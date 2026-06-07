@@ -33,6 +33,41 @@ export async function listActiveClients(): Promise<ClientRow[]> {
   return result.rows;
 }
 
+export interface UpsertClientByNameInput {
+  name: string;
+  n8n_base_url: string;
+  n8n_api_key_encrypted: string;
+}
+
+/**
+ * Insert a client, or update its connection details if one with the same name
+ * already exists. Idempotent on `name` (re-running won't create duplicates).
+ * Done in a single statement via writable CTEs so it returns exactly one row.
+ */
+export async function upsertClientByName(input: UpsertClientByNameInput): Promise<ClientRow> {
+  const result = await query<ClientRow>(
+    `WITH updated AS (
+       UPDATE clients
+          SET n8n_base_url = $2,
+              n8n_api_key_encrypted = $3,
+              is_active = true,
+              updated_at = now()
+        WHERE name = $1
+        RETURNING *
+     ), inserted AS (
+       INSERT INTO clients (name, n8n_base_url, n8n_api_key_encrypted)
+       SELECT $1, $2, $3
+        WHERE NOT EXISTS (SELECT 1 FROM updated)
+        RETURNING *
+     )
+     SELECT * FROM updated
+     UNION ALL
+     SELECT * FROM inserted`,
+    [input.name, input.n8n_base_url, input.n8n_api_key_encrypted],
+  );
+  return firstRowOrThrow(result, 'upsertClientByName');
+}
+
 /** Bump a client's updated_at to now(); returns the updated row, or null if missing. */
 export async function touchClient(id: string): Promise<ClientRow | null> {
   const result = await query<ClientRow>(

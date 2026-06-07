@@ -12,7 +12,8 @@
     "build": "tsc",
     "migrate": "node-pg-migrate --envPath .env --tsx",
     "verify:db": "tsx src/scripts/verifyDb.ts",
-    "verify:n8n": "tsx src/scripts/verifyN8n.ts"
+    "verify:n8n": "tsx src/scripts/verifyN8n.ts",
+    "verify:ingest": "tsx src/scripts/verifyIngest.ts"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
