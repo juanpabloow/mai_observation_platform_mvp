@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
-    "migrate": "node-pg-migrate"
+    "migrate": "node-pg-migrate --envPath .env --tsx",
+    "verify:db": "tsx src/scripts/verifyDb.ts"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
