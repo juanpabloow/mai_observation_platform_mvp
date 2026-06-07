@@ -1,5 +1,7 @@
 import { config } from './config.js';
+import { closePool } from './db/client.js';
 import { logger } from './logger.js';
+import { startWorker, stopWorker } from './ingestion/worker.js';
 
 /**
  * Mask the password embedded in a PostgreSQL connection string while keeping
@@ -23,22 +25,36 @@ const redactedConfig = {
   DATABASE_URL: redactDatabaseUrl(config.DATABASE_URL),
   DB_PASSWORD: '***REDACTED***',
   ENCRYPTION_KEY: '***REDACTED***',
+  ...(config.TEST_N8N_API_KEY ? { TEST_N8N_API_KEY: '***REDACTED***' } : {}),
 };
 
 logger.info({ logLevel: config.LOG_LEVEL }, 'starting worker');
 logger.info({ config: redactedConfig }, 'loaded configuration');
 
-// Keep the process alive. The ingestion/polling loop will be added in a later
-// step; for now this no-op interval prevents the worker from exiting.
-const keepAlive = setInterval(() => {
-  /* intentionally empty until the polling loop lands */
-}, 60_000);
+startWorker();
 
-function shutdown(signal: NodeJS.Signals): void {
+let shuttingDown = false;
+
+async function shutdown(signal: NodeJS.Signals): Promise<void> {
+  if (shuttingDown) {
+    return; // ignore repeated signals
+  }
+  shuttingDown = true;
   logger.info({ signal }, 'shutting down worker');
-  clearInterval(keepAlive);
-  process.exit(0);
+  try {
+    await stopWorker();
+    await closePool();
+  } catch (err) {
+    logger.error({ err }, 'error during shutdown');
+  } finally {
+    logger.info('shutdown complete');
+    process.exit(0);
+  }
 }
 
-process.on('SIGINT', () => shutdown('SIGINT'));
-process.on('SIGTERM', () => shutdown('SIGTERM'));
+process.on('SIGINT', () => {
+  void shutdown('SIGINT');
+});
+process.on('SIGTERM', () => {
+  void shutdown('SIGTERM');
+});
