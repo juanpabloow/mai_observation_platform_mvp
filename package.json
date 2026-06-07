@@ -1,0 +1,28 @@
+{
+  "name": "observability-platform",
+  "version": "0.1.0",
+  "description": "Multi-tenant observability platform for n8n automations",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "migrate": "node-pg-migrate"
+  },
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "pg": "^8.21.0",
+    "pino": "^10.3.1",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.2",
+    "@types/pg": "^8.20.0",
+    "node-pg-migrate": "^8.0.4",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3"
+  }
+}
