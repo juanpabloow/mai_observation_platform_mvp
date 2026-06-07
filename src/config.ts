@@ -32,6 +32,11 @@ const envSchema = z.object({
 
   // Polling cadence for n8n instances (used in a later step).
   POLL_INTERVAL_SECONDS: z.coerce.number().int().positive().default(30),
+
+  // Optional — used ONLY by the throwaway verify:n8n script to hit a real
+  // n8n instance. Left undefined in normal operation so the app still boots.
+  TEST_N8N_BASE_URL: z.string().min(1).optional(),
+  TEST_N8N_API_KEY: z.string().min(1).optional(),
 });
 
 /** Fully validated, typed shape of the application configuration. */
