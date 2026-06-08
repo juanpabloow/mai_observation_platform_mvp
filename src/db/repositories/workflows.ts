@@ -89,3 +89,64 @@ export async function listWorkflowsForTenant(tenantId: string): Promise<Workflow
   );
   return result.rows;
 }
+
+/** A workflow summary for the picker: distinct workflow + active + execution count. */
+export interface WorkflowSummary {
+  n8n_workflow_id: string;
+  name: string | null;
+  active: boolean | null;
+  execution_count: number;
+}
+
+/**
+ * Distinct workflows for a tenant with their execution counts, for the workflow
+ * picker. One GROUP BY scan over the tenant's executions (cheap for the picker;
+ * the workflow list is small).
+ */
+export async function listWorkflowsForTenantWithCounts(
+  tenantId: string,
+): Promise<WorkflowSummary[]> {
+  const result = await query<WorkflowSummary>(
+    `WITH distinct_workflows AS (
+       SELECT DISTINCT ON (n8n_workflow_id) n8n_workflow_id, name, active
+         FROM workflows
+        WHERE tenant_id = $1
+        ORDER BY n8n_workflow_id, name
+     ),
+     execution_counts AS (
+       SELECT n8n_workflow_id, count(*) AS c
+         FROM executions
+        WHERE tenant_id = $1
+        GROUP BY n8n_workflow_id
+     )
+     SELECT dw.n8n_workflow_id,
+            dw.name,
+            dw.active,
+            COALESCE(ec.c, 0)::int AS execution_count
+       FROM distinct_workflows dw
+       LEFT JOIN execution_counts ec USING (n8n_workflow_id)
+      ORDER BY dw.name NULLS LAST, dw.n8n_workflow_id`,
+    [tenantId],
+  );
+  return result.rows;
+}
+
+/**
+ * Resolve an n8n workflow id to its workflow row for a tenant (always
+ * tenant-scoped). Returns null if not found / not this tenant. If the same n8n
+ * id exists under multiple connections, returns the most recently synced.
+ */
+export async function getWorkflowByN8nId(params: {
+  tenantId: string;
+  n8nWorkflowId: string;
+}): Promise<WorkflowRow | null> {
+  const { tenantId, n8nWorkflowId } = params;
+  const result = await query<WorkflowRow>(
+    `SELECT * FROM workflows
+      WHERE tenant_id = $1 AND n8n_workflow_id = $2
+      ORDER BY last_synced_at DESC NULLS LAST
+      LIMIT 1`,
+    [tenantId, n8nWorkflowId],
+  );
+  return result.rows[0] ?? null;
+}

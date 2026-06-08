@@ -52,10 +52,10 @@ export default async function ExecutionDetailPage({
     <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-6 py-12">
       <div>
         <Link
-          href="/executions"
+          href={`/workflows/${encodeURIComponent(execution.n8n_workflow_id)}/executions`}
           className="text-sm text-neutral-500 transition-colors hover:text-neutral-300"
         >
-          &larr; Back to executions
+          &larr; Back to {execution.workflow_name}
         </Link>
       </div>
 

@@ -54,10 +54,10 @@ export default async function Home() {
 
       <div>
         <Link
-          href="/executions"
+          href="/workflows"
           className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-black/[0.03] px-5 py-2.5 text-sm font-medium transition-colors hover:bg-black/[0.06] dark:border-white/15 dark:bg-white/[0.04] dark:hover:bg-white/[0.08]"
         >
-          View executions
+          Browse workflows
           <span aria-hidden>&rarr;</span>
         </Link>
       </div>
