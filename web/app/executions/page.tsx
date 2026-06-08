@@ -10,6 +10,7 @@ import {
 import { listWorkflowsForTenant } from "@worker/db/repositories/workflows.js";
 import { listClientsForTenant } from "@worker/db/repositories/clients.js";
 import { getCurrentTenantId } from "@/lib/tenant";
+import { formatDateTime, formatDuration } from "@/lib/format";
 import { FilterBar } from "./_components/FilterBar";
 import { ExecutionsTable, type ExecutionRowView } from "./_components/ExecutionsTable";
 
@@ -25,24 +26,6 @@ function first(value: string | string[] | undefined): string | undefined {
 function parseIntParam(value: string | undefined, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) ? Math.floor(n) : fallback;
-}
-
-function formatStarted(date: Date): string {
-  return date.toLocaleString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-function formatDuration(ms: number | null): string {
-  if (ms === null) return "—";
-  if (ms < 1000) return `${ms}ms`;
-  const seconds = ms / 1000;
-  if (seconds < 60) return `${seconds.toFixed(1)}s`;
-  return `${(seconds / 60).toFixed(1)}m`;
 }
 
 export default async function ExecutionsPage({
@@ -94,7 +77,7 @@ export default async function ExecutionsPage({
     status: r.status,
     workflowName: r.workflow_name,
     clientName: r.client_name,
-    startedDisplay: formatStarted(r.started_at),
+    startedDisplay: formatDateTime(r.started_at),
     durationDisplay: formatDuration(r.duration_ms),
     executionId: r.n8n_execution_id,
   }));

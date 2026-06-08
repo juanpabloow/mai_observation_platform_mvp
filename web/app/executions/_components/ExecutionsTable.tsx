@@ -9,6 +9,7 @@ import {
   type OnChangeFn,
   type SortingState,
 } from "@tanstack/react-table";
+import { statusBadgeClasses } from "@/lib/format";
 
 /**
  * Pre-formatted view of one execution row. Dates/durations are formatted on the
@@ -23,20 +24,6 @@ export interface ExecutionRowView {
   startedDisplay: string;
   durationDisplay: string;
   executionId: string;
-}
-
-function statusBadgeClasses(status: string): string {
-  const base =
-    "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset";
-  switch (status) {
-    case "success":
-      return `${base} bg-green-500/15 text-green-400 ring-green-500/30`;
-    case "error":
-    case "crashed":
-      return `${base} bg-red-500/15 text-red-400 ring-red-500/30`;
-    default:
-      return `${base} bg-white/10 text-neutral-300 ring-white/15`;
-  }
 }
 
 const columnHelper = createColumnHelper<ExecutionRowView>();

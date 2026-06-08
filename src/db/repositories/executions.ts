@@ -229,3 +229,48 @@ export async function listExecutionsPage(
     total: Number(totalResult.rows[0]?.count ?? 0),
   };
 }
+
+/** Full execution row including the raw payload, for the detail view. */
+export interface ExecutionDetailRow extends ExecutionListItem {
+  raw_data: unknown | null;
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Fetch a single execution (with raw_data) by its internal UUID, but ONLY if it
+ * belongs to the given tenant — otherwise null. Callers should treat null as
+ * "not found" without distinguishing "doesn't exist" from "not yours". A
+ * malformed (non-UUID) id returns null without touching the database.
+ */
+export async function getExecutionByIdForTenant(params: {
+  tenantId: string;
+  id: string;
+}): Promise<ExecutionDetailRow | null> {
+  const { tenantId, id } = params;
+  if (!UUID_RE.test(id)) {
+    return null;
+  }
+  const result = await query<ExecutionDetailRow>(
+    `SELECT
+       e.id,
+       e.n8n_execution_id,
+       e.status,
+       e.mode,
+       e.started_at,
+       e.stopped_at,
+       e.duration_ms,
+       e.n8n_workflow_id,
+       COALESCE(w.name, e.workflow_name, e.n8n_workflow_id) AS workflow_name,
+       c.name AS client_name,
+       e.raw_data
+     FROM executions e
+     LEFT JOIN workflows w
+       ON w.n8n_connection_id = e.n8n_connection_id
+      AND w.n8n_workflow_id = e.n8n_workflow_id
+     LEFT JOIN clients c ON c.id = w.client_id
+     WHERE e.id = $1 AND e.tenant_id = $2`,
+    [id, tenantId],
+  );
+  return result.rows[0] ?? null;
+}
