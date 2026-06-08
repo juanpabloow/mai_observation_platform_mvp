@@ -9,10 +9,12 @@ import {
 } from "@worker/db/repositories/executions.js";
 import { listWorkflowsForTenant } from "@worker/db/repositories/workflows.js";
 import { listClientsForTenant } from "@worker/db/repositories/clients.js";
+import { config } from "@worker/config.js";
 import { getCurrentTenantId } from "@/lib/tenant";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import { FilterBar } from "./_components/FilterBar";
 import { ExecutionsTable, type ExecutionRowView } from "./_components/ExecutionsTable";
+import { AutoRefresh } from "./_components/AutoRefresh";
 
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 100;
@@ -117,9 +119,10 @@ export default async function ExecutionsPage({
         <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
           Executions
         </h1>
-        <p className="text-sm text-neutral-500">
-          {total.toLocaleString()} matching
-        </p>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-neutral-500">{total.toLocaleString()} matching</p>
+          <AutoRefresh intervalSeconds={config.POLL_INTERVAL_SECONDS} />
+        </div>
       </header>
 
       <FilterBar
