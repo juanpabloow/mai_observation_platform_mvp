@@ -54,6 +54,46 @@ function numberOrNull(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/**
+ * Unwrap n8n's output/input envelope to the meaningful payload (DISPLAY ONLY —
+ * raw_data in the DB is untouched).
+ *
+ * n8n wraps node data as `{ <connection>: [ [ { json, pairedItem }, ... ] ] }`,
+ * where <connection> is 'main' for normal nodes or an AI key (ai_tool,
+ * ai_memory, ai_languageModel, ai_embedding, ...) for sub-nodes — all the same
+ * shape. This returns the inner `json` object directly when there's a single
+ * item, or an array of `json` objects for multiple items, dropping `pairedItem`.
+ * Anything that doesn't match the envelope is returned unchanged (fall back to
+ * raw — never hide data, never crash).
+ */
+export function unwrapNodeData(value: unknown): unknown {
+  const envelope = asObject(value);
+  if (!envelope) return value;
+
+  // The envelope is keyed by exactly one connection type (e.g. 'main').
+  const keys = Object.keys(envelope);
+  if (keys.length !== 1) return value;
+
+  const connections = envelope[keys[0]];
+  if (!Array.isArray(connections) || connections.length === 0) return value;
+
+  // First output connection holds the items: [ { json, pairedItem }, ... ].
+  const items = connections[0];
+  if (!Array.isArray(items)) return value;
+  if (items.length === 0) return [];
+
+  // Confirm the n8n item signature (objects carrying a `json` field).
+  const firstItem = asObject(items[0]);
+  if (!firstItem || !("json" in firstItem)) return value;
+
+  const jsons = items.map((item) => {
+    const itemObj = asObject(item);
+    return itemObj && "json" in itemObj ? itemObj.json : item; // drops pairedItem
+  });
+
+  return jsons.length === 1 ? jsons[0] : jsons;
+}
+
 export function parseExecution(rawData: unknown): ParsedExecution {
   const root = asObject(rawData);
   const resultData = asObject(root?.resultData);
@@ -76,8 +116,9 @@ export function parseExecution(rawData: unknown): ParsedExecution {
           typeof entry.executionStatus === "string" ? entry.executionStatus : "unknown",
         executionTimeMs: numberOrNull(entry.executionTime),
         startTime: numberOrNull(entry.startTime),
-        output: entry.data ?? null,
-        input: entry.inputOverride ?? null,
+        // Display transformation: unwrap the n8n envelope to the inner json.
+        output: unwrapNodeData(entry.data ?? null),
+        input: unwrapNodeData(entry.inputOverride ?? null),
         error: entry.error ?? null,
       };
     });
