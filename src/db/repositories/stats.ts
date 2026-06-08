@@ -5,10 +5,11 @@ import { query } from '../client.js';
  * layer (used by the web app); the ingestion worker does not depend on these.
  */
 
-/** Total number of executions stored across all tenants. */
-export async function countAllExecutions(): Promise<number> {
+/** Number of executions stored for a tenant. */
+export async function countExecutionsForTenant(tenantId: string): Promise<number> {
   const result = await query<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM executions`,
+    `SELECT COUNT(*)::text AS count FROM executions WHERE tenant_id = $1`,
+    [tenantId],
   );
   return Number(result.rows[0]?.count ?? 0);
 }
