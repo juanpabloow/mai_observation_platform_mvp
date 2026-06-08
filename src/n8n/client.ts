@@ -2,8 +2,10 @@ import { logger } from '../logger.js';
 import {
   n8nExecutionDetailSchema,
   n8nExecutionListResponseSchema,
+  n8nWorkflowListResponseSchema,
   type N8nExecutionDetail,
   type N8nExecutionListResponse,
+  type N8nWorkflowListResponse,
 } from './types.js';
 
 export interface N8nClientOptions {
@@ -19,9 +21,16 @@ export interface ListExecutionsParams {
   status?: string;
 }
 
+export interface ListWorkflowsParams {
+  limit?: number;
+  cursor?: string;
+  active?: boolean;
+}
+
 export interface N8nClient {
   listExecutions(params?: ListExecutionsParams): Promise<N8nExecutionListResponse>;
   getExecution(id: string): Promise<N8nExecutionDetail>;
+  listWorkflows(params?: ListWorkflowsParams): Promise<N8nWorkflowListResponse>;
 }
 
 /** Thrown on any non-2xx (or transport-level) failure talking to n8n. */
@@ -127,6 +136,21 @@ export function createN8nClient(options: N8nClientOptions): N8nClient {
       const sp = new URLSearchParams({ includeData: 'true' });
       const json = await get(`/executions/${encodeURIComponent(id)}`, sp);
       return n8nExecutionDetailSchema.parse(json);
+    },
+
+    async listWorkflows(params: ListWorkflowsParams = {}): Promise<N8nWorkflowListResponse> {
+      const sp = new URLSearchParams();
+      if (params.limit !== undefined) {
+        sp.set('limit', String(params.limit));
+      }
+      if (params.cursor !== undefined) {
+        sp.set('cursor', params.cursor);
+      }
+      if (params.active !== undefined) {
+        sp.set('active', String(params.active));
+      }
+      const json = await get('/workflows', sp);
+      return n8nWorkflowListResponseSchema.parse(json);
     },
   };
 }

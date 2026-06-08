@@ -2,7 +2,8 @@ import { query } from '../client.js';
 
 /** Input shape for inserting an execution. `raw_data` is any JSON-serialisable value. */
 export interface NewExecution {
-  client_id: string;
+  tenant_id: string;
+  n8n_connection_id: string;
   n8n_execution_id: string;
   n8n_workflow_id: string;
   workflow_name?: string | null;
@@ -17,7 +18,8 @@ export interface NewExecution {
 // Column order used to build the multi-row INSERT. Only identifiers live in the
 // SQL string; every value is bound as a $N parameter.
 const INSERT_COLUMNS = [
-  'client_id',
+  'tenant_id',
+  'n8n_connection_id',
   'n8n_execution_id',
   'n8n_workflow_id',
   'workflow_name',
@@ -31,8 +33,8 @@ const INSERT_COLUMNS = [
 
 /**
  * Insert many executions in one statement. Conflicts on
- * (client_id, n8n_execution_id) are ignored (ON CONFLICT DO NOTHING) — this is
- * the idempotency guarantee for re-polling.
+ * (n8n_connection_id, n8n_execution_id) are ignored (ON CONFLICT DO NOTHING) —
+ * this is the idempotency guarantee for re-polling.
  *
  * @returns the number of rows actually inserted (excludes ignored conflicts).
  */
@@ -49,7 +51,8 @@ export async function upsertMany(executions: NewExecution[]): Promise<number> {
     const placeholders = INSERT_COLUMNS.map(() => `$${p++}`);
     rowsSql.push(`(${placeholders.join(', ')})`);
     params.push(
-      e.client_id,
+      e.tenant_id,
+      e.n8n_connection_id,
       e.n8n_execution_id,
       e.n8n_workflow_id,
       e.workflow_name ?? null,
@@ -66,17 +69,17 @@ export async function upsertMany(executions: NewExecution[]): Promise<number> {
 
   const sql = `INSERT INTO executions (${INSERT_COLUMNS.join(', ')})
      VALUES ${rowsSql.join(', ')}
-     ON CONFLICT (client_id, n8n_execution_id) DO NOTHING`;
+     ON CONFLICT (n8n_connection_id, n8n_execution_id) DO NOTHING`;
 
   const result = await query(sql, params);
   return result.rowCount ?? 0;
 }
 
-/** Count executions stored for a given client (used for verification). */
-export async function countByClient(clientId: string): Promise<number> {
+/** Count executions stored for a given n8n connection (used for verification). */
+export async function countByConnection(connectionId: string): Promise<number> {
   const result = await query<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM executions WHERE client_id = $1`,
-    [clientId],
+    `SELECT COUNT(*)::text AS count FROM executions WHERE n8n_connection_id = $1`,
+    [connectionId],
   );
   return Number(result.rows[0]?.count ?? 0);
 }

@@ -4,8 +4,17 @@
  * directly onto these types.
  */
 
-export interface ClientRow {
+export interface TenantRow {
   id: string;
+  name: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/** An n8n instance we poll (base url + encrypted key). */
+export interface N8nConnectionRow {
+  id: string;
+  tenant_id: string;
   name: string;
   n8n_base_url: string;
   n8n_api_key_encrypted: string;
@@ -14,9 +23,33 @@ export interface ClientRow {
   updated_at: Date;
 }
 
+/** A platform-managed logical group of workflows (no connection details). */
+export interface ClientRow {
+  id: string;
+  tenant_id: string;
+  name: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/** A workflow synced from n8n, optionally assigned to one client. */
+export interface WorkflowRow {
+  id: string;
+  tenant_id: string;
+  n8n_connection_id: string;
+  n8n_workflow_id: string;
+  name: string | null;
+  client_id: string | null;
+  active: boolean | null;
+  last_synced_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export interface ExecutionRow {
   id: string;
-  client_id: string;
+  tenant_id: string;
+  n8n_connection_id: string;
   n8n_execution_id: string;
   n8n_workflow_id: string;
   workflow_name: string | null;
@@ -42,7 +75,8 @@ export type ConversationRole =
 
 export interface FieldMappingRow {
   id: string;
-  client_id: string;
+  tenant_id: string;
+  n8n_connection_id: string;
   n8n_workflow_id: string;
   mapping_kind: MappingKind;
   column_label: string | null;
@@ -53,7 +87,8 @@ export interface FieldMappingRow {
 }
 
 export interface IngestionStateRow {
-  client_id: string;
+  n8n_connection_id: string;
+  tenant_id: string;
   last_seen_execution_id: string | null;
   last_polled_at: Date | null;
   last_successful_poll_at: Date | null;

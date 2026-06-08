@@ -5,7 +5,7 @@ import { query } from '../client.js';
  * layer (used by the web app); the ingestion worker does not depend on these.
  */
 
-/** Total number of executions stored across all clients. */
+/** Total number of executions stored across all tenants. */
 export async function countAllExecutions(): Promise<number> {
   const result = await query<{ count: string }>(
     `SELECT COUNT(*)::text AS count FROM executions`,
@@ -13,10 +13,10 @@ export async function countAllExecutions(): Promise<number> {
   return Number(result.rows[0]?.count ?? 0);
 }
 
-/** Number of clients currently marked active. */
-export async function countActiveClients(): Promise<number> {
+/** Number of active n8n connections (the instances the worker polls). */
+export async function countActiveConnections(): Promise<number> {
   const result = await query<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM clients WHERE is_active = true`,
+    `SELECT COUNT(*)::text AS count FROM n8n_connections WHERE is_active = true`,
   );
   return Number(result.rows[0]?.count ?? 0);
 }

@@ -1,6 +1,6 @@
 /**
- * THROWAWAY verification script (Step 4). Proves the full ingestion path:
- * crypto round-trip → upsert a test client → ingest once → ingest again
+ * THROWAWAY verification script. Proves the full ingestion path:
+ * crypto round-trip → upsert a test n8n connection → ingest once → ingest again
  * (cursor + idempotency) → inspect stored rows. Safe to delete later.
  *
  * Run with: npm run verify:ingest
@@ -8,9 +8,10 @@
 import { config } from '../config.js';
 import { closePool, query } from '../db/client.js';
 import { decrypt, encrypt } from '../crypto.js';
-import { upsertClientByName } from '../db/repositories/clients.js';
-import { countByClient } from '../db/repositories/executions.js';
-import { ingestExecutionsForClient } from '../ingestion/ingestExecutions.js';
+import { getOrCreateTenant } from '../db/repositories/tenants.js';
+import { upsertConnectionByName } from '../db/repositories/n8nConnections.js';
+import { countByConnection } from '../db/repositories/executions.js';
+import { ingestExecutionsForConnection } from '../ingestion/ingestExecutions.js';
 
 function requireTestCredentials(): { baseUrl: string; apiKey: string } {
   const baseUrl = config.TEST_N8N_BASE_URL;
@@ -45,27 +46,28 @@ async function main(): Promise<void> {
   }
   console.log('crypto OK');
 
-  // 2. Upsert the test client (idempotent on name; key stored encrypted).
+  // 2. Upsert the test connection under the default tenant (idempotent on name).
   const { baseUrl, apiKey } = requireTestCredentials();
-  const client = await upsertClientByName({
+  const tenant = await getOrCreateTenant('MAI');
+  const connection = await upsertConnectionByName({
+    tenant_id: tenant.id,
     name: 'my-test-instance',
     n8n_base_url: baseUrl,
     n8n_api_key_encrypted: encrypt(apiKey),
   });
-  console.log(`client: ${client.id} (name=${client.name})`);
+  console.log(`tenant: ${tenant.id} (${tenant.name})`);
+  console.log(`connection: ${connection.id} (name=${connection.name})`);
 
   // 3. First ingest.
-  const result1 = await ingestExecutionsForClient(client);
+  const result1 = await ingestExecutionsForConnection(connection);
   console.log('IngestResult #1:', result1);
-
-  // 4. Count after first run.
-  const countAfter1 = await countByClient(client.id);
+  const countAfter1 = await countByConnection(connection.id);
   console.log('count after run 1:', countAfter1);
 
-  // 5. Second ingest immediately — should be a no-op (cursor + idempotency).
-  const result2 = await ingestExecutionsForClient(client);
+  // 4. Second ingest immediately — should be a no-op (cursor + idempotency).
+  const result2 = await ingestExecutionsForConnection(connection);
   console.log('IngestResult #2:', result2);
-  const countAfter2 = await countByClient(client.id);
+  const countAfter2 = await countByConnection(connection.id);
   console.log('count after run 2:', countAfter2);
 
   const idempotent = result2.new === 0 && countAfter2 === countAfter1;
@@ -75,15 +77,15 @@ async function main(): Promise<void> {
       : '✗ idempotency check FAILED',
   );
 
-  // 6. Show 3 sample stored rows (no full payloads — just confirm raw_data exists).
+  // 5. Show 3 sample stored rows.
   const samples = await query<SampleRow>(
     `SELECT n8n_execution_id, status, workflow_name, started_at,
             (raw_data IS NOT NULL) AS has_raw
        FROM executions
-      WHERE client_id = $1
+      WHERE n8n_connection_id = $1
       ORDER BY started_at DESC
       LIMIT 3`,
-    [client.id],
+    [connection.id],
   );
   console.log('\n3 sample stored rows:');
   for (const row of samples.rows) {

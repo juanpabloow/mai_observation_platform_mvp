@@ -1,63 +1,78 @@
 import { config } from '../config.js';
 import { logger } from '../logger.js';
-import { listActiveClients } from '../db/repositories/clients.js';
-import { ingestExecutionsForClient } from './ingestExecutions.js';
+import { listActiveConnections } from '../db/repositories/n8nConnections.js';
+import { ingestExecutionsForConnection, type IngestResult } from './ingestExecutions.js';
+import { syncWorkflowsForConnection, type SyncResult } from './syncWorkflows.js';
+import type { N8nConnectionRow } from '../db/types.js';
 
 /**
- * Max clients ingested concurrently per cycle. Separate from (and outer to) the
- * per-execution CONCURRENCY inside ingestExecutionsForClient — keeps one slow
- * client's n8n from blocking the others.
+ * Max connections processed concurrently per cycle. Separate from (and outer to)
+ * the per-execution CONCURRENCY inside ingestExecutionsForConnection — keeps one
+ * slow connection's n8n from blocking the others.
  */
-export const CLIENT_CONCURRENCY = 5;
+export const CONNECTION_CONCURRENCY = 5;
 
 let intervalHandle: NodeJS.Timeout | null = null;
 let isRunning = false;
 let currentCycle: Promise<void> | null = null;
 let cycleCount = 0;
 
-/** One ingestion cycle across all active clients. Never throws (logs instead). */
+interface ConnectionOutcome {
+  sync: SyncResult;
+  ingest: IngestResult;
+}
+
+/** Sync workflows then ingest executions for one connection. */
+async function processConnection(connection: N8nConnectionRow): Promise<ConnectionOutcome> {
+  const sync = await syncWorkflowsForConnection(connection);
+  const ingest = await ingestExecutionsForConnection(connection);
+  return { sync, ingest };
+}
+
+/** One cycle across all active connections. Never throws (logs instead). */
 async function runCycle(): Promise<void> {
   const cycle = ++cycleCount;
   const startedAt = Date.now();
 
   try {
-    const clients = await listActiveClients();
-    logger.info({ cycle, activeClients: clients.length }, 'ingestion cycle start');
+    const connections = await listActiveConnections();
+    logger.info({ cycle, activeConnections: connections.length }, 'ingestion cycle start');
 
-    let clientsProcessed = 0;
+    let processed = 0;
+    let totalSynced = 0;
     let totalNew = 0;
     let totalErrors = 0;
 
-    for (let i = 0; i < clients.length; i += CLIENT_CONCURRENCY) {
-      const chunk = clients.slice(i, i + CLIENT_CONCURRENCY);
-      const settled = await Promise.allSettled(
-        chunk.map((client) => ingestExecutionsForClient(client)),
-      );
+    for (let i = 0; i < connections.length; i += CONNECTION_CONCURRENCY) {
+      const chunk = connections.slice(i, i + CONNECTION_CONCURRENCY);
+      const settled = await Promise.allSettled(chunk.map((c) => processConnection(c)));
 
       settled.forEach((outcome, idx) => {
-        const client = chunk[idx];
-        clientsProcessed += 1;
+        const connection = chunk[idx];
+        processed += 1;
         if (outcome.status === 'fulfilled') {
-          const r = outcome.value;
-          totalNew += r.new;
-          totalErrors += r.errors;
+          const { sync, ingest } = outcome.value;
+          totalSynced += sync.synced;
+          totalNew += ingest.new;
+          totalErrors += ingest.errors;
           logger.info(
             {
               cycle,
-              client: client.name,
-              clientId: client.id,
-              fetched: r.fetched,
-              new: r.new,
-              errors: r.errors,
-              newCursor: r.newCursor,
+              connection: connection.name,
+              connectionId: connection.id,
+              workflowsSynced: sync.synced,
+              fetched: ingest.fetched,
+              new: ingest.new,
+              errors: ingest.errors,
+              newCursor: ingest.newCursor,
             },
-            'client ingested',
+            'connection processed',
           );
         } else {
           totalErrors += 1;
           logger.error(
-            { cycle, client: client.name, clientId: client.id, err: outcome.reason },
-            'client ingestion rejected',
+            { cycle, connection: connection.name, connectionId: connection.id, err: outcome.reason },
+            'connection processing rejected',
           );
         }
       });
@@ -66,7 +81,8 @@ async function runCycle(): Promise<void> {
     logger.info(
       {
         cycle,
-        clientsProcessed,
+        connectionsProcessed: processed,
+        totalWorkflowsSynced: totalSynced,
         totalNew,
         totalErrors,
         durationMs: Date.now() - startedAt,
@@ -74,7 +90,7 @@ async function runCycle(): Promise<void> {
       'ingestion cycle complete',
     );
   } catch (err) {
-    // e.g. listActiveClients failed — never let a cycle crash the worker.
+    // e.g. listActiveConnections failed — never let a cycle crash the worker.
     logger.error({ cycle, err, durationMs: Date.now() - startedAt }, 'ingestion cycle failed');
   }
 }
@@ -102,7 +118,7 @@ export function startWorker(): void {
   }
   const intervalMs = config.POLL_INTERVAL_SECONDS * 1000;
   logger.info(
-    { intervalSeconds: config.POLL_INTERVAL_SECONDS, clientConcurrency: CLIENT_CONCURRENCY },
+    { intervalSeconds: config.POLL_INTERVAL_SECONDS, connectionConcurrency: CONNECTION_CONCURRENCY },
     'polling worker started',
   );
 

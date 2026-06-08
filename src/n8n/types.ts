@@ -56,3 +56,26 @@ export const n8nExecutionDetailSchema = n8nExecutionSummarySchema.extend({
 });
 
 export type N8nExecutionDetail = z.infer<typeof n8nExecutionDetailSchema>;
+
+/**
+ * A workflow as returned by GET /workflows. We only rely on id/name/active;
+ * `active` is tolerated as missing (defaults false).
+ */
+export const n8nWorkflowSummarySchema = z.object({
+  id: idLike,
+  name: z.string(),
+  active: z.boolean().nullish().transform((v) => v ?? false),
+});
+
+export type N8nWorkflowSummary = z.infer<typeof n8nWorkflowSummarySchema>;
+
+/** Response shape of GET /workflows. */
+export const n8nWorkflowListResponseSchema = z.object({
+  data: z.array(n8nWorkflowSummarySchema),
+  nextCursor: z
+    .string()
+    .nullish()
+    .transform((v) => v ?? null),
+});
+
+export type N8nWorkflowListResponse = z.infer<typeof n8nWorkflowListResponseSchema>;

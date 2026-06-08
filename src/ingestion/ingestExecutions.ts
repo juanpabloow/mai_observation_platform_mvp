@@ -8,7 +8,7 @@ import {
   recordFailedPoll,
   recordSuccessfulPoll,
 } from '../db/repositories/ingestionState.js';
-import type { ClientRow } from '../db/types.js';
+import type { N8nConnectionRow } from '../db/types.js';
 
 /** Max concurrent getExecution detail fetches. */
 export const CONCURRENCY = 10;
@@ -28,7 +28,11 @@ export interface IngestResult {
 }
 
 /** Map a full n8n execution detail into an `executions` row. */
-function mapDetailToRow(clientId: string, detail: N8nExecutionDetail): NewExecution {
+function mapDetailToRow(
+  tenantId: string,
+  connectionId: string,
+  detail: N8nExecutionDetail,
+): NewExecution {
   const { startedAt, stoppedAt } = detail;
 
   let durationMs: number | null = null;
@@ -41,7 +45,8 @@ function mapDetailToRow(clientId: string, detail: N8nExecutionDetail): NewExecut
   }
 
   return {
-    client_id: clientId,
+    tenant_id: tenantId,
+    n8n_connection_id: connectionId,
     n8n_execution_id: detail.id,
     n8n_workflow_id: detail.workflowId,
     workflow_name: detail.workflowData?.name ?? null,
@@ -57,15 +62,16 @@ function mapDetailToRow(clientId: string, detail: N8nExecutionDetail): NewExecut
 /** Fetch one execution's full payload; returns null (and logs) on failure. */
 async function fetchRow(
   n8n: N8nClient,
-  clientId: string,
+  tenantId: string,
+  connectionId: string,
   summary: N8nExecutionSummary,
 ): Promise<NewExecution | null> {
   try {
     const detail = await n8n.getExecution(summary.id);
-    return mapDetailToRow(clientId, detail);
+    return mapDetailToRow(tenantId, connectionId, detail);
   } catch (err) {
     logger.warn(
-      { err, clientId, executionId: summary.id },
+      { err, connectionId, executionId: summary.id },
       'failed to fetch execution detail; skipping',
     );
     return null;
@@ -73,16 +79,22 @@ async function fetchRow(
 }
 
 /**
- * Ingest NEW executions for a single client: list what's new since the stored
- * cursor, fetch full payloads with bounded concurrency, upsert them, and update
- * the ingestion cursor/health. Does not run a loop and does not crash on a
- * fetch failure — it records the failure and returns a failure-shaped result.
+ * Ingest NEW executions for a single n8n connection: list what's new since the
+ * stored cursor, fetch full payloads with bounded concurrency, upsert them
+ * (stamped with tenant_id + n8n_connection_id), and update the cursor/health.
+ * Does not loop and does not crash on a fetch failure — it records the failure
+ * and returns a failure-shaped result.
  */
-export async function ingestExecutionsForClient(client: ClientRow): Promise<IngestResult> {
-  const apiKey = decrypt(client.n8n_api_key_encrypted);
-  const n8n = createN8nClient({ baseUrl: client.n8n_base_url, apiKey });
+export async function ingestExecutionsForConnection(
+  connection: N8nConnectionRow,
+): Promise<IngestResult> {
+  const tenantId = connection.tenant_id;
+  const connectionId = connection.id;
 
-  const state = await getIngestionState(client.id);
+  const apiKey = decrypt(connection.n8n_api_key_encrypted);
+  const n8n = createN8nClient({ baseUrl: connection.n8n_base_url, apiKey });
+
+  const state = await getIngestionState(connectionId);
   const prevLastSeen = state?.last_seen_execution_id ?? null;
   const prevLastSeenNum = prevLastSeen !== null ? Number(prevLastSeen) : null;
   const firstRun = prevLastSeenNum === null;
@@ -116,9 +128,9 @@ export async function ingestExecutionsForClient(client: ClientRow): Promise<Inge
   } catch (err) {
     // Total fetch failure: record it, do NOT advance the cursor, don't crash.
     const message = err instanceof Error ? err.message : String(err);
-    await recordFailedPoll(client.id, message);
+    await recordFailedPoll(connectionId, tenantId, message);
     logger.error(
-      { err, client: client.name, clientId: client.id, pages },
+      { err, connection: connection.name, connectionId, pages },
       'ingestion failed while listing executions',
     );
     return { fetched: 0, new: 0, errors: 1, newCursor: prevLastSeen };
@@ -132,7 +144,9 @@ export async function ingestExecutionsForClient(client: ClientRow): Promise<Inge
   for (let i = 0; i < newSummaries.length; i += CONCURRENCY) {
     const chunk = newSummaries.slice(i, i + CONCURRENCY);
     batches += 1;
-    const settled = await Promise.all(chunk.map((s) => fetchRow(n8n, client.id, s)));
+    const settled = await Promise.all(
+      chunk.map((s) => fetchRow(n8n, tenantId, connectionId, s)),
+    );
     for (const row of settled) {
       if (row) {
         rows.push(row);
@@ -151,7 +165,7 @@ export async function ingestExecutionsForClient(client: ClientRow): Promise<Inge
   );
   const newCursor = newSummaries.length > 0 ? String(maxSeenNum) : prevLastSeen;
 
-  await recordSuccessfulPoll(client.id, newCursor);
+  await recordSuccessfulPoll(connectionId, tenantId, newCursor);
 
   const result: IngestResult = {
     fetched: rows.length,
@@ -162,8 +176,9 @@ export async function ingestExecutionsForClient(client: ClientRow): Promise<Inge
 
   logger.info(
     {
-      client: client.name,
-      clientId: client.id,
+      connection: connection.name,
+      connectionId,
+      tenantId,
       fetched: result.fetched,
       new: result.new,
       errors: result.errors,

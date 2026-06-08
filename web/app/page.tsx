@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import {
-  countActiveClients,
+  countActiveConnections,
   countAllExecutions,
 } from "@worker/db/repositories/stats.js";
 
@@ -9,14 +9,14 @@ export default async function Home() {
   // on each request rather than at build time.
   await connection();
 
-  const [executions, activeClients] = await Promise.all([
+  const [executions, activeConnections] = await Promise.all([
     countAllExecutions(),
-    countActiveClients(),
+    countActiveConnections(),
   ]);
 
   const stats = [
     { label: "Executions ingested", value: executions },
-    { label: "Active clients", value: activeClients },
+    { label: "Active n8n connections", value: activeConnections },
   ];
 
   return (

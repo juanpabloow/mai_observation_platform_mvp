@@ -1,27 +1,31 @@
 /**
- * THROWAWAY verification script (Step 2). Proves the schema + repositories work
- * end to end, including the ON CONFLICT DO NOTHING idempotency guarantee.
+ * THROWAWAY verification script. Proves the schema + repositories work end to
+ * end, including the ON CONFLICT DO NOTHING idempotency guarantee.
  * Safe to delete in a later step.
  *
- * Run with: npm run verify:db   (or: npx tsx src/scripts/verifyDb.ts)
+ * Run with: npm run verify:db
  */
 import { closePool } from '../db/client.js';
-import { insertClient } from '../db/repositories/clients.js';
-import { countByClient, upsertMany, type NewExecution } from '../db/repositories/executions.js';
+import { getOrCreateTenant } from '../db/repositories/tenants.js';
+import { insertConnection } from '../db/repositories/n8nConnections.js';
+import { countByConnection, upsertMany, type NewExecution } from '../db/repositories/executions.js';
 import { logger } from '../logger.js';
 
 async function main(): Promise<void> {
-  // 1. Insert a test client.
-  const client = await insertClient({
-    name: 'verify-test-client',
+  // 1. Tenant + n8n connection (the thing executions belong to).
+  const tenant = await getOrCreateTenant('verify-db-tenant');
+  const connection = await insertConnection({
+    tenant_id: tenant.id,
+    name: 'verify-db-connection',
     n8n_base_url: 'https://n8n.example.test',
     n8n_api_key_encrypted: 'placeholder-encrypted-key',
   });
-  logger.info({ clientId: client.id }, 'inserted test client');
+  logger.info({ tenantId: tenant.id, connectionId: connection.id }, 'inserted test tenant + connection');
 
-  // 2. Build one fake execution for that client.
+  // 2. Build one fake execution for that connection.
   const execution: NewExecution = {
-    client_id: client.id,
+    tenant_id: tenant.id,
+    n8n_connection_id: connection.id,
     n8n_execution_id: 'exec-verify-0001',
     n8n_workflow_id: 'wf-verify-0001',
     workflow_name: 'Verification Workflow',
@@ -34,18 +38,17 @@ async function main(): Promise<void> {
   };
 
   const firstInserted = await upsertMany([execution]);
-  const countAfterFirst = await countByClient(client.id);
+  const countAfterFirst = await countByConnection(connection.id);
 
   // 3. Run upsertMany AGAIN with the SAME execution → should insert nothing.
   const secondInserted = await upsertMany([execution]);
-  const countAfterSecond = await countByClient(client.id);
+  const countAfterSecond = await countByConnection(connection.id);
 
   const idempotent = countAfterSecond === 1 && secondInserted === 0;
 
-  // Human-readable summary.
   console.log('\n================ verifyDb results ================');
-  console.log('Client row:');
-  console.dir(client, { depth: null });
+  console.log('Tenant:', tenant.id, `(${tenant.name})`);
+  console.log('Connection:', connection.id, `(${connection.name})`);
   console.log('\nRows inserted on 1st upsertMany:      ', firstInserted);
   console.log('Execution count after 1st upsert:     ', countAfterFirst);
   console.log('Rows inserted on 2nd upsertMany (dup):', secondInserted);
