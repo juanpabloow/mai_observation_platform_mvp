@@ -1,20 +1,24 @@
 "use client";
 
+import { useMemo } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   createColumnHelper,
   flexRender,
   getCoreRowModel,
   useReactTable,
+  type ColumnDef,
   type OnChangeFn,
   type SortingState,
 } from "@tanstack/react-table";
 import { statusBadgeClasses } from "@/lib/format";
+import type { CustomCell } from "@/lib/fieldCatalog";
 
 /**
  * Pre-formatted view of one execution row. Dates/durations are formatted on the
- * SERVER and passed as strings, so this client component does no locale work
- * (avoids hydration mismatches).
+ * SERVER and passed as strings (no client locale work → no hydration drift).
+ * `custom` holds pre-extracted, pre-formatted values for the workflow's custom
+ * columns, keyed by mapping id.
  */
 export interface ExecutionRowView {
   id: string;
@@ -24,11 +28,18 @@ export interface ExecutionRowView {
   startedDisplay: string;
   durationDisplay: string;
   executionId: string;
+  custom: Record<string, CustomCell>;
+}
+
+export interface CustomColumnDef {
+  id: string;
+  label: string;
 }
 
 const columnHelper = createColumnHelper<ExecutionRowView>();
 
-const columns = [
+// Fixed columns (DB-backed; sortable where supported in SQL).
+const FIXED_COLUMNS = [
   columnHelper.accessor("status", {
     id: "status",
     header: "Status",
@@ -77,19 +88,42 @@ const columns = [
       <span className="font-mono text-xs text-neutral-500">{info.getValue()}</span>
     ),
   }),
-];
+] as ColumnDef<ExecutionRowView>[];
 
 interface ExecutionsTableProps {
   rows: ExecutionRowView[];
   sort: { key: string; direction: "asc" | "desc" };
+  customColumns: CustomColumnDef[];
 }
 
-export function ExecutionsTable({ rows, sort }: ExecutionsTableProps) {
+export function ExecutionsTable({ rows, sort, customColumns }: ExecutionsTableProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  // Controlled sorting state reflecting the URL.
+  // Fixed columns + the workflow's custom columns (derived, not sortable yet).
+  const columns = useMemo<ColumnDef<ExecutionRowView>[]>(
+    () => [
+      ...FIXED_COLUMNS,
+      ...customColumns.map(
+        (col): ColumnDef<ExecutionRowView> =>
+          columnHelper.display({
+            id: `custom_${col.id}`,
+            header: col.label,
+            cell: ({ row }) => {
+              const cell = row.original.custom[col.id];
+              return (
+                <span className="block max-w-[16rem] truncate" title={cell?.title}>
+                  {cell?.display ?? "—"}
+                </span>
+              );
+            },
+          }),
+      ),
+    ],
+    [customColumns],
+  );
+
   const sorting: SortingState = [{ id: sort.key, desc: sort.direction === "desc" }];
 
   // Sorting happens in SQL — clicking a header just rewrites the URL.
@@ -159,7 +193,7 @@ export function ExecutionsTable({ rows, sort }: ExecutionsTableProps) {
           {rows.length === 0 ? (
             <tr>
               <td
-                colSpan={columns.length}
+                colSpan={FIXED_COLUMNS.length + customColumns.length}
                 className="px-4 py-12 text-center text-sm text-neutral-500"
               >
                 No executions match these filters.

@@ -130,6 +130,42 @@ export function buildFieldCatalog(rawDataList: unknown[]): FieldCatalog {
   }));
 }
 
+const CELL_MAX = 80; // truncate cell display past this many chars
+const TITLE_MAX = 2000; // cap the hover-title full value
+
+/** A formatted custom-column cell: short display + optional full value for hover. */
+export interface CustomCell {
+  display: string;
+  title?: string;
+}
+
+/**
+ * Format an extracted value for a table cell. Null/undefined/missing → "—".
+ * Primitives shown directly (long strings truncated). Objects/arrays shown as a
+ * truncated JSON preview — never the full blob (keeps cells readable + safe for
+ * large extracted values).
+ */
+export function formatCellValue(value: unknown): CustomCell {
+  if (value === undefined || value === null) return { display: "—" };
+  if (typeof value === "string") {
+    return value.length > CELL_MAX
+      ? { display: `${value.slice(0, CELL_MAX)}…`, title: value.slice(0, TITLE_MAX) }
+      : { display: value };
+  }
+  if (typeof value === "number" || typeof value === "boolean") {
+    return { display: String(value) };
+  }
+  let json: string;
+  try {
+    json = JSON.stringify(value) ?? String(value);
+  } catch {
+    json = String(value);
+  }
+  return json.length > CELL_MAX
+    ? { display: `${json.slice(0, CELL_MAX)}…`, title: json.slice(0, TITLE_MAX) }
+    : { display: json };
+}
+
 /** Walk a dotted path (numeric segment = array index) into a value. */
 export function extractByPath(value: unknown, path: string): unknown {
   if (path === "") return value;

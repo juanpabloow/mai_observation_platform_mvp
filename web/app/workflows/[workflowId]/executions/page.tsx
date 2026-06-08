@@ -2,21 +2,57 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
 import {
+  getRawDataByIds,
   isExecutionSortKey,
   listExecutionsPage,
   type ExecutionFilters,
   type ExecutionListItem,
   type ExecutionSortKey,
 } from "@worker/db/repositories/executions.js";
-import { listColumnMappings } from "@worker/db/repositories/fieldMappings.js";
+import {
+  listColumnMappings,
+  type ColumnMappingRow,
+} from "@worker/db/repositories/fieldMappings.js";
 import { config } from "@worker/config.js";
 import { getCurrentTenantId } from "@/lib/tenant";
 import { getWorkflowForCurrentTenant } from "@/lib/workflow";
 import { formatDateTime, formatDuration } from "@/lib/format";
+import { parseExecution } from "@/lib/executionDetail";
+import { extractByPath, formatCellValue, type CustomCell } from "@/lib/fieldCatalog";
 import { FilterBar } from "@/components/FilterBar";
-import { ExecutionsTable, type ExecutionRowView } from "@/components/ExecutionsTable";
+import {
+  ExecutionsTable,
+  type CustomColumnDef,
+  type ExecutionRowView,
+} from "@/components/ExecutionsTable";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { ColumnsManager, type DefinedColumn } from "@/components/ColumnsManager";
+
+/**
+ * Extract + format each custom column's value for one execution. Null-safe: if
+ * the node didn't run, output is missing, or the path doesn't resolve, the cell
+ * is "—" (the normal case — different executions run different nodes).
+ */
+function computeCustomCells(
+  rawData: unknown,
+  columns: ColumnMappingRow[],
+): Record<string, CustomCell> {
+  const nodeOutputs = new Map<string, unknown>();
+  if (rawData !== null && rawData !== undefined) {
+    for (const node of parseExecution(rawData).nodes) {
+      if (!nodeOutputs.has(node.name)) {
+        nodeOutputs.set(node.name, node.runs[0]?.output);
+      }
+    }
+  }
+  const cells: Record<string, CustomCell> = {};
+  for (const col of columns) {
+    const output = col.node_name ? nodeOutputs.get(col.node_name) : undefined;
+    const value = output === undefined ? undefined : extractByPath(output, col.json_path);
+    cells[col.id] = formatCellValue(value);
+  }
+  return cells;
+}
 
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 100;
@@ -89,6 +125,22 @@ export default async function WorkflowExecutionsPage({
     dataType: c.data_type,
   }));
 
+  const customColumns: CustomColumnDef[] = columnMappings.map((c) => ({
+    id: c.id,
+    label: c.column_label ?? c.json_path,
+  }));
+
+  // Extract custom-column values server-side for ONLY the current page's rows
+  // (fetch raw_data just for these ids — never the whole table).
+  const customByRow = new Map<string, Record<string, CustomCell>>();
+  if (columnMappings.length > 0 && rows.length > 0) {
+    const raws = await getRawDataByIds({ tenantId, ids: rows.map((r) => r.id) });
+    const rawById = new Map(raws.map((r) => [r.id, r.raw_data]));
+    for (const r of rows) {
+      customByRow.set(r.id, computeCustomCells(rawById.get(r.id), columnMappings));
+    }
+  }
+
   const view: ExecutionRowView[] = rows.map((r: ExecutionListItem) => ({
     id: r.id,
     status: r.status,
@@ -97,6 +149,7 @@ export default async function WorkflowExecutionsPage({
     startedDisplay: formatDateTime(r.started_at),
     durationDisplay: formatDuration(r.duration_ms),
     executionId: r.n8n_execution_id,
+    custom: customByRow.get(r.id) ?? {},
   }));
 
   const totalPages = Math.max(1, Math.ceil(total / pageSize));
@@ -136,7 +189,11 @@ export default async function WorkflowExecutionsPage({
 
       <ColumnsManager workflowId={workflowId} columns={definedColumns} />
 
-      <ExecutionsTable rows={view} sort={{ key: sortKey, direction }} />
+      <ExecutionsTable
+        rows={view}
+        sort={{ key: sortKey, direction }}
+        customColumns={customColumns}
+      />
 
       <nav className="flex items-center justify-between text-sm">
         <span className="text-neutral-500">

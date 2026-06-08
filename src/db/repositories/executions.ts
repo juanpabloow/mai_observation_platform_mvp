@@ -250,6 +250,26 @@ export async function listRecentRawForWorkflow(params: {
   return result.rows;
 }
 
+/**
+ * Fetch raw_data for a specific set of execution ids (tenant-scoped). Used to
+ * extract custom-column values for ONLY the executions on the current page —
+ * never the whole table.
+ */
+export async function getRawDataByIds(params: {
+  tenantId: string;
+  ids: string[];
+}): Promise<Array<{ id: string; raw_data: unknown }>> {
+  if (params.ids.length === 0) {
+    return [];
+  }
+  const result = await query<{ id: string; raw_data: unknown }>(
+    `SELECT id, raw_data FROM executions
+      WHERE tenant_id = $1 AND id = ANY($2::uuid[])`,
+    [params.tenantId, params.ids],
+  );
+  return result.rows;
+}
+
 /** Full execution row including the raw payload, for the detail view. */
 export interface ExecutionDetailRow extends ExecutionListItem {
   raw_data: unknown | null;
