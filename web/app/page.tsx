@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import {
-  countActiveConnections,
+  countActiveConnectionsForTenant,
   countExecutionsForTenant,
 } from "@worker/db/repositories/stats.js";
 import { getCurrentTenantId } from "@/lib/tenant";
@@ -14,7 +14,7 @@ export default async function Home() {
   const tenantId = await getCurrentTenantId();
   const [executions, activeConnections] = await Promise.all([
     countExecutionsForTenant(tenantId),
-    countActiveConnections(),
+    countActiveConnectionsForTenant(tenantId),
   ]);
 
   const stats = [

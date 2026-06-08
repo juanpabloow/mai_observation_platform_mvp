@@ -14,10 +14,11 @@ export async function countExecutionsForTenant(tenantId: string): Promise<number
   return Number(result.rows[0]?.count ?? 0);
 }
 
-/** Number of active n8n connections (the instances the worker polls). */
-export async function countActiveConnections(): Promise<number> {
+/** Number of active n8n connections for a tenant. */
+export async function countActiveConnectionsForTenant(tenantId: string): Promise<number> {
   const result = await query<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM n8n_connections WHERE is_active = true`,
+    `SELECT COUNT(*)::text AS count FROM n8n_connections WHERE tenant_id = $1 AND is_active = true`,
+    [tenantId],
   );
   return Number(result.rows[0]?.count ?? 0);
 }

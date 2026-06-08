@@ -67,3 +67,25 @@ export async function listWorkflowsByConnection(
   );
   return result.rows;
 }
+
+/** A workflow option for the filter dropdown (distinct workflow ids per tenant). */
+export interface WorkflowOption {
+  n8n_workflow_id: string;
+  name: string | null;
+}
+
+/** Distinct workflows for a tenant, for the filter dropdown (ordered by name). */
+export async function listWorkflowsForTenant(tenantId: string): Promise<WorkflowOption[]> {
+  const result = await query<WorkflowOption>(
+    `SELECT n8n_workflow_id, name
+       FROM (
+         SELECT DISTINCT ON (n8n_workflow_id) n8n_workflow_id, name
+           FROM workflows
+          WHERE tenant_id = $1
+          ORDER BY n8n_workflow_id, name
+       ) distinct_workflows
+      ORDER BY name NULLS LAST, n8n_workflow_id`,
+    [tenantId],
+  );
+  return result.rows;
+}

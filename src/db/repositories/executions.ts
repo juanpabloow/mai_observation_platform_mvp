@@ -100,10 +100,46 @@ export interface ExecutionListItem {
   client_name: string | null;
 }
 
+/** Columns the list can be sorted by (whitelist — never interpolate raw input). */
+export type ExecutionSortKey = 'started_at' | 'duration_ms' | 'status';
+export type SortDirection = 'asc' | 'desc';
+
+// Maps a validated sort key to a safe SQL column expression.
+const SORT_COLUMNS: Record<ExecutionSortKey, string> = {
+  started_at: 'e.started_at',
+  duration_ms: 'e.duration_ms',
+  status: 'e.status',
+};
+
+/** Type guard so callers can validate a raw query-param value. */
+export function isExecutionSortKey(value: string): value is ExecutionSortKey {
+  return value === 'started_at' || value === 'duration_ms' || value === 'status';
+}
+
+export interface ExecutionFilters {
+  /** Exact status match (e.g. 'success', 'error'). Omit/undefined = all. */
+  status?: string;
+  /** Exact n8n_workflow_id match. */
+  workflowId?: string;
+  /** A client UUID, or the literal 'unassigned' (workflow with no client). */
+  clientId?: string;
+  /** Inclusive lower bound on started_at, as 'YYYY-MM-DD'. */
+  fromDate?: string;
+  /** Inclusive upper bound on started_at (whole day), as 'YYYY-MM-DD'. */
+  toDate?: string;
+}
+
+export interface ExecutionSort {
+  key: ExecutionSortKey;
+  direction: SortDirection;
+}
+
 export interface ListExecutionsPageParams {
   tenantId: string;
   limit: number;
   offset: number;
+  filters?: ExecutionFilters;
+  sort?: ExecutionSort;
 }
 
 export interface ExecutionsPage {
@@ -112,19 +148,60 @@ export interface ExecutionsPage {
 }
 
 /**
- * Fetch one page of executions for a tenant, newest first. Resolves the workflow
- * name (and assigned client name) via LEFT JOINs; never loads more than `limit`
- * rows. `total` is the tenant's full execution count, for pagination.
- *
- * Backed by the (tenant_id, started_at DESC) index.
+ * Fetch one page of executions for a tenant with optional filtering and sorting,
+ * all applied in SQL (server-side, never client-side). `total` reflects the SAME
+ * filters so pagination stays correct. Always tenant-scoped; never loads more
+ * than `limit` rows. Backed by the (tenant_id, started_at DESC) index.
  */
 export async function listExecutionsPage(
   params: ListExecutionsPageParams,
 ): Promise<ExecutionsPage> {
-  const { tenantId, limit, offset } = params;
+  const { tenantId, limit, offset, filters = {}, sort } = params;
 
-  const rowsPromise = query<ExecutionListItem>(
-    `SELECT
+  // Build the WHERE clause from filters. Every value is a bound $N parameter.
+  const conditions: string[] = ['e.tenant_id = $1'];
+  const filterParams: unknown[] = [tenantId];
+  let p = 2;
+
+  if (filters.status && filters.status !== 'all') {
+    conditions.push(`e.status = $${p++}`);
+    filterParams.push(filters.status);
+  }
+  if (filters.workflowId) {
+    conditions.push(`e.n8n_workflow_id = $${p++}`);
+    filterParams.push(filters.workflowId);
+  }
+  if (filters.clientId) {
+    if (filters.clientId === 'unassigned') {
+      conditions.push('w.client_id IS NULL');
+    } else {
+      conditions.push(`w.client_id = $${p++}`);
+      filterParams.push(filters.clientId);
+    }
+  }
+  if (filters.fromDate) {
+    conditions.push(`e.started_at >= $${p++}::timestamptz`);
+    filterParams.push(filters.fromDate);
+  }
+  if (filters.toDate) {
+    conditions.push(`e.started_at < ($${p++}::timestamptz + INTERVAL '1 day')`);
+    filterParams.push(filters.toDate);
+  }
+
+  const whereSql = conditions.join(' AND ');
+
+  // Sort key/direction come from a whitelist + validated enum — safe to inline.
+  const sortKey: ExecutionSortKey = sort?.key ?? 'started_at';
+  const sortDir = sort?.direction === 'asc' ? 'ASC' : 'DESC';
+  const orderSql = `ORDER BY ${SORT_COLUMNS[sortKey]} ${sortDir} NULLS LAST, e.n8n_execution_id DESC`;
+
+  const fromJoin = `FROM executions e
+     LEFT JOIN workflows w
+       ON w.n8n_connection_id = e.n8n_connection_id
+      AND w.n8n_workflow_id = e.n8n_workflow_id
+     LEFT JOIN clients c ON c.id = w.client_id`;
+
+  const rowsSql = `SELECT
        e.id,
        e.n8n_execution_id,
        e.status,
@@ -135,23 +212,17 @@ export async function listExecutionsPage(
        e.n8n_workflow_id,
        COALESCE(w.name, e.workflow_name, e.n8n_workflow_id) AS workflow_name,
        c.name AS client_name
-     FROM executions e
-     LEFT JOIN workflows w
-       ON w.n8n_connection_id = e.n8n_connection_id
-      AND w.n8n_workflow_id = e.n8n_workflow_id
-     LEFT JOIN clients c ON c.id = w.client_id
-     WHERE e.tenant_id = $1
-     ORDER BY e.started_at DESC, e.n8n_execution_id DESC
-     LIMIT $2 OFFSET $3`,
-    [tenantId, limit, offset],
-  );
+     ${fromJoin}
+     WHERE ${whereSql}
+     ${orderSql}
+     LIMIT $${p++} OFFSET $${p++}`;
 
-  const totalPromise = query<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM executions WHERE tenant_id = $1`,
-    [tenantId],
-  );
+  const countSql = `SELECT COUNT(*)::text AS count ${fromJoin} WHERE ${whereSql}`;
 
-  const [rowsResult, totalResult] = await Promise.all([rowsPromise, totalPromise]);
+  const [rowsResult, totalResult] = await Promise.all([
+    query<ExecutionListItem>(rowsSql, [...filterParams, limit, offset]),
+    query<{ count: string }>(countSql, filterParams),
+  ]);
 
   return {
     rows: rowsResult.rows,
