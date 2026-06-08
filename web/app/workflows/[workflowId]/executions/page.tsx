@@ -8,6 +8,7 @@ import {
   type ExecutionListItem,
   type ExecutionSortKey,
 } from "@worker/db/repositories/executions.js";
+import { listColumnMappings } from "@worker/db/repositories/fieldMappings.js";
 import { config } from "@worker/config.js";
 import { getCurrentTenantId } from "@/lib/tenant";
 import { getWorkflowForCurrentTenant } from "@/lib/workflow";
@@ -15,6 +16,7 @@ import { formatDateTime, formatDuration } from "@/lib/format";
 import { FilterBar } from "@/components/FilterBar";
 import { ExecutionsTable, type ExecutionRowView } from "@/components/ExecutionsTable";
 import { AutoRefresh } from "@/components/AutoRefresh";
+import { ColumnsManager, type DefinedColumn } from "@/components/ColumnsManager";
 
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 100;
@@ -68,13 +70,24 @@ export default async function WorkflowExecutionsPage({
   };
 
   const tenantId = await getCurrentTenantId();
-  const { rows, total } = await listExecutionsPage({
-    tenantId,
-    limit: pageSize,
-    offset: (page - 1) * pageSize,
-    filters,
-    sort: { key: sortKey, direction },
-  });
+  const [{ rows, total }, columnMappings] = await Promise.all([
+    listExecutionsPage({
+      tenantId,
+      limit: pageSize,
+      offset: (page - 1) * pageSize,
+      filters,
+      sort: { key: sortKey, direction },
+    }),
+    listColumnMappings({ tenantId, n8nWorkflowId: workflowId }),
+  ]);
+
+  const definedColumns: DefinedColumn[] = columnMappings.map((c) => ({
+    id: c.id,
+    nodeName: c.node_name,
+    columnLabel: c.column_label,
+    jsonPath: c.json_path,
+    dataType: c.data_type,
+  }));
 
   const view: ExecutionRowView[] = rows.map((r: ExecutionListItem) => ({
     id: r.id,
@@ -120,6 +133,8 @@ export default async function WorkflowExecutionsPage({
         from={filters.fromDate ?? ""}
         to={filters.toDate ?? ""}
       />
+
+      <ColumnsManager workflowId={workflowId} columns={definedColumns} />
 
       <ExecutionsTable rows={view} sort={{ key: sortKey, direction }} />
 

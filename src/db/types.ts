@@ -76,9 +76,12 @@ export type ConversationRole =
 export interface FieldMappingRow {
   id: string;
   tenant_id: string;
-  n8n_connection_id: string;
+  /** Null for 'column' mappings (keyed by tenant + workflow, not a connection). */
+  n8n_connection_id: string | null;
   n8n_workflow_id: string;
   mapping_kind: MappingKind;
+  /** The node a 'column' field comes from (its json_path is relative to that node). */
+  node_name: string | null;
   column_label: string | null;
   role: string | null;
   json_path: string;

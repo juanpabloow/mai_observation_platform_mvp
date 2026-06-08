@@ -230,6 +230,26 @@ export async function listExecutionsPage(
   };
 }
 
+/**
+ * Raw payloads of the most recent executions for a workflow (tenant-scoped,
+ * newest first). Used to sample available fields for the column picker.
+ */
+export async function listRecentRawForWorkflow(params: {
+  tenantId: string;
+  n8nWorkflowId: string;
+  limit: number;
+}): Promise<Array<{ raw_data: unknown }>> {
+  const result = await query<{ raw_data: unknown }>(
+    `SELECT raw_data
+       FROM executions
+      WHERE tenant_id = $1 AND n8n_workflow_id = $2
+      ORDER BY started_at DESC, n8n_execution_id DESC
+      LIMIT $3`,
+    [params.tenantId, params.n8nWorkflowId, params.limit],
+  );
+  return result.rows;
+}
+
 /** Full execution row including the raw payload, for the detail view. */
 export interface ExecutionDetailRow extends ExecutionListItem {
   raw_data: unknown | null;
