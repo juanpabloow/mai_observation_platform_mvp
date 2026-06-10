@@ -11,9 +11,6 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "migrate": "node-pg-migrate --envPath .env --tsx",
-    "verify:db": "tsx src/scripts/verifyDb.ts",
-    "verify:n8n": "tsx src/scripts/verifyN8n.ts",
-    "verify:ingest": "tsx src/scripts/verifyIngest.ts",
     "web": "cd web && npm run dev",
     "web:build": "cd web && npm run build",
     "web:install": "cd web && npm install"

@@ -75,15 +75,6 @@ export async function upsertMany(executions: NewExecution[]): Promise<number> {
   return result.rowCount ?? 0;
 }
 
-/** Count executions stored for a given n8n connection (used for verification). */
-export async function countByConnection(connectionId: string): Promise<number> {
-  const result = await query<{ count: string }>(
-    `SELECT COUNT(*)::text AS count FROM executions WHERE n8n_connection_id = $1`,
-    [connectionId],
-  );
-  return Number(result.rows[0]?.count ?? 0);
-}
-
 /** A row in the tenant-scoped executions list (joined to workflow + client). */
 export interface ExecutionListItem {
   id: string;
