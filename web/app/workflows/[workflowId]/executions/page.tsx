@@ -17,8 +17,12 @@ import { config } from "@worker/config.js";
 import { getCurrentTenantId } from "@/lib/tenant";
 import { getWorkflowForCurrentTenant } from "@/lib/workflow";
 import { formatDateTime, formatDuration } from "@/lib/format";
-import { parseExecution } from "@/lib/executionDetail";
-import { extractByPath, formatCellValue, type CustomCell } from "@/lib/fieldCatalog";
+import {
+  buildExecutionResolver,
+  extractMapping,
+  formatCellValue,
+  type CustomCell,
+} from "@/lib/fieldCatalog";
 import { FilterBar } from "@/components/FilterBar";
 import {
   ExecutionsTable,
@@ -37,19 +41,11 @@ function computeCustomCells(
   rawData: unknown,
   columns: ColumnMappingRow[],
 ): Record<string, CustomCell> {
-  const nodeOutputs = new Map<string, unknown>();
-  if (rawData !== null && rawData !== undefined) {
-    for (const node of parseExecution(rawData).nodes) {
-      if (!nodeOutputs.has(node.name)) {
-        nodeOutputs.set(node.name, node.runs[0]?.output);
-      }
-    }
-  }
+  // Resolver handles both node-output and execution-metadata paths; null-safe.
+  const resolver = buildExecutionResolver(rawData);
   const cells: Record<string, CustomCell> = {};
   for (const col of columns) {
-    const output = col.node_name ? nodeOutputs.get(col.node_name) : undefined;
-    const value = output === undefined ? undefined : extractByPath(output, col.json_path);
-    cells[col.id] = formatCellValue(value);
+    cells[col.id] = formatCellValue(extractMapping(resolver, col.node_name, col.json_path));
   }
   return cells;
 }

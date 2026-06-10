@@ -37,11 +37,21 @@ export interface CatalogField {
 }
 
 export interface CatalogNode {
+  /** Stored identifier: the real node name, or METADATA_NODE_NAME for metadata. */
   nodeName: string;
+  /** Display name for the picker (e.g. "Execution metadata"). */
+  displayName: string;
   fields: CatalogField[];
 }
 
 export type FieldCatalog = CatalogNode[];
+
+/**
+ * Sentinel node_name for fields that live under data.resultData.metadata
+ * (execution-level, not a node's output — e.g. an AI reply written to metadata).
+ */
+export const METADATA_NODE_NAME = "__metadata__";
+export const METADATA_NODE_LABEL = "Execution metadata";
 
 function previewValue(value: unknown): string {
   if (value === null) return "null";
@@ -53,6 +63,25 @@ function previewValue(value: unknown): string {
 
 function dataTypeOf(value: unknown): string {
   return value === null ? "null" : typeof value;
+}
+
+/** data.resultData.metadata, or undefined if absent. */
+function getResultDataMetadata(rawData: unknown): unknown {
+  if (rawData === null || typeof rawData !== "object" || Array.isArray(rawData)) return undefined;
+  const resultData = (rawData as Record<string, unknown>).resultData;
+  if (resultData === null || typeof resultData !== "object" || Array.isArray(resultData)) {
+    return undefined;
+  }
+  return (resultData as Record<string, unknown>).metadata;
+}
+
+function accumulatorToFields(acc: FieldAccumulator): CatalogField[] {
+  return [...acc.entries()].map(([jsonPath, f]) => ({
+    label: f.label,
+    jsonPath,
+    exampleValue: f.example,
+    dataType: f.dataType,
+  }));
 }
 
 type FieldAccumulator = Map<string, { label: string; example: string; dataType: string }>;
@@ -104,6 +133,8 @@ export function buildFieldCatalog(rawDataList: unknown[]): FieldCatalog {
   // nodeName -> (jsonPath -> field). Iterated newest-first, so the first time a
   // path is seen (set-if-absent) captures the most recent example.
   const nodes = new Map<string, FieldAccumulator>();
+  // Fields under data.resultData.metadata, offered as a pseudo-node.
+  const metadataFields: FieldAccumulator = new Map();
 
   for (const rawData of rawDataList) {
     const parsed = parseExecution(rawData);
@@ -117,17 +148,30 @@ export function buildFieldCatalog(rawDataList: unknown[]): FieldCatalog {
       }
       flattenLeaves(output, [], [], 0, fields);
     }
+
+    const metadata = getResultDataMetadata(rawData);
+    if (metadata !== undefined && metadata !== null) {
+      flattenLeaves(metadata, [], [], 0, metadataFields);
+    }
   }
 
-  return [...nodes.entries()].map(([nodeName, fields]) => ({
+  const catalog: FieldCatalog = [...nodes.entries()].map(([nodeName, fields]) => ({
     nodeName,
-    fields: [...fields.entries()].map(([jsonPath, f]) => ({
-      label: f.label,
-      jsonPath,
-      exampleValue: f.example,
-      dataType: f.dataType,
-    })),
+    displayName: nodeName,
+    fields: accumulatorToFields(fields),
   }));
+
+  // Append the execution-metadata pseudo-node so fields like response_ai_agent
+  // (which live outside any node output) are pickable the same way.
+  if (metadataFields.size > 0) {
+    catalog.push({
+      nodeName: METADATA_NODE_NAME,
+      displayName: METADATA_NODE_LABEL,
+      fields: accumulatorToFields(metadataFields),
+    });
+  }
+
+  return catalog;
 }
 
 const CELL_MAX = 80; // truncate cell display past this many chars
@@ -183,4 +227,43 @@ export function extractByPath(value: unknown, path: string): unknown {
     }
   }
   return cur;
+}
+
+export interface ExecutionResolver {
+  /** nodeName -> that node's unwrapped output. */
+  nodeOutputs: Map<string, unknown>;
+  /** data.resultData.metadata. */
+  metadata: unknown;
+}
+
+/** Parse one execution into node outputs + metadata, for repeated extraction. */
+export function buildExecutionResolver(rawData: unknown): ExecutionResolver {
+  const nodeOutputs = new Map<string, unknown>();
+  for (const node of parseExecution(rawData).nodes) {
+    if (!nodeOutputs.has(node.name)) {
+      nodeOutputs.set(node.name, node.runs[0]?.output);
+    }
+  }
+  return { nodeOutputs, metadata: getResultDataMetadata(rawData) ?? null };
+}
+
+/**
+ * Extract a mapping's value from a resolver. Handles BOTH node-output mappings
+ * and execution-metadata mappings (node_name === METADATA_NODE_NAME, json_path
+ * relative to resultData.metadata). Null-safe: returns undefined if the node
+ * didn't run / metadata is absent / the path doesn't resolve.
+ */
+export function extractMapping(
+  resolver: ExecutionResolver,
+  nodeName: string | null,
+  jsonPath: string,
+): unknown {
+  const source =
+    nodeName === METADATA_NODE_NAME
+      ? resolver.metadata
+      : nodeName
+        ? resolver.nodeOutputs.get(nodeName)
+        : undefined;
+  if (source === undefined || source === null) return undefined;
+  return extractByPath(source, jsonPath);
 }

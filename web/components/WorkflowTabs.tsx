@@ -10,8 +10,8 @@ import { usePathname } from "next/navigation";
  */
 const TABS = [
   { key: "executions", label: "Executions", enabled: true },
+  { key: "conversations", label: "Conversations", enabled: true },
   { key: "analytics", label: "Analytics", enabled: false },
-  { key: "conversations", label: "Conversations", enabled: false },
 ];
 
 export function WorkflowTabs({ workflowId }: { workflowId: string }) {
