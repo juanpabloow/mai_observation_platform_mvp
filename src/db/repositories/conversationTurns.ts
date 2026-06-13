@@ -77,6 +77,25 @@ export async function deleteTurnByExecution(params: {
   return (result.rowCount ?? 0) > 0;
 }
 
+/**
+ * The turn derived from a specific execution (tenant-scoped), or null if that
+ * execution produced no turn (a non-message execution / no mapping). Used by the
+ * execution-detail page to decide whether to show the conversation side panel.
+ */
+export async function getTurnByExecution(params: {
+  tenantId: string;
+  executionId: string;
+}): Promise<ConversationTurnRow | null> {
+  const result = await query<ConversationTurnRow>(
+    `SELECT id, tenant_id, n8n_workflow_id, execution_id, conversation_id,
+            contact_name, user_message, ai_response, turn_timestamp, created_at
+       FROM conversation_turns
+      WHERE execution_id = $1 AND tenant_id = $2`,
+    [params.executionId, params.tenantId],
+  );
+  return result.rows[0] ?? null;
+}
+
 /** Count derived turns for a workflow (tenant-scoped). */
 export async function countTurns(params: {
   tenantId: string;

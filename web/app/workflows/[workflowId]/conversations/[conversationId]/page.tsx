@@ -1,37 +1,14 @@
 import { connection } from "next/server";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { listTurnsForConversation, type ConversationTurnRow } from "@worker/db/repositories/conversationTurns.js";
+import { listTurnsForConversation } from "@worker/db/repositories/conversationTurns.js";
 import { getCurrentTenantId } from "@/lib/tenant";
 import { getWorkflowForCurrentTenant } from "@/lib/workflow";
-import { formatChatTime, formatDayLabel, localDayKey } from "@/lib/format";
 import { ChatScroll } from "@/components/ChatScroll";
+import { ChatTranscript } from "@/components/ChatTranscript";
 
 function hasText(value: string | null): value is string {
   return value !== null && value.trim() !== "";
-}
-
-/** One chat bubble: inbound (user, left, gray) or outbound (AI, right, green). */
-function Bubble({ side, text, time }: { side: "in" | "out"; text: string; time: string }) {
-  const out = side === "out";
-  return (
-    <div className={`flex ${out ? "justify-end" : "justify-start"}`}>
-      <div
-        className={`max-w-[78%] rounded-2xl px-3 py-2 shadow-sm ${
-          out
-            ? "rounded-br-sm bg-emerald-700/90 text-emerald-50"
-            : "rounded-bl-sm bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100"
-        }`}
-      >
-        <div className="max-h-96 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed">
-          {text}
-        </div>
-        <div className={`mt-1 text-right text-[10px] ${out ? "text-emerald-100/70" : "text-neutral-500"}`}>
-          {time}
-        </div>
-      </div>
-    </div>
-  );
 }
 
 export default async function ConversationThreadPage({
@@ -63,20 +40,7 @@ export default async function ConversationThreadPage({
     if (hasText(t.contact_name)) contactName = t.contact_name;
   }
   const displayName = contactName ?? conversationId;
-
-  // Group consecutive turns by calendar day for date dividers.
   const now = new Date();
-  const groups: { key: string; label: string; turns: ConversationTurnRow[] }[] = [];
-  for (const t of turns) {
-    const key = localDayKey(t.turn_timestamp);
-    const last = groups[groups.length - 1];
-    if (!last || last.key !== key) {
-      groups.push({ key, label: formatDayLabel(t.turn_timestamp, now), turns: [t] });
-    } else {
-      last.turns.push(t);
-    }
-  }
-
   const listHref = `/workflows/${encodeURIComponent(workflowId)}/conversations`;
 
   return (
@@ -95,30 +59,7 @@ export default async function ConversationThreadPage({
       </div>
 
       <ChatScroll className="h-[70vh] overflow-y-auto rounded-xl border border-black/10 bg-black/[0.02] px-4 py-4 dark:border-white/10 dark:bg-white/[0.02]">
-        <div className="flex flex-col gap-2">
-          {groups.map((group) => (
-            <div key={group.key} className="flex flex-col gap-2">
-              <div className="my-2 flex justify-center">
-                <span className="rounded-full bg-black/5 px-3 py-1 text-xs text-neutral-500 dark:bg-white/5 dark:text-neutral-400">
-                  {group.label}
-                </span>
-              </div>
-              {group.turns.map((t) => {
-                const time = formatChatTime(t.turn_timestamp);
-                return (
-                  <div key={t.id} className="flex flex-col gap-1">
-                    {hasText(t.user_message) ? (
-                      <Bubble side="in" text={t.user_message} time={time} />
-                    ) : null}
-                    {hasText(t.ai_response) ? (
-                      <Bubble side="out" text={t.ai_response} time={time} />
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-          ))}
-        </div>
+        <ChatTranscript turns={turns} now={now} />
       </ChatScroll>
     </div>
   );
