@@ -11,6 +11,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "migrate": "node-pg-migrate --envPath .env --tsx",
+    "derive:backfill": "tsx src/scripts/deriveBackfill.ts",
     "web": "cd web && npm run dev",
     "web:build": "cd web && npm run build",
     "web:install": "cd web && npm install"

@@ -36,11 +36,13 @@ const INSERT_COLUMNS = [
  * (n8n_connection_id, n8n_execution_id) are ignored (ON CONFLICT DO NOTHING) —
  * this is the idempotency guarantee for re-polling.
  *
- * @returns the number of rows actually inserted (excludes ignored conflicts).
+ * @returns the internal UUIDs of the rows ACTUALLY inserted (excludes ignored
+ * conflicts). The caller derives the inserted count from `.length` and uses the
+ * ids to derive conversation turns for just-ingested executions.
  */
-export async function upsertMany(executions: NewExecution[]): Promise<number> {
+export async function upsertMany(executions: NewExecution[]): Promise<string[]> {
   if (executions.length === 0) {
-    return 0;
+    return [];
   }
 
   const params: unknown[] = [];
@@ -69,10 +71,12 @@ export async function upsertMany(executions: NewExecution[]): Promise<number> {
 
   const sql = `INSERT INTO executions (${INSERT_COLUMNS.join(', ')})
      VALUES ${rowsSql.join(', ')}
-     ON CONFLICT (n8n_connection_id, n8n_execution_id) DO NOTHING`;
+     ON CONFLICT (n8n_connection_id, n8n_execution_id) DO NOTHING
+     RETURNING id`;
 
-  const result = await query(sql, params);
-  return result.rowCount ?? 0;
+  // ON CONFLICT DO NOTHING + RETURNING returns only the rows that were inserted.
+  const result = await query<{ id: string }>(sql, params);
+  return result.rows.map((r) => r.id);
 }
 
 /** A row in the tenant-scoped executions list (joined to workflow + client). */
@@ -257,6 +261,68 @@ export async function getRawDataByIds(params: {
     `SELECT id, raw_data FROM executions
       WHERE tenant_id = $1 AND id = ANY($2::uuid[])`,
     [params.tenantId, params.ids],
+  );
+  return result.rows;
+}
+
+/**
+ * The minimal execution shape needed to derive a conversation turn: the internal
+ * id (turn FK + upsert key), workflow + tenant (to load mappings), the raw
+ * payload (to extract fields), and started_at (the turn timestamp).
+ */
+export interface ExecutionForDerivation {
+  id: string;
+  tenant_id: string;
+  n8n_workflow_id: string;
+  started_at: Date;
+  raw_data: unknown;
+}
+
+const DERIVATION_COLUMNS = 'id, tenant_id, n8n_workflow_id, started_at, raw_data';
+
+/**
+ * Fetch executions for turn derivation by their internal ids (tenant-scoped).
+ * Used by the derive-on-ingest worker step for ONLY the just-ingested rows.
+ */
+export async function getExecutionsForDerivationByIds(params: {
+  tenantId: string;
+  ids: string[];
+}): Promise<ExecutionForDerivation[]> {
+  if (params.ids.length === 0) {
+    return [];
+  }
+  const result = await query<ExecutionForDerivation>(
+    `SELECT ${DERIVATION_COLUMNS} FROM executions
+      WHERE tenant_id = $1 AND id = ANY($2::uuid[])`,
+    [params.tenantId, params.ids],
+  );
+  return result.rows;
+}
+
+/**
+ * One keyset page of a workflow's executions for turn derivation (tenant-scoped),
+ * ordered by id ASC. Pass the previous page's last id as `afterId` to continue.
+ * Ordering is by id (a stable, total order) because backfill only needs to visit
+ * every row once — not chronologically.
+ */
+export async function listExecutionsForDerivationPage(params: {
+  tenantId: string;
+  n8nWorkflowId: string;
+  afterId: string | null;
+  limit: number;
+}): Promise<ExecutionForDerivation[]> {
+  const conditions = ['tenant_id = $1', 'n8n_workflow_id = $2'];
+  const values: unknown[] = [params.tenantId, params.n8nWorkflowId];
+  if (params.afterId) {
+    conditions.push(`id > $${values.length + 1}::uuid`);
+    values.push(params.afterId);
+  }
+  const result = await query<ExecutionForDerivation>(
+    `SELECT ${DERIVATION_COLUMNS} FROM executions
+      WHERE ${conditions.join(' AND ')}
+      ORDER BY id ASC
+      LIMIT $${values.length + 1}`,
+    [...values, params.limit],
   );
   return result.rows;
 }

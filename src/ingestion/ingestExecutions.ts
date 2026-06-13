@@ -25,6 +25,8 @@ export interface IngestResult {
   errors: number;
   /** Cursor we persisted: max numeric id seen, as a string (null if none yet). */
   newCursor: string | null;
+  /** Internal UUIDs of the rows newly inserted this run (for turn derivation). */
+  newExecutionIds: string[];
 }
 
 /** Map a full n8n execution detail into an `executions` row. */
@@ -133,7 +135,7 @@ export async function ingestExecutionsForConnection(
       { err, connection: connection.name, connectionId, pages },
       'ingestion failed while listing executions',
     );
-    return { fetched: 0, new: 0, errors: 1, newCursor: prevLastSeen };
+    return { fetched: 0, new: 0, errors: 1, newCursor: prevLastSeen, newExecutionIds: [] };
   }
 
   // --- 2. Fetch full payloads with bounded concurrency. ---
@@ -157,7 +159,7 @@ export async function ingestExecutionsForConnection(
   }
 
   // --- 3. Persist rows (idempotent) and advance the cursor. ---
-  const newCount = await upsertMany(rows);
+  const insertedIds = await upsertMany(rows);
 
   const maxSeenNum = newSummaries.reduce<number>(
     (max, s) => Math.max(max, Number(s.id)),
@@ -169,9 +171,10 @@ export async function ingestExecutionsForConnection(
 
   const result: IngestResult = {
     fetched: rows.length,
-    new: newCount,
+    new: insertedIds.length,
     errors,
     newCursor,
+    newExecutionIds: insertedIds,
   };
 
   logger.info(

@@ -196,6 +196,29 @@ export async function upsertConversationMapping(
   return firstRowOrThrow(result, 'upsertConversationMapping');
 }
 
+/**
+ * Distinct (tenant, workflow) pairs that have at least one conversation mapping.
+ * Used by the turn backfill to find which workflows to derive turns for. Pass
+ * `filterWorkflowId` to scope to a single workflow.
+ */
+export async function listWorkflowsWithConversationMappings(
+  filterWorkflowId?: string,
+): Promise<Array<{ tenant_id: string; n8n_workflow_id: string }>> {
+  const conditions = ["mapping_kind = 'conversation'"];
+  const values: unknown[] = [];
+  if (filterWorkflowId) {
+    conditions.push(`n8n_workflow_id = $${values.length + 1}`);
+    values.push(filterWorkflowId);
+  }
+  const result = await query<{ tenant_id: string; n8n_workflow_id: string }>(
+    `SELECT DISTINCT tenant_id, n8n_workflow_id
+       FROM field_mappings
+      WHERE ${conditions.join(' AND ')}`,
+    values,
+  );
+  return result.rows;
+}
+
 /** Delete one role's mapping (tenant-scoped). Returns true if a row was removed. */
 export async function deleteConversationMapping(params: {
   tenantId: string;

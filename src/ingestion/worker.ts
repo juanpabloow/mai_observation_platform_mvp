@@ -3,6 +3,7 @@ import { logger } from '../logger.js';
 import { listActiveConnections } from '../db/repositories/n8nConnections.js';
 import { ingestExecutionsForConnection, type IngestResult } from './ingestExecutions.js';
 import { syncWorkflowsForConnection, type SyncResult } from './syncWorkflows.js';
+import { deriveTurnsForExecutionIds, type DeriveCounts } from '../conversations/deriveTurns.js';
 import type { N8nConnectionRow } from '../db/types.js';
 
 /**
@@ -20,13 +21,41 @@ let cycleCount = 0;
 interface ConnectionOutcome {
   sync: SyncResult;
   ingest: IngestResult;
+  derive: DeriveCounts;
 }
 
-/** Sync workflows then ingest executions for one connection. */
+const EMPTY_DERIVE: DeriveCounts = {
+  processed: 0,
+  upserted: 0,
+  deleted: 0,
+  skipped: 0,
+  errors: 0,
+};
+
+/**
+ * Sync workflows, ingest executions, then derive conversation turns for the
+ * just-ingested executions (only workflows with conversation mappings produce
+ * turns). Derivation is best-effort: its failure is logged but never breaks the
+ * connection's ingestion outcome.
+ */
 async function processConnection(connection: N8nConnectionRow): Promise<ConnectionOutcome> {
   const sync = await syncWorkflowsForConnection(connection);
   const ingest = await ingestExecutionsForConnection(connection);
-  return { sync, ingest };
+
+  let derive = EMPTY_DERIVE;
+  try {
+    derive = await deriveTurnsForExecutionIds({
+      tenantId: connection.tenant_id,
+      executionIds: ingest.newExecutionIds,
+    });
+  } catch (err) {
+    logger.error(
+      { err, connection: connection.name, connectionId: connection.id },
+      'turn derivation step failed for connection; continuing',
+    );
+  }
+
+  return { sync, ingest, derive };
 }
 
 /** One cycle across all active connections. Never throws (logs instead). */
@@ -42,6 +71,7 @@ async function runCycle(): Promise<void> {
     let totalSynced = 0;
     let totalNew = 0;
     let totalErrors = 0;
+    let totalTurns = 0;
 
     for (let i = 0; i < connections.length; i += CONNECTION_CONCURRENCY) {
       const chunk = connections.slice(i, i + CONNECTION_CONCURRENCY);
@@ -51,10 +81,11 @@ async function runCycle(): Promise<void> {
         const connection = chunk[idx];
         processed += 1;
         if (outcome.status === 'fulfilled') {
-          const { sync, ingest } = outcome.value;
+          const { sync, ingest, derive } = outcome.value;
           totalSynced += sync.synced;
           totalNew += ingest.new;
-          totalErrors += ingest.errors;
+          totalErrors += ingest.errors + derive.errors;
+          totalTurns += derive.upserted;
           logger.info(
             {
               cycle,
@@ -65,6 +96,9 @@ async function runCycle(): Promise<void> {
               new: ingest.new,
               errors: ingest.errors,
               newCursor: ingest.newCursor,
+              turnsUpserted: derive.upserted,
+              turnsDeleted: derive.deleted,
+              deriveErrors: derive.errors,
             },
             'connection processed',
           );
@@ -85,6 +119,7 @@ async function runCycle(): Promise<void> {
         totalWorkflowsSynced: totalSynced,
         totalNew,
         totalErrors,
+        totalTurns,
         durationMs: Date.now() - startedAt,
       },
       'ingestion cycle complete',

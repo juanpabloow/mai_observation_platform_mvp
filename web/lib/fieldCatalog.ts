@@ -1,4 +1,24 @@
-import { parseExecution } from "./executionDetail";
+import {
+  parseExecution,
+  getResultDataMetadata,
+  extractByPath,
+  buildExecutionResolver,
+  extractMapping,
+  METADATA_NODE_NAME,
+  type ExecutionResolver,
+} from "@worker/n8n/executionData.js";
+
+// The parse/extract core now lives in the shared worker layer (src/n8n/
+// executionData.ts) so the ingestion worker (turn derivation) and the web app
+// use the EXACT same logic. Re-export it here so existing web modules keep
+// importing these from "@/lib/fieldCatalog".
+export {
+  extractByPath,
+  buildExecutionResolver,
+  extractMapping,
+  METADATA_NODE_NAME,
+  type ExecutionResolver,
+};
 
 /**
  * Builds the "available fields" catalog for a workflow's column picker from a
@@ -46,11 +66,7 @@ export interface CatalogNode {
 
 export type FieldCatalog = CatalogNode[];
 
-/**
- * Sentinel node_name for fields that live under data.resultData.metadata
- * (execution-level, not a node's output — e.g. an AI reply written to metadata).
- */
-export const METADATA_NODE_NAME = "__metadata__";
+/** Display label for the execution-metadata pseudo-node (sentinel METADATA_NODE_NAME). */
 export const METADATA_NODE_LABEL = "Execution metadata";
 
 function previewValue(value: unknown): string {
@@ -63,16 +79,6 @@ function previewValue(value: unknown): string {
 
 function dataTypeOf(value: unknown): string {
   return value === null ? "null" : typeof value;
-}
-
-/** data.resultData.metadata, or undefined if absent. */
-function getResultDataMetadata(rawData: unknown): unknown {
-  if (rawData === null || typeof rawData !== "object" || Array.isArray(rawData)) return undefined;
-  const resultData = (rawData as Record<string, unknown>).resultData;
-  if (resultData === null || typeof resultData !== "object" || Array.isArray(resultData)) {
-    return undefined;
-  }
-  return (resultData as Record<string, unknown>).metadata;
 }
 
 function accumulatorToFields(acc: FieldAccumulator): CatalogField[] {
@@ -208,62 +214,4 @@ export function formatCellValue(value: unknown): CustomCell {
   return json.length > CELL_MAX
     ? { display: `${json.slice(0, CELL_MAX)}…`, title: json.slice(0, TITLE_MAX) }
     : { display: json };
-}
-
-/** Walk a dotted path (numeric segment = array index) into a value. */
-export function extractByPath(value: unknown, path: string): unknown {
-  if (path === "") return value;
-  let cur: unknown = value;
-  for (const seg of path.split(".")) {
-    if (cur === null || cur === undefined) return undefined;
-    if (Array.isArray(cur)) {
-      const idx = Number(seg);
-      if (!Number.isInteger(idx)) return undefined;
-      cur = cur[idx];
-    } else if (typeof cur === "object") {
-      cur = (cur as Record<string, unknown>)[seg];
-    } else {
-      return undefined;
-    }
-  }
-  return cur;
-}
-
-export interface ExecutionResolver {
-  /** nodeName -> that node's unwrapped output. */
-  nodeOutputs: Map<string, unknown>;
-  /** data.resultData.metadata. */
-  metadata: unknown;
-}
-
-/** Parse one execution into node outputs + metadata, for repeated extraction. */
-export function buildExecutionResolver(rawData: unknown): ExecutionResolver {
-  const nodeOutputs = new Map<string, unknown>();
-  for (const node of parseExecution(rawData).nodes) {
-    if (!nodeOutputs.has(node.name)) {
-      nodeOutputs.set(node.name, node.runs[0]?.output);
-    }
-  }
-  return { nodeOutputs, metadata: getResultDataMetadata(rawData) ?? null };
-}
-
-/**
- * Extract a mapping's value from a resolver. Handles BOTH node-output mappings
- * and execution-metadata mappings (node_name === METADATA_NODE_NAME, json_path
- * relative to resultData.metadata). Null-safe: returns undefined if the node
- * didn't run / metadata is absent / the path doesn't resolve.
- */
-export function extractMapping(
-  resolver: ExecutionResolver,
-  nodeName: string | null,
-  jsonPath: string,
-): unknown {
-  const source =
-    nodeName === METADATA_NODE_NAME
-      ? resolver.metadata
-      : nodeName
-        ? resolver.nodeOutputs.get(nodeName)
-        : undefined;
-  if (source === undefined || source === null) return undefined;
-  return extractByPath(source, jsonPath);
 }
