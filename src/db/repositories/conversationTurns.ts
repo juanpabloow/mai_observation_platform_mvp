@@ -106,12 +106,17 @@ export interface ConversationSummary {
 /**
  * Distinct conversations for a workflow (tenant-scoped), newest activity first.
  * Each row aggregates a thread: turn count, last activity, a preview of the most
- * recent turn, and the most recent non-null contact name.
+ * recent turn, and the most recent non-null contact name. `limit` caps the
+ * number of threads returned (the most recently active ones) — pass it so a
+ * workflow with very many conversations can't load unbounded.
  */
 export async function listConversations(params: {
   tenantId: string;
   n8nWorkflowId: string;
+  limit?: number;
 }): Promise<ConversationSummary[]> {
+  const values: unknown[] = [params.tenantId, params.n8nWorkflowId];
+  const limitSql = params.limit !== undefined ? ` LIMIT $${values.push(params.limit)}` : '';
   const result = await query<ConversationSummary>(
     `SELECT
         conversation_id,
@@ -124,8 +129,8 @@ export async function listConversations(params: {
        FROM conversation_turns
       WHERE tenant_id = $1 AND n8n_workflow_id = $2
       GROUP BY conversation_id
-      ORDER BY last_activity DESC`,
-    [params.tenantId, params.n8nWorkflowId],
+      ORDER BY last_activity DESC${limitSql}`,
+    values,
   );
   return result.rows;
 }

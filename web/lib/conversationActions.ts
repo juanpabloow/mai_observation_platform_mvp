@@ -37,6 +37,9 @@ export async function upsertConversationRoleAction(input: {
     label: input.label ?? null,
     dataType: input.dataType ?? null,
   });
+  // Refresh both the settings screen and the list (mapping changes flip the
+  // list between its setup-prompt and chat-list states).
+  revalidatePath(`/workflows/${input.workflowId}/conversations/settings`);
   revalidatePath(`/workflows/${input.workflowId}/conversations`);
 }
 
@@ -50,5 +53,6 @@ export async function deleteConversationRoleAction(input: {
     n8nWorkflowId: input.workflowId,
     role: input.role,
   });
+  revalidatePath(`/workflows/${input.workflowId}/conversations/settings`);
   revalidatePath(`/workflows/${input.workflowId}/conversations`);
 }

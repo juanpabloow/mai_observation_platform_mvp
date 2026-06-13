@@ -1,30 +1,21 @@
 import { connection } from "next/server";
+import Link from "next/link";
 import { notFound } from "next/navigation";
 import { listConversationMappings } from "@worker/db/repositories/fieldMappings.js";
-import { listRecentRawForWorkflow } from "@worker/db/repositories/executions.js";
-import type { ConversationRole } from "@worker/db/types.js";
+import { listConversations } from "@worker/db/repositories/conversationTurns.js";
 import { getCurrentTenantId } from "@/lib/tenant";
 import { getWorkflowForCurrentTenant } from "@/lib/workflow";
-import {
-  buildExecutionResolver,
-  extractMapping,
-  formatCellValue,
-  METADATA_NODE_LABEL,
-  METADATA_NODE_NAME,
-} from "@/lib/fieldCatalog";
-import {
-  ConversationSettings,
-  type RoleAssignmentView,
-} from "@/components/ConversationSettings";
+import { formatListTimestamp } from "@/lib/format";
+import { ConversationList, type ConversationListItem } from "@/components/ConversationList";
 
-const ROLE_DEFS: { role: ConversationRole; label: string; required: boolean }[] = [
-  { role: "conversation_id", label: "Conversation ID", required: true },
-  { role: "user_message", label: "User message", required: true },
-  { role: "ai_response", label: "AI response", required: true },
-  { role: "contact_name", label: "Contact name", required: false },
-];
+/** Cap the number of threads loaded into the list (most recently active first). */
+const LIST_CAP = 500;
+const PREVIEW_MAX = 120;
 
-const SAMPLE_SIZE = 10;
+function truncate(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > PREVIEW_MAX ? `${flat.slice(0, PREVIEW_MAX)}…` : flat;
+}
 
 export default async function ConversationsPage({
   params,
@@ -40,51 +31,93 @@ export default async function ConversationsPage({
   }
 
   const tenantId = await getCurrentTenantId();
-  const [mappings, raws] = await Promise.all([
+  const [mappings, conversations] = await Promise.all([
     listConversationMappings({ tenantId, n8nWorkflowId: workflowId }),
-    listRecentRawForWorkflow({ tenantId, n8nWorkflowId: workflowId, limit: SAMPLE_SIZE }),
+    listConversations({ tenantId, n8nWorkflowId: workflowId, limit: LIST_CAP }),
   ]);
 
-  const byRole = new Map(mappings.map((m) => [m.role, m]));
-  const resolvers = raws.map((r) => buildExecutionResolver(r.raw_data));
+  // A workflow can only produce turns once the two derivation-required roles are
+  // mapped — that's what gates "configured" vs "needs setup".
+  const roles = new Set(mappings.map((m) => m.role));
+  const configured = roles.has("conversation_id") && roles.has("user_message");
 
-  const roles: RoleAssignmentView[] = ROLE_DEFS.map((def) => {
-    const mapping = byRole.get(def.role);
-    if (!mapping) {
-      return {
-        role: def.role,
-        label: def.label,
-        required: def.required,
-        set: false,
-        nodeLabel: null,
-        fieldLabel: null,
-        jsonPath: null,
-        example: null,
-      };
-    }
+  const settingsHref = `/workflows/${encodeURIComponent(workflowId)}/conversations/settings`;
+  const now = new Date();
 
-    // Example = first non-null extraction across the recent sample.
-    let example: string | null = null;
-    for (const resolver of resolvers) {
-      const value = extractMapping(resolver, mapping.node_name, mapping.json_path);
-      if (value !== undefined && value !== null) {
-        example = formatCellValue(value).display;
-        break;
-      }
-    }
+  const header = (
+    <div className="flex flex-wrap items-center justify-between gap-3">
+      <h2 className="text-lg font-semibold tracking-tight">Conversations</h2>
+      <Link
+        href={settingsHref}
+        className="rounded-lg border border-black/10 px-3 py-1.5 text-sm text-neutral-400 transition-colors hover:bg-black/[0.04] hover:text-neutral-200 dark:border-white/15 dark:hover:bg-white/[0.06]"
+      >
+        ⚙ Conversation settings
+      </Link>
+    </div>
+  );
 
-    return {
-      role: def.role,
-      label: def.label,
-      required: def.required,
-      set: true,
-      nodeLabel:
-        mapping.node_name === METADATA_NODE_NAME ? METADATA_NODE_LABEL : mapping.node_name,
-      fieldLabel: mapping.column_label,
-      jsonPath: mapping.json_path,
-      example,
-    };
-  });
+  // Not configured → prompt to set up the mapping (never an empty chat list).
+  if (!configured) {
+    return (
+      <div className="flex flex-col gap-4">
+        {header}
+        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-black/15 px-6 py-14 text-center dark:border-white/15">
+          <p className="text-sm text-neutral-400">
+            This workflow doesn&rsquo;t have a conversation mapping yet.
+          </p>
+          <p className="max-w-md text-sm text-neutral-500">
+            Tell the platform which fields hold the conversation id, the user
+            message, and the AI response, and chats will be reconstructed here.
+          </p>
+          <Link
+            href={settingsHref}
+            className="mt-1 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500"
+          >
+            Configure conversation mapping
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
-  return <ConversationSettings workflowId={workflowId} roles={roles} />;
+  // Configured but nothing derived yet → friendly empty state.
+  if (conversations.length === 0) {
+    return (
+      <div className="flex flex-col gap-4">
+        {header}
+        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-black/15 px-6 py-14 text-center dark:border-white/15">
+          <p className="text-sm text-neutral-400">No conversations yet.</p>
+          <p className="max-w-md text-sm text-neutral-500">
+            Once this workflow processes messages, reconstructed chats will appear
+            here automatically.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  const items: ConversationListItem[] = conversations.map((c) => ({
+    conversationId: c.conversation_id,
+    contactName: c.contact_name,
+    displayName: c.contact_name ?? c.conversation_id,
+    // Preview = the most recent message: the latest turn's AI reply if any,
+    // else its user message.
+    preview: truncate(c.last_ai_response ?? c.last_user_message ?? ""),
+    timestamp: formatListTimestamp(c.last_activity, now),
+    turnCount: c.turn_count,
+  }));
+
+  const capped = conversations.length >= LIST_CAP;
+
+  return (
+    <div className="flex flex-col gap-4">
+      {header}
+      <ConversationList workflowId={workflowId} conversations={items} />
+      {capped ? (
+        <p className="text-center text-xs text-neutral-600">
+          Showing the {LIST_CAP} most recently active conversations.
+        </p>
+      ) : null}
+    </div>
+  );
 }
