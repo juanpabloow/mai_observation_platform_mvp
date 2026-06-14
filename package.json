@@ -12,6 +12,7 @@
     "build": "tsc",
     "migrate": "node-pg-migrate --envPath .env --tsx",
     "derive:backfill": "tsx src/scripts/deriveBackfill.ts",
+    "link:founder": "tsx src/scripts/linkFounder.ts",
     "web": "cd web && npm run dev",
     "web:build": "cd web && npm run build",
     "web:install": "cd web && npm install"

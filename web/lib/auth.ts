@@ -1,6 +1,11 @@
 import { betterAuth } from "better-auth";
 import { nextCookies } from "better-auth/next-js";
 import { Pool } from "pg";
+import {
+  createTenantWithOwner,
+  deleteAuthUserById,
+  getTenantIdForUser,
+} from "@worker/db/repositories/tenantMembers.js";
 
 /**
  * Better Auth server instance.
@@ -37,6 +42,31 @@ export const auth = betterAuth({
         },
       }
     : {},
+  // Provision a tenant for every NEW user. This fires on user creation for BOTH
+  // providers — email/password signup AND a Google user's first login (a row in
+  // `user` is created once, never on subsequent logins), so it is inherently
+  // idempotent: returning users never get a second tenant.
+  databaseHooks: {
+    user: {
+      create: {
+        after: async (user) => {
+          try {
+            // Defensive idempotency: never create a second tenant for a user.
+            if (await getTenantIdForUser(user.id)) return;
+            const workspace = `${(user.name && user.name.trim()) || user.email}'s workspace`;
+            // createTenantWithOwner is one transaction → never a tenant w/o owner.
+            await createTenantWithOwner({ userId: user.id, tenantName: workspace });
+          } catch (err) {
+            // A user with no tenant is an invalid state. Compensate by deleting
+            // the just-created auth user (cascades account/session) so signup
+            // fails cleanly instead of leaving a dangling, tenant-less user.
+            await deleteAuthUserById(user.id).catch(() => {});
+            throw err;
+          }
+        },
+      },
+    },
+  },
   // Honors Set-Cookie from server-side auth calls in the Next App Router
   // (server actions / RSC). Must be the last plugin.
   plugins: [nextCookies()],
