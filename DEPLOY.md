@@ -42,14 +42,28 @@ Railway service **Settings → Config-as-code**, set the config file path:
 
 ### web  →  `railway.web.json`
 - **Root Directory:** repo root
-- **Build:** `npm ci && cd web && npm ci && npm run build`
-  (root deps so `../src` resolves, then web deps, then `next build --webpack`)
-- **Start:** `npm run start:web`  (`next start`, serves on Railway's `$PORT`)
+- **Build (paste this EXACT string into Railway's Custom Build Command):**
+
+  ```
+  npm ci && cd web && npm ci && npm run build
+  ```
+
+  Root `npm ci` installs the shared `../src` runtime deps (`pg`, `pino`, `zod`,
+  `dotenv`) so the build can resolve `@worker/*`; **`cd web && npm ci` installs
+  the web deps (including `next`)**; then `npm run build` runs `next build`.
+- **Start:** `npm run start:web`  (`cd web && next start`, serves on Railway's `$PORT`)
 - **Variables:** `DATABASE_URL`, `ENCRYPTION_KEY`, `LOG_LEVEL`, `BETTER_AUTH_SECRET`,
   `BETTER_AUTH_URL`, and optionally `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET`
 
-> If you'd rather not use config files, type the same Build/Start commands
-> directly into each service's Settings → Deploy.
+> ⚠️ **Do NOT set the web build command to `npm run build:web`.** That script is
+> `cd web && npm run build` — a *local* convenience that assumes web deps are
+> already installed. On Railway it runs `next build` without ever installing
+> web/'s deps, so the build fails with `sh: next: not found` (exit 127). The
+> build command MUST include `cd web && npm ci` (as above). Same applies if you
+> point the service at `railway.web.json` — its `buildCommand` already does this.
+
+> If you'd rather not use the config files, type the same Build/Start commands
+> directly into each service's Settings → Build/Deploy.
 
 ## Environment variables
 
