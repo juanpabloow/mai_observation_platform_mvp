@@ -10,11 +10,16 @@
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
+    "build:worker": "tsc",
+    "start:worker": "node dist/index.js",
     "migrate": "node-pg-migrate --envPath .env --tsx",
+    "migrate:prod": "node-pg-migrate --tsx",
     "derive:backfill": "tsx src/scripts/deriveBackfill.ts",
     "link:founder": "tsx src/scripts/linkFounder.ts",
     "web": "cd web && npm run dev",
     "web:build": "cd web && npm run build",
+    "build:web": "cd web && npm run build",
+    "start:web": "cd web && npm run start",
     "web:install": "cd web && npm install"
   },
   "dependencies": {

@@ -42,7 +42,10 @@ const authPool =
 
 export const auth = betterAuth({
   database: authPool,
-  baseURL: process.env.BETTER_AUTH_URL,
+  // Public base URL — set BETTER_AUTH_URL to the deployed web URL in production
+  // (drives OAuth callbacks + the CSRF trusted origin). Falls back to localhost
+  // for local dev. The Google redirect URI is <baseURL>/api/auth/callback/google.
+  baseURL: process.env.BETTER_AUTH_URL ?? "http://localhost:3000",
   secret: process.env.BETTER_AUTH_SECRET,
   emailAndPassword: {
     enabled: true,
