@@ -15,7 +15,11 @@ import {
  *   Better Auth owns its tables (user / session / account / verification) and
  *   manages them through Kysely internally, so our application code stays
  *   no-ORM. Env is loaded from the repo-root .env by web/next.config.ts before
- *   any module reads process.env.
+ *   any module reads process.env. The Pool is a globalThis SINGLETON: under
+ *   `next dev` this module is re-evaluated on recompiles, and a fresh `new Pool`
+ *   each time would leak Postgres connections (the cause of the logout hang), so
+ *   we create it once and reuse it. Tagged with application_name for visibility
+ *   in pg_stat_activity.
  * - PASSWORDS: emailAndPassword uses Better Auth's built-in hashing (scrypt) —
  *   we never store or compare plaintext, and never roll our own.
  * - GOOGLE: OPTIONAL. The provider is only registered when BOTH GOOGLE_CLIENT_ID
@@ -27,8 +31,17 @@ export const isGoogleConfigured = Boolean(
   process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET,
 );
 
+// Single Pool reused across HMR re-evaluations (see DATABASE note above).
+const globalForAuthPool = globalThis as unknown as { __obsAuthPool?: Pool };
+const authPool =
+  globalForAuthPool.__obsAuthPool ??
+  (globalForAuthPool.__obsAuthPool = new Pool({
+    connectionString: process.env.DATABASE_URL,
+    application_name: "obs-web-auth",
+  }));
+
 export const auth = betterAuth({
-  database: new Pool({ connectionString: process.env.DATABASE_URL }),
+  database: authPool,
   baseURL: process.env.BETTER_AUTH_URL,
   secret: process.env.BETTER_AUTH_SECRET,
   emailAndPassword: {
