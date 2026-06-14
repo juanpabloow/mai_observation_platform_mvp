@@ -15,8 +15,8 @@ const nextConfig: NextConfig = {
     // The web app reuses the worker's data-access layer in ../src (outside web/).
     externalDir: true,
   },
-  // Used by the shared db layer; keep them as runtime Node deps, don't bundle.
-  serverExternalPackages: ["pg", "pino"],
+  // Used by the shared db layer + auth; keep them as runtime Node deps, don't bundle.
+  serverExternalPackages: ["pg", "pino", "better-auth"],
   // Use webpack (this config function) instead of the default Turbopack, so we
   // can map the worker's NodeNext ".js" import specifiers to their ".ts" sources.
   webpack: (config) => {
