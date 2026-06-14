@@ -1,9 +1,17 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { authClient } from "@/lib/auth-client";
+
+/** Only allow internal redirect targets (block open-redirects / protocol-relative). */
+function safeRedirect(value: string | null): string {
+  if (value && value.startsWith("/") && !value.startsWith("//") && !value.startsWith("/\\")) {
+    return value;
+  }
+  return "/";
+}
 
 /**
  * Email/password auth form shared by /login and /signup, plus a "Continue with
@@ -20,6 +28,8 @@ export function AuthForm({
   googleEnabled: boolean;
 }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const destination = safeRedirect(searchParams.get("redirect"));
   const isSignup = mode === "signup";
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -45,7 +55,7 @@ export function AuthForm({
         setError(result.error.message ?? "Authentication failed.");
         return;
       }
-      router.push("/");
+      router.push(destination);
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unexpected error.");
@@ -57,7 +67,7 @@ export function AuthForm({
   async function onGoogle() {
     if (!googleEnabled) return;
     setError(null);
-    await authClient.signIn.social({ provider: "google", callbackURL: "/" });
+    await authClient.signIn.social({ provider: "google", callbackURL: destination });
   }
 
   return (

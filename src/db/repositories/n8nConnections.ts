@@ -28,6 +28,47 @@ export async function insertConnection(
   return firstRowOrThrow(result, 'insertConnection');
 }
 
+/**
+ * A connection as shown in the UI. Deliberately EXCLUDES
+ * n8n_api_key_encrypted so the key never leaves the DB layer toward the client.
+ */
+export interface ConnectionSummary {
+  id: string;
+  name: string;
+  n8n_base_url: string;
+  is_active: boolean;
+  created_at: Date;
+  updated_at: Date;
+}
+
+/** List a tenant's connections for display (NEVER includes the API key). */
+export async function listConnectionsForTenant(tenantId: string): Promise<ConnectionSummary[]> {
+  const result = await query<ConnectionSummary>(
+    `SELECT id, name, n8n_base_url, is_active, created_at, updated_at
+       FROM n8n_connections
+      WHERE tenant_id = $1
+      ORDER BY created_at ASC`,
+    [tenantId],
+  );
+  return result.rows;
+}
+
+/** Activate/deactivate a connection (tenant-scoped). Deactivating stops the
+ * worker from polling it; it does NOT delete the connection or any domain data.
+ * Returns true if a row was updated. */
+export async function setConnectionActiveForTenant(params: {
+  tenantId: string;
+  id: string;
+  isActive: boolean;
+}): Promise<boolean> {
+  const result = await query(
+    `UPDATE n8n_connections SET is_active = $3, updated_at = now()
+      WHERE id = $1 AND tenant_id = $2`,
+    [params.id, params.tenantId, params.isActive],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 /** Fetch a single connection by id, or null if it does not exist. */
 export async function getConnectionById(id: string): Promise<N8nConnectionRow | null> {
   const result = await query<N8nConnectionRow>(

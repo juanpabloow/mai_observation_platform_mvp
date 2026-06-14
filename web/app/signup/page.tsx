@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { isGoogleConfigured } from "@/lib/auth";
 import { AuthForm } from "@/components/AuthForm";
 
@@ -8,7 +9,9 @@ export default function SignupPage() {
         <h1 className="text-2xl font-semibold tracking-tight">Create account</h1>
         <p className="text-sm text-neutral-500">Sign up with email and password.</p>
       </div>
-      <AuthForm mode="signup" googleEnabled={isGoogleConfigured} />
+      <Suspense fallback={null}>
+        <AuthForm mode="signup" googleEnabled={isGoogleConfigured} />
+      </Suspense>
     </main>
   );
 }

@@ -19,6 +19,9 @@ export async function AuthHeader() {
       <div className="flex items-center gap-4">
         {user ? (
           <>
+            <Link href="/settings/connections" className="text-neutral-400 transition-colors hover:text-white">
+              Connections
+            </Link>
             <span className="text-neutral-400">{user.email}</span>
             <Link href="/logout" className="text-neutral-400 transition-colors hover:text-white">
               Log out
