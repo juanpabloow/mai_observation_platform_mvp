@@ -93,23 +93,29 @@ const FIXED_COLUMNS = [
 interface ExecutionsTableProps {
   rows: ExecutionRowView[];
   sort: { key: string; direction: "asc" | "desc" };
+  /** Active custom-field sort (cf_sort), if any — takes precedence over `sort`. */
+  customSort?: { mappingId: string; direction: "asc" | "desc" };
   customColumns: CustomColumnDef[];
 }
 
-export function ExecutionsTable({ rows, sort, customColumns }: ExecutionsTableProps) {
+export function ExecutionsTable({ rows, sort, customSort, customColumns }: ExecutionsTableProps) {
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
 
-  // Fixed columns + the workflow's custom columns (derived, not sortable yet).
+  // Fixed columns + the workflow's custom columns (sortable via the cf_sort seam).
   const columns = useMemo<ColumnDef<ExecutionRowView>[]>(
     () => [
       ...FIXED_COLUMNS,
       ...customColumns.map(
         (col): ColumnDef<ExecutionRowView> =>
-          columnHelper.display({
+          // accessor (not display) so the column is SORTABLE — getCanSort() needs
+          // an accessorFn. Actual sorting is server-side (cf_sort); the accessor's
+          // value is only used to enable the header's sort toggle.
+          columnHelper.accessor((row) => row.custom[col.id]?.display ?? "", {
             id: `custom_${col.id}`,
             header: col.label,
+            enableSorting: true,
             cell: ({ row }) => {
               const cell = row.original.custom[col.id];
               return (
@@ -118,26 +124,38 @@ export function ExecutionsTable({ rows, sort, customColumns }: ExecutionsTablePr
                 </span>
               );
             },
-          }),
+          }) as ColumnDef<ExecutionRowView>,
       ),
     ],
     [customColumns],
   );
 
-  const sorting: SortingState = [{ id: sort.key, desc: sort.direction === "desc" }];
+  // The active sort drives the indicator. A custom-field sort (cf_sort) is shown
+  // on its column (id `custom_<mappingId>`); otherwise the fixed column.
+  const sorting: SortingState = customSort
+    ? [{ id: `custom_${customSort.mappingId}`, desc: customSort.direction === "desc" }]
+    : [{ id: sort.key, desc: sort.direction === "desc" }];
 
-  // Sorting happens in SQL — clicking a header just rewrites the URL.
+  // Sorting happens in SQL — clicking a header just rewrites the URL. Fixed columns
+  // use sort/dir; custom columns use cf_sort. Only ONE sort is active at a time, so
+  // setting one clears the other (matching the backend).
   const handleSortingChange: OnChangeFn<SortingState> = (updater) => {
     const next = typeof updater === "function" ? updater(sorting) : updater;
     const params = new URLSearchParams(searchParams.toString());
     params.delete("page"); // filters/sort changes reset to page 1
     const first = next[0];
-    if (first) {
-      params.set("sort", first.id);
-      params.set("dir", first.desc ? "desc" : "asc");
-    } else {
+    if (!first) {
       params.delete("sort");
       params.delete("dir");
+      params.delete("cf_sort");
+    } else if (first.id.startsWith("custom_")) {
+      params.set("cf_sort", `${first.id.slice("custom_".length)}:${first.desc ? "desc" : "asc"}`);
+      params.delete("sort");
+      params.delete("dir");
+    } else {
+      params.set("sort", first.id);
+      params.set("dir", first.desc ? "desc" : "asc");
+      params.delete("cf_sort");
     }
     router.push(`${pathname}?${params.toString()}`);
   };

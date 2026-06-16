@@ -26,7 +26,8 @@ import {
   formatCellValue,
   type CustomCell,
 } from "@/lib/fieldCatalog";
-import { FilterBar } from "@/components/FilterBar";
+import { FilterMenu, type FilterableField } from "@/components/FilterMenu";
+import { FilterChips, type FilterChip } from "@/components/FilterChips";
 import {
   ExecutionsTable,
   type CustomColumnDef,
@@ -167,6 +168,17 @@ export default async function WorkflowExecutionsPage({
     label: c.column_label ?? c.json_path,
   }));
 
+  // Fields the Filter menu can target (tenant+workflow-scoped = this workflow's
+  // own column mappings); referenced by id only. + a label lookup for chips.
+  const filterableFields: FilterableField[] = columnMappings.map((c) => ({
+    id: c.id,
+    label: c.column_label ?? c.json_path,
+  }));
+  const columnLabelById = new Map(columnMappings.map((c) => [c.id, c.column_label ?? c.json_path]));
+  // Show the custom-sort indicator only when cf_sort resolves to a real column.
+  const resolvedCustomSort =
+    customSort && columnLabelById.has(customSort.mappingId) ? customSort : undefined;
+
   // Extract custom-column values server-side for ONLY the current page's rows
   // (fetch raw_data just for these ids — never the whole table).
   const customByRow = new Map<string, Record<string, CustomCell>>();
@@ -214,6 +226,54 @@ export default async function WorkflowExecutionsPage({
     return `${basePath}?${p.toString()}`;
   };
 
+  // Active-filter chips, server-rendered from the URL. Each removeHref is the
+  // current params minus that one filter (page reset by omission).
+  const hrefWithout = (mutate: (p: URLSearchParams) => void): string => {
+    const p = new URLSearchParams(baseParams);
+    mutate(p);
+    const qs = p.toString();
+    return qs ? `${basePath}?${qs}` : basePath;
+  };
+  const opText = (op: string, val?: string) =>
+    op === "not_empty" ? "is not empty" : op === "contains" ? `contains "${val}"` : `equals ${val}`;
+
+  const chips: FilterChip[] = [];
+  if (filters.status) {
+    chips.push({ label: `Status: ${filters.status}`, removeHref: hrefWithout((p) => p.delete("status")) });
+  }
+  if (filters.fromDate) {
+    chips.push({ label: `Started ≥ ${filters.fromDate}`, removeHref: hrefWithout((p) => p.delete("from")) });
+  }
+  if (filters.toDate) {
+    chips.push({ label: `Started ≤ ${filters.toDate}`, removeHref: hrefWithout((p) => p.delete("to")) });
+  }
+  for (const raw of [...new Set(all(sp.cf))]) {
+    const i1 = raw.indexOf(":");
+    if (i1 <= 0) continue;
+    const id = raw.slice(0, i1);
+    const rest = raw.slice(i1 + 1);
+    const i2 = rest.indexOf(":");
+    const op = i2 < 0 ? rest : rest.slice(0, i2);
+    const val = i2 < 0 ? undefined : rest.slice(i2 + 1);
+    const label = columnLabelById.get(id);
+    if (!label || !isCustomFilterOperator(op)) continue;
+    if ((op === "equals" || op === "contains") && !val) continue;
+    chips.push({
+      label: `${label} ${opText(op, val)}`,
+      removeHref: hrefWithout((p) => {
+        const remaining = all(sp.cf).filter((x) => x !== raw);
+        p.delete("cf");
+        for (const x of remaining) p.append("cf", x);
+      }),
+    });
+  }
+  const clearAllHref = hrefWithout((p) => {
+    p.delete("status");
+    p.delete("from");
+    p.delete("to");
+    p.delete("cf");
+  });
+
   return (
     <>
       <div className="flex flex-wrap items-center justify-between gap-3">
@@ -221,17 +281,17 @@ export default async function WorkflowExecutionsPage({
         <AutoRefresh intervalSeconds={config.POLL_INTERVAL_SECONDS} />
       </div>
 
-      <FilterBar
-        status={filters.status ?? "all"}
-        from={filters.fromDate ?? ""}
-        to={filters.toDate ?? ""}
-      />
+      <div className="flex flex-wrap items-center gap-3">
+        <FilterMenu customFields={filterableFields} />
+        <FilterChips chips={chips} clearAllHref={clearAllHref} />
+      </div>
 
       <ColumnsManager workflowId={workflowId} columns={definedColumns} />
 
       <ExecutionsTable
         rows={view}
         sort={{ key: sortKey, direction }}
+        customSort={resolvedCustomSort}
         customColumns={customColumns}
       />
 
