@@ -1,4 +1,10 @@
 import { query } from '../client.js';
+import {
+  customFilterCondition,
+  customSortExpr,
+  type CustomFilterOperator,
+} from '../customFieldSql.js';
+import { listColumnMappings } from './fieldMappings.js';
 
 /** Input shape for inserting an execution. `raw_data` is any JSON-serialisable value. */
 export interface NewExecution {
@@ -129,12 +135,33 @@ export interface ExecutionSort {
   direction: SortDirection;
 }
 
+/**
+ * A custom-field filter. The field is referenced by its field_mappings id (NOT a
+ * raw node/path), so it is resolved tenant+workflow-scoped before any SQL is
+ * built — a mappingId that isn't this tenant+workflow's is ignored, never trusted.
+ */
+export interface CustomFieldFilter {
+  mappingId: string;
+  operator: CustomFilterOperator;
+  value?: string;
+}
+
+/** A custom-field sort, referenced (and validated) by field_mappings id. */
+export interface CustomFieldSort {
+  mappingId: string;
+  direction: SortDirection;
+}
+
 export interface ListExecutionsPageParams {
   tenantId: string;
   limit: number;
   offset: number;
   filters?: ExecutionFilters;
   sort?: ExecutionSort;
+  /** Custom-field filters (ANDed with each other + the fixed filters). */
+  customFilters?: CustomFieldFilter[];
+  /** Custom-field sort; when present + valid, replaces the fixed-column sort. */
+  customSort?: CustomFieldSort;
 }
 
 export interface ExecutionsPage {
@@ -151,50 +178,86 @@ export interface ExecutionsPage {
 export async function listExecutionsPage(
   params: ListExecutionsPageParams,
 ): Promise<ExecutionsPage> {
-  const { tenantId, limit, offset, filters = {}, sort } = params;
+  const { tenantId, limit, offset, filters = {}, sort, customFilters = [], customSort } = params;
 
-  // Build the WHERE clause from filters. Every value is a bound $N parameter.
+  // ONE growing bound-params array. Order in the rows query: WHERE params first
+  // ($1..), then any custom-SORT params, then LIMIT/OFFSET — so the count query
+  // (WHERE only) reuses exactly the leading prefix. Every value is a bound $N
+  // parameter; nothing user/mapping-derived is concatenated into SQL.
+  const queryParams: unknown[] = [tenantId]; // $1
   const conditions: string[] = ['e.tenant_id = $1'];
-  const filterParams: unknown[] = [tenantId];
-  let p = 2;
 
   if (filters.status && filters.status !== 'all') {
-    conditions.push(`e.status = $${p++}`);
-    filterParams.push(filters.status);
+    queryParams.push(filters.status);
+    conditions.push(`e.status = $${queryParams.length}`);
   }
   if (filters.workflowId) {
-    conditions.push(`e.n8n_workflow_id = $${p++}`);
-    filterParams.push(filters.workflowId);
+    queryParams.push(filters.workflowId);
+    conditions.push(`e.n8n_workflow_id = $${queryParams.length}`);
   }
   if (filters.clientId) {
     if (filters.clientId === 'unassigned') {
       conditions.push('w.client_id IS NULL');
     } else {
-      conditions.push(`w.client_id = $${p++}`);
-      filterParams.push(filters.clientId);
+      queryParams.push(filters.clientId);
+      conditions.push(`w.client_id = $${queryParams.length}`);
     }
   }
   if (filters.fromDate) {
-    conditions.push(`e.started_at >= $${p++}::timestamptz`);
-    filterParams.push(filters.fromDate);
+    queryParams.push(filters.fromDate);
+    conditions.push(`e.started_at >= $${queryParams.length}::timestamptz`);
   }
   if (filters.toDate) {
-    conditions.push(`e.started_at < ($${p++}::timestamptz + INTERVAL '1 day')`);
-    filterParams.push(filters.toDate);
+    queryParams.push(filters.toDate);
+    conditions.push(`e.started_at < ($${queryParams.length}::timestamptz + INTERVAL '1 day')`);
+  }
+
+  // Resolve custom-field mappings TENANT+WORKFLOW-SCOPED (only when needed and a
+  // workflow is in scope). A mappingId that isn't in this set is silently ignored
+  // — it never reaches the seam, so no SQL is ever built from an unvalidated id.
+  const wantsCustom = customFilters.length > 0 || customSort != null;
+  const customCols =
+    wantsCustom && filters.workflowId
+      ? new Map(
+          (await listColumnMappings({ tenantId, n8nWorkflowId: filters.workflowId })).map((c) => [
+            c.id,
+            { nodeName: c.node_name, jsonPath: c.json_path },
+          ]),
+        )
+      : new Map<string, { nodeName: string | null; jsonPath: string }>();
+
+  for (const cf of customFilters) {
+    const field = customCols.get(cf.mappingId);
+    if (!field) continue;
+    conditions.push(customFilterCondition(field, cf.operator, cf.value, 'e.raw_data', queryParams));
   }
 
   const whereSql = conditions.join(' AND ');
+  const whereParamCount = queryParams.length; // count query binds exactly these
 
-  // Sort key/direction come from a whitelist + validated enum — safe to inline.
-  const sortKey: ExecutionSortKey = sort?.key ?? 'started_at';
-  const sortDir = sort?.direction === 'asc' ? 'ASC' : 'DESC';
-  const orderSql = `ORDER BY ${SORT_COLUMNS[sortKey]} ${sortDir} NULLS LAST, e.n8n_execution_id DESC`;
+  // ORDER BY — a valid custom sort (resolvable mapping) replaces the fixed sort.
+  let orderSql: string;
+  const sortField = customSort ? customCols.get(customSort.mappingId) : undefined;
+  if (customSort && sortField) {
+    const expr = customSortExpr(sortField, 'e.raw_data', queryParams);
+    const dir = customSort.direction === 'asc' ? 'ASC' : 'DESC';
+    orderSql = `ORDER BY (${expr}) ${dir} NULLS LAST, e.n8n_execution_id DESC`;
+  } else {
+    const sortKey: ExecutionSortKey = sort?.key ?? 'started_at';
+    const sortDir = sort?.direction === 'asc' ? 'ASC' : 'DESC';
+    orderSql = `ORDER BY ${SORT_COLUMNS[sortKey]} ${sortDir} NULLS LAST, e.n8n_execution_id DESC`;
+  }
 
   const fromJoin = `FROM executions e
      LEFT JOIN workflows w
        ON w.n8n_connection_id = e.n8n_connection_id
       AND w.n8n_workflow_id = e.n8n_workflow_id
      LEFT JOIN clients c ON c.id = w.client_id`;
+
+  queryParams.push(limit);
+  const limitParam = queryParams.length;
+  queryParams.push(offset);
+  const offsetParam = queryParams.length;
 
   const rowsSql = `SELECT
        e.id,
@@ -210,13 +273,13 @@ export async function listExecutionsPage(
      ${fromJoin}
      WHERE ${whereSql}
      ${orderSql}
-     LIMIT $${p++} OFFSET $${p++}`;
+     LIMIT $${limitParam} OFFSET $${offsetParam}`;
 
   const countSql = `SELECT COUNT(*)::text AS count ${fromJoin} WHERE ${whereSql}`;
 
   const [rowsResult, totalResult] = await Promise.all([
-    query<ExecutionListItem>(rowsSql, [...filterParams, limit, offset]),
-    query<{ count: string }>(countSql, filterParams),
+    query<ExecutionListItem>(rowsSql, queryParams),
+    query<{ count: string }>(countSql, queryParams.slice(0, whereParamCount)),
   ]);
 
   return {

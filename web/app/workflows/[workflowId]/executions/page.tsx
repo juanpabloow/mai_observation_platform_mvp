@@ -5,10 +5,13 @@ import {
   getRawDataByIds,
   isExecutionSortKey,
   listExecutionsPage,
+  type CustomFieldFilter,
+  type CustomFieldSort,
   type ExecutionFilters,
   type ExecutionListItem,
   type ExecutionSortKey,
 } from "@worker/db/repositories/executions.js";
+import { isCustomFilterOperator } from "@worker/db/customFieldSql.js";
 import {
   listColumnMappings,
   type ColumnMappingRow,
@@ -59,6 +62,11 @@ function first(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
+/** All values of a (possibly repeated) query param, as an array. */
+function all(value: string | string[] | undefined): string[] {
+  return Array.isArray(value) ? value : value != null ? [value] : [];
+}
+
 function parseIntParam(value: string | undefined, fallback: number): number {
   const n = Number(value);
   return Number.isFinite(n) ? Math.floor(n) : fallback;
@@ -101,6 +109,37 @@ export default async function WorkflowExecutionsPage({
     toDate: first(sp.to) || undefined,
   };
 
+  // Custom-field filters/sort (F1). URL form:
+  //   cf=<mappingId>:<operator>[:<value>]   (repeatable; ANDed)
+  //   cf_sort=<mappingId>:<asc|desc>
+  // The operator/direction are validated against their whitelists HERE; the
+  // mappingId is resolved tenant+workflow-scoped inside listExecutionsPage (a
+  // foreign/bogus id is ignored there — defense in depth, no SQL built from it).
+  const customFilters: CustomFieldFilter[] = [];
+  for (const raw of all(sp.cf)) {
+    const i1 = raw.indexOf(":");
+    if (i1 <= 0) continue;
+    const mappingId = raw.slice(0, i1);
+    const rest = raw.slice(i1 + 1);
+    const i2 = rest.indexOf(":");
+    const operator = i2 < 0 ? rest : rest.slice(0, i2);
+    const value = i2 < 0 ? undefined : rest.slice(i2 + 1);
+    if (!isCustomFilterOperator(operator)) continue;
+    if ((operator === "equals" || operator === "contains") && !value) continue;
+    customFilters.push({ mappingId, operator, value });
+  }
+
+  const cfSortRaw = first(sp.cf_sort);
+  let customSort: CustomFieldSort | undefined;
+  if (cfSortRaw) {
+    const i = cfSortRaw.lastIndexOf(":");
+    if (i > 0) {
+      const mappingId = cfSortRaw.slice(0, i);
+      const dir = cfSortRaw.slice(i + 1);
+      if (dir === "asc" || dir === "desc") customSort = { mappingId, direction: dir };
+    }
+  }
+
   const tenantId = await getCurrentTenantId();
   const [{ rows, total }, columnMappings] = await Promise.all([
     listExecutionsPage({
@@ -109,6 +148,8 @@ export default async function WorkflowExecutionsPage({
       offset: (page - 1) * pageSize,
       filters,
       sort: { key: sortKey, direction },
+      customFilters,
+      customSort,
     }),
     listColumnMappings({ tenantId, n8nWorkflowId: workflowId }),
   ]);
@@ -162,6 +203,9 @@ export default async function WorkflowExecutionsPage({
     baseParams.set("dir", direction);
   }
   if (pageSize !== DEFAULT_PAGE_SIZE) baseParams.set("pageSize", String(pageSize));
+  // Preserve custom-field filters/sort across pagination.
+  for (const raw of all(sp.cf)) baseParams.append("cf", raw);
+  if (cfSortRaw) baseParams.set("cf_sort", cfSortRaw);
 
   const basePath = `/workflows/${encodeURIComponent(workflowId)}/executions`;
   const pageHref = (target: number): string => {
