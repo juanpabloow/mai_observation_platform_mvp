@@ -9,8 +9,49 @@ GitHub repo:
 | **worker** | Ingestion loop (polls n8n, derives turns) | `src/` → compiled to `dist/` |
 | **web** | Next.js dashboard | `web/` (imports the shared data layer in `../src`) |
 
-> Nothing here deploys automatically — this document is the manual runbook. No
-> secrets are committed; set them in each service's **Variables** tab.
+> Initial setup is manual (this runbook). Once set up, the app **auto-deploys on
+> push to `main`** — read **[Deploying changes](#deploying-changes-ongoing-deploys)**
+> first before shipping. No secrets are committed; set them in each service's
+> **Variables** tab.
+
+## Deploying changes (ongoing deploys)
+
+> **Read this first when shipping a change. `main` is production.**
+
+**Auto-deploy:** Railway is connected to this GitHub repo and auto-deploys on every
+push to `main` (rebuild + redeploy). Because both services share one repo, a push
+redeploys **both** `worker` and `web` — so even a web-only change briefly restarts
+the worker. That's harmless and expected.
+
+**⚠️ Migrations are NOT automatic.** Pushing code does **not** run DB migrations.
+
+- **Code-only change (no new migration):** just push to `main`. Done.
+- **Change that adds a NEW migration** (new table / column / index / etc.) — run it
+  **manually, AFTER the deploy finishes**:
+  1. Push to `main`; wait for the redeploy to complete.
+  2. Railway → **worker** service → **Console** → run:  `npm run migrate:prod up`
+  3. Verify (migration reports applied; spot-check the app).
+- **Sequence for a schema-changing deploy:** push → wait for redeploy → run
+  `npm run migrate:prod up` in the worker Console → verify.
+- **Do NOT** deploy schema-dependent code without running its migration first —
+  production will throw `relation/column does not exist` errors until it's applied.
+
+**Safety / discipline:**
+
+- `main` = production. **Verify locally before pushing**: `npm run dev` + `npm run web`
+  work, and the production builds pass (`npm run build:worker`, `npm run build:web`).
+- A **failed build does NOT take down the live site** — Railway keeps the last
+  successful deployment serving; the failed build just doesn't go live until fixed.
+- **`ENCRYPTION_KEY` must stay identical on `web` and `worker`** (web encrypts n8n
+  API keys, worker decrypts them). Never rotate it on one service without the other,
+  or ingestion breaks.
+
+**Future improvements** (not yet implemented; tracked in `scaling-todo.md`):
+
+- Automate migrations as a Railway pre-deploy / release command, so schema changes
+  apply automatically on deploy instead of the manual Console step.
+- Add a staging environment / non-`main` branch workflow before production, once
+  there are real users.
 
 ## Key fact: both Node services use the **repo root** as their Railway "Root Directory"
 
