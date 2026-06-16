@@ -8,6 +8,9 @@ export interface WorkflowUpsert {
   n8n_workflow_id: string;
   name?: string | null;
   active?: boolean | null;
+  /** Client a NEWLY-discovered workflow lands in (the tenant's default client).
+   * Ignored for already-existing workflows — their assignment is preserved. */
+  client_id: string;
 }
 
 const UPSERT_COLUMNS = [
@@ -16,12 +19,15 @@ const UPSERT_COLUMNS = [
   'n8n_workflow_id',
   'name',
   'active',
+  'client_id',
 ] as const;
 
 /**
- * Upsert workflows synced from n8n. On conflict (same connection + workflow id)
- * updates name/active/last_synced_at but LEAVES client_id untouched (assignment
- * is managed by the platform, not by sync). Returns the number of rows affected.
+ * Upsert workflows synced from n8n. A newly-discovered workflow is inserted into
+ * the provided client_id (the tenant's DEFAULT client, so client_id is never
+ * null). On conflict (same connection + workflow id) it updates name/active/
+ * last_synced_at but LEAVES client_id UNTOUCHED — workflow→client assignment is
+ * managed by the platform, never overwritten by a sync. Returns rows affected.
  */
 export async function upsertWorkflows(workflows: WorkflowUpsert[]): Promise<number> {
   if (workflows.length === 0) {
@@ -42,6 +48,7 @@ export async function upsertWorkflows(workflows: WorkflowUpsert[]): Promise<numb
       w.n8n_workflow_id,
       w.name ?? null,
       w.active ?? null,
+      w.client_id,
     );
   }
 

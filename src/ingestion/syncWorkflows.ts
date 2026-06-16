@@ -2,6 +2,7 @@ import { decrypt } from '../crypto.js';
 import { logger } from '../logger.js';
 import { createN8nClient } from '../n8n/client.js';
 import { upsertWorkflows, type WorkflowUpsert } from '../db/repositories/workflows.js';
+import { getDefaultClientForTenant } from '../db/repositories/clients.js';
 import type { N8nConnectionRow } from '../db/types.js';
 
 /** Page size when listing workflows. */
@@ -27,6 +28,18 @@ export async function syncWorkflowsForConnection(
   const connectionId = connection.id;
 
   try {
+    // Newly-discovered workflows land in the tenant's default client (client_id
+    // is NOT NULL). Every tenant has one (created with the tenant + by migration);
+    // if somehow missing, skip rather than insert a workflow with no client.
+    const defaultClient = await getDefaultClientForTenant(tenantId);
+    if (!defaultClient) {
+      logger.error(
+        { connection: connection.name, connectionId, tenantId },
+        'workflow sync skipped: tenant has no default client',
+      );
+      return { synced: 0, ok: false };
+    }
+
     const apiKey = decrypt(connection.n8n_api_key_encrypted);
     const n8n = createN8nClient({ baseUrl: connection.n8n_base_url, apiKey });
 
@@ -42,6 +55,7 @@ export async function syncWorkflowsForConnection(
           n8n_workflow_id: wf.id,
           name: wf.name,
           active: wf.active,
+          client_id: defaultClient.id,
         });
       }
       if (!page.nextCursor) break;

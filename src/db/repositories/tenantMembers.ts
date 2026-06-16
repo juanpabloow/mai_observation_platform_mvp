@@ -45,6 +45,13 @@ export async function createTenantWithOwner(params: {
       `INSERT INTO tenant_members (tenant_id, user_id, role) VALUES ($1, $2, 'owner')`,
       [tenantId, params.userId],
     );
+    // Every tenant is born with exactly one default client (its home for
+    // ungrouped/auto-synced workflows). Same transaction → a tenant never exists
+    // without a default client.
+    await client.query(
+      `INSERT INTO clients (tenant_id, name, is_default) VALUES ($1, $2, true)`,
+      [tenantId, params.tenantName],
+    );
     await client.query('COMMIT');
     return tenantId;
   } catch (err) {
