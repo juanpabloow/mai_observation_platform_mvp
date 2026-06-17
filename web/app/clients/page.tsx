@@ -4,6 +4,7 @@ import { listClientsForTenant } from "@worker/db/repositories/clients.js";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { countActiveConnectionsForTenant } from "@worker/db/repositories/stats.js";
 import { getCurrentTenantId } from "@/lib/tenant";
+import { isR2Configured } from "@/lib/r2";
 import {
   ClientsWorkflowsView,
   type ClientFolderView,
@@ -81,6 +82,7 @@ export default async function ClientsPage() {
     .map((c) => ({
       id: c.id,
       name: c.name,
+      logoUrl: c.logo_url,
       workflowCount: c.workflow_count,
       workflows: (byClient.get(c.id) ?? []).sort(byName),
     }));
@@ -99,6 +101,7 @@ export default async function ClientsPage() {
       looseWorkflows={looseWorkflows}
       folders={folders}
       clientOptions={clientOptions}
+      r2Enabled={isR2Configured}
     />
   );
 }

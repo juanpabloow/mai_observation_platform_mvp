@@ -86,6 +86,23 @@ export async function renameClient(params: {
 }
 
 /**
+ * Set (or clear, with null) a client's logo URL (tenant-scoped). The URL is a
+ * public storage link produced server-side; this only persists it. Returns true
+ * if a row was updated (false if the client isn't this tenant's).
+ */
+export async function updateClientLogo(params: {
+  tenantId: string;
+  clientId: string;
+  logoUrl: string | null;
+}): Promise<boolean> {
+  const r = await query(
+    `UPDATE clients SET logo_url = $3, updated_at = now() WHERE id = $2 AND tenant_id = $1`,
+    [params.tenantId, params.clientId, params.logoUrl],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
  * Assign a workflow to a client. BOTH the workflow AND the target client are
  * validated to belong to `tenantId`, so a cross-tenant id can never move data.
  * Returns true iff the workflow was (re)assigned.

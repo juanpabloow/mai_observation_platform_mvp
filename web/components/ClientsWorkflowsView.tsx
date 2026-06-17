@@ -9,6 +9,7 @@ import {
   createClientAction,
   deleteClientAction,
   renameClientAction,
+  uploadClientLogoAction,
 } from "@/lib/clientActions";
 
 export interface WorkflowItem {
@@ -24,6 +25,7 @@ export interface WorkflowItem {
 export interface ClientFolderView {
   id: string;
   name: string;
+  logoUrl: string | null;
   workflowCount: number;
   workflows: WorkflowItem[];
 }
@@ -41,14 +43,27 @@ function workflowHref(w: WorkflowItem): string {
   return `/clients/${w.clientId}/workflows/${encodeURIComponent(w.n8nWorkflowId)}/executions`;
 }
 
-/** Monogram placeholder for a client logo (CL-3 swaps in the uploaded image). */
-function ClientLogo({ name }: { name: string }) {
+/**
+ * Client logo: the uploaded image (from R2's public URL) when set, else a
+ * monogram placeholder. Same square slot either way so the layout is stable.
+ */
+function ClientLogo({ name, logoUrl }: { name: string; logoUrl: string | null }) {
+  if (logoUrl) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element -- tiny external logo from R2; Next image optimizer not needed
+      <img
+        src={logoUrl}
+        alt=""
+        aria-hidden
+        className="size-9 shrink-0 rounded-lg border border-white/10 object-cover"
+      />
+    );
+  }
   const letter = name.trim()[0]?.toUpperCase() ?? "?";
   return (
     <span
       aria-hidden
       className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] text-sm font-semibold text-neutral-300"
-      title="Logo (coming soon)"
     >
       {letter}
     </span>
@@ -198,10 +213,13 @@ export function ClientsWorkflowsView({
   looseWorkflows,
   folders,
   clientOptions,
+  r2Enabled,
 }: {
   looseWorkflows: WorkflowItem[];
   folders: ClientFolderView[];
   clientOptions: ClientOption[];
+  /** Whether R2 is configured — gates the logo upload UI (graceful optional). */
+  r2Enabled: boolean;
 }) {
   const router = useRouter();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -212,6 +230,7 @@ export function ClientsWorkflowsView({
   const [createOpen, setCreateOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ClientFolderView | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ClientFolderView | null>(null);
+  const [logoTarget, setLogoTarget] = useState<ClientFolderView | null>(null);
 
   // Close any open ⋯ menu on an outside click or Escape. The menu body is
   // portaled to <body> (to escape overflow clipping), so a click inside it lands
@@ -370,7 +389,7 @@ export function ClientsWorkflowsView({
                     className="flex min-w-0 flex-1 items-center gap-3 text-left"
                   >
                     <Chevron open={isOpen} />
-                    <ClientLogo name={folder.name} />
+                    <ClientLogo name={folder.name} logoUrl={folder.logoUrl} />
                     <FolderIcon open={isOpen} />
                     <span className="min-w-0">
                       <span className="block truncate text-sm font-semibold">{folder.name}</span>
@@ -399,6 +418,18 @@ export function ClientsWorkflowsView({
                       >
                         Rename
                       </button>
+                      {r2Enabled ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setOpenMenu(null);
+                            setLogoTarget(folder);
+                          }}
+                          className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                        >
+                          {folder.logoUrl ? "Change logo" : "Add logo"}
+                        </button>
+                      ) : null}
                       <button
                         type="button"
                         onClick={() => {
@@ -435,18 +466,50 @@ export function ClientsWorkflowsView({
       </section>
 
       {createOpen ? (
-        <NameModal
-          title="New client"
-          confirmLabel="Create client"
-          placeholder="e.g. Coca Cola"
+        <CreateClientModal
+          r2Enabled={r2Enabled}
           busy={busy}
           onCancel={() => setCreateOpen(false)}
-          onSubmit={async (name) => {
+          onDone={() => {
+            setCreateOpen(false);
+            router.refresh();
+          }}
+          onCreate={async (name) => {
             setBusy(true);
             try {
-              const res = await createClientAction(name);
+              return await createClientAction(name);
+            } finally {
+              setBusy(false);
+            }
+          }}
+          onUploadLogo={async (clientId, file) => {
+            setBusy(true);
+            try {
+              const fd = new FormData();
+              fd.set("clientId", clientId);
+              fd.set("logo", file);
+              return await uploadClientLogoAction(fd);
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      ) : null}
+
+      {logoTarget ? (
+        <LogoModal
+          client={logoTarget}
+          busy={busy}
+          onCancel={() => setLogoTarget(null)}
+          onSubmit={async (file) => {
+            setBusy(true);
+            try {
+              const fd = new FormData();
+              fd.set("clientId", logoTarget.id);
+              fd.set("logo", file);
+              const res = await uploadClientLogoAction(fd);
               if (res.ok) {
-                setCreateOpen(false);
+                setLogoTarget(null);
                 router.refresh();
               }
               return res;
@@ -514,7 +577,7 @@ export function ClientsWorkflowsView({
   );
 }
 
-/** Single-field name modal (create / rename), with inline validation error. */
+/** Single-field name modal (used for Rename), with inline validation error. */
 function NameModal({
   title,
   confirmLabel,
@@ -555,8 +618,6 @@ function NameModal({
         }}
         className={inputClass}
       />
-      {/* CL-3 will add a logo upload field here. */}
-      <p className="mt-2 text-xs text-neutral-600">Logo upload coming soon.</p>
       {error ? <p className="mt-2 text-xs text-red-400">{error}</p> : null}
       <div className="mt-4 flex justify-end gap-2">
         <button
@@ -573,6 +634,252 @@ function NameModal({
           className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
         >
           {busy ? "Saving…" : confirmLabel}
+        </button>
+      </div>
+    </Backdrop>
+  );
+}
+
+/** MIME types accepted client-side (UX gate). The server re-validates by magic
+ * bytes — this is only to give fast feedback and set the file picker's filter. */
+const ALLOWED_LOGO_MIME = ["image/png", "image/jpeg", "image/webp"];
+const MAX_LOGO_MB = 2;
+
+/**
+ * File picker for a logo: a square preview (object URL) + a "Choose image"
+ * button. Pre-checks the picked file's type/size for fast feedback (the server
+ * is the authoritative validator). Calls onPick(file, error).
+ */
+function LogoPicker({
+  file,
+  onPick,
+}: {
+  file: File | null;
+  onPick: (file: File | null, error: string | null) => void;
+}) {
+  const [preview, setPreview] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!file) {
+      setPreview(null);
+      return;
+    }
+    const url = URL.createObjectURL(file);
+    setPreview(url);
+    return () => URL.revokeObjectURL(url);
+  }, [file]);
+
+  const onChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0] ?? null;
+    e.target.value = ""; // allow re-picking the same file later
+    if (!f) {
+      onPick(null, null);
+      return;
+    }
+    if (!ALLOWED_LOGO_MIME.includes(f.type)) {
+      onPick(null, "Use a PNG, JPEG, or WebP image.");
+      return;
+    }
+    if (f.size > MAX_LOGO_MB * 1024 * 1024) {
+      onPick(null, `Image too large (max ${MAX_LOGO_MB} MB).`);
+      return;
+    }
+    onPick(f, null);
+  };
+
+  return (
+    <div className="flex items-center gap-3">
+      <span className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-white/[0.04]">
+        {preview ? (
+          // eslint-disable-next-line @next/next/no-img-element -- local object-URL preview
+          <img src={preview} alt="" className="size-full object-cover" />
+        ) : (
+          <span aria-hidden className="text-lg text-neutral-600">
+            🖼
+          </span>
+        )}
+      </span>
+      <label className="cursor-pointer rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] dark:border-white/15 dark:hover:bg-white/[0.06]">
+        {file ? "Choose a different image" : "Choose image"}
+        <input
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          className="hidden"
+          onChange={onChange}
+        />
+      </label>
+      {file ? (
+        <button
+          type="button"
+          onClick={() => onPick(null, null)}
+          className="text-xs text-neutral-500 transition-colors hover:text-neutral-300"
+        >
+          Remove
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * Create-client modal: name (required) + optional logo. Creates the client, then
+ * (if a logo was picked and R2 is configured) uploads it in a second step. If the
+ * client is created but the logo upload fails, the client still exists — the modal
+ * shows that and offers a logo retry (no duplicate client is ever created).
+ */
+function CreateClientModal({
+  r2Enabled,
+  busy,
+  onCancel,
+  onDone,
+  onCreate,
+  onUploadLogo,
+}: {
+  r2Enabled: boolean;
+  busy: boolean;
+  onCancel: () => void;
+  onDone: () => void;
+  onCreate: (name: string) => Promise<{ ok: boolean; error?: string; clientId?: string }>;
+  onUploadLogo: (clientId: string, file: File) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const [name, setName] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [createdId, setCreatedId] = useState<string | null>(null);
+
+  const submit = async () => {
+    setError(null);
+    // Retry path: client already created, only the logo upload failed.
+    if (createdId) {
+      if (!file) return onDone();
+      const up = await onUploadLogo(createdId, file);
+      if (!up.ok) return setError(`Logo upload failed: ${up.error}`);
+      return onDone();
+    }
+    if (!name.trim()) return setError("Client name is required.");
+    const res = await onCreate(name);
+    if (!res.ok || !res.clientId) return setError(res.error ?? "Could not create client.");
+    if (!file) return onDone();
+    setCreatedId(res.clientId);
+    const up = await onUploadLogo(res.clientId, file);
+    if (!up.ok) {
+      return setError(
+        `Client created, but the logo upload failed: ${up.error}. Add one later via the ⋯ menu.`,
+      );
+    }
+    onDone();
+  };
+
+  return (
+    <Backdrop onClose={createdId ? onDone : onCancel}>
+      <h3 className="mb-3 text-sm font-medium">New client</h3>
+      <input
+        type="text"
+        autoFocus
+        value={name}
+        placeholder="e.g. Coca Cola"
+        disabled={!!createdId}
+        onChange={(e) => setName(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" && name.trim() && !busy) submit();
+        }}
+        className={inputClass}
+      />
+      <div className="mt-3">
+        <p className="mb-1.5 text-xs font-medium text-neutral-400">Logo (optional)</p>
+        {r2Enabled ? (
+          <>
+            <LogoPicker
+              file={file}
+              onPick={(f, err) => {
+                setFile(f);
+                setFileError(err);
+              }}
+            />
+            <p className="mt-1.5 text-[11px] text-neutral-600">PNG, JPEG, or WebP · max {MAX_LOGO_MB} MB.</p>
+            {fileError ? <p className="mt-1 text-xs text-red-400">{fileError}</p> : null}
+          </>
+        ) : (
+          <p className="text-xs text-neutral-600">
+            Logo upload is unavailable (storage not configured).
+          </p>
+        )}
+      </div>
+      {error ? <p className="mt-2 text-xs text-red-400">{error}</p> : null}
+      <div className="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={createdId ? onDone : onCancel}
+          className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-neutral-300"
+        >
+          {createdId ? "Done" : "Cancel"}
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={busy || (!createdId && name.trim() === "") || !!fileError}
+          className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
+        >
+          {busy ? "Saving…" : createdId ? "Retry logo" : "Create client"}
+        </button>
+      </div>
+    </Backdrop>
+  );
+}
+
+/** Add/replace a client's logo. */
+function LogoModal({
+  client,
+  busy,
+  onCancel,
+  onSubmit,
+}: {
+  client: ClientFolderView;
+  busy: boolean;
+  onCancel: () => void;
+  onSubmit: (file: File) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const [file, setFile] = useState<File | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const submit = async () => {
+    if (!file) return;
+    setError(null);
+    const res = await onSubmit(file);
+    if (!res.ok) setError(res.error ?? "Upload failed.");
+  };
+
+  return (
+    <Backdrop onClose={onCancel}>
+      <h3 className="mb-1 text-sm font-medium">{client.logoUrl ? "Change logo" : "Add logo"}</h3>
+      <p className="mb-3 text-xs text-neutral-500">{client.name}</p>
+      <LogoPicker
+        file={file}
+        onPick={(f, err) => {
+          setFile(f);
+          setFileError(err);
+        }}
+      />
+      <p className="mt-1.5 text-[11px] text-neutral-600">PNG, JPEG, or WebP · max {MAX_LOGO_MB} MB.</p>
+      {fileError ? <p className="mt-1 text-xs text-red-400">{fileError}</p> : null}
+      {error ? <p className="mt-2 text-xs text-red-400">{error}</p> : null}
+      <div className="mt-4 flex justify-end gap-2">
+        <button
+          type="button"
+          onClick={onCancel}
+          className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-neutral-300"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          onClick={submit}
+          disabled={busy || !file || !!fileError}
+          className="rounded-lg bg-emerald-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
+        >
+          {busy ? "Uploading…" : "Save logo"}
         </button>
       </div>
     </Backdrop>
