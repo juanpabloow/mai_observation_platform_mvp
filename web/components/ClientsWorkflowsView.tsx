@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -82,6 +83,117 @@ function Chevron({ open }: { open: boolean }) {
   );
 }
 
+/**
+ * Dropdown body rendered in a PORTAL to document.body so it escapes the
+ * `overflow-hidden` rounded containers (the loose list + folder cards) that
+ * would otherwise clip it. Positioned `absolute` in page coordinates anchored to
+ * the ⋯ trigger (so it tracks page scroll), flips above the trigger when there's
+ * no room below, and sits at z-[60] above every row/card. Marked
+ * `data-menu-portal` so the view's outside-click handler treats clicks inside it
+ * as "inside the menu".
+ */
+function PortalMenu({
+  anchorRef,
+  align = "right",
+  width = 224,
+  children,
+}: {
+  anchorRef: React.RefObject<HTMLButtonElement | null>;
+  align?: "left" | "right";
+  width?: number;
+  children: React.ReactNode;
+}) {
+  const menuRef = useRef<HTMLDivElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  useLayoutEffect(() => {
+    const anchor = anchorRef.current;
+    if (!anchor) return;
+    const compute = () => {
+      const r = anchor.getBoundingClientRect();
+      const menuH = menuRef.current?.offsetHeight ?? 0;
+      const gap = 4;
+      // Open downward; flip above the trigger if it would overflow the viewport
+      // bottom and there's room above.
+      let top = r.bottom + gap;
+      if (menuH && top + menuH > window.innerHeight - 8 && r.top - gap - menuH > 8) {
+        top = r.top - gap - menuH;
+      }
+      // Right-align the menu to the trigger by default; clamp within the viewport.
+      let left = align === "right" ? r.right - width : r.left;
+      left = Math.min(Math.max(8, left), window.innerWidth - width - 8);
+      setPos({ top: top + window.scrollY, left: left + window.scrollX });
+    };
+    compute();
+    window.addEventListener("resize", compute);
+    return () => window.removeEventListener("resize", compute);
+  }, [anchorRef, align, width]);
+
+  if (typeof document === "undefined") return null;
+  return createPortal(
+    <div
+      ref={menuRef}
+      data-menu-portal
+      style={{
+        position: "absolute",
+        top: pos?.top ?? 0,
+        left: pos?.left ?? 0,
+        width,
+        // Hidden for the first layout pass (before we've measured), so it never
+        // flashes at the wrong spot.
+        visibility: pos ? "visible" : "hidden",
+      }}
+      className="z-[60] overflow-hidden rounded-xl border border-black/10 bg-white shadow-xl dark:border-white/15 dark:bg-neutral-900"
+    >
+      {children}
+    </div>,
+    document.body,
+  );
+}
+
+/**
+ * A ⋯ trigger button plus its portaled dropdown. Open state is controlled by the
+ * parent (so only one menu is open at a time); the button is marked
+ * `data-menu-root` so clicking it doesn't count as an outside click.
+ */
+function RowMenu({
+  open,
+  onToggle,
+  ariaLabel,
+  align = "right",
+  width = 224,
+  children,
+}: {
+  open: boolean;
+  onToggle: () => void;
+  ariaLabel: string;
+  align?: "left" | "right";
+  width?: number;
+  children: React.ReactNode;
+}) {
+  const btnRef = useRef<HTMLButtonElement>(null);
+  return (
+    <>
+      <button
+        ref={btnRef}
+        type="button"
+        data-menu-root
+        onClick={onToggle}
+        aria-label={ariaLabel}
+        aria-expanded={open}
+        className="flex size-7 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-black/[0.05] hover:text-neutral-200 dark:hover:bg-white/[0.08]"
+      >
+        <span aria-hidden className="text-lg leading-none">⋯</span>
+      </button>
+      {open ? (
+        <PortalMenu anchorRef={btnRef} align={align} width={width}>
+          {children}
+        </PortalMenu>
+      ) : null}
+    </>
+  );
+}
+
 export function ClientsWorkflowsView({
   looseWorkflows,
   folders,
@@ -101,13 +213,25 @@ export function ClientsWorkflowsView({
   const [renameTarget, setRenameTarget] = useState<ClientFolderView | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ClientFolderView | null>(null);
 
-  // Close any open ⋯ menu on an outside click.
+  // Close any open ⋯ menu on an outside click or Escape. The menu body is
+  // portaled to <body> (to escape overflow clipping), so a click inside it lands
+  // on [data-menu-portal] rather than the trigger's [data-menu-root] — spare both.
   useEffect(() => {
     const onDoc = (e: MouseEvent) => {
-      if (!(e.target as HTMLElement).closest("[data-menu-root]")) setOpenMenu(null);
+      const t = e.target as HTMLElement;
+      if (!t.closest("[data-menu-root]") && !t.closest("[data-menu-portal]")) {
+        setOpenMenu(null);
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpenMenu(null);
     };
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
   }, []);
 
   const toggle = (id: string) =>
@@ -129,51 +253,36 @@ export function ClientsWorkflowsView({
     }
   };
 
-  const move = (
-    w: WorkflowItem,
-    menuKey: string,
-    align: "left" | "right" = "right",
-  ) => (
-    <div data-menu-root className="relative">
-      <button
-        type="button"
-        onClick={() => setOpenMenu(openMenu === menuKey ? null : menuKey)}
-        aria-label="Workflow actions"
-        aria-expanded={openMenu === menuKey}
-        className="flex size-7 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-black/[0.05] hover:text-neutral-200 dark:hover:bg-white/[0.08]"
-      >
-        <span aria-hidden className="text-lg leading-none">⋯</span>
-      </button>
-      {openMenu === menuKey ? (
-        <div
-          className={`absolute z-30 mt-1 w-56 overflow-hidden rounded-xl border border-black/10 bg-white shadow-xl dark:border-white/15 dark:bg-neutral-900 ${
-            align === "right" ? "right-0" : "left-0"
-          }`}
-        >
-          <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-neutral-500">
-            Move to
-          </p>
-          <div className="max-h-64 overflow-y-auto pb-1">
-            {clientOptions.map((c) => {
-              const current = c.id === w.clientId;
-              const label = c.isDefault ? "Unassigned" : c.name;
-              return (
-                <button
-                  key={c.id}
-                  type="button"
-                  disabled={current || busy}
-                  onClick={() => assign(w.id, c.id)}
-                  className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] disabled:cursor-default disabled:opacity-100 dark:hover:bg-white/[0.06]"
-                >
-                  <span className="truncate">{label}</span>
-                  {current ? <span aria-hidden className="text-xs text-emerald-400">✓ here</span> : null}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-    </div>
+  const move = (w: WorkflowItem, menuKey: string) => (
+    <RowMenu
+      open={openMenu === menuKey}
+      onToggle={() => setOpenMenu(openMenu === menuKey ? null : menuKey)}
+      ariaLabel="Workflow actions"
+      align="right"
+      width={224}
+    >
+      <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-neutral-500">
+        Move to
+      </p>
+      <div className="max-h-64 overflow-y-auto pb-1">
+        {clientOptions.map((c) => {
+          const current = c.id === w.clientId;
+          const label = c.isDefault ? "Unassigned" : c.name;
+          return (
+            <button
+              key={c.id}
+              type="button"
+              disabled={current || busy}
+              onClick={() => assign(w.id, c.id)}
+              className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] disabled:cursor-default disabled:opacity-100 dark:hover:bg-white/[0.06]"
+            >
+              <span className="truncate">{label}</span>
+              {current ? <span aria-hidden className="text-xs text-emerald-400">✓ here</span> : null}
+            </button>
+          );
+        })}
+      </div>
+    </RowMenu>
   );
 
   const workflowRow = (w: WorkflowItem, menuKey: string) => (
@@ -272,41 +381,36 @@ export function ClientsWorkflowsView({
                   </button>
 
                   {/* Client ⋯ menu: rename / delete (never on the default client) */}
-                  <div data-menu-root className="relative">
-                    <button
-                      type="button"
-                      onClick={() => setOpenMenu(openMenu === menuKey ? null : menuKey)}
-                      aria-label="Client actions"
-                      aria-expanded={openMenu === menuKey}
-                      className="flex size-7 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-black/[0.05] hover:text-neutral-200 dark:hover:bg-white/[0.08]"
-                    >
-                      <span aria-hidden className="text-lg leading-none">⋯</span>
-                    </button>
-                    {openMenu === menuKey ? (
-                      <div className="absolute right-0 z-30 mt-1 w-44 overflow-hidden rounded-xl border border-black/10 bg-white py-1 shadow-xl dark:border-white/15 dark:bg-neutral-900">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setOpenMenu(null);
-                            setRenameTarget(folder);
-                          }}
-                          className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
-                        >
-                          Rename
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setOpenMenu(null);
-                            setDeleteTarget(folder);
-                          }}
-                          className="flex w-full items-center px-3 py-1.5 text-left text-sm text-red-400 transition-colors hover:bg-red-500/10"
-                        >
-                          Delete
-                        </button>
-                      </div>
-                    ) : null}
-                  </div>
+                  <RowMenu
+                    open={openMenu === menuKey}
+                    onToggle={() => setOpenMenu(openMenu === menuKey ? null : menuKey)}
+                    ariaLabel="Client actions"
+                    align="right"
+                    width={176}
+                  >
+                    <div className="py-1">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenMenu(null);
+                          setRenameTarget(folder);
+                        }}
+                        className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                      >
+                        Rename
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenMenu(null);
+                          setDeleteTarget(folder);
+                        }}
+                        className="flex w-full items-center px-3 py-1.5 text-left text-sm text-red-400 transition-colors hover:bg-red-500/10"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </RowMenu>
                 </div>
 
                 {isOpen ? (
