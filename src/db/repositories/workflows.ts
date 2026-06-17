@@ -99,6 +99,8 @@ export async function listWorkflowsForTenant(tenantId: string): Promise<Workflow
 
 /** A distinct workflow plus the client that owns it (for client→workflow nav). */
 export interface WorkflowWithClient {
+  /** workflows.id (row uuid) — the key assignWorkflowToClient operates on. */
+  id: string;
   n8n_workflow_id: string;
   name: string | null;
   active: boolean | null;
@@ -106,16 +108,17 @@ export interface WorkflowWithClient {
 }
 
 /**
- * Distinct workflows for a tenant, each with its owning client_id, for the
- * client → workflow navigation. Mirrors getWorkflowByN8nId's "most recently
- * synced row per n8n id" rule (DISTINCT ON + last_synced_at DESC) so a link
- * built from this list resolves to the same workflow row.
+ * Distinct workflows for a tenant, each with its row id + owning client_id, for
+ * the client → workflow view. Mirrors getWorkflowByN8nId's "most recently synced
+ * row per n8n id" rule (DISTINCT ON + last_synced_at DESC) so a link built from
+ * this list resolves to the same workflow row, and the returned `id` is that same
+ * row (the one reassignment should move).
  */
 export async function listWorkflowsWithClientForTenant(
   tenantId: string,
 ): Promise<WorkflowWithClient[]> {
   const result = await query<WorkflowWithClient>(
-    `SELECT DISTINCT ON (n8n_workflow_id) n8n_workflow_id, name, active, client_id
+    `SELECT DISTINCT ON (n8n_workflow_id) id, n8n_workflow_id, name, active, client_id
        FROM workflows
       WHERE tenant_id = $1
       ORDER BY n8n_workflow_id, last_synced_at DESC NULLS LAST`,
