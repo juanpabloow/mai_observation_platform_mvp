@@ -6,6 +6,7 @@ import {
   listTurnsForConversation,
 } from "@worker/db/repositories/conversationTurns.js";
 import { getCurrentTenantId } from "@/lib/tenant";
+import { getWorkflowForCurrentTenant } from "@/lib/workflow";
 import { parseExecution } from "@/lib/executionDetail";
 import { formatDateTime, formatDuration, statusBadgeClasses } from "@/lib/format";
 import { ChatScroll } from "@/components/ChatScroll";
@@ -40,6 +41,15 @@ export default async function ExecutionDetailPage({
   if (!execution) {
     notFound(); // not found OR another tenant's — indistinguishable on purpose
   }
+
+  // Resolve the execution's workflow → its client (tenant-scoped) so links point
+  // at the nested client/workflow URLs. /executions/[id] itself stays global
+  // (keyed by execution UUID); only the links OUT of it are nested.
+  const workflow = await getWorkflowForCurrentTenant(execution.n8n_workflow_id);
+  const workflowClientId = workflow?.client_id ?? null;
+  const backHref = workflowClientId
+    ? `/clients/${workflowClientId}/workflows/${encodeURIComponent(execution.n8n_workflow_id)}/executions`
+    : "/clients";
 
   const parsed = parseExecution(execution.raw_data);
 
@@ -81,6 +91,7 @@ export default async function ExecutionDetailPage({
       <ConversationPanel
         contactName={contactName}
         conversationId={turn.conversation_id}
+        clientId={workflowClientId ?? ""}
         workflowId={turn.n8n_workflow_id}
         turnCount={thread.length}
       >
@@ -126,7 +137,7 @@ export default async function ExecutionDetailPage({
     >
       <div>
         <Link
-          href={`/workflows/${encodeURIComponent(execution.n8n_workflow_id)}/executions`}
+          href={backHref}
           className="text-sm text-neutral-500 transition-colors hover:text-neutral-300"
         >
           &larr; Back to {execution.workflow_name}

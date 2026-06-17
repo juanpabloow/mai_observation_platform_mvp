@@ -13,19 +13,21 @@ import Link from "next/link";
 export function ConversationPanel({
   contactName,
   conversationId,
+  clientId,
   workflowId,
   turnCount,
   children,
 }: {
   contactName: string | null;
   conversationId: string;
+  clientId: string;
   workflowId: string;
   turnCount: number;
   children: React.ReactNode;
 }) {
   const [open, setOpen] = useState(true);
   const displayName = contactName ?? conversationId;
-  const fullHref = `/workflows/${encodeURIComponent(workflowId)}/conversations/${encodeURIComponent(conversationId)}`;
+  const fullHref = `/clients/${encodeURIComponent(clientId)}/workflows/${encodeURIComponent(workflowId)}/conversations/${encodeURIComponent(conversationId)}`;
 
   return (
     <aside className="flex flex-col gap-3 lg:sticky lg:top-6 lg:self-start">

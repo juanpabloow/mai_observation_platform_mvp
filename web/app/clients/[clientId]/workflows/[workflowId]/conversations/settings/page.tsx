@@ -1,11 +1,10 @@
 import { connection } from "next/server";
 import Link from "next/link";
-import { notFound } from "next/navigation";
 import { listConversationMappings } from "@worker/db/repositories/fieldMappings.js";
 import { listRecentRawForWorkflow } from "@worker/db/repositories/executions.js";
 import type { ConversationRole } from "@worker/db/types.js";
 import { getCurrentTenantId } from "@/lib/tenant";
-import { getWorkflowForCurrentTenant } from "@/lib/workflow";
+import { requireWorkflowUnderClient } from "@/lib/clientWorkflow";
 import {
   buildExecutionResolver,
   extractMapping,
@@ -30,15 +29,17 @@ const SAMPLE_SIZE = 10;
 export default async function ConversationSettingsPage({
   params,
 }: {
-  params: Promise<{ workflowId: string }>;
+  params: Promise<{ clientId: string; workflowId: string }>;
 }) {
   await connection();
-  const { workflowId } = await params;
+  const { clientId, workflowId } = await params;
 
-  const workflow = await getWorkflowForCurrentTenant(workflowId);
-  if (!workflow) {
-    notFound();
-  }
+  const workflow = await requireWorkflowUnderClient(
+    clientId,
+    workflowId,
+    "conversations/settings",
+  );
+  const linkClientId = workflow.client_id ?? clientId;
 
   const tenantId = await getCurrentTenantId();
   const [mappings, raws] = await Promise.all([
@@ -90,7 +91,7 @@ export default async function ConversationSettingsPage({
   return (
     <div className="flex flex-col gap-4">
       <Link
-        href={`/workflows/${encodeURIComponent(workflowId)}/conversations`}
+        href={`/clients/${linkClientId}/workflows/${encodeURIComponent(workflowId)}/conversations`}
         className="text-sm text-neutral-500 transition-colors hover:text-neutral-300"
       >
         &larr; Back to conversations

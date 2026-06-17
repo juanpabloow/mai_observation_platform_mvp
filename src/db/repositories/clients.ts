@@ -32,6 +32,22 @@ export async function getDefaultClientForTenant(tenantId: string): Promise<Clien
   return r.rows[0] ?? null;
 }
 
+/**
+ * A single client by id, tenant-scoped (a foreign/bogus id returns null — never
+ * another tenant's client). Used by the web routing layer to validate the
+ * clientId in a URL and to render the client breadcrumb.
+ */
+export async function getClientById(params: {
+  tenantId: string;
+  clientId: string;
+}): Promise<ClientRow | null> {
+  const r = await query<ClientRow>(
+    `SELECT ${CLIENT_COLUMNS} FROM clients WHERE id = $1 AND tenant_id = $2 LIMIT 1`,
+    [params.clientId, params.tenantId],
+  );
+  return r.rows[0] ?? null;
+}
+
 /** All clients for a tenant with their workflow counts (default first, then name). */
 export async function listClientsForTenant(tenantId: string): Promise<ClientWithCount[]> {
   const r = await query<ClientWithCount>(

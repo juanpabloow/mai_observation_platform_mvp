@@ -84,10 +84,10 @@ export default async function Home() {
 
       <div className="flex flex-wrap gap-3">
         <Link
-          href="/workflows"
+          href="/clients"
           className="inline-flex items-center gap-2 rounded-full border border-black/10 bg-black/[0.03] px-5 py-2.5 text-sm font-medium transition-colors hover:bg-black/[0.06] dark:border-white/15 dark:bg-white/[0.04] dark:hover:bg-white/[0.08]"
         >
-          Browse workflows
+          Browse clients
           <span aria-hidden>&rarr;</span>
         </Link>
         <Link

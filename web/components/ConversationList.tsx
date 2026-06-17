@@ -26,9 +26,11 @@ function initials(name: string): string {
 }
 
 export function ConversationList({
+  clientId,
   workflowId,
   conversations,
 }: {
+  clientId: string;
   workflowId: string;
   conversations: ConversationListItem[];
 }) {
@@ -44,7 +46,7 @@ export function ConversationList({
     );
   }, [query, conversations]);
 
-  const base = `/workflows/${encodeURIComponent(workflowId)}/conversations`;
+  const base = `/clients/${encodeURIComponent(clientId)}/workflows/${encodeURIComponent(workflowId)}/conversations`;
 
   return (
     <div className="flex flex-col gap-3">

@@ -28,7 +28,7 @@ export async function addConnectionAction(input: {
   }
   revalidatePath("/settings/connections");
   revalidatePath("/");
-  revalidatePath("/workflows");
+  revalidatePath("/clients");
   return { ok: true };
 }
 

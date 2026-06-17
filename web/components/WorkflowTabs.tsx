@@ -4,9 +4,10 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 
 /**
- * Tab nav for a workflow. "Executions" is live today; future sibling views
- * (Analytics, Conversations) are placeholders here — adding one later means
- * flipping `enabled` and creating web/app/workflows/[workflowId]/<tab>/page.tsx.
+ * Tab nav for a workflow under its client. "Executions" + "Conversations" are
+ * live; "Analytics" is a placeholder — enabling one later means flipping
+ * `enabled` and adding the route folder under
+ * web/app/clients/[clientId]/workflows/[workflowId]/<tab>/.
  */
 const TABS = [
   { key: "executions", label: "Executions", enabled: true },
@@ -14,9 +15,15 @@ const TABS = [
   { key: "analytics", label: "Analytics", enabled: false },
 ];
 
-export function WorkflowTabs({ workflowId }: { workflowId: string }) {
+export function WorkflowTabs({
+  clientId,
+  workflowId,
+}: {
+  clientId: string;
+  workflowId: string;
+}) {
   const pathname = usePathname();
-  const base = `/workflows/${encodeURIComponent(workflowId)}`;
+  const base = `/clients/${encodeURIComponent(clientId)}/workflows/${encodeURIComponent(workflowId)}`;
 
   return (
     <nav className="flex gap-1 border-b border-black/10 dark:border-white/10">

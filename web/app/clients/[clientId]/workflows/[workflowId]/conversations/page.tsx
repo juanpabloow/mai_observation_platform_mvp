@@ -1,10 +1,9 @@
 import { connection } from "next/server";
 import Link from "next/link";
-import { notFound } from "next/navigation";
 import { listConversationMappings } from "@worker/db/repositories/fieldMappings.js";
 import { listConversations } from "@worker/db/repositories/conversationTurns.js";
 import { getCurrentTenantId } from "@/lib/tenant";
-import { getWorkflowForCurrentTenant } from "@/lib/workflow";
+import { requireWorkflowUnderClient } from "@/lib/clientWorkflow";
 import { formatListTimestamp } from "@/lib/format";
 import { ConversationList, type ConversationListItem } from "@/components/ConversationList";
 
@@ -20,15 +19,13 @@ function truncate(text: string): string {
 export default async function ConversationsPage({
   params,
 }: {
-  params: Promise<{ workflowId: string }>;
+  params: Promise<{ clientId: string; workflowId: string }>;
 }) {
   await connection();
-  const { workflowId } = await params;
+  const { clientId, workflowId } = await params;
 
-  const workflow = await getWorkflowForCurrentTenant(workflowId);
-  if (!workflow) {
-    notFound();
-  }
+  const workflow = await requireWorkflowUnderClient(clientId, workflowId, "conversations");
+  const linkClientId = workflow.client_id ?? clientId;
 
   const tenantId = await getCurrentTenantId();
   const [mappings, conversations] = await Promise.all([
@@ -41,7 +38,8 @@ export default async function ConversationsPage({
   const roles = new Set(mappings.map((m) => m.role));
   const configured = roles.has("conversation_id") && roles.has("user_message");
 
-  const settingsHref = `/workflows/${encodeURIComponent(workflowId)}/conversations/settings`;
+  const conversationsBase = `/clients/${linkClientId}/workflows/${encodeURIComponent(workflowId)}/conversations`;
+  const settingsHref = `${conversationsBase}/settings`;
   const now = new Date();
 
   const header = (
@@ -112,7 +110,11 @@ export default async function ConversationsPage({
   return (
     <div className="flex flex-col gap-4">
       {header}
-      <ConversationList workflowId={workflowId} conversations={items} />
+      <ConversationList
+        clientId={linkClientId}
+        workflowId={workflowId}
+        conversations={items}
+      />
       {capped ? (
         <p className="text-center text-xs text-neutral-600">
           Showing the {LIST_CAP} most recently active conversations.

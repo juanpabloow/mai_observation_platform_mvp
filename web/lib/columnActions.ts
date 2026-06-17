@@ -56,7 +56,9 @@ export async function addColumnAction(input: AddColumnInput): Promise<void> {
     jsonPath: input.jsonPath,
     dataType: input.dataType ?? null,
   });
-  revalidatePath(`/workflows/${input.workflowId}/executions`);
+  if (workflow.client_id) {
+    revalidatePath(`/clients/${workflow.client_id}/workflows/${input.workflowId}/executions`);
+  }
 }
 
 /** Delete a 'column' mapping by id (tenant-scoped). */
@@ -66,5 +68,9 @@ export async function deleteColumnAction(input: {
 }): Promise<void> {
   const tenantId = await getCurrentTenantId();
   await deleteColumnMapping({ tenantId, id: input.id });
-  revalidatePath(`/workflows/${input.workflowId}/executions`);
+  // Resolve the workflow's client to revalidate the canonical nested path.
+  const workflow = await getWorkflowForCurrentTenant(input.workflowId);
+  if (workflow?.client_id) {
+    revalidatePath(`/clients/${workflow.client_id}/workflows/${input.workflowId}/executions`);
+  }
 }

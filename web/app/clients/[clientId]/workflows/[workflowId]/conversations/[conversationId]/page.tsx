@@ -3,7 +3,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { listTurnsForConversation } from "@worker/db/repositories/conversationTurns.js";
 import { getCurrentTenantId } from "@/lib/tenant";
-import { getWorkflowForCurrentTenant } from "@/lib/workflow";
+import { requireWorkflowUnderClient } from "@/lib/clientWorkflow";
 import { ChatScroll } from "@/components/ChatScroll";
 import { ChatTranscript } from "@/components/ChatTranscript";
 
@@ -14,17 +14,20 @@ function hasText(value: string | null): value is string {
 export default async function ConversationThreadPage({
   params,
 }: {
-  params: Promise<{ workflowId: string; conversationId: string }>;
+  params: Promise<{ clientId: string; workflowId: string; conversationId: string }>;
 }) {
   await connection();
-  const { workflowId, conversationId: rawConversationId } = await params;
+  const { clientId, workflowId, conversationId: rawConversationId } = await params;
   const conversationId = decodeURIComponent(rawConversationId);
 
-  // The workflow layout already 404s if the workflow isn't this tenant's.
-  const workflow = await getWorkflowForCurrentTenant(workflowId);
-  if (!workflow) {
-    notFound();
-  }
+  // Resolve under the client (404/redirect-to-canonical). The redirect preserves
+  // this exact conversation segment as received.
+  const workflow = await requireWorkflowUnderClient(
+    clientId,
+    workflowId,
+    `conversations/${rawConversationId}`,
+  );
+  const linkClientId = workflow.client_id ?? clientId;
 
   const tenantId = await getCurrentTenantId();
   const turns = await listTurnsForConversation({ tenantId, n8nWorkflowId: workflowId, conversationId });
@@ -41,7 +44,7 @@ export default async function ConversationThreadPage({
   }
   const displayName = contactName ?? conversationId;
   const now = new Date();
-  const listHref = `/workflows/${encodeURIComponent(workflowId)}/conversations`;
+  const listHref = `/clients/${linkClientId}/workflows/${encodeURIComponent(workflowId)}/conversations`;
 
   return (
     <div className="flex flex-col gap-4">

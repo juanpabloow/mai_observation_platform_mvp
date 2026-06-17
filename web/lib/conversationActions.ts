@@ -39,8 +39,11 @@ export async function upsertConversationRoleAction(input: {
   });
   // Refresh both the settings screen and the list (mapping changes flip the
   // list between its setup-prompt and chat-list states).
-  revalidatePath(`/workflows/${input.workflowId}/conversations/settings`);
-  revalidatePath(`/workflows/${input.workflowId}/conversations`);
+  if (workflow.client_id) {
+    const base = `/clients/${workflow.client_id}/workflows/${input.workflowId}/conversations`;
+    revalidatePath(`${base}/settings`);
+    revalidatePath(base);
+  }
 }
 
 export async function deleteConversationRoleAction(input: {
@@ -53,6 +56,10 @@ export async function deleteConversationRoleAction(input: {
     n8nWorkflowId: input.workflowId,
     role: input.role,
   });
-  revalidatePath(`/workflows/${input.workflowId}/conversations/settings`);
-  revalidatePath(`/workflows/${input.workflowId}/conversations`);
+  const workflow = await getWorkflowForCurrentTenant(input.workflowId);
+  if (workflow?.client_id) {
+    const base = `/clients/${workflow.client_id}/workflows/${input.workflowId}/conversations`;
+    revalidatePath(`${base}/settings`);
+    revalidatePath(base);
+  }
 }

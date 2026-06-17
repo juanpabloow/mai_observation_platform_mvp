@@ -1,6 +1,5 @@
 import Link from "next/link";
 import { connection } from "next/server";
-import { notFound } from "next/navigation";
 import {
   getRawDataByIds,
   isExecutionSortKey,
@@ -18,7 +17,7 @@ import {
 } from "@worker/db/repositories/fieldMappings.js";
 import { config } from "@worker/config.js";
 import { getCurrentTenantId } from "@/lib/tenant";
-import { getWorkflowForCurrentTenant } from "@/lib/workflow";
+import { requireWorkflowUnderClient } from "@/lib/clientWorkflow";
 import { formatDateTime, formatDuration } from "@/lib/format";
 import {
   buildExecutionResolver,
@@ -73,22 +72,39 @@ function parseIntParam(value: string | undefined, fallback: number): number {
   return Number.isFinite(n) ? Math.floor(n) : fallback;
 }
 
+/** Re-serialize the parsed searchParams into a "?a=1&b=2" string (preserving
+ * repeated keys), used to carry filters across a canonical-client redirect. */
+function serializeSearch(sp: SearchParams): string {
+  const p = new URLSearchParams();
+  for (const [key, value] of Object.entries(sp)) {
+    for (const v of all(value)) p.append(key, v);
+  }
+  const qs = p.toString();
+  return qs ? `?${qs}` : "";
+}
+
 export default async function WorkflowExecutionsPage({
   params,
   searchParams,
 }: {
-  params: Promise<{ workflowId: string }>;
+  params: Promise<{ clientId: string; workflowId: string }>;
   searchParams: Promise<SearchParams>;
 }) {
   await connection();
-  const { workflowId } = await params;
+  const { clientId, workflowId } = await params;
   const sp = await searchParams;
 
-  // Tenant-scoped workflow resolution (deduped with the layout via React cache).
-  const workflow = await getWorkflowForCurrentTenant(workflowId);
-  if (!workflow) {
-    notFound();
-  }
+  // Tenant-scoped resolution (deduped with the layout via React cache). 404s a
+  // missing/bogus workflow|client; redirects a stale clientId to the canonical
+  // URL, preserving the current filters/sort/page query string.
+  const workflow = await requireWorkflowUnderClient(
+    clientId,
+    workflowId,
+    "executions",
+    serializeSearch(sp),
+  );
+  // The workflow's REAL client — all links below are canonical, never the URL's.
+  const linkClientId = workflow.client_id ?? clientId;
 
   const pageSize = Math.min(
     Math.max(parseIntParam(first(sp.pageSize), DEFAULT_PAGE_SIZE), 1),
@@ -219,7 +235,7 @@ export default async function WorkflowExecutionsPage({
   for (const raw of all(sp.cf)) baseParams.append("cf", raw);
   if (cfSortRaw) baseParams.set("cf_sort", cfSortRaw);
 
-  const basePath = `/workflows/${encodeURIComponent(workflowId)}/executions`;
+  const basePath = `/clients/${linkClientId}/workflows/${encodeURIComponent(workflowId)}/executions`;
   const pageHref = (target: number): string => {
     const p = new URLSearchParams(baseParams);
     p.set("page", String(target));

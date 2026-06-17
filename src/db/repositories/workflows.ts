@@ -97,6 +97,33 @@ export async function listWorkflowsForTenant(tenantId: string): Promise<Workflow
   return result.rows;
 }
 
+/** A distinct workflow plus the client that owns it (for client→workflow nav). */
+export interface WorkflowWithClient {
+  n8n_workflow_id: string;
+  name: string | null;
+  active: boolean | null;
+  client_id: string;
+}
+
+/**
+ * Distinct workflows for a tenant, each with its owning client_id, for the
+ * client → workflow navigation. Mirrors getWorkflowByN8nId's "most recently
+ * synced row per n8n id" rule (DISTINCT ON + last_synced_at DESC) so a link
+ * built from this list resolves to the same workflow row.
+ */
+export async function listWorkflowsWithClientForTenant(
+  tenantId: string,
+): Promise<WorkflowWithClient[]> {
+  const result = await query<WorkflowWithClient>(
+    `SELECT DISTINCT ON (n8n_workflow_id) n8n_workflow_id, name, active, client_id
+       FROM workflows
+      WHERE tenant_id = $1
+      ORDER BY n8n_workflow_id, last_synced_at DESC NULLS LAST`,
+    [tenantId],
+  );
+  return result.rows;
+}
+
 /** A workflow summary for the picker: distinct workflow + active + execution count. */
 export interface WorkflowSummary {
   n8n_workflow_id: string;
