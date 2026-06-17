@@ -97,7 +97,7 @@ export default async function ExecutionDetailPage({
       >
         <ChatScroll
           focusSelector='[data-focus="true"]'
-          className="h-[60vh] overflow-y-auto rounded-2xl border border-black/10 bg-black/[0.02] px-3 py-3 lg:h-[70vh] dark:border-white/10 dark:bg-white/[0.02]"
+          className="h-[60vh] overflow-y-auto rounded-2xl border border-black/10 bg-black/[0.02] px-3 py-3 lg:h-[70vh] dark:border-line dark:bg-card"
         >
           {/* Highlight + center THIS execution's turn (use the canonical DB id). */}
           <ChatTranscript turns={thread} now={now} highlightExecutionId={execution.id} />
@@ -120,7 +120,7 @@ export default async function ExecutionDetailPage({
       {parsed.hasRunData ? (
         <NodeSections nodes={nodeViews} />
       ) : (
-        <div className="rounded-2xl border border-black/10 bg-black/[0.02] p-6 text-sm text-neutral-500 dark:border-white/10 dark:bg-white/[0.03]">
+        <div className="rounded-2xl border border-black/10 bg-black/[0.02] p-6 text-sm text-neutral-500 dark:border-line dark:bg-card">
           No node-level data captured for this execution.
         </div>
       )}
@@ -138,14 +138,14 @@ export default async function ExecutionDetailPage({
       <div>
         <Link
           href={backHref}
-          className="text-sm text-neutral-500 transition-colors hover:text-neutral-300"
+          className="text-sm text-neutral-500 transition-colors hover:text-foreground"
         >
           &larr; Back to {execution.workflow_name}
         </Link>
       </div>
 
       {/* Summary header (full width) */}
-      <header className="space-y-4 rounded-2xl border border-black/10 bg-black/[0.02] p-5 dark:border-white/10 dark:bg-white/[0.03]">
+      <header className="space-y-4 rounded-2xl border border-black/10 bg-black/[0.02] p-5 dark:border-line dark:bg-card">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-xl font-semibold tracking-tight sm:text-2xl">
             {execution.workflow_name}
@@ -155,7 +155,7 @@ export default async function ExecutionDetailPage({
         <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
           <SummaryField
             label="Client"
-            value={execution.client_name ?? <span className="text-neutral-600">Unassigned</span>}
+            value={execution.client_name ?? <span className="text-faint">Unassigned</span>}
           />
           <SummaryField
             label="Execution ID"

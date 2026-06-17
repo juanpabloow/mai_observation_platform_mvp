@@ -31,10 +31,10 @@ export function ConversationPanel({
 
   return (
     <aside className="flex flex-col gap-3 lg:sticky lg:top-6 lg:self-start">
-      <div className="flex flex-col gap-2 rounded-2xl border border-black/10 bg-black/[0.02] p-4 dark:border-white/10 dark:bg-white/[0.03]">
+      <div className="flex flex-col gap-2 rounded-2xl border border-black/10 bg-black/[0.02] p-4 dark:border-line dark:bg-card">
         <div className="flex items-start justify-between gap-2">
           <div className="flex min-w-0 items-center gap-2.5">
-            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-xs font-medium text-emerald-300">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-xs font-medium text-accent">
               💬
             </span>
             <div className="min-w-0">
@@ -48,7 +48,7 @@ export function ConversationPanel({
           <button
             type="button"
             onClick={() => setOpen((o) => !o)}
-            className="shrink-0 rounded-lg border border-black/10 px-2 py-1 text-xs text-neutral-400 transition-colors hover:bg-black/[0.04] hover:text-neutral-200 dark:border-white/15 dark:hover:bg-white/[0.06]"
+            className="shrink-0 rounded-lg border border-black/10 px-2 py-1 text-xs text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground dark:border-line-strong dark:hover:bg-subtle"
             aria-expanded={open}
           >
             {open ? "Hide" : "Show"}
@@ -56,7 +56,7 @@ export function ConversationPanel({
         </div>
         <Link
           href={fullHref}
-          className="text-xs text-emerald-400 transition-colors hover:text-emerald-300"
+          className="text-xs text-accent transition-colors hover:opacity-80"
         >
           Open full conversation →
         </Link>

@@ -63,21 +63,21 @@ const FIXED_COLUMNS = [
     enableSorting: false,
     cell: (info) =>
       info.getValue() ? (
-        <span className="text-neutral-400">{info.getValue()}</span>
+        <span className="text-muted">{info.getValue()}</span>
       ) : (
-        <span className="text-neutral-600">Unassigned</span>
+        <span className="text-faint">Unassigned</span>
       ),
   }),
   columnHelper.accessor("startedDisplay", {
     id: "started_at",
     header: "Started",
-    cell: (info) => <span className="text-neutral-400">{info.getValue()}</span>,
+    cell: (info) => <span className="text-muted">{info.getValue()}</span>,
   }),
   columnHelper.accessor("durationDisplay", {
     id: "duration_ms",
     header: "Duration",
     cell: (info) => (
-      <span className="tabular-nums text-neutral-400">{info.getValue()}</span>
+      <span className="tabular-nums text-muted">{info.getValue()}</span>
     ),
   }),
   columnHelper.accessor("executionId", {
@@ -174,9 +174,9 @@ export function ExecutionsTable({ rows, sort, customSort, customColumns }: Execu
   });
 
   return (
-    <div className="overflow-x-auto rounded-2xl border border-black/10 dark:border-white/10">
+    <div className="overflow-x-auto rounded-2xl border border-black/10 dark:border-line">
       <table className="w-full min-w-[60rem] border-collapse">
-        <thead className="bg-black/[0.02] dark:bg-white/[0.03]">
+        <thead className="bg-black/[0.02] dark:bg-card">
           {table.getHeaderGroups().map((headerGroup) => (
             <tr key={headerGroup.id}>
               {headerGroup.headers.map((header) => {
@@ -191,7 +191,7 @@ export function ExecutionsTable({ rows, sort, customSort, customColumns }: Execu
                       <button
                         type="button"
                         onClick={header.column.getToggleSortingHandler()}
-                        className="inline-flex items-center gap-1 uppercase transition-colors hover:text-neutral-300"
+                        className="inline-flex items-center gap-1 uppercase transition-colors hover:text-foreground"
                       >
                         {flexRender(header.column.columnDef.header, header.getContext())}
                         <span className="text-[10px] leading-none">
@@ -231,7 +231,7 @@ export function ExecutionsTable({ rows, sort, customSort, customColumns }: Execu
                       router.push(href);
                     }
                   }}
-                  className="cursor-pointer border-t border-black/5 outline-none transition-colors hover:bg-black/[0.03] focus:bg-black/[0.04] dark:border-white/5 dark:hover:bg-white/[0.04] dark:focus:bg-white/[0.06]"
+                  className="cursor-pointer border-t border-black/5 outline-none transition-colors hover:bg-black/[0.03] focus:bg-black/[0.04] dark:border-line dark:hover:bg-subtle dark:focus:bg-subtle"
                 >
                   {row.getVisibleCells().map((cell) => (
                     <td key={cell.id} className="px-4 py-3 text-sm">

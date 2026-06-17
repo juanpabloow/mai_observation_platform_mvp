@@ -22,7 +22,7 @@ const OPERATORS: { value: CustomOperator; label: string }[] = [
 ];
 
 const inputClass =
-  "w-full rounded-lg border border-black/10 bg-transparent px-2.5 py-1.5 text-sm outline-none focus:border-black/30 dark:border-white/15 dark:focus:border-white/30";
+  "w-full rounded-lg border border-black/10 bg-transparent px-2.5 py-1.5 text-sm outline-none focus:border-black/30 dark:border-line-strong dark:focus:border-line-strong";
 
 /**
  * Unified Filter dropdown over the F1 backend. It ONLY constructs URL params
@@ -82,14 +82,14 @@ export function FilterMenu({ customFields }: { customFields: FilterableField[] }
       <button
         type="button"
         onClick={() => (open ? close() : setOpen(true))}
-        className="inline-flex items-center gap-1.5 rounded-lg border border-black/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-black/[0.04] dark:border-white/15 dark:hover:bg-white/[0.06]"
+        className="inline-flex items-center gap-1.5 rounded-lg border border-black/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
         aria-expanded={open}
       >
         <span aria-hidden>＋</span> Filter
       </button>
 
       {open ? (
-        <div className="absolute left-0 z-20 mt-2 w-72 overflow-hidden rounded-xl border border-black/10 bg-white shadow-xl dark:border-white/15 dark:bg-neutral-900">
+        <div className="absolute left-0 z-20 mt-2 w-72 overflow-hidden rounded-xl border border-black/10 bg-white shadow-xl dark:border-line-strong dark:bg-neutral-900">
           {picked === null ? (
             <div className="flex flex-col py-1">
               <GroupLabel>Predefined</GroupLabel>
@@ -125,7 +125,7 @@ export function FilterMenu({ customFields }: { customFields: FilterableField[] }
                     key={opt.value}
                     type="button"
                     onClick={() => apply((p) => p.set("status", opt.value))}
-                    className="rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] dark:border-white/15 dark:hover:bg-white/[0.06]"
+                    className="rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
                   >
                     {opt.label}
                   </button>
@@ -203,7 +203,7 @@ function FieldButton({ children, onClick }: { children: React.ReactNode; onClick
     <button
       type="button"
       onClick={onClick}
-      className="flex items-center justify-between px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+      className="flex items-center justify-between px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
     >
       <span className="truncate">{children}</span>
       <span aria-hidden className="text-neutral-500">›</span>
@@ -217,7 +217,7 @@ function Editor({ title, onBack, children }: { title: string; onBack: () => void
       <button
         type="button"
         onClick={onBack}
-        className="flex items-center gap-1 text-xs text-neutral-500 transition-colors hover:text-neutral-300"
+        className="flex items-center gap-1 text-xs text-neutral-500 transition-colors hover:text-foreground"
       >
         <span aria-hidden>‹</span> Back
       </button>

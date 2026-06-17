@@ -35,24 +35,24 @@ function shouldAutoExpand(value: unknown): boolean {
 
 function KeyLabel({ name }: { name?: string }) {
   if (name === undefined) return null;
-  return <span className="text-sky-300">{name}: </span>;
+  return <span className="text-sky-700 dark:text-sky-300">{name}: </span>;
 }
 
 function StringValue({ value }: { value: string }) {
   const [expanded, setExpanded] = useState(false);
 
   if (value.length <= STRING_PREVIEW) {
-    return <span className="break-words text-green-300">&quot;{value}&quot;</span>;
+    return <span className="break-words text-success">&quot;{value}&quot;</span>;
   }
 
   if (!expanded) {
     return (
-      <span className="break-words text-green-300">
+      <span className="break-words text-success">
         &quot;{value.slice(0, STRING_PREVIEW)}…&quot;{" "}
         <button
           type="button"
           onClick={() => setExpanded(true)}
-          className="text-xs text-sky-400 hover:underline"
+          className="text-xs text-sky-700 dark:text-sky-400 hover:underline"
         >
           (show {value.length.toLocaleString()} chars)
         </button>
@@ -62,17 +62,17 @@ function StringValue({ value }: { value: string }) {
 
   const truncated = value.length > STRING_MAX;
   return (
-    <span className="whitespace-pre-wrap break-words text-green-300">
+    <span className="whitespace-pre-wrap break-words text-success">
       &quot;{value.slice(0, STRING_MAX)}{truncated ? "…" : ""}&quot;{" "}
       {truncated ? (
-        <span className="text-xs text-amber-400/80">
+        <span className="text-xs text-amber-700/80 dark:text-amber-400/80">
           ({(value.length - STRING_MAX).toLocaleString()} chars truncated)
         </span>
       ) : null}{" "}
       <button
         type="button"
         onClick={() => setExpanded(false)}
-        className="text-xs text-sky-400 hover:underline"
+        className="text-xs text-sky-700 dark:text-sky-400 hover:underline"
       >
         (collapse)
       </button>
@@ -83,10 +83,10 @@ function StringValue({ value }: { value: string }) {
 function PrimitiveValue({ value }: { value: unknown }) {
   if (value === null) return <span className="text-neutral-500">null</span>;
   if (typeof value === "boolean")
-    return <span className="text-purple-400">{String(value)}</span>;
-  if (typeof value === "number") return <span className="text-amber-300">{value}</span>;
+    return <span className="text-purple-700 dark:text-purple-400">{String(value)}</span>;
+  if (typeof value === "number") return <span className="text-amber-700 dark:text-amber-300">{value}</span>;
   if (typeof value === "string") return <StringValue value={value} />;
-  return <span className="text-neutral-400">{String(value)}</span>;
+  return <span className="text-muted">{String(value)}</span>;
 }
 
 function Container({
@@ -117,7 +117,7 @@ function Container({
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="inline-flex items-start gap-1 text-left hover:text-neutral-200"
+        className="inline-flex items-start gap-1 text-left hover:text-foreground"
       >
         <span className="select-none text-neutral-500">{open ? "▾" : "▸"}</span>
         <span>
@@ -125,7 +125,7 @@ function Container({
           <span className="text-neutral-500">{summary}</span>
         </span>
       </button>
-      {open ? <div className="ml-3 border-l border-white/10 pl-3">{children()}</div> : null}
+      {open ? <div className="ml-3 border-l border-line pl-3">{children()}</div> : null}
     </div>
   );
 }
@@ -153,7 +153,7 @@ function ContainerNode({ name, value }: { name?: string; value: unknown }) {
               <JsonTree key={i} name={String(i)} value={item} />
             ))}
             {hidden > 0 ? (
-              <div className="py-1 text-xs text-amber-400/80">
+              <div className="py-1 text-xs text-amber-700/80 dark:text-amber-400/80">
                 … {hidden.toLocaleString()} more items not shown (showing first{" "}
                 {ARRAY_RENDER_CAP})
               </div>

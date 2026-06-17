@@ -68,7 +68,7 @@ export function AutoRefresh({ intervalSeconds = 30 }: { intervalSeconds?: number
         onClick={() => setEnabled((e) => !e)}
         aria-pressed={enabled}
         title={enabled ? "Auto-refresh is on — click to pause" : "Auto-refresh is off — click to resume"}
-        className="inline-flex items-center gap-1.5 rounded-full border border-black/10 px-2.5 py-1 transition-colors hover:bg-black/[0.04] dark:border-white/15 dark:hover:bg-white/[0.06]"
+        className="inline-flex items-center gap-1.5 rounded-full border border-black/10 px-2.5 py-1 transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
       >
         <span
           className={`h-1.5 w-1.5 rounded-full ${

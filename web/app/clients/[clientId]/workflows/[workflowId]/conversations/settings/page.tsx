@@ -92,7 +92,7 @@ export default async function ConversationSettingsPage({
     <div className="flex flex-col gap-4">
       <Link
         href={`/clients/${linkClientId}/workflows/${encodeURIComponent(workflowId)}/conversations`}
-        className="text-sm text-neutral-500 transition-colors hover:text-neutral-300"
+        className="text-sm text-neutral-500 transition-colors hover:text-foreground"
       >
         &larr; Back to conversations
       </Link>

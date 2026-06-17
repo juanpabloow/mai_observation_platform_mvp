@@ -47,7 +47,7 @@ export default async function ConversationsPage({
       <h2 className="text-lg font-semibold tracking-tight">Conversations</h2>
       <Link
         href={settingsHref}
-        className="rounded-lg border border-black/10 px-3 py-1.5 text-sm text-neutral-400 transition-colors hover:bg-black/[0.04] hover:text-neutral-200 dark:border-white/15 dark:hover:bg-white/[0.06]"
+        className="rounded-lg border border-black/10 px-3 py-1.5 text-sm text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground dark:border-line-strong dark:hover:bg-subtle"
       >
         ⚙ Conversation settings
       </Link>
@@ -59,8 +59,8 @@ export default async function ConversationsPage({
     return (
       <div className="flex flex-col gap-4">
         {header}
-        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-black/15 px-6 py-14 text-center dark:border-white/15">
-          <p className="text-sm text-neutral-400">
+        <div className="flex flex-col items-center gap-3 rounded-xl border border-dashed border-black/15 px-6 py-14 text-center dark:border-line-strong">
+          <p className="text-sm text-muted">
             This workflow doesn&rsquo;t have a conversation mapping yet.
           </p>
           <p className="max-w-md text-sm text-neutral-500">
@@ -83,8 +83,8 @@ export default async function ConversationsPage({
     return (
       <div className="flex flex-col gap-4">
         {header}
-        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-black/15 px-6 py-14 text-center dark:border-white/15">
-          <p className="text-sm text-neutral-400">No conversations yet.</p>
+        <div className="flex flex-col items-center gap-2 rounded-xl border border-dashed border-black/15 px-6 py-14 text-center dark:border-line-strong">
+          <p className="text-sm text-muted">No conversations yet.</p>
           <p className="max-w-md text-sm text-neutral-500">
             Once this workflow processes messages, reconstructed chats will appear
             here automatically.
@@ -116,7 +116,7 @@ export default async function ConversationsPage({
         conversations={items}
       />
       {capped ? (
-        <p className="text-center text-xs text-neutral-600">
+        <p className="text-center text-xs text-faint">
           Showing the {LIST_CAP} most recently active conversations.
         </p>
       ) : null}

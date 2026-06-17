@@ -14,7 +14,7 @@ function Bubble({ side, text, time }: { side: "in" | "out"; text: string; time: 
         className={`max-w-[78%] rounded-2xl px-3 py-2 shadow-sm ${
           out
             ? "rounded-br-sm bg-emerald-700/90 text-emerald-50"
-            : "rounded-bl-sm bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-neutral-100"
+            : "rounded-bl-sm bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-foreground"
         }`}
       >
         <div className="max-h-96 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed">
@@ -63,7 +63,7 @@ export function ChatTranscript({
       {groups.map((group) => (
         <div key={group.key} className="flex flex-col gap-2">
           <div className="my-2 flex justify-center">
-            <span className="rounded-full bg-black/5 px-3 py-1 text-xs text-neutral-500 dark:bg-white/5 dark:text-neutral-400">
+            <span className="rounded-full bg-black/5 px-3 py-1 text-xs text-neutral-500 dark:bg-card dark:text-muted">
               {group.label}
             </span>
           </div>

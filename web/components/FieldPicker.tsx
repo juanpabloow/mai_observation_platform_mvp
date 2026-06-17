@@ -13,7 +13,7 @@ export interface PickedField {
 }
 
 const inputClasses =
-  "w-full rounded-lg border border-black/10 bg-white/60 px-3 py-2 text-sm outline-none focus:border-black/30 dark:border-white/15 dark:bg-white/[0.04] dark:text-neutral-200 dark:focus:border-white/30";
+  "w-full rounded-lg border border-black/10 bg-white/60 px-3 py-2 text-sm outline-none focus:border-black/30 dark:border-line-strong dark:bg-subtle dark:text-foreground dark:focus:border-line-strong";
 
 /**
  * Reusable node → field picker modal. Loads the workflow's field catalog
@@ -86,10 +86,10 @@ export function FieldPicker({
       onClick={onClose}
     >
       <div
-        className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-black/10 bg-white shadow-xl dark:border-white/15 dark:bg-neutral-900"
+        className="flex max-h-[80vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-black/10 bg-white shadow-xl dark:border-line-strong dark:bg-neutral-900"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center justify-between border-b border-black/10 px-4 py-3 dark:border-white/10">
+        <div className="flex items-center justify-between border-b border-black/10 px-4 py-3 dark:border-line">
           <div className="flex items-center gap-2 text-sm">
             {step === "fields" ? (
               <button
@@ -98,7 +98,7 @@ export function FieldPicker({
                   setSearch("");
                   setStep("nodes");
                 }}
-                className="text-neutral-500 hover:text-neutral-300"
+                className="text-neutral-500 hover:text-foreground"
               >
                 &larr; Back
               </button>
@@ -110,7 +110,7 @@ export function FieldPicker({
           <button
             type="button"
             onClick={onClose}
-            className="text-neutral-500 hover:text-neutral-300"
+            className="text-neutral-500 hover:text-foreground"
             aria-label="Close"
           >
             ✕
@@ -118,7 +118,7 @@ export function FieldPicker({
         </div>
 
         <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto p-4">
-          {error ? <p className="text-sm text-red-400">{error}</p> : null}
+          {error ? <p className="text-sm text-danger">{error}</p> : null}
           {loading ? (
             <p className="text-sm text-neutral-500">Loading fields…</p>
           ) : step === "nodes" ? (
@@ -144,7 +144,7 @@ export function FieldPicker({
                           setStep("fields");
                           setSearch("");
                         }}
-                        className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                        className="flex w-full items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
                       >
                         <span className="truncate font-medium">{n.displayName}</span>
                         <span className="shrink-0 text-xs text-neutral-500">
@@ -182,7 +182,7 @@ export function FieldPicker({
                             field: f,
                           })
                         }
-                        className="flex w-full flex-col gap-0.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                        className="flex w-full flex-col gap-0.5 rounded-lg px-3 py-2 text-left transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
                       >
                         <span className="truncate text-sm font-medium">{f.label}</span>
                         <span className="truncate font-mono text-xs text-neutral-500">

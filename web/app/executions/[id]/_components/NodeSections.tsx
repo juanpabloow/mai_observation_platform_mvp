@@ -33,11 +33,11 @@ function NodeSection({ node }: { node: NodeView }) {
   const [open, setOpen] = useState(node.defaultOpen);
 
   return (
-    <div className="overflow-hidden rounded-xl border border-black/10 dark:border-white/10">
+    <div className="overflow-hidden rounded-xl border border-black/10 dark:border-line">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.04]"
+        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-black/[0.03] dark:hover:bg-subtle"
       >
         <span className="flex min-w-0 items-center gap-3">
           <span className="select-none text-neutral-500">{open ? "▾" : "▸"}</span>
@@ -52,7 +52,7 @@ function NodeSection({ node }: { node: NodeView }) {
       </button>
 
       {open ? (
-        <div className="space-y-4 border-t border-black/10 px-4 py-3 font-mono text-xs leading-relaxed dark:border-white/10">
+        <div className="space-y-4 border-t border-black/10 px-4 py-3 font-mono text-xs leading-relaxed dark:border-line">
           {node.runs.map((run, i) => (
             <div key={i} className="space-y-3">
               {node.runs.length > 1 ? (
@@ -63,7 +63,7 @@ function NodeSection({ node }: { node: NodeView }) {
 
               {run.error ? (
                 <div>
-                  <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-red-400">
+                  <div className="mb-1 text-[11px] font-medium uppercase tracking-wider text-danger">
                     Error
                   </div>
                   <JsonTree value={run.error} />
@@ -80,7 +80,7 @@ function NodeSection({ node }: { node: NodeView }) {
               <div>
                 <SectionLabel>Output</SectionLabel>
                 {run.output === null || run.output === undefined ? (
-                  <div className="text-neutral-600">No output</div>
+                  <div className="text-faint">No output</div>
                 ) : (
                   <JsonTree value={run.output} />
                 )}

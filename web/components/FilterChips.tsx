@@ -19,13 +19,13 @@ export function FilterChips({ chips, clearAllHref }: { chips: FilterChip[]; clea
       {chips.map((chip, i) => (
         <span
           key={`${i}:${chip.label}`}
-          className="inline-flex items-center gap-1.5 rounded-full border border-black/10 bg-black/[0.03] py-1 pl-3 pr-1.5 text-sm dark:border-white/15 dark:bg-white/[0.06]"
+          className="inline-flex items-center gap-1.5 rounded-full border border-black/10 bg-black/[0.03] py-1 pl-3 pr-1.5 text-sm dark:border-line-strong dark:bg-subtle"
         >
-          <span className="text-neutral-700 dark:text-neutral-200">{chip.label}</span>
+          <span className="text-neutral-700 dark:text-foreground">{chip.label}</span>
           <Link
             href={chip.removeHref}
             aria-label={`Remove filter ${chip.label}`}
-            className="flex size-5 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-black/10 hover:text-neutral-200 dark:hover:bg-white/10"
+            className="flex size-5 items-center justify-center rounded-full text-neutral-500 transition-colors hover:bg-black/10 hover:text-foreground dark:hover:bg-subtle"
           >
             ✕
           </Link>
@@ -34,7 +34,7 @@ export function FilterChips({ chips, clearAllHref }: { chips: FilterChip[]; clea
       {chips.length > 1 ? (
         <Link
           href={clearAllHref}
-          className="rounded-full px-2.5 py-1 text-sm text-neutral-500 transition-colors hover:text-neutral-300"
+          className="rounded-full px-2.5 py-1 text-sm text-neutral-500 transition-colors hover:text-foreground"
         >
           Clear all
         </Link>

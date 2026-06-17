@@ -13,7 +13,7 @@ export default async function ConnectionsSettingsPage() {
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-12">
       <div className="space-y-1">
-        <Link href="/" className="text-sm text-neutral-500 transition-colors hover:text-neutral-300">
+        <Link href="/" className="text-sm text-neutral-500 transition-colors hover:text-foreground">
           &larr; Overview
         </Link>
         <h1 className="text-2xl font-semibold tracking-tight">n8n connections</h1>

@@ -57,7 +57,7 @@ export function ConnectionsManager({ connections }: { connections: ConnectionVie
   return (
     <div className="flex flex-col gap-6">
       {connections.length > 0 ? (
-        <ul className="divide-y divide-black/5 overflow-hidden rounded-xl border border-black/10 dark:divide-white/5 dark:border-white/10">
+        <ul className="divide-y divide-black/5 overflow-hidden rounded-xl border border-black/10 dark:divide-white/5 dark:border-line">
           {connections.map((c) => (
             <li key={c.id} className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
               <div className="min-w-0">
@@ -66,8 +66,8 @@ export function ConnectionsManager({ connections }: { connections: ConnectionVie
                   <span
                     className={`rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${
                       c.is_active
-                        ? "bg-green-500/15 text-green-400"
-                        : "bg-white/10 text-neutral-500"
+                        ? "bg-green-500/15 text-success"
+                        : "bg-subtle text-neutral-500"
                     }`}
                   >
                     {c.is_active ? "active" : "inactive"}
@@ -81,7 +81,7 @@ export function ConnectionsManager({ connections }: { connections: ConnectionVie
                 type="button"
                 disabled={busy}
                 onClick={() => toggle(c.id, !c.is_active)}
-                className="shrink-0 rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] disabled:opacity-50 dark:border-white/15 dark:hover:bg-white/[0.06]"
+                className="shrink-0 rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] disabled:opacity-50 dark:border-line-strong dark:hover:bg-subtle"
               >
                 {c.is_active ? "Deactivate" : "Activate"}
               </button>
@@ -92,32 +92,32 @@ export function ConnectionsManager({ connections }: { connections: ConnectionVie
 
       <form
         onSubmit={onAdd}
-        className="flex flex-col gap-3 rounded-xl border border-black/10 p-4 dark:border-white/10"
+        className="flex flex-col gap-3 rounded-xl border border-black/10 p-4 dark:border-line"
       >
         <h3 className="text-sm font-semibold">Add a connection</h3>
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-neutral-400">Name</span>
+          <span className="text-muted">Name</span>
           <input
             required
             value={name}
             onChange={(e) => setName(e.target.value)}
             placeholder="Production n8n"
-            className="rounded-lg border border-white/10 bg-transparent px-3 py-2 outline-none focus:border-white/30"
+            className="rounded-lg border border-line bg-transparent px-3 py-2 outline-none focus:border-line-strong"
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-neutral-400">n8n base URL</span>
+          <span className="text-muted">n8n base URL</span>
           <input
             required
             type="url"
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
             placeholder="https://your-n8n.example.com"
-            className="rounded-lg border border-white/10 bg-transparent px-3 py-2 outline-none focus:border-white/30"
+            className="rounded-lg border border-line bg-transparent px-3 py-2 outline-none focus:border-line-strong"
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-neutral-400">n8n API key</span>
+          <span className="text-muted">n8n API key</span>
           <input
             required
             type="password"
@@ -125,20 +125,20 @@ export function ConnectionsManager({ connections }: { connections: ConnectionVie
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
             placeholder="n8n_api_…"
-            className="rounded-lg border border-white/10 bg-transparent px-3 py-2 font-mono outline-none focus:border-white/30"
+            className="rounded-lg border border-line bg-transparent px-3 py-2 font-mono outline-none focus:border-line-strong"
           />
-          <span className="text-xs text-neutral-600">
+          <span className="text-xs text-faint">
             Stored encrypted; we verify it works before saving and never show it again.
           </span>
         </label>
 
         {error ? (
-          <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-danger">
             {error}
           </p>
         ) : null}
         {ok ? (
-          <p className="rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm text-green-400">
+          <p className="rounded-lg border border-green-500/30 bg-green-500/10 px-3 py-2 text-sm text-success">
             Connection added — the worker will start ingesting shortly.
           </p>
         ) : null}

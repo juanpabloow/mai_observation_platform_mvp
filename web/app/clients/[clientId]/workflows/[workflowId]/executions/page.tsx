@@ -319,24 +319,24 @@ export default async function WorkflowExecutionsPage({
           {hasPrev ? (
             <Link
               href={pageHref(page - 1)}
-              className="rounded-lg border border-black/10 px-3 py-1.5 transition-colors hover:bg-black/[0.04] dark:border-white/15 dark:hover:bg-white/[0.06]"
+              className="rounded-lg border border-black/10 px-3 py-1.5 transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
             >
               &larr; Previous
             </Link>
           ) : (
-            <span className="cursor-not-allowed rounded-lg border border-black/5 px-3 py-1.5 text-neutral-600 dark:border-white/5">
+            <span className="cursor-not-allowed rounded-lg border border-black/5 px-3 py-1.5 text-faint dark:border-line">
               &larr; Previous
             </span>
           )}
           {hasNext ? (
             <Link
               href={pageHref(page + 1)}
-              className="rounded-lg border border-black/10 px-3 py-1.5 transition-colors hover:bg-black/[0.04] dark:border-white/15 dark:hover:bg-white/[0.06]"
+              className="rounded-lg border border-black/10 px-3 py-1.5 transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
             >
               Next &rarr;
             </Link>
           ) : (
-            <span className="cursor-not-allowed rounded-lg border border-black/5 px-3 py-1.5 text-neutral-600 dark:border-white/5">
+            <span className="cursor-not-allowed rounded-lg border border-black/5 px-3 py-1.5 text-faint dark:border-line">
               Next &rarr;
             </span>
           )}

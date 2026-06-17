@@ -55,7 +55,7 @@ export function ConversationList({
         value={query}
         onChange={(e) => setQuery(e.target.value)}
         placeholder="Search by name or number…"
-        className="w-full rounded-xl border border-black/10 bg-transparent px-4 py-2 text-sm outline-none transition-colors placeholder:text-neutral-600 focus:border-black/25 dark:border-white/10 dark:focus:border-white/25"
+        className="w-full rounded-xl border border-black/10 bg-transparent px-4 py-2 text-sm outline-none transition-colors placeholder:text-faint focus:border-black/25 dark:border-line dark:focus:border-line-strong"
       />
 
       {filtered.length === 0 ? (
@@ -63,24 +63,24 @@ export function ConversationList({
           No conversations match &ldquo;{query}&rdquo;.
         </p>
       ) : (
-        <ul className="divide-y divide-black/5 overflow-hidden rounded-xl border border-black/10 dark:divide-white/5 dark:border-white/10">
+        <ul className="divide-y divide-black/5 overflow-hidden rounded-xl border border-black/10 dark:divide-white/5 dark:border-line">
           {filtered.map((c) => (
             <li key={c.conversationId}>
               <Link
                 href={`${base}/${encodeURIComponent(c.conversationId)}`}
-                className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.04]"
+                className="flex items-center gap-3 px-4 py-3 transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
               >
-                <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-sm font-medium text-emerald-300">
+                <span className="flex size-10 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-sm font-medium text-accent">
                   {initials(c.displayName)}
                 </span>
                 <span className="min-w-0 flex-1">
                   <span className="flex items-baseline justify-between gap-2">
-                    <span className="truncate font-medium text-neutral-100">{c.displayName}</span>
+                    <span className="truncate font-medium text-foreground">{c.displayName}</span>
                     <span className="shrink-0 text-xs text-neutral-500">{c.timestamp}</span>
                   </span>
                   <span className="mt-0.5 flex items-center justify-between gap-2">
                     <span className="truncate text-sm text-neutral-500">{c.preview}</span>
-                    <span className="shrink-0 rounded-full bg-white/10 px-1.5 py-0.5 text-[10px] text-neutral-400">
+                    <span className="shrink-0 rounded-full bg-subtle px-1.5 py-0.5 text-[10px] text-muted">
                       {c.turnCount}
                     </span>
                   </span>

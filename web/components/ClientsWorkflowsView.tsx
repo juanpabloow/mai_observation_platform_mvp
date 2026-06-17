@@ -37,7 +37,7 @@ export interface ClientOption {
 }
 
 const inputClass =
-  "w-full rounded-lg border border-black/10 bg-white/60 px-3 py-2 text-sm outline-none focus:border-black/30 dark:border-white/15 dark:bg-white/[0.04] dark:text-neutral-200 dark:focus:border-white/30";
+  "w-full rounded-lg border border-black/10 bg-white/60 px-3 py-2 text-sm outline-none focus:border-black/30 dark:border-line-strong dark:bg-subtle dark:text-foreground dark:focus:border-line-strong";
 
 function workflowHref(w: WorkflowItem): string {
   return `/clients/${w.clientId}/workflows/${encodeURIComponent(w.n8nWorkflowId)}/executions`;
@@ -55,7 +55,7 @@ function ClientLogo({ name, logoUrl }: { name: string; logoUrl: string | null })
         src={logoUrl}
         alt=""
         aria-hidden
-        className="size-9 shrink-0 rounded-lg border border-white/10 object-cover"
+        className="size-9 shrink-0 rounded-lg border border-line object-cover"
       />
     );
   }
@@ -63,7 +63,7 @@ function ClientLogo({ name, logoUrl }: { name: string; logoUrl: string | null })
   return (
     <span
       aria-hidden
-      className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/[0.06] text-sm font-semibold text-neutral-300"
+      className="flex size-9 shrink-0 items-center justify-center rounded-lg border border-line bg-subtle text-sm font-semibold text-foreground"
     >
       {letter}
     </span>
@@ -72,7 +72,7 @@ function ClientLogo({ name, logoUrl }: { name: string; logoUrl: string | null })
 
 function FolderIcon({ open }: { open: boolean }) {
   return (
-    <svg viewBox="0 0 20 20" fill="none" className="size-4 shrink-0 text-neutral-400" aria-hidden>
+    <svg viewBox="0 0 20 20" fill="none" className="size-4 shrink-0 text-muted" aria-hidden>
       <path
         d={
           open
@@ -158,7 +158,7 @@ function PortalMenu({
         // flashes at the wrong spot.
         visibility: pos ? "visible" : "hidden",
       }}
-      className="z-[60] overflow-hidden rounded-xl border border-black/10 bg-white shadow-xl dark:border-white/15 dark:bg-neutral-900"
+      className="z-[60] overflow-hidden rounded-xl border border-black/10 bg-white shadow-xl dark:border-line-strong dark:bg-neutral-900"
     >
       {children}
     </div>,
@@ -196,7 +196,7 @@ function RowMenu({
         onClick={onToggle}
         aria-label={ariaLabel}
         aria-expanded={open}
-        className="flex size-7 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-black/[0.05] hover:text-neutral-200 dark:hover:bg-white/[0.08]"
+        className="flex size-7 items-center justify-center rounded-md text-neutral-500 transition-colors hover:bg-black/[0.05] hover:text-foreground dark:hover:bg-subtle"
       >
         <span aria-hidden className="text-lg leading-none">⋯</span>
       </button>
@@ -293,10 +293,10 @@ export function ClientsWorkflowsView({
               type="button"
               disabled={current || busy}
               onClick={() => assign(w.id, c.id)}
-              className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] disabled:cursor-default disabled:opacity-100 dark:hover:bg-white/[0.06]"
+              className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] disabled:cursor-default disabled:opacity-100 dark:hover:bg-subtle"
             >
               <span className="truncate">{label}</span>
-              {current ? <span aria-hidden className="text-xs text-emerald-400">✓ here</span> : null}
+              {current ? <span aria-hidden className="text-xs text-accent">✓ here</span> : null}
             </button>
           );
         })}
@@ -305,14 +305,14 @@ export function ClientsWorkflowsView({
   );
 
   const workflowRow = (w: WorkflowItem, menuKey: string) => (
-    <div className="flex items-center justify-between gap-3 px-3 py-2.5 transition-colors hover:bg-black/[0.03] dark:hover:bg-white/[0.03]">
+    <div className="flex items-center justify-between gap-3 px-3 py-2.5 transition-colors hover:bg-black/[0.03] dark:hover:bg-card">
       <Link href={workflowHref(w)} className="flex min-w-0 flex-1 items-center gap-3">
         <span
           className={`h-1.5 w-1.5 shrink-0 rounded-full ${w.active ? "bg-green-400" : "bg-neutral-600"}`}
           title={w.active ? "Active" : "Inactive"}
         />
         <span className="min-w-0">
-          <span className="block truncate text-sm font-medium text-neutral-100">
+          <span className="block truncate text-sm font-medium text-foreground">
             {w.name ?? w.n8nWorkflowId}
           </span>
           <span className="block truncate font-mono text-xs text-neutral-500">{w.n8nWorkflowId}</span>
@@ -326,13 +326,13 @@ export function ClientsWorkflowsView({
     <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-6 py-12">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div className="space-y-2">
-          <Link href="/" className="text-sm text-neutral-500 transition-colors hover:text-neutral-300">
+          <Link href="/" className="text-sm text-neutral-500 transition-colors hover:text-foreground">
             &larr; Overview
           </Link>
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Clients &amp; Workflows</h1>
           <p className="text-sm text-neutral-500">
             Group workflows into clients. Ungrouped workflows are{" "}
-            <span className="text-neutral-400">Unassigned</span>.
+            <span className="text-muted">Unassigned</span>.
           </p>
         </div>
         <button
@@ -350,11 +350,11 @@ export function ClientsWorkflowsView({
           Unassigned · {looseWorkflows.length}
         </h2>
         {looseWorkflows.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-black/10 px-4 py-6 text-center text-sm text-neutral-600 dark:border-white/10">
+          <p className="rounded-xl border border-dashed border-black/10 px-4 py-6 text-center text-sm text-faint dark:border-line">
             Nothing unassigned.
           </p>
         ) : (
-          <ul className="divide-y divide-black/5 overflow-hidden rounded-2xl border border-black/10 dark:divide-white/5 dark:border-white/10">
+          <ul className="divide-y divide-black/5 overflow-hidden rounded-2xl border border-black/10 dark:divide-white/5 dark:border-line">
             {looseWorkflows.map((w) => (
               <li key={w.id}>{workflowRow(w, `wf:loose:${w.id}`)}</li>
             ))}
@@ -368,8 +368,8 @@ export function ClientsWorkflowsView({
           Clients · {folders.length}
         </h2>
         {folders.length === 0 ? (
-          <p className="rounded-xl border border-dashed border-black/10 px-4 py-6 text-center text-sm text-neutral-600 dark:border-white/10">
-            No clients yet. Create one with <span className="text-neutral-400">＋ New client</span>, then
+          <p className="rounded-xl border border-dashed border-black/10 px-4 py-6 text-center text-sm text-faint dark:border-line">
+            No clients yet. Create one with <span className="text-muted">＋ New client</span>, then
             move workflows into it.
           </p>
         ) : (
@@ -379,7 +379,7 @@ export function ClientsWorkflowsView({
             return (
               <div
                 key={folder.id}
-                className="overflow-hidden rounded-2xl border border-black/10 bg-black/[0.02] dark:border-white/10 dark:bg-white/[0.03]"
+                className="overflow-hidden rounded-2xl border border-black/10 bg-black/[0.02] dark:border-line dark:bg-card"
               >
                 <div className="flex items-center gap-2 px-3 py-2.5">
                   <button
@@ -414,7 +414,7 @@ export function ClientsWorkflowsView({
                           setOpenMenu(null);
                           setRenameTarget(folder);
                         }}
-                        className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                        className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
                       >
                         Rename
                       </button>
@@ -425,7 +425,7 @@ export function ClientsWorkflowsView({
                             setOpenMenu(null);
                             setLogoTarget(folder);
                           }}
-                          className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                          className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
                         >
                           {folder.logoUrl ? "Change logo" : "Add logo"}
                         </button>
@@ -436,7 +436,7 @@ export function ClientsWorkflowsView({
                           setOpenMenu(null);
                           setDeleteTarget(folder);
                         }}
-                        className="flex w-full items-center px-3 py-1.5 text-left text-sm text-red-400 transition-colors hover:bg-red-500/10"
+                        className="flex w-full items-center px-3 py-1.5 text-left text-sm text-danger transition-colors hover:bg-red-500/10"
                       >
                         Delete
                       </button>
@@ -446,11 +446,11 @@ export function ClientsWorkflowsView({
 
                 {isOpen ? (
                   folder.workflows.length === 0 ? (
-                    <p className="border-t border-black/5 px-4 py-5 text-center text-sm text-neutral-600 dark:border-white/5">
+                    <p className="border-t border-black/5 px-4 py-5 text-center text-sm text-faint dark:border-line">
                       No workflows — assign one via a workflow&rsquo;s ⋯ menu.
                     </p>
                   ) : (
-                    <ul className="divide-y divide-black/5 border-t border-black/5 dark:divide-white/5 dark:border-white/5">
+                    <ul className="divide-y divide-black/5 border-t border-black/5 dark:divide-white/5 dark:border-line">
                       {folder.workflows.map((w) => (
                         <li key={w.id} className="pl-3">
                           {workflowRow(w, `wf:${folder.id}:${w.id}`)}
@@ -618,12 +618,12 @@ function NameModal({
         }}
         className={inputClass}
       />
-      {error ? <p className="mt-2 text-xs text-red-400">{error}</p> : null}
+      {error ? <p className="mt-2 text-xs text-danger">{error}</p> : null}
       <div className="mt-4 flex justify-end gap-2">
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-neutral-300"
+          className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-foreground"
         >
           Cancel
         </button>
@@ -689,17 +689,17 @@ function LogoPicker({
 
   return (
     <div className="flex items-center gap-3">
-      <span className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-white/10 bg-white/[0.04]">
+      <span className="flex size-12 shrink-0 items-center justify-center overflow-hidden rounded-lg border border-line bg-subtle">
         {preview ? (
           // eslint-disable-next-line @next/next/no-img-element -- local object-URL preview
           <img src={preview} alt="" className="size-full object-cover" />
         ) : (
-          <span aria-hidden className="text-lg text-neutral-600">
+          <span aria-hidden className="text-lg text-faint">
             🖼
           </span>
         )}
       </span>
-      <label className="cursor-pointer rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] dark:border-white/15 dark:hover:bg-white/[0.06]">
+      <label className="cursor-pointer rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle">
         {file ? "Choose a different image" : "Choose image"}
         <input
           type="file"
@@ -712,7 +712,7 @@ function LogoPicker({
         <button
           type="button"
           onClick={() => onPick(null, null)}
-          className="text-xs text-neutral-500 transition-colors hover:text-neutral-300"
+          className="text-xs text-neutral-500 transition-colors hover:text-foreground"
         >
           Remove
         </button>
@@ -787,7 +787,7 @@ function CreateClientModal({
         className={inputClass}
       />
       <div className="mt-3">
-        <p className="mb-1.5 text-xs font-medium text-neutral-400">Logo (optional)</p>
+        <p className="mb-1.5 text-xs font-medium text-muted">Logo (optional)</p>
         {r2Enabled ? (
           <>
             <LogoPicker
@@ -797,21 +797,21 @@ function CreateClientModal({
                 setFileError(err);
               }}
             />
-            <p className="mt-1.5 text-[11px] text-neutral-600">PNG, JPEG, or WebP · max {MAX_LOGO_MB} MB.</p>
-            {fileError ? <p className="mt-1 text-xs text-red-400">{fileError}</p> : null}
+            <p className="mt-1.5 text-[11px] text-faint">PNG, JPEG, or WebP · max {MAX_LOGO_MB} MB.</p>
+            {fileError ? <p className="mt-1 text-xs text-danger">{fileError}</p> : null}
           </>
         ) : (
-          <p className="text-xs text-neutral-600">
+          <p className="text-xs text-faint">
             Logo upload is unavailable (storage not configured).
           </p>
         )}
       </div>
-      {error ? <p className="mt-2 text-xs text-red-400">{error}</p> : null}
+      {error ? <p className="mt-2 text-xs text-danger">{error}</p> : null}
       <div className="mt-4 flex justify-end gap-2">
         <button
           type="button"
           onClick={createdId ? onDone : onCancel}
-          className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-neutral-300"
+          className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-foreground"
         >
           {createdId ? "Done" : "Cancel"}
         </button>
@@ -862,14 +862,14 @@ function LogoModal({
           setFileError(err);
         }}
       />
-      <p className="mt-1.5 text-[11px] text-neutral-600">PNG, JPEG, or WebP · max {MAX_LOGO_MB} MB.</p>
-      {fileError ? <p className="mt-1 text-xs text-red-400">{fileError}</p> : null}
-      {error ? <p className="mt-2 text-xs text-red-400">{error}</p> : null}
+      <p className="mt-1.5 text-[11px] text-faint">PNG, JPEG, or WebP · max {MAX_LOGO_MB} MB.</p>
+      {fileError ? <p className="mt-1 text-xs text-danger">{fileError}</p> : null}
+      {error ? <p className="mt-2 text-xs text-danger">{error}</p> : null}
       <div className="mt-4 flex justify-end gap-2">
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-neutral-300"
+          className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-foreground"
         >
           Cancel
         </button>
@@ -904,12 +904,12 @@ function ConfirmModal({
   return (
     <Backdrop onClose={onCancel}>
       <h3 className="mb-2 text-sm font-medium">{title}</h3>
-      <p className="text-sm text-neutral-400">{body}</p>
+      <p className="text-sm text-muted">{body}</p>
       <div className="mt-4 flex justify-end gap-2">
         <button
           type="button"
           onClick={onCancel}
-          className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-neutral-300"
+          className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-foreground"
         >
           Cancel
         </button>
@@ -933,7 +933,7 @@ function Backdrop({ onClose, children }: { onClose: () => void; children: React.
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md rounded-2xl border border-black/10 bg-white p-4 shadow-xl dark:border-white/15 dark:bg-neutral-900"
+        className="w-full max-w-md rounded-2xl border border-black/10 bg-white p-4 shadow-xl dark:border-line-strong dark:bg-neutral-900"
         onClick={(e) => e.stopPropagation()}
       >
         {children}

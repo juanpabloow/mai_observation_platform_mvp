@@ -65,11 +65,11 @@ export function statusBadgeClasses(status: string): string {
     "inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset";
   switch (status) {
     case "success":
-      return `${base} bg-green-500/15 text-green-400 ring-green-500/30`;
+      return `${base} bg-green-500/15 text-green-700 ring-green-600/30 dark:text-green-400 dark:ring-green-500/30`;
     case "error":
     case "crashed":
-      return `${base} bg-red-500/15 text-red-400 ring-red-500/30`;
+      return `${base} bg-red-500/15 text-red-700 ring-red-600/30 dark:text-red-400 dark:ring-red-500/30`;
     default:
-      return `${base} bg-white/10 text-neutral-300 ring-white/15`;
+      return `${base} bg-subtle text-muted ring-line`;
   }
 }

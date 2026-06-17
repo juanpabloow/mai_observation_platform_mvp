@@ -31,12 +31,12 @@ function parseWorkflowRoute(pathname: string): { clientId: string; workflowId: s
 function MiniLogo({ name, logoUrl, size = "size-5" }: { name: string; logoUrl: string | null; size?: string }) {
   if (logoUrl) {
     // eslint-disable-next-line @next/next/no-img-element -- tiny external logo from R2
-    return <img src={logoUrl} alt="" aria-hidden className={`${size} shrink-0 rounded border border-white/10 object-cover`} />;
+    return <img src={logoUrl} alt="" aria-hidden className={`${size} shrink-0 rounded border border-line object-cover`} />;
   }
   return (
     <span
       aria-hidden
-      className={`${size} flex shrink-0 items-center justify-center rounded border border-white/10 bg-white/[0.06] text-[10px] font-semibold text-neutral-300`}
+      className={`${size} flex shrink-0 items-center justify-center rounded border border-line bg-subtle text-[10px] font-semibold text-foreground`}
     >
       {name.trim()[0]?.toUpperCase() ?? "?"}
     </span>
@@ -94,7 +94,7 @@ function PortalPanel({
         width,
         visibility: pos ? "visible" : "hidden",
       }}
-      className="z-[60] overflow-hidden rounded-xl border border-black/10 bg-white shadow-xl dark:border-white/15 dark:bg-neutral-900"
+      className="z-[60] overflow-hidden rounded-xl border border-black/10 bg-white shadow-xl dark:border-line-strong dark:bg-neutral-900"
     >
       {children}
     </div>,
@@ -178,11 +178,11 @@ export function HeaderBar({
   const initial = (name?.trim()[0] ?? email.trim()[0] ?? "?").toUpperCase();
 
   return (
-    <header className="flex items-center justify-between gap-3 border-b border-black/10 px-4 py-2.5 dark:border-white/10">
-      {/* LEFT — text logo → tenant home */}
+    <header className="flex items-center justify-between gap-3 border-b border-black/10 px-4 py-2.5 dark:border-line">
+      {/* LEFT — text logo → the Hub (tenant lobby) */}
       <Link
-        href="/clients"
-        className="shrink-0 font-semibold tracking-tight text-neutral-200 transition-colors hover:text-white"
+        href="/"
+        className="shrink-0 font-semibold tracking-tight text-foreground transition-opacity hover:opacity-70"
       >
         Observability
       </Link>
@@ -197,7 +197,7 @@ export function HeaderBar({
             data-menu-root
             onClick={() => setOpenMenu(openMenu === "client" ? null : "client")}
             aria-expanded={openMenu === "client"}
-            className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-neutral-200 transition-colors hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
+            className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-foreground transition-colors hover:bg-black/[0.05] dark:hover:bg-subtle"
           >
             {currentClient ? (
               <>
@@ -205,7 +205,7 @@ export function HeaderBar({
                 <span className="truncate font-medium">{currentClient.name}</span>
               </>
             ) : (
-              <span className="text-neutral-400">Select a client</span>
+              <span className="text-muted">Select a client</span>
             )}
             <Caret />
           </button>
@@ -220,12 +220,12 @@ export function HeaderBar({
                     key={c.id}
                     type="button"
                     onClick={() => go(clientTarget(c.id))}
-                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                    className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
                   >
                     <MiniLogo name={c.name} logoUrl={c.logoUrl} size="size-6" />
                     <span className="truncate">{c.name}</span>
                     {c.id === currentClient?.id ? (
-                      <span aria-hidden className="ml-auto text-xs text-emerald-400">✓</span>
+                      <span aria-hidden className="ml-auto text-xs text-accent">✓</span>
                     ) : null}
                   </button>
                 ))}
@@ -237,7 +237,7 @@ export function HeaderBar({
         {/* Workflow segment (only at workflow level) */}
         {atWorkflow ? (
           <>
-            <span aria-hidden className="text-neutral-600">/</span>
+            <span aria-hidden className="text-faint">/</span>
             <div className="contents">
               <button
                 ref={workflowBtn}
@@ -245,7 +245,7 @@ export function HeaderBar({
                 data-menu-root
                 onClick={() => setOpenMenu(openMenu === "workflow" ? null : "workflow")}
                 aria-expanded={openMenu === "workflow"}
-                className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-neutral-200 transition-colors hover:bg-black/[0.05] dark:hover:bg-white/[0.06]"
+                className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-foreground transition-colors hover:bg-black/[0.05] dark:hover:bg-subtle"
               >
                 <span className="truncate font-medium">
                   {currentWorkflow?.name ?? route?.workflowId ?? "Workflow"}
@@ -266,11 +266,11 @@ export function HeaderBar({
                           key={w.id}
                           type="button"
                           onClick={() => go(workflowTarget(w.clientId, w.id))}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
                         >
                           <span className="truncate">{w.name ?? w.id}</span>
                           {w.id === currentWorkflow?.id ? (
-                            <span aria-hidden className="ml-auto text-xs text-emerald-400">✓</span>
+                            <span aria-hidden className="ml-auto text-xs text-accent">✓</span>
                           ) : null}
                         </button>
                       ))
@@ -292,28 +292,28 @@ export function HeaderBar({
           onClick={() => setOpenMenu(openMenu === "profile" ? null : "profile")}
           aria-label="Account"
           aria-expanded={openMenu === "profile"}
-          className="flex size-8 shrink-0 items-center justify-center rounded-full border border-white/15 bg-white/[0.06] text-sm font-semibold text-neutral-200 transition-colors hover:bg-white/[0.12]"
+          className="flex size-8 shrink-0 items-center justify-center rounded-full border border-line-strong bg-subtle text-sm font-semibold text-foreground transition-colors hover:bg-subtle"
         >
           {initial}
         </button>
         {openMenu === "profile" ? (
           <PortalPanel anchorRef={profileBtn} align="right" width={232}>
-            <div className="border-b border-black/5 px-3 py-2 dark:border-white/10">
+            <div className="border-b border-black/5 px-3 py-2 dark:border-line">
               <p className="text-[10px] font-medium uppercase tracking-wider text-neutral-500">Signed in as</p>
-              <p className="truncate text-sm text-neutral-200">{email}</p>
+              <p className="truncate text-sm text-foreground">{email}</p>
             </div>
             <div className="py-1">
               <Link
                 href="/settings/connections"
                 onClick={() => setOpenMenu(null)}
-                className="flex w-full items-center px-3 py-1.5 text-left text-sm text-neutral-200 transition-colors hover:bg-black/[0.04] dark:hover:bg-white/[0.06]"
+                className="flex w-full items-center px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
               >
                 n8n connections
               </Link>
               <Link
                 href="/logout"
                 onClick={() => setOpenMenu(null)}
-                className="flex w-full items-center px-3 py-1.5 text-left text-sm text-red-400 transition-colors hover:bg-red-500/10"
+                className="flex w-full items-center px-3 py-1.5 text-left text-sm text-danger transition-colors hover:bg-red-500/10"
               >
                 Log out
               </Link>

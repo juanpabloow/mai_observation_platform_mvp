@@ -74,18 +74,18 @@ export function AuthForm({
     <div className="flex flex-col gap-5">
       <form onSubmit={onSubmit} className="flex flex-col gap-3">
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-neutral-400">Email</span>
+          <span className="text-muted">Email</span>
           <input
             type="email"
             required
             autoComplete="email"
             value={email}
             onChange={(e) => setEmail(e.target.value)}
-            className="rounded-lg border border-white/10 bg-transparent px-3 py-2 outline-none transition-colors focus:border-white/30"
+            className="rounded-lg border border-line bg-transparent px-3 py-2 outline-none transition-colors focus:border-line-strong"
           />
         </label>
         <label className="flex flex-col gap-1 text-sm">
-          <span className="text-neutral-400">Password</span>
+          <span className="text-muted">Password</span>
           <input
             type="password"
             required
@@ -93,15 +93,15 @@ export function AuthForm({
             autoComplete={isSignup ? "new-password" : "current-password"}
             value={password}
             onChange={(e) => setPassword(e.target.value)}
-            className="rounded-lg border border-white/10 bg-transparent px-3 py-2 outline-none transition-colors focus:border-white/30"
+            className="rounded-lg border border-line bg-transparent px-3 py-2 outline-none transition-colors focus:border-line-strong"
           />
           {isSignup ? (
-            <span className="text-xs text-neutral-600">At least 8 characters.</span>
+            <span className="text-xs text-faint">At least 8 characters.</span>
           ) : null}
         </label>
 
         {error ? (
-          <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-300">
+          <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-danger">
             {error}
           </p>
         ) : null}
@@ -115,10 +115,10 @@ export function AuthForm({
         </button>
       </form>
 
-      <div className="flex items-center gap-3 text-xs text-neutral-600">
-        <span className="h-px flex-1 bg-white/10" />
+      <div className="flex items-center gap-3 text-xs text-faint">
+        <span className="h-px flex-1 bg-subtle" />
         or
-        <span className="h-px flex-1 bg-white/10" />
+        <span className="h-px flex-1 bg-subtle" />
       </div>
 
       <button
@@ -126,11 +126,11 @@ export function AuthForm({
         onClick={onGoogle}
         disabled={!googleEnabled}
         title={googleEnabled ? undefined : "Google sign-in is not configured"}
-        className="rounded-lg border border-white/15 px-4 py-2 text-sm transition-colors enabled:hover:bg-white/[0.06] disabled:cursor-not-allowed disabled:opacity-50"
+        className="rounded-lg border border-line-strong px-4 py-2 text-sm transition-colors enabled:hover:bg-subtle disabled:cursor-not-allowed disabled:opacity-50"
       >
         Continue with Google
         {!googleEnabled ? (
-          <span className="ml-1 text-xs text-neutral-600">(not configured)</span>
+          <span className="ml-1 text-xs text-faint">(not configured)</span>
         ) : null}
       </button>
 
@@ -138,14 +138,14 @@ export function AuthForm({
         {isSignup ? (
           <>
             Already have an account?{" "}
-            <Link href="/login" className="text-emerald-400 hover:text-emerald-300">
+            <Link href="/login" className="text-accent hover:opacity-80">
               Log in
             </Link>
           </>
         ) : (
           <>
             No account?{" "}
-            <Link href="/signup" className="text-emerald-400 hover:text-emerald-300">
+            <Link href="/signup" className="text-accent hover:opacity-80">
               Sign up
             </Link>
           </>

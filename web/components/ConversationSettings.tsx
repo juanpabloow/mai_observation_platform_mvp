@@ -85,8 +85,8 @@ export function ConversationSettings({
       <div
         className={`rounded-xl border px-4 py-3 text-sm ${
           complete
-            ? "border-green-500/30 bg-green-500/10 text-green-400"
-            : "border-amber-500/30 bg-amber-500/10 text-amber-300"
+            ? "border-green-500/30 bg-green-500/10 text-success"
+            : "border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-300"
         }`}
       >
         {complete
@@ -100,7 +100,7 @@ export function ConversationSettings({
         {roles.map((r) => (
           <li
             key={r.role}
-            className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-black/10 px-4 py-3 dark:border-white/10"
+            className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-black/10 px-4 py-3 dark:border-line"
           >
             <div className="min-w-0">
               <div className="flex items-center gap-2">
@@ -108,8 +108,8 @@ export function ConversationSettings({
                 <span
                   className={`rounded-full px-1.5 py-0.5 text-[10px] uppercase tracking-wider ${
                     r.required
-                      ? "bg-white/10 text-neutral-400"
-                      : "bg-white/5 text-neutral-500"
+                      ? "bg-subtle text-muted"
+                      : "bg-card text-neutral-500"
                   }`}
                 >
                   {r.required ? "required" : "optional"}
@@ -119,11 +119,11 @@ export function ConversationSettings({
                 <div className="mt-0.5 truncate font-mono text-xs text-neutral-500">
                   {r.nodeLabel} · {r.jsonPath}
                   {r.example ? (
-                    <span className="text-neutral-400"> · e.g. {r.example}</span>
+                    <span className="text-muted"> · e.g. {r.example}</span>
                   ) : null}
                 </div>
               ) : (
-                <div className="mt-0.5 text-xs text-neutral-600">Not set</div>
+                <div className="mt-0.5 text-xs text-faint">Not set</div>
               )}
             </div>
             <div className="flex shrink-0 items-center gap-2">
@@ -131,7 +131,7 @@ export function ConversationSettings({
                 type="button"
                 disabled={busy}
                 onClick={() => pick(r.role)}
-                className="rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] disabled:opacity-50 dark:border-white/15 dark:hover:bg-white/[0.06]"
+                className="rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] disabled:opacity-50 dark:border-line-strong dark:hover:bg-subtle"
               >
                 {r.set ? "Re-pick" : "Pick field"}
               </button>
@@ -140,7 +140,7 @@ export function ConversationSettings({
                   type="button"
                   disabled={busy}
                   onClick={() => clear(r.role)}
-                  className="rounded-lg px-2 py-1.5 text-sm text-neutral-500 transition-colors hover:text-red-400 disabled:opacity-50"
+                  className="rounded-lg px-2 py-1.5 text-sm text-neutral-500 transition-colors hover:text-danger disabled:opacity-50"
                 >
                   Clear
                 </button>

@@ -35,13 +35,13 @@ export default async function ClientsPage() {
     return (
       <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-20">
         <header className="space-y-2">
-          <Link href="/" className="text-sm text-neutral-500 transition-colors hover:text-neutral-300">
+          <Link href="/" className="text-sm text-neutral-500 transition-colors hover:text-foreground">
             &larr; Overview
           </Link>
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Clients &amp; Workflows</h1>
         </header>
-        <div className="flex flex-col items-start gap-3 rounded-xl border border-dashed border-black/15 px-5 py-8 dark:border-white/15">
-          <p className="text-sm text-neutral-400">
+        <div className="flex flex-col items-start gap-3 rounded-xl border border-dashed border-black/15 px-5 py-8 dark:border-line-strong">
+          <p className="text-sm text-muted">
             No n8n connection yet — connect one to start ingesting workflows.
           </p>
           <Link

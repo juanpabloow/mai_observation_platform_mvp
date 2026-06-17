@@ -49,7 +49,7 @@ export default async function ConversationThreadPage({
   return (
     <div className="flex flex-col gap-4">
       <div className="flex flex-col gap-2">
-        <Link href={listHref} className="text-sm text-neutral-500 transition-colors hover:text-neutral-300">
+        <Link href={listHref} className="text-sm text-neutral-500 transition-colors hover:text-foreground">
           &larr; Conversations
         </Link>
         <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
@@ -61,7 +61,7 @@ export default async function ConversationThreadPage({
         </div>
       </div>
 
-      <ChatScroll className="h-[70vh] overflow-y-auto rounded-xl border border-black/10 bg-black/[0.02] px-4 py-4 dark:border-white/10 dark:bg-white/[0.02]">
+      <ChatScroll className="h-[70vh] overflow-y-auto rounded-xl border border-black/10 bg-black/[0.02] px-4 py-4 dark:border-line dark:bg-card">
         <ChatTranscript turns={turns} now={now} />
       </ChatScroll>
     </div>
