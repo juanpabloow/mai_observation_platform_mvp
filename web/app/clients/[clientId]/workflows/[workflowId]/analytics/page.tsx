@@ -1,10 +1,8 @@
-import Link from "next/link";
 import { connection } from "next/server";
 import { getCurrentTenantId } from "@/lib/tenant";
 import { requireWorkflowUnderClient } from "@/lib/clientWorkflow";
 import { formatDuration } from "@/lib/format";
 import {
-  ANALYTICS_RANGE_DAYS,
   coerceRangeDays,
   getConversationDailySeries,
   getConversationSummary,
@@ -15,12 +13,18 @@ import {
   ConversationTurnsChart,
   ExecutionsByStatusChart,
 } from "@/components/WorkflowAnalyticsCharts";
+import {
+  LegendDot,
+  NoDataInRange,
+  RangeSelector,
+  RATE_ERROR,
+  RATE_SUCCESS,
+  StatCard,
+  SuccessRateCard,
+} from "@/components/analytics-ui";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
-
-const SUCCESS = "#22c55e";
-const ERROR = "#ef4444";
 
 export default async function AnalyticsPage({
   params,
@@ -91,8 +95,8 @@ export default async function AnalyticsPage({
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-sm font-medium">Executions over time</h3>
               <div className="flex items-center gap-3 text-xs text-muted">
-                <LegendDot color={SUCCESS} label="Success" />
-                <LegendDot color={ERROR} label="Error" />
+                <LegendDot color={RATE_SUCCESS} label="Success" />
+                <LegendDot color={RATE_ERROR} label="Error" />
               </div>
             </div>
             {summary.total === 0 ? (
@@ -129,96 +133,5 @@ export default async function AnalyticsPage({
         </>
       )}
     </section>
-  );
-}
-
-function RangeSelector({ basePath, current }: { basePath: string; current: number }) {
-  return (
-    <div className="inline-flex items-center gap-0.5 rounded-lg border border-line p-0.5 text-sm">
-      {ANALYTICS_RANGE_DAYS.map((d) => (
-        <Link
-          key={d}
-          href={`${basePath}?range=${d}`}
-          scroll={false}
-          aria-current={d === current ? "page" : undefined}
-          className={`rounded-md px-2.5 py-1 transition-colors ${
-            d === current ? "bg-subtle font-medium text-foreground" : "text-muted hover:text-foreground"
-          }`}
-        >
-          {d}d
-        </Link>
-      ))}
-    </div>
-  );
-}
-
-function StatCard({
-  label,
-  value,
-  sub,
-}: {
-  label: string;
-  value: React.ReactNode;
-  sub?: React.ReactNode;
-}) {
-  return (
-    <div className="rounded-2xl border border-line bg-card p-4">
-      <div className="text-xs font-medium uppercase tracking-wider text-faint">{label}</div>
-      <div className="mt-2 text-2xl font-semibold tabular-nums tracking-tight sm:text-3xl">{value}</div>
-      {sub ? <div className="mt-1 text-xs text-muted">{sub}</div> : null}
-    </div>
-  );
-}
-
-function SuccessRateCard({
-  rate,
-  success,
-  error,
-}: {
-  rate: number | null;
-  success: number;
-  error: number;
-}) {
-  const completed = success + error;
-  const sPct = completed > 0 ? (success / completed) * 100 : 0;
-  const ePct = completed > 0 ? (error / completed) * 100 : 0;
-  return (
-    <div className="rounded-2xl border border-line bg-card p-4">
-      <div className="text-xs font-medium uppercase tracking-wider text-faint">Success rate</div>
-      <div className="mt-2 text-2xl font-semibold tabular-nums tracking-tight sm:text-3xl">
-        {rate === null ? "—" : `${rate}%`}
-      </div>
-      <div className="mt-2 flex h-1.5 overflow-hidden rounded-full bg-subtle">
-        <div style={{ width: `${sPct}%`, background: SUCCESS }} />
-        <div style={{ width: `${ePct}%`, background: ERROR }} />
-      </div>
-      <div className="mt-1.5 flex items-center gap-3 text-xs text-muted">
-        <span className="inline-flex items-center gap-1">
-          <span className="size-2 rounded-full" style={{ background: SUCCESS }} />
-          {success.toLocaleString()} ok
-        </span>
-        <span className="inline-flex items-center gap-1">
-          <span className="size-2 rounded-full" style={{ background: ERROR }} />
-          {error.toLocaleString()} err
-        </span>
-      </div>
-    </div>
-  );
-}
-
-function LegendDot({ color, label }: { color: string; label: string }) {
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span className="size-2 rounded-sm" style={{ background: color }} />
-      {label}
-    </span>
-  );
-}
-
-function NoDataInRange({ days }: { days: number }) {
-  return (
-    <div className="flex h-60 items-center justify-center text-sm text-faint">
-      No executions in the last {days} days.
-    </div>
   );
 }

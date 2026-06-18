@@ -1,21 +1,22 @@
 import { query } from '../client.js';
 
 /**
- * Per-workflow analytics aggregations (CL-5a). All queries are tenant + workflow
- * scoped and fully parameterized (tenant, workflow, range-days, timezone — no
- * interpolation). Day bucketing is done in SQL with date_trunc in the tenant
- * timezone (America/Bogota, matching how the rest of the app presents dates), and
- * the series queries LEFT JOIN a generate_series day axis so every day in the
- * range is present (gaps filled with 0). The range-day window is anchored to the
- * START of the (today − N + 1) local day, so the chart axis and the summary
- * counts cover the exact same N calendar days. Read-only; the worker never imports
- * this (CL-5b/5c will reuse these for the tenant Hub + "all workflows").
+ * Analytics aggregations (CL-5). One generalized, tenant-scoped, parameterized
+ * query set that is scoped by an OPTIONAL filter:
+ *   - n8nWorkflowId set  → a single workflow (CL-5a per-workflow tab),
+ *   - clientId set       → all workflows of one client (CL-5c, executions resolve
+ *                          to a client THROUGH their workflow),
+ *   - neither set        → the whole tenant (CL-5b Hub aggregate).
+ * Each filter is `($p IS NULL OR <predicate>)`, so passing null = "no filter";
+ * the per-workflow callers pass n8nWorkflowId and get byte-identical results to
+ * before. Day bucketing is done in SQL with date_trunc in the tenant timezone
+ * (America/Bogota), the range window anchored to the start of the (today − N + 1)
+ * local day so the chart axis and the summary cover the same N calendar days.
+ * Read-only; the worker never imports this.
  */
 
-/** The server timezone used for day bucketing (matches the app's date display). */
 const TZ = 'America/Bogota';
 
-/** Allowed analytics ranges (days). The selector + URL param validate against these. */
 export const ANALYTICS_RANGE_DAYS = [7, 30, 90] as const;
 export type AnalyticsRange = (typeof ANALYTICS_RANGE_DAYS)[number];
 
@@ -26,68 +27,82 @@ export function coerceRangeDays(value: unknown): AnalyticsRange {
 }
 
 export interface ExecutionDayPoint {
-  /** Local (Bogota) calendar day, YYYY-MM-DD. */
   day: string;
   success: number;
   error: number;
   other: number;
 }
-
 export interface ExecutionSummary {
   total: number;
   success: number;
   error: number;
   other: number;
-  /** Mean duration_ms over the range, or null when there are no executions. */
   avgDurationMs: number | null;
-  /** All-time execution count for the workflow (range-independent). */
   allTimeTotal: number;
 }
-
 export interface ConversationDayPoint {
   day: string;
   turns: number;
 }
-
 export interface ConversationSummary {
   totalTurns: number;
   distinctConversations: number;
-  /** All-time turns — used to decide whether to show the conversation section. */
   allTimeTurns: number;
 }
-
-interface Scope {
-  tenantId: string;
-  n8nWorkflowId: string;
-  days: number;
+export interface TopClient {
+  id: string;
+  name: string;
+  isDefault: boolean;
+  logoUrl: string | null;
+  executions: number;
 }
 
-/** Daily execution counts by status (success / error+crashed / other), gap-filled. */
-export async function getExecutionDailySeries(s: Scope): Promise<ExecutionDayPoint[]> {
+/** Scope: tenant + range, optionally narrowed to one workflow or one client. */
+export interface AnalyticsScope {
+  tenantId: string;
+  days: number;
+  n8nWorkflowId?: string | null;
+  clientId?: string | null;
+}
+
+// Param order for the scoped queries: $1 tenant, $2 days, $3 tz, $4 workflow, $5 client.
+const params = (s: AnalyticsScope) =>
+  [s.tenantId, s.days, TZ, s.n8nWorkflowId ?? null, s.clientId ?? null] as const;
+
+// Reusable SQL fragments (executions `e` / turns `t` aliases).
+const EXEC_FILTER = `($4::text IS NULL OR e.n8n_workflow_id = $4)
+  AND ($5::uuid IS NULL OR EXISTS (
+        SELECT 1 FROM workflows w
+         WHERE w.tenant_id = e.tenant_id AND w.n8n_workflow_id = e.n8n_workflow_id AND w.client_id = $5))`;
+const WINDOW_START = `(date_trunc('day', now() AT TIME ZONE $3) - make_interval(days => $2::int - 1)) AT TIME ZONE $3`;
+const DAY_AXIS = `generate_series(
+    (date_trunc('day', now() AT TIME ZONE $3)::date - ($2::int - 1)),
+    (date_trunc('day', now() AT TIME ZONE $3)::date),
+    interval '1 day'
+  )`;
+
+/** Daily execution counts by status (gap-filled over the range). */
+export async function getExecutionDailySeries(s: AnalyticsScope): Promise<ExecutionDayPoint[]> {
   const r = await query<ExecutionDayPoint>(
     `SELECT to_char(d.day, 'YYYY-MM-DD') AS day,
             count(e.id) FILTER (WHERE e.status = 'success')::int AS success,
             count(e.id) FILTER (WHERE e.status IN ('error', 'crashed'))::int AS error,
             count(e.id) FILTER (WHERE e.status NOT IN ('success', 'error', 'crashed'))::int AS other
-       FROM generate_series(
-              (date_trunc('day', now() AT TIME ZONE $4)::date - ($3::int - 1)),
-              (date_trunc('day', now() AT TIME ZONE $4)::date),
-              interval '1 day'
-            ) AS d(day)
+       FROM ${DAY_AXIS} AS d(day)
        LEFT JOIN executions e
          ON e.tenant_id = $1
-        AND e.n8n_workflow_id = $2
-        AND e.started_at >= (date_trunc('day', now() AT TIME ZONE $4) - make_interval(days => $3::int - 1)) AT TIME ZONE $4
-        AND (e.started_at AT TIME ZONE $4)::date = d.day::date
+        AND ${EXEC_FILTER}
+        AND e.started_at >= ${WINDOW_START}
+        AND (e.started_at AT TIME ZONE $3)::date = d.day::date
       GROUP BY d.day
       ORDER BY d.day`,
-    [s.tenantId, s.n8nWorkflowId, s.days, TZ],
+    [...params(s)],
   );
   return r.rows;
 }
 
-/** Range totals (by status), mean duration, and the all-time total. */
-export async function getExecutionSummary(s: Scope): Promise<ExecutionSummary> {
+/** Range totals (by status) + mean duration + all-time total, for the scope. */
+export async function getExecutionSummary(s: AnalyticsScope): Promise<ExecutionSummary> {
   const r = await query<{
     total: number; success: number; error: number; other: number;
     avg_duration_ms: number | null; all_time_total: number;
@@ -97,12 +112,13 @@ export async function getExecutionSummary(s: Scope): Promise<ExecutionSummary> {
             count(*) FILTER (WHERE status IN ('error', 'crashed'))::int AS error,
             count(*) FILTER (WHERE status NOT IN ('success', 'error', 'crashed'))::int AS other,
             avg(duration_ms)::float8 AS avg_duration_ms,
-            (SELECT count(*)::int FROM executions
-              WHERE tenant_id = $1 AND n8n_workflow_id = $2) AS all_time_total
-       FROM executions
-      WHERE tenant_id = $1 AND n8n_workflow_id = $2
-        AND started_at >= (date_trunc('day', now() AT TIME ZONE $4) - make_interval(days => $3::int - 1)) AT TIME ZONE $4`,
-    [s.tenantId, s.n8nWorkflowId, s.days, TZ],
+            (SELECT count(*)::int FROM executions e
+              WHERE e.tenant_id = $1 AND ${EXEC_FILTER}) AS all_time_total
+       FROM executions e
+      WHERE e.tenant_id = $1
+        AND ${EXEC_FILTER}
+        AND e.started_at >= ${WINDOW_START}`,
+    [...params(s)],
   );
   const row = r.rows[0];
   return {
@@ -115,41 +131,46 @@ export async function getExecutionSummary(s: Scope): Promise<ExecutionSummary> {
   };
 }
 
-/** Daily conversation-turn counts, gap-filled over the range. */
-export async function getConversationDailySeries(s: Scope): Promise<ConversationDayPoint[]> {
+/** Daily conversation-turn counts (gap-filled over the range). */
+export async function getConversationDailySeries(s: AnalyticsScope): Promise<ConversationDayPoint[]> {
+  const turnFilter = `($4::text IS NULL OR t.n8n_workflow_id = $4)
+    AND ($5::uuid IS NULL OR EXISTS (
+          SELECT 1 FROM workflows w
+           WHERE w.tenant_id = t.tenant_id AND w.n8n_workflow_id = t.n8n_workflow_id AND w.client_id = $5))`;
   const r = await query<ConversationDayPoint>(
     `SELECT to_char(d.day, 'YYYY-MM-DD') AS day,
             count(t.id)::int AS turns
-       FROM generate_series(
-              (date_trunc('day', now() AT TIME ZONE $4)::date - ($3::int - 1)),
-              (date_trunc('day', now() AT TIME ZONE $4)::date),
-              interval '1 day'
-            ) AS d(day)
+       FROM ${DAY_AXIS} AS d(day)
        LEFT JOIN conversation_turns t
          ON t.tenant_id = $1
-        AND t.n8n_workflow_id = $2
-        AND t.turn_timestamp >= (date_trunc('day', now() AT TIME ZONE $4) - make_interval(days => $3::int - 1)) AT TIME ZONE $4
-        AND (t.turn_timestamp AT TIME ZONE $4)::date = d.day::date
+        AND ${turnFilter}
+        AND t.turn_timestamp >= ${WINDOW_START}
+        AND (t.turn_timestamp AT TIME ZONE $3)::date = d.day::date
       GROUP BY d.day
       ORDER BY d.day`,
-    [s.tenantId, s.n8nWorkflowId, s.days, TZ],
+    [...params(s)],
   );
   return r.rows;
 }
 
-/** Range turn total + distinct conversations, plus the all-time turn count. */
-export async function getConversationSummary(s: Scope): Promise<ConversationSummary> {
+/** Range turn total + distinct conversations + all-time turns, for the scope. */
+export async function getConversationSummary(s: AnalyticsScope): Promise<ConversationSummary> {
+  const turnFilter = `($4::text IS NULL OR t.n8n_workflow_id = $4)
+    AND ($5::uuid IS NULL OR EXISTS (
+          SELECT 1 FROM workflows w
+           WHERE w.tenant_id = t.tenant_id AND w.n8n_workflow_id = t.n8n_workflow_id AND w.client_id = $5))`;
   const r = await query<{
     total_turns: number; distinct_conversations: number; all_time_turns: number;
   }>(
     `SELECT count(*)::int AS total_turns,
             count(DISTINCT conversation_id)::int AS distinct_conversations,
-            (SELECT count(*)::int FROM conversation_turns
-              WHERE tenant_id = $1 AND n8n_workflow_id = $2) AS all_time_turns
-       FROM conversation_turns
-      WHERE tenant_id = $1 AND n8n_workflow_id = $2
-        AND turn_timestamp >= (date_trunc('day', now() AT TIME ZONE $4) - make_interval(days => $3::int - 1)) AT TIME ZONE $4`,
-    [s.tenantId, s.n8nWorkflowId, s.days, TZ],
+            (SELECT count(*)::int FROM conversation_turns t
+              WHERE t.tenant_id = $1 AND ${turnFilter}) AS all_time_turns
+       FROM conversation_turns t
+      WHERE t.tenant_id = $1
+        AND ${turnFilter}
+        AND t.turn_timestamp >= ${WINDOW_START}`,
+    [...params(s)],
   );
   const row = r.rows[0];
   return {
@@ -157,4 +178,59 @@ export async function getConversationSummary(s: Scope): Promise<ConversationSumm
     distinctConversations: row.distinct_conversations,
     allTimeTurns: row.all_time_turns,
   };
+}
+
+// ---- Tenant-scoped aliases (CL-5b Hub; CL-5c passes clientId for one client) ----
+
+interface TenantScope {
+  tenantId: string;
+  days: number;
+  clientId?: string | null;
+}
+export const getTenantExecutionDailySeries = (s: TenantScope) =>
+  getExecutionDailySeries({ tenantId: s.tenantId, days: s.days, clientId: s.clientId ?? null });
+export const getTenantExecutionSummary = (s: TenantScope) =>
+  getExecutionSummary({ tenantId: s.tenantId, days: s.days, clientId: s.clientId ?? null });
+export const getTenantConversationSummary = (s: TenantScope) =>
+  getConversationSummary({ tenantId: s.tenantId, days: s.days, clientId: s.clientId ?? null });
+
+/**
+ * Top clients by execution count in the range, tenant-wide. Each execution is
+ * attributed to the client of its CANONICAL workflow row (most recently synced
+ * per n8n id — matching getWorkflowByN8nId), so an n8n id under multiple
+ * connections isn't double-counted. Executions whose workflow has no row are
+ * unattributable and excluded (so the sum can be < total executions).
+ */
+export async function getTopClientsByExecutions(s: {
+  tenantId: string;
+  days: number;
+  limit: number;
+}): Promise<TopClient[]> {
+  const r = await query<{
+    id: string; name: string; is_default: boolean; logo_url: string | null; executions: number;
+  }>(
+    `WITH wf AS (
+        SELECT DISTINCT ON (n8n_workflow_id) n8n_workflow_id, client_id
+          FROM workflows
+         WHERE tenant_id = $1
+         ORDER BY n8n_workflow_id, last_synced_at DESC NULLS LAST
+     )
+     SELECT cl.id, cl.name, cl.is_default, cl.logo_url, count(e.id)::int AS executions
+       FROM executions e
+       JOIN wf ON wf.n8n_workflow_id = e.n8n_workflow_id
+       JOIN clients cl ON cl.id = wf.client_id
+      WHERE e.tenant_id = $1
+        AND e.started_at >= (date_trunc('day', now() AT TIME ZONE $3) - make_interval(days => $2::int - 1)) AT TIME ZONE $3
+      GROUP BY cl.id
+      ORDER BY executions DESC, lower(cl.name)
+      LIMIT $4`,
+    [s.tenantId, s.days, TZ, s.limit],
+  );
+  return r.rows.map((row) => ({
+    id: row.id,
+    name: row.name,
+    isDefault: row.is_default,
+    logoUrl: row.logo_url,
+    executions: row.executions,
+  }));
 }
