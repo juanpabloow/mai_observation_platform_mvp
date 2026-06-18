@@ -1,15 +1,21 @@
 @import "tailwindcss";
 
 /*
+ * Dark mode is CLASS-BASED: the `.dark` class on <html> (set by next-themes /
+ * the no-flash script) flips the tokens, and `dark:` utilities follow that class
+ * via this custom variant — NOT prefers-color-scheme — so the in-app toggle can
+ * override the OS. (next-themes defaults to the OS preference on first visit, so
+ * the initial experience is unchanged.)
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/*
  * Semantic theme tokens. Every UI color routes through one of these so the app
- * is legible in BOTH light and dark mode: the values flip in the dark media
- * query and are exposed to Tailwind via @theme inline, yielding theme-aware
- * utilities (text-foreground / text-muted / text-faint / border-line /
- * border-line-strong / bg-card / bg-subtle / bg-popover / bg-sidebar).
- *
- * Dark mode follows prefers-color-scheme (no class toggle), so a hardcoded
- * light-only color (e.g. text-neutral-200, bg-white/10, border-white/10) is
- * invisible on a white background — those are replaced by these tokens.
+ * is legible in BOTH light and dark mode: the values are the light defaults on
+ * :root and are overridden by .dark, exposed to Tailwind via @theme inline,
+ * yielding theme-aware utilities (text-foreground / text-muted / text-faint /
+ * border-line / border-line-strong / bg-card / bg-subtle / bg-popover /
+ * bg-sidebar / text-accent / text-danger / text-success).
  */
 :root {
   --background: #ffffff;
@@ -29,23 +35,21 @@
   --success: #15803d; /* green — connected / complete */
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-    --muted: #a3a3a3; /* ~6:1 on near-black */
-    --faint: #8f8f8f; /* ~4.6:1 */
-    --line: rgba(255, 255, 255, 0.12);
-    --line-strong: rgba(255, 255, 255, 0.2);
-    --card: rgba(255, 255, 255, 0.03);
-    --subtle: rgba(255, 255, 255, 0.06);
-    --popover: #171717;
-    --popover-foreground: #ededed;
-    --sidebar: rgba(255, 255, 255, 0.02);
-    --accent: #34d399; /* emerald-400 */
-    --danger: #f87171; /* red-400 */
-    --success: #4ade80; /* green-400 */
-  }
+.dark {
+  --background: #0a0a0a;
+  --foreground: #ededed;
+  --muted: #a3a3a3; /* ~6:1 on near-black */
+  --faint: #8f8f8f; /* ~4.6:1 */
+  --line: rgba(255, 255, 255, 0.12);
+  --line-strong: rgba(255, 255, 255, 0.2);
+  --card: rgba(255, 255, 255, 0.03);
+  --subtle: rgba(255, 255, 255, 0.06);
+  --popover: #171717;
+  --popover-foreground: #ededed;
+  --sidebar: rgba(255, 255, 255, 0.02);
+  --accent: #34d399; /* emerald-400 */
+  --danger: #f87171; /* red-400 */
+  --success: #4ade80; /* green-400 */
 }
 
 @theme inline {

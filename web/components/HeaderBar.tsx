@@ -4,6 +4,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
+import { useTheme } from "next-themes";
 
 export interface HeaderClient {
   id: string;
@@ -136,6 +137,7 @@ export function HeaderBar({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { theme, setTheme } = useTheme();
   const [openMenu, setOpenMenu] = useState<null | "client" | "workflow" | "profile">(null);
 
   const clientBtn = useRef<HTMLButtonElement>(null);
@@ -330,9 +332,29 @@ export function HeaderBar({
         </button>
         {openMenu === "profile" ? (
           <PortalPanel anchorRef={profileBtn} align="right" width={232}>
-            <div className="border-b border-black/5 px-3 py-2 dark:border-line">
-              <p className="text-[10px] font-medium uppercase tracking-wider text-neutral-500">Signed in as</p>
+            <div className="border-b border-line px-3 py-2">
+              <p className="text-[10px] font-medium uppercase tracking-wider text-faint">Signed in as</p>
               <p className="truncate text-sm text-foreground">{email}</p>
+            </div>
+            <div className="border-b border-line px-3 py-2.5">
+              <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-faint">Theme</p>
+              <div className="flex gap-0.5 rounded-lg border border-line p-0.5">
+                {(["light", "dark", "system"] as const).map((opt) => (
+                  <button
+                    key={opt}
+                    type="button"
+                    onClick={() => setTheme(opt)}
+                    aria-pressed={theme === opt}
+                    className={`flex-1 rounded-md px-2 py-1 text-xs capitalize transition-colors ${
+                      theme === opt
+                        ? "bg-subtle font-medium text-foreground"
+                        : "text-muted hover:text-foreground"
+                    }`}
+                  >
+                    {opt}
+                  </button>
+                ))}
+              </div>
             </div>
             <div className="py-1">
               <Link

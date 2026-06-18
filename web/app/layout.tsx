@@ -3,6 +3,7 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { AppSidebar } from "@/components/AppSidebar";
+import { Providers } from "./providers";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -28,18 +29,23 @@ export default function RootLayout({
   return (
     <html
       lang="en"
+      // next-themes sets the theme class on <html> before hydration; suppress the
+      // resulting server/client class mismatch warning (no-flash approach).
+      suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <Suspense fallback={null}>
-          <AppHeader />
-        </Suspense>
-        {/* Below the full-width header: [sidebar | content]. On auth screens both
-            the header and sidebar render null, so content fills the full width. */}
-        <div className="flex min-h-0 flex-1">
-          <AppSidebar />
-          <div className="flex min-w-0 flex-1 flex-col">{children}</div>
-        </div>
+        <Providers>
+          <Suspense fallback={null}>
+            <AppHeader />
+          </Suspense>
+          {/* Below the full-width header: [sidebar | content]. On auth screens both
+              the header and sidebar render null, so content fills the full width. */}
+          <div className="flex min-h-0 flex-1">
+            <AppSidebar />
+            <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+          </div>
+        </Providers>
       </body>
     </html>
   );

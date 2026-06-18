@@ -68,7 +68,7 @@ export default async function AnalyticsPage({
         </div>
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-4 md:grid-cols-3 xl:grid-cols-5">
+          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
             <SuccessRateCard rate={successRate} success={summary.success} error={summary.error} />
             <StatCard
               label={`Executions · ${days}d`}
@@ -85,7 +85,6 @@ export default async function AnalyticsPage({
               value={formatDuration(summary.avgDurationMs != null ? Math.round(summary.avgDurationMs) : null)}
               sub="per execution"
             />
-            <StatCard label="Status" value={<StatusValue active={workflow.active} />} />
           </div>
 
           <div className="rounded-2xl border border-line bg-card p-4">
@@ -204,16 +203,6 @@ function SuccessRateCard({
         </span>
       </div>
     </div>
-  );
-}
-
-function StatusValue({ active }: { active: boolean | null }) {
-  if (active === null) return <span className="text-faint">Unknown</span>;
-  return (
-    <span className="inline-flex items-center gap-2">
-      <span className="size-2.5 rounded-full" style={{ background: active ? SUCCESS : "#a3a3a3" }} />
-      {active ? "Active" : "Inactive"}
-    </span>
   );
 }
 

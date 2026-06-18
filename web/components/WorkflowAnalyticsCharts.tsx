@@ -50,7 +50,9 @@ function useMounted(): boolean {
 }
 
 /** Read the CL-4b theme tokens live (concrete values, since Recharts sets SVG
- * attributes which don't resolve CSS var() — re-reads on theme change). */
+ * attributes which don't resolve CSS var()). Theming is now CLASS-based, so we
+ * re-read whenever the <html> class changes — that fires both when the user
+ * TOGGLES the theme and when next-themes follows an OS change in "system" mode. */
 function useChartTheme() {
   const [c, setC] = useState({ faint: "#8f8f8f", grid: "rgba(128,128,128,0.18)" });
   useEffect(() => {
@@ -62,9 +64,9 @@ function useChartTheme() {
       });
     };
     read();
-    const mq = window.matchMedia("(prefers-color-scheme: dark)");
-    mq.addEventListener("change", read);
-    return () => mq.removeEventListener("change", read);
+    const observer = new MutationObserver(read);
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] });
+    return () => observer.disconnect();
   }, []);
   return c;
 }
