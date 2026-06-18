@@ -42,7 +42,11 @@ export default function RootLayout({
           {/* Below the full-width header: [sidebar | content]. On auth screens both
               the header and sidebar render null, so content fills the full width. */}
           <div className="flex min-h-0 flex-1">
-            <AppSidebar />
+            <Suspense
+              fallback={<div className="hidden w-52 shrink-0 border-r border-line bg-sidebar md:block" />}
+            >
+              <AppSidebar />
+            </Suspense>
             <div className="flex min-w-0 flex-1 flex-col">{children}</div>
           </div>
         </Providers>

@@ -1,14 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 
 const AUTH_PREFIXES = ["/login", "/signup", "/logout"];
 
-/** Raw (URL-encoded, as they appear in the path) client + workflow segments. */
-function parseWorkflowRoute(pathname: string): { base: string } | null {
-  const m = pathname.match(/^(\/clients\/[^/]+\/workflows\/[^/]+)(?:\/|$)/);
-  return m ? { base: m[1] } : null;
+/** The workflow-level base path + the workflow slot ("all" for the aggregate view). */
+function parseWorkflowRoute(pathname: string): { base: string; slot: string } | null {
+  const m = pathname.match(/^(\/clients\/[^/]+\/workflows\/([^/]+))(?:\/|$)/);
+  return m ? { base: m[1], slot: m[2] } : null;
 }
 
 function SideLink({
@@ -50,17 +50,24 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
  *    (Executions / Conversations / Analytics); no tenant-level link by design.
  *    Back to tenant level is via the header (the logo → Hub, and the breadcrumb
  *    client picker, whose default client reads "Hub").
- * Reactive via usePathname (a root-layout server component would not update on
- * client navigation). Hidden on the auth screens and on small screens (the header
- * breadcrumb covers navigation there).
+ *  - "ALL WORKFLOWS" (workflow slot = "all", analytics only): Analytics stays on
+ *    the aggregate; Executions/Conversations carry ?from so the all/{exec,conv}
+ *    redirect routes return the user to the REMEMBERED workflow.
+ * Reactive via usePathname/useSearchParams (a root-layout server component would
+ * not update on client navigation). Hidden on auth screens + small screens.
  */
 export function AppSidebar() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   if (AUTH_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
     return null;
   }
 
   const route = parseWorkflowRoute(pathname);
+  // On the "all" aggregate view, carry ?from so Executions/Conversations resolve
+  // to the remembered workflow (via the all/{exec,conv} redirect routes).
+  const from = route?.slot === "all" ? searchParams.get("from") : null;
+  const fromQuery = from ? `?from=${encodeURIComponent(from)}` : "";
 
   return (
     <aside className="hidden w-52 shrink-0 flex-col gap-0.5 border-r border-line bg-sidebar px-3 py-4 md:flex">
@@ -68,17 +75,17 @@ export function AppSidebar() {
         <>
           <SectionLabel>Workflow</SectionLabel>
           <SideLink
-            href={`${route.base}/executions`}
+            href={`${route.base}/executions${fromQuery}`}
             label="Executions"
             active={pathname.startsWith(`${route.base}/executions`)}
           />
           <SideLink
-            href={`${route.base}/conversations`}
+            href={`${route.base}/conversations${fromQuery}`}
             label="Conversations"
             active={pathname.startsWith(`${route.base}/conversations`)}
           />
           <SideLink
-            href={`${route.base}/analytics`}
+            href={`${route.base}/analytics${fromQuery}`}
             label="Analytics"
             active={pathname.startsWith(`${route.base}/analytics`)}
           />

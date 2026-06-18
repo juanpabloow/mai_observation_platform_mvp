@@ -11,14 +11,23 @@ import { ANALYTICS_RANGE_DAYS } from "@worker/db/repositories/analytics.js";
 export const RATE_SUCCESS = "#22c55e";
 export const RATE_ERROR = "#ef4444";
 
-/** 7/30/90-day selector as URL-param links (bookmarkable, server-rendered). */
-export function RangeSelector({ basePath, current }: { basePath: string; current: number }) {
+/** 7/30/90-day selector as URL-param links (bookmarkable, server-rendered).
+ * `extraQuery` (e.g. "&from=W") is appended so other params survive a range change. */
+export function RangeSelector({
+  basePath,
+  current,
+  extraQuery = "",
+}: {
+  basePath: string;
+  current: number;
+  extraQuery?: string;
+}) {
   return (
     <div className="inline-flex items-center gap-0.5 rounded-lg border border-line p-0.5 text-sm">
       {ANALYTICS_RANGE_DAYS.map((d) => (
         <Link
           key={d}
-          href={`${basePath}?range=${d}`}
+          href={`${basePath}?range=${d}${extraQuery}`}
           scroll={false}
           aria-current={d === current ? "page" : undefined}
           className={`rounded-md px-2.5 py-1 transition-colors ${

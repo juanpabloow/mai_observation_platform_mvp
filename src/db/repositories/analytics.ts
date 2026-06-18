@@ -56,6 +56,12 @@ export interface TopClient {
   logoUrl: string | null;
   executions: number;
 }
+export interface TopWorkflow {
+  /** n8n workflow id. */
+  id: string;
+  name: string | null;
+  executions: number;
+}
 
 /** Scope: tenant + range, optionally narrowed to one workflow or one client. */
 export interface AnalyticsScope {
@@ -233,4 +239,37 @@ export async function getTopClientsByExecutions(s: {
     logoUrl: row.logo_url,
     executions: row.executions,
   }));
+}
+
+/**
+ * Top workflows by execution count WITHIN one client, in the range (the
+ * per-workflow breakdown on a client's "All workflows" analytics view). Each
+ * execution is attributed to the canonical workflow row (most recently synced
+ * per n8n id); only the given client's workflows are considered.
+ */
+export async function getTopWorkflowsByExecutions(s: {
+  tenantId: string;
+  clientId: string;
+  days: number;
+  limit: number;
+}): Promise<TopWorkflow[]> {
+  const r = await query<{ id: string; name: string | null; executions: number }>(
+    `WITH wf AS (
+        SELECT DISTINCT ON (n8n_workflow_id) n8n_workflow_id, name, client_id
+          FROM workflows
+         WHERE tenant_id = $1
+         ORDER BY n8n_workflow_id, last_synced_at DESC NULLS LAST
+     )
+     SELECT wf.n8n_workflow_id AS id, wf.name, count(e.id)::int AS executions
+       FROM executions e
+       JOIN wf ON wf.n8n_workflow_id = e.n8n_workflow_id
+      WHERE e.tenant_id = $1
+        AND wf.client_id = $4
+        AND e.started_at >= (date_trunc('day', now() AT TIME ZONE $3) - make_interval(days => $2::int - 1)) AT TIME ZONE $3
+      GROUP BY wf.n8n_workflow_id, wf.name
+      ORDER BY executions DESC, lower(coalesce(wf.name, wf.n8n_workflow_id))
+      LIMIT $5`,
+    [s.tenantId, s.days, TZ, s.clientId, s.limit],
+  );
+  return r.rows;
 }

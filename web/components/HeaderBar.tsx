@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import { useTheme } from "next-themes";
 
@@ -137,6 +137,7 @@ export function HeaderBar({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { theme, setTheme } = useTheme();
   const [openMenu, setOpenMenu] = useState<null | "client" | "workflow" | "profile">(null);
 
@@ -174,7 +175,17 @@ export function HeaderBar({
     ? workflows.find((w) => w.id === route.workflowId && w.clientId === route.clientId) ?? null
     : null;
   const atWorkflow = Boolean(route);
-  const tab = pathname.includes("/conversations") ? "conversations" : "executions";
+  const isAnalytics = pathname.includes("/analytics");
+  const isAll = route?.workflowId === "all";
+  const tab = isAnalytics ? "analytics" : pathname.includes("/conversations") ? "conversations" : "executions";
+  // The workflow to "remember" when jumping to the client's All-workflows view:
+  // the one being viewed (or, if already on "all", whatever ?from carries).
+  const currentFrom = isAll ? searchParams.get("from") : route?.workflowId ?? null;
+  const allAnalyticsHref = route
+    ? `/clients/${route.clientId}/workflows/all/analytics${
+        currentFrom ? `?from=${encodeURIComponent(currentFrom)}` : ""
+      }`
+    : "/";
 
   const byName = (a: HeaderWorkflow, b: HeaderWorkflow) =>
     (a.name ?? a.id).localeCompare(b.name ?? b.id);
@@ -282,7 +293,7 @@ export function HeaderBar({
                 className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-foreground transition-colors hover:bg-black/[0.05] dark:hover:bg-subtle"
               >
                 <span className="truncate font-medium">
-                  {currentWorkflow?.name ?? route?.workflowId ?? "Workflow"}
+                  {isAll ? "All workflows" : currentWorkflow?.name ?? route?.workflowId ?? "Workflow"}
                 </span>
                 <Caret />
               </button>
@@ -292,6 +303,17 @@ export function HeaderBar({
                     {currentClient ? `Workflows in ${currentClient.name}` : "Workflows"}
                   </p>
                   <div className="max-h-72 overflow-y-auto pb-1">
+                    {/* On analytics routes, "All workflows" = the client-aggregate view. */}
+                    {isAnalytics ? (
+                      <button
+                        type="button"
+                        onClick={() => go(allAnalyticsHref)}
+                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
+                      >
+                        <span className="truncate font-medium">All workflows</span>
+                        {isAll ? <span aria-hidden className="ml-auto text-xs text-accent">✓</span> : null}
+                      </button>
+                    ) : null}
                     {clientWorkflows.length === 0 ? (
                       <p className="px-3 py-2 text-xs text-neutral-500">No workflows in this client.</p>
                     ) : (
@@ -303,7 +325,7 @@ export function HeaderBar({
                           className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
                         >
                           <span className="truncate">{w.name ?? w.id}</span>
-                          {w.id === currentWorkflow?.id ? (
+                          {!isAll && w.id === currentWorkflow?.id ? (
                             <span aria-hidden className="ml-auto text-xs text-accent">✓</span>
                           ) : null}
                         </button>

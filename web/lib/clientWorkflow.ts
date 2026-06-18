@@ -1,6 +1,6 @@
 import { cache } from "react";
 import { notFound, redirect } from "next/navigation";
-import { getWorkflowByN8nId } from "@worker/db/repositories/workflows.js";
+import { getWorkflowByN8nId, listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { getClientById, type ClientRow } from "@worker/db/repositories/clients.js";
 import type { WorkflowRow } from "@worker/db/types.js";
 import { getCurrentTenantId } from "./tenant";
@@ -76,4 +76,38 @@ export async function requireWorkflowUnderClient(
     );
   }
   return res.workflow;
+}
+
+/**
+ * Validate a clientId is the CURRENT tenant's and return it (the "all workflows"
+ * analytics view trusts no URL clientId). Cached so a page + its helpers share
+ * one lookup. Returns null for a bogus/foreign client → the caller 404s.
+ */
+export const getClientForTenant = cache(async (clientId: string): Promise<ClientRow | null> => {
+  const tenantId = await getCurrentTenantId();
+  return getClientById({ tenantId, clientId });
+});
+
+/**
+ * Resolve which workflow the "All workflows" view's Executions/Conversations
+ * links should land on: the remembered `from` workflow if it belongs to this
+ * client, else the client's first workflow (by name), else null (no workflows /
+ * bogus client → the caller sends the user back to /clients). Tenant-scoped — a
+ * `from` from another client/tenant is ignored.
+ */
+export async function resolveRememberedWorkflow(
+  clientId: string,
+  from: string | undefined,
+): Promise<string | null> {
+  const tenantId = await getCurrentTenantId();
+  const client = await getClientById({ tenantId, clientId });
+  if (!client) return null;
+  const workflows = (await listWorkflowsWithClientForTenant(tenantId)).filter(
+    (w) => w.client_id === clientId,
+  );
+  if (from && workflows.some((w) => w.n8n_workflow_id === from)) return from;
+  if (workflows.length === 0) return null;
+  return [...workflows].sort((a, b) =>
+    (a.name ?? a.n8n_workflow_id).localeCompare(b.name ?? b.n8n_workflow_id),
+  )[0].n8n_workflow_id;
 }
