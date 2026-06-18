@@ -43,6 +43,27 @@ function MiniLogo({ name, logoUrl, size = "size-5" }: { name: string; logoUrl: s
   );
 }
 
+/** Home/hub glyph in the same square slot as MiniLogo — for the default client,
+ * which is presented as "Hub" (the lobby) rather than its stored name. */
+function HubBadge({ size = "size-5" }: { size?: string }) {
+  return (
+    <span
+      aria-hidden
+      className={`${size} flex shrink-0 items-center justify-center rounded border border-line bg-subtle text-faint`}
+    >
+      <svg viewBox="0 0 16 16" className="size-3" fill="none">
+        <path
+          d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h8V6.5"
+          stroke="currentColor"
+          strokeWidth="1.3"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    </span>
+  );
+}
+
 function Caret() {
   return (
     <svg viewBox="0 0 16 16" className="size-3 shrink-0 text-neutral-500" aria-hidden>
@@ -200,10 +221,17 @@ export function HeaderBar({
             className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-foreground transition-colors hover:bg-black/[0.05] dark:hover:bg-subtle"
           >
             {currentClient ? (
-              <>
-                <MiniLogo name={currentClient.name} logoUrl={currentClient.logoUrl} />
-                <span className="truncate font-medium">{currentClient.name}</span>
-              </>
+              currentClient.isDefault ? (
+                <>
+                  <HubBadge />
+                  <span className="truncate font-medium">Hub</span>
+                </>
+              ) : (
+                <>
+                  <MiniLogo name={currentClient.name} logoUrl={currentClient.logoUrl} />
+                  <span className="truncate font-medium">{currentClient.name}</span>
+                </>
+              )
             ) : (
               <span className="text-muted">Select a client</span>
             )}
@@ -219,11 +247,15 @@ export function HeaderBar({
                   <button
                     key={c.id}
                     type="button"
-                    onClick={() => go(clientTarget(c.id))}
+                    onClick={() => go(c.isDefault ? "/" : clientTarget(c.id))}
                     className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
                   >
-                    <MiniLogo name={c.name} logoUrl={c.logoUrl} size="size-6" />
-                    <span className="truncate">{c.name}</span>
+                    {c.isDefault ? (
+                      <HubBadge size="size-6" />
+                    ) : (
+                      <MiniLogo name={c.name} logoUrl={c.logoUrl} size="size-6" />
+                    )}
+                    <span className="truncate">{c.isDefault ? "Hub" : c.name}</span>
                     {c.id === currentClient?.id ? (
                       <span aria-hidden className="ml-auto text-xs text-accent">✓</span>
                     ) : null}

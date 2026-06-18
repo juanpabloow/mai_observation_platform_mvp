@@ -46,9 +46,10 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 /**
  * Left navigation, below the full-width header. LEVEL-AWARE (the two-level model):
  *  - TENANT level → Hub + Clients & Workflows.
- *  - WORKFLOW level (/clients/[c]/workflows/[w]/…) → that workflow's features
- *    (Executions / Conversations / Analytics-stub), with a "← Clients & Workflows"
- *    item so tenant level is always reachable (the header logo → Hub too).
+ *  - WORKFLOW level (/clients/[c]/workflows/[w]/…) → ONLY that workflow's features
+ *    (Executions / Conversations / Analytics-stub); no tenant-level link by design.
+ *    Back to tenant level is via the header (the logo → Hub, and the breadcrumb
+ *    client picker, whose default client reads "Hub").
  * Reactive via usePathname (a root-layout server component would not update on
  * client navigation). Hidden on the auth screens and on small screens (the header
  * breadcrumb covers navigation there).
@@ -65,7 +66,6 @@ export function AppSidebar() {
     <aside className="hidden w-52 shrink-0 flex-col gap-0.5 border-r border-line bg-sidebar px-3 py-4 md:flex">
       {route ? (
         <>
-          <SideLink href="/clients" label="← Clients & Workflows" active={false} />
           <SectionLabel>Workflow</SectionLabel>
           <SideLink
             href={`${route.base}/executions`}
