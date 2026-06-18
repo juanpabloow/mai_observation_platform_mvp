@@ -1,13 +1,14 @@
 import { connection } from "next/server";
 import Link from "next/link";
 import { listConnectionsForTenant } from "@worker/db/repositories/n8nConnections.js";
-import { requireTenant } from "@/lib/requireAuth";
+import { requireFullAccessOrLand } from "@/lib/access";
 import { ConnectionsManager } from "@/components/ConnectionsManager";
 
 export default async function ConnectionsSettingsPage() {
   await connection();
-  // Tenant-scoped + protected (redirects to /login if not authed).
-  const { tenantId } = await requireTenant();
+  // n8n connections are tenant-wide secrets — owner/admin only. A member is sent
+  // to their own client's context (also redirects to /login if not authed).
+  const { tenantId } = await requireFullAccessOrLand();
   const connections = await listConnectionsForTenant(tenantId);
 
   return (

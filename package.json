@@ -16,6 +16,7 @@
     "migrate:prod": "node-pg-migrate --tsx",
     "derive:backfill": "tsx src/scripts/deriveBackfill.ts",
     "link:founder": "tsx src/scripts/linkFounder.ts",
+    "rbac:set-role": "tsx src/scripts/rbacSetRole.ts",
     "web": "cd web && npm run dev",
     "web:build": "cd web && npm run build",
     "build:web": "cd web && npm run build",

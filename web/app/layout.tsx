@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
-import { AppSidebar } from "@/components/AppSidebar";
+import { AppSidebarServer } from "@/components/AppSidebarServer";
 import { Providers } from "./providers";
 import "./globals.css";
 
@@ -45,7 +45,7 @@ export default function RootLayout({
             <Suspense
               fallback={<div className="hidden w-52 shrink-0 border-r border-line bg-sidebar md:block" />}
             >
-              <AppSidebar />
+              <AppSidebarServer />
             </Suspense>
             <div className="flex min-w-0 flex-1 flex-col">{children}</div>
           </div>

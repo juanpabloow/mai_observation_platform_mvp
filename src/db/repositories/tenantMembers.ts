@@ -25,6 +25,56 @@ export async function getTenantIdForUser(userId: string): Promise<string | null>
   return result.rows[0]?.tenant_id ?? null;
 }
 
+/** A user's membership scope (RBAC): tenant + role + the one client a 'member'
+ * is restricted to (NULL for owner/admin). The read behind getAccessScope(). */
+export interface MembershipScopeRow {
+  tenant_id: string;
+  role: string;
+  member_client_id: string | null;
+}
+
+/**
+ * The current user's membership with its role + per-member client scope — the
+ * read behind the web app's getAccessScope() authority. Oldest membership first
+ * (matches getTenantIdForUser, so both resolve the SAME row); null when none.
+ */
+export async function getMembershipForUser(userId: string): Promise<MembershipScopeRow | null> {
+  const result = await query<MembershipScopeRow>(
+    `SELECT tenant_id, role, member_client_id FROM tenant_members
+      WHERE user_id = $1
+      ORDER BY created_at ASC
+      LIMIT 1`,
+    [userId],
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Set a user's role within a tenant (used by the RBAC simulation/admin script;
+ * RBAC-3 will add the real UI). Writes role + member_client_id in ONE UPDATE so
+ * the role↔client invariant never transiently breaks: a 'member' REQUIRES a
+ * memberClientId (validated same-tenant by the composite FK + the DB CHECK);
+ * owner/admin force it to NULL. Returns rows affected (0 = no such membership).
+ */
+export async function setMembershipRole(params: {
+  tenantId: string;
+  userId: string;
+  role: 'owner' | 'admin' | 'member';
+  memberClientId?: string | null;
+}): Promise<number> {
+  const memberClientId = params.role === 'member' ? (params.memberClientId ?? null) : null;
+  if (params.role === 'member' && !memberClientId) {
+    throw new Error("setMembershipRole: role='member' requires a memberClientId");
+  }
+  const result = await query(
+    `UPDATE tenant_members
+        SET role = $3, member_client_id = $4
+      WHERE tenant_id = $1 AND user_id = $2`,
+    [params.tenantId, params.userId, params.role, memberClientId],
+  );
+  return result.rowCount ?? 0;
+}
+
 /**
  * Create a brand-new tenant AND its owner membership in ONE transaction — both
  * or neither, so we never produce a tenant with no owner. Returns the tenant id.

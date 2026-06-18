@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { getWorkflowByN8nId, listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { getClientById, type ClientRow } from "@worker/db/repositories/clients.js";
 import type { WorkflowRow } from "@worker/db/types.js";
-import { getCurrentTenantId } from "./tenant";
+import { getAccessScope, canAccessClient } from "./access";
 
 /**
  * Resolution of a (clientId, workflowId) URL pair against the current tenant.
@@ -30,7 +30,8 @@ export type ClientWorkflowResolution =
  */
 export const resolveWorkflowUnderClient = cache(
   async (urlClientId: string, workflowId: string): Promise<ClientWorkflowResolution> => {
-    const tenantId = await getCurrentTenantId();
+    const scope = await getAccessScope();
+    const tenantId = scope.tenantId;
 
     const workflow = await getWorkflowByN8nId({ tenantId, n8nWorkflowId: workflowId });
     if (!workflow) return { kind: "not_found" };
@@ -39,6 +40,12 @@ export const resolveWorkflowUnderClient = cache(
     // type, which still reads string | null).
     const ownerClientId = workflow.client_id;
     if (!ownerClientId) return { kind: "not_found" };
+
+    // RBAC (deny-by-default): a member may only see THEIR client's workflows. The
+    // workflow's REAL client_id is what's checked — never the URL clientId — so
+    // neither a forged URL segment nor a stale mismatch can widen a member's
+    // access. A workflow under any other client is indistinguishable from a 404.
+    if (!canAccessClient(scope, ownerClientId)) return { kind: "not_found" };
 
     if (ownerClientId === urlClientId) {
       const client = await getClientById({ tenantId, clientId: ownerClientId });
@@ -79,13 +86,15 @@ export async function requireWorkflowUnderClient(
 }
 
 /**
- * Validate a clientId is the CURRENT tenant's and return it (the "all workflows"
- * analytics view trusts no URL clientId). Cached so a page + its helpers share
- * one lookup. Returns null for a bogus/foreign client → the caller 404s.
+ * Validate a clientId is the CURRENT tenant's AND accessible to the user, then
+ * return it (the "all workflows" analytics view trusts no URL clientId). Cached
+ * so a page + its helpers share one lookup. Returns null for a bogus/foreign
+ * client OR a client outside a member's scope → the caller 404s (deny-by-default).
  */
 export const getClientForTenant = cache(async (clientId: string): Promise<ClientRow | null> => {
-  const tenantId = await getCurrentTenantId();
-  return getClientById({ tenantId, clientId });
+  const scope = await getAccessScope();
+  if (!canAccessClient(scope, clientId)) return null; // RBAC: member → only their client
+  return getClientById({ tenantId: scope.tenantId, clientId });
 });
 
 /**
@@ -99,7 +108,9 @@ export async function resolveRememberedWorkflow(
   clientId: string,
   from: string | undefined,
 ): Promise<string | null> {
-  const tenantId = await getCurrentTenantId();
+  const scope = await getAccessScope();
+  if (!canAccessClient(scope, clientId)) return null; // RBAC: member → only their client
+  const tenantId = scope.tenantId;
   const client = await getClientById({ tenantId, clientId });
   if (!client) return null;
   const workflows = (await listWorkflowsWithClientForTenant(tenantId)).filter(

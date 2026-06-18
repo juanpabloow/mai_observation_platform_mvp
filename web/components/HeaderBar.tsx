@@ -129,11 +129,17 @@ export function HeaderBar({
   name,
   clients,
   workflows,
+  canSwitchClients,
+  homeHref,
 }: {
   email: string;
   name: string | null;
   clients: HeaderClient[];
   workflows: HeaderWorkflow[];
+  /** false for a member (one client, no switcher) — also hides tenant-wide settings. */
+  canSwitchClients: boolean;
+  /** Logo / home target: "/" (Hub) for owner/admin, the member's client otherwise. */
+  homeHref: string;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -174,6 +180,10 @@ export function HeaderBar({
   const currentWorkflow = route
     ? workflows.find((w) => w.id === route.workflowId && w.clientId === route.clientId) ?? null
     : null;
+  // The member breadcrumb (no switcher) shows their ONE client even off a workflow
+  // route (e.g. /executions/[id], where `route` is null) — fall back to the only
+  // client the scope-narrowed header was given.
+  const soleClient = currentClient ?? clients[0] ?? null;
   const atWorkflow = Boolean(route);
   const isAnalytics = pathname.includes("/analytics");
   const isAll = route?.workflowId === "all";
@@ -213,9 +223,9 @@ export function HeaderBar({
 
   return (
     <header className="flex items-center justify-between gap-3 border-b border-black/10 px-4 py-2.5 dark:border-line">
-      {/* LEFT — text logo → the Hub (tenant lobby) */}
+      {/* LEFT — text logo → home (the Hub for owner/admin; the member's client) */}
       <Link
-        href="/"
+        href={homeHref}
         className="shrink-0 font-semibold tracking-tight text-foreground transition-opacity hover:opacity-70"
       >
         Observability
@@ -223,7 +233,8 @@ export function HeaderBar({
 
       {/* CENTER — route-aware breadcrumb */}
       <nav className="flex min-w-0 flex-1 items-center justify-center gap-1 text-sm">
-        {/* Client segment (a picker) */}
+        {/* Client segment — a picker for owner/admin; static text for a member */}
+        {canSwitchClients ? (
         <div className="contents">
           <button
             ref={clientBtn}
@@ -278,6 +289,13 @@ export function HeaderBar({
             </PortalPanel>
           ) : null}
         </div>
+        ) : soleClient ? (
+          // Member: their single client, shown as static text (no switcher).
+          <span className="inline-flex min-w-0 items-center gap-1.5 px-2 py-1 text-foreground">
+            <MiniLogo name={soleClient.name} logoUrl={soleClient.logoUrl} />
+            <span className="truncate font-medium">{soleClient.name}</span>
+          </span>
+        ) : null}
 
         {/* Workflow segment (only at workflow level) */}
         {atWorkflow ? (
@@ -379,13 +397,16 @@ export function HeaderBar({
               </div>
             </div>
             <div className="py-1">
-              <Link
-                href="/settings/connections"
-                onClick={() => setOpenMenu(null)}
-                className="flex w-full items-center px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
-              >
-                n8n connections
-              </Link>
+              {/* Tenant-wide settings — owner/admin only (a member would be bounced). */}
+              {canSwitchClients ? (
+                <Link
+                  href="/settings/connections"
+                  onClick={() => setOpenMenu(null)}
+                  className="flex w-full items-center px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
+                >
+                  n8n connections
+                </Link>
+              ) : null}
               <Link
                 href="/logout"
                 onClick={() => setOpenMenu(null)}

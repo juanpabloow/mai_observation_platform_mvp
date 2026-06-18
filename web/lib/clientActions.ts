@@ -10,14 +10,17 @@ import {
   updateClientLogo,
 } from "@worker/db/repositories/clients.js";
 import { getCurrentTenantId } from "./tenant";
+import { requireFullAccessForAction } from "./access";
 import { deleteLogo, isR2Configured, uploadLogo } from "./r2";
 
 /**
- * Server actions for the Clients & Workflows view. Every action resolves the
- * tenant via getCurrentTenantId() and delegates to the (already proven, cross-
- * tenant-safe) clients repo — no SQL is built here, and a foreign client/workflow
- * id can never take effect (the repo validates ownership). They revalidate
- * /clients so the server-rendered folder view reflects the change.
+ * Server actions for the Clients & Workflows view. Client management is an
+ * owner/admin capability, so every action FIRST gates on requireFullAccessForAction()
+ * (a member can't reach the UI, but the action fails closed if invoked directly).
+ * Each then resolves the tenant via getCurrentTenantId() and delegates to the
+ * (already proven, cross-tenant-safe) clients repo — no SQL is built here, and a
+ * foreign client/workflow id can never take effect (the repo validates ownership).
+ * They revalidate /clients so the server-rendered folder view reflects the change.
  */
 
 /** Create a new (non-default) client. Name is required; duplicates are allowed
@@ -29,6 +32,7 @@ export async function createClientAction(
   const trimmed = name.trim();
   if (!trimmed) return { ok: false, error: "Client name is required." };
   if (trimmed.length > 120) return { ok: false, error: "Name is too long (max 120)." };
+  await requireFullAccessForAction(); // owner/admin only — client management is not a member capability
   const tenantId = await getCurrentTenantId();
   const client = await createClient(tenantId, trimmed);
   revalidatePath("/clients");
@@ -56,6 +60,7 @@ export async function uploadClientLogoAction(
   if (!clientId) return { ok: false, error: "Missing client." };
   if (!(file instanceof File)) return { ok: false, error: "No image selected." };
 
+  await requireFullAccessForAction(); // owner/admin only — client management is not a member capability
   const tenantId = await getCurrentTenantId();
   // Ownership check (tenant isolation) — also yields the previous logo for cleanup.
   const client = await getClientById({ tenantId, clientId });
@@ -84,6 +89,7 @@ export async function assignWorkflowAction(input: {
   workflowId: string;
   clientId: string;
 }): Promise<{ ok: boolean }> {
+  await requireFullAccessForAction(); // owner/admin only — client management is not a member capability
   const tenantId = await getCurrentTenantId();
   const ok = await assignWorkflowToClient({
     tenantId,
@@ -102,6 +108,7 @@ export async function renameClientAction(input: {
   const trimmed = input.name.trim();
   if (!trimmed) return { ok: false, error: "Client name is required." };
   if (trimmed.length > 120) return { ok: false, error: "Name is too long (max 120)." };
+  await requireFullAccessForAction(); // owner/admin only — client management is not a member capability
   const tenantId = await getCurrentTenantId();
   const ok = await renameClient({ tenantId, clientId: input.clientId, name: trimmed });
   revalidatePath("/clients");
@@ -115,6 +122,7 @@ export async function renameClientAction(input: {
 export async function deleteClientAction(input: {
   clientId: string;
 }): Promise<{ ok: boolean; result: "deleted" | "not_found" | "is_default" }> {
+  await requireFullAccessForAction(); // owner/admin only — client management is not a member capability
   const tenantId = await getCurrentTenantId();
   const result = await deleteClient({ tenantId, clientId: input.clientId });
   revalidatePath("/clients");

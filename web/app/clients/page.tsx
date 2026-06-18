@@ -3,7 +3,7 @@ import { connection } from "next/server";
 import { listClientsForTenant } from "@worker/db/repositories/clients.js";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { countActiveConnectionsForTenant } from "@worker/db/repositories/stats.js";
-import { getCurrentTenantId } from "@/lib/tenant";
+import { requireFullAccessOrLand } from "@/lib/access";
 import { isR2Configured } from "@/lib/r2";
 import {
   ClientsWorkflowsView,
@@ -22,7 +22,9 @@ import {
 export default async function ClientsPage() {
   await connection();
 
-  const tenantId = await getCurrentTenantId();
+  // The Clients & Workflows management view is owner/admin only — a member can't
+  // manage clients; requireFullAccessOrLand sends them to their own client.
+  const { tenantId } = await requireFullAccessOrLand();
   const [clients, workflows, activeConnections] = await Promise.all([
     listClientsForTenant(tenantId),
     listWorkflowsWithClientForTenant(tenantId),

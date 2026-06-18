@@ -11,7 +11,7 @@ import {
   getTopClientsByExecutions,
   type TopClient,
 } from "@worker/db/repositories/analytics.js";
-import { getCurrentTenantId } from "@/lib/tenant";
+import { requireFullAccessOrLand } from "@/lib/access";
 import { ExecutionsByStatusChart } from "@/components/WorkflowAnalyticsCharts";
 import {
   LegendDot,
@@ -41,7 +41,9 @@ export default async function HubPage({
   await connection();
   const sp = await searchParams;
   const days = coerceRangeDays(first(sp.range));
-  const tenantId = await getCurrentTenantId();
+  // The Hub is the TENANT lobby — owner/admin only. A member has no tenant-wide
+  // view; requireFullAccessOrLand sends them to their own client's context.
+  const { tenantId } = await requireFullAccessOrLand();
 
   const activeConnections = await countActiveConnectionsForTenant(tenantId);
 

@@ -5,7 +5,7 @@ import {
   getTurnByExecution,
   listTurnsForConversation,
 } from "@worker/db/repositories/conversationTurns.js";
-import { getCurrentTenantId } from "@/lib/tenant";
+import { getAccessScope, hasFullAccess } from "@/lib/access";
 import { getWorkflowForCurrentTenant } from "@/lib/workflow";
 import { parseExecution } from "@/lib/executionDetail";
 import { formatDateTime, formatDuration, statusBadgeClasses } from "@/lib/format";
@@ -35,17 +35,25 @@ export default async function ExecutionDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  const tenantId = await getCurrentTenantId();
+  const scope = await getAccessScope();
+  const tenantId = scope.tenantId;
 
   const execution = await getExecutionByIdForTenant({ tenantId, id });
   if (!execution) {
     notFound(); // not found OR another tenant's — indistinguishable on purpose
   }
 
-  // Resolve the execution's workflow → its client (tenant-scoped) so links point
+  // Resolve the execution's workflow → its client (access-scoped) so links point
   // at the nested client/workflow URLs. /executions/[id] itself stays global
   // (keyed by execution UUID); only the links OUT of it are nested.
   const workflow = await getWorkflowForCurrentTenant(execution.n8n_workflow_id);
+  // RBAC (deny-by-default): a member may view an execution only when its workflow
+  // is in their client. getWorkflowForCurrentTenant returns null for a foreign
+  // client (or orphan), so a member with no accessible workflow → 404, exactly as
+  // if the execution didn't exist. Owner/admin still see orphan executions.
+  if (!hasFullAccess(scope) && !workflow) {
+    notFound();
+  }
   const workflowClientId = workflow?.client_id ?? null;
   const backHref = workflowClientId
     ? `/clients/${workflowClientId}/workflows/${encodeURIComponent(execution.n8n_workflow_id)}/executions`

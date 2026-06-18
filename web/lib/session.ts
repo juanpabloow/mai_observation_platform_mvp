@@ -1,3 +1,4 @@
+import { cache } from "react";
 import { headers } from "next/headers";
 import { auth } from "./auth";
 
@@ -13,9 +14,12 @@ import { auth } from "./auth";
  * those checks will use.)
  *
  * Returns `{ user, session }` when authenticated, or `null` when not.
+ *
+ * Wrapped in React.cache so the many consumers in one render (the access-scope
+ * resolvers, the header, the sidebar) share a single session validation.
  */
-export async function getServerSession() {
+export const getServerSession = cache(async () => {
   return auth.api.getSession({ headers: await headers() });
-}
+});
 
 export type ServerSession = Awaited<ReturnType<typeof getServerSession>>;

@@ -56,7 +56,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
  * Reactive via usePathname/useSearchParams (a root-layout server component would
  * not update on client navigation). Hidden on auth screens + small screens.
  */
-export function AppSidebar() {
+export function AppSidebar({ memberClientId }: { memberClientId: string | null }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
   if (AUTH_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
@@ -88,6 +88,17 @@ export function AppSidebar() {
             href={`${route.base}/analytics${fromQuery}`}
             label="Analytics"
             active={pathname.startsWith(`${route.base}/analytics`)}
+          />
+        </>
+      ) : memberClientId ? (
+        // Member at a tenant-level route (e.g. /executions/[id]): no Hub and no
+        // client management — just a link back to their own client's overview.
+        <>
+          <SectionLabel>Client</SectionLabel>
+          <SideLink
+            href={`/clients/${memberClientId}/workflows/all/analytics`}
+            label="Overview"
+            active={false}
           />
         </>
       ) : (
