@@ -47,7 +47,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
  * Left navigation, below the full-width header. LEVEL-AWARE (the two-level model):
  *  - TENANT level → Hub + Clients & Workflows.
  *  - WORKFLOW level (/clients/[c]/workflows/[w]/…) → ONLY that workflow's features
- *    (Executions / Conversations / Analytics-stub); no tenant-level link by design.
+ *    (Executions / Conversations / Analytics); no tenant-level link by design.
  *    Back to tenant level is via the header (the logo → Hub, and the breadcrumb
  *    client picker, whose default client reads "Hub").
  * Reactive via usePathname (a root-layout server component would not update on
@@ -77,15 +77,11 @@ export function AppSidebar() {
             label="Conversations"
             active={pathname.startsWith(`${route.base}/conversations`)}
           />
-          <span
-            title="Coming soon"
-            className="flex cursor-not-allowed items-center justify-between rounded-lg px-3 py-2 text-sm text-faint"
-          >
-            Analytics
-            <span className="rounded-full bg-subtle px-1.5 py-0.5 text-[10px] uppercase tracking-wider">
-              Soon
-            </span>
-          </span>
+          <SideLink
+            href={`${route.base}/analytics`}
+            label="Analytics"
+            active={pathname.startsWith(`${route.base}/analytics`)}
+          />
         </>
       ) : (
         <>
