@@ -6,6 +6,7 @@ import {
   deleteAuthUserById,
   getTenantIdForUser,
 } from "@worker/db/repositories/tenantMembers.js";
+import { hasValidPendingInvitationForEmail } from "@worker/db/repositories/invitations.js";
 
 /**
  * Better Auth server instance.
@@ -69,6 +70,13 @@ export const auth = betterAuth({
           try {
             // Defensive idempotency: never create a second tenant for a user.
             if (await getTenantIdForUser(user.id)) return;
+            // INVITE OVERRIDE (RBAC-2): when this email has a VALID pending
+            // invitation, the user is joining the INVITING tenant on accept — do
+            // NOT spawn a personal tenant here (which would make them an owner of a
+            // new empty workspace). Works for both providers. The membership is
+            // created when they accept the invite; until then they're tenant-less,
+            // which the /invite/accept page handles (and getAccessScope denies).
+            if (await hasValidPendingInvitationForEmail(user.email)) return;
             const workspace = `${(user.name && user.name.trim()) || user.email}'s workspace`;
             // createTenantWithOwner is one transaction → never a tenant w/o owner.
             await createTenantWithOwner({ userId: user.id, tenantName: workspace });

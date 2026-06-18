@@ -14,7 +14,10 @@ import { getSessionCookie } from "better-auth/cookies";
  *      don't briefly render a protected page before the data layer bounces them.
  * A forged cookie passes here but is still rejected by the data layer.
  */
-const PUBLIC_PREFIXES = ["/login", "/signup", "/logout", "/api/auth"];
+// /invite is public: the accept page handles its own auth (prompting sign-in
+// while preserving the token in the URL) and the real gate is the accept action
+// at the data layer. (Middleware can't carry the token through its /login bounce.)
+const PUBLIC_PREFIXES = ["/login", "/signup", "/logout", "/api/auth", "/invite"];
 
 export function middleware(request: NextRequest): NextResponse {
   const { pathname } = request.nextUrl;

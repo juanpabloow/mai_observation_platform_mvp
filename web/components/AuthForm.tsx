@@ -31,7 +31,9 @@ export function AuthForm({
   const searchParams = useSearchParams();
   const destination = safeRedirect(searchParams.get("redirect"));
   const isSignup = mode === "signup";
-  const [email, setEmail] = useState("");
+  // The invite accept page links here with ?email to prefill the invited address
+  // (UX only — the accept action re-checks the signed-in email against the invite).
+  const [email, setEmail] = useState(searchParams.get("email") ?? "");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
