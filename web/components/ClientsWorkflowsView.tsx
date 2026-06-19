@@ -409,6 +409,13 @@ export function ClientsWorkflowsView({
                     width={176}
                   >
                     <div className="py-1">
+                      <Link
+                        href={`/clients/${folder.id}/team`}
+                        onClick={() => setOpenMenu(null)}
+                        className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
+                      >
+                        Members
+                      </Link>
                       <button
                         type="button"
                         onClick={() => {

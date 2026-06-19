@@ -182,7 +182,14 @@ export function HeaderBar({
   }
 
   const route = parseWorkflowRoute(pathname);
-  const currentClient = route ? clients.find((c) => c.id === route.clientId) ?? null : null;
+  // The client-level Team route (/clients/[c]/team) — a non-workflow client surface.
+  const teamMatch = pathname.match(/^\/clients\/([^/]+)\/team/);
+  const teamClientId = teamMatch ? decodeURIComponent(teamMatch[1]) : null;
+  const currentClient = route
+    ? clients.find((c) => c.id === route.clientId) ?? null
+    : teamClientId
+      ? clients.find((c) => c.id === teamClientId) ?? null
+      : null;
   const currentWorkflow = route
     ? workflows.find((w) => w.id === route.workflowId && w.clientId === route.clientId) ?? null
     : null;
@@ -301,6 +308,14 @@ export function HeaderBar({
             <MiniLogo name={soleClient.name} logoUrl={soleClient.logoUrl} />
             <span className="truncate font-medium">{soleClient.name}</span>
           </span>
+        ) : null}
+
+        {/* Team segment (the client-level Team route → "Client / Team") */}
+        {teamClientId ? (
+          <>
+            <span aria-hidden className="text-faint">/</span>
+            <span className="inline-flex items-center px-2 py-1 font-medium text-foreground">Team</span>
+          </>
         ) : null}
 
         {/* Workflow segment (only at workflow level) */}

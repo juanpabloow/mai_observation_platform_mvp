@@ -3,29 +3,22 @@
 import { useState } from "react";
 import { createInvitationAction } from "@/lib/inviteActions";
 
-export interface InviteClientOption {
-  id: string;
-  name: string;
-}
-
 type Result = { ok: boolean; error?: string; emailSent?: boolean; acceptUrl?: string };
 
+type InviteFormProps =
+  | { mode: "admin" }
+  | { mode: "member"; clientId: string; clientName: string };
+
 /**
- * Invite form for the team page. Owners can invite admins or members; admins can
- * invite members only (the role↔capability boundary — also enforced server-side in
- * createInvitationAction). A member invite requires a client.
+ * Invite form, scoped by SURFACE (RBAC split):
+ *  - mode="admin"  (Hub Team) → invites a tenant-wide ADMIN; no client.
+ *  - mode="member" (per-client Team) → invites a MEMBER of the CONTEXT client; the
+ *    client is implied by the route (no picker), passed in by the page.
+ * Both call the proven createInvitationAction. The server re-validates role↔client
+ * and that the client is the tenant's, so the implied client can't be spoofed.
  */
-export function InviteForm({
-  clients,
-  viewerRole,
-}: {
-  clients: InviteClientOption[];
-  viewerRole: "owner" | "admin";
-}) {
-  const canInviteAdmin = viewerRole === "owner";
+export function InviteForm(props: InviteFormProps) {
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<"admin" | "member">("member");
-  const [clientId, setClientId] = useState(clients[0]?.id ?? "");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
 
@@ -34,11 +27,11 @@ export function InviteForm({
     setBusy(true);
     setResult(null);
     try {
-      const res = await createInvitationAction({
-        email,
-        role,
-        memberClientId: role === "member" ? clientId : null,
-      });
+      const res = await createInvitationAction(
+        props.mode === "admin"
+          ? { email, role: "admin" }
+          : { email, role: "member", memberClientId: props.clientId },
+      );
       setResult(res);
       if (res.ok) setEmail("");
     } catch {
@@ -47,6 +40,11 @@ export function InviteForm({
       setBusy(false);
     }
   }
+
+  const hint =
+    props.mode === "admin"
+      ? "They'll have full access to the workspace."
+      : `They'll be added as a member of ${props.clientName}.`;
 
   return (
     <form onSubmit={onSubmit} className="flex flex-col gap-3 rounded-2xl border border-line bg-card p-5">
@@ -61,44 +59,14 @@ export function InviteForm({
           className="rounded-lg border border-line bg-transparent px-3 py-2 outline-none transition-colors focus:border-line-strong"
         />
       </label>
-
-      <div className="flex gap-3">
-        <label className="flex flex-1 flex-col gap-1 text-sm">
-          <span className="text-muted">Role</span>
-          <select
-            value={role}
-            onChange={(e) => setRole(e.target.value as "admin" | "member")}
-            className="rounded-lg border border-line bg-transparent px-3 py-2 outline-none transition-colors focus:border-line-strong"
-          >
-            <option value="member">Member (one client)</option>
-            {canInviteAdmin ? <option value="admin">Admin (full access)</option> : null}
-          </select>
-        </label>
-
-        {role === "member" ? (
-          <label className="flex flex-1 flex-col gap-1 text-sm">
-            <span className="text-muted">Client</span>
-            <select
-              value={clientId}
-              onChange={(e) => setClientId(e.target.value)}
-              className="rounded-lg border border-line bg-transparent px-3 py-2 outline-none transition-colors focus:border-line-strong"
-            >
-              {clients.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-      </div>
+      <p className="text-xs text-faint">{hint}</p>
 
       <button
         type="submit"
-        disabled={busy || (role === "member" && !clientId)}
+        disabled={busy}
         className="self-start rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
       >
-        {busy ? "Sending…" : "Send invitation"}
+        {busy ? "Sending…" : props.mode === "admin" ? "Send admin invitation" : "Send member invitation"}
       </button>
 
       {result ? (
