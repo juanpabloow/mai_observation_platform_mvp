@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import {
   assignWorkflowToClient,
+  countMembersAssignedToClient,
   createClient,
   deleteClient,
   getClientById,
@@ -118,13 +119,24 @@ export async function renameClientAction(input: {
 /**
  * Delete a client. The repo refuses the default client and reassigns a deleted
  * client's workflows to the default (they move to "Unassigned", never orphaned).
+ * RBAC-3: if any tenant MEMBERS are scoped to this client, deletion is blocked
+ * ('has_members' + count) — the caller asks the owner to reassign/remove them
+ * first (on the Team page), instead of an opaque FK error.
  */
 export async function deleteClientAction(input: {
   clientId: string;
-}): Promise<{ ok: boolean; result: "deleted" | "not_found" | "is_default" }> {
+}): Promise<{
+  ok: boolean;
+  result: "deleted" | "not_found" | "is_default" | "has_members";
+  memberCount?: number;
+}> {
   await requireFullAccessForAction(); // owner/admin only — client management is not a member capability
   const tenantId = await getCurrentTenantId();
   const result = await deleteClient({ tenantId, clientId: input.clientId });
+  if (result === "has_members") {
+    const memberCount = await countMembersAssignedToClient({ tenantId, clientId: input.clientId });
+    return { ok: false, result, memberCount };
+  }
   revalidatePath("/clients");
   return { ok: result === "deleted", result };
 }

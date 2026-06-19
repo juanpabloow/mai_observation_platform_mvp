@@ -58,6 +58,11 @@ export async function AppHeader() {
     clientId: w.client_id,
   }));
 
+  // For the profile menu: a member's client label (so they always see where they
+  // are). owner/admin have no single client.
+  const memberClient = memberClientId ? visibleClients[0] : null;
+  const clientLabel = memberClient ? (memberClient.is_default ? "Unassigned" : memberClient.name) : null;
+
   return (
     <HeaderBar
       email={session.user.email}
@@ -68,6 +73,8 @@ export async function AppHeader() {
       // any "/" target route them to their own client, not the (forbidden) Hub.
       canSwitchClients={memberClientId === null}
       homeHref={memberLandingHref(scope)}
+      role={scope.role}
+      clientLabel={clientLabel}
     />
   );
 }

@@ -123,16 +123,29 @@ export async function assignWorkflowToClient(params: {
   return (r.rowCount ?? 0) > 0;
 }
 
+/** How many tenant members are scoped to this client (RBAC member assignments). */
+export async function countMembersAssignedToClient(params: {
+  tenantId: string;
+  clientId: string;
+}): Promise<number> {
+  const r = await query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM tenant_members WHERE member_client_id = $1 AND tenant_id = $2`,
+    [params.clientId, params.tenantId],
+  );
+  return r.rows[0]?.n ?? 0;
+}
+
 /**
  * Delete a NON-default client. Its workflows are first reassigned to the tenant's
  * default client (never orphaned or deleted); the default client itself cannot be
  * deleted. Atomic. Returns 'deleted' | 'not_found' (not this tenant's) |
- * 'is_default' (refused).
+ * 'is_default' (refused) | 'has_members' (RBAC members are scoped to it — the
+ * composite FK would block the delete; reassign/remove them first).
  */
 export async function deleteClient(params: {
   tenantId: string;
   clientId: string;
-}): Promise<'deleted' | 'not_found' | 'is_default'> {
+}): Promise<'deleted' | 'not_found' | 'is_default' | 'has_members'> {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
@@ -147,6 +160,18 @@ export async function deleteClient(params: {
     if (target.rows[0].is_default) {
       await client.query('ROLLBACK');
       return 'is_default';
+    }
+    // RBAC: a client with members scoped to it can't be deleted (the composite FK
+    // tenant_members.(member_client_id,tenant_id) → clients would block it). Surface
+    // a clean result so the UI can ask the owner to reassign/remove them first,
+    // rather than letting an opaque FK error escape.
+    const assigned = await client.query<{ n: number }>(
+      `SELECT count(*)::int AS n FROM tenant_members WHERE member_client_id = $1 AND tenant_id = $2`,
+      [params.clientId, params.tenantId],
+    );
+    if ((assigned.rows[0]?.n ?? 0) > 0) {
+      await client.query('ROLLBACK');
+      return 'has_members';
     }
     const def = await client.query<{ id: string }>(
       `SELECT id FROM clients WHERE tenant_id = $1 AND is_default = true LIMIT 1`,

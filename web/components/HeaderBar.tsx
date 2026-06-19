@@ -131,6 +131,8 @@ export function HeaderBar({
   workflows,
   canSwitchClients,
   homeHref,
+  role,
+  clientLabel,
 }: {
   email: string;
   name: string | null;
@@ -140,6 +142,10 @@ export function HeaderBar({
   canSwitchClients: boolean;
   /** Logo / home target: "/" (Hub) for owner/admin, the member's client otherwise. */
   homeHref: string;
+  /** The signed-in user's role (shown in the profile menu). */
+  role: "owner" | "admin" | "member";
+  /** A member's client name (so they always see where they're scoped); else null. */
+  clientLabel: string | null;
 }) {
   const pathname = usePathname();
   const router = useRouter();
@@ -375,6 +381,10 @@ export function HeaderBar({
             <div className="border-b border-line px-3 py-2">
               <p className="text-[10px] font-medium uppercase tracking-wider text-faint">Signed in as</p>
               <p className="truncate text-sm text-foreground">{email}</p>
+              <p className="mt-0.5 truncate text-xs capitalize text-muted">
+                {role}
+                {clientLabel ? <span className="text-faint"> · {clientLabel}</span> : null}
+              </p>
             </div>
             <div className="border-b border-line px-3 py-2.5">
               <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-faint">Theme</p>
@@ -397,15 +407,24 @@ export function HeaderBar({
               </div>
             </div>
             <div className="py-1">
-              {/* Tenant-wide settings — owner/admin only (a member would be bounced). */}
+              {/* Owner/admin-only management — hidden for a member (they'd be bounced). */}
               {canSwitchClients ? (
-                <Link
-                  href="/settings/connections"
-                  onClick={() => setOpenMenu(null)}
-                  className="flex w-full items-center px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
-                >
-                  n8n connections
-                </Link>
+                <>
+                  <Link
+                    href="/settings/team"
+                    onClick={() => setOpenMenu(null)}
+                    className="flex w-full items-center px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
+                  >
+                    Team
+                  </Link>
+                  <Link
+                    href="/settings/connections"
+                    onClick={() => setOpenMenu(null)}
+                    className="flex w-full items-center px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
+                  >
+                    n8n connections
+                  </Link>
+                </>
               ) : null}
               <Link
                 href="/logout"

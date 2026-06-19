@@ -87,6 +87,11 @@ export async function createInvitationAction(input: {
   if (input.role !== "admin" && input.role !== "member") {
     return { ok: false, error: "Invalid role." };
   }
+  // Boundary (RBAC-3): inviting an ADMIN is owner-only — admins manage members, not
+  // the admin tier. An admin can still invite members.
+  if (input.role === "admin" && scope.role !== "owner") {
+    return { ok: false, error: "Only the owner can invite an admin." };
+  }
 
   // Role↔client rule + same-tenant client (also enforced by the DB).
   let memberClientId: string | null = null;

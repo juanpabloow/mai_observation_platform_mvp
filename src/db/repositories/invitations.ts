@@ -31,7 +31,7 @@ export interface InvitationWithNames {
   client_name: string | null;
 }
 
-/** Invitation row for the RBAC-3 team list (joins the client name; no token). */
+/** Invitation row for the RBAC-3 team list (joins client + inviter; no token). */
 export interface InvitationListRow {
   id: string;
   email: string;
@@ -42,6 +42,7 @@ export interface InvitationListRow {
   expires_at: Date;
   created_at: Date;
   accepted_at: Date | null;
+  invited_by_email: string | null;
 }
 
 /** Normalize an email for storage/comparison (case-insensitive, trimmed). */
@@ -204,9 +205,11 @@ export async function acceptInvitation(params: {
 export async function listInvitationsForTenant(tenantId: string): Promise<InvitationListRow[]> {
   const result = await query<InvitationListRow>(
     `SELECT i.id, i.email, i.role, i.member_client_id, c.name AS client_name,
-            i.status, i.expires_at, i.created_at, i.accepted_at
+            i.status, i.expires_at, i.created_at, i.accepted_at,
+            iu.email AS invited_by_email
        FROM invitations i
        LEFT JOIN clients c ON c.id = i.member_client_id
+       LEFT JOIN "user" iu ON iu.id = i.invited_by
       WHERE i.tenant_id = $1
       ORDER BY i.created_at DESC`,
     [tenantId],

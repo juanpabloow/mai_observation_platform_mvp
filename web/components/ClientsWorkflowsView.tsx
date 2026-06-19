@@ -230,6 +230,7 @@ export function ClientsWorkflowsView({
   const [createOpen, setCreateOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ClientFolderView | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<ClientFolderView | null>(null);
+  const [deleteError, setDeleteError] = useState<React.ReactNode | null>(null);
   const [logoTarget, setLogoTarget] = useState<ClientFolderView | null>(null);
 
   // Close any open ⋯ menu on an outside click or Escape. The menu body is
@@ -555,11 +556,32 @@ export function ClientsWorkflowsView({
           }
           confirmLabel="Delete client"
           busy={busy}
-          onCancel={() => setDeleteTarget(null)}
+          error={deleteError}
+          onCancel={() => {
+            setDeleteTarget(null);
+            setDeleteError(null);
+          }}
           onConfirm={async () => {
             setBusy(true);
+            setDeleteError(null);
             try {
-              await deleteClientAction({ clientId: deleteTarget.id });
+              const res = await deleteClientAction({ clientId: deleteTarget.id });
+              if (!res.ok && res.result === "has_members") {
+                // RBAC: members are scoped to this client — block with a clear,
+                // actionable message instead of a DB FK error.
+                const n = res.memberCount ?? 0;
+                setDeleteError(
+                  <>
+                    {n} member{n === 1 ? " is" : "s are"} assigned to this client. Reassign or
+                    remove {n === 1 ? "them" : "them"} on the{" "}
+                    <Link href="/settings/team" className="underline hover:opacity-80">
+                      Team page
+                    </Link>{" "}
+                    first.
+                  </>,
+                );
+                return;
+              }
               setExpanded((prev) => {
                 const next = new Set(prev);
                 next.delete(deleteTarget.id);
@@ -891,6 +913,7 @@ function ConfirmModal({
   body,
   confirmLabel,
   busy,
+  error,
   onCancel,
   onConfirm,
 }: {
@@ -898,6 +921,7 @@ function ConfirmModal({
   body: string;
   confirmLabel: string;
   busy: boolean;
+  error?: React.ReactNode | null;
   onCancel: () => void;
   onConfirm: () => void;
 }) {
@@ -905,6 +929,11 @@ function ConfirmModal({
     <Backdrop onClose={onCancel}>
       <h3 className="mb-2 text-sm font-medium">{title}</h3>
       <p className="text-sm text-muted">{body}</p>
+      {error ? (
+        <p className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
+          {error}
+        </p>
+      ) : null}
       <div className="mt-4 flex justify-end gap-2">
         <button
           type="button"
@@ -916,7 +945,7 @@ function ConfirmModal({
         <button
           type="button"
           onClick={onConfirm}
-          disabled={busy}
+          disabled={busy || Boolean(error)}
           className="rounded-lg bg-red-600 px-4 py-1.5 text-sm font-medium text-white transition-colors hover:bg-red-500 disabled:opacity-50"
         >
           {busy ? "Deleting…" : confirmLabel}

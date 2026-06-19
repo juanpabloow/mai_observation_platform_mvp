@@ -162,3 +162,60 @@ export async function listMembershipsForUser(userId: string): Promise<TenantMemb
   );
   return result.rows;
 }
+
+/** A tenant member with the joined display fields the team UI needs. */
+export interface MemberWithDetails {
+  user_id: string;
+  email: string;
+  name: string | null;
+  role: string;
+  member_client_id: string | null;
+  client_name: string | null;
+  created_at: Date;
+}
+
+/**
+ * All members of a tenant (RBAC-3 team list): joins the Better Auth user (email/
+ * name) + the assigned client's name. Ordered owner → admins → members, then email.
+ */
+export async function listMembersForTenant(tenantId: string): Promise<MemberWithDetails[]> {
+  const result = await query<MemberWithDetails>(
+    `SELECT tm.user_id, u.email, u.name, tm.role, tm.member_client_id,
+            c.name AS client_name, tm.created_at
+       FROM tenant_members tm
+       JOIN "user" u ON u.id = tm.user_id
+       LEFT JOIN clients c ON c.id = tm.member_client_id
+      WHERE tm.tenant_id = $1
+      ORDER BY CASE tm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, lower(u.email)`,
+    [tenantId],
+  );
+  return result.rows;
+}
+
+/** A single member's role + client scope within a tenant (for action guards). */
+export async function getMemberInTenant(
+  tenantId: string,
+  userId: string,
+): Promise<{ role: string; member_client_id: string | null } | null> {
+  const result = await query<{ role: string; member_client_id: string | null }>(
+    `SELECT role, member_client_id FROM tenant_members WHERE tenant_id = $1 AND user_id = $2`,
+    [tenantId, userId],
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Remove a member from a tenant. NEVER removes the OWNER row (the `role <> 'owner'`
+ * guard is defense-in-depth on top of the action's checks — so a tenant can never
+ * be left ownerless). Returns true iff a (non-owner) membership was deleted.
+ */
+export async function removeMemberFromTenant(params: {
+  tenantId: string;
+  userId: string;
+}): Promise<boolean> {
+  const result = await query(
+    `DELETE FROM tenant_members WHERE tenant_id = $1 AND user_id = $2 AND role <> 'owner'`,
+    [params.tenantId, params.userId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}

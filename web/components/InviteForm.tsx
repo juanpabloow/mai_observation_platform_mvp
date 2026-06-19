@@ -11,10 +11,18 @@ export interface InviteClientOption {
 type Result = { ok: boolean; error?: string; emailSent?: boolean; acceptUrl?: string };
 
 /**
- * INTERIM invite form (RBAC-2). RBAC-3 replaces this with the real team-management
- * UI; it exists now so an owner/admin can trigger createInvitationAction end-to-end.
+ * Invite form for the team page. Owners can invite admins or members; admins can
+ * invite members only (the role↔capability boundary — also enforced server-side in
+ * createInvitationAction). A member invite requires a client.
  */
-export function InviteForm({ clients }: { clients: InviteClientOption[] }) {
+export function InviteForm({
+  clients,
+  viewerRole,
+}: {
+  clients: InviteClientOption[];
+  viewerRole: "owner" | "admin";
+}) {
+  const canInviteAdmin = viewerRole === "owner";
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<"admin" | "member">("member");
   const [clientId, setClientId] = useState(clients[0]?.id ?? "");
@@ -63,7 +71,7 @@ export function InviteForm({ clients }: { clients: InviteClientOption[] }) {
             className="rounded-lg border border-line bg-transparent px-3 py-2 outline-none transition-colors focus:border-line-strong"
           >
             <option value="member">Member (one client)</option>
-            <option value="admin">Admin (full access)</option>
+            {canInviteAdmin ? <option value="admin">Admin (full access)</option> : null}
           </select>
         </label>
 
