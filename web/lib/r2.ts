@@ -40,6 +40,23 @@ export const isR2Configured = Boolean(
   endpoint && accessKeyId && secretAccessKey && bucket && publicUrl,
 );
 
+// ─────────────────────────────────────────────────────────────────────────────
+// TEMPORARY DIAGNOSTIC — REMOVE AFTER DEBUGGING R2 CONFIG IN PRODUCTION.
+// Logs (once, on first server-side import of this module) WHICH R2 inputs are
+// present vs missing, so we can see which env var production isn't getting.
+// PRESENCE BOOLEANS ONLY — never the key/secret VALUES.
+console.info("[TEMP R2 DIAGNOSTIC] r2 env presence", {
+  hasEndpoint: Boolean(process.env.R2_ENDPOINT || process.env.R2_ACCOUNT_ID),
+  hasR2Endpoint: Boolean(process.env.R2_ENDPOINT),
+  hasR2AccountId: Boolean(process.env.R2_ACCOUNT_ID),
+  hasAccessKey: Boolean(process.env.R2_ACCESS_KEY_ID),
+  hasSecret: Boolean(process.env.R2_SECRET_ACCESS_KEY),
+  hasBucket: Boolean(process.env.R2_BUCKET_NAME),
+  hasPublicUrl: Boolean(process.env.R2_PUBLIC_URL),
+  isR2Configured,
+});
+// ───────────────────────── END TEMPORARY DIAGNOSTIC ─────────────────────────
+
 // Singleton S3 client reused across HMR re-evaluations.
 const globalForR2 = globalThis as unknown as { __obsR2Client?: S3Client };
 function r2(): S3Client {
