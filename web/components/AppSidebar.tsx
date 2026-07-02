@@ -104,7 +104,7 @@ export function AppSidebar({
   const isMember = memberClientId !== null;
 
   const railClass =
-    "hidden w-52 shrink-0 flex-col gap-0.5 border-r border-line bg-sidebar px-3 py-4 md:flex";
+    "hidden w-52 shrink-0 flex-col gap-0.5 overflow-y-auto border-r border-line bg-sidebar px-3 py-4 md:flex";
 
   // ── Inside a client: the stable Executions/Conversations/Analytics/Team list ──
   if (clientId) {

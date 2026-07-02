@@ -30,7 +30,12 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 function NodeSection({ node }: { node: NodeView }) {
-  const [open, setOpen] = useState(node.defaultOpen);
+  // Every node starts COLLAPSED in the panel — a uniform closed list the user
+  // expands deliberately (node.defaultOpen is retained on the type but no longer
+  // drives the initial state). The panel is keyed by execution id, so swapping
+  // executions remounts this and resets all nodes to collapsed. The oversized
+  // JsonTree guards still apply once a node is expanded.
+  const [open, setOpen] = useState(false);
 
   return (
     <div className="overflow-hidden rounded-xl border border-black/10 dark:border-line">

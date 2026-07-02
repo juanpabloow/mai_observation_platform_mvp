@@ -137,11 +137,19 @@ function PortalMenu({
       // Right-align the menu to the trigger by default; clamp within the viewport.
       let left = align === "right" ? r.right - width : r.left;
       left = Math.min(Math.max(8, left), window.innerWidth - width - 8);
-      setPos({ top: top + window.scrollY, left: left + window.scrollX });
+      // position:fixed → VIEWPORT coordinates (no scrollY/X). Under the fixed shell
+      // the body doesn't scroll; fixed avoids body overflow-hidden clipping, and
+      // recomputing on scroll (capture) keeps the menu glued to a trigger in a
+      // scrolling region (the folder list scrolls in the content region).
+      setPos({ top, left });
     };
     compute();
     window.addEventListener("resize", compute);
-    return () => window.removeEventListener("resize", compute);
+    window.addEventListener("scroll", compute, true);
+    return () => {
+      window.removeEventListener("resize", compute);
+      window.removeEventListener("scroll", compute, true);
+    };
   }, [anchorRef, align, width]);
 
   if (typeof document === "undefined") return null;
@@ -150,7 +158,7 @@ function PortalMenu({
       ref={menuRef}
       data-menu-portal
       style={{
-        position: "absolute",
+        position: "fixed",
         top: pos?.top ?? 0,
         left: pos?.left ?? 0,
         width,

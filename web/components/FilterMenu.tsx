@@ -1,7 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
+
+const MENU_WIDTH = 288; // w-72
 
 export interface FilterableField {
   /** field_mappings id (the URL references this, never the raw path). */
@@ -41,15 +44,45 @@ export function FilterMenu({ customFields }: { customFields: FilterableField[] }
   const [value, setValue] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
-  const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
+
+  // Portal position (fixed / viewport coords) so the dropdown escapes the
+  // scrolling table column's overflow clipping under the fixed shell; recompute on
+  // scroll (capture — catches the column/content-region scroll) + resize to track.
+  useLayoutEffect(() => {
+    if (!open) return;
+    const compute = () => {
+      const anchor = triggerRef.current;
+      if (!anchor) return;
+      const r = anchor.getBoundingClientRect();
+      const left = Math.min(Math.max(8, r.left), window.innerWidth - MENU_WIDTH - 8);
+      setPos({ top: r.bottom + 8, left });
+    };
+    compute();
+    window.addEventListener("resize", compute);
+    window.addEventListener("scroll", compute, true);
+    return () => {
+      window.removeEventListener("resize", compute);
+      window.removeEventListener("scroll", compute, true);
+    };
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
     const onDoc = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) close();
+      const t = e.target as HTMLElement;
+      if (!t.closest("[data-filter-trigger]") && !t.closest("[data-filter-portal]")) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") close();
     };
     document.addEventListener("mousedown", onDoc);
-    return () => document.removeEventListener("mousedown", onDoc);
+    document.addEventListener("keydown", onKey);
+    return () => {
+      document.removeEventListener("mousedown", onDoc);
+      document.removeEventListener("keydown", onKey);
+    };
   }, [open]);
 
   function close() {
@@ -78,8 +111,10 @@ export function FilterMenu({ customFields }: { customFields: FilterableField[] }
   }
 
   return (
-    <div ref={ref} className="relative">
+    <>
       <button
+        ref={triggerRef}
+        data-filter-trigger
         type="button"
         onClick={() => (open ? close() : setOpen(true))}
         className="inline-flex items-center gap-1.5 rounded-lg border border-black/10 px-3 py-1.5 text-sm font-medium transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
@@ -88,8 +123,19 @@ export function FilterMenu({ customFields }: { customFields: FilterableField[] }
         <span aria-hidden>＋</span> Filter
       </button>
 
-      {open ? (
-        <div className="absolute left-0 z-20 mt-2 w-72 overflow-hidden rounded-xl border border-black/10 bg-white shadow-xl dark:border-line-strong dark:bg-neutral-900">
+      {open && typeof document !== "undefined"
+        ? createPortal(
+        <div
+          data-filter-portal
+          style={{
+            position: "fixed",
+            top: pos?.top ?? 0,
+            left: pos?.left ?? 0,
+            width: MENU_WIDTH,
+            visibility: pos ? "visible" : "hidden",
+          }}
+          className="z-[60] overflow-hidden rounded-xl border border-black/10 bg-white shadow-xl dark:border-line-strong dark:bg-neutral-900"
+        >
           {picked === null ? (
             <div className="flex flex-col py-1">
               <GroupLabel>Predefined</GroupLabel>
@@ -184,9 +230,11 @@ export function FilterMenu({ customFields }: { customFields: FilterableField[] }
               />
             </Editor>
           )}
-        </div>
-      ) : null}
-    </div>
+        </div>,
+        document.body,
+        )
+        : null}
+    </>
   );
 }
 

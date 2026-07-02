@@ -34,7 +34,12 @@ export default function RootLayout({
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">
+      {/* FIXED SHELL: the body is exactly the viewport and never scrolls; the
+          header + sidebar are pinned (they're non-scrolling flex items), and ONLY
+          the content region scrolls. This is the single shell-level scroll
+          architecture — pages don't manage the shell, they just render into the
+          scrolling content region (or, under the workflow layout, into its slot). */}
+      <body className="h-full overflow-hidden flex flex-col">
         <Providers>
           <Suspense fallback={null}>
             <AppHeader />
@@ -47,7 +52,9 @@ export default function RootLayout({
             >
               <AppSidebarServer />
             </Suspense>
-            <div className="flex min-w-0 flex-1 flex-col">{children}</div>
+            {/* THE scroll container. min-h-0 lets it shrink within the fixed shell
+                so its own overflow (or a child's) scrolls instead of growing. */}
+            <div className="flex min-w-0 min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
           </div>
         </Providers>
       </body>

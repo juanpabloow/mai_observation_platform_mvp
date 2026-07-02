@@ -98,11 +98,19 @@ function PortalPanel({
       const r = anchor.getBoundingClientRect();
       let left = align === "right" ? r.right - width : r.left;
       left = Math.min(Math.max(8, left), window.innerWidth - width - 8);
-      setPos({ top: r.bottom + 6 + window.scrollY, left: left + window.scrollX });
+      // position:fixed → VIEWPORT coordinates (no scrollY/X). Under the fixed shell
+      // the body doesn't scroll, so fixed avoids clipping by body overflow-hidden,
+      // and recomputing on scroll (capture — catches the content region / inner
+      // columns) keeps the panel glued to a trigger inside a scrolling region.
+      setPos({ top: r.bottom + 6, left });
     };
     compute();
     window.addEventListener("resize", compute);
-    return () => window.removeEventListener("resize", compute);
+    window.addEventListener("scroll", compute, true);
+    return () => {
+      window.removeEventListener("resize", compute);
+      window.removeEventListener("scroll", compute, true);
+    };
   }, [anchorRef, align, width]);
 
   if (typeof document === "undefined") return null;
@@ -110,7 +118,7 @@ function PortalPanel({
     <div
       data-menu-portal
       style={{
-        position: "absolute",
+        position: "fixed",
         top: pos?.top ?? 0,
         left: pos?.left ?? 0,
         width,
@@ -235,7 +243,7 @@ export function HeaderBar({
   const initial = (name?.trim()[0] ?? email.trim()[0] ?? "?").toUpperCase();
 
   return (
-    <header className="flex items-center justify-between gap-3 border-b border-black/10 px-4 py-2.5 dark:border-line">
+    <header className="flex shrink-0 items-center justify-between gap-3 border-b border-black/10 px-4 py-2.5 dark:border-line">
       {/* LEFT — text logo → home (the Hub for owner/admin; the member's client) */}
       <Link
         href={homeHref}

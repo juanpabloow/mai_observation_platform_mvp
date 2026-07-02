@@ -4,22 +4,22 @@ import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 
 /**
- * Master-detail shell for the executions page. The table (+ its controls +
- * pagination) is the LEFT column; when a row is opened (?execution=<id> → the
- * page server-renders `panel`), a resizable DETAIL PANEL appears on the RIGHT.
- * Because this lives ON the executions page, the breadcrumb + sidebar never
- * change while viewing an execution (the old /executions/[id] nav-context bug is
- * gone) — for owners, admins, AND members alike.
+ * Master-detail shell for the executions page, under the FIXED app shell. It fills
+ * the workflow layout's bounded slot (flex-1 min-h-0) and, on desktop, splits into
+ * two INDEPENDENTLY-SCROLLING columns: the table column (left) and a resizable
+ * DETAIL PANEL (right, when ?execution=<id> is set). Scrolling one never moves the
+ * other or the page; the chat box inside the panel keeps its own inner scroll.
+ * On mobile it collapses to a single scrolling column (table, then panel below).
  *
- *  - RESIZABLE: drag the divider (pointer-capture); width is clamped to
- *    [MIN, min(HARD_MAX, container − MIN_TABLE)] so the table always keeps room,
- *    re-clamped on container resize, and persisted to localStorage.
- *  - The panel is an `@container`, so its own width (not the viewport) decides
- *    whether the conversation sits beside or above the nodes — dragging re-decides.
- *  - CLOSE (✕) just drops ?execution (scroll:false); opening/closing/swapping are
- *    plain URL changes, so a bookmarked ?execution=<id> opens the panel directly.
- *  - Auto-refresh of the table beneath uses router.refresh(), which preserves
- *    client state + scroll, so the open panel doesn't flicker/close/reset.
+ *  - Because this lives ON the executions page, the breadcrumb + sidebar never
+ *    change while viewing an execution (the old /executions/[id] nav bug is gone).
+ *  - RESIZABLE: drag the divider (which is also the visible panel BOUNDARY — a
+ *    full-height line); width clamped to [MIN, min(HARD_MAX, container − MIN_TABLE)],
+ *    re-clamped on container resize, persisted to localStorage.
+ *  - The panel is an `@container`, so its own width decides whether the
+ *    conversation sits beside or above the nodes — dragging re-decides.
+ *  - CLOSE (✕) drops ?execution (scroll:false). Auto-refresh uses router.refresh(),
+ *    which preserves client state + scroll, so the open panel isn't disturbed.
  */
 
 const MIN_WIDTH = 360;
@@ -104,18 +104,26 @@ export function ExecutionsWorkspace({
     router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
 
+  // Root fills the bounded slot. Mobile: one scrolling column (overflow-y-auto).
+  // Desktop: a non-scrolling flex row whose columns each scroll independently.
+  const rootClass =
+    "mx-auto flex w-full max-w-6xl min-h-0 flex-1 flex-col overflow-y-auto px-6 md:flex-row md:overflow-hidden" +
+    (dragging ? " select-none" : "");
+
   if (!open) {
-    return <div ref={containerRef}>{children}</div>;
+    return (
+      <div ref={containerRef} className={rootClass}>
+        <div className="min-w-0 py-6 md:min-h-0 md:flex-1 md:overflow-y-auto">{children}</div>
+      </div>
+    );
   }
 
   return (
-    <div
-      ref={containerRef}
-      className={`flex flex-col md:flex-row md:items-start ${dragging ? "select-none" : ""}`}
-    >
-      <div className="min-w-0 flex-1">{children}</div>
+    <div ref={containerRef} className={rootClass}>
+      {/* LEFT — table column, scrolls independently on desktop. */}
+      <div className="min-w-0 py-6 md:min-h-0 md:flex-1 md:overflow-y-auto md:pr-4">{children}</div>
 
-      {/* Drag divider (desktop). touch-none so a touch-drag resizes, not scrolls. */}
+      {/* DIVIDER — the visible panel boundary (full-height line) that also drags. */}
       <div
         role="separator"
         aria-orientation="vertical"
@@ -124,21 +132,26 @@ export function ExecutionsWorkspace({
         onPointerMove={onPointerMove}
         onPointerUp={endDrag}
         onPointerCancel={endDrag}
-        className="group hidden shrink-0 cursor-col-resize touch-none items-center justify-center self-stretch px-1.5 md:flex"
+        className="group relative hidden w-4 shrink-0 cursor-col-resize touch-none md:block"
       >
         <span
-          className={`h-10 w-1 rounded-full transition-colors ${
+          className={`absolute inset-y-0 left-1/2 -ml-px w-0.5 transition-colors ${
+            dragging ? "bg-accent" : "bg-line group-hover:bg-accent"
+          }`}
+        />
+        <span
+          className={`absolute left-1/2 top-1/2 h-10 w-1 -translate-x-1/2 -translate-y-1/2 rounded-full transition-colors ${
             dragging ? "bg-accent" : "bg-line-strong group-hover:bg-accent"
           }`}
         />
       </div>
 
-      {/* Detail panel. @container → the panel's own width drives its inner layout. */}
+      {/* PANEL — scrolls independently; @container drives its inner conv layout. */}
       <aside
         style={{ width }}
-        className="@container w-full shrink-0 max-md:!w-full md:min-w-0"
+        className="@container w-full shrink-0 py-6 max-md:!w-full md:min-h-0 md:min-w-0 md:overflow-y-auto md:pl-4"
       >
-        <div className="mb-3 flex items-center justify-between gap-2 max-md:mt-6">
+        <div className="mb-3 flex items-center justify-between gap-2">
           <h2 className="text-xs font-medium uppercase tracking-wider text-neutral-500">
             Execution detail
           </h2>
