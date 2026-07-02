@@ -5,6 +5,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import { useTheme } from "next-themes";
+import { useSidebar } from "@/components/SidebarContext";
 
 export interface HeaderClient {
   id: string;
@@ -65,10 +66,23 @@ function HubBadge({ size = "size-5" }: { size?: string }) {
   );
 }
 
-function Caret() {
+/** Stacked up/down chevron — the "this is a dropdown" affordance on the breadcrumb
+ * picker segments (small + muted, both themes). */
+function ChevronUpDown() {
   return (
-    <svg viewBox="0 0 16 16" className="size-3 shrink-0 text-neutral-500" aria-hidden>
-      <path d="M4 6l4 4 4-4" stroke="currentColor" strokeWidth="1.5" fill="none" strokeLinecap="round" strokeLinejoin="round" />
+    <svg viewBox="0 0 16 16" className="size-3.5 shrink-0 text-faint" aria-hidden fill="none">
+      <path d="M5.5 7L8 4.5 10.5 7" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M5.5 9L8 11.5 10.5 9" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
+/** Panel-left icon for the sidebar show/hide toggle. */
+function PanelIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="size-4" aria-hidden fill="none">
+      <rect x="2" y="3" width="12" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
+      <line x1="6.25" y1="3.4" x2="6.25" y2="12.6" stroke="currentColor" strokeWidth="1.3" />
     </svg>
   );
 }
@@ -159,6 +173,7 @@ export function HeaderBar({
   const router = useRouter();
   const searchParams = useSearchParams();
   const { theme, setTheme } = useTheme();
+  const { toggle: toggleSidebar } = useSidebar();
   const [openMenu, setOpenMenu] = useState<null | "client" | "workflow" | "profile">(null);
 
   const clientBtn = useRef<HTMLButtonElement>(null);
@@ -244,13 +259,24 @@ export function HeaderBar({
 
   return (
     <header className="flex shrink-0 items-center justify-between gap-3 border-b border-black/10 px-4 py-2.5 dark:border-line">
-      {/* LEFT — text logo → home (the Hub for owner/admin; the member's client) */}
-      <Link
-        href={homeHref}
-        className="shrink-0 font-semibold tracking-tight text-foreground transition-opacity hover:opacity-70"
-      >
-        Observability
-      </Link>
+      {/* LEFT — sidebar toggle (desktop) + text logo → home */}
+      <div className="flex shrink-0 items-center gap-2">
+        <button
+          type="button"
+          onClick={toggleSidebar}
+          aria-label="Toggle sidebar"
+          title="Toggle sidebar"
+          className="hidden rounded-lg p-1.5 text-muted transition-colors hover:bg-black/[0.05] hover:text-foreground md:inline-flex dark:hover:bg-subtle"
+        >
+          <PanelIcon />
+        </button>
+        <Link
+          href={homeHref}
+          className="font-semibold tracking-tight text-foreground transition-opacity hover:opacity-70"
+        >
+          Observability
+        </Link>
+      </div>
 
       {/* CENTER — route-aware breadcrumb */}
       <nav className="flex min-w-0 flex-1 items-center justify-center gap-1 text-sm">
@@ -280,7 +306,7 @@ export function HeaderBar({
             ) : (
               <span className="text-muted">Select a client</span>
             )}
-            <Caret />
+            <ChevronUpDown />
           </button>
           {openMenu === "client" ? (
             <PortalPanel anchorRef={clientBtn} align="left" width={264}>
@@ -342,7 +368,7 @@ export function HeaderBar({
                 <span className="truncate font-medium">
                   {isAll ? "All workflows" : currentWorkflow?.name ?? route?.workflowId ?? "Workflow"}
                 </span>
-                <Caret />
+                <ChevronUpDown />
               </button>
               {openMenu === "workflow" ? (
                 <PortalPanel anchorRef={workflowBtn} align="left" width={264}>

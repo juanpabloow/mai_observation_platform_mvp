@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   createColumnHelper,
@@ -38,7 +38,9 @@ export interface CustomColumnDef {
 
 const columnHelper = createColumnHelper<ExecutionRowView>();
 
-// Fixed columns (DB-backed; sortable where supported in SQL).
+// Fixed columns (DB-backed; sortable where supported in SQL). The Client + Workflow
+// columns are intentionally OMITTED — the page is already scoped to one workflow
+// (its name is in the breadcrumb + the pinned heading), so they were redundant.
 const FIXED_COLUMNS = [
   columnHelper.accessor("status", {
     id: "status",
@@ -47,31 +49,11 @@ const FIXED_COLUMNS = [
       <span className={statusBadgeClasses(info.getValue())}>{info.getValue()}</span>
     ),
   }),
-  columnHelper.accessor("workflowName", {
-    id: "workflow",
-    header: "Workflow",
-    enableSorting: false,
-    cell: (info) => (
-      <span className="block max-w-[18rem] truncate font-medium" title={info.getValue()}>
-        {info.getValue()}
-      </span>
-    ),
-  }),
-  columnHelper.accessor("clientName", {
-    id: "client",
-    header: "Client",
-    enableSorting: false,
-    cell: (info) =>
-      info.getValue() ? (
-        <span className="text-muted">{info.getValue()}</span>
-      ) : (
-        <span className="text-faint">Unassigned</span>
-      ),
-  }),
   columnHelper.accessor("startedDisplay", {
     id: "started_at",
     header: "Started",
-    cell: (info) => <span className="text-muted">{info.getValue()}</span>,
+    // Wide enough to never wrap the timestamp.
+    cell: (info) => <span className="whitespace-nowrap text-muted">{info.getValue()}</span>,
   }),
   columnHelper.accessor("durationDisplay", {
     id: "duration_ms",
@@ -184,9 +166,42 @@ export function ExecutionsTable({ rows, sort, customSort, customColumns }: Execu
     router.push(`${pathname}?${params.toString()}`, { scroll: false });
   };
 
+  // NEW-ROW ANIMATION: highlight only rows that ARRIVE via auto-refresh — i.e. ids
+  // not seen in the previous render OF THE SAME QUERY. The query "signature" is the
+  // URL params EXCLUDING `execution` (opening/closing the panel isn't a data
+  // change); when it changes (filter/sort/page), we reseed the known-id set with no
+  // animation, so those transitions don't flash. First mount also just seeds.
+  const querySig = useMemo(() => {
+    const p = new URLSearchParams(searchParams.toString());
+    p.delete("execution");
+    return p.toString();
+  }, [searchParams]);
+  const knownRef = useRef<{ sig: string; ids: Set<string> } | null>(null);
+  const [highlightIds, setHighlightIds] = useState<Set<string>>(() => new Set());
+
+  useEffect(() => {
+    const currentIds = rows.map((r) => r.id);
+    const prev = knownRef.current;
+    // First render, or a new query (filters/sort/page) → seed, never animate.
+    if (!prev || prev.sig !== querySig) {
+      knownRef.current = { sig: querySig, ids: new Set(currentIds) };
+      setHighlightIds(new Set());
+      return;
+    }
+    const fresh = currentIds.filter((id) => !prev.ids.has(id));
+    const merged = new Set(prev.ids);
+    currentIds.forEach((id) => merged.add(id));
+    knownRef.current = { sig: querySig, ids: merged };
+    if (fresh.length === 0) return;
+    setHighlightIds(new Set(fresh));
+    // Clear once the fade has played, so it doesn't replay on the next re-render.
+    const t = setTimeout(() => setHighlightIds(new Set()), 2000);
+    return () => clearTimeout(t);
+  }, [rows, querySig]);
+
   return (
     <div className="overflow-x-auto rounded-2xl border border-black/10 dark:border-line">
-      <table className="w-full min-w-[60rem] border-collapse">
+      <table className="w-full min-w-[34rem] border-collapse">
         <thead className="bg-black/[0.02] dark:bg-card">
           {table.getHeaderGroups().map((headerGroup) => (
             <tr key={headerGroup.id}>
@@ -196,7 +211,7 @@ export function ExecutionsTable({ rows, sort, customSort, customColumns }: Execu
                 return (
                   <th
                     key={header.id}
-                    className="px-4 py-3 text-left text-xs font-medium uppercase tracking-wider text-neutral-500"
+                    className="px-3 py-2 text-left text-xs font-medium uppercase tracking-wider text-neutral-500"
                   >
                     {canSort ? (
                       <button
@@ -223,7 +238,7 @@ export function ExecutionsTable({ rows, sort, customSort, customColumns }: Execu
             <tr>
               <td
                 colSpan={FIXED_COLUMNS.length + customColumns.length}
-                className="px-4 py-12 text-center text-sm text-neutral-500"
+                className="px-3 py-12 text-center text-sm text-neutral-500"
               >
                 No executions match these filters.
               </td>
@@ -231,6 +246,7 @@ export function ExecutionsTable({ rows, sort, customSort, customColumns }: Execu
           ) : (
             table.getRowModel().rows.map((row) => {
               const isSelected = row.original.id === selectedId;
+              const isNew = highlightIds.has(row.original.id);
               return (
                 <tr
                   key={row.id}
@@ -244,13 +260,15 @@ export function ExecutionsTable({ rows, sort, customSort, customColumns }: Execu
                     }
                   }}
                   className={`cursor-pointer border-t border-black/5 outline-none transition-colors dark:border-line ${
+                    isNew ? "row-enter" : ""
+                  } ${
                     isSelected
                       ? "bg-emerald-500/10 hover:bg-emerald-500/15 dark:bg-emerald-500/10 dark:hover:bg-emerald-500/15"
                       : "hover:bg-black/[0.03] focus:bg-black/[0.04] dark:hover:bg-subtle dark:focus:bg-subtle"
                   }`}
                 >
                   {row.getVisibleCells().map((cell) => (
-                    <td key={cell.id} className="px-4 py-3 text-sm">
+                    <td key={cell.id} className="px-3 py-2 text-sm">
                       {flexRender(cell.column.columnDef.cell, cell.getContext())}
                     </td>
                   ))}

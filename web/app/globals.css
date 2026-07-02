@@ -76,3 +76,23 @@ body {
   color: var(--foreground);
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
+
+/* New-row highlight: a fresh execution arriving via auto-refresh fades from an
+   accent tint back to transparent. Applied only to genuinely new rows (see
+   ExecutionsTable). Honors reduced-motion. */
+@keyframes row-enter {
+  from {
+    background-color: color-mix(in srgb, var(--accent) 22%, transparent);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+.row-enter {
+  animation: row-enter 1.6s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .row-enter {
+    animation: none;
+  }
+}

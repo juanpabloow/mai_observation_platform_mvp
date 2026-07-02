@@ -34,7 +34,7 @@ import {
   type ExecutionRowView,
 } from "@/components/ExecutionsTable";
 import { AutoRefresh } from "@/components/AutoRefresh";
-import { ColumnsManager, type DefinedColumn } from "@/components/ColumnsManager";
+import { ColumnsMenu, type DefinedColumn } from "@/components/ColumnsMenu";
 import { ExecutionsWorkspace } from "@/components/ExecutionsWorkspace";
 import { ExecutionDetailPanel } from "@/components/ExecutionDetailPanel";
 
@@ -335,10 +335,9 @@ export default async function WorkflowExecutionsPage({
 
         <div className="flex flex-wrap items-center gap-3">
           <FilterMenu customFields={filterableFields} />
+          <ColumnsMenu workflowId={workflowId} columns={definedColumns} />
           <FilterChips chips={chips} clearAllHref={clearAllHref} />
         </div>
-
-        <ColumnsManager workflowId={workflowId} columns={definedColumns} />
 
         <ExecutionsTable
           rows={view}

@@ -1,83 +1,84 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 
 /**
- * Auto-refresh TRIGGER for the executions list. Its only job is: every
- * `intervalSeconds`, if the tab is visible and the toggle is on, call
- * router.refresh() — Next's soft refresh, which re-runs the server component
- * with the CURRENT URL params (same filters/sort/page) and swaps in fresh rows
- * without a full reload, scroll reset, or losing UI state.
+ * Auto-refresh trigger + a subtle COUNTDOWN indicator for the executions list.
+ * Every second (while enabled and the tab is visible) it ticks down; at zero it
+ * calls router.refresh() — Next's soft refresh, which re-runs the server component
+ * with the CURRENT URL params and swaps in fresh rows without a full reload,
+ * scroll reset, or losing UI state (so the detail panel isn't disturbed).
  *
- * Deliberately separate from the data fetching (the existing server-side query).
- * A future realtime mechanism (SSE/websocket) can replace this timer without
- * touching the query/tenant-scoping logic.
+ * Indicator: "Refreshes in Ns", resetting on each refresh — no persistent "on"
+ * badge. When the tab is hidden the timer PAUSES (no ticking, no refresh), so the
+ * countdown freezes rather than counting into a backgrounded tab; becoming visible
+ * refreshes immediately and resets. Clicking toggles auto-refresh off (a minimal
+ * "Auto-refresh off" you can click to resume).
  */
 export function AutoRefresh({ intervalSeconds = 30 }: { intervalSeconds?: number }) {
   const router = useRouter();
   const [enabled, setEnabled] = useState(true);
-  const [secondsAgo, setSecondsAgo] = useState(0);
-  const lastRefreshRef = useRef(Date.now());
+  const [secondsLeft, setSecondsLeft] = useState(intervalSeconds);
 
   useEffect(() => {
     if (!enabled) return;
-
-    // Reset the "updated Ns ago" clock whenever we (re)enable.
-    lastRefreshRef.current = Date.now();
-    setSecondsAgo(0);
+    setSecondsLeft(intervalSeconds);
+    let elapsed = 0;
 
     const refresh = () => {
       router.refresh();
-      lastRefreshRef.current = Date.now();
-      setSecondsAgo(0);
+      elapsed = 0;
+      setSecondsLeft(intervalSeconds);
     };
 
-    const intervalMs = intervalSeconds * 1000;
-    const refreshTimer = setInterval(() => {
-      // Pause while the tab is hidden — no point polling a backgrounded tab.
-      if (document.visibilityState === "visible") {
+    // One 1s timer drives both the countdown and the refresh. While hidden it does
+    // nothing (elapsed frozen → countdown pauses).
+    const ticker = setInterval(() => {
+      if (document.visibilityState !== "visible") return;
+      elapsed += 1;
+      if (elapsed >= intervalSeconds) {
         refresh();
+      } else {
+        setSecondsLeft(intervalSeconds - elapsed);
       }
-    }, intervalMs);
-
-    // Tick the "updated Ns ago" label once a second.
-    const labelTimer = setInterval(() => {
-      setSecondsAgo(Math.round((Date.now() - lastRefreshRef.current) / 1000));
     }, 1000);
 
-    // When the tab becomes visible again, refresh immediately, then resume.
+    // Returning to the tab refreshes immediately, then resumes the countdown.
     const onVisibility = () => {
-      if (document.visibilityState === "visible") {
-        refresh();
-      }
+      if (document.visibilityState === "visible") refresh();
     };
     document.addEventListener("visibilitychange", onVisibility);
 
     return () => {
-      clearInterval(refreshTimer);
-      clearInterval(labelTimer);
+      clearInterval(ticker);
       document.removeEventListener("visibilitychange", onVisibility);
     };
   }, [enabled, intervalSeconds, router]);
 
-  return (
-    <div className="flex items-center gap-2 text-xs text-neutral-500">
+  if (!enabled) {
+    return (
       <button
         type="button"
-        onClick={() => setEnabled((e) => !e)}
-        aria-pressed={enabled}
-        title={enabled ? "Auto-refresh is on — click to pause" : "Auto-refresh is off — click to resume"}
-        className="inline-flex items-center gap-1.5 rounded-full border border-black/10 px-2.5 py-1 transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
+        onClick={() => setEnabled(true)}
+        title="Auto-refresh is off — click to resume"
+        className="inline-flex items-center gap-1.5 text-xs text-neutral-500 transition-colors hover:text-foreground"
       >
-        <span
-          className={`h-1.5 w-1.5 rounded-full ${
-            enabled ? "animate-pulse bg-green-400" : "bg-neutral-600"
-          }`}
-        />
-        <span>Auto-refresh {enabled ? "on" : "off"}</span>
+        <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-neutral-500" />
+        Auto-refresh off
       </button>
-      {enabled ? <span>· updated {secondsAgo}s ago</span> : null}
-    </div>
+    );
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => setEnabled(false)}
+      title="Click to pause auto-refresh"
+      className="inline-flex items-center gap-1.5 text-xs text-neutral-500 transition-colors hover:text-foreground"
+    >
+      <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-400" />
+      Refreshes in {secondsLeft}s
+    </button>
   );
 }

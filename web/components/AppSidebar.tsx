@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
+import { useSidebar } from "@/components/SidebarContext";
 
 const AUTH_PREFIXES = ["/login", "/signup", "/logout"];
 
@@ -95,9 +96,12 @@ export function AppSidebar({
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const { collapsed } = useSidebar();
   if (AUTH_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
     return null;
   }
+  // Hidden by the toggle → the content region fills the freed space (flex).
+  if (collapsed) return null;
 
   const route = parseWorkflowRoute(pathname);
   const clientId = route?.clientId ?? parseClientId(pathname);

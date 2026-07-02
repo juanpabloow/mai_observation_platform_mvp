@@ -1,6 +1,7 @@
 "use client";
 
 import { ThemeProvider } from "next-themes";
+import { SidebarProvider } from "@/components/SidebarContext";
 
 /**
  * Client providers mounted in the root layout. next-themes manages CLASS-BASED
@@ -19,7 +20,7 @@ import { ThemeProvider } from "next-themes";
 export function Providers({ children }: { children: React.ReactNode }) {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
-      {children}
+      <SidebarProvider>{children}</SidebarProvider>
     </ThemeProvider>
   );
 }
