@@ -173,6 +173,17 @@ export function ExecutionsTable({ rows, sort, customSort, customColumns }: Execu
     onSortingChange: handleSortingChange,
   });
 
+  // The open execution (its detail panel is shown to the right). Row click sets
+  // ?execution=<id> IN PLACE — the detail opens as a panel on THIS page, so the
+  // breadcrumb + sidebar (the workflow context) never change. scroll:false keeps
+  // the table's scroll position; other params (filters/sort/page) are preserved.
+  const selectedId = searchParams.get("execution");
+  const openExecution = (id: string) => {
+    const params = new URLSearchParams(searchParams.toString());
+    params.set("execution", id);
+    router.push(`${pathname}?${params.toString()}`, { scroll: false });
+  };
+
   return (
     <div className="overflow-x-auto rounded-2xl border border-black/10 dark:border-line">
       <table className="w-full min-w-[60rem] border-collapse">
@@ -219,19 +230,24 @@ export function ExecutionsTable({ rows, sort, customSort, customColumns }: Execu
             </tr>
           ) : (
             table.getRowModel().rows.map((row) => {
-              const href = `/executions/${row.original.id}`;
+              const isSelected = row.original.id === selectedId;
               return (
                 <tr
                   key={row.id}
                   tabIndex={0}
-                  role="link"
-                  onClick={() => router.push(href)}
+                  role="button"
+                  aria-pressed={isSelected}
+                  onClick={() => openExecution(row.original.id)}
                   onKeyDown={(e) => {
                     if (e.key === "Enter") {
-                      router.push(href);
+                      openExecution(row.original.id);
                     }
                   }}
-                  className="cursor-pointer border-t border-black/5 outline-none transition-colors hover:bg-black/[0.03] focus:bg-black/[0.04] dark:border-line dark:hover:bg-subtle dark:focus:bg-subtle"
+                  className={`cursor-pointer border-t border-black/5 outline-none transition-colors dark:border-line ${
+                    isSelected
+                      ? "bg-emerald-500/10 hover:bg-emerald-500/15 dark:bg-emerald-500/10 dark:hover:bg-emerald-500/15"
+                      : "hover:bg-black/[0.03] focus:bg-black/[0.04] dark:hover:bg-subtle dark:focus:bg-subtle"
+                  }`}
                 >
                   {row.getVisibleCells().map((cell) => (
                     <td key={cell.id} className="px-4 py-3 text-sm">

@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import {
+  getExecutionByIdForTenant,
   getRawDataByIds,
   isExecutionSortKey,
   listExecutionsPage,
@@ -34,6 +35,8 @@ import {
 } from "@/components/ExecutionsTable";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { ColumnsManager, type DefinedColumn } from "@/components/ColumnsManager";
+import { ExecutionsWorkspace } from "@/components/ExecutionsWorkspace";
+import { ExecutionDetailPanel } from "@/components/ExecutionDetailPanel";
 
 /**
  * Extract + format each custom column's value for one execution. Null-safe: if
@@ -157,8 +160,15 @@ export default async function WorkflowExecutionsPage({
     }
   }
 
+  // ?execution=<id> opens the detail PANEL (master-detail). Loaded by id + tenant;
+  // the malformed-id case is handled in the repo (UUID-validated → null). We then
+  // require it to belong to THIS workflow — so a foreign/other-workflow/other-tenant
+  // id simply doesn't open a panel (no leak). This is the same scope already proven
+  // for the page (a member only reaches their client's workflow here).
+  const executionParam = first(sp.execution);
+
   const tenantId = await getCurrentTenantId();
-  const [{ rows, total }, columnMappings] = await Promise.all([
+  const [{ rows, total }, columnMappings, detailExecutionRaw] = await Promise.all([
     listExecutionsPage({
       tenantId,
       limit: pageSize,
@@ -169,7 +179,15 @@ export default async function WorkflowExecutionsPage({
       customSort,
     }),
     listColumnMappings({ tenantId, n8nWorkflowId: workflowId }),
+    executionParam
+      ? getExecutionByIdForTenant({ tenantId, id: executionParam })
+      : Promise.resolve(null),
   ]);
+
+  const detailExecution =
+    detailExecutionRaw && detailExecutionRaw.n8n_workflow_id === workflowId
+      ? detailExecutionRaw
+      : null;
 
   const definedColumns: DefinedColumn[] = columnMappings.map((c) => ({
     id: c.id,
@@ -234,6 +252,9 @@ export default async function WorkflowExecutionsPage({
   // Preserve custom-field filters/sort across pagination.
   for (const raw of all(sp.cf)) baseParams.append("cf", raw);
   if (cfSortRaw) baseParams.set("cf_sort", cfSortRaw);
+  // Keep an open detail panel open across pagination + filter/chip changes (the
+  // panel is independent of which rows are listed — it renders by id).
+  if (executionParam) baseParams.set("execution", executionParam);
 
   const basePath = `/clients/${linkClientId}/workflows/${encodeURIComponent(workflowId)}/executions`;
   const pageHref = (target: number): string => {
@@ -291,27 +312,42 @@ export default async function WorkflowExecutionsPage({
   });
 
   return (
-    <>
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <p className="text-sm text-neutral-500">{total.toLocaleString()} matching</p>
-        <AutoRefresh intervalSeconds={config.POLL_INTERVAL_SECONDS} />
-      </div>
+    <ExecutionsWorkspace
+      panel={
+        detailExecution ? (
+          // Keyed by execution id: swapping rows remounts (fresh node collapse +
+          // the chat re-centers on the new turn); an auto-refresh of the table
+          // (same id) preserves the open panel's state.
+          <ExecutionDetailPanel
+            key={detailExecution.id}
+            execution={detailExecution}
+            tenantId={tenantId}
+            clientId={linkClientId}
+          />
+        ) : null
+      }
+    >
+      <div className="flex min-w-0 flex-col gap-6">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm text-neutral-500">{total.toLocaleString()} matching</p>
+          <AutoRefresh intervalSeconds={config.POLL_INTERVAL_SECONDS} />
+        </div>
 
-      <div className="flex flex-wrap items-center gap-3">
-        <FilterMenu customFields={filterableFields} />
-        <FilterChips chips={chips} clearAllHref={clearAllHref} />
-      </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <FilterMenu customFields={filterableFields} />
+          <FilterChips chips={chips} clearAllHref={clearAllHref} />
+        </div>
 
-      <ColumnsManager workflowId={workflowId} columns={definedColumns} />
+        <ColumnsManager workflowId={workflowId} columns={definedColumns} />
 
-      <ExecutionsTable
-        rows={view}
-        sort={{ key: sortKey, direction }}
-        customSort={resolvedCustomSort}
-        customColumns={customColumns}
-      />
+        <ExecutionsTable
+          rows={view}
+          sort={{ key: sortKey, direction }}
+          customSort={resolvedCustomSort}
+          customColumns={customColumns}
+        />
 
-      <nav className="flex items-center justify-between text-sm">
+        <nav className="flex items-center justify-between text-sm">
         <span className="text-neutral-500">
           Page {page} of {totalPages} · {total.toLocaleString()} total
         </span>
@@ -341,7 +377,8 @@ export default async function WorkflowExecutionsPage({
             </span>
           )}
         </div>
-      </nav>
-    </>
+        </nav>
+      </div>
+    </ExecutionsWorkspace>
   );
 }
