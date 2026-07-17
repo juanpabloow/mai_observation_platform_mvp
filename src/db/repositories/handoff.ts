@@ -140,6 +140,21 @@ export async function getMode(
   return r.rows[0]?.mode ?? 'bot';
 }
 
+/**
+ * Minimal display summary of an assigned agent (Better Auth user) — for the
+ * handoff API's conversation projection. Looked up by id; null if the user no
+ * longer exists (an assigned agent whose account was deleted → SET NULL upstream).
+ */
+export async function getAgentSummary(
+  userId: string,
+): Promise<{ id: string; name: string | null } | null> {
+  const r = await query<{ id: string; name: string | null }>(
+    `SELECT id, name FROM "user" WHERE id = $1`,
+    [userId],
+  );
+  return r.rows[0] ?? null;
+}
+
 export interface InsertMessageInput {
   tenantId: string;
   conversationId: string;

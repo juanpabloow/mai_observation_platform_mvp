@@ -103,3 +103,17 @@ export async function listTokensForTenant(tenantId: string): Promise<HandoffToke
   );
   return r.rows;
 }
+
+/** A connection's tokens (tenant-scoped), newest first — for the token UI. */
+export async function listTokensForConnection(
+  tenantId: string,
+  n8nConnectionId: string,
+): Promise<HandoffTokenRow[]> {
+  const r = await query<HandoffTokenRow>(
+    `SELECT * FROM handoff_tokens
+      WHERE tenant_id = $1 AND n8n_connection_id = $2
+      ORDER BY created_at DESC`,
+    [tenantId, n8nConnectionId],
+  );
+  return r.rows;
+}

@@ -1,8 +1,10 @@
 import { connection } from "next/server";
 import Link from "next/link";
 import { listConnectionsForTenant } from "@worker/db/repositories/n8nConnections.js";
+import { listTokensForConnection } from "@worker/db/repositories/handoffTokens.js";
 import { requireFullAccessOrLand } from "@/lib/access";
 import { ConnectionsManager } from "@/components/ConnectionsManager";
+import { HandoffTokens, type ConnectionTokens } from "@/components/HandoffTokens";
 
 export default async function ConnectionsSettingsPage() {
   await connection();
@@ -10,6 +12,24 @@ export default async function ConnectionsSettingsPage() {
   // to their own client's context (also redirects to /login if not authed).
   const { tenantId } = await requireFullAccessOrLand();
   const connections = await listConnectionsForTenant(tenantId);
+
+  // Handoff tokens per connection (few connections → a small fan-out of queries).
+  const tokenSections: ConnectionTokens[] = await Promise.all(
+    connections.map(async (c) => {
+      const tokens = await listTokensForConnection(tenantId, c.id);
+      return {
+        connectionId: c.id,
+        connectionName: c.name,
+        tokens: tokens.map((t) => ({
+          id: t.id,
+          prefix: t.token_prefix,
+          createdAt: t.created_at.toISOString(),
+          lastUsedAt: t.last_used_at ? t.last_used_at.toISOString() : null,
+          revoked: t.revoked_at !== null,
+        })),
+      };
+    }),
+  );
 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-12">
@@ -32,6 +52,8 @@ export default async function ConnectionsSettingsPage() {
           is_active: c.is_active,
         }))}
       />
+
+      <HandoffTokens connections={tokenSections} />
     </main>
   );
 }

@@ -75,6 +75,25 @@ export async function listWorkflowsByConnection(
   return result.rows;
 }
 
+/**
+ * Does a workflow_ref belong to THIS token's connection (and tenant)? The handoff
+ * API scoping rule: a machine token authorizes only workflows synced under its own
+ * connection. Wrong tenant, wrong connection, or unknown ref → false (→ 404).
+ */
+export async function workflowBelongsToConnection(
+  tenantId: string,
+  n8nConnectionId: string,
+  n8nWorkflowId: string,
+): Promise<boolean> {
+  const result = await query(
+    `SELECT 1 FROM workflows
+      WHERE tenant_id = $1 AND n8n_connection_id = $2 AND n8n_workflow_id = $3
+      LIMIT 1`,
+    [tenantId, n8nConnectionId, n8nWorkflowId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
 /** A workflow option for the filter dropdown (distinct workflow ids per tenant). */
 export interface WorkflowOption {
   n8n_workflow_id: string;
