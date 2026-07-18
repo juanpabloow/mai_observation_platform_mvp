@@ -4,7 +4,9 @@ import { listConversationMappings } from "@worker/db/repositories/fieldMappings.
 import { listRecentRawForWorkflow } from "@worker/db/repositories/executions.js";
 import type { ConversationRole } from "@worker/db/types.js";
 import { getCurrentTenantId } from "@/lib/tenant";
+import { getAccessScope, hasFullAccess } from "@/lib/access";
 import { requireWorkflowUnderClient } from "@/lib/clientWorkflow";
+import { getWebhookRow } from "@worker/db/repositories/webhooks.js";
 import {
   buildExecutionResolver,
   extractMapping,
@@ -16,6 +18,7 @@ import {
   ConversationSettings,
   type RoleAssignmentView,
 } from "@/components/ConversationSettings";
+import { HandoffWebhook, type WebhookView } from "@/components/HandoffWebhook";
 
 const ROLE_DEFS: { role: ConversationRole; label: string; required: boolean }[] = [
   { role: "conversation_id", label: "Conversation ID", required: true },
@@ -42,10 +45,23 @@ export default async function ConversationSettingsPage({
   const linkClientId = workflow.client_id ?? clientId;
 
   const tenantId = await getCurrentTenantId();
-  const [mappings, raws] = await Promise.all([
+  // The Human Handoff (webhook) section is owner/admin only — resolve access here so
+  // a member never even receives the webhook config (the actions also re-check).
+  const scope = await getAccessScope();
+  const isFullAccess = hasFullAccess(scope);
+  const [mappings, raws, webhookRow] = await Promise.all([
     listConversationMappings({ tenantId, n8nWorkflowId: workflowId }),
     listRecentRawForWorkflow({ tenantId, n8nWorkflowId: workflowId, limit: SAMPLE_SIZE }),
+    isFullAccess ? getWebhookRow(tenantId, workflowId) : Promise.resolve(null),
   ]);
+  const webhookView: WebhookView | null = webhookRow
+    ? {
+        url: webhookRow.url,
+        enabled: webhookRow.enabled,
+        lastDeliveryAt: webhookRow.last_delivery_at?.toISOString() ?? null,
+        lastDeliveryStatus: webhookRow.last_delivery_status,
+      }
+    : null;
 
   const byRole = new Map(mappings.map((m) => [m.role, m]));
   const resolvers = raws.map((r) => buildExecutionResolver(r.raw_data));
@@ -97,6 +113,7 @@ export default async function ConversationSettingsPage({
         &larr; Back to conversations
       </Link>
       <ConversationSettings workflowId={workflowId} roles={roles} />
+      {isFullAccess ? <HandoffWebhook workflowId={workflowId} initial={webhookView} /> : null}
     </div>
   );
 }

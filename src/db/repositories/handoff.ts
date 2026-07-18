@@ -245,6 +245,54 @@ export async function insertMessage(
 }
 
 /**
+ * H-3 outbound delivery status update. Flips a message between 'sending' → 'sent' /
+ * 'failed' after a webhook attempt. On 'sent' the external id is stored (COALESCE
+ * keeps a prior value if the new one is null); failure_code/detail are set on
+ * failure and cleared on success. Tenant-scoped. Returns the updated row or null.
+ */
+export async function updateMessageDelivery(params: {
+  tenantId: string;
+  messageId: string;
+  status: MessageStatus;
+  externalMessageId?: string | null;
+  failureCode?: string | null;
+  failureDetail?: string | null;
+}): Promise<HandoffMessageRow | null> {
+  const r = await query<HandoffMessageRow>(
+    `UPDATE handoff_messages
+        SET status = $3,
+            external_message_id = COALESCE($4, external_message_id),
+            failure_code = $5,
+            failure_detail = $6
+      WHERE tenant_id = $1 AND id = $2
+      RETURNING *`,
+    [
+      params.tenantId,
+      params.messageId,
+      params.status,
+      params.externalMessageId ?? null,
+      params.failureCode ?? null,
+      params.failureDetail ?? null,
+    ],
+  );
+  return r.rows[0] ?? null;
+}
+
+/** A single message within a conversation (tenant-scoped) — for retrying a send. */
+export async function getHandoffMessage(
+  tenantId: string,
+  conversationId: string,
+  messageId: string,
+): Promise<HandoffMessageRow | null> {
+  const r = await query<HandoffMessageRow>(
+    `SELECT * FROM handoff_messages
+      WHERE tenant_id = $1 AND conversation_id = $2 AND id = $3`,
+    [tenantId, conversationId, messageId],
+  );
+  return r.rows[0] ?? null;
+}
+
+/**
  * A page of a conversation's messages, newest first. `before` (an occurred_at
  * cursor) fetches the messages older than it; id is the stable tiebreaker.
  */
@@ -392,10 +440,12 @@ export async function transitionMode(
  * 'platform_rule', reason_code 'agent_removed') so it re-enters the inbox. Clearing
  * the assignment is handled by transitionMode (agent set iff mode='human').
  *
- * Scope:
- *   - no clientId  → tenant-wide (the agent left the tenant entirely).
- *   - clientId set → only conversations of THAT client's workflows (the agent was
- *     removed from one client; their conversations elsewhere are untouched).
+ * Scope (at most one of clientId / exceptClientId):
+ *   - neither        → tenant-wide (the agent left the tenant entirely).
+ *   - clientId       → only conversations of THAT client's workflows (the agent was
+ *                      removed from one client; their conversations elsewhere untouched).
+ *   - exceptClientId → conversations of every client EXCEPT that one (an admin demoted
+ *                      to a member of one client loses access to all the others).
  *
  * A conversation belongs to a client iff its workflow's CANONICAL row (most recently
  * synced, mirroring getWorkflowByN8nId) is assigned to that client. Best-effort per
@@ -405,21 +455,26 @@ export async function transitionMode(
 export async function releaseAgentConversations(
   tenantId: string,
   agentUserId: string,
-  opts: { clientId?: string } = {},
+  opts: { clientId?: string; exceptClientId?: string } = {},
 ): Promise<number> {
   const params: unknown[] = [tenantId, agentUserId];
   let clientFilter = '';
+  // Resolve the conversation's canonical client the same way getWorkflowByN8nId does.
+  const CANONICAL = `
+    SELECT 1 FROM (
+      SELECT DISTINCT ON (n8n_workflow_id) client_id
+        FROM workflows w
+       WHERE w.tenant_id = c.tenant_id AND w.n8n_workflow_id = c.n8n_workflow_id
+       ORDER BY n8n_workflow_id, last_synced_at DESC NULLS LAST
+    ) canonical
+    WHERE canonical.client_id = $3`;
   if (opts.clientId) {
     params.push(opts.clientId);
-    clientFilter = `AND EXISTS (
-      SELECT 1 FROM (
-        SELECT DISTINCT ON (n8n_workflow_id) client_id
-          FROM workflows w
-         WHERE w.tenant_id = c.tenant_id AND w.n8n_workflow_id = c.n8n_workflow_id
-         ORDER BY n8n_workflow_id, last_synced_at DESC NULLS LAST
-      ) canonical
-      WHERE canonical.client_id = $3
-    )`;
+    clientFilter = `AND EXISTS (${CANONICAL})`;
+  } else if (opts.exceptClientId) {
+    params.push(opts.exceptClientId);
+    // Release everywhere the canonical client is NOT the kept one (incl. no client).
+    clientFilter = `AND NOT EXISTS (${CANONICAL})`;
   }
 
   const targets = await query<{ id: string }>(

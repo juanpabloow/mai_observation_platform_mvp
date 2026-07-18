@@ -19,10 +19,10 @@ import {
 async function releaseOrphanedConversations(
   tenantId: string,
   userId: string,
-  clientId?: string,
+  opts: { clientId?: string; exceptClientId?: string } = {},
 ): Promise<void> {
   try {
-    await releaseAgentConversations(tenantId, userId, clientId ? { clientId } : {});
+    await releaseAgentConversations(tenantId, userId, opts);
   } catch {
     /* best-effort — the membership change is the source of truth */
   }
@@ -94,6 +94,15 @@ export async function changeMemberRoleAction(input: {
   } catch {
     return { ok: false, error: "Could not update the member." };
   }
+  // Orphan release: becoming a member narrows access to a single client. Release any
+  // 'human' conversations this user holds in clients they can NO LONGER reach (every
+  // client except the one they're now scoped to). Covers admin→member demotion and a
+  // member→member re-scope; member→admin (a widening) never reaches here.
+  if (input.newRole === "member" && memberClientId) {
+    await releaseOrphanedConversations(scope.tenantId, input.targetUserId, {
+      exceptClientId: memberClientId,
+    });
+  }
   revalidatePath("/settings/team");
   return { ok: true };
 }
@@ -127,7 +136,7 @@ export async function reassignMemberClientAction(input: {
   // 'human' conversations they held THERE. Their new client's conversations are
   // untouched. Skip when the reassign is a no-op (same client).
   if (oldClientId && oldClientId !== input.clientId) {
-    await releaseOrphanedConversations(scope.tenantId, input.targetUserId, oldClientId);
+    await releaseOrphanedConversations(scope.tenantId, input.targetUserId, { clientId: oldClientId });
   }
   revalidatePath("/settings/team");
   return { ok: true };

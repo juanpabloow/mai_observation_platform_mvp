@@ -31,7 +31,9 @@ export interface InboxMessageView {
   agentName: string | null;
   text: string | null;
   contentType: string;
-  status: string;
+  status: string; // received | sending | sent | failed
+  failureCode: string | null;
+  failureDetail: string | null;
   occurredAt: string; // ISO
 }
 
@@ -43,6 +45,19 @@ export interface InboxHeaderView {
   assignedAgentUserId: string | null;
   assignedAgentName: string | null;
 }
+
+/** Result of a send/retry server action (client-safe shape). */
+export type SendErrorCode =
+  | "forbidden"
+  | "not_found"
+  | "mode_changed"
+  | "no_webhook"
+  | "disabled"
+  | "invalid";
+
+export type SendActionResult =
+  | { ok: true; message: InboxMessageView }
+  | { ok: false; error: string; code: SendErrorCode; header?: InboxHeaderView };
 
 export const INBOX_FILTERS: { key: InboxFilter; label: string }[] = [
   { key: "all", label: "All" },

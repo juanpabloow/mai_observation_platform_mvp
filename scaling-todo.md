@@ -46,3 +46,18 @@ it here; don't duplicate per-surface.
 - **Thread pagination.** The thread loads all messages oldest→newest each poll. Fine
   for v1 volumes; long-lived conversations will want a windowed/cursor load (the
   machine-API `listMessages` already has a `before` cursor to build on).
+
+## Outbound send (H-3)
+
+- **Webhook egress hardening (SSRF).** The send webhook URL is customer-supplied. v1
+  accepts `https://` (+ `http://localhost` for dev) and refuses redirects, but does NOT
+  resolve-and-block private/link-local/metadata IP ranges (`10/8`, `172.16/12`,
+  `192.168/16`, `127/8`, `169.254/16`, `::1`, `fc00::/7`) or guard against DNS-rebinding.
+  All outbound delivery goes through the single `sendToWebhook()` function in
+  `web/lib/sendToWebhook.ts` — add the egress allow/deny check there (resolve the host,
+  reject private targets, pin the resolved IP for the connection) when this platform is
+  exposed to untrusted tenants.
+- **Delivery is synchronous** inside the send server action (POST within the request,
+  10s timeout, no queue). Fine at v1 volume; a durable outbound queue/worker with
+  backoff-free manual retry semantics would decouple the agent's click from channel
+  latency as send volume grows.

@@ -4,6 +4,7 @@ import { notFound } from "next/navigation";
 import { getAccessScope, hasFullAccess } from "@/lib/access";
 import { getClientForTenant } from "@/lib/clientWorkflow";
 import { loadInboxThread } from "@/lib/inboxData";
+import { getAgentSummary } from "@worker/db/repositories/handoff.js";
 import { InboxThread } from "@/components/InboxThread";
 
 /**
@@ -23,11 +24,10 @@ export default async function ClientInboxThreadPage({
   const client = await getClientForTenant(clientId);
   if (!client) notFound();
 
-  const payload = await loadInboxThread(
-    scope.tenantId,
-    clientId,
-    decodeURIComponent(conversationId),
-  );
+  const [payload, viewer] = await Promise.all([
+    loadInboxThread(scope.tenantId, clientId, decodeURIComponent(conversationId)),
+    getAgentSummary(scope.userId),
+  ]);
   if (!payload) notFound();
 
   return (
@@ -42,6 +42,7 @@ export default async function ClientInboxThreadPage({
         clientId={clientId}
         initial={payload}
         viewerUserId={scope.userId}
+        viewerName={viewer?.name ?? null}
         viewerIsFullAccess={hasFullAccess(scope)}
       />
     </main>

@@ -60,7 +60,7 @@ function toConversationView(r: InboxConversationRow): InboxConversationView {
   };
 }
 
-function toMessageView(m: ThreadMessageRow): InboxMessageView {
+export function toMessageView(m: ThreadMessageRow): InboxMessageView {
   return {
     id: m.id,
     sender: m.sender,
@@ -68,6 +68,8 @@ function toMessageView(m: ThreadMessageRow): InboxMessageView {
     text: m.text,
     contentType: m.content_type,
     status: m.status,
+    failureCode: m.failure_code,
+    failureDetail: m.failure_detail,
     occurredAt: m.occurred_at.toISOString(),
   };
 }
