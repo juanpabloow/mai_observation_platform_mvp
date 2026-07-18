@@ -3,11 +3,30 @@
 import { revalidatePath } from "next/cache";
 import { getAccessScope, hasFullAccess } from "./access";
 import { getClientById } from "@worker/db/repositories/clients.js";
+import { releaseAgentConversations } from "@worker/db/repositories/handoff.js";
 import {
   getMemberInTenant,
   removeMemberFromTenant,
   setMembershipRole,
 } from "@worker/db/repositories/tenantMembers.js";
+
+/**
+ * ORPHAN RELEASE (H-2). After a member loses access to conversations they were
+ * assigned to, re-queue their live 'human' handoff conversations so no customer is
+ * stranded. Best-effort: it must NEVER fail the membership change that already
+ * committed, so any error is swallowed (the repo is itself per-conversation safe).
+ */
+async function releaseOrphanedConversations(
+  tenantId: string,
+  userId: string,
+  clientId?: string,
+): Promise<void> {
+  try {
+    await releaseAgentConversations(tenantId, userId, clientId ? { clientId } : {});
+  } catch {
+    /* best-effort — the membership change is the source of truth */
+  }
+}
 
 /**
  * Member-management actions (RBAC-3). All owner/admin-only and tenant-scoped; they
@@ -93,6 +112,7 @@ export async function reassignMemberClientAction(input: {
   }
   const client = await getClientById({ tenantId: scope.tenantId, clientId: input.clientId });
   if (!client) return { ok: false, error: "That client isn't in your workspace." };
+  const oldClientId = target.member_client_id; // the client they're leaving
   try {
     await setMembershipRole({
       tenantId: scope.tenantId,
@@ -102,6 +122,12 @@ export async function reassignMemberClientAction(input: {
     });
   } catch {
     return { ok: false, error: "Could not reassign the client." };
+  }
+  // Orphan release (client-scoped): the member left their old client, so re-queue any
+  // 'human' conversations they held THERE. Their new client's conversations are
+  // untouched. Skip when the reassign is a no-op (same client).
+  if (oldClientId && oldClientId !== input.clientId) {
+    await releaseOrphanedConversations(scope.tenantId, input.targetUserId, oldClientId);
   }
   revalidatePath("/settings/team");
   return { ok: true };
@@ -125,6 +151,9 @@ export async function removeMemberAction(input: { targetUserId: string }): Promi
   }
   const ok = await removeMemberFromTenant({ tenantId: scope.tenantId, userId: input.targetUserId });
   if (!ok) return { ok: false, error: "Could not remove the member." };
+  // Orphan release (tenant-wide): the removed user can no longer act on ANY of their
+  // 'human' conversations across the tenant — re-queue them all.
+  await releaseOrphanedConversations(scope.tenantId, input.targetUserId);
   revalidatePath("/settings/team");
   return { ok: true };
 }

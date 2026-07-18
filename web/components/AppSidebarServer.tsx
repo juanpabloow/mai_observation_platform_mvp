@@ -1,5 +1,9 @@
 import { getSessionScope } from "@/lib/access";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
+import {
+  countPendingForClient,
+  pendingCountsByClientForTenant,
+} from "@worker/db/repositories/handoff.js";
 import { AppSidebar, type SidebarWorkflow } from "./AppSidebar";
 
 /**
@@ -23,15 +27,31 @@ import { AppSidebar, type SidebarWorkflow } from "./AppSidebar";
  */
 export async function AppSidebarServer() {
   const scope = await getSessionScope();
-  if (!scope) return <AppSidebar memberClientId={null} workflows={[]} />;
+  if (!scope) return <AppSidebar memberClientId={null} workflows={[]} pendingCounts={{}} />;
 
-  const workflows: SidebarWorkflow[] = scope.memberClientId
-    ? []
-    : (await listWorkflowsWithClientForTenant(scope.tenantId)).map((w) => ({
-        id: w.n8n_workflow_id,
-        clientId: w.client_id,
-        name: w.name,
-      }));
+  // Workflows (owner/admin only) + per-client pending counts to SEED the Inbox tab
+  // badges instantly (they then poll to stay live). A member only needs their own
+  // client's count; owner/admin get every client's in one grouped query.
+  const [workflows, pendingCounts] = await Promise.all([
+    scope.memberClientId
+      ? Promise.resolve<SidebarWorkflow[]>([])
+      : listWorkflowsWithClientForTenant(scope.tenantId).then((rows) =>
+          rows.map((w) => ({ id: w.n8n_workflow_id, clientId: w.client_id, name: w.name })),
+        ),
+    scope.memberClientId
+      ? countPendingForClient(scope.tenantId, scope.memberClientId).then((count) => ({
+          [scope.memberClientId as string]: count,
+        }))
+      : pendingCountsByClientForTenant(scope.tenantId).then((rows) =>
+          Object.fromEntries(rows.map((r) => [r.client_id, r.count])),
+        ),
+  ]);
 
-  return <AppSidebar memberClientId={scope.memberClientId} workflows={workflows} />;
+  return (
+    <AppSidebar
+      memberClientId={scope.memberClientId}
+      workflows={workflows}
+      pendingCounts={pendingCounts}
+    />
+  );
 }

@@ -83,6 +83,11 @@ export class IllegalModeTransitionError extends Error {
  *   pending → human(agent)                       -- an agent claims an escalation
  *   pending → bot  (agent)                       -- an agent dismisses it
  *   human → bot    (agent)                       -- an agent hands back to the bot
+ *   human → pending(platform_rule)               -- ORPHAN RELEASE: the assigned
+ *       agent was removed, so the platform re-queues the conversation. This edge is
+ *       platform_rule ONLY — an agent can never move a live conversation straight
+ *       from human back to pending (that would silently un-take it); an agent hands
+ *       back via human → bot instead.
  */
 const LEGAL_TRANSITIONS: ReadonlyArray<{
   from: ConversationMode;
@@ -94,6 +99,7 @@ const LEGAL_TRANSITIONS: ReadonlyArray<{
   { from: 'pending', to: 'human', sources: ['agent'] },
   { from: 'pending', to: 'bot', sources: ['agent'] },
   { from: 'human', to: 'bot', sources: ['agent'] },
+  { from: 'human', to: 'pending', sources: ['platform_rule'] },
 ];
 
 /**
@@ -271,6 +277,13 @@ export interface TransitionOptions {
   agentUserId?: string | null;
   reasonCode?: string | null;
   detail?: string | null;
+  /**
+   * Optional optimistic-concurrency precondition: only transition if the row is
+   * STILL in this mode under the lock. If it isn't, this is a no-op ({changed:false})
+   * — NOT an error. Lets an action assert "dismiss ONLY if still pending" so a
+   * concurrent take can't be silently clobbered by an otherwise-legal edge.
+   */
+  expectedFrom?: ConversationMode;
 }
 
 export interface TransitionResult {
@@ -313,6 +326,12 @@ export async function transitionMode(
     }
 
     const from = conversation.mode;
+    // Precondition (optimistic concurrency): a caller can require the row still be in
+    // a specific mode. If it moved on, this is a no-op (not an error) — no audit row.
+    if (opts.expectedFrom && from !== opts.expectedFrom) {
+      await client.query('ROLLBACK');
+      return { changed: false, conversation };
+    }
     // Idempotent no-op — release the lock, report no change, write no audit row.
     if (from === toMode) {
       await client.query('ROLLBACK');
@@ -363,4 +382,230 @@ export async function transitionMode(
   } finally {
     client.release();
   }
+}
+
+/**
+ * ORPHAN RELEASE. When an agent loses access to conversations they were assigned to
+ * — they were removed from a client, or from the tenant — a customer must never be
+ * left stranded in a silent 'human' conversation nobody is watching. This finds the
+ * agent's live 'human' conversations and re-queues each (human → pending, source
+ * 'platform_rule', reason_code 'agent_removed') so it re-enters the inbox. Clearing
+ * the assignment is handled by transitionMode (agent set iff mode='human').
+ *
+ * Scope:
+ *   - no clientId  → tenant-wide (the agent left the tenant entirely).
+ *   - clientId set → only conversations of THAT client's workflows (the agent was
+ *     removed from one client; their conversations elsewhere are untouched).
+ *
+ * A conversation belongs to a client iff its workflow's CANONICAL row (most recently
+ * synced, mirroring getWorkflowByN8nId) is assigned to that client. Best-effort per
+ * conversation: a concurrent change on one row is swallowed so the sweep still
+ * releases the rest. Returns how many were actually re-queued.
+ */
+export async function releaseAgentConversations(
+  tenantId: string,
+  agentUserId: string,
+  opts: { clientId?: string } = {},
+): Promise<number> {
+  const params: unknown[] = [tenantId, agentUserId];
+  let clientFilter = '';
+  if (opts.clientId) {
+    params.push(opts.clientId);
+    clientFilter = `AND EXISTS (
+      SELECT 1 FROM (
+        SELECT DISTINCT ON (n8n_workflow_id) client_id
+          FROM workflows w
+         WHERE w.tenant_id = c.tenant_id AND w.n8n_workflow_id = c.n8n_workflow_id
+         ORDER BY n8n_workflow_id, last_synced_at DESC NULLS LAST
+      ) canonical
+      WHERE canonical.client_id = $3
+    )`;
+  }
+
+  const targets = await query<{ id: string }>(
+    `SELECT c.id FROM conversations c
+      WHERE c.tenant_id = $1 AND c.mode = 'human' AND c.assigned_agent_user_id = $2
+      ${clientFilter}`,
+    params,
+  );
+
+  let released = 0;
+  for (const row of targets.rows) {
+    try {
+      const res = await transitionMode(tenantId, row.id, 'pending', {
+        source: 'platform_rule',
+        reasonCode: 'agent_removed',
+        // The acting agent_user_id column is for the platform actor (null here); the
+        // released agent's id is recorded in detail for traceability.
+        detail: `released from agent ${agentUserId}`,
+      });
+      if (res.changed) released += 1;
+    } catch {
+      // Best-effort: a concurrent transition on this one row shouldn't abort the sweep.
+    }
+  }
+  return released;
+}
+
+/*
+ * ── H-2 inbox reads ─────────────────────────────────────────────────────────
+ * The per-client Inbox. A conversation belongs to a client iff the CANONICAL row
+ * (most recently synced, mirroring getWorkflowByN8nId) of its n8n_workflow_id is
+ * assigned to that client — so a conversation of a client-UNASSIGNED workflow (or
+ * one with no synced workflow) appears in NO inbox. Every read is tenant-scoped and
+ * takes the clientId as a data-layer scope (the web layer authorizes access first).
+ */
+
+/** A conversation as a row in the per-client inbox list. */
+export interface InboxConversationRow {
+  id: string;
+  conversation_ref: string;
+  n8n_workflow_id: string;
+  mode: ConversationMode;
+  assigned_agent_user_id: string | null;
+  assigned_agent_name: string | null;
+  workflow_name: string | null;
+  last_message_text: string | null;
+  last_message_sender: MessageSender | null;
+  last_message_content_type: string | null;
+  last_message_at: Date | null;
+  created_at: Date;
+  /** When it last entered 'pending' (for the pending-age label); null if never. */
+  pending_since: Date | null;
+}
+
+// The canonical-workflow lateral, shared by the inbox reads: resolves one workflow
+// row per n8n id (most recently synced) and exposes its client_id + name.
+const CANONICAL_WORKFLOW_LATERAL = `
+  SELECT DISTINCT ON (w.n8n_workflow_id) w.client_id, w.name AS workflow_name
+    FROM workflows w
+   WHERE w.tenant_id = c.tenant_id AND w.n8n_workflow_id = c.n8n_workflow_id
+   ORDER BY w.n8n_workflow_id, w.last_synced_at DESC NULLS LAST`;
+
+/**
+ * The client's conversations for the inbox list, optionally filtered to one mode.
+ * Sorted pending-first, then most-recent activity. Each row carries the workflow
+ * name, assigned-agent name (when human), a last-message preview, and pending-since.
+ */
+export async function listConversationsForClient(
+  tenantId: string,
+  clientId: string,
+  opts: { mode?: ConversationMode } = {},
+): Promise<InboxConversationRow[]> {
+  const params: unknown[] = [tenantId, clientId];
+  let modeFilter = '';
+  if (opts.mode) {
+    params.push(opts.mode);
+    modeFilter = `AND c.mode = $3`;
+  }
+  const r = await query<InboxConversationRow>(
+    `SELECT
+       c.id, c.conversation_ref, c.n8n_workflow_id, c.mode,
+       c.assigned_agent_user_id, c.last_message_at, c.created_at,
+       cw.workflow_name,
+       u.name AS assigned_agent_name,
+       lm.text AS last_message_text,
+       lm.sender AS last_message_sender,
+       lm.content_type AS last_message_content_type,
+       ps.pending_since
+     FROM conversations c
+     JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON cw.client_id = $2
+     LEFT JOIN "user" u ON u.id = c.assigned_agent_user_id
+     LEFT JOIN LATERAL (
+       SELECT text, sender, content_type
+         FROM handoff_messages hm
+        WHERE hm.conversation_id = c.id
+        ORDER BY hm.occurred_at DESC, hm.id DESC
+        LIMIT 1
+     ) lm ON true
+     LEFT JOIN LATERAL (
+       SELECT created_at AS pending_since
+         FROM conversation_mode_transitions t
+        WHERE t.conversation_id = c.id AND t.to_mode = 'pending'
+        ORDER BY t.created_at DESC
+        LIMIT 1
+     ) ps ON true
+     WHERE c.tenant_id = $1 ${modeFilter}
+     ORDER BY (c.mode = 'pending') DESC, c.last_message_at DESC NULLS LAST, c.created_at DESC`,
+    params,
+  );
+  return r.rows;
+}
+
+/** A single conversation with its workflow + assigned-agent names, for the thread. */
+export interface InboxConversationDetail extends ConversationRow {
+  workflow_name: string | null;
+  assigned_agent_name: string | null;
+}
+
+/**
+ * Resolve a conversation for the thread view — ONLY if it belongs to this client
+ * (its canonical workflow is assigned there) and this tenant. Returns null
+ * otherwise, so a direct-URL probe of another client's conversation → not-found.
+ */
+export async function getConversationForClient(
+  tenantId: string,
+  clientId: string,
+  conversationId: string,
+): Promise<InboxConversationDetail | null> {
+  const r = await query<InboxConversationDetail>(
+    `SELECT c.*, cw.workflow_name, u.name AS assigned_agent_name
+       FROM conversations c
+       JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON cw.client_id = $2
+       LEFT JOIN "user" u ON u.id = c.assigned_agent_user_id
+      WHERE c.tenant_id = $1 AND c.id = $3`,
+    [tenantId, clientId, conversationId],
+  );
+  return r.rows[0] ?? null;
+}
+
+/** A thread message with its sender agent's display name (for human_agent bubbles). */
+export interface ThreadMessageRow extends HandoffMessageRow {
+  agent_name: string | null;
+}
+
+/**
+ * A conversation's messages oldest→newest for the thread view, each with the
+ * sender agent's name joined (null unless sender='human_agent'). Tenant-scoped.
+ */
+export async function listThreadMessages(
+  tenantId: string,
+  conversationId: string,
+): Promise<ThreadMessageRow[]> {
+  const r = await query<ThreadMessageRow>(
+    `SELECT hm.*, u.name AS agent_name
+       FROM handoff_messages hm
+       LEFT JOIN "user" u ON u.id = hm.agent_user_id
+      WHERE hm.tenant_id = $1 AND hm.conversation_id = $2
+      ORDER BY hm.occurred_at ASC, hm.id ASC`,
+    [tenantId, conversationId],
+  );
+  return r.rows;
+}
+
+/** How many of this client's conversations are 'pending' (the inbox tab badge). */
+export async function countPendingForClient(tenantId: string, clientId: string): Promise<number> {
+  const r = await query<{ count: number }>(
+    `SELECT count(*)::int AS count
+       FROM conversations c
+       JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON cw.client_id = $2
+      WHERE c.tenant_id = $1 AND c.mode = 'pending'`,
+    [tenantId, clientId],
+  );
+  return r.rows[0]?.count ?? 0;
+}
+
+/** Pending counts grouped by client, for seeding all inbox tab badges at once. */
+export async function pendingCountsByClientForTenant(
+  tenantId: string,
+): Promise<{ client_id: string; count: number }[]> {
+  const r = await query<{ client_id: string; count: number }>(
+    `SELECT cw.client_id, count(*)::int AS count
+       FROM conversations c
+       JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON true
+      WHERE c.tenant_id = $1 AND c.mode = 'pending'
+      GROUP BY cw.client_id`,
+    [tenantId],
+  );
+  return r.rows;
 }

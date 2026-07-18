@@ -59,6 +59,23 @@ export function formatListTimestamp(date: Date, now: Date): string {
   );
 }
 
+/**
+ * A compact elapsed-time label from `from` to `now`: "now", "5m", "3h", "2d",
+ * "4w". Used for the inbox pending-age ("pending 12m") and last-activity times.
+ * Clamps negatives (clock skew) to "now".
+ */
+export function formatAgeShort(from: Date, now: Date): string {
+  const secs = Math.floor((now.getTime() - from.getTime()) / 1000);
+  if (secs < 45) return "now";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `${Math.max(mins, 1)}m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `${hours}h`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days}d`;
+  return `${Math.floor(days / 7)}w`;
+}
+
 /** Tailwind classes for a status badge (green success / red error / neutral). */
 export function statusBadgeClasses(status: string): string {
   const base =

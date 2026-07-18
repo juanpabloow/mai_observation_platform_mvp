@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import { useSidebar } from "@/components/SidebarContext";
+import { InboxTabLink } from "@/components/InboxTabLink";
 
 const AUTH_PREFIXES = ["/login", "/signup", "/logout"];
 
@@ -90,9 +91,12 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 export function AppSidebar({
   memberClientId,
   workflows,
+  pendingCounts,
 }: {
   memberClientId: string | null;
   workflows: SidebarWorkflow[];
+  /** Per-client pending-conversation counts (seeds the Inbox tab badge). */
+  pendingCounts: Record<string, number>;
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -175,6 +179,14 @@ export function AppSidebar({
             <DisabledItem label="Analytics" />
           </>
         )}
+        {/* Inbox is CLIENT-level (like Team) and shown to everyone with access to the
+            client — a member sees their own client's inbox. Its badge stays live. */}
+        <InboxTabLink
+          clientId={clientId}
+          href={`/clients/${clientId}/inbox`}
+          active={pathname.startsWith(`/clients/${clientId}/inbox`)}
+          initialCount={pendingCounts[clientId] ?? 0}
+        />
         {/* Team is owner/admin only — a member never sees it. */}
         {!isMember ? <SideLink href={teamHref} label="Team" active={onTeam} /> : null}
       </aside>
