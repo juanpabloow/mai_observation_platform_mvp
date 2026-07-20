@@ -15,11 +15,13 @@ export function InboxTabLink({
   href,
   active,
   initialCount,
+  label = "Inbox",
 }: {
   clientId: string;
   href: string;
   active: boolean;
   initialCount: number;
+  label?: string;
 }) {
   const [count, setCount] = useState(initialCount);
 
@@ -73,7 +75,7 @@ export function InboxTabLink({
           : "text-muted hover:bg-subtle hover:text-foreground"
       }`}
     >
-      <span>Inbox</span>
+      <span>{label}</span>
       {count > 0 ? (
         <span className="ml-2 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-amber-700 dark:text-amber-400">
           {count}

@@ -9,11 +9,15 @@
 // zero server coupling). These string sets are stable (DB CHECK-constrained).
 export type InboxMode = "bot" | "pending" | "human";
 export type InboxSender = "user" | "bot" | "human_agent";
-export type InboxFilter = "all" | "pending" | "human" | "bot";
+// "attention" is an internal filter (the client-level attention queue = pending+human);
+// it is NOT one of the user-facing chips in INBOX_FILTERS.
+export type InboxFilter = "all" | "pending" | "human" | "bot" | "attention";
 
 export interface InboxConversationView {
   id: string;
   conversationRef: string;
+  /** The conversation's n8n_workflow_id — used to link a row into its workflow inbox. */
+  workflowId: string;
   workflowName: string | null;
   mode: InboxMode;
   assignedAgentName: string | null;
@@ -67,7 +71,13 @@ export const INBOX_FILTERS: { key: InboxFilter; label: string }[] = [
 ];
 
 export function isInboxFilter(value: string | null): value is InboxFilter {
-  return value === "all" || value === "pending" || value === "human" || value === "bot";
+  return (
+    value === "all" ||
+    value === "pending" ||
+    value === "human" ||
+    value === "bot" ||
+    value === "attention"
+  );
 }
 
 /** A one-line preview for a conversation row's last message. */

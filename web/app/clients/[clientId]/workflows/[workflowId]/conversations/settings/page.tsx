@@ -107,10 +107,10 @@ export default async function ConversationSettingsPage({
   return (
     <div className="flex flex-col gap-4">
       <Link
-        href={`/clients/${linkClientId}/workflows/${encodeURIComponent(workflowId)}/conversations`}
+        href={`/clients/${linkClientId}/workflows/${encodeURIComponent(workflowId)}/inbox`}
         className="text-sm text-neutral-500 transition-colors hover:text-foreground"
       >
-        &larr; Back to conversations
+        &larr; Back to inbox
       </Link>
       <ConversationSettings workflowId={workflowId} roles={roles} />
       {isFullAccess ? <HandoffWebhook workflowId={workflowId} initial={webhookView} /> : null}

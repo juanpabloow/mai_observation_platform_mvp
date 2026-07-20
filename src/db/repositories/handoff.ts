@@ -614,6 +614,163 @@ export async function getConversationForClient(
   return r.rows[0] ?? null;
 }
 
+/*
+ * ── H-6 per-workflow inbox reads ────────────────────────────────────────────
+ * The Inbox is now a per-WORKFLOW section (H-6 consolidation). These mirror the
+ * per-client reads but scope by n8n_workflow_id. Client-level reads remain for the
+ * attention queue (pending+human across the client).
+ */
+
+/**
+ * Is this workflow HANDOFF-ACTIVE? True iff it has a registered webhook (enabled or
+ * not) OR any handoff_messages exist for its conversations. One cheap query — call
+ * once per page load, never per row.
+ */
+export async function isWorkflowHandoffActive(
+  tenantId: string,
+  n8nWorkflowId: string,
+): Promise<boolean> {
+  const r = await query<{ active: boolean }>(
+    `SELECT (
+       EXISTS (SELECT 1 FROM handoff_webhooks w
+                WHERE w.tenant_id = $1 AND w.n8n_workflow_id = $2)
+       OR EXISTS (SELECT 1 FROM handoff_messages hm
+                    JOIN conversations c ON c.id = hm.conversation_id
+                   WHERE c.tenant_id = $1 AND c.n8n_workflow_id = $2)
+     ) AS active`,
+    [tenantId, n8nWorkflowId],
+  );
+  return r.rows[0]?.active ?? false;
+}
+
+/**
+ * A workflow's conversations for the per-workflow inbox list, optionally filtered to
+ * one mode. Same row shape + pending-first sort as the client list; scoped by
+ * n8n_workflow_id (no client join needed — the web layer already authorized the
+ * workflow under its client).
+ */
+export async function listConversationsForWorkflow(
+  tenantId: string,
+  n8nWorkflowId: string,
+  opts: { mode?: ConversationMode } = {},
+): Promise<InboxConversationRow[]> {
+  const params: unknown[] = [tenantId, n8nWorkflowId];
+  let modeFilter = '';
+  if (opts.mode) {
+    params.push(opts.mode);
+    modeFilter = `AND c.mode = $3`;
+  }
+  const r = await query<InboxConversationRow>(
+    `SELECT
+       c.id, c.conversation_ref, c.n8n_workflow_id, c.mode,
+       c.assigned_agent_user_id, c.last_message_at, c.created_at,
+       cw.workflow_name,
+       u.name AS assigned_agent_name,
+       lm.text AS last_message_text,
+       lm.sender AS last_message_sender,
+       lm.content_type AS last_message_content_type,
+       ps.pending_since
+     FROM conversations c
+     LEFT JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON true
+     LEFT JOIN "user" u ON u.id = c.assigned_agent_user_id
+     LEFT JOIN LATERAL (
+       SELECT text, sender, content_type
+         FROM handoff_messages hm
+        WHERE hm.conversation_id = c.id
+        ORDER BY hm.occurred_at DESC, hm.id DESC
+        LIMIT 1
+     ) lm ON true
+     LEFT JOIN LATERAL (
+       SELECT created_at AS pending_since
+         FROM conversation_mode_transitions t
+        WHERE t.conversation_id = c.id AND t.to_mode = 'pending'
+        ORDER BY t.created_at DESC
+        LIMIT 1
+     ) ps ON true
+     WHERE c.tenant_id = $1 AND c.n8n_workflow_id = $2 ${modeFilter}
+     ORDER BY (c.mode = 'pending') DESC, c.last_message_at DESC NULLS LAST, c.created_at DESC`,
+    params,
+  );
+  return r.rows;
+}
+
+/** Count of a workflow's pending conversations (per-workflow inbox Pending chip). */
+export async function countPendingForWorkflow(
+  tenantId: string,
+  n8nWorkflowId: string,
+): Promise<number> {
+  const r = await query<{ count: number }>(
+    `SELECT count(*)::int AS count FROM conversations
+      WHERE tenant_id = $1 AND n8n_workflow_id = $2 AND mode = 'pending'`,
+    [tenantId, n8nWorkflowId],
+  );
+  return r.rows[0]?.count ?? 0;
+}
+
+/**
+ * The CLIENT-level attention queue: only pending + human conversations across the
+ * client, pending first then human, most-recent activity within each. Same row shape
+ * as the inbox list (carries workflow name + id so rows link into the workflow inbox).
+ */
+export async function listAttentionForClient(
+  tenantId: string,
+  clientId: string,
+): Promise<InboxConversationRow[]> {
+  const r = await query<InboxConversationRow>(
+    `SELECT
+       c.id, c.conversation_ref, c.n8n_workflow_id, c.mode,
+       c.assigned_agent_user_id, c.last_message_at, c.created_at,
+       cw.workflow_name,
+       u.name AS assigned_agent_name,
+       lm.text AS last_message_text,
+       lm.sender AS last_message_sender,
+       lm.content_type AS last_message_content_type,
+       ps.pending_since
+     FROM conversations c
+     JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON cw.client_id = $2
+     LEFT JOIN "user" u ON u.id = c.assigned_agent_user_id
+     LEFT JOIN LATERAL (
+       SELECT text, sender, content_type
+         FROM handoff_messages hm
+        WHERE hm.conversation_id = c.id
+        ORDER BY hm.occurred_at DESC, hm.id DESC
+        LIMIT 1
+     ) lm ON true
+     LEFT JOIN LATERAL (
+       SELECT created_at AS pending_since
+         FROM conversation_mode_transitions t
+        WHERE t.conversation_id = c.id AND t.to_mode = 'pending'
+        ORDER BY t.created_at DESC
+        LIMIT 1
+     ) ps ON true
+     WHERE c.tenant_id = $1 AND c.mode IN ('pending', 'human')
+     ORDER BY (c.mode = 'pending') DESC, c.last_message_at DESC NULLS LAST, c.created_at DESC`,
+    [tenantId, clientId],
+  );
+  return r.rows;
+}
+
+/**
+ * Resolve a conversation for the per-workflow thread — ONLY if it belongs to this
+ * workflow + tenant. Returns null otherwise (direct-URL probe → not-found). The
+ * caller guards that conversationId is a UUID before calling.
+ */
+export async function getConversationForWorkflow(
+  tenantId: string,
+  n8nWorkflowId: string,
+  conversationId: string,
+): Promise<InboxConversationDetail | null> {
+  const r = await query<InboxConversationDetail>(
+    `SELECT c.*, cw.workflow_name, u.name AS assigned_agent_name
+       FROM conversations c
+       LEFT JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON true
+       LEFT JOIN "user" u ON u.id = c.assigned_agent_user_id
+      WHERE c.tenant_id = $1 AND c.n8n_workflow_id = $2 AND c.id = $3`,
+    [tenantId, n8nWorkflowId, conversationId],
+  );
+  return r.rows[0] ?? null;
+}
+
 /** A thread message with its sender agent's display name (for human_agent bubbles). */
 export interface ThreadMessageRow extends HandoffMessageRow {
   agent_name: string | null;

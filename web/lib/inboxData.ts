@@ -1,10 +1,14 @@
 import "server-only";
 import { getSessionScope, canAccessClient, type AccessScope } from "./access";
 import { getClientById } from "@worker/db/repositories/clients.js";
+import { getWorkflowByN8nId } from "@worker/db/repositories/workflows.js";
 import {
   countPendingForClient,
+  countPendingForWorkflow,
   getConversationForClient,
+  listAttentionForClient,
   listConversationsForClient,
+  listConversationsForWorkflow,
   listThreadMessages,
   type InboxConversationRow,
   type InboxConversationDetail,
@@ -16,6 +20,13 @@ import type {
   InboxHeaderView,
   InboxMessageView,
 } from "./inboxView";
+
+/** UUID guard so a non-UUID conversation id (e.g. a derived ref) never reaches a
+ * `id = $` query and triggers a Postgres uuid-cast error on probing. */
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+export function isUuid(value: string): boolean {
+  return UUID_RE.test(value);
+}
 
 /**
  * Server-side inbox data layer: resolves access for the session-authed JSON polling
@@ -48,6 +59,7 @@ function toConversationView(r: InboxConversationRow): InboxConversationView {
   return {
     id: r.id,
     conversationRef: r.conversation_ref,
+    workflowId: r.n8n_workflow_id,
     workflowName: r.workflow_name,
     mode: r.mode,
     assignedAgentName: r.assigned_agent_name,
@@ -86,7 +98,7 @@ export function toHeaderView(c: InboxConversationDetail): InboxHeaderView {
 }
 
 const filterToMode = (f: InboxFilter): "bot" | "pending" | "human" | undefined =>
-  f === "all" ? undefined : f;
+  f === "all" || f === "attention" ? undefined : f;
 
 export interface InboxListPayload {
   conversations: InboxConversationView[];
@@ -94,7 +106,11 @@ export interface InboxListPayload {
   asOf: string;
 }
 
-/** Load a client's inbox list (serialized), plus the pending count (tab badge). */
+/**
+ * Load a client-scoped list. `attention` = the pending+human attention queue (pending
+ * first); any other filter = the full client list filtered to that mode. Always
+ * returns the pending count (the sidebar badge / Pending chip).
+ */
 export async function loadInboxList(
   tenantId: string,
   clientId: string,
@@ -102,7 +118,9 @@ export async function loadInboxList(
 ): Promise<InboxListPayload> {
   const mode = filterToMode(filter);
   const [rows, pendingCount] = await Promise.all([
-    listConversationsForClient(tenantId, clientId, mode ? { mode } : {}),
+    filter === "attention"
+      ? listAttentionForClient(tenantId, clientId)
+      : listConversationsForClient(tenantId, clientId, mode ? { mode } : {}),
     countPendingForClient(tenantId, clientId),
   ]);
   return {
@@ -110,6 +128,45 @@ export async function loadInboxList(
     pendingCount,
     asOf: new Date().toISOString(),
   };
+}
+
+/** Load a single WORKFLOW's inbox list (serialized) + its pending count. */
+export async function loadWorkflowInboxList(
+  tenantId: string,
+  n8nWorkflowId: string,
+  filter: InboxFilter,
+): Promise<InboxListPayload> {
+  const mode = filterToMode(filter);
+  const [rows, pendingCount] = await Promise.all([
+    listConversationsForWorkflow(tenantId, n8nWorkflowId, mode ? { mode } : {}),
+    countPendingForWorkflow(tenantId, n8nWorkflowId),
+  ]);
+  return {
+    conversations: rows.map(toConversationView),
+    pendingCount,
+    asOf: new Date().toISOString(),
+  };
+}
+
+export type WorkflowInboxAccess =
+  | { ok: true; scope: AccessScope }
+  | { ok: false; status: 401 | 404 };
+
+/**
+ * Authorize a session user for a WORKFLOW's inbox (JSON routes, non-redirecting):
+ * the workflow must be this tenant's, and its real client must be accessible to the
+ * user. 401 unauthenticated; 404 for a foreign/bogus workflow or one outside a
+ * member's client scope (deny-by-default).
+ */
+export async function resolveWorkflowInboxAccess(
+  n8nWorkflowId: string,
+): Promise<WorkflowInboxAccess> {
+  const scope = await getSessionScope();
+  if (!scope) return { ok: false, status: 401 };
+  const workflow = await getWorkflowByN8nId({ tenantId: scope.tenantId, n8nWorkflowId });
+  if (!workflow || !workflow.client_id) return { ok: false, status: 404 };
+  if (!canAccessClient(scope, workflow.client_id)) return { ok: false, status: 404 };
+  return { ok: true, scope };
 }
 
 export interface InboxThreadPayload {
@@ -128,6 +185,7 @@ export async function loadInboxThread(
   clientId: string,
   conversationId: string,
 ): Promise<InboxThreadPayload | null> {
+  if (!isUuid(conversationId)) return null; // never let a non-UUID reach the id= query
   const conversation = await getConversationForClient(tenantId, clientId, conversationId);
   if (!conversation) return null;
   const messages = await listThreadMessages(tenantId, conversationId);

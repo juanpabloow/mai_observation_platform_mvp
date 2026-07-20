@@ -7,24 +7,24 @@ import { loadInboxList } from "@/lib/inboxData";
 import { InboxList } from "@/components/InboxList";
 
 /**
- * Per-client Inbox (CLIENT level, like Team). RBAC: owner/admin see any client;
- * a member only their own (getClientForTenant returns null otherwise → 404, so the
- * URL is never trusted and other clients' existence is never disclosed). The initial
- * list is server-rendered; InboxList then light-polls the session-authed JSON route.
+ * Client-level ATTENTION QUEUE (H-6) — replaces the old full client inbox at the same
+ * route. Shows ONLY pending + human conversations across the client's workflows
+ * (pending first), each linking into its workflow's Inbox thread. RBAC unchanged:
+ * owner/admin any client, a member only their own; foreign/bogus → not-found.
  */
-export default async function ClientInboxPage({
+export default async function ClientAttentionQueuePage({
   params,
 }: {
   params: Promise<{ clientId: string }>;
 }) {
   await connection();
-  const scope = await getAccessScope(); // redirects if unauthenticated
+  const scope = await getAccessScope();
   const { clientId } = await params;
-  const client = await getClientForTenant(clientId); // tenant-scoped + RBAC; foreign → null
+  const client = await getClientForTenant(clientId);
   if (!client) notFound();
 
   const clientLabel = client.is_default ? "Unassigned" : client.name;
-  const initial = await loadInboxList(scope.tenantId, clientId, "all");
+  const initial = await loadInboxList(scope.tenantId, clientId, "attention");
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-6 py-12">
@@ -35,14 +35,24 @@ export default async function ClientInboxPage({
         >
           &larr; {clientLabel}
         </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">{clientLabel} · Inbox</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{clientLabel} · Needs attention</h1>
         <p className="text-sm text-muted">
           Conversations across <span className="text-foreground">{clientLabel}</span>&rsquo;s
-          workflows — bot-handled, pending a human, or taken by an agent. Take one to reply.
+          workflows that are waiting for a human or currently with an agent. Open one to reply
+          in its workflow inbox.
         </p>
       </div>
 
-      <InboxList clientId={clientId} initial={initial} initialFilter="all" />
+      <InboxList
+        clientId={clientId}
+        initial={initial}
+        initialFilter="attention"
+        endpoint={`/api/inbox/${clientId}/conversations`}
+        filters={[]}
+        showWorkflow
+        emptyTitle="Needs attention"
+        emptyMessage="Nothing needs attention — every conversation is bot-handled right now."
+      />
     </main>
   );
 }

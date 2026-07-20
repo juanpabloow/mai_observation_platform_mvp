@@ -1,19 +1,15 @@
 import { connection } from "next/server";
-import Link from "next/link";
-import { notFound } from "next/navigation";
-import { getAccessScope, hasFullAccess } from "@/lib/access";
-import { getClientForTenant } from "@/lib/clientWorkflow";
-import { loadInboxThread } from "@/lib/inboxData";
-import { getAgentSummary } from "@worker/db/repositories/handoff.js";
-import { InboxThread } from "@/components/InboxThread";
+import { notFound, redirect } from "next/navigation";
+import { getAccessScope, canAccessClient } from "@/lib/access";
+import { getConversationForClient } from "@worker/db/repositories/handoff.js";
+import { isUuid } from "@/lib/inboxData";
 
 /**
- * Inbox thread view. Two data-layer guards: getClientForTenant (RBAC — the user can
- * see this client) AND loadInboxThread returning null unless the conversation belongs
- * to this client (a direct-URL probe of another client's conversation → 404). The
- * viewer's id + full-access flag drive which actions render (re-checked server-side).
+ * H-6: the client-level Inbox thread moved into the conversation's WORKFLOW inbox.
+ * Resolve the conversation's workflow (tenant + client scoped) and 307-redirect there.
+ * RBAC: a member who can't see this client → not-found (no existence disclosure).
  */
-export default async function ClientInboxThreadPage({
+export default async function OldClientInboxThreadRedirect({
   params,
 }: {
   params: Promise<{ clientId: string; conversationId: string }>;
@@ -21,30 +17,14 @@ export default async function ClientInboxThreadPage({
   await connection();
   const scope = await getAccessScope();
   const { clientId, conversationId } = await params;
-  const client = await getClientForTenant(clientId);
-  if (!client) notFound();
+  if (!canAccessClient(scope, clientId)) notFound();
 
-  const [payload, viewer] = await Promise.all([
-    loadInboxThread(scope.tenantId, clientId, decodeURIComponent(conversationId)),
-    getAgentSummary(scope.userId),
-  ]);
-  if (!payload) notFound();
+  const id = decodeURIComponent(conversationId);
+  if (!isUuid(id)) notFound();
+  const conv = await getConversationForClient(scope.tenantId, clientId, id);
+  if (!conv) notFound();
 
-  return (
-    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 px-6 py-8">
-      <Link
-        href={`/clients/${clientId}/inbox`}
-        className="text-sm text-muted transition-colors hover:text-foreground"
-      >
-        &larr; Inbox
-      </Link>
-      <InboxThread
-        clientId={clientId}
-        initial={payload}
-        viewerUserId={scope.userId}
-        viewerName={viewer?.name ?? null}
-        viewerIsFullAccess={hasFullAccess(scope)}
-      />
-    </main>
+  redirect(
+    `/clients/${clientId}/workflows/${encodeURIComponent(conv.n8n_workflow_id)}/inbox/${encodeURIComponent(id)}`,
   );
 }

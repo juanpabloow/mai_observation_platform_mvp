@@ -29,10 +29,14 @@ export function ConversationList({
   clientId,
   workflowId,
   conversations,
+  basePath,
 }: {
   clientId: string;
   workflowId: string;
   conversations: ConversationListItem[];
+  /** Section base for row links (H-6: the workflow's inbox). Defaults to the legacy
+   * conversations path for back-compat. */
+  basePath?: string;
 }) {
   const [query, setQuery] = useState("");
 
@@ -46,7 +50,9 @@ export function ConversationList({
     );
   }, [query, conversations]);
 
-  const base = `/clients/${encodeURIComponent(clientId)}/workflows/${encodeURIComponent(workflowId)}/conversations`;
+  const base =
+    basePath ??
+    `/clients/${encodeURIComponent(clientId)}/workflows/${encodeURIComponent(workflowId)}/conversations`;
 
   return (
     <div className="flex flex-col gap-3">

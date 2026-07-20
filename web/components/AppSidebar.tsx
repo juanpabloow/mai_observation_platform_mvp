@@ -160,10 +160,16 @@ export function AppSidebar({
               label="Executions"
               active={pathname.startsWith(`${wfBase}/executions`)}
             />
+            {/* H-6: the per-workflow Inbox replaces "Conversations". Active on the
+                inbox route AND the settings surface (which still lives under
+                /conversations/settings). */}
             <SideLink
-              href={`${wfBase}/conversations${wfQuery}`}
-              label="Conversations"
-              active={pathname.startsWith(`${wfBase}/conversations`)}
+              href={`${wfBase}/inbox${wfQuery}`}
+              label="Inbox"
+              active={
+                pathname.startsWith(`${wfBase}/inbox`) ||
+                pathname.startsWith(`${wfBase}/conversations`)
+              }
             />
             <SideLink
               href={`${wfBase}/analytics${wfQuery}`}
@@ -175,17 +181,18 @@ export function AppSidebar({
           // Owner/admin on an empty client's Team page: tabs have no target.
           <>
             <DisabledItem label="Executions" />
-            <DisabledItem label="Conversations" />
+            <DisabledItem label="Inbox" />
             <DisabledItem label="Analytics" />
           </>
         )}
-        {/* Inbox is CLIENT-level (like Team) and shown to everyone with access to the
-            client — a member sees their own client's inbox. Its badge stays live. */}
+        {/* Client-level ATTENTION queue (H-6): pending+human across the client, with
+            the live pending badge. Distinct from the per-workflow Inbox above. */}
         <InboxTabLink
           clientId={clientId}
           href={`/clients/${clientId}/inbox`}
           active={pathname.startsWith(`/clients/${clientId}/inbox`)}
           initialCount={pendingCounts[clientId] ?? 0}
+          label="Attention"
         />
         {/* Team is owner/admin only — a member never sees it. */}
         {!isMember ? <SideLink href={teamHref} label="Team" active={onTeam} /> : null}
