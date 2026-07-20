@@ -11,6 +11,7 @@ import {
   getTopWorkflowsByExecutions,
   type TopWorkflow,
 } from "@worker/db/repositories/analytics.js";
+import { countPendingForClient } from "@worker/db/repositories/handoff.js";
 import { ExecutionsByStatusChart } from "@/components/WorkflowAnalyticsCharts";
 import {
   LegendDot,
@@ -49,11 +50,14 @@ export default async function AllWorkflowsAnalyticsPage({
   if (!client) notFound(); // tenant-scoped: foreign/bogus client → 404
 
   const scope = { tenantId: await getCurrentTenantId(), days, clientId };
-  const [summary, series, convSummary, topWorkflows] = await Promise.all([
+  const [summary, series, convSummary, topWorkflows, pendingAcross] = await Promise.all([
     getTenantExecutionSummary(scope),
     getTenantExecutionDailySeries(scope),
     getTenantConversationSummary(scope),
     getTopWorkflowsByExecutions({ tenantId: scope.tenantId, clientId, days, limit: 5 }),
+    // A small static aggregate (H-7): pending across the client's workflows. NOT an
+    // attention surface — open a workflow's Inbox to act on its pending conversations.
+    countPendingForClient(scope.tenantId, clientId),
   ]);
 
   const completed = summary.success + summary.error;
@@ -68,6 +72,11 @@ export default async function AllWorkflowsAnalyticsPage({
         <div className="space-y-1.5">
           <p className="text-xs font-medium uppercase tracking-widest text-faint">{clientLabel}</p>
           <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">All workflows</h1>
+          {pendingAcross > 0 ? (
+            <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+              {pendingAcross} pending across workflows — open a workflow&rsquo;s Inbox to reply.
+            </p>
+          ) : null}
         </div>
         <RangeSelector basePath={basePath} current={days} extraQuery={fromQuery} />
       </header>

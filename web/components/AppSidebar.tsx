@@ -91,12 +91,9 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 export function AppSidebar({
   memberClientId,
   workflows,
-  pendingCounts,
 }: {
   memberClientId: string | null;
   workflows: SidebarWorkflow[];
-  /** Per-client pending-conversation counts (seeds the Inbox tab badge). */
-  pendingCounts: Record<string, number>;
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -160,17 +157,27 @@ export function AppSidebar({
               label="Executions"
               active={pathname.startsWith(`${wfBase}/executions`)}
             />
-            {/* H-6: the per-workflow Inbox replaces "Conversations". Active on the
-                inbox route AND the settings surface (which still lives under
-                /conversations/settings). */}
-            <SideLink
-              href={`${wfBase}/inbox${wfQuery}`}
-              label="Inbox"
-              active={
-                pathname.startsWith(`${wfBase}/inbox`) ||
-                pathname.startsWith(`${wfBase}/conversations`)
-              }
-            />
+            {/* H-7: the Inbox tab carries a LIVE per-workflow pending badge (the
+                client-level attention badge was removed with the attention surface).
+                Active on the inbox route AND the settings surface (still under
+                /conversations/settings). teamFrom is the context workflow id. */}
+            {teamFrom ? (
+              <InboxTabLink
+                href={`${wfBase}/inbox${wfQuery}`}
+                active={
+                  pathname.startsWith(`${wfBase}/inbox`) ||
+                  pathname.startsWith(`${wfBase}/conversations`)
+                }
+                countEndpoint={`/api/inbox/${clientId}/workflows/${encodeURIComponent(teamFrom)}/pending-count`}
+                label="Inbox"
+              />
+            ) : (
+              <SideLink
+                href={`${wfBase}/inbox${wfQuery}`}
+                label="Inbox"
+                active={pathname.startsWith(`${wfBase}/inbox`)}
+              />
+            )}
             <SideLink
               href={`${wfBase}/analytics${wfQuery}`}
               label="Analytics"
@@ -185,15 +192,6 @@ export function AppSidebar({
             <DisabledItem label="Analytics" />
           </>
         )}
-        {/* Client-level ATTENTION queue (H-6): pending+human across the client, with
-            the live pending badge. Distinct from the per-workflow Inbox above. */}
-        <InboxTabLink
-          clientId={clientId}
-          href={`/clients/${clientId}/inbox`}
-          active={pathname.startsWith(`/clients/${clientId}/inbox`)}
-          initialCount={pendingCounts[clientId] ?? 0}
-          label="Attention"
-        />
         {/* Team is owner/admin only — a member never sees it. */}
         {!isMember ? <SideLink href={teamHref} label="Team" active={onTeam} /> : null}
       </aside>

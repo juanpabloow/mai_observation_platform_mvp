@@ -7,7 +7,7 @@ import { getCurrentTenantId } from "@/lib/tenant";
 import { requireWorkflowUnderClient } from "@/lib/clientWorkflow";
 import { loadWorkflowInboxList } from "@/lib/inboxData";
 import { formatListTimestamp } from "@/lib/format";
-import { InboxList } from "@/components/InboxList";
+import { ConversationGrid } from "@/components/ConversationGrid";
 import { ConversationList, type ConversationListItem } from "@/components/ConversationList";
 import { EnableHandoffCallout } from "@/components/EnableHandoffCallout";
 
@@ -58,18 +58,16 @@ export default async function WorkflowInboxPage({
 
   const handoffActive = await isWorkflowHandoffActive(tenantId, workflowId);
 
-  // ── HANDOFF-ACTIVE: the live inbox (conversations table) ──
+  // ── HANDOFF-ACTIVE: the live conversation GRID (conversations table) ──
   if (handoffActive) {
-    const initial = await loadWorkflowInboxList(tenantId, workflowId, "all");
+    const initial = await loadWorkflowInboxList(tenantId, workflowId);
     return (
       <div className="flex flex-col gap-4">
         {header}
-        <InboxList
+        <ConversationGrid
           clientId={linkClientId}
           initial={initial}
-          initialFilter="all"
           endpoint={`/api/inbox/${encodeURIComponent(linkClientId)}/workflows/${encodeURIComponent(workflowId)}/conversations`}
-          showWorkflow={false}
         />
       </div>
     );

@@ -3,20 +3,18 @@ import { getSessionScope, canAccessClient, type AccessScope } from "./access";
 import { getClientById } from "@worker/db/repositories/clients.js";
 import { getWorkflowByN8nId } from "@worker/db/repositories/workflows.js";
 import {
-  countPendingForClient,
-  countPendingForWorkflow,
+  ACTIVITY_WINDOW_HOURS,
   getConversationForClient,
-  listAttentionForClient,
-  listConversationsForClient,
+  getLatestEscalationReasons,
   listConversationsForWorkflow,
   listThreadMessages,
+  type EscalationReasonRow,
   type InboxConversationRow,
   type InboxConversationDetail,
   type ThreadMessageRow,
 } from "@worker/db/repositories/handoff.js";
 import type {
   InboxConversationView,
-  InboxFilter,
   InboxHeaderView,
   InboxMessageView,
 } from "./inboxView";
@@ -55,13 +53,17 @@ export async function resolveInboxAccess(clientId: string): Promise<InboxAccess>
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);
 
-function toConversationView(r: InboxConversationRow): InboxConversationView {
+function toConversationView(
+  r: InboxConversationRow,
+  reason?: EscalationReasonRow,
+): InboxConversationView {
   return {
     id: r.id,
     conversationRef: r.conversation_ref,
     workflowId: r.n8n_workflow_id,
     workflowName: r.workflow_name,
     mode: r.mode,
+    active: r.active,
     assignedAgentName: r.assigned_agent_name,
     lastMessageText: r.last_message_text,
     lastMessageSender: r.last_message_sender,
@@ -69,6 +71,9 @@ function toConversationView(r: InboxConversationRow): InboxConversationView {
     lastMessageAt: iso(r.last_message_at),
     createdAt: r.created_at.toISOString(),
     pendingSince: iso(r.pending_since),
+    // Escalation reason is attached only for pending cards (batched, see loader).
+    escalationReasonCode: reason?.reason_code ?? null,
+    escalationDetail: reason?.detail ?? null,
   };
 }
 
@@ -97,53 +102,29 @@ export function toHeaderView(c: InboxConversationDetail): InboxHeaderView {
   };
 }
 
-const filterToMode = (f: InboxFilter): "bot" | "pending" | "human" | undefined =>
-  f === "all" || f === "attention" ? undefined : f;
-
-export interface InboxListPayload {
+export interface WorkflowInboxPayload {
   conversations: InboxConversationView[];
-  pendingCount: number;
+  /** The activity threshold (hours) — surfaced so the client tooltip stays in sync. */
+  activityWindowHours: number;
   asOf: string;
 }
 
 /**
- * Load a client-scoped list. `attention` = the pending+human attention queue (pending
- * first); any other filter = the full client list filtered to that mode. Always
- * returns the pending count (the sidebar badge / Pending chip).
+ * Load a single WORKFLOW's full conversation list for the grid (H-7). Returns ALL
+ * conversations (the grid does mode/activity/search filtering + live counts
+ * client-side). Each row carries the SQL-computed `active` flag; the latest escalation
+ * reason is attached to PENDING rows via ONE batched query (never a per-card lateral).
  */
-export async function loadInboxList(
-  tenantId: string,
-  clientId: string,
-  filter: InboxFilter,
-): Promise<InboxListPayload> {
-  const mode = filterToMode(filter);
-  const [rows, pendingCount] = await Promise.all([
-    filter === "attention"
-      ? listAttentionForClient(tenantId, clientId)
-      : listConversationsForClient(tenantId, clientId, mode ? { mode } : {}),
-    countPendingForClient(tenantId, clientId),
-  ]);
-  return {
-    conversations: rows.map(toConversationView),
-    pendingCount,
-    asOf: new Date().toISOString(),
-  };
-}
-
-/** Load a single WORKFLOW's inbox list (serialized) + its pending count. */
 export async function loadWorkflowInboxList(
   tenantId: string,
   n8nWorkflowId: string,
-  filter: InboxFilter,
-): Promise<InboxListPayload> {
-  const mode = filterToMode(filter);
-  const [rows, pendingCount] = await Promise.all([
-    listConversationsForWorkflow(tenantId, n8nWorkflowId, mode ? { mode } : {}),
-    countPendingForWorkflow(tenantId, n8nWorkflowId),
-  ]);
+): Promise<WorkflowInboxPayload> {
+  const rows = await listConversationsForWorkflow(tenantId, n8nWorkflowId);
+  const pendingIds = rows.filter((r) => r.mode === "pending").map((r) => r.id);
+  const reasons = await getLatestEscalationReasons(tenantId, pendingIds);
   return {
-    conversations: rows.map(toConversationView),
-    pendingCount,
+    conversations: rows.map((r) => toConversationView(r, reasons.get(r.id))),
+    activityWindowHours: ACTIVITY_WINDOW_HOURS,
     asOf: new Date().toISOString(),
   };
 }

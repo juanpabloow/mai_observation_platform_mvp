@@ -1,25 +1,24 @@
 import { loadWorkflowInboxList, resolveWorkflowInboxAccess } from "@/lib/inboxData";
-import { isInboxFilter, type InboxFilter } from "@/lib/inboxView";
 
 /**
- * GET /api/inbox/[clientId]/workflows/[workflowId]/conversations?filter=all|pending|human|bot
+ * GET /api/inbox/[clientId]/workflows/[workflowId]/conversations
  *
- * SESSION-authed per-workflow inbox list for light polling. Access is resolved by the
- * WORKFLOW (its real client must be accessible to the user) — the path clientId is not
- * trusted. 401 unauthenticated, 404 for a foreign/inaccessible workflow.
+ * SESSION-authed per-workflow conversation list for the grid's ~5s poll. Returns ALL
+ * conversations (the grid filters + counts client-side); each carries the SQL-computed
+ * `active` flag and, for pending, the latest escalation reason. Access is resolved by
+ * the WORKFLOW (its real client must be accessible) — the path clientId is not trusted.
  */
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  req: Request,
+  _req: Request,
   { params }: { params: Promise<{ clientId: string; workflowId: string }> },
 ): Promise<Response> {
   const { workflowId } = await params;
-  const access = await resolveWorkflowInboxAccess(decodeURIComponent(workflowId));
+  const wf = decodeURIComponent(workflowId);
+  const access = await resolveWorkflowInboxAccess(wf);
   if (!access.ok) return Response.json({ error: "forbidden" }, { status: access.status });
 
-  const f = new URL(req.url).searchParams.get("filter");
-  const filter: InboxFilter = isInboxFilter(f) ? f : "all";
-  const payload = await loadWorkflowInboxList(access.scope.tenantId, decodeURIComponent(workflowId), filter);
+  const payload = await loadWorkflowInboxList(access.scope.tenantId, wf);
   return Response.json(payload);
 }

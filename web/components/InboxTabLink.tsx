@@ -6,35 +6,34 @@ import { useCallback, useEffect, useState } from "react";
 const POLL_MS = 5000;
 
 /**
- * The sidebar Inbox tab. Shows a pending-count badge that stays live from ANY tab of
- * the client: seeded server-side (initialCount) for an instant, correct value, then
- * light-polled from the session-authed count route (paused while the tab is hidden).
+ * A sidebar nav item with a live pending-count badge. H-7: the badge is now scoped per
+ * WORKFLOW (countEndpoint points at the workflow's pending-count route) — the old
+ * client-level attention badge was removed with the attention surface. Polls on mount
+ * and every ~5s, paused while the tab is hidden.
  */
 export function InboxTabLink({
-  clientId,
   href,
   active,
-  initialCount,
+  countEndpoint,
   label = "Inbox",
 }: {
-  clientId: string;
   href: string;
   active: boolean;
-  initialCount: number;
+  countEndpoint: string;
   label?: string;
 }) {
-  const [count, setCount] = useState(initialCount);
+  const [count, setCount] = useState(0);
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch(`/api/inbox/${clientId}/pending-count`, { cache: "no-store" });
+      const res = await fetch(countEndpoint, { cache: "no-store" });
       if (!res.ok) return;
       const payload: { pendingCount?: number } = await res.json();
       if (typeof payload.pendingCount === "number") setCount(payload.pendingCount);
     } catch {
       /* keep last-known count */
     }
-  }, [clientId]);
+  }, [countEndpoint]);
 
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;

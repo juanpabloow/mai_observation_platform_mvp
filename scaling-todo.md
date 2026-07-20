@@ -63,6 +63,25 @@ it here; don't duplicate per-surface.
   for v1 volumes; long-lived conversations will want a windowed/cursor load (the
   machine-API `listMessages` already has a `before` cursor to build on).
 
+## Conversation grid / activity (H-7)
+
+- **Per-workflow activity threshold.** ACTIVE/INACTIVE uses one global constant
+  `ACTIVITY_WINDOW_HOURS = 24` (`src/db/repositories/handoff.ts`, surfaced to the UI via
+  the list payload's `activityWindowHours`). Channel service windows differ (WhatsApp
+  24h vs. others), so make it per-workflow configurable — a column on the workflow's
+  handoff config, read into the `active` SQL expression instead of the constant.
+- **Grid / list view toggle.** The per-workflow Inbox is a card grid; a dense list view
+  suits high-volume triage. Add a remembered per-user toggle (the data payload already
+  serves both — only the presentation differs).
+- **Read / unread tracking.** There is NO read-state today and the grid does not fake
+  one. A real "unread since you last looked" needs a per-agent last-seen marker
+  (per conversation or per workflow) — a new table + write on thread open; do not
+  approximate it from message timestamps.
+- **Pending notifications + recipient model** (carried forward, unchanged): when a
+  conversation goes pending, notify the right humans (email/Slack/push). Needs a
+  recipient model (who watches which client/workflow) — deferred until the Human-Agent
+  role lands. `/api/health`-style polling is not a substitute for a push notification.
+
 ## Outbound send (H-3)
 
 - **Webhook egress hardening (SSRF).** The send webhook URL is customer-supplied. v1

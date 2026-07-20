@@ -20,9 +20,19 @@ export interface ConversationRow {
   mode: ConversationMode;
   assigned_agent_user_id: string | null;
   last_message_at: Date | null;
+  /** Most recent CUSTOMER ('user') message time — drives the ACTIVE/INACTIVE dimension. */
+  last_user_message_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
+
+/**
+ * The activity window (H-7): a conversation is ACTIVE iff its last CUSTOMER message is
+ * within this many hours of now, else INACTIVE (null ⇒ INACTIVE). THE single source of
+ * truth for the threshold — referenced by every activity computation. (Scaling-todo:
+ * per-workflow configurable, since channel service windows differ.)
+ */
+export const ACTIVITY_WINDOW_HOURS = 24;
 
 export interface HandoffMessageRow {
   id: string;
@@ -225,12 +235,18 @@ export async function insertMessage(
 
   if (inserted.rows[0]) {
     // GREATEST ignores NULLs, so the first message sets last_message_at and later
-    // (possibly out-of-order) ones only advance it.
+    // (possibly out-of-order) ones only advance it. last_user_message_at advances the
+    // same way but ONLY for a customer ('user') message — bot/human_agent must not
+    // touch it (it's the activity signal: "the customer wrote").
+    const bumpUser = input.sender === 'user';
     await query(
       `UPDATE conversations
-          SET last_message_at = GREATEST(last_message_at, $3), updated_at = now()
+          SET last_message_at = GREATEST(last_message_at, $3),
+              last_user_message_at = CASE WHEN $4 THEN GREATEST(last_user_message_at, $3)
+                                          ELSE last_user_message_at END,
+              updated_at = now()
         WHERE id = $1 AND tenant_id = $2`,
-      [input.conversationId, input.tenantId, input.occurredAt],
+      [input.conversationId, input.tenantId, input.occurredAt, bumpUser],
     );
     return { message: inserted.rows[0], deduped: false };
   }
@@ -527,6 +543,8 @@ export interface InboxConversationRow {
   created_at: Date;
   /** When it last entered 'pending' (for the pending-age label); null if never. */
   pending_since: Date | null;
+  /** ACTIVE iff the last customer message is within ACTIVITY_WINDOW_HOURS (SQL-computed). */
+  active: boolean;
 }
 
 // The canonical-workflow lateral, shared by the inbox reads: resolves one workflow
@@ -536,56 +554,6 @@ const CANONICAL_WORKFLOW_LATERAL = `
     FROM workflows w
    WHERE w.tenant_id = c.tenant_id AND w.n8n_workflow_id = c.n8n_workflow_id
    ORDER BY w.n8n_workflow_id, w.last_synced_at DESC NULLS LAST`;
-
-/**
- * The client's conversations for the inbox list, optionally filtered to one mode.
- * Sorted pending-first, then most-recent activity. Each row carries the workflow
- * name, assigned-agent name (when human), a last-message preview, and pending-since.
- */
-export async function listConversationsForClient(
-  tenantId: string,
-  clientId: string,
-  opts: { mode?: ConversationMode } = {},
-): Promise<InboxConversationRow[]> {
-  const params: unknown[] = [tenantId, clientId];
-  let modeFilter = '';
-  if (opts.mode) {
-    params.push(opts.mode);
-    modeFilter = `AND c.mode = $3`;
-  }
-  const r = await query<InboxConversationRow>(
-    `SELECT
-       c.id, c.conversation_ref, c.n8n_workflow_id, c.mode,
-       c.assigned_agent_user_id, c.last_message_at, c.created_at,
-       cw.workflow_name,
-       u.name AS assigned_agent_name,
-       lm.text AS last_message_text,
-       lm.sender AS last_message_sender,
-       lm.content_type AS last_message_content_type,
-       ps.pending_since
-     FROM conversations c
-     JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON cw.client_id = $2
-     LEFT JOIN "user" u ON u.id = c.assigned_agent_user_id
-     LEFT JOIN LATERAL (
-       SELECT text, sender, content_type
-         FROM handoff_messages hm
-        WHERE hm.conversation_id = c.id
-        ORDER BY hm.occurred_at DESC, hm.id DESC
-        LIMIT 1
-     ) lm ON true
-     LEFT JOIN LATERAL (
-       SELECT created_at AS pending_since
-         FROM conversation_mode_transitions t
-        WHERE t.conversation_id = c.id AND t.to_mode = 'pending'
-        ORDER BY t.created_at DESC
-        LIMIT 1
-     ) ps ON true
-     WHERE c.tenant_id = $1 ${modeFilter}
-     ORDER BY (c.mode = 'pending') DESC, c.last_message_at DESC NULLS LAST, c.created_at DESC`,
-    params,
-  );
-  return r.rows;
-}
 
 /** A single conversation with its workflow + assigned-agent names, for the thread. */
 export interface InboxConversationDetail extends ConversationRow {
@@ -654,11 +622,13 @@ export async function listConversationsForWorkflow(
   n8nWorkflowId: string,
   opts: { mode?: ConversationMode } = {},
 ): Promise<InboxConversationRow[]> {
-  const params: unknown[] = [tenantId, n8nWorkflowId];
+  // $3 = the activity window (hours); computed as a boolean in SQL so polling naturally
+  // flips a card at the 24h boundary. null last_user_message_at ⇒ INACTIVE (COALESCE).
+  const params: unknown[] = [tenantId, n8nWorkflowId, ACTIVITY_WINDOW_HOURS];
   let modeFilter = '';
   if (opts.mode) {
     params.push(opts.mode);
-    modeFilter = `AND c.mode = $3`;
+    modeFilter = `AND c.mode = $4`;
   }
   const r = await query<InboxConversationRow>(
     `SELECT
@@ -669,7 +639,8 @@ export async function listConversationsForWorkflow(
        lm.text AS last_message_text,
        lm.sender AS last_message_sender,
        lm.content_type AS last_message_content_type,
-       ps.pending_since
+       ps.pending_since,
+       COALESCE(c.last_user_message_at >= now() - make_interval(hours => $3::int), false) AS active
      FROM conversations c
      LEFT JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON true
      LEFT JOIN "user" u ON u.id = c.assigned_agent_user_id
@@ -694,6 +665,29 @@ export async function listConversationsForWorkflow(
   return r.rows;
 }
 
+/** Latest escalation reason (reason_code + detail of the most recent bot→pending
+ * transition) for the given conversations — ONE batched query for the visible pending
+ * page only, never a per-card lateral. Returns a map keyed by conversation id. */
+export interface EscalationReasonRow {
+  conversation_id: string;
+  reason_code: string | null;
+  detail: string | null;
+}
+export async function getLatestEscalationReasons(
+  tenantId: string,
+  conversationIds: string[],
+): Promise<Map<string, EscalationReasonRow>> {
+  if (conversationIds.length === 0) return new Map();
+  const r = await query<EscalationReasonRow>(
+    `SELECT DISTINCT ON (conversation_id) conversation_id, reason_code, detail
+       FROM conversation_mode_transitions
+      WHERE tenant_id = $1 AND conversation_id = ANY($2::uuid[]) AND to_mode = 'pending'
+      ORDER BY conversation_id, created_at DESC`,
+    [tenantId, conversationIds],
+  );
+  return new Map(r.rows.map((row) => [row.conversation_id, row]));
+}
+
 /** Count of a workflow's pending conversations (per-workflow inbox Pending chip). */
 export async function countPendingForWorkflow(
   tenantId: string,
@@ -705,49 +699,6 @@ export async function countPendingForWorkflow(
     [tenantId, n8nWorkflowId],
   );
   return r.rows[0]?.count ?? 0;
-}
-
-/**
- * The CLIENT-level attention queue: only pending + human conversations across the
- * client, pending first then human, most-recent activity within each. Same row shape
- * as the inbox list (carries workflow name + id so rows link into the workflow inbox).
- */
-export async function listAttentionForClient(
-  tenantId: string,
-  clientId: string,
-): Promise<InboxConversationRow[]> {
-  const r = await query<InboxConversationRow>(
-    `SELECT
-       c.id, c.conversation_ref, c.n8n_workflow_id, c.mode,
-       c.assigned_agent_user_id, c.last_message_at, c.created_at,
-       cw.workflow_name,
-       u.name AS assigned_agent_name,
-       lm.text AS last_message_text,
-       lm.sender AS last_message_sender,
-       lm.content_type AS last_message_content_type,
-       ps.pending_since
-     FROM conversations c
-     JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON cw.client_id = $2
-     LEFT JOIN "user" u ON u.id = c.assigned_agent_user_id
-     LEFT JOIN LATERAL (
-       SELECT text, sender, content_type
-         FROM handoff_messages hm
-        WHERE hm.conversation_id = c.id
-        ORDER BY hm.occurred_at DESC, hm.id DESC
-        LIMIT 1
-     ) lm ON true
-     LEFT JOIN LATERAL (
-       SELECT created_at AS pending_since
-         FROM conversation_mode_transitions t
-        WHERE t.conversation_id = c.id AND t.to_mode = 'pending'
-        ORDER BY t.created_at DESC
-        LIMIT 1
-     ) ps ON true
-     WHERE c.tenant_id = $1 AND c.mode IN ('pending', 'human')
-     ORDER BY (c.mode = 'pending') DESC, c.last_message_at DESC NULLS LAST, c.created_at DESC`,
-    [tenantId, clientId],
-  );
-  return r.rows;
 }
 
 /**
@@ -795,7 +746,8 @@ export async function listThreadMessages(
   return r.rows;
 }
 
-/** How many of this client's conversations are 'pending' (the inbox tab badge). */
+/** How many of this client's conversations are 'pending' — the small static
+ * "N pending across workflows" stat on the client overview (H-7; no attention surface). */
 export async function countPendingForClient(tenantId: string, clientId: string): Promise<number> {
   const r = await query<{ count: number }>(
     `SELECT count(*)::int AS count
@@ -805,19 +757,4 @@ export async function countPendingForClient(tenantId: string, clientId: string):
     [tenantId, clientId],
   );
   return r.rows[0]?.count ?? 0;
-}
-
-/** Pending counts grouped by client, for seeding all inbox tab badges at once. */
-export async function pendingCountsByClientForTenant(
-  tenantId: string,
-): Promise<{ client_id: string; count: number }[]> {
-  const r = await query<{ client_id: string; count: number }>(
-    `SELECT cw.client_id, count(*)::int AS count
-       FROM conversations c
-       JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON true
-      WHERE c.tenant_id = $1 AND c.mode = 'pending'
-      GROUP BY cw.client_id`,
-    [tenantId],
-  );
-  return r.rows;
 }
