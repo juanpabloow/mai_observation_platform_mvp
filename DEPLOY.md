@@ -25,6 +25,15 @@ the worker. That's harmless and expected.
 
 **⚠️ Migrations are NOT automatic.** Pushing code does **not** run DB migrations.
 
+> **🔒 HARD RULE — schema must never lag deployed code.** Any push containing a
+> migration **requires `npm run migrate:prod up` (back up first — see
+> [Database migrations](#database-migrations)) BEFORE or immediately after the push.**
+> Never leave migrated code deployed against an un-migrated database.
+> This is not hypothetical: H-2/H-3 code auto-deployed while its two handoff migrations
+> sat unapplied, and the sidebar's `conversations` query then `500`'d **every**
+> authenticated page until they were run. If you can't run the migration right after
+> the push, don't push the schema-dependent code yet.
+
 - **Code-only change (no new migration):** just push to `main`. Done.
 - **Change that adds a NEW migration** (new table / column / index / etc.) — run it
   **manually, AFTER the deploy finishes**:
@@ -130,6 +139,20 @@ Production migrate command (reads `DATABASE_URL` from the environment, no `.env`
 ```
 npm run migrate:prod up
 ```
+
+**Back up FIRST — canonical method.** Before any production migration, dump the DB
+from your laptop using the Postgres service's **public proxy URL** (Railway → Postgres
+→ *Connect* → the **public** `DATABASE_PUBLIC_URL` / proxy `…proxy.rlwy.net` URL — the
+internal `${{ Postgres.DATABASE_URL }}` is not reachable off-Railway, and the
+dashboard **Backups** tab is plan-gated so we don't rely on it):
+
+```
+pg_dump "<public proxy DATABASE_URL>" > ~/obs-backups/obs-$(date +%F-%H%M).sql
+```
+
+Keep the dump **outside the repo** (it contains real data + secrets — never commit it).
+Restore, if ever needed, with `psql "<public url>" < that-file.sql`. Only after the
+backup succeeds, run `npm run migrate:prod up`.
 
 **Recommended for the first deploy (simplest + reliable):** run it as a **one-off
 command in the Railway `worker` service** (Railway dashboard → worker → run a

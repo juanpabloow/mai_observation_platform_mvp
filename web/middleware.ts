@@ -19,7 +19,16 @@ import { getSessionCookie } from "better-auth/cookies";
 // at the data layer. (Middleware can't carry the token through its /login bounce.)
 // /api/handoff is the MACHINE handoff API: cookieless Bearer-token requests must
 // reach the route (which does its own auth) instead of being redirected to /login.
-const PUBLIC_PREFIXES = ["/login", "/signup", "/logout", "/api/auth", "/invite", "/api/handoff"];
+// /api/health is the public uptime probe: it must return 200/503 cookieless.
+const PUBLIC_PREFIXES = [
+  "/login",
+  "/signup",
+  "/logout",
+  "/api/auth",
+  "/invite",
+  "/api/handoff",
+  "/api/health",
+];
 
 export function middleware(request: NextRequest): NextResponse {
   const { pathname } = request.nextUrl;

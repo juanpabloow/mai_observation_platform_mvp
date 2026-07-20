@@ -7,10 +7,26 @@ extends the right place instead of bolting on a parallel mechanism.
 
 ## Deploy / ops
 
-- **Automate migrations** as a Railway pre-deploy / release command, so schema
-  changes apply automatically on deploy instead of the manual Console step.
+- **Automate migrations** as a Railway pre-deploy / release step (`railway.worker.json`
+  → `deploy.preDeployCommand: "npm run migrate:prod up"`), so schema changes apply on
+  every deploy instead of the manual Console step. This makes the **code-outruns-schema
+  failure class disappear** — the one that took production down once (H-2/H-3 code
+  auto-deployed while its two migrations sat unapplied, so every authenticated page
+  `500`'d until they were run). Until this is in place, the manual run is a HARD RULE —
+  see `DEPLOY.md`. (Pair it with an automated backup step before the migration runs.)
 - **Staging environment** / non-`main` branch workflow before production, once there
   are real users.
+
+## Health & monitoring
+
+- **Self-monitoring / alerting.** `GET /api/health` (public; `SELECT 1` → `200 ok` /
+  `503 degraded`) now exists as the probe, but nothing *watches* it — the production
+  outage was **invisible until a human loaded a page**. Wire an external uptime monitor
+  (or a Railway healthcheck) to poll `/api/health` and alert (Slack / email / paging) on
+  `503` or unreachable. Add a synthetic check that also loads an *authenticated* page, so
+  a schema/render regression (like the migration outage, which `/api/health` alone would
+  NOT have caught — the DB was up, only app tables were missing) is caught before a
+  customer hits it.
 
 ## Real-time updates (polling → push)
 
