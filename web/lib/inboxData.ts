@@ -2,6 +2,7 @@ import "server-only";
 import { getSessionScope, canAccessClient, type AccessScope } from "./access";
 import { getClientById } from "@worker/db/repositories/clients.js";
 import { getWorkflowByN8nId } from "@worker/db/repositories/workflows.js";
+import { listTurnsForConversation } from "@worker/db/repositories/conversationTurns.js";
 import {
   ACTIVITY_WINDOW_HOURS,
   getConversationForClient,
@@ -14,6 +15,7 @@ import {
   type ThreadMessageRow,
 } from "@worker/db/repositories/handoff.js";
 import type {
+  HistoryTurnView,
   InboxConversationView,
   InboxHeaderView,
   InboxMessageView,
@@ -91,12 +93,19 @@ export function toMessageView(m: ThreadMessageRow): InboxMessageView {
   };
 }
 
-export function toHeaderView(c: InboxConversationDetail): InboxHeaderView {
+export function toHeaderView(
+  c: InboxConversationDetail,
+  windowHours: number = ACTIVITY_WINDOW_HOURS,
+): InboxHeaderView {
+  const active = c.last_user_message_at
+    ? Date.now() - c.last_user_message_at.getTime() <= windowHours * 3600_000
+    : false;
   return {
     id: c.id,
     conversationRef: c.conversation_ref,
     workflowName: c.workflow_name,
     mode: c.mode,
+    active,
     assignedAgentUserId: c.assigned_agent_user_id,
     assignedAgentName: c.assigned_agent_name,
   };
@@ -153,6 +162,9 @@ export async function resolveWorkflowInboxAccess(
 export interface InboxThreadPayload {
   header: InboxHeaderView;
   messages: InboxMessageView[];
+  /** Pre-handoff derived turns (only when requested — for the drawer's initial load). */
+  history?: HistoryTurnView[];
+  activityWindowHours: number;
   asOf: string;
 }
 
@@ -160,19 +172,40 @@ export interface InboxThreadPayload {
  * Load a thread (header + messages, serialized) — but ONLY if the conversation
  * belongs to this client. Returns null otherwise (→ the caller 404s / direct-URL
  * probing of another client's conversation is indistinguishable from not-found).
+ * `includeHistory` adds the pre-handoff derived turns (one extra query) — the drawer
+ * requests it on the initial open; the ~4s poll does not.
  */
 export async function loadInboxThread(
   tenantId: string,
   clientId: string,
   conversationId: string,
+  opts: { includeHistory?: boolean } = {},
 ): Promise<InboxThreadPayload | null> {
   if (!isUuid(conversationId)) return null; // never let a non-UUID reach the id= query
   const conversation = await getConversationForClient(tenantId, clientId, conversationId);
   if (!conversation) return null;
   const messages = await listThreadMessages(tenantId, conversationId);
+
+  let history: HistoryTurnView[] | undefined;
+  if (opts.includeHistory) {
+    const turns = await listTurnsForConversation({
+      tenantId,
+      n8nWorkflowId: conversation.n8n_workflow_id,
+      conversationId: conversation.conversation_ref,
+    });
+    history = turns.map((t) => ({
+      id: t.id,
+      userText: t.user_message,
+      aiText: t.ai_response,
+      at: t.turn_timestamp.toISOString(),
+    }));
+  }
+
   return {
     header: toHeaderView(conversation),
     messages: messages.map(toMessageView),
+    history,
+    activityWindowHours: ACTIVITY_WINDOW_HOURS,
     asOf: new Date().toISOString(),
   };
 }

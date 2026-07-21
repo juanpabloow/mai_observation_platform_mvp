@@ -1,7 +1,6 @@
 import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { resolveWorkflowUnderClient } from "@/lib/clientWorkflow";
-import { statusBadgeClasses } from "@/lib/format";
 
 /**
  * Shared layout for everything under a workflow
@@ -33,37 +32,26 @@ export default async function WorkflowLayout({
   }
   const { workflow } = res;
 
+  // H-8: the large workflow title block was removed from ALL workflow sections — the
+  // breadcrumb (tenant / workflow) already carries identity, and each section renders
+  // its own compact header. `workflow` is still resolved above for the RBAC/notFound
+  // guard (and cached for the page).
+  void workflow;
+
   const pathname = (await headers()).get("x-pathname") ?? "";
   // The executions master-detail owns its internal scroll; everything else scrolls
   // the slot. (x-pathname carries no query string, so a plain suffix test is safe.)
   const isExecutions = pathname.endsWith("/executions");
 
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      {/* Pinned workflow heading — stays put while the sub-page content scrolls. */}
-      <div className="shrink-0 border-b border-line px-6 py-5">
-        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-3">
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">
-            {workflow.name ?? workflow.n8n_workflow_id}
-          </h1>
-          {workflow.active !== null ? (
-            <span className={statusBadgeClasses(workflow.active ? "success" : "neutral")}>
-              {workflow.active ? "active" : "inactive"}
-            </span>
-          ) : null}
-          <span className="font-mono text-xs text-faint">{workflow.n8n_workflow_id}</span>
-        </div>
-      </div>
-
-      {isExecutions ? (
-        // Bounded slot: the workspace fills it and scrolls its columns internally.
-        <div className="flex min-h-0 flex-1 flex-col">{children}</div>
-      ) : (
-        // Scrolling slot: full-width scrollbar, familiar centered content column.
-        <div className="min-h-0 flex-1 overflow-y-auto">
-          <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-8">{children}</div>
-        </div>
-      )}
+  return isExecutions ? (
+    // Bounded slot: the workspace fills it and scrolls its columns internally.
+    <div className="flex min-h-0 flex-1 flex-col">{children}</div>
+  ) : (
+    // Scrolling slot: full-width scrollbar, familiar centered content column. This is
+    // the ONE padded wrapper for every non-executions section (Inbox/Analytics/…), so
+    // hard-load and client-nav always render with identical spacing.
+    <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-8">{children}</div>
     </div>
   );
 }

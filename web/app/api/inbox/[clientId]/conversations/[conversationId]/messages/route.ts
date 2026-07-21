@@ -10,17 +10,21 @@ import { loadInboxThread, resolveInboxAccess } from "@/lib/inboxData";
 export const dynamic = "force-dynamic";
 
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: Promise<{ clientId: string; conversationId: string }> },
 ): Promise<Response> {
   const { clientId, conversationId } = await params;
   const access = await resolveInboxAccess(clientId);
   if (!access.ok) return Response.json({ error: "forbidden" }, { status: access.status });
 
+  // The drawer's initial open requests ?history=1 (pre-handoff derived turns); the
+  // ~4s poll omits it to avoid the extra query.
+  const includeHistory = new URL(req.url).searchParams.get("history") === "1";
   const payload = await loadInboxThread(
     access.scope.tenantId,
     clientId,
     decodeURIComponent(conversationId),
+    { includeHistory },
   );
   if (!payload) return Response.json({ error: "not_found" }, { status: 404 });
   return Response.json(payload);

@@ -51,8 +51,18 @@ export interface InboxHeaderView {
   conversationRef: string;
   workflowName: string | null;
   mode: InboxMode;
+  /** ACTIVE iff the customer wrote within the activity window (for the drawer's tag). */
+  active: boolean;
   assignedAgentUserId: string | null;
   assignedAgentName: string | null;
+}
+
+/** A pre-handoff derived turn (read-only history disclosure at the top of a thread). */
+export interface HistoryTurnView {
+  id: string;
+  userText: string | null;
+  aiText: string | null;
+  at: string; // ISO
 }
 
 /** Result of a send/retry server action (client-safe shape). */

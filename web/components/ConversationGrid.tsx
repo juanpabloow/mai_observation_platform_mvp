@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { ConversationCard } from "./ConversationCard";
 import {
   ACTIVITY_SEGMENTS,
@@ -29,10 +30,12 @@ export function ConversationGrid({
   clientId,
   initial,
   endpoint,
+  settingsHref,
 }: {
   clientId: string;
   initial: GridPayload;
   endpoint: string;
+  settingsHref: string;
 }) {
   const [data, setData] = useState<GridPayload>(initial);
   const [stale, setStale] = useState(false);
@@ -104,8 +107,10 @@ export function ConversationGrid({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex flex-col gap-3">
-        {/* Mode chips with live counts */}
+      {/* ONE coherent toolbar row (H-8): [mode chips] [activity segment] ····· [search]
+          [settings]. Consistent control height; wraps gracefully (the search+settings
+          group drops to its own row on narrow widths via ml-auto + flex-wrap). */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
         <div className="flex flex-wrap items-center gap-2">
           {INBOX_FILTERS.map((f) => {
             const active = mode === f.key;
@@ -115,7 +120,7 @@ export function ConversationGrid({
                 type="button"
                 onClick={() => setMode(f.key)}
                 aria-pressed={active}
-                className={`rounded-full px-3 py-1 text-sm transition-colors ${
+                className={`h-8 rounded-full px-3 text-sm transition-colors ${
                   active
                     ? "bg-foreground text-background"
                     : "border border-black/10 text-muted hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
@@ -125,35 +130,42 @@ export function ConversationGrid({
               </button>
             );
           })}
-          {stale ? <span className="text-xs text-faint">Reconnecting…</span> : null}
         </div>
 
-        {/* Activity segment + search */}
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div className="inline-flex overflow-hidden rounded-lg border border-black/10 text-sm dark:border-line-strong">
-            {ACTIVITY_SEGMENTS.map((s) => (
-              <button
-                key={s.key}
-                type="button"
-                onClick={() => setActivity(s.key)}
-                aria-pressed={activity === s.key}
-                className={`px-3 py-1 transition-colors ${
-                  activity === s.key
-                    ? "bg-foreground text-background"
-                    : "text-muted hover:bg-black/[0.04] dark:hover:bg-subtle"
-                }`}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
+        <div className="inline-flex h-8 overflow-hidden rounded-lg border border-black/10 text-sm dark:border-line-strong">
+          {ACTIVITY_SEGMENTS.map((s) => (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => setActivity(s.key)}
+              aria-pressed={activity === s.key}
+              className={`px-3 transition-colors ${
+                activity === s.key
+                  ? "bg-foreground text-background"
+                  : "text-muted hover:bg-black/[0.04] dark:hover:bg-subtle"
+              }`}
+            >
+              {s.label}
+            </button>
+          ))}
+        </div>
+
+        {stale ? <span className="text-xs text-faint">Reconnecting…</span> : null}
+
+        <div className="ml-auto flex items-center gap-2">
           <input
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Search number…"
-            className="w-full max-w-xs rounded-lg border border-line bg-transparent px-3 py-1.5 text-sm outline-none focus:border-line-strong"
+            className="h-8 w-[240px] max-w-[55vw] rounded-lg border border-line bg-transparent px-3 text-sm outline-none focus:border-line-strong"
           />
+          <Link
+            href={settingsHref}
+            className="flex h-8 shrink-0 items-center rounded-lg border border-black/10 px-3 text-sm text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground dark:border-line-strong dark:hover:bg-subtle"
+          >
+            ⚙ Settings
+          </Link>
         </div>
       </div>
 
@@ -167,7 +179,8 @@ export function ConversationGrid({
             <ConversationCard
               key={v.id}
               view={v}
-              href={`/clients/${encodeURIComponent(clientId)}/workflows/${encodeURIComponent(v.workflowId)}/inbox/${encodeURIComponent(v.id)}`}
+              // Open the drawer via ?c= (same route — no full navigation; grid stays live).
+              href={`/clients/${encodeURIComponent(clientId)}/workflows/${encodeURIComponent(v.workflowId)}/inbox?c=${encodeURIComponent(v.id)}`}
               now={now}
               activityWindowHours={data.activityWindowHours}
             />

@@ -59,7 +59,7 @@ export function Composer({ mode, onSend }: { mode: InboxMode; onSend: (text: str
           Send
         </button>
       </div>
-      {!enabled ? <p className="mt-1 text-xs text-faint">{helper}</p> : null}
+      {/* H-8: no caption — the disabled-mode helper lives in the placeholder only. */}
     </div>
   );
 }

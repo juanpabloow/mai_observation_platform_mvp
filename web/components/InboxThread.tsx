@@ -5,31 +5,36 @@ import { ModeBadge } from "./ModeBadge";
 import { ThreadActions } from "./ThreadActions";
 import { Composer } from "./Composer";
 import { formatChatTime, formatDayLabel, localDayKey } from "@/lib/format";
-import type { InboxHeaderView, InboxMessageView } from "@/lib/inboxView";
+import type { HistoryTurnView, InboxHeaderView, InboxMessageView } from "@/lib/inboxView";
 import type { InboxActionResult } from "@/lib/inboxActions";
 import { sendMessageAction, retrySendAction } from "@/lib/sendActions";
 
 interface ThreadPayload {
   header: InboxHeaderView;
   messages: InboxMessageView[];
+  history?: HistoryTurnView[];
+  activityWindowHours: number;
   asOf: string;
 }
 
-/** A brand-new send not yet confirmed present in the server list. */
 interface PendingSend {
   tempId: string;
-  realId: string | null; // set once the action returns the inserted row's id
+  realId: string | null;
   view: InboxMessageView;
 }
 
 const POLL_MS = 4000;
+const GROUP_GAP_MS = 3 * 60_000; // same sender within 3min stacks into one group
+const NEAR_BOTTOM_PX = 90;
 
 /**
- * Thread view with the ACTIVE composer (H-3). Optimistic sends: a 'sending' bubble
- * appears immediately, then resolves to sent or failed (+detail+Retry). Reconciliation
- * with the ~4s poll is by message id — a pending bubble is dropped once its real id
- * appears in the server list, and a retry is shown as 'sending' via a per-id override
- * until the poll catches up. No duplicate bubbles.
+ * The live conversation thread, rendered INSIDE the inbox drawer (H-8). Fills the
+ * drawer as a flex column: compact header → scrolling messages → pinned composer.
+ * Optimistic sends + ~4s poll (visibility-paused) are preserved. Messages are grouped
+ * by consecutive sender (name once per group), timestamps sit in-bubble bottom-right,
+ * date separators mark day changes, and the pre-handoff history is a collapsed
+ * disclosure at the TOP. Auto-scrolls to the newest on open and on your own send; a
+ * polled message only auto-scrolls when you're already near the bottom.
  */
 export function InboxThread({
   clientId,
@@ -37,12 +42,14 @@ export function InboxThread({
   viewerUserId,
   viewerName,
   viewerIsFullAccess,
+  onClose,
 }: {
   clientId: string;
   initial: ThreadPayload;
   viewerUserId: string;
   viewerName: string | null;
   viewerIsFullAccess: boolean;
+  onClose: () => void;
 }) {
   const [header, setHeader] = useState(initial.header);
   const [serverMessages, setServerMessages] = useState(initial.messages);
@@ -50,10 +57,20 @@ export function InboxThread({
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
   const [now, setNow] = useState(() => new Date(initial.asOf));
   const [notice, setNotice] = useState<{ kind: "error" | "info"; text: string } | null>(null);
+  const history = initial.history ?? [];
   const scrollRef = useRef<HTMLDivElement>(null);
   const tempCounter = useRef(0);
+  const wasNearBottom = useRef(true);
+  const forceScroll = useRef(true); // scroll on first paint
+
+  const nearBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return true;
+    return el.scrollHeight - el.scrollTop - el.clientHeight < NEAR_BOTTOM_PX;
+  };
 
   const load = useCallback(async () => {
+    wasNearBottom.current = nearBottom(); // capture BEFORE the DOM grows
     try {
       const res = await fetch(`/api/inbox/${clientId}/conversations/${header.id}/messages`, {
         cache: "no-store",
@@ -68,7 +85,6 @@ export function InboxThread({
     }
   }, [clientId, header.id]);
 
-  // Poll with visibility pause.
   useEffect(() => {
     let timer: ReturnType<typeof setInterval> | null = null;
     const start = () => {
@@ -95,15 +111,13 @@ export function InboxThread({
     };
   }, [load]);
 
-  // Merge server + optimistic, keyed by id (server wins once a pending's realId lands).
+  // Merge server + optimistic (server wins once a pending's realId lands).
   const serverIds = new Set(serverMessages.map((m) => m.id));
   const merged: InboxMessageView[] = serverMessages.map((m) =>
-    retrying.has(m.id)
-      ? { ...m, status: "sending", failureCode: null, failureDetail: null }
-      : m,
+    retrying.has(m.id) ? { ...m, status: "sending", failureCode: null, failureDetail: null } : m,
   );
   for (const p of pending) {
-    if (p.realId && serverIds.has(p.realId)) continue; // server caught up → drop optimistic
+    if (p.realId && serverIds.has(p.realId)) continue;
     merged.push(p.view);
   }
   merged.sort((a, b) => {
@@ -111,20 +125,16 @@ export function InboxThread({
     return t !== 0 ? t : a.id.localeCompare(b.id);
   });
 
-  // Auto-scroll to newest when the rendered count grows.
+  // Auto-scroll: force on open/own-send; otherwise only if the user was near the bottom.
   const renderedCount = merged.length;
-  const lastCountRef = useRef(renderedCount);
   useEffect(() => {
     const el = scrollRef.current;
-    if (el && renderedCount !== lastCountRef.current) {
-      lastCountRef.current = renderedCount;
+    if (!el) return;
+    if (forceScroll.current || wasNearBottom.current) {
       el.scrollTop = el.scrollHeight;
+      forceScroll.current = false;
     }
   }, [renderedCount]);
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (el) el.scrollTop = el.scrollHeight;
-  }, []);
 
   const onActionResult = (r: InboxActionResult) => {
     if (r.header) setHeader(r.header);
@@ -145,20 +155,16 @@ export function InboxThread({
       failureDetail: null,
       occurredAt: new Date().toISOString(),
     };
+    forceScroll.current = true; // your own message → jump to bottom
     setPending((prev) => [...prev, { tempId, realId: null, view: optimistic }]);
-
     void (async () => {
       const r = await sendMessageAction(clientId, header.id, text);
       if (r.ok) {
-        // Keep the bubble (now sent OR failed), keyed by the real id.
         setPending((prev) =>
-          prev.map((p) =>
-            p.tempId === tempId ? { tempId, realId: r.message.id, view: r.message } : p,
-          ),
+          prev.map((p) => (p.tempId === tempId ? { tempId, realId: r.message.id, view: r.message } : p)),
         );
         void load();
       } else {
-        // Guard failed before any row was created → drop the optimistic bubble.
         setPending((prev) => prev.filter((p) => p.tempId !== tempId));
         if (r.code === "mode_changed" && r.header) setHeader(r.header);
         setNotice({ kind: r.code === "mode_changed" ? "info" : "error", text: r.error });
@@ -170,18 +176,14 @@ export function InboxThread({
     setRetrying((prev) => new Set(prev).add(messageId));
     void (async () => {
       const r = await retrySendAction(clientId, header.id, messageId);
-      await load(); // pull the final status before dropping the override
+      await load();
       setRetrying((prev) => {
         const next = new Set(prev);
         next.delete(messageId);
         return next;
       });
-      // Also update any still-pending optimistic entry mirroring this id.
-      if (r.ok) {
-        setPending((prev) =>
-          prev.map((p) => (p.realId === messageId ? { ...p, view: r.message } : p)),
-        );
-      } else {
+      if (r.ok) setPending((prev) => prev.map((p) => (p.realId === messageId ? { ...p, view: r.message } : p)));
+      else {
         if (r.code === "mode_changed" && r.header) setHeader(r.header);
         setNotice({ kind: r.code === "mode_changed" ? "info" : "error", text: r.error });
       }
@@ -189,51 +191,127 @@ export function InboxThread({
   };
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="flex flex-col gap-1">
-          <div className="flex items-center gap-2">
+    <div className="flex h-full min-h-0 flex-col">
+      {/* Compact header */}
+      <div className="flex shrink-0 items-start justify-between gap-2 border-b border-line px-4 py-3">
+        <div className="flex min-w-0 flex-col gap-1">
+          <div className="flex flex-wrap items-center gap-2">
             <ModeBadge mode={header.mode} />
-            <h2 className="text-lg font-semibold tracking-tight">{header.conversationRef}</h2>
+            <span className="truncate font-semibold">{header.conversationRef}</span>
+            <ActivityTag active={header.active} windowHours={initial.activityWindowHours} />
           </div>
-          <div className="text-xs text-faint">
+          <div className="truncate text-xs text-faint">
             {header.workflowName ?? "Unknown workflow"}
-            {header.mode === "human" && header.assignedAgentName
-              ? ` · Taken by ${header.assignedAgentName}`
-              : ""}
+            {header.mode === "human" && header.assignedAgentName ? (
+              <span className="text-emerald-700 dark:text-emerald-400"> · ● {header.assignedAgentName}</span>
+            ) : null}
           </div>
         </div>
-        <ThreadActions
-          clientId={clientId}
-          header={header}
-          viewerUserId={viewerUserId}
-          viewerIsFullAccess={viewerIsFullAccess}
-          onResult={onActionResult}
-        />
+        <div className="flex shrink-0 items-center gap-2">
+          <ThreadActions
+            clientId={clientId}
+            header={header}
+            viewerUserId={viewerUserId}
+            viewerIsFullAccess={viewerIsFullAccess}
+            onResult={onActionResult}
+          />
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close conversation"
+            className="rounded-lg border border-black/10 px-2 py-1 text-xs text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground dark:border-line-strong dark:hover:bg-subtle"
+          >
+            ✕
+          </button>
+        </div>
       </div>
 
       {notice ? (
         <p
-          className={
-            notice.kind === "error"
-              ? "rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-danger"
-              : "rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-400"
-          }
+          className={`shrink-0 px-4 py-2 text-sm ${
+            notice.kind === "error" ? "text-danger" : "text-amber-700 dark:text-amber-400"
+          }`}
         >
           {notice.text}
         </p>
       ) : null}
 
-      <div
-        ref={scrollRef}
-        className="h-[55vh] overflow-y-auto rounded-xl border border-black/10 bg-black/[0.02] px-4 py-4 dark:border-line dark:bg-card"
-      >
+      {/* Messages (scrolls) */}
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-black/[0.02] px-4 py-3 dark:bg-card">
+        {history.length > 0 ? <HistoryDisclosure turns={history} /> : null}
         <MessageTranscript messages={merged} now={now} onRetry={handleRetry} />
       </div>
 
-      <Composer mode={header.mode} onSend={handleSend} />
+      {/* Composer (pinned) */}
+      <div className="shrink-0 px-4 pb-3">
+        <Composer mode={header.mode} onSend={handleSend} />
+      </div>
     </div>
   );
+}
+
+function ActivityTag({ active, windowHours }: { active: boolean; windowHours: number }) {
+  return active ? (
+    <span
+      title={`Active — the customer wrote within the last ${windowHours}h`}
+      className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400"
+    >
+      Active
+    </span>
+  ) : (
+    <span
+      title={`Inactive — no customer message in the last ${windowHours}h`}
+      className="rounded-full bg-subtle px-1.5 py-0.5 text-[11px] font-medium text-faint"
+    >
+      Inactive
+    </span>
+  );
+}
+
+/** Collapsed pre-handoff history at the top (read-only derived turns). */
+function HistoryDisclosure({ turns }: { turns: HistoryTurnView[] }) {
+  return (
+    <details className="mb-3 rounded-xl border border-black/10 dark:border-line">
+      <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted hover:text-foreground">
+        History before handoff · {turns.length} {turns.length === 1 ? "turn" : "turns"}
+      </summary>
+      <div className="flex flex-col gap-2 border-t border-line px-3 py-3">
+        <p className="text-[11px] text-faint">
+          Reconstructed from executions before live handoff was wired (read-only).
+        </p>
+        {turns.map((t) => (
+          <div key={t.id} className="flex flex-col gap-1">
+            {t.userText ? (
+              <div className="flex justify-start">
+                <div className="max-w-[70%] rounded-xl bg-black/5 px-3 py-2 text-sm text-foreground dark:bg-white/10">
+                  {t.userText}
+                </div>
+              </div>
+            ) : null}
+            {t.aiText ? (
+              <div className="flex justify-end">
+                <div className="max-w-[70%] rounded-xl bg-emerald-700/80 px-3 py-2 text-sm text-emerald-50">
+                  {t.aiText}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
+interface Run {
+  type: "run";
+  key: string;
+  sender: InboxMessageView["sender"];
+  items: InboxMessageView[];
+}
+interface DateSep {
+  type: "date";
+  key: string;
+  label: string;
 }
 
 function MessageTranscript({
@@ -248,58 +326,91 @@ function MessageTranscript({
   if (messages.length === 0) {
     return <p className="py-8 text-center text-sm text-faint">No messages yet.</p>;
   }
-  const groups: { key: string; label: string; items: InboxMessageView[] }[] = [];
+  // Build date separators + consecutive-sender runs.
+  const blocks: (Run | DateSep)[] = [];
+  let lastDay: string | null = null;
+  let run: Run | null = null;
   for (const m of messages) {
     const d = new Date(m.occurredAt);
-    const key = localDayKey(d);
-    const last = groups[groups.length - 1];
-    if (!last || last.key !== key) groups.push({ key, label: formatDayLabel(d, now), items: [m] });
-    else last.items.push(m);
+    const day = localDayKey(d);
+    if (day !== lastDay) {
+      blocks.push({ type: "date", key: `date-${day}`, label: formatDayLabel(d, now) });
+      lastDay = day;
+      run = null;
+    }
+    const prev = run?.items[run.items.length - 1];
+    const sameRun =
+      run !== null &&
+      run.sender === m.sender &&
+      prev !== undefined &&
+      d.getTime() - new Date(prev.occurredAt).getTime() <= GROUP_GAP_MS;
+    if (sameRun && run) {
+      run.items.push(m);
+    } else {
+      run = { type: "run", key: `run-${m.id}`, sender: m.sender, items: [m] };
+      blocks.push(run);
+    }
   }
+
   return (
-    <div className="flex flex-col gap-2">
-      {groups.map((g) => (
-        <div key={g.key} className="flex flex-col gap-2">
-          <div className="my-2 flex justify-center">
-            <span className="rounded-full bg-black/5 px-3 py-1 text-xs text-neutral-500 dark:bg-card dark:text-muted">
-              {g.label}
+    <div className="flex flex-col gap-3">
+      {blocks.map((b) =>
+        b.type === "date" ? (
+          <div key={b.key} className="my-1 flex justify-center">
+            <span className="rounded-full bg-black/5 px-2.5 py-0.5 text-[11px] text-neutral-500 dark:bg-white/10 dark:text-muted">
+              {b.label}
             </span>
           </div>
-          {g.items.map((m) => (
-            <Bubble key={m.id} msg={m} onRetry={onRetry} />
-          ))}
-        </div>
+        ) : (
+          <MessageRun key={b.key} run={b} onRetry={onRetry} />
+        ),
+      )}
+    </div>
+  );
+}
+
+/** One consecutive-sender group: name once at the top, bubbles stacked tightly. */
+function MessageRun({ run, onRetry }: { run: Run; onRetry: (id: string) => void }) {
+  const isUser = run.sender === "user";
+  const isAgent = run.sender === "human_agent";
+  const agentName = isAgent ? run.items.find((m) => m.agentName)?.agentName ?? null : null;
+  return (
+    <div className={`flex flex-col gap-0.5 ${isUser ? "items-start" : "items-end"}`}>
+      {isAgent && agentName ? (
+        <span className="px-1 text-[11px] font-medium text-faint">{agentName}</span>
+      ) : null}
+      {run.items.map((m) => (
+        <Bubble key={m.id} msg={m} onRetry={onRetry} />
       ))}
     </div>
   );
 }
 
 /**
- * A message bubble. user → left (gray); bot → right (emerald); human_agent → right
- * (indigo + agent name). Human-agent sends show status: sending (ghosted), sent, or
- * failed (error style + failure detail + Retry).
+ * A single bubble. user → left neutral; bot → right emerald; human_agent → right
+ * indigo (failed → red). Timestamp in-bubble bottom-right, small + muted.
  */
 function Bubble({ msg, onRetry }: { msg: InboxMessageView; onRetry: (id: string) => void }) {
   const isUser = msg.sender === "user";
   const isAgent = msg.sender === "human_agent";
-  const time = formatChatTime(new Date(msg.occurredAt));
   const sending = msg.status === "sending";
   const failed = msg.status === "failed";
+  const time = formatChatTime(new Date(msg.occurredAt));
 
   const bubbleClass = isUser
-    ? "rounded-bl-sm bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-foreground"
+    ? "bg-black/5 text-foreground dark:bg-white/10"
     : isAgent
       ? failed
-        ? "rounded-br-sm bg-red-600/90 text-red-50"
-        : "rounded-br-sm bg-indigo-600/90 text-indigo-50"
-      : "rounded-br-sm bg-emerald-700/90 text-emerald-50";
-  const timeClass = isUser
-    ? "text-neutral-500"
+        ? "bg-red-600/90 text-red-50"
+        : "bg-indigo-600 text-indigo-50"
+      : "bg-emerald-700 text-emerald-50";
+  const metaClass = isUser
+    ? "text-faint"
     : isAgent
       ? failed
         ? "text-red-100/80"
-        : "text-indigo-100/70"
-      : "text-emerald-100/70";
+        : "text-indigo-100/80"
+      : "text-emerald-100/80";
 
   const body =
     msg.text && msg.text.trim() !== ""
@@ -309,33 +420,26 @@ function Bubble({ msg, onRetry }: { msg: InboxMessageView; onRetry: (id: string)
         : "…";
 
   return (
-    <div className={`flex ${isUser ? "justify-start" : "justify-end"}`}>
-      <div className={`max-w-[78%] rounded-2xl px-3 py-2 shadow-sm ${bubbleClass} ${sending ? "opacity-70" : ""}`}>
-        {isAgent && msg.agentName ? (
-          <div className="mb-0.5 text-[11px] font-medium text-white/90">{msg.agentName}</div>
+    <div className={`max-w-[70%] rounded-xl px-3 py-2 text-sm leading-snug shadow-sm ${bubbleClass} ${sending ? "opacity-70" : ""}`}>
+      <span className="whitespace-pre-wrap break-words align-middle">{body}</span>
+      {failed && msg.failureDetail ? (
+        <span className="mt-1 block rounded bg-black/20 px-1.5 py-1 text-[11px] text-red-50">
+          {msg.failureDetail}
+        </span>
+      ) : null}
+      <span className={`ml-2 inline-flex items-center gap-1.5 align-middle text-[10px] ${metaClass}`}>
+        {sending ? <span>sending…</span> : null}
+        {failed ? (
+          <button
+            type="button"
+            onClick={() => onRetry(msg.id)}
+            className="rounded bg-white/20 px-1 text-[10px] font-medium text-white hover:bg-white/30"
+          >
+            Retry
+          </button>
         ) : null}
-        <div className="max-h-96 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed">
-          {body}
-        </div>
-        {failed && msg.failureDetail ? (
-          <div className="mt-1 rounded bg-black/20 px-1.5 py-1 text-[11px] text-red-50">
-            {msg.failureDetail}
-          </div>
-        ) : null}
-        <div className={`mt-1 flex items-center justify-end gap-2 text-[10px] ${timeClass}`}>
-          {sending ? <span>sending…</span> : null}
-          {failed ? (
-            <button
-              type="button"
-              onClick={() => onRetry(msg.id)}
-              className="rounded bg-white/20 px-1.5 py-0.5 text-[10px] font-medium text-white hover:bg-white/30"
-            >
-              Retry
-            </button>
-          ) : null}
-          <span>{time}</span>
-        </div>
-      </div>
+        <span>{time}</span>
+      </span>
     </div>
   );
 }

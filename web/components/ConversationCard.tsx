@@ -33,10 +33,11 @@ function ActivityTag({ active, windowHours }: { active: boolean; windowHours: nu
 
 /**
  * One conversation card in the grid (H-7). The WHOLE card is the link to the thread.
- *   - human mode → a "live person here" ring (semantic --ring-live-human token: ink in
- *     light, white in dark) + elevated shadow.
- *   - pending mode → a subtle amber tint so the eye finds it first, plus pending-age and
- *     the latest escalation reason.
+ *   - human mode → a 4px LEFT accent strip in the Human-badge emerald + elevated shadow
+ *     (H-8: was a full ring, which read as "selected").
+ *   - pending mode → a 4px amber left strip + a subtle amber tint so the eye finds it
+ *     first, plus pending-age and the latest escalation reason.
+ *   - bot mode → no strip (the silent default).
  */
 export function ConversationCard({
   view,
@@ -52,12 +53,15 @@ export function ConversationCard({
   const human = view.mode === "human";
   const pending = view.mode === "pending";
 
+  // H-8: the mode signal is a 4px LEFT accent strip (not a full ring, which read as
+  // "selected"): human = the Human-badge emerald, pending = the pending amber, bot =
+  // none. Human keeps a subtle elevation; pending keeps its faint amber tint so it
+  // still draws the eye first.
   const cardClass = [
-    "flex h-full flex-col gap-2 rounded-xl border p-4 transition-shadow",
-    pending
-      ? "border-amber-500/40 bg-amber-500/[0.06]"
-      : "border-black/10 bg-card dark:border-line",
-    human ? "shadow-md ring-2 ring-ring-live-human" : "hover:shadow-sm",
+    "flex h-full flex-col gap-2 rounded-xl border border-black/10 bg-card p-4 transition-shadow dark:border-line",
+    human ? "border-l-4 border-l-emerald-500 shadow-md dark:border-l-emerald-400" : "",
+    pending ? "border-l-4 border-l-amber-500 bg-amber-500/[0.06] dark:border-l-amber-400" : "",
+    !human && !pending ? "hover:shadow-sm" : "",
   ].join(" ");
 
   const reasonLine = pending

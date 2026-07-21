@@ -33,9 +33,6 @@
   --accent: #059669; /* emerald — links, ✓ */
   --danger: #dc2626; /* red — destructive, errors */
   --success: #15803d; /* green — connected / complete */
-  /* H-7 conversation grid: the "a person is live here" ring on human-mode cards.
-     Light = near-black ink; dark (below) = white. One semantic token, both themes. */
-  --ring-live-human: #171717;
 }
 
 .dark {
@@ -53,7 +50,6 @@
   --accent: #34d399; /* emerald-400 */
   --danger: #f87171; /* red-400 */
   --success: #4ade80; /* green-400 */
-  --ring-live-human: #ffffff; /* white ring on human cards in dark mode */
 }
 
 @theme inline {
@@ -71,7 +67,6 @@
   --color-accent: var(--accent);
   --color-danger: var(--danger);
   --color-success: var(--success);
-  --color-ring-live-human: var(--ring-live-human);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
 }

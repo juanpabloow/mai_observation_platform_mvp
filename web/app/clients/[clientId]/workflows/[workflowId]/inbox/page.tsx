@@ -2,14 +2,16 @@ import { connection } from "next/server";
 import Link from "next/link";
 import { listConversationMappings } from "@worker/db/repositories/fieldMappings.js";
 import { listConversations } from "@worker/db/repositories/conversationTurns.js";
-import { isWorkflowHandoffActive } from "@worker/db/repositories/handoff.js";
+import { isWorkflowHandoffActive, getAgentSummary } from "@worker/db/repositories/handoff.js";
 import { getCurrentTenantId } from "@/lib/tenant";
+import { getAccessScope, hasFullAccess } from "@/lib/access";
 import { requireWorkflowUnderClient } from "@/lib/clientWorkflow";
 import { loadWorkflowInboxList } from "@/lib/inboxData";
 import { formatListTimestamp } from "@/lib/format";
 import { ConversationGrid } from "@/components/ConversationGrid";
 import { ConversationList, type ConversationListItem } from "@/components/ConversationList";
 import { EnableHandoffCallout } from "@/components/EnableHandoffCallout";
+import { InboxDrawer } from "@/components/InboxDrawer";
 
 /**
  * Per-workflow INBOX (H-6) — replaces the old per-workflow "Conversations" section.
@@ -58,18 +60,29 @@ export default async function WorkflowInboxPage({
 
   const handoffActive = await isWorkflowHandoffActive(tenantId, workflowId);
 
-  // ── HANDOFF-ACTIVE: the live conversation GRID (conversations table) ──
+  // ── HANDOFF-ACTIVE: the live conversation GRID (conversations table) + the thread
+  // DRAWER (H-8, opened via ?c=). The grid's toolbar IS the section header now.
   if (handoffActive) {
-    const initial = await loadWorkflowInboxList(tenantId, workflowId);
+    const scope = await getAccessScope();
+    const [initial, viewer] = await Promise.all([
+      loadWorkflowInboxList(tenantId, workflowId),
+      getAgentSummary(scope.userId),
+    ]);
     return (
-      <div className="flex flex-col gap-4">
-        {header}
+      <>
         <ConversationGrid
           clientId={linkClientId}
           initial={initial}
           endpoint={`/api/inbox/${encodeURIComponent(linkClientId)}/workflows/${encodeURIComponent(workflowId)}/conversations`}
+          settingsHref={settingsHref}
         />
-      </div>
+        <InboxDrawer
+          clientId={linkClientId}
+          viewerUserId={scope.userId}
+          viewerName={viewer?.name ?? null}
+          viewerIsFullAccess={hasFullAccess(scope)}
+        />
+      </>
     );
   }
 

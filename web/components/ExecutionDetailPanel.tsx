@@ -2,6 +2,7 @@ import {
   getTurnByExecution,
   listTurnsForConversation,
 } from "@worker/db/repositories/conversationTurns.js";
+import { getHandoffConversationIdByRef } from "@worker/db/repositories/handoff.js";
 import { parseExecution } from "@/lib/executionDetail";
 import { formatDateTime, formatDuration, statusBadgeClasses } from "@/lib/format";
 import { ChatScroll } from "@/components/ChatScroll";
@@ -29,10 +30,6 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
       <dd className="text-xs">{value}</dd>
     </div>
   );
-}
-
-function hasText(value: string | null): value is string {
-  return value !== null && value.trim() !== "";
 }
 
 /**
@@ -86,27 +83,26 @@ export async function ExecutionDetailPanel({
   const turn = await getTurnByExecution({ tenantId, executionId: execution.id });
   let conversation: React.ReactNode = null;
   if (turn) {
-    const thread = await listTurnsForConversation({
-      tenantId,
-      n8nWorkflowId: turn.n8n_workflow_id,
-      conversationId: turn.conversation_id,
-    });
-    let contactName: string | null = null;
-    for (const t of thread) {
-      if (hasText(t.contact_name)) contactName = t.contact_name;
-    }
+    const [thread, handoffId] = await Promise.all([
+      listTurnsForConversation({
+        tenantId,
+        n8nWorkflowId: turn.n8n_workflow_id,
+        conversationId: turn.conversation_id,
+      }),
+      // A live handoff conversation for this ref → the inbox drawer (?c=); else the
+      // derived read-only view at the inbox thread route.
+      getHandoffConversationIdByRef(tenantId, turn.n8n_workflow_id, turn.conversation_id),
+    ]);
     const now = new Date();
+    const inboxBase = `/clients/${encodeURIComponent(clientId)}/workflows/${encodeURIComponent(turn.n8n_workflow_id)}/inbox`;
+    const openHref = handoffId
+      ? `${inboxBase}?c=${encodeURIComponent(handoffId)}`
+      : `${inboxBase}/${encodeURIComponent(turn.conversation_id)}`;
     conversation = (
-      <ConversationPanel
-        contactName={contactName}
-        conversationId={turn.conversation_id}
-        clientId={clientId}
-        workflowId={turn.n8n_workflow_id}
-        turnCount={thread.length}
-      >
+      <ConversationPanel conversationRef={turn.conversation_id} turnCount={thread.length} openHref={openHref}>
         <ChatScroll
           focusSelector='[data-focus="true"]'
-          className="h-[55vh] overflow-y-auto rounded-2xl border border-black/10 bg-black/[0.02] px-3 py-3 dark:border-line dark:bg-card"
+          className="h-[55vh] overflow-y-auto bg-black/[0.02] px-3 py-3 dark:bg-card"
         >
           {/* Highlight + center THIS execution's turn (canonical DB id). */}
           <ChatTranscript turns={thread} now={now} highlightExecutionId={execution.id} />

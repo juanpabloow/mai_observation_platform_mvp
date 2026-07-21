@@ -722,6 +722,25 @@ export async function getConversationForWorkflow(
   return r.rows[0] ?? null;
 }
 
+/**
+ * The live handoff conversation id for a (workflow, conversation_ref), or null if none
+ * exists. Lets the execution-detail conversation link target the inbox drawer (?c=<id>)
+ * when the conversation is a live handoff one, and fall back to the derived view otherwise.
+ */
+export async function getHandoffConversationIdByRef(
+  tenantId: string,
+  n8nWorkflowId: string,
+  conversationRef: string,
+): Promise<string | null> {
+  const r = await query<{ id: string }>(
+    `SELECT id FROM conversations
+      WHERE tenant_id = $1 AND n8n_workflow_id = $2 AND conversation_ref = $3
+      LIMIT 1`,
+    [tenantId, n8nWorkflowId, conversationRef],
+  );
+  return r.rows[0]?.id ?? null;
+}
+
 /** A thread message with its sender agent's display name (for human_agent bubbles). */
 export interface ThreadMessageRow extends HandoffMessageRow {
   agent_name: string | null;

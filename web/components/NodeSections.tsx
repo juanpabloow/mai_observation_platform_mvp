@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import { JsonTree } from "@/components/JsonTree";
-import { statusBadgeClasses } from "@/lib/format";
 
 export interface RunView {
   status: string;
@@ -36,24 +35,29 @@ function NodeSection({ node }: { node: NodeView }) {
   // executions remounts this and resets all nodes to collapsed. The oversized
   // JsonTree guards still apply once a node is expanded.
   const [open, setOpen] = useState(false);
+  // H-8: success is the silent default — no badge. FAILURE is the only decorated state:
+  // a red left border + red-tinted name (the error detail expands as before). Rows are
+  // compact; the duration sits muted on the right.
+  const failed = node.hasError;
 
   return (
-    <div className="overflow-hidden rounded-xl border border-black/10 dark:border-line">
+    <div
+      className={`overflow-hidden rounded-lg border ${
+        failed ? "border-red-500/40 border-l-2 border-l-red-500" : "border-black/10 dark:border-line"
+      }`}
+    >
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-black/[0.03] dark:hover:bg-subtle"
+        className="flex w-full items-center justify-between gap-3 px-3 py-1.5 text-left transition-colors hover:bg-black/[0.03] dark:hover:bg-subtle"
       >
-        <span className="flex min-w-0 items-center gap-3">
-          <span className="select-none text-neutral-500">{open ? "▾" : "▸"}</span>
-          <span className="truncate font-medium">{node.name}</span>
-        </span>
-        <span className="flex shrink-0 items-center gap-3">
-          <span className="text-xs tabular-nums text-neutral-500">
-            {node.durationDisplay}
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="select-none text-xs text-neutral-500">{open ? "▾" : "▸"}</span>
+          <span className={`truncate text-sm ${failed ? "font-medium text-danger" : ""}`}>
+            {node.name}
           </span>
-          <span className={statusBadgeClasses(node.status)}>{node.status}</span>
         </span>
+        <span className="shrink-0 text-xs tabular-nums text-neutral-500">{node.durationDisplay}</span>
       </button>
 
       {open ? (
