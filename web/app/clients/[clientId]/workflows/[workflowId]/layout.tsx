@@ -1,22 +1,24 @@
-import { headers } from "next/headers";
 import { notFound } from "next/navigation";
 import { resolveWorkflowUnderClient } from "@/lib/clientWorkflow";
 
 /**
- * Shared layout for everything under a workflow
+ * Shared GUARD for everything under a workflow
  * (/clients/[clientId]/workflows/[workflowId]). Resolves the workflow tenant-
  * scoped (deduped with the page via React.cache) — notFound() if it isn't this
- * tenant's — and renders the workflow header.
+ * tenant's — then renders its child straight through.
  *
- * SCROLL ARCHITECTURE (under the fixed shell): this layout fills the content
- * region and PINS the workflow heading (shrink-0), then hands its sub-page a slot
- * that fills the rest. The slot's behavior depends on the route (read from the
- * middleware's x-pathname — same source AppHeader uses):
- *   - executions → a BOUNDED slot (no scroll of its own) so the master-detail can
- *     give its table column + detail panel their OWN independent scroll regions.
- *   - every other sub-page (analytics, conversations list/thread/settings) → a
- *     SCROLLING slot with the familiar centered max-w-6xl padded column, so those
- *     pages scroll normally under the fixed shell with no per-page changes.
+ * H-8.1: this layout no longer decides the content wrapper. Deciding it here meant
+ * reading the request pathname (headers() x-pathname) and branching bounded-vs-
+ * padded — but App Router renders a shared layout ONCE on section entry and REUSES
+ * it across sibling client-side navigations (a layout is not re-rendered when only
+ * the page below it changes). So the branch FROZE at whichever page you entered
+ * through: enter on executions (bounded, no padding) then client-nav to Inbox and
+ * Inbox inherited the bounded slot → flush-against-the-edges; enter on Inbox then
+ * nav to executions and the master-detail got trapped in the padded column. The
+ * wrapper now lives in two sibling route groups — (workspace) for the full-bleed
+ * executions master-detail, (padded) for the centered column everything else uses.
+ * Crossing those groups REMOUNTS the group layout, so each section always gets its
+ * own wrapper and it can never go stale. Route groups don't change the URL.
  */
 export default async function WorkflowLayout({
   params,
@@ -30,28 +32,5 @@ export default async function WorkflowLayout({
   if (res.kind === "not_found") {
     notFound();
   }
-  const { workflow } = res;
-
-  // H-8: the large workflow title block was removed from ALL workflow sections — the
-  // breadcrumb (tenant / workflow) already carries identity, and each section renders
-  // its own compact header. `workflow` is still resolved above for the RBAC/notFound
-  // guard (and cached for the page).
-  void workflow;
-
-  const pathname = (await headers()).get("x-pathname") ?? "";
-  // The executions master-detail owns its internal scroll; everything else scrolls
-  // the slot. (x-pathname carries no query string, so a plain suffix test is safe.)
-  const isExecutions = pathname.endsWith("/executions");
-
-  return isExecutions ? (
-    // Bounded slot: the workspace fills it and scrolls its columns internally.
-    <div className="flex min-h-0 flex-1 flex-col">{children}</div>
-  ) : (
-    // Scrolling slot: full-width scrollbar, familiar centered content column. This is
-    // the ONE padded wrapper for every non-executions section (Inbox/Analytics/…), so
-    // hard-load and client-nav always render with identical spacing.
-    <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 px-6 py-8">{children}</div>
-    </div>
-  );
+  return children;
 }
