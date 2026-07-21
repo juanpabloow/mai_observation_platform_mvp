@@ -33,6 +33,9 @@
   --accent: #059669; /* emerald — links, ✓ */
   --danger: #dc2626; /* red — destructive, errors */
   --success: #15803d; /* green — connected / complete */
+  /* minimal scrollbars (H-8.2): subtle-but-visible translucent thumb, both themes */
+  --scrollbar-thumb: rgba(0, 0, 0, 0.22);
+  --scrollbar-thumb-hover: rgba(0, 0, 0, 0.38);
 }
 
 .dark {
@@ -50,6 +53,8 @@
   --accent: #34d399; /* emerald-400 */
   --danger: #f87171; /* red-400 */
   --success: #4ade80; /* green-400 */
+  --scrollbar-thumb: rgba(255, 255, 255, 0.2);
+  --scrollbar-thumb-hover: rgba(255, 255, 255, 0.34);
 }
 
 @theme inline {
@@ -75,6 +80,36 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+/*
+ * Minimal, app-wide scrollbars (H-8.2). WebKit: an ~8px transparent track with a
+ * rounded, semi-translucent thumb (theme token, subtle-but-visible in both themes,
+ * a touch stronger on hover). Firefox: thin + the same token colors. The token is
+ * translucent so it works over any surface; the track is transparent so no gutter/
+ * layout shift, and on macOS overlay scrollbars this styling only applies once the
+ * scrollbar is shown (native overlay behavior is preserved).
+ */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+::-webkit-scrollbar-corner {
+  background: transparent;
 }
 
 /* New-row highlight: a fresh execution arriving via auto-refresh fades from an

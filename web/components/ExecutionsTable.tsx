@@ -200,7 +200,9 @@ export function ExecutionsTable({ rows, sort, customSort, customColumns }: Execu
   }, [rows, querySig]);
 
   return (
-    <div className="overflow-x-auto rounded-2xl border border-black/10 dark:border-line">
+    // H-8.2: flat + edge-to-edge — no rounded corners / side margins; borders top &
+    // bottom only, so the table fills the full workspace width (dense list-group look).
+    <div className="overflow-x-auto border-y border-black/10 dark:border-line">
       <table className="w-full min-w-[34rem] border-collapse">
         <thead className="bg-black/[0.02] dark:bg-card">
           {table.getHeaderGroups().map((headerGroup) => (

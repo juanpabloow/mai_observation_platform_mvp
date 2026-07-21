@@ -41,11 +41,9 @@ function NodeSection({ node }: { node: NodeView }) {
   const failed = node.hasError;
 
   return (
-    <div
-      className={`overflow-hidden rounded-lg border ${
-        failed ? "border-red-500/40 border-l-2 border-l-red-500" : "border-black/10 dark:border-line"
-      }`}
-    >
+    // H-8.2: JOINED rows — no per-row box/rounding/gap (the parent supplies divide-y
+    // dividers). Failure is the only decoration: a red left border + red-tinted name.
+    <div className={failed ? "border-l-2 border-l-red-500" : ""}>
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
@@ -103,8 +101,9 @@ function NodeSection({ node }: { node: NodeView }) {
 }
 
 export function NodeSections({ nodes }: { nodes: NodeView[] }) {
+  // H-8.2: one flat container with 1px dividers between joined rows (list-group).
   return (
-    <div className="space-y-3">
+    <div className="divide-y divide-black/10 border-y border-black/10 dark:divide-line dark:border-line">
       {nodes.map((node) => (
         <NodeSection key={node.name} node={node} />
       ))}

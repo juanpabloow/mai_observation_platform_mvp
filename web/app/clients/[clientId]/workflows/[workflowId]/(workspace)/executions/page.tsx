@@ -35,7 +35,7 @@ import {
 } from "@/components/ExecutionsTable";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { ColumnsMenu, type DefinedColumn } from "@/components/ColumnsMenu";
-import { ExecutionsWorkspace } from "@/components/ExecutionsWorkspace";
+import { ExecutionPane } from "@/components/ExecutionPane";
 import { ExecutionDetailPanel } from "@/components/ExecutionDetailPanel";
 
 /**
@@ -312,33 +312,27 @@ export default async function WorkflowExecutionsPage({
   });
 
   return (
-    <ExecutionsWorkspace
-      panel={
-        detailExecution ? (
-          // Keyed by execution id: swapping rows remounts (fresh node collapse +
-          // the chat re-centers on the new turn); an auto-refresh of the table
-          // (same id) preserves the open panel's state.
-          <ExecutionDetailPanel
-            key={detailExecution.id}
-            execution={detailExecution}
-            tenantId={tenantId}
-            clientId={linkClientId}
-          />
-        ) : null
-      }
-    >
-      <div className="flex min-w-0 flex-col gap-6">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-sm text-neutral-500">{total.toLocaleString()} matching</p>
+    // H-8.2: full-width, edge-to-edge in the (workspace) slot (no centered container).
+    <div className="flex min-h-0 flex-1 flex-col">
+      {/* ONE toolbar line: count + Filter + Add column (left) · auto-refresh (right). */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-2 pt-4">
+        <p className="text-sm text-neutral-500">{total.toLocaleString()} matching</p>
+        <FilterMenu customFields={filterableFields} />
+        <ColumnsMenu workflowId={workflowId} columns={definedColumns} />
+        <div className="ml-auto">
           <AutoRefresh intervalSeconds={config.POLL_INTERVAL_SECONDS} />
         </div>
+      </div>
 
-        <div className="flex flex-wrap items-center gap-3">
-          <FilterMenu customFields={filterableFields} />
-          <ColumnsMenu workflowId={workflowId} columns={definedColumns} />
+      {/* Active-filter chips on their own row (only when present). */}
+      {chips.length > 0 ? (
+        <div className="px-4 pb-2">
           <FilterChips chips={chips} clearAllHref={clearAllHref} />
         </div>
+      ) : null}
 
+      {/* The table scrolls; it's edge-to-edge (flat borders) within this padded slot. */}
+      <div className="min-h-0 flex-1 overflow-y-auto px-4 pb-6">
         <ExecutionsTable
           rows={view}
           sort={{ key: sortKey, direction }}
@@ -346,38 +340,52 @@ export default async function WorkflowExecutionsPage({
           customColumns={customColumns}
         />
 
-        <nav className="flex items-center justify-between text-sm">
-        <span className="text-neutral-500">
-          Page {page} of {totalPages} · {total.toLocaleString()} total
-        </span>
-        <div className="flex items-center gap-2">
-          {hasPrev ? (
-            <Link
-              href={pageHref(page - 1)}
-              className="rounded-lg border border-black/10 px-3 py-1.5 transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
-            >
-              &larr; Previous
-            </Link>
-          ) : (
-            <span className="cursor-not-allowed rounded-lg border border-black/5 px-3 py-1.5 text-faint dark:border-line">
-              &larr; Previous
-            </span>
-          )}
-          {hasNext ? (
-            <Link
-              href={pageHref(page + 1)}
-              className="rounded-lg border border-black/10 px-3 py-1.5 transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
-            >
-              Next &rarr;
-            </Link>
-          ) : (
-            <span className="cursor-not-allowed rounded-lg border border-black/5 px-3 py-1.5 text-faint dark:border-line">
-              Next &rarr;
-            </span>
-          )}
-        </div>
+        <nav className="mt-4 flex items-center justify-between text-sm">
+          <span className="text-neutral-500">
+            Page {page} of {totalPages} · {total.toLocaleString()} total
+          </span>
+          <div className="flex items-center gap-2">
+            {hasPrev ? (
+              <Link
+                href={pageHref(page - 1)}
+                className="rounded-lg border border-black/10 px-3 py-1.5 transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
+              >
+                &larr; Previous
+              </Link>
+            ) : (
+              <span className="cursor-not-allowed rounded-lg border border-black/5 px-3 py-1.5 text-faint dark:border-line">
+                &larr; Previous
+              </span>
+            )}
+            {hasNext ? (
+              <Link
+                href={pageHref(page + 1)}
+                className="rounded-lg border border-black/10 px-3 py-1.5 transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
+              >
+                Next &rarr;
+              </Link>
+            ) : (
+              <span className="cursor-not-allowed rounded-lg border border-black/5 px-3 py-1.5 text-faint dark:border-line">
+                Next &rarr;
+              </span>
+            )}
+          </div>
         </nav>
       </div>
-    </ExecutionsWorkspace>
+
+      {/* Execution detail — the shared non-modal SidePane, deep-linked via ?execution=.
+          Keyed by id so swapping rows remounts the detail (fresh node collapse); the
+          pane wrapper stays mounted, so the swap is in place. */}
+      {detailExecution ? (
+        <ExecutionPane>
+          <ExecutionDetailPanel
+            key={detailExecution.id}
+            execution={detailExecution}
+            tenantId={tenantId}
+            clientId={linkClientId}
+          />
+        </ExecutionPane>
+      ) : null}
+    </div>
   );
 }
