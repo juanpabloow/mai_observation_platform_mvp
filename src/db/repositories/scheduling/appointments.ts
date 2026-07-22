@@ -275,3 +275,20 @@ export async function listAppointmentEvents(tenantId: string, appointmentId: str
 export async function listAppointmentsForContact(tenantId: string, contactId: string): Promise<AppointmentListItem[]> {
   return listAppointments(tenantId, { contactId });
 }
+
+/** All appointment events across a contact's appointments — the Activity tab. */
+export async function listEventsForContact(
+  tenantId: string,
+  contactId: string,
+): Promise<Array<AppointmentEventRow & { appointment_id: string }>> {
+  const r = await query<AppointmentEventRow & { appointment_id: string }>(
+    `SELECT e.id, e.appointment_id, e.event_type, e.actor_type, e.actor_user_id, e.detail, e.created_at
+       FROM appointment_events e
+       JOIN appointments a ON a.id = e.appointment_id
+      WHERE e.tenant_id = $1 AND a.contact_id = $2
+      ORDER BY e.created_at DESC
+      LIMIT 200`,
+    [tenantId, contactId],
+  );
+  return r.rows;
+}

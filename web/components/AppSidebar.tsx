@@ -222,6 +222,22 @@ export function AppSidebar({
         label="Clients & Workflows"
         active={pathname === "/clients" || pathname.startsWith("/clients/")}
       />
+      <SectionLabel>Scheduling</SectionLabel>
+      <SideLink
+        href="/scheduling/agenda"
+        label="Agenda"
+        active={pathname === "/scheduling" || pathname.startsWith("/scheduling/agenda")}
+      />
+      <SideLink
+        href="/contacts"
+        label="Contacts"
+        active={pathname === "/contacts" || pathname.startsWith("/contacts/")}
+      />
+      <SideLink
+        href="/scheduling/admin"
+        label="Scheduling admin"
+        active={pathname.startsWith("/scheduling/admin")}
+      />
     </aside>
   );
 }
