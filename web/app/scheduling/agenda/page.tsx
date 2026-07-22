@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { connection } from "next/server";
-import { requireFullAccessOrLand } from "@/lib/access";
+import { getAccessScope } from "@/lib/access";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 import { listStaff } from "@worker/db/repositories/scheduling/staff.js";
 import { listServicesForSite } from "@worker/db/repositories/scheduling/services.js";
@@ -20,10 +20,12 @@ export default async function AgendaPage({
   searchParams: Promise<{ site?: string; date?: string }>;
 }) {
   await connection();
-  const { tenantId } = await requireFullAccessOrLand();
+  const scope = await getAccessScope();
+  const tenantId = scope.tenantId;
+  const clientScope = scope.memberClientId; // null = owner/admin (all clients)
   const sp = await searchParams;
 
-  const sites = await listSites(tenantId);
+  const sites = await listSites(tenantId, { clientId: clientScope });
   if (sites.length === 0) {
     return (
       <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-20">
@@ -50,9 +52,9 @@ export default async function AgendaPage({
   const dayEnd = zonedPartsToUtc(y, m, d + 1, 0, 0, site.timezone);
 
   const [staff, services, appts] = await Promise.all([
-    listStaff(tenantId, { siteId: site.id }),
+    listStaff(tenantId, { siteId: site.id, clientId: clientScope }),
     listServicesForSite(tenantId, site.id),
-    listAppointments(tenantId, { siteId: site.id, from: dayStart, to: dayEnd }),
+    listAppointments(tenantId, { siteId: site.id, from: dayStart, to: dayEnd, clientId: clientScope }),
   ]);
 
   return (

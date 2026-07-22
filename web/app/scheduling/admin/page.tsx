@@ -1,5 +1,6 @@
 import { connection } from "next/server";
 import { requireFullAccessOrLand } from "@/lib/access";
+import { listClientsForTenant } from "@worker/db/repositories/clients.js";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 import { listStaff, listStaffForService } from "@worker/db/repositories/scheduling/staff.js";
 import { listServices, listStaffServices } from "@worker/db/repositories/scheduling/services.js";
@@ -15,8 +16,9 @@ export default async function SchedulingAdminPage() {
   await connection();
   const { tenantId } = await requireFullAccessOrLand();
 
-  const [sites, services, staff] = await Promise.all([
-    listSites(tenantId, true),
+  const [clients, sites, services, staff] = await Promise.all([
+    listClientsForTenant(tenantId),
+    listSites(tenantId, { includeInactive: true }),
     listServices(tenantId, true),
     listStaff(tenantId, { includeInactive: true }),
   ]);
@@ -31,8 +33,10 @@ export default async function SchedulingAdminPage() {
 
   return (
     <AdminPanel
+      clients={clients.map((c) => ({ id: c.id, name: c.name, is_default: c.is_default }))}
       sites={sites.map((s) => ({
         id: s.id,
+        client_id: s.client_id,
         slug: s.slug,
         name: s.name,
         address: s.address,

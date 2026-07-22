@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { connection } from "next/server";
-import { requireFullAccessOrLand } from "@/lib/access";
+import { getAccessScope } from "@/lib/access";
 import { listContacts } from "@worker/db/repositories/contacts.js";
 import { AutoRefresh } from "@/components/AutoRefresh";
 
@@ -12,9 +12,9 @@ import { AutoRefresh } from "@/components/AutoRefresh";
  */
 export default async function ContactsPage({ searchParams }: { searchParams: Promise<{ q?: string }> }) {
   await connection();
-  const { tenantId } = await requireFullAccessOrLand();
+  const scope = await getAccessScope();
   const { q } = await searchParams;
-  const contacts = await listContacts(tenantId, { search: q?.trim() || undefined });
+  const contacts = await listContacts(scope.tenantId, { search: q?.trim() || undefined, clientId: scope.memberClientId });
 
   const fmtDate = (d: Date | null): string =>
     d ? new Intl.DateTimeFormat("es-CO", { dateStyle: "medium", timeStyle: "short" }).format(new Date(d)) : "—";

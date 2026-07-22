@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
-import { requireFullAccessOrLand } from "@/lib/access";
+import { getAccessScope } from "@/lib/access";
 import { getContactById, listContactConversations } from "@worker/db/repositories/contacts.js";
 import { listAppointmentsForContact, listEventsForContact } from "@worker/db/repositories/scheduling/appointments.js";
 import { ContactDetail } from "@/components/contacts/ContactDetail";
@@ -17,10 +17,11 @@ export default async function ContactDetailPage({
   params: Promise<{ contactId: string }>;
 }) {
   await connection();
-  const { tenantId } = await requireFullAccessOrLand();
+  const scope = await getAccessScope();
+  const tenantId = scope.tenantId;
   const { contactId } = await params;
 
-  const contact = await getContactById(tenantId, contactId);
+  const contact = await getContactById(tenantId, contactId, scope.memberClientId);
   if (!contact) notFound();
 
   const [conversations, appointments, activity] = await Promise.all([

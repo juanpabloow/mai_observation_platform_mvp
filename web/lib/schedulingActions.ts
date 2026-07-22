@@ -1,8 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getCurrentTenantId } from "./tenant";
-import { requireFullAccessForAction } from "./access";
+import { getAccessScope } from "./access";
 import {
   createAppointment,
   rescheduleAppointment,
@@ -11,11 +10,11 @@ import {
 } from "@worker/scheduling/booking.js";
 
 /**
- * Server actions for the internal agenda (owner/admin, tenant-level). Every action
- * gates on requireFullAccessForAction() and resolves the tenant from the SESSION
- * (never the client) before delegating to the SAME booking domain service the n8n
- * API and public page use — one engine, one set of rules. All revalidate the
- * agenda so the server-rendered view reflects the change immediately.
+ * Server actions for the internal agenda. Access is resolved from the SESSION (never
+ * the client): owner/admin act across ALL clients (scopeClientId = null), a member
+ * is hard-scoped to their ONE client (scopeClientId = memberClientId) — the booking
+ * domain service rejects any cross-client id as not-found. They delegate to the SAME
+ * booking engine the n8n API and public page use, and revalidate the agenda.
  */
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
@@ -53,8 +52,8 @@ export interface ManualAppointmentInput {
 /** Create a manual appointment or walk-in from the agenda. A walk-in without any
  * channel identity produces an appointment with no contact (contact_id null). */
 export async function createManualAppointmentAction(input: ManualAppointmentInput): Promise<ActionResult> {
-  const scope = await requireFullAccessForAction();
-  const tenantId = await getCurrentTenantId();
+  const scope = await getAccessScope();
+  const tenantId = scope.tenantId;
   const start = new Date(input.startAt);
   if (Number.isNaN(start.getTime())) return { ok: false, error: "Invalid start time." };
 
@@ -80,6 +79,7 @@ export async function createManualAppointmentAction(input: ManualAppointmentInpu
     createdByType: "agent",
     createdByUserId: scope.userId,
     idempotencyKey: null,
+    scopeClientId: scope.memberClientId,
   });
 
   if (!result.ok) return { ok: false, error: messageFor(result.error, "Could not create the appointment.") };
@@ -88,36 +88,36 @@ export async function createManualAppointmentAction(input: ManualAppointmentInpu
 }
 
 export async function cancelAppointmentAction(appointmentId: string, reason?: string): Promise<ActionResult> {
-  const scope = await requireFullAccessForAction();
-  const tenantId = await getCurrentTenantId();
-  const r = await transitionStatus("cancelled", { tenantId, appointmentId, actorType: "agent", actorUserId: scope.userId, reason });
+  const scope = await getAccessScope();
+  const tenantId = scope.tenantId;
+  const r = await transitionStatus("cancelled", { tenantId, appointmentId, actorType: "agent", actorUserId: scope.userId, reason, scopeClientId: scope.memberClientId });
   if (!r.ok) return { ok: false, error: messageFor(r.error, "Could not cancel.") };
   revalidatePath("/scheduling/agenda");
   return { ok: true };
 }
 
 export async function confirmAppointmentAction(appointmentId: string): Promise<ActionResult> {
-  const scope = await requireFullAccessForAction();
-  const tenantId = await getCurrentTenantId();
-  const r = await transitionStatus("confirmed", { tenantId, appointmentId, actorType: "agent", actorUserId: scope.userId });
+  const scope = await getAccessScope();
+  const tenantId = scope.tenantId;
+  const r = await transitionStatus("confirmed", { tenantId, appointmentId, actorType: "agent", actorUserId: scope.userId, scopeClientId: scope.memberClientId });
   if (!r.ok) return { ok: false, error: messageFor(r.error, "Could not confirm.") };
   revalidatePath("/scheduling/agenda");
   return { ok: true };
 }
 
 export async function completeAppointmentAction(appointmentId: string): Promise<ActionResult> {
-  const scope = await requireFullAccessForAction();
-  const tenantId = await getCurrentTenantId();
-  const r = await transitionStatus("completed", { tenantId, appointmentId, actorType: "agent", actorUserId: scope.userId });
+  const scope = await getAccessScope();
+  const tenantId = scope.tenantId;
+  const r = await transitionStatus("completed", { tenantId, appointmentId, actorType: "agent", actorUserId: scope.userId, scopeClientId: scope.memberClientId });
   if (!r.ok) return { ok: false, error: messageFor(r.error, "Could not complete.") };
   revalidatePath("/scheduling/agenda");
   return { ok: true };
 }
 
 export async function noShowAppointmentAction(appointmentId: string): Promise<ActionResult> {
-  const scope = await requireFullAccessForAction();
-  const tenantId = await getCurrentTenantId();
-  const r = await transitionStatus("no_show", { tenantId, appointmentId, actorType: "agent", actorUserId: scope.userId });
+  const scope = await getAccessScope();
+  const tenantId = scope.tenantId;
+  const r = await transitionStatus("no_show", { tenantId, appointmentId, actorType: "agent", actorUserId: scope.userId, scopeClientId: scope.memberClientId });
   if (!r.ok) return { ok: false, error: messageFor(r.error, "Could not mark no-show.") };
   revalidatePath("/scheduling/agenda");
   return { ok: true };
@@ -128,8 +128,8 @@ export async function rescheduleAppointmentAction(
   startAt: string,
   staffId?: string | null,
 ): Promise<ActionResult> {
-  const scope = await requireFullAccessForAction();
-  const tenantId = await getCurrentTenantId();
+  const scope = await getAccessScope();
+  const tenantId = scope.tenantId;
   const start = new Date(startAt);
   if (Number.isNaN(start.getTime())) return { ok: false, error: "Invalid start time." };
   const r = await rescheduleAppointment({
@@ -139,6 +139,7 @@ export async function rescheduleAppointmentAction(
     staffId: staffId ?? null,
     actorType: "agent",
     actorUserId: scope.userId,
+    scopeClientId: scope.memberClientId,
   });
   if (!r.ok) return { ok: false, error: messageFor(r.error, "Could not reschedule.") };
   revalidatePath("/scheduling/agenda");

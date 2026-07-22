@@ -200,7 +200,9 @@ export function AppSidebar({
 
   // ── Outside a client ──
   if (isMember) {
-    // A member has no tenant level — link back to their client's overview.
+    // A member has no tenant level — link back to their client's overview, plus
+    // the scheduling surfaces they CAN use (scoped to their client server-side).
+    // No "Scheduling admin" — sites/staff/services CRUD is owner/admin only.
     return (
       <aside className={railClass}>
         <SectionLabel>Client</SectionLabel>
@@ -208,6 +210,17 @@ export function AppSidebar({
           href={`/clients/${memberClientId}/workflows/all/analytics`}
           label="Overview"
           active={false}
+        />
+        <SectionLabel>Scheduling</SectionLabel>
+        <SideLink
+          href="/scheduling/agenda"
+          label="Agenda"
+          active={pathname === "/scheduling" || pathname.startsWith("/scheduling/agenda")}
+        />
+        <SideLink
+          href="/contacts"
+          label="Contacts"
+          active={pathname === "/contacts" || pathname.startsWith("/contacts/")}
         />
       </aside>
     );

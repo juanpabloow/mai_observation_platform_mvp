@@ -16,8 +16,9 @@ import {
 
 type WeeklyHours = Record<string, Array<{ start: string; end: string }>>;
 
+interface Client { id: string; name: string; is_default: boolean }
 interface Site {
-  id: string; slug: string; name: string; address: string | null; timezone: string; active: boolean;
+  id: string; client_id: string; slug: string; name: string; address: string | null; timezone: string; active: boolean;
 }
 interface Service {
   id: string; name: string; description: string | null; duration_min: number;
@@ -32,11 +33,13 @@ const BTN = "rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white dis
 const GHOST = "rounded-lg border border-line px-2 py-1 text-xs hover:bg-subtle";
 
 export function AdminPanel({
+  clients,
   sites,
   services,
   staff,
   exceptions,
 }: {
+  clients: Client[];
   sites: Site[];
   services: Service[];
   staff: Staff[];
@@ -60,7 +63,7 @@ export function AdminPanel({
       <h1 className="text-xl font-semibold tracking-tight">Scheduling admin</h1>
       {error ? <p className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p> : null}
 
-      <SitesSection sites={sites} run={run} pending={pending} />
+      <SitesSection clients={clients} sites={sites} run={run} pending={pending} />
       <ServicesSection services={services} run={run} pending={pending} />
       <StaffSection sites={sites} services={services} staff={staff} run={run} pending={pending} />
       <ExceptionsSection sites={sites} staff={staff} exceptions={exceptions} run={run} pending={pending} />
@@ -79,19 +82,21 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function SitesSection({ sites, run, pending }: { sites: Site[]; run: Run; pending: boolean }) {
+function SitesSection({ clients, sites, run, pending }: { clients: Client[]; sites: Site[]; run: Run; pending: boolean }) {
   const [slug, setSlug] = useState("");
   const [name, setName] = useState("");
   const [tz, setTz] = useState("America/Bogota");
+  const [clientId, setClientId] = useState(clients.find((c) => c.is_default)?.id ?? clients[0]?.id ?? "");
   const [hours, setHours] = useState<Record<string, { on: boolean; start: string; end: string }>>(
     Object.fromEntries(DAYS.map((d) => [d, { on: d !== "sun", start: "09:00", end: "18:00" }])),
   );
+  const clientName = (id: string) => clients.find((c) => c.id === id)?.name ?? "—";
 
   const submit = () => {
     const openingHours: WeeklyHours = {};
     for (const d of DAYS) if (hours[d].on) openingHours[d] = [{ start: hours[d].start, end: hours[d].end }];
     run(async () => {
-      const r = await createSiteAction({ slug: slug.trim(), name: name.trim(), timezone: tz, openingHours });
+      const r = await createSiteAction({ clientId, slug: slug.trim(), name: name.trim(), timezone: tz, openingHours });
       if (r.ok) { setSlug(""); setName(""); }
       return r;
     });
@@ -102,7 +107,7 @@ function SitesSection({ sites, run, pending }: { sites: Site[]; run: Run; pendin
       <ul className="flex flex-col gap-1 text-sm">
         {sites.map((s) => (
           <li key={s.id} className="flex items-center justify-between rounded-lg border border-line px-3 py-2">
-            <span>{s.name} <span className="text-faint">/{s.slug} · {s.timezone}</span> {s.active ? "" : <em className="text-faint">(inactive)</em>}</span>
+            <span>{s.name} <span className="text-faint">/{s.slug} · {clientName(s.client_id)} · {s.timezone}</span> {s.active ? "" : <em className="text-faint">(inactive)</em>}</span>
             {s.active ? <button className={GHOST} disabled={pending} onClick={() => run(() => deactivateSiteAction(s.id))}>Deactivate</button> : null}
           </li>
         ))}
@@ -111,6 +116,9 @@ function SitesSection({ sites, run, pending }: { sites: Site[]; run: Run; pendin
         <div className="flex flex-wrap gap-2">
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className={INPUT} />
           <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="slug (public URL)" className={INPUT} />
+          <select value={clientId} onChange={(e) => setClientId(e.target.value)} className={INPUT}>
+            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+          </select>
           <input value={tz} onChange={(e) => setTz(e.target.value)} placeholder="IANA timezone" className={INPUT} />
         </div>
         <div className="flex flex-col gap-1">
@@ -125,7 +133,7 @@ function SitesSection({ sites, run, pending }: { sites: Site[]; run: Run; pendin
             </div>
           ))}
         </div>
-        <button className={BTN} disabled={pending || !slug || !name} onClick={submit}>Add site</button>
+        <button className={BTN} disabled={pending || !slug || !name || !clientId} onClick={submit}>Add site</button>
       </div>
     </Section>
   );
@@ -246,11 +254,13 @@ function ExceptionsSection({ sites, staff, exceptions, run, pending }: { sites: 
 
   const submit = () =>
     run(async () => {
+      // Send the RAW local wall-clock (from datetime-local); the server anchors it
+      // to the SITE's timezone, not the browser's.
       const r = await createExceptionAction({
         siteId,
         staffId: staffId || null,
-        startsAt: new Date(start).toISOString(),
-        endsAt: new Date(end).toISOString(),
+        startsAt: start,
+        endsAt: end,
         reason: reason || undefined,
       });
       if (r.ok) { setStart(""); setEnd(""); setReason(""); }

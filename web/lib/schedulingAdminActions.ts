@@ -4,9 +4,11 @@ import { revalidatePath } from "next/cache";
 import { getCurrentTenantId } from "./tenant";
 import { requireFullAccessForAction } from "./access";
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, type WeeklyHours } from "@worker/scheduling/types.js";
+import { localWallClockToUtc } from "@worker/scheduling/timezone.js";
 import {
   createSite,
   deactivateSite,
+  getSiteById,
   updateSite,
 } from "@worker/db/repositories/scheduling/sites.js";
 import { createStaff, deactivateStaff, updateStaff } from "@worker/db/repositories/scheduling/staff.js";
@@ -38,6 +40,7 @@ function revalidateAdmin(): void {
 // ── Sites ──────────────────────────────────────────────────────────────────────
 
 export async function createSiteAction(input: {
+  clientId: string;
   slug: string;
   name: string;
   address?: string;
@@ -47,12 +50,14 @@ export async function createSiteAction(input: {
 }): Promise<AdminResult> {
   await requireFullAccessForAction();
   const tenantId = await getCurrentTenantId();
+  if (!input.clientId) return { ok: false, error: "A business (client) is required." };
   if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(input.slug)) {
     return { ok: false, error: "Slug must be lowercase letters, numbers and hyphens." };
   }
   try {
     const site = await createSite({
       tenantId,
+      clientId: input.clientId,
       slug: input.slug,
       name: input.name.trim(),
       address: input.address ?? null,
@@ -206,18 +211,27 @@ export async function setStaffServiceAction(staffId: string, serviceId: string, 
 export async function createExceptionAction(input: {
   siteId: string;
   staffId?: string | null;
+  /** Local wall-clock "YYYY-MM-DDTHH:MM" as typed — interpreted in the SITE tz. */
   startsAt: string;
   endsAt: string;
   reason?: string;
 }): Promise<AdminResult> {
   await requireFullAccessForAction();
   const tenantId = await getCurrentTenantId();
-  const s = new Date(input.startsAt);
-  const e = new Date(input.endsAt);
-  if (Number.isNaN(s.getTime()) || Number.isNaN(e.getTime())) return { ok: false, error: "Invalid dates." };
+  // Anchor the entered wall-clock to the SITE's timezone (not the browser's).
+  const site = await getSiteById(tenantId, input.siteId);
+  if (!site) return { ok: false, error: "Site not found." };
+  let s: Date;
+  let e: Date;
+  try {
+    s = localWallClockToUtc(input.startsAt, site.timezone);
+    e = localWallClockToUtc(input.endsAt, site.timezone);
+  } catch {
+    return { ok: false, error: "Invalid dates." };
+  }
   if (e.getTime() <= s.getTime()) return { ok: false, error: "End must be after start." };
   try {
-    const row = await createException({ tenantId, siteId: input.siteId, staffId: input.staffId ?? null, startsAt: s, endsAt: e, reason: input.reason ?? null });
+    const row = await createException({ tenantId, siteId: input.siteId, staffId: input.staffId ?? null, startsAt: s, endsAt: e, reason: input.reason ?? undefined });
     revalidateAdmin();
     return { ok: true, id: row.id };
   } catch (err) {

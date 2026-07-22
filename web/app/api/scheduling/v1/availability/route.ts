@@ -42,12 +42,14 @@ export async function GET(req: Request): Promise<Response> {
 
   return Response.json({
     site: { id: result.site.id, timezone: result.site.timezone },
-    duration_min: result.timing.duration_min,
+    // Duration can differ per staff (per-staff overrides), so it is carried on each
+    // slot's service window (start_at → service_end_at) rather than a single value.
     slots: result.slots.map((s) => ({
       start_at: s.start_at,
       service_end_at: s.service_end_at,
       staff_id: s.staff_id,
       available_staff_ids: s.available_staff_ids,
+      candidates: s.candidates,
     })),
   });
 }
