@@ -20,6 +20,9 @@ import { getSessionCookie } from "better-auth/cookies";
 // /api/handoff is the MACHINE handoff API: cookieless Bearer-token requests must
 // reach the route (which does its own auth) instead of being redirected to /login.
 // /api/health is the public uptime probe: it must return 200/503 cookieless.
+// /api/scheduling is the MACHINE scheduling API (Bearer token, like /api/handoff).
+// /book is the PUBLIC booking page and /api/booking its public endpoints — both
+// cookieless and self-protected (site-slug scoping + rate limiting).
 const PUBLIC_PREFIXES = [
   "/login",
   "/signup",
@@ -28,6 +31,9 @@ const PUBLIC_PREFIXES = [
   "/invite",
   "/api/handoff",
   "/api/health",
+  "/api/scheduling",
+  "/api/booking",
+  "/book",
 ];
 
 export function middleware(request: NextRequest): NextResponse {
