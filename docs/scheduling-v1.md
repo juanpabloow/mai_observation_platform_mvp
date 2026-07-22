@@ -30,9 +30,27 @@ booking page, how to test a double-booking race, and V1 decisions/limitations.
   admin (CRUD sites/services/staff/exceptions).
 - **Realtime** — see §8.
 
-Tenant model: the canonical tenant is **`tenant_id`** (the top-level account).
-Everything scheduling-related is scoped by `tenant_id`; `clients` (groups of
-workflows) are unchanged.
+Tenant model: the canonical top-level account is **`tenant_id`**. A tenant can
+contain **multiple businesses** via `clients` (a workflow belongs to exactly one
+client; a tenant `member` is hard-scoped to ONE client by DB constraints — see
+`migrations/1781400000000_client-model.ts` + `1781500000000_rbac-roles.ts`).
+Scheduling is therefore scoped by **`client_id` within `tenant_id`**: `sites`
+belong to a client (composite FK enforces same-tenant), and `staff` / `services`
+enablement / `appointments` / `contacts` / realtime events resolve to that client.
+This is the existing tenant→client sub-scope — NOT a second tenant concept.
+
+Permissions:
+
+| Capability | owner / admin | member (scoped to their client) |
+| --- | --- | --- |
+| View agenda, create/cancel/confirm/complete/no-show/reschedule, walk-ins | all clients | their client only |
+| Contacts list + detail + edit | all clients | their client only |
+| Sites / staff / services / exceptions CRUD (Scheduling admin) | ✅ | ❌ (not shown; actions fail closed) |
+| n8n API (Bearer token) | tenant-level machine integration (stamps each appointment's client from the site) | — |
+
+A member acting on another client's appointment/contact is treated as **not
+found** (no cross-client action, no existence leak); enforced in the booking
+domain service and the repos, not just the UI.
 
 ---
 
@@ -269,24 +287,32 @@ gets a clean 23P01 → HTTP 409 (instead of a GiST deadlock).
 
 ## 10. Decisions & limitations (V1)
 
-- **Tenant = `tenant_id`.** Scheduling is a tenant-level, owner/admin capability;
-  members (per-client) don't see it in V1.
-- **Effective service duration is resolved per (site, service)** so the slot grid
-  is uniform across staff (required for the "any barber" dedup). Per-staff
-  *duration* overrides are stored but don't reshape the V1 grid; per-staff *price*
-  overrides are honored at booking time.
+- **Tenant = `tenant_id`, scheduling scoped by `client_id`** (see the model +
+  permissions matrix above). owner/admin span all clients; members are confined to
+  their one client, enforced at the data/domain layer.
+- **Per-staff service duration is honored**: effective duration =
+  `COALESCE(staff_services.duration_override_min, site_services.duration_override_min,
+  services.duration_min)`, so two barbers can offer the same service at different
+  lengths — the engine reshapes only that staff's slots (each slot carries per-staff
+  service windows in `candidates`). Buffers are service-level / site defaults.
 - **Snapshots**: service name/duration/price/buffers are copied onto each
   appointment, so later catalogue edits never change historical bookings.
 - **Staff working hours** default to the site's opening hours when left empty
   (`{}`); otherwise a missing weekday means the barber is off that day.
 - **Backfill**: pre-existing conversations were linked to one imported contact per
-  distinct `conversation_ref` (`channel = 'imported'`). Real channel identities
-  arrive going forward via the API's resolve-or-create.
-- **Admin exception times** are entered in the browser's local timezone in the V1
-  UI (documented; site-tz-aware entry is a later refinement).
+  distinct `(client, conversation_ref)` (`channel = 'imported'`), the client
+  resolved from the conversation's workflow (or the tenant's default client). Real
+  channel identities arrive going forward via the API's resolve-or-create.
+- **Admin exception times** are entered as local wall-clock and anchored to the
+  **site's** IANA timezone server-side (never the browser's).
+- **n8n token scope**: the Bearer token is tenant-level (the existing handoff
+  token); appointments still get their `client_id` from the chosen site.
 - **Rate limiting** for public endpoints is in-process (per web instance), enough
   for a single Railway instance; a shared limiter is future work.
 - **Realtime** is polling (no WebSocket exists) — see §8.
+- **Anti-deadlock**: a per-staff transaction advisory lock serializes same-staff
+  inserts so the loser gets a clean 23P01 → 409 (not a GiST deadlock); a stray
+  deadlock is logged with the original error before being mapped to a conflict.
 
 ### Explicitly out of scope for V1
 Google Calendar sync, payments/deposits, recurring appointments, waitlists,

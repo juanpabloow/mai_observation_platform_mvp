@@ -20,6 +20,9 @@ const OPEN_9_18: WeeklyHours = {
 
 export interface Scenario {
   tenantId: string;
+  clientId: string;
+  /** A second client in the SAME tenant (for client-isolation tests). */
+  otherClientId: string;
   siteId: string;
   siteSlug: string;
   staffA: string;
@@ -33,13 +36,23 @@ export async function seedScenario(opts: { openingHours?: WeeklyHours } = {}): P
   const tenantId = randomUUID();
   await query(`INSERT INTO tenants (id, name) VALUES ($1, $2)`, [tenantId, `Test Tenant ${tenantId.slice(0, 8)}`]);
 
+  const mkClient = async (name: string, isDefault: boolean): Promise<string> => {
+    const r = await query<{ id: string }>(
+      `INSERT INTO clients (tenant_id, name, is_default) VALUES ($1, $2, $3) RETURNING id`,
+      [tenantId, name, isDefault],
+    );
+    return r.rows[0].id;
+  };
+  const clientId = await mkClient('Business A', true);
+  const otherClientId = await mkClient('Business B', false);
+
   const slug = `shop-${tenantId.slice(0, 8)}`;
   const site = await query<{ id: string }>(
-    `INSERT INTO sites (tenant_id, slug, name, timezone, opening_hours, scheduling_config)
-       VALUES ($1, $2, 'Test Barbershop', 'America/Bogota', $3,
+    `INSERT INTO sites (tenant_id, client_id, slug, name, timezone, opening_hours, scheduling_config)
+       VALUES ($1, $2, $3, 'Test Barbershop', 'America/Bogota', $4,
          '{"slot_interval_min":30,"min_notice_min":0,"booking_horizon_days":365,"default_buffer_before_min":0,"default_buffer_after_min":0}'::jsonb)
      RETURNING id`,
-    [tenantId, slug, JSON.stringify(opts.openingHours ?? OPEN_9_18)],
+    [tenantId, clientId, slug, JSON.stringify(opts.openingHours ?? OPEN_9_18)],
   );
   const siteId = site.rows[0].id;
 
@@ -74,7 +87,31 @@ export async function seedScenario(opts: { openingHours?: WeeklyHours } = {}): P
   }
   await query(`INSERT INTO staff_services (tenant_id, staff_id, service_id) VALUES ($1, $2, $3)`, [tenantId, staffA, serviceColor]);
 
-  return { tenantId, siteId, siteSlug: slug, staffA, staffB, serviceHaircut, serviceBeard, serviceColor };
+  return { tenantId, clientId, otherClientId, siteId, siteSlug: slug, staffA, staffB, serviceHaircut, serviceBeard, serviceColor };
+}
+
+/** Helpers for the client-scoping tests. */
+export async function seedSiteForClient(tenantId: string, clientId: string): Promise<{ siteId: string; staffId: string; serviceId: string }> {
+  const slug = `shop-${randomUUID().slice(0, 8)}`;
+  const site = await query<{ id: string }>(
+    `INSERT INTO sites (tenant_id, client_id, slug, name, timezone, opening_hours, scheduling_config)
+       VALUES ($1, $2, $3, 'Other Site', 'America/Bogota', $4,
+         '{"slot_interval_min":30,"min_notice_min":0,"booking_horizon_days":365,"default_buffer_before_min":0,"default_buffer_after_min":0}'::jsonb)
+     RETURNING id`,
+    [tenantId, clientId, slug, JSON.stringify(OPEN_9_18)],
+  );
+  const siteId = site.rows[0].id;
+  const staff = await query<{ id: string }>(
+    `INSERT INTO staff (tenant_id, site_id, name, working_hours) VALUES ($1, $2, 'Other Barber', '{}'::jsonb) RETURNING id`,
+    [tenantId, siteId],
+  );
+  const svc = await query<{ id: string }>(
+    `INSERT INTO services (tenant_id, name, duration_min, price) VALUES ($1, 'Other Svc', 30, 10) RETURNING id`,
+    [tenantId],
+  );
+  await query(`INSERT INTO site_services (tenant_id, site_id, service_id) VALUES ($1, $2, $3)`, [tenantId, siteId, svc.rows[0].id]);
+  await query(`INSERT INTO staff_services (tenant_id, staff_id, service_id) VALUES ($1, $2, $3)`, [tenantId, staff.rows[0].id, svc.rows[0].id]);
+  return { siteId, staffId: staff.rows[0].id, serviceId: svc.rows[0].id };
 }
 
 export async function cleanupTenant(tenantId: string): Promise<void> {

@@ -16,7 +16,8 @@ import {
 } from '../../src/db/repositories/scheduling/appointments.js';
 import { listContactConversations } from '../../src/db/repositories/contacts.js';
 import { listEventsSince } from '../../src/db/repositories/scheduling/events.js';
-import { cleanupTenant, closeDb, seedScenario } from './fixtures.js';
+import { getContactById } from '../../src/db/repositories/contacts.js';
+import { cleanupTenant, closeDb, seedScenario, seedSiteForClient } from './fixtures.js';
 
 const TZ = 'America/Bogota';
 const NOW = zonedPartsToUtc(2026, 8, 1, 0, 0, TZ); // well before the test slots
@@ -66,7 +67,7 @@ test('#12b DB exclusion constraint: two concurrent RAW inserts → exactly one 2
   const insertRaw = () =>
     withTransaction((client) =>
       insertAppointment(client, {
-        tenantId: s.tenantId, siteId: s.siteId, contactId: null, sourceConversationId: null,
+        tenantId: s.tenantId, clientId: s.clientId, siteId: s.siteId, contactId: null, sourceConversationId: null,
         staffId: s.staffA, serviceId: s.serviceHaircut, startAt: start, serviceEndAt: end,
         blockedFrom: start, blockedUntil: end, serviceNameSnapshot: 'Haircut', durationMinSnapshot: 60,
         priceSnapshot: null, bufferBeforeMinSnapshot: 0, bufferAfterMinSnapshot: 0,
@@ -272,6 +273,79 @@ test('#18 + #19 public and n8n share one agenda; realtime event emitted after co
   const after = await listEventsSince(s.tenantId, before[before.length - 1]?.seq ?? null, { siteId: s.siteId });
   const created = after.filter((e) => e.event_type === 'appointment.created');
   assert.ok(created.length >= 2, 'a realtime created-event was recorded post-commit for each');
+});
+
+test('per-staff duration override is honored in booking (snapshot reflects it)', async () => {
+  const s = await scenario();
+  await query(`UPDATE staff_services SET duration_override_min = 45 WHERE tenant_id = $1 AND staff_id = $2 AND service_id = $3`, [
+    s.tenantId, s.staffA, s.serviceHaircut,
+  ]);
+  const rA = await createAppointment({
+    tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
+    startAt: wed(9), origin: 'internal', createdByType: 'agent', now: NOW,
+  });
+  const rB = await createAppointment({
+    tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffB,
+    startAt: wed(9), origin: 'internal', createdByType: 'agent', now: NOW,
+  });
+  assert.ok(rA.ok && rB.ok);
+  assert.equal(rA.value.duration_min_snapshot, 45, 'Ana books a 45-min service');
+  assert.equal(rB.value.duration_min_snapshot, 60, 'Beto books the default 60-min service');
+  assert.equal(rA.value.service_end_at.getTime(), wed(9, 45).getTime());
+  assert.equal(rB.value.service_end_at.getTime(), wed(10).getTime());
+});
+
+test("client scoping: appointment + contact stamped with the site's client", async () => {
+  const s = await scenario();
+  const r = await createAppointment({
+    tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
+    startAt: wed(10), channel: 'whatsapp', channelUserId: '573001110000', customerName: 'Zoe',
+    origin: 'n8n', createdByType: 'n8n', now: NOW,
+  });
+  assert.ok(r.ok);
+  assert.equal(r.value.client_id, s.clientId);
+  const contact = await getContactById(s.tenantId, r.value.contact_id!);
+  assert.equal(contact?.client_id, s.clientId, 'contact belongs to the site client');
+});
+
+test('client scope: acting under another client is rejected as not_found', async () => {
+  const s = await scenario();
+  const blocked = await createAppointment({
+    tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
+    startAt: wed(10), origin: 'internal', createdByType: 'agent', scopeClientId: s.otherClientId, now: NOW,
+  });
+  assert.ok(!blocked.ok && blocked.error === 'not_found');
+  const ok = await createAppointment({
+    tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
+    startAt: wed(10), origin: 'internal', createdByType: 'agent', scopeClientId: s.clientId, now: NOW,
+  });
+  assert.ok(ok.ok);
+  const t = await transitionStatus('confirmed', { tenantId: s.tenantId, appointmentId: ok.value.id, actorType: 'agent', scopeClientId: s.otherClientId });
+  assert.ok(!t.ok && t.error === 'not_found');
+  const rs = await rescheduleAppointment({ tenantId: s.tenantId, appointmentId: ok.value.id, startAt: wed(11), actorType: 'agent', scopeClientId: s.otherClientId, now: NOW });
+  assert.ok(!rs.ok && rs.error === 'not_found');
+  const t2 = await transitionStatus('confirmed', { tenantId: s.tenantId, appointmentId: ok.value.id, actorType: 'agent', scopeClientId: s.clientId });
+  assert.ok(t2.ok);
+});
+
+test('client isolation: listAppointments filtered by client excludes the other client', async () => {
+  const s = await scenario();
+  const other = await seedSiteForClient(s.tenantId, s.otherClientId);
+  const rA = await createAppointment({
+    tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
+    startAt: wed(10), origin: 'internal', createdByType: 'agent', now: NOW,
+  });
+  const rB = await createAppointment({
+    tenantId: s.tenantId, siteId: other.siteId, serviceId: other.serviceId, staffId: other.staffId,
+    startAt: wed(10), origin: 'internal', createdByType: 'agent', now: NOW,
+  });
+  assert.ok(rA.ok && rB.ok);
+  const onlyA = await listAppointments(s.tenantId, { clientId: s.clientId });
+  assert.ok(onlyA.every((a) => a.client_id === s.clientId));
+  assert.ok(onlyA.some((a) => a.id === rA.value.id));
+  assert.ok(!onlyA.some((a) => a.id === rB.value.id), 'other client appointment excluded');
+  const all = await listAppointments(s.tenantId);
+  assert.ok(all.some((a) => a.id === rA.value.id) && all.some((a) => a.id === rB.value.id));
 });
 
 test('availability reflects a booking (loadAvailability hides the taken slot)', async () => {

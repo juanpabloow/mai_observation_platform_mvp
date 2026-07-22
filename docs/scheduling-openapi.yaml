@@ -37,11 +37,19 @@ components:
       type: object
       properties:
         start_at: { type: string, format: date-time }
-        service_end_at: { type: string, format: date-time }
+        service_end_at: { type: string, format: date-time, description: For the chosen staff (duration can differ per staff). }
         staff_id: { type: string, format: uuid, description: Deterministically chosen staff for "any". }
         available_staff_ids:
           type: array
           items: { type: string, format: uuid }
+        candidates:
+          type: array
+          description: Per-staff service windows for this start (each staff's own duration).
+          items:
+            type: object
+            properties:
+              staff_id: { type: string, format: uuid }
+              service_end_at: { type: string, format: date-time }
     Appointment:
       type: object
       properties:
