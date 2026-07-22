@@ -20,10 +20,14 @@ import { getSessionCookie } from "better-auth/cookies";
 // /api/handoff is the MACHINE handoff API: cookieless Bearer-token requests must
 // reach the route (which does its own auth) instead of being redirected to /login.
 // /api/health is the public uptime probe: it must return 200/503 cookieless.
+// /forgot-password and /reset-password are the account-recovery pages: their
+// whole audience is logged-out users, so they must never bounce to /login.
 const PUBLIC_PREFIXES = [
   "/login",
   "/signup",
   "/logout",
+  "/forgot-password",
+  "/reset-password",
   "/api/auth",
   "/invite",
   "/api/handoff",

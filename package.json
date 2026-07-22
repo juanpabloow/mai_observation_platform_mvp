@@ -9,6 +9,8 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
+    "test": "npm run test:auth",
+    "test:auth": "tsx --test web/tests/*.test.ts",
     "build": "tsc",
     "build:worker": "tsc",
     "start:worker": "node dist/index.js",
