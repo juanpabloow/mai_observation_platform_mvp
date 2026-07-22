@@ -40,6 +40,10 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       public_reference uuid NOT NULL UNIQUE DEFAULT gen_random_uuid(),
       tenant_id uuid NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+      -- Denormalized from the site's client for authorization filtering + indexes
+      -- (a member sees only their client's appointments). Same-tenant enforced via
+      -- the composite FK to clients.
+      client_id uuid NOT NULL,
       site_id uuid NOT NULL REFERENCES sites (id) ON DELETE CASCADE,
       contact_id uuid REFERENCES contacts (id) ON DELETE SET NULL,
       source_conversation_id uuid REFERENCES conversations (id) ON DELETE SET NULL,
@@ -72,7 +76,9 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       CONSTRAINT appointments_service_range CHECK (service_end_at > start_at),
       CONSTRAINT appointments_blocked_range CHECK (blocked_until > blocked_from),
       CONSTRAINT appointments_blocked_contains_service
-        CHECK (blocked_from <= start_at AND blocked_until >= service_end_at)
+        CHECK (blocked_from <= start_at AND blocked_until >= service_end_at),
+      CONSTRAINT appointments_client_fkey FOREIGN KEY (client_id, tenant_id)
+        REFERENCES clients (id, tenant_id)
     );
 
     -- Idempotency: one active appointment per (tenant, idempotency_key).
@@ -89,6 +95,7 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       )
       WHERE (status IN ('scheduled', 'confirmed'));
 
+    CREATE INDEX appointments_tenant_client_start_idx ON appointments (tenant_id, client_id, start_at);
     CREATE INDEX appointments_tenant_site_start_idx ON appointments (tenant_id, site_id, start_at);
     CREATE INDEX appointments_tenant_staff_start_idx ON appointments (tenant_id, staff_id, start_at);
     CREATE INDEX appointments_tenant_status_idx ON appointments (tenant_id, status);

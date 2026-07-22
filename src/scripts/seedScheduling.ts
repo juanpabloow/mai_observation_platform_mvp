@@ -31,14 +31,26 @@ async function main(): Promise<void> {
     [DEMO_TENANT_ID],
   );
 
-  // Site (idempotent by slug within the tenant).
+  // The demo business (client) within the tenant — the default client home.
+  const clientRow = await query<{ id: string }>(
+    `INSERT INTO clients (tenant_id, name, is_default)
+       SELECT $1, 'Demo Barbershop (client)', true
+        WHERE NOT EXISTS (SELECT 1 FROM clients WHERE tenant_id = $1 AND is_default)
+     RETURNING id`,
+    [DEMO_TENANT_ID],
+  );
+  const clientId =
+    clientRow.rows[0]?.id ??
+    (await query<{ id: string }>(`SELECT id FROM clients WHERE tenant_id = $1 AND is_default`, [DEMO_TENANT_ID])).rows[0].id;
+
+  // Site (idempotent by slug), belonging to the demo client.
   const siteRow = await query<{ id: string }>(
-    `INSERT INTO sites (tenant_id, slug, name, address, timezone, opening_hours, scheduling_config)
-       VALUES ($1, $2, 'Demo Barbershop', 'Cra 7 #1-23, Bogotá', 'America/Bogota', $3,
+    `INSERT INTO sites (tenant_id, client_id, slug, name, address, timezone, opening_hours, scheduling_config)
+       VALUES ($1, $2, $3, 'Demo Barbershop', 'Cra 7 #1-23, Bogotá', 'America/Bogota', $4,
          '{"slot_interval_min":15,"min_notice_min":60,"booking_horizon_days":30,"default_buffer_before_min":0,"default_buffer_after_min":5}'::jsonb)
      ON CONFLICT (slug) DO UPDATE SET name = EXCLUDED.name
      RETURNING id`,
-    [DEMO_TENANT_ID, DEMO_SLUG, JSON.stringify(WEEK)],
+    [DEMO_TENANT_ID, clientId, DEMO_SLUG, JSON.stringify(WEEK)],
   );
   const siteId = siteRow.rows[0].id;
 

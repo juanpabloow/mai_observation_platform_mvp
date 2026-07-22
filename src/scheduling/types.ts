@@ -34,16 +34,6 @@ export interface SiteAvailabilityInput {
   scheduling_config: SchedulingConfig;
 }
 
-/** A candidate staff member with resolved (post-override) service timing. */
-export interface StaffAvailabilityInput {
-  id: string;
-  working_hours: WeeklyHours;
-  /** UTC blocked ranges from that staff's ACTIVE appointments. */
-  busy: Array<{ from: Date; until: Date }>;
-  /** UTC ranges from staff-specific exceptions. */
-  exceptions: Array<{ from: Date; until: Date }>;
-}
-
 /** Effective service timing (after site/staff overrides applied by the caller). */
 export interface ServiceTiming {
   duration_min: number;
@@ -51,9 +41,21 @@ export interface ServiceTiming {
   buffer_after_min: number;
 }
 
+/** A candidate staff member with resolved (post-override) service timing. Each
+ * staff carries its OWN timing so a per-staff duration override reshapes only
+ * that staff's slots (two barbers can have different durations for one service). */
+export interface StaffAvailabilityInput {
+  id: string;
+  working_hours: WeeklyHours;
+  timing: ServiceTiming;
+  /** UTC blocked ranges from that staff's ACTIVE appointments. */
+  busy: Array<{ from: Date; until: Date }>;
+  /** UTC ranges from staff-specific exceptions. */
+  exceptions: Array<{ from: Date; until: Date }>;
+}
+
 export interface AvailabilityRequest {
   site: SiteAvailabilityInput;
-  service: ServiceTiming;
   staff: StaffAvailabilityInput[];
   /** UTC ranges from site-wide exceptions (staff_id NULL). */
   siteExceptions: Array<{ from: Date; until: Date }>;
@@ -63,12 +65,22 @@ export interface AvailabilityRequest {
   now: Date;
 }
 
-/** One bookable slot: the customer-visible service window + the staff to book. */
+/** A per-staff candidate for a start time (its service window depends on its own
+ * duration, so service_end_at can differ between staff at the same start). */
+export interface SlotCandidate {
+  staff_id: string;
+  service_end_at: Date;
+}
+
+/** One bookable slot at a start time: the deterministically chosen staff + its
+ * service window, plus every staff that can take this exact start. */
 export interface Slot {
   start_at: Date;
   service_end_at: Date;
   /** Deterministically chosen staff for "any"; the requested staff otherwise. */
   staff_id: string;
-  /** All staff that can take this exact slot (⊇ {staff_id}). */
+  /** All staff that can take this exact start (⊇ {staff_id}). */
   available_staff_ids: string[];
+  /** Per-staff service windows for this start (each staff's own duration). */
+  candidates: SlotCandidate[];
 }

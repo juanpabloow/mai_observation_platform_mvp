@@ -49,13 +49,9 @@ function toSpans(ranges: Array<{ from: Date; until: Date }>): Span[] {
  * lowest id (never "always the first row") — with available_staff_ids listing all.
  */
 export function computeAvailability(req: AvailabilityRequest): Slot[] {
-  const { site, service, now } = req;
+  const { site, now } = req;
   const cfg = site.scheduling_config;
   const slotMs = cfg.slot_interval_min * MS_PER_MIN;
-  const durMs = service.duration_min * MS_PER_MIN;
-  const bufBeforeMs = service.buffer_before_min * MS_PER_MIN;
-  const bufAfterMs = service.buffer_after_min * MS_PER_MIN;
-  const blockMs = bufBeforeMs + durMs + bufAfterMs;
 
   const rangeStart = req.from.getTime();
   const rangeEnd = req.to.getTime();
@@ -80,8 +76,8 @@ export function computeAvailability(req: AvailabilityRequest): Slot[] {
     staffDayLoad.set(st.id, perDay);
   }
 
-  // start_at epoch ms → { available: staffId[] }
-  const byStart = new Map<number, { available: string[] }>();
+  // start_at epoch ms → per-staff service-end (each staff has its OWN duration).
+  const byStart = new Map<number, Map<string, number>>();
 
   for (const date of dates) {
     // The weekday of this local date.
@@ -89,8 +85,13 @@ export function computeAvailability(req: AvailabilityRequest): Slot[] {
     const weekday = utcToZonedParts(noon, site.timezone).weekday;
     const siteOpen = normalize(hoursToSpans(site.opening_hours, date, weekday, site.timezone));
     if (siteOpen.length === 0) continue;
+    const midnight = zonedPartsToUtc(date.year, date.month, date.day, 0, 0, site.timezone).getTime();
 
     for (const st of req.staff) {
+      const durMs = st.timing.duration_min * MS_PER_MIN;
+      const bufBeforeMs = st.timing.buffer_before_min * MS_PER_MIN;
+      const bufAfterMs = st.timing.buffer_after_min * MS_PER_MIN;
+
       // Staff working hours: {} (no weekday keys) means "inherit site opening".
       const hasOwnHours = Object.keys(st.working_hours).length > 0;
       const staffWork = hasOwnHours
@@ -103,10 +104,8 @@ export function computeAvailability(req: AvailabilityRequest): Slot[] {
       free = subtract(free, toSpans(st.busy));
 
       for (const span of free) {
-        // Grid-align candidate starts to local midnight of this date.
-        const midnight = zonedPartsToUtc(date.year, date.month, date.day, 0, 0, site.timezone).getTime();
         const firstStart = span.start + bufBeforeMs; // earliest S so blocked_from ≥ span.start
-        // Snap up to the next slot-grid tick ≥ firstStart.
+        // Snap up to the next slot-grid tick ≥ firstStart (grid aligned to midnight).
         const offset = firstStart - midnight;
         const aligned = midnight + Math.ceil(offset / slotMs) * slotMs;
 
@@ -116,9 +115,8 @@ export function computeAvailability(req: AvailabilityRequest): Slot[] {
           if (blockedFrom < span.start || blockedUntil > span.end) continue; // must fit fully
           if (s < rangeStart || s + durMs > rangeEnd) continue; // within requested window
           if (s < minStart || s > maxStart) continue; // min-notice + horizon
-          void blockMs;
-          const entry = byStart.get(s) ?? { available: [] };
-          entry.available.push(st.id);
+          const entry = byStart.get(s) ?? new Map<string, number>();
+          entry.set(st.id, s + durMs);
           byStart.set(s, entry);
         }
       }
@@ -126,14 +124,18 @@ export function computeAvailability(req: AvailabilityRequest): Slot[] {
   }
 
   const slots: Slot[] = [];
-  for (const [start, { available }] of [...byStart.entries()].sort((a, b) => a[0] - b[0])) {
+  for (const [start, perStaff] of [...byStart.entries()].sort((a, b) => a[0] - b[0])) {
     const startDate = new Date(start);
+    const available = [...perStaff.keys()];
     const chosen = chooseStaff(available, startDate, staffDayLoad, dayKey);
     slots.push({
       start_at: startDate,
-      service_end_at: new Date(start + durMs),
+      service_end_at: new Date(perStaff.get(chosen) as number),
       staff_id: chosen,
       available_staff_ids: [...available].sort(),
+      candidates: [...perStaff.entries()]
+        .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+        .map(([staffId, end]) => ({ staff_id: staffId, service_end_at: new Date(end) })),
     });
   }
   return slots;
@@ -153,20 +155,6 @@ function chooseStaff(
     if (la !== lb) return la - lb;
     return a < b ? -1 : a > b ? 1 : 0;
   })[0];
-}
-
-/** Effective timing for a service given optional site/staff duration overrides and
- * the service's own buffers (site scheduling_config supplies buffer defaults only
- * when the service leaves them at zero AND no explicit service buffer is set). */
-export function resolveServiceTiming(
-  base: { duration_min: number; buffer_before_min: number; buffer_after_min: number },
-  overrides: { duration_override_min?: number | null },
-): { duration_min: number; buffer_before_min: number; buffer_after_min: number } {
-  return {
-    duration_min: overrides.duration_override_min ?? base.duration_min,
-    buffer_before_min: base.buffer_before_min,
-    buffer_after_min: base.buffer_after_min,
-  };
 }
 
 export type { StaffAvailabilityInput };

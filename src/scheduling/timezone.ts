@@ -90,6 +90,18 @@ export function utcToZonedParts(
   };
 }
 
+/**
+ * Parse a local wall-clock string "YYYY-MM-DDTHH:MM" (the value an <input
+ * type="datetime-local"> yields) and interpret it in `timeZone` → the UTC instant.
+ * This is how schedule-exception times entered in the admin UI are anchored to the
+ * SITE's timezone (never the browser's). Throws on malformed input.
+ */
+export function localWallClockToUtc(isoLocal: string, timeZone: string): Date {
+  const m = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})/.exec(isoLocal);
+  if (!m) throw new Error(`Invalid local datetime: ${isoLocal}`);
+  return zonedPartsToUtc(Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4]), Number(m[5]), timeZone);
+}
+
 /** "HH:MM" → minutes since local midnight. Throws on malformed input. */
 export function parseHhMm(hhmm: string): number {
   const m = /^(\d{2}):(\d{2})$/.exec(hhmm);

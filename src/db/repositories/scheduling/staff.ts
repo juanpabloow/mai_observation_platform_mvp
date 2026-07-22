@@ -20,17 +20,23 @@ export interface StaffRow {
 
 export async function listStaff(
   tenantId: string,
-  opts: { siteId?: string; includeInactive?: boolean } = {},
+  opts: { siteId?: string; includeInactive?: boolean; clientId?: string | null } = {},
 ): Promise<StaffRow[]> {
   const params: unknown[] = [tenantId];
-  const where = ['tenant_id = $1'];
+  const where = ['s.tenant_id = $1'];
   if (opts.siteId) {
     params.push(opts.siteId);
-    where.push(`site_id = $${params.length}`);
+    where.push(`s.site_id = $${params.length}`);
   }
-  if (!opts.includeInactive) where.push('active = true');
+  if (opts.clientId) {
+    // Client scope flows through the site (staff belong to a site of a client).
+    params.push(opts.clientId);
+    where.push(`si.client_id = $${params.length}`);
+  }
+  if (!opts.includeInactive) where.push('s.active = true');
   const r = await query<StaffRow>(
-    `SELECT * FROM staff WHERE ${where.join(' AND ')} ORDER BY name`,
+    `SELECT s.* FROM staff s JOIN sites si ON si.id = s.site_id
+      WHERE ${where.join(' AND ')} ORDER BY s.name`,
     params,
   );
   return r.rows;

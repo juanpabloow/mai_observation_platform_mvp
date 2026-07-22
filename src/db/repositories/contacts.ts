@@ -17,6 +17,7 @@ export type ContactStage = 'new' | 'active' | 'customer' | 'archived';
 export interface ContactRow {
   id: string;
   tenant_id: string;
+  client_id: string;
   channel: string;
   channel_user_id: string;
   phone_e164: string | null;
@@ -34,6 +35,7 @@ export interface ContactRow {
 
 export interface ResolveContactInput {
   tenantId: string;
+  clientId: string;
   channel: string;
   channelUserId: string;
   name?: string | null;
@@ -42,7 +44,7 @@ export interface ResolveContactInput {
 }
 
 /**
- * Race-safe resolve-or-create by canonical identity (tenant, channel,
+ * Race-safe resolve-or-create by canonical identity (tenant, client, channel,
  * channel_user_id). On an existing row, fills in any newly-supplied name/phone/
  * email that was previously null (never overwrites known values) and advances
  * last_contact_at. Phone is normalized to E.164; an un-normalizable phone is
@@ -57,22 +59,34 @@ export async function resolveOrCreateContact(
     client ? client.query<T>(text, params) : query<T>(text, params);
   const phone = normalizeE164(input.phone);
   const r = await run<ContactRow>(
-    `INSERT INTO contacts (tenant_id, channel, channel_user_id, name, phone_e164, email, last_contact_at)
-       VALUES ($1, $2, $3, $4, $5, $6, now())
-     ON CONFLICT (tenant_id, channel, channel_user_id) DO UPDATE
+    `INSERT INTO contacts (tenant_id, client_id, channel, channel_user_id, name, phone_e164, email, last_contact_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+     ON CONFLICT (tenant_id, client_id, channel, channel_user_id) DO UPDATE
        SET name = COALESCE(contacts.name, EXCLUDED.name),
            phone_e164 = COALESCE(contacts.phone_e164, EXCLUDED.phone_e164),
            email = COALESCE(contacts.email, EXCLUDED.email),
            last_contact_at = now(),
            updated_at = now()
      RETURNING *`,
-    [input.tenantId, input.channel, input.channelUserId, input.name ?? null, phone, input.email ?? null],
+    [input.tenantId, input.clientId, input.channel, input.channelUserId, input.name ?? null, phone, input.email ?? null],
   );
   return firstRowOrThrow(r, 'resolveOrCreateContact');
 }
 
-export async function getContactById(tenantId: string, id: string): Promise<ContactRow | null> {
-  const r = await query<ContactRow>(`SELECT * FROM contacts WHERE id = $1 AND tenant_id = $2`, [id, tenantId]);
+/** Get a contact by id, tenant-scoped. When clientId is provided (a member), the
+ * contact must belong to that client too — else null (no cross-client read). */
+export async function getContactById(
+  tenantId: string,
+  id: string,
+  clientId?: string | null,
+): Promise<ContactRow | null> {
+  const params: unknown[] = [id, tenantId];
+  let where = 'id = $1 AND tenant_id = $2';
+  if (clientId) {
+    params.push(clientId);
+    where += ` AND client_id = $${params.length}`;
+  }
+  const r = await query<ContactRow>(`SELECT * FROM contacts WHERE ${where}`, params);
   return r.rows[0] ?? null;
 }
 
@@ -88,10 +102,14 @@ export interface ContactListItem extends ContactRow {
  * (completed appts), and last conversation activity. Tenant-scoped. */
 export async function listContacts(
   tenantId: string,
-  opts: { search?: string; stage?: ContactStage; limit?: number } = {},
+  opts: { search?: string; stage?: ContactStage; limit?: number; clientId?: string | null } = {},
 ): Promise<ContactListItem[]> {
   const params: unknown[] = [tenantId];
   const where: string[] = ['c.tenant_id = $1'];
+  if (opts.clientId) {
+    params.push(opts.clientId);
+    where.push(`c.client_id = $${params.length}`);
+  }
   if (opts.stage) {
     params.push(opts.stage);
     where.push(`c.stage = $${params.length}`);
@@ -175,6 +193,7 @@ export async function updateContact(
   tenantId: string,
   id: string,
   patch: UpdateContactInput,
+  clientId?: string | null,
 ): Promise<ContactRow | null> {
   const sets: string[] = [];
   const params: unknown[] = [id, tenantId];
@@ -188,10 +207,15 @@ export async function updateContact(
   if (patch.stage !== undefined) add('stage', patch.stage);
   if (patch.bot_human_mode !== undefined) add('bot_human_mode', patch.bot_human_mode);
   if (patch.assigned_to !== undefined) add('assigned_to', patch.assigned_to);
-  if (sets.length === 0) return getContactById(tenantId, id);
+  if (sets.length === 0) return getContactById(tenantId, id, clientId);
   sets.push('updated_at = now()');
+  let where = 'id = $1 AND tenant_id = $2';
+  if (clientId) {
+    params.push(clientId);
+    where += ` AND client_id = $${params.length}`;
+  }
   const r = await query<ContactRow>(
-    `UPDATE contacts SET ${sets.join(', ')} WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+    `UPDATE contacts SET ${sets.join(', ')} WHERE ${where} RETURNING *`,
     params,
   );
   return r.rows[0] ?? null;

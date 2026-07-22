@@ -27,6 +27,7 @@ export interface AppointmentRow {
   id: string;
   public_reference: string;
   tenant_id: string;
+  client_id: string;
   site_id: string;
   contact_id: string | null;
   source_conversation_id: string | null;
@@ -53,6 +54,7 @@ export interface AppointmentRow {
 
 export interface InsertAppointmentInput {
   tenantId: string;
+  clientId: string;
   siteId: string;
   contactId: string | null;
   sourceConversationId: string | null;
@@ -84,15 +86,15 @@ export async function insertAppointment(client: PoolClient, input: InsertAppoint
   await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [input.staffId]);
   const r = await client.query<AppointmentRow>(
     `INSERT INTO appointments (
-        tenant_id, site_id, contact_id, source_conversation_id, staff_id, service_id,
+        tenant_id, client_id, site_id, contact_id, source_conversation_id, staff_id, service_id,
         start_at, service_end_at, blocked_from, blocked_until,
         service_name_snapshot, duration_min_snapshot, price_snapshot,
         buffer_before_min_snapshot, buffer_after_min_snapshot,
         status, origin, created_by_type, created_by_user_id, idempotency_key)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'scheduled',$16,$17,$18,$19)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'scheduled',$17,$18,$19,$20)
      RETURNING *`,
     [
-      input.tenantId, input.siteId, input.contactId, input.sourceConversationId, input.staffId, input.serviceId,
+      input.tenantId, input.clientId, input.siteId, input.contactId, input.sourceConversationId, input.staffId, input.serviceId,
       input.startAt, input.serviceEndAt, input.blockedFrom, input.blockedUntil,
       input.serviceNameSnapshot, input.durationMinSnapshot, input.priceSnapshot,
       input.bufferBeforeMinSnapshot, input.bufferAfterMinSnapshot,
@@ -210,6 +212,7 @@ export async function moveInterval(
 }
 
 export interface ListAppointmentsFilters {
+  clientId?: string | null;
   siteId?: string;
   staffId?: string;
   status?: AppointmentStatus | AppointmentStatus[];
@@ -237,6 +240,7 @@ export async function listAppointments(
     params.push(val);
     where.push(frag(params.length));
   };
+  if (filters.clientId) add((i) => `a.client_id = $${i}`, filters.clientId);
   if (filters.siteId) add((i) => `a.site_id = $${i}`, filters.siteId);
   if (filters.staffId) add((i) => `a.staff_id = $${i}`, filters.staffId);
   if (filters.contactId) add((i) => `a.contact_id = $${i}`, filters.contactId);

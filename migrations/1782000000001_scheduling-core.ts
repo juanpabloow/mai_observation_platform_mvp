@@ -32,6 +32,10 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
     CREATE TABLE sites (
       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
       tenant_id uuid NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+      -- A site belongs to a CLIENT (a business within the tenant). The composite
+      -- FK forces the client to be in the SAME tenant (matches the RBAC model,
+      -- where a member is scoped to exactly one client).
+      client_id uuid NOT NULL,
       slug text NOT NULL UNIQUE CHECK (slug ~ '^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$'),
       name text NOT NULL,
       address text,
@@ -41,9 +45,12 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
         '{"slot_interval_min":15,"min_notice_min":120,"booking_horizon_days":30,"default_buffer_before_min":0,"default_buffer_after_min":0}'::jsonb,
       active boolean NOT NULL DEFAULT true,
       created_at timestamptz NOT NULL DEFAULT now(),
-      updated_at timestamptz NOT NULL DEFAULT now()
+      updated_at timestamptz NOT NULL DEFAULT now(),
+      CONSTRAINT sites_client_fkey FOREIGN KEY (client_id, tenant_id)
+        REFERENCES clients (id, tenant_id)
     );
     CREATE INDEX sites_tenant_idx ON sites (tenant_id);
+    CREATE INDEX sites_tenant_client_idx ON sites (tenant_id, client_id);
 
     -- ── staff (an agendable RESOURCE; not necessarily an MT_AI user) ───────────
     CREATE TABLE staff (

@@ -23,6 +23,8 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       seq bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       id uuid NOT NULL DEFAULT gen_random_uuid(),
       tenant_id uuid NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
+      -- The client the event belongs to (a member subscribes to their client only).
+      client_id uuid,
       site_id uuid REFERENCES sites (id) ON DELETE CASCADE,
       event_type text NOT NULL CHECK (event_type IN (
         'appointment.created', 'appointment.rescheduled', 'appointment.cancelled',
@@ -32,6 +34,7 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       created_at timestamptz NOT NULL DEFAULT now()
     );
     CREATE INDEX scheduling_events_tenant_seq_idx ON scheduling_events (tenant_id, seq);
+    CREATE INDEX scheduling_events_client_seq_idx ON scheduling_events (tenant_id, client_id, seq);
     CREATE INDEX scheduling_events_site_seq_idx ON scheduling_events (tenant_id, site_id, seq);
   `);
 }

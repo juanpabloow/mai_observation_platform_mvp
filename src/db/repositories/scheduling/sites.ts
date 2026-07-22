@@ -10,6 +10,7 @@ import type { SchedulingConfig, WeeklyHours } from '../../../scheduling/types.js
 export interface SiteRow {
   id: string;
   tenant_id: string;
+  client_id: string;
   slug: string;
   name: string;
   address: string | null;
@@ -21,11 +22,18 @@ export interface SiteRow {
   updated_at: Date;
 }
 
-export async function listSites(tenantId: string, includeInactive = false): Promise<SiteRow[]> {
-  const r = await query<SiteRow>(
-    `SELECT * FROM sites WHERE tenant_id = $1 ${includeInactive ? '' : 'AND active = true'} ORDER BY name`,
-    [tenantId],
-  );
+export async function listSites(
+  tenantId: string,
+  opts: { includeInactive?: boolean; clientId?: string | null } = {},
+): Promise<SiteRow[]> {
+  const params: unknown[] = [tenantId];
+  const where = ['tenant_id = $1'];
+  if (opts.clientId) {
+    params.push(opts.clientId);
+    where.push(`client_id = $${params.length}`);
+  }
+  if (!opts.includeInactive) where.push('active = true');
+  const r = await query<SiteRow>(`SELECT * FROM sites WHERE ${where.join(' AND ')} ORDER BY name`, params);
   return r.rows;
 }
 
@@ -44,6 +52,7 @@ export async function getActiveSiteBySlug(slug: string): Promise<SiteRow | null>
 
 export interface CreateSiteInput {
   tenantId: string;
+  clientId: string;
   slug: string;
   name: string;
   address?: string | null;
@@ -53,12 +62,16 @@ export interface CreateSiteInput {
 }
 
 export async function createSite(input: CreateSiteInput): Promise<SiteRow> {
+  // The composite FK guarantees the client belongs to the tenant, but validate up
+  // front for a clean error rather than an FK violation.
   const r = await query<SiteRow>(
-    `INSERT INTO sites (tenant_id, slug, name, address, timezone, opening_hours, scheduling_config)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `INSERT INTO sites (tenant_id, client_id, slug, name, address, timezone, opening_hours, scheduling_config)
+       SELECT $1, $2, $3, $4, $5, $6, $7, $8
+        WHERE EXISTS (SELECT 1 FROM clients WHERE id = $2 AND tenant_id = $1)
      RETURNING *`,
     [
       input.tenantId,
+      input.clientId,
       input.slug,
       input.name,
       input.address ?? null,
@@ -67,6 +80,7 @@ export async function createSite(input: CreateSiteInput): Promise<SiteRow> {
       JSON.stringify(input.schedulingConfig),
     ],
   );
+  if (!r.rows[0]) throw new Error('createSite: client not found for tenant');
   return firstRowOrThrow(r, 'createSite');
 }
 

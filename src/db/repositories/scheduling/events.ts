@@ -19,6 +19,7 @@ export interface SchedulingEventRow {
   seq: string; // bigint → string
   id: string;
   tenant_id: string;
+  client_id: string | null;
   site_id: string | null;
   event_type: SchedulingEventType;
   payload: Record<string, unknown>;
@@ -29,6 +30,7 @@ export interface SchedulingEventRow {
 export async function recordSchedulingEvent(
   input: {
     tenantId: string;
+    clientId?: string | null;
     siteId: string | null;
     eventType: SchedulingEventType;
     payload: Record<string, unknown>;
@@ -38,20 +40,24 @@ export async function recordSchedulingEvent(
   const run = (text: string, params: unknown[]) =>
     client ? client.query(text, params) : query(text, params);
   await run(
-    `INSERT INTO scheduling_events (tenant_id, site_id, event_type, payload)
-       VALUES ($1, $2, $3, $4)`,
-    [input.tenantId, input.siteId, input.eventType, JSON.stringify(input.payload)],
+    `INSERT INTO scheduling_events (tenant_id, client_id, site_id, event_type, payload)
+       VALUES ($1, $2, $3, $4, $5)`,
+    [input.tenantId, input.clientId ?? null, input.siteId, input.eventType, JSON.stringify(input.payload)],
   );
 }
 
-/** Events for a tenant after a cursor (seq). Optionally filtered by site. Bounded. */
+/** Events for a tenant after a cursor (seq). Optionally filtered by site/client. */
 export async function listEventsSince(
   tenantId: string,
   sinceSeq: string | null,
-  opts: { siteId?: string; limit?: number } = {},
+  opts: { siteId?: string; clientId?: string | null; limit?: number } = {},
 ): Promise<SchedulingEventRow[]> {
   const params: unknown[] = [tenantId, sinceSeq ?? '0'];
   const where = ['tenant_id = $1', 'seq > $2'];
+  if (opts.clientId) {
+    params.push(opts.clientId);
+    where.push(`client_id = $${params.length}`);
+  }
   if (opts.siteId) {
     params.push(opts.siteId);
     where.push(`site_id = $${params.length}`);

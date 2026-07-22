@@ -1,11 +1,11 @@
 import { isDeadlock, isExclusionViolation, isUniqueViolation, query, withTransaction } from '../db/client.js';
+import { logger } from '../logger.js';
 import { resolveOrCreateContact, linkConversationToContact } from '../db/repositories/contacts.js';
 import { getOrCreateConversation } from '../db/repositories/handoff.js';
 import {
   isSlotAvailable,
   loadAvailability,
   resolveEffectivePrice,
-  type EffectiveTiming,
 } from '../db/repositories/scheduling/availabilityData.js';
 import {
   getAppointmentForUpdate,
@@ -60,6 +60,8 @@ export interface CreateAppointmentInput {
   createdByType: ActorType;
   createdByUserId?: string | null;
   idempotencyKey?: string | null;
+  /** When set (a member), the site's client must equal this, else not_found. */
+  scopeClientId?: string | null;
   now?: Date;
 }
 
@@ -105,18 +107,24 @@ export async function createAppointment(
   const slot = avail.slots.find((s) => s.start_at.getTime() === input.startAt.getTime());
   if (!slot) return { ok: false, error: 'unavailable', message: 'That time is no longer available.' };
   const chosenStaffId = input.staffId ?? slot.staff_id;
-  if (!slot.available_staff_ids.includes(chosenStaffId)) {
+  const candidate = slot.candidates.find((c) => c.staff_id === chosenStaffId);
+  if (!candidate) {
     return { ok: false, error: 'no_staff', message: 'The requested staff is not available for that time.' };
   }
 
-  const timing: EffectiveTiming = avail.timing;
+  const clientId = avail.site.client_id;
+  if (input.scopeClientId && clientId !== input.scopeClientId) {
+    return { ok: false, error: 'not_found', message: 'Service is not offered at this site.' };
+  }
   const priceSnapshot = await resolveEffectivePrice(input.tenantId, input.siteId, input.serviceId, chosenStaffId);
   const serviceName = await serviceNameFor(input.tenantId, input.serviceId);
   if (serviceName == null) return { ok: false, error: 'not_found', message: 'Service not found.' };
 
-  const blockedFrom = new Date(input.startAt.getTime() - timing.buffer_before_min * MS_PER_MIN);
-  const serviceEnd = new Date(input.startAt.getTime() + timing.duration_min * MS_PER_MIN);
-  const blockedUntil = new Date(serviceEnd.getTime() + timing.buffer_after_min * MS_PER_MIN);
+  // Per-staff service window (the chosen staff's own duration), plus service-level buffers.
+  const serviceEnd = candidate.service_end_at;
+  const durationMinSnapshot = Math.round((serviceEnd.getTime() - input.startAt.getTime()) / MS_PER_MIN);
+  const blockedFrom = new Date(input.startAt.getTime() - avail.buffers.before_min * MS_PER_MIN);
+  const blockedUntil = new Date(serviceEnd.getTime() + avail.buffers.after_min * MS_PER_MIN);
 
   // 3. Transaction: resolve identity, insert (exclusion-guarded), audit event.
   try {
@@ -126,6 +134,7 @@ export async function createAppointment(
         const contact = await resolveOrCreateContact(
           {
             tenantId: input.tenantId,
+            clientId,
             channel: input.channel,
             channelUserId: input.channelUserId,
             name: input.customerName,
@@ -146,6 +155,7 @@ export async function createAppointment(
 
       const appt = await insertAppointment(client, {
         tenantId: input.tenantId,
+        clientId,
         siteId: input.siteId,
         contactId,
         sourceConversationId,
@@ -156,10 +166,10 @@ export async function createAppointment(
         blockedFrom,
         blockedUntil,
         serviceNameSnapshot: serviceName,
-        durationMinSnapshot: timing.duration_min,
+        durationMinSnapshot,
         priceSnapshot,
-        bufferBeforeMinSnapshot: timing.buffer_before_min,
-        bufferAfterMinSnapshot: timing.buffer_after_min,
+        bufferBeforeMinSnapshot: avail.buffers.before_min,
+        bufferAfterMinSnapshot: avail.buffers.after_min,
         origin: input.origin,
         createdByType: input.createdByType,
         createdByUserId: input.createdByUserId ?? null,
@@ -189,13 +199,20 @@ export async function createAppointment(
     // 4. Realtime AFTER commit.
     await recordSchedulingEvent({
       tenantId: created.tenant_id,
+      clientId: created.client_id,
       siteId: created.site_id,
       eventType: 'appointment.created',
       payload: { appointment_id: created.id, staff_id: created.staff_id, start_at: created.start_at, contact_id: created.contact_id },
     });
     return { ok: true, value: created };
   } catch (err) {
-    if (isExclusionViolation(err) || isDeadlock(err)) {
+    if (isExclusionViolation(err)) {
+      return { ok: false, error: 'conflict_slot', message: 'That time was just booked. Please pick another.' };
+    }
+    if (isDeadlock(err)) {
+      // The per-staff advisory lock should prevent this; preserve the original
+      // error internally before mapping to a conflict (defense-in-depth).
+      logger.warn({ err, staffId: chosenStaffId, startAt: input.startAt }, 'createAppointment: deadlock mapped to conflict_slot');
       return { ok: false, error: 'conflict_slot', message: 'That time was just booked. Please pick another.' };
     }
     if (isUniqueViolation(err) && input.idempotencyKey) {
@@ -241,6 +258,9 @@ export interface TransitionInput {
   actorType: ActorType;
   actorUserId?: string | null;
   reason?: string | null;
+  /** When set (a member), the appointment must belong to this client, else it is
+   * treated as not-found (no cross-client action, no existence leak). */
+  scopeClientId?: string | null;
 }
 
 /** Apply a status transition (confirm/complete/cancel/no_show) under a row lock,
@@ -253,6 +273,7 @@ export async function transitionStatus(
     const result = await withTransaction(async (client) => {
       const current = await getAppointmentForUpdate(client, input.tenantId, input.appointmentId);
       if (!current) return { kind: 'not_found' as const };
+      if (input.scopeClientId && current.client_id !== input.scopeClientId) return { kind: 'not_found' as const };
       if (!LEGAL_STATUS[current.status].includes(target)) {
         return { kind: 'invalid' as const, from: current.status };
       }
@@ -277,6 +298,7 @@ export async function transitionStatus(
     }
     await recordSchedulingEvent({
       tenantId: result.updated.tenant_id,
+      clientId: result.updated.client_id,
       siteId: result.updated.site_id,
       eventType: target === 'cancelled' ? 'appointment.cancelled' : 'appointment.status_changed',
       payload: { appointment_id: result.updated.id, status: target, staff_id: result.updated.staff_id, start_at: result.updated.start_at },
@@ -296,6 +318,7 @@ export interface RescheduleInput {
   staffId?: string | null; // null = keep current staff
   actorType: ActorType;
   actorUserId?: string | null;
+  scopeClientId?: string | null;
   now?: Date;
 }
 
@@ -308,6 +331,7 @@ export async function rescheduleAppointment(input: RescheduleInput): Promise<Boo
     const outcome = await withTransaction(async (client) => {
       const current = await getAppointmentForUpdate(client, input.tenantId, input.appointmentId);
       if (!current) return { kind: 'not_found' as const };
+      if (input.scopeClientId && current.client_id !== input.scopeClientId) return { kind: 'not_found' as const };
       if (TERMINAL.includes(current.status)) return { kind: 'invalid' as const, from: current.status };
 
       const targetStaff = input.staffId ?? current.staff_id;
@@ -375,13 +399,18 @@ export async function rescheduleAppointment(input: RescheduleInput): Promise<Boo
     }
     await recordSchedulingEvent({
       tenantId: outcome.moved.tenant_id,
+      clientId: outcome.moved.client_id,
       siteId: outcome.moved.site_id,
       eventType: 'appointment.rescheduled',
       payload: { appointment_id: outcome.moved.id, staff_id: outcome.moved.staff_id, start_at: outcome.moved.start_at },
     });
     return { ok: true, value: outcome.moved };
   } catch (err) {
-    if (isExclusionViolation(err) || isDeadlock(err)) {
+    if (isExclusionViolation(err)) {
+      return { ok: false, error: 'conflict_slot', message: 'That time was just booked. Please pick another.' };
+    }
+    if (isDeadlock(err)) {
+      logger.warn({ err, appointmentId: input.appointmentId, startAt: input.startAt }, 'rescheduleAppointment: deadlock mapped to conflict_slot');
       return { ok: false, error: 'conflict_slot', message: 'That time was just booked. Please pick another.' };
     }
     throw err;
