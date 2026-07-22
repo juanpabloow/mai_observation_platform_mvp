@@ -1,4 +1,4 @@
-import { Pool, type QueryResult, type QueryResultRow } from 'pg';
+import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg';
 import { config } from '../config.js';
 import { logger } from '../logger.js';
 
@@ -41,6 +41,44 @@ export function query<T extends QueryResultRow = QueryResultRow>(
   params?: unknown[],
 ): Promise<QueryResult<T>> {
   return pool.query<T>(text, params);
+}
+
+/**
+ * Run `fn` inside a single transaction on a dedicated pooled client: BEGIN, then
+ * COMMIT on success or ROLLBACK on any throw (re-raising the original error). The
+ * client is always released. Used by the booking engine, where the availability
+ * revalidation + insert + event log must be atomic and the insert relies on the
+ * appointments GiST exclusion constraint for the anti-double-book guarantee.
+ */
+export async function withTransaction<T>(fn: (client: PoolClient) => Promise<T>): Promise<T> {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await fn(client);
+    await client.query('COMMIT');
+    return result;
+  } catch (err) {
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // A failed rollback (e.g. a dead connection) must not mask the real error.
+    }
+    throw err;
+  } finally {
+    client.release();
+  }
+}
+
+/** True iff `err` is a Postgres exclusion-constraint violation (SQLSTATE 23P01) —
+ * i.e. the anti-double-book guard fired. Callers map this to HTTP 409. */
+export function isExclusionViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23P01';
+}
+
+/** True iff `err` is a Postgres unique-violation (SQLSTATE 23505). Used to detect
+ * an idempotency-key collision race. */
+export function isUniqueViolation(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505';
 }
 
 /**
