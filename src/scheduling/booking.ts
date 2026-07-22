@@ -1,4 +1,4 @@
-import { isExclusionViolation, isUniqueViolation, query, withTransaction } from '../db/client.js';
+import { isDeadlock, isExclusionViolation, isUniqueViolation, query, withTransaction } from '../db/client.js';
 import { resolveOrCreateContact, linkConversationToContact } from '../db/repositories/contacts.js';
 import { getOrCreateConversation } from '../db/repositories/handoff.js';
 import {
@@ -195,7 +195,7 @@ export async function createAppointment(
     });
     return { ok: true, value: created };
   } catch (err) {
-    if (isExclusionViolation(err)) {
+    if (isExclusionViolation(err) || isDeadlock(err)) {
       return { ok: false, error: 'conflict_slot', message: 'That time was just booked. Please pick another.' };
     }
     if (isUniqueViolation(err) && input.idempotencyKey) {
@@ -381,7 +381,7 @@ export async function rescheduleAppointment(input: RescheduleInput): Promise<Boo
     });
     return { ok: true, value: outcome.moved };
   } catch (err) {
-    if (isExclusionViolation(err)) {
+    if (isExclusionViolation(err) || isDeadlock(err)) {
       return { ok: false, error: 'conflict_slot', message: 'That time was just booked. Please pick another.' };
     }
     throw err;

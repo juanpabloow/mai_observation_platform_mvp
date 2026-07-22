@@ -74,8 +74,14 @@ export interface InsertAppointmentInput {
 }
 
 /** Raw insert. May throw SQLSTATE 23P01 (overlap → the anti-double-book guard) or
- * 23505 (idempotency-key collision) — the booking service maps those. */
+ * 23505 (idempotency-key collision) — the booking service maps those.
+ *
+ * Takes a transaction-scoped ADVISORY LOCK keyed by staff_id first: concurrent
+ * inserts for the SAME staff serialize, so the loser gets a clean 23P01 instead of
+ * a GiST-exclusion DEADLOCK (two overlapping inserts each waiting on the other's
+ * pending tuple). Different staff hash to different keys and never contend. */
 export async function insertAppointment(client: PoolClient, input: InsertAppointmentInput): Promise<AppointmentRow> {
+  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [input.staffId]);
   const r = await client.query<AppointmentRow>(
     `INSERT INTO appointments (
         tenant_id, site_id, contact_id, source_conversation_id, staff_id, service_id,
@@ -190,6 +196,9 @@ export async function moveInterval(
     blockedUntil: Date;
   },
 ): Promise<AppointmentRow> {
+  // Same per-staff advisory lock as insert, so a reschedule onto a contended slot
+  // serializes into a clean 23P01 rather than a deadlock.
+  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [next.staffId]);
   const r = await client.query<AppointmentRow>(
     `UPDATE appointments
         SET staff_id = $3, start_at = $4, service_end_at = $5, blocked_from = $6, blocked_until = $7,

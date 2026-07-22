@@ -81,6 +81,13 @@ export function isUniqueViolation(err: unknown): boolean {
   return typeof err === 'object' && err !== null && (err as { code?: string }).code === '23505';
 }
 
+/** True iff `err` is a Postgres deadlock (SQLSTATE 40P01). The per-staff advisory
+ * lock should prevent booking deadlocks, but this is mapped to a slot conflict as
+ * defense-in-depth so a rare deadlock never surfaces as a 500. */
+export function isDeadlock(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === '40P01';
+}
+
 /**
  * Helper for statements that must return exactly one row (e.g. INSERT ...
  * RETURNING). Throws a clear error rather than yielding `undefined`.
