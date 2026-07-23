@@ -2,8 +2,12 @@ import { connection } from "next/server";
 import { requireFullAccessOrLand } from "@/lib/access";
 import { listClientsForTenant } from "@worker/db/repositories/clients.js";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
-import { listStaff, listStaffForService } from "@worker/db/repositories/scheduling/staff.js";
-import { listServices, listStaffServices } from "@worker/db/repositories/scheduling/services.js";
+import { listStaff } from "@worker/db/repositories/scheduling/staff.js";
+import {
+  listServices,
+  listServicesForSite,
+  listStaffServices,
+} from "@worker/db/repositories/scheduling/services.js";
 import { listExceptions } from "@worker/db/repositories/scheduling/exceptions.js";
 import { AdminPanel } from "@/components/scheduling/AdminPanel";
 
@@ -28,8 +32,15 @@ export default async function SchedulingAdminPage() {
   );
   const staffServiceMap = Object.fromEntries(staffServices.map((x) => [x.staffId, x.serviceIds]));
 
+  // The REAL per-site service enablement (site_services join), so the panel can
+  // render site chips per service and staff chips can be limited to what the
+  // barber's site actually offers. Keyed by siteId → enabled serviceIds.
+  const siteServiceRows = await Promise.all(
+    sites.map(async (s) => ({ siteId: s.id, serviceIds: (await listServicesForSite(tenantId, s.id)).map((x) => x.id) })),
+  );
+  const siteServiceMap = Object.fromEntries(siteServiceRows.map((x) => [x.siteId, x.serviceIds]));
+
   const exceptions = (await Promise.all(sites.map((s) => listExceptions(tenantId, { siteId: s.id, from: new Date() })))).flat();
-  void listStaffForService;
 
   return (
     <AdminPanel
@@ -54,6 +65,7 @@ export default async function SchedulingAdminPage() {
         active: s.active,
       }))}
       staff={staff.map((s) => ({ id: s.id, site_id: s.site_id, name: s.name, active: s.active, serviceIds: staffServiceMap[s.id] ?? [] }))}
+      siteServiceMap={siteServiceMap}
       exceptions={exceptions.map((e) => ({
         id: e.id,
         site_id: e.site_id,

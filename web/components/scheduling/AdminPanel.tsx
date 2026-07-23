@@ -11,6 +11,7 @@ import {
   deactivateSiteAction,
   deactivateStaffAction,
   deleteExceptionAction,
+  setSiteServiceAction,
   setStaffServiceAction,
 } from "@/lib/schedulingAdminActions";
 
@@ -38,12 +39,15 @@ export function AdminPanel({
   services,
   staff,
   exceptions,
+  siteServiceMap,
 }: {
   clients: Client[];
   sites: Site[];
   services: Service[];
   staff: Staff[];
   exceptions: Exception[];
+  /** REAL per-site enablement (site_services): siteId → enabled serviceIds. */
+  siteServiceMap: Record<string, string[]>;
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -64,8 +68,8 @@ export function AdminPanel({
       {error ? <p className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p> : null}
 
       <SitesSection clients={clients} sites={sites} run={run} pending={pending} />
-      <ServicesSection services={services} run={run} pending={pending} />
-      <StaffSection sites={sites} services={services} staff={staff} run={run} pending={pending} />
+      <ServicesSection sites={sites} services={services} siteServiceMap={siteServiceMap} run={run} pending={pending} />
+      <StaffSection sites={sites} services={services} staff={staff} siteServiceMap={siteServiceMap} run={run} pending={pending} />
       <ExceptionsSection sites={sites} staff={staff} exceptions={exceptions} run={run} pending={pending} />
     </main>
   );
@@ -139,12 +143,31 @@ function SitesSection({ clients, sites, run, pending }: { clients: Client[]; sit
   );
 }
 
-function ServicesSection({ services, run, pending }: { services: Service[]; run: Run; pending: boolean }) {
+function ServicesSection({
+  sites,
+  services,
+  siteServiceMap,
+  run,
+  pending,
+}: {
+  sites: Site[];
+  services: Service[];
+  siteServiceMap: Record<string, string[]>;
+  run: Run;
+  pending: boolean;
+}) {
+  const activeSites = sites.filter((s) => s.active);
   const [name, setName] = useState("");
   const [duration, setDuration] = useState("60");
   const [price, setPrice] = useState("");
   const [bBefore, setBBefore] = useState("0");
   const [bAfter, setBAfter] = useState("0");
+  // Sites the new service will be enabled at — default ALL active sites, so a
+  // freshly created service is bookable everywhere unless narrowed.
+  const [siteIds, setSiteIds] = useState<string[]>(activeSites.map((s) => s.id));
+
+  const toggleSite = (id: string) =>
+    setSiteIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
 
   const submit = () =>
     run(async () => {
@@ -154,8 +177,9 @@ function ServicesSection({ services, run, pending }: { services: Service[]; run:
         price: price ? Number(price) : null,
         bufferBeforeMin: Number(bBefore),
         bufferAfterMin: Number(bAfter),
+        siteIds,
       });
-      if (r.ok) { setName(""); }
+      if (r.ok) { setName(""); setSiteIds(activeSites.map((s) => s.id)); }
       return r;
     });
 
@@ -163,28 +187,91 @@ function ServicesSection({ services, run, pending }: { services: Service[]; run:
     <Section title="Services">
       <ul className="flex flex-col gap-1 text-sm">
         {services.map((s) => (
-          <li key={s.id} className="flex items-center justify-between rounded-lg border border-line px-3 py-2">
-            <span>{s.name} <span className="text-faint">· {s.duration_min}m · buffers {s.buffer_before_min}/{s.buffer_after_min}{s.price ? ` · ${s.price}` : ""}</span> {s.active ? "" : <em className="text-faint">(inactive)</em>}</span>
+          <li key={s.id} className="flex items-center justify-between gap-3 rounded-lg border border-line px-3 py-2">
+            <div>
+              <span>{s.name} <span className="text-faint">· {s.duration_min}m · buffers {s.buffer_before_min}/{s.buffer_after_min}{s.price ? ` · ${s.price}` : ""}</span> {s.active ? "" : <em className="text-faint">(inactive)</em>}</span>
+              {/* Per-site enablement (site_services): this is what makes the service
+                  bookable at a site — /book/{slug} and availability only see enabled
+                  pairs. Toggling writes through setSiteServiceAction. */}
+              {s.active ? (
+                <div className="mt-1 flex flex-wrap items-center gap-1">
+                  <span className="text-[10px] uppercase tracking-wider text-faint">Sites:</span>
+                  {activeSites.map((site) => {
+                    const on = (siteServiceMap[site.id] ?? []).includes(s.id);
+                    return (
+                      <button
+                        key={site.id}
+                        disabled={pending}
+                        title={on ? `Disable at ${site.name}` : `Enable at ${site.name}`}
+                        onClick={() => run(() => setSiteServiceAction(site.id, s.id, !on))}
+                        className={`rounded border px-1.5 py-0.5 text-[11px] ${on ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:bg-subtle"}`}
+                      >
+                        {site.name}
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : null}
+            </div>
             {s.active ? <button className={GHOST} disabled={pending} onClick={() => run(() => deactivateServiceAction(s.id))}>Deactivate</button> : null}
           </li>
         ))}
       </ul>
-      <div className="flex flex-wrap items-end gap-2 rounded-lg border border-line bg-card p-3">
-        <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className={INPUT} />
-        <input value={duration} onChange={(e) => setDuration(e.target.value)} placeholder="min" className={`${INPUT} w-20`} />
-        <input value={price} onChange={(e) => setPrice(e.target.value)} placeholder="price" className={`${INPUT} w-24`} />
-        <input value={bBefore} onChange={(e) => setBBefore(e.target.value)} placeholder="buf before" className={`${INPUT} w-24`} />
-        <input value={bAfter} onChange={(e) => setBAfter(e.target.value)} placeholder="buf after" className={`${INPUT} w-24`} />
-        <button className={BTN} disabled={pending || !name || !(Number(duration) > 0)} onClick={submit}>Add service</button>
+      <div className="flex flex-col gap-2 rounded-lg border border-line bg-card p-3">
+        <div className="flex flex-wrap items-end gap-2">
+          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className={INPUT} />
+          <input value={duration} onChange={(e) => setDuration(e.target.value)} placeholder="min" className={`${INPUT} w-20`} />
+          <input value={price} onChange={(e) => setPrice(e.target.value)} placeholder="price" className={`${INPUT} w-24`} />
+          <input value={bBefore} onChange={(e) => setBBefore(e.target.value)} placeholder="buf before" className={`${INPUT} w-24`} />
+          <input value={bAfter} onChange={(e) => setBAfter(e.target.value)} placeholder="buf after" className={`${INPUT} w-24`} />
+        </div>
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="text-[10px] uppercase tracking-wider text-faint">Enable at:</span>
+          {activeSites.map((site) => (
+            <button
+              key={site.id}
+              onClick={() => toggleSite(site.id)}
+              className={`rounded border px-1.5 py-0.5 text-[11px] ${siteIds.includes(site.id) ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:bg-subtle"}`}
+            >
+              {site.name}
+            </button>
+          ))}
+        </div>
+        <button
+          className={`${BTN} self-start`}
+          disabled={pending || !name || !(Number(duration) > 0) || siteIds.length === 0}
+          onClick={submit}
+        >
+          Add service
+        </button>
       </div>
     </Section>
   );
 }
 
-function StaffSection({ sites, services, staff, run, pending }: { sites: Site[]; services: Service[]; staff: Staff[]; run: Run; pending: boolean }) {
+function StaffSection({
+  sites,
+  services,
+  staff,
+  siteServiceMap,
+  run,
+  pending,
+}: {
+  sites: Site[];
+  services: Service[];
+  staff: Staff[];
+  siteServiceMap: Record<string, string[]>;
+  run: Run;
+  pending: boolean;
+}) {
   const [name, setName] = useState("");
   const [siteId, setSiteId] = useState(sites[0]?.id ?? "");
   const [serviceIds, setServiceIds] = useState<string[]>([]);
+
+  // A barber can only be assigned services their SITE offers (site_services) —
+  // otherwise the pairing is unreachable by availability/booking anyway.
+  const servicesAtSite = (sid: string): Service[] =>
+    services.filter((sv) => sv.active && (siteServiceMap[sid] ?? []).includes(sv.id));
 
   const submit = () =>
     run(async () => {
@@ -200,24 +287,29 @@ function StaffSection({ sites, services, staff, run, pending }: { sites: Site[];
       <ul className="flex flex-col gap-1 text-sm">
         {staff.map((s) => {
           const site = sites.find((x) => x.id === s.site_id);
+          const offered = servicesAtSite(s.site_id);
           return (
             <li key={s.id} className="flex items-center justify-between gap-3 rounded-lg border border-line px-3 py-2">
               <div>
                 <span>{s.name} <span className="text-faint">· {site?.name ?? "—"}</span> {s.active ? "" : <em className="text-faint">(inactive)</em>}</span>
                 <div className="mt-1 flex flex-wrap gap-1">
-                  {services.filter((sv) => sv.active).map((sv) => {
-                    const on = s.serviceIds.includes(sv.id);
-                    return (
-                      <button
-                        key={sv.id}
-                        disabled={pending}
-                        onClick={() => run(() => setStaffServiceAction(s.id, sv.id, !on))}
-                        className={`rounded border px-1.5 py-0.5 text-[11px] ${on ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:bg-subtle"}`}
-                      >
-                        {sv.name}
-                      </button>
-                    );
-                  })}
+                  {offered.length === 0 ? (
+                    <span className="text-[11px] text-faint">No services enabled at this site yet.</span>
+                  ) : (
+                    offered.map((sv) => {
+                      const on = s.serviceIds.includes(sv.id);
+                      return (
+                        <button
+                          key={sv.id}
+                          disabled={pending}
+                          onClick={() => run(() => setStaffServiceAction(s.id, sv.id, !on))}
+                          className={`rounded border px-1.5 py-0.5 text-[11px] ${on ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:bg-subtle"}`}
+                        >
+                          {sv.name}
+                        </button>
+                      );
+                    })
+                  )}
                 </div>
               </div>
               {s.active ? <button className={GHOST} disabled={pending} onClick={() => run(() => deactivateStaffAction(s.id))}>Deactivate</button> : null}
@@ -228,16 +320,28 @@ function StaffSection({ sites, services, staff, run, pending }: { sites: Site[];
       <div className="flex flex-col gap-2 rounded-lg border border-line bg-card p-3">
         <div className="flex flex-wrap gap-2">
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className={INPUT} />
-          <select value={siteId} onChange={(e) => setSiteId(e.target.value)} className={INPUT}>
+          <select
+            value={siteId}
+            onChange={(e) => {
+              setSiteId(e.target.value);
+              // Selections that the new site doesn't offer are dropped.
+              setServiceIds((prev) => prev.filter((id) => (siteServiceMap[e.target.value] ?? []).includes(id)));
+            }}
+            className={INPUT}
+          >
             {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
           </select>
         </div>
         <div className="flex flex-wrap gap-1">
-          {services.filter((s) => s.active).map((s) => (
-            <button key={s.id} onClick={() => toggle(s.id)} className={`rounded border px-1.5 py-0.5 text-[11px] ${serviceIds.includes(s.id) ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:bg-subtle"}`}>
-              {s.name}
-            </button>
-          ))}
+          {servicesAtSite(siteId).length === 0 ? (
+            <span className="text-[11px] text-faint">No services enabled at this site — enable some above first.</span>
+          ) : (
+            servicesAtSite(siteId).map((s) => (
+              <button key={s.id} onClick={() => toggle(s.id)} className={`rounded border px-1.5 py-0.5 text-[11px] ${serviceIds.includes(s.id) ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:bg-subtle"}`}>
+                {s.name}
+              </button>
+            ))
+          )}
         </div>
         <button className={BTN} disabled={pending || !name || !siteId} onClick={submit}>Add staff</button>
       </div>
