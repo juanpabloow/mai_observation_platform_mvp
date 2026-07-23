@@ -91,9 +91,13 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 export function AppSidebar({
   memberClientId,
   workflows,
+  defaultClientId,
 }: {
   memberClientId: string | null;
   workflows: SidebarWorkflow[];
+  /** The tenant's default/"Unassigned" client id (owner/admin; null for members
+   * or logged-out) — the rail hides Modules for it (it can't have modules). */
+  defaultClientId: string | null;
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -114,6 +118,7 @@ export function AppSidebar({
   // ── Inside a client: the stable Executions/Conversations/Analytics/Team list ──
   if (clientId) {
     const onTeam = pathname.startsWith(`/clients/${clientId}/team`);
+    const onModules = pathname.startsWith(`/clients/${clientId}/modules`);
 
     // The workflow the tabs point at, the ?from they carry (the "all" case), and
     // the workflow to remember when opening Team.
@@ -147,6 +152,9 @@ export function AppSidebar({
     }
 
     const teamHref = `/clients/${clientId}/team${teamFrom ? `?from=${encodeURIComponent(teamFrom)}` : ""}`;
+    // Modules carries the same context-workflow memory as Team, so returning to
+    // Executions/Inbox/Analytics keeps pointing at the workflow you came from.
+    const modulesHref = `/clients/${clientId}/modules${teamFrom ? `?from=${encodeURIComponent(teamFrom)}` : ""}`;
 
     return (
       <aside className={railClass}>
@@ -192,8 +200,20 @@ export function AppSidebar({
             <DisabledItem label="Analytics" />
           </>
         )}
-        {/* Team is owner/admin only — a member never sees it. */}
-        {!isMember ? <SideLink href={teamHref} label="Team" active={onTeam} /> : null}
+        {/* Team + Modules are owner/admin only — a member never sees either.
+            Both are CLIENT-level routes, so they work even when the client has
+            zero workflows (the workflow tabs render disabled above). Modules is
+            additionally hidden for the DEFAULT ("Unassigned") client — identified
+            by its real is_default id, never by name — since it can't have modules
+            (the page 404s and the action refuses). */}
+        {!isMember ? (
+          <>
+            <SideLink href={teamHref} label="Team" active={onTeam} />
+            {clientId !== defaultClientId ? (
+              <SideLink href={modulesHref} label="Modules" active={onModules} />
+            ) : null}
+          </>
+        ) : null}
       </aside>
     );
   }

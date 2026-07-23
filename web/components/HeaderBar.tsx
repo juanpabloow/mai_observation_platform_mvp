@@ -205,13 +205,18 @@ export function HeaderBar({
   }
 
   const route = parseWorkflowRoute(pathname);
-  // The client-level Team route (/clients/[c]/team) — a non-workflow client surface.
-  const teamMatch = pathname.match(/^\/clients\/([^/]+)\/team/);
-  const teamClientId = teamMatch ? decodeURIComponent(teamMatch[1]) : null;
+  // CLIENT-LEVEL (non-workflow) surfaces under /clients/[c]/… — each renders as
+  // "Client / <Label>" in the breadcrumb. Generalized from the original
+  // team-only match so new client surfaces just add a label here.
+  const CLIENT_SURFACE_LABELS: Record<string, string> = { team: "Team", modules: "Modules" };
+  const surfaceMatch = pathname.match(/^\/clients\/([^/]+)\/(team|modules)(?:\/|$)/);
+  const clientSurface = surfaceMatch
+    ? { clientId: decodeURIComponent(surfaceMatch[1]), label: CLIENT_SURFACE_LABELS[surfaceMatch[2]] }
+    : null;
   const currentClient = route
     ? clients.find((c) => c.id === route.clientId) ?? null
-    : teamClientId
-      ? clients.find((c) => c.id === teamClientId) ?? null
+    : clientSurface
+      ? clients.find((c) => c.id === clientSurface.clientId) ?? null
       : null;
   const currentWorkflow = route
     ? workflows.find((w) => w.id === route.workflowId && w.clientId === route.clientId) ?? null
@@ -344,11 +349,13 @@ export function HeaderBar({
           </span>
         ) : null}
 
-        {/* Team segment (the client-level Team route → "Client / Team") */}
-        {teamClientId ? (
+        {/* Client-surface segment ("Client / Team", "Client / Modules", …) */}
+        {clientSurface ? (
           <>
             <span aria-hidden className="text-faint">/</span>
-            <span className="inline-flex items-center px-2 py-1 font-medium text-foreground">Team</span>
+            <span className="inline-flex items-center px-2 py-1 font-medium text-foreground">
+              {clientSurface.label}
+            </span>
           </>
         ) : null}
 

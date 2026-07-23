@@ -417,6 +417,16 @@ export function ClientsWorkflowsView({
                     width={176}
                   >
                     <div className="py-1">
+                      {/* Modules is per-NAMED-client only — the default client is
+                          rendered as loose "Unassigned" workflows outside these
+                          folders, so it never gets this menu. */}
+                      <Link
+                        href={`/clients/${folder.id}/modules`}
+                        onClick={() => setOpenMenu(null)}
+                        className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
+                      >
+                        Modules
+                      </Link>
                       <Link
                         href={`/clients/${folder.id}/team`}
                         onClick={() => setOpenMenu(null)}
