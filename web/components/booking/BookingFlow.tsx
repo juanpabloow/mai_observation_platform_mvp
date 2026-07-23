@@ -39,14 +39,40 @@ export function BookingFlow({ slug, timezone }: { slug: string; timezone: string
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
+  // Explicit lifecycle for the initial services load so the UI never sits on
+  // "Loading services…" forever after a failure.
+  const [servicesState, setServicesState] = useState<"loading" | "loaded" | "error">("loading");
   const idemKey = useRef<string>("");
 
-  // Load services on mount.
+  // Load services on mount — control res.ok: a 404 means booking is unavailable
+  // (unknown slug / inactive site / scheduling disabled), not an empty catalogue.
   useEffect(() => {
-    fetch(`/api/booking/${slug}/services`)
-      .then((r) => r.json())
-      .then((d) => setServices(d.services ?? []))
-      .catch(() => setError("Could not load services."));
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(`/api/booking/${slug}/services`);
+        if (!res.ok) {
+          if (!cancelled) {
+            setServicesState("error");
+            setError("Booking is unavailable.");
+          }
+          return;
+        }
+        const d = (await res.json()) as { services?: Service[] };
+        if (!cancelled) {
+          setServices(d.services ?? []);
+          setServicesState("loaded");
+        }
+      } catch {
+        if (!cancelled) {
+          setServicesState("error");
+          setError("Booking is unavailable.");
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [slug]);
 
   // Choose a service: reset the downstream picks and load that service's staff.
@@ -57,10 +83,20 @@ export function BookingFlow({ slug, timezone }: { slug: string; timezone: string
     setDate("");
     setSlots([]);
     setSlot(null);
-    fetch(`/api/booking/${slug}/staff?service_id=${id}`)
-      .then((r) => r.json())
-      .then((d) => setStaff(d.staff ?? []))
-      .catch(() => undefined);
+    setError(null);
+    (async () => {
+      try {
+        const res = await fetch(`/api/booking/${slug}/staff?service_id=${id}`);
+        if (!res.ok) {
+          setError(res.status === 404 ? "Booking is unavailable." : "Could not load barbers.");
+          return;
+        }
+        const d = (await res.json()) as { staff?: Staff[] };
+        setStaff(d.staff ?? []);
+      } catch {
+        setError("Could not load barbers.");
+      }
+    })();
   };
 
   // Explicit args (not closure state) so it's safe to call straight from event
@@ -80,7 +116,9 @@ export function BookingFlow({ slug, timezone }: { slug: string; timezone: string
         if (stf) params.set("staff_id", stf);
         const res = await fetch(`/api/booking/${slug}/availability?${params.toString()}`);
         if (!res.ok) {
-          setError("Could not load availability.");
+          // A 404 mid-session means the booking site went away (module disabled /
+          // site deactivated); anything else is a transient availability error.
+          setError(res.status === 404 ? "Booking is unavailable." : "Could not load availability.");
           return;
         }
         const data = (await res.json()) as { slots: Slot[] };
@@ -115,9 +153,15 @@ export function BookingFlow({ slug, timezone }: { slug: string; timezone: string
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data?.error?.message ?? "Could not complete the booking.");
-        // On a slot conflict, refresh availability so the customer can re-pick.
-        if (res.status === 409) void loadAvailability(serviceId, staffId, date);
+        if (res.status === 404) {
+          // The module was turned off (or the site deactivated) mid-flow — show a
+          // customer-facing message, never the internal "Booking page not found."
+          setError("Booking is unavailable.");
+        } else {
+          setError(data?.error?.message ?? "Could not complete the booking.");
+          // On a slot conflict, refresh availability so the customer can re-pick.
+          if (res.status === 409) void loadAvailability(serviceId, staffId, date);
+        }
         return;
       }
       setConfirmation(data.confirmation as Confirmation);
@@ -144,21 +188,33 @@ export function BookingFlow({ slug, timezone }: { slug: string; timezone: string
 
   return (
     <div className="flex flex-col gap-5">
-      {error ? <p className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p> : null}
+      {error ? (
+        <p role="alert" aria-live="assertive" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">
+          {error}
+        </p>
+      ) : null}
 
       <Step n={1} label="Choose a service">
         <div className="flex flex-col gap-2">
-          {services.map((s) => (
-            <button
-              key={s.id}
-              onClick={() => selectService(s.id)}
-              className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm ${serviceId === s.id ? "border-accent bg-accent/10" : "border-line hover:bg-subtle"}`}
-            >
-              <span>{s.name} <span className="text-faint">· {s.duration_min}m</span></span>
-              {s.price ? <span className="text-muted">{s.price}</span> : null}
-            </button>
-          ))}
-          {services.length === 0 ? <p className="text-sm text-muted">Loading services…</p> : null}
+          {servicesState === "loading" ? (
+            <p className="text-sm text-muted">Loading services…</p>
+          ) : servicesState === "error" ? (
+            // The error banner above already explains it; no perpetual spinner.
+            <p className="text-sm text-muted">Booking is unavailable.</p>
+          ) : services.length === 0 ? (
+            <p className="text-sm text-muted">No services available.</p>
+          ) : (
+            services.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => selectService(s.id)}
+                className={`flex items-center justify-between rounded-lg border px-3 py-2 text-left text-sm ${serviceId === s.id ? "border-accent bg-accent/10" : "border-line hover:bg-subtle"}`}
+              >
+                <span>{s.name} <span className="text-faint">· {s.duration_min}m</span></span>
+                {s.price ? <span className="text-muted">{s.price}</span> : null}
+              </button>
+            ))
+          )}
         </div>
       </Step>
 

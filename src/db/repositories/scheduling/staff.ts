@@ -47,16 +47,27 @@ export async function getStaffById(tenantId: string, id: string): Promise<StaffR
   return r.rows[0] ?? null;
 }
 
-/** Active staff at a site who can perform a service (joined via staff_services). */
+/** Active staff at a site who can perform a service. Hardened: requires a VALID
+ * site (exists, active, in tenant), the service ENABLED at that site (site_services
+ * active) and same-tenant/active, the staff belonging to that site+tenant, and an
+ * active same-tenant staff_services row. Any inconsistent relation fails closed. */
 export async function listStaffForService(
   tenantId: string,
   siteId: string,
   serviceId: string,
 ): Promise<StaffRow[]> {
   const r = await query<StaffRow>(
-    `SELECT s.* FROM staff s
-       JOIN staff_services ss ON ss.staff_id = s.id AND ss.active = true
-      WHERE s.tenant_id = $1 AND s.site_id = $2 AND ss.service_id = $3 AND s.active = true
+    `SELECT s.*
+       FROM sites si
+       JOIN site_services ss
+         ON ss.site_id = si.id AND ss.tenant_id = si.tenant_id AND ss.service_id = $3 AND ss.active = true
+       JOIN services sv
+         ON sv.id = ss.service_id AND sv.tenant_id = si.tenant_id AND sv.active = true
+       JOIN staff s
+         ON s.site_id = si.id AND s.tenant_id = si.tenant_id AND s.active = true
+       JOIN staff_services sts
+         ON sts.staff_id = s.id AND sts.service_id = sv.id AND sts.tenant_id = si.tenant_id AND sts.active = true
+      WHERE si.id = $2 AND si.tenant_id = $1 AND si.active = true
       ORDER BY s.id`,
     [tenantId, siteId, serviceId],
   );

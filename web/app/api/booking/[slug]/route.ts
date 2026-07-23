@@ -7,7 +7,7 @@ import {
   parseIsoDate,
   schedulingError,
 } from "@/lib/schedulingApi";
-import { getActiveSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
+import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
 import { getStaffById } from "@worker/db/repositories/scheduling/staff.js";
 import { createAppointment } from "@worker/scheduling/booking.js";
 
@@ -35,6 +35,12 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
   }
   const { slug } = await params;
 
+  // GATE FIRST: resolve the public booking site before reading/parsing any body.
+  // A disabled/unknown/default/inactive site returns the generic 404 even for an
+  // invalid or empty body — the module gate never leaks through input validation.
+  const site = await getPublicBookingSiteBySlug(slug);
+  if (!site) return schedulingError(404, "not_found", "Booking page not found.");
+
   let json: unknown;
   try {
     json = await req.json();
@@ -45,9 +51,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
   if (!parsed.success) return schedulingError(422, "invalid_body", parsed.error.issues[0]?.message ?? "Invalid body.");
   const startAt = parseIsoDate(parsed.data.start_at);
   if (!startAt) return schedulingError(422, "invalid_body", "start_at must be an ISO-8601 datetime.");
-
-  const site = await getActiveSiteBySlug(slug);
-  if (!site) return schedulingError(404, "not_found", "Booking page not found.");
 
   const idempotencyKey = (req.headers.get("idempotency-key") ?? "").trim() || `pub_${randomUUID()}`;
   const result = await createAppointment({
@@ -65,6 +68,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
     origin: "public",
     createdByType: "public",
     idempotencyKey,
+    // Defense in depth: the booking engine rejects any site/appointment outside
+    // this client (the resolver already proved the site's client hosts booking).
+    scopeClientId: site.client_id,
   });
 
   if (!result.ok) return schedulingError(bookingErrorStatus(result.error), result.error, result.message);

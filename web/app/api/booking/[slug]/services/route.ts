@@ -1,5 +1,5 @@
 import { checkRateLimit, clientIp, schedulingError } from "@/lib/schedulingApi";
-import { getActiveSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
+import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
 import { listServicesForSite } from "@worker/db/repositories/scheduling/services.js";
 
 /**
@@ -14,7 +14,7 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     return schedulingError(429, "rate_limited", "Too many requests. Please slow down.");
   }
   const { slug } = await params;
-  const site = await getActiveSiteBySlug(slug);
+  const site = await getPublicBookingSiteBySlug(slug);
   if (!site) return schedulingError(404, "not_found", "Booking page not found.");
   const services = await listServicesForSite(site.tenant_id, site.id);
   return Response.json({

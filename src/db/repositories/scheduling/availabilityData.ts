@@ -67,8 +67,10 @@ export async function resolveSiteService(
             ss.duration_override_min AS site_duration_override_min,
             sv.buffer_before_min, sv.buffer_after_min
        FROM sites si
-       JOIN site_services ss ON ss.site_id = si.id AND ss.active = true
-       JOIN services sv ON sv.id = ss.service_id AND sv.active = true
+       JOIN site_services ss
+         ON ss.site_id = si.id AND ss.tenant_id = si.tenant_id AND ss.active = true
+       JOIN services sv
+         ON sv.id = ss.service_id AND sv.tenant_id = si.tenant_id AND sv.active = true
       WHERE si.tenant_id = $1 AND si.id = $2 AND sv.id = $3 AND si.active = true`,
     [tenantId, siteId, serviceId],
   );
@@ -91,12 +93,23 @@ export async function resolveEffectivePrice(
   serviceId: string,
   staffId: string,
 ): Promise<string | null> {
+  // Hardened: the effective price is computed ONLY over a fully consistent, active
+  // chain (site → site_service → service, and staff → staff_service, all same-tenant
+  // and active). Overrides are COALESCEd on top. An inconsistent/foreign chain
+  // yields no row → null (fail closed); valid bookings always have the chain (the
+  // slot already passed availability), so the price is correct.
   const r = await query<{ price: string | null }>(
     `SELECT COALESCE(sts.price_override, ss.price_override, sv.price) AS price
-       FROM services sv
-       LEFT JOIN site_services ss ON ss.service_id = sv.id AND ss.site_id = $2
-       LEFT JOIN staff_services sts ON sts.service_id = sv.id AND sts.staff_id = $4
-      WHERE sv.tenant_id = $1 AND sv.id = $3`,
+       FROM sites si
+       JOIN site_services ss
+         ON ss.site_id = si.id AND ss.tenant_id = si.tenant_id AND ss.service_id = $3 AND ss.active = true
+       JOIN services sv
+         ON sv.id = ss.service_id AND sv.tenant_id = si.tenant_id AND sv.active = true
+       JOIN staff st
+         ON st.id = $4 AND st.site_id = si.id AND st.tenant_id = si.tenant_id AND st.active = true
+       JOIN staff_services sts
+         ON sts.staff_id = st.id AND sts.service_id = sv.id AND sts.tenant_id = si.tenant_id AND sts.active = true
+      WHERE si.id = $2 AND si.tenant_id = $1 AND si.active = true`,
     [tenantId, siteId, serviceId, staffId],
   );
   return r.rows[0]?.price ?? null;
@@ -116,10 +129,13 @@ export async function loadAvailability(params: LoadAvailabilityParams): Promise<
     staffParams.push(params.staffId);
     staffWhere += ` AND s.id = $${staffParams.length}`;
   }
+  // staff_services joined with explicit tenant consistency (ss.tenant_id = s.tenant_id)
+  // so a cross-tenant staff_services row can never qualify a barber for the service.
   const staffRows = await query<{ id: string; working_hours: WeeklyHours; staff_duration_override_min: number | null }>(
     `SELECT s.id, s.working_hours, ss.duration_override_min AS staff_duration_override_min
        FROM staff s
-       JOIN staff_services ss ON ss.staff_id = s.id AND ss.service_id = $3 AND ss.active = true
+       JOIN staff_services ss
+         ON ss.staff_id = s.id AND ss.tenant_id = s.tenant_id AND ss.service_id = $3 AND ss.active = true
       WHERE ${staffWhere}
       ORDER BY s.id`,
     staffParams,

@@ -42,11 +42,35 @@ export async function getSiteById(tenantId: string, id: string): Promise<SiteRow
   return r.rows[0] ?? null;
 }
 
-/** PUBLIC resolver: by slug, across tenants, ACTIVE only. Returns the site (incl.
- * its tenant_id) — the only place a slug crosses the tenant boundary, and it never
- * exposes other tenants' data (just the one matching active site). */
-export async function getActiveSiteBySlug(slug: string): Promise<SiteRow | null> {
-  const r = await query<SiteRow>(`SELECT * FROM sites WHERE slug = $1 AND active = true`, [slug]);
+/**
+ * THE public booking resolver — the single gate for /book/{slug} and every public
+ * /api/booking/{slug}/* endpoint. In ONE parameterized query it returns the site
+ * ONLY when ALL hold:
+ *   - a site with this EXACT slug is active;
+ *   - its client is in the same tenant AND is NOT the default ("Unassigned")
+ *     client (the default can never host public booking, even if a client_modules
+ *     row exists for it);
+ *   - that client has the `scheduling` module ENABLED (a client_modules row for
+ *     the same tenant+client, module_key='scheduling', enabled=true).
+ *
+ * Unknown slug, inactive site, default client, or an absent/disabled scheduling
+ * module ALL return null — indistinguishably — so no public surface can leak which
+ * condition failed (they all map it to the same generic 404). Re-enabling the
+ * module makes the same site resolve again with its existing data (nothing is
+ * deleted by disabling).
+ */
+export async function getPublicBookingSiteBySlug(slug: string): Promise<SiteRow | null> {
+  const r = await query<SiteRow>(
+    `SELECT si.*
+       FROM sites si
+       JOIN clients c
+         ON c.id = si.client_id AND c.tenant_id = si.tenant_id AND c.is_default = false
+       JOIN client_modules cm
+         ON cm.tenant_id = si.tenant_id AND cm.client_id = si.client_id
+        AND cm.module_key = 'scheduling' AND cm.enabled = true
+      WHERE si.slug = $1 AND si.active = true`,
+    [slug],
+  );
   return r.rows[0] ?? null;
 }
 

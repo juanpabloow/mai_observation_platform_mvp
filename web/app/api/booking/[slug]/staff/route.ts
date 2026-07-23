@@ -1,5 +1,5 @@
 import { checkRateLimit, clientIp, schedulingError } from "@/lib/schedulingApi";
-import { getActiveSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
+import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
 import { listStaffForService } from "@worker/db/repositories/scheduling/staff.js";
 
 /**
@@ -13,10 +13,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     return schedulingError(429, "rate_limited", "Too many requests. Please slow down.");
   }
   const { slug } = await params;
+  // GATE FIRST: a disabled/unknown site 404s even without a service_id.
+  const site = await getPublicBookingSiteBySlug(slug);
+  if (!site) return schedulingError(404, "not_found", "Booking page not found.");
   const serviceId = new URL(req.url).searchParams.get("service_id");
   if (!serviceId) return schedulingError(400, "invalid_request", "service_id is required.");
-  const site = await getActiveSiteBySlug(slug);
-  if (!site) return schedulingError(404, "not_found", "Booking page not found.");
   const staff = await listStaffForService(site.tenant_id, site.id, serviceId);
   return Response.json({ staff: staff.map((s) => ({ id: s.id, name: s.name })) });
 }

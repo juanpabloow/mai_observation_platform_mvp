@@ -1,5 +1,5 @@
 import { checkRateLimit, clientIp, parseIsoDate, schedulingError } from "@/lib/schedulingApi";
-import { getActiveSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
+import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
 import { loadAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
 
 /**
@@ -15,6 +15,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     return schedulingError(429, "rate_limited", "Too many requests. Please slow down.");
   }
   const { slug } = await params;
+  // GATE FIRST: a disabled/unknown site 404s even with missing/invalid params.
+  const site = await getPublicBookingSiteBySlug(slug);
+  if (!site) return schedulingError(404, "not_found", "Booking page not found.");
+
   const p = new URL(req.url).searchParams;
   const serviceId = p.get("service_id");
   const staffId = p.get("staff_id");
@@ -24,8 +28,6 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
   if (to.getTime() <= from.getTime() || to.getTime() - from.getTime() > MAX_WINDOW_MS) {
     return schedulingError(400, "invalid_request", "Invalid or too-large window (max 14 days).");
   }
-  const site = await getActiveSiteBySlug(slug);
-  if (!site) return schedulingError(404, "not_found", "Booking page not found.");
 
   const result = await loadAvailability({
     tenantId: site.tenant_id,

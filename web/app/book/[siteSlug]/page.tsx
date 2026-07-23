@@ -1,18 +1,19 @@
 import { notFound } from "next/navigation";
-import { getActiveSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
+import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
 import { BookingFlow } from "@/components/booking/BookingFlow";
 
 /**
- * PUBLIC booking page /book/{siteSlug}. No auth. Resolves the site by its
- * globally-unique slug (active only) server-side; the BookingFlow client drives
- * the steps and calls the public /api/booking/{slug}/* endpoints, which use the
- * SAME availability + booking engine as the internal agenda and n8n API.
+ * PUBLIC booking page /book/{siteSlug}. No auth. Resolves the site through the
+ * central public gate (active site + non-default client + `scheduling` module
+ * enabled); an unknown slug, inactive site, default client, or disabled module
+ * all 404. The BookingFlow client drives the steps and calls the public
+ * /api/booking/{slug}/* endpoints, which share the SAME gate + engine.
  */
 export const dynamic = "force-dynamic";
 
 export default async function PublicBookingPage({ params }: { params: Promise<{ siteSlug: string }> }) {
   const { siteSlug } = await params;
-  const site = await getActiveSiteBySlug(siteSlug);
+  const site = await getPublicBookingSiteBySlug(siteSlug);
   if (!site) notFound();
 
   return (

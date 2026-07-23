@@ -44,13 +44,21 @@ export interface SiteServiceRow extends ServiceRow {
 }
 
 export async function listServicesForSite(tenantId: string, siteId: string): Promise<SiteServiceRow[]> {
+  // Hardened: the service is reachable ONLY through a VALID site — the site must
+  // exist, be active and belong to the tenant; site_services must be same-tenant
+  // and active; the service same-tenant and active. A cross-tenant or inconsistent
+  // row yields nothing (fails closed) — services stays a tenant catalogue but can
+  // never be used at a site it isn't properly enabled for.
   const r = await query<SiteServiceRow>(
     `SELECT s.*, ss.id AS site_service_id, ss.duration_override_min, ss.price_override,
             COALESCE(ss.duration_override_min, s.duration_min) AS effective_duration_min,
             COALESCE(ss.price_override, s.price) AS effective_price
-       FROM services s
-       JOIN site_services ss ON ss.service_id = s.id AND ss.active = true
-      WHERE s.tenant_id = $1 AND ss.site_id = $2 AND s.active = true
+       FROM sites si
+       JOIN site_services ss
+         ON ss.site_id = si.id AND ss.tenant_id = si.tenant_id AND ss.active = true
+       JOIN services s
+         ON s.id = ss.service_id AND s.tenant_id = si.tenant_id AND s.active = true
+      WHERE si.id = $2 AND si.tenant_id = $1 AND si.active = true
       ORDER BY s.name`,
     [tenantId, siteId],
   );
