@@ -4,6 +4,13 @@ import { useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { authClient } from "@/lib/auth-client";
+import {
+  EMAIL_VERIFIED_NOTICE,
+  PASSWORD_RESET_DONE_NOTICE,
+  mapAuthErrorParam,
+  mapClientAuthError,
+} from "@/lib/auth-errors";
+import { VERIFIED_LOGIN_CALLBACK } from "@/lib/auth-verification";
 
 /** Only allow internal redirect targets (block open-redirects / protocol-relative). */
 function safeRedirect(value: string | null): string {
@@ -19,6 +26,10 @@ function safeRedirect(value: string | null): string {
  * (googleEnabled) — otherwise the button renders disabled, so the page works
  * without Google creds. Uses the Better Auth client SDK (route handler sets the
  * session cookie); on success redirects home.
+ *
+ * Account recovery lives at /forgot-password (linked below the form) — the
+ * password-reset flow is the ONLY public recovery path; see web/lib/auth.ts
+ * for the pre-hijacking rationale.
  */
 export function AuthForm({
   mode,
@@ -37,6 +48,18 @@ export function AuthForm({
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Banner derived from redirects back to /login: OAuth callback errors
+  // (?error=account_not_linked via errorCallbackURL, allowlist-mapped), the
+  // email-verification link outcome (?verified=1 / ?error=TOKEN_EXPIRED), and
+  // the password-reset outcome (?reset=1).
+  const urlErrorMessage = mapAuthErrorParam(searchParams.get("error"));
+  const successBanner = urlErrorMessage
+    ? null
+    : searchParams.get("reset") === "1"
+      ? PASSWORD_RESET_DONE_NOTICE
+      : searchParams.get("verified") === "1"
+        ? EMAIL_VERIFIED_NOTICE
+        : null;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -50,30 +73,70 @@ export function AuthForm({
             // The user table requires a name; derive a sensible default from the
             // email local-part (no separate field needed for this step).
             name: email.split("@")[0] || email,
+            // Where the sendOnSignUp verification link drops the user.
+            callbackURL: VERIFIED_LOGIN_CALLBACK,
           })
         : await authClient.signIn.email({ email, password });
 
       if (result.error) {
-        setError(result.error.message ?? "Authentication failed.");
+        // Allowlist-mapped — raw server messages are never rendered.
+        setError(
+          mapClientAuthError(
+            result.error.code,
+            isSignup ? "Could not create the account. Please try again." : "Log in failed. Please try again.",
+          ),
+        );
         return;
       }
       router.push(destination);
       router.refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unexpected error.");
+    } catch {
+      setError("Unexpected error. Please try again.");
     } finally {
       setBusy(false);
     }
   }
 
   async function onGoogle() {
-    if (!googleEnabled) return;
+    if (!googleEnabled || busy) return;
     setError(null);
-    await authClient.signIn.social({ provider: "google", callbackURL: destination });
+    setBusy(true);
+    try {
+      const result = await authClient.signIn.social({
+        provider: "google",
+        callbackURL: destination,
+        // OAuth-callback failures (e.g. account_not_linked) land back on
+        // /login?error=<code>, rendered by mapAuthErrorParam above — instead
+        // of Better Auth's bare default error page.
+        errorCallbackURL: "/login",
+      });
+      if (result.error) {
+        // Immediate (pre-redirect) failure. Allowlist-mapped code with a
+        // generic fallback — never result.error.message directly.
+        setError(mapClientAuthError(result.error.code, "Google sign-in failed. Please try again."));
+        setBusy(false);
+        return;
+      }
+      // Success = the browser is navigating to Google; keep busy=true so the
+      // button can't be double-clicked while the redirect is in flight.
+    } catch {
+      setError("Google sign-in failed. Please try again.");
+      setBusy(false);
+    }
   }
 
   return (
     <div className="flex flex-col gap-5">
+      {urlErrorMessage ? (
+        <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm">
+          {urlErrorMessage}
+        </p>
+      ) : null}
+      {successBanner ? (
+        <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm">
+          {successBanner}
+        </p>
+      ) : null}
       <form onSubmit={onSubmit} className="flex flex-col gap-3">
         <label className="flex flex-col gap-1 text-sm">
           <span className="text-muted">Email</span>
@@ -115,6 +178,15 @@ export function AuthForm({
         >
           {busy ? "Please wait…" : isSignup ? "Create account" : "Log in"}
         </button>
+
+        {!isSignup ? (
+          <Link
+            href="/forgot-password"
+            className="self-center text-sm text-accent hover:opacity-80"
+          >
+            Forgot password?
+          </Link>
+        ) : null}
       </form>
 
       <div className="flex items-center gap-3 text-xs text-faint">
@@ -126,11 +198,11 @@ export function AuthForm({
       <button
         type="button"
         onClick={onGoogle}
-        disabled={!googleEnabled}
+        disabled={!googleEnabled || busy}
         title={googleEnabled ? undefined : "Google sign-in is not configured"}
         className="rounded-lg border border-line-strong px-4 py-2 text-sm transition-colors enabled:hover:bg-subtle disabled:cursor-not-allowed disabled:opacity-50"
       >
-        Continue with Google
+        {busy ? "Please wait…" : "Continue with Google"}
         {!googleEnabled ? (
           <span className="ml-1 text-xs text-faint">(not configured)</span>
         ) : null}

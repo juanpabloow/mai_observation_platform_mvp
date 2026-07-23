@@ -20,7 +20,7 @@ export interface HeaderWorkflow {
   clientId: string;
 }
 
-const AUTH_PREFIXES = ["/login", "/signup", "/logout"];
+const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password"];
 
 /** Parse the client + workflow ids out of a /clients/<c>/workflows/<w>/… path. */
 function parseWorkflowRoute(pathname: string): { clientId: string; workflowId: string } | null {
@@ -475,6 +475,15 @@ export function HeaderBar({
                   </Link>
                 </>
               ) : null}
+              {/* Per-USER sign-in settings (password reset → linkSocial recovery
+                  flow) — every role manages their own credentials, so no gate. */}
+              <Link
+                href="/settings/security"
+                onClick={() => setOpenMenu(null)}
+                className="flex w-full items-center px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
+              >
+                Sign-in &amp; security
+              </Link>
               <Link
                 href="/logout"
                 onClick={() => setOpenMenu(null)}

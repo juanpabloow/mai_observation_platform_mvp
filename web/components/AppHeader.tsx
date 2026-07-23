@@ -5,7 +5,7 @@ import { listClientsForTenant } from "@worker/db/repositories/clients.js";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { HeaderBar, type HeaderClient, type HeaderWorkflow } from "./HeaderBar";
 
-const AUTH_PREFIXES = ["/login", "/signup", "/logout"];
+const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password"];
 
 /**
  * Global app header (logo / breadcrumb / profile). SERVER component in the root

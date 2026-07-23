@@ -5,7 +5,7 @@ import { usePathname, useSearchParams } from "next/navigation";
 import { useSidebar } from "@/components/SidebarContext";
 import { InboxTabLink } from "@/components/InboxTabLink";
 
-const AUTH_PREFIXES = ["/login", "/signup", "/logout"];
+const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password"];
 
 /** A tenant workflow (id + owning client) — the minimum the rail needs to keep the
  * workflow tabs pointing at a real workflow from the client-level Team page. */

@@ -23,10 +23,14 @@ import { getSessionCookie } from "better-auth/cookies";
 // /api/scheduling is the MACHINE scheduling API (Bearer token, like /api/handoff).
 // /book is the PUBLIC booking page and /api/booking its public endpoints — both
 // cookieless and self-protected (site-slug scoping + rate limiting).
+// /forgot-password and /reset-password are the account-recovery pages: their
+// whole audience is logged-out users, so they must never bounce to /login.
 const PUBLIC_PREFIXES = [
   "/login",
   "/signup",
   "/logout",
+  "/forgot-password",
+  "/reset-password",
   "/api/auth",
   "/invite",
   "/api/handoff",
