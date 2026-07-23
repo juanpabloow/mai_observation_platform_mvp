@@ -29,18 +29,27 @@ const fmt = (iso: string | null): string =>
   iso ? new Intl.DateTimeFormat("es-CO", { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso)) : "—";
 
 export function ContactDetail({
+  clientId,
+  initialTab = "data",
+  agendaHref,
   contact,
   conversations,
   appointments,
   activity,
 }: {
+  /** The validated owning client — saves go through the client-scoped action. */
+  clientId: string;
+  /** Section to open first (?tab= — e.g. AgendaView's "View conversation"). */
+  initialTab?: Tab;
+  /** Client-scoped Agenda link, or null when Scheduling is disabled for this client. */
+  agendaHref: string | null;
   contact: ContactData;
   conversations: Conv[];
   appointments: Appt[];
   activity: Activity[];
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<Tab>("data");
+  const [tab, setTab] = useState<Tab>(initialTab);
   const [name, setName] = useState(contact.name ?? "");
   const [phone, setPhone] = useState(contact.phone_e164 ?? "");
   const [email, setEmail] = useState(contact.email ?? "");
@@ -51,7 +60,7 @@ export function ContactDetail({
   const save = () => {
     setMsg(null);
     startTransition(async () => {
-      const r = await updateContactAction(contact.id, {
+      const r = await updateContactAction(clientId, contact.id, {
         name,
         phone,
         email,
@@ -155,7 +164,10 @@ export function ContactDetail({
         </ul>
       ) : null}
 
-      <Link href="/scheduling/agenda" className="text-xs text-accent hover:underline">Open agenda →</Link>
+      {/* Only when Scheduling is enabled for this client (server-resolved). */}
+      {agendaHref ? (
+        <Link href={agendaHref} className="text-xs text-accent hover:underline">Open agenda →</Link>
+      ) : null}
     </div>
   );
 }

@@ -1,7 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getAccessScope } from "./access";
+import { resolveClientModuleContext } from "./clientModuleAccess";
+import { isUuid } from "./clientModuleValidation";
 import {
   createAppointment,
   rescheduleAppointment,
@@ -10,14 +11,18 @@ import {
 } from "@worker/scheduling/booking.js";
 
 /**
- * Server actions for the internal agenda. Access is resolved from the SESSION (never
- * the client): owner/admin act across ALL clients (scopeClientId = null), a member
- * is hard-scoped to their ONE client (scopeClientId = memberClientId) — the booking
- * domain service rejects any cross-client id as not-found. They delegate to the SAME
- * booking engine the n8n API and public page use, and revalidate the agenda.
+ * Server actions for the client-scoped Agenda (Phase 3A). Every action takes the
+ * CONTEXTUAL clientId and is gated by the central module resolver (UUID →
+ * session → canAccessClient → client-in-tenant → non-default → `scheduling`
+ * enabled). The booking domain service then receives scopeClientId = the
+ * VALIDATED client id — ALWAYS, also for owner/admin — so an action opened from
+ * client A can never operate on a site or appointment of client B (the domain
+ * treats the mismatch as not-found). Errors stay generic.
  */
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
+
+const GENERIC_GATE = "Not available.";
 
 function messageFor(error: BookingError, fallback: string): string {
   switch (error) {
@@ -28,12 +33,22 @@ function messageFor(error: BookingError, fallback: string): string {
     case "no_staff":
       return "The selected staff can't take that time.";
     case "not_found":
-      return "Service/site not found.";
+      return "Not available.";
     case "invalid_transition":
       return "That status change isn't allowed.";
     default:
       return fallback;
   }
+}
+
+/** Shared gate: resolve the scheduling module context or fail generically. */
+async function gate(clientId: string) {
+  const resolved = await resolveClientModuleContext(clientId, "scheduling");
+  return resolved.ok ? resolved.context : null;
+}
+
+function agendaPath(clientId: string): string {
+  return `/clients/${clientId}/scheduling/agenda`;
 }
 
 export interface ManualAppointmentInput {
@@ -51,9 +66,15 @@ export interface ManualAppointmentInput {
 
 /** Create a manual appointment or walk-in from the agenda. A walk-in without any
  * channel identity produces an appointment with no contact (contact_id null). */
-export async function createManualAppointmentAction(input: ManualAppointmentInput): Promise<ActionResult> {
-  const scope = await getAccessScope();
-  const tenantId = scope.tenantId;
+export async function createManualAppointmentAction(
+  clientId: string,
+  input: ManualAppointmentInput,
+): Promise<ActionResult> {
+  if (!isUuid(input.siteId) || !isUuid(input.serviceId) || (input.staffId && !isUuid(input.staffId))) {
+    return { ok: false, error: GENERIC_GATE };
+  }
+  const ctx = await gate(clientId);
+  if (!ctx) return { ok: false, error: GENERIC_GATE };
   const start = new Date(input.startAt);
   if (Number.isNaN(start.getTime())) return { ok: false, error: "Invalid start time." };
 
@@ -65,7 +86,7 @@ export async function createManualAppointmentAction(input: ManualAppointmentInpu
     input.channelUserId ?? (hasIdentity ? (input.customerPhone || input.customerName || "").trim() : undefined);
 
   const result = await createAppointment({
-    tenantId,
+    tenantId: ctx.scope.tenantId,
     siteId: input.siteId,
     serviceId: input.serviceId,
     staffId: input.staffId ?? null,
@@ -77,71 +98,77 @@ export async function createManualAppointmentAction(input: ManualAppointmentInpu
     customerEmail: input.customerEmail ?? null,
     origin: input.walkIn ? "walk_in" : "internal",
     createdByType: "agent",
-    createdByUserId: scope.userId,
+    createdByUserId: ctx.scope.userId,
     idempotencyKey: null,
-    scopeClientId: scope.memberClientId,
+    // The VALIDATED contextual client — a site of another client is not-found.
+    scopeClientId: ctx.client.id,
   });
 
   if (!result.ok) return { ok: false, error: messageFor(result.error, "Could not create the appointment.") };
-  revalidatePath("/scheduling/agenda");
+  revalidatePath(agendaPath(ctx.client.id));
   return { ok: true };
 }
 
-export async function cancelAppointmentAction(appointmentId: string, reason?: string): Promise<ActionResult> {
-  const scope = await getAccessScope();
-  const tenantId = scope.tenantId;
-  const r = await transitionStatus("cancelled", { tenantId, appointmentId, actorType: "agent", actorUserId: scope.userId, reason, scopeClientId: scope.memberClientId });
-  if (!r.ok) return { ok: false, error: messageFor(r.error, "Could not cancel.") };
-  revalidatePath("/scheduling/agenda");
+async function transition(
+  target: "cancelled" | "confirmed" | "completed" | "no_show",
+  clientId: string,
+  appointmentId: string,
+  fallback: string,
+  reason?: string,
+): Promise<ActionResult> {
+  if (!isUuid(appointmentId)) return { ok: false, error: GENERIC_GATE };
+  const ctx = await gate(clientId);
+  if (!ctx) return { ok: false, error: GENERIC_GATE };
+  const r = await transitionStatus(target, {
+    tenantId: ctx.scope.tenantId,
+    appointmentId,
+    actorType: "agent",
+    actorUserId: ctx.scope.userId,
+    reason: reason ?? null,
+    scopeClientId: ctx.client.id, // always — cross-client appointment = not-found
+  });
+  if (!r.ok) return { ok: false, error: messageFor(r.error, fallback) };
+  revalidatePath(agendaPath(ctx.client.id));
   return { ok: true };
 }
 
-export async function confirmAppointmentAction(appointmentId: string): Promise<ActionResult> {
-  const scope = await getAccessScope();
-  const tenantId = scope.tenantId;
-  const r = await transitionStatus("confirmed", { tenantId, appointmentId, actorType: "agent", actorUserId: scope.userId, scopeClientId: scope.memberClientId });
-  if (!r.ok) return { ok: false, error: messageFor(r.error, "Could not confirm.") };
-  revalidatePath("/scheduling/agenda");
-  return { ok: true };
+export async function cancelAppointmentAction(clientId: string, appointmentId: string, reason?: string): Promise<ActionResult> {
+  return transition("cancelled", clientId, appointmentId, "Could not cancel.", reason);
 }
 
-export async function completeAppointmentAction(appointmentId: string): Promise<ActionResult> {
-  const scope = await getAccessScope();
-  const tenantId = scope.tenantId;
-  const r = await transitionStatus("completed", { tenantId, appointmentId, actorType: "agent", actorUserId: scope.userId, scopeClientId: scope.memberClientId });
-  if (!r.ok) return { ok: false, error: messageFor(r.error, "Could not complete.") };
-  revalidatePath("/scheduling/agenda");
-  return { ok: true };
+export async function confirmAppointmentAction(clientId: string, appointmentId: string): Promise<ActionResult> {
+  return transition("confirmed", clientId, appointmentId, "Could not confirm.");
 }
 
-export async function noShowAppointmentAction(appointmentId: string): Promise<ActionResult> {
-  const scope = await getAccessScope();
-  const tenantId = scope.tenantId;
-  const r = await transitionStatus("no_show", { tenantId, appointmentId, actorType: "agent", actorUserId: scope.userId, scopeClientId: scope.memberClientId });
-  if (!r.ok) return { ok: false, error: messageFor(r.error, "Could not mark no-show.") };
-  revalidatePath("/scheduling/agenda");
-  return { ok: true };
+export async function completeAppointmentAction(clientId: string, appointmentId: string): Promise<ActionResult> {
+  return transition("completed", clientId, appointmentId, "Could not complete.");
+}
+
+export async function noShowAppointmentAction(clientId: string, appointmentId: string): Promise<ActionResult> {
+  return transition("no_show", clientId, appointmentId, "Could not mark no-show.");
 }
 
 export async function rescheduleAppointmentAction(
+  clientId: string,
   appointmentId: string,
   startAt: string,
   staffId?: string | null,
 ): Promise<ActionResult> {
-  const scope = await getAccessScope();
-  const tenantId = scope.tenantId;
+  if (!isUuid(appointmentId) || (staffId && !isUuid(staffId))) return { ok: false, error: GENERIC_GATE };
+  const ctx = await gate(clientId);
+  if (!ctx) return { ok: false, error: GENERIC_GATE };
   const start = new Date(startAt);
   if (Number.isNaN(start.getTime())) return { ok: false, error: "Invalid start time." };
   const r = await rescheduleAppointment({
-    tenantId,
+    tenantId: ctx.scope.tenantId,
     appointmentId,
     startAt: start,
     staffId: staffId ?? null,
     actorType: "agent",
-    actorUserId: scope.userId,
-    scopeClientId: scope.memberClientId,
+    actorUserId: ctx.scope.userId,
+    scopeClientId: ctx.client.id,
   });
   if (!r.ok) return { ok: false, error: messageFor(r.error, "Could not reschedule.") };
-  revalidatePath("/scheduling/agenda");
+  revalidatePath(agendaPath(ctx.client.id));
   return { ok: true };
 }

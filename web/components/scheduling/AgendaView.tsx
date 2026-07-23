@@ -46,6 +46,16 @@ function fmtTime(iso: string, tz: string): string {
 }
 
 export function AgendaView(props: {
+  /** The validated owning client — every action is sent with this id. */
+  clientId: string;
+  /** Canonical route base, e.g. /clients/{id}/scheduling/agenda. */
+  basePath: string;
+  /** Client-scoped contacts base, or null when CRM is disabled for this client. */
+  contactsBase: string | null;
+  /** Origin workflow to preserve across navigation (?from=). */
+  from: string | null;
+  /** owner/admin — controls whether admin links (Add staff) render. */
+  canManage: boolean;
   timezone: string;
   date: string;
   dayStartIso: string;
@@ -65,8 +75,11 @@ export function AgendaView(props: {
     const params = new URLSearchParams();
     params.set("site", patch.site ?? props.currentSiteId);
     params.set("date", patch.date ?? props.date);
-    router.push(`/scheduling/agenda?${params.toString()}`);
+    if (props.from) params.set("from", props.from); // keep the origin workflow
+    router.push(`${props.basePath}?${params.toString()}`);
   };
+
+  const fromQS = props.from ? `?from=${encodeURIComponent(props.from)}` : "";
 
   const shiftDate = (days: number) => {
     const [y, m, d] = props.date.split("-").map(Number);
@@ -134,7 +147,14 @@ export function AgendaView(props: {
 
       {props.staff.length === 0 ? (
         <div className="rounded-xl border border-dashed border-line-strong px-5 py-8">
-          <p className="text-sm text-muted">No staff at this site yet. <Link href="/scheduling/admin" className="text-accent hover:underline">Add staff</Link>.</p>
+          {props.canManage ? (
+            <p className="text-sm text-muted">
+              No staff at this site yet. <Link href="/scheduling/admin" className="text-accent hover:underline">Add staff</Link>.
+            </p>
+          ) : (
+            // A member can't open the tenant-level Scheduling admin — message only.
+            <p className="text-sm text-muted">No staff at this site yet. Ask your administrator to add staff.</p>
+          )}
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto">
@@ -152,17 +172,23 @@ export function AgendaView(props: {
                     </div>
                     <p className="mt-1">{a.service_name}</p>
                     <p className="text-xs text-muted">
-                      {a.contact_id ? (
-                        <Link href={`/contacts/${a.contact_id}`} className="hover:underline">{a.contact_name ?? "Contact"}</Link>
+                      {/* Contact links only when CRM is enabled for this client. */}
+                      {a.contact_id && props.contactsBase ? (
+                        <Link href={`${props.contactsBase}/${a.contact_id}${fromQS}`} className="hover:underline">
+                          {a.contact_name ?? "Contact"}
+                        </Link>
                       ) : (
-                        <span>Walk-in</span>
+                        <span>{a.contact_id ? (a.contact_name ?? "Contact") : "Walk-in"}</span>
                       )}
                       {" · "}
                       <span className="text-faint">{a.origin}</span>
                     </p>
-                    {a.source_conversation_id ? (
+                    {a.source_conversation_id && a.contact_id && props.contactsBase ? (
                       <p className="text-xs">
-                        <Link href={`/contacts/${a.contact_id ?? ""}?tab=conversations`} className="text-accent hover:underline">
+                        <Link
+                          href={`${props.contactsBase}/${a.contact_id}${fromQS ? `${fromQS}&` : "?"}tab=conversations`}
+                          className="text-accent hover:underline"
+                        >
                           View conversation
                         </Link>
                       </p>
@@ -170,12 +196,12 @@ export function AgendaView(props: {
                     {a.status === "scheduled" || a.status === "confirmed" ? (
                       <div className="mt-2 flex flex-wrap gap-1">
                         {a.status === "scheduled" ? (
-                          <ActBtn label="Confirm" disabled={pending} onClick={() => run(() => confirmAppointmentAction(a.id))} />
+                          <ActBtn label="Confirm" disabled={pending} onClick={() => run(() => confirmAppointmentAction(props.clientId, a.id))} />
                         ) : null}
-                        <ActBtn label="Complete" disabled={pending} onClick={() => run(() => completeAppointmentAction(a.id))} />
-                        <ActBtn label="No-show" disabled={pending} onClick={() => run(() => noShowAppointmentAction(a.id))} />
+                        <ActBtn label="Complete" disabled={pending} onClick={() => run(() => completeAppointmentAction(props.clientId, a.id))} />
+                        <ActBtn label="No-show" disabled={pending} onClick={() => run(() => noShowAppointmentAction(props.clientId, a.id))} />
                         <ActBtn label="Reschedule" disabled={pending} onClick={() => setModal({ mode: "reschedule", appt: a })} />
-                        <ActBtn label="Cancel" danger disabled={pending} onClick={() => run(() => cancelAppointmentAction(a.id))} />
+                        <ActBtn label="Cancel" danger disabled={pending} onClick={() => run(() => cancelAppointmentAction(props.clientId, a.id))} />
                       </div>
                     ) : null}
                   </article>
@@ -218,6 +244,7 @@ function ActBtn({ label, onClick, danger, disabled }: { label: string; onClick: 
 
 /** Modal for new appointment / walk-in / reschedule — fetches real availability. */
 function AppointmentModal(props: {
+  clientId: string;
   timezone: string;
   currentSiteId: string;
   dayStartIso: string;
@@ -250,6 +277,7 @@ function AppointmentModal(props: {
     setSlotStart("");
     try {
       const params = new URLSearchParams({
+        client_id: props.clientId, // the endpoint re-validates module + site↔client
         site_id: props.currentSiteId,
         service_id: effectiveServiceId,
         from: props.dayStartIso,
@@ -276,10 +304,15 @@ function AppointmentModal(props: {
     props.onError(null);
     startTransition(async () => {
       if (isReschedule) {
-        const r = await rescheduleAppointmentAction(props.modal.mode === "reschedule" ? props.modal.appt.id : "", slotStart, staffId || null);
+        const r = await rescheduleAppointmentAction(
+          props.clientId,
+          props.modal.mode === "reschedule" ? props.modal.appt.id : "",
+          slotStart,
+          staffId || null,
+        );
         if (!r.ok) return props.onError(r.error);
       } else {
-        const r = await createManualAppointmentAction({
+        const r = await createManualAppointmentAction(props.clientId, {
           siteId: props.currentSiteId,
           serviceId,
           staffId: staffId || null,

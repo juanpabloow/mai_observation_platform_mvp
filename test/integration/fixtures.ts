@@ -114,6 +114,21 @@ export async function seedSiteForClient(tenantId: string, clientId: string): Pro
   return { siteId, staffId: staff.rows[0].id, serviceId: svc.rows[0].id };
 }
 
+/** Insert an n8n connection + a synced workflow row owned by `clientId` — needed
+ * wherever the CANONICAL-workflow criterion (conversation → client) is in play. */
+export async function seedWorkflow(tenantId: string, clientId: string, n8nWorkflowId: string): Promise<void> {
+  const conn = await query<{ id: string }>(
+    `INSERT INTO n8n_connections (tenant_id, name, n8n_base_url, n8n_api_key_encrypted)
+       VALUES ($1, 'conn', 'https://n8n.local', 'x') RETURNING id`,
+    [tenantId],
+  );
+  await query(
+    `INSERT INTO workflows (tenant_id, n8n_connection_id, n8n_workflow_id, name, client_id, last_synced_at)
+       VALUES ($1, $2, $3, $3, $4, now())`,
+    [tenantId, conn.rows[0].id, n8nWorkflowId, clientId],
+  );
+}
+
 export async function cleanupTenant(tenantId: string): Promise<void> {
   await query(`DELETE FROM tenants WHERE id = $1`, [tenantId]);
 }

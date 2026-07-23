@@ -6,6 +6,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import { useTheme } from "next-themes";
 import { useSidebar } from "@/components/SidebarContext";
+import { parseClientSurface } from "@/lib/clientSurface";
 
 export interface HeaderClient {
   id: string;
@@ -206,13 +207,9 @@ export function HeaderBar({
 
   const route = parseWorkflowRoute(pathname);
   // CLIENT-LEVEL (non-workflow) surfaces under /clients/[c]/… — each renders as
-  // "Client / <Label>" in the breadcrumb. Generalized from the original
-  // team-only match so new client surfaces just add a label here.
-  const CLIENT_SURFACE_LABELS: Record<string, string> = { team: "Team", modules: "Modules" };
-  const surfaceMatch = pathname.match(/^\/clients\/([^/]+)\/(team|modules)(?:\/|$)/);
-  const clientSurface = surfaceMatch
-    ? { clientId: decodeURIComponent(surfaceMatch[1]), label: CLIENT_SURFACE_LABELS[surfaceMatch[2]] }
-    : null;
+  // "Client / <Label>". The pure parser (lib/clientSurface) knows Team, Modules,
+  // Contacts, and Agenda; workflow routes return null there.
+  const clientSurface = parseClientSurface(pathname);
   const currentClient = route
     ? clients.find((c) => c.id === route.clientId) ?? null
     : clientSurface

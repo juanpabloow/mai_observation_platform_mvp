@@ -92,12 +92,16 @@ export function AppSidebar({
   memberClientId,
   workflows,
   defaultClientId,
+  enabledModules,
 }: {
   memberClientId: string | null;
   workflows: SidebarWorkflow[];
   /** The tenant's default/"Unassigned" client id (owner/admin; null for members
    * or logged-out) — the rail hides Modules for it (it can't have modules). */
   defaultClientId: string | null;
+  /** clientId → ENABLED module keys (server-resolved). Owner/admin: the whole
+   * tenant; member: only their client. Drives the Contacts/Agenda links. */
+  enabledModules: Record<string, string[]>;
 }) {
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -155,6 +159,10 @@ export function AppSidebar({
     // Modules carries the same context-workflow memory as Team, so returning to
     // Executions/Inbox/Analytics keeps pointing at the workflow you came from.
     const modulesHref = `/clients/${clientId}/modules${teamFrom ? `?from=${encodeURIComponent(teamFrom)}` : ""}`;
+    // Same ?from memory for the module surfaces (Contacts / Agenda).
+    const fromSuffix = teamFrom ? `?from=${encodeURIComponent(teamFrom)}` : "";
+    // This client's ENABLED modules (server-resolved; [] when none/unknown).
+    const clientModuleKeys = enabledModules[clientId] ?? [];
 
     return (
       <aside className={railClass}>
@@ -200,6 +208,23 @@ export function AppSidebar({
             <DisabledItem label="Analytics" />
           </>
         )}
+        {/* Per-client MODULE surfaces (Phase 3A): Contacts iff crm enabled,
+            Agenda iff scheduling enabled — both client-scoped routes carrying
+            the context workflow (?from), for every role that can see this rail. */}
+        {clientModuleKeys.includes("crm") ? (
+          <SideLink
+            href={`/clients/${clientId}/contacts${fromSuffix}`}
+            label="Contacts"
+            active={pathname.startsWith(`/clients/${clientId}/contacts`)}
+          />
+        ) : null}
+        {clientModuleKeys.includes("scheduling") ? (
+          <SideLink
+            href={`/clients/${clientId}/scheduling/agenda${fromSuffix}`}
+            label="Agenda"
+            active={pathname.startsWith(`/clients/${clientId}/scheduling`)}
+          />
+        ) : null}
         {/* Team + Modules are owner/admin only — a member never sees either.
             Both are CLIENT-level routes, so they work even when the client has
             zero workflows (the workflow tabs render disabled above). Modules is
@@ -221,8 +246,9 @@ export function AppSidebar({
   // ── Outside a client ──
   if (isMember) {
     // A member has no tenant level — link back to their client's overview, plus
-    // the scheduling surfaces they CAN use (scoped to their client server-side).
+    // ONLY the module surfaces enabled for THEIR client (client-scoped routes).
     // No "Scheduling admin" — sites/staff/services CRUD is owner/admin only.
+    const memberModules = enabledModules[memberClientId] ?? [];
     return (
       <aside className={railClass}>
         <SectionLabel>Client</SectionLabel>
@@ -231,22 +257,27 @@ export function AppSidebar({
           label="Overview"
           active={false}
         />
-        <SectionLabel>Scheduling</SectionLabel>
-        <SideLink
-          href="/scheduling/agenda"
-          label="Agenda"
-          active={pathname === "/scheduling" || pathname.startsWith("/scheduling/agenda")}
-        />
-        <SideLink
-          href="/contacts"
-          label="Contacts"
-          active={pathname === "/contacts" || pathname.startsWith("/contacts/")}
-        />
+        {memberModules.includes("crm") ? (
+          <SideLink
+            href={`/clients/${memberClientId}/contacts`}
+            label="Contacts"
+            active={pathname.startsWith(`/clients/${memberClientId}/contacts`)}
+          />
+        ) : null}
+        {memberModules.includes("scheduling") ? (
+          <SideLink
+            href={`/clients/${memberClientId}/scheduling/agenda`}
+            label="Agenda"
+            active={pathname.startsWith(`/clients/${memberClientId}/scheduling`)}
+          />
+        ) : null}
       </aside>
     );
   }
 
-  // Owner/admin tenant level.
+  // Owner/admin tenant level. Agenda/Contacts are CLIENT-scoped now (Phase 3A) —
+  // no global aggregate links; the tenant-level Scheduling admin stays (the
+  // services catalogue is tenant-level, see /scheduling/admin).
   return (
     <aside className={railClass}>
       <SideLink href="/" label="Hub" active={pathname === "/"} />
@@ -256,16 +287,6 @@ export function AppSidebar({
         active={pathname === "/clients" || pathname.startsWith("/clients/")}
       />
       <SectionLabel>Scheduling</SectionLabel>
-      <SideLink
-        href="/scheduling/agenda"
-        label="Agenda"
-        active={pathname === "/scheduling" || pathname.startsWith("/scheduling/agenda")}
-      />
-      <SideLink
-        href="/contacts"
-        label="Contacts"
-        active={pathname === "/contacts" || pathname.startsWith("/contacts/")}
-      />
       <SideLink
         href="/scheduling/admin"
         label="Scheduling admin"

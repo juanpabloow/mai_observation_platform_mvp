@@ -1,77 +1,40 @@
-import Link from "next/link";
-import { notFound } from "next/navigation";
+import { notFound, redirect } from "next/navigation";
 import { connection } from "next/server";
-import { getAccessScope } from "@/lib/access";
-import { getContactById, listContactConversations } from "@worker/db/repositories/contacts.js";
-import { listAppointmentsForContact, listEventsForContact } from "@worker/db/repositories/scheduling/appointments.js";
-import { ContactDetail } from "@/components/contacts/ContactDetail";
+import { getAccessScope, canAccessClient } from "@/lib/access";
+import { isUuid } from "@/lib/clientModuleValidation";
+import { getContactById } from "@worker/db/repositories/contacts.js";
+import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 
 /**
- * Contact detail (owner/admin, tenant-scoped) with Data / Conversations /
- * Appointments / Activity sections. All data loaded server-side; the ContactDetail
- * client handles tab switching + the edit form.
+ * LEGACY route (Phase 3A): redirects an old /contacts/{id} link to the contact's
+ * canonical client-scoped route. The contact resolves under tenant + RBAC (a
+ * member can only reach their own client's contacts), its client must have CRM
+ * enabled, and safe query params (from, tab) are preserved. Invalid UUID → 404
+ * before any query.
  */
-export default async function ContactDetailPage({
+export default async function LegacyContactDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ contactId: string }>;
+  searchParams: Promise<{ from?: string; tab?: string }>;
 }) {
   await connection();
-  const scope = await getAccessScope();
-  const tenantId = scope.tenantId;
   const { contactId } = await params;
+  if (!isUuid(contactId)) notFound();
+  const scope = await getAccessScope();
+  const sp = await searchParams;
 
-  const contact = await getContactById(tenantId, contactId, scope.memberClientId);
+  // Tenant + RBAC scoping: members only resolve their own client's contacts.
+  const contact = await getContactById(scope.tenantId, contactId, scope.memberClientId);
   if (!contact) notFound();
+  if (!canAccessClient(scope, contact.client_id)) notFound();
+  if (!(await isClientModuleEnabled(scope.tenantId, contact.client_id, "crm"))) notFound();
 
-  const [conversations, appointments, activity] = await Promise.all([
-    listContactConversations(tenantId, contactId),
-    listAppointmentsForContact(tenantId, contactId),
-    listEventsForContact(tenantId, contactId),
-  ]);
-
-  const isCustomer = appointments.some((a) => a.status === "completed");
-
-  return (
-    <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-4 px-6 py-6">
-      <Link href="/contacts" className="text-sm text-muted hover:text-foreground">← Contacts</Link>
-      <ContactDetail
-        contact={{
-          id: contact.id,
-          name: contact.name,
-          channel: contact.channel,
-          channel_user_id: contact.channel_user_id,
-          phone_e164: contact.phone_e164,
-          email: contact.email,
-          stage: contact.stage,
-          bot_human_mode: contact.bot_human_mode,
-          message_count: contact.message_count,
-          is_customer: isCustomer,
-        }}
-        conversations={conversations.map((c) => ({
-          id: c.id,
-          workflow_ref: c.n8n_workflow_id,
-          conversation_ref: c.conversation_ref,
-          mode: c.mode,
-          last_message_at: c.last_message_at ? new Date(c.last_message_at).toISOString() : null,
-        }))}
-        appointments={appointments.map((a) => ({
-          id: a.id,
-          service_name: a.service_name_snapshot,
-          staff_name: a.staff_name,
-          site_name: a.site_name,
-          start_at: a.start_at.toISOString(),
-          status: a.status,
-          origin: a.origin,
-        }))}
-        activity={activity.map((e) => ({
-          id: e.id,
-          event_type: e.event_type,
-          actor_type: e.actor_type,
-          created_at: e.created_at.toISOString(),
-          detail: e.detail,
-        }))}
-      />
-    </main>
-  );
+  // Preserve the SAFE, known query params only (never arbitrary input).
+  const qs = new URLSearchParams();
+  if (sp.from) qs.set("from", sp.from);
+  if (sp.tab) qs.set("tab", sp.tab);
+  const suffix = qs.size > 0 ? `?${qs.toString()}` : "";
+  redirect(`/clients/${contact.client_id}/contacts/${contact.id}${suffix}`);
 }

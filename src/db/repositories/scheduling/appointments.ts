@@ -229,7 +229,25 @@ export interface AppointmentListItem extends AppointmentRow {
   contact_name: string | null;
 }
 
-/** Tenant-scoped list with safe filters + light joins for display. */
+/**
+ * Tenant-scoped list with safe filters. CROSS-CLIENT IDENTITY DEFENSE: the DB
+ * doesn't guarantee an appointment's contact/source-conversation stay within
+ * its client, and site/staff rows are joined for display — so no joined
+ * identity may leak across clients:
+ *
+ * - sites/staff are REQUIRED resources and join on tenant + ownership
+ *   (si.client_id = a.client_id; st.site_id = a.site_id) as INNER joins — an
+ *   inconsistent appointment (site or staff of another client) is EXCLUDED
+ *   from the list entirely.
+ * - contact joins on tenant + client; the projection takes contact_id FROM THE
+ *   JOIN (ct.id, an explicit projection — never a.*), so a mislinked foreign
+ *   contact yields contact_id = NULL and contact_name = NULL. The foreign UUID
+ *   never reaches the caller.
+ * - source_conversation_id is only projected when the conversation belongs to
+ *   the tenant AND its CANONICAL workflow (most recently synced row for
+ *   tenant + n8n_workflow_id — same criterion as the conversation reads)
+ *   belongs to a.client_id; otherwise NULL.
+ */
 export async function listAppointments(
   tenantId: string,
   filters: ListAppointmentsFilters = {},
@@ -253,11 +271,34 @@ export async function listAppointments(
   if (filters.to) add((i) => `a.start_at < $${i}`, filters.to);
   params.push(Math.min(filters.limit ?? 500, 1000));
   const r = await query<AppointmentListItem>(
-    `SELECT a.*, st.name AS staff_name, si.name AS site_name, ct.name AS contact_name
+    `SELECT a.id, a.public_reference, a.tenant_id, a.client_id, a.site_id,
+            ct.id AS contact_id,
+            sc.id AS source_conversation_id,
+            a.staff_id, a.service_id,
+            a.start_at, a.service_end_at, a.blocked_from, a.blocked_until,
+            a.service_name_snapshot, a.duration_min_snapshot, a.price_snapshot,
+            a.buffer_before_min_snapshot, a.buffer_after_min_snapshot,
+            a.status, a.origin, a.created_by_type, a.created_by_user_id,
+            a.idempotency_key, a.version, a.created_at, a.updated_at,
+            st.name AS staff_name, si.name AS site_name, ct.name AS contact_name
        FROM appointments a
-       LEFT JOIN staff st ON st.id = a.staff_id
-       LEFT JOIN sites si ON si.id = a.site_id
-       LEFT JOIN contacts ct ON ct.id = a.contact_id
+       JOIN sites si
+         ON si.id = a.site_id AND si.tenant_id = a.tenant_id AND si.client_id = a.client_id
+       JOIN staff st
+         ON st.id = a.staff_id AND st.tenant_id = a.tenant_id AND st.site_id = a.site_id
+       LEFT JOIN contacts ct
+         ON ct.id = a.contact_id AND ct.tenant_id = a.tenant_id AND ct.client_id = a.client_id
+       LEFT JOIN conversations sc
+         ON sc.id = a.source_conversation_id
+        AND sc.tenant_id = a.tenant_id
+        AND EXISTS (
+              SELECT 1
+                FROM (SELECT DISTINCT ON (w.n8n_workflow_id) w.client_id
+                        FROM workflows w
+                       WHERE w.tenant_id = sc.tenant_id AND w.n8n_workflow_id = sc.n8n_workflow_id
+                       ORDER BY w.n8n_workflow_id, w.last_synced_at DESC NULLS LAST) cw
+               WHERE cw.client_id = a.client_id
+            )
       WHERE ${where.join(' AND ')}
       ORDER BY a.start_at ASC
       LIMIT $${params.length}`,
@@ -284,24 +325,40 @@ export async function listAppointmentEvents(tenantId: string, appointmentId: str
   return r.rows;
 }
 
-/** Appointments for a contact (contact detail view). */
-export async function listAppointmentsForContact(tenantId: string, contactId: string): Promise<AppointmentListItem[]> {
-  return listAppointments(tenantId, { contactId });
+/** Appointments for a contact (contact detail view) — READ-SIDE DEFENDED by
+ * client: both filters are passed, so a mislinked cross-client appointment
+ * never surfaces on another client's contact. FAILS CLOSED at runtime: the
+ * TypeScript signature requires clientId, but an untyped JS caller could omit
+ * it — and listAppointments treats a missing clientId as "no filter" (tenant-
+ * wide). A missing/empty clientId therefore returns [] instead of widening. */
+export async function listAppointmentsForContact(
+  tenantId: string,
+  contactId: string,
+  clientId: string,
+): Promise<AppointmentListItem[]> {
+  if (!clientId || typeof clientId !== 'string') return [];
+  return listAppointments(tenantId, { contactId, clientId });
 }
 
-/** All appointment events across a contact's appointments — the Activity tab. */
+/** All appointment events across a contact's appointments — the Activity tab.
+ * Client-defended like the appointment list: the owning appointment must belong
+ * to `clientId` in addition to the tenant/contact filters. */
 export async function listEventsForContact(
   tenantId: string,
   contactId: string,
+  clientId: string,
 ): Promise<Array<AppointmentEventRow & { appointment_id: string }>> {
+  // Fail closed on a runtime-missing clientId (the SQL's a.client_id = $3 would
+  // match nothing on NULL anyway; this makes the contract explicit).
+  if (!clientId || typeof clientId !== 'string') return [];
   const r = await query<AppointmentEventRow & { appointment_id: string }>(
     `SELECT e.id, e.appointment_id, e.event_type, e.actor_type, e.actor_user_id, e.detail, e.created_at
        FROM appointment_events e
        JOIN appointments a ON a.id = e.appointment_id
-      WHERE e.tenant_id = $1 AND a.contact_id = $2
+      WHERE e.tenant_id = $1 AND a.contact_id = $2 AND a.client_id = $3
       ORDER BY e.created_at DESC
       LIMIT 200`,
-    [tenantId, contactId],
+    [tenantId, contactId, clientId],
   );
   return r.rows;
 }

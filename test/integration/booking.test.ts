@@ -17,7 +17,7 @@ import {
 import { listContactConversations } from '../../src/db/repositories/contacts.js';
 import { listEventsSince } from '../../src/db/repositories/scheduling/events.js';
 import { getContactById } from '../../src/db/repositories/contacts.js';
-import { cleanupTenant, closeDb, seedScenario, seedSiteForClient } from './fixtures.js';
+import { cleanupTenant, closeDb, seedScenario, seedSiteForClient, seedWorkflow } from './fixtures.js';
 
 const TZ = 'America/Bogota';
 const NOW = zonedPartsToUtc(2026, 8, 1, 0, 0, TZ); // well before the test slots
@@ -217,6 +217,9 @@ test('#3 tenant isolation: one tenant never sees another tenant\'s appointments'
 
 test('#1 one contact, many conversations (no duplication)', async () => {
   const s = await scenario();
+  // The conversation → client link resolves through the CANONICAL workflow row
+  // (Phase 3A read defense), so 'wf1' must exist as a synced workflow of this client.
+  await seedWorkflow(s.tenantId, s.clientId, 'wf1');
   const common = {
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
     channel: 'whatsapp', channelUserId: '573001112233', customerName: 'Carlos',
@@ -228,7 +231,7 @@ test('#1 one contact, many conversations (no duplication)', async () => {
   assert.equal(r1.value.contact_id, r2.value.contact_id, 'same person → same contact');
   const contactCount = await query(`SELECT COUNT(*)::int AS n FROM contacts WHERE tenant_id = $1 AND channel = 'whatsapp'`, [s.tenantId]);
   assert.equal(contactCount.rows[0].n, 1, 'no duplicate contact');
-  const convs = await listContactConversations(s.tenantId, r1.value.contact_id!);
+  const convs = await listContactConversations(s.tenantId, r1.value.contact_id!, s.clientId);
   assert.equal(convs.length, 2, 'one contact, two conversations');
 });
 
@@ -242,7 +245,7 @@ test('#2 one contact, many appointments', async () => {
   const r1 = await createAppointment({ ...common, serviceId: s.serviceHaircut, startAt: wed(9) });
   const r2 = await createAppointment({ ...common, serviceId: s.serviceBeard, startAt: wed(11) });
   assert.ok(r1.ok && r2.ok);
-  const appts = await listAppointmentsForContact(s.tenantId, r1.value.contact_id!);
+  const appts = await listAppointmentsForContact(s.tenantId, r1.value.contact_id!, s.clientId);
   assert.equal(appts.length, 2);
 });
 

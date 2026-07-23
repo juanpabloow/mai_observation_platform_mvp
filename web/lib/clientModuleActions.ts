@@ -65,5 +65,9 @@ export async function setClientModuleAction(input: {
 
   revalidatePath("/clients");
   revalidatePath(`/clients/${clientId}/modules`);
+  // The module surfaces themselves (Phase 3A) — so a toggle immediately
+  // reflects on their pages (and the sidebar re-render drops/adds the links).
+  revalidatePath(`/clients/${clientId}/contacts`);
+  revalidatePath(`/clients/${clientId}/scheduling/agenda`);
   return { ok: true, module: { module_key: row.module_key, enabled: row.enabled } };
 }

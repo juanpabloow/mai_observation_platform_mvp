@@ -119,6 +119,11 @@ export async function listContacts(
     where.push(`(c.name ILIKE $${params.length} OR c.phone_e164 ILIKE $${params.length} OR c.email ILIKE $${params.length} OR c.channel_user_id ILIKE $${params.length})`);
   }
   params.push(Math.min(opts.limit ?? 200, 500));
+  // READ-SIDE CLIENT DEFENSE on the aggregates: appointment counts join on
+  // contact_id AND client_id (a mislinked cross-client appointment never counts),
+  // and last_conversation_at only considers conversations whose CANONICAL
+  // workflow (most recently synced row for tenant + n8n_workflow_id) belongs to
+  // the contact's own client.
   const r = await query<ContactListItem>(
     `SELECT c.*,
             COALESCE(a.completed_count, 0) AS completed_count,
@@ -128,19 +133,26 @@ export async function listContacts(
             conv.last_conversation_at
        FROM contacts c
        LEFT JOIN (
-         SELECT contact_id,
-                COUNT(*) FILTER (WHERE status = 'completed') AS completed_count,
+         SELECT contact_id, client_id,
+                (COUNT(*) FILTER (WHERE status = 'completed'))::int AS completed_count,
                 MIN(start_at) FILTER (WHERE status IN ('scheduled','confirmed') AND start_at >= now()) AS next_appointment_at
            FROM appointments
           WHERE tenant_id = $1 AND contact_id IS NOT NULL
-          GROUP BY contact_id
-       ) a ON a.contact_id = c.id
+          GROUP BY contact_id, client_id
+       ) a ON a.contact_id = c.id AND a.client_id = c.client_id
        LEFT JOIN (
-         SELECT contact_id, MAX(COALESCE(last_message_at, updated_at)) AS last_conversation_at
-           FROM conversations
-          WHERE tenant_id = $1 AND contact_id IS NOT NULL
-          GROUP BY contact_id
-       ) conv ON conv.contact_id = c.id
+         SELECT co.contact_id, cw.client_id,
+                MAX(COALESCE(co.last_message_at, co.updated_at)) AS last_conversation_at
+           FROM conversations co
+           JOIN LATERAL (
+             SELECT DISTINCT ON (w.n8n_workflow_id) w.client_id
+               FROM workflows w
+              WHERE w.tenant_id = co.tenant_id AND w.n8n_workflow_id = co.n8n_workflow_id
+              ORDER BY w.n8n_workflow_id, w.last_synced_at DESC NULLS LAST
+           ) cw ON true
+          WHERE co.tenant_id = $1 AND co.contact_id IS NOT NULL
+          GROUP BY co.contact_id, cw.client_id
+       ) conv ON conv.contact_id = c.id AND conv.client_id = c.client_id
       WHERE ${where.join(' AND ')}
       ORDER BY c.last_contact_at DESC
       LIMIT $${params.length}`,
@@ -149,17 +161,34 @@ export async function listContacts(
   return r.rows;
 }
 
-/** Conversations belonging to a contact (for the contact detail view). */
+/**
+ * Conversations belonging to a contact (for the contact detail view), READ-SIDE
+ * DEFENDED by client: only conversations whose CANONICAL workflow (same criterion
+ * as the inbox's getConversationForClient — tenant + n8n_workflow_id, most
+ * recently synced row wins) belongs to `clientId` are returned. The DB does not
+ * guarantee conversations.contact_id stays within one client, so a mislinked
+ * cross-client conversation must never surface on another client's contact.
+ */
 export async function listContactConversations(
   tenantId: string,
   contactId: string,
+  clientId: string,
 ): Promise<Array<{ id: string; n8n_workflow_id: string; conversation_ref: string; mode: string; last_message_at: Date | null }>> {
+  // Fail closed on a runtime-missing clientId (the join's cw.client_id = $3
+  // would match nothing on NULL anyway; this makes the contract explicit).
+  if (!clientId || typeof clientId !== 'string') return [];
   const r = await query(
-    `SELECT id, n8n_workflow_id, conversation_ref, mode, last_message_at
-       FROM conversations
-      WHERE tenant_id = $1 AND contact_id = $2
-      ORDER BY COALESCE(last_message_at, updated_at) DESC`,
-    [tenantId, contactId],
+    `SELECT c.id, c.n8n_workflow_id, c.conversation_ref, c.mode, c.last_message_at
+       FROM conversations c
+       JOIN LATERAL (
+         SELECT DISTINCT ON (w.n8n_workflow_id) w.client_id
+           FROM workflows w
+          WHERE w.tenant_id = c.tenant_id AND w.n8n_workflow_id = c.n8n_workflow_id
+          ORDER BY w.n8n_workflow_id, w.last_synced_at DESC NULLS LAST
+       ) cw ON cw.client_id = $3
+      WHERE c.tenant_id = $1 AND c.contact_id = $2
+      ORDER BY COALESCE(c.last_message_at, c.updated_at) DESC`,
+    [tenantId, contactId, clientId],
   );
   return r.rows as Array<{ id: string; n8n_workflow_id: string; conversation_ref: string; mode: string; last_message_at: Date | null }>;
 }
