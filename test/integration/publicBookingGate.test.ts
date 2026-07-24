@@ -63,8 +63,8 @@ async function mkBookingSite(tenantId: string, opts: { isDefault?: boolean } = {
   );
   const siteId = site.rows[0].id;
   const svc = await query<{ id: string }>(
-    `INSERT INTO services (tenant_id, name, duration_min, price) VALUES ($1, 'Haircut', 60, 30) RETURNING id`,
-    [tenantId],
+    `INSERT INTO services (tenant_id, client_id, name, duration_min, price) VALUES ($1, $2, 'Haircut', 60, 30) RETURNING id`,
+    [tenantId, clientId],
   );
   const serviceId = svc.rows[0].id;
   await query(`INSERT INTO site_services (tenant_id, site_id, service_id) VALUES ($1, $2, $3)`, [tenantId, siteId, serviceId]);

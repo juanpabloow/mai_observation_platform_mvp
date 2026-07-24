@@ -81,9 +81,10 @@ export async function seedScenario(
   const staffB = await mkStaff('Beto');
 
   const mkService = async (name: string, dur: number, price: number): Promise<string> => {
+    // Services are per-CLIENT — the seeded site belongs to `clientId` (Business A).
     const r = await query<{ id: string }>(
-      `INSERT INTO services (tenant_id, name, duration_min, price) VALUES ($1, $2, $3, $4) RETURNING id`,
-      [tenantId, name, dur, price],
+      `INSERT INTO services (tenant_id, client_id, name, duration_min, price) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+      [tenantId, clientId, name, dur, price],
     );
     const id = r.rows[0].id;
     await query(`INSERT INTO site_services (tenant_id, site_id, service_id) VALUES ($1, $2, $3)`, [tenantId, siteId, id]);
@@ -133,8 +134,8 @@ export async function seedSiteForClient(tenantId: string, clientId: string): Pro
     [tenantId, siteId],
   );
   const svc = await query<{ id: string }>(
-    `INSERT INTO services (tenant_id, name, duration_min, price) VALUES ($1, 'Other Svc', 30, 10) RETURNING id`,
-    [tenantId],
+    `INSERT INTO services (tenant_id, client_id, name, duration_min, price) VALUES ($1, $2, 'Other Svc', 30, 10) RETURNING id`,
+    [tenantId, clientId],
   );
   await query(`INSERT INTO site_services (tenant_id, site_id, service_id) VALUES ($1, $2, $3)`, [tenantId, siteId, svc.rows[0].id]);
   await query(`INSERT INTO staff_services (tenant_id, staff_id, service_id) VALUES ($1, $2, $3)`, [tenantId, staff.rows[0].id, svc.rows[0].id]);

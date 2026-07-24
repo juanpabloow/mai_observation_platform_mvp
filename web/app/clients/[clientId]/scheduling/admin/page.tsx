@@ -21,8 +21,8 @@ import { AdminPanel } from "@/components/scheduling/AdminPanel";
  *      and have scheduling ENABLED; any failure is an indistinguishable 404.
  * ALL data is loaded with the VALIDATED client id — sites/staff/exceptions filtered to
  * this client; there is NO client selector, so this page can't cross into another
- * client. The service CATALOGUE is tenant-level (shared), enabled per this client's
- * sites via site_services.
+ * client. Each client owns its OWN service catalogue (services.client_id); those
+ * services are enabled per this client's sites via site_services.
  */
 export default async function ClientSchedulingAdminPage({
   params,
@@ -37,7 +37,7 @@ export default async function ClientSchedulingAdminPage({
 
   const [sites, services, staff] = await Promise.all([
     listSites(tenantId, { clientId: client.id, includeInactive: true }),
-    listServices(tenantId, true),
+    listServices(tenantId, client.id, true),
     listStaff(tenantId, { clientId: client.id, includeInactive: true }),
   ]);
 

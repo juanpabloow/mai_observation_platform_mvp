@@ -98,14 +98,18 @@ async function main(): Promise<void> {
   const beto = await upsertStaff('Beto Ruiz');
 
   const upsertService = async (name: string, dur: number, price: number, bAfter = 5): Promise<string> => {
-    const existing = await query<{ id: string }>(`SELECT id FROM services WHERE tenant_id = $1 AND name = $2`, [DEMO_TENANT_ID, name]);
+    // Services are per-CLIENT now — scope the lookup + insert to the demo client.
+    const existing = await query<{ id: string }>(
+      `SELECT id FROM services WHERE tenant_id = $1 AND client_id = $2 AND name = $3`,
+      [DEMO_TENANT_ID, clientId, name],
+    );
     let id: string;
     if (existing.rows[0]) {
       id = existing.rows[0].id;
     } else {
       const r = await query<{ id: string }>(
-        `INSERT INTO services (tenant_id, name, duration_min, price, buffer_after_min) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
-        [DEMO_TENANT_ID, name, dur, price, bAfter],
+        `INSERT INTO services (tenant_id, client_id, name, duration_min, price, buffer_after_min) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id`,
+        [DEMO_TENANT_ID, clientId, name, dur, price, bAfter],
       );
       id = r.rows[0].id;
     }

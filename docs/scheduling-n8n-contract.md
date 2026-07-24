@@ -101,5 +101,8 @@ curl "${H[@]}" -X POST "$BASE/appointments/$ID/reschedule" -H "Content-Type: app
 - If scheduling is turned off for the client (even mid-request), writes return
   `403 module_disabled` and change nothing; re-enabling restores access to the
   existing data.
-- `services` is a tenant-level catalogue enabled per site (`site_services`); the
-  API only ever exposes services enabled at the resolved client's sites.
+- `services` belong to a **single client** (`services.client_id`) and are enabled per
+  site (`site_services`); a service can only be enabled at, assigned to staff of, or
+  booked against a site of its OWN client. The API only ever exposes/uses services of
+  the workflow's resolved client — a service id from another client returns the same
+  generic `404 not_found`, never revealing it exists elsewhere.

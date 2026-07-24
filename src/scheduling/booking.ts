@@ -159,7 +159,7 @@ export async function createAppointment(
     return { ok: false, error: 'not_found', message: 'Service is not offered at this site.' };
   }
   const priceSnapshot = await resolveEffectivePrice(input.tenantId, input.siteId, input.serviceId, chosenStaffId);
-  const serviceName = await serviceNameFor(input.tenantId, input.serviceId);
+  const serviceName = await serviceNameFor(input.tenantId, clientId, input.serviceId);
   if (serviceName == null) return { ok: false, error: 'not_found', message: 'Service not found.' };
 
   // Per-staff service window (the chosen staff's own duration), plus service-level buffers.
@@ -280,8 +280,11 @@ export async function createAppointment(
   }
 }
 
-async function serviceNameFor(tenantId: string, serviceId: string): Promise<string | null> {
-  const r = await query<{ name: string }>(`SELECT name FROM services WHERE id = $1 AND tenant_id = $2`, [serviceId, tenantId]);
+async function serviceNameFor(tenantId: string, clientId: string, serviceId: string): Promise<string | null> {
+  const r = await query<{ name: string }>(
+    `SELECT name FROM services WHERE id = $1 AND tenant_id = $2 AND client_id = $3`,
+    [serviceId, tenantId, clientId],
+  );
   return r.rows[0]?.name ?? null;
 }
 

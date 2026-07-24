@@ -70,7 +70,8 @@ export async function resolveSiteService(
        JOIN site_services ss
          ON ss.site_id = si.id AND ss.tenant_id = si.tenant_id AND ss.active = true
        JOIN services sv
-         ON sv.id = ss.service_id AND sv.tenant_id = si.tenant_id AND sv.active = true
+         ON sv.id = ss.service_id AND sv.tenant_id = si.tenant_id
+        AND sv.client_id = si.client_id AND sv.active = true
       WHERE si.tenant_id = $1 AND si.id = $2 AND sv.id = $3 AND si.active = true`,
     [tenantId, siteId, serviceId],
   );
@@ -104,7 +105,8 @@ export async function resolveEffectivePrice(
        JOIN site_services ss
          ON ss.site_id = si.id AND ss.tenant_id = si.tenant_id AND ss.service_id = $3 AND ss.active = true
        JOIN services sv
-         ON sv.id = ss.service_id AND sv.tenant_id = si.tenant_id AND sv.active = true
+         ON sv.id = ss.service_id AND sv.tenant_id = si.tenant_id
+        AND sv.client_id = si.client_id AND sv.active = true
        JOIN staff st
          ON st.id = $4 AND st.site_id = si.id AND st.tenant_id = si.tenant_id AND st.active = true
        JOIN staff_services sts

@@ -34,8 +34,9 @@ import {
 
 /**
  * Owner/admin CRUD for a SINGLE CLIENT's scheduling resource model (sites, staff,
- * per-site service enablement, exceptions) — the tenant-level service CATALOGUE is
- * shared and enabled per THIS client's sites. Every action is validated FOUR ways,
+ * the client's OWN service catalogue, per-site enablement, exceptions). Services now
+ * belong to the client (services.client_id) — never shared across clients. Every
+ * action is validated FOUR ways,
  * in this order, before any mutation:
  *   1. owner/admin              — requireFullAccessForAction (throws for a member);
  *   2. tenant + client of route — resolveClientModuleContext (the URL clientId is
@@ -136,7 +137,7 @@ export async function deactivateSiteAction(clientId: string, id: string): Promis
   return { ok: true };
 }
 
-// ── Services (tenant-level catalogue, enabled per THIS client's sites) ──────────
+// ── Services (this CLIENT's own catalogue, enabled per THIS client's sites) ─────
 
 export async function createServiceAction(input: {
   clientId: string;
@@ -158,6 +159,7 @@ export async function createServiceAction(input: {
   }
   const svc = await createService({
     tenantId: auth.tenantId,
+    clientId: input.clientId, // the VALIDATED route client — the service's owner
     name: input.name.trim(),
     description: input.description ?? null,
     durationMin: input.durationMin,
@@ -179,7 +181,7 @@ export async function updateServiceAction(
 ): Promise<AdminResult> {
   const auth = await requireSchedulingAdmin(clientId);
   if (!auth.ok) return auth;
-  const row = await updateService(auth.tenantId, id, patch);
+  const row = await updateService(auth.tenantId, clientId, id, patch);
   if (!row) return { ok: false, error: "Service not found." };
   revalidateAdmin(clientId);
   return { ok: true, id };
@@ -188,7 +190,7 @@ export async function updateServiceAction(
 export async function deactivateServiceAction(clientId: string, id: string): Promise<AdminResult> {
   const auth = await requireSchedulingAdmin(clientId);
   if (!auth.ok) return auth;
-  const ok = await deactivateService(auth.tenantId, id);
+  const ok = await deactivateService(auth.tenantId, clientId, id);
   if (!ok) return { ok: false, error: "Service not found or already inactive." };
   revalidateAdmin(clientId);
   return { ok: true };
@@ -266,8 +268,8 @@ export async function setStaffServiceAction(
   const auth = await requireSchedulingAdmin(clientId);
   if (!auth.ok) return auth;
   if (!(await staffInClient(auth.tenantId, clientId, staffId))) return { ok: false, error: FOREIGN };
-  // The service must exist in the tenant catalogue (shared, not per-client).
-  if (enabled && !(await getServiceById(auth.tenantId, serviceId))) return { ok: false, error: FOREIGN };
+  // The service must belong to THIS client (per-client catalogue).
+  if (enabled && !(await getServiceById(auth.tenantId, clientId, serviceId))) return { ok: false, error: FOREIGN };
   if (enabled) await setStaffService(auth.tenantId, staffId, serviceId, { active: true });
   else await removeStaffService(auth.tenantId, staffId, serviceId);
   revalidateAdmin(clientId);
