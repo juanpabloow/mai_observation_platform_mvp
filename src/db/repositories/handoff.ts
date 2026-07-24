@@ -1,4 +1,5 @@
 import { pool, query, firstRowOrThrow } from '../client.js';
+import { isInboxEnabledForUpdate } from './clientModules.js';
 
 /**
  * H-1a repository for the stateful handoff entities: conversations, their message
@@ -348,6 +349,22 @@ export interface TransitionOptions {
    * concurrent take can't be silently clobbered by an otherwise-legal edge.
    */
   expectedFrom?: ConversationMode;
+  /**
+   * Optional per-client `inbox` module gate. When set, the transition is only
+   * allowed if the inbox module is ENABLED for this client — checked with FOR SHARE
+   * on the client_modules row INSIDE this transaction, so it serializes with a
+   * concurrent disable (disableInboxIfIdle). Disabled → ModuleDisabledError (rolled
+   * back, no mode change, no audit). Used by escalation + human-intervention edges.
+   */
+  inboxGate?: { clientId: string };
+}
+
+/** Thrown by a gated transition when the required client module is disabled. */
+export class ModuleDisabledError extends Error {
+  constructor(public readonly module: string) {
+    super(`module_disabled: ${module}`);
+    this.name = 'ModuleDisabledError';
+  }
 }
 
 export interface TransitionResult {
@@ -380,6 +397,15 @@ export async function transitionMode(
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    // Inbox module gate (race-safe): FOR SHARE on the client_modules row serializes
+    // with a concurrent disable. Disabled → abort with ModuleDisabledError (nothing
+    // written). Runs BEFORE the conversation lock so a disabled module never mutates.
+    if (opts.inboxGate) {
+      if (!(await isInboxEnabledForUpdate(client, tenantId, opts.inboxGate.clientId))) {
+        await client.query('ROLLBACK');
+        throw new ModuleDisabledError('inbox');
+      }
+    }
     const cur = await client.query<ConversationRow>(
       `SELECT * FROM conversations WHERE id = $1 AND tenant_id = $2 FOR UPDATE`,
       [conversationId, tenantId],

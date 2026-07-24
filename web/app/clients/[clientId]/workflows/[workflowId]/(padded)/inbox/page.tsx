@@ -3,6 +3,8 @@ import Link from "next/link";
 import { listConversationMappings } from "@worker/db/repositories/fieldMappings.js";
 import { listConversations } from "@worker/db/repositories/conversationTurns.js";
 import { isWorkflowHandoffActive, getAgentSummary } from "@worker/db/repositories/handoff.js";
+import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
+import { notFound } from "next/navigation";
 import { getCurrentTenantId } from "@/lib/tenant";
 import { getAccessScope, hasFullAccess } from "@/lib/access";
 import { requireWorkflowUnderClient } from "@/lib/clientWorkflow";
@@ -42,6 +44,9 @@ export default async function WorkflowInboxPage({
   const workflow = await requireWorkflowUnderClient(clientId, workflowId, "inbox");
   const linkClientId = workflow.client_id ?? clientId;
   const tenantId = await getCurrentTenantId();
+  // The (compat) per-workflow inbox requires the workflow's CLIENT to have `inbox`
+  // enabled — a workflow of an inbox-disabled client is an indistinguishable 404.
+  if (!(await isClientModuleEnabled(tenantId, linkClientId, "inbox"))) notFound();
 
   const inboxBase = `/clients/${encodeURIComponent(linkClientId)}/workflows/${encodeURIComponent(workflowId)}/inbox`;
   const settingsHref = `/clients/${encodeURIComponent(linkClientId)}/workflows/${encodeURIComponent(workflowId)}/conversations/settings`;

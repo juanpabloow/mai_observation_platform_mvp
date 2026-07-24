@@ -10,7 +10,7 @@
  * CONSUME modules (workflow_modules, a future phase) but never own module data.
  */
 
-export const CLIENT_MODULE_KEYS = ["crm", "scheduling"] as const;
+export const CLIENT_MODULE_KEYS = ["crm", "scheduling", "inbox"] as const;
 
 export type ClientModuleKey = (typeof CLIENT_MODULE_KEYS)[number];
 

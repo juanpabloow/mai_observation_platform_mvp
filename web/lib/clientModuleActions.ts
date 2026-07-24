@@ -5,6 +5,7 @@ import { requireFullAccessForAction } from "./access";
 import { parseSetClientModuleInput } from "./clientModuleValidation";
 import { getClientById } from "@worker/db/repositories/clients.js";
 import {
+  disableInboxIfIdle,
   setClientModuleEnabled,
   type ClientModuleRow,
 } from "@worker/db/repositories/clientModules.js";
@@ -53,21 +54,39 @@ export async function setClientModuleAction(input: {
     return { ok: false, error: "The Unassigned client cannot have modules." };
   }
 
-  const row: ClientModuleRow | null = await setClientModuleEnabled({
-    tenantId,
-    clientId,
-    moduleKey,
-    enabled,
-    // settings intentionally omitted: an update preserves existing settings,
-    // an insert starts from {} (repo semantics).
-  });
-  if (!row) return { ok: false, error: "Client not found." };
+  // DISABLING inbox is special: refuse while ACTIVE human conversations exist
+  // (pending/human), transactionally + race-safe against a concurrent escalation.
+  // Disabling never deletes conversations/messages/contacts/executions/handoff
+  // history — re-enabling restores full access.
+  let view: ClientModuleView;
+  if (moduleKey === "inbox" && !enabled) {
+    const res = await disableInboxIfIdle(tenantId, clientId);
+    if (!res.ok) {
+      if (res.reason === "active_conversations") {
+        return { ok: false, error: "Return or resolve active human conversations before disabling Inbox." };
+      }
+      return { ok: false, error: "Client not found." };
+    }
+    view = { module_key: "inbox", enabled: false };
+  } else {
+    const row: ClientModuleRow | null = await setClientModuleEnabled({
+      tenantId,
+      clientId,
+      moduleKey,
+      enabled,
+      // settings intentionally omitted: an update preserves existing settings,
+      // an insert starts from {} (repo semantics).
+    });
+    if (!row) return { ok: false, error: "Client not found." };
+    view = { module_key: row.module_key, enabled: row.enabled };
+  }
 
   revalidatePath("/clients");
   revalidatePath(`/clients/${clientId}/modules`);
-  // The module surfaces themselves (Phase 3A) — so a toggle immediately
-  // reflects on their pages (and the sidebar re-render drops/adds the links).
+  // The module surfaces themselves — so a toggle immediately reflects on their
+  // pages (and the sidebar re-render drops/adds the links).
   revalidatePath(`/clients/${clientId}/contacts`);
   revalidatePath(`/clients/${clientId}/scheduling/agenda`);
-  return { ok: true, module: { module_key: row.module_key, enabled: row.enabled } };
+  revalidatePath(`/clients/${clientId}/inbox`);
+  return { ok: true, module: view };
 }

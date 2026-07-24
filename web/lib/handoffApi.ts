@@ -4,7 +4,7 @@ import {
   hashHandoffToken,
   touchLastUsed,
 } from "@worker/db/repositories/handoffTokens.js";
-import { workflowBelongsToConnection } from "@worker/db/repositories/workflows.js";
+import { resolveWorkflowForConnection } from "@worker/db/repositories/workflows.js";
 import { getAgentSummary, type ConversationRow } from "@worker/db/repositories/handoff.js";
 
 /**
@@ -58,19 +58,30 @@ export async function authenticateHandoffRequest(req: Request): Promise<AuthResu
   };
 }
 
-export type ScopeResult = { ok: true } | { ok: false; response: Response };
+export type ScopeResult =
+  | { ok: true; clientId: string; clientIsDefault: boolean }
+  | { ok: false; response: Response };
 
 /**
  * Scope a workflow_ref to the token's connection + tenant (the synced workflows
- * table). The token authorizes ONLY workflows under its own connection — a wrong
- * tenant, wrong connection, or unknown ref all return the SAME 404.
+ * table) AND resolve its owning client. The token authorizes ONLY workflows under
+ * its own connection — a wrong tenant, wrong connection, or unknown ref all return
+ * the SAME 404. The returned clientId is the ONLY trusted client for the request
+ * (never a body/query field) — used to gate per-client modules (e.g. inbox).
  */
 export async function resolveWorkflowOr404(
   auth: HandoffAuth,
   workflowRef: string,
 ): Promise<ScopeResult> {
-  const belongs = await workflowBelongsToConnection(auth.tenantId, auth.connectionId, workflowRef);
-  return belongs ? { ok: true } : { ok: false, response: workflowNotFound() };
+  const wf = await resolveWorkflowForConnection(auth.tenantId, auth.connectionId, workflowRef);
+  if (!wf) return { ok: false, response: workflowNotFound() };
+  return { ok: true, clientId: wf.client_id, clientIsDefault: wf.client_is_default };
+}
+
+/** The standard machine "module_disabled" body — same shape as the scheduling API
+ * ({error, module}), 403. Never reveals other clients/tenants. */
+export function moduleDisabled(module: string): Response {
+  return Response.json({ error: "module_disabled", module }, { status: 403 });
 }
 
 /** The contract's conversation projection: { id, mode, assigned_agent:{id,name}|null }. */

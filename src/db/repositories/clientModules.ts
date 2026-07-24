@@ -1,5 +1,5 @@
 import type { PoolClient } from 'pg';
-import { query } from '../client.js';
+import { query, withTransaction } from '../client.js';
 import type { ClientModuleKey } from '../../modules/registry.js';
 
 /**
@@ -104,6 +104,79 @@ export async function isSchedulingEnabledForUpdate(
     [tenantId, clientId],
   );
   return r.rows.length > 0;
+}
+
+/**
+ * TRANSACTION-AWARE `inbox` gate for the human-intervention / escalation write path.
+ * Runs on the txn client with `FOR SHARE OF cm`, so a concurrent disableInboxIfIdle
+ * (which takes FOR UPDATE on the same row) SERIALIZES: either the disable commits
+ * first (this sees enabled=false → false) or this commits first (the disable then
+ * counts the new active conversation and is blocked). Requires a NON-DEFAULT client;
+ * absent row → false (nothing to lock; absent = disabled).
+ */
+export async function isInboxEnabledForUpdate(
+  client: PoolClient,
+  tenantId: string,
+  clientId: string,
+): Promise<boolean> {
+  const r = await client.query<{ ok: boolean }>(
+    `SELECT true AS ok
+       FROM client_modules cm
+       JOIN clients c ON c.id = cm.client_id AND c.tenant_id = cm.tenant_id AND c.is_default = false
+      WHERE cm.tenant_id = $1 AND cm.client_id = $2
+        AND cm.module_key = 'inbox' AND cm.enabled = true
+      FOR SHARE OF cm`,
+    [tenantId, clientId],
+  );
+  return r.rows.length > 0;
+}
+
+export type DisableInboxResult =
+  | { ok: true }
+  | { ok: false; reason: 'active_conversations'; activeCount: number }
+  | { ok: false; reason: 'not_found' };
+
+/**
+ * Disable the `inbox` module for a client ONLY IF it has no ACTIVE human handoff
+ * (no conversation in mode 'pending' or 'human'). Transactional + race-safe: it
+ * takes FOR UPDATE on the client_modules row (serializing with isInboxEnabledForUpdate
+ * used by the escalation/human-action write path), THEN counts active conversations
+ * (canonical workflow → client), and only flips enabled=false when the count is 0.
+ * Never deletes the row or any conversation data (an off/on cycle preserves settings
+ * and restores full access to the history).
+ */
+export async function disableInboxIfIdle(tenantId: string, clientId: string): Promise<DisableInboxResult> {
+  return withTransaction(async (client): Promise<DisableInboxResult> => {
+    const locked = await client.query<{ id: string }>(
+      `SELECT id FROM client_modules
+        WHERE tenant_id = $1 AND client_id = $2 AND module_key = 'inbox'
+        FOR UPDATE`,
+      [tenantId, clientId],
+    );
+    if (locked.rows.length === 0) return { ok: false, reason: 'not_found' };
+
+    const cnt = await client.query<{ n: number }>(
+      `SELECT count(*)::int AS n
+         FROM conversations c
+         JOIN LATERAL (
+           SELECT DISTINCT ON (w.n8n_workflow_id) w.client_id
+             FROM workflows w
+            WHERE w.tenant_id = c.tenant_id AND w.n8n_workflow_id = c.n8n_workflow_id
+            ORDER BY w.n8n_workflow_id, w.last_synced_at DESC NULLS LAST
+         ) cw ON cw.client_id = $2
+        WHERE c.tenant_id = $1 AND c.mode IN ('pending', 'human')`,
+      [tenantId, clientId],
+    );
+    const n = cnt.rows[0]?.n ?? 0;
+    if (n > 0) return { ok: false, reason: 'active_conversations', activeCount: n };
+
+    await client.query(
+      `UPDATE client_modules SET enabled = false, updated_at = now()
+        WHERE tenant_id = $1 AND client_id = $2 AND module_key = 'inbox'`,
+      [tenantId, clientId],
+    );
+    return { ok: true };
+  });
 }
 
 export interface SetClientModuleEnabledInput {

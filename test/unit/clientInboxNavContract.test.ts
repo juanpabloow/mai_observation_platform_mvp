@@ -34,8 +34,8 @@ test('sidebar: sections are ordered Automation → Conversations → CRM → Sch
   const src = read('components/AppSidebar.tsx');
   const ctx = slice(src, 'if (clientId) {', '} else if (isMember) {');
   const order = [
-    '{ label: "Automation"',
-    '{ label: "Conversations"',
+    'label: "Automation"',
+    'label: "Conversations"',
     'label: "CRM"',
     'label: "Scheduling"',
     'label: "Administration"',
@@ -67,7 +67,9 @@ test('sidebar: NO full workflow list — no workflows prop, no workflow query', 
 
 test('sidebar: Inbox uses the unified client-level route + aggregated pending badge', () => {
   const src = read('components/AppSidebar.tsx');
-  const conv = slice(src, 'const conversations: NavItem[] = [', '];');
+  // The Conversations section is now gated by the inbox module; the Inbox item lives
+  // inside that block.
+  const conv = slice(src, 'if (moduleKeys.includes("inbox"))', 'if (moduleKeys.includes("crm"))');
   assert.ok(conv.includes('key: "inbox"'), 'the Conversations section is the Inbox');
   assert.ok(conv.includes('href: c("/inbox")'), 'Inbox → the unified /clients/{id}/inbox route');
   assert.ok(
@@ -186,10 +188,11 @@ test('workflows page: session-authorized, filtered to this client, searchable li
 
 // ───────────────────── Preserved: unified Inbox + legacy routes ───────────────
 
-test('client Inbox page (unified): still session-authorized, client-level poll', () => {
+test('client Inbox page (unified): gated by the inbox module, client-level poll', () => {
   const src = read('app/clients/[clientId]/inbox/page.tsx');
-  assert.ok(src.includes('getClientForTenant('), 'authorizes via getClientForTenant');
-  assert.ok(src.includes('notFound()'), 'foreign/bogus/out-of-scope client → 404');
+  // Now gated by the canonical module gate (tenant + client + non-default + inbox
+  // enabled → indistinguishable 404).
+  assert.ok(src.includes('requireClientModulePage(clientId, "inbox")'), 'gated by the inbox module');
   assert.ok(
     src.includes('`/api/inbox/${encodeURIComponent(client.id)}/conversations`'),
     'polls the client-level conversations endpoint',

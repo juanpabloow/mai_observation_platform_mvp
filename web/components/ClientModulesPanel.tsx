@@ -27,6 +27,10 @@ const MODULE_COPY: Record<string, { name: string; description: string }> = {
     name: "Scheduling",
     description: "Agenda, services, staff, availability, and appointments.",
   },
+  inbox: {
+    name: "Inbox",
+    description: "Unified conversations and human handoff.",
+  },
 };
 
 export function ClientModulesPanel({

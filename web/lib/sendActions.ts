@@ -14,6 +14,7 @@ import {
   type InboxConversationDetail,
 } from "@worker/db/repositories/handoff.js";
 import { getWebhookForWorkflow, setDeliveryResult } from "@worker/db/repositories/webhooks.js";
+import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 
 /**
  * The outbound SEND pipeline (composer → workflow), H-3 (contract §5 Exchange 4).
@@ -37,6 +38,9 @@ export async function sendMessageAction(
   const scope = await getAccessScope();
   if (!canAccessClient(scope, clientId)) {
     return { ok: false, code: "forbidden", error: "You don't have access to this conversation." };
+  }
+  if (!(await isClientModuleEnabled(scope.tenantId, clientId, "inbox"))) {
+    return { ok: false, code: "disabled", error: "Inbox is disabled for this client." };
   }
   if (typeof text !== "string" || text.trim().length === 0) {
     return { ok: false, code: "invalid", error: "Message can't be empty." };
@@ -88,6 +92,9 @@ export async function retrySendAction(
   const scope = await getAccessScope();
   if (!canAccessClient(scope, clientId)) {
     return { ok: false, code: "forbidden", error: "You don't have access to this conversation." };
+  }
+  if (!(await isClientModuleEnabled(scope.tenantId, clientId, "inbox"))) {
+    return { ok: false, code: "disabled", error: "Inbox is disabled for this client." };
   }
 
   const conv = await getConversationForClient(scope.tenantId, clientId, conversationId);

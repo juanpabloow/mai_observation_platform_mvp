@@ -1,9 +1,8 @@
 import { connection } from "next/server";
-import { notFound } from "next/navigation";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { getAgentSummary } from "@worker/db/repositories/handoff.js";
-import { getAccessScope, hasFullAccess } from "@/lib/access";
-import { getClientForTenant } from "@/lib/clientWorkflow";
+import { hasFullAccess } from "@/lib/access";
+import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { loadClientInboxList } from "@/lib/inboxData";
 import { ClientInboxWorkspace } from "@/components/ClientInboxWorkspace";
 
@@ -30,9 +29,10 @@ export default async function ClientInboxPage({
   await connection();
   const { clientId } = await params;
 
-  const scope = await getAccessScope();
-  const client = await getClientForTenant(clientId);
-  if (!client) notFound(); // foreign / bogus / outside a member's scope → 404
+  // Gate: session + client of this tenant + NON-default + `inbox` module ENABLED.
+  // Any failure (foreign/bogus/out-of-scope/default/disabled) is an indistinguishable
+  // 404 — the same safe 404 every other client module uses.
+  const { scope, client } = await requireClientModulePage(clientId, "inbox");
 
   const [initial, viewer, wfRows] = await Promise.all([
     loadClientInboxList(scope.tenantId, client.id),

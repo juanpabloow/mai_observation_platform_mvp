@@ -454,6 +454,7 @@ export function ClientsWorkflowsView({
                         </span>
                         {moduleKeys.includes("crm") ? <ModuleChip label="CRM" /> : null}
                         {moduleKeys.includes("scheduling") ? <ModuleChip label="Scheduling" /> : null}
+                        {moduleKeys.includes("inbox") ? <ModuleChip label="Inbox" /> : null}
                       </span>
                     </span>
                   </button>

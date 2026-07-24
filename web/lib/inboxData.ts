@@ -1,6 +1,7 @@
 import "server-only";
 import { getSessionScope, canAccessClient, type AccessScope } from "./access";
 import { getClientById } from "@worker/db/repositories/clients.js";
+import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { getWorkflowByN8nId } from "@worker/db/repositories/workflows.js";
 import { listTurnsForConversation } from "@worker/db/repositories/conversationTurns.js";
 import {
@@ -42,8 +43,9 @@ export type InboxAccess =
 
 /**
  * Authorize a session user for a client's inbox WITHOUT redirecting (for JSON
- * routes). 401 when unauthenticated; 404 when the client is bogus/foreign or
- * outside a member's scope (deny-by-default, never disclose existence).
+ * routes). 401 when unauthenticated; 404 when the client is bogus/foreign, outside a
+ * member's scope, OR the `inbox` module is DISABLED for the client (deny-by-default,
+ * never disclose existence — the disabled case is indistinguishable from missing).
  */
 export async function resolveInboxAccess(clientId: string): Promise<InboxAccess> {
   const scope = await getSessionScope();
@@ -51,6 +53,7 @@ export async function resolveInboxAccess(clientId: string): Promise<InboxAccess>
   if (!canAccessClient(scope, clientId)) return { ok: false, status: 404 };
   const client = await getClientById({ tenantId: scope.tenantId, clientId });
   if (!client) return { ok: false, status: 404 };
+  if (!(await isClientModuleEnabled(scope.tenantId, clientId, "inbox"))) return { ok: false, status: 404 };
   return { ok: true, scope };
 }
 
@@ -179,6 +182,11 @@ export async function resolveWorkflowInboxAccess(
   const workflow = await getWorkflowByN8nId({ tenantId: scope.tenantId, n8nWorkflowId });
   if (!workflow || !workflow.client_id) return { ok: false, status: 404 };
   if (!canAccessClient(scope, workflow.client_id)) return { ok: false, status: 404 };
+  // The (compat) per-workflow inbox is gated on the workflow's CLIENT having inbox
+  // enabled — a workflow of a client whose inbox is off is an indistinguishable 404.
+  if (!(await isClientModuleEnabled(scope.tenantId, workflow.client_id, "inbox"))) {
+    return { ok: false, status: 404 };
+  }
   return { ok: true, scope };
 }
 

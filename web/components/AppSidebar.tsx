@@ -366,20 +366,24 @@ export function AppSidebar({
         active: pathname === c("/workflows/all/analytics"),
       },
     ];
-    const conversations: NavItem[] = [
-      {
-        key: "inbox",
-        label: "Inbox",
-        href: c("/inbox"),
-        icon: Icon.inbox,
-        active: pathname.startsWith(c("/inbox")),
-        countEndpoint: `/api/inbox/${clientId}/pending-count`,
-      },
-    ];
-    sections = [
-      { label: "Automation", items: automation },
-      { label: "Conversations", items: conversations },
-    ];
+    sections = [{ label: "Automation", items: automation }];
+    // CONVERSATIONS (Inbox) only when the `inbox` module is enabled — hides the link,
+    // the badge, and (no countEndpoint rendered) stops the pending-count polling.
+    if (moduleKeys.includes("inbox")) {
+      sections.push({
+        label: "Conversations",
+        items: [
+          {
+            key: "inbox",
+            label: "Inbox",
+            href: c("/inbox"),
+            icon: Icon.inbox,
+            active: pathname.startsWith(c("/inbox")),
+            countEndpoint: `/api/inbox/${clientId}/pending-count`,
+          },
+        ],
+      });
+    }
     if (moduleKeys.includes("crm")) {
       sections.push({
         label: "CRM",
