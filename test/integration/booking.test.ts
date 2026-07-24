@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { after, test } from 'node:test';
 import { isExclusionViolation, query, withTransaction } from '../../src/db/client.js';
 import { zonedPartsToUtc } from '../../src/scheduling/timezone.js';
+import type { WeeklyHours } from '../../src/scheduling/types.js';
 import {
   createAppointment,
   rescheduleAppointment,
@@ -24,8 +25,10 @@ const NOW = zonedPartsToUtc(2026, 8, 1, 0, 0, TZ); // well before the test slots
 const wed = (h: number, m = 0): Date => zonedPartsToUtc(2026, 8, 5, h, m, TZ);
 
 const tenants: string[] = [];
-async function scenario(opts = {}) {
-  const s = await seedScenario(opts);
+// Every booking here goes through the domain, which now requires the client's
+// scheduling module to be enabled — so this suite opts in by default.
+async function scenario(opts: { openingHours?: WeeklyHours } = {}) {
+  const s = await seedScenario({ ...opts, enableScheduling: true });
   tenants.push(s.tenantId);
   return s;
 }
@@ -45,6 +48,7 @@ test('#12 two concurrent bookings for same staff+slot → exactly one wins, othe
     startAt: wed(10),
     origin: 'n8n' as const,
     createdByType: 'n8n' as const,
+    scopeClientId: s.clientId,
     now: NOW,
   };
   const [r1, r2] = await Promise.all([createAppointment({ ...base }), createAppointment({ ...base })]);
@@ -93,6 +97,7 @@ test('#13 same Idempotency-Key + same payload → no duplicate, returns same app
     origin: 'n8n' as const,
     createdByType: 'n8n' as const,
     idempotencyKey: 'key-abc',
+    scopeClientId: s.clientId,
     now: NOW,
   };
   const r1 = await createAppointment({ ...input });
@@ -114,6 +119,7 @@ test('#14 same Idempotency-Key + different payload → conflict', async () => {
     origin: 'n8n' as const,
     createdByType: 'n8n' as const,
     idempotencyKey: 'key-xyz',
+    scopeClientId: s.clientId,
     now: NOW,
   };
   const r1 = await createAppointment({ ...base, startAt: wed(12) });
@@ -126,21 +132,21 @@ test('#15 cancellation frees the slot', async () => {
   const s = await scenario();
   const r = await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
-    startAt: wed(14), origin: 'internal', createdByType: 'agent', now: NOW,
+    startAt: wed(14), origin: 'internal', createdByType: 'agent', scopeClientId: s.clientId, now: NOW,
   });
   assert.ok(r.ok);
   // Slot is taken → a second booking is rejected (revalidation sees it busy).
   const blocked = await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
-    startAt: wed(14), origin: 'internal', createdByType: 'agent', now: NOW,
+    startAt: wed(14), origin: 'internal', createdByType: 'agent', scopeClientId: s.clientId, now: NOW,
   });
   assert.ok(!blocked.ok && ['conflict_slot', 'unavailable'].includes(blocked.error));
   // Cancel, then the same slot books again.
-  const c = await transitionStatus('cancelled', { tenantId: s.tenantId, appointmentId: r.value.id, actorType: 'agent' });
+  const c = await transitionStatus('cancelled', { tenantId: s.tenantId, appointmentId: r.value.id, actorType: 'agent', scopeClientId: s.clientId });
   assert.ok(c.ok);
   const rebook = await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
-    startAt: wed(14), origin: 'internal', createdByType: 'agent', now: NOW,
+    startAt: wed(14), origin: 'internal', createdByType: 'agent', scopeClientId: s.clientId, now: NOW,
   });
   assert.ok(rebook.ok, 'slot should be free after cancellation');
 });
@@ -149,21 +155,21 @@ test('#16 reschedule re-validates availability (blocked target fails, free targe
   const s = await scenario();
   const a1 = await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
-    startAt: wed(9), origin: 'internal', createdByType: 'agent', now: NOW,
+    startAt: wed(9), origin: 'internal', createdByType: 'agent', scopeClientId: s.clientId, now: NOW,
   });
   const a2 = await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
-    startAt: wed(11), origin: 'internal', createdByType: 'agent', now: NOW,
+    startAt: wed(11), origin: 'internal', createdByType: 'agent', scopeClientId: s.clientId, now: NOW,
   });
   assert.ok(a1.ok && a2.ok);
   // Move a1 onto a2's slot → conflict/unavailable.
   const clash = await rescheduleAppointment({
-    tenantId: s.tenantId, appointmentId: a1.value.id, startAt: wed(11), actorType: 'agent', now: NOW,
+    tenantId: s.tenantId, appointmentId: a1.value.id, startAt: wed(11), actorType: 'agent', scopeClientId: s.clientId, now: NOW,
   });
   assert.ok(!clash.ok);
   // Move a1 to a free slot → ok, same id, version bumped.
   const moved = await rescheduleAppointment({
-    tenantId: s.tenantId, appointmentId: a1.value.id, startAt: wed(15), actorType: 'agent', now: NOW,
+    tenantId: s.tenantId, appointmentId: a1.value.id, startAt: wed(15), actorType: 'agent', scopeClientId: s.clientId, now: NOW,
   });
   assert.ok(moved.ok);
   assert.equal(moved.value.id, a1.value.id);
@@ -175,12 +181,12 @@ test('#17 terminal states reject invalid transitions', async () => {
   const s = await scenario();
   const r = await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
-    startAt: wed(16), origin: 'internal', createdByType: 'agent', now: NOW,
+    startAt: wed(16), origin: 'internal', createdByType: 'agent', scopeClientId: s.clientId, now: NOW,
   });
   assert.ok(r.ok);
-  const done = await transitionStatus('completed', { tenantId: s.tenantId, appointmentId: r.value.id, actorType: 'agent' });
+  const done = await transitionStatus('completed', { tenantId: s.tenantId, appointmentId: r.value.id, actorType: 'agent', scopeClientId: s.clientId });
   assert.ok(done.ok);
-  const illegal = await transitionStatus('confirmed', { tenantId: s.tenantId, appointmentId: r.value.id, actorType: 'agent' });
+  const illegal = await transitionStatus('confirmed', { tenantId: s.tenantId, appointmentId: r.value.id, actorType: 'agent', scopeClientId: s.clientId });
   assert.ok(!illegal.ok && illegal.error === 'invalid_transition');
 });
 
@@ -188,7 +194,7 @@ test('#20 old appointments keep their snapshot when the service later changes', 
   const s = await scenario();
   const r = await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
-    startAt: wed(9, 30), origin: 'internal', createdByType: 'agent', now: NOW,
+    startAt: wed(9, 30), origin: 'internal', createdByType: 'agent', scopeClientId: s.clientId, now: NOW,
   });
   assert.ok(r.ok);
   assert.equal(r.value.duration_min_snapshot, 60);
@@ -205,7 +211,7 @@ test('#3 tenant isolation: one tenant never sees another tenant\'s appointments'
   const b = await scenario();
   const ra = await createAppointment({
     tenantId: a.tenantId, siteId: a.siteId, serviceId: a.serviceHaircut, staffId: a.staffA,
-    startAt: wed(10), origin: 'internal', createdByType: 'agent', now: NOW,
+    startAt: wed(10), origin: 'internal', createdByType: 'agent', scopeClientId: a.clientId, now: NOW,
   });
   assert.ok(ra.ok);
   // Tenant B cannot read A's appointment, and B's list is empty.
@@ -223,7 +229,7 @@ test('#1 one contact, many conversations (no duplication)', async () => {
   const common = {
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
     channel: 'whatsapp', channelUserId: '573001112233', customerName: 'Carlos',
-    origin: 'n8n' as const, createdByType: 'n8n' as const, now: NOW,
+    origin: 'n8n' as const, createdByType: 'n8n' as const, scopeClientId: s.clientId, now: NOW,
   };
   const r1 = await createAppointment({ ...common, startAt: wed(9), workflowRef: 'wf1', conversationRef: 'conv-1' });
   const r2 = await createAppointment({ ...common, startAt: wed(11), workflowRef: 'wf1', conversationRef: 'conv-2' });
@@ -240,7 +246,7 @@ test('#2 one contact, many appointments', async () => {
   const common = {
     tenantId: s.tenantId, siteId: s.siteId, staffId: s.staffA,
     channel: 'whatsapp', channelUserId: '573009998877',
-    origin: 'n8n' as const, createdByType: 'n8n' as const, now: NOW,
+    origin: 'n8n' as const, createdByType: 'n8n' as const, scopeClientId: s.clientId, now: NOW,
   };
   const r1 = await createAppointment({ ...common, serviceId: s.serviceHaircut, startAt: wed(9) });
   const r2 = await createAppointment({ ...common, serviceId: s.serviceBeard, startAt: wed(11) });
@@ -253,7 +259,7 @@ test('#11 "any staff" assigns a concrete staff and both barbers usable', async (
   const s = await scenario();
   const r = await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, // no staffId → any
-    startAt: wed(10), origin: 'public', createdByType: 'public', now: NOW,
+    startAt: wed(10), origin: 'public', createdByType: 'public', scopeClientId: s.clientId, now: NOW,
   });
   assert.ok(r.ok);
   assert.ok([s.staffA, s.staffB].includes(r.value.staff_id), 'a concrete staff was assigned');
@@ -264,11 +270,11 @@ test('#18 + #19 public and n8n share one agenda; realtime event emitted after co
   const before = await listEventsSince(s.tenantId, null, { siteId: s.siteId });
   const rn = await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
-    startAt: wed(9), origin: 'n8n', createdByType: 'n8n', now: NOW,
+    startAt: wed(9), origin: 'n8n', createdByType: 'n8n', scopeClientId: s.clientId, now: NOW,
   });
   const rp = await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffB,
-    startAt: wed(9), origin: 'public', createdByType: 'public', now: NOW,
+    startAt: wed(9), origin: 'public', createdByType: 'public', scopeClientId: s.clientId, now: NOW,
   });
   assert.ok(rn.ok && rp.ok);
   const agenda = await listAppointments(s.tenantId, { siteId: s.siteId });
@@ -285,11 +291,11 @@ test('per-staff duration override is honored in booking (snapshot reflects it)',
   ]);
   const rA = await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
-    startAt: wed(9), origin: 'internal', createdByType: 'agent', now: NOW,
+    startAt: wed(9), origin: 'internal', createdByType: 'agent', scopeClientId: s.clientId, now: NOW,
   });
   const rB = await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffB,
-    startAt: wed(9), origin: 'internal', createdByType: 'agent', now: NOW,
+    startAt: wed(9), origin: 'internal', createdByType: 'agent', scopeClientId: s.clientId, now: NOW,
   });
   assert.ok(rA.ok && rB.ok);
   assert.equal(rA.value.duration_min_snapshot, 45, 'Ana books a 45-min service');
@@ -303,7 +309,7 @@ test("client scoping: appointment + contact stamped with the site's client", asy
   const r = await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
     startAt: wed(10), channel: 'whatsapp', channelUserId: '573001110000', customerName: 'Zoe',
-    origin: 'n8n', createdByType: 'n8n', now: NOW,
+    origin: 'n8n', createdByType: 'n8n', scopeClientId: s.clientId, now: NOW,
   });
   assert.ok(r.ok);
   assert.equal(r.value.client_id, s.clientId);
@@ -336,11 +342,11 @@ test('client isolation: listAppointments filtered by client excludes the other c
   const other = await seedSiteForClient(s.tenantId, s.otherClientId);
   const rA = await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
-    startAt: wed(10), origin: 'internal', createdByType: 'agent', now: NOW,
+    startAt: wed(10), origin: 'internal', createdByType: 'agent', scopeClientId: s.clientId, now: NOW,
   });
   const rB = await createAppointment({
     tenantId: s.tenantId, siteId: other.siteId, serviceId: other.serviceId, staffId: other.staffId,
-    startAt: wed(10), origin: 'internal', createdByType: 'agent', now: NOW,
+    startAt: wed(10), origin: 'internal', createdByType: 'agent', scopeClientId: s.otherClientId, now: NOW,
   });
   assert.ok(rA.ok && rB.ok);
   const onlyA = await listAppointments(s.tenantId, { clientId: s.clientId });
@@ -355,7 +361,7 @@ test('availability reflects a booking (loadAvailability hides the taken slot)', 
   const s = await scenario();
   await createAppointment({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,
-    startAt: wed(10), origin: 'internal', createdByType: 'agent', now: NOW,
+    startAt: wed(10), origin: 'internal', createdByType: 'agent', scopeClientId: s.clientId, now: NOW,
   });
   const avail = await loadAvailability({
     tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceHaircut, staffId: s.staffA,

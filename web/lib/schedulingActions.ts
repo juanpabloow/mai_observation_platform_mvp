@@ -34,6 +34,9 @@ function messageFor(error: BookingError, fallback: string): string {
       return "The selected staff can't take that time.";
     case "not_found":
       return "Not available.";
+    case "module_disabled":
+      // A concurrent disable — generic, no internal detail leaked.
+      return "Not available.";
     case "invalid_transition":
       return "That status change isn't allowed.";
     default:

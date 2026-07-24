@@ -1,18 +1,35 @@
 import "server-only";
 import { authenticateHandoffRequest } from "@/lib/handoffApi";
+import { isUuid } from "@/lib/clientModuleValidation";
 import type { AppointmentRow } from "@worker/db/repositories/scheduling/appointments.js";
 import type { BookingError } from "@worker/scheduling/booking.js";
+import { resolveMachineSchedulingScope } from "@worker/scheduling/machineScope.js";
+import { parseWorkflowRef } from "@worker/scheduling/workflowRef.js";
+import { getSiteById, type SiteRow } from "@worker/db/repositories/scheduling/sites.js";
 
 /**
- * Shared auth + response helpers for the n8n-facing scheduling API
- * (app/api/scheduling/v1/*). These routes are MACHINE-only: Bearer token, no
- * session/cookies. They REUSE the existing handoff Bearer token (per-tenant
- * machine credential) — no second token concept is introduced — and only need the
- * tenant_id it resolves to, so a token for one business can never touch another.
+ * Shared auth + scope for the n8n-facing scheduling API (app/api/scheduling/v1/*).
+ * MACHINE-only: Bearer token + an X-Workflow-Ref header. The chain is:
+ *
+ *   Bearer token → tenant + n8n connection (handoff token)
+ *   → X-Workflow-Ref → the workflow synced under THAT connection
+ *   → its client_id → non-default client → scheduling enabled
+ *
+ * So a token can only ever act on the ONE client its X-Workflow-Ref resolves to;
+ * it can never use another connection's workflow or reach another client's
+ * sites/appointments/contacts/staff. tenant_id and client_id are NEVER accepted
+ * from the request — they are derived here. Routes must NOT re-resolve tenant or
+ * client on their own.
  */
 
 export interface SchedulingAuth {
   tenantId: string;
+  connectionId: string;
+  tokenId: string;
+  /** The n8n workflow id from X-Workflow-Ref (authoritative provenance). */
+  workflowRef: string;
+  /** The workflow's owning client — the ONLY client this request may touch. */
+  clientId: string;
 }
 
 export type SchedAuthResult = { ok: true; auth: SchedulingAuth } | { ok: false; response: Response };
@@ -22,12 +39,61 @@ export function schedulingError(status: number, code: string, message: string): 
   return Response.json({ error: { code, message } }, { status });
 }
 
-/** Authenticate a machine request and expose the token's tenant. Reuses the
- * handoff token chokepoint; a single 401 for any auth failure. */
+/**
+ * THE auth + scope chokepoint. Authenticates FIRST (a request without valid
+ * credentials never sees body/query validation), then requires X-Workflow-Ref and
+ * resolves the machine scope:
+ *  - no/invalid/revoked token → the handoff 401 (unchanged).
+ *  - token ok but X-Workflow-Ref missing/blank → 400 workflow_ref_required.
+ *  - unknown/wrong-connection/wrong-tenant workflow → 404 not_found (Workflow not found).
+ *  - workflow on the default client, or scheduling absent/disabled → 403 module_disabled.
+ */
 export async function authenticateScheduling(req: Request): Promise<SchedAuthResult> {
   const result = await authenticateHandoffRequest(req);
   if (!result.ok) return { ok: false, response: result.response };
-  return { ok: true, auth: { tenantId: result.auth.tenantId } };
+  const { tenantId, connectionId, tokenId } = result.auth;
+
+  const workflowRef = parseWorkflowRef(req.headers.get("x-workflow-ref"));
+  if (!workflowRef) {
+    return {
+      ok: false,
+      response: schedulingError(400, "workflow_ref_required", "X-Workflow-Ref header is required."),
+    };
+  }
+
+  const scope = await resolveMachineSchedulingScope({ tenantId, connectionId, workflowRef });
+  if (!scope.ok) {
+    if (scope.reason === "workflow_not_found") {
+      return { ok: false, response: schedulingError(404, "not_found", "Workflow not found.") };
+    }
+    return {
+      ok: false,
+      response: schedulingError(403, "module_disabled", "Scheduling module is disabled for this client."),
+    };
+  }
+
+  return { ok: true, auth: { tenantId, connectionId, tokenId, workflowRef: scope.workflowRef, clientId: scope.clientId } };
+}
+
+/**
+ * Resolve a `site_id` request value to a site OWNED BY the authenticated client.
+ * Invalid UUID, unknown site, or a site of another client all return the SAME
+ * generic 404 (never revealing it exists under a different client). Every
+ * site-scoped read (services/staff/availability/appointments filter) routes
+ * through this so a token can't point at a foreign site.
+ */
+export async function resolveOwnedSite(
+  auth: SchedulingAuth,
+  siteId: string | null | undefined,
+): Promise<{ ok: true; site: SiteRow } | { ok: false; response: Response }> {
+  if (!siteId || !isUuid(siteId)) {
+    return { ok: false, response: schedulingError(404, "not_found", "Not found.") };
+  }
+  const site = await getSiteById(auth.tenantId, siteId);
+  if (!site || site.client_id !== auth.clientId) {
+    return { ok: false, response: schedulingError(404, "not_found", "Not found.") };
+  }
+  return { ok: true, site };
 }
 
 /** Map a booking domain error to an HTTP status. */
@@ -35,6 +101,8 @@ export function bookingErrorStatus(error: BookingError): number {
   switch (error) {
     case "not_found":
       return 404;
+    case "module_disabled":
+      return 403;
     case "conflict_slot":
     case "conflict_idempotency":
     case "unavailable":

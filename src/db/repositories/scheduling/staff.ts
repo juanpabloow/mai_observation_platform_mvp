@@ -74,6 +74,17 @@ export async function listStaffForService(
   return r.rows;
 }
 
+/** Is `staffId` an ACTIVE staff member of this site (same tenant)? Used by the
+ * machine API to 404 a staff_id filter that belongs to another site/client. */
+export async function isActiveStaffOfSite(tenantId: string, siteId: string, staffId: string): Promise<boolean> {
+  const r = await query<{ ok: boolean }>(
+    `SELECT true AS ok FROM staff
+      WHERE id = $3 AND tenant_id = $1 AND site_id = $2 AND active = true`,
+    [tenantId, siteId, staffId],
+  );
+  return r.rows.length > 0;
+}
+
 export interface CreateStaffInput {
   tenantId: string;
   siteId: string;

@@ -65,6 +65,27 @@ export async function listServicesForSite(tenantId: string, siteId: string): Pro
   return r.rows;
 }
 
+/** Is a service ENABLED at a site (active site_services row), same-tenant and
+ * both site+service active? Used by the machine API to 404 a service that isn't
+ * offered at the resolved site before touching the engine. */
+export async function isServiceEnabledAtSite(
+  tenantId: string,
+  siteId: string,
+  serviceId: string,
+): Promise<boolean> {
+  const r = await query<{ ok: boolean }>(
+    `SELECT true AS ok
+       FROM sites si
+       JOIN site_services ss
+         ON ss.site_id = si.id AND ss.tenant_id = si.tenant_id AND ss.service_id = $3 AND ss.active = true
+       JOIN services sv
+         ON sv.id = ss.service_id AND sv.tenant_id = si.tenant_id AND sv.active = true
+      WHERE si.id = $2 AND si.tenant_id = $1 AND si.active = true`,
+    [tenantId, siteId, serviceId],
+  );
+  return r.rows.length > 0;
+}
+
 export interface CreateServiceInput {
   tenantId: string;
   name: string;

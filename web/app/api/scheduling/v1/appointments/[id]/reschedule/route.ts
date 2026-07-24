@@ -6,6 +6,7 @@ import {
   projectAppointment,
   schedulingError,
 } from "@/lib/schedulingApi";
+import { isUuid } from "@/lib/clientModuleValidation";
 import { rescheduleAppointment } from "@worker/scheduling/booking.js";
 
 /**
@@ -22,6 +23,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const auth = await authenticateScheduling(req);
   if (!auth.ok) return auth.response;
   const { id } = await params;
+  // Validate the id BEFORE reading the body (a bad id never touches the body/DB).
+  if (!isUuid(id)) return schedulingError(404, "not_found", "Not found.");
 
   let json: unknown;
   try {
@@ -40,6 +43,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     startAt,
     staffId: parsed.data.staff_id ?? null,
     actorType: "n8n",
+    scopeClientId: auth.auth.clientId,
   });
   if (!result.ok) return schedulingError(bookingErrorStatus(result.error), result.error, result.message);
   return Response.json({ appointment: projectAppointment(result.value) });

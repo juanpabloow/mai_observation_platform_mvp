@@ -1,5 +1,8 @@
-import { authenticateScheduling, parseIsoDate, schedulingError } from "@/lib/schedulingApi";
+import { authenticateScheduling, parseIsoDate, resolveOwnedSite, schedulingError } from "@/lib/schedulingApi";
+import { isUuid } from "@/lib/clientModuleValidation";
 import { loadAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
+import { isServiceEnabledAtSite } from "@worker/db/repositories/scheduling/services.js";
+import { isActiveStaffOfSite } from "@worker/db/repositories/scheduling/staff.js";
 
 /**
  * GET /api/scheduling/v1/availability?site_id=&service_id=&staff_id?=&from=&to=
@@ -28,10 +31,25 @@ export async function GET(req: Request): Promise<Response> {
   if (to.getTime() - from.getTime() > MAX_WINDOW_MS) {
     return schedulingError(400, "invalid_request", "Requested window is too large (max 45 days).");
   }
+  const owned = await resolveOwnedSite(auth.auth, siteId);
+  if (!owned.ok) return owned.response;
+
+  // Validate resource shapes + membership BEFORE the engine (no 22P02, no
+  // foreign/unknown/not-enabled leaking): service must be enabled at this site,
+  // and a given staff_id must be an active staff OF this site.
+  if (!isUuid(serviceId) || (staffId && !isUuid(staffId))) {
+    return schedulingError(404, "not_found", "Not found.");
+  }
+  if (!(await isServiceEnabledAtSite(auth.auth.tenantId, owned.site.id, serviceId))) {
+    return schedulingError(404, "not_found", "Not found.");
+  }
+  if (staffId && !(await isActiveStaffOfSite(auth.auth.tenantId, owned.site.id, staffId))) {
+    return schedulingError(404, "not_found", "Not found.");
+  }
 
   const result = await loadAvailability({
     tenantId: auth.auth.tenantId,
-    siteId,
+    siteId: owned.site.id,
     serviceId,
     staffId: staffId ?? null,
     from,

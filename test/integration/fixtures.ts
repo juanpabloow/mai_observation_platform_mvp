@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { query, pool } from '../../src/db/client.js';
+import { setClientModuleEnabled } from '../../src/db/repositories/clientModules.js';
 import type { WeeklyHours } from '../../src/scheduling/types.js';
 
 /**
@@ -20,8 +21,11 @@ const OPEN_9_18: WeeklyHours = {
 
 export interface Scenario {
   tenantId: string;
+  /** The tenant's real default/"Unassigned" client (is_default = true). */
+  defaultClientId: string;
+  /** A real NON-DEFAULT client that owns the seeded site. */
   clientId: string;
-  /** A second client in the SAME tenant (for client-isolation tests). */
+  /** A second real NON-DEFAULT client in the SAME tenant (client-isolation tests). */
   otherClientId: string;
   siteId: string;
   siteSlug: string;
@@ -32,7 +36,16 @@ export interface Scenario {
   serviceColor: string; // 90 min
 }
 
-export async function seedScenario(opts: { openingHours?: WeeklyHours } = {}): Promise<Scenario> {
+/**
+ * Seed a tenant with a SEPARATE default client plus two real non-default clients
+ * (clientId owns the site; otherClientId is for isolation). Modules are OFF by
+ * default so the "module absent" tests stay valid; a booking suite opts in with
+ * `enableScheduling` (enabled for BOTH non-default clients, since some tests book
+ * at otherClientId's site) and/or `enableCrm`.
+ */
+export async function seedScenario(
+  opts: { openingHours?: WeeklyHours; enableScheduling?: boolean; enableCrm?: boolean } = {},
+): Promise<Scenario> {
   const tenantId = randomUUID();
   await query(`INSERT INTO tenants (id, name) VALUES ($1, $2)`, [tenantId, `Test Tenant ${tenantId.slice(0, 8)}`]);
 
@@ -43,7 +56,8 @@ export async function seedScenario(opts: { openingHours?: WeeklyHours } = {}): P
     );
     return r.rows[0].id;
   };
-  const clientId = await mkClient('Business A', true);
+  const defaultClientId = await mkClient('Unassigned', true);
+  const clientId = await mkClient('Business A', false);
   const otherClientId = await mkClient('Business B', false);
 
   const slug = `shop-${tenantId.slice(0, 8)}`;
@@ -87,7 +101,20 @@ export async function seedScenario(opts: { openingHours?: WeeklyHours } = {}): P
   }
   await query(`INSERT INTO staff_services (tenant_id, staff_id, service_id) VALUES ($1, $2, $3)`, [tenantId, staffA, serviceColor]);
 
-  return { tenantId, clientId, otherClientId, siteId, siteSlug: slug, staffA, staffB, serviceHaircut, serviceBeard, serviceColor };
+  // Opt-in module enablement (only booking suites need it) — enabled for BOTH
+  // non-default clients so tests that book at otherClientId's site work too.
+  if (opts.enableScheduling) {
+    for (const c of [clientId, otherClientId]) {
+      await setClientModuleEnabled({ tenantId, clientId: c, moduleKey: 'scheduling', enabled: true });
+    }
+  }
+  if (opts.enableCrm) {
+    for (const c of [clientId, otherClientId]) {
+      await setClientModuleEnabled({ tenantId, clientId: c, moduleKey: 'crm', enabled: true });
+    }
+  }
+
+  return { tenantId, defaultClientId, clientId, otherClientId, siteId, siteSlug: slug, staffA, staffB, serviceHaircut, serviceBeard, serviceColor };
 }
 
 /** Helpers for the client-scoping tests. */
@@ -114,18 +141,39 @@ export async function seedSiteForClient(tenantId: string, clientId: string): Pro
   return { siteId, staffId: staff.rows[0].id, serviceId: svc.rows[0].id };
 }
 
-/** Insert an n8n connection + a synced workflow row owned by `clientId` — needed
- * wherever the CANONICAL-workflow criterion (conversation → client) is in play. */
-export async function seedWorkflow(tenantId: string, clientId: string, n8nWorkflowId: string): Promise<void> {
-  const conn = await query<{ id: string }>(
-    `INSERT INTO n8n_connections (tenant_id, name, n8n_base_url, n8n_api_key_encrypted)
-       VALUES ($1, 'conn', 'https://n8n.local', 'x') RETURNING id`,
-    [tenantId],
-  );
+/** Insert an n8n connection + a synced workflow row owned by `clientId`. Returns
+ * the connection id (the machine-scope tests need it; older callers ignore it).
+ * Pass an existing `connectionId` to add a workflow under the SAME connection. */
+export async function seedWorkflow(
+  tenantId: string,
+  clientId: string,
+  n8nWorkflowId: string,
+  connectionId?: string,
+): Promise<{ connectionId: string }> {
+  let connId = connectionId;
+  if (!connId) {
+    const conn = await query<{ id: string }>(
+      `INSERT INTO n8n_connections (tenant_id, name, n8n_base_url, n8n_api_key_encrypted)
+         VALUES ($1, 'conn', 'https://n8n.local', 'x') RETURNING id`,
+      [tenantId],
+    );
+    connId = conn.rows[0].id;
+  }
   await query(
     `INSERT INTO workflows (tenant_id, n8n_connection_id, n8n_workflow_id, name, client_id, last_synced_at)
        VALUES ($1, $2, $3, $3, $4, now())`,
-    [tenantId, conn.rows[0].id, n8nWorkflowId, clientId],
+    [tenantId, connId, n8nWorkflowId, clientId],
+  );
+  return { connectionId: connId };
+}
+
+/** Reassign a synced workflow (by n8n id) to a different client — used to prove
+ * the machine scope re-resolves after a workflow moves between clients. */
+export async function reassignWorkflow(tenantId: string, n8nWorkflowId: string, newClientId: string): Promise<void> {
+  await query(
+    `UPDATE workflows SET client_id = $3, updated_at = now()
+      WHERE tenant_id = $1 AND n8n_workflow_id = $2`,
+    [tenantId, n8nWorkflowId, newClientId],
   );
 }
 

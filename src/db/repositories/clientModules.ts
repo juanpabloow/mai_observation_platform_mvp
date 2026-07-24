@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { query } from '../client.js';
 import type { ClientModuleKey } from '../../modules/registry.js';
 
@@ -60,6 +61,49 @@ export async function isClientModuleEnabled(
     [tenantId, clientId, moduleKey],
   );
   return r.rows[0]?.enabled ?? false;
+}
+
+/**
+ * Is `scheduling` bookable for this client? True iff the client is a NON-DEFAULT
+ * client of the tenant AND has an enabled scheduling row. Non-transactional —
+ * used for read-only checks (e.g. the idempotent-replay gate). A default client
+ * can never be bookable even with a forced row.
+ */
+export async function isSchedulingBookable(tenantId: string, clientId: string): Promise<boolean> {
+  const r = await query<{ ok: boolean }>(
+    `SELECT true AS ok
+       FROM client_modules cm
+       JOIN clients c ON c.id = cm.client_id AND c.tenant_id = cm.tenant_id AND c.is_default = false
+      WHERE cm.tenant_id = $1 AND cm.client_id = $2
+        AND cm.module_key = 'scheduling' AND cm.enabled = true`,
+    [tenantId, clientId],
+  );
+  return r.rows.length > 0;
+}
+
+/**
+ * TRANSACTION-AWARE scheduling gate for the booking write path. Runs on the txn
+ * client and takes `FOR SHARE OF cm` on the client_modules row, so a concurrent
+ * setClientModuleEnabled (which UPDATEs that row, needing FOR UPDATE) SERIALIZES
+ * with the booking: either the disable commits first (this sees enabled=false →
+ * false) or the booking commits first (the disable waits). Also requires a
+ * NON-DEFAULT client. Absent row → false (nothing to lock; absent = disabled).
+ */
+export async function isSchedulingEnabledForUpdate(
+  client: PoolClient,
+  tenantId: string,
+  clientId: string,
+): Promise<boolean> {
+  const r = await client.query<{ ok: boolean }>(
+    `SELECT true AS ok
+       FROM client_modules cm
+       JOIN clients c ON c.id = cm.client_id AND c.tenant_id = cm.tenant_id AND c.is_default = false
+      WHERE cm.tenant_id = $1 AND cm.client_id = $2
+        AND cm.module_key = 'scheduling' AND cm.enabled = true
+      FOR SHARE OF cm`,
+    [tenantId, clientId],
+  );
+  return r.rows.length > 0;
 }
 
 export interface SetClientModuleEnabledInput {

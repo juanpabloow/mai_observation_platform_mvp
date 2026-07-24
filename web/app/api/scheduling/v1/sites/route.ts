@@ -2,15 +2,16 @@ import { authenticateScheduling } from "@/lib/schedulingApi";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 
 /**
- * GET /api/scheduling/v1/sites — active sites for the token's tenant.
- * MACHINE endpoint (Bearer token). Tenant is derived from the token, never input.
+ * GET /api/scheduling/v1/sites — active sites for the RESOLVED client only.
+ * MACHINE endpoint (Bearer token + X-Workflow-Ref). Tenant AND client are derived
+ * from the token+workflow, never input — a token never lists another client's sites.
  */
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request): Promise<Response> {
   const auth = await authenticateScheduling(req);
   if (!auth.ok) return auth.response;
-  const sites = await listSites(auth.auth.tenantId);
+  const sites = await listSites(auth.auth.tenantId, { clientId: auth.auth.clientId });
   return Response.json({
     sites: sites.map((s) => ({
       id: s.id,

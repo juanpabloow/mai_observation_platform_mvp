@@ -20,6 +20,7 @@ import {
   type ActorType,
 } from '../db/repositories/scheduling/appointments.js';
 import { recordSchedulingEvent } from '../db/repositories/scheduling/events.js';
+import { isSchedulingBookable, isSchedulingEnabledForUpdate } from '../db/repositories/clientModules.js';
 
 /**
  * The booking domain service — the single engine BOTH n8n and the public page use.
@@ -37,7 +38,8 @@ export type BookingError =
   | 'unavailable' // slot not offered by the engine
   | 'conflict_slot' // lost the concurrency race (exclusion constraint)
   | 'conflict_idempotency' // same key, different payload
-  | 'invalid_transition'; // illegal status change / reschedule from terminal
+  | 'invalid_transition' // illegal status change / reschedule from terminal
+  | 'module_disabled'; // the client's scheduling module is off (incl. concurrent disable)
 
 export type BookingResult<T> = { ok: true; value: T; deduped?: boolean } | { ok: false; error: BookingError; message: string };
 
@@ -60,9 +62,17 @@ export interface CreateAppointmentInput {
   createdByType: ActorType;
   createdByUserId?: string | null;
   idempotencyKey?: string | null;
-  /** When set (a member), the site's client must equal this, else not_found. */
-  scopeClientId?: string | null;
+  /** REQUIRED authorization scope: the site's client MUST equal this, else
+   * not_found. Every production caller (n8n API, public booking, internal
+   * actions, seed) resolves and passes it — there is no scope-less path. */
+  scopeClientId: string;
   now?: Date;
+}
+
+/** True when a required scope value is present (non-empty string). Callers may be
+ * untyped JS, so we fail closed at runtime rather than trust the type. */
+function hasScope(scopeClientId: unknown): scopeClientId is string {
+  return typeof scopeClientId === 'string' && scopeClientId.length > 0;
 }
 
 /** Structural idempotency comparison: same key + same (site, service, start, and
@@ -77,19 +87,50 @@ function samePayload(existing: AppointmentRow, input: CreateAppointmentInput): b
   );
 }
 
+/**
+ * Decide the outcome for an idempotency-key hit. Guards, in order:
+ *  - CROSS-CLIENT collision (Idempotency-Key is tenant-scoped): if scopeClientId
+ *    is set and the existing appointment belongs to a DIFFERENT client, never
+ *    project it — treat as a key reused with a different payload (conflict).
+ *  - different payload → conflict.
+ *  - scheduling disabled for the existing appointment's client → module_disabled
+ *    (a replay must not succeed once the module is off).
+ *  - otherwise → the deduped replay.
+ */
+async function replayOrConflict(
+  existing: AppointmentRow,
+  input: CreateAppointmentInput,
+): Promise<BookingResult<AppointmentRow>> {
+  // Unconditional cross-client guard: a key hit for a DIFFERENT client's
+  // appointment is never projected — treated as a key reused with a different
+  // payload. (scopeClientId is guaranteed present by the caller's fail-closed check.)
+  if (existing.client_id !== input.scopeClientId) {
+    return { ok: false, error: 'conflict_idempotency', message: 'Idempotency-Key reused with a different payload.' };
+  }
+  if (!samePayload(existing, input)) {
+    return { ok: false, error: 'conflict_idempotency', message: 'Idempotency-Key reused with a different payload.' };
+  }
+  if (!(await isSchedulingBookable(input.tenantId, existing.client_id))) {
+    return { ok: false, error: 'module_disabled', message: 'Scheduling is disabled for this client.' };
+  }
+  return { ok: true, value: existing, deduped: true };
+}
+
 export async function createAppointment(
   input: CreateAppointmentInput,
 ): Promise<BookingResult<AppointmentRow>> {
+  // 0. FAIL CLOSED: a missing/empty scope (an untyped JS caller) is rejected
+  //    before touching idempotency, availability or any write — no reads, no leak.
+  if (!hasScope(input.scopeClientId)) {
+    return { ok: false, error: 'not_found', message: 'Service is not offered at this site.' };
+  }
   const now = input.now ?? new Date();
 
-  // 1. Idempotency short-circuit (before any writes).
+  // 1. Idempotency short-circuit (before any writes) — with the cross-client +
+  //    module-disabled guards.
   if (input.idempotencyKey) {
     const existing = await findByIdempotencyKey(input.tenantId, input.idempotencyKey);
-    if (existing) {
-      return samePayload(existing, input)
-        ? { ok: true, value: existing, deduped: true }
-        : { ok: false, error: 'conflict_idempotency', message: 'Idempotency-Key reused with a different payload.' };
-    }
+    if (existing) return replayOrConflict(existing, input);
   }
 
   // 2. Resolve timing + choose a concrete staff via the availability engine.
@@ -113,7 +154,8 @@ export async function createAppointment(
   }
 
   const clientId = avail.site.client_id;
-  if (input.scopeClientId && clientId !== input.scopeClientId) {
+  // Unconditional: the resolved site's client MUST match the required scope.
+  if (clientId !== input.scopeClientId) {
     return { ok: false, error: 'not_found', message: 'Service is not offered at this site.' };
   }
   const priceSnapshot = await resolveEffectivePrice(input.tenantId, input.siteId, input.serviceId, chosenStaffId);
@@ -126,9 +168,16 @@ export async function createAppointment(
   const blockedFrom = new Date(input.startAt.getTime() - avail.buffers.before_min * MS_PER_MIN);
   const blockedUntil = new Date(serviceEnd.getTime() + avail.buffers.after_min * MS_PER_MIN);
 
-  // 3. Transaction: resolve identity, insert (exclusion-guarded), audit event.
+  // 3. Transaction: RE-CHECK the scheduling module (FOR SHARE, so a concurrent
+  //    disable serializes with us), then resolve identity, insert
+  //    (exclusion-guarded), audit event — all or nothing.
   try {
     const created = await withTransaction(async (client) => {
+      // Transactional module gate: if scheduling is off for this client (or was
+      // just turned off concurrently), write NOTHING.
+      if (!(await isSchedulingEnabledForUpdate(client, input.tenantId, clientId))) {
+        return { kind: 'module_disabled' as const };
+      }
       let contactId: string | null = null;
       if (input.channel && input.channelUserId) {
         const contact = await resolveOrCreateContact(
@@ -193,18 +242,24 @@ export async function createAppointment(
         },
         client,
       );
-      return appt;
+      return { kind: 'ok' as const, appt };
     });
+
+    // Scheduling was disabled (possibly concurrently) → zero writes, module_disabled.
+    if (created.kind === 'module_disabled') {
+      return { ok: false, error: 'module_disabled', message: 'Scheduling is disabled for this client.' };
+    }
+    const appt = created.appt;
 
     // 4. Realtime AFTER commit.
     await recordSchedulingEvent({
-      tenantId: created.tenant_id,
-      clientId: created.client_id,
-      siteId: created.site_id,
+      tenantId: appt.tenant_id,
+      clientId: appt.client_id,
+      siteId: appt.site_id,
       eventType: 'appointment.created',
-      payload: { appointment_id: created.id, staff_id: created.staff_id, start_at: created.start_at, contact_id: created.contact_id },
+      payload: { appointment_id: appt.id, staff_id: appt.staff_id, start_at: appt.start_at, contact_id: appt.contact_id },
     });
-    return { ok: true, value: created };
+    return { ok: true, value: appt };
   } catch (err) {
     if (isExclusionViolation(err)) {
       return { ok: false, error: 'conflict_slot', message: 'That time was just booked. Please pick another.' };
@@ -216,13 +271,10 @@ export async function createAppointment(
       return { ok: false, error: 'conflict_slot', message: 'That time was just booked. Please pick another.' };
     }
     if (isUniqueViolation(err) && input.idempotencyKey) {
-      // Concurrent same-key insert won the race: fetch and dedup/conflict.
+      // Concurrent same-key insert won the race: fetch and apply the same replay
+      // guards (cross-client + module-disabled), never projecting a foreign appt.
       const existing = await findByIdempotencyKey(input.tenantId, input.idempotencyKey);
-      if (existing) {
-        return samePayload(existing, input)
-          ? { ok: true, value: existing, deduped: true }
-          : { ok: false, error: 'conflict_idempotency', message: 'Idempotency-Key reused with a different payload.' };
-      }
+      if (existing) return replayOrConflict(existing, input);
     }
     throw err;
   }
@@ -258,9 +310,9 @@ export interface TransitionInput {
   actorType: ActorType;
   actorUserId?: string | null;
   reason?: string | null;
-  /** When set (a member), the appointment must belong to this client, else it is
-   * treated as not-found (no cross-client action, no existence leak). */
-  scopeClientId?: string | null;
+  /** REQUIRED: the appointment must belong to this client, else not-found (no
+   * cross-client action, no existence leak). */
+  scopeClientId: string;
 }
 
 /** Apply a status transition (confirm/complete/cancel/no_show) under a row lock,
@@ -269,11 +321,18 @@ export async function transitionStatus(
   target: Exclude<AppointmentStatus, 'scheduled'>,
   input: TransitionInput,
 ): Promise<BookingResult<AppointmentRow>> {
+  // FAIL CLOSED: no scope → not_found before locking/reading the appointment.
+  if (!hasScope(input.scopeClientId)) return { ok: false, error: 'not_found', message: 'Appointment not found.' };
   try {
     const result = await withTransaction(async (client) => {
       const current = await getAppointmentForUpdate(client, input.tenantId, input.appointmentId);
       if (!current) return { kind: 'not_found' as const };
-      if (input.scopeClientId && current.client_id !== input.scopeClientId) return { kind: 'not_found' as const };
+      if (current.client_id !== input.scopeClientId) return { kind: 'not_found' as const };
+      // Transactional module gate (after scope): a disabled client can't be
+      // mutated, even by a concurrent disable — no status/version/event change.
+      if (!(await isSchedulingEnabledForUpdate(client, input.tenantId, current.client_id))) {
+        return { kind: 'module_disabled' as const };
+      }
       if (!LEGAL_STATUS[current.status].includes(target)) {
         return { kind: 'invalid' as const, from: current.status };
       }
@@ -293,6 +352,9 @@ export async function transitionStatus(
     });
 
     if (result.kind === 'not_found') return { ok: false, error: 'not_found', message: 'Appointment not found.' };
+    if (result.kind === 'module_disabled') {
+      return { ok: false, error: 'module_disabled', message: 'Scheduling is disabled for this client.' };
+    }
     if (result.kind === 'invalid') {
       return { ok: false, error: 'invalid_transition', message: `Cannot move a ${result.from} appointment to ${target}.` };
     }
@@ -318,7 +380,8 @@ export interface RescheduleInput {
   staffId?: string | null; // null = keep current staff
   actorType: ActorType;
   actorUserId?: string | null;
-  scopeClientId?: string | null;
+  /** REQUIRED: the appointment must belong to this client, else not-found. */
+  scopeClientId: string;
   now?: Date;
 }
 
@@ -326,12 +389,18 @@ export interface RescheduleInput {
  * interval, moves it in a transaction (exclusion-guarded), bumps version, and
  * writes an event with old + new values. Only non-terminal appointments move. */
 export async function rescheduleAppointment(input: RescheduleInput): Promise<BookingResult<AppointmentRow>> {
+  // FAIL CLOSED: no scope → not_found before locking/reading the appointment.
+  if (!hasScope(input.scopeClientId)) return { ok: false, error: 'not_found', message: 'Appointment not found.' };
   const now = input.now ?? new Date();
   try {
     const outcome = await withTransaction(async (client) => {
       const current = await getAppointmentForUpdate(client, input.tenantId, input.appointmentId);
       if (!current) return { kind: 'not_found' as const };
-      if (input.scopeClientId && current.client_id !== input.scopeClientId) return { kind: 'not_found' as const };
+      if (current.client_id !== input.scopeClientId) return { kind: 'not_found' as const };
+      // Transactional module gate (after scope): disabled → no interval/version/event.
+      if (!(await isSchedulingEnabledForUpdate(client, input.tenantId, current.client_id))) {
+        return { kind: 'module_disabled' as const };
+      }
       if (TERMINAL.includes(current.status)) return { kind: 'invalid' as const, from: current.status };
 
       const targetStaff = input.staffId ?? current.staff_id;
@@ -391,6 +460,9 @@ export async function rescheduleAppointment(input: RescheduleInput): Promise<Boo
     });
 
     if (outcome.kind === 'not_found') return { ok: false, error: 'not_found', message: 'Appointment not found.' };
+    if (outcome.kind === 'module_disabled') {
+      return { ok: false, error: 'module_disabled', message: 'Scheduling is disabled for this client.' };
+    }
     if (outcome.kind === 'invalid') {
       return { ok: false, error: 'invalid_transition', message: `Cannot reschedule a ${outcome.from} appointment.` };
     }

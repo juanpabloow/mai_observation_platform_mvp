@@ -73,7 +73,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
     scopeClientId: site.client_id,
   });
 
-  if (!result.ok) return schedulingError(bookingErrorStatus(result.error), result.error, result.message);
+  if (!result.ok) {
+    // A CONCURRENT disable (module turned off between the gate and the commit)
+    // surfaces as module_disabled — collapse it to the SAME generic 404 the gate
+    // uses, never a 403 that would reveal the site once existed here.
+    if (result.error === "module_disabled") {
+      return schedulingError(404, "not_found", "Booking page not found.");
+    }
+    return schedulingError(bookingErrorStatus(result.error), result.error, result.message);
+  }
   const a = result.value;
   const staff = await getStaffById(site.tenant_id, a.staff_id);
   return Response.json(

@@ -4,21 +4,23 @@ import {
   bookingErrorStatus,
   parseIsoDate,
   projectAppointment,
+  resolveOwnedSite,
   schedulingError,
 } from "@/lib/schedulingApi";
+import { isUuid } from "@/lib/clientModuleValidation";
 import { createAppointment } from "@worker/scheduling/booking.js";
 import { listAppointments, type AppointmentStatus } from "@worker/db/repositories/scheduling/appointments.js";
 
 /**
  * /api/scheduling/v1/appointments
  *
- * GET  — tenant-scoped list with safe filters (status, from/to, contact_id,
- *        conversation_id, site_id, staff_id).
- * POST — create an appointment. Requires an Idempotency-Key header (per-tenant):
- *        a repeat with the same key + payload returns the SAME appointment (200);
- *        a reused key with a different payload → 409. Resolves/creates the contact
- *        and conversation, revalidates availability, assigns a concrete staff, and
- *        the DB exclusion constraint guarantees no double-book (→ 409).
+ * GET  — appointments of the RESOLVED client only (clientId is ALWAYS applied and
+ *        can't be dropped by other filters). Optional site_id must belong to the
+ *        client; id filters are UUID-validated to avoid a 22P02 and never widen
+ *        past the client.
+ * POST — create an appointment for the resolved client. Requires Idempotency-Key.
+ *        Provenance is the X-Workflow-Ref header (auth.workflowRef), NEVER a body
+ *        field. scopeClientId pins the booking to the resolved client.
  */
 export const dynamic = "force-dynamic";
 
@@ -35,11 +37,29 @@ export async function GET(req: Request): Promise<Response> {
   const from = parseIsoDate(p.get("from")) ?? undefined;
   const to = parseIsoDate(p.get("to")) ?? undefined;
 
+  // Optional site_id must be OWNED by the resolved client (foreign/unknown → 404).
+  const siteIdParam = p.get("site_id");
+  let siteId: string | undefined;
+  if (siteIdParam) {
+    const owned = await resolveOwnedSite(auth.auth, siteIdParam);
+    if (!owned.ok) return owned.response;
+    siteId = owned.site.id;
+  }
+  // UUID-validate the other id filters so a malformed value can't 22P02 (and a
+  // foreign but valid id simply matches nothing under the mandatory clientId).
+  const staffIdParam = p.get("staff_id");
+  const contactIdParam = p.get("contact_id");
+  const conversationIdParam = p.get("conversation_id");
+  for (const v of [staffIdParam, contactIdParam, conversationIdParam]) {
+    if (v && !isUuid(v)) return schedulingError(400, "invalid_request", "Filter ids must be UUIDs.");
+  }
+
   const rows = await listAppointments(auth.auth.tenantId, {
-    siteId: p.get("site_id") ?? undefined,
-    staffId: p.get("staff_id") ?? undefined,
-    contactId: p.get("contact_id") ?? undefined,
-    conversationId: p.get("conversation_id") ?? undefined,
+    clientId: auth.auth.clientId, // MANDATORY — never removed by other filters
+    siteId,
+    staffId: staffIdParam ?? undefined,
+    contactId: contactIdParam ?? undefined,
+    conversationId: conversationIdParam ?? undefined,
     status,
     from,
     to,
@@ -48,8 +68,10 @@ export async function GET(req: Request): Promise<Response> {
   return Response.json({ appointments: rows.map(projectAppointment) });
 }
 
+// workflow_ref is deliberately ABSENT from the body: provenance comes ONLY from
+// the X-Workflow-Ref header (auth.workflowRef). conversation_ref still may come
+// in the body.
 const CreateBody = z.object({
-  workflow_ref: z.string().min(1).optional(),
   conversation_ref: z.string().min(1).max(256).optional(),
   channel: z.string().min(1).max(64).optional(),
   channel_user_id: z.string().min(1).max(256).optional(),
@@ -91,7 +113,8 @@ export async function POST(req: Request): Promise<Response> {
     serviceId: b.service_id,
     staffId: b.staff_id ?? null,
     startAt,
-    workflowRef: b.workflow_ref ?? null,
+    // Provenance is the X-Workflow-Ref header — the ONLY authority (never the body).
+    workflowRef: auth.auth.workflowRef,
     conversationRef: b.conversation_ref ?? null,
     channel: b.channel ?? null,
     channelUserId: b.channel_user_id ?? null,
@@ -101,6 +124,8 @@ export async function POST(req: Request): Promise<Response> {
     origin: "n8n",
     createdByType: "n8n",
     idempotencyKey,
+    // Pin to the resolved client — a foreign site → not_found, zero writes.
+    scopeClientId: auth.auth.clientId,
   });
 
   if (!result.ok) {
