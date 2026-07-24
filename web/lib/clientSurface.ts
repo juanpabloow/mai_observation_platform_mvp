@@ -14,6 +14,7 @@ const CLIENT_SURFACE_LABELS: ReadonlyArray<{ pattern: RegExp; label: string }> =
   { pattern: /^\/clients\/([^/]+)\/modules(?:\/|$)/, label: "Modules" },
   { pattern: /^\/clients\/([^/]+)\/contacts(?:\/|$)/, label: "Contacts" },
   { pattern: /^\/clients\/([^/]+)\/scheduling\/agenda(?:\/|$)/, label: "Agenda" },
+  { pattern: /^\/clients\/([^/]+)\/scheduling\/admin(?:\/|$)/, label: "Scheduling settings" },
 ];
 
 export interface ClientSurface {

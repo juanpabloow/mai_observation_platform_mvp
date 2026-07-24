@@ -14,6 +14,8 @@ test('recognizes every client-level surface', () => {
   assert.deepEqual(parseClientSurface(`/clients/${CID}/contacts/abc-123`), { clientId: CID, label: 'Contacts' });
   assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/agenda`), { clientId: CID, label: 'Agenda' });
   assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/agenda/`), { clientId: CID, label: 'Agenda' });
+  // Per-client scheduling admin (canonical route).
+  assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/admin`), { clientId: CID, label: 'Scheduling settings' });
   // Final design: the Workflows LIST page + the client-level Inbox (incl. its thread).
   assert.deepEqual(parseClientSurface(`/clients/${CID}/workflows`), { clientId: CID, label: 'Workflows' });
   assert.deepEqual(parseClientSurface(`/clients/${CID}/inbox`), { clientId: CID, label: 'Inbox' });

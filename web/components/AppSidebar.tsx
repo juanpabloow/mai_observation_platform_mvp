@@ -389,12 +389,22 @@ export function AppSidebar({
       });
     }
     if (moduleKeys.includes("scheduling")) {
-      sections.push({
-        label: "Scheduling",
-        items: [
-          { key: "agenda", label: "Agenda", href: c("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(c("/scheduling")) },
-        ],
-      });
+      const scheduling: NavItem[] = [
+        { key: "agenda", label: "Agenda", href: c("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(c("/scheduling/agenda")) },
+      ];
+      // Scheduling settings (the per-client admin) — owner/admin only, and never for
+      // the DEFAULT client (it can't have scheduling). The module gate already
+      // ensured `scheduling` is enabled for this client.
+      if (!isMember && clientId !== defaultClientId) {
+        scheduling.push({
+          key: "scheduling-settings",
+          label: "Scheduling settings",
+          href: c("/scheduling/admin"),
+          icon: Icon.schedulingAdmin,
+          active: pathname.startsWith(c("/scheduling/admin")),
+        });
+      }
+      sections.push({ label: "Scheduling", items: scheduling });
     }
     if (!isMember) {
       const admin: NavItem[] = [
@@ -420,7 +430,9 @@ export function AppSidebar({
     }
     sections = [{ label: "Client", items }];
   } else {
-    // Owner/admin tenant level.
+    // Owner/admin tenant level (the Hub) — ONLY global surfaces. Scheduling is NOT
+    // here: sites/services/staff/hours belong to a specific client and are
+    // administered inside that client's workspace (SCHEDULING → Scheduling settings).
     sections = [
       {
         label: "Workspace",
@@ -433,12 +445,6 @@ export function AppSidebar({
             icon: Icon.clients,
             active: pathname === "/clients" || pathname.startsWith("/clients/"),
           },
-        ],
-      },
-      {
-        label: "Scheduling",
-        items: [
-          { key: "sched-admin", label: "Scheduling admin", href: "/scheduling/admin", icon: Icon.schedulingAdmin, active: pathname.startsWith("/scheduling/admin") },
         ],
       },
     ];

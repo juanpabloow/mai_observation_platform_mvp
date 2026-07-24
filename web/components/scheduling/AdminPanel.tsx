@@ -17,7 +17,6 @@ import {
 
 type WeeklyHours = Record<string, Array<{ start: string; end: string }>>;
 
-interface Client { id: string; name: string; is_default: boolean }
 interface Site {
   id: string; client_id: string; slug: string; name: string; address: string | null; timezone: string; active: boolean;
 }
@@ -33,15 +32,24 @@ const INPUT = "rounded-lg border border-line-strong bg-transparent px-2 py-1.5 t
 const BTN = "rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50";
 const GHOST = "rounded-lg border border-line px-2 py-1 text-xs hover:bg-subtle";
 
+/**
+ * Per-CLIENT scheduling settings (owner/admin). Every mutation carries the route's
+ * `clientId`, which the server actions re-validate (tenant + client + non-default +
+ * scheduling enabled + resource ownership) — there is no client selector, so this
+ * panel can only ever administer the one client it was opened for. `clientName` is
+ * shown for context only.
+ */
 export function AdminPanel({
-  clients,
+  clientId,
+  clientName,
   sites,
   services,
   staff,
   exceptions,
   siteServiceMap,
 }: {
-  clients: Client[];
+  clientId: string;
+  clientName: string;
   sites: Site[];
   services: Service[];
   staff: Staff[];
@@ -64,13 +72,16 @@ export function AdminPanel({
 
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-8 px-6 py-6">
-      <h1 className="text-xl font-semibold tracking-tight">Scheduling admin</h1>
-      {error ? <p className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p> : null}
+      <header className="space-y-1">
+        <h1 className="text-xl font-semibold tracking-tight">Scheduling settings</h1>
+        <p className="text-sm text-muted">Sites, services, staff, and blocked time for {clientName}.</p>
+      </header>
+      {error ? <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p> : null}
 
-      <SitesSection clients={clients} sites={sites} run={run} pending={pending} />
-      <ServicesSection sites={sites} services={services} siteServiceMap={siteServiceMap} run={run} pending={pending} />
-      <StaffSection sites={sites} services={services} staff={staff} siteServiceMap={siteServiceMap} run={run} pending={pending} />
-      <ExceptionsSection sites={sites} staff={staff} exceptions={exceptions} run={run} pending={pending} />
+      <SitesSection clientId={clientId} sites={sites} run={run} pending={pending} />
+      <ServicesSection clientId={clientId} sites={sites} services={services} siteServiceMap={siteServiceMap} run={run} pending={pending} />
+      <StaffSection clientId={clientId} sites={sites} services={services} staff={staff} siteServiceMap={siteServiceMap} run={run} pending={pending} />
+      <ExceptionsSection clientId={clientId} sites={sites} staff={staff} exceptions={exceptions} run={run} pending={pending} />
     </main>
   );
 }
@@ -86,15 +97,13 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
-function SitesSection({ clients, sites, run, pending }: { clients: Client[]; sites: Site[]; run: Run; pending: boolean }) {
+function SitesSection({ clientId, sites, run, pending }: { clientId: string; sites: Site[]; run: Run; pending: boolean }) {
   const [slug, setSlug] = useState("");
   const [name, setName] = useState("");
   const [tz, setTz] = useState("America/Bogota");
-  const [clientId, setClientId] = useState(clients.find((c) => c.is_default)?.id ?? clients[0]?.id ?? "");
   const [hours, setHours] = useState<Record<string, { on: boolean; start: string; end: string }>>(
     Object.fromEntries(DAYS.map((d) => [d, { on: d !== "sun", start: "09:00", end: "18:00" }])),
   );
-  const clientName = (id: string) => clients.find((c) => c.id === id)?.name ?? "—";
 
   const submit = () => {
     const openingHours: WeeklyHours = {};
@@ -111,8 +120,8 @@ function SitesSection({ clients, sites, run, pending }: { clients: Client[]; sit
       <ul className="flex flex-col gap-1 text-sm">
         {sites.map((s) => (
           <li key={s.id} className="flex items-center justify-between rounded-lg border border-line px-3 py-2">
-            <span>{s.name} <span className="text-faint">/{s.slug} · {clientName(s.client_id)} · {s.timezone}</span> {s.active ? "" : <em className="text-faint">(inactive)</em>}</span>
-            {s.active ? <button className={GHOST} disabled={pending} onClick={() => run(() => deactivateSiteAction(s.id))}>Deactivate</button> : null}
+            <span>{s.name} <span className="text-faint">/{s.slug} · {s.timezone}</span> {s.active ? "" : <em className="text-faint">(inactive)</em>}</span>
+            {s.active ? <button className={GHOST} disabled={pending} onClick={() => run(() => deactivateSiteAction(clientId, s.id))}>Deactivate</button> : null}
           </li>
         ))}
       </ul>
@@ -120,9 +129,6 @@ function SitesSection({ clients, sites, run, pending }: { clients: Client[]; sit
         <div className="flex flex-wrap gap-2">
           <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className={INPUT} />
           <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="slug (public URL)" className={INPUT} />
-          <select value={clientId} onChange={(e) => setClientId(e.target.value)} className={INPUT}>
-            {clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-          </select>
           <input value={tz} onChange={(e) => setTz(e.target.value)} placeholder="IANA timezone" className={INPUT} />
         </div>
         <div className="flex flex-col gap-1">
@@ -137,19 +143,21 @@ function SitesSection({ clients, sites, run, pending }: { clients: Client[]; sit
             </div>
           ))}
         </div>
-        <button className={BTN} disabled={pending || !slug || !name || !clientId} onClick={submit}>Add site</button>
+        <button className={BTN} disabled={pending || !slug || !name} onClick={submit}>Add site</button>
       </div>
     </Section>
   );
 }
 
 function ServicesSection({
+  clientId,
   sites,
   services,
   siteServiceMap,
   run,
   pending,
 }: {
+  clientId: string;
   sites: Site[];
   services: Service[];
   siteServiceMap: Record<string, string[]>;
@@ -172,6 +180,7 @@ function ServicesSection({
   const submit = () =>
     run(async () => {
       const r = await createServiceAction({
+        clientId,
         name: name.trim(),
         durationMin: Number(duration),
         price: price ? Number(price) : null,
@@ -203,7 +212,7 @@ function ServicesSection({
                         key={site.id}
                         disabled={pending}
                         title={on ? `Disable at ${site.name}` : `Enable at ${site.name}`}
-                        onClick={() => run(() => setSiteServiceAction(site.id, s.id, !on))}
+                        onClick={() => run(() => setSiteServiceAction(clientId, site.id, s.id, !on))}
                         className={`rounded border px-1.5 py-0.5 text-[11px] ${on ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:bg-subtle"}`}
                       >
                         {site.name}
@@ -213,7 +222,7 @@ function ServicesSection({
                 </div>
               ) : null}
             </div>
-            {s.active ? <button className={GHOST} disabled={pending} onClick={() => run(() => deactivateServiceAction(s.id))}>Deactivate</button> : null}
+            {s.active ? <button className={GHOST} disabled={pending} onClick={() => run(() => deactivateServiceAction(clientId, s.id))}>Deactivate</button> : null}
           </li>
         ))}
       </ul>
@@ -250,6 +259,7 @@ function ServicesSection({
 }
 
 function StaffSection({
+  clientId,
   sites,
   services,
   staff,
@@ -257,6 +267,7 @@ function StaffSection({
   run,
   pending,
 }: {
+  clientId: string;
   sites: Site[];
   services: Service[];
   staff: Staff[];
@@ -275,7 +286,7 @@ function StaffSection({
 
   const submit = () =>
     run(async () => {
-      const r = await createStaffAction({ siteId, name: name.trim(), serviceIds });
+      const r = await createStaffAction({ clientId, siteId, name: name.trim(), serviceIds });
       if (r.ok) { setName(""); setServiceIds([]); }
       return r;
     });
@@ -302,7 +313,7 @@ function StaffSection({
                         <button
                           key={sv.id}
                           disabled={pending}
-                          onClick={() => run(() => setStaffServiceAction(s.id, sv.id, !on))}
+                          onClick={() => run(() => setStaffServiceAction(clientId, s.id, sv.id, !on))}
                           className={`rounded border px-1.5 py-0.5 text-[11px] ${on ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:bg-subtle"}`}
                         >
                           {sv.name}
@@ -312,7 +323,7 @@ function StaffSection({
                   )}
                 </div>
               </div>
-              {s.active ? <button className={GHOST} disabled={pending} onClick={() => run(() => deactivateStaffAction(s.id))}>Deactivate</button> : null}
+              {s.active ? <button className={GHOST} disabled={pending} onClick={() => run(() => deactivateStaffAction(clientId, s.id))}>Deactivate</button> : null}
             </li>
           );
         })}
@@ -349,7 +360,7 @@ function StaffSection({
   );
 }
 
-function ExceptionsSection({ sites, staff, exceptions, run, pending }: { sites: Site[]; staff: Staff[]; exceptions: Exception[]; run: Run; pending: boolean }) {
+function ExceptionsSection({ clientId, sites, staff, exceptions, run, pending }: { clientId: string; sites: Site[]; staff: Staff[]; exceptions: Exception[]; run: Run; pending: boolean }) {
   const [siteId, setSiteId] = useState(sites[0]?.id ?? "");
   const [staffId, setStaffId] = useState("");
   const [start, setStart] = useState("");
@@ -361,6 +372,7 @@ function ExceptionsSection({ sites, staff, exceptions, run, pending }: { sites: 
       // Send the RAW local wall-clock (from datetime-local); the server anchors it
       // to the SITE's timezone, not the browser's.
       const r = await createExceptionAction({
+        clientId,
         siteId,
         staffId: staffId || null,
         startsAt: start,
@@ -383,7 +395,7 @@ function ExceptionsSection({ sites, staff, exceptions, run, pending }: { sites: 
           return (
             <li key={e.id} className="flex items-center justify-between rounded-lg border border-line px-3 py-2">
               <span>{fmt(e.starts_at)} → {fmt(e.ends_at)} <span className="text-faint">· {site?.name ?? "—"} · {st ? st.name : "whole site"}{e.reason ? ` · ${e.reason}` : ""}</span></span>
-              <button className={GHOST} disabled={pending} onClick={() => run(() => deleteExceptionAction(e.id))}>Delete</button>
+              <button className={GHOST} disabled={pending} onClick={() => run(() => deleteExceptionAction(clientId, e.id))}>Delete</button>
             </li>
           );
         })}

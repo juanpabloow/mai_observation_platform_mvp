@@ -41,8 +41,8 @@ export default async function ClientAgendaPage({
           {hasFullAccess(scope) ? (
             <>
               <p className="text-sm text-muted">No sites for {client.name} yet — create one to start scheduling.</p>
-              <Link href="/scheduling/admin" className="text-sm text-accent hover:underline">
-                Go to Scheduling admin →
+              <Link href={`/clients/${client.id}/scheduling/admin`} className="text-sm text-accent hover:underline">
+                Go to Scheduling settings →
               </Link>
             </>
           ) : (

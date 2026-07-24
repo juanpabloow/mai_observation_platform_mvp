@@ -149,7 +149,7 @@ export function AgendaView(props: {
         <div className="rounded-xl border border-dashed border-line-strong px-5 py-8">
           {props.canManage ? (
             <p className="text-sm text-muted">
-              No staff at this site yet. <Link href="/scheduling/admin" className="text-accent hover:underline">Add staff</Link>.
+              No staff at this site yet. <Link href={`/clients/${props.clientId}/scheduling/admin`} className="text-accent hover:underline">Add staff</Link>.
             </p>
           ) : (
             // A member can't open the tenant-level Scheduling admin — message only.

@@ -44,6 +44,19 @@ export async function listExceptions(
   return r.rows;
 }
 
+/** One exception by id (tenant-scoped), or null. Read-only — used by the admin
+ * layer to validate an exception belongs to the acting client's site before delete. */
+export async function getExceptionById(
+  tenantId: string,
+  id: string,
+): Promise<ScheduleExceptionRow | null> {
+  const r = await query<ScheduleExceptionRow>(
+    `SELECT * FROM schedule_exceptions WHERE id = $1 AND tenant_id = $2`,
+    [id, tenantId],
+  );
+  return r.rows[0] ?? null;
+}
+
 export interface CreateExceptionInput {
   tenantId: string;
   siteId: string;
