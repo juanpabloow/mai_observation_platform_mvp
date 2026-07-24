@@ -4,10 +4,10 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
-import { useTheme } from "next-themes";
 import { useSidebar } from "@/components/SidebarContext";
 import { parseClientSurface } from "@/lib/clientSurface";
 import { WorkflowSwitcherPanel } from "@/components/WorkflowSwitcherPanel";
+import { AccountMenu } from "@/components/AccountMenu";
 
 export interface HeaderClient {
   id: string;
@@ -87,6 +87,15 @@ function PanelIcon() {
     <svg viewBox="0 0 16 16" className="size-4" aria-hidden fill="none">
       <rect x="2" y="3" width="12" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
       <line x1="6.25" y1="3.4" x2="6.25" y2="12.6" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
+  );
+}
+
+/** Hamburger icon for the mobile drawer trigger. */
+function MenuIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="size-4" aria-hidden fill="none">
+      <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round" />
     </svg>
   );
 }
@@ -175,8 +184,7 @@ export function HeaderBar({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { theme, setTheme } = useTheme();
-  const { toggle: toggleSidebar } = useSidebar();
+  const { toggle: toggleSidebar, setMobileOpen } = useSidebar();
   const [openMenu, setOpenMenu] = useState<null | "client" | "workflow" | "profile">(null);
 
   const clientBtn = useRef<HTMLButtonElement>(null);
@@ -261,8 +269,19 @@ export function HeaderBar({
 
   return (
     <header className="flex shrink-0 items-center justify-between gap-3 border-b border-black/10 px-4 py-2.5 dark:border-line">
-      {/* LEFT — sidebar toggle (desktop) + text logo → home */}
+      {/* LEFT — sidebar controls + text logo → home */}
       <div className="flex shrink-0 items-center gap-2">
+        {/* Mobile: opens the sidebar as a drawer. */}
+        <button
+          type="button"
+          onClick={() => setMobileOpen(true)}
+          aria-label="Open menu"
+          title="Open menu"
+          className="inline-flex rounded-lg p-1.5 text-muted transition-colors hover:bg-black/[0.05] hover:text-foreground md:hidden dark:hover:bg-subtle"
+        >
+          <MenuIcon />
+        </button>
+        {/* Desktop: collapse / expand the sidebar rail. */}
         <button
           type="button"
           onClick={toggleSidebar}
@@ -408,71 +427,13 @@ export function HeaderBar({
         </button>
         {openMenu === "profile" ? (
           <PortalPanel anchorRef={profileBtn} align="right" width={232}>
-            <div className="border-b border-line px-3 py-2">
-              <p className="text-[10px] font-medium uppercase tracking-wider text-faint">Signed in as</p>
-              <p className="truncate text-sm text-foreground">{email}</p>
-              <p className="mt-0.5 truncate text-xs capitalize text-muted">
-                {role}
-                {clientLabel ? <span className="text-faint"> · {clientLabel}</span> : null}
-              </p>
-            </div>
-            <div className="border-b border-line px-3 py-2.5">
-              <p className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-faint">Theme</p>
-              <div className="flex gap-0.5 rounded-lg border border-line p-0.5">
-                {(["light", "dark", "system"] as const).map((opt) => (
-                  <button
-                    key={opt}
-                    type="button"
-                    onClick={() => setTheme(opt)}
-                    aria-pressed={theme === opt}
-                    className={`flex-1 rounded-md px-2 py-1 text-xs capitalize transition-colors ${
-                      theme === opt
-                        ? "bg-subtle font-medium text-foreground"
-                        : "text-muted hover:text-foreground"
-                    }`}
-                  >
-                    {opt}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="py-1">
-              {/* Owner/admin-only management — hidden for a member (they'd be bounced). */}
-              {canSwitchClients ? (
-                <>
-                  <Link
-                    href="/settings/team"
-                    onClick={() => setOpenMenu(null)}
-                    className="flex w-full items-center px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
-                  >
-                    Team
-                  </Link>
-                  <Link
-                    href="/settings/connections"
-                    onClick={() => setOpenMenu(null)}
-                    className="flex w-full items-center px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
-                  >
-                    n8n connections
-                  </Link>
-                </>
-              ) : null}
-              {/* Per-USER sign-in settings (password reset → linkSocial recovery
-                  flow) — every role manages their own credentials, so no gate. */}
-              <Link
-                href="/settings/security"
-                onClick={() => setOpenMenu(null)}
-                className="flex w-full items-center px-3 py-1.5 text-left text-sm text-foreground transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
-              >
-                Sign-in &amp; security
-              </Link>
-              <Link
-                href="/logout"
-                onClick={() => setOpenMenu(null)}
-                className="flex w-full items-center px-3 py-1.5 text-left text-sm text-danger transition-colors hover:bg-red-500/10"
-              >
-                Log out
-              </Link>
-            </div>
+            <AccountMenu
+              email={email}
+              role={role}
+              clientLabel={clientLabel}
+              canSwitchClients={canSwitchClients}
+              onNavigate={() => setOpenMenu(null)}
+            />
           </PortalPanel>
         ) : null}
       </div>

@@ -30,58 +30,79 @@ function slice(src: string, start: string, end: string): string {
 
 // ─────────────────────────────── Sidebar ────────────────────────────────────
 
-test('sidebar: Workflows is the FIRST option, under Automation, before Overview', () => {
+test('sidebar: sections are ordered Automation → Conversations → CRM → Scheduling → Administration', () => {
   const src = read('components/AppSidebar.tsx');
-  const inClient = slice(src, 'if (clientId) {', '// ── Outside a client');
-  const automation = idx(inClient, '<SectionLabel>Automation</SectionLabel>');
-  const workflows = idx(inClient, 'label="Workflows"');
-  const overview = idx(inClient, 'label="Overview"');
-  const conversations = idx(inClient, '<SectionLabel>Conversations</SectionLabel>');
-  assert.ok(automation < workflows, 'Automation label precedes Workflows');
-  assert.ok(workflows < overview, 'Workflows is above Overview');
-  assert.ok(overview < conversations, 'Automation (Workflows+Overview) precedes Conversations');
-  // Workflows links to the list page and stays active across every /workflows/… route.
-  assert.ok(inClient.includes('href={`/clients/${clientId}/workflows`}'), 'Workflows → the list page');
-  assert.ok(
-    inClient.includes('pathname.startsWith(`/clients/${clientId}/workflows`)'),
-    'Workflows is active on all /workflows/… routes',
-  );
+  const ctx = slice(src, 'if (clientId) {', '} else if (isMember) {');
+  const order = [
+    '{ label: "Automation"',
+    '{ label: "Conversations"',
+    'label: "CRM"',
+    'label: "Scheduling"',
+    'label: "Administration"',
+  ];
+  let prev = -1;
+  for (const marker of order) {
+    const i = idx(ctx, marker);
+    assert.ok(i > prev, `section ${marker} is in the expected order`);
+    prev = i;
+  }
 });
 
-test('sidebar: NO individual workflow names are rendered (no workflows prop / no list map)', () => {
+test('sidebar: Workflows is the FIRST item, active on every /workflows/… route; Overview → aggregate', () => {
+  const src = read('components/AppSidebar.tsx');
+  const automation = slice(src, 'const automation: NavItem[] = [', '];');
+  assert.ok(idx(automation, 'key: "workflows"') < idx(automation, 'key: "overview"'), 'Workflows precedes Overview');
+  assert.ok(automation.includes('href: c("/workflows")'), 'Workflows → the client workflow list');
+  assert.ok(automation.includes('pathname.startsWith(c("/workflows"))'), 'active across all /workflows/… routes');
+  assert.ok(automation.includes('c("/workflows/all/analytics")'), 'Overview keeps the aggregate analytics target');
+});
+
+test('sidebar: NO full workflow list — no workflows prop, no workflow query', () => {
   const src = read('components/AppSidebar.tsx');
   assert.ok(!src.includes('SidebarWorkflow'), 'the SidebarWorkflow type is gone');
-  assert.ok(!/\bworkflows[:,]/.test(slice(src, 'export function AppSidebar(', ') {')),
-    'AppSidebar no longer takes a workflows prop');
-  const inClient = slice(src, 'if (clientId) {', '// ── Outside a client');
-  assert.ok(!inClient.includes('.map('), 'the in-client rail never maps a workflow list');
+  const props = slice(src, 'export function AppSidebar({', '}: {');
+  assert.ok(!/\bworkflows\b/.test(props), 'AppSidebar takes no workflows prop');
+  assert.ok(!src.includes('listWorkflows'), 'the sidebar never queries the workflow list');
 });
 
-test('sidebar: Inbox lives under Conversations with the aggregated client-level badge', () => {
+test('sidebar: Inbox uses the unified client-level route + aggregated pending badge', () => {
   const src = read('components/AppSidebar.tsx');
-  const inClient = slice(src, 'if (clientId) {', '// ── Outside a client');
+  const conv = slice(src, 'const conversations: NavItem[] = [', '];');
+  assert.ok(conv.includes('key: "inbox"'), 'the Conversations section is the Inbox');
+  assert.ok(conv.includes('href: c("/inbox")'), 'Inbox → the unified /clients/{id}/inbox route');
   assert.ok(
-    idx(inClient, '<SectionLabel>Conversations</SectionLabel>') < idx(inClient, 'InboxTabLink'),
-    'the Conversations label precedes the Inbox link',
-  );
-  assert.ok(inClient.includes('href={`/clients/${clientId}/inbox`}'), 'Inbox → the client-level route');
-  assert.ok(
-    inClient.includes('countEndpoint={`/api/inbox/${clientId}/pending-count`}'),
+    conv.includes('countEndpoint: `/api/inbox/${clientId}/pending-count`'),
     'Inbox keeps the aggregated client-level pending badge',
   );
 });
 
-test('sidebar: categories respect modules + roles', () => {
+test('sidebar: modules + roles still gate the entries', () => {
   const src = read('components/AppSidebar.tsx');
-  const inClient = slice(src, 'if (clientId) {', '// ── Outside a client');
-  // CRM only when crm enabled; Scheduling only when scheduling enabled.
-  assert.ok(inClient.includes('clientModuleKeys.includes("crm")'), 'CRM gated by the crm module');
-  assert.ok(inClient.includes('clientModuleKeys.includes("scheduling")'), 'Scheduling gated by scheduling');
-  // Administration (Team + Modules) is owner/admin only; Modules hidden for default.
-  const admin = slice(inClient, '{!isMember ? (', '</aside>');
-  assert.ok(admin.includes('<SectionLabel>Administration</SectionLabel>'), 'Administration is owner/admin only');
-  assert.ok(admin.includes('label="Team"') && admin.includes('label="Modules"'), 'Team + Modules under it');
-  assert.ok(admin.includes('clientId !== defaultClientId'), 'Modules hidden for the default client');
+  assert.ok(src.includes('moduleKeys.includes("crm")'), 'Contacts gated by the crm module');
+  assert.ok(src.includes('moduleKeys.includes("scheduling")'), 'Agenda gated by the scheduling module');
+  assert.ok(src.includes('if (!isMember) {'), 'Administration (Team/Modules) is owner/admin only');
+  assert.ok(src.includes('clientId !== defaultClientId'), 'Modules hidden for the default client');
+});
+
+test('sidebar: collapsed mode keeps navigation accessible (aria-label + tooltip + aria-current)', () => {
+  const src = read('components/AppSidebar.tsx');
+  assert.ok(src.includes('aria-label={collapsed ? item.label : undefined}'), 'collapsed NavLink exposes its name');
+  assert.ok(src.includes('title={collapsed ? item.label : undefined}'), 'collapsed NavLink has a tooltip');
+  assert.ok(src.includes('aria-current={item.active ? "page" : undefined}'), 'active item is aria-current="page"');
+  assert.ok(src.includes('aria-label="Primary"'), 'the nav is a labelled landmark');
+  // Collapsed Inbox keeps an accessible name including the pending count.
+  const inbox = read('components/InboxTabLink.tsx');
+  assert.ok(
+    inbox.includes('aria-label={count > 0 ? `${label}, ${count} pending` : label}'),
+    'collapsed Inbox has an accessible name with its count',
+  );
+});
+
+test('sidebar: has a fixed account footer that opens the SHARED account menu', () => {
+  const src = read('components/AppSidebar.tsx');
+  assert.ok(src.includes('border-t border-line'), 'a bottom footer area exists');
+  assert.ok(src.includes('<AccountMenu'), 'the footer opens the shared AccountMenu (no duplicated actions)');
+  assert.ok(src.includes('aria-haspopup="menu"'), 'the account trigger is a menu button');
 });
 
 test('sidebar server: never serializes any workflow list (member gets no foreign workflows)', () => {

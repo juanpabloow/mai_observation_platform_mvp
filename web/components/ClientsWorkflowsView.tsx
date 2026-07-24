@@ -43,6 +43,15 @@ function workflowHref(w: WorkflowItem): string {
   return `/clients/${w.clientId}/workflows/${encodeURIComponent(w.n8nWorkflowId)}/executions`;
 }
 
+/** A small pill for an ENABLED client module (real state only — never fabricated). */
+function ModuleChip({ label }: { label: string }) {
+  return (
+    <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700 dark:text-emerald-400">
+      {label}
+    </span>
+  );
+}
+
 /**
  * Client logo: the uploaded image (from R2's public URL) when set, else a
  * monogram placeholder. Same square slot either way so the layout is stable.
@@ -222,17 +231,22 @@ export function ClientsWorkflowsView({
   folders,
   clientOptions,
   r2Enabled,
+  enabledModules,
 }: {
   looseWorkflows: WorkflowItem[];
   folders: ClientFolderView[];
   clientOptions: ClientOption[];
   /** Whether R2 is configured — gates the logo upload UI (graceful optional). */
   r2Enabled: boolean;
+  /** clientId → ENABLED module keys (crm/scheduling), for the per-client chips. */
+  enabledModules: Record<string, string[]>;
 }) {
   const router = useRouter();
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [openMenu, setOpenMenu] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // Client-side search over client names + their workflow names/ids.
+  const [query, setQuery] = useState("");
 
   // Modals
   const [createOpen, setCreateOpen] = useState(false);
@@ -331,50 +345,81 @@ export function ClientsWorkflowsView({
     </div>
   );
 
+  // ── Client-side search over client names + their workflow names/ids ──
+  const q = query.trim().toLowerCase();
+  const matchWf = (w: WorkflowItem): boolean =>
+    !q ||
+    (w.name ?? w.n8nWorkflowId).toLowerCase().includes(q) ||
+    w.n8nWorkflowId.toLowerCase().includes(q);
+  const visibleLoose = q ? looseWorkflows.filter(matchWf) : looseWorkflows;
+  const visibleFolders = q
+    ? folders.filter((f) => f.name.toLowerCase().includes(q) || f.workflows.some(matchWf))
+    : folders;
+  const noResults = q !== "" && visibleFolders.length === 0 && visibleLoose.length === 0;
+
   return (
-    <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-6 px-6 py-12">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-2">
-          <Link href="/" className="text-sm text-neutral-500 transition-colors hover:text-foreground">
-            &larr; Overview
-          </Link>
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Clients &amp; Workflows</h1>
-          <p className="text-sm text-neutral-500">
-            Group workflows into clients. Ungrouped workflows are{" "}
-            <span className="text-muted">Unassigned</span>.
-          </p>
+    <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-6 px-6 py-10">
+      <header className="flex flex-col gap-4">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div className="space-y-1.5">
+            <Link href="/" className="text-sm text-neutral-500 transition-colors hover:text-foreground">
+              &larr; Overview
+            </Link>
+            <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Clients</h1>
+            <p className="text-sm text-muted">
+              Workspaces that group workflows, conversations, and modules. Ungrouped workflows stay{" "}
+              <span className="text-foreground">Unassigned</span>.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setCreateOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500"
+          >
+            <span aria-hidden>＋</span> New client
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => setCreateOpen(true)}
-          className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500"
-        >
-          <span aria-hidden>＋</span> New client
-        </button>
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search clients or workflows…"
+          aria-label="Search clients or workflows"
+          className="h-9 w-full max-w-sm rounded-lg border border-black/10 bg-transparent px-3 text-sm outline-none focus:border-line-strong dark:border-line-strong"
+        />
       </header>
 
+      {noResults ? (
+        <p className="rounded-xl border border-dashed border-line px-4 py-10 text-center text-sm text-faint">
+          No clients or workflows match &ldquo;{query.trim()}&rdquo;.
+        </p>
+      ) : null}
+
       {/* Unassigned (default client's workflows shown as loose files) */}
+      {!noResults ? (
       <section className="flex flex-col gap-2">
         <h2 className="px-1 text-[11px] font-medium uppercase tracking-wider text-neutral-500">
-          Unassigned · {looseWorkflows.length}
+          Unassigned · {visibleLoose.length}
         </h2>
-        {looseWorkflows.length === 0 ? (
+        {visibleLoose.length === 0 ? (
           <p className="rounded-xl border border-dashed border-black/10 px-4 py-6 text-center text-sm text-faint dark:border-line">
-            Nothing unassigned.
+            {q ? "No matching unassigned workflows." : "Nothing unassigned."}
           </p>
         ) : (
           <ul className="divide-y divide-black/5 overflow-hidden rounded-2xl border border-black/10 dark:divide-white/5 dark:border-line">
-            {looseWorkflows.map((w) => (
+            {visibleLoose.map((w) => (
               <li key={w.id}>{workflowRow(w, `wf:loose:${w.id}`)}</li>
             ))}
           </ul>
         )}
       </section>
+      ) : null}
 
       {/* Client folders */}
+      {!noResults ? (
       <section className="flex flex-col gap-3">
         <h2 className="px-1 text-[11px] font-medium uppercase tracking-wider text-neutral-500">
-          Clients · {folders.length}
+          Clients · {visibleFolders.length}
         </h2>
         {folders.length === 0 ? (
           <p className="rounded-xl border border-dashed border-black/10 px-4 py-6 text-center text-sm text-faint dark:border-line">
@@ -382,9 +427,10 @@ export function ClientsWorkflowsView({
             move workflows into it.
           </p>
         ) : (
-          folders.map((folder) => {
+          visibleFolders.map((folder) => {
             const isOpen = expanded.has(folder.id);
             const menuKey = `client:${folder.id}`;
+            const moduleKeys = enabledModules[folder.id] ?? [];
             return (
               <div
                 key={folder.id}
@@ -402,11 +448,24 @@ export function ClientsWorkflowsView({
                     <FolderIcon open={isOpen} />
                     <span className="min-w-0">
                       <span className="block truncate text-sm font-semibold">{folder.name}</span>
-                      <span className="block text-xs text-neutral-500">
-                        {folder.workflowCount} workflow{folder.workflowCount === 1 ? "" : "s"}
+                      <span className="flex items-center gap-1.5">
+                        <span className="text-xs text-neutral-500">
+                          {folder.workflowCount} workflow{folder.workflowCount === 1 ? "" : "s"}
+                        </span>
+                        {moduleKeys.includes("crm") ? <ModuleChip label="CRM" /> : null}
+                        {moduleKeys.includes("scheduling") ? <ModuleChip label="Scheduling" /> : null}
                       </span>
                     </span>
                   </button>
+
+                  {/* Open the client's workspace (aggregate overview — valid even with
+                      zero workflows). Real route, no fabricated data. */}
+                  <Link
+                    href={`/clients/${folder.id}/workflows/all/analytics`}
+                    className="hidden shrink-0 rounded-lg border border-black/10 px-2.5 py-1 text-xs text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground sm:inline-flex dark:border-line-strong dark:hover:bg-subtle"
+                  >
+                    Open
+                  </Link>
 
                   {/* Client ⋯ menu: rename / delete (never on the default client) */}
                   <RowMenu
@@ -490,6 +549,7 @@ export function ClientsWorkflowsView({
           })
         )}
       </section>
+      ) : null}
 
       {createOpen ? (
         <CreateClientModal
@@ -707,12 +767,16 @@ function LogoPicker({
   const [preview, setPreview] = useState<string | null>(null);
 
   useEffect(() => {
+    // Sync a preview object-URL to the picked file (an external resource that must be
+    // created + revoked here); the setPreview calls are intentional for that sync.
+    /* eslint-disable react-hooks/set-state-in-effect */
     if (!file) {
       setPreview(null);
       return;
     }
     const url = URL.createObjectURL(file);
     setPreview(url);
+    /* eslint-enable react-hooks/set-state-in-effect */
     return () => URL.revokeObjectURL(url);
   }, [file]);
 

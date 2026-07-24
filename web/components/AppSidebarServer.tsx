@@ -1,4 +1,5 @@
 import { getSessionScope } from "@/lib/access";
+import { getServerSession } from "@/lib/session";
 import { buildEnabledModulesMap } from "@/lib/enabledModulesMap";
 import { getClientById, getDefaultClientForTenant } from "@worker/db/repositories/clients.js";
 import {
@@ -9,8 +10,8 @@ import { AppSidebar } from "./AppSidebar";
 
 /**
  * Server wrapper that feeds the access scope into the (client) AppSidebar. The
- * sidebar is route-reactive (usePathname/useSearchParams) so it must stay a client
- * component, but the role/scope comes from the session at the data layer — never
+ * sidebar is route-reactive (usePathname) so it must stay a client component, but
+ * the role/scope + account identity come from the session at the data layer — never
  * the URL.
  *
  * We pass MINIMAL data:
@@ -18,25 +19,26 @@ import { AppSidebar } from "./AppSidebar";
  *    client's surfaces instead of the Hub + Clients & Workflows management.
  *  - defaultClientId (owner/admin): identifies the "Unassigned" client by its real
  *    is_default row — the rail hides Modules for it.
- *  - enabledModules: clientId → ENABLED module keys. Owner/admin: the whole
- *    tenant in ONE query, with the DEFAULT client's rows EXCLUDED (backfill
- *    residue is inert — Unassigned never shows Contacts/Agenda). A member gets
- *    only their client's entry, and nothing at all if their client is somehow
- *    the default. After a toggle the panel's router.refresh() re-renders this
- *    server component, so a disabled module's link disappears.
- * The rail no longer renders workflow names (the header switcher + the Workflows
- * list own that), so NO workflow list is serialized here — in particular a member
- * never receives any workflow data through the sidebar.
- * Graceful (non-redirecting) like AppHeader — the page itself owns any redirect.
+ *  - enabledModules: clientId → ENABLED module keys. Owner/admin: the whole tenant in
+ *    ONE query, with the DEFAULT client's rows EXCLUDED (Unassigned never shows
+ *    Contacts/Agenda). A member gets only their client's entry.
+ *  - email / role / clientLabel: identity for the fixed account footer (the SAME
+ *    account menu the header uses — one shared implementation).
+ * The rail never renders workflow names (the header switcher + the Workflows list own
+ * that), so NO workflow list is serialized here — a member never receives any
+ * workflow data through the sidebar.
+ * Graceful (non-redirecting) like AppHeader — the page itself owns any redirect;
+ * logged-out → no rail.
  */
 export async function AppSidebarServer() {
   const scope = await getSessionScope();
-  if (!scope) {
-    return <AppSidebar memberClientId={null} defaultClientId={null} enabledModules={{}} />;
-  }
+  if (!scope) return null;
+  const session = await getServerSession();
+  const email = session?.user?.email ?? "";
 
   let defaultClientId: string | null = null;
   let enabledModules: Record<string, string[]> = {};
+  let clientLabel: string | null = null;
 
   if (scope.memberClientId) {
     // Member: their client's module rows only.
@@ -49,6 +51,8 @@ export async function AppSidebarServer() {
     if (memberClient && !memberClient.is_default) {
       enabledModules = buildEnabledModulesMap(moduleRows, null);
     }
+    // Their client name — so the footer/menu shows where they're scoped.
+    clientLabel = memberClient ? (memberClient.is_default ? "Unassigned" : memberClient.name) : null;
   } else {
     const [defaultClient, moduleRows] = await Promise.all([
       getDefaultClientForTenant(scope.tenantId),
@@ -64,6 +68,9 @@ export async function AppSidebarServer() {
       memberClientId={scope.memberClientId}
       defaultClientId={defaultClientId}
       enabledModules={enabledModules}
+      email={email}
+      role={scope.role}
+      clientLabel={clientLabel}
     />
   );
 }
