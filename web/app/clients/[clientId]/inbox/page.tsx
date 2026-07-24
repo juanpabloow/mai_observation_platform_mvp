@@ -5,22 +5,22 @@ import { getAgentSummary } from "@worker/db/repositories/handoff.js";
 import { getAccessScope, hasFullAccess } from "@/lib/access";
 import { getClientForTenant } from "@/lib/clientWorkflow";
 import { loadClientInboxList } from "@/lib/inboxData";
-import { ConversationGrid } from "@/components/ConversationGrid";
-import { InboxDrawer } from "@/components/InboxDrawer";
+import { ClientInboxWorkspace } from "@/components/ClientInboxWorkspace";
 
 /**
- * Client-level UNIFIED INBOX (Phase 4A). ONE tray for the live/handoff conversations
- * of ALL the client's canonical workflows — each card labelled with its workflow and
- * filterable by workflow WITHOUT a full reload. It reuses the exact same grid + drawer
- * as the per-workflow inbox (no duplicate UI): the grid light-polls the client-level
- * endpoint and cards open the drawer via `?c=<conversationId>` on this same route.
+ * Client-level UNIFIED INBOX — an operative THREE-COLUMN workspace (list · chat ·
+ * customer details). ONE tray for the live/handoff conversations of ALL the client's
+ * canonical workflows, grouped by real state (Needs human attention / Human is
+ * handling / Bot is handling), filterable by workflow, opening the chat via the
+ * existing `?c=<conversationId>` deep link on this same route.
  *
  * Access is resolved from the SESSION, never the URL: getClientForTenant validates the
  * clientId is a real client of THIS tenant AND accessible to the user (owner/admin →
- * any of their clients; member → only their one client) — any other client (foreign,
- * bogus, or out-of-a-member's-scope) is an indistinguishable 404. The data layer
- * (loadClientInboxList / the poll route) filters by tenant+client at the SQL layer, so
- * a foreign conversation is never listed and a direct `?c=` to one 404s in the drawer.
+ * any of their clients; member → only their one client) — any other client is an
+ * indistinguishable 404. The data layer (loadClientInboxList / the poll route) filters
+ * by tenant+client at the SQL layer, so a foreign conversation is never listed and a
+ * direct `?c=` to one 404s in the thread pane. All props handed to the (client)
+ * workspace are serializable — no function crosses the RSC boundary.
  */
 export default async function ClientInboxPage({
   params,
@@ -48,29 +48,15 @@ export default async function ClientInboxPage({
     .sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id));
 
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-4 px-6 py-6">
-      <header>
-        <h1 className="text-xl font-semibold tracking-tight">Inbox</h1>
-        <p className="mt-0.5 text-sm text-muted">
-          Live and handed-off conversations across all of this client&rsquo;s workflows.
-        </p>
-      </header>
-
-      <ConversationGrid
-        clientId={client.id}
-        initial={initial}
-        endpoint={`/api/inbox/${encodeURIComponent(client.id)}/conversations`}
-        workflows={workflows}
-        // Serializable route selector (NOT a callback) — cards open the drawer via
-        // ?c= on THIS same client-level route. Nothing non-serializable crosses here.
-        conversationRoute="client"
-      />
-      <InboxDrawer
-        clientId={client.id}
-        viewerUserId={scope.userId}
-        viewerName={viewer?.name ?? null}
-        viewerIsFullAccess={hasFullAccess(scope)}
-      />
-    </main>
+    <ClientInboxWorkspace
+      clientId={client.id}
+      clientName={client.name}
+      initial={initial}
+      endpoint={`/api/inbox/${encodeURIComponent(client.id)}/conversations`}
+      workflows={workflows}
+      viewerUserId={scope.userId}
+      viewerName={viewer?.name ?? null}
+      viewerIsFullAccess={hasFullAccess(scope)}
+    />
   );
 }

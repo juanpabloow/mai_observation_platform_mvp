@@ -198,16 +198,19 @@ test('client Inbox page (unified): still session-authorized, client-level poll',
   assert.ok(src.includes('w.client_id === client.id'), 'the workflow filter is scoped to this client');
 });
 
-test('RSC-safe: the server page passes NO function to ConversationGrid, only conversationRoute="client"', () => {
+test('RSC-safe: the server page passes NO function to the client workspace', () => {
   const src = read('app/clients/[clientId]/inbox/page.tsx');
-  // The regressed prop (a callback) must be gone — passing it broke RSC serialization
-  // ("Functions cannot be passed directly to Client Components").
+  // The three-column workspace is a client component; the server page must hand it
+  // only serializable props (a callback would break RSC serialization —
+  // "Functions cannot be passed directly to Client Components").
+  assert.ok(src.includes('<ClientInboxWorkspace'), 'the page renders the client workspace');
   assert.ok(!src.includes('conversationHref'), 'no conversationHref callback prop');
-  // No inline arrow / function is handed to the grid at all.
-  const grid = slice(src, '<ConversationGrid', '/>');
-  assert.ok(!grid.includes('=>') && !grid.includes('function'), 'no function crosses the RSC boundary');
-  // The serializable selector is used instead.
-  assert.ok(grid.includes('conversationRoute="client"'), 'passes the serializable conversationRoute="client"');
+  const ws = slice(src, '<ClientInboxWorkspace', '/>');
+  assert.ok(!ws.includes('=>') && !ws.includes('function'), 'no function crosses the RSC boundary');
+  // The workspace itself owns the ?c= deep link (the client-scoped route selector).
+  const wsSrc = read('components/ClientInboxWorkspace.tsx');
+  assert.ok(wsSrc.includes('searchParams.get("c")'), 'selection is the existing ?c= param');
+  assert.ok(wsSrc.includes('p.set("c", id)'), 'selecting a row sets ?c= (preserving other params)');
 });
 
 test('grid builds the drawer href from conversationRoute (client vs workflow), all segments encoded', () => {
