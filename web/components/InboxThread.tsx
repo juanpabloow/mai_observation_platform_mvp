@@ -42,6 +42,8 @@ export function InboxThread({
   viewerName,
   viewerIsFullAccess,
   onClose,
+  onBack,
+  headerExtra,
 }: {
   clientId: string;
   initial: ThreadPayload;
@@ -49,6 +51,10 @@ export function InboxThread({
   viewerName: string | null;
   viewerIsFullAccess: boolean;
   onClose: () => void;
+  /** Optional: a mobile "back to list" control (client→client callback). */
+  onBack?: () => void;
+  /** Optional: extra header controls (e.g. a Details toggle) — client→client node. */
+  headerExtra?: React.ReactNode;
 }) {
   const [header, setHeader] = useState(initial.header);
   const [serverMessages, setServerMessages] = useState(initial.messages);
@@ -193,7 +199,17 @@ export function InboxThread({
     <div className="flex h-full min-h-0 flex-col">
       {/* Compact header */}
       <div className="flex shrink-0 items-start justify-between gap-2 border-b border-line px-4 py-3">
-        <div className="flex min-w-0 flex-col gap-1">
+        {onBack ? (
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="Back to conversations"
+            className="mt-0.5 shrink-0 rounded-lg border border-black/10 px-2 py-1 text-xs text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground lg:hidden dark:border-line-strong dark:hover:bg-subtle"
+          >
+            ‹ Back
+          </button>
+        ) : null}
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
             <ModeBadge mode={header.mode} />
             <span className="truncate font-semibold">{header.conversationRef}</span>
@@ -214,6 +230,7 @@ export function InboxThread({
             viewerIsFullAccess={viewerIsFullAccess}
             onResult={onActionResult}
           />
+          {headerExtra}
           <button
             type="button"
             onClick={onClose}

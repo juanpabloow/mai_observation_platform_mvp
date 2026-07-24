@@ -94,6 +94,42 @@ export async function workflowBelongsToConnection(
   return (result.rowCount ?? 0) > 0;
 }
 
+/** A workflow resolved for a machine token: its row + owning client + whether
+ * that client is the tenant's default ("Unassigned"). */
+export interface WorkflowConnectionResolution {
+  id: string;
+  n8n_workflow_id: string;
+  n8n_connection_id: string;
+  client_id: string;
+  client_is_default: boolean;
+}
+
+/**
+ * Resolve a workflow for the SCHEDULING machine API: it must belong SIMULTANEOUSLY
+ * to this tenant, this connection AND this n8n workflow id (never tenant + ref
+ * alone — a token authorizes only workflows synced under its own connection).
+ * Returns the workflow's owning client_id + whether that client is the default.
+ * Unknown ref / wrong connection / wrong tenant → null. Separate from
+ * workflowBelongsToConnection (still used by the handoff API) so that stays
+ * untouched.
+ */
+export async function resolveWorkflowForConnection(
+  tenantId: string,
+  n8nConnectionId: string,
+  n8nWorkflowId: string,
+): Promise<WorkflowConnectionResolution | null> {
+  const result = await query<WorkflowConnectionResolution>(
+    `SELECT w.id, w.n8n_workflow_id, w.n8n_connection_id, w.client_id,
+            c.is_default AS client_is_default
+       FROM workflows w
+       JOIN clients c ON c.id = w.client_id AND c.tenant_id = w.tenant_id
+      WHERE w.tenant_id = $1 AND w.n8n_connection_id = $2 AND w.n8n_workflow_id = $3
+      LIMIT 1`,
+    [tenantId, n8nConnectionId, n8nWorkflowId],
+  );
+  return result.rows[0] ?? null;
+}
+
 /** A workflow option for the filter dropdown (distinct workflow ids per tenant). */
 export interface WorkflowOption {
   n8n_workflow_id: string;

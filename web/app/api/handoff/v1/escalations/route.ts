@@ -3,11 +3,13 @@ import {
   authenticateHandoffRequest,
   formatConversation,
   handoffError,
+  moduleDisabled,
   resolveWorkflowOr404,
 } from "@/lib/handoffApi";
 import {
   getOrCreateConversation,
   IllegalModeTransitionError,
+  ModuleDisabledError,
   transitionMode,
 } from "@worker/db/repositories/handoff.js";
 
@@ -61,12 +63,17 @@ export async function POST(req: Request): Promise<Response> {
         source: "workflow",
         reasonCode: b.reason_code ?? null,
         detail: b.detail ?? null,
+        // Race-safe INBOX gate: the client is derived from the authenticated
+        // workflow (never a body field). Disabled → module_disabled, no escalation.
+        inboxGate: { clientId: wf.clientId },
       });
       return Response.json(
         { conversation: await formatConversation(result.conversation) },
         { status: result.changed ? 201 : 200 },
       );
     } catch (err) {
+      // The client's inbox module is off (or was disabled concurrently) → no handoff.
+      if (err instanceof ModuleDisabledError) return moduleDisabled("inbox");
       // TOCTOU: an agent took (or otherwise changed) the conversation between our
       // mode read above and transitionMode's row lock, so bot→pending is no longer a
       // legal edge. That's not an error — the escalation is moot. Re-read and return

@@ -4,6 +4,7 @@ import { notFound, redirect } from "next/navigation";
 import { listTurnsForConversation } from "@worker/db/repositories/conversationTurns.js";
 import { getCurrentTenantId } from "@/lib/tenant";
 import { requireWorkflowUnderClient } from "@/lib/clientWorkflow";
+import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { isUuid } from "@/lib/inboxData";
 import { ChatScroll } from "@/components/ChatScroll";
 import { ChatTranscript } from "@/components/ChatTranscript";
@@ -31,6 +32,8 @@ export default async function WorkflowInboxThreadPage({
 
   const workflow = await requireWorkflowUnderClient(clientId, workflowId, `inbox/${rawId}`);
   const linkClientId = workflow.client_id ?? clientId;
+  const tenantId = await getCurrentTenantId();
+  if (!(await isClientModuleEnabled(tenantId, linkClientId, "inbox"))) notFound();
   const inboxHref = `/clients/${encodeURIComponent(linkClientId)}/workflows/${encodeURIComponent(workflowId)}/inbox`;
 
   // Handoff conversations (uuid) open in the drawer via ?c=.
@@ -39,7 +42,6 @@ export default async function WorkflowInboxThreadPage({
   }
 
   // Derived (non-handoff) conversation: the Phase-3 read-only transcript.
-  const tenantId = await getCurrentTenantId();
   const turns = await listTurnsForConversation({ tenantId, n8nWorkflowId: workflowId, conversationId });
   if (turns.length === 0) notFound();
 

@@ -1,12 +1,14 @@
 import "server-only";
 import { getSessionScope, canAccessClient, type AccessScope } from "./access";
 import { getClientById } from "@worker/db/repositories/clients.js";
+import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { getWorkflowByN8nId } from "@worker/db/repositories/workflows.js";
 import { listTurnsForConversation } from "@worker/db/repositories/conversationTurns.js";
 import {
   ACTIVITY_WINDOW_HOURS,
   getConversationForClient,
   getLatestEscalationReasons,
+  listConversationsForClient,
   listConversationsForWorkflow,
   listThreadMessages,
   type EscalationReasonRow,
@@ -41,8 +43,9 @@ export type InboxAccess =
 
 /**
  * Authorize a session user for a client's inbox WITHOUT redirecting (for JSON
- * routes). 401 when unauthenticated; 404 when the client is bogus/foreign or
- * outside a member's scope (deny-by-default, never disclose existence).
+ * routes). 401 when unauthenticated; 404 when the client is bogus/foreign, outside a
+ * member's scope, OR the `inbox` module is DISABLED for the client (deny-by-default,
+ * never disclose existence — the disabled case is indistinguishable from missing).
  */
 export async function resolveInboxAccess(clientId: string): Promise<InboxAccess> {
   const scope = await getSessionScope();
@@ -50,6 +53,7 @@ export async function resolveInboxAccess(clientId: string): Promise<InboxAccess>
   if (!canAccessClient(scope, clientId)) return { ok: false, status: 404 };
   const client = await getClientById({ tenantId: scope.tenantId, clientId });
   if (!client) return { ok: false, status: 404 };
+  if (!(await isClientModuleEnabled(scope.tenantId, clientId, "inbox"))) return { ok: false, status: 404 };
   return { ok: true, scope };
 }
 
@@ -138,6 +142,28 @@ export async function loadWorkflowInboxList(
   };
 }
 
+/**
+ * Load a CLIENT's UNIFIED inbox list (Phase 4A): the live/handoff conversations of
+ * ALL the client's canonical workflows, in the same wire shape as the per-workflow
+ * list (each row carries workflowId + workflowName so the grid can show and filter
+ * by workflow). The latest escalation reason is attached to PENDING rows via ONE
+ * batched query. Caller MUST pass a tenant+client the session is authorized for
+ * (resolveInboxAccess / getClientForTenant).
+ */
+export async function loadClientInboxList(
+  tenantId: string,
+  clientId: string,
+): Promise<WorkflowInboxPayload> {
+  const rows = await listConversationsForClient(tenantId, clientId);
+  const pendingIds = rows.filter((r) => r.mode === "pending").map((r) => r.id);
+  const reasons = await getLatestEscalationReasons(tenantId, pendingIds);
+  return {
+    conversations: rows.map((r) => toConversationView(r, reasons.get(r.id))),
+    activityWindowHours: ACTIVITY_WINDOW_HOURS,
+    asOf: new Date().toISOString(),
+  };
+}
+
 export type WorkflowInboxAccess =
   | { ok: true; scope: AccessScope }
   | { ok: false; status: 401 | 404 };
@@ -156,6 +182,11 @@ export async function resolveWorkflowInboxAccess(
   const workflow = await getWorkflowByN8nId({ tenantId: scope.tenantId, n8nWorkflowId });
   if (!workflow || !workflow.client_id) return { ok: false, status: 404 };
   if (!canAccessClient(scope, workflow.client_id)) return { ok: false, status: 404 };
+  // The (compat) per-workflow inbox is gated on the workflow's CLIENT having inbox
+  // enabled — a workflow of a client whose inbox is off is an indistinguishable 404.
+  if (!(await isClientModuleEnabled(scope.tenantId, workflow.client_id, "inbox"))) {
+    return { ok: false, status: 404 };
+  }
   return { ok: true, scope };
 }
 

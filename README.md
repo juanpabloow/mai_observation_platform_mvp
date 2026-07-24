@@ -15,6 +15,18 @@ Both import the **same** pg connection pool, repositories, and row types from
 `src/db` — there is no duplicated data-access logic. In production they deploy
 as two independent services from this one repo.
 
+## CRM + Scheduling (V1)
+
+Beyond observability, MT_AI is the **single source of truth for schedules** — it
+manages contacts, sites, staff, services, and appointments, computes availability,
+and makes double-booking impossible at the database level (a Postgres GiST
+exclusion constraint). It exposes a Bearer-token API for n8n, a public booking
+page at `/book/{site_slug}`, and internal Agenda / Contacts / Scheduling-admin
+surfaces. See **[docs/scheduling-v1.md](docs/scheduling-v1.md)** for setup,
+migrations, the n8n API (+ [OpenAPI](docs/scheduling-openapi.yaml)), curl and n8n
+payload examples, how to test a double-booking race, and V1 decisions/limitations.
+Seed demo data with `npm run seed:scheduling`.
+
 ## Tech stack
 
 - **Node.js 20+** with **TypeScript** (strict mode)

@@ -48,7 +48,7 @@ export default function RootLayout({
               the header and sidebar render null, so content fills the full width. */}
           <div className="flex min-h-0 flex-1">
             <Suspense
-              fallback={<div className="hidden w-52 shrink-0 border-r border-line bg-sidebar md:block" />}
+              fallback={<div className="hidden w-60 shrink-0 border-r border-line bg-sidebar md:block" />}
             >
               <AppSidebarServer />
             </Suspense>

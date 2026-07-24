@@ -1,40 +1,76 @@
 import { getSessionScope } from "@/lib/access";
-import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
-import { AppSidebar, type SidebarWorkflow } from "./AppSidebar";
+import { getServerSession } from "@/lib/session";
+import { buildEnabledModulesMap } from "@/lib/enabledModulesMap";
+import { getClientById, getDefaultClientForTenant } from "@worker/db/repositories/clients.js";
+import {
+  listClientModules,
+  listClientModulesForTenant,
+} from "@worker/db/repositories/clientModules.js";
+import { AppSidebar } from "./AppSidebar";
 
 /**
  * Server wrapper that feeds the access scope into the (client) AppSidebar. The
- * sidebar is route-reactive (usePathname/useSearchParams) so it must stay a client
- * component, but the role/scope comes from the session at the data layer — never
+ * sidebar is route-reactive (usePathname) so it must stay a client component, but
+ * the role/scope + account identity come from the session at the data layer — never
  * the URL.
  *
- * We pass:
+ * We pass MINIMAL data:
  *  - memberClientId: when set (a member), the tenant-level rail shows their single
- *    client's overview instead of the Hub + Clients & Workflows management.
- *  - workflows (id + owning client): so the in-client rail can keep the workflow
- *    tabs (Executions/Conversations/Analytics) pointing at a real workflow even on
- *    the client-level Team page — resolving a remembered/first workflow CLIENT-side
- *    (same idea as CL-5c). It's the FULL tenant list (owner/admin), so any client's
- *    first workflow is computable without re-querying per navigation (the list is
- *    navigation-independent; router.refresh() after mutations keeps it current).
- *    Members don't see Team and their tabs come straight from the route, so the
- *    query is skipped for them.
- * Graceful (non-redirecting) like AppHeader — the page itself owns any redirect.
+ *    client's surfaces instead of the Hub + Clients & Workflows management.
+ *  - defaultClientId (owner/admin): identifies the "Unassigned" client by its real
+ *    is_default row — the rail hides Modules for it.
+ *  - enabledModules: clientId → ENABLED module keys. Owner/admin: the whole tenant in
+ *    ONE query, with the DEFAULT client's rows EXCLUDED (Unassigned never shows
+ *    Contacts/Agenda). A member gets only their client's entry.
+ *  - email / role / clientLabel: identity for the fixed account footer (the SAME
+ *    account menu the header uses — one shared implementation).
+ * The rail never renders workflow names (the header switcher + the Workflows list own
+ * that), so NO workflow list is serialized here — a member never receives any
+ * workflow data through the sidebar.
+ * Graceful (non-redirecting) like AppHeader — the page itself owns any redirect;
+ * logged-out → no rail.
  */
 export async function AppSidebarServer() {
   const scope = await getSessionScope();
-  if (!scope) return <AppSidebar memberClientId={null} workflows={[]} />;
+  if (!scope) return null;
+  const session = await getServerSession();
+  const email = session?.user?.email ?? "";
 
-  // Workflows (owner/admin only) so the in-client rail can keep the workflow tabs
-  // pointed at a real workflow even on the Team page. The per-workflow Inbox pending
-  // badge (H-7) is polled client-side by InboxTabLink, so no counts are seeded here.
-  const workflows: SidebarWorkflow[] = scope.memberClientId
-    ? []
-    : (await listWorkflowsWithClientForTenant(scope.tenantId)).map((w) => ({
-        id: w.n8n_workflow_id,
-        clientId: w.client_id,
-        name: w.name,
-      }));
+  let defaultClientId: string | null = null;
+  let enabledModules: Record<string, string[]> = {};
+  let clientLabel: string | null = null;
 
-  return <AppSidebar memberClientId={scope.memberClientId} workflows={workflows} />;
+  if (scope.memberClientId) {
+    // Member: their client's module rows only.
+    const [memberClient, moduleRows] = await Promise.all([
+      getClientById({ tenantId: scope.tenantId, clientId: scope.memberClientId }),
+      listClientModules(scope.tenantId, scope.memberClientId),
+    ]);
+    // A default client never exposes modules (defensive: a member shouldn't be
+    // scoped to the default, but fail closed if data says otherwise).
+    if (memberClient && !memberClient.is_default) {
+      enabledModules = buildEnabledModulesMap(moduleRows, null);
+    }
+    // Their client name — so the footer/menu shows where they're scoped.
+    clientLabel = memberClient ? (memberClient.is_default ? "Unassigned" : memberClient.name) : null;
+  } else {
+    const [defaultClient, moduleRows] = await Promise.all([
+      getDefaultClientForTenant(scope.tenantId),
+      listClientModulesForTenant(scope.tenantId), // one query, no N+1
+    ]);
+    defaultClientId = defaultClient?.id ?? null;
+    // Default client's rows excluded — Unassigned never shows module links.
+    enabledModules = buildEnabledModulesMap(moduleRows, defaultClientId);
+  }
+
+  return (
+    <AppSidebar
+      memberClientId={scope.memberClientId}
+      defaultClientId={defaultClientId}
+      enabledModules={enabledModules}
+      email={email}
+      role={scope.role}
+      clientLabel={clientLabel}
+    />
+  );
 }

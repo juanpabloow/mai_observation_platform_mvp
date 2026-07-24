@@ -2,8 +2,10 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { listClientsForTenant } from "@worker/db/repositories/clients.js";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
+import { listClientModulesForTenant } from "@worker/db/repositories/clientModules.js";
 import { countActiveConnectionsForTenant } from "@worker/db/repositories/stats.js";
 import { requireFullAccessOrLand } from "@/lib/access";
+import { buildEnabledModulesMap } from "@/lib/enabledModulesMap";
 import { isR2Configured } from "@/lib/r2";
 import {
   ClientsWorkflowsView,
@@ -25,10 +27,11 @@ export default async function ClientsPage() {
   // The Clients & Workflows management view is owner/admin only — a member can't
   // manage clients; requireFullAccessOrLand sends them to their own client.
   const { tenantId } = await requireFullAccessOrLand();
-  const [clients, workflows, activeConnections] = await Promise.all([
+  const [clients, workflows, activeConnections, moduleRows] = await Promise.all([
     listClientsForTenant(tenantId),
     listWorkflowsWithClientForTenant(tenantId),
     countActiveConnectionsForTenant(tenantId),
+    listClientModulesForTenant(tenantId), // one query, no N+1 — for the per-client chips
   ]);
 
   // Soft-gate: no connection → nothing has synced yet, so prompt to connect
@@ -78,6 +81,10 @@ export default async function ClientsPage() {
   const defaultClient = clients.find((c) => c.is_default);
   const looseWorkflows = (byClient.get(defaultClient?.id ?? "") ?? []).sort(byName);
 
+  // clientId → ENABLED module keys (default client's rows excluded — Unassigned never
+  // shows module chips). Real state only; drives the CRM/Scheduling chips.
+  const enabledModules = buildEnabledModulesMap(moduleRows, defaultClient?.id ?? null);
+
   const folders: ClientFolderView[] = clients
     .filter((c) => !c.is_default)
     .sort((a, b) => a.name.localeCompare(b.name))
@@ -104,6 +111,7 @@ export default async function ClientsPage() {
       folders={folders}
       clientOptions={clientOptions}
       r2Enabled={isR2Configured}
+      enabledModules={enabledModules}
     />
   );
 }

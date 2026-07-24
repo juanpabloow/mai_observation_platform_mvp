@@ -5,7 +5,7 @@ import { listClientsForTenant } from "@worker/db/repositories/clients.js";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { HeaderBar, type HeaderClient, type HeaderWorkflow } from "./HeaderBar";
 
-const AUTH_PREFIXES = ["/login", "/signup", "/logout"];
+const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password"];
 
 /**
  * Global app header (logo / breadcrumb / profile). SERVER component in the root
@@ -56,6 +56,7 @@ export async function AppHeader() {
     id: w.n8n_workflow_id,
     name: w.name,
     clientId: w.client_id,
+    active: w.active,
   }));
 
   // For the profile menu: a member's client label (so they always see where they

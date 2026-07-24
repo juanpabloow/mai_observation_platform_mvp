@@ -5,6 +5,7 @@ import { getAccessScope, canAccessClient, hasFullAccess } from "./access";
 import { toHeaderView } from "./inboxData";
 import type { InboxHeaderView } from "./inboxView";
 import { getConversationForClient, transitionMode } from "@worker/db/repositories/handoff.js";
+import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 
 /**
  * Inbox agent actions (H-2): take / dismiss / return-to-bot. EVERY action:
@@ -30,6 +31,16 @@ export interface InboxActionResult {
 
 const FORBIDDEN = "You don't have access to this conversation.";
 const NOT_FOUND = "This conversation no longer exists.";
+const INBOX_DISABLED = "Inbox is disabled for this client.";
+
+/** Server-side INBOX module gate for the human-intervention actions. Hiding the UI
+ * is never enough — take/dismiss/return are refused when inbox is off for the client
+ * (any role). Active human/pending conversations block a disable, so these actions
+ * can't race a disable into an active-but-disabled state (the escalation path, which
+ * CAN, is separately race-safe via transitionMode's inboxGate). */
+async function inboxEnabled(tenantId: string, clientId: string): Promise<boolean> {
+  return isClientModuleEnabled(tenantId, clientId, "inbox");
+}
 
 /** Take a bot/pending conversation into human handling (assign to the current user). */
 export async function takeConversationAction(
@@ -38,6 +49,7 @@ export async function takeConversationAction(
 ): Promise<InboxActionResult> {
   const scope = await getAccessScope();
   if (!canAccessClient(scope, clientId)) return { ok: false, error: FORBIDDEN };
+  if (!(await inboxEnabled(scope.tenantId, clientId))) return { ok: false, error: INBOX_DISABLED };
 
   const conv = await getConversationForClient(scope.tenantId, clientId, conversationId);
   if (!conv) return { ok: false, error: NOT_FOUND };
@@ -76,6 +88,7 @@ export async function dismissConversationAction(
 ): Promise<InboxActionResult> {
   const scope = await getAccessScope();
   if (!canAccessClient(scope, clientId)) return { ok: false, error: FORBIDDEN };
+  if (!(await inboxEnabled(scope.tenantId, clientId))) return { ok: false, error: INBOX_DISABLED };
 
   const conv = await getConversationForClient(scope.tenantId, clientId, conversationId);
   if (!conv) return { ok: false, error: NOT_FOUND };
@@ -118,6 +131,7 @@ export async function returnConversationToBotAction(
 ): Promise<InboxActionResult> {
   const scope = await getAccessScope();
   if (!canAccessClient(scope, clientId)) return { ok: false, error: FORBIDDEN };
+  if (!(await inboxEnabled(scope.tenantId, clientId))) return { ok: false, error: INBOX_DISABLED };
 
   const conv = await getConversationForClient(scope.tenantId, clientId, conversationId);
   if (!conv) return { ok: false, error: NOT_FOUND };

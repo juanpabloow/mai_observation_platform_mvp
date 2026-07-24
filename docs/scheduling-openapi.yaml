@@ -1,0 +1,224 @@
+openapi: 3.1.0
+info:
+  title: MT_AI Scheduling API (n8n)
+  version: "1.0.0"
+  description: >
+    Machine API for the MT_AI scheduling engine. Bearer-token authenticated,
+    reusing the existing per-tenant handoff token (Authorization: Bearer <token>).
+    The tenant is derived from the token — never sent by the caller — so a token
+    for one business can only ever read/modify that business's data.
+
+    Times are ISO-8601 timestamps in UTC; each site presents them in its own IANA
+    timezone. Double-booking is impossible at the database level (a Postgres GiST
+    exclusion constraint); a lost race returns 409.
+servers:
+  - url: https://YOUR-APP.up.railway.app/api/scheduling/v1
+    description: Railway deployment (replace host)
+  - url: http://localhost:3000/api/scheduling/v1
+    description: Local dev
+security:
+  - bearerAuth: []
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: The per-tenant handoff token (hk_...), issued in the platform.
+  schemas:
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code: { type: string }
+            message: { type: string }
+    Slot:
+      type: object
+      properties:
+        start_at: { type: string, format: date-time }
+        service_end_at: { type: string, format: date-time, description: For the chosen staff (duration can differ per staff). }
+        staff_id: { type: string, format: uuid, description: Deterministically chosen staff for "any". }
+        available_staff_ids:
+          type: array
+          items: { type: string, format: uuid }
+        candidates:
+          type: array
+          description: Per-staff service windows for this start (each staff's own duration).
+          items:
+            type: object
+            properties:
+              staff_id: { type: string, format: uuid }
+              service_end_at: { type: string, format: date-time }
+    Appointment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        public_reference: { type: string, format: uuid }
+        site_id: { type: string, format: uuid }
+        staff_id: { type: string, format: uuid }
+        service_id: { type: string, format: uuid }
+        contact_id: { type: [string, "null"], format: uuid }
+        source_conversation_id: { type: [string, "null"], format: uuid }
+        start_at: { type: string, format: date-time }
+        service_end_at: { type: string, format: date-time }
+        status: { type: string, enum: [scheduled, confirmed, completed, cancelled, no_show] }
+        origin: { type: string, enum: [public, n8n, internal, walk_in] }
+        service_name: { type: string }
+        duration_min: { type: integer }
+        price: { type: [string, "null"] }
+        version: { type: integer }
+  responses:
+    Unauthorized:
+      description: Missing/invalid Bearer token
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Conflict:
+      description: Slot taken, unavailable, idempotency-key reuse, or illegal state transition
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+paths:
+  /sites:
+    get:
+      summary: List active sites
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  sites: { type: array, items: { type: object } }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /services:
+    get:
+      summary: List services enabled at a site
+      parameters:
+        - { name: site_id, in: query, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK }
+        "400": { description: site_id required }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /staff:
+    get:
+      summary: List staff at a site (optionally filtered to a service)
+      parameters:
+        - { name: site_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: service_id, in: query, required: false, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+  /availability:
+    get:
+      summary: Real availability for a service in a window
+      parameters:
+        - { name: site_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: service_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: staff_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date-time } }
+      responses:
+        "200":
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  slots: { type: array, items: { $ref: "#/components/schemas/Slot" } }
+        "400": { description: Invalid/too-large window }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: Service not offered at this site }
+  /appointments:
+    get:
+      summary: List appointments (safe filters)
+      parameters:
+        - { name: site_id, in: query, schema: { type: string, format: uuid } }
+        - { name: staff_id, in: query, schema: { type: string, format: uuid } }
+        - { name: status, in: query, schema: { type: string, enum: [scheduled, confirmed, completed, cancelled, no_show] } }
+        - { name: contact_id, in: query, schema: { type: string, format: uuid } }
+        - { name: conversation_id, in: query, schema: { type: string, format: uuid } }
+        - { name: from, in: query, schema: { type: string, format: date-time } }
+        - { name: to, in: query, schema: { type: string, format: date-time } }
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+    post:
+      summary: Create an appointment (idempotent)
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema: { type: string }
+          description: Per-tenant idempotency key. Same key+payload → the same appointment (200); reuse with a different payload → 409.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [site_id, service_id, start_at]
+              properties:
+                workflow_ref: { type: string }
+                conversation_ref: { type: string }
+                channel: { type: string, description: "e.g. whatsapp" }
+                channel_user_id: { type: string, description: "wa_id or stable channel id" }
+                customer_name: { type: string }
+                customer_phone: { type: string, description: normalized to E.164 when possible }
+                customer_email: { type: string }
+                site_id: { type: string, format: uuid }
+                service_id: { type: string, format: uuid }
+                staff_id: { type: string, format: uuid, description: omit for "any barber" }
+                start_at: { type: string, format: date-time }
+      responses:
+        "201": { description: Created, content: { application/json: { schema: { type: object, properties: { appointment: { $ref: "#/components/schemas/Appointment" } } } } } }
+        "200": { description: Idempotent replay (same key+payload) — returns the existing appointment }
+        "400": { description: Idempotency-Key header missing }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "409": { $ref: "#/components/responses/Conflict" }
+        "422": { description: Invalid body }
+  /appointments/{id}/cancel:
+    post:
+      summary: Cancel (status change; never a physical delete)
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      requestBody:
+        required: false
+        content: { application/json: { schema: { type: object, properties: { reason: { type: string } } } } }
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: Not found }
+        "409": { $ref: "#/components/responses/Conflict" }
+  /appointments/{id}/confirm:
+    post:
+      summary: Confirm
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK }, "409": { $ref: "#/components/responses/Conflict" } }
+  /appointments/{id}/complete:
+    post:
+      summary: Mark completed
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK }, "409": { $ref: "#/components/responses/Conflict" } }
+  /appointments/{id}/no-show:
+    post:
+      summary: Mark no-show
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      responses: { "200": { description: OK }, "409": { $ref: "#/components/responses/Conflict" } }
+  /appointments/{id}/reschedule:
+    post:
+      summary: Reschedule (keeps the same id; re-validates availability)
+      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [start_at]
+              properties:
+                start_at: { type: string, format: date-time }
+                staff_id: { type: string, format: uuid }
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { description: Not found }
+        "409": { $ref: "#/components/responses/Conflict" }

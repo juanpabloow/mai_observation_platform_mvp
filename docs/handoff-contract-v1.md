@@ -400,3 +400,37 @@ conversation was returned to the bot) before a send, the platform refuses with a
 error and the composer tells the agent. Concurrent sends into one conversation are each
 attributed to their own sender and idempotency key; there is no server-side ordering
 guarantee beyond per-message delivery.
+
+## Inbox as a per-client module (MOD-2)
+
+Inbox is a **per-client module** (`client_modules.module_key = 'inbox'`), alongside
+`crm` and `scheduling`. Owner/admin toggle it on **Modules**; the Unassigned/default
+client can never have it. Existing non-default clients were backfilled to **enabled**
+(prior always-on behavior); brand-new clients start **without** Inbox until enabled.
+
+**Disabling does NOT delete data.** Conversations, messages, contacts, executions and
+handoff history are preserved — re-enabling restores full access. What continues while
+Inbox is OFF: n8n **execution ingestion**, conversation reconstruction, **Executions**
+and **Analytics**, and message storage. What is **blocked** while OFF: new human-handoff
+**escalations**, **take / dismiss / return-to-bot**, and manual human **messages** — i.e.
+every human-intervention path.
+
+**Cannot disable with active handoffs.** Disabling is refused while any conversation is
+`pending` or `human`; owner/admin sees: *"Return or resolve active human conversations
+before disabling Inbox."* The check is transactional and **race-safe**: the disable
+takes `FOR UPDATE` on the module row while a concurrent escalation takes `FOR SHARE`, so
+a new escalation can never slip in and leave an active handoff with Inbox disabled.
+
+**Machine handoff API.** `POST /api/handoff/v1/escalations` derives the client from the
+authenticated workflow (`X-Workflow-Ref` / the token's connection) — never a body field.
+If that client's Inbox is disabled it returns, without revealing other clients/tenants:
+
+```json
+{ "error": "module_disabled", "module": "inbox" }
+```
+
+with HTTP **403**. `GET /mode` and `POST /messages` are NOT gated (the bot keeps
+replying and message history keeps accruing while Inbox is off). All inbox surfaces
+(the unified `/clients/[clientId]/inbox`, the legacy per-workflow inbox, and every
+client-scoped inbox JSON API) return the same safe **404** when the module is off —
+gated by `tenant_id + client_id + module_key = inbox`, never a name or an unvalidated id.

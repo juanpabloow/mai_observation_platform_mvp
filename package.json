@@ -9,7 +9,6 @@
   },
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "test": "npm run test:auth",
     "test:auth": "tsx --test web/tests/*.test.ts",
     "build": "tsc",
     "build:worker": "tsc",
@@ -24,7 +23,13 @@
     "web:build": "cd web && npm run build",
     "build:web": "cd web && npm run build",
     "start:web": "cd web && npm run start",
-    "web:install": "cd web && npm install"
+    "web:install": "cd web && npm install",
+    "test": "npm run test:auth && npm run test:unit && npm run test:integration",
+    "test:unit": "node --import tsx --test test/unit/*.test.ts",
+    "test:integration": "node --import tsx --import ./test/integration/env.ts --test test/integration/*.test.ts",
+    "test:db:migrate": "DATABASE_URL=$TEST_DATABASE_URL node-pg-migrate --tsx up",
+    "seed:scheduling": "tsx src/scripts/seedScheduling.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "dotenv": "^17.4.2",
