@@ -20,28 +20,42 @@ interface GridPayload {
 const POLL_MS = 5000;
 
 /**
- * The per-workflow conversation GRID (H-7) — the single conversations surface for a
- * handoff-active workflow. Server-rendered once, then light-polls the workflow list
- * route every ~5s (visibility-paused). ALL filtering is client-side over the loaded
- * page: mode chips (with live counts) AND an Activity segment AND a conversation_ref
- * search — combinable. Server sort (pending-first, recent) is preserved.
+ * The conversation GRID — the shared conversations surface for BOTH a single
+ * handoff-active workflow AND the client-level UNIFIED inbox (Phase 4A). Server-
+ * rendered once, then light-polls `endpoint` every ~5s (visibility-paused). ALL
+ * filtering is client-side over the loaded page: mode chips (with live counts), an
+ * Activity segment, a conversation_ref search, and — when `workflows` is provided
+ * (the client-level tray) — a workflow filter. Combinable; server sort preserved.
+ *
+ * `settingsHref` is optional (the client tray has no single per-workflow settings).
+ * `conversationRoute` picks the drawer deep-link SHAPE (a serializable string, never
+ * a function — server pages can't pass callbacks to a client component): "client" →
+ * /clients/{c}/inbox?c=…; "workflow" (default) → the workflow-scoped route.
  */
 export function ConversationGrid({
   clientId,
   initial,
   endpoint,
   settingsHref,
+  workflows,
+  conversationRoute = "workflow",
 }: {
   clientId: string;
   initial: GridPayload;
   endpoint: string;
-  settingsHref: string;
+  settingsHref?: string;
+  /** When given (client tray), renders a workflow filter dropdown. */
+  workflows?: Array<{ id: string; name: string | null }>;
+  /** Which ?c= drawer deep-link to build (serializable — no callback crosses the RSC
+   * boundary): "client" (the unified tray) or "workflow" (per-workflow inbox, default). */
+  conversationRoute?: "client" | "workflow";
 }) {
   const [data, setData] = useState<GridPayload>(initial);
   const [stale, setStale] = useState(false);
   const [mode, setMode] = useState<InboxFilter>("all");
   const [activity, setActivity] = useState<ActivitySegment>("all");
   const [search, setSearch] = useState("");
+  const [workflowFilter, setWorkflowFilter] = useState<string>("all");
 
   const load = useCallback(async () => {
     try {
@@ -100,10 +114,11 @@ export function ConversationGrid({
       if (mode !== "all" && v.mode !== mode) return false;
       if (activity === "active" && !v.active) return false;
       if (activity === "inactive" && v.active) return false;
+      if (workflowFilter !== "all" && v.workflowId !== workflowFilter) return false;
       if (needle && !v.conversationRef.toLowerCase().includes(needle)) return false;
       return true;
     });
-  }, [all, mode, activity, search]);
+  }, [all, mode, activity, search, workflowFilter]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -150,6 +165,23 @@ export function ConversationGrid({
           ))}
         </div>
 
+        {/* Client-tray only: filter by workflow (no full reload — client-side). */}
+        {workflows && workflows.length > 0 ? (
+          <select
+            value={workflowFilter}
+            onChange={(e) => setWorkflowFilter(e.target.value)}
+            aria-label="Filter by workflow"
+            className="h-8 rounded-lg border border-black/10 bg-transparent px-2 text-sm text-muted dark:border-line-strong"
+          >
+            <option value="all">All workflows</option>
+            {workflows.map((w) => (
+              <option key={w.id} value={w.id}>
+                {w.name ?? w.id}
+              </option>
+            ))}
+          </select>
+        ) : null}
+
         {stale ? <span className="text-xs text-faint">Reconnecting…</span> : null}
 
         <div className="ml-auto flex items-center gap-2">
@@ -160,12 +192,14 @@ export function ConversationGrid({
             placeholder="Search number…"
             className="h-8 w-[240px] max-w-[55vw] rounded-lg border border-line bg-transparent px-3 text-sm outline-none focus:border-line-strong"
           />
-          <Link
-            href={settingsHref}
-            className="flex h-8 shrink-0 items-center rounded-lg border border-black/10 px-3 text-sm text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground dark:border-line-strong dark:hover:bg-subtle"
-          >
-            ⚙ Settings
-          </Link>
+          {settingsHref ? (
+            <Link
+              href={settingsHref}
+              className="flex h-8 shrink-0 items-center rounded-lg border border-black/10 px-3 text-sm text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground dark:border-line-strong dark:hover:bg-subtle"
+            >
+              ⚙ Settings
+            </Link>
+          ) : null}
         </div>
       </div>
 
@@ -179,10 +213,18 @@ export function ConversationGrid({
             <ConversationCard
               key={v.id}
               view={v}
-              // Open the drawer via ?c= (same route — no full navigation; grid stays live).
-              href={`/clients/${encodeURIComponent(clientId)}/workflows/${encodeURIComponent(v.workflowId)}/inbox?c=${encodeURIComponent(v.id)}`}
+              // Open the drawer via ?c= (same route — no full navigation; grid stays
+              // live). "client" → the unified tray; "workflow" → the per-workflow inbox.
+              // Every dynamic segment is encodeURIComponent'd.
+              href={
+                conversationRoute === "client"
+                  ? `/clients/${encodeURIComponent(clientId)}/inbox?c=${encodeURIComponent(v.id)}`
+                  : `/clients/${encodeURIComponent(clientId)}/workflows/${encodeURIComponent(v.workflowId)}/inbox?c=${encodeURIComponent(v.id)}`
+              }
               now={now}
               activityWindowHours={data.activityWindowHours}
+              // Label each card with its workflow only in the unified client tray.
+              showWorkflow={Boolean(workflows)}
             />
           ))}
         </div>

@@ -14,10 +14,16 @@ test('recognizes every client-level surface', () => {
   assert.deepEqual(parseClientSurface(`/clients/${CID}/contacts/abc-123`), { clientId: CID, label: 'Contacts' });
   assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/agenda`), { clientId: CID, label: 'Agenda' });
   assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/agenda/`), { clientId: CID, label: 'Agenda' });
+  // Final design: the Workflows LIST page + the client-level Inbox (incl. its thread).
+  assert.deepEqual(parseClientSurface(`/clients/${CID}/workflows`), { clientId: CID, label: 'Workflows' });
+  assert.deepEqual(parseClientSurface(`/clients/${CID}/inbox`), { clientId: CID, label: 'Inbox' });
+  assert.deepEqual(parseClientSurface(`/clients/${CID}/inbox/abc-123`), { clientId: CID, label: 'Inbox' });
 });
 
 test('workflow routes and non-client paths are NOT client surfaces', () => {
+  // A SPECIFIC workflow is a workflow route (parseWorkflowRoute), not the list surface.
   assert.equal(parseClientSurface(`/clients/${CID}/workflows/wf1/executions`), null);
+  assert.equal(parseClientSurface(`/clients/${CID}/workflows/all/analytics`), null);
   assert.equal(parseClientSurface(`/clients/${CID}`), null);
   assert.equal(parseClientSurface('/contacts'), null);
   assert.equal(parseClientSurface('/scheduling/agenda'), null);

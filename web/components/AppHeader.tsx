@@ -56,6 +56,7 @@ export async function AppHeader() {
     id: w.n8n_workflow_id,
     name: w.name,
     clientId: w.client_id,
+    active: w.active,
   }));
 
   // For the profile menu: a member's client label (so they always see where they

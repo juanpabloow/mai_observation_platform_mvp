@@ -44,11 +44,14 @@ export function ConversationCard({
   href,
   now,
   activityWindowHours,
+  showWorkflow = false,
 }: {
   view: InboxConversationView;
   href: string;
   now: Date;
   activityWindowHours: number;
+  /** Client-level unified tray: label each card with its workflow (Phase 4A). */
+  showWorkflow?: boolean;
 }) {
   const human = view.mode === "human";
   const pending = view.mode === "pending";
@@ -78,6 +81,12 @@ export function ConversationCard({
         <span className="min-w-0 truncate font-semibold text-foreground">{view.conversationRef}</span>
         <ModeBadge mode={view.mode} className="shrink-0" />
       </div>
+
+      {showWorkflow && view.workflowName ? (
+        <span className="w-fit max-w-full truncate rounded-full bg-subtle px-2 py-0.5 text-xs font-medium text-muted">
+          {view.workflowName}
+        </span>
+      ) : null}
 
       <div className="flex flex-wrap items-center gap-2 text-xs">
         <ActivityTag active={view.active} windowHours={activityWindowHours} />

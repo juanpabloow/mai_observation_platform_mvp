@@ -2,11 +2,12 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { useTheme } from "next-themes";
 import { useSidebar } from "@/components/SidebarContext";
 import { parseClientSurface } from "@/lib/clientSurface";
+import { WorkflowSwitcherPanel } from "@/components/WorkflowSwitcherPanel";
 
 export interface HeaderClient {
   id: string;
@@ -19,6 +20,8 @@ export interface HeaderWorkflow {
   id: string;
   name: string | null;
   clientId: string;
+  /** n8n active flag — drives the Active/Inactive grouping + status dot in the switcher. */
+  active: boolean | null;
 }
 
 const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password"];
@@ -172,7 +175,6 @@ export function HeaderBar({
 }) {
   const pathname = usePathname();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const { theme, setTheme } = useTheme();
   const { toggle: toggleSidebar } = useSidebar();
   const [openMenu, setOpenMenu] = useState<null | "client" | "workflow" | "profile">(null);
@@ -197,8 +199,14 @@ export function HeaderBar({
       document.removeEventListener("keydown", onKey);
     };
   }, []);
-  // A navigation closes any open menu.
-  useEffect(() => setOpenMenu(null), [pathname]);
+  // A navigation closes any open menu. Adjust state DURING render when the route
+  // changes (React's documented alternative to a setState-in-effect): compare against
+  // the tracked path in state so it runs once per change and never loops.
+  const [lastPath, setLastPath] = useState(pathname);
+  if (lastPath !== pathname) {
+    setLastPath(pathname);
+    if (openMenu !== null) setOpenMenu(null);
+  }
 
   // Auth screens stay clean (also covers a client-side nav to /logout).
   if (AUTH_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
@@ -225,15 +233,9 @@ export function HeaderBar({
   const atWorkflow = Boolean(route);
   const isAnalytics = pathname.includes("/analytics");
   const isAll = route?.workflowId === "all";
-  const tab = isAnalytics ? "analytics" : pathname.includes("/conversations") ? "conversations" : "executions";
-  // The workflow to "remember" when jumping to the client's All-workflows view:
-  // the one being viewed (or, if already on "all", whatever ?from carries).
-  const currentFrom = isAll ? searchParams.get("from") : route?.workflowId ?? null;
-  const allAnalyticsHref = route
-    ? `/clients/${route.clientId}/workflows/all/analytics${
-        currentFrom ? `?from=${encodeURIComponent(currentFrom)}` : ""
-      }`
-    : "/";
+  // The section the switcher preserves when changing workflow: Analytics if we're on
+  // an analytics route, else Executions (the fallback for every other surface).
+  const section: "executions" | "analytics" = isAnalytics ? "analytics" : "executions";
 
   const byName = (a: HeaderWorkflow, b: HeaderWorkflow) =>
     (a.name ?? a.id).localeCompare(b.name ?? b.id);
@@ -245,8 +247,6 @@ export function HeaderBar({
       ? `/clients/${clientId}/workflows/${encodeURIComponent(first.id)}/executions`
       : "/clients";
   };
-  const workflowTarget = (clientId: string, workflowId: string): string =>
-    `/clients/${clientId}/workflows/${encodeURIComponent(workflowId)}/${tab}`;
 
   const go = (href: string) => {
     setOpenMenu(null);
@@ -366,6 +366,7 @@ export function HeaderBar({
                 type="button"
                 data-menu-root
                 onClick={() => setOpenMenu(openMenu === "workflow" ? null : "workflow")}
+                aria-haspopup="listbox"
                 aria-expanded={openMenu === "workflow"}
                 className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-foreground transition-colors hover:bg-black/[0.05] dark:hover:bg-subtle"
               >
@@ -374,41 +375,17 @@ export function HeaderBar({
                 </span>
                 <ChevronUpDown />
               </button>
-              {openMenu === "workflow" ? (
-                <PortalPanel anchorRef={workflowBtn} align="left" width={264}>
-                  <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-neutral-500">
-                    {currentClient ? `Workflows in ${currentClient.name}` : "Workflows"}
-                  </p>
-                  <div className="max-h-72 overflow-y-auto pb-1">
-                    {/* On analytics routes, "All workflows" = the client-aggregate view. */}
-                    {isAnalytics ? (
-                      <button
-                        type="button"
-                        onClick={() => go(allAnalyticsHref)}
-                        className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
-                      >
-                        <span className="truncate font-medium">All workflows</span>
-                        {isAll ? <span aria-hidden className="ml-auto text-xs text-accent">✓</span> : null}
-                      </button>
-                    ) : null}
-                    {clientWorkflows.length === 0 ? (
-                      <p className="px-3 py-2 text-xs text-neutral-500">No workflows in this client.</p>
-                    ) : (
-                      clientWorkflows.map((w) => (
-                        <button
-                          key={w.id}
-                          type="button"
-                          onClick={() => go(workflowTarget(w.clientId, w.id))}
-                          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
-                        >
-                          <span className="truncate">{w.name ?? w.id}</span>
-                          {!isAll && w.id === currentWorkflow?.id ? (
-                            <span aria-hidden className="ml-auto text-xs text-accent">✓</span>
-                          ) : null}
-                        </button>
-                      ))
-                    )}
-                  </div>
+              {openMenu === "workflow" && route ? (
+                <PortalPanel anchorRef={workflowBtn} align="left" width={280}>
+                  <WorkflowSwitcherPanel
+                    clientId={route.clientId}
+                    clientName={currentClient?.name ?? null}
+                    workflows={clientWorkflows.map((w) => ({ id: w.id, name: w.name, active: w.active }))}
+                    currentWorkflowId={currentWorkflow?.id ?? null}
+                    isAll={isAll}
+                    section={section}
+                    onSelect={go}
+                  />
                 </PortalPanel>
               ) : null}
             </div>

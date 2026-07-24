@@ -665,6 +665,55 @@ export async function listConversationsForWorkflow(
   return r.rows;
 }
 
+/**
+ * A CLIENT's unified inbox list (Phase 4A): every conversation whose CANONICAL
+ * workflow (most recently synced row per n8n id) is assigned to `clientId`, across
+ * ALL that client's workflows. Same row shape + pending-first sort as the
+ * per-workflow list, and each row carries its `workflow_name`. Uses the INNER
+ * canonical lateral (`cw ON cw.client_id = $2`) — same criterion as
+ * getConversationForClient/countPendingForClient — so a conversation whose workflow
+ * belongs to ANOTHER client is excluded at the SQL layer. This is the LIVE/handoff
+ * surface only (the conversations table); execution-derived turns are separate.
+ */
+export async function listConversationsForClient(
+  tenantId: string,
+  clientId: string,
+): Promise<InboxConversationRow[]> {
+  const r = await query<InboxConversationRow>(
+    `SELECT
+       c.id, c.conversation_ref, c.n8n_workflow_id, c.mode,
+       c.assigned_agent_user_id, c.last_message_at, c.created_at,
+       cw.workflow_name,
+       u.name AS assigned_agent_name,
+       lm.text AS last_message_text,
+       lm.sender AS last_message_sender,
+       lm.content_type AS last_message_content_type,
+       ps.pending_since,
+       COALESCE(c.last_user_message_at >= now() - make_interval(hours => $3::int), false) AS active
+     FROM conversations c
+     JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON cw.client_id = $2
+     LEFT JOIN "user" u ON u.id = c.assigned_agent_user_id
+     LEFT JOIN LATERAL (
+       SELECT text, sender, content_type
+         FROM handoff_messages hm
+        WHERE hm.conversation_id = c.id
+        ORDER BY hm.occurred_at DESC, hm.id DESC
+        LIMIT 1
+     ) lm ON true
+     LEFT JOIN LATERAL (
+       SELECT created_at AS pending_since
+         FROM conversation_mode_transitions t
+        WHERE t.conversation_id = c.id AND t.to_mode = 'pending'
+        ORDER BY t.created_at DESC
+        LIMIT 1
+     ) ps ON true
+     WHERE c.tenant_id = $1
+     ORDER BY (c.mode = 'pending') DESC, c.last_message_at DESC NULLS LAST, c.created_at DESC`,
+    [tenantId, clientId, ACTIVITY_WINDOW_HOURS],
+  );
+  return r.rows;
+}
+
 /** Latest escalation reason (reason_code + detail of the most recent bot→pending
  * transition) for the given conversations — ONE batched query for the visible pending
  * page only, never a per-card lateral. Returns a map keyed by conversation id. */

@@ -1,5 +1,6 @@
 import { notFound } from "next/navigation";
 import { resolveWorkflowUnderClient } from "@/lib/clientWorkflow";
+import { WorkflowTabs } from "@/components/WorkflowTabs";
 
 /**
  * Shared GUARD for everything under a workflow
@@ -32,5 +33,15 @@ export default async function WorkflowLayout({
   if (res.kind === "not_found") {
     notFound();
   }
-  return children;
+  // Use the workflow's CANONICAL client id (never the raw URL) so the tabs point at
+  // the right client even on a stale-bookmark mismatch (the page redirects to it).
+  const canonicalClientId = res.kind === "ok" ? res.client.id : res.canonicalClientId;
+  // Shared compact tabs (Executions | Analytics) above every workflow section, in a
+  // flex column so the (workspace)/(padded) child fills the remaining height.
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <WorkflowTabs clientId={canonicalClientId} slot={workflowId} />
+      {children}
+    </div>
+  );
 }

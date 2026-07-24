@@ -7,6 +7,7 @@ import {
   ACTIVITY_WINDOW_HOURS,
   getConversationForClient,
   getLatestEscalationReasons,
+  listConversationsForClient,
   listConversationsForWorkflow,
   listThreadMessages,
   type EscalationReasonRow,
@@ -129,6 +130,28 @@ export async function loadWorkflowInboxList(
   n8nWorkflowId: string,
 ): Promise<WorkflowInboxPayload> {
   const rows = await listConversationsForWorkflow(tenantId, n8nWorkflowId);
+  const pendingIds = rows.filter((r) => r.mode === "pending").map((r) => r.id);
+  const reasons = await getLatestEscalationReasons(tenantId, pendingIds);
+  return {
+    conversations: rows.map((r) => toConversationView(r, reasons.get(r.id))),
+    activityWindowHours: ACTIVITY_WINDOW_HOURS,
+    asOf: new Date().toISOString(),
+  };
+}
+
+/**
+ * Load a CLIENT's UNIFIED inbox list (Phase 4A): the live/handoff conversations of
+ * ALL the client's canonical workflows, in the same wire shape as the per-workflow
+ * list (each row carries workflowId + workflowName so the grid can show and filter
+ * by workflow). The latest escalation reason is attached to PENDING rows via ONE
+ * batched query. Caller MUST pass a tenant+client the session is authorized for
+ * (resolveInboxAccess / getClientForTenant).
+ */
+export async function loadClientInboxList(
+  tenantId: string,
+  clientId: string,
+): Promise<WorkflowInboxPayload> {
+  const rows = await listConversationsForClient(tenantId, clientId);
   const pendingIds = rows.filter((r) => r.mode === "pending").map((r) => r.id);
   const reasons = await getLatestEscalationReasons(tenantId, pendingIds);
   return {

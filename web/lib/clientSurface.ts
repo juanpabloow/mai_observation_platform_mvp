@@ -6,6 +6,10 @@
  */
 
 const CLIENT_SURFACE_LABELS: ReadonlyArray<{ pattern: RegExp; label: string }> = [
+  // The bare Workflows LIST page only (…/workflows exactly) — a specific workflow
+  // (…/workflows/<id>/…) is a workflow route, handled by parseWorkflowRoute, not here.
+  { pattern: /^\/clients\/([^/]+)\/workflows$/, label: "Workflows" },
+  { pattern: /^\/clients\/([^/]+)\/inbox(?:\/|$)/, label: "Inbox" },
   { pattern: /^\/clients\/([^/]+)\/team(?:\/|$)/, label: "Team" },
   { pattern: /^\/clients\/([^/]+)\/modules(?:\/|$)/, label: "Modules" },
   { pattern: /^\/clients\/([^/]+)\/contacts(?:\/|$)/, label: "Contacts" },
