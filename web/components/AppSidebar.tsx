@@ -4,6 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { useSidebar } from "@/components/SidebarContext";
+import { useScope } from "@/components/ScopeProvider";
+import { scopeHref } from "@/lib/scopeSurface";
 import { InboxTabLink } from "@/components/InboxTabLink";
 import { AccountMenu } from "@/components/AccountMenu";
 
@@ -320,6 +322,7 @@ export function AppSidebar({
 }) {
   const pathname = usePathname();
   const { collapsed, mobileOpen, setMobileOpen } = useSidebar();
+  const { scopeFor } = useScope();
 
   // Escape closes the mobile drawer (the listener lives in an effect; it only calls
   // setState from an event callback, never synchronously in the effect body).
@@ -350,23 +353,30 @@ export function AppSidebar({
   if (clientId) {
     const moduleKeys = enabledModules[clientId] ?? [];
     const c = (p: string) => `/clients/${clientId}${p}`;
-    const automation: NavItem[] = [
+    // Scope-aware hrefs (Phase W-1): both items point at the CURRENT workflow scope
+    // read from context — Executions/Analytics of the selected workflow, or the list/
+    // aggregate when scope is 'all'. Both sections live under /workflows/…, so the
+    // active split keys off whether the path is an analytics route.
+    const scope = scopeFor(clientId);
+    const onWorkflows = pathname.startsWith(c("/workflows"));
+    const onAnalytics = /\/workflows\/[^/]+\/analytics(?:\/|$)/.test(pathname);
+    const workflows: NavItem[] = [
       {
-        key: "workflows",
-        label: "Workflows",
-        href: c("/workflows"),
+        key: "executions",
+        label: "Executions",
+        href: scopeHref(clientId, "executions", scope),
         icon: Icon.workflows,
-        active: pathname.startsWith(c("/workflows")),
+        active: onWorkflows && !onAnalytics,
       },
       {
-        key: "overview",
-        label: "Overview",
-        href: c("/workflows/all/analytics"),
+        key: "analytics",
+        label: "Analytics",
+        href: scopeHref(clientId, "analytics", scope),
         icon: Icon.overview,
-        active: pathname === c("/workflows/all/analytics"),
+        active: onWorkflows && onAnalytics,
       },
     ];
-    sections = [{ label: "Automation", items: automation }];
+    sections = [{ label: "Workflows", items: workflows }];
     // CONVERSATIONS (Inbox) only when the `inbox` module is enabled — hides the link,
     // the badge, and (no countEndpoint rendered) stops the pending-count polling.
     if (moduleKeys.includes("inbox")) {
@@ -424,7 +434,13 @@ export function AppSidebar({
     const m = (p: string) => `/clients/${memberClientId}${p}`;
     const memberModules = enabledModules[memberClientId] ?? [];
     const items: NavItem[] = [
-      { key: "overview", label: "Overview", href: m("/workflows/all/analytics"), icon: Icon.overview, active: false },
+      {
+        key: "analytics",
+        label: "Analytics",
+        href: scopeHref(memberClientId, "analytics", scopeFor(memberClientId)),
+        icon: Icon.overview,
+        active: false,
+      },
     ];
     if (memberModules.includes("crm")) {
       items.push({ key: "contacts", label: "Contacts", href: m("/contacts"), icon: Icon.contacts, active: pathname.startsWith(m("/contacts")) });

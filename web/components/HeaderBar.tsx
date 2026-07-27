@@ -5,7 +5,9 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { createPortal } from "react-dom";
 import { useSidebar } from "@/components/SidebarContext";
+import { useScope } from "@/components/ScopeProvider";
 import { parseClientSurface } from "@/lib/clientSurface";
+import { parseScopeSurface, scopeHref } from "@/lib/scopeSurface";
 import { WorkflowSwitcherPanel } from "@/components/WorkflowSwitcherPanel";
 import { AccountMenu } from "@/components/AccountMenu";
 
@@ -25,13 +27,6 @@ export interface HeaderWorkflow {
 }
 
 const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password"];
-
-/** Parse the client + workflow ids out of a /clients/<c>/workflows/<w>/… path. */
-function parseWorkflowRoute(pathname: string): { clientId: string; workflowId: string } | null {
-  const m = pathname.match(/^\/clients\/([^/]+)\/workflows\/([^/]+)(?:\/|$)/);
-  if (!m) return null;
-  return { clientId: decodeURIComponent(m[1]), workflowId: decodeURIComponent(m[2]) };
-}
 
 /** Small client logo (uploaded image or monogram fallback) for breadcrumb + picker. */
 function MiniLogo({ name, logoUrl, size = "size-5" }: { name: string; logoUrl: string | null; size?: string }) {
@@ -185,6 +180,7 @@ export function HeaderBar({
   const pathname = usePathname();
   const router = useRouter();
   const { toggle: toggleSidebar, setMobileOpen } = useSidebar();
+  const { scopeFor, setScope } = useScope();
   const [openMenu, setOpenMenu] = useState<null | "client" | "workflow" | "profile">(null);
 
   const clientBtn = useRef<HTMLButtonElement>(null);
@@ -221,44 +217,47 @@ export function HeaderBar({
     return null;
   }
 
-  const route = parseWorkflowRoute(pathname);
-  // CLIENT-LEVEL (non-workflow) surfaces under /clients/[c]/… — each renders as
-  // "Client / <Label>". The pure parser (lib/clientSurface) knows Team, Modules,
-  // Contacts, and Agenda; workflow routes return null there.
+  // The scope-bearing surface (Executions / Analytics / Inbox) drives the workflow
+  // switcher; parseClientSurface labels the module pages (Team / Modules / Contacts / …).
+  const surface = parseScopeSurface(pathname);
   const clientSurface = parseClientSurface(pathname);
-  const currentClient = route
-    ? clients.find((c) => c.id === route.clientId) ?? null
-    : clientSurface
-      ? clients.find((c) => c.id === clientSurface.clientId) ?? null
-      : null;
-  const currentWorkflow = route
-    ? workflows.find((w) => w.id === route.workflowId && w.clientId === route.clientId) ?? null
-    : null;
-  // The member breadcrumb (no switcher) shows their ONE client even off a workflow
-  // route (e.g. /executions/[id], where `route` is null) — fall back to the only
-  // client the scope-narrowed header was given.
+  const pathClientId = surface?.clientId ?? clientSurface?.clientId ?? null;
+  const currentClient = pathClientId ? clients.find((c) => c.id === pathClientId) ?? null : null;
+  // The member breadcrumb (no client switcher) shows their ONE client — fall back to
+  // the only client the scope-narrowed header was given.
   const soleClient = currentClient ?? clients[0] ?? null;
-  const atWorkflow = Boolean(route);
-  const isAnalytics = pathname.includes("/analytics");
-  const isAll = route?.workflowId === "all";
-  // The section the switcher preserves when changing workflow: Analytics if we're on
-  // an analytics route, else Executions (the fallback for every other surface).
-  const section: "executions" | "analytics" = isAnalytics ? "analytics" : "executions";
+
+  // The remembered workflow SCOPE for this client (from context) — the switcher's
+  // label + ✓, kept URL-accurate by ScopeSync so the header never shows a scope the
+  // content doesn't. "All workflows" when scope is 'all'.
+  const currentScope: "all" | string = pathClientId ? scopeFor(pathClientId) : "all";
+  const scopeWorkflow =
+    currentScope !== "all"
+      ? workflows.find((w) => w.id === currentScope && w.clientId === pathClientId) ?? null
+      : null;
+  const scopeLabel = currentScope === "all" ? "All workflows" : scopeWorkflow?.name ?? currentScope;
 
   const byName = (a: HeaderWorkflow, b: HeaderWorkflow) =>
     (a.name ?? a.id).localeCompare(b.name ?? b.id);
 
-  /** Where selecting a client sends you: its first workflow, else the folder view. */
-  const clientTarget = (clientId: string): string => {
-    const first = workflows.filter((w) => w.clientId === clientId).sort(byName)[0];
-    return first
-      ? `/clients/${clientId}/workflows/${encodeURIComponent(first.id)}/executions`
-      : "/clients";
-  };
+  // Selecting a client goes to its Executions entry (the workflows list route), which
+  // server-resolves THAT client's own remembered scope — redirecting to its workflow
+  // when it has one, else rendering the list. So switching clients respects per-client
+  // memory (and defaults to 'all') without the header guessing a target.
+  const clientTarget = (clientId: string): string => `/clients/${clientId}/workflows`;
 
   const go = (href: string) => {
     setOpenMenu(null);
     router.push(href);
+  };
+
+  // Switcher select: remember the scope for this client (cookie + context), then
+  // navigate keeping the current section (Executions / Analytics / Inbox).
+  const onSelectScope = (scope: "all" | string) => {
+    if (!surface) return;
+    setOpenMenu(null);
+    setScope(surface.clientId, scope);
+    router.push(scopeHref(surface.clientId, surface.section, scope));
   };
 
   const clientWorkflows = currentClient
@@ -365,8 +364,11 @@ export function HeaderBar({
           </span>
         ) : null}
 
-        {/* Client-surface segment ("Client / Team", "Client / Modules", …) */}
-        {clientSurface ? (
+        {/* Client-surface segment ("Client / Team", "Client / Modules", "Client / Inbox").
+            Shown for the module pages, and kept alongside the switcher on Inbox; it's
+            suppressed on the workflow scope surfaces (Executions/Analytics + the list)
+            since the switcher itself carries that identity. */}
+        {clientSurface && (!surface || surface.section === "inbox") ? (
           <>
             <span aria-hidden className="text-faint">/</span>
             <span className="inline-flex items-center px-2 py-1 font-medium text-foreground">
@@ -375,8 +377,10 @@ export function HeaderBar({
           </>
         ) : null}
 
-        {/* Workflow segment (only at workflow level) */}
-        {atWorkflow ? (
+        {/* Workflow SCOPE switcher — on every scope surface (Executions / Analytics /
+            Inbox). Shows the remembered scope; selecting one remembers it + navigates
+            keeping the section. Hidden on the module pages (no scope surface). */}
+        {surface ? (
           <>
             <span aria-hidden className="text-faint">/</span>
             <div className="contents">
@@ -389,21 +393,16 @@ export function HeaderBar({
                 aria-expanded={openMenu === "workflow"}
                 className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-foreground transition-colors hover:bg-black/[0.05] dark:hover:bg-subtle"
               >
-                <span className="truncate font-medium">
-                  {isAll ? "All workflows" : currentWorkflow?.name ?? route?.workflowId ?? "Workflow"}
-                </span>
+                <span className="truncate font-medium">{scopeLabel}</span>
                 <ChevronUpDown />
               </button>
-              {openMenu === "workflow" && route ? (
+              {openMenu === "workflow" ? (
                 <PortalPanel anchorRef={workflowBtn} align="left" width={280}>
                   <WorkflowSwitcherPanel
-                    clientId={route.clientId}
                     clientName={currentClient?.name ?? null}
                     workflows={clientWorkflows.map((w) => ({ id: w.id, name: w.name, active: w.active }))}
-                    currentWorkflowId={currentWorkflow?.id ?? null}
-                    isAll={isAll}
-                    section={section}
-                    onSelect={go}
+                    currentScope={currentScope}
+                    onSelect={onSelectScope}
                   />
                 </PortalPanel>
               ) : null}

@@ -1,6 +1,5 @@
 import { notFound } from "next/navigation";
 import { resolveWorkflowUnderClient } from "@/lib/clientWorkflow";
-import { WorkflowTabs } from "@/components/WorkflowTabs";
 
 /**
  * Shared GUARD for everything under a workflow
@@ -8,18 +7,13 @@ import { WorkflowTabs } from "@/components/WorkflowTabs";
  * scoped (deduped with the page via React.cache) — notFound() if it isn't this
  * tenant's — then renders its child straight through.
  *
- * H-8.1: this layout no longer decides the content wrapper. Deciding it here meant
- * reading the request pathname (headers() x-pathname) and branching bounded-vs-
- * padded — but App Router renders a shared layout ONCE on section entry and REUSES
- * it across sibling client-side navigations (a layout is not re-rendered when only
- * the page below it changes). So the branch FROZE at whichever page you entered
- * through: enter on executions (bounded, no padding) then client-nav to Inbox and
- * Inbox inherited the bounded slot → flush-against-the-edges; enter on Inbox then
- * nav to executions and the master-detail got trapped in the padded column. The
- * wrapper now lives in two sibling route groups — (workspace) for the full-bleed
- * executions master-detail, (padded) for the centered column everything else uses.
- * Crossing those groups REMOUNTS the group layout, so each section always gets its
- * own wrapper and it can never go stale. Route groups don't change the URL.
+ * H-8.1: this layout must NOT decide the content wrapper (reading the pathname here
+ * and branching went stale across client-side navigation). The (workspace)/(padded)
+ * route groups own the slot; this stays a guard-only pass-through.
+ *
+ * W-1: the in-content Executions | Analytics tab bar was removed — those sections are
+ * reached from the sidebar (Executions / Analytics), scoped to the current workflow by
+ * the header switcher. So this layout returns its child unchanged.
  */
 export default async function WorkflowLayout({
   params,
@@ -33,15 +27,5 @@ export default async function WorkflowLayout({
   if (res.kind === "not_found") {
     notFound();
   }
-  // Use the workflow's CANONICAL client id (never the raw URL) so the tabs point at
-  // the right client even on a stale-bookmark mismatch (the page redirects to it).
-  const canonicalClientId = res.kind === "ok" ? res.client.id : res.canonicalClientId;
-  // Shared compact tabs (Executions | Analytics) above every workflow section, in a
-  // flex column so the (workspace)/(padded) child fills the remaining height.
-  return (
-    <div className="flex min-h-0 flex-1 flex-col">
-      <WorkflowTabs clientId={canonicalClientId} slot={workflowId} />
-      {children}
-    </div>
-  );
+  return children;
 }

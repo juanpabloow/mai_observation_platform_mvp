@@ -3,6 +3,8 @@ import { Geist, Geist_Mono } from "next/font/google";
 import { Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { AppSidebarServer } from "@/components/AppSidebarServer";
+import { ScopeProviderServer } from "@/components/ScopeProviderServer";
+import { ScopeSync } from "@/components/ScopeSync";
 import { Providers } from "./providers";
 import "./globals.css";
 
@@ -41,21 +43,28 @@ export default function RootLayout({
           scrolling content region (or, under the workflow layout, into its slot). */}
       <body className="h-full overflow-hidden flex flex-col">
         <Providers>
-          <Suspense fallback={null}>
-            <AppHeader />
-          </Suspense>
-          {/* Below the full-width header: [sidebar | content]. On auth screens both
-              the header and sidebar render null, so content fills the full width. */}
-          <div className="flex min-h-0 flex-1">
-            <Suspense
-              fallback={<div className="hidden w-60 shrink-0 border-r border-line bg-sidebar md:block" />}
-            >
-              <AppSidebarServer />
+          {/* ScopeProviderServer seeds the client scope context (per-client "current
+              workflow") from the request; ScopeSync keeps it URL-accurate across
+              client-side navigation. Both wrap the header + sidebar so those read the
+              scope from context (never a stale layout-captured value — the H-8.1 trap). */}
+          <ScopeProviderServer>
+            <ScopeSync />
+            <Suspense fallback={null}>
+              <AppHeader />
             </Suspense>
-            {/* THE scroll container. min-h-0 lets it shrink within the fixed shell
-                so its own overflow (or a child's) scrolls instead of growing. */}
-            <div className="flex min-w-0 min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
-          </div>
+            {/* Below the full-width header: [sidebar | content]. On auth screens both
+                the header and sidebar render null, so content fills the full width. */}
+            <div className="flex min-h-0 flex-1">
+              <Suspense
+                fallback={<div className="hidden w-60 shrink-0 border-r border-line bg-sidebar md:block" />}
+              >
+                <AppSidebarServer />
+              </Suspense>
+              {/* THE scroll container. min-h-0 lets it shrink within the fixed shell
+                  so its own overflow (or a child's) scrolls instead of growing. */}
+              <div className="flex min-w-0 min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
+            </div>
+          </ScopeProviderServer>
         </Providers>
       </body>
     </html>
