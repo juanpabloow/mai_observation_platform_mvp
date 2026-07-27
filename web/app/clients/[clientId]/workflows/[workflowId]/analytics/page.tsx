@@ -14,18 +14,32 @@ import {
   ExecutionsByStatusChart,
 } from "@/components/WorkflowAnalyticsCharts";
 import {
+  AnalyticsColumns,
+  AnalyticsEmpty,
+  AnalyticsShell,
+  KpiCard,
+  KpiGrid,
   LegendDot,
   NoDataInRange,
-  RangeSelector,
+  PanelCard,
+  PanelEmpty,
   RATE_ERROR,
   RATE_SUCCESS,
-  StatCard,
   SuccessRateCard,
 } from "@/components/analytics-ui";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
+/**
+ * Single-workflow analytics — the Analytics surface at scope = one workflow. Renders
+ * through the SAME AnalyticsShell + KpiCard/PanelCard primitives as the all-workflows
+ * aggregate (workflows/all/analytics), so the two views share one container, header
+ * and KPI/chart skeleton by construction. Only the KPI set (Avg duration here) and
+ * the side panel (this workflow's conversation stats) differ. Lives OUTSIDE the
+ * (padded) group so AnalyticsShell is the sole container (the aggregate has no padded
+ * ancestor either) — same URL, same padded-column result in both.
+ */
 export default async function AnalyticsPage({
   params,
   searchParams,
@@ -57,81 +71,82 @@ export default async function AnalyticsPage({
   const hasConversations = convSummary.allTimeTurns > 0;
 
   return (
-    <section className="flex flex-col gap-6">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold tracking-tight">Analytics</h2>
-        <RangeSelector basePath={basePath} current={days} />
-      </div>
-
+    <AnalyticsShell
+      scopeLabel={workflow.name ?? workflowId}
+      rangeBasePath={basePath}
+      rangeCurrent={days}
+    >
       {summary.allTimeTotal === 0 ? (
-        <div className="rounded-2xl border border-dashed border-line px-6 py-16 text-center">
-          <p className="text-sm text-muted">Not enough data yet.</p>
-          <p className="mt-1 text-sm text-faint">
-            Once this workflow runs, its execution analytics will appear here.
-          </p>
-        </div>
+        <AnalyticsEmpty hint="Once this workflow runs, its execution analytics will appear here." />
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <KpiGrid>
             <SuccessRateCard rate={successRate} success={summary.success} error={summary.error} />
-            <StatCard
+            <KpiCard
               label={`Executions · ${days}d`}
               value={summary.total.toLocaleString()}
               sub={`${summary.allTimeTotal.toLocaleString()} all-time`}
             />
-            <StatCard
+            <KpiCard
               label="Errors"
               value={summary.error.toLocaleString()}
               sub={summary.other > 0 ? `${summary.other} other` : "in range"}
             />
-            <StatCard
+            <KpiCard
               label="Avg duration"
               value={formatDuration(summary.avgDurationMs != null ? Math.round(summary.avgDurationMs) : null)}
               sub="per execution"
             />
-          </div>
+          </KpiGrid>
 
-          <div className="rounded-2xl border border-line bg-card p-4">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-              <h3 className="text-sm font-medium">Executions over time</h3>
-              <div className="flex items-center gap-3 text-xs text-muted">
-                <LegendDot color={RATE_SUCCESS} label="Success" />
-                <LegendDot color={RATE_ERROR} label="Error" />
-              </div>
-            </div>
-            {summary.total === 0 ? (
-              <NoDataInRange days={days} />
-            ) : (
-              <ExecutionsByStatusChart data={series} />
-            )}
-          </div>
-
-          {hasConversations ? (
-            <div className="flex flex-col gap-4">
-              <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-                <StatCard
-                  label={`Turns · ${days}d`}
-                  value={convSummary.totalTurns.toLocaleString()}
-                  sub={`${convSummary.allTimeTurns.toLocaleString()} all-time`}
-                />
-                <StatCard
-                  label="Conversations"
-                  value={convSummary.distinctConversations.toLocaleString()}
-                  sub="distinct in range"
-                />
-              </div>
-              <div className="rounded-2xl border border-line bg-card p-4">
-                <h3 className="mb-3 text-sm font-medium">Conversation turns over time</h3>
-                {convSummary.totalTurns === 0 ? (
+          <AnalyticsColumns
+            primary={
+              <PanelCard
+                title="Executions over time"
+                aside={
+                  <>
+                    <LegendDot color={RATE_SUCCESS} label="Success" />
+                    <LegendDot color={RATE_ERROR} label="Error" />
+                  </>
+                }
+              >
+                {summary.total === 0 ? (
                   <NoDataInRange days={days} />
                 ) : (
-                  <ConversationTurnsChart data={convSeries} />
+                  <ExecutionsByStatusChart data={series} />
                 )}
-              </div>
-            </div>
-          ) : null}
+              </PanelCard>
+            }
+            side={
+              hasConversations ? (
+                <>
+                  <KpiCard
+                    label={`Turns · ${days}d`}
+                    value={convSummary.totalTurns.toLocaleString()}
+                    sub={`${convSummary.allTimeTurns.toLocaleString()} all-time`}
+                  />
+                  <KpiCard
+                    label="Conversations"
+                    value={convSummary.distinctConversations.toLocaleString()}
+                    sub="distinct in range"
+                  />
+                  <PanelCard title="Conversation turns over time">
+                    {convSummary.totalTurns === 0 ? (
+                      <NoDataInRange days={days} />
+                    ) : (
+                      <ConversationTurnsChart data={convSeries} />
+                    )}
+                  </PanelCard>
+                </>
+              ) : (
+                <PanelCard title="Conversations">
+                  <PanelEmpty>No conversation activity yet.</PanelEmpty>
+                </PanelCard>
+              )
+            }
+          />
         </>
       )}
-    </section>
+    </AnalyticsShell>
   );
 }

@@ -14,12 +14,17 @@ import {
 import { countPendingForClient } from "@worker/db/repositories/handoff.js";
 import { ExecutionsByStatusChart } from "@/components/WorkflowAnalyticsCharts";
 import {
+  AnalyticsColumns,
+  AnalyticsEmpty,
+  AnalyticsShell,
+  KpiCard,
+  KpiGrid,
   LegendDot,
   NoDataInRange,
-  RangeSelector,
+  PanelCard,
+  PanelEmpty,
   RATE_ERROR,
   RATE_SUCCESS,
-  StatCard,
   SuccessRateCard,
 } from "@/components/analytics-ui";
 
@@ -27,11 +32,13 @@ type SearchParams = Record<string, string | string[] | undefined>;
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
 /**
- * Client-aggregate analytics — "All workflows" for ONE client (the `all` sentinel
- * in the workflow slot, valid only for analytics). Reuses the CL-5b client-scoped
- * helpers (getTenant*({clientId})). The clientId is validated tenant-scoped — a
- * foreign client 404s. `?from` (the workflow the user came from) is preserved on
- * the range links so the sidebar's Executions/Conversations keep targeting it.
+ * Client-aggregate analytics — the Analytics surface at scope = "All workflows" for
+ * ONE client (the `all` sentinel in the workflow slot, valid only for analytics).
+ * Reuses the CL-5b client-scoped helpers (getTenant*({clientId})). Renders through the
+ * SAME AnalyticsShell + KpiCard/PanelCard primitives as the single-workflow view, so
+ * the two are consistent by construction. The clientId is validated tenant-scoped — a
+ * foreign client 404s. `?from` (the workflow the user came from) is preserved on the
+ * range links so the sidebar's Executions/Conversations keep targeting it.
  */
 export default async function AllWorkflowsAnalyticsPage({
   params,
@@ -67,75 +74,78 @@ export default async function AllWorkflowsAnalyticsPage({
   const fromQuery = from ? `&from=${encodeURIComponent(from)}` : "";
 
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-6 py-10">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-1.5">
-          <p className="text-xs font-medium uppercase tracking-widest text-faint">{clientLabel}</p>
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">All workflows</h1>
-          {pendingAcross > 0 ? (
-            <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
-              {pendingAcross} pending across workflows — open a workflow&rsquo;s Inbox to reply.
-            </p>
-          ) : null}
-        </div>
-        <RangeSelector basePath={basePath} current={days} extraQuery={fromQuery} />
-      </header>
-
-      {summary.allTimeTotal === 0 ? (
-        <div className="rounded-2xl border border-dashed border-line px-6 py-16 text-center">
-          <p className="text-sm text-muted">Not enough data yet.</p>
-          <p className="mt-1 text-sm text-faint">
-            Once this client&rsquo;s workflows run, their combined analytics will appear here.
+    <AnalyticsShell
+      scopeLabel="All workflows"
+      rangeBasePath={basePath}
+      rangeCurrent={days}
+      rangeExtraQuery={fromQuery}
+      banner={
+        pendingAcross > 0 ? (
+          <p className="text-sm font-medium text-amber-700 dark:text-amber-400">
+            {pendingAcross} pending across workflows — open a workflow&rsquo;s Inbox to reply.
           </p>
-        </div>
+        ) : undefined
+      }
+    >
+      {summary.allTimeTotal === 0 ? (
+        <AnalyticsEmpty
+          hint={`Once ${clientLabel}'s workflows run, their combined analytics will appear here.`}
+        />
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          <KpiGrid>
             <SuccessRateCard rate={successRate} success={summary.success} error={summary.error} />
-            <StatCard
+            <KpiCard
               label={`Executions · ${days}d`}
               value={summary.total.toLocaleString()}
               sub={`${summary.allTimeTotal.toLocaleString()} all-time`}
             />
-            <StatCard
+            <KpiCard
               label="Errors"
               value={summary.error.toLocaleString()}
               sub={summary.other > 0 ? `${summary.other} other` : "in range"}
             />
-            <StatCard
+            <KpiCard
               label={`Turns · ${days}d`}
               value={convSummary.totalTurns.toLocaleString()}
               sub={`${convSummary.distinctConversations.toLocaleString()} conversations`}
             />
-          </div>
+          </KpiGrid>
 
-          <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,20rem)]">
-            <div className="rounded-2xl border border-line bg-card p-4">
-              <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-                <h3 className="text-sm font-medium">Executions over time · all workflows</h3>
-                <div className="flex items-center gap-3 text-xs text-muted">
-                  <LegendDot color={RATE_SUCCESS} label="Success" />
-                  <LegendDot color={RATE_ERROR} label="Error" />
-                </div>
-              </div>
-              {summary.total === 0 ? <NoDataInRange days={days} /> : <ExecutionsByStatusChart data={series} />}
-            </div>
-
-            <div className="rounded-2xl border border-line bg-card p-4">
-              <h3 className="mb-3 text-sm font-medium">Top workflows · {days}d</h3>
-              <TopWorkflows clientId={clientId} workflows={topWorkflows} />
-            </div>
-          </div>
+          <AnalyticsColumns
+            primary={
+              <PanelCard
+                title="Executions over time"
+                aside={
+                  <>
+                    <LegendDot color={RATE_SUCCESS} label="Success" />
+                    <LegendDot color={RATE_ERROR} label="Error" />
+                  </>
+                }
+              >
+                {summary.total === 0 ? (
+                  <NoDataInRange days={days} />
+                ) : (
+                  <ExecutionsByStatusChart data={series} />
+                )}
+              </PanelCard>
+            }
+            side={
+              <PanelCard title={`Top workflows · ${days}d`}>
+                <TopWorkflows clientId={clientId} workflows={topWorkflows} />
+              </PanelCard>
+            }
+          />
         </>
       )}
-    </main>
+    </AnalyticsShell>
   );
 }
 
 /** Per-workflow breakdown within the client; each row drills into that workflow's analytics. */
 function TopWorkflows({ clientId, workflows }: { clientId: string; workflows: TopWorkflow[] }) {
   if (workflows.length === 0) {
-    return <p className="py-8 text-center text-sm text-faint">No executions in this range.</p>;
+    return <PanelEmpty>No executions in this range.</PanelEmpty>;
   }
   const max = Math.max(1, ...workflows.map((w) => w.executions));
   return (

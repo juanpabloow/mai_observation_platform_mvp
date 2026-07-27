@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, useSyncExternalStore } from "react";
 import {
   Bar,
   BarChart,
@@ -43,10 +43,13 @@ const SERIES = {
   turns: "#0ea5e9", // sky-500
 };
 
+/** Client-only mount guard via useSyncExternalStore: returns false during SSR + the
+ * hydration pass (server snapshot) and true once on the client, so the charts render
+ * after mount WITHOUT a synchronous set-state-in-effect (same skeleton-then-chart
+ * timing as the old useEffect flag). */
+const subscribeMount = () => () => {};
 function useMounted(): boolean {
-  const [m, setM] = useState(false);
-  useEffect(() => setM(true), []);
-  return m;
+  return useSyncExternalStore(subscribeMount, () => true, () => false);
 }
 
 /** Read the CL-4b theme tokens live (concrete values, since Recharts sets SVG
