@@ -2,7 +2,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname, useRouter } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import { useSidebar } from "@/components/SidebarContext";
 import { useScope } from "@/components/ScopeProvider";
@@ -179,6 +179,7 @@ export function HeaderBar({
 }) {
   const pathname = usePathname();
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { toggle: toggleSidebar, setMobileOpen } = useSidebar();
   const { scopeFor, setScope } = useScope();
   const [openMenu, setOpenMenu] = useState<null | "client" | "workflow" | "profile">(null);
@@ -257,7 +258,17 @@ export function HeaderBar({
     if (!surface) return;
     setOpenMenu(null);
     setScope(surface.clientId, scope);
-    router.push(scopeHref(surface.clientId, surface.section, scope));
+    if (surface.section === "inbox") {
+      // Inbox scope rides in ?workflow=; preserve the open conversation (?c=) — the
+      // workspace closes it if it falls outside the new scope, and keeps it on 'all'.
+      const p = new URLSearchParams(searchParams.toString());
+      if (scope === "all") p.delete("workflow");
+      else p.set("workflow", scope);
+      const qs = p.toString();
+      router.push(`/clients/${encodeURIComponent(surface.clientId)}/inbox${qs ? `?${qs}` : ""}`);
+    } else {
+      router.push(scopeHref(surface.clientId, surface.section, scope));
+    }
   };
 
   const clientWorkflows = currentClient

@@ -107,7 +107,7 @@ export default async function ConversationSettingsPage({
   return (
     <div className="flex flex-col gap-4">
       <Link
-        href={`/clients/${linkClientId}/workflows/${encodeURIComponent(workflowId)}/inbox`}
+        href={`/clients/${linkClientId}/inbox?workflow=${encodeURIComponent(workflowId)}`}
         className="text-sm text-neutral-500 transition-colors hover:text-foreground"
       >
         &larr; Back to inbox

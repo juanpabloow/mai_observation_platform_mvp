@@ -2,7 +2,6 @@ import "server-only";
 import { getSessionScope, canAccessClient, type AccessScope } from "./access";
 import { getClientById } from "@worker/db/repositories/clients.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
-import { getWorkflowByN8nId } from "@worker/db/repositories/workflows.js";
 import { listTurnsForConversation } from "@worker/db/repositories/conversationTurns.js";
 import {
   ACTIVITY_WINDOW_HOURS,
@@ -164,30 +163,22 @@ export async function loadClientInboxList(
   };
 }
 
-export type WorkflowInboxAccess =
-  | { ok: true; scope: AccessScope }
-  | { ok: false; status: 401 | 404 };
-
 /**
- * Authorize a session user for a WORKFLOW's inbox (JSON routes, non-redirecting):
- * the workflow must be this tenant's, and its real client must be accessible to the
- * user. 401 unauthenticated; 404 for a foreign/bogus workflow or one outside a
- * member's client scope (deny-by-default).
+ * Load a client's inbox list SCOPED to the current workflow (W-2): 'all' ⇒ the whole
+ * client (loadClientInboxList); a workflow id ⇒ just that workflow's conversations
+ * (loadWorkflowInboxList). The caller MUST have already validated that `scope` (when a
+ * workflow id) belongs to `clientId` and is accessible (the page/route resolve it via
+ * resolveWorkflowScope / validateWorkflowForClient). Filtering at THIS data layer keeps
+ * the list's groups, counts, and pending badge correct for the scoped set.
  */
-export async function resolveWorkflowInboxAccess(
-  n8nWorkflowId: string,
-): Promise<WorkflowInboxAccess> {
-  const scope = await getSessionScope();
-  if (!scope) return { ok: false, status: 401 };
-  const workflow = await getWorkflowByN8nId({ tenantId: scope.tenantId, n8nWorkflowId });
-  if (!workflow || !workflow.client_id) return { ok: false, status: 404 };
-  if (!canAccessClient(scope, workflow.client_id)) return { ok: false, status: 404 };
-  // The (compat) per-workflow inbox is gated on the workflow's CLIENT having inbox
-  // enabled — a workflow of a client whose inbox is off is an indistinguishable 404.
-  if (!(await isClientModuleEnabled(scope.tenantId, workflow.client_id, "inbox"))) {
-    return { ok: false, status: 404 };
-  }
-  return { ok: true, scope };
+export async function loadScopedClientInbox(
+  tenantId: string,
+  clientId: string,
+  scope: "all" | string,
+): Promise<WorkflowInboxPayload> {
+  return scope === "all"
+    ? loadClientInboxList(tenantId, clientId)
+    : loadWorkflowInboxList(tenantId, scope);
 }
 
 export interface InboxThreadPayload {

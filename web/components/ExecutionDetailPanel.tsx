@@ -117,6 +117,10 @@ export async function ExecutionDetailPanel({
   let conversation: React.ReactNode = null;
   if (turn) {
     const now = new Date();
+    // W-2: a live handoff conversation opens in the CLIENT inbox, scoped to this
+    // workflow (?workflow=) with the conversation preselected (?c=). A derived
+    // (non-handoff) ref keeps the per-workflow read-only transcript route.
+    const clientInboxBase = `/clients/${encodeURIComponent(clientId)}/inbox?workflow=${encodeURIComponent(turn.n8n_workflow_id)}`;
     const inboxBase = `/clients/${encodeURIComponent(clientId)}/workflows/${encodeURIComponent(turn.n8n_workflow_id)}/inbox`;
     // A live handoff conversation for this ref → unified bubbles + the inbox pane link.
     const handoffId = await getHandoffConversationIdByRef(
@@ -148,7 +152,7 @@ export async function ExecutionDetailPanel({
         <ConversationPanel
           conversationRef={turn.conversation_id}
           turnCount={views.length}
-          openHref={`${inboxBase}?c=${encodeURIComponent(handoffId)}`}
+          openHref={`${clientInboxBase}&c=${encodeURIComponent(handoffId)}`}
         >
           <div className="bg-black/[0.02] px-4 py-3 dark:bg-card">
             <MessageTranscript

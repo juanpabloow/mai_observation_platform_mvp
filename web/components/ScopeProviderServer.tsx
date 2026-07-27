@@ -32,10 +32,12 @@ export async function ScopeProviderServer({ children }: { children: React.ReactN
 
   const scope = await getSessionScope();
   if (scope) {
-    const pathname = (await headers()).get("x-pathname") ?? "";
+    const h = await headers();
+    const pathname = h.get("x-pathname") ?? "";
+    const search = h.get("x-search") ?? ""; // for the inbox's ?workflow= (W-2)
     const clientId = parseClientId(pathname);
     if (clientId) {
-      const surface = parseScopeSurface(pathname);
+      const surface = parseScopeSurface(pathname, search);
       let resolved: "all" | string;
       if (surface && surface.urlWorkflow !== null) {
         resolved =

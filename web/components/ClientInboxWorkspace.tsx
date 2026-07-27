@@ -50,8 +50,7 @@ export function ClientInboxWorkspace({
   clientId,
   clientName,
   initial,
-  endpoint,
-  workflows,
+  scope,
   viewerUserId,
   viewerName,
   viewerIsFullAccess,
@@ -59,8 +58,10 @@ export function ClientInboxWorkspace({
   clientId: string;
   clientName: string;
   initial: GridPayload;
-  endpoint: string;
-  workflows: Array<{ id: string; name: string | null }>;
+  /** The active workflow scope (W-1/W-2): 'all' or a workflow id. Resolved by the page
+   *  (URL ?workflow= else cookie); this component is keyed by it, so a change remounts
+   *  it with the already-scoped initial payload. */
+  scope: "all" | string;
   viewerUserId: string;
   viewerName: string | null;
   viewerIsFullAccess: boolean;
@@ -69,12 +70,17 @@ export function ClientInboxWorkspace({
   const router = useRouter();
   const pathname = usePathname();
   const selectedId = searchParams.get("c");
+  const showWorkflow = scope === "all"; // per-row workflow chip only makes sense in 'all'
 
-  // ── List state + polling (same contract as the old grid) ──
+  // ── List state + polling. The poll mirrors the active scope (?workflow=) so its
+  // groups/counts stay consistent with the server-scoped initial payload. ──
+  const endpoint =
+    scope === "all"
+      ? `/api/inbox/${encodeURIComponent(clientId)}/conversations`
+      : `/api/inbox/${encodeURIComponent(clientId)}/conversations?workflow=${encodeURIComponent(scope)}`;
   const [data, setData] = useState<GridPayload>(initial);
   const [stale, setStale] = useState(false);
   const [search, setSearch] = useState("");
-  const [workflowFilter, setWorkflowFilter] = useState<string>("all");
 
   const load = useCallback(async () => {
     try {
@@ -119,19 +125,18 @@ export function ClientInboxWorkspace({
   const now = new Date(data.asOf);
   const all = data.conversations;
 
-  // Search over the REAL fields: identifier (ref / phone), last message content, workflow.
+  // The list is already workflow-scoped at the data layer; here only the keyword search
+  // narrows it (identifier / last message / workflow name).
   const filtered = useMemo(() => {
     const needle = search.trim().toLowerCase();
-    return all.filter((v) => {
-      if (workflowFilter !== "all" && v.workflowId !== workflowFilter) return false;
-      if (!needle) return true;
-      return (
+    if (!needle) return all;
+    return all.filter(
+      (v) =>
         v.conversationRef.toLowerCase().includes(needle) ||
         (v.lastMessageText ?? "").toLowerCase().includes(needle) ||
-        (v.workflowName ?? "").toLowerCase().includes(needle)
-      );
-    });
-  }, [all, search, workflowFilter]);
+        (v.workflowName ?? "").toLowerCase().includes(needle),
+    );
+  }, [all, search]);
 
   const groups = useMemo(() => groupConversations(filtered), [filtered]);
   const pending = pendingCount(all);
@@ -152,6 +157,14 @@ export function ClientInboxWorkspace({
     const qs = p.toString();
     router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   }, [searchParams, pathname, router]);
+
+  // W-2: if a conversation is open but falls OUTSIDE the active workflow scope, close
+  // the pane cleanly (empty state) — the scoped list wouldn't contain it, so we never
+  // render a conversation from another workflow. 'all' never closes.
+  useEffect(() => {
+    if (scope === "all" || !selectedId) return;
+    if (!all.some((v) => v.id === selectedId)) close();
+  }, [scope, selectedId, all, close]);
 
   // ── Center: thread payload for the selected conversation (same fetch as the drawer) ──
   const [thread, setThread] = useState<ThreadPayload | null>(null);
@@ -252,21 +265,8 @@ export function ClientInboxWorkspace({
             aria-label="Search conversations"
             className="h-9 w-full rounded-lg border border-line bg-transparent px-3 text-sm outline-none focus:border-line-strong"
           />
-          {workflows.length > 0 ? (
-            <select
-              value={workflowFilter}
-              onChange={(e) => setWorkflowFilter(e.target.value)}
-              aria-label="Filter by workflow"
-              className="h-9 w-full rounded-lg border border-black/10 bg-transparent px-2 text-sm text-muted dark:border-line-strong"
-            >
-              <option value="all">All workflows</option>
-              {workflows.map((w) => (
-                <option key={w.id} value={w.id}>
-                  {w.name ?? w.id}
-                </option>
-              ))}
-            </select>
-          ) : null}
+          {/* No in-panel workflow selector (W-2): the header switcher is the single
+              workflow selector; this list follows the active scope. */}
           {stale ? <span className="text-xs text-faint">Reconnecting…</span> : null}
         </div>
 
@@ -293,6 +293,8 @@ export function ClientInboxWorkspace({
                         href={hrefFor(v.id)}
                         selected={v.id === selectedId}
                         now={now}
+                        showWorkflow={showWorkflow}
+                        activityWindowHours={data.activityWindowHours}
                       />
                     </li>
                   ))}
@@ -395,16 +397,43 @@ function relTime(iso: string, now: Date): string {
   return r === "now" ? "now" : `${r}`;
 }
 
+/**
+ * Activity dot (H-7 dimension ported into the dense row): a filled emerald dot when the
+ * customer wrote within the activity window, a hollow muted ring when not. A DOT (not a
+ * text pill) is the compact choice the spec sanctions — the row already carries an
+ * avatar, ref, timestamp, preview and (in 'all') a workflow chip, so a labeled pill
+ * would crowd it; the color + tooltip carry the state, readable in both themes.
+ */
+function ActivityDot({ active, windowHours }: { active: boolean; windowHours: number }) {
+  return active ? (
+    <span
+      title={`Active — the customer wrote within the last ${windowHours}h`}
+      aria-label="Active"
+      className="size-1.5 shrink-0 rounded-full bg-emerald-500"
+    />
+  ) : (
+    <span
+      title={`Inactive — no customer message in the last ${windowHours}h`}
+      aria-label="Inactive"
+      className="size-1.5 shrink-0 rounded-full border border-line-strong"
+    />
+  );
+}
+
 function ConversationRow({
   view,
   href,
   selected,
   now,
+  showWorkflow,
+  activityWindowHours,
 }: {
   view: InboxConversationView;
   href: string;
   selected: boolean;
   now: Date;
+  showWorkflow: boolean;
+  activityWindowHours: number;
 }) {
   const initial = (view.conversationRef.match(/[a-z0-9]/i)?.[0] ?? "?").toUpperCase();
   const stateLabel =
@@ -434,12 +463,15 @@ function ConversationRow({
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="flex items-center justify-between gap-2">
           <span className="truncate text-sm font-medium text-foreground">{view.conversationRef}</span>
-          {view.lastMessageAt ? (
-            <span className="shrink-0 text-[11px] text-faint">{relTime(view.lastMessageAt, now)}</span>
-          ) : null}
+          <span className="flex shrink-0 items-center gap-1.5">
+            <ActivityDot active={view.active} windowHours={activityWindowHours} />
+            {view.lastMessageAt ? (
+              <span className="text-[11px] text-faint">{relTime(view.lastMessageAt, now)}</span>
+            ) : null}
+          </span>
         </span>
         <span className="truncate text-xs text-muted">{conversationPreview(view)}</span>
-        {view.workflowName ? (
+        {showWorkflow && view.workflowName ? (
           <span className="mt-0.5 w-fit max-w-full truncate rounded bg-subtle px-1.5 py-0.5 text-[10px] font-medium text-faint">
             {view.workflowName}
           </span>

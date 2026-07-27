@@ -34,11 +34,13 @@ export default async function WorkflowInboxThreadPage({
   const linkClientId = workflow.client_id ?? clientId;
   const tenantId = await getCurrentTenantId();
   if (!(await isClientModuleEnabled(tenantId, linkClientId, "inbox"))) notFound();
-  const inboxHref = `/clients/${encodeURIComponent(linkClientId)}/workflows/${encodeURIComponent(workflowId)}/inbox`;
+  // W-2: the client inbox is the single inbox, scoped by ?workflow=. Handoff
+  // conversations (uuid) open there (scoped to this workflow, conversation preselected);
+  // the derived read-only transcript below stays for non-handoff, execution-derived refs.
+  const inboxHref = `/clients/${encodeURIComponent(linkClientId)}/inbox?workflow=${encodeURIComponent(workflowId)}`;
 
-  // Handoff conversations (uuid) open in the drawer via ?c=.
   if (isUuid(conversationId)) {
-    redirect(`${inboxHref}?c=${encodeURIComponent(conversationId)}`);
+    redirect(`${inboxHref}&c=${encodeURIComponent(conversationId)}`);
   }
 
   // Derived (non-handoff) conversation: the Phase-3 read-only transcript.

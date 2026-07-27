@@ -1,59 +1,65 @@
 import { connection } from "next/server";
-import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { getAgentSummary } from "@worker/db/repositories/handoff.js";
 import { hasFullAccess } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
-import { loadClientInboxList } from "@/lib/inboxData";
+import { resolveWorkflowScope, validateWorkflowForClient } from "@/lib/workflowScope";
+import { loadScopedClientInbox } from "@/lib/inboxData";
 import { ClientInboxWorkspace } from "@/components/ClientInboxWorkspace";
 
+type SearchParams = Record<string, string | string[] | undefined>;
+const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
+
 /**
- * Client-level UNIFIED INBOX — an operative THREE-COLUMN workspace (list · chat ·
- * customer details). ONE tray for the live/handoff conversations of ALL the client's
- * canonical workflows, grouped by real state (Needs human attention / Human is
- * handling / Bot is handling), filterable by workflow, opening the chat via the
- * existing `?c=<conversationId>` deep link on this same route.
+ * Client-level UNIFIED INBOX — a THREE-COLUMN workspace (list · chat · customer
+ * details). ONE tray for the live/handoff conversations of the client's workflows,
+ * grouped by real state (Needs human attention / Human / Bot), opening the chat via the
+ * existing `?c=<conversationId>` deep link.
  *
- * Access is resolved from the SESSION, never the URL: getClientForTenant validates the
- * clientId is a real client of THIS tenant AND accessible to the user (owner/admin →
- * any of their clients; member → only their one client) — any other client is an
- * indistinguishable 404. The data layer (loadClientInboxList / the poll route) filters
- * by tenant+client at the SQL layer, so a foreign conversation is never listed and a
- * direct `?c=` to one 404s in the thread pane. All props handed to the (client)
- * workspace are serializable — no function crosses the RSC boundary.
+ * W-2: the list respects the W-1 workflow SCOPE — there is no in-panel workflow picker;
+ * the header switcher is the only selector. The effective scope is URL-first
+ * (?workflow=<id>, validated) then the remembered cookie; 'all' ⇒ every conversation,
+ * a workflow ⇒ only its conversations. The scope is resolved HERE (server) and both the
+ * initial list and the poll route filter at the data layer, so groups/counts/pending
+ * are correct on first paint (no flash of the full list). The workspace is keyed by the
+ * scope so a scope change re-seeds it with the already-scoped list.
+ *
+ * Access is the shared module gate (session + client-of-tenant + non-default + `inbox`
+ * enabled) — any failure is an indistinguishable 404.
  */
 export default async function ClientInboxPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ clientId: string }>;
+  searchParams: Promise<SearchParams>;
 }) {
   await connection();
   const { clientId } = await params;
-
-  // Gate: session + client of this tenant + NON-default + `inbox` module ENABLED.
-  // Any failure (foreign/bogus/out-of-scope/default/disabled) is an indistinguishable
-  // 404 — the same safe 404 every other client module uses.
   const { scope, client } = await requireClientModulePage(clientId, "inbox");
 
-  const [initial, viewer, wfRows] = await Promise.all([
-    loadClientInboxList(scope.tenantId, client.id),
-    getAgentSummary(scope.userId),
-    listWorkflowsWithClientForTenant(scope.tenantId),
-  ]);
+  // URL wins: ?workflow=<id> (validated to this client + accessible) else the cookie.
+  const wfParam = first((await searchParams).workflow);
+  let effective: "all" | string;
+  if (wfParam && wfParam !== "all") {
+    effective = (await validateWorkflowForClient(scope.tenantId, client.id, wfParam, scope))
+      ? wfParam
+      : "all";
+  } else {
+    effective = await resolveWorkflowScope(scope.tenantId, client.id, scope);
+  }
 
-  // The workflow filter options — only THIS client's workflows, sorted by name. (No
-  // other client's workflow ids/names are ever serialized to the browser.)
-  const workflows = wfRows
-    .filter((w) => w.client_id === client.id)
-    .map((w) => ({ id: w.n8n_workflow_id, name: w.name }))
-    .sort((a, b) => (a.name ?? a.id).localeCompare(b.name ?? b.id));
+  const [initial, viewer] = await Promise.all([
+    loadScopedClientInbox(scope.tenantId, client.id, effective),
+    getAgentSummary(scope.userId),
+  ]);
 
   return (
     <ClientInboxWorkspace
+      key={effective}
       clientId={client.id}
       clientName={client.name}
+      scope={effective}
       initial={initial}
-      endpoint={`/api/inbox/${encodeURIComponent(client.id)}/conversations`}
-      workflows={workflows}
       viewerUserId={scope.userId}
       viewerName={viewer?.name ?? null}
       viewerIsFullAccess={hasFullAccess(scope)}

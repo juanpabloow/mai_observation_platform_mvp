@@ -48,7 +48,9 @@ export default function RootLayout({
               client-side navigation. Both wrap the header + sidebar so those read the
               scope from context (never a stale layout-captured value — the H-8.1 trap). */}
           <ScopeProviderServer>
-            <ScopeSync />
+            <Suspense fallback={null}>
+              <ScopeSync />
+            </Suspense>
             <Suspense fallback={null}>
               <AppHeader />
             </Suspense>

@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
-import { usePathname } from "next/navigation";
+import { usePathname, useSearchParams } from "next/navigation";
 import { parseScopeSurface } from "@/lib/scopeSurface";
 import { useScope } from "./ScopeProvider";
 
@@ -19,9 +19,11 @@ import { useScope } from "./ScopeProvider";
  */
 export function ScopeSync() {
   const pathname = usePathname();
+  const searchParams = useSearchParams();
   const { setScope } = useScope();
 
-  const surface = parseScopeSurface(pathname);
+  // The inbox expresses scope via ?workflow=, so the query participates in URL-wins.
+  const surface = parseScopeSurface(pathname, searchParams.toString());
   const clientId = surface?.clientId ?? null;
   const urlWorkflow = surface && surface.urlWorkflow !== null ? surface.urlWorkflow : null;
 

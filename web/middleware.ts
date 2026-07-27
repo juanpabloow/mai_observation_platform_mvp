@@ -45,6 +45,10 @@ export function middleware(request: NextRequest): NextResponse {
 
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set("x-pathname", pathname);
+  // The query string too, so the server can read URL-expressed scope (the inbox's
+  // ?workflow=, W-2) the same way it reads a workflow path segment — seeding the scope
+  // provider on hard-load with no flash.
+  requestHeaders.set("x-search", request.nextUrl.search);
 
   const isPublic = PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   if (!isPublic && !getSessionCookie(request)) {
