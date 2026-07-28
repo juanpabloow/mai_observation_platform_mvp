@@ -1,5 +1,5 @@
-import type { PoolClient, QueryResultRow } from 'pg';
-import { query, firstRowOrThrow } from '../client.js';
+import type { PoolClient } from 'pg';
+import { query } from '../client.js';
 import { normalizeE164 } from '../../scheduling/phone.js';
 
 /**
@@ -13,11 +13,13 @@ import { normalizeE164 } from '../../scheduling/phone.js';
 
 export type BotHumanMode = 'bot' | 'human';
 export type ContactStage = 'new' | 'active' | 'customer' | 'archived';
+export type MessagingConsent = 'unknown' | 'opted_in' | 'opted_out';
 
 export interface ContactRow {
   id: string;
   tenant_id: string;
   client_id: string;
+  /** SOURCE (C-2): how the contact first arrived — descriptive, never a unique key. */
   channel: string;
   channel_user_id: string;
   phone_e164: string | null;
@@ -26,6 +28,11 @@ export interface ContactRow {
   bot_human_mode: BotHumanMode;
   stage: ContactStage;
   assigned_to: string | null;
+  /** Consent is STORE-ONLY (C-2): recorded, never gates service replies. */
+  messaging_consent: MessagingConsent;
+  consent_updated_at: Date | null;
+  consent_source: string | null;
+  custom_fields: Record<string, unknown>;
   first_contact_at: Date;
   last_contact_at: Date;
   message_count: number;
@@ -33,45 +40,10 @@ export interface ContactRow {
   updated_at: Date;
 }
 
-export interface ResolveContactInput {
-  tenantId: string;
-  clientId: string;
-  channel: string;
-  channelUserId: string;
-  name?: string | null;
-  phone?: string | null;
-  email?: string | null;
-}
-
-/**
- * Race-safe resolve-or-create by canonical identity (tenant, client, channel,
- * channel_user_id). On an existing row, fills in any newly-supplied name/phone/
- * email that was previously null (never overwrites known values) and advances
- * last_contact_at. Phone is normalized to E.164; an un-normalizable phone is
- * dropped rather than stored malformed. Runs on the passed client when inside a
- * booking transaction, else on the pool.
- */
-export async function resolveOrCreateContact(
-  input: ResolveContactInput,
-  client?: PoolClient,
-): Promise<ContactRow> {
-  const run = <T extends QueryResultRow>(text: string, params: unknown[]) =>
-    client ? client.query<T>(text, params) : query<T>(text, params);
-  const phone = normalizeE164(input.phone);
-  const r = await run<ContactRow>(
-    `INSERT INTO contacts (tenant_id, client_id, channel, channel_user_id, name, phone_e164, email, last_contact_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, now())
-     ON CONFLICT (tenant_id, client_id, channel, channel_user_id) DO UPDATE
-       SET name = COALESCE(contacts.name, EXCLUDED.name),
-           phone_e164 = COALESCE(contacts.phone_e164, EXCLUDED.phone_e164),
-           email = COALESCE(contacts.email, EXCLUDED.email),
-           last_contact_at = now(),
-           updated_at = now()
-     RETURNING *`,
-    [input.tenantId, input.clientId, input.channel, input.channelUserId, input.name ?? null, phone, input.email ?? null],
-  );
-  return firstRowOrThrow(r, 'resolveOrCreateContact');
-}
+// resolveOrCreateContact was removed in C-2: contact resolution now goes through the
+// identity spine — see resolveContactByIdentity in ./contactIdentities.ts (the single
+// chokepoint). The old ON CONFLICT keyed on (channel, channel_user_id), a unique that
+// C-2 dropped.
 
 /** Get a contact by id, tenant-scoped. When clientId is provided (a member), the
  * contact must belong to that client too — else null (no cross-client read). */
@@ -300,6 +272,11 @@ export interface UpdateContactInput {
   stage?: ContactStage;
   bot_human_mode?: BotHumanMode;
   assigned_to?: string | null;
+  messaging_consent?: MessagingConsent;
+  consent_source?: string | null;
+  /** Full custom-fields blob — the caller MUST have validated it against the client's
+   * field definitions first (see validateCustomFields). */
+  custom_fields?: Record<string, unknown>;
 }
 
 export async function updateContact(
@@ -320,6 +297,16 @@ export async function updateContact(
   if (patch.stage !== undefined) add('stage', patch.stage);
   if (patch.bot_human_mode !== undefined) add('bot_human_mode', patch.bot_human_mode);
   if (patch.assigned_to !== undefined) add('assigned_to', patch.assigned_to);
+  if (patch.messaging_consent !== undefined) {
+    add('messaging_consent', patch.messaging_consent);
+    sets.push('consent_updated_at = now()');
+    // consent_source moves with the consent change (null clears it).
+    add('consent_source', patch.consent_source ?? null);
+  }
+  if (patch.custom_fields !== undefined) {
+    params.push(JSON.stringify(patch.custom_fields));
+    sets.push(`custom_fields = $${params.length}::jsonb`);
+  }
   if (sets.length === 0) return getContactById(tenantId, id, clientId);
   sets.push('updated_at = now()');
   let where = 'id = $1 AND tenant_id = $2';
@@ -332,4 +319,22 @@ export async function updateContact(
     params,
   );
   return r.rows[0] ?? null;
+}
+
+/** Record messaging consent (STORE-ONLY — never gates anything). Client-aware so the
+ * machine booking flow can set it inside its transaction. */
+export async function setContactConsent(
+  tenantId: string,
+  clientId: string,
+  contactId: string,
+  consent: MessagingConsent,
+  source: string | null,
+  client?: PoolClient,
+): Promise<void> {
+  const run = client ? (t: string, p: unknown[]) => client.query(t, p) : (t: string, p: unknown[]) => query(t, p);
+  await run(
+    `UPDATE contacts SET messaging_consent=$4, consent_updated_at=now(), consent_source=$5, updated_at=now()
+      WHERE id=$1 AND tenant_id=$2 AND client_id=$3`,
+    [contactId, tenantId, clientId, consent, source],
+  );
 }

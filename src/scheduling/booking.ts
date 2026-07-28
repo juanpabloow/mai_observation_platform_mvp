@@ -1,6 +1,7 @@
 import { isDeadlock, isExclusionViolation, isUniqueViolation, query, withTransaction } from '../db/client.js';
 import { logger } from '../logger.js';
-import { resolveOrCreateContact, linkConversationToContact } from '../db/repositories/contacts.js';
+import { linkConversationToContact, setContactConsent, type MessagingConsent } from '../db/repositories/contacts.js';
+import { resolveContactByIdentity } from '../db/repositories/contactIdentities.js';
 import { getOrCreateConversation } from '../db/repositories/handoff.js';
 import {
   isSlotAvailable,
@@ -57,6 +58,9 @@ export interface CreateAppointmentInput {
   customerName?: string | null;
   customerPhone?: string | null;
   customerEmail?: string | null;
+  // Consent (C-2, STORE-ONLY): an automation may record an opt-in/opt-out on the contact.
+  messagingConsent?: MessagingConsent | null;
+  consentSource?: string | null;
   // Provenance.
   origin: AppointmentOrigin;
   createdByType: ActorType;
@@ -187,7 +191,9 @@ export async function createAppointment(
       }
       let contactId: string | null = null;
       if (input.channel && input.channelUserId) {
-        const contact = await resolveOrCreateContact(
+        // C-2: resolve through the identity spine (normalizes → the same person can't
+        // fork into two contacts). Consent, when supplied, is recorded store-only.
+        const resolved = await resolveContactByIdentity(
           {
             tenantId: input.tenantId,
             clientId,
@@ -199,7 +205,10 @@ export async function createAppointment(
           },
           client,
         );
-        contactId = contact.id;
+        contactId = resolved.contact.id;
+        if (input.messagingConsent) {
+          await setContactConsent(input.tenantId, clientId, contactId, input.messagingConsent, input.consentSource ?? null, client);
+        }
       }
 
       let sourceConversationId: string | null = null;
@@ -415,10 +424,10 @@ export async function rescheduleAppointment(input: RescheduleInput): Promise<Boo
 
       const targetStaff = input.staffId ?? current.staff_id;
 
-      // Revalidate the new slot with the engine (excluding THIS appointment's own
-      // block is unnecessary: if unchanged it just re-offers, and the exclusion
-      // constraint ignores same-row via the UPDATE). Use the snapshot timing so a
-      // later catalogue change never reshapes an existing booking.
+      // Revalidate the new slot with the engine, EXCLUDING this appointment's own block
+      // from the busy set (C-2) — otherwise a small move that overlaps its current time
+      // ("11:45 → 12:15") would be blocked by itself. Use the snapshot timing so a later
+      // catalogue change never reshapes an existing booking.
       const check = await isSlotAvailable(
         {
           tenantId: input.tenantId,
@@ -427,11 +436,10 @@ export async function rescheduleAppointment(input: RescheduleInput): Promise<Boo
           staffId: targetStaff,
           startAt: input.startAt,
           now,
+          excludeAppointmentId: input.appointmentId,
         },
       );
-      // The engine counts the current appointment as "busy"; allow the slot if it
-      // is exactly the appointment's current interval (a no-op move) OR the engine
-      // offers it. We compute the new interval from the SNAPSHOT duration/buffers.
+      // New interval from the SNAPSHOT duration/buffers (for moveInterval below).
       const dur = current.duration_min_snapshot;
       const bBefore = current.buffer_before_min_snapshot;
       const bAfter = current.buffer_after_min_snapshot;
@@ -439,9 +447,7 @@ export async function rescheduleAppointment(input: RescheduleInput): Promise<Boo
       const blockedFrom = new Date(input.startAt.getTime() - bBefore * MS_PER_MIN);
       const blockedUntil = new Date(serviceEnd.getTime() + bAfter * MS_PER_MIN);
 
-      const sameInterval =
-        targetStaff === current.staff_id && input.startAt.getTime() === current.start_at.getTime();
-      if (!sameInterval && !check.available) {
+      if (!check.available) {
         return { kind: 'unavailable' as const };
       }
 

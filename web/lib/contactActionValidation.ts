@@ -12,6 +12,7 @@ import { z } from "zod";
 
 export const CONTACT_STAGES = ["new", "active", "customer", "archived"] as const;
 export const BOT_HUMAN_MODES = ["bot", "human"] as const;
+export const MESSAGING_CONSENTS = ["unknown", "opted_in", "opted_out"] as const;
 
 export const ContactPatchInput = z.strictObject({
   // Strings are optional (a PATCH sends only what changed); empty strings stay
@@ -21,6 +22,13 @@ export const ContactPatchInput = z.strictObject({
   email: z.string().max(256).optional(),
   stage: z.enum(CONTACT_STAGES).optional(),
   bot_human_mode: z.enum(BOT_HUMAN_MODES).optional(),
+  // C-2 additions. assigned_to is now settable but the ACTION validates the assignee
+  // has access to this client (server-side). custom_fields is validated against the
+  // client's field definitions in the ACTION (shape here is deliberately loose).
+  assigned_to: z.string().max(255).nullable().optional(),
+  messaging_consent: z.enum(MESSAGING_CONSENTS).optional(),
+  consent_source: z.string().max(256).nullable().optional(),
+  custom_fields: z.unknown().optional(),
 });
 
 export type ContactPatch = z.infer<typeof ContactPatchInput>;
@@ -38,5 +46,9 @@ export function parseContactPatch(input: unknown): { ok: true; value: ContactPat
   if (v.email !== undefined) value.email = v.email;
   if (v.stage !== undefined) value.stage = v.stage;
   if (v.bot_human_mode !== undefined) value.bot_human_mode = v.bot_human_mode;
+  if (v.assigned_to !== undefined) value.assigned_to = v.assigned_to;
+  if (v.messaging_consent !== undefined) value.messaging_consent = v.messaging_consent;
+  if (v.consent_source !== undefined) value.consent_source = v.consent_source;
+  if (v.custom_fields !== undefined) value.custom_fields = v.custom_fields;
   return { ok: true, value };
 }

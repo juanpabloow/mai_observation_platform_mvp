@@ -177,6 +177,33 @@ test('#16 reschedule re-validates availability (blocked target fails, free targe
   assert.ok(moved.value.version > a1.value.version);
 });
 
+test('#21 (C-2) a long appointment moves 30 min (overlapping its OWN block) yet a real conflict still 409s', async () => {
+  const s = await scenario();
+  // 90-min "Color" on staffA at 10:00 → blocks 10:00–11:30.
+  const a1 = await createAppointment({
+    tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceColor, staffId: s.staffA,
+    startAt: wed(10), origin: 'internal', createdByType: 'agent', scopeClientId: s.clientId, now: NOW,
+  });
+  assert.ok(a1.ok);
+  // Move it 30 minutes later → 10:30 (new block 10:30–12:00 OVERLAPS the old 10:00–11:30).
+  // Before the C-2 fix the revalidation counted the appointment's OWN block as busy → 409.
+  const moved = await rescheduleAppointment({
+    tenantId: s.tenantId, appointmentId: a1.value.id, startAt: wed(10, 30), actorType: 'agent', scopeClientId: s.clientId, now: NOW,
+  });
+  assert.ok(moved.ok, 'a 30-min self-overlapping move must succeed');
+  assert.ok(moved.ok && moved.value.start_at.getTime() === wed(10, 30).getTime());
+  // A DIFFERENT appointment at 13:00 (Color → 13:00–14:30); moving a1 onto it is a REAL conflict.
+  const a2 = await createAppointment({
+    tenantId: s.tenantId, siteId: s.siteId, serviceId: s.serviceColor, staffId: s.staffA,
+    startAt: wed(13), origin: 'internal', createdByType: 'agent', scopeClientId: s.clientId, now: NOW,
+  });
+  assert.ok(a2.ok);
+  const clash = await rescheduleAppointment({
+    tenantId: s.tenantId, appointmentId: a1.value.id, startAt: wed(13), actorType: 'agent', scopeClientId: s.clientId, now: NOW,
+  });
+  assert.ok(!clash.ok, 'a genuine conflict with a DIFFERENT appointment must still 409');
+});
+
 test('#17 terminal states reject invalid transitions', async () => {
   const s = await scenario();
   const r = await createAppointment({

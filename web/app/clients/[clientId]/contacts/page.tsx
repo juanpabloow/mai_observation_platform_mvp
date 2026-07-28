@@ -1,8 +1,11 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
+import { hasFullAccess } from "@/lib/access";
 import { listContacts } from "@worker/db/repositories/contacts.js";
+import { listOpenCandidates } from "@worker/db/repositories/contactIdentities.js";
 import { AutoRefresh } from "@/components/AutoRefresh";
+import { DuplicateCandidates } from "@/components/contacts/DuplicateCandidates";
 
 /**
  * Client-scoped Contacts (Phase 3A — the canonical CRM list). Gated by the
@@ -31,6 +34,10 @@ export default async function ClientContactsPage({
     limit: 50,
   });
 
+  // Duplicate merge + custom-field management are owner/admin only (server-gated too).
+  const isFullAccess = hasFullAccess(scope);
+  const candidates = isFullAccess ? await listOpenCandidates(scope.tenantId, client.id) : [];
+
   const base = `/clients/${client.id}/contacts`;
   const fromQS = from ? `?from=${encodeURIComponent(from)}` : "";
   // The "next page" link preserves the active search + origin workflow.
@@ -49,8 +56,17 @@ export default async function ClientContactsPage({
     <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-4 px-6 py-6">
       <header className="flex items-center justify-between gap-3">
         <h1 className="text-xl font-semibold tracking-tight">Contacts</h1>
-        <AutoRefresh intervalSeconds={30} />
+        <div className="flex items-center gap-3">
+          {isFullAccess ? (
+            <Link href={`${base}/fields`} className="text-xs text-accent hover:underline">
+              Custom fields
+            </Link>
+          ) : null}
+          <AutoRefresh intervalSeconds={30} />
+        </div>
       </header>
+
+      {isFullAccess ? <DuplicateCandidates clientId={client.id} candidates={candidates} /> : null}
 
       {/* Canonical client-scoped form action; `from` survives the search round-trip. */}
       <form className="flex gap-2" action={base}>

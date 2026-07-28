@@ -30,6 +30,9 @@ export interface LoadAvailabilityParams {
   from: Date;
   to: Date;
   now: Date;
+  /** C-2: exclude one appointment from the busy set — the appointment being
+   * rescheduled must not block its own new slot (so "move my 11:45 to 12:15" works). */
+  excludeAppointmentId?: string | null;
 }
 
 export interface AvailabilityResult {
@@ -158,8 +161,9 @@ export async function loadAvailability(params: LoadAvailabilityParams): Promise<
        FROM appointments
       WHERE tenant_id = $1 AND site_id = $2 AND staff_id = ANY($3::uuid[])
         AND status IN ('scheduled','confirmed')
-        AND blocked_until > $4 AND blocked_from < $5`,
-    [params.tenantId, params.siteId, staffIds, params.from, params.to],
+        AND blocked_until > $4 AND blocked_from < $5
+        AND ($6::uuid IS NULL OR id <> $6)`,
+    [params.tenantId, params.siteId, staffIds, params.from, params.to, params.excludeAppointmentId ?? null],
   );
 
   const excRows = await query<{ staff_id: string | null; starts_at: Date; ends_at: Date }>(
@@ -207,7 +211,16 @@ export async function loadAvailability(params: LoadAvailabilityParams): Promise<
  * service to REVALIDATE just before insert. Returns the chosen staff's service
  * window (end) so the caller can snapshot the exact duration. */
 export async function isSlotAvailable(
-  params: { tenantId: string; siteId: string; serviceId: string; staffId: string; startAt: Date; now: Date },
+  params: {
+    tenantId: string;
+    siteId: string;
+    serviceId: string;
+    staffId: string;
+    startAt: Date;
+    now: Date;
+    /** C-2: the appointment being rescheduled — excluded from its own busy check. */
+    excludeAppointmentId?: string | null;
+  },
   client?: PoolClient,
 ): Promise<{ available: boolean; serviceEndAt: Date | null; buffers: { before_min: number; after_min: number } | null }> {
   void client; // availability reads use the pool; the insert (next step) holds the txn
@@ -225,6 +238,7 @@ export async function isSlotAvailable(
     from: windowStart,
     to: windowEnd,
     now: params.now,
+    excludeAppointmentId: params.excludeAppointmentId ?? null,
   });
   if (!avail) return { available: false, serviceEndAt: null, buffers: null };
   const slot = avail.slots.find((s) => s.start_at.getTime() === params.startAt.getTime());

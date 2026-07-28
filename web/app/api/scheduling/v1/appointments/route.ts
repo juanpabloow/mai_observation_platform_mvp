@@ -78,6 +78,9 @@ const CreateBody = z.object({
   customer_name: z.string().max(256).optional(),
   customer_phone: z.string().max(64).optional(),
   customer_email: z.string().max(256).optional(),
+  // C-2: an automation may record consent on the resolved contact (STORE-ONLY).
+  messaging_consent: z.enum(["unknown", "opted_in", "opted_out"]).optional(),
+  consent_source: z.string().max(256).optional(),
   site_id: z.string().uuid(),
   service_id: z.string().uuid(),
   staff_id: z.string().uuid().optional(),
@@ -121,6 +124,8 @@ export async function POST(req: Request): Promise<Response> {
     customerName: b.customer_name ?? null,
     customerPhone: b.customer_phone ?? null,
     customerEmail: b.customer_email ?? null,
+    messagingConsent: b.messaging_consent ?? null,
+    consentSource: b.consent_source ?? null,
     origin: "n8n",
     createdByType: "n8n",
     idempotencyKey,

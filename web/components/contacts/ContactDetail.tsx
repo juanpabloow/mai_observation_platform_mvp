@@ -16,10 +16,17 @@ interface ContactData {
   bot_human_mode: string;
   message_count: number;
   is_customer: boolean;
+  messaging_consent: string;
+  consent_source: string | null;
+  assigned_to: string | null;
+  custom_fields: Record<string, unknown>;
 }
 interface Conv { id: string; workflow_ref: string; conversation_ref: string; mode: string; last_message_at: string | null }
 interface Appt { id: string; service_name: string; staff_name: string | null; site_name: string | null; start_at: string; status: string; origin: string }
 interface Activity { id: string; event_type: string; actor_type: string; created_at: string; detail: Record<string, unknown> }
+export interface IdentityView { kind: string; value: string; label: string | null }
+export interface MemberOption { user_id: string; email: string; name: string | null }
+export interface FieldDefView { id: string; key: string; label: string; type: "text" | "number" | "date" | "select" | "boolean"; options: string[] | null }
 
 type Tab = "data" | "conversations" | "appointments" | "activity";
 
@@ -36,17 +43,23 @@ export function ContactDetail({
   conversations,
   appointments,
   activity,
+  identities,
+  assignableMembers,
+  fieldDefs,
 }: {
-  /** The validated owning client — saves go through the client-scoped action. */
   clientId: string;
-  /** Section to open first (?tab= — e.g. AgendaView's "View conversation"). */
   initialTab?: Tab;
-  /** Client-scoped Agenda link, or null when Scheduling is disabled for this client. */
   agendaHref: string | null;
   contact: ContactData;
   conversations: Conv[];
   appointments: Appt[];
   activity: Activity[];
+  /** Every way this contact is recognised (C-2 multi-identity), read-only. */
+  identities: IdentityView[];
+  /** Users assignable as owner (owner/admin only; empty ⇒ hide the owner control). */
+  assignableMembers: MemberOption[];
+  /** The client's custom-field definitions (enabled). */
+  fieldDefs: FieldDefView[];
 }) {
   const router = useRouter();
   const [tab, setTab] = useState<Tab>(initialTab);
@@ -54,18 +67,36 @@ export function ContactDetail({
   const [phone, setPhone] = useState(contact.phone_e164 ?? "");
   const [email, setEmail] = useState(contact.email ?? "");
   const [stage, setStage] = useState(contact.stage);
+  const [consent, setConsent] = useState(contact.messaging_consent);
+  const [consentSource, setConsentSource] = useState(contact.consent_source ?? "");
+  const [owner, setOwner] = useState(contact.assigned_to ?? "");
+  const [custom, setCustom] = useState<Record<string, unknown>>(contact.custom_fields ?? {});
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
 
+  const setField = (key: string, v: unknown) => setCustom((c) => ({ ...c, [key]: v }));
+
   const save = () => {
     setMsg(null);
+    // Coerce custom values to their declared type so validation (strict) passes.
+    const customPayload: Record<string, unknown> = {};
+    for (const def of fieldDefs) {
+      const raw = custom[def.key];
+      if (raw === undefined || raw === null || raw === "") continue;
+      customPayload[def.key] = def.type === "number" ? Number(raw) : def.type === "boolean" ? Boolean(raw) : String(raw);
+    }
     startTransition(async () => {
-      const r = await updateContactAction(clientId, contact.id, {
+      const patch: Record<string, unknown> = {
         name,
         phone,
         email,
-        stage: stage as "new" | "active" | "customer" | "archived",
-      });
+        stage,
+        messaging_consent: consent as "unknown" | "opted_in" | "opted_out",
+        consent_source: consentSource || null,
+        custom_fields: customPayload,
+      };
+      if (assignableMembers.length > 0) patch.assigned_to = owner || null;
+      const r = await updateContactAction(clientId, contact.id, patch);
       if (!r.ok) setMsg(r.error);
       else {
         setMsg("Saved.");
@@ -111,6 +142,45 @@ export function ContactDetail({
               {["new", "active", "customer", "archived"].map((s) => <option key={s} value={s}>{s}</option>)}
             </select>
           </Field>
+
+          <Field label="Messaging consent">
+            <select value={consent} onChange={(e) => setConsent(e.target.value)} className={INPUT}>
+              {["unknown", "opted_in", "opted_out"].map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+          </Field>
+          <Field label="Consent source"><input value={consentSource} onChange={(e) => setConsentSource(e.target.value)} className={INPUT} placeholder="e.g. verbal, form" /></Field>
+
+          {assignableMembers.length > 0 ? (
+            <Field label="Owner">
+              <select value={owner} onChange={(e) => setOwner(e.target.value)} className={INPUT}>
+                <option value="">— unassigned —</option>
+                {assignableMembers.map((m) => <option key={m.user_id} value={m.user_id}>{m.name ?? m.email}</option>)}
+              </select>
+            </Field>
+          ) : null}
+
+          {fieldDefs.length > 0 ? (
+            <div className="flex flex-col gap-3 border-t border-line pt-3">
+              <p className="text-xs font-medium uppercase tracking-wider text-faint">Custom fields</p>
+              {fieldDefs.map((def) => (
+                <Field key={def.id} label={def.label}>
+                  <CustomInput def={def} value={custom[def.key]} onChange={(v) => setField(def.key, v)} />
+                </Field>
+              ))}
+            </div>
+          ) : null}
+
+          {identities.length > 0 ? (
+            <div className="border-t border-line pt-3">
+              <p className="text-xs font-medium uppercase tracking-wider text-faint">Identities</p>
+              <ul className="mt-1 flex flex-col gap-0.5 text-xs text-muted">
+                {identities.map((i) => (
+                  <li key={`${i.kind}:${i.value}`}><span className="font-mono">{i.kind}</span> {i.value}{i.label ? ` · ${i.label}` : ""}</li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+
           <p className="text-xs text-faint">Messages: {contact.message_count} · Bot/human mode: {contact.bot_human_mode}</p>
           <div className="flex items-center gap-3">
             <button onClick={save} disabled={pending} className="self-start rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">
@@ -164,12 +234,27 @@ export function ContactDetail({
         </ul>
       ) : null}
 
-      {/* Only when Scheduling is enabled for this client (server-resolved). */}
       {agendaHref ? (
         <Link href={agendaHref} className="text-xs text-accent hover:underline">Open agenda →</Link>
       ) : null}
     </div>
   );
+}
+
+function CustomInput({ def, value, onChange }: { def: FieldDefView; value: unknown; onChange: (v: unknown) => void }) {
+  if (def.type === "boolean") {
+    return <input type="checkbox" checked={Boolean(value)} onChange={(e) => onChange(e.target.checked)} />;
+  }
+  if (def.type === "select") {
+    return (
+      <select value={value == null ? "" : String(value)} onChange={(e) => onChange(e.target.value)} className={INPUT}>
+        <option value="">—</option>
+        {(def.options ?? []).map((o) => <option key={o} value={o}>{o}</option>)}
+      </select>
+    );
+  }
+  const type = def.type === "number" ? "number" : def.type === "date" ? "date" : "text";
+  return <input type={type} value={value == null ? "" : String(value)} onChange={(e) => onChange(e.target.value)} className={INPUT} />;
 }
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {

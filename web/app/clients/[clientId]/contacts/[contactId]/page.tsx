@@ -2,8 +2,12 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
+import { hasFullAccess } from "@/lib/access";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { getContactById, listContactConversations } from "@worker/db/repositories/contacts.js";
+import { listIdentitiesForContact } from "@worker/db/repositories/contactIdentities.js";
+import { listFieldDefinitions } from "@worker/db/repositories/clientFieldDefinitions.js";
+import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
 import { listAppointmentsForContact, listEventsForContact } from "@worker/db/repositories/scheduling/appointments.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { ContactDetail } from "@/components/contacts/ContactDetail";
@@ -44,12 +48,21 @@ export default async function ClientContactDetailPage({
   // Every child read carries client.id too (READ-SIDE DEFENSE): a conversation
   // whose canonical workflow lives in another client, or an appointment/event of
   // another client, never renders here even if it was mislinked to this contact.
-  const [conversations, appointments, activity, schedulingEnabled] = await Promise.all([
+  const [conversations, appointments, activity, schedulingEnabled, identities, fieldDefs, members] = await Promise.all([
     listContactConversations(tenantId, contactId, client.id),
     listAppointmentsForContact(tenantId, contactId, client.id),
     listEventsForContact(tenantId, contactId, client.id),
     isClientModuleEnabled(tenantId, client.id, "scheduling"),
+    listIdentitiesForContact(tenantId, contactId, client.id),
+    listFieldDefinitions(tenantId, client.id, { enabledOnly: true }),
+    // Owner assignment is owner/admin only; members get no assignable list (control hidden).
+    hasFullAccess(scope) ? listMembersForTenant(tenantId) : Promise.resolve([]),
   ]);
+
+  // Assignable = users with access to THIS client (owner/admin: all; a member: only their own).
+  const assignableMembers = members
+    .filter((m) => m.member_client_id === null || m.member_client_id === client.id)
+    .map((m) => ({ user_id: m.user_id, email: m.email, name: m.name }));
 
   const isCustomer = appointments.some((a) => a.status === "completed");
   const fromQS = from ? `?from=${encodeURIComponent(from)}` : "";
@@ -74,7 +87,14 @@ export default async function ClientContactDetailPage({
           bot_human_mode: contact.bot_human_mode,
           message_count: contact.message_count,
           is_customer: isCustomer,
+          messaging_consent: contact.messaging_consent,
+          consent_source: contact.consent_source,
+          assigned_to: contact.assigned_to,
+          custom_fields: contact.custom_fields ?? {},
         }}
+        identities={identities.map((i) => ({ kind: i.kind, value: i.value, label: i.label }))}
+        assignableMembers={assignableMembers}
+        fieldDefs={fieldDefs.map((d) => ({ id: d.id, key: d.key, label: d.label, type: d.type, options: d.options }))}
         conversations={conversations.map((c) => ({
           id: c.id,
           workflow_ref: c.n8n_workflow_id,
