@@ -212,7 +212,11 @@ export async function isSlotAvailable(
 ): Promise<{ available: boolean; serviceEndAt: Date | null; buffers: { before_min: number; after_min: number } | null }> {
   void client; // availability reads use the pool; the insert (next step) holds the txn
   const windowStart = new Date(params.startAt.getTime() - 60 * 60 * 1000);
-  const windowEnd = new Date(params.startAt.getTime() + 6 * 60 * 60 * 1000);
+  // 24h upper bound (was 6h): availability.ts filters a candidate when
+  // `startAt + serviceDuration > windowEnd`, so a too-narrow window silently makes a
+  // long service un-reschedulable (same class of bug as createAppointment's window).
+  // Any single-day service fits within 24h; the free interval is the real gate.
+  const windowEnd = new Date(params.startAt.getTime() + 24 * 60 * 60 * 1000);
   const avail = await loadAvailability({
     tenantId: params.tenantId,
     siteId: params.siteId,

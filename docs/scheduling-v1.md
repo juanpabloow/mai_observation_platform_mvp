@@ -86,7 +86,12 @@ New migrations (in order):
 3. `..._appointments` — `btree_gist`, `appointments`, exclusion constraint, idempotency index, `appointment_events`.
 4. `..._scheduling-events` — realtime feed table.
 
-Roll back the four with `npm run migrate down 4`.
+Later migrations this feature also depends on: `..._client-modules` (the per-client
+`scheduling` gate this API enforces), `..._services-per-client` (adds `services.client_id`
+and re-points the catalogue per client — the SCHED-1 "services are tenant-level" note
+above is superseded by it), and `..._contacts-search` (C-1: pg_trgm + keyset indexes for
+the contacts list). `npm run migrate down 4` only reverses the four core migrations, not
+those — roll back the exact count you applied.
 
 ---
 
@@ -135,57 +140,102 @@ limited per IP; keep the app behind Railway's proxy (the code reads
 
 ## 6. n8n integration
 
-Auth: `Authorization: Bearer <handoff-token>`. Base URL:
-`https://YOUR-APP/api/scheduling/v1`. Full spec: [`scheduling-openapi.yaml`](./scheduling-openapi.yaml).
+Auth: `Authorization: Bearer <handoff-token>` **and** `X-Workflow-Ref: <n8n workflow id>`
+on every request. Base URL: `https://YOUR-APP/api/scheduling/v1`. Full spec:
+[`scheduling-openapi.yaml`](./scheduling-openapi.yaml).
 
-Typical conversational flow (n8n):
+### Getting started for n8n
 
-1. `GET /sites` → pick `site_id`.
-2. `GET /services?site_id=…` → pick `service_id`.
-3. `GET /availability?site_id=…&service_id=…&from=…&to=…` (optionally `&staff_id=`).
-4. `POST /appointments` with an `Idempotency-Key` header.
+1. **Issue a token.** In the platform, issue a handoff token for the client's n8n
+   connection (the same token the handoff API uses — there is no separate scheduling
+   token). Store it in n8n as `MTAI_SCHEDULING_TOKEN`.
+2. **Send both headers on every call.** `Authorization: Bearer {{$env.MTAI_SCHEDULING_TOKEN}}`
+   and `X-Workflow-Ref: {{ $workflow.id }}`. The token gives the tenant; the workflow ref
+   resolves the CLIENT (its workflow's owning client, which must be non-default with
+   `scheduling` enabled). Never send `tenant_id`/`client_id`/`workflow_ref` in the body.
+3. **The booking conversation, in order:**
+   1. `GET /sites` → choose `site_id` (usually the client has one).
+   2. `GET /services?site_id=…` → present options → `service_id`.
+   3. `GET /staff?site_id=…&service_id=…` → let the customer pick a barber, or skip for "any".
+   4. `GET /availability?site_id=…&service_id=…&from=…&to=…[&staff_id=…]` → offer real slots.
+   5. `POST /appointments` with an **`Idempotency-Key`** (build it from something stable
+      for the attempt, e.g. `conversation_ref + chosen_slot`, so a node retry can't
+      double-book). Include `channel` + `channel_user_id` (e.g. `whatsapp` + the wa_id) to
+      attach/create the CRM **contact**; omit them for an anonymous booking.
+   6. Lifecycle as the conversation continues: `POST /appointments/{id}/confirm` |
+      `complete` | `no-show` | `cancel` | `reschedule`.
+4. **Handle 409 gracefully.** A slot can be taken between your availability read and the
+   create. On `409` (`conflict_slot` / `unavailable` / `no_staff`) re-fetch `/availability`
+   and offer a new slot — do NOT change the `Idempotency-Key` on a genuine retry of the
+   *same* attempt (only a new attempt gets a new key). `409 conflict_idempotency` means you
+   reused a key with a different payload — fix the payload or use a new key.
 
 ### curl examples
 
+> Every example below was RUN against a local server (C-1) and its response pasted
+> verbatim. Two headers are mandatory on every call: `Authorization: Bearer <token>`
+> and **`X-Workflow-Ref: <n8n workflow id>`** (the client is resolved from them).
+> `workflow_ref` is NOT a body field.
+
 ```bash
-TOKEN=hk_xxx
+TOKEN=hk_xxx                       # issued in the platform
+WF=demo-wf-1                       # the n8n workflow id; in n8n: {{ $workflow.id }}
 BASE=http://localhost:3000/api/scheduling/v1
+H=(-H "Authorization: Bearer $TOKEN" -H "X-Workflow-Ref: $WF")
 
-# Sites / services / staff
-curl -H "Authorization: Bearer $TOKEN" "$BASE/sites"
-curl -H "Authorization: Bearer $TOKEN" "$BASE/services?site_id=$SITE"
-curl -H "Authorization: Bearer $TOKEN" "$BASE/staff?site_id=$SITE&service_id=$SVC"
+# Sites / services / staff (client resolved from token + X-Workflow-Ref)
+curl "${H[@]}" "$BASE/sites"
+curl "${H[@]}" "$BASE/services?site_id=$SITE"
+curl "${H[@]}" "$BASE/staff?site_id=$SITE&service_id=$SVC"
 
-# Availability (next 2 days)
-curl -H "Authorization: Bearer $TOKEN" \
-  "$BASE/availability?site_id=$SITE&service_id=$SVC&from=2026-07-23T00:00:00Z&to=2026-07-25T00:00:00Z"
+# Availability (window; max 45 days)
+curl "${H[@]}" "$BASE/availability?site_id=$SITE&service_id=$SVC&from=2026-07-29T00:00:00Z&to=2026-07-31T00:00:00Z"
 
-# Create (idempotent). Repeat with the SAME key+payload → 200 same appointment;
-# SAME key + different payload → 409.
-curl -X POST "$BASE/appointments" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Idempotency-Key: booking-abc-123" \
-  -H "content-type: application/json" \
-  -d '{
-    "workflow_ref": "wf-123",
-    "conversation_ref": "5730011122@wa",
-    "channel": "whatsapp",
-    "channel_user_id": "573001112233",
-    "customer_name": "Carlos",
-    "customer_phone": "+573001112233",
-    "site_id": "SITE_UUID",
-    "service_id": "SERVICE_UUID",
-    "start_at": "2026-07-23T15:30:00.000Z"
-  }'
+# Create (idempotent). NO workflow_ref in the body — it's the X-Workflow-Ref HEADER.
+# channel + channel_user_id (optional) attach a CRM contact; omit for anonymous.
+curl -X POST "$BASE/appointments" "${H[@]}" \
+  -H "Idempotency-Key: booking-abc-123" -H "content-type: application/json" \
+  -d "{
+    \"conversation_ref\": \"573001112233@wa\",
+    \"channel\": \"whatsapp\",
+    \"channel_user_id\": \"573001112233\",
+    \"customer_name\": \"Carlos\",
+    \"customer_phone\": \"+573001112233\",
+    \"site_id\": \"$SITE\",
+    \"service_id\": \"$SVC\",
+    \"start_at\": \"2026-07-29T14:00:00.000Z\"
+  }"
+# Repeat with the SAME key+payload → 200 + the same appointment; SAME key + a DIFFERENT
+# payload → 409 conflict_idempotency.
 
-# Lifecycle (no generic PATCH — explicit transitions only)
-curl -X POST "$BASE/appointments/$ID/confirm"   -H "Authorization: Bearer $TOKEN"
-curl -X POST "$BASE/appointments/$ID/complete"  -H "Authorization: Bearer $TOKEN"
-curl -X POST "$BASE/appointments/$ID/no-show"   -H "Authorization: Bearer $TOKEN"
-curl -X POST "$BASE/appointments/$ID/cancel"    -H "Authorization: Bearer $TOKEN" \
-     -H "content-type: application/json" -d '{"reason":"customer cancelled"}'
-curl -X POST "$BASE/appointments/$ID/reschedule" -H "Authorization: Bearer $TOKEN" \
-     -H "content-type: application/json" -d '{"start_at":"2026-07-24T16:00:00.000Z"}'
+# Lifecycle (no generic PATCH — explicit transitions only). All need both headers.
+curl -X POST "${H[@]}" "$BASE/appointments/$ID/confirm"
+curl -X POST "${H[@]}" "$BASE/appointments/$ID/complete"
+curl -X POST "${H[@]}" "$BASE/appointments/$ID/no-show"
+curl -X POST "${H[@]}" -H "content-type: application/json" -d '{"reason":"customer cancelled"}' "$BASE/appointments/$ID/cancel"
+curl -X POST "${H[@]}" -H "content-type: application/json" -d '{"start_at":"2026-07-29T16:00:00.000Z"}' "$BASE/appointments/$ID/reschedule"
+```
+
+**Verified responses** (real output, C-1):
+
+```jsonc
+// GET /availability?... → 200  (note the `site` wrapper)
+{ "site": { "id": "1a37f273-…", "timezone": "America/Bogota" },
+  "slots": [ { "start_at": "2026-07-29T14:00:00.000Z",
+               "service_end_at": "2026-07-29T14:45:00.000Z",
+               "staff_id": "b8ded960-…",
+               "available_staff_ids": ["b8ded960-…"] } ] }
+
+// POST /appointments (Idempotency-Key: booking-abc-123) → 201
+{ "appointment": { "id": "7747a035-…", "public_reference": "7ac59929-…",
+    "status": "scheduled", "origin": "n8n", "service_name": "Corte de cabello",
+    "duration_min": 45, "price": "35000.00", "contact_id": "ffb44579-…", "version": 1 } }
+
+// Same key + same payload again        → 200  (the same appointment, not a duplicate)
+// Same slot + a different key           → 409  { "error": { "code": "unavailable" } }
+// No X-Workflow-Ref header              → 400  { "error": { "code": "workflow_ref_required" } }
+// Unknown / foreign X-Workflow-Ref      → 404  { "error": { "code": "not_found", "message": "Workflow not found." } }
+// Workflow on the default client / scheduling off → 403 { "error": { "code": "module_disabled" } }
 ```
 
 ### n8n HTTP Request node payload
@@ -196,11 +246,11 @@ curl -X POST "$BASE/appointments/$ID/reschedule" -H "Authorization: Bearer $TOKE
   "url": "https://YOUR-APP/api/scheduling/v1/appointments",
   "headers": {
     "Authorization": "Bearer {{$env.MTAI_SCHEDULING_TOKEN}}",
-    "Idempotency-Key": "{{$json.conversation_ref}}-{{$json.chosen_slot}}",
+    "X-Workflow-Ref": "={{$workflow.id}}",
+    "Idempotency-Key": "={{$json.conversation_ref}}-{{$json.chosen_slot}}",
     "Content-Type": "application/json"
   },
   "body": {
-    "workflow_ref": "={{$workflow.id}}",
     "conversation_ref": "={{$json.wa_id}}",
     "channel": "whatsapp",
     "channel_user_id": "={{$json.wa_id}}",
@@ -235,12 +285,15 @@ IP rate limited).
 
 The platform has **no WebSocket** — realtime is the existing **poll** mechanism
 (`AutoRefresh` → `router.refresh()`), which re-renders the server component with
-fresh data. Every committed mutation also appends a row to `scheduling_events`
-(`appointment.created|rescheduled|cancelled|status_changed`, `schedule.changed`)
-**after commit**; a session poll endpoint (`/api/scheduling/internal/events`) reads
-"events since cursor" as a change hint. If a client misses an event, the next
-refresh re-reads the authoritative tables — the feed is a hint, not the source of
-truth.
+fresh data. Every committed APPOINTMENT mutation appends a row to `scheduling_events`
+**after commit** — `appointment.created | rescheduled | cancelled | status_changed`.
+(The `schedule.changed` type exists in the schema but is **not emitted today**: admin
+edits to sites/services/staff/hours/exceptions push no realtime hint — the agenda
+still refreshes on its poll interval regardless.) A session poll endpoint
+(`/api/scheduling/internal/events`) reads "events since cursor" as a change hint; it is
+session-authed only (not exposed to the machine API, so n8n cannot poll it). If a client
+misses an event, the next refresh re-reads the authoritative tables — the feed is a
+hint, not the source of truth.
 
 ---
 

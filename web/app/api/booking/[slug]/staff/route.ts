@@ -1,4 +1,5 @@
 import { checkRateLimit, clientIp, schedulingError } from "@/lib/schedulingApi";
+import { isUuid } from "@/lib/clientModuleValidation";
 import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
 import { listStaffForService } from "@worker/db/repositories/scheduling/staff.js";
 
@@ -17,7 +18,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
   const site = await getPublicBookingSiteBySlug(slug);
   if (!site) return schedulingError(404, "not_found", "Booking page not found.");
   const serviceId = new URL(req.url).searchParams.get("service_id");
-  if (!serviceId) return schedulingError(400, "invalid_request", "service_id is required.");
+  // Validate the id SHAPE before the query (R1): a malformed uuid is a 400, not a 500.
+  if (!serviceId || !isUuid(serviceId)) {
+    return schedulingError(400, "invalid_request", "service_id must be a valid id.");
+  }
   const staff = await listStaffForService(site.tenant_id, site.id, serviceId);
   return Response.json({ staff: staff.map((s) => ({ id: s.id, name: s.name })) });
 }

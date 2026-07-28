@@ -140,7 +140,14 @@ export async function createAppointment(
     serviceId: input.serviceId,
     staffId: input.staffId ?? null,
     from: new Date(input.startAt.getTime() - 60 * MS_PER_MIN),
-    to: new Date(input.startAt.getTime() + 60 * MS_PER_MIN),
+    // The upper bound must exceed startAt + serviceDuration, else availability.ts
+    // (`s + durMs > rangeEnd` → skip) filters out the requested start for any service
+    // LONGER than this window and the booking 409s `unavailable` even though the wide-
+    // window availability endpoint offered it (C-1: a 60-min window silently blocked
+    // every 75-min "Corte + barba"). Any single-day service fits within 24h; the free
+    // interval + min-notice + horizon remain the real gates. We only .find() the exact
+    // start, so the extra candidates are harmless.
+    to: new Date(input.startAt.getTime() + 24 * 60 * MS_PER_MIN),
     now,
   });
   if (!avail) return { ok: false, error: 'not_found', message: 'Service is not offered at this site.' };

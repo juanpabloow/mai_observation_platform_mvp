@@ -91,7 +91,7 @@ test('mislinked cross-client conversation/appointment never surface on the conta
   assert.equal(events.length, 0, "client B's appointment events never surface either");
 
   // ── List aggregates for client A must ignore them too ──
-  const list = await listContacts(s.tenantId, { clientId: s.clientId });
+  const { items: list } = await listContacts(s.tenantId, { clientId: s.clientId });
   const row = list.find((c) => c.id === contact.id);
   assert.ok(row);
   assert.equal(row.visit_count, 0, "B's completed appointment doesn't count as a visit");

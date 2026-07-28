@@ -1,16 +1,25 @@
 openapi: 3.1.0
 info:
   title: MT_AI Scheduling API (n8n)
-  version: "1.0.0"
+  version: "1.1.0"
   description: >
     Machine API for the MT_AI scheduling engine. Bearer-token authenticated,
     reusing the existing per-tenant handoff token (Authorization: Bearer <token>).
-    The tenant is derived from the token — never sent by the caller — so a token
-    for one business can only ever read/modify that business's data.
+
+    SCOPE — two headers together decide what a request may touch:
+      • Authorization: Bearer <token>  → the TENANT + n8n connection (from the token).
+      • X-Workflow-Ref: <n8n workflow id>  → REQUIRED on every endpoint. It is resolved
+        to the workflow synced under that connection, and that workflow's owning CLIENT
+        is the only client the request can read/modify. The client must be a non-default
+        client with the `scheduling` module enabled.
+    tenant_id and client_id are NEVER sent by the caller — both are derived server-side.
+    A missing X-Workflow-Ref is 400; an unknown/foreign workflow is 404; a workflow whose
+    client is the default ("Unassigned") client or has scheduling disabled is 403.
 
     Times are ISO-8601 timestamps in UTC; each site presents them in its own IANA
     timezone. Double-booking is impossible at the database level (a Postgres GiST
-    exclusion constraint); a lost race returns 409.
+    exclusion constraint); a lost race — or a slot taken since the availability read —
+    returns 409.
 servers:
   - url: https://YOUR-APP.up.railway.app/api/scheduling/v1
     description: Railway deployment (replace host)
@@ -24,6 +33,15 @@ components:
       type: http
       scheme: bearer
       description: The per-tenant handoff token (hk_...), issued in the platform.
+  parameters:
+    WorkflowRef:
+      name: X-Workflow-Ref
+      in: header
+      required: true
+      schema: { type: string }
+      description: >
+        The n8n workflow id (in n8n, `{{ $workflow.id }}`). Resolves the CLIENT this
+        request acts on. Required on every endpoint; missing/blank → 400.
   schemas:
     Error:
       type: object
@@ -70,15 +88,37 @@ components:
         version: { type: integer }
   responses:
     Unauthorized:
-      description: Missing/invalid Bearer token
+      description: >
+        Missing/invalid/revoked Bearer token — `{ error: { code: "unauthorized" } }`.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    BadRequest:
+      description: >
+        Missing X-Workflow-Ref (`workflow_ref_required`), a missing/invalid query
+        parameter, or a malformed id (`invalid_request`).
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Forbidden:
+      description: >
+        The workflow's client is the default client, or its `scheduling` module is
+        disabled — `{ error: { code: "module_disabled" } }`.
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    NotFound:
+      description: >
+        Workflow not found (unknown/foreign/wrong-connection ref), or a resource
+        (site/appointment) that doesn't resolve under this client — `not_found`.
+        Foreign resources are indistinguishable from missing ones.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
     Conflict:
-      description: Slot taken, unavailable, idempotency-key reuse, or illegal state transition
+      description: >
+        Slot taken (`conflict_slot`), no longer available (`unavailable`), no staff
+        (`no_staff`), idempotency-key reuse with a different payload
+        (`conflict_idempotency`), or an illegal state transition (`invalid_transition`).
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
 paths:
   /sites:
     get:
-      summary: List active sites
+      summary: List the resolved client's active sites
+      parameters:
+        - { $ref: "#/components/parameters/WorkflowRef" }
       responses:
         "200":
           description: OK
@@ -88,34 +128,45 @@ paths:
                 type: object
                 properties:
                   sites: { type: array, items: { type: object } }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /services:
     get:
       summary: List services enabled at a site
       parameters:
+        - { $ref: "#/components/parameters/WorkflowRef" }
         - { name: site_id, in: query, required: true, schema: { type: string, format: uuid } }
       responses:
         "200": { description: OK }
-        "400": { description: site_id required }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /staff:
     get:
       summary: List staff at a site (optionally filtered to a service)
       parameters:
+        - { $ref: "#/components/parameters/WorkflowRef" }
         - { name: site_id, in: query, required: true, schema: { type: string, format: uuid } }
         - { name: service_id, in: query, required: false, schema: { type: string, format: uuid } }
       responses:
         "200": { description: OK }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /availability:
     get:
       summary: Real availability for a service in a window
       parameters:
+        - { $ref: "#/components/parameters/WorkflowRef" }
         - { name: site_id, in: query, required: true, schema: { type: string, format: uuid } }
         - { name: service_id, in: query, required: true, schema: { type: string, format: uuid } }
         - { name: staff_id, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
-        - { name: to, in: query, required: true, schema: { type: string, format: date-time } }
+        - { name: to, in: query, required: true, schema: { type: string, format: date-time }, description: "Window; max 45 days from `from`." }
       responses:
         "200":
           description: OK
@@ -124,14 +175,21 @@ paths:
               schema:
                 type: object
                 properties:
+                  site:
+                    type: object
+                    properties:
+                      id: { type: string, format: uuid }
+                      timezone: { type: string, description: IANA tz the slots are presented in. }
                   slots: { type: array, items: { $ref: "#/components/schemas/Slot" } }
-        "400": { description: Invalid/too-large window }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { description: Service not offered at this site }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /appointments:
     get:
-      summary: List appointments (safe filters)
+      summary: List appointments (safe filters; the resolved client only)
       parameters:
+        - { $ref: "#/components/parameters/WorkflowRef" }
         - { name: site_id, in: query, schema: { type: string, format: uuid } }
         - { name: staff_id, in: query, schema: { type: string, format: uuid } }
         - { name: status, in: query, schema: { type: string, enum: [scheduled, confirmed, completed, cancelled, no_show] } }
@@ -141,10 +199,14 @@ paths:
         - { name: to, in: query, schema: { type: string, format: date-time } }
       responses:
         "200": { description: OK }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
     post:
       summary: Create an appointment (idempotent)
       parameters:
+        - { $ref: "#/components/parameters/WorkflowRef" }
         - name: Idempotency-Key
           in: header
           required: true
@@ -157,10 +219,14 @@ paths:
             schema:
               type: object
               required: [site_id, service_id, start_at]
+              description: >
+                The workflow (and thus client) comes from the X-Workflow-Ref HEADER, never
+                the body. Sending a contact identity (channel + channel_user_id) attaches
+                the appointment to a CRM contact (resolve-or-create); omit them for an
+                anonymous booking (contact_id stays null).
               properties:
-                workflow_ref: { type: string }
                 conversation_ref: { type: string }
-                channel: { type: string, description: "e.g. whatsapp" }
+                channel: { type: string, description: "e.g. whatsapp — with channel_user_id, attaches a contact" }
                 channel_user_id: { type: string, description: "wa_id or stable channel id" }
                 customer_name: { type: string }
                 customer_phone: { type: string, description: normalized to E.164 when possible }
@@ -172,41 +238,67 @@ paths:
       responses:
         "201": { description: Created, content: { application/json: { schema: { type: object, properties: { appointment: { $ref: "#/components/schemas/Appointment" } } } } } }
         "200": { description: Idempotent replay (same key+payload) — returns the existing appointment }
-        "400": { description: Idempotency-Key header missing }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
         "422": { description: Invalid body }
   /appointments/{id}/cancel:
     post:
       summary: Cancel (status change; never a physical delete)
-      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      parameters:
+        - { $ref: "#/components/parameters/WorkflowRef" }
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: false
         content: { application/json: { schema: { type: object, properties: { reason: { type: string } } } } }
       responses:
         "200": { description: OK }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { description: Not found }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
   /appointments/{id}/confirm:
     post:
       summary: Confirm
-      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
-      responses: { "200": { description: OK }, "409": { $ref: "#/components/responses/Conflict" } }
+      parameters:
+        - { $ref: "#/components/parameters/WorkflowRef" }
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /appointments/{id}/complete:
     post:
       summary: Mark completed
-      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
-      responses: { "200": { description: OK }, "409": { $ref: "#/components/responses/Conflict" } }
+      parameters:
+        - { $ref: "#/components/parameters/WorkflowRef" }
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /appointments/{id}/no-show:
     post:
       summary: Mark no-show
-      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
-      responses: { "200": { description: OK }, "409": { $ref: "#/components/responses/Conflict" } }
+      parameters:
+        - { $ref: "#/components/parameters/WorkflowRef" }
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+      responses:
+        "200": { description: OK }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /appointments/{id}/reschedule:
     post:
       summary: Reschedule (keeps the same id; re-validates availability)
-      parameters: [ { name: id, in: path, required: true, schema: { type: string, format: uuid } } ]
+      parameters:
+        - { $ref: "#/components/parameters/WorkflowRef" }
+        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
       requestBody:
         required: true
         content:
@@ -219,6 +311,9 @@ paths:
                 staff_id: { type: string, format: uuid }
       responses:
         "200": { description: OK }
+        "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
-        "404": { description: Not found }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+        "422": { description: Invalid body }

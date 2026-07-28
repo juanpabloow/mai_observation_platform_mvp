@@ -98,12 +98,70 @@ export interface ContactListItem extends ContactRow {
   visit_count: number;
 }
 
-/** Contact list with derived customer status, next upcoming appointment, visits
- * (completed appts), and last conversation activity. Tenant-scoped. */
+export interface ListContactsResult {
+  items: ContactListItem[];
+  /** Opaque keyset cursor for the NEXT page, or null when this is the last page. */
+  nextCursor: string | null;
+}
+
+/**
+ * Immutable "search document" expression (aliased to `c`). MUST stay byte-identical
+ * to the GIN trigram index in migrations/1782500000000_contacts-search.ts (minus the
+ * `c.` alias) or the planner won't use it. Includes a digits-only copy of the phone
+ * so a phone typed with +/spaces/dashes still matches the stored E.164.
+ */
+const CONTACT_SEARCH_DOC =
+  `lower(coalesce(c.name,'') || ' ' || coalesce(c.email,'') || ' ' || coalesce(c.channel_user_id,'') || ' ' || coalesce(c.phone_e164,'') || ' ' || regexp_replace(coalesce(c.phone_e164,''), '[^0-9]', '', 'g'))`;
+
+/** Keyset cursor codec: opaque base64url of `<micro-precise ISO ts>|<id>`. The
+ * timestamp MUST carry Postgres's microsecond precision — a JS Date only has
+ * millisecond precision, and a ms-truncated cursor makes the keyset comparison SKIP
+ * every row that shares a millisecond with the cursor row. So the ts is taken from the
+ * DB as text (to_char … .US) in the query, never from the row's Date. */
+function encodeContactCursor(cursorTs: string, id: string): string {
+  return Buffer.from(`${cursorTs}|${id}`, 'utf8').toString('base64url');
+}
+function decodeContactCursor(cursor: string | null | undefined): { ts: string; id: string } | null {
+  if (!cursor) return null;
+  try {
+    const s = Buffer.from(cursor, 'base64url').toString('utf8');
+    const i = s.indexOf('|');
+    if (i <= 0) return null;
+    const ts = s.slice(0, i);
+    const id = s.slice(i + 1);
+    // Reject a malformed cursor rather than letting it 500 on a bad cast.
+    if (Number.isNaN(new Date(ts).getTime())) return null;
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) return null;
+    return { ts, id };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Contact list with derived customer status, next upcoming appointment, visits
+ * (completed appts), and last conversation activity. Tenant-scoped.
+ *
+ * Search is index-served (pg_trgm GIN over CONTACT_SEARCH_DOC): one substring match
+ * across name/email/channel_user_id/phone, and a phone typed with any punctuation
+ * matches the stored E.164 via the digits-only token. Pagination is KEYSET on
+ * (last_contact_at DESC, id DESC) — stable under the constantly-changing
+ * last_contact_at (offset pagination would skip/duplicate rows as contacts reorder),
+ * and index-served by contacts_client_recency_idx. Fetches pageSize+1 to know whether
+ * a next page exists.
+ */
 export async function listContacts(
   tenantId: string,
-  opts: { search?: string; stage?: ContactStage; limit?: number; clientId?: string | null } = {},
-): Promise<ContactListItem[]> {
+  opts: {
+    search?: string;
+    stage?: ContactStage;
+    limit?: number;
+    clientId?: string | null;
+    /** Opaque cursor from a previous result's nextCursor. Malformed → ignored. */
+    cursor?: string | null;
+  } = {},
+): Promise<ListContactsResult> {
+  const pageSize = Math.min(Math.max(opts.limit ?? 50, 1), 200);
   const params: unknown[] = [tenantId];
   const where: string[] = ['c.tenant_id = $1'];
   if (opts.clientId) {
@@ -114,23 +172,42 @@ export async function listContacts(
     params.push(opts.stage);
     where.push(`c.stage = $${params.length}`);
   }
-  if (opts.search) {
-    params.push(`%${opts.search}%`);
-    where.push(`(c.name ILIKE $${params.length} OR c.phone_e164 ILIKE $${params.length} OR c.email ILIKE $${params.length} OR c.channel_user_id ILIKE $${params.length})`);
+  const search = opts.search?.trim();
+  if (search) {
+    params.push(`%${search}%`);
+    const clauses = [`${CONTACT_SEARCH_DOC} ILIKE $${params.length}`];
+    // When the user typed punctuation (e.g. "+57 300-123"), also match the
+    // digits-only phone token so it finds the stored E.164.
+    const digits = search.replace(/\D/g, '');
+    if (digits.length >= 2 && digits !== search) {
+      params.push(`%${digits}%`);
+      clauses.push(`${CONTACT_SEARCH_DOC} ILIKE $${params.length}`);
+    }
+    where.push(`(${clauses.join(' OR ')})`);
   }
-  params.push(Math.min(opts.limit ?? 200, 500));
+  const cursor = decodeContactCursor(opts.cursor);
+  if (cursor) {
+    params.push(cursor.ts);
+    const tsIdx = params.length;
+    params.push(cursor.id);
+    where.push(`(c.last_contact_at, c.id) < ($${tsIdx}::timestamptz, $${params.length}::uuid)`);
+  }
+  params.push(pageSize + 1);
+  const limitIdx = params.length;
   // READ-SIDE CLIENT DEFENSE on the aggregates: appointment counts join on
   // contact_id AND client_id (a mislinked cross-client appointment never counts),
   // and last_conversation_at only considers conversations whose CANONICAL
   // workflow (most recently synced row for tenant + n8n_workflow_id) belongs to
   // the contact's own client.
-  const r = await query<ContactListItem>(
+  const r = await query<ContactListItem & { cursor_ts: string }>(
     `SELECT c.*,
             COALESCE(a.completed_count, 0) AS completed_count,
             (COALESCE(a.completed_count, 0) > 0) AS is_customer,
             COALESCE(a.completed_count, 0) AS visit_count,
             a.next_appointment_at,
-            conv.last_conversation_at
+            conv.last_conversation_at,
+            -- Microsecond-precise cursor key (a JS Date would drop precision; see codec).
+            to_char(c.last_contact_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts
        FROM contacts c
        LEFT JOIN (
          SELECT contact_id, client_id,
@@ -154,11 +231,18 @@ export async function listContacts(
           GROUP BY co.contact_id, cw.client_id
        ) conv ON conv.contact_id = c.id AND conv.client_id = c.client_id
       WHERE ${where.join(' AND ')}
-      ORDER BY c.last_contact_at DESC
-      LIMIT $${params.length}`,
+      ORDER BY c.last_contact_at DESC, c.id DESC
+      LIMIT $${limitIdx}`,
     params,
   );
-  return r.rows;
+  const hasMore = r.rows.length > pageSize;
+  const kept = hasMore ? r.rows.slice(0, pageSize) : r.rows;
+  const last = kept[kept.length - 1];
+  const nextCursor = hasMore && last ? encodeContactCursor(last.cursor_ts, last.id) : null;
+  // `kept` rows carry the internal cursor_ts; it never reaches the client (the page
+  // reads named fields), and `ContactListItem & {cursor_ts}` is assignable to the
+  // ContactListItem[] contract.
+  return { items: kept, nextCursor };
 }
 
 /**

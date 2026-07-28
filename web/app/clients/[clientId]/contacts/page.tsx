@@ -17,20 +17,31 @@ export default async function ClientContactsPage({
   searchParams,
 }: {
   params: Promise<{ clientId: string }>;
-  searchParams: Promise<{ q?: string; from?: string }>;
+  searchParams: Promise<{ q?: string; from?: string; cursor?: string }>;
 }) {
   await connection();
   const { clientId } = await params;
   const { scope, client } = await requireClientModulePage(clientId, "crm");
-  const { q, from } = await searchParams;
+  const { q, from, cursor } = await searchParams;
 
-  const contacts = await listContacts(scope.tenantId, {
+  const { items: contacts, nextCursor } = await listContacts(scope.tenantId, {
     search: q?.trim() || undefined,
     clientId: client.id, // ALWAYS the validated client — search stays inside it
+    cursor: cursor || undefined, // keyset pagination; a malformed cursor is ignored
+    limit: 50,
   });
 
   const base = `/clients/${client.id}/contacts`;
   const fromQS = from ? `?from=${encodeURIComponent(from)}` : "";
+  // The "next page" link preserves the active search + origin workflow.
+  const nextHref = (() => {
+    if (!nextCursor) return null;
+    const p = new URLSearchParams();
+    if (q) p.set("q", q);
+    if (from) p.set("from", from);
+    p.set("cursor", nextCursor);
+    return `${base}?${p.toString()}`;
+  })();
   const fmtDate = (d: Date | null): string =>
     d ? new Intl.DateTimeFormat("es-CO", { dateStyle: "medium", timeStyle: "short" }).format(new Date(d)) : "—";
 
@@ -88,6 +99,18 @@ export default async function ClientContactsPage({
           </table>
         </div>
       )}
+
+      {nextHref ? (
+        <div className="flex justify-center pt-1">
+          <Link
+            href={nextHref}
+            scroll={false}
+            className="rounded-lg border border-line px-4 py-1.5 text-sm text-muted transition-colors hover:bg-subtle hover:text-foreground"
+          >
+            Next →
+          </Link>
+        </div>
+      ) : null}
     </main>
   );
 }
