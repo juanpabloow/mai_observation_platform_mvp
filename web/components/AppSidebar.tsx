@@ -87,6 +87,17 @@ const Icon = {
       <circle cx="12" cy="14.5" r="1.6" stroke="currentColor" strokeWidth="1.6" />
     </svg>
   ),
+  settings: (
+    <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.6" />
+      <path
+        d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6 18 18M18 6l-1.4 1.4M7.4 16.6 6 18"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinecap="round"
+      />
+    </svg>
+  ),
 } as const;
 
 interface NavItem {
@@ -360,13 +371,16 @@ export function AppSidebar({
     const scope = scopeFor(clientId);
     const onWorkflows = pathname.startsWith(c("/workflows"));
     const onAnalytics = /\/workflows\/[^/]+\/analytics(?:\/|$)/.test(pathname);
+    const onSettings =
+      /\/workflows\/[^/]+\/conversations\/settings(?:\/|$)/.test(pathname) ||
+      /\/workflows\/all\/settings(?:\/|$)/.test(pathname);
     const workflows: NavItem[] = [
       {
         key: "executions",
         label: "Executions",
         href: scopeHref(clientId, "executions", scope),
         icon: Icon.workflows,
-        active: onWorkflows && !onAnalytics,
+        active: onWorkflows && !onAnalytics && !onSettings,
       },
       {
         key: "analytics",
@@ -376,6 +390,18 @@ export function AppSidebar({
         active: onWorkflows && onAnalytics,
       },
     ];
+    // Settings (Handoff webhook + field mappings) — owner/admin only, scope-aware like
+    // its siblings: the current workflow's settings page, or the picker at scope 'all'.
+    // Members never see it (the page's handoff section + actions refuse them server-side).
+    if (!isMember) {
+      workflows.push({
+        key: "settings",
+        label: "Settings",
+        href: scopeHref(clientId, "settings", scope),
+        icon: Icon.settings,
+        active: onWorkflows && onSettings,
+      });
+    }
     sections = [{ label: "Workflows", items: workflows }];
     // CONVERSATIONS (Inbox) only when the `inbox` module is enabled — hides the link,
     // the badge, and (no countEndpoint rendered) stops the pending-count polling.

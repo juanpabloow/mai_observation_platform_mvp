@@ -8,6 +8,8 @@
  * The scope-bearing surfaces, and what the URL says about scope:
  *   /clients/<c>/workflows                     → Executions, "all" (the list = all)
  *   /clients/<c>/workflows/<w>/analytics        → Analytics, that workflow (w="all" ⇒ aggregate)
+ *   /clients/<c>/workflows/all/settings         → Settings, "all" (the picker list)
+ *   /clients/<c>/workflows/<w>/conversations/settings → Settings, that workflow
  *   /clients/<c>/workflows/<w>/executions|…      → Executions, that workflow
  *   /clients/<c>/inbox        [?workflow=<w>]   → Inbox; scope from ?workflow= (W-2) else null
  * Everything else (Contacts, Agenda, Scheduling settings, Team, Modules, non-client
@@ -19,7 +21,7 @@
  * so callers pass the request's search string alongside the pathname.
  */
 
-export type ScopeSection = "executions" | "analytics" | "inbox";
+export type ScopeSection = "executions" | "analytics" | "inbox" | "settings";
 
 export interface ScopeSurface {
   clientId: string;
@@ -29,6 +31,10 @@ export interface ScopeSurface {
 
 const RE_LIST = /^\/clients\/([^/]+)\/workflows\/?$/;
 const RE_ANALYTICS = /^\/clients\/([^/]+)\/workflows\/([^/]+)\/analytics(?:\/|$)/;
+// Settings surfaces — both matched BEFORE RE_WORKFLOW (which would otherwise claim
+// them as Executions): the "all" picker list, then a specific workflow's settings page.
+const RE_SETTINGS_ALL = /^\/clients\/([^/]+)\/workflows\/all\/settings(?:\/|$)/;
+const RE_SETTINGS = /^\/clients\/([^/]+)\/workflows\/([^/]+)\/conversations\/settings(?:\/|$)/;
 const RE_WORKFLOW = /^\/clients\/([^/]+)\/workflows\/([^/]+)(?:\/|$)/;
 const RE_INBOX = /^\/clients\/([^/]+)\/inbox(?:\/|$)/;
 
@@ -66,6 +72,10 @@ export function parseScopeSurface(
   if (m) return { clientId: dec(m[1]), section: "executions", urlWorkflow: "all" };
   m = pathname.match(RE_ANALYTICS);
   if (m) return { clientId: dec(m[1]), section: "analytics", urlWorkflow: slot(m[2]) };
+  m = pathname.match(RE_SETTINGS_ALL);
+  if (m) return { clientId: dec(m[1]), section: "settings", urlWorkflow: "all" };
+  m = pathname.match(RE_SETTINGS);
+  if (m) return { clientId: dec(m[1]), section: "settings", urlWorkflow: slot(m[2]) };
   m = pathname.match(RE_WORKFLOW);
   if (m) return { clientId: dec(m[1]), section: "executions", urlWorkflow: slot(m[2]) };
   m = pathname.match(RE_INBOX);
@@ -81,6 +91,8 @@ export function parseScopeSurface(
  *   executions + X   → X's executions
  *   analytics  + all → the aggregate analytics
  *   analytics  + X   → X's analytics
+ *   settings   + all → the workflow picker (pick one to configure)
+ *   settings   + X   → X's Handoff & mapping settings page
  *   inbox      + X   → the client inbox with ?workflow=X (all ⇒ no param)
  */
 export function scopeHref(clientId: string, section: ScopeSection, scope: "all" | string): string {
@@ -92,6 +104,11 @@ export function scopeHref(clientId: string, section: ScopeSection, scope: "all" 
     return scope === "all"
       ? `${c}/workflows/all/analytics`
       : `${c}/workflows/${encodeURIComponent(scope)}/analytics`;
+  }
+  if (section === "settings") {
+    return scope === "all"
+      ? `${c}/workflows/all/settings`
+      : `${c}/workflows/${encodeURIComponent(scope)}/conversations/settings`;
   }
   return scope === "all" ? `${c}/workflows` : `${c}/workflows/${encodeURIComponent(scope)}/executions`;
 }

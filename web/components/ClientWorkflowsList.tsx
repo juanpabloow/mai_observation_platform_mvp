@@ -2,6 +2,7 @@
 
 import { useMemo, useState } from "react";
 import Link from "next/link";
+import { scopeHref } from "@/lib/scopeSurface";
 
 export interface ClientWorkflowRow {
   /** n8n workflow id — the URL segment + the mono id shown on the row. */
@@ -14,15 +15,19 @@ export interface ClientWorkflowRow {
  * The client's WORKFLOWS list (final-design page at /clients/<c>/workflows). A
  * searchable list of the workflows assigned to this client: status dot, name,
  * active/inactive label, and the mono workflow id. The whole row links to that
- * workflow's Executions. Search filters client-side over name + id; an empty client
- * and a no-match search each get their own empty state.
+ * workflow's `section` (Executions by default; Settings for the 'all' Settings picker
+ * — same list, same behavior, just a different target). Search filters client-side
+ * over name + id; an empty client and a no-match search each get their own empty state.
  */
 export function ClientWorkflowsList({
   clientId,
   workflows,
+  section = "executions",
 }: {
   clientId: string;
   workflows: ClientWorkflowRow[];
+  /** Where a row leads — that workflow's Executions (default) or its Settings page. */
+  section?: "executions" | "settings";
 }) {
   const [search, setSearch] = useState("");
 
@@ -36,8 +41,7 @@ export function ClientWorkflowsList({
     );
   }, [workflows, search]);
 
-  const href = (w: ClientWorkflowRow): string =>
-    `/clients/${encodeURIComponent(clientId)}/workflows/${encodeURIComponent(w.n8nWorkflowId)}/executions`;
+  const href = (w: ClientWorkflowRow): string => scopeHref(clientId, section, w.n8nWorkflowId);
 
   // Empty client (nothing assigned) — distinct from a no-match search below.
   if (workflows.length === 0) {

@@ -1,5 +1,5 @@
 import { connection } from "next/server";
-import { getAgentSummary } from "@worker/db/repositories/handoff.js";
+import { getAgentSummary, isWorkflowHandoffActive } from "@worker/db/repositories/handoff.js";
 import { hasFullAccess } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { resolveWorkflowScope, validateWorkflowForClient } from "@/lib/workflowScope";
@@ -53,6 +53,14 @@ export default async function ClientInboxPage({
     getAgentSummary(scope.userId),
   ]);
 
+  // Empty-state nuance (H-6): when a specific workflow is scoped but has NO conversations
+  // yet, distinguish "not set up for handoff" from "set up but quiet" so the empty state
+  // can point the operator at settings. One extra cheap query, only when the list is empty.
+  const workflowHandoffActive =
+    effective !== "all" && initial.conversations.length === 0
+      ? await isWorkflowHandoffActive(scope.tenantId, effective)
+      : null;
+
   return (
     <ClientInboxWorkspace
       key={effective}
@@ -60,6 +68,7 @@ export default async function ClientInboxPage({
       clientName={client.name}
       scope={effective}
       initial={initial}
+      workflowHandoffActive={workflowHandoffActive}
       viewerUserId={scope.userId}
       viewerName={viewer?.name ?? null}
       viewerIsFullAccess={hasFullAccess(scope)}

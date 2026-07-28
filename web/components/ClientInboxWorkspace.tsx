@@ -14,6 +14,7 @@ import {
   type InboxMessageView,
 } from "@/lib/inboxView";
 import { groupConversations, pendingCount, type InboxGroupMeta } from "@/lib/inboxGroups";
+import { scopeHref } from "@/lib/scopeSurface";
 
 interface GridPayload {
   conversations: InboxConversationView[];
@@ -51,6 +52,7 @@ export function ClientInboxWorkspace({
   clientName,
   initial,
   scope,
+  workflowHandoffActive,
   viewerUserId,
   viewerName,
   viewerIsFullAccess,
@@ -62,6 +64,10 @@ export function ClientInboxWorkspace({
    *  (URL ?workflow= else cookie); this component is keyed by it, so a change remounts
    *  it with the already-scoped initial payload. */
   scope: "all" | string;
+  /** Only meaningful when `scope` is a workflow AND the initial list is empty (H-6): is
+   *  the workflow set up for handoff (a registered webhook or any handoff messages)?
+   *  Drives the "not set up yet" vs "no conversations yet" empty state. null at 'all'. */
+  workflowHandoffActive: boolean | null;
   viewerUserId: string;
   viewerName: string | null;
   viewerIsFullAccess: boolean;
@@ -272,9 +278,15 @@ export function ClientInboxWorkspace({
 
         <div className="min-h-0 flex-1 overflow-y-auto">
           {all.length === 0 ? (
-            <p className="px-4 py-10 text-center text-sm text-faint">
-              No conversations yet. They appear here when a workflow posts messages or an agent takes one over.
-            </p>
+            scope !== "all" && workflowHandoffActive === false ? (
+              <WorkflowNotSetUp
+                settingsHref={viewerIsFullAccess ? scopeHref(clientId, "settings", scope) : null}
+              />
+            ) : (
+              <p className="px-4 py-10 text-center text-sm text-faint">
+                No conversations yet. They appear here when a workflow posts messages or an agent takes one over.
+              </p>
+            )
           ) : groups.length === 0 ? (
             <p className="px-4 py-10 text-center text-sm text-faint">No conversations match your filters.</p>
           ) : (
@@ -478,6 +490,30 @@ function ConversationRow({
         ) : null}
       </span>
     </Link>
+  );
+}
+
+/**
+ * Empty list when a scoped workflow isn't handoff-active yet (H-6). Explains what
+ * connecting handoff unlocks; the settings link is owner/admin only (members get the
+ * text but no link — the settings page refuses them server-side anyway).
+ */
+function WorkflowNotSetUp({ settingsHref }: { settingsHref: string | null }) {
+  return (
+    <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
+      <p className="text-sm font-medium text-muted">This workflow isn&rsquo;t set up for handoff yet.</p>
+      <p className="max-w-xs text-sm text-faint">
+        Connect it for handoff so your team can see and reply to its conversations here.
+      </p>
+      {settingsHref ? (
+        <Link
+          href={settingsHref}
+          className="mt-1 rounded-lg border border-line px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-subtle"
+        >
+          Open workflow settings
+        </Link>
+      ) : null}
+    </div>
   );
 }
 
