@@ -96,13 +96,29 @@ export interface ContactListItem extends ContactRow {
   next_appointment_at: Date | null;
   last_conversation_at: Date | null;
   visit_count: number;
+  assignee_name: string | null;
+}
+
+/** CRM list filters. All are OPTIONAL and ADDITIVE — omitting them preserves the
+ * original tenant-wide behaviour. `tagId`/`assignedTo`/`taskFilter` narrow to this
+ * client's CRM data; `offset` drives keyset-free page navigation on the list UI. */
+export interface ListContactsOpts {
+  search?: string;
+  stage?: ContactStage;
+  clientId?: string | null;
+  tagId?: string;
+  assignedTo?: string;
+  taskFilter?: 'open' | 'overdue';
+  limit?: number;
+  offset?: number;
 }
 
 /** Contact list with derived customer status, next upcoming appointment, visits
- * (completed appts), and last conversation activity. Tenant-scoped. */
+ * (completed appts), last conversation activity, and the owner's display name.
+ * Tenant-scoped; the optional filters/pagination narrow it for the CRM list UI. */
 export async function listContacts(
   tenantId: string,
-  opts: { search?: string; stage?: ContactStage; limit?: number; clientId?: string | null } = {},
+  opts: ListContactsOpts = {},
 ): Promise<ContactListItem[]> {
   const params: unknown[] = [tenantId];
   const where: string[] = ['c.tenant_id = $1'];
@@ -114,9 +130,31 @@ export async function listContacts(
     params.push(opts.stage);
     where.push(`c.stage = $${params.length}`);
   }
+  if (opts.assignedTo) {
+    params.push(opts.assignedTo);
+    where.push(`c.assigned_to = $${params.length}`);
+  }
   if (opts.search) {
     params.push(`%${opts.search}%`);
     where.push(`(c.name ILIKE $${params.length} OR c.phone_e164 ILIKE $${params.length} OR c.email ILIKE $${params.length} OR c.channel_user_id ILIKE $${params.length})`);
+  }
+  // Tag/task filters stay INSIDE the contact's own (tenant, client) — an EXISTS
+  // over the client-scoped CRM tables never leaks a cross-client link.
+  if (opts.tagId) {
+    params.push(opts.tagId);
+    where.push(
+      `EXISTS (SELECT 1 FROM contact_tag_links l
+                WHERE l.contact_id = c.id AND l.tenant_id = c.tenant_id
+                  AND l.client_id = c.client_id AND l.tag_id = $${params.length})`,
+    );
+  }
+  if (opts.taskFilter) {
+    const overdueOnly = opts.taskFilter === 'overdue' ? ' AND t.due_at IS NOT NULL AND t.due_at < now()' : '';
+    where.push(
+      `EXISTS (SELECT 1 FROM crm_tasks t
+                WHERE t.contact_id = c.id AND t.tenant_id = c.tenant_id
+                  AND t.client_id = c.client_id AND t.status = 'open'${overdueOnly})`,
+    );
   }
   params.push(Math.min(opts.limit ?? 200, 500));
   // READ-SIDE CLIENT DEFENSE on the aggregates: appointment counts join on
@@ -124,14 +162,22 @@ export async function listContacts(
   // and last_conversation_at only considers conversations whose CANONICAL
   // workflow (most recently synced row for tenant + n8n_workflow_id) belongs to
   // the contact's own client.
+  const limitPos = params.length;
+  let tail = `LIMIT $${limitPos}`;
+  if (opts.offset && opts.offset > 0) {
+    params.push(opts.offset);
+    tail += ` OFFSET $${params.length}`;
+  }
   const r = await query<ContactListItem>(
     `SELECT c.*,
             COALESCE(a.completed_count, 0) AS completed_count,
             (COALESCE(a.completed_count, 0) > 0) AS is_customer,
             COALESCE(a.completed_count, 0) AS visit_count,
             a.next_appointment_at,
-            conv.last_conversation_at
+            conv.last_conversation_at,
+            ownr.name AS assignee_name
        FROM contacts c
+       LEFT JOIN "user" ownr ON ownr.id = c.assigned_to
        LEFT JOIN (
          SELECT contact_id, client_id,
                 (COUNT(*) FILTER (WHERE status = 'completed'))::int AS completed_count,
@@ -155,7 +201,7 @@ export async function listContacts(
        ) conv ON conv.contact_id = c.id AND conv.client_id = c.client_id
       WHERE ${where.join(' AND ')}
       ORDER BY c.last_contact_at DESC
-      LIMIT $${params.length}`,
+      ${tail}`,
     params,
   );
   return r.rows;
