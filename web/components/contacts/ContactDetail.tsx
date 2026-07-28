@@ -4,68 +4,70 @@ import Link from "next/link";
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { updateContactAction } from "@/lib/contactActions";
+import { ContactHeader } from "@/components/crm/ContactHeader";
+import { NotesPanel } from "@/components/crm/NotesPanel";
+import { TasksPanel } from "@/components/crm/TasksPanel";
+import { TimelinePanel } from "@/components/crm/TimelinePanel";
+import {
+  fmtDateTime,
+  type AppointmentDTO,
+  type ContactDTO,
+  type ContactTab,
+  type ConversationDTO,
+  type MemberOption,
+  type NoteDTO,
+  type TagDTO,
+  type TaskDTO,
+  type TimelineItemDTO,
+} from "@/components/crm/types";
 
-interface ContactData {
-  id: string;
-  name: string | null;
-  channel: string;
-  channel_user_id: string;
-  phone_e164: string | null;
-  email: string | null;
-  stage: string;
-  bot_human_mode: string;
-  message_count: number;
-  is_customer: boolean;
-}
-interface Conv { id: string; workflow_ref: string; conversation_ref: string; mode: string; last_message_at: string | null }
-interface Appt { id: string; service_name: string; staff_name: string | null; site_name: string | null; start_at: string; status: string; origin: string }
-interface Activity { id: string; event_type: string; actor_type: string; created_at: string; detail: Record<string, unknown> }
-
-type Tab = "data" | "conversations" | "appointments" | "activity";
-
-const INPUT = "rounded-lg border border-line-strong bg-transparent px-2 py-1.5";
-
-const fmt = (iso: string | null): string =>
-  iso ? new Intl.DateTimeFormat("es-CO", { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso)) : "—";
+const INPUT = "rounded-lg border border-line-strong bg-transparent px-2 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-accent/40";
 
 export function ContactDetail({
   clientId,
-  initialTab = "data",
+  initialTab = "overview",
+  canFullAccess,
+  members,
   agendaHref,
   contact,
+  tagCatalog,
+  contactTags,
+  notes,
+  tasks,
   conversations,
   appointments,
-  activity,
+  timelineItems,
+  timelineCursor,
 }: {
-  /** The validated owning client — saves go through the client-scoped action. */
   clientId: string;
-  /** Section to open first (?tab= — e.g. AgendaView's "View conversation"). */
-  initialTab?: Tab;
-  /** Client-scoped Agenda link, or null when Scheduling is disabled for this client. */
+  initialTab?: ContactTab;
+  canFullAccess: boolean;
+  members: MemberOption[];
   agendaHref: string | null;
-  contact: ContactData;
-  conversations: Conv[];
-  appointments: Appt[];
-  activity: Activity[];
+  contact: ContactDTO;
+  tagCatalog: TagDTO[];
+  contactTags: TagDTO[];
+  notes: NoteDTO[];
+  tasks: TaskDTO[];
+  conversations: ConversationDTO[];
+  appointments: AppointmentDTO[];
+  timelineItems: TimelineItemDTO[];
+  timelineCursor: string | null;
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<Tab>(initialTab);
+  const [tab, setTab] = useState<ContactTab>(initialTab);
   const [name, setName] = useState(contact.name ?? "");
   const [phone, setPhone] = useState(contact.phone_e164 ?? "");
   const [email, setEmail] = useState(contact.email ?? "");
-  const [stage, setStage] = useState(contact.stage);
   const [msg, setMsg] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+
+  const openTasks = tasks.filter((t) => t.status === "open").length;
 
   const save = () => {
     setMsg(null);
     startTransition(async () => {
-      const r = await updateContactAction(clientId, contact.id, {
-        name,
-        phone,
-        email,
-        stage: stage as "new" | "active" | "customer" | "archived",
-      });
+      const r = await updateContactAction(clientId, contact.id, { name, phone, email });
       if (!r.ok) setMsg(r.error);
       else {
         setMsg("Saved.");
@@ -74,51 +76,72 @@ export function ContactDetail({
     });
   };
 
-  const tabs: Array<{ key: Tab; label: string }> = [
-    { key: "data", label: "Data" },
+  const tabs: Array<{ key: ContactTab; label: string }> = [
+    { key: "overview", label: "Overview" },
+    { key: "timeline", label: "Timeline" },
     { key: "conversations", label: `Conversations (${conversations.length})` },
     { key: "appointments", label: `Appointments (${appointments.length})` },
-    { key: "activity", label: `Activity (${activity.length})` },
+    { key: "tasks", label: `Tasks${openTasks ? ` (${openTasks})` : ""}` },
   ];
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center gap-3">
-        <h1 className="text-xl font-semibold tracking-tight">{contact.name ?? contact.channel_user_id}</h1>
-        {contact.is_customer ? <span className="rounded bg-success/15 px-2 py-0.5 text-xs text-success">customer</span> : null}
-        <span className="text-xs text-faint">{contact.channel} · {contact.channel_user_id}</span>
-      </div>
+      <ContactHeader
+        clientId={clientId}
+        contact={contact}
+        members={members}
+        contactTags={contactTags}
+        tagCatalog={tagCatalog}
+        canFullAccess={canFullAccess}
+      />
 
-      <nav className="flex gap-1 border-b border-line">
+      <nav className="flex gap-1 overflow-x-auto border-b border-line" role="tablist" aria-label="Contact sections">
         {tabs.map((t) => (
           <button
             key={t.key}
+            role="tab"
+            aria-selected={tab === t.key}
             onClick={() => setTab(t.key)}
-            className={`px-3 py-2 text-sm ${tab === t.key ? "border-b-2 border-accent font-medium text-foreground" : "text-muted hover:text-foreground"}`}
+            className={`whitespace-nowrap px-3 py-2 text-sm ${
+              tab === t.key ? "border-b-2 border-accent font-medium text-foreground" : "text-muted hover:text-foreground"
+            }`}
           >
             {t.label}
           </button>
         ))}
       </nav>
 
-      {tab === "data" ? (
-        <div className="flex max-w-md flex-col gap-3 text-sm">
-          <Field label="Name"><input value={name} onChange={(e) => setName(e.target.value)} className={INPUT} /></Field>
-          <Field label="Phone (E.164)"><input value={phone} onChange={(e) => setPhone(e.target.value)} className={INPUT} placeholder="+57300…" /></Field>
-          <Field label="Email"><input value={email} onChange={(e) => setEmail(e.target.value)} className={INPUT} /></Field>
-          <Field label="Stage">
-            <select value={stage} onChange={(e) => setStage(e.target.value)} className={INPUT}>
-              {["new", "active", "customer", "archived"].map((s) => <option key={s} value={s}>{s}</option>)}
-            </select>
-          </Field>
-          <p className="text-xs text-faint">Messages: {contact.message_count} · Bot/human mode: {contact.bot_human_mode}</p>
-          <div className="flex items-center gap-3">
-            <button onClick={save} disabled={pending} className="self-start rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">
-              {pending ? "Saving…" : "Save"}
-            </button>
-            {msg ? <span className="text-xs text-muted">{msg}</span> : null}
+      {tab === "overview" ? (
+        <div className="flex flex-col gap-6">
+          <div className="flex max-w-md flex-col gap-3 text-sm">
+            <Field label="Name">
+              <input value={name} onChange={(e) => setName(e.target.value)} className={INPUT} />
+            </Field>
+            <Field label="Phone (E.164)">
+              <input value={phone} onChange={(e) => setPhone(e.target.value)} className={INPUT} placeholder="+57300…" />
+            </Field>
+            <Field label="Email">
+              <input value={email} onChange={(e) => setEmail(e.target.value)} className={INPUT} />
+            </Field>
+            <p className="text-xs text-faint">
+              Messages: {contact.message_count} · Bot/human mode: {contact.bot_human_mode}
+            </p>
+            <div className="flex items-center gap-3">
+              <button onClick={save} disabled={pending} className="self-start rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">
+                {pending ? "Saving…" : "Save"}
+              </button>
+              {msg ? <span className="text-xs text-muted">{msg}</span> : null}
+            </div>
+          </div>
+          <div>
+            <h2 className="mb-2 text-sm font-semibold">Notes</h2>
+            <NotesPanel clientId={clientId} contactId={contact.id} notes={notes} />
           </div>
         </div>
+      ) : null}
+
+      {tab === "timeline" ? (
+        <TimelinePanel clientId={clientId} contactId={contact.id} initialItems={timelineItems} initialCursor={timelineCursor} />
       ) : null}
 
       {tab === "conversations" ? (
@@ -127,10 +150,12 @@ export function ContactDetail({
           {conversations.map((c) => (
             <li key={c.id} className="rounded-lg border border-line p-3">
               <div className="flex items-center justify-between">
-                <span className="font-mono text-xs">{c.workflow_ref} / {c.conversation_ref}</span>
+                <span className="font-mono text-xs">
+                  {c.workflow_ref} / {c.conversation_ref}
+                </span>
                 <span className="rounded bg-subtle px-1.5 py-0.5 text-[11px]">{c.mode}</span>
               </div>
-              <p className="mt-1 text-xs text-muted">Last message: {fmt(c.last_message_at)}</p>
+              <p className="mt-1 text-xs text-muted">Last message: {fmtDateTime(c.last_message_at)}</p>
             </li>
           ))}
         </ul>
@@ -143,7 +168,9 @@ export function ContactDetail({
             <li key={a.id} className="flex items-center justify-between rounded-lg border border-line p-3">
               <div>
                 <p className="font-medium">{a.service_name}</p>
-                <p className="text-xs text-muted">{fmt(a.start_at)} · {a.staff_name ?? "—"} · {a.site_name ?? "—"} · {a.origin}</p>
+                <p className="text-xs text-muted">
+                  {fmtDateTime(a.start_at)} · {a.staff_name ?? "—"} · {a.site_name ?? "—"} · {a.origin}
+                </p>
               </div>
               <span className="rounded bg-subtle px-1.5 py-0.5 text-[11px]">{a.status}</span>
             </li>
@@ -151,22 +178,14 @@ export function ContactDetail({
         </ul>
       ) : null}
 
-      {tab === "activity" ? (
-        <ul className="flex flex-col gap-1.5 text-sm">
-          {activity.length === 0 ? <li className="text-muted">No activity.</li> : null}
-          {activity.map((e) => (
-            <li key={e.id} className="flex items-center gap-2 text-xs">
-              <span className="text-faint">{fmt(e.created_at)}</span>
-              <span className="rounded bg-subtle px-1.5 py-0.5">{e.event_type}</span>
-              <span className="text-muted">by {e.actor_type}</span>
-            </li>
-          ))}
-        </ul>
+      {tab === "tasks" ? (
+        <TasksPanel clientId={clientId} contactId={contact.id} tasks={tasks} members={members} canAssignOthers={canFullAccess} />
       ) : null}
 
-      {/* Only when Scheduling is enabled for this client (server-resolved). */}
       {agendaHref ? (
-        <Link href={agendaHref} className="text-xs text-accent hover:underline">Open agenda →</Link>
+        <Link href={agendaHref} className="text-xs text-accent hover:underline">
+          Open agenda →
+        </Link>
       ) : null}
     </div>
   );

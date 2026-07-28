@@ -178,6 +178,52 @@ export async function reassignWorkflow(tenantId: string, n8nWorkflowId: string, 
   );
 }
 
+/** Insert a Better Auth user + a tenant_members row (the membership the composite
+ * FKs on CRM tables reference). Returns the user id. */
+export async function seedMember(
+  tenantId: string,
+  opts: { role?: 'owner' | 'admin' | 'member'; clientId?: string } = {},
+): Promise<string> {
+  const role = opts.role ?? 'owner';
+  // RBAC invariant: role='member' ⇒ member_client_id NOT NULL; else NULL.
+  const memberClientId = role === 'member' ? opts.clientId ?? null : null;
+  if (role === 'member' && !memberClientId) {
+    throw new Error('seedMember: role "member" requires a clientId');
+  }
+  const userId = randomUUID();
+  await query(
+    `INSERT INTO "user" ("id", "name", "email", "emailVerified") VALUES ($1, $2, $3, true)`,
+    [userId, `U ${userId.slice(0, 6)}`, `${userId.slice(0, 8)}@test.local`],
+  );
+  await query(`INSERT INTO tenant_members (tenant_id, user_id, role, member_client_id) VALUES ($1, $2, $3, $4)`, [
+    tenantId,
+    userId,
+    role,
+    memberClientId,
+  ]);
+  return userId;
+}
+
+/** Remove a user's tenant membership (simulates a member leaving the team) —
+ * fires the CRM tables' ON DELETE SET NULL on author/assignee/actor. */
+export async function removeMember(tenantId: string, userId: string): Promise<void> {
+  await query(`DELETE FROM tenant_members WHERE tenant_id = $1 AND user_id = $2`, [tenantId, userId]);
+}
+
+/** Insert a contact for a client (canonical identity channel=test). */
+export async function seedContact(
+  tenantId: string,
+  clientId: string,
+  opts: { name?: string; channelUserId?: string } = {},
+): Promise<string> {
+  const cuid = opts.channelUserId ?? `wa:${randomUUID().slice(0, 10)}`;
+  const r = await query<{ id: string }>(
+    `INSERT INTO contacts (tenant_id, client_id, channel, channel_user_id, name) VALUES ($1, $2, 'test', $3, $4) RETURNING id`,
+    [tenantId, clientId, cuid, opts.name ?? 'Test Person'],
+  );
+  return r.rows[0].id;
+}
+
 export async function cleanupTenant(tenantId: string): Promise<void> {
   await query(`DELETE FROM tenants WHERE id = $1`, [tenantId]);
 }
