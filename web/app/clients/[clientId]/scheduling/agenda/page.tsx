@@ -67,11 +67,12 @@ export default async function ClientAgendaPage({
   const dayStart = zonedPartsToUtc(y, m, d, 0, 0, site.timezone);
   const dayEnd = zonedPartsToUtc(y, m, d + 1, 0, 0, site.timezone);
 
-  const [staff, services, appts, crmEnabled] = await Promise.all([
+  const [staff, services, appts, crmEnabled, inboxEnabled] = await Promise.all([
     listStaff(tenantId, { siteId: site.id, clientId: client.id }),
     listServicesForSite(tenantId, site.id),
     listAppointments(tenantId, { siteId: site.id, from: dayStart, to: dayEnd, clientId: client.id }),
     isClientModuleEnabled(tenantId, client.id, "crm"),
+    isClientModuleEnabled(tenantId, client.id, "inbox"),
   ]);
 
   return (
@@ -79,6 +80,7 @@ export default async function ClientAgendaPage({
       clientId={client.id}
       basePath={`/clients/${client.id}/scheduling/agenda`}
       contactsBase={crmEnabled ? `/clients/${client.id}/contacts` : null}
+      inboxBase={inboxEnabled ? `/clients/${client.id}/inbox` : null}
       from={sp.from ?? null}
       canManage={hasFullAccess(scope)}
       timezone={site.timezone}

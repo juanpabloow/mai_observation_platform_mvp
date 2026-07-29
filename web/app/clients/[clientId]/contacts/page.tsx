@@ -4,6 +4,7 @@ import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { hasFullAccess } from "@/lib/access";
 import { listContacts } from "@worker/db/repositories/contacts.js";
 import { listOpenCandidates } from "@worker/db/repositories/contactIdentities.js";
+import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { DuplicateCandidates } from "@/components/contacts/DuplicateCandidates";
 
@@ -37,6 +38,10 @@ export default async function ClientContactsPage({
   // Duplicate merge + custom-field management are owner/admin only (server-gated too).
   const isFullAccess = hasFullAccess(scope);
   const candidates = isFullAccess ? await listOpenCandidates(scope.tenantId, client.id) : [];
+
+  // Owner names: ONE members query + an in-memory map (never a per-row lookup).
+  const members = await listMembersForTenant(scope.tenantId);
+  const ownerName = new Map(members.map((m) => [m.user_id, m.name ?? m.email]));
 
   const base = `/clients/${client.id}/contacts`;
   const fromQS = from ? `?from=${encodeURIComponent(from)}` : "";
@@ -90,7 +95,8 @@ export default async function ClientContactsPage({
                 <th className="px-3 py-2 font-medium">Name</th>
                 <th className="px-3 py-2 font-medium">Channel</th>
                 <th className="px-3 py-2 font-medium">Stage</th>
-                <th className="px-3 py-2 font-medium">Last conversation</th>
+                <th className="px-3 py-2 font-medium">Owner</th>
+                <th className="px-3 py-2 font-medium">Last activity</th>
                 <th className="px-3 py-2 font-medium">Next appointment</th>
                 <th className="px-3 py-2 font-medium">Visits</th>
               </tr>
@@ -106,6 +112,7 @@ export default async function ClientContactsPage({
                   </td>
                   <td className="px-3 py-2 text-muted">{c.channel}</td>
                   <td className="px-3 py-2 text-muted">{c.stage}</td>
+                  <td className="px-3 py-2 text-muted">{c.assigned_to ? ownerName.get(c.assigned_to) ?? "—" : "—"}</td>
                   <td className="px-3 py-2 text-muted">{fmtDate(c.last_conversation_at)}</td>
                   <td className="px-3 py-2 text-muted">{fmtDate(c.next_appointment_at)}</td>
                   <td className="px-3 py-2 text-muted">{c.visit_count}</td>

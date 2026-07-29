@@ -65,7 +65,6 @@ export default async function ClientInboxPage({
     <ClientInboxWorkspace
       key={effective}
       clientId={client.id}
-      clientName={client.name}
       scope={effective}
       initial={initial}
       workflowHandoffActive={workflowHandoffActive}

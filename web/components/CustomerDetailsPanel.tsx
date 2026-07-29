@@ -1,40 +1,89 @@
 "use client";
 
-import { ModeBadge } from "./ModeBadge";
-import { formatDateTime, formatAgeShort } from "@/lib/format";
-import type { InboxConversationView } from "@/lib/inboxView";
+import { useCallback, useEffect, useState, useTransition } from "react";
+import Link from "next/link";
+import type { ContactPanelData } from "@/lib/contactPanel";
+import { ContactIdentitySummary } from "@/components/contacts/shared/ContactIdentitySummary";
+import { AppointmentsSection } from "@/components/contacts/shared/AppointmentsSection";
+import { TasksSection } from "@/components/contacts/shared/TasksSection";
+import { NotesSection } from "@/components/contacts/shared/NotesSection";
+import { TagsSection } from "@/components/contacts/shared/TagsSection";
+import { linkConversationContactAction } from "@/lib/inboxContactActions";
 
 /**
- * The right-column "Customer details" panel. It shows ONLY data that is really in the
- * conversation payload — the conversation identifier (conversation_ref, usually the
- * channel id), origin workflow, owning client, operative status, and first/last
- * interaction times. No extra contact profile (name, contact channels, org, location,
- * counts, tags) is shown: those would need a contacts join (a worker change we
- * deliberately don't make this phase), so nothing is fabricated. Presentational +
- * client-safe; `onClose` (client→client, never a Server→Client prop) closes the
- * desktop column or the mobile drawer.
+ * The inbox CUSTOMER PANEL (C-4) — the moment the platform's promise becomes visible:
+ * an agent replying in chat sees who the person is and when they are next coming in,
+ * without leaving the thread. A COMPACT variant assembled from the SAME shared
+ * components as the record's left column + rail (identity summary, next appointment,
+ * open tasks, recent notes + composer, tags) — not a parallel implementation.
+ *
+ * It loads the contact linked to the open conversation from a session-authed route
+ * (client-scoped; re-validated server-side). When the conversation has NO linked contact,
+ * it offers to link/create one through C-2's identity chokepoint
+ * (linkConversationContactAction) so the channel identity attaches without a duplicate.
  */
+
+interface PanelResponse {
+  contactId: string | null;
+  panel?: ContactPanelData;
+  schedulingEnabled: boolean;
+}
+
+const SECTION_LABEL = "text-[10px] font-medium uppercase tracking-wider text-faint";
+
 export function CustomerDetailsPanel({
-  view,
-  clientName,
-  activityWindowHours,
-  now,
+  clientId,
+  conversationId,
+  conversationRef,
+  viewerUserId,
+  viewerIsFullAccess,
   onClose,
 }: {
-  view: InboxConversationView;
-  clientName: string;
-  activityWindowHours: number;
-  now: Date;
+  clientId: string;
+  conversationId: string;
+  conversationRef: string;
+  viewerUserId: string;
+  viewerIsFullAccess: boolean;
   onClose?: () => void;
 }) {
-  const ref = view.conversationRef;
-  const initial = (ref.match(/[a-z0-9]/i)?.[0] ?? "?").toUpperCase();
-  const reason = view.escalationDetail ?? view.escalationReasonCode ?? null;
+  const [state, setState] = useState<{ status: "loading" | "ready" | "error"; data?: PanelResponse }>({ status: "loading" });
+  const [linking, startLink] = useTransition();
+  const [linkErr, setLinkErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/inbox/${clientId}/conversations/${conversationId}/contact`, { cache: "no-store" });
+      if (!res.ok) {
+        setState({ status: "error" });
+        return;
+      }
+      setState({ status: "ready", data: (await res.json()) as PanelResponse });
+    } catch {
+      setState({ status: "error" });
+    }
+  }, [clientId, conversationId]);
+
+  // The workspace keys this component by conversation id, so it remounts (fresh
+  // "loading" state) on selection change. load()'s setState runs only AFTER the fetch
+  // await (the sanctioned async pattern) — the rule can't see past the callback.
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- setState is async (post-fetch), not a sync cascade
+    void load();
+  }, [load]);
+
+  const link = () => {
+    setLinkErr(null);
+    startLink(async () => {
+      const r = await linkConversationContactAction(clientId, conversationId);
+      if (!r.ok) setLinkErr(r.error);
+      else await load();
+    });
+  };
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
       <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-3">
-        <h2 className="text-sm font-semibold">Customer details</h2>
+        <h2 className="text-sm font-semibold">Customer</h2>
         {onClose ? (
           <button
             type="button"
@@ -48,54 +97,127 @@ export function CustomerDetailsPanel({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
-        {/* Identity — avatar initial + the conversation identifier (real). */}
-        <div className="flex flex-col items-center gap-2 text-center">
-          <span
-            aria-hidden
-            className="flex size-14 items-center justify-center rounded-full border border-line-strong bg-subtle text-lg font-semibold text-foreground"
-          >
-            {initial}
-          </span>
-          <p className="break-all text-sm font-semibold text-foreground">{ref}</p>
-          <ModeBadge mode={view.mode} />
-        </div>
-
-        <dl className="mt-5 flex flex-col gap-3 text-sm">
-          <Field label="Status">
-            <span>
-              {view.mode === "pending" ? "Needs human attention" : view.mode === "human" ? "Human is handling" : "Bot is handling"}
-              {" · "}
-              <span className={view.active ? "text-emerald-700 dark:text-emerald-400" : "text-faint"}>
-                {view.active ? `Active (≤${activityWindowHours}h)` : "Inactive"}
-              </span>
-            </span>
-          </Field>
-          {view.mode === "human" && view.assignedAgentName ? (
-            <Field label="Handled by">{view.assignedAgentName}</Field>
-          ) : null}
-          {view.mode === "pending" ? (
-            <Field label="Waiting since">
-              {view.pendingSince ? `${formatAgeShort(new Date(view.pendingSince), now)} ago` : "—"}
-              {reason ? <span className="mt-0.5 block text-xs text-faint">Reason: {reason}</span> : null}
-            </Field>
-          ) : null}
-          <Field label="Workflow">{view.workflowName ?? "Unknown workflow"}</Field>
-          <Field label="Client">{clientName}</Field>
-          <Field label="First seen">{formatDateTime(new Date(view.createdAt))}</Field>
-          <Field label="Last activity">
-            {view.lastMessageAt ? formatDateTime(new Date(view.lastMessageAt)) : "No messages yet"}
-          </Field>
-        </dl>
+        {state.status === "loading" ? (
+          <p className="text-sm text-faint">Loading…</p>
+        ) : state.status === "error" ? (
+          <p className="text-sm text-faint">Couldn&rsquo;t load contact details.</p>
+        ) : state.data && state.data.contactId && state.data.panel ? (
+          <Ready
+            clientId={clientId}
+            contactId={state.data.contactId}
+            data={state.data.panel}
+            schedulingEnabled={state.data.schedulingEnabled}
+            viewerUserId={viewerUserId}
+            viewerIsFullAccess={viewerIsFullAccess}
+            onChanged={load}
+          />
+        ) : (
+          <div className="flex flex-col gap-3">
+            <div>
+              <p className="text-sm font-medium text-foreground">No linked contact</p>
+              <p className="mt-0.5 text-sm text-faint">
+                This conversation (<span className="break-all font-mono text-xs">{conversationRef}</span>) isn&rsquo;t linked to a
+                contact yet.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={link}
+              disabled={linking}
+              className="w-fit rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
+            >
+              {linking ? "Linking…" : "Link contact"}
+            </button>
+            {linkErr ? <span className="text-xs text-danger">{linkErr}</span> : null}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
-function Field({ label, children }: { label: string; children: React.ReactNode }) {
+function Ready({
+  clientId,
+  contactId,
+  data,
+  schedulingEnabled,
+  viewerUserId,
+  viewerIsFullAccess,
+  onChanged,
+}: {
+  clientId: string;
+  contactId: string;
+  data: ContactPanelData;
+  schedulingEnabled: boolean;
+  viewerUserId: string;
+  viewerIsFullAccess: boolean;
+  onChanged: () => void;
+}) {
   return (
-    <div className="flex flex-col gap-0.5">
-      <dt className="text-[11px] font-medium uppercase tracking-wider text-faint">{label}</dt>
-      <dd className="text-foreground">{children}</dd>
+    <div className="flex flex-col gap-4">
+      <ContactIdentitySummary summary={data.summary} identities={data.identities} dense />
+
+      <div className="flex flex-wrap gap-2">
+        <Link
+          href={`/clients/${clientId}/contacts/${contactId}`}
+          className="rounded-lg border border-line px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-subtle"
+        >
+          Open full record
+        </Link>
+        {schedulingEnabled ? (
+          <Link
+            href={`/clients/${clientId}/scheduling/agenda`}
+            className="rounded-lg border border-line px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-subtle"
+          >
+            Book appointment
+          </Link>
+        ) : null}
+      </div>
+
+      {schedulingEnabled ? (
+        <section className="flex flex-col gap-2 border-t border-line pt-3">
+          <p className={SECTION_LABEL}>Next appointment</p>
+          <AppointmentsSection clientId={clientId} appointments={data.appointments} onChanged={onChanged} showHistory={false} />
+        </section>
+      ) : null}
+
+      <section className="flex flex-col gap-2 border-t border-line pt-3">
+        <p className={SECTION_LABEL}>Open tasks</p>
+        <TasksSection
+          clientId={clientId}
+          contactId={contactId}
+          tasks={data.openTasks}
+          assignableMembers={[]}
+          viewerUserId={viewerUserId}
+          viewerIsFullAccess={viewerIsFullAccess}
+          onChanged={onChanged}
+        />
+      </section>
+
+      <section className="flex flex-col gap-2 border-t border-line pt-3">
+        <p className={SECTION_LABEL}>Notes</p>
+        <NotesSection
+          clientId={clientId}
+          contactId={contactId}
+          notes={data.recentNotes}
+          viewerUserId={viewerUserId}
+          viewerIsFullAccess={viewerIsFullAccess}
+          onChanged={onChanged}
+          dense
+        />
+      </section>
+
+      <section className="flex flex-col gap-2 border-t border-line pt-3">
+        <p className={SECTION_LABEL}>Tags</p>
+        <TagsSection
+          clientId={clientId}
+          contactId={contactId}
+          tags={data.tags}
+          catalogue={[]}
+          canManageCatalog={viewerIsFullAccess}
+          onChanged={onChanged}
+        />
+      </section>
     </div>
   );
 }

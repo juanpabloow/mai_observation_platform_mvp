@@ -239,6 +239,29 @@ export async function listOpenCandidates(tenantId: string, clientId: string): Pr
   return r.rows;
 }
 
+/** Open (unresolved) duplicate candidates involving THIS contact (either side) — for the
+ *  record's duplicate banner. Same display join as listOpenCandidates, filtered to rows
+ *  where the contact is the keep OR the duplicate. Client-scoped. */
+export async function listCandidatesForContact(
+  tenantId: string,
+  clientId: string,
+  contactId: string,
+): Promise<CandidateRow[]> {
+  const r = await query<CandidateRow>(
+    `SELECT d.id, d.contact_id_keep, k.name AS keep_name, k.channel_user_id AS keep_ref,
+            d.contact_id_duplicate, u.name AS dup_name, u.channel_user_id AS dup_ref,
+            d.reason, d.detected_at
+       FROM duplicate_contact_candidates d
+       JOIN contacts k ON k.id = d.contact_id_keep
+       JOIN contacts u ON u.id = d.contact_id_duplicate
+      WHERE d.tenant_id=$1 AND d.client_id=$2 AND d.resolved_at IS NULL
+        AND (d.contact_id_keep=$3 OR d.contact_id_duplicate=$3)
+      ORDER BY d.detected_at ASC`,
+    [tenantId, clientId, contactId],
+  );
+  return r.rows;
+}
+
 export async function dismissCandidate(tenantId: string, clientId: string, candidateId: string): Promise<boolean> {
   const r = await query(
     `UPDATE duplicate_contact_candidates SET resolved_at = now(), reason = 'dismissed'

@@ -8,7 +8,8 @@ import { fileURLToPath } from 'node:url';
  * DB isolation + thread behavior are proven elsewhere (clientInbox integration tests,
  * InboxThread); THESE guard the new layout's wiring: three columns, the preserved
  * ?c= deep link + workflow filter, reuse of the real chat/actions, client-scoped
- * fetches, and a details panel that uses ONLY real payload fields.
+ * fetches, and (C-4) a customer panel assembled from the SHARED contact components that
+ * loads the linked contact from a session-authed route.
  */
 
 const web = fileURLToPath(new URL('../../web/', import.meta.url));
@@ -60,18 +61,20 @@ test('workspace: keyboard + a11y — aria-current selection, Escape closes the d
   assert.ok(src.includes('e.key === "Escape"') && src.includes('setDetailsDrawer(false)'), 'Escape closes the drawer');
 });
 
-test('customer details: REAL payload fields only — no fabricated profile, no extra query', () => {
+test('customer panel: assembled from SHARED contact components, loads the linked contact (C-4)', () => {
   const src = read('components/CustomerDetailsPanel.tsx');
-  // Renders only what the conversation view really carries.
-  for (const field of ['Status', 'Workflow', 'Client', 'First seen', 'Last activity']) {
-    assert.ok(src.includes(field), `shows the real field: ${field}`);
+  // C-4: the panel is the COMPACT variant of the record — the same shared components,
+  // not a parallel implementation.
+  for (const comp of ['ContactIdentitySummary', 'AppointmentsSection', 'TasksSection', 'NotesSection', 'TagsSection']) {
+    assert.ok(src.includes(comp), `reuses the shared ${comp}`);
   }
-  // Never invents contact profile fields absent from the DB payload.
-  for (const bogus of ['email', 'Email', 'company', 'Company', 'address', 'Address', 'Instagram']) {
-    assert.ok(!src.includes(bogus), `does not fabricate: ${bogus}`);
-  }
-  // No server / contacts import → no N+1 or new query was introduced here.
-  assert.ok(!src.includes('@worker'), 'the panel imports no worker/contacts data');
+  // Contact data loads from the session-authed, client-scoped route (re-validated
+  // server-side) — the client panel imports NO worker/db module directly.
+  assert.ok(src.includes('conversations/${conversationId}/contact'), 'fetches the contact payload route');
+  assert.ok(!src.includes('@worker'), 'no worker/db import in the client panel');
+  // When the conversation has no linked contact, it offers to link through C-2's
+  // identity chokepoint (no duplicate created).
+  assert.ok(src.includes('linkConversationContactAction'), 'offers to link/create when unlinked');
 });
 
 // The "per-workflow inbox stays on the old grid + drawer (compat)" case was DELETED:

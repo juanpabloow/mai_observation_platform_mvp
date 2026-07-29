@@ -49,7 +49,6 @@ const POLL_MS = 5000;
  */
 export function ClientInboxWorkspace({
   clientId,
-  clientName,
   initial,
   scope,
   workflowHandoffActive,
@@ -58,7 +57,6 @@ export function ClientInboxWorkspace({
   viewerIsFullAccess,
 }: {
   clientId: string;
-  clientName: string;
   initial: GridPayload;
   /** The active workflow scope (W-1/W-2): 'all' or a workflow id. Resolved by the page
    *  (URL ?workflow= else cookie); this component is keyed by it, so a change remounts
@@ -354,12 +352,14 @@ export function ClientInboxWorkspace({
 
       {/* ── RIGHT — customer details (inline on xl) ── */}
       {selectedId && selectedView && detailsInline ? (
-        <aside aria-label="Customer details" className="hidden w-[300px] shrink-0 flex-col border-l border-line xl:flex">
+        <aside aria-label="Customer details" className="hidden w-[320px] shrink-0 flex-col border-l border-line xl:flex">
           <CustomerDetailsPanel
-            view={selectedView}
-            clientName={clientName}
-            activityWindowHours={data.activityWindowHours}
-            now={now}
+            key={selectedView.id}
+            clientId={clientId}
+            conversationId={selectedView.id}
+            conversationRef={selectedView.conversationRef}
+            viewerUserId={viewerUserId}
+            viewerIsFullAccess={viewerIsFullAccess}
             onClose={() => setDetailsInline(false)}
           />
         </aside>
@@ -376,13 +376,15 @@ export function ClientInboxWorkspace({
           />
           <aside
             aria-label="Customer details"
-            className="fixed inset-y-0 right-0 z-50 flex w-[300px] max-w-[85vw] flex-col border-l border-line bg-background shadow-xl"
+            className="fixed inset-y-0 right-0 z-50 flex w-[320px] max-w-[85vw] flex-col border-l border-line bg-background shadow-xl"
           >
             <CustomerDetailsPanel
-              view={selectedView}
-              clientName={clientName}
-              activityWindowHours={data.activityWindowHours}
-              now={now}
+              key={selectedView.id}
+              clientId={clientId}
+              conversationId={selectedView.id}
+              conversationRef={selectedView.conversationRef}
+              viewerUserId={viewerUserId}
+              viewerIsFullAccess={viewerIsFullAccess}
               onClose={() => setDetailsDrawer(false)}
             />
           </aside>

@@ -52,6 +52,9 @@ export function AgendaView(props: {
   basePath: string;
   /** Client-scoped contacts base, or null when CRM is disabled for this client. */
   contactsBase: string | null;
+  /** Client-scoped inbox base, or null when the inbox module is disabled — gates the
+   *  "View conversation" deep link so it never lands on a disabled surface. */
+  inboxBase: string | null;
   /** Origin workflow to preserve across navigation (?from=). */
   from: string | null;
   /** owner/admin — controls whether admin links (Add staff) render. */
@@ -183,10 +186,13 @@ export function AgendaView(props: {
                       {" · "}
                       <span className="text-faint">{a.origin}</span>
                     </p>
-                    {a.source_conversation_id && a.contact_id && props.contactsBase ? (
+                    {a.source_conversation_id && props.inboxBase ? (
                       <p className="text-xs">
+                        {/* Appointment → conversation: deep-link into the inbox thread (?c=).
+                            The per-workflow inbox was removed in W-2; the client inbox is
+                            the single surface. */}
                         <Link
-                          href={`${props.contactsBase}/${a.contact_id}${fromQS ? `${fromQS}&` : "?"}tab=conversations`}
+                          href={`${props.inboxBase}?c=${encodeURIComponent(a.source_conversation_id)}`}
                           className="text-accent hover:underline"
                         >
                           View conversation

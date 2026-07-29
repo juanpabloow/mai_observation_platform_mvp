@@ -243,6 +243,16 @@ test('timeline: ONE entry per conversation, faithful appointment history, all so
     assert.ok(all.items.some((i) => srcOf(i.kind) === src), `timeline includes a ${src} item`);
   }
 
+  // FILTER PUSH-DOWN (C-4 timeline chips): the `kinds` filter restricts the union to
+  // exactly the requested source(s) — a notes-only filter returns ONLY notes, an
+  // appointments-only filter ONLY appointments. (Proves the chip pushes down to the API
+  // rather than the client hiding rows.)
+  const notesOnly = await getContactTimeline(s.tenantId, s.clientId, contact, { limit: 100, kinds: ['note'] });
+  assert.ok(notesOnly.items.length > 0, 'notes-only filter still returns the notes');
+  assert.ok(notesOnly.items.every((i) => srcOf(i.kind) === 'note'), 'notes-only filter returns ONLY note items');
+  const apptOnly = await getContactTimeline(s.tenantId, s.clientId, contact, { limit: 100, kinds: ['appointment'] });
+  assert.ok(apptOnly.items.length > 0 && apptOnly.items.every((i) => srcOf(i.kind) === 'appointment'), 'appointments-only filter returns ONLY appointment items');
+
   // KEYSET pagination (limit 3, ≥4 pages): every entry exactly once, no skip. Insert a
   // NEW note mid-pagination → still no duplicates/skips of the entries being paged.
   const total = all.items.length;

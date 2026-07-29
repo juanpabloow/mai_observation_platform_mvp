@@ -585,6 +585,10 @@ const CANONICAL_WORKFLOW_LATERAL = `
 export interface InboxConversationDetail extends ConversationRow {
   workflow_name: string | null;
   assigned_agent_name: string | null;
+  /** The linked contact (conversations.contact_id) — nullable; returned by the SELECT c.*
+   *  detail reads. Scoped by the canonical-workflow client, but the pointed-at contact is
+   *  NOT guaranteed same-client, so a consumer must re-scope via getContactById(...,client). */
+  contact_id: string | null;
 }
 
 /**
