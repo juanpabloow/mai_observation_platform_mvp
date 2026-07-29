@@ -9,9 +9,10 @@ import { fileURLToPath } from 'node:url';
  * `@/`/`@worker/` aliases and can't be invoked from the root runner. The DB-level
  * isolation is proven by the PostgreSQL clientInbox / clientWorkflows tests; THESE
  * guard the navigation WIRING those can't reach — sidebar grouping/order, the header
- * workflow switcher, the shared workflow tabs, the Workflows list page, and that the
- * unified Inbox + its legacy routes are preserved. Structure/wiring guards, NOT a
- * claim that anything renders.
+ * workflow SCOPE switcher (W-1/W-2), the Workflows list page, and that the unified Inbox
+ * + its legacy redirects are preserved. Structure/wiring guards, NOT a claim that
+ * anything renders. (W-1 removed the in-content WorkflowTabs; W-2 removed the per-
+ * workflow inbox grid — both are reflected below.)
  */
 
 const web = fileURLToPath(new URL('../../web/', import.meta.url));
@@ -30,11 +31,13 @@ function slice(src: string, start: string, end: string): string {
 
 // ─────────────────────────────── Sidebar ────────────────────────────────────
 
-test('sidebar: sections are ordered Automation → Conversations → CRM → Scheduling → Administration', () => {
+test('sidebar: sections are ordered Workflows → Conversations → CRM → Scheduling → Administration', () => {
+  // W-3 renamed the first section "Automation" → "Workflows" (the client's workflow
+  // surfaces: Executions / Analytics / Settings, scope-driven).
   const src = read('components/AppSidebar.tsx');
   const ctx = slice(src, 'if (clientId) {', '} else if (isMember) {');
   const order = [
-    'label: "Automation"',
+    'label: "Workflows"',
     'label: "Conversations"',
     'label: "CRM"',
     'label: "Scheduling"',
@@ -48,13 +51,22 @@ test('sidebar: sections are ordered Automation → Conversations → CRM → Sch
   }
 });
 
-test('sidebar: Workflows is the FIRST item, active on every /workflows/… route; Overview → aggregate', () => {
+test('sidebar: Workflows section = scope-driven Executions → Analytics → Settings(owner/admin)', () => {
+  // W-1/W-3: the old Workflows-list + Overview pair was replaced by scope-driven
+  // Executions / Analytics / Settings items. Their hrefs come from the single
+  // scopeHref() source of truth (the current workflow scope from context), and they're
+  // active across every /workflows/… route (split by analytics/settings).
   const src = read('components/AppSidebar.tsx');
-  const automation = slice(src, 'const automation: NavItem[] = [', '];');
-  assert.ok(idx(automation, 'key: "workflows"') < idx(automation, 'key: "overview"'), 'Workflows precedes Overview');
-  assert.ok(automation.includes('href: c("/workflows")'), 'Workflows → the client workflow list');
-  assert.ok(automation.includes('pathname.startsWith(c("/workflows"))'), 'active across all /workflows/… routes');
-  assert.ok(automation.includes('c("/workflows/all/analytics")'), 'Overview keeps the aggregate analytics target');
+  const workflows = slice(src, 'const workflows: NavItem[] = [', '];');
+  assert.ok(idx(workflows, 'key: "executions"') < idx(workflows, 'key: "analytics"'), 'Executions precedes Analytics');
+  assert.ok(workflows.includes('scopeHref(clientId, "executions", scope)'), 'Executions href via scopeHref');
+  assert.ok(workflows.includes('scopeHref(clientId, "analytics", scope)'), 'Analytics href via scopeHref');
+  // Active across all /workflows/… routes (the scope-aware split lives on top of this).
+  assert.ok(src.includes('const onWorkflows = pathname.startsWith(c("/workflows"));'), 'active across all /workflows/… routes');
+  // Settings is owner/admin only (pushed inside the !isMember block) + scope-driven.
+  const settingsPush = slice(src, 'if (!isMember) {', 'sections = [{ label: "Workflows"');
+  assert.ok(settingsPush.includes('key: "settings"') && settingsPush.includes('scopeHref(clientId, "settings", scope)'), 'Settings is owner/admin-only + scope-driven');
+  assert.ok(src.includes('sections = [{ label: "Workflows", items: workflows }];'), 'the first section is Workflows');
 });
 
 test('sidebar: NO full workflow list — no workflows prop, no workflow query', () => {
@@ -128,45 +140,51 @@ test('switcher panel: search + Active/Inactive groups + accessible listbox', () 
   assert.ok(src.includes('"ArrowDown"') && src.includes('"ArrowUp"') && src.includes('"Enter"'), 'keyboard nav');
 });
 
-test('switcher panel: preserves section for a workflow, aggregate → all/analytics', () => {
+test('switcher panel: a pure scope PICKER (emits onSelect(scope)); builds no routes', () => {
+  // W-1: the panel no longer builds section hrefs. It emits onSelect("all" | workflowId)
+  // and the host (HeaderBar) turns that into a route via scopeHref, preserving the
+  // current section. So the panel itself must contain NO /workflows route strings.
   const src = read('components/WorkflowSwitcherPanel.tsx');
-  // A specific workflow keeps the current section; "All workflows" opens the aggregate.
-  assert.ok(
-    src.includes('/workflows/${encodeURIComponent(workflowId)}/${section}`'),
-    'a workflow selection preserves the section',
-  );
-  assert.ok(src.includes('/workflows/all/analytics`'), '"All workflows" opens the aggregate analytics');
+  assert.ok(src.includes('scope: "all", label: "All workflows"'), '"All workflows" is the first option (scope "all")');
+  assert.ok(src.includes('scope: w.id'), 'each workflow option carries its id as the scope');
+  assert.ok(src.includes('onSelect(o.scope)'), 'selecting an option emits onSelect(scope)');
+  assert.ok(src.includes('o.scope === currentScope'), 'the current scope is marked (✓)');
+  assert.ok(!src.includes('/workflows'), 'the picker builds no routes (the host does, via scopeHref)');
 });
 
-test('header: the switcher only ever receives the CURRENT client\'s workflows + section', () => {
+test('header: the switcher gets ONLY the current client\'s workflows + remembered scope', () => {
+  // W-1/W-2: the section is no longer a local const — it comes from the scope SURFACE
+  // (parseScopeSurface: executions / analytics / inbox / settings). The panel is a pure
+  // picker; the header turns a selection into a route via scopeHref, preserving section.
   const src = read('components/HeaderBar.tsx');
-  // section = analytics on analytics routes, else executions (the fallback).
-  assert.ok(
-    src.includes('const section: "executions" | "analytics" = isAnalytics ? "analytics" : "executions"'),
-    'section preserves analytics, else falls back to executions',
-  );
+  assert.ok(src.includes('const surface = parseScopeSurface(pathname);'), 'the section comes from the scope surface');
   // clientWorkflows is filtered to the current client; that list feeds the panel.
   assert.ok(
     src.includes('workflows.filter((w) => w.clientId === currentClient.id)'),
     'only the current client\'s workflows are collected',
   );
+  // Selecting a scope preserves the current section (non-inbox via scopeHref, inbox via ?workflow=).
+  assert.ok(
+    src.includes('scopeHref(surface.clientId, surface.section, scope)'),
+    'a selection navigates keeping the section',
+  );
   const panel = slice(src, '<WorkflowSwitcherPanel', '/>');
   assert.ok(panel.includes('workflows={clientWorkflows'), 'the panel receives the current-client list');
-  assert.ok(panel.includes('section={section}'), 'the panel receives the section to preserve');
+  assert.ok(panel.includes('currentScope={currentScope}'), 'the panel receives the remembered scope (drives the ✓)');
+  assert.ok(panel.includes('onSelect={onSelectScope}'), 'the panel reports selections back to the host');
 });
 
-// ──────────────────────────── Shared workflow tabs ───────────────────────────
-
-test('workflow tabs: a SHARED component with Executions + Analytics only (no Inbox)', () => {
-  const src = read('components/WorkflowTabs.tsx');
-  assert.ok(src.includes('"Executions"') && src.includes('"Analytics"'), 'both tabs present');
-  // No Inbox tab and no /inbox link (the doc comment may mention Inbox in prose).
-  assert.ok(!src.includes('/inbox'), 'no /inbox route is a workflow tab');
-  const tabs = slice(src, 'const TABS = [', '] as const');
-  assert.ok(!/inbox/i.test(tabs), 'the TABS list is Executions/Analytics only');
-  // Mounted once in the shared workflow layout (not duplicated per page).
+// ─────────── Shared workflow tabs — REMOVED (W-1): see the deletion note below ──────
+// The shared in-content "Executions | Analytics" WorkflowTabs component was removed in
+// W-1. Those sections are now scope-driven sidebar items (covered by the "Workflows
+// section" sidebar test above), and the per-workflow layout is a guard-only pass-through
+// (no tab bar). The previous "workflow tabs: a SHARED component…" case — which asserted
+// a TABS list of Executions/Analytics with no Inbox, mounted by the layout — was deleted
+// because the component and the layout tab bar no longer exist.
+test('workflow layout: guard-only pass-through, no in-content tab bar (W-1)', () => {
   const layout = read('app/clients/[clientId]/workflows/[workflowId]/layout.tsx');
-  assert.ok(layout.includes('<WorkflowTabs'), 'the shared layout renders the tabs');
+  assert.ok(layout.includes('return children;'), 'the layout renders its child straight through');
+  assert.ok(!layout.includes('WorkflowTabs') && !layout.includes('role="tablist"'), 'no in-content tab bar');
 });
 
 // ───────────────────────────── Workflows list page ───────────────────────────
@@ -182,23 +200,36 @@ test('workflows page: session-authorized, filtered to this client, searchable li
   assert.ok(list.includes('placeholder="Search workflows…"'), 'has a search field');
   assert.ok(list.includes('Active') && list.includes('Inactive'), 'shows active/inactive status');
   assert.ok(list.includes('w.n8nWorkflowId'), 'shows the workflow id');
-  assert.ok(list.includes('/executions`'), 'rows open the workflow Executions');
+  // W-1: rows link through the single scopeHref() source of truth; the default section
+  // is "executions", so a row opens that workflow's Executions (the /executions literal
+  // now lives in scopeSurface, exercised by its own tests).
+  assert.ok(list.includes('scopeHref(clientId, section, w.n8nWorkflowId)'), 'rows link via scopeHref');
+  assert.ok(list.includes('section = "executions"'), 'rows default to the workflow Executions');
   assert.ok(list.includes('No workflows yet'), 'has an empty state');
 });
 
 // ───────────────────── Preserved: unified Inbox + legacy routes ───────────────
 
-test('client Inbox page (unified): gated by the inbox module, client-level poll', () => {
+test('client Inbox page (unified): inbox-gated, resolves W-2 scope, loads the scoped list', () => {
   const src = read('app/clients/[clientId]/inbox/page.tsx');
-  // Now gated by the canonical module gate (tenant + client + non-default + inbox
-  // enabled → indistinguishable 404).
+  // Gated by the canonical module gate (tenant + client + non-default + inbox enabled →
+  // indistinguishable 404).
   assert.ok(src.includes('requireClientModulePage(clientId, "inbox")'), 'gated by the inbox module');
+  // W-2: the effective scope is URL-first (?workflow=, validated) else the remembered
+  // cookie; the list is loaded ALREADY-SCOPED server-side (no client-side workflow
+  // filtering, no flash of the full list).
+  assert.ok(src.includes('validateWorkflowForClient(') && src.includes('resolveWorkflowScope('), 'resolves the URL-first / cookie scope');
+  assert.ok(src.includes('loadScopedClientInbox('), 'loads the already-scoped unified list');
+  // The workspace is keyed by the scope so a scope change re-seeds it.
+  const ws = slice(src, '<ClientInboxWorkspace', '/>');
+  assert.ok(ws.includes('key={effective}') && ws.includes('scope={effective}'), 'the workspace is keyed by + given the scope');
+  // The client-level poll lives in the workspace (a serializable prop crossing; the page
+  // itself no longer polls).
+  const wsSrc = read('components/ClientInboxWorkspace.tsx');
   assert.ok(
-    src.includes('`/api/inbox/${encodeURIComponent(client.id)}/conversations`'),
-    'polls the client-level conversations endpoint',
+    wsSrc.includes('`/api/inbox/${encodeURIComponent(clientId)}/conversations`'),
+    'the workspace polls the client-level conversations endpoint',
   );
-  assert.ok(src.includes('loadClientInboxList('), 'loads the unified list');
-  assert.ok(src.includes('w.client_id === client.id'), 'the workflow filter is scoped to this client');
 });
 
 test('RSC-safe: the server page passes NO function to the client workspace', () => {
@@ -216,35 +247,17 @@ test('RSC-safe: the server page passes NO function to the client workspace', () 
   assert.ok(wsSrc.includes('p.set("c", id)'), 'selecting a row sets ?c= (preserving other params)');
 });
 
-test('grid builds the drawer href from conversationRoute (client vs workflow), all segments encoded', () => {
-  const src = read('components/ConversationGrid.tsx');
-  // Serializable prop, not a callback.
-  assert.ok(
-    src.includes('conversationRoute?: "client" | "workflow"'),
-    'conversationRoute is a serializable string union',
-  );
-  assert.ok(!src.includes('conversationHref'), 'the callback prop is fully removed');
-  // Client mode → /clients/{clientId}/inbox?c={id}.
-  assert.ok(
-    src.includes(
-      '`/clients/${encodeURIComponent(clientId)}/inbox?c=${encodeURIComponent(v.id)}`',
-    ),
-    'client mode builds /clients/{clientId}/inbox?c={id}',
-  );
-  // Workflow mode → the per-workflow route is preserved.
-  assert.ok(
-    src.includes(
-      '`/clients/${encodeURIComponent(clientId)}/workflows/${encodeURIComponent(v.workflowId)}/inbox?c=${encodeURIComponent(v.id)}`',
-    ),
-    'workflow mode preserves the per-workflow inbox route',
-  );
-});
+// The "grid builds the drawer href from conversationRoute (client vs workflow)…" case
+// was DELETED: the ConversationGrid + InboxDrawer components were removed. The unified
+// client inbox is now the three-column ClientInboxWorkspace, which selects via the ?c=
+// deep link (covered by inboxWorkspaceContract), and the "workflow mode" route it built
+// (/workflows/<w>/inbox) no longer renders a grid — it 307-redirects (see below).
 
 test('legacy routes still exist / compile (compatibility)', () => {
-  assert.ok(
-    read('app/clients/[clientId]/workflows/[workflowId]/(padded)/inbox/page.tsx').includes('ConversationGrid'),
-    'the per-workflow inbox page is still present',
-  );
+  // W-2: the per-workflow inbox surface was removed; the route is now a 307-redirect to
+  // the client inbox scoped to that workflow (?workflow=<w>), preserving ?c=.
+  const perWorkflow = read('app/clients/[clientId]/workflows/[workflowId]/(padded)/inbox/page.tsx');
+  assert.ok(perWorkflow.includes('redirect(') && perWorkflow.includes('/inbox?workflow='), 'the per-workflow inbox 307-redirects to the scoped client inbox');
   assert.ok(
     read('app/clients/[clientId]/inbox/[conversationId]/page.tsx').includes('redirect('),
     'the legacy client thread URL still redirects',

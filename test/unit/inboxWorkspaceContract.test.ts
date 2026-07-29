@@ -28,12 +28,16 @@ test('workspace: grouped by real state + pending counter (pure mapping)', () => 
   assert.ok(src.includes('pending'), 'pending counter is surfaced');
 });
 
-test('workspace: preserves the ?c= deep link and the workflow filter', () => {
+test('workspace: preserves the ?c= deep link; NO in-panel workflow filter (header owns scope)', () => {
   const src = read('components/ClientInboxWorkspace.tsx');
   assert.ok(src.includes('searchParams.get("c")'), 'selection reads the ?c= param');
   assert.ok(src.includes('p.set("c", id)'), 'selecting sets ?c= …');
   assert.ok(src.includes('searchParams.toString()'), '… while preserving the other params');
-  assert.ok(src.includes('aria-label="Filter by workflow"'), 'the workflow filter is kept');
+  // W-2: the in-panel workflow filter was removed — the header switcher is the single
+  // workflow selector, and the list follows the active scope (the component is keyed by
+  // it, re-seeded with the already-scoped payload on a scope change).
+  assert.ok(!src.includes('aria-label="Filter by workflow"'), 'there is NO in-panel workflow filter');
+  assert.ok(src.includes('No in-panel workflow selector'), 'the workspace follows the header scope');
 });
 
 test('workspace: reuses the REAL chat + handoff actions (InboxThread), client-scoped fetch', () => {
@@ -70,8 +74,8 @@ test('customer details: REAL payload fields only — no fabricated profile, no e
   assert.ok(!src.includes('@worker'), 'the panel imports no worker/contacts data');
 });
 
-test('per-workflow inbox stays on the old grid + drawer (compat, untouched)', () => {
-  const page = read('app/clients/[clientId]/workflows/[workflowId]/(padded)/inbox/page.tsx');
-  assert.ok(page.includes('ConversationGrid'), 'per-workflow inbox still uses the grid');
-  assert.ok(page.includes('InboxDrawer'), 'per-workflow inbox still uses the drawer');
-});
+// The "per-workflow inbox stays on the old grid + drawer (compat)" case was DELETED:
+// W-2 removed that surface entirely. The ConversationGrid + InboxDrawer components no
+// longer exist, and the route is now a 307-redirect to the client inbox scoped to the
+// workflow (asserted by clientInboxNavContract's "legacy routes" + inboxModuleContract's
+// "inbox pages are inbox-gated" cases). Nothing about a per-workflow grid remains to guard.

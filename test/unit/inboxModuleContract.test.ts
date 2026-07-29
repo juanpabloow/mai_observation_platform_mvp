@@ -39,23 +39,26 @@ test('manual send + retry are inbox-gated', () => {
   assert.ok(gates.length >= 2, 'both send + retry gate on the inbox module');
 });
 
-test('inbox JSON APIs + per-workflow access resolve the inbox module (404 when off)', () => {
+test('inbox JSON API access resolves the inbox module (404 when off)', () => {
   const src = read('web/lib/inboxData.ts');
-  // resolveInboxAccess (client-level) + resolveWorkflowInboxAccess (per-workflow).
+  // W-2 removed the per-workflow inbox surface, so resolveWorkflowInboxAccess is gone —
+  // there is now ONE non-redirecting resolver (resolveInboxAccess) for the client-level
+  // JSON poll routes. It gates on the inbox module and denies with the same safe 404.
   const hits = src.match(/isClientModuleEnabled\([^)]*"inbox"\)/g) ?? [];
-  assert.ok(hits.length >= 2, 'both access resolvers gate on inbox');
+  assert.ok(hits.length >= 1, 'the client-level access resolver gates on inbox');
+  assert.ok(!src.includes('resolveWorkflowInboxAccess'), 'the per-workflow resolver was removed with the surface');
   assert.ok(src.includes('status: 404'), 'disabled → the same safe 404');
 });
 
-test('inbox pages are inbox-gated (unified + per-workflow + legacy thread)', () => {
+test('inbox pages are inbox-gated (unified + legacy thread); per-workflow defers to the target', () => {
   assert.ok(
     read('web/app/clients/[clientId]/inbox/page.tsx').includes('requireClientModulePage(clientId, "inbox")'),
     'unified inbox page gated',
   );
-  assert.ok(
-    read('web/app/clients/[clientId]/workflows/[workflowId]/(padded)/inbox/page.tsx').includes('isClientModuleEnabled(tenantId, linkClientId, "inbox")'),
-    'per-workflow inbox page gated on the workflow client',
-  );
+  // W-2: the per-workflow inbox page no longer gates itself — it 307-redirects to the
+  // client inbox scoped to that workflow, and THAT page does the real access/module gate.
+  const perWorkflow = read('web/app/clients/[clientId]/workflows/[workflowId]/(padded)/inbox/page.tsx');
+  assert.ok(perWorkflow.includes('redirect(') && perWorkflow.includes('/inbox?workflow='), 'per-workflow inbox redirects to the gated client inbox');
   assert.ok(
     read('web/app/clients/[clientId]/inbox/[conversationId]/page.tsx').includes('isClientModuleEnabled(scope.tenantId, clientId, "inbox")'),
     'legacy client thread gated',
