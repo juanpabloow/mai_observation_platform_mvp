@@ -5,7 +5,11 @@ import {
   isClientModuleEnabled,
   setClientModuleEnabled,
 } from '../../src/db/repositories/clientModules.js';
-import { resolveOrCreateContact, updateContact, getContactById } from '../../src/db/repositories/contacts.js';
+import { updateContact, getContactById } from '../../src/db/repositories/contacts.js';
+import { resolveContactByIdentity } from '../../src/db/repositories/contactIdentities.js';
+// C-2 shim: resolveOrCreateContact was replaced by the identity chokepoint.
+const resolveOrCreateContact = async (i: Parameters<typeof resolveContactByIdentity>[0]) =>
+  (await resolveContactByIdentity(i)).contact;
 import { getSiteById } from '../../src/db/repositories/scheduling/sites.js';
 import { cleanupTenant, closeDb, seedScenario, seedSiteForClient } from './fixtures.js';
 

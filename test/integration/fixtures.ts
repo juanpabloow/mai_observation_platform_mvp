@@ -186,5 +186,40 @@ export async function closeDb(): Promise<void> {
   await pool.end();
 }
 
+// ── C-3 CRM fixtures (recovered from PR #2) ─────────────────────────────────────
+export async function seedContact(
+  tenantId: string,
+  clientId: string,
+  opts: { name?: string; channelUserId?: string } = {},
+): Promise<string> {
+  const cuid = opts.channelUserId ?? `wa:${randomUUID().slice(0, 10)}`;
+  const r = await query<{ id: string }>(
+    `INSERT INTO contacts (tenant_id, client_id, channel, channel_user_id, name) VALUES ($1, $2, 'test', $3, $4) RETURNING id`,
+    [tenantId, clientId, cuid, opts.name ?? 'Test Person'],
+  );
+  return r.rows[0].id;
+}
+
+export async function seedMember(
+  tenantId: string,
+  opts: { role?: 'owner' | 'admin' | 'member'; clientId?: string } = {},
+): Promise<string> {
+  const role = opts.role ?? 'owner';
+  const memberClientId = role === 'member' ? opts.clientId ?? null : null;
+  if (role === 'member' && !memberClientId) throw new Error('seedMember: role "member" requires a clientId');
+  const userId = randomUUID();
+  await query(`INSERT INTO "user" ("id", "name", "email", "emailVerified") VALUES ($1, $2, $3, true)`, [
+    userId,
+    `U ${userId.slice(0, 6)}`,
+    `${userId.slice(0, 8)}@test.local`,
+  ]);
+  await query(`INSERT INTO tenant_members (tenant_id, user_id, role, member_client_id) VALUES ($1, $2, $3, $4)`, [tenantId, userId, role, memberClientId]);
+  return userId;
+}
+
+export async function removeMember(tenantId: string, userId: string): Promise<void> {
+  await query(`DELETE FROM tenant_members WHERE tenant_id = $1 AND user_id = $2`, [tenantId, userId]);
+}
+
 /** A UTC instant for a local Bogota wall-clock time on 2026-08-05 (a Wednesday). */
 export { OPEN_9_18 };

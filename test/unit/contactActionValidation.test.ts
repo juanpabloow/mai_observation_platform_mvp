@@ -29,9 +29,14 @@ test('invalid enum values are rejected', () => {
   assert.equal(parseContactPatch({ bot_human_mode: 'auto' }).ok, false);
 });
 
-test('assigned_to (and any unknown key) is rejected — over-posting blocked', () => {
-  assert.equal(parseContactPatch({ name: 'x', assigned_to: 'user-1' }).ok, false);
-  assert.equal(parseContactPatch({ assigned_to: null }).ok, false);
+test('unknown keys rejected (over-posting blocked); C-2 fields accepted by the validator', () => {
+  // C-2 made assigned_to / messaging_consent / consent_source / custom_fields editable
+  // — the validator now ACCEPTS them; the ACTION enforces owner-access + custom-field
+  // validity server-side (not this pure whitelist).
+  assert.ok(parseContactPatch({ name: 'x', assigned_to: 'user-1' }).ok);
+  assert.ok(parseContactPatch({ assigned_to: null }).ok);
+  assert.ok(parseContactPatch({ messaging_consent: 'opted_out', consent_source: 'form' }).ok);
+  // A truly unknown key is still rejected by strictObject.
   assert.equal(parseContactPatch({ anything_else: 1 }).ok, false);
 });
 

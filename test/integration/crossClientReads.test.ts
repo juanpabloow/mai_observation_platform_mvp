@@ -5,8 +5,11 @@ import { query, withTransaction } from '../../src/db/client.js';
 import {
   listContactConversations,
   listContacts,
-  resolveOrCreateContact,
 } from '../../src/db/repositories/contacts.js';
+import { resolveContactByIdentity } from '../../src/db/repositories/contactIdentities.js';
+// C-2 shim: resolveOrCreateContact was replaced by the identity chokepoint.
+const resolveOrCreateContact = async (i: Parameters<typeof resolveContactByIdentity>[0]) =>
+  (await resolveContactByIdentity(i)).contact;
 import {
   insertAppointment,
   listAppointments,
