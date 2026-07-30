@@ -39,6 +39,8 @@ function messageFor(error: BookingError, fallback: string): string {
       return "Not available.";
     case "invalid_transition":
       return "That status change isn't allowed.";
+    case "contact_conflict":
+      return "That phone or email already belongs to a different contact.";
     default:
       return fallback;
   }
@@ -65,6 +67,10 @@ export interface ManualAppointmentInput {
   channel?: string;
   channelUserId?: string;
   walkIn?: boolean;
+  /** C-4.1: book for an EXISTING contact (e.g. from the contact record) — attaches to it
+   *  without creating/mutating a contact. Wins over typed identity; the domain refuses a
+   *  contact_id that isn't this client's, or typed identity that resolves elsewhere. */
+  contactId?: string;
 }
 
 /** Create a manual appointment or walk-in from the agenda. A walk-in without any
@@ -73,7 +79,7 @@ export async function createManualAppointmentAction(
   clientId: string,
   input: ManualAppointmentInput,
 ): Promise<ActionResult> {
-  if (!isUuid(input.siteId) || !isUuid(input.serviceId) || (input.staffId && !isUuid(input.staffId))) {
+  if (!isUuid(input.siteId) || !isUuid(input.serviceId) || (input.staffId && !isUuid(input.staffId)) || (input.contactId && !isUuid(input.contactId))) {
     return { ok: false, error: GENERIC_GATE };
   }
   const ctx = await gate(clientId);
@@ -81,12 +87,15 @@ export async function createManualAppointmentAction(
   const start = new Date(input.startAt);
   if (Number.isNaN(start.getTime())) return { ok: false, error: "Invalid start time." };
 
-  // A walk-in with a name+phone still resolves a contact (channel 'walk_in') so it
-  // shows up in the CRM; a fully anonymous walk-in has no contact.
-  const hasIdentity = Boolean(input.channelUserId || input.customerPhone || input.customerName);
+  // C-4.1: booking for an existing contact attaches to it directly (no typed identity).
+  // Otherwise a walk-in with a name+phone still resolves a contact (channel 'walk_in') so
+  // it shows up in the CRM; a fully anonymous walk-in has no contact.
+  const bookingForContact = Boolean(input.contactId);
+  const hasIdentity = !bookingForContact && Boolean(input.channelUserId || input.customerPhone || input.customerName);
   const channel = input.channel ?? (input.walkIn ? "walk_in" : "manual");
-  const channelUserId =
-    input.channelUserId ?? (hasIdentity ? (input.customerPhone || input.customerName || "").trim() : undefined);
+  const channelUserId = hasIdentity
+    ? input.channelUserId ?? (input.customerPhone || input.customerName || "").trim()
+    : undefined;
 
   const result = await createAppointment({
     tenantId: ctx.scope.tenantId,
@@ -94,11 +103,12 @@ export async function createManualAppointmentAction(
     serviceId: input.serviceId,
     staffId: input.staffId ?? null,
     startAt: start,
+    contactId: input.contactId ?? null,
     channel: channelUserId ? channel : null,
     channelUserId: channelUserId || null,
-    customerName: input.customerName ?? null,
-    customerPhone: input.customerPhone ?? null,
-    customerEmail: input.customerEmail ?? null,
+    customerName: bookingForContact ? null : input.customerName ?? null,
+    customerPhone: bookingForContact ? null : input.customerPhone ?? null,
+    customerEmail: bookingForContact ? null : input.customerEmail ?? null,
     origin: input.walkIn ? "walk_in" : "internal",
     createdByType: "agent",
     createdByUserId: ctx.scope.userId,

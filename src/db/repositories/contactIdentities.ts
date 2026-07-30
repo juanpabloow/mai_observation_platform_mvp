@@ -194,6 +194,56 @@ export async function resolveContactByIdentity(
   return { contact: await fillEmptyAndTouch(run, input, winner.id), candidatesRecorded };
 }
 
+// ── READ-ONLY lookups for the book-by-contact path (C-4.1) ──────────────────────────
+// These never create or mutate a contact. The booking domain uses them when an explicit
+// contact_id is supplied: validate it belongs to the client, and refuse if typed identity
+// strings point at a DIFFERENT existing contact.
+
+/** Does this contact belong to (tenant, client)? Pure existence check, no mutation. */
+export async function contactBelongsToClient(
+  tenantId: string,
+  clientId: string,
+  contactId: string,
+  client?: PoolClient,
+): Promise<boolean> {
+  const run = runner(client);
+  const r = await run(
+    `SELECT 1 FROM contacts WHERE id=$1 AND tenant_id=$2 AND client_id=$3`,
+    [contactId, tenantId, clientId],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** The DISTINCT contact ids the given identity strings currently map to within this
+ *  client (via contact_identities). Empty when none are claimed yet. Read-only — used to
+ *  detect a contact_id-vs-typed-identity conflict WITHOUT resolving (which would create). */
+export async function findContactIdsByIdentity(
+  input: { tenantId: string; clientId: string; channelUserId?: string | null; phone?: string | null; email?: string | null },
+  client?: PoolClient,
+): Promise<string[]> {
+  const run = runner(client);
+  const pairs: Array<{ kind: string; value: string }> = [];
+  const seen = new Set<string>();
+  for (const raw of [input.channelUserId, input.phone, input.email]) {
+    const n = classifyIdentity(raw);
+    if (!n) continue;
+    const k = `${n.kind}:${n.value}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    pairs.push(n);
+  }
+  if (pairs.length === 0) return [];
+  const kinds = pairs.map((p) => p.kind);
+  const values = pairs.map((p) => p.value);
+  const r = await run<{ contact_id: string }>(
+    `SELECT DISTINCT contact_id FROM contact_identities
+      WHERE tenant_id=$1 AND client_id=$2
+        AND (kind, value) IN (SELECT * FROM unnest($3::text[], $4::text[]))`,
+    [input.tenantId, input.clientId, kinds, values],
+  );
+  return r.rows.map((row) => row.contact_id);
+}
+
 // ── Identity display / candidate management ────────────────────────────────────────
 
 export interface IdentityRow {

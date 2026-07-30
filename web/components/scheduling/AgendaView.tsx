@@ -32,6 +32,12 @@ interface Appt {
   source_conversation_id: string | null;
 }
 interface Slot { start_at: string; service_end_at: string; staff_id: string; available_staff_ids: string[] }
+/** When booking for an existing contact (C-4.1 deep-link), the modal locks the identity
+ *  to this contact and submits its id — staff never retype what's on the record. */
+interface ContactPrefill { contactId: string; contactName: string }
+type ModalState =
+  | { mode: "new" | "walkin"; contact?: ContactPrefill }
+  | { mode: "reschedule"; appt: Appt };
 
 const STATUS_STYLE: Record<string, string> = {
   scheduled: "bg-subtle text-foreground",
@@ -57,6 +63,10 @@ export function AgendaView(props: {
   inboxBase: string | null;
   /** Origin workflow to preserve across navigation (?from=). */
   from: string | null;
+  /** C-4.1 deep-links from the contact record: open the "new appointment" modal
+   *  prefilled for this contact, or open "reschedule" already on this appointment. */
+  prefillBook: ContactPrefill | null;
+  openReschedule: string | null;
   /** owner/admin — controls whether admin links (Add staff) render. */
   canManage: boolean;
   timezone: string;
@@ -72,7 +82,17 @@ export function AgendaView(props: {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
-  const [modal, setModal] = useState<null | { mode: "new" | "walkin" } | { mode: "reschedule"; appt: Appt }>(null);
+  // Auto-open from a deep-link (book-for-contact / reschedule) on first render — the
+  // reschedule appointment is in props.appointments because the page forced its site+day.
+  const initialModal: ModalState | null = props.prefillBook
+    ? { mode: "new", contact: props.prefillBook }
+    : props.openReschedule
+      ? (() => {
+          const appt = props.appointments.find((a) => a.id === props.openReschedule);
+          return appt ? { mode: "reschedule" as const, appt } : null;
+        })()
+      : null;
+  const [modal, setModal] = useState<ModalState | null>(initialModal);
 
   const navigate = (patch: { site?: string; date?: string }) => {
     const params = new URLSearchParams();
@@ -257,12 +277,14 @@ function AppointmentModal(props: {
   dayEndIso: string;
   staff: StaffOpt[];
   services: ServiceOpt[];
-  modal: { mode: "new" | "walkin" } | { mode: "reschedule"; appt: Appt };
+  modal: ModalState;
   onClose: () => void;
   onError: (e: string | null) => void;
   onDone: () => void;
 }) {
   const isReschedule = props.modal.mode === "reschedule";
+  // Booking for an existing contact (deep-link): lock identity, submit its id.
+  const bookingContact = props.modal.mode !== "reschedule" ? props.modal.contact ?? null : null;
   const [serviceId, setServiceId] = useState(props.services[0]?.id ?? "");
   const [staffId, setStaffId] = useState<string>("");
   const [slots, setSlots] = useState<Slot[]>([]);
@@ -323,9 +345,15 @@ function AppointmentModal(props: {
           serviceId,
           staffId: staffId || null,
           startAt: slotStart,
-          customerName: name || undefined,
-          customerPhone: phone || undefined,
-          customerEmail: email || undefined,
+          // Booking for a contact → attach by id (no typed identity). Otherwise the
+          // free-text identity path (manual / walk-in) is unchanged.
+          ...(bookingContact
+            ? { contactId: bookingContact.contactId }
+            : {
+                customerName: name || undefined,
+                customerPhone: phone || undefined,
+                customerEmail: email || undefined,
+              }),
           walkIn: props.modal.mode === "walkin",
         });
         if (!r.ok) return props.onError(r.error);
@@ -334,7 +362,13 @@ function AppointmentModal(props: {
     });
   };
 
-  const title = isReschedule ? "Reschedule appointment" : props.modal.mode === "walkin" ? "Register walk-in" : "New appointment";
+  const title = isReschedule
+    ? "Reschedule appointment"
+    : props.modal.mode === "walkin"
+      ? "Register walk-in"
+      : bookingContact
+        ? "Book appointment"
+        : "New appointment";
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={props.onClose}>
@@ -382,7 +416,13 @@ function AppointmentModal(props: {
               ))}
             </div>
           ) : null}
-          {!isReschedule ? (
+          {!isReschedule && bookingContact ? (
+            // Booking for an existing contact — identity is LOCKED to the record, never typed.
+            <div className="flex flex-col gap-1">
+              <span className="text-xs text-muted">Customer</span>
+              <div className="rounded-lg border border-line bg-subtle px-2 py-1.5">{bookingContact.contactName}</div>
+            </div>
+          ) : !isReschedule ? (
             <>
               <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Customer name" className="rounded-lg border border-line-strong bg-transparent px-2 py-1.5" />
               <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Phone (E.164, e.g. +57300…)" className="rounded-lg border border-line-strong bg-transparent px-2 py-1.5" />

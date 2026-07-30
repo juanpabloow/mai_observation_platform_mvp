@@ -74,7 +74,7 @@ function NextCard({
       </div>
       <div className="mt-2 flex items-center gap-2">
         <Link
-          href={agendaHref(clientId, appt)}
+          href={`/clients/${clientId}/scheduling/agenda?reschedule=${encodeURIComponent(appt.id)}`}
           className="rounded-lg border border-line px-2 py-1 text-xs text-foreground transition-colors hover:bg-subtle"
         >
           Reschedule

@@ -5,8 +5,10 @@ import { hasFullAccess } from "@/lib/access";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 import { listStaff } from "@worker/db/repositories/scheduling/staff.js";
 import { listServicesForSite } from "@worker/db/repositories/scheduling/services.js";
-import { listAppointments } from "@worker/db/repositories/scheduling/appointments.js";
+import { listAppointments, getAppointmentById } from "@worker/db/repositories/scheduling/appointments.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
+import { getContactById } from "@worker/db/repositories/contacts.js";
+import { isUuid } from "@/lib/clientModuleValidation";
 import { utcToZonedParts, zonedPartsToUtc } from "@worker/scheduling/timezone.js";
 import { AgendaView } from "@/components/scheduling/AgendaView";
 
@@ -23,7 +25,7 @@ export default async function ClientAgendaPage({
   searchParams,
 }: {
   params: Promise<{ clientId: string }>;
-  searchParams: Promise<{ site?: string; date?: string; from?: string }>;
+  searchParams: Promise<{ site?: string; date?: string; from?: string; book?: string; reschedule?: string }>;
 }) {
   await connection();
   const { clientId } = await params;
@@ -55,14 +57,35 @@ export default async function ClientAgendaPage({
     );
   }
 
+  // C-4.1 reschedule deep-link: resolve the appointment (tenant-scoped; re-check the
+  // client + that it's still live) so we land on ITS site + day with the modal open —
+  // one click from the contact record, no hunting. Its site/date override the params.
+  let openReschedule: string | null = null;
+  let forcedSiteId: string | undefined;
+  let forcedDate: string | undefined;
+  if (sp.reschedule && isUuid(sp.reschedule)) {
+    const appt = await getAppointmentById(tenantId, sp.reschedule);
+    if (appt && appt.client_id === client.id && (appt.status === "scheduled" || appt.status === "confirmed")) {
+      openReschedule = appt.id;
+      forcedSiteId = appt.site_id;
+      const at = sites.find((s) => s.id === appt.site_id);
+      if (at) {
+        const p = utcToZonedParts(appt.start_at, at.timezone);
+        forcedDate = `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+      }
+    }
+  }
+
   // A ?site= from another client never matches this client's sites → first valid.
-  const site = sites.find((s) => s.id === sp.site) ?? sites[0];
+  const site = sites.find((s) => s.id === (forcedSiteId ?? sp.site)) ?? sites[0];
 
   // Resolve the local day (site tz) → a UTC [dayStart, dayEnd) window.
   const todayParts = utcToZonedParts(new Date(), site.timezone);
-  const dateStr = sp.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date)
-    ? sp.date
-    : `${todayParts.year}-${String(todayParts.month).padStart(2, "0")}-${String(todayParts.day).padStart(2, "0")}`;
+  const dateStr = forcedDate
+    ? forcedDate
+    : sp.date && /^\d{4}-\d{2}-\d{2}$/.test(sp.date)
+      ? sp.date
+      : `${todayParts.year}-${String(todayParts.month).padStart(2, "0")}-${String(todayParts.day).padStart(2, "0")}`;
   const [y, m, d] = dateStr.split("-").map(Number);
   const dayStart = zonedPartsToUtc(y, m, d, 0, 0, site.timezone);
   const dayEnd = zonedPartsToUtc(y, m, d + 1, 0, 0, site.timezone);
@@ -75,12 +98,23 @@ export default async function ClientAgendaPage({
     isClientModuleEnabled(tenantId, client.id, "inbox"),
   ]);
 
+  // C-4.1 book-for-contact deep-link: prefill the "new appointment" modal with the
+  // contact (locked, not typed) so staff never retype identity already on the record.
+  // Only when CRM is on and the contact really belongs to this client.
+  let prefillBook: { contactId: string; contactName: string } | null = null;
+  if (sp.book && isUuid(sp.book) && crmEnabled) {
+    const c = await getContactById(tenantId, sp.book, client.id);
+    if (c) prefillBook = { contactId: c.id, contactName: c.name ?? c.channel_user_id };
+  }
+
   return (
     <AgendaView
       clientId={client.id}
       basePath={`/clients/${client.id}/scheduling/agenda`}
       contactsBase={crmEnabled ? `/clients/${client.id}/contacts` : null}
       inboxBase={inboxEnabled ? `/clients/${client.id}/inbox` : null}
+      prefillBook={prefillBook}
+      openReschedule={openReschedule}
       from={sp.from ?? null}
       canManage={hasFullAccess(scope)}
       timezone={site.timezone}

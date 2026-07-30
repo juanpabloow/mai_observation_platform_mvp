@@ -1,22 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import type { ReactNode } from "react";
+import { PanelCard } from "@/components/analytics-primitives";
 import type { AppointmentSummary, MemberOption, TagView, TaskView } from "@/lib/contactShared";
 import { AppointmentsSection } from "./shared/AppointmentsSection";
 import { TasksSection } from "./shared/TasksSection";
 import { TagsSection } from "./shared/TagsSection";
-
-/** Local client-safe card (same chrome as analytics-ui's PanelCard, which can't be
- *  imported here — it transitively pulls the server pg client into the bundle). */
-function RailCard({ title, children }: { title: string; children: ReactNode }) {
-  return (
-    <div className="rounded-2xl border border-line bg-card p-4">
-      <p className="mb-2 text-sm font-medium text-foreground">{title}</p>
-      {children}
-    </div>
-  );
-}
 
 /**
  * The record's RIGHT rail (C-4): next/upcoming/past appointments, open tasks, tags, and
@@ -64,7 +53,7 @@ export function ContactAssociations({
       <div className="flex flex-wrap gap-2">
         {schedulingEnabled ? (
           <Link
-            href={`/clients/${clientId}/scheduling/agenda`}
+            href={`/clients/${clientId}/scheduling/agenda?book=${encodeURIComponent(contactId)}`}
             className="rounded-lg border border-line px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-subtle"
           >
             Book appointment
@@ -81,12 +70,12 @@ export function ContactAssociations({
       </div>
 
       {schedulingEnabled ? (
-        <RailCard title="Appointments">
+        <PanelCard title="Appointments">
           <AppointmentsSection clientId={clientId} appointments={appointments} onChanged={onChanged} showHistory />
-        </RailCard>
+        </PanelCard>
       ) : null}
 
-      <RailCard title="Open tasks">
+      <PanelCard title="Open tasks">
         <TasksSection
           clientId={clientId}
           contactId={contactId}
@@ -96,9 +85,9 @@ export function ContactAssociations({
           viewerIsFullAccess={viewerIsFullAccess}
           onChanged={onChanged}
         />
-      </RailCard>
+      </PanelCard>
 
-      <RailCard title="Tags">
+      <PanelCard title="Tags">
         <TagsSection
           clientId={clientId}
           contactId={contactId}
@@ -107,7 +96,7 @@ export function ContactAssociations({
           canManageCatalog={canManageTags}
           onChanged={onChanged}
         />
-      </RailCard>
+      </PanelCard>
     </div>
   );
 }

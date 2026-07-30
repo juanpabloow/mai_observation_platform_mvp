@@ -1,7 +1,7 @@
 import { isDeadlock, isExclusionViolation, isUniqueViolation, query, withTransaction } from '../db/client.js';
 import { logger } from '../logger.js';
 import { linkConversationToContact, setContactConsent, type MessagingConsent } from '../db/repositories/contacts.js';
-import { resolveContactByIdentity } from '../db/repositories/contactIdentities.js';
+import { resolveContactByIdentity, contactBelongsToClient, findContactIdsByIdentity } from '../db/repositories/contactIdentities.js';
 import { getOrCreateConversation } from '../db/repositories/handoff.js';
 import {
   isSlotAvailable,
@@ -40,7 +40,8 @@ export type BookingError =
   | 'conflict_slot' // lost the concurrency race (exclusion constraint)
   | 'conflict_idempotency' // same key, different payload
   | 'invalid_transition' // illegal status change / reschedule from terminal
-  | 'module_disabled'; // the client's scheduling module is off (incl. concurrent disable)
+  | 'module_disabled' // the client's scheduling module is off (incl. concurrent disable)
+  | 'contact_conflict'; // explicit contact_id disagrees with the typed identity (C-4.1)
 
 export type BookingResult<T> = { ok: true; value: T; deduped?: boolean } | { ok: false; error: BookingError; message: string };
 
@@ -50,6 +51,11 @@ export interface CreateAppointmentInput {
   serviceId: string;
   staffId?: string | null; // null/undefined = "any"
   startAt: Date;
+  /** EXPLICIT contact to attach to (C-4.1), an ALTERNATIVE to identity resolution — when
+   *  set, the contact is validated to belong to (tenant, scopeClientId) and is NEVER
+   *  created or mutated. If identity strings are ALSO supplied and resolve to a different
+   *  existing contact, the booking is refused (contact_conflict). */
+  contactId?: string | null;
   // Identity (all optional — a walk-in may have none).
   workflowRef?: string | null;
   conversationRef?: string | null;
@@ -190,7 +196,27 @@ export async function createAppointment(
         return { kind: 'module_disabled' as const };
       }
       let contactId: string | null = null;
-      if (input.channel && input.channelUserId) {
+      if (input.contactId) {
+        // C-4.1: an EXPLICIT contact (e.g. booked from the contact record). Validate it
+        // belongs to this client — fail closed — and NEVER create or mutate it.
+        if (!(await contactBelongsToClient(input.tenantId, clientId, input.contactId, client))) {
+          return { kind: 'contact_not_found' as const };
+        }
+        // If identity strings were ALSO supplied, they must not point at a DIFFERENT
+        // existing contact (read-only check — no resolution/creation). contact_id wins.
+        if (input.channel && input.channelUserId) {
+          const mapped = await findContactIdsByIdentity(
+            { tenantId: input.tenantId, clientId, channelUserId: input.channelUserId, phone: input.customerPhone, email: input.customerEmail },
+            client,
+          );
+          if (mapped.some((id) => id !== input.contactId)) {
+            return { kind: 'contact_conflict' as const };
+          }
+        }
+        contactId = input.contactId;
+        // NB: no consent write here — recording consent would mutate the contact, which
+        // the explicit-contact path must not do.
+      } else if (input.channel && input.channelUserId) {
         // C-2: resolve through the identity spine (normalizes → the same person can't
         // fork into two contacts). Consent, when supplied, is recorded store-only.
         const resolved = await resolveContactByIdentity(
@@ -264,6 +290,13 @@ export async function createAppointment(
     // Scheduling was disabled (possibly concurrently) → zero writes, module_disabled.
     if (created.kind === 'module_disabled') {
       return { ok: false, error: 'module_disabled', message: 'Scheduling is disabled for this client.' };
+    }
+    // C-4.1 explicit-contact guards (zero writes — the tx returned before insert).
+    if (created.kind === 'contact_not_found') {
+      return { ok: false, error: 'not_found', message: 'Contact not found for this client.' };
+    }
+    if (created.kind === 'contact_conflict') {
+      return { ok: false, error: 'contact_conflict', message: 'The provided identity belongs to a different contact.' };
     }
     const appt = created.appt;
 
