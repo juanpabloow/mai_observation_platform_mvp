@@ -45,10 +45,12 @@ function NextCard({
   clientId,
   appt,
   onChanged,
+  returnContactId,
 }: {
   clientId: string;
   appt: AppointmentView;
   onChanged?: () => void;
+  returnContactId?: string;
 }) {
   const [pending, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
@@ -74,7 +76,7 @@ function NextCard({
       </div>
       <div className="mt-2 flex items-center gap-2">
         <Link
-          href={`/clients/${clientId}/scheduling/agenda?reschedule=${encodeURIComponent(appt.id)}`}
+          href={`/clients/${clientId}/scheduling/agenda?reschedule=${encodeURIComponent(appt.id)}${returnContactId ? `&return=${encodeURIComponent(returnContactId)}` : ""}`}
           className="rounded-lg border border-line px-2 py-1 text-xs text-foreground transition-colors hover:bg-subtle"
         >
           Reschedule
@@ -115,11 +117,15 @@ export function AppointmentsSection({
   appointments,
   onChanged,
   showHistory = true,
+  returnContactId,
 }: {
   clientId: string;
   appointments: AppointmentSummary;
   onChanged?: () => void;
   showHistory?: boolean;
+  /** When set, the Reschedule deep link carries `&return=<id>` so the agenda sends the
+   *  user back to this contact record after rescheduling (C-5 0b). */
+  returnContactId?: string;
 }) {
   const { next, upcoming, past } = appointments;
   const laterUpcoming = upcoming.slice(1); // `next` is upcoming[0]
@@ -127,7 +133,7 @@ export function AppointmentsSection({
   return (
     <div className="flex flex-col gap-3">
       {next ? (
-        <NextCard clientId={clientId} appt={next} onChanged={onChanged} />
+        <NextCard clientId={clientId} appt={next} onChanged={onChanged} returnContactId={returnContactId} />
       ) : (
         <p className="text-sm text-faint">No upcoming appointment.</p>
       )}

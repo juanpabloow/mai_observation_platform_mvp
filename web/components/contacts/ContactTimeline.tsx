@@ -43,6 +43,8 @@ function actorLabel(item: TimelineItemView): string {
       return "Bot";
     case "user":
       return "Agent";
+    case "automation":
+      return "Automation";
     default:
       return "System";
   }

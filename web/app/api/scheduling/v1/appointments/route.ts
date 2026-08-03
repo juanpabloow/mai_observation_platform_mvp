@@ -27,7 +27,7 @@ export const dynamic = "force-dynamic";
 const STATUSES = ["scheduled", "confirmed", "completed", "cancelled", "no_show"] as const;
 
 export async function GET(req: Request): Promise<Response> {
-  const auth = await authenticateScheduling(req);
+  const auth = await authenticateScheduling(req, "scheduling.read");
   if (!auth.ok) return auth.response;
   const p = new URL(req.url).searchParams;
   const statusParam = p.get("status");
@@ -88,7 +88,7 @@ const CreateBody = z.object({
 });
 
 export async function POST(req: Request): Promise<Response> {
-  const auth = await authenticateScheduling(req);
+  const auth = await authenticateScheduling(req, "scheduling.write");
   if (!auth.ok) return auth.response;
 
   const idempotencyKey = (req.headers.get("idempotency-key") ?? "").trim();

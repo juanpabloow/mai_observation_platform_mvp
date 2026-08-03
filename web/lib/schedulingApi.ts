@@ -1,5 +1,6 @@
 import "server-only";
 import { authenticateHandoffRequest } from "@/lib/handoffApi";
+import type { Capability } from "@worker/db/repositories/handoffTokens.js";
 import { isUuid } from "@/lib/clientModuleValidation";
 import type { AppointmentRow } from "@worker/db/repositories/scheduling/appointments.js";
 import type { BookingError } from "@worker/scheduling/booking.js";
@@ -43,13 +44,17 @@ export function schedulingError(status: number, code: string, message: string): 
  * THE auth + scope chokepoint. Authenticates FIRST (a request without valid
  * credentials never sees body/query validation), then requires X-Workflow-Ref and
  * resolves the machine scope:
- *  - no/invalid/revoked token → the handoff 401 (unchanged).
+ *  - no/invalid/revoked token, OR a token WITHOUT the required capability → the handoff
+ *    401 (indistinguishable; capability is checked in the chokepoint before scope).
  *  - token ok but X-Workflow-Ref missing/blank → 400 workflow_ref_required.
  *  - unknown/wrong-connection/wrong-tenant workflow → 404 not_found (Workflow not found).
  *  - workflow on the default client, or scheduling absent/disabled → 403 module_disabled.
+ *
+ * `capability` is `scheduling.read` for reads and `scheduling.write` for mutations —
+ * declared once per route.
  */
-export async function authenticateScheduling(req: Request): Promise<SchedAuthResult> {
-  const result = await authenticateHandoffRequest(req);
+export async function authenticateScheduling(req: Request, capability: Capability): Promise<SchedAuthResult> {
+  const result = await authenticateHandoffRequest(req, capability);
   if (!result.ok) return { ok: false, response: result.response };
   const { tenantId, connectionId, tokenId } = result.auth;
 

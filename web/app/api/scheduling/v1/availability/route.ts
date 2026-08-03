@@ -17,7 +17,7 @@ export const dynamic = "force-dynamic";
 const MAX_WINDOW_MS = 45 * 24 * 60 * 60 * 1000; // hard cap on a single query span
 
 export async function GET(req: Request): Promise<Response> {
-  const auth = await authenticateScheduling(req);
+  const auth = await authenticateScheduling(req, "scheduling.read");
   if (!auth.ok) return auth.response;
   const p = new URL(req.url).searchParams;
   const siteId = p.get("site_id");

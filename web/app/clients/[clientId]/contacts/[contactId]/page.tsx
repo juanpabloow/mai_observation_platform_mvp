@@ -45,7 +45,7 @@ export default async function ClientContactDetailPage({
 
   const [identities, fieldDefs, members, timeline, openTasks, attachedTags, tagCatalogue, appts, conversations, schedulingEnabled, candidates] =
     await Promise.all([
-      listIdentitiesForContact(tenantId, contactId, client.id),
+      listIdentitiesForContact(tenantId, client.id, contactId),
       listFieldDefinitions(tenantId, client.id, { enabledOnly: true }),
       listMembersForTenant(tenantId),
       getContactTimeline(tenantId, client.id, contactId, {}),

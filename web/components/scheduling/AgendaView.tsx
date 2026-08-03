@@ -67,6 +67,9 @@ export function AgendaView(props: {
    *  prefilled for this contact, or open "reschedule" already on this appointment. */
   prefillBook: ContactPrefill | null;
   openReschedule: string | null;
+  /** C-5 0b: after a deep-linked book/reschedule, return to this contact record (a
+   *  plain, server-validated contact id — used only for in-app navigation). */
+  returnContactId: string | null;
   /** owner/admin — controls whether admin links (Add staff) render. */
   canManage: boolean;
   timezone: string;
@@ -246,7 +249,10 @@ export function AgendaView(props: {
           onError={setError}
           onDone={() => {
             setModal(null);
-            router.refresh();
+            // Deep-linked from a contact record → return there so the new/moved
+            // appointment is visible in context; otherwise just refresh the agenda.
+            if (props.returnContactId) router.push(`/clients/${props.clientId}/contacts/${props.returnContactId}`);
+            else router.refresh();
           }}
         />
       ) : null}

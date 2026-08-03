@@ -53,7 +53,7 @@ export function ContactAssociations({
       <div className="flex flex-wrap gap-2">
         {schedulingEnabled ? (
           <Link
-            href={`/clients/${clientId}/scheduling/agenda?book=${encodeURIComponent(contactId)}`}
+            href={`/clients/${clientId}/scheduling/agenda?book=${encodeURIComponent(contactId)}&return=${encodeURIComponent(contactId)}`}
             className="rounded-lg border border-line px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-subtle"
           >
             Book appointment
@@ -71,7 +71,7 @@ export function ContactAssociations({
 
       {schedulingEnabled ? (
         <PanelCard title="Appointments">
-          <AppointmentsSection clientId={clientId} appointments={appointments} onChanged={onChanged} showHistory />
+          <AppointmentsSection clientId={clientId} appointments={appointments} onChanged={onChanged} showHistory returnContactId={contactId} />
         </PanelCard>
       ) : null}
 

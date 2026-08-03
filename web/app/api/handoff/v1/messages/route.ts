@@ -45,7 +45,7 @@ const Body = z
   );
 
 export async function POST(req: Request): Promise<Response> {
-  const auth = await authenticateHandoffRequest(req);
+  const auth = await authenticateHandoffRequest(req, "handoff");
   if (!auth.ok) return auth.response;
 
   let json: unknown;

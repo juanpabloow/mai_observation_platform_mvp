@@ -20,7 +20,7 @@ export const dynamic = "force-dynamic";
 const Body = z.object({ start_at: z.string().min(1), staff_id: z.string().uuid().optional() });
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
-  const auth = await authenticateScheduling(req);
+  const auth = await authenticateScheduling(req, "scheduling.write");
   if (!auth.ok) return auth.response;
   const { id } = await params;
   // Validate the id BEFORE reading the body (a bad id never touches the body/DB).

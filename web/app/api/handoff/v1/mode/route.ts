@@ -20,7 +20,7 @@ const Query = z.object({
 });
 
 export async function GET(req: Request): Promise<Response> {
-  const auth = await authenticateHandoffRequest(req);
+  const auth = await authenticateHandoffRequest(req, "handoff");
   if (!auth.ok) return auth.response;
 
   const url = new URL(req.url);

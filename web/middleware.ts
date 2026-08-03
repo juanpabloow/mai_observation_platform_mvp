@@ -21,6 +21,7 @@ import { getSessionCookie } from "better-auth/cookies";
 // reach the route (which does its own auth) instead of being redirected to /login.
 // /api/health is the public uptime probe: it must return 200/503 cookieless.
 // /api/scheduling is the MACHINE scheduling API (Bearer token, like /api/handoff).
+// /api/crm is the MACHINE CRM API (Bearer token, like /api/handoff) — C-5.
 // /book is the PUBLIC booking page and /api/booking its public endpoints — both
 // cookieless and self-protected (site-slug scoping + rate limiting).
 // /forgot-password and /reset-password are the account-recovery pages: their
@@ -36,6 +37,7 @@ const PUBLIC_PREFIXES = [
   "/api/handoff",
   "/api/health",
   "/api/scheduling",
+  "/api/crm",
   "/api/booking",
   "/book",
 ];

@@ -25,7 +25,7 @@ export default async function ClientAgendaPage({
   searchParams,
 }: {
   params: Promise<{ clientId: string }>;
-  searchParams: Promise<{ site?: string; date?: string; from?: string; book?: string; reschedule?: string }>;
+  searchParams: Promise<{ site?: string; date?: string; from?: string; book?: string; reschedule?: string; return?: string }>;
 }) {
   await connection();
   const { clientId } = await params;
@@ -107,6 +107,11 @@ export default async function ClientAgendaPage({
     if (c) prefillBook = { contactId: c.id, contactName: c.name ?? c.channel_user_id };
   }
 
+  // C-5 0b: after a deep-linked book/reschedule, return to the contact record the user
+  // came from. `return` is a PLAIN contact id (UUID-validated), never an arbitrary URL —
+  // used only to build the in-app /contacts/{id} path.
+  const returnContactId = sp.return && isUuid(sp.return) ? sp.return : null;
+
   return (
     <AgendaView
       clientId={client.id}
@@ -115,6 +120,7 @@ export default async function ClientAgendaPage({
       inboxBase={inboxEnabled ? `/clients/${client.id}/inbox` : null}
       prefillBook={prefillBook}
       openReschedule={openReschedule}
+      returnContactId={returnContactId}
       from={sp.from ?? null}
       canManage={hasFullAccess(scope)}
       timezone={site.timezone}

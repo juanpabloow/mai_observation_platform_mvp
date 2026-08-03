@@ -6,7 +6,7 @@ import { transitionStatus } from "@worker/scheduling/booking.js";
 export const dynamic = "force-dynamic";
 
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
-  const auth = await authenticateScheduling(req);
+  const auth = await authenticateScheduling(req, "scheduling.write");
   if (!auth.ok) return auth.response;
   const { id } = await params;
   if (!isUuid(id)) return schedulingError(404, "not_found", "Not found.");

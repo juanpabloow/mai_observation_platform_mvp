@@ -133,7 +133,9 @@ export async function attachTag(input: {
   clientId: string;
   contactId: string;
   tagId: string;
-  actorUserId: string;
+  /** null for an automation actor (C-5). */
+  actorUserId: string | null;
+  actorKind?: 'user' | 'automation';
 }): Promise<{ ok: boolean; added: boolean }> {
   return withTransaction(async (client) => {
     const okContact = await belongsToClient(client, 'contacts', input.tenantId, input.clientId, input.contactId);
@@ -154,6 +156,7 @@ export async function attachTag(input: {
         contactId: input.contactId,
         eventType: 'tag_added',
         actorUserId: input.actorUserId,
+        actorKind: input.actorKind ?? 'user',
         detail: { tag_id: input.tagId },
       });
     }
@@ -167,7 +170,9 @@ export async function detachTag(input: {
   clientId: string;
   contactId: string;
   tagId: string;
-  actorUserId: string;
+  /** null for an automation actor (C-5). */
+  actorUserId: string | null;
+  actorKind?: 'user' | 'automation';
 }): Promise<{ ok: boolean; removed: boolean }> {
   return withTransaction(async (client) => {
     const r = await client.query(
@@ -183,6 +188,7 @@ export async function detachTag(input: {
         contactId: input.contactId,
         eventType: 'tag_removed',
         actorUserId: input.actorUserId,
+        actorKind: input.actorKind ?? 'user',
         detail: { tag_id: input.tagId },
       });
     }

@@ -4,7 +4,7 @@ import { listConnectionsForTenant } from "@worker/db/repositories/n8nConnections
 import { listTokensForConnection } from "@worker/db/repositories/handoffTokens.js";
 import { requireFullAccessOrLand } from "@/lib/access";
 import { ConnectionsManager } from "@/components/ConnectionsManager";
-import { HandoffTokens, type ConnectionTokens } from "@/components/HandoffTokens";
+import { MachineTokens, type ConnectionTokens } from "@/components/MachineTokens";
 
 export default async function ConnectionsSettingsPage() {
   await connection();
@@ -23,6 +23,7 @@ export default async function ConnectionsSettingsPage() {
         tokens: tokens.map((t) => ({
           id: t.id,
           prefix: t.token_prefix,
+          capabilities: t.capabilities,
           createdAt: t.created_at.toISOString(),
           lastUsedAt: t.last_used_at ? t.last_used_at.toISOString() : null,
           revoked: t.revoked_at !== null,
@@ -53,7 +54,7 @@ export default async function ConnectionsSettingsPage() {
         }))}
       />
 
-      <HandoffTokens connections={tokenSections} />
+      <MachineTokens connections={tokenSections} />
     </main>
   );
 }

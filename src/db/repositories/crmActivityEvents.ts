@@ -30,20 +30,25 @@ export type CrmEventType =
   | 'contact_merged'
   | 'consent_changed';
 
+export type ActorKind = 'user' | 'automation';
+
 export interface RecordCrmActivityInput {
   tenantId: string;
   clientId: string;
   contactId: string;
   eventType: CrmEventType;
   actorUserId: string | null;
+  /** Who drove the change (C-5). 'automation' → the timeline attributes it to the
+   *  machine rather than "System"; defaults 'user' for the existing session paths. */
+  actorKind?: ActorKind;
   detail?: Record<string, unknown>;
 }
 
 /** Insert one activity event on the transaction client. Caller owns the tx. */
 export async function recordCrmActivity(client: PoolClient, input: RecordCrmActivityInput): Promise<void> {
   await client.query(
-    `INSERT INTO crm_activity_events (tenant_id, client_id, contact_id, event_type, actor_user_id, detail)
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
-    [input.tenantId, input.clientId, input.contactId, input.eventType, input.actorUserId, JSON.stringify(input.detail ?? {})],
+    `INSERT INTO crm_activity_events (tenant_id, client_id, contact_id, event_type, actor_user_id, actor_kind, detail)
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)`,
+    [input.tenantId, input.clientId, input.contactId, input.eventType, input.actorUserId, input.actorKind ?? 'user', JSON.stringify(input.detail ?? {})],
   );
 }

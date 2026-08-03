@@ -29,7 +29,7 @@ import { query } from '../client.js';
  */
 
 export type TimelineSource = 'conversation' | 'appointment' | 'note' | 'activity';
-export type TimelineActor = 'user' | 'bot' | 'customer' | 'system';
+export type TimelineActor = 'user' | 'bot' | 'customer' | 'system' | 'automation';
 const ALL_SOURCES: TimelineSource[] = ['conversation', 'appointment', 'note', 'activity'];
 
 export interface TimelineItem {
@@ -116,7 +116,8 @@ const SUBQUERY: Record<TimelineSource, string> = {
      LIMIT $6`,
   note: `
     SELECT n.id AS sort_id, n.created_at AS occurred_at, 'note' AS kind,
-           CASE WHEN n.created_by_user_id IS NOT NULL THEN 'user' ELSE 'system' END AS actor,
+           CASE WHEN n.author_kind = 'automation' THEN 'automation'
+                WHEN n.created_by_user_id IS NOT NULL THEN 'user' ELSE 'system' END AS actor,
            left(n.body, 280) AS summary, u.name AS actor_name,
            jsonb_build_object('noteId', n.id) AS ref,
            jsonb_build_object('edited', (n.updated_at > n.created_at)) AS meta
@@ -128,7 +129,8 @@ const SUBQUERY: Record<TimelineSource, string> = {
      LIMIT $6`,
   activity: `
     SELECT e.id AS sort_id, e.occurred_at AS occurred_at, e.event_type AS kind,
-           CASE WHEN e.actor_user_id IS NOT NULL THEN 'user' ELSE 'system' END AS actor,
+           CASE WHEN e.actor_kind = 'automation' THEN 'automation'
+                WHEN e.actor_user_id IS NOT NULL THEN 'user' ELSE 'system' END AS actor,
            NULL::text AS summary, u.name AS actor_name,
            jsonb_build_object('eventId', e.id) AS ref,
            e.detail AS meta

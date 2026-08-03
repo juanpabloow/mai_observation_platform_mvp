@@ -9,7 +9,7 @@ import { listServicesForSite } from "@worker/db/repositories/scheduling/services
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request): Promise<Response> {
-  const auth = await authenticateScheduling(req);
+  const auth = await authenticateScheduling(req, "scheduling.read");
   if (!auth.ok) return auth.response;
   const siteId = new URL(req.url).searchParams.get("site_id");
   if (!siteId) return schedulingError(400, "invalid_request", "site_id is required.");

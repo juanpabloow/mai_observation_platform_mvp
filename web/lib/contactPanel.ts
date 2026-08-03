@@ -125,7 +125,7 @@ export async function loadContactPanel(
   if (!contact) return null;
 
   const [identities, appts, openTasks, notes, tags] = await Promise.all([
-    listIdentitiesForContact(tenantId, contactId, clientId),
+    listIdentitiesForContact(tenantId, clientId, contactId),
     listAppointmentsForContact(tenantId, contactId, clientId),
     listTasksForContact(tenantId, clientId, contactId, { status: "open" }),
     listNotesForContact(tenantId, clientId, contactId),

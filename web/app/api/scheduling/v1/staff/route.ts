@@ -11,7 +11,7 @@ import { isServiceEnabledAtSite } from "@worker/db/repositories/scheduling/servi
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request): Promise<Response> {
-  const auth = await authenticateScheduling(req);
+  const auth = await authenticateScheduling(req, "scheduling.read");
   if (!auth.ok) return auth.response;
   const params = new URL(req.url).searchParams;
   const siteId = params.get("site_id");

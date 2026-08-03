@@ -9,7 +9,7 @@ import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 export const dynamic = "force-dynamic";
 
 export async function GET(req: Request): Promise<Response> {
-  const auth = await authenticateScheduling(req);
+  const auth = await authenticateScheduling(req, "scheduling.read");
   if (!auth.ok) return auth.response;
   const sites = await listSites(auth.auth.tenantId, { clientId: auth.auth.clientId });
   return Response.json({

@@ -16,6 +16,9 @@ export interface ContactNoteRow {
   contact_id: string;
   body: string;
   created_by_user_id: string | null;
+  /** 'user' | 'automation' (C-5) — distinguishes a machine-authored note from a note
+   *  whose author was a since-deleted member (both have a null created_by_user_id). */
+  author_kind: 'user' | 'automation';
   created_at: Date;
   updated_at: Date;
   deleted_at: Date | null;
@@ -39,19 +42,36 @@ async function contactInClient(
   return r.rows.length > 0;
 }
 
+/** Look up a note by its idempotency key (C-5, tenant-scoped) — for a machine retry
+ *  replay so a re-POST returns the original note instead of creating a duplicate. */
+export async function getNoteByIdempotencyKey(
+  tenantId: string,
+  idempotencyKey: string,
+): Promise<ContactNoteRow | null> {
+  const r = await query<ContactNoteRow>(
+    `SELECT * FROM contact_notes WHERE tenant_id = $1 AND idempotency_key = $2`,
+    [tenantId, idempotencyKey],
+  );
+  return r.rows[0] ?? null;
+}
+
 export async function createNote(input: {
   tenantId: string;
   clientId: string;
   contactId: string;
   body: string;
-  createdByUserId: string;
+  /** null for an automation-authored note (C-5). */
+  createdByUserId: string | null;
+  authorKind?: 'user' | 'automation';
+  idempotencyKey?: string | null;
 }): Promise<ContactNoteRow | null> {
+  const authorKind = input.authorKind ?? 'user';
   return withTransaction(async (client) => {
     if (!(await contactInClient(client, input.tenantId, input.clientId, input.contactId))) return null;
     const r = await client.query<ContactNoteRow>(
-      `INSERT INTO contact_notes (tenant_id, client_id, contact_id, body, created_by_user_id)
-         VALUES ($1, $2, $3, $4, $5) RETURNING *`,
-      [input.tenantId, input.clientId, input.contactId, input.body, input.createdByUserId],
+      `INSERT INTO contact_notes (tenant_id, client_id, contact_id, body, created_by_user_id, author_kind, idempotency_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+      [input.tenantId, input.clientId, input.contactId, input.body, input.createdByUserId, authorKind, input.idempotencyKey ?? null],
     );
     const note = r.rows[0];
     await recordCrmActivity(client, {
@@ -60,6 +80,7 @@ export async function createNote(input: {
       contactId: input.contactId,
       eventType: 'note_created',
       actorUserId: input.createdByUserId,
+      actorKind: authorKind,
       detail: { note_id: note.id },
     });
     return note;

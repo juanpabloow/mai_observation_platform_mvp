@@ -2,7 +2,9 @@ import "server-only";
 import {
   findActiveByHash,
   hashHandoffToken,
+  tokenHasCapability,
   touchLastUsed,
+  type Capability,
 } from "@worker/db/repositories/handoffTokens.js";
 import { resolveWorkflowForConnection } from "@worker/db/repositories/workflows.js";
 import { getAgentSummary, type ConversationRow } from "@worker/db/repositories/handoff.js";
@@ -36,13 +38,20 @@ const workflowNotFound = (): Response => handoffError(404, "not_found", "Workflo
 export type AuthResult = { ok: true; auth: HandoffAuth } | { ok: false; response: Response };
 
 /**
- * THE auth chokepoint for the handoff API. Parses "Authorization: Bearer <token>",
- * hashes it (SHA-256), and resolves an ACTIVE (non-revoked) token → its tenant /
- * connection / token ids. Every failure returns the SAME 401 (no distinguishing
- * detail). touchLastUsed runs fire-and-forget on success. Structured so a rate
- * limiter can wrap it later without touching the routes.
+ * THE capability-aware auth chokepoint for EVERY machine route (handoff directly;
+ * scheduling + CRM via their wrappers, which pass their capability through). Parses
+ * "Authorization: Bearer <token>", hashes it (SHA-256), resolves an ACTIVE (non-revoked)
+ * token, then checks the route's REQUIRED capability — declared once per route.
+ *
+ * Deny-by-default: a token lacking the capability is refused with the EXACT SAME 401 as
+ * a missing / malformed / unknown / revoked token, so a caller cannot distinguish "bad
+ * token" from "valid token without this capability". The capability is checked BEFORE
+ * any workflow resolution, so an un-capable token never reaches the 404 workflow-scope
+ * path — it always sees this one 401 regardless of the workflow ref it sent. An
+ * unknown/removed capability string is treated as absent, never a wildcard.
+ * touchLastUsed runs fire-and-forget on success.
  */
-export async function authenticateHandoffRequest(req: Request): Promise<AuthResult> {
+export async function authenticateHandoffRequest(req: Request, capability: Capability): Promise<AuthResult> {
   const header = (req.headers.get("authorization") ?? "").trim();
   const match = /^Bearer\s+(.+)$/i.exec(header);
   const raw = match?.[1]?.trim();
@@ -50,6 +59,9 @@ export async function authenticateHandoffRequest(req: Request): Promise<AuthResu
 
   const token = await findActiveByHash(hashHandoffToken(raw));
   if (!token) return { ok: false, response: unauthorized() };
+
+  // Deny-by-default capability gate — same 401 body as a bad token (indistinguishable).
+  if (!tokenHasCapability(token.capabilities, capability)) return { ok: false, response: unauthorized() };
 
   void touchLastUsed(token.id); // fire-and-forget best-effort telemetry
   return {
