@@ -97,6 +97,33 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   );
 }
 
+/** Copyable id chip — the site id (UUID) that the machine scheduling/CRM API needs as
+ * `site_id`. The value is `select-all` (triple-click) AND click-to-copy. */
+function CopyId({ label, value }: { label: string; value: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(value);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1200);
+    } catch {
+      /* clipboard blocked — the select-all text is still the fallback */
+    }
+  };
+  return (
+    <button
+      type="button"
+      onClick={copy}
+      title={`Copy ${label}`}
+      className="inline-flex w-fit items-center gap-1.5 rounded border border-line px-1.5 py-0.5 text-[11px] text-muted transition-colors hover:bg-subtle"
+    >
+      <span className="text-faint">{label}</span>
+      <span className="select-all font-mono text-foreground">{value}</span>
+      <span className="text-faint">{copied ? "copied ✓" : "copy"}</span>
+    </button>
+  );
+}
+
 function SitesSection({ clientId, sites, run, pending }: { clientId: string; sites: Site[]; run: Run; pending: boolean }) {
   const [slug, setSlug] = useState("");
   const [name, setName] = useState("");
@@ -119,8 +146,11 @@ function SitesSection({ clientId, sites, run, pending }: { clientId: string; sit
     <Section title="Sites">
       <ul className="flex flex-col gap-1 text-sm">
         {sites.map((s) => (
-          <li key={s.id} className="flex items-center justify-between rounded-lg border border-line px-3 py-2">
-            <span>{s.name} <span className="text-faint">/{s.slug} · {s.timezone}</span> {s.active ? "" : <em className="text-faint">(inactive)</em>}</span>
+          <li key={s.id} className="flex items-center justify-between gap-3 rounded-lg border border-line px-3 py-2">
+            <div className="flex min-w-0 flex-col gap-1">
+              <span>{s.name} <span className="text-faint">/{s.slug} · {s.timezone}</span> {s.active ? "" : <em className="text-faint">(inactive)</em>}</span>
+              <CopyId label="Site id" value={s.id} />
+            </div>
             {s.active ? <button className={GHOST} disabled={pending} onClick={() => run(() => deactivateSiteAction(clientId, s.id))}>Deactivate</button> : null}
           </li>
         ))}
