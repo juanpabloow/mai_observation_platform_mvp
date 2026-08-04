@@ -24,10 +24,20 @@ import {
 
 type WeeklyHours = Record<string, Array<{ start: string; end: string }>>;
 
+interface SchedulingConfig {
+  slot_interval_min: number;
+  min_notice_min: number;
+  booking_horizon_days: number;
+  default_buffer_before_min: number;
+  default_buffer_after_min: number;
+}
 interface Site {
   id: string; client_id: string; slug: string; name: string; address: string | null; timezone: string; active: boolean;
   /** The site's configured weekly opening hours (C-6 — shown + editable). */
   opening_hours: WeeklyHours;
+  /** min notice / booking horizon / slot granularity (+ default buffers). Config-only until
+   *  now — shown + editable so an operator can see why availability starts N min from now. */
+  scheduling_config: SchedulingConfig;
 }
 interface Service {
   id: string; name: string; description: string | null; duration_min: number;
@@ -187,6 +197,23 @@ function WhyNothingAvailable({ sites, staff }: { sites: Site[]; staff: Staff[] }
             <span className="text-danger">none — nothing can be booked</span>
           )}
         </p>
+        {(() => {
+          const notice = site.scheduling_config.min_notice_min;
+          const h = Math.floor(notice / 60);
+          const m = notice % 60;
+          const noticeText = notice === 0 ? "none" : h > 0 ? `${h} h${m ? ` ${m} min` : ""}` : `${m} min`;
+          return (
+            <p>
+              <span className="text-faint">Minimum notice:</span>{" "}
+              {notice > 0 ? (
+                <span className="text-accent">{noticeText} — the first {noticeText} from now are never offered today (edit under Sites above).</span>
+              ) : (
+                <span>none — same-minute bookings allowed</span>
+              )}
+              <span className="text-faint">{" · "}booking horizon {site.scheduling_config.booking_horizon_days} days · slots every {site.scheduling_config.slot_interval_min} min</span>
+            </p>
+          );
+        })()}
         <p className="text-[11px] text-faint">One-off blocks (vacations/holidays) are listed under Exceptions below.</p>
       </div>
     </Section>
@@ -323,8 +350,31 @@ function EditableSite({ clientId, site, run, pending }: { clientId: string; site
   const [slug, setSlug] = useState(site.slug);
   const [tz, setTz] = useState(site.timezone);
   const [grid, setGrid] = useState<HourGrid>(gridFromWeekly(site.opening_hours));
+  // Booking rules that used to be config-only — now visible + editable. min_notice is why
+  // "availability starts N minutes from now"; horizon caps how far ahead; slot is the grid.
+  const [minNotice, setMinNotice] = useState(String(site.scheduling_config.min_notice_min));
+  const [horizon, setHorizon] = useState(String(site.scheduling_config.booking_horizon_days));
+  const [slotMin, setSlotMin] = useState(String(site.scheduling_config.slot_interval_min));
+  const nums = [minNotice, horizon, slotMin].map((v) => Number(v));
+  const numsOk =
+    nums.every((n) => Number.isFinite(n) && Number.isInteger(n)) &&
+    nums[0] >= 0 && nums[1] >= 1 && nums[2] >= 1;
   const save = () =>
-    run(() => updateSiteAction(clientId, site.id, { name: name.trim(), slug: slug.trim(), timezone: tz, openingHours: weeklyFromGrid(grid) }));
+    run(() =>
+      updateSiteAction(clientId, site.id, {
+        name: name.trim(),
+        slug: slug.trim(),
+        timezone: tz,
+        openingHours: weeklyFromGrid(grid),
+        // Merge over the existing config so the buffers (not shown here) are preserved.
+        schedulingConfig: {
+          ...site.scheduling_config,
+          min_notice_min: Number(minNotice),
+          booking_horizon_days: Number(horizon),
+          slot_interval_min: Number(slotMin),
+        },
+      }),
+    );
   return (
     <div className={`flex flex-col gap-2 rounded-lg border border-line px-3 py-2 ${site.active ? "" : "bg-subtle/40"}`}>
       <div className="flex items-center justify-between gap-2">
@@ -337,9 +387,24 @@ function EditableSite({ clientId, site, run, pending }: { clientId: string; site
         <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wider text-faint">Slug (public URL)<input value={slug} onChange={(e) => setSlug(e.target.value)} className={INPUT} /></label>
         <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wider text-faint">Timezone<input value={tz} onChange={(e) => setTz(e.target.value)} className={INPUT} /></label>
       </div>
+      <span className="text-[10px] uppercase tracking-wider text-faint">Booking rules</span>
+      <div className="flex flex-wrap gap-2">
+        <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wider text-faint" title="The first N minutes from now are never offered — this is why availability seems to start later today.">
+          Minimum notice (min)
+          <input type="number" min={0} value={minNotice} onChange={(e) => setMinNotice(e.target.value)} className={INPUT} />
+        </label>
+        <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wider text-faint" title="How many days ahead bookings are offered.">
+          Booking horizon (days)
+          <input type="number" min={1} value={horizon} onChange={(e) => setHorizon(e.target.value)} className={INPUT} />
+        </label>
+        <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wider text-faint" title="The spacing between offered start times.">
+          Slot granularity (min)
+          <input type="number" min={1} value={slotMin} onChange={(e) => setSlotMin(e.target.value)} className={INPUT} />
+        </label>
+      </div>
       <span className="text-[10px] uppercase tracking-wider text-faint">Weekly opening hours</span>
       <HoursGrid grid={grid} setGrid={setGrid} />
-      <button className={`${BTN} self-start`} disabled={pending || !name || !slug} onClick={save}>Save changes</button>
+      <button className={`${BTN} self-start`} disabled={pending || !name || !slug || !numsOk} onClick={save}>Save changes</button>
     </div>
   );
 }

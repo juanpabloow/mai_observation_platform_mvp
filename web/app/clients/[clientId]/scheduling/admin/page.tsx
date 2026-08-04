@@ -67,6 +67,7 @@ export default async function ClientSchedulingAdminPage({
         timezone: s.timezone,
         active: s.active,
         opening_hours: s.opening_hours, // C-6: shown + editable
+        scheduling_config: s.scheduling_config, // min notice / horizon / slot granularity — shown + editable
       }))}
       services={services.map((s) => ({
         id: s.id,

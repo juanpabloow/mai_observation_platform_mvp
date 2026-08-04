@@ -125,6 +125,12 @@ export async function updateSiteAction(
   const auth = await requireSchedulingAdmin(clientId);
   if (!auth.ok) return auth;
   if (!(await siteInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
+  // A bad scheduling_config value silently breaks availability, so validate it here.
+  if (patch.schedulingConfig) {
+    const cfg = sanitizeSchedulingConfig(patch.schedulingConfig);
+    if (!cfg.ok) return { ok: false, error: cfg.error };
+    patch = { ...patch, schedulingConfig: cfg.value };
+  }
   const row = await updateSite(auth.tenantId, id, patch);
   if (!row) return { ok: false, error: "Site not found." };
   revalidateAdmin(clientId);
@@ -388,4 +394,27 @@ export async function deleteExceptionAction(clientId: string, id: string): Promi
 
 function errText(err: unknown, fallback: string): string {
   return err instanceof Error && err.message ? err.message : fallback;
+}
+
+/** Validate + coerce a scheduling_config to safe integers (a bad value would silently
+ * break availability). min_notice/buffers ≥ 0; slot_interval + booking_horizon ≥ 1; sane
+ * upper bounds. Returns the sanitized config or a readable error. */
+function sanitizeSchedulingConfig(
+  c: SchedulingConfig,
+): { ok: true; value: SchedulingConfig } | { ok: false; error: string } {
+  const field = (label: string, v: unknown, min: number, max: number): number | null => {
+    const n = typeof v === "number" ? v : Number(v);
+    if (!Number.isFinite(n) || !Number.isInteger(n) || n < min || n > max) return null;
+    return n;
+  };
+  const slot = field("slot_interval_min", c.slot_interval_min, 1, 24 * 60);
+  const notice = field("min_notice_min", c.min_notice_min, 0, 365 * 24 * 60);
+  const horizon = field("booking_horizon_days", c.booking_horizon_days, 1, 365);
+  const bBefore = field("default_buffer_before_min", c.default_buffer_before_min, 0, 24 * 60);
+  const bAfter = field("default_buffer_after_min", c.default_buffer_after_min, 0, 24 * 60);
+  if (slot === null) return { ok: false, error: "Slot granularity must be a whole number of minutes (1–1440)." };
+  if (notice === null) return { ok: false, error: "Minimum notice must be a whole number of minutes (0 or more)." };
+  if (horizon === null) return { ok: false, error: "Booking horizon must be a whole number of days (1–365)." };
+  if (bBefore === null || bAfter === null) return { ok: false, error: "Buffers must be a whole number of minutes (0 or more)." };
+  return { ok: true, value: { slot_interval_min: slot, min_notice_min: notice, booking_horizon_days: horizon, default_buffer_before_min: bBefore, default_buffer_after_min: bAfter } };
 }
