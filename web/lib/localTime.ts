@@ -68,6 +68,12 @@ export function dateLabel(instant: Date, tz: string, locale: string): string {
   return new Intl.DateTimeFormat(locale, { timeZone: tz, weekday: "long", day: "numeric", month: "long" }).format(instant);
 }
 
+/** The 24-hour wall clock "HH:MM" in `tz` (locale-independent — the canonical value a
+ *  caller passes back as `time`). */
+export function localClock24(instant: Date, tz: string): string {
+  return new Intl.DateTimeFormat("en-GB", { timeZone: tz, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(instant);
+}
+
 export interface LocalTimeFields {
   start_local: string;
   end_local: string;
@@ -87,6 +93,34 @@ export function localTimeFields(start: Date, end: Date, tz: string, locale: stri
     end_label: timeLabel(end, tz, locale),
     date_label: dateLabel(start, tz, locale),
     day: localDay(start, tz),
+  };
+}
+
+export interface LocalStartFields {
+  start_local: string;
+  start_label: string;
+  date_label: string;
+  day: string;
+}
+
+/** The start-only labels for a single instant with no known end (e.g. a contact's
+ *  next_appointment). Composed from the SAME primitives as localTimeFields — one source
+ *  of formatting. */
+export function localStartFields(start: Date, tz: string, locale: string): LocalStartFields {
+  return {
+    start_local: localIsoWithOffset(start, tz),
+    start_label: timeLabel(start, tz, locale),
+    date_label: dateLabel(start, tz, locale),
+    day: localDay(start, tz),
+  };
+}
+
+/** Labels for a point-in-time that is a moment, not a slot (e.g. a note's created_at):
+ *  the offset-ISO plus a spoken "date, time". Same primitives, no second formatter. */
+export function localMomentFields(instant: Date, tz: string, locale: string): { local: string; label: string } {
+  return {
+    local: localIsoWithOffset(instant, tz),
+    label: `${dateLabel(instant, tz, locale)}, ${timeLabel(instant, tz, locale)}`,
   };
 }
 

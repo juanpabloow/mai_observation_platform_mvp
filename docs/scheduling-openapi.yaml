@@ -259,7 +259,7 @@ paths:
   /availability:
     get:
       summary: Real availability for a service in a window
-      description: "E-1: the service may be given by `service_id` (UUID) OR `service` (NAME); staff optionally by `staff_id` OR `staff` (NAME). A bad name → 400 service_not_found/staff_not_found (message lists valid names); an ambiguous name → 400 ambiguous_match. A `staff` filter returns ONLY that staff's slots; a staff who doesn't perform the service → 409 staff_service_mismatch (naming who does), never an empty list. Each slot carries staff_name + available_staff [{id,name}]."
+      description: "E-1: service by `service_id` (UUID) OR `service` (NAME); staff optionally by `staff_id` OR `staff` (NAME); bad name → 400 service_not_found/staff_not_found (lists valid names); ambiguous → 400 ambiguous_match; a `staff` filter returns ONLY that staff's slots; unqualified staff+service → 409 staff_service_mismatch (never empty). Each slot carries staff_name + available_staff [{id,name}]. E-3: the response also carries `free_blocks` (contiguous free ranges, per day+staff, with read-aloud labels), `has_availability` ({day:bool} per requested day), and `?compact=true` trims each slot to {day,start_label,end_label,time,staff_name}. A conversational caller should use compact=true + free_blocks."
       parameters:
         - { $ref: "#/components/parameters/WorkflowRef" }
         - { name: site_id, in: query, required: true, schema: { type: string, format: uuid } }
@@ -269,11 +269,12 @@ paths:
         - { name: staff, in: query, required: false, description: "Staff NAME (case/accent-insensitive) — alternative to staff_id.", schema: { type: string } }
         - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
         - { name: to, in: query, required: true, schema: { type: string, format: date-time }, description: "Window; max 45 days from `from`." }
+        - { name: compact, in: query, required: false, description: "E-3: trim each slot to {day,start_label,end_label,time,staff_name}. free_blocks + has_availability are unchanged.", schema: { type: boolean } }
         - { $ref: "#/components/parameters/Tz" }
         - { $ref: "#/components/parameters/Locale" }
       responses:
         "200":
-          description: OK
+          description: "OK. `slots` is the full Slot shape by default, or the compact shape when `compact=true`. `free_blocks` + `has_availability` are always present (E-3)."
           content:
             application/json:
               schema:
@@ -285,7 +286,28 @@ paths:
                       id: { type: string, format: uuid }
                       timezone: { type: string, description: The site's own IANA timezone. }
                       timezone_used: { type: string, description: "The tz the *_local/*_label fields were formatted in (differs from `timezone` only when `tz` was passed)." }
-                  slots: { type: array, items: { $ref: "#/components/schemas/Slot" } }
+                  has_availability:
+                    type: object
+                    additionalProperties: { type: boolean }
+                    description: "E-3: { 'YYYY-MM-DD': true|false } for each requested local day."
+                  free_blocks:
+                    type: array
+                    description: "E-3: contiguous free runs collapsed per day+staff, labels ready to read aloud."
+                    items:
+                      type: object
+                      properties:
+                        day: { type: string }
+                        date_label: { type: string }
+                        staff_name: { type: [string, "null"] }
+                        from_label: { type: string, description: "start of the first slot in the run" }
+                        to_label: { type: string, description: "END of the last slot in the run" }
+                        first_start_at: { type: string, format: date-time }
+                        first_start_local: { type: string }
+                        first_time: { type: string, description: "24h HH:MM of the first slot" }
+                  slots:
+                    type: array
+                    description: "Full Slot (default) OR the compact shape {day,start_label,end_label,time,staff_name} when compact=true."
+                    items: { $ref: "#/components/schemas/Slot" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }

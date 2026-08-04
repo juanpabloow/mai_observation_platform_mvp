@@ -24,6 +24,9 @@ export interface AppointmentView {
   startAt: string; // ISO
   endAt: string; // ISO
   status: AppointmentStatus;
+  /** The appointment's SITE timezone — so a machine caller can label start_at locally
+   *  (an appointment happens at a physical place). */
+  siteTimezone: string;
 }
 
 export interface TaskView {

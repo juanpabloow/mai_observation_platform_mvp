@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { authenticateCrm, crmError, loadMachineContact } from "@/lib/crmApi";
+import { resolveLabelParams } from "@/lib/schedulingApi";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { getContactById } from "@worker/db/repositories/contacts.js";
 import { createTag, attachTag, listTags } from "@worker/db/repositories/contactTags.js";
@@ -18,6 +19,8 @@ const Body = z.object({ tag: z.string().trim().min(1).max(64) }).strict();
 export async function POST(req: Request, { params }: { params: Promise<{ contactId: string }> }): Promise<Response> {
   const auth = await authenticateCrm(req, "crm.write");
   if (!auth.ok) return auth.response;
+  const labels = resolveLabelParams(req);
+  if (!labels.ok) return labels.response;
   const { tenantId, clientId } = auth.auth;
   const { contactId } = await params;
   if (!isUuid(contactId)) return crmError(400, "invalid_request", "contact id must be a valid UUID.");
@@ -49,6 +52,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ contact
   const att = await attachTag({ tenantId, clientId, contactId, tagId, actorUserId: null, actorKind: "automation" });
   if (!att.ok) return crmError(404, "contact_not_found", "No contact with that id exists for this client. Call GET /api/crm/v1/contacts/lookup or POST /api/crm/v1/contacts/upsert to resolve one.");
 
-  const contact = await loadMachineContact(tenantId, clientId, contactId);
+  const contact = await loadMachineContact(tenantId, clientId, contactId, { tzOverride: labels.tzOverride, locale: labels.locale });
   return Response.json({ contact });
 }

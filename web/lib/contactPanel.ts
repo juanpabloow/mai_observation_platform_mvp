@@ -39,6 +39,7 @@ export function toAppointmentView(a: AppointmentListItem): AppointmentView {
     startAt: a.start_at.toISOString(),
     endAt: a.service_end_at.toISOString(),
     status: a.status,
+    siteTimezone: a.site_timezone,
   };
 }
 

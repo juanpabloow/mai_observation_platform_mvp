@@ -1,4 +1,5 @@
 import { authenticateCrm, crmError, loadMachineContact } from "@/lib/crmApi";
+import { resolveLabelParams } from "@/lib/schedulingApi";
 import { findContactIdsByIdentity } from "@worker/db/repositories/contactIdentities.js";
 
 /**
@@ -13,6 +14,8 @@ export const dynamic = "force-dynamic";
 export async function GET(req: Request): Promise<Response> {
   const auth = await authenticateCrm(req, "crm.read");
   if (!auth.ok) return auth.response;
+  const labels = resolveLabelParams(req);
+  if (!labels.ok) return labels.response;
 
   const p = new URL(req.url).searchParams;
   const phone = p.get("phone") ?? undefined;
@@ -27,7 +30,7 @@ export async function GET(req: Request): Promise<Response> {
   );
   if (ids.length === 0) return crmError(404, "contact_not_found", "No contact matches that identity. Call POST /api/crm/v1/contacts/upsert to create one, or check the phone/email/external id.");
 
-  const contact = await loadMachineContact(auth.auth.tenantId, auth.auth.clientId, ids[0]);
+  const contact = await loadMachineContact(auth.auth.tenantId, auth.auth.clientId, ids[0], { tzOverride: labels.tzOverride, locale: labels.locale });
   if (!contact) return crmError(404, "contact_not_found", "No contact matches that identity. Call POST /api/crm/v1/contacts/upsert to create one, or check the phone/email/external id.");
   return Response.json({ contact });
 }

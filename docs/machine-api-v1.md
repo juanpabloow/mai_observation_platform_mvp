@@ -279,6 +279,42 @@ GET /api/scheduling/v1/services?site_id=e5793e2a-…&featured=true
         # …but with NONE marked featured, the same call returns all three (never []).
 ```
 
+### 1.12 Readable availability (E-3, additive)
+
+A one-day, one-staff availability response can be 26 slots × ~10 fields — mostly redundant
+for a caller that only needs to know what is free, and the extra surface invites
+hallucination (an agent claimed 11:00 was free when the slot list skipped it). Three
+additive aids move the grouping into the engine, where it is deterministic:
+
+- **`free_blocks`** — contiguous runs of free slots collapsed into ranges, per day + staff,
+  with read-aloud labels. A run breaks wherever a slot in between is taken; `to_label` is the
+  END of the last slot in the run (60-min slots starting 9:00…10:00 end at 11:00).
+- **`has_availability`** — `{ "<day>": true|false }` for each requested local day, so a
+  caller answers "¿hay cupo mañana?" by indexing, not by scanning the slot array.
+- **`?compact=true`** — trims each slot to the fields needed to choose + book
+  (`day`, `start_label`, `end_label`, `time` (24h HH:MM), `staff_name`), dropping
+  `candidates`, `available_staff_ids`, `start_at`/`service_end_at`/`start_local`/`end_local`.
+  The FULL slot shape is the default (existing callers unaffected). A conversational caller
+  should use `compact=true` **plus** `free_blocks`.
+
+Executed — a day with an 11:00–12:00 appointment (`Coneja`, 60-min service, 15-min grid):
+
+```
+GET /api/scheduling/v1/availability?site_id=…&service=Corte&staff=Coneja&from=…&to=…&compact=true
+→ 200 {
+  "site": { "id":"…","timezone":"America/Bogota","timezone_used":"America/Bogota" },
+  "has_availability": { "2026-08-05": true },
+  "free_blocks": [
+    { "day":"2026-08-05","date_label":"miércoles, 5 de agosto","staff_name":"Coneja",
+      "from_label":"9:00 a. m.","to_label":"11:00 a. m.",
+      "first_start_at":"2026-08-05T14:00:00.000Z","first_start_local":"2026-08-05T09:00:00-05:00","first_time":"09:00" },
+    { "day":"2026-08-05","date_label":"miércoles, 5 de agosto","staff_name":"Coneja",
+      "from_label":"12:00 p. m.","to_label":"6:00 p. m.", "first_time":"12:00", … }
+  ],
+  "slots": [ { "day":"2026-08-05","start_label":"9:00 a. m.","end_label":"10:00 a. m.","time":"09:00","staff_name":"Coneja" }, … ]
+}
+```
+
 ---
 
 ## 2. The three families
@@ -325,10 +361,26 @@ channel; identities are `phone` / `email` / `external`.
   "consent": "unknown|opted_in|opted_out", "custom_fields": { },
   "identities": [ { "kind": "phone|email|external", "value": "…", "label": "…|null" } ],
   "tags": [ "…" ],
-  "next_appointment": { "id","public_reference","service_name","staff_name","start_at","status" } | null,
-  "recent_notes": [ { "id", "body", "author": "user|automation|system", "created_at" } ]
+  "next_appointment": {
+    "id","public_reference","service_name","staff_name","status",
+    "start_at": "2026-08-05T16:00:00.000Z",          // canonical UTC
+    "start_local": "2026-08-05T11:00:00-05:00",       // E-3: local labels (site tz unless ?tz)
+    "start_label": "11:00 a. m.", "date_label": "miércoles, 5 de agosto", "day": "2026-08-05"
+  } | null,
+  "recent_notes": [ {
+    "id", "body", "author": "user|automation|system",
+    "created_at": "…Z", "created_at_local": "…-05:00", "created_at_label": "martes, 4 de agosto, 5:24 p. m."
+  } ]
 }
 ```
+**Timestamp rule (E-3): no machine-API response exposes a timestamp without a local label
+beside it** — a raw UTC value alone is a trap for an LLM consumer (an agent read a
+`16:00Z` next_appointment and told the customer "4:00 p. m." instead of 11:00 a. m.). Every
+`*_at` gets `*_local` (offset-ISO) + a spoken `*_label`, formatted with the SAME C-6 helper.
+`next_appointment` uses the appointment's SITE timezone; site-less timestamps (notes) use
+the client's site timezone. Both routes honor `?tz` / `?locale` to override. (The sole
+exception is the handoff `mode` endpoint's `as_of`, a control-plane "evaluated-at now"
+marker that is never read to a customer.)
 `is_customer` / `visits` / `no_shows` / `next_appointment` are **derived** from the
 contact's appointments (never stored). Every write records the `crm_activity_events` audit
 fact C-3 defines, attributed to the **automation** — so the record's timeline shows

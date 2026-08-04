@@ -1,21 +1,28 @@
 import { authenticateScheduling, parseIsoDate, resolveLabelParams, resolveOwnedSite, schedulingError } from "@/lib/schedulingApi";
 import { resolveServiceParam, resolveStaffParam } from "@/lib/semanticParams";
-import { localTimeFields } from "@/lib/localTime";
+import { computeFreeBlocks, computeHasAvailability } from "@/lib/availabilityView";
+import { localClock24, localDay, localTimeFields } from "@/lib/localTime";
 import { loadAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
 import { listStaff, listStaffForService } from "@worker/db/repositories/scheduling/staff.js";
 import { getServiceById } from "@worker/db/repositories/scheduling/services.js";
+import { localDatesInRange } from "@worker/scheduling/timezone.js";
 
 /**
- * GET /api/scheduling/v1/availability?site_id=&(service_id|service)=&(staff_id|staff)?=&from=&to=
+ * GET /api/scheduling/v1/availability?site_id=&(service_id|service)=&(staff_id|staff)?=&from=&to=[&compact=true]
  *
  * Real availability from the shared engine (identical rules to the public page).
  * The service may be given by `service_id` (UUID) OR `service` (NAME); staff optionally by
  * `staff_id` OR `staff` (NAME) — an LLM transcribes a name far more reliably than a UUID.
  * A `staff` filter returns ONLY that staff's slots (the engine does the set membership, not
- * the agent). Each slot additionally carries `staff_name` and `available_staff` [{id,name}]
- * so an agent can say "5:00 p.m. with Padre G" without mapping ids. When staff is omitted,
- * slots across all qualified staff are returned. The window [from,to] is capped to the
- * site's booking horizon by the engine.
+ * the agent). Each slot additionally carries `staff_name` and `available_staff` [{id,name}].
+ *
+ * E-3 readability (reduce hallucination surface): the response also carries `free_blocks`
+ * (contiguous free runs collapsed into ranges with read-aloud labels, per day + staff) and
+ * `has_availability` ({day: bool} for each requested day). `?compact=true` trims each slot
+ * to the fields a caller needs to choose + book (day, start_label, end_label, time,
+ * staff_name); the full slot shape is the DEFAULT so existing callers are unaffected. A
+ * conversational caller should use compact=true + free_blocks. When staff is omitted, slots
+ * across all qualified staff are returned. The window [from,to] is capped by the engine.
  */
 export const dynamic = "force-dynamic";
 
@@ -84,24 +91,52 @@ export async function GET(req: Request): Promise<Response> {
 
   // Label timezone: the ?tz override, else the site's own timezone (the physical place).
   const tz = labels.tzOverride ?? result.site.timezone;
+  const compact = new URL(req.url).searchParams.get("compact") === "true";
+
+  // E-3 §2a: collapse free slots into read-aloud ranges (per day + staff), server-side.
+  const freeBlocks = computeFreeBlocks(
+    result.slots.map((s) => ({ start_at: s.start_at, service_end_at: s.service_end_at, staff_id: s.staff_id, staff_name: nameById.get(s.staff_id) ?? null })),
+    tz,
+    labels.locale,
+    owned.site.scheduling_config.slot_interval_min * 60_000,
+  );
+  // E-3 §2c: yes/no per requested local day, so a caller answers "¿hay cupo mañana?" by index.
+  const requestedDays = localDatesInRange(from, to, tz).map((d) => `${d.year}-${String(d.month).padStart(2, "0")}-${String(d.day).padStart(2, "0")}`);
+  const hasAvailability = computeHasAvailability(requestedDays, result.slots.map((s) => localDay(s.start_at, tz)));
+
+  // E-3 §2b: compact trims each slot to what a conversational caller needs to choose + book.
+  const slots = result.slots.map((s) =>
+    compact
+      ? {
+          day: localDay(s.start_at, tz),
+          start_label: localTimeFields(s.start_at, s.service_end_at, tz, labels.locale).start_label,
+          end_label: localTimeFields(s.start_at, s.service_end_at, tz, labels.locale).end_label,
+          time: localClock24(s.start_at, tz),
+          staff_name: nameById.get(s.staff_id) ?? null,
+        }
+      : {
+          start_at: s.start_at,
+          service_end_at: s.service_end_at,
+          ...localTimeFields(s.start_at, s.service_end_at, tz, labels.locale),
+          staff_id: s.staff_id,
+          // Additive (E-1 addendum): names so an agent can say "with Padre G" without mapping
+          // ids. The id fields above are unchanged for programmatic callers.
+          staff_name: nameById.get(s.staff_id) ?? null,
+          available_staff_ids: s.available_staff_ids,
+          available_staff: s.available_staff_ids.map((id) => ({ id, name: nameById.get(id) ?? null })),
+          candidates: s.candidates,
+        },
+  );
+
   return Response.json({
     // `timezone` is the site's own tz; `timezone_used` is what the *_label/*_local fields
     // were formatted in (differs only when ?tz was passed).
     site: { id: result.site.id, timezone: result.site.timezone, timezone_used: tz },
+    has_availability: hasAvailability,
+    free_blocks: freeBlocks,
     // start_at/service_end_at stay UTC (pass start_at back verbatim to book); the *_local
     // and *_label fields are display-only. Duration can differ per staff, so the window is
     // carried per slot rather than a single value.
-    slots: result.slots.map((s) => ({
-      start_at: s.start_at,
-      service_end_at: s.service_end_at,
-      ...localTimeFields(s.start_at, s.service_end_at, tz, labels.locale),
-      staff_id: s.staff_id,
-      // Additive (E-1 addendum): names so an agent can say "with Padre G" without mapping
-      // ids. The id fields above are unchanged for programmatic callers.
-      staff_name: nameById.get(s.staff_id) ?? null,
-      available_staff_ids: s.available_staff_ids,
-      available_staff: s.available_staff_ids.map((id) => ({ id, name: nameById.get(id) ?? null })),
-      candidates: s.candidates,
-    })),
+    slots,
   });
 }

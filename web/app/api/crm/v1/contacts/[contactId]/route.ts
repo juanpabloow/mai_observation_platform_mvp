@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { authenticateCrm, crmError, loadMachineContact, applyConsentAsAutomation, recordAutomationActivity } from "@/lib/crmApi";
+import { resolveLabelParams } from "@/lib/schedulingApi";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { getContactById, updateContact } from "@worker/db/repositories/contacts.js";
 import { listFieldDefinitions, validateCustomFieldValues } from "@worker/db/repositories/clientFieldDefinitions.js";
@@ -29,8 +30,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ contactI
   if (!auth.ok) return auth.response;
   const { contactId } = await params;
   if (!isUuid(contactId)) return crmError(400, "invalid_request", "contact id must be a valid UUID.");
+  const labels = resolveLabelParams(req);
+  if (!labels.ok) return labels.response;
 
-  const contact = await loadMachineContact(auth.auth.tenantId, auth.auth.clientId, contactId);
+  const contact = await loadMachineContact(auth.auth.tenantId, auth.auth.clientId, contactId, { tzOverride: labels.tzOverride, locale: labels.locale });
   if (!contact) return crmError(404, "contact_not_found", "No contact with that id exists for this client. Call GET /api/crm/v1/contacts/lookup or POST /api/crm/v1/contacts/upsert to resolve one.");
   return Response.json({ contact });
 }
@@ -41,6 +44,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ contac
   const { tenantId, clientId } = auth.auth;
   const { contactId } = await params;
   if (!isUuid(contactId)) return crmError(400, "invalid_request", "contact id must be a valid UUID.");
+  const labels = resolveLabelParams(req);
+  if (!labels.ok) return labels.response;
 
   let raw: unknown;
   try {
@@ -82,6 +87,6 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ contac
     await applyConsentAsAutomation(tenantId, clientId, contactId, body.consent, "api");
   }
 
-  const contact = await loadMachineContact(tenantId, clientId, contactId);
+  const contact = await loadMachineContact(tenantId, clientId, contactId, { tzOverride: labels.tzOverride, locale: labels.locale });
   return Response.json({ contact });
 }

@@ -1,4 +1,5 @@
 import { authenticateCrm, crmError, loadMachineContact } from "@/lib/crmApi";
+import { resolveLabelParams } from "@/lib/schedulingApi";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { getContactById } from "@worker/db/repositories/contacts.js";
 import { detachTag, listTags } from "@worker/db/repositories/contactTags.js";
@@ -15,6 +16,8 @@ export const dynamic = "force-dynamic";
 export async function DELETE(req: Request, { params }: { params: Promise<{ contactId: string; tag: string }> }): Promise<Response> {
   const auth = await authenticateCrm(req, "crm.write");
   if (!auth.ok) return auth.response;
+  const labels = resolveLabelParams(req);
+  if (!labels.ok) return labels.response;
   const { tenantId, clientId } = auth.auth;
   const { contactId, tag } = await params;
   if (!isUuid(contactId)) return crmError(400, "invalid_request", "contact id must be a valid UUID.");
@@ -27,6 +30,6 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ conta
     await detachTag({ tenantId, clientId, contactId, tagId: found.id, actorUserId: null, actorKind: "automation" });
   }
 
-  const contact = await loadMachineContact(tenantId, clientId, contactId);
+  const contact = await loadMachineContact(tenantId, clientId, contactId, { tzOverride: labels.tzOverride, locale: labels.locale });
   return Response.json({ contact });
 }
