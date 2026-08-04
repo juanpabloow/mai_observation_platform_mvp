@@ -158,6 +158,45 @@ export interface MachineContact {
 
 const RECENT_NOTES = 5;
 
+/** E-4 compact contact for a conversational caller (`?compact=true`): drop the fields an
+ *  agent never reads — owner_user_id, next_appointment.public_reference + its raw UTC pair,
+ *  identity labels, and note created_at + created_at_local (keep the spoken label). The full
+ *  shape stays the default. */
+export interface CompactContact {
+  id: string;
+  name: string | null;
+  stage: string;
+  is_customer: boolean;
+  visits: number;
+  no_shows: number;
+  consent: string;
+  custom_fields: Record<string, unknown>;
+  identities: Array<{ kind: string; value: string }>;
+  tags: string[];
+  next_appointment: { id: string; service_name: string; staff_name: string | null; start_label: string; date_label: string; day: string; status: string } | null;
+  recent_notes: Array<{ id: string; body: string; author: "user" | "automation" | "system"; created_at_label: string }>;
+}
+
+export function toCompactContact(c: MachineContact): CompactContact {
+  const n = c.next_appointment;
+  return {
+    id: c.id,
+    name: c.name,
+    stage: c.stage,
+    is_customer: c.is_customer,
+    visits: c.visits,
+    no_shows: c.no_shows,
+    consent: c.consent,
+    custom_fields: c.custom_fields,
+    identities: c.identities.map((i) => ({ kind: i.kind, value: i.value })),
+    tags: c.tags,
+    next_appointment: n
+      ? { id: n.id, service_name: n.service_name, staff_name: n.staff_name, start_label: n.start_label, date_label: n.date_label, day: n.day, status: n.status }
+      : null,
+    recent_notes: c.recent_notes.map((r) => ({ id: r.id, body: r.body, author: r.author, created_at_label: r.created_at_label })),
+  };
+}
+
 /** Optional presentation controls for a machine contact response (mirrors the scheduling
  *  routes' `tz`/`locale`). tz defaults to the appointment's / client's site timezone. */
 export interface ContactLabelOpts {

@@ -270,7 +270,8 @@ with nothing to offer because the operator hasn't configured anything yet. Execu
 
 ```
 GET /api/scheduling/v1/services?site_id=e5793e2a-…
-→ 200  { "services": [ { "id":"…","name":"Color","featured":true, … },      # featured first
+→ 200  { "services": [ { "id":"…","name":"Color","featured":true,
+                          "price":"120000.00","price_label":"$120.000", … },   # featured first; E-4 price_label
                         { "id":"…","name":"Barba","featured":false, … },
                         { "id":"…","name":"Corte","featured":false, … } ] }
 
@@ -315,6 +316,32 @@ GET /api/scheduling/v1/availability?site_id=…&service=Corte&staff=Coneja&from=
 }
 ```
 
+### 1.13 Compact responses + labels for conversational callers (E-4, additive)
+
+The SAFE trims from the output catalog (`docs/machine-api-output-catalog.md`). All additive —
+the full shapes are unchanged, so programmatic callers are unaffected.
+
+- **`?compact=true` on the appointments list** (`GET /api/scheduling/v1/appointments`) — each
+  row trimmed to `id, status, service_name, staff_name, day, date_label, start_label,
+  end_label, time, contact{name}`. Measured ~4 621 B → ~1 273 B (−74 %) for 5 rows.
+- **`staff_name` on EVERY appointment object** (list, create, cancel, reschedule, confirm,
+  complete, no-show) — so an agent says "con Ana" without mapping a UUID. Resolved in one
+  lookup per response (the list gets it from its join).
+- **`?compact=true` on the CRM contact summary** (`GET /contacts/{id}` and `/lookup`) — keeps
+  id, name, stage, is_customer, visits, no_shows, consent, identities (kind+value), tags,
+  custom_fields, and a labeled compact `next_appointment`; drops `owner_user_id`,
+  `next_appointment.public_reference`, the raw `created_at`/`created_at_local` note pair, and
+  identity labels. Measured ~1 266 B → ~795 B (−40 %).
+- **`price_label` on service objects** (`GET /services`) — Colombian format from the raw
+  `price` (`"35000.00"` → `"$35.000"`; cents kept as `"$2.500,50"`); raw `price` unchanged.
+
+**Guidance for a conversational (LLM) caller:** **send `compact=true`** on availability,
+appointments and contact reads; on availability **read `free_blocks` first** (it is the
+PRIMARY availability surface — the ranges to offer aloud), falling back to the compact slots
+only to pin an exact booking time; and **resolve by name and day+time, never by UUID**
+(service/staff by name, appointments by `phone`+`current_day`+`current_time` via the
+`by-time` path). UUIDs remain for programmatic callers.
+
 ---
 
 ## 2. The three families
@@ -354,6 +381,10 @@ Fully specified here (no other document). **Channel-blind**: no field or code na
 channel; identities are `phone` / `email` / `external`.
 
 #### The contact summary (returned by lookup, GET, upsert, PATCH, tag writes)
+`GET /contacts/{id}` and `/lookup` accept **`?compact=true`** for a conversational caller —
+the leaner shape in §1.13 (drops `owner_user_id`, `next_appointment.public_reference`, the raw
+note `created_at` pair, identity labels; keeps the spoken labels). The full shape below is the
+default.
 ```json
 {
   "id": "…", "name": "…|null", "stage": "new|active|customer|archived",

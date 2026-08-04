@@ -1,7 +1,5 @@
-import { appointmentErrorResponse, authenticateScheduling, projectAppointment, resolveLabelParams } from "@/lib/schedulingApi";
+import { appointmentErrorResponse, authenticateScheduling, projectSingleAppointment, resolveLabelParams } from "@/lib/schedulingApi";
 import { resolveAppointmentTarget } from "@/lib/semanticParams";
-import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
-import { getContactCardById } from "@worker/db/repositories/contactIdentities.js";
 import { transitionStatus } from "@worker/scheduling/booking.js";
 
 /**
@@ -42,7 +40,5 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     scopeClientId: auth.auth.clientId,
   });
   if (!result.ok) return appointmentErrorResponse(result);
-  const tz = labels.tzOverride ?? (await getSiteById(auth.auth.tenantId, result.value.site_id))?.timezone ?? "UTC";
-  const contact = result.value.contact_id ? await getContactCardById(auth.auth.tenantId, auth.auth.clientId, result.value.contact_id) : null;
-  return Response.json({ appointment: projectAppointment(result.value, tz, labels.locale, contact) });
+  return Response.json({ appointment: await projectSingleAppointment(auth.auth, result.value, labels) });
 }

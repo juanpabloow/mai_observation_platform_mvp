@@ -1,4 +1,5 @@
 import { authenticateScheduling, resolveOwnedSite, schedulingError } from "@/lib/schedulingApi";
+import { priceLabelCOP } from "@/lib/money";
 import { listServicesForSite } from "@worker/db/repositories/scheduling/services.js";
 
 /**
@@ -35,6 +36,8 @@ export async function GET(req: Request): Promise<Response> {
       description: s.description,
       duration_min: s.effective_duration_min,
       price: s.effective_price,
+      // E-4 additive: a canonical Colombian money label so an agent quotes it consistently.
+      price_label: priceLabelCOP(s.effective_price),
       buffer_before_min: s.buffer_before_min,
       buffer_after_min: s.buffer_after_min,
       featured: s.featured,

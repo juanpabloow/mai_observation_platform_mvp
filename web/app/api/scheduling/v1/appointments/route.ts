@@ -5,17 +5,18 @@ import {
   createErrorResponse,
   parseIsoDate,
   projectAppointment,
+  projectSingleAppointment,
   resolveLabelParams,
   resolveOwnedSite,
   schedulingError,
 } from "@/lib/schedulingApi";
 import { nearestTimesHint, resolveServiceParam, resolveStaffParam, resolveStartParam } from "@/lib/semanticParams";
+import { dateLabel, localClock24, localDay, timeLabel } from "@/lib/localTime";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { createAppointment } from "@worker/scheduling/booking.js";
 import { listAppointments, type AppointmentStatus } from "@worker/db/repositories/scheduling/appointments.js";
-import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
 import { staffBelongsToClient } from "@worker/db/repositories/scheduling/staff.js";
-import { getContactCardById, findContactIdsByIdentity, contactBelongsToClient } from "@worker/db/repositories/contactIdentities.js";
+import { findContactIdsByIdentity, contactBelongsToClient } from "@worker/db/repositories/contactIdentities.js";
 
 /**
  * /api/scheduling/v1/appointments
@@ -46,7 +47,7 @@ const STATUSES = ["scheduled", "confirmed", "completed", "cancelled", "no_show"]
 // or unsupported param like `?phone` on an old build must be LOUD, never ignored).
 const ALLOWED_PARAMS = new Set([
   "status", "active", "from", "to", "site_id", "staff_id", "contact_id",
-  "conversation_id", "phone", "email", "external_id", "tz", "locale",
+  "conversation_id", "phone", "email", "external_id", "tz", "locale", "compact",
 ]);
 
 export async function GET(req: Request): Promise<Response> {
@@ -169,15 +170,27 @@ export async function GET(req: Request): Promise<Response> {
   });
   // Per-row timezone (the list can span sites): the ?tz override, else each row's site tz.
   // Contact card comes from the row's join (contact_id is NULL for walk-ins / foreign).
+  // staff_name (E-4) is already on the row from the list query — no per-row lookup.
+  const compact = p.get("compact") === "true";
   return Response.json({
-    appointments: rows.map((r) =>
-      projectAppointment(
-        r,
-        labels.tzOverride ?? r.site_timezone,
-        labels.locale,
-        r.contact_id ? { id: r.contact_id, name: r.contact_name, primary_identity: r.primary_identity } : null,
-      ),
-    ),
+    appointments: rows.map((r) => {
+      const tz = labels.tzOverride ?? r.site_timezone;
+      const contact = r.contact_id ? { id: r.contact_id, name: r.contact_name, primary_identity: r.primary_identity } : null;
+      if (!compact) return projectAppointment(r, tz, labels.locale, contact, r.staff_name);
+      // E-4 compact: only what a conversational caller needs to read + act on.
+      return {
+        id: r.id,
+        status: r.status,
+        service_name: r.service_name_snapshot,
+        staff_name: r.staff_name,
+        day: localDay(r.start_at, tz),
+        date_label: dateLabel(r.start_at, tz, labels.locale),
+        start_label: timeLabel(r.start_at, tz, labels.locale),
+        end_label: timeLabel(r.service_end_at, tz, labels.locale),
+        time: localClock24(r.start_at, tz),
+        contact: contact ? { name: contact.name } : null,
+      };
+    }),
   });
 }
 
@@ -274,8 +287,7 @@ export async function POST(req: Request): Promise<Response> {
     }
     return createErrorResponse(result);
   }
-  // Label timezone: the ?tz override, else the appointment's site tz.
-  const tz = labels.tzOverride ?? (await getSiteById(auth.auth.tenantId, result.value.site_id))?.timezone ?? "UTC";
-  const contact = result.value.contact_id ? await getContactCardById(auth.auth.tenantId, auth.auth.clientId, result.value.contact_id) : null;
-  return Response.json({ appointment: projectAppointment(result.value, tz, labels.locale, contact) }, { status: result.deduped ? 200 : 201 });
+  // Site tz + contact card + staff_name (E-4) resolved together for the one row.
+  const appointment = await projectSingleAppointment(auth.auth, result.value, labels);
+  return Response.json({ appointment }, { status: result.deduped ? 200 : 201 });
 }

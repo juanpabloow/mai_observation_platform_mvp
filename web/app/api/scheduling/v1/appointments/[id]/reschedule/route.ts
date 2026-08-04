@@ -3,7 +3,7 @@ import {
   appointmentErrorResponse,
   authenticateScheduling,
   bookingErrorStatus,
-  projectAppointment,
+  projectSingleAppointment,
   resolveLabelParams,
   schedulingError,
 } from "@/lib/schedulingApi";
@@ -11,7 +11,6 @@ import { nearestTimesHint, resolveAppointmentTarget, resolveStaffParam, resolveS
 import { rescheduleAppointment } from "@worker/scheduling/booking.js";
 import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
 import { getAppointmentById } from "@worker/db/repositories/scheduling/appointments.js";
-import { getContactCardById } from "@worker/db/repositories/contactIdentities.js";
 
 /**
  * POST /api/scheduling/v1/appointments/{id}/reschedule — move an appointment to a new start
@@ -90,7 +89,5 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     }
     return appointmentErrorResponse(result);
   }
-  const tz = labels.tzOverride ?? siteTz;
-  const contact = result.value.contact_id ? await getContactCardById(auth.auth.tenantId, auth.auth.clientId, result.value.contact_id) : null;
-  return Response.json({ appointment: projectAppointment(result.value, tz, labels.locale, contact) });
+  return Response.json({ appointment: await projectSingleAppointment(auth.auth, result.value, labels) });
 }

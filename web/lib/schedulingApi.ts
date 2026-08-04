@@ -8,6 +8,8 @@ import type { BookingError } from "@worker/scheduling/booking.js";
 import { resolveMachineSchedulingScope } from "@worker/scheduling/machineScope.js";
 import { parseWorkflowRef } from "@worker/scheduling/workflowRef.js";
 import { getSiteById, type SiteRow } from "@worker/db/repositories/scheduling/sites.js";
+import { getStaffById } from "@worker/db/repositories/scheduling/staff.js";
+import { getContactCardById } from "@worker/db/repositories/contactIdentities.js";
 
 /**
  * Shared auth + scope for the n8n-facing scheduling API (app/api/scheduling/v1/*).
@@ -200,12 +202,15 @@ export function projectAppointment(
   tz: string,
   locale: string = DEFAULT_LABEL_LOCALE,
   contact: AppointmentContact | null = null,
+  staffName: string | null = null,
 ): Record<string, unknown> {
   return {
     id: a.id,
     public_reference: a.public_reference,
     site_id: a.site_id,
     staff_id: a.staff_id,
+    // E-4 additive: the staff NAME so an agent can say "con Ana" without mapping a UUID.
+    staff_name: staffName,
     service_id: a.service_id,
     contact_id: a.contact_id,
     contact,
@@ -222,6 +227,26 @@ export function projectAppointment(
     created_at: a.created_at,
     updated_at: a.updated_at,
   };
+}
+
+/**
+ * Project a SINGLE appointment returned by a mutation (create / cancel / confirm / complete /
+ * no-show / reschedule): resolves the site timezone, the contact card, and the staff NAME
+ * (E-4) in parallel — one lookup each for the one row, never N. Used by every
+ * single-appointment route so `staff_name` is present everywhere.
+ */
+export async function projectSingleAppointment(
+  auth: SchedulingAuth,
+  appt: AppointmentRow,
+  labels: { tzOverride: string | null; locale: string },
+): Promise<Record<string, unknown>> {
+  const [site, staff, contact] = await Promise.all([
+    getSiteById(auth.tenantId, appt.site_id),
+    getStaffById(auth.tenantId, appt.staff_id),
+    appt.contact_id ? getContactCardById(auth.tenantId, auth.clientId, appt.contact_id) : Promise.resolve(null),
+  ]);
+  const tz = labels.tzOverride ?? site?.timezone ?? "UTC";
+  return projectAppointment(appt, tz, labels.locale, contact, staff?.name ?? null);
 }
 
 /**

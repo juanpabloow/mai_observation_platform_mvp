@@ -157,18 +157,21 @@ test('appointments GET resolves identity filters through the C-2 spine (never tr
   assertContains(rel, 'clientId: auth.auth.clientId');
 });
 
-test('every appointment-returning route projects the contact identity (Task 2)', () => {
-  // The list builds the contact inline from its join; the single-appointment
-  // routes fetch it via getContactCardById. Either way projectAppointment gets it.
+test('every appointment-returning route projects the contact identity + staff_name (Task 2 / E-4)', () => {
+  // The list builds the contact inline from its join (and passes r.staff_name); the
+  // single-appointment routes go through projectSingleAppointment, which resolves the
+  // contact card AND the staff name in one lookup each. Either way the caller gets both.
   assertContains('appointments/route.ts', 'primary_identity');
   for (const rel of [
-    'appointments/route.ts', // POST (create)
     'appointments/[id]/cancel/route.ts',
     'appointments/[id]/confirm/route.ts',
     'appointments/[id]/complete/route.ts',
     'appointments/[id]/no-show/route.ts',
     'appointments/[id]/reschedule/route.ts',
   ]) {
-    assertContains(rel, 'getContactCardById(');
+    assertContains(rel, 'projectSingleAppointment(');
   }
+  // Create also uses it; the list passes the row's staff_name (no per-row lookup).
+  assertContains('appointments/route.ts', 'projectSingleAppointment(auth.auth, result.value');
+  assertContains('appointments/route.ts', 'r.staff_name');
 });

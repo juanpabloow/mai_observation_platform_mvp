@@ -123,6 +123,7 @@ components:
         public_reference: { type: string, format: uuid }
         site_id: { type: string, format: uuid }
         staff_id: { type: string, format: uuid }
+        staff_name: { type: [string, "null"], description: "E-4 additive: the staff name (so an agent needn't map staff_id)." }
         service_id: { type: string, format: uuid }
         contact_id: { type: [string, "null"], format: uuid }
         contact:
@@ -233,6 +234,7 @@ paths:
                         description: { type: [string, "null"] }
                         duration_min: { type: integer, description: effective (after any site override) }
                         price: { type: [string, "null"] }
+                        price_label: { type: [string, "null"], description: "E-4: Colombian money label from price, e.g. \"$35.000\"." }
                         buffer_before_min: { type: integer }
                         buffer_after_min: { type: integer }
                         featured: { type: boolean, description: "E-2: operator-chosen; featured services are listed first." }
@@ -323,10 +325,13 @@ paths:
         (`phone`/`email`/`external_id`) resolve to that contact's appointments; an
         identity matching nobody returns 0 rows (never the whole client) and excludes
         walk-ins. `status` accepts one-or-more values (comma-separated/repeated);
-        `active=true` is shorthand for scheduled+confirmed.
+        `active=true` is shorthand for scheduled+confirmed. E-4: every row carries
+        `staff_name`; `compact=true` trims each row to
+        {id,status,service_name,staff_name,day,date_label,start_label,end_label,time,contact{name}}.
       parameters:
         - { $ref: "#/components/parameters/WorkflowRef" }
         - { name: site_id, in: query, schema: { type: string, format: uuid } }
+        - { name: compact, in: query, description: "E-4: trim each row to the conversational fields.", schema: { type: boolean } }
         - { name: staff_id, in: query, schema: { type: string, format: uuid } }
         - name: status
           in: query

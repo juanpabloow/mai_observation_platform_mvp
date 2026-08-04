@@ -1,4 +1,4 @@
-import { authenticateCrm, crmError, loadMachineContact } from "@/lib/crmApi";
+import { authenticateCrm, crmError, loadMachineContact, toCompactContact } from "@/lib/crmApi";
 import { resolveLabelParams } from "@/lib/schedulingApi";
 import { findContactIdsByIdentity } from "@worker/db/repositories/contactIdentities.js";
 
@@ -32,5 +32,6 @@ export async function GET(req: Request): Promise<Response> {
 
   const contact = await loadMachineContact(auth.auth.tenantId, auth.auth.clientId, ids[0], { tzOverride: labels.tzOverride, locale: labels.locale });
   if (!contact) return crmError(404, "contact_not_found", "No contact matches that identity. Call POST /api/crm/v1/contacts/upsert to create one, or check the phone/email/external id.");
-  return Response.json({ contact });
+  const compact = p.get("compact") === "true";
+  return Response.json({ contact: compact ? toCompactContact(contact) : contact });
 }

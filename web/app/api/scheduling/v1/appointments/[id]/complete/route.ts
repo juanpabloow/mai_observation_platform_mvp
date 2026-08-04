@@ -1,6 +1,4 @@
-import { appointmentErrorResponse, authenticateScheduling, projectAppointment, resolveLabelParams, schedulingError } from "@/lib/schedulingApi";
-import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
-import { getContactCardById } from "@worker/db/repositories/contactIdentities.js";
+import { appointmentErrorResponse, authenticateScheduling, projectSingleAppointment, resolveLabelParams, schedulingError } from "@/lib/schedulingApi";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { transitionStatus } from "@worker/scheduling/booking.js";
 
@@ -16,7 +14,5 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!isUuid(id)) return schedulingError(400, "invalid_request", "appointment id must be a valid UUID.");
   const result = await transitionStatus("completed", { tenantId: auth.auth.tenantId, appointmentId: id, actorType: "n8n" , scopeClientId: auth.auth.clientId });
   if (!result.ok) return appointmentErrorResponse(result);
-  const tz = labels.tzOverride ?? (await getSiteById(auth.auth.tenantId, result.value.site_id))?.timezone ?? "UTC";
-  const contact = result.value.contact_id ? await getContactCardById(auth.auth.tenantId, auth.auth.clientId, result.value.contact_id) : null;
-  return Response.json({ appointment: projectAppointment(result.value, tz, labels.locale, contact) });
+  return Response.json({ appointment: await projectSingleAppointment(auth.auth, result.value, labels) });
 }

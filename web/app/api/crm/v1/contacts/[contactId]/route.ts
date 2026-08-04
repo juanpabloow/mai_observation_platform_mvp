@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { authenticateCrm, crmError, loadMachineContact, applyConsentAsAutomation, recordAutomationActivity } from "@/lib/crmApi";
+import { authenticateCrm, crmError, loadMachineContact, toCompactContact, applyConsentAsAutomation, recordAutomationActivity } from "@/lib/crmApi";
 import { resolveLabelParams } from "@/lib/schedulingApi";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { getContactById, updateContact } from "@worker/db/repositories/contacts.js";
@@ -35,7 +35,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ contactI
 
   const contact = await loadMachineContact(auth.auth.tenantId, auth.auth.clientId, contactId, { tzOverride: labels.tzOverride, locale: labels.locale });
   if (!contact) return crmError(404, "contact_not_found", "No contact with that id exists for this client. Call GET /api/crm/v1/contacts/lookup or POST /api/crm/v1/contacts/upsert to resolve one.");
-  return Response.json({ contact });
+  const compact = new URL(req.url).searchParams.get("compact") === "true";
+  return Response.json({ contact: compact ? toCompactContact(contact) : contact });
 }
 
 export async function PATCH(req: Request, { params }: { params: Promise<{ contactId: string }> }): Promise<Response> {
