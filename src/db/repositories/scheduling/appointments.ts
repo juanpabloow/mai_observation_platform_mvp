@@ -217,6 +217,11 @@ export interface ListAppointmentsFilters {
   staffId?: string;
   status?: AppointmentStatus | AppointmentStatus[];
   contactId?: string;
+  /** C-7: an identity-resolved set of contact ids. `a.contact_id = ANY(...)` — an
+   *  EMPTY array matches nothing (0 rows), so an identity that resolves to no
+   *  contact CANNOT widen to the whole client. NULL contact_id is excluded (a
+   *  `= ANY` never matches NULL), so identity-filtered lists never return walk-ins. */
+  contactIds?: string[];
   conversationId?: string;
   from?: Date;
   to?: Date;
@@ -230,6 +235,9 @@ export interface AppointmentListItem extends AppointmentRow {
    *  can span sites, so this can't be a single per-request value. */
   site_timezone: string;
   contact_name: string | null;
+  /** The contact's main phone-or-email (C-7 identification), from ONE lateral join —
+   *  never a per-row lookup. NULL for walk-ins / a contact with no phone/email. */
+  primary_identity: string | null;
 }
 
 /**
@@ -265,6 +273,9 @@ export async function listAppointments(
   if (filters.siteId) add((i) => `a.site_id = $${i}`, filters.siteId);
   if (filters.staffId) add((i) => `a.staff_id = $${i}`, filters.staffId);
   if (filters.contactId) add((i) => `a.contact_id = $${i}`, filters.contactId);
+  // Identity-resolved set: applied when the key is PRESENT (even if []), so an
+  // identity that matched no contact yields 0 rows instead of the whole client.
+  if (filters.contactIds !== undefined) add((i) => `a.contact_id = ANY($${i}::uuid[])`, filters.contactIds);
   if (filters.conversationId) add((i) => `a.source_conversation_id = $${i}`, filters.conversationId);
   if (filters.status) {
     const arr = Array.isArray(filters.status) ? filters.status : [filters.status];
@@ -283,7 +294,8 @@ export async function listAppointments(
             a.buffer_before_min_snapshot, a.buffer_after_min_snapshot,
             a.status, a.origin, a.created_by_type, a.created_by_user_id,
             a.idempotency_key, a.version, a.created_at, a.updated_at,
-            st.name AS staff_name, si.name AS site_name, si.timezone AS site_timezone, ct.name AS contact_name
+            st.name AS staff_name, si.name AS site_name, si.timezone AS site_timezone, ct.name AS contact_name,
+            pid.value AS primary_identity
        FROM appointments a
        JOIN sites si
          ON si.id = a.site_id AND si.tenant_id = a.tenant_id AND si.client_id = a.client_id
@@ -291,6 +303,14 @@ export async function listAppointments(
          ON st.id = a.staff_id AND st.tenant_id = a.tenant_id AND st.site_id = a.site_id
        LEFT JOIN contacts ct
          ON ct.id = a.contact_id AND ct.tenant_id = a.tenant_id AND ct.client_id = a.client_id
+       LEFT JOIN LATERAL (
+         SELECT ci.value
+           FROM contact_identities ci
+          WHERE ci.tenant_id = ct.tenant_id AND ci.client_id = ct.client_id AND ci.contact_id = ct.id
+            AND ci.kind IN ('phone', 'email')
+          ORDER BY (ci.kind = 'phone') DESC, ci.created_at ASC
+          LIMIT 1
+       ) pid ON true
        LEFT JOIN conversations sc
          ON sc.id = a.source_conversation_id
         AND sc.tenant_id = a.tenant_id

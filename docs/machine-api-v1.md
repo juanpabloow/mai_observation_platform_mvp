@@ -136,6 +136,37 @@ computed):
 This is an **additive** change under §1.1: no version bump, `start_at`/`service_end_at`
 are unchanged, and existing consumers keep working (they simply ignore the new fields).
 
+### 1.9 Contact identification + list filters (C-7, additive)
+
+**Contact object.** Every appointment object now carries a `contact` alongside the
+unchanged `contact_id`, so a human/agent can tell *whose* appointment it is without a
+second lookup:
+
+```json
+"contact": { "id": "0e40…", "name": "Camila Torres", "primary_identity": "+573001234567" } | null
+```
+
+`primary_identity` is the contact's main phone (else email). `contact` is `null` for a
+walk-in (no `contact_id`). Additive — `contact_id` is unchanged, no version bump.
+
+**`GET /api/scheduling/v1/appointments` filters.** The list is **always** scoped to the
+token's one client; filters only narrow within it. **A filter is never silently
+ignored** — an unrecognized or empty-valued param is a `400`, so a mistyped filter can
+never widen the result to the whole client:
+
+| param | meaning |
+|---|---|
+| `contact_id` | a single contact (UUID) |
+| `phone` / `email` / `external_id` | resolve an identity → that contact's appointments; an identity matching nobody returns **0 rows** (never the whole list) and excludes walk-ins |
+| `status` | one or more of `scheduled,confirmed,completed,cancelled,no_show` (comma-separated and/or repeated) |
+| `active=true` | convenience for `scheduled`+`confirmed` |
+| `site_id` / `staff_id` / `conversation_id` / `from` / `to` | as before |
+
+Error bodies: `400 unknown_parameter` (an unsupported param, named), `400
+empty_parameter` (a recognized param sent with an empty value, named), `400
+invalid_request` (an unknown `status` value, a non-`true/false` `active`, or a bad
+`from`/`to`). No identifying filter is *required* — a bare site/day listing stays valid.
+
 ---
 
 ## 2. The three families
@@ -331,7 +362,9 @@ POST /api/scheduling/v1/appointments   Idempotency-Key: book-key-1
 { "appointment": { "id": "19bddd34-…", "public_reference": "e4bbb506-…", "status": "scheduled",
                    "service_name": "Corte de cabello", "start_at": "2026-08-05T13:00:00.000Z",
                    "start_local": "2026-08-05T08:00:00-05:00", "start_label": "8:00 a. m.",
-                   "date_label": "miércoles, 5 de agosto", "day": "2026-08-05", … } }
+                   "date_label": "miércoles, 5 de agosto", "day": "2026-08-05",
+                   "contact_id": "0e40…",
+                   "contact": { "id": "0e40…", "name": "Camila Torres", "primary_identity": "+573001234567" }, … } }
 ```
 Round-trip verified live: the availability slot's `start_at` passed back verbatim books
 that exact instant, and the appointment's local fields match the slot's.

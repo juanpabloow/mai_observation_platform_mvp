@@ -129,3 +129,42 @@ test('staff/availability validate resource shape + membership before the engine'
   assertBefore('availability/route.ts', 'isServiceEnabledAtSite(', 'loadAvailability(');
   assertBefore('staff/route.ts', 'isServiceEnabledAtSite(', 'listStaffForService(');
 });
+
+// ── C-7 wiring guards (the handler can't run here; guard the source shapes) ──────
+
+test('appointments GET rejects unknown + empty params instead of silently dropping a filter', () => {
+  const rel = 'appointments/route.ts';
+  // The over-return bug: an unrecognized or empty-valued param used to widen the
+  // query to the whole client. Both must now be LOUD 400s.
+  assertContains(rel, 'unknown_parameter');
+  assertContains(rel, 'empty_parameter');
+  // The allowlist gate + the empty-value gate both run BEFORE listAppointments.
+  assertBefore(rel, 'unknown_parameter', 'listAppointments(');
+  assertBefore(rel, 'empty_parameter', 'listAppointments(');
+});
+
+test('appointments GET resolves identity filters through the C-2 spine (never trusts a raw filter)', () => {
+  const rel = 'appointments/route.ts';
+  // phone/email/external_id resolve to a contact-id SET; an empty set → 0 rows.
+  assertContains(rel, 'findContactIdsByIdentity(');
+  assertContains(rel, 'contactIds');
+  // resolution feeds the mandatory-client list (clientId is still forced).
+  assertBefore(rel, 'findContactIdsByIdentity(', 'listAppointments(');
+  assertContains(rel, 'clientId: auth.auth.clientId');
+});
+
+test('every appointment-returning route projects the contact identity (Task 2)', () => {
+  // The list builds the contact inline from its join; the single-appointment
+  // routes fetch it via getContactCardById. Either way projectAppointment gets it.
+  assertContains('appointments/route.ts', 'primary_identity');
+  for (const rel of [
+    'appointments/route.ts', // POST (create)
+    'appointments/[id]/cancel/route.ts',
+    'appointments/[id]/confirm/route.ts',
+    'appointments/[id]/complete/route.ts',
+    'appointments/[id]/no-show/route.ts',
+    'appointments/[id]/reschedule/route.ts',
+  ]) {
+    assertContains(rel, 'getContactCardById(');
+  }
+});

@@ -10,6 +10,7 @@ import {
 import { isUuid } from "@/lib/clientModuleValidation";
 import { rescheduleAppointment } from "@worker/scheduling/booking.js";
 import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
+import { getContactCardById } from "@worker/db/repositories/contactIdentities.js";
 
 /**
  * POST /api/scheduling/v1/appointments/{id}/reschedule — move an appointment to a
@@ -51,5 +52,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   });
   if (!result.ok) return schedulingError(bookingErrorStatus(result.error), result.error, result.message);
   const tz = labels.tzOverride ?? (await getSiteById(auth.auth.tenantId, result.value.site_id))?.timezone ?? "UTC";
-  return Response.json({ appointment: projectAppointment(result.value, tz, labels.locale) });
+  const contact = result.value.contact_id ? await getContactCardById(auth.auth.tenantId, auth.auth.clientId, result.value.contact_id) : null;
+  return Response.json({ appointment: projectAppointment(result.value, tz, labels.locale, contact) });
 }

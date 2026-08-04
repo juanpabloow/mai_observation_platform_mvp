@@ -125,8 +125,21 @@ export function bookingErrorStatus(error: BookingError): number {
  *
  * C-6 additive: `start_at`/`service_end_at` stay UTC (the canonical value to pass back
  * when booking); the *_local / *_label / date_label / day fields are display-only,
- * formatted in `tz` (the site's timezone unless a `tz` param overrode it) + `locale`. */
-export function projectAppointment(a: AppointmentRow, tz: string, locale: string = DEFAULT_LABEL_LOCALE): Record<string, unknown> {
+ * formatted in `tz` (the site's timezone unless a `tz` param overrode it) + `locale`.
+ *
+ * C-7 additive: `contact` = { id, name, primary_identity } | null so a human/agent can
+ * tell whose appointment it is (not just a UUID). `contact_id` is unchanged. */
+export interface AppointmentContact {
+  id: string;
+  name: string | null;
+  primary_identity: string | null;
+}
+export function projectAppointment(
+  a: AppointmentRow,
+  tz: string,
+  locale: string = DEFAULT_LABEL_LOCALE,
+  contact: AppointmentContact | null = null,
+): Record<string, unknown> {
   return {
     id: a.id,
     public_reference: a.public_reference,
@@ -134,6 +147,7 @@ export function projectAppointment(a: AppointmentRow, tz: string, locale: string
     staff_id: a.staff_id,
     service_id: a.service_id,
     contact_id: a.contact_id,
+    contact,
     source_conversation_id: a.source_conversation_id,
     start_at: a.start_at,
     service_end_at: a.service_end_at,

@@ -1,5 +1,6 @@
 import { authenticateScheduling, bookingErrorStatus, projectAppointment, resolveLabelParams, schedulingError } from "@/lib/schedulingApi";
 import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
+import { getContactCardById } from "@worker/db/repositories/contactIdentities.js";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { transitionStatus } from "@worker/scheduling/booking.js";
 
@@ -29,7 +30,8 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   });
   if (!result.ok) return schedulingError(bookingErrorStatus(result.error), result.error, result.message);
   const tz = labels.tzOverride ?? (await getSiteById(auth.auth.tenantId, result.value.site_id))?.timezone ?? "UTC";
-  return Response.json({ appointment: projectAppointment(result.value, tz, labels.locale) });
+  const contact = result.value.contact_id ? await getContactCardById(auth.auth.tenantId, auth.auth.clientId, result.value.contact_id) : null;
+  return Response.json({ appointment: projectAppointment(result.value, tz, labels.locale, contact) });
 }
 
 async function readReason(req: Request): Promise<string | null> {

@@ -116,6 +116,17 @@ components:
         staff_id: { type: string, format: uuid }
         service_id: { type: string, format: uuid }
         contact_id: { type: [string, "null"], format: uuid }
+        contact:
+          description: >
+            C-7 (additive): who the appointment is for. `null` for a walk-in.
+            `primary_identity` is the contact's main phone (else email).
+          oneOf:
+            - type: "null"
+            - type: object
+              properties:
+                id: { type: string, format: uuid }
+                name: { type: [string, "null"] }
+                primary_identity: { type: [string, "null"] }
         source_conversation_id: { type: [string, "null"], format: uuid }
         start_at: { type: string, format: date-time }
         service_end_at: { type: string, format: date-time }
@@ -132,8 +143,10 @@ components:
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
     BadRequest:
       description: >
-        Missing X-Workflow-Ref (`workflow_ref_required`), a missing/invalid query
-        parameter, or a malformed id (`invalid_request`).
+        Missing X-Workflow-Ref (`workflow_ref_required`); an unrecognized query
+        param (`unknown_parameter`) or one sent with an empty value
+        (`empty_parameter`); a malformed id, unknown status value, non-boolean
+        `active`, or bad `from`/`to` (`invalid_request`).
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
     Forbidden:
       description: >
@@ -230,19 +243,34 @@ paths:
   /appointments:
     get:
       summary: List appointments (safe filters; the resolved client only)
+      description: >
+        C-7: filters only NARROW within the token's one client. A filter is never
+        silently ignored — an unrecognized param → `400 unknown_parameter`; a
+        recognized param sent empty → `400 empty_parameter`. Identity filters
+        (`phone`/`email`/`external_id`) resolve to that contact's appointments; an
+        identity matching nobody returns 0 rows (never the whole client) and excludes
+        walk-ins. `status` accepts one-or-more values (comma-separated/repeated);
+        `active=true` is shorthand for scheduled+confirmed.
       parameters:
         - { $ref: "#/components/parameters/WorkflowRef" }
         - { name: site_id, in: query, schema: { type: string, format: uuid } }
         - { name: staff_id, in: query, schema: { type: string, format: uuid } }
-        - { name: status, in: query, schema: { type: string, enum: [scheduled, confirmed, completed, cancelled, no_show] } }
+        - name: status
+          in: query
+          description: One or more statuses, comma-separated and/or the param repeated.
+          schema: { type: array, items: { type: string, enum: [scheduled, confirmed, completed, cancelled, no_show] } }
+        - { name: active, in: query, description: "true → scheduled+confirmed (convenience).", schema: { type: boolean } }
         - { name: contact_id, in: query, schema: { type: string, format: uuid } }
+        - { name: phone, in: query, description: "Resolve via the identity spine → that contact's appointments.", schema: { type: string } }
+        - { name: email, in: query, description: "Resolve via the identity spine → that contact's appointments.", schema: { type: string } }
+        - { name: external_id, in: query, description: "Resolve via the identity spine → that contact's appointments.", schema: { type: string } }
         - { name: conversation_id, in: query, schema: { type: string, format: uuid } }
         - { name: from, in: query, schema: { type: string, format: date-time } }
         - { name: to, in: query, schema: { type: string, format: date-time } }
         - { $ref: "#/components/parameters/Tz" }
         - { $ref: "#/components/parameters/Locale" }
       responses:
-        "200": { description: "OK — { appointments: [Appointment] }, each with UTC + local fields (per-row site tz unless `tz` was passed)." }
+        "200": { description: "OK — { appointments: [Appointment] }, each with UTC + local fields (per-row site tz unless `tz` was passed) and a contact object." }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
