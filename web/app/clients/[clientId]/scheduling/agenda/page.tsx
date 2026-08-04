@@ -8,6 +8,7 @@ import { listServicesForSite } from "@worker/db/repositories/scheduling/services
 import { listAppointments } from "@worker/db/repositories/scheduling/appointments.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { utcToZonedParts, zonedPartsToUtc } from "@worker/scheduling/timezone.js";
+import { parseStatus, pickAllowedId } from "@/lib/schedulingFilters";
 import { AgendaView } from "@/components/scheduling/AgendaView";
 
 /**
@@ -23,7 +24,7 @@ export default async function ClientAgendaPage({
   searchParams,
 }: {
   params: Promise<{ clientId: string }>;
-  searchParams: Promise<{ site?: string; date?: string; from?: string }>;
+  searchParams: Promise<{ site?: string; date?: string; from?: string; staff?: string; service?: string; status?: string }>;
 }) {
   await connection();
   const { clientId } = await params;
@@ -67,12 +68,28 @@ export default async function ClientAgendaPage({
   const dayStart = zonedPartsToUtc(y, m, d, 0, 0, site.timezone);
   const dayEnd = zonedPartsToUtc(y, m, d + 1, 0, 0, site.timezone);
 
-  const [staff, services, appts, crmEnabled] = await Promise.all([
+  const [staff, services, crmEnabled] = await Promise.all([
     listStaff(tenantId, { siteId: site.id, clientId: client.id }),
     listServicesForSite(tenantId, site.id),
-    listAppointments(tenantId, { siteId: site.id, from: dayStart, to: dayEnd, clientId: client.id }),
     isClientModuleEnabled(tenantId, client.id, "crm"),
   ]);
+
+  // Validate the staff/service/status filters against THIS site's loaded, client-
+  // scoped sets — a foreign or forged id resolves to undefined (ignored), never a
+  // cross-client leak. All three persist in the query string.
+  const staffFilter = pickAllowedId(sp.staff, staff.map((s) => s.id));
+  const serviceFilter = pickAllowedId(sp.service, services.map((s) => s.id));
+  const statusFilter = parseStatus(sp.status);
+
+  const appts = await listAppointments(tenantId, {
+    siteId: site.id,
+    clientId: client.id,
+    from: dayStart,
+    to: dayEnd,
+    staffId: staffFilter,
+    serviceId: serviceFilter,
+    status: statusFilter ?? undefined,
+  });
 
   return (
     <AgendaView
@@ -89,6 +106,9 @@ export default async function ClientAgendaPage({
       currentSiteId={site.id}
       staff={staff.map((s) => ({ id: s.id, name: s.name }))}
       services={services.map((s) => ({ id: s.id, name: s.name, duration_min: s.effective_duration_min }))}
+      staffFilter={staffFilter ?? null}
+      serviceFilter={serviceFilter ?? null}
+      statusFilter={statusFilter ?? null}
       appointments={appts.map((a) => ({
         id: a.id,
         staff_id: a.staff_id,

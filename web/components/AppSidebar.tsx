@@ -429,16 +429,22 @@ export function AppSidebar({
       });
     }
     if (moduleKeys.includes("scheduling")) {
+      // Operational surfaces (Agenda, Team, Analytics) are visible to ANY user
+      // authorized for this client (owner/admin + the client's members). The active
+      // split is exact so /scheduling/staff and /scheduling/analytics don't light up
+      // Agenda (whose prefix /scheduling/ would otherwise match them).
       const scheduling: NavItem[] = [
         { key: "agenda", label: "Agenda", href: c("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(c("/scheduling/agenda")) },
+        { key: "team", label: "Team", href: c("/scheduling/staff"), icon: Icon.team, active: pathname.startsWith(c("/scheduling/staff")) },
+        { key: "scheduling-analytics", label: "Analytics", href: c("/scheduling/analytics"), icon: Icon.overview, active: pathname.startsWith(c("/scheduling/analytics")) },
       ];
-      // Scheduling settings (the per-client admin) — owner/admin only, and never for
-      // the DEFAULT client (it can't have scheduling). The module gate already
-      // ensured `scheduling` is enabled for this client.
+      // Settings (the per-client admin) — owner/admin only, and never for the DEFAULT
+      // client (it can't have scheduling). The module gate already ensured
+      // `scheduling` is enabled for this client.
       if (!isMember && clientId !== defaultClientId) {
         scheduling.push({
           key: "scheduling-settings",
-          label: "Scheduling settings",
+          label: "Settings",
           href: c("/scheduling/admin"),
           icon: Icon.schedulingAdmin,
           active: pathname.startsWith(c("/scheduling/admin")),
@@ -472,7 +478,9 @@ export function AppSidebar({
       items.push({ key: "contacts", label: "Contacts", href: m("/contacts"), icon: Icon.contacts, active: pathname.startsWith(m("/contacts")) });
     }
     if (memberModules.includes("scheduling")) {
-      items.push({ key: "agenda", label: "Agenda", href: m("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(m("/scheduling")) });
+      items.push({ key: "agenda", label: "Agenda", href: m("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(m("/scheduling/agenda")) });
+      items.push({ key: "team", label: "Team", href: m("/scheduling/staff"), icon: Icon.team, active: pathname.startsWith(m("/scheduling/staff")) });
+      items.push({ key: "scheduling-analytics", label: "Analytics", href: m("/scheduling/analytics"), icon: Icon.overview, active: pathname.startsWith(m("/scheduling/analytics")) });
     }
     sections = [{ label: "Client", items }];
   } else {

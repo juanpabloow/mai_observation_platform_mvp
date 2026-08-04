@@ -142,6 +142,60 @@ export async function seedSiteForClient(tenantId: string, clientId: string): Pro
   return { siteId, staffId: staff.rows[0].id, serviceId: svc.rows[0].id };
 }
 
+/**
+ * Insert an appointment row DIRECTLY (bypassing the booking orchestrator's
+ * availability checks) so analytics/operations tests can control status, date,
+ * staff, service, and price precisely. The interval columns are set from
+ * startAt + durationMin; give non-overlapping times per staff to avoid the
+ * anti-double-book exclusion constraint. contactId defaults to null (proving the
+ * agenda/analytics work without CRM). Returns the appointment id.
+ */
+export async function seedAppointment(
+  tenantId: string,
+  input: {
+    clientId: string;
+    siteId: string;
+    staffId: string;
+    serviceId: string;
+    startAt: Date;
+    durationMin?: number;
+    status?: 'scheduled' | 'confirmed' | 'completed' | 'cancelled' | 'no_show';
+    price?: number | null;
+    serviceName?: string;
+    contactId?: string | null;
+    origin?: 'public' | 'n8n' | 'internal' | 'walk_in';
+  },
+): Promise<string> {
+  const dur = input.durationMin ?? 30;
+  const end = new Date(input.startAt.getTime() + dur * 60_000);
+  const r = await query<{ id: string }>(
+    `INSERT INTO appointments (
+        tenant_id, client_id, site_id, contact_id, staff_id, service_id,
+        start_at, service_end_at, blocked_from, blocked_until,
+        service_name_snapshot, duration_min_snapshot, price_snapshot,
+        buffer_before_min_snapshot, buffer_after_min_snapshot,
+        status, origin, created_by_type)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$7,$8,$9,$10,$11,0,0,$12,$13,'system')
+      RETURNING id`,
+    [
+      tenantId,
+      input.clientId,
+      input.siteId,
+      input.contactId ?? null,
+      input.staffId,
+      input.serviceId,
+      input.startAt,
+      end,
+      input.serviceName ?? 'Haircut',
+      dur,
+      input.price ?? null,
+      input.status ?? 'scheduled',
+      input.origin ?? 'internal',
+    ],
+  );
+  return r.rows[0].id;
+}
+
 /** Insert an n8n connection + a synced workflow row owned by `clientId`. Returns
  * the connection id (the machine-scope tests need it; older callers ignore it).
  * Pass an existing `connectionId` to add a workflow under the SAME connection. */

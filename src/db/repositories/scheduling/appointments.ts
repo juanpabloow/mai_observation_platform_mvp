@@ -215,12 +215,15 @@ export interface ListAppointmentsFilters {
   clientId?: string | null;
   siteId?: string;
   staffId?: string;
+  serviceId?: string;
   status?: AppointmentStatus | AppointmentStatus[];
   contactId?: string;
   conversationId?: string;
   from?: Date;
   to?: Date;
   limit?: number;
+  /** start_at ordering (default 'asc' — the agenda's chronological view). */
+  order?: 'asc' | 'desc';
 }
 
 export interface AppointmentListItem extends AppointmentRow {
@@ -261,6 +264,7 @@ export async function listAppointments(
   if (filters.clientId) add((i) => `a.client_id = $${i}`, filters.clientId);
   if (filters.siteId) add((i) => `a.site_id = $${i}`, filters.siteId);
   if (filters.staffId) add((i) => `a.staff_id = $${i}`, filters.staffId);
+  if (filters.serviceId) add((i) => `a.service_id = $${i}`, filters.serviceId);
   if (filters.contactId) add((i) => `a.contact_id = $${i}`, filters.contactId);
   if (filters.conversationId) add((i) => `a.source_conversation_id = $${i}`, filters.conversationId);
   if (filters.status) {
@@ -300,7 +304,7 @@ export async function listAppointments(
                WHERE cw.client_id = a.client_id
             )
       WHERE ${where.join(' AND ')}
-      ORDER BY a.start_at ASC
+      ORDER BY a.start_at ${filters.order === 'desc' ? 'DESC' : 'ASC'}
       LIMIT $${params.length}`,
     params,
   );

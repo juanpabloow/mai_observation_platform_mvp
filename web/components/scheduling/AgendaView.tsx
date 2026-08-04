@@ -65,19 +65,36 @@ export function AgendaView(props: {
   staff: StaffOpt[];
   services: ServiceOpt[];
   appointments: Appt[];
+  /** Persistent filters (null = not applied). Validated server-side to this client. */
+  staffFilter: string | null;
+  serviceFilter: string | null;
+  statusFilter: string | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [modal, setModal] = useState<null | { mode: "new" | "walkin" } | { mode: "reschedule"; appt: Appt }>(null);
 
-  const navigate = (patch: { site?: string; date?: string }) => {
+  // Every navigation MERGES the current filters, so site/date changes and the
+  // filter selects all preserve one another (and survive reload — they're the URL).
+  // Changing the SITE drops staff/service (they're per-site ids); status is generic.
+  const navigate = (patch: { site?: string; date?: string; staff?: string | null; service?: string | null; status?: string | null }) => {
+    const changingSite = patch.site !== undefined && patch.site !== props.currentSiteId;
     const params = new URLSearchParams();
     params.set("site", patch.site ?? props.currentSiteId);
     params.set("date", patch.date ?? props.date);
+    const staff = patch.staff !== undefined ? patch.staff : changingSite ? null : props.staffFilter;
+    const service = patch.service !== undefined ? patch.service : changingSite ? null : props.serviceFilter;
+    const status = patch.status !== undefined ? patch.status : props.statusFilter;
+    if (staff) params.set("staff", staff);
+    if (service) params.set("service", service);
+    if (status) params.set("status", status);
     if (props.from) params.set("from", props.from); // keep the origin workflow
     router.push(`${props.basePath}?${params.toString()}`);
   };
+
+  const hasFilters = props.staffFilter !== null || props.serviceFilter !== null || props.statusFilter !== null;
+  const clearFilters = () => navigate({ staff: null, service: null, status: null });
 
   const fromQS = props.from ? `?from=${encodeURIComponent(props.from)}` : "";
 
@@ -143,6 +160,33 @@ export function AgendaView(props: {
         </div>
       </header>
 
+      {/* Persistent filters — barber, service, status + clear. site/date live in the header. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <FilterSelect
+          label="All barbers"
+          value={props.staffFilter ?? ""}
+          onChange={(v) => navigate({ staff: v || null })}
+          options={props.staff.map((s) => ({ value: s.id, label: s.name }))}
+        />
+        <FilterSelect
+          label="All services"
+          value={props.serviceFilter ?? ""}
+          onChange={(v) => navigate({ service: v || null })}
+          options={props.services.map((s) => ({ value: s.id, label: s.name }))}
+        />
+        <FilterSelect
+          label="Any status"
+          value={props.statusFilter ?? ""}
+          onChange={(v) => navigate({ status: v || null })}
+          options={["scheduled", "confirmed", "completed", "cancelled", "no_show"].map((s) => ({ value: s, label: s }))}
+        />
+        {hasFilters ? (
+          <button onClick={clearFilters} className="rounded-lg px-2 py-1 text-sm text-muted underline-offset-2 hover:text-foreground hover:underline">
+            Clear filters
+          </button>
+        ) : null}
+      </div>
+
       {error ? <p className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p> : null}
 
       {props.staff.length === 0 ? (
@@ -155,6 +199,19 @@ export function AgendaView(props: {
             // A member can't open the tenant-level Scheduling admin — message only.
             <p className="text-sm text-muted">No staff at this site yet. Ask your administrator to add staff.</p>
           )}
+        </div>
+      ) : props.appointments.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-line-strong px-5 py-8">
+          <p className="text-sm text-muted">
+            {hasFilters
+              ? "No appointments match these filters on this day."
+              : "No appointments scheduled for this day."}
+          </p>
+          {hasFilters ? (
+            <button onClick={clearFilters} className="mt-2 text-sm text-accent hover:underline">
+              Clear filters
+            </button>
+          ) : null}
         </div>
       ) : (
         <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto">
@@ -225,6 +282,33 @@ export function AgendaView(props: {
         />
       ) : null}
     </main>
+  );
+}
+
+function FilterSelect({
+  label,
+  value,
+  onChange,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  options: Array<{ value: string; label: string }>;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      className="rounded-lg border border-line-strong bg-transparent px-2 py-1 text-sm"
+    >
+      <option value="">{label}</option>
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>
+          {o.label}
+        </option>
+      ))}
+    </select>
   );
 }
 

@@ -138,3 +138,97 @@ export async function deactivateStaff(tenantId: string, id: string): Promise<boo
   );
   return (r.rowCount ?? 0) > 0;
 }
+
+// ── Team / operational reads (Scheduling Operations V1) ──────────────────────────
+
+export interface StaffWithSite extends StaffRow {
+  site_name: string;
+  site_timezone: string;
+  site_client_id: string;
+}
+
+/**
+ * A staff member resolved WITH its site — but ONLY if that site belongs to
+ * `clientId` in this tenant. This is the ownership guard for the Team detail route:
+ * a valid UUID whose site is in ANOTHER client (or tenant) returns null → the page
+ * 404s. Staff never carries client_id directly; the site is the source of truth.
+ */
+export async function getStaffForClient(
+  tenantId: string,
+  clientId: string,
+  staffId: string,
+): Promise<StaffWithSite | null> {
+  const r = await query<StaffWithSite>(
+    `SELECT s.*, si.name AS site_name, si.timezone AS site_timezone, si.client_id AS site_client_id
+       FROM staff s
+       JOIN sites si ON si.id = s.site_id AND si.tenant_id = s.tenant_id
+      WHERE s.id = $1 AND s.tenant_id = $2 AND si.client_id = $3`,
+    [staffId, tenantId, clientId],
+  );
+  return r.rows[0] ?? null;
+}
+
+export interface StaffOpsSummary {
+  staff_id: string;
+  next_appointment_at: Date | null;
+  today_count: number;
+}
+
+/**
+ * Per-barber operational summary for the Team LIST — next upcoming appointment and
+ * count for the barber's LOCAL today (each site's own timezone, computed in SQL) —
+ * in ONE batched query (no N+1). Cancelled appointments never count toward "today".
+ * Scoped to the client via the site join; optionally narrowed to one site.
+ */
+export async function staffOperationalSummary(
+  tenantId: string,
+  clientId: string,
+  opts: { siteId?: string } = {},
+): Promise<Map<string, StaffOpsSummary>> {
+  const params: unknown[] = [tenantId, clientId];
+  const where = ['a.tenant_id = $1', 'a.client_id = $2'];
+  if (opts.siteId) {
+    params.push(opts.siteId);
+    where.push(`a.site_id = $${params.length}`);
+  }
+  const r = await query<StaffOpsSummary>(
+    `SELECT a.staff_id,
+            MIN(a.start_at) FILTER (
+              WHERE a.start_at >= now() AND a.status IN ('scheduled','confirmed')
+            ) AS next_appointment_at,
+            COUNT(*) FILTER (
+              WHERE (a.start_at AT TIME ZONE si.timezone)::date = (now() AT TIME ZONE si.timezone)::date
+                AND a.status <> 'cancelled'
+            )::int AS today_count
+       FROM appointments a
+       JOIN sites si ON si.id = a.site_id AND si.tenant_id = a.tenant_id AND si.client_id = a.client_id
+      WHERE ${where.join(' AND ')}
+      GROUP BY a.staff_id`,
+    params,
+  );
+  return new Map(r.rows.map((x) => [x.staff_id, x]));
+}
+
+/** Active service NAMES offered by each of the given staff — ONE batched query for
+ * the Team list (no N+1). Only same-tenant, active staff_services + active services. */
+export async function serviceNamesByStaff(
+  tenantId: string,
+  staffIds: string[],
+): Promise<Map<string, string[]>> {
+  if (staffIds.length === 0) return new Map();
+  const r = await query<{ staff_id: string; name: string }>(
+    `SELECT sts.staff_id, sv.name
+       FROM staff_services sts
+       JOIN services sv ON sv.id = sts.service_id AND sv.tenant_id = sts.tenant_id AND sv.active = true
+      WHERE sts.tenant_id = $1 AND sts.active = true AND sts.staff_id = ANY($2::uuid[])
+      ORDER BY sv.name`,
+    [tenantId, staffIds],
+  );
+  const map = new Map<string, string[]>();
+  for (const row of r.rows) {
+    const list = map.get(row.staff_id) ?? [];
+    list.push(row.name);
+    map.set(row.staff_id, list);
+  }
+  return map;
+}
