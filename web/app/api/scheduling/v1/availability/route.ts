@@ -1,4 +1,5 @@
-import { authenticateScheduling, parseIsoDate, resolveOwnedSite, schedulingError } from "@/lib/schedulingApi";
+import { authenticateScheduling, parseIsoDate, resolveLabelParams, resolveOwnedSite, schedulingError } from "@/lib/schedulingApi";
+import { localTimeFields } from "@/lib/localTime";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { loadAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
 import { isServiceEnabledAtSite } from "@worker/db/repositories/scheduling/services.js";
@@ -19,6 +20,10 @@ const MAX_WINDOW_MS = 45 * 24 * 60 * 60 * 1000; // hard cap on a single query sp
 export async function GET(req: Request): Promise<Response> {
   const auth = await authenticateScheduling(req, "scheduling.read");
   if (!auth.ok) return auth.response;
+  // C-6 presentation params (validated before any work; invalid tz/locale → 400, never a
+  // silent UTC fallback).
+  const labels = resolveLabelParams(req);
+  if (!labels.ok) return labels.response;
   const p = new URL(req.url).searchParams;
   const siteId = p.get("site_id");
   const serviceId = p.get("service_id");
@@ -58,13 +63,19 @@ export async function GET(req: Request): Promise<Response> {
   });
   if (!result) return schedulingError(404, "not_found", "Service is not offered at this site.");
 
+  // Label timezone: the ?tz override, else the site's own timezone (the physical place).
+  const tz = labels.tzOverride ?? result.site.timezone;
   return Response.json({
-    site: { id: result.site.id, timezone: result.site.timezone },
-    // Duration can differ per staff (per-staff overrides), so it is carried on each
-    // slot's service window (start_at → service_end_at) rather than a single value.
+    // `timezone` is the site's own tz; `timezone_used` is what the *_label/*_local fields
+    // were formatted in (differs only when ?tz was passed).
+    site: { id: result.site.id, timezone: result.site.timezone, timezone_used: tz },
+    // start_at/service_end_at stay UTC (pass start_at back verbatim to book); the *_local
+    // and *_label fields are display-only. Duration can differ per staff, so the window is
+    // carried per slot rather than a single value.
     slots: result.slots.map((s) => ({
       start_at: s.start_at,
       service_end_at: s.service_end_at,
+      ...localTimeFields(s.start_at, s.service_end_at, tz, labels.locale),
       staff_id: s.staff_id,
       available_staff_ids: s.available_staff_ids,
       candidates: s.candidates,

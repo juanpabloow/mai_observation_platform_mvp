@@ -4,12 +4,14 @@ import {
   bookingErrorStatus,
   parseIsoDate,
   projectAppointment,
+  resolveLabelParams,
   resolveOwnedSite,
   schedulingError,
 } from "@/lib/schedulingApi";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { createAppointment } from "@worker/scheduling/booking.js";
 import { listAppointments, type AppointmentStatus } from "@worker/db/repositories/scheduling/appointments.js";
+import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
 
 /**
  * /api/scheduling/v1/appointments
@@ -29,6 +31,8 @@ const STATUSES = ["scheduled", "confirmed", "completed", "cancelled", "no_show"]
 export async function GET(req: Request): Promise<Response> {
   const auth = await authenticateScheduling(req, "scheduling.read");
   if (!auth.ok) return auth.response;
+  const labels = resolveLabelParams(req);
+  if (!labels.ok) return labels.response;
   const p = new URL(req.url).searchParams;
   const statusParam = p.get("status");
   const status = statusParam && (STATUSES as readonly string[]).includes(statusParam)
@@ -65,7 +69,8 @@ export async function GET(req: Request): Promise<Response> {
     to,
     limit: 500,
   });
-  return Response.json({ appointments: rows.map(projectAppointment) });
+  // Per-row timezone (the list can span sites): the ?tz override, else each row's site tz.
+  return Response.json({ appointments: rows.map((r) => projectAppointment(r, labels.tzOverride ?? r.site_timezone, labels.locale)) });
 }
 
 // workflow_ref is deliberately ABSENT from the body: provenance comes ONLY from
@@ -90,6 +95,8 @@ const CreateBody = z.object({
 export async function POST(req: Request): Promise<Response> {
   const auth = await authenticateScheduling(req, "scheduling.write");
   if (!auth.ok) return auth.response;
+  const labels = resolveLabelParams(req);
+  if (!labels.ok) return labels.response;
 
   const idempotencyKey = (req.headers.get("idempotency-key") ?? "").trim();
   if (!idempotencyKey) {
@@ -136,5 +143,7 @@ export async function POST(req: Request): Promise<Response> {
   if (!result.ok) {
     return schedulingError(bookingErrorStatus(result.error), result.error, result.message);
   }
-  return Response.json({ appointment: projectAppointment(result.value) }, { status: result.deduped ? 200 : 201 });
+  // Label timezone: the ?tz override, else the appointment's site tz.
+  const tz = labels.tzOverride ?? (await getSiteById(auth.auth.tenantId, result.value.site_id))?.timezone ?? "UTC";
+  return Response.json({ appointment: projectAppointment(result.value, tz, labels.locale) }, { status: result.deduped ? 200 : 201 });
 }

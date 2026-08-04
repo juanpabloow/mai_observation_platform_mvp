@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: MT_AI Scheduling API (n8n)
-  version: "1.1.0"
+  version: "1.2.0"
   description: >
     Machine API for the MT_AI scheduling engine. Bearer-token authenticated,
     reusing the existing per-tenant handoff token (Authorization: Bearer <token>).
@@ -16,10 +16,14 @@ info:
     A missing X-Workflow-Ref is 400; an unknown/foreign workflow is 404; a workflow whose
     client is the default ("Unassigned") client or has scheduling disabled is 403.
 
-    Times are ISO-8601 timestamps in UTC; each site presents them in its own IANA
-    timezone. Double-booking is impossible at the database level (a Postgres GiST
-    exclusion constraint); a lost race — or a slot taken since the availability read —
-    returns 409.
+    Times are ISO-8601 timestamps in UTC — the canonical value to pass back when booking.
+    v1.2 (C-6, ADDITIVE): availability slots and appointment objects also carry
+    display-only local fields (start_local/end_local/start_label/end_label/date_label/day)
+    formatted in the site's timezone by default, tunable per request with the `tz` and
+    `locale` query params (an invalid `tz`/`locale` is 400, never a silent UTC fallback).
+    UTC fields are unchanged, so existing consumers are unaffected. Double-booking is
+    impossible at the database level (a Postgres GiST exclusion constraint); a lost race —
+    or a slot taken since the availability read — returns 409.
 servers:
   - url: https://YOUR-APP.up.railway.app/api/scheduling/v1
     description: Railway deployment (replace host)
@@ -42,6 +46,24 @@ components:
       description: >
         The n8n workflow id (in n8n, `{{ $workflow.id }}`). Resolves the CLIENT this
         request acts on. Required on every endpoint; missing/blank → 400.
+    Tz:
+      name: tz
+      in: query
+      required: false
+      schema: { type: string }
+      description: >
+        C-6, PRESENTATION ONLY. IANA timezone for the *_local/*_label fields (e.g.
+        America/Mexico_City). Default: the site's own timezone. An unknown IANA name →
+        400 invalid_request naming `tz` (never a silent UTC fallback). Does not change
+        what is stored, available, or computed.
+    Locale:
+      name: locale
+      in: query
+      required: false
+      schema: { type: string, default: es-CO }
+      description: >
+        C-6, PRESENTATION ONLY. BCP-47 locale for the label text (default es-CO,
+        12-hour a. m./p. m.). An unsupported locale → 400 naming `locale`.
   schemas:
     Error:
       type: object
@@ -51,10 +73,25 @@ components:
           properties:
             code: { type: string }
             message: { type: string }
+    LocalTimeFields:
+      type: object
+      description: >
+        C-6 additive, DISPLAY-ONLY local-time fields (formatted in the `tz`/`locale` of
+        the request; `tz` defaults to the site's timezone). `start_at`/`service_end_at`
+        stay UTC and remain the canonical value to pass back when booking.
+      properties:
+        start_local: { type: string, description: "ISO-8601 with local offset, e.g. 2026-08-05T08:00:00-05:00" }
+        end_local: { type: string }
+        start_label: { type: string, description: "Short spoken 12-hour time, e.g. es-CO \"8:00 a. m.\"" }
+        end_label: { type: string }
+        date_label: { type: string, description: "Spoken local date, e.g. \"miércoles, 5 de agosto\"" }
+        day: { type: string, description: "LOCAL calendar date YYYY-MM-DD (can differ from the UTC date near midnight)" }
     Slot:
       type: object
+      allOf:
+        - $ref: "#/components/schemas/LocalTimeFields"
       properties:
-        start_at: { type: string, format: date-time }
+        start_at: { type: string, format: date-time, description: Canonical UTC; pass back verbatim to book. }
         service_end_at: { type: string, format: date-time, description: For the chosen staff (duration can differ per staff). }
         staff_id: { type: string, format: uuid, description: Deterministically chosen staff for "any". }
         available_staff_ids:
@@ -70,6 +107,8 @@ components:
               service_end_at: { type: string, format: date-time }
     Appointment:
       type: object
+      allOf:
+        - $ref: "#/components/schemas/LocalTimeFields"
       properties:
         id: { type: string, format: uuid }
         public_reference: { type: string, format: uuid }
@@ -167,6 +206,8 @@ paths:
         - { name: staff_id, in: query, required: false, schema: { type: string, format: uuid } }
         - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
         - { name: to, in: query, required: true, schema: { type: string, format: date-time }, description: "Window; max 45 days from `from`." }
+        - { $ref: "#/components/parameters/Tz" }
+        - { $ref: "#/components/parameters/Locale" }
       responses:
         "200":
           description: OK
@@ -179,7 +220,8 @@ paths:
                     type: object
                     properties:
                       id: { type: string, format: uuid }
-                      timezone: { type: string, description: IANA tz the slots are presented in. }
+                      timezone: { type: string, description: The site's own IANA timezone. }
+                      timezone_used: { type: string, description: "The tz the *_local/*_label fields were formatted in (differs from `timezone` only when `tz` was passed)." }
                   slots: { type: array, items: { $ref: "#/components/schemas/Slot" } }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
@@ -197,8 +239,10 @@ paths:
         - { name: conversation_id, in: query, schema: { type: string, format: uuid } }
         - { name: from, in: query, schema: { type: string, format: date-time } }
         - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { $ref: "#/components/parameters/Tz" }
+        - { $ref: "#/components/parameters/Locale" }
       responses:
-        "200": { description: OK }
+        "200": { description: "OK — { appointments: [Appointment] }, each with UTC + local fields (per-row site tz unless `tz` was passed)." }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -207,6 +251,8 @@ paths:
       summary: Create an appointment (idempotent)
       parameters:
         - { $ref: "#/components/parameters/WorkflowRef" }
+        - { $ref: "#/components/parameters/Tz" }
+        - { $ref: "#/components/parameters/Locale" }
         - name: Idempotency-Key
           in: header
           required: true

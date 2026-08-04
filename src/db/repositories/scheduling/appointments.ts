@@ -226,6 +226,9 @@ export interface ListAppointmentsFilters {
 export interface AppointmentListItem extends AppointmentRow {
   staff_name: string | null;
   site_name: string | null;
+  /** The appointment's site timezone — for per-row local-time labels (C-6); the list
+   *  can span sites, so this can't be a single per-request value. */
+  site_timezone: string;
   contact_name: string | null;
 }
 
@@ -280,7 +283,7 @@ export async function listAppointments(
             a.buffer_before_min_snapshot, a.buffer_after_min_snapshot,
             a.status, a.origin, a.created_by_type, a.created_by_user_id,
             a.idempotency_key, a.version, a.created_at, a.updated_at,
-            st.name AS staff_name, si.name AS site_name, ct.name AS contact_name
+            st.name AS staff_name, si.name AS site_name, si.timezone AS site_timezone, ct.name AS contact_name
        FROM appointments a
        JOIN sites si
          ON si.id = a.site_id AND si.tenant_id = a.tenant_id AND si.client_id = a.client_id

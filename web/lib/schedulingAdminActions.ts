@@ -116,7 +116,7 @@ export async function createSiteAction(input: {
 export async function updateSiteAction(
   clientId: string,
   id: string,
-  patch: { name?: string; address?: string; timezone?: string; openingHours?: WeeklyHours; schedulingConfig?: SchedulingConfig; active?: boolean },
+  patch: { slug?: string; name?: string; address?: string; timezone?: string; openingHours?: WeeklyHours; schedulingConfig?: SchedulingConfig; active?: boolean },
 ): Promise<AdminResult> {
   const auth = await requireSchedulingAdmin(clientId);
   if (!auth.ok) return auth;

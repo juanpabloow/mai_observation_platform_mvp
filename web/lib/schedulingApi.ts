@@ -2,6 +2,7 @@ import "server-only";
 import { authenticateHandoffRequest } from "@/lib/handoffApi";
 import type { Capability } from "@worker/db/repositories/handoffTokens.js";
 import { isUuid } from "@/lib/clientModuleValidation";
+import { localTimeFields, isValidTimeZone, isSupportedLocale, DEFAULT_LABEL_LOCALE } from "@/lib/localTime";
 import type { AppointmentRow } from "@worker/db/repositories/scheduling/appointments.js";
 import type { BookingError } from "@worker/scheduling/booking.js";
 import { resolveMachineSchedulingScope } from "@worker/scheduling/machineScope.js";
@@ -120,8 +121,12 @@ export function bookingErrorStatus(error: BookingError): number {
 }
 
 /** The public projection of an appointment (safe to return to n8n / the customer).
- * Never leaks internal ids beyond what's needed; exposes public_reference. */
-export function projectAppointment(a: AppointmentRow): Record<string, unknown> {
+ * Never leaks internal ids beyond what's needed; exposes public_reference.
+ *
+ * C-6 additive: `start_at`/`service_end_at` stay UTC (the canonical value to pass back
+ * when booking); the *_local / *_label / date_label / day fields are display-only,
+ * formatted in `tz` (the site's timezone unless a `tz` param overrode it) + `locale`. */
+export function projectAppointment(a: AppointmentRow, tz: string, locale: string = DEFAULT_LABEL_LOCALE): Record<string, unknown> {
   return {
     id: a.id,
     public_reference: a.public_reference,
@@ -132,6 +137,7 @@ export function projectAppointment(a: AppointmentRow): Record<string, unknown> {
     source_conversation_id: a.source_conversation_id,
     start_at: a.start_at,
     service_end_at: a.service_end_at,
+    ...localTimeFields(a.start_at, a.service_end_at, tz, locale),
     status: a.status,
     origin: a.origin,
     service_name: a.service_name_snapshot,
@@ -141,6 +147,26 @@ export function projectAppointment(a: AppointmentRow): Record<string, unknown> {
     created_at: a.created_at,
     updated_at: a.updated_at,
   };
+}
+
+/**
+ * Resolve the optional `tz` + `locale` presentation params (C-6). `tz` defaults to the
+ * caller-supplied site tz (per route); `locale` defaults to es-CO. An unknown IANA tz or
+ * unsupported locale → 400 naming the parameter (an agent reads the message) — NEVER a
+ * silent UTC fallback, which is how a wrong hour reaches a customer. Returns the override
+ * tz (or null to mean "use the context default") + the resolved locale.
+ */
+export function resolveLabelParams(req: Request): { ok: true; tzOverride: string | null; locale: string } | { ok: false; response: Response } {
+  const p = new URL(req.url).searchParams;
+  const tzParam = (p.get("tz") ?? "").trim();
+  const localeParam = (p.get("locale") ?? "").trim();
+  if (tzParam && !isValidTimeZone(tzParam)) {
+    return { ok: false, response: schedulingError(400, "invalid_request", `tz is not a valid IANA timezone name: ${tzParam}`) };
+  }
+  if (localeParam && !isSupportedLocale(localeParam)) {
+    return { ok: false, response: schedulingError(400, "invalid_request", `locale is not supported: ${localeParam}`) };
+  }
+  return { ok: true, tzOverride: tzParam || null, locale: localeParam || DEFAULT_LABEL_LOCALE };
 }
 
 /** Parse an ISO-8601 datetime query/body value → Date, or null when invalid. */

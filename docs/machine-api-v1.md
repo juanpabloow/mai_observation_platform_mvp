@@ -111,6 +111,31 @@ token routes are not per-token rate-limited today; treat generous but polite cal
 as the contract and expect a future per-token limit (it will surface as `429 rate_limited`
 with the standard error shape).
 
+### 1.8 Local-time fields + `tz` / `locale` (C-6, additive)
+Every timestamp is returned as UTC (`…Z`) — **that is the canonical value to pass back**
+when booking (`start_at`). Alongside it, availability slots and appointment objects carry
+**display-only** local fields so an agent never converts timezones itself:
+
+| field | example | meaning |
+|---|---|---|
+| `start_local` / `end_local` | `2026-08-05T08:00:00-05:00` | ISO-8601 with the local offset (DST-correct for the instant) |
+| `start_label` / `end_label` | `8:00 a. m.` | short spoken 12-hour time in `locale` |
+| `date_label` | `miércoles, 5 de agosto` | spoken date (the START's local date) |
+| `day` | `2026-08-05` | the LOCAL calendar date (group by day without parsing; can differ from the UTC date near midnight) |
+
+Two optional query params tune presentation (they change NOTHING stored, available, or
+computed):
+- **`tz`** — an IANA name (e.g. `America/Mexico_City`). **Default: the site's own timezone**
+  (an appointment happens at a physical place). An unknown IANA name → `400 invalid_request`
+  naming `tz` — **never** a silent UTC fallback. Available on `/availability` and the
+  appointments endpoints. The availability `site` object reports both `timezone` (the
+  site's) and `timezone_used` (what the labels were formatted in).
+- **`locale`** — label text; **default `es-CO`** (12-hour with a. m./p. m.; note es-CO
+  renders a narrow space, "a. m."). An unsupported locale → `400` naming `locale`.
+
+This is an **additive** change under §1.1: no version bump, `start_at`/`service_end_at`
+are unchanged, and existing consumers keep working (they simply ignore the new fields).
+
 ---
 
 ## 2. The three families
@@ -279,14 +304,21 @@ GET /api/scheduling/v1/staff?site_id=e5793e2a-…&service_id=90767852-…
 → 200   { "staff": [ { "id": "07d603c3-…", "name": "Ana Gómez" }, { "id": "…", "name": "Beto Ruiz" } ] }
 ```
 
-**4. Ask for availability** (an ISO window; ≤ 45 days):
+**4. Ask for availability** (an ISO window; ≤ 45 days). Each slot carries UTC + local
+(C-6). No `tz` was passed, so labels are in the site's own timezone (`timezone_used`):
 ```
 GET /api/scheduling/v1/availability?site_id=e5793e2a-…&service_id=90767852-…&from=2026-08-05T12:00:00Z&to=2026-08-05T23:00:00Z
 → 200
-{ "site": { "id": "e5793e2a-…", "timezone": "America/Bogota" },
+{ "site": { "id": "e5793e2a-…", "timezone": "America/Bogota", "timezone_used": "America/Bogota" },
   "slots": [ { "start_at": "2026-08-05T13:00:00.000Z", "service_end_at": "2026-08-05T13:45:00.000Z",
+               "start_local": "2026-08-05T08:00:00-05:00", "end_local": "2026-08-05T08:45:00-05:00",
+               "start_label": "8:00 a. m.", "end_label": "8:45 a. m.", "date_label": "miércoles, 5 de agosto", "day": "2026-08-05",
                "staff_id": "07d603c3-…", "available_staff_ids": [ "07d603c3-…", "f64bda…" ], "candidates": [ … ] }, … ] }
 ```
+Pass `&tz=America/Mexico_City` and the SAME slot returns identical `start_at` with
+`start_local: "2026-08-05T07:00:00-06:00"`, `start_label: "7:00 a. m."`, and the same set
+of slots — presentation only. An invalid `tz` → `400 { "error": { "code":
+"invalid_request", "message": "tz is not a valid IANA timezone name: …" } }`.
 
 **5. Create the appointment** with an `Idempotency-Key` (pick a slot's `start_at` +
 `staff_id`):
@@ -297,8 +329,12 @@ POST /api/scheduling/v1/appointments   Idempotency-Key: book-key-1
   "customer_phone": "+573001234567", "channel": "whatsapp", "channel_user_id": "573001234567" }
 → 201
 { "appointment": { "id": "19bddd34-…", "public_reference": "e4bbb506-…", "status": "scheduled",
-                   "service_name": "Corte de cabello", "start_at": "2026-08-05T13:00:00.000Z", … } }
+                   "service_name": "Corte de cabello", "start_at": "2026-08-05T13:00:00.000Z",
+                   "start_local": "2026-08-05T08:00:00-05:00", "start_label": "8:00 a. m.",
+                   "date_label": "miércoles, 5 de agosto", "day": "2026-08-05", … } }
 ```
+Round-trip verified live: the availability slot's `start_at` passed back verbatim books
+that exact instant, and the appointment's local fields match the slot's.
 
 **6. Retry safely** — the same key replays the original (no double-book):
 ```
