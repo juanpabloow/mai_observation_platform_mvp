@@ -1,4 +1,5 @@
 import { query, firstRowOrThrow } from '../../client.js';
+import { matchByName, type NameMatch } from '../../../scheduling/nameMatch.js';
 
 /**
  * Services repository — the per-CLIENT service catalogue (tenant_id + client_id) plus
@@ -82,6 +83,20 @@ export async function listServicesForSite(tenantId: string, siteId: string): Pro
     [tenantId, siteId],
   );
   return r.rows;
+}
+
+/** Resolve a service NAME (case/accent-insensitive) to its id, among the services ENABLED
+ * at this site (the set an availability/booking call can actually use). Returns a
+ * discriminated match so the route can emit not_found (with the valid names) or
+ * ambiguous_match (with the candidates) — never a silent pick. Client scope flows through
+ * the site (resolved as owned before this is called). */
+export async function resolveServiceByNameAtSite(
+  tenantId: string,
+  siteId: string,
+  name: string | null | undefined,
+): Promise<NameMatch> {
+  const rows = await listServicesForSite(tenantId, siteId);
+  return matchByName(rows.map((r) => ({ id: r.id, name: r.name })), name);
 }
 
 /** Is a service ENABLED at a site (active site_services row), same-tenant, same-CLIENT,

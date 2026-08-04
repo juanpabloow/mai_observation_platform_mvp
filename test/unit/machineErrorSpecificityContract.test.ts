@@ -45,12 +45,16 @@ test('availability/services/staff resolve the site with requireActive: true (ina
   }
 });
 
-test('availability returns specific codes + 400 for malformed ids', () => {
+test('availability resolves service/staff via the semantic layer; specific codes live there', () => {
   const src = web('app/api/scheduling/v1/availability/route.ts');
-  assert.ok(src.includes('"invalid_request", "service_id and staff_id must be valid UUIDs."'), 'malformed service/staff → 400');
-  assert.ok(src.includes('"service_not_found"'), 'service not enabled → service_not_found');
-  assert.ok(src.includes('"staff_not_found"'), 'staff not active → staff_not_found');
-  assert.ok(!/schedulingError\(404, "not_found", "Not found\."\)/.test(src), 'no generic "Not found." left');
+  assert.ok(src.includes('resolveServiceParam(') && src.includes('resolveStaffParam('), 'availability resolves service/staff (id or name)');
+  assert.ok(!src.includes('"not_found", "Not found."'), 'no generic "Not found." left');
+  // The specific, actionable codes now live in the shared resolver (E-1).
+  const sp = web('lib/semanticParams.ts');
+  for (const code of ['service_not_found', 'staff_not_found', 'ambiguous_match', 'param_conflict']) {
+    assert.ok(sp.includes(`"${code}"`), `semanticParams emits ${code}`);
+  }
+  assert.ok(sp.includes('service_id must be a valid UUID') && sp.includes('staff_id must be a valid UUID'), 'malformed ids → invalid_request');
 });
 
 test('appointments LIST: site WITHOUT requireActive; nonexistent contact/staff filter → specific 404 (never [])', () => {
@@ -65,12 +69,24 @@ test('appointments LIST: site WITHOUT requireActive; nonexistent contact/staff f
 });
 
 test('transition routes: malformed id → 400; not-found → appointment_not_found', () => {
-  for (const t of ['cancel', 'confirm', 'complete', 'no-show', 'reschedule']) {
+  // confirm/complete/no-show still validate the id directly (no semantic alternative).
+  for (const t of ['confirm', 'complete', 'no-show']) {
     const src = web(`app/api/scheduling/v1/appointments/[id]/${t}/route.ts`);
     assert.ok(src.includes('"invalid_request", "appointment id must be a valid UUID."'), `${t}: malformed id → 400`);
+  }
+  // cancel/reschedule accept UUID OR by-time; the UUID-or-by-time guard lives in the shared
+  // resolveAppointmentTarget (which 400s a malformed non-UUID, non-by-time id).
+  for (const t of ['cancel', 'reschedule']) {
+    assert.ok(web(`app/api/scheduling/v1/appointments/[id]/${t}/route.ts`).includes('resolveAppointmentTarget('), `${t}: id resolved via resolveAppointmentTarget`);
+  }
+  for (const t of ['cancel', 'confirm', 'complete', 'no-show', 'reschedule']) {
+    const src = web(`app/api/scheduling/v1/appointments/[id]/${t}/route.ts`);
     assert.ok(src.includes('appointmentErrorResponse(result)'), `${t}: not-found → appointment_not_found`);
     assert.ok(!src.includes('"not_found", "Not found."'), `${t}: no generic not_found`);
   }
+  // The malformed-id 400 + by-time contract lives in the shared resolver.
+  const sp = web('lib/semanticParams.ts');
+  assert.ok(sp.includes('appointment id must be a valid UUID') && sp.includes('by-time'), 'resolveAppointmentTarget 400s a bad id and documents by-time');
 });
 
 test('CRM contact routes: malformed → 400; not-found → contact_not_found (never the generic not_found)', () => {

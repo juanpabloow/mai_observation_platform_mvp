@@ -104,30 +104,34 @@ function assertBefore(rel: string, a: string, b: string): void {
   assert.ok(ia < ib, `${rel}: ${JSON.stringify(a)} must precede ${JSON.stringify(b)}`);
 }
 
-test('every appointment id route validates the id (isUuid) BEFORE calling the domain', () => {
+test('confirm/complete/no-show validate the id (isUuid) BEFORE calling the domain', () => {
+  // These have no semantic alternative, so the id must still be a UUID validated up front.
   assertBefore('appointments/[id]/confirm/route.ts', 'isUuid(id)', 'transitionStatus(');
   assertBefore('appointments/[id]/complete/route.ts', 'isUuid(id)', 'transitionStatus(');
   assertBefore('appointments/[id]/no-show/route.ts', 'isUuid(id)', 'transitionStatus(');
-  assertBefore('appointments/[id]/cancel/route.ts', 'isUuid(id)', 'transitionStatus(');
-  assertBefore('appointments/[id]/reschedule/route.ts', 'isUuid(id)', 'rescheduleAppointment(');
 });
 
-test('cancel and reschedule validate the id BEFORE reading the body', () => {
-  assertBefore('appointments/[id]/cancel/route.ts', 'isUuid(id)', 'readReason(req)');
-  assertBefore('appointments/[id]/reschedule/route.ts', 'isUuid(id)', 'req.json(');
+test('cancel and reschedule resolve the appointment target (UUID or by-time) BEFORE the domain', () => {
+  // E-1 §3: the id may be a UUID OR `by-time` (identity+day+time in the body), so the
+  // target is resolved (and its failure returned) before any mutation.
+  for (const [rel, domain] of [
+    ['appointments/[id]/cancel/route.ts', 'transitionStatus('],
+    ['appointments/[id]/reschedule/route.ts', 'rescheduleAppointment('],
+  ] as const) {
+    assertBefore(rel, 'resolveAppointmentTarget(', domain);
+    assertBefore(rel, 'if (!target.ok) return target.response', domain);
+  }
 });
 
-test('staff/availability validate resource shape + membership before the engine', () => {
-  // staff: service_id UUID + enabled-at-site check.
-  assertContains('staff/route.ts', 'isUuid(serviceId)');
-  assertContains('staff/route.ts', 'isServiceEnabledAtSite(');
-  // availability: service_id/staff_id UUID + service-enabled + staff-of-site checks.
-  assertContains('availability/route.ts', 'isUuid(serviceId)');
-  assertContains('availability/route.ts', 'isServiceEnabledAtSite(');
-  assertContains('availability/route.ts', 'isActiveStaffOfSite(');
-  // …and those run before the engine call.
-  assertBefore('availability/route.ts', 'isServiceEnabledAtSite(', 'loadAvailability(');
-  assertBefore('staff/route.ts', 'isServiceEnabledAtSite(', 'listStaffForService(');
+test('staff/availability resolve service/staff (id OR name) before the engine', () => {
+  // E-1: shape + membership + name resolution now live in the shared resolveServiceParam/
+  // resolveStaffParam (which enforce the enabled-at-site / active-staff checks), and run
+  // before the engine call.
+  assertContains('availability/route.ts', 'resolveServiceParam(');
+  assertContains('availability/route.ts', 'resolveStaffParam(');
+  assertBefore('availability/route.ts', 'resolveServiceParam(', 'loadAvailability(');
+  assertContains('staff/route.ts', 'resolveServiceParam(');
+  assertBefore('staff/route.ts', 'resolveServiceParam(', 'listStaffForService(');
 });
 
 // ── C-7 wiring guards (the handler can't run here; guard the source shapes) ──────

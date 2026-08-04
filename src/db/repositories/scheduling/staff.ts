@@ -1,5 +1,6 @@
 import { query, firstRowOrThrow } from '../../client.js';
 import type { WeeklyHours } from '../../../scheduling/types.js';
+import { matchByName, type NameMatch } from '../../../scheduling/nameMatch.js';
 
 /**
  * Staff repository — agendable resources (a barber), each belonging to exactly one
@@ -83,6 +84,19 @@ export async function isActiveStaffOfSite(tenantId: string, siteId: string, staf
     [tenantId, siteId, staffId],
   );
   return r.rows.length > 0;
+}
+
+/** Resolve a staff NAME (case/accent-insensitive) to its id, among the ACTIVE staff at
+ * this site (the set that can take new bookings). Discriminated result → the route emits
+ * not_found (valid names) or ambiguous_match (candidates), never a silent pick. Whether the
+ * staff can perform the chosen service is validated downstream by the engine. */
+export async function resolveStaffByNameAtSite(
+  tenantId: string,
+  siteId: string,
+  name: string | null | undefined,
+): Promise<NameMatch> {
+  const rows = await listStaff(tenantId, { siteId });
+  return matchByName(rows.map((r) => ({ id: r.id, name: r.name })), name);
 }
 
 /** Does `staffId` belong to this client (via its site), REGARDLESS of active state?

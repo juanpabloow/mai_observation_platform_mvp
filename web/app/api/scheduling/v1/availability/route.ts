@@ -1,17 +1,17 @@
 import { authenticateScheduling, parseIsoDate, resolveLabelParams, resolveOwnedSite, schedulingError } from "@/lib/schedulingApi";
+import { resolveServiceParam, resolveStaffParam } from "@/lib/semanticParams";
 import { localTimeFields } from "@/lib/localTime";
-import { isUuid } from "@/lib/clientModuleValidation";
 import { loadAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
-import { isServiceEnabledAtSite } from "@worker/db/repositories/scheduling/services.js";
-import { isActiveStaffOfSite } from "@worker/db/repositories/scheduling/staff.js";
 
 /**
- * GET /api/scheduling/v1/availability?site_id=&service_id=&staff_id?=&from=&to=
+ * GET /api/scheduling/v1/availability?site_id=&(service_id|service)=&(staff_id|staff)?=&from=&to=
  *
  * Real availability from the shared engine (identical rules to the public page).
- * staff_id optional — when omitted, slots across all qualified staff are returned,
- * each carrying the deterministically chosen staff plus available_staff_ids. The
- * window [from,to] is capped to the site's booking horizon by the engine.
+ * The service may be given by `service_id` (UUID) OR `service` (NAME); staff optionally by
+ * `staff_id` OR `staff` (NAME) — an LLM transcribes a name far more reliably than a UUID.
+ * When staff is omitted, slots across all qualified staff are returned, each carrying the
+ * deterministically chosen staff plus available_staff_ids. The window [from,to] is capped
+ * to the site's booking horizon by the engine.
  */
 export const dynamic = "force-dynamic";
 
@@ -26,11 +26,9 @@ export async function GET(req: Request): Promise<Response> {
   if (!labels.ok) return labels.response;
   const p = new URL(req.url).searchParams;
   const siteId = p.get("site_id");
-  const serviceId = p.get("service_id");
-  const staffId = p.get("staff_id");
   const from = parseIsoDate(p.get("from"));
   const to = parseIsoDate(p.get("to"));
-  if (!siteId || !serviceId) return schedulingError(400, "invalid_request", "site_id and service_id are required.");
+  if (!siteId) return schedulingError(400, "invalid_request", "site_id is required.");
   if (!from || !to) return schedulingError(400, "invalid_request", "from and to must be ISO-8601 datetimes.");
   if (to.getTime() <= from.getTime()) return schedulingError(400, "invalid_request", "to must be after from.");
   if (to.getTime() - from.getTime() > MAX_WINDOW_MS) {
@@ -41,24 +39,18 @@ export async function GET(req: Request): Promise<Response> {
   const owned = await resolveOwnedSite(auth.auth, siteId, { requireActive: true });
   if (!owned.ok) return owned.response;
 
-  // Validate resource shapes + membership BEFORE the engine. Malformed id → 400 (§3: a
-  // fabricated/mistyped id must fail loudly, never a 404 or empty result). A well-formed
-  // but unknown/not-enabled resource → the SPECIFIC, actionable 404 so an agent can recover.
-  if (!isUuid(serviceId) || (staffId && !isUuid(staffId))) {
-    return schedulingError(400, "invalid_request", "service_id and staff_id must be valid UUIDs.");
-  }
-  if (!(await isServiceEnabledAtSite(auth.auth.tenantId, owned.site.id, serviceId))) {
-    return schedulingError(404, "service_not_found", "No service with that id is offered at this site. Call GET /api/scheduling/v1/services?site_id=… to get valid service ids.");
-  }
-  if (staffId && !(await isActiveStaffOfSite(auth.auth.tenantId, owned.site.id, staffId))) {
-    return schedulingError(404, "staff_not_found", "No active staff with that id at this site. Call GET /api/scheduling/v1/staff?site_id=… to get valid staff ids.");
-  }
+  // service_id|service and staff_id|staff resolve BEFORE the engine — a bad name → 400 with
+  // the valid names, an ambiguous name → ambiguous_match, a bad id → the specific 404.
+  const svc = await resolveServiceParam(auth.auth, owned.site.id, p.get("service_id"), p.get("service"));
+  if (!svc.ok) return svc.response;
+  const stf = await resolveStaffParam(auth.auth, owned.site.id, p.get("staff_id"), p.get("staff"));
+  if (!stf.ok) return stf.response;
 
   const result = await loadAvailability({
     tenantId: auth.auth.tenantId,
     siteId: owned.site.id,
-    serviceId,
-    staffId: staffId ?? null,
+    serviceId: svc.value,
+    staffId: stf.value,
     from,
     to,
     now: new Date(),

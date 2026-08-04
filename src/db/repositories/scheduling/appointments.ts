@@ -1,5 +1,6 @@
 import type { PoolClient, QueryResultRow } from 'pg';
 import { query, firstRowOrThrow } from '../../client.js';
+import { utcToZonedParts } from '../../../scheduling/timezone.js';
 
 /**
  * Appointments repository — low-level, client-aware primitives (they accept an
@@ -353,6 +354,55 @@ export async function countUpcomingAppointmentsForResource(
     [tenantId, filter.clientId, val, now],
   );
   return r.rows[0]?.n ?? 0;
+}
+
+/** A contact's active appointment described in words an agent/customer can read back:
+ *  local day + time (in the appointment's OWN site tz) + service name. */
+export interface ActiveAppointmentView {
+  id: string;
+  day: string; // YYYY-MM-DD (site-local)
+  time: string; // HH:MM (site-local, 24h)
+  service: string;
+}
+export type AppointmentByTimeMatch =
+  | { status: 'ok'; id: string }
+  | { status: 'none'; active: ActiveAppointmentView[] }
+  | { status: 'ambiguous'; matches: ActiveAppointmentView[] };
+
+function toActiveView(a: AppointmentListItem): ActiveAppointmentView {
+  const p = utcToZonedParts(a.start_at, a.site_timezone);
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  return {
+    id: a.id,
+    day: `${p.year}-${pad(p.month)}-${pad(p.day)}`,
+    time: `${pad(p.hour)}:${pad(p.minute)}`,
+    service: a.service_name_snapshot,
+  };
+}
+
+/**
+ * §3: identify a contact's ACTIVE (scheduled|confirmed) appointment by its LOCAL day+time —
+ * the alternative to transcribing its UUID (the most destructive id to get wrong, on cancel).
+ * Matching is per-appointment in its OWN site timezone, so the caller never needs a site_id.
+ *   - exactly one active appointment at that day+time → ok(id);
+ *   - none → the contact's active appointments (day/time/service) so the agent can re-offer;
+ *   - more than one → ambiguous (never guess when a cancellation is at stake).
+ * `time` must already be canonical "HH:MM" (parse the human form at the edge).
+ */
+export async function resolveActiveAppointmentByLocalTime(
+  tenantId: string,
+  clientId: string,
+  contactIds: string[],
+  day: string,
+  time: string,
+): Promise<AppointmentByTimeMatch> {
+  if (contactIds.length === 0) return { status: 'none', active: [] };
+  const appts = await listAppointments(tenantId, { clientId, contactIds, status: ['scheduled', 'confirmed'] });
+  const views = appts.map(toActiveView);
+  const matches = views.filter((v) => v.day === day && v.time === time);
+  if (matches.length === 1) return { status: 'ok', id: matches[0].id };
+  if (matches.length > 1) return { status: 'ambiguous', matches };
+  return { status: 'none', active: views };
 }
 
 export interface AppointmentEventRow {

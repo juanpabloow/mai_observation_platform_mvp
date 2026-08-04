@@ -102,6 +102,8 @@ nonexistent one (both → the same `*_not_found`), so nothing cross-client leaks
 | 400 | `invalid_request` | a **malformed** id (not a UUID) or bad query param — fails loudly, never a 404 or empty result |
 | 404 | `site_not_found` · `service_not_found` · `staff_not_found` · `contact_not_found` · `appointment_not_found` | a **well-formed** id with no such resource for this client. Message names the recovery endpoint (e.g. "Call GET /api/scheduling/v1/services?site_id=… to get valid ids") |
 | 409 | `site_inactive` | the site exists but is **deactivated** — distinct from `site_not_found` so an operator can tell "wrong id" from "deactivated". Reactivate it, or use another site_id |
+| 400 | `ambiguous_match` | a `service`/`staff` name (or a `by-time` identity) matched more than one row — the message lists the candidates (E-1) |
+| 400 | `param_conflict` | an id and a name, or `start_at` and `day`+`time`, were both sent and disagree — send only one (E-1) |
 | 403 | `module_disabled` | the resolved client has the family's module off (or is the default client) |
 | 422 | `invalid_body` | malformed JSON / failed schema (create/patch bodies — id shape enforced here → never a silent empty result) |
 | 422 | `validation` | a custom-field value fails its definition (names the field) |
@@ -184,6 +186,46 @@ Error bodies: `400 unknown_parameter` (an unsupported param, named), `400
 empty_parameter` (a recognized param sent with an empty value, named), `400
 invalid_request` (an unknown `status` value, a non-`true/false` `active`, or a bad
 `from`/`to`). No identifying filter is *required* — a bare site/day listing stays valid.
+
+### 1.10 Semantic parameters (E-1, additive)
+
+An API consumed by a language model should accept the values a model handles reliably —
+**names, local dates, clock times** — as an alternative to opaque UUIDs and ISO timestamps
+(a one-character UUID typo has already told a customer they had no appointments, and failed
+an availability call mid-conversation). Every id/ISO path is **unchanged**; these are
+parallel, resolved server-side. Names match **case- and accent-insensitively** (trimmed,
+whitespace-collapsed).
+
+**Resolve by name** — availability, staff and booking accept, instead of the id:
+- **`service`** — the service NAME (alternative to `service_id`).
+- **`staff`** — the staff member's NAME (alternative to `staff_id`).
+
+No match → `400 service_not_found` / `staff_not_found` whose message **lists the valid
+names** for that site. Two names both matching → `400 ambiguous_match` listing the
+candidates (never a silent pick). An id and a name that disagree → `400 param_conflict`.
+
+**Local day + time** — booking and reschedule accept, instead of `start_at`:
+- **`day`** — `YYYY-MM-DD` in the SITE's timezone.
+- **`time`** — a clock time. **Accepted:** 24-hour `"HH:MM"` / `"H:MM"` (e.g. `14:30`,
+  `9:00`); 12-hour `"H[:MM] am|pm"` (e.g. `9 am`, `9:00am`, `5 pm`, `5:30 p.m.`, `12 am`→
+  `00:00`, `12 pm`→`12:00`). A bare number (`"5"`) is rejected as ambiguous. The server
+  combines them with the site timezone (DST-correct), so the caller never converts. The
+  instant is still validated against real availability; if it isn't bookable, the
+  `409 unavailable`/`conflict_slot` message names the **nearest available times that day**.
+  `start_at` + `day`/`time` that disagree → `400 param_conflict`.
+
+**Identify an appointment without its UUID** (the most destructive id to transcribe wrong)
+— cancel and reschedule accept the path segment **`by-time`** in place of the `{id}`, then
+the body carries `phone` (or `email` / `external_id`) + `current_day` + `current_time`,
+resolved to that contact's **active** appointment at that local moment:
+- exactly one → act on it;
+- none → `404 appointment_not_found` listing the contact's active appointments (day/time/service);
+- more than one → `400 ambiguous_match` listing them (never guess when a cancellation is at stake).
+
+On reschedule via `by-time`, `current_day`/`current_time` identify the appointment and
+`day`/`time` (or `start_at`) are the NEW slot. `POST /appointments/{uuid}/cancel|reschedule`
+is unchanged. **`site_id` is the one parameter with no name alternative today** (there is
+normally one site; a `site`/slug alternative is a candidate follow-up).
 
 ---
 

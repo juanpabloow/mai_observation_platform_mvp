@@ -115,6 +115,64 @@ export function parseHhMm(hhmm: string): number {
 }
 
 /**
+ * Parse a human clock time to canonical "HH:MM" (24h), or null if unparseable. The value
+ * an LLM emits is far more robust than a 24-char ISO string, and the server owns the
+ * timezone. ACCEPTED (case-insensitive, surrounding space tolerated):
+ *   - 24-hour:  "H:MM" or "HH:MM"        e.g. "9:00", "14:30", "09:05"  (00:00–23:59)
+ *   - 12-hour:  "H[:MM] am|pm"           e.g. "9 am", "9:00am", "5 pm", "5:30 p.m.", "12 am"
+ *               ("am"/"a.m."/"pm"/"p.m." all accepted; 12 am → 00:00, 12 pm → 12:00)
+ * A bare number ("5") is rejected as ambiguous — require a colon (24h) or am/pm (12h).
+ */
+export function parseClockTime(raw: string | null | undefined): string | null {
+  if (raw == null) return null;
+  const s = String(raw).trim().toLowerCase();
+  if (!s) return null;
+  const pad = (n: number): string => String(n).padStart(2, '0');
+  // 12-hour with meridiem.
+  let m = /^(\d{1,2})(?::(\d{2}))?\s*([ap])\.?\s*m\.?$/.exec(s);
+  if (m) {
+    let h = Number(m[1]);
+    const min = m[2] ? Number(m[2]) : 0;
+    if (h < 1 || h > 12 || min > 59) return null;
+    if (m[3] === 'a') h = h === 12 ? 0 : h;
+    else h = h === 12 ? 12 : h + 12;
+    return `${pad(h)}:${pad(min)}`;
+  }
+  // 24-hour with a colon.
+  m = /^(\d{1,2}):(\d{2})$/.exec(s);
+  if (m) {
+    const h = Number(m[1]);
+    const min = Number(m[2]);
+    if (h > 23 || min > 59) return null;
+    return `${pad(h)}:${pad(min)}`;
+  }
+  return null;
+}
+
+/**
+ * Combine a local `day` ("YYYY-MM-DD") + `time` (any form parseClockTime accepts) into the
+ * exact UTC instant, interpreted in `timeZone`. Returns null for a malformed/impossible
+ * date or unparseable time. This is what removes timezone conversion from the caller: it is
+ * DST-correct (zonedPartsToUtc re-evaluates the offset at the instant), so the same day+time
+ * yields the right instant in a DST zone as well as a fixed-offset one.
+ */
+export function combineLocalDayTime(day: string, time: string, timeZone: string): Date | null {
+  const dm = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(day ?? '').trim());
+  if (!dm) return null;
+  const hhmm = parseClockTime(time);
+  if (!hhmm) return null;
+  const [y, mo, d] = [Number(dm[1]), Number(dm[2]), Number(dm[3])];
+  const [h, mi] = hhmm.split(':').map(Number);
+  if (mo < 1 || mo > 12 || d < 1 || d > 31) return null;
+  const instant = zonedPartsToUtc(y, mo, d, h, mi, timeZone);
+  // Reject impossible calendar dates (e.g. 2026-02-30 rolls over): the local DATE must
+  // round-trip. (Time is not re-checked, so a DST spring-forward gap simply finds no slot.)
+  const p = utcToZonedParts(instant, timeZone);
+  if (p.year !== y || p.month !== mo || p.day !== d) return null;
+  return instant;
+}
+
+/**
  * The list of local calendar dates (as {year,month,day}) that the UTC range
  * [from, to] touches, in `timeZone`. Inclusive of both endpoints' local dates.
  */

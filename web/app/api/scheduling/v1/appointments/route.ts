@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   authenticateScheduling,
+  bookingErrorStatus,
   createErrorResponse,
   parseIsoDate,
   projectAppointment,
@@ -8,12 +9,12 @@ import {
   resolveOwnedSite,
   schedulingError,
 } from "@/lib/schedulingApi";
+import { nearestTimesHint, resolveServiceParam, resolveStaffParam, resolveStartParam } from "@/lib/semanticParams";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { createAppointment } from "@worker/scheduling/booking.js";
 import { listAppointments, type AppointmentStatus } from "@worker/db/repositories/scheduling/appointments.js";
 import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
-import { isServiceEnabledAtSite } from "@worker/db/repositories/scheduling/services.js";
-import { isActiveStaffOfSite, staffBelongsToClient } from "@worker/db/repositories/scheduling/staff.js";
+import { staffBelongsToClient } from "@worker/db/repositories/scheduling/staff.js";
 import { getContactCardById, findContactIdsByIdentity, contactBelongsToClient } from "@worker/db/repositories/contactIdentities.js";
 
 /**
@@ -194,9 +195,15 @@ const CreateBody = z.object({
   messaging_consent: z.enum(["unknown", "opted_in", "opted_out"]).optional(),
   consent_source: z.string().max(256).optional(),
   site_id: z.string().uuid(),
-  service_id: z.string().uuid(),
+  // Service/staff by opaque id OR by NAME (an LLM transcribes a name reliably; a UUID it
+  // sometimes corrupts by one character). start by ISO `start_at` OR local `day` + `time`.
+  service_id: z.string().uuid().optional(),
+  service: z.string().min(1).max(256).optional(),
   staff_id: z.string().uuid().optional(),
-  start_at: z.string().min(1),
+  staff: z.string().min(1).max(256).optional(),
+  start_at: z.string().min(1).optional(),
+  day: z.string().min(1).max(10).optional(),
+  time: z.string().min(1).max(16).optional(),
 });
 
 export async function POST(req: Request): Promise<Response> {
@@ -221,28 +228,25 @@ export async function POST(req: Request): Promise<Response> {
     return schedulingError(422, "invalid_body", parsed.error.issues[0]?.message ?? "Invalid request body.");
   }
   const b = parsed.data;
-  const startAt = parseIsoDate(b.start_at);
-  if (!startAt) return schedulingError(422, "invalid_body", "start_at must be an ISO-8601 datetime.");
 
-  // Pre-validate the referenced resources so a bad id gets a SPECIFIC, actionable error
-  // (site_inactive / site_not_found / service_not_found / staff_not_found) instead of the
-  // engine's single generic not_found. The engine still re-checks everything under
-  // scopeClientId, so this is defense-in-depth, not the only guard. (Body id SHAPE is
-  // already enforced by zod → 422 invalid_body, satisfying §3's "never 404/empty".)
+  // Resolve the semantic parameters server-side (site by id; service/staff by id OR name;
+  // start by ISO OR site-local day+time). Each returns a SPECIFIC, actionable error. The
+  // engine still re-validates everything under scopeClientId — this is defense-in-depth.
   const site = await resolveOwnedSite(auth.auth, b.site_id, { requireActive: true });
   if (!site.ok) return site.response;
-  if (!(await isServiceEnabledAtSite(auth.auth.tenantId, site.site.id, b.service_id))) {
-    return schedulingError(404, "service_not_found", "No service with that id is offered at this site. Call GET /api/scheduling/v1/services?site_id=… to get valid service ids.");
-  }
-  if (b.staff_id && !(await isActiveStaffOfSite(auth.auth.tenantId, site.site.id, b.staff_id))) {
-    return schedulingError(404, "staff_not_found", "No active staff with that id at this site. Call GET /api/scheduling/v1/staff?site_id=… to get valid staff ids.");
-  }
+  const svc = await resolveServiceParam(auth.auth, site.site.id, b.service_id, b.service);
+  if (!svc.ok) return svc.response;
+  const stf = await resolveStaffParam(auth.auth, site.site.id, b.staff_id, b.staff);
+  if (!stf.ok) return stf.response;
+  const start = resolveStartParam(b.start_at, b.day, b.time, site.site.timezone);
+  if (!start.ok) return start.response;
+  const startAt = start.value;
 
   const result = await createAppointment({
     tenantId: auth.auth.tenantId,
     siteId: b.site_id,
-    serviceId: b.service_id,
-    staffId: b.staff_id ?? null,
+    serviceId: svc.value,
+    staffId: stf.value,
     startAt,
     // Provenance is the X-Workflow-Ref header — the ONLY authority (never the body).
     workflowRef: auth.auth.workflowRef,
@@ -262,6 +266,12 @@ export async function POST(req: Request): Promise<Response> {
   });
 
   if (!result.ok) {
+    // A slot problem gets the nearest real times THAT day appended, so the agent can
+    // re-offer immediately instead of guessing (§2).
+    if (result.error === "unavailable" || result.error === "no_staff" || result.error === "conflict_slot") {
+      const hint = await nearestTimesHint(auth.auth, site.site.id, svc.value, stf.value, startAt, site.site.timezone);
+      return schedulingError(bookingErrorStatus(result.error), result.error, result.message + hint);
+    }
     return createErrorResponse(result);
   }
   // Label timezone: the ?tz override, else the appointment's site tz.

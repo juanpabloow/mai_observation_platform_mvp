@@ -1,0 +1,213 @@
+import "server-only";
+import { parseIsoDate, schedulingError, type SchedulingAuth } from "@/lib/schedulingApi";
+import { isUuid } from "@/lib/clientModuleValidation";
+import { combineLocalDayTime, parseClockTime, utcToZonedParts } from "@worker/scheduling/timezone.js";
+import { isServiceEnabledAtSite, resolveServiceByNameAtSite } from "@worker/db/repositories/scheduling/services.js";
+import { isActiveStaffOfSite, resolveStaffByNameAtSite } from "@worker/db/repositories/scheduling/staff.js";
+import { findContactIdsByIdentity } from "@worker/db/repositories/contactIdentities.js";
+import { resolveActiveAppointmentByLocalTime } from "@worker/db/repositories/scheduling/appointments.js";
+import { loadAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
+
+/**
+ * SEMANTIC PARAMETERS — the values an LLM handles reliably (a service/staff NAME, a local
+ * day + clock time, a phone) as an alternative to opaque UUIDs and ISO timestamps. Every
+ * resolver runs server-side, AFTER the site is resolved as owned, and returns either the
+ * canonical id/instant or a ready HTTP error whose message lets an agent recover in one
+ * turn (valid names, candidates, nearest times). The id/ISO path is unchanged, so existing
+ * programmatic callers keep working byte-identically.
+ */
+
+export type Resolved<T> = { ok: true; value: T } | { ok: false; response: Response };
+const fail = (status: number, code: string, message: string): { ok: false; response: Response } => ({
+  ok: false,
+  response: schedulingError(status, code, message),
+});
+const has = (v: string | null | undefined): v is string => v != null && v.trim() !== "";
+
+function serviceNotFound(name: string, valid: string[]): { ok: false; response: Response } {
+  return fail(400, "service_not_found", `No service named “${name}” at this site. Valid services: ${valid.join(", ") || "(none configured)"}.`);
+}
+function staffNotFound(name: string, valid: string[]): { ok: false; response: Response } {
+  return fail(400, "staff_not_found", `No staff named “${name}” at this site. Valid staff: ${valid.join(", ") || "(none configured)"}.`);
+}
+
+/** service_id OR service (name). Both + disagree → param_conflict. Neither → invalid_request. */
+export async function resolveServiceParam(
+  auth: SchedulingAuth,
+  siteId: string,
+  serviceId: string | null | undefined,
+  serviceName: string | null | undefined,
+): Promise<Resolved<string>> {
+  const hasId = has(serviceId);
+  const hasName = has(serviceName);
+  if (!hasId && !hasName) return fail(400, "invalid_request", "Provide service_id or service (the service name).");
+  let fromName: string | null = null;
+  if (hasName) {
+    const m = await resolveServiceByNameAtSite(auth.tenantId, siteId, serviceName);
+    if (m.status === "not_found") return serviceNotFound(serviceName!.trim(), m.valid);
+    if (m.status === "ambiguous") {
+      return fail(400, "ambiguous_match", `More than one service matches “${serviceName!.trim()}”: ${m.candidates.map((c) => `${c.name} (${c.id})`).join("; ")}. Pass service_id to choose.`);
+    }
+    fromName = m.id;
+  }
+  if (hasId) {
+    if (!isUuid(serviceId!)) return fail(400, "invalid_request", "service_id must be a valid UUID.");
+    if (!(await isServiceEnabledAtSite(auth.tenantId, siteId, serviceId!))) {
+      return fail(404, "service_not_found", "No service with that id is offered at this site. Call GET /api/scheduling/v1/services?site_id=… for valid ids.");
+    }
+    if (fromName && fromName !== serviceId) return fail(400, "param_conflict", "service_id and service refer to different services — send only one.");
+    return { ok: true, value: serviceId! };
+  }
+  return { ok: true, value: fromName! };
+}
+
+/** staff_id OR staff (name), OPTIONAL. Neither → null ("any"). Both + disagree → param_conflict. */
+export async function resolveStaffParam(
+  auth: SchedulingAuth,
+  siteId: string,
+  staffId: string | null | undefined,
+  staffName: string | null | undefined,
+): Promise<Resolved<string | null>> {
+  const hasId = has(staffId);
+  const hasName = has(staffName);
+  if (!hasId && !hasName) return { ok: true, value: null };
+  let fromName: string | null = null;
+  if (hasName) {
+    const m = await resolveStaffByNameAtSite(auth.tenantId, siteId, staffName);
+    if (m.status === "not_found") return staffNotFound(staffName!.trim(), m.valid);
+    if (m.status === "ambiguous") {
+      return fail(400, "ambiguous_match", `More than one staff member matches “${staffName!.trim()}”: ${m.candidates.map((c) => `${c.name} (${c.id})`).join("; ")}. Pass staff_id to choose.`);
+    }
+    fromName = m.id;
+  }
+  if (hasId) {
+    if (!isUuid(staffId!)) return fail(400, "invalid_request", "staff_id must be a valid UUID.");
+    if (!(await isActiveStaffOfSite(auth.tenantId, siteId, staffId!))) {
+      return fail(404, "staff_not_found", "No active staff with that id at this site. Call GET /api/scheduling/v1/staff?site_id=… for valid ids.");
+    }
+    if (fromName && fromName !== staffId) return fail(400, "param_conflict", "staff_id and staff refer to different staff — send only one.");
+    return { ok: true, value: staffId! };
+  }
+  return { ok: true, value: fromName };
+}
+
+/**
+ * start_at (ISO-8601) OR day ("YYYY-MM-DD") + time (site-local clock). Both + disagree →
+ * param_conflict. `tz` is the SITE timezone, so the caller never converts. Keeps the exact
+ * 422 invalid_body messages an existing start_at caller already sees.
+ */
+export function resolveStartParam(
+  startAt: string | null | undefined,
+  day: string | null | undefined,
+  time: string | null | undefined,
+  tz: string,
+): Resolved<Date> {
+  const hasStart = has(startAt);
+  const hasDay = has(day);
+  const hasTime = has(time);
+  if (!hasStart && !hasDay && !hasTime) {
+    return fail(422, "invalid_body", "Provide start_at (ISO-8601) or day + time (site-local).");
+  }
+  let fromDayTime: Date | null = null;
+  if (hasDay || hasTime) {
+    if (!(hasDay && hasTime)) return fail(400, "invalid_request", "day and time must be provided together.");
+    fromDayTime = combineLocalDayTime(day!, time!, tz);
+    if (!fromDayTime) {
+      return fail(400, "invalid_request", `Could not read day “${day}” + time “${time}”. Use day=YYYY-MM-DD and time as “14:30” (24h) or “9:00 am”.`);
+    }
+  }
+  let fromStart: Date | null = null;
+  if (hasStart) {
+    fromStart = parseIsoDate(startAt);
+    if (!fromStart) return fail(422, "invalid_body", "start_at must be an ISO-8601 datetime.");
+  }
+  if (fromStart && fromDayTime && fromStart.getTime() !== fromDayTime.getTime()) {
+    return fail(400, "param_conflict", "start_at and day+time refer to different times — send only one.");
+  }
+  return { ok: true, value: (fromStart ?? fromDayTime)! };
+}
+
+/** The path segment that means "identify the appointment from the body, not by UUID". */
+export const BY_TIME = "by-time";
+
+/**
+ * §3: resolve which appointment a cancel/reschedule targets. `pathId` is either a UUID
+ * (existing callers, unchanged) or the literal `by-time`, in which case the body must carry
+ * `phone`/`email`/`external_id` + `current_day` + `current_time` and we resolve that
+ * contact's ACTIVE appointment at that local moment. A wrong id on cancel is the most
+ * destructive transcription error, so this NEVER guesses: no match → 404 with the contact's
+ * active appointments; more than one → 400 ambiguous_match.
+ */
+export async function resolveAppointmentTarget(
+  auth: SchedulingAuth,
+  pathId: string,
+  identity: { phone?: string | null; email?: string | null; externalId?: string | null; currentDay?: string | null; currentTime?: string | null },
+): Promise<Resolved<string>> {
+  if (isUuid(pathId)) return { ok: true, value: pathId };
+  if (pathId !== BY_TIME) {
+    return fail(400, "invalid_request", `appointment id must be a valid UUID, or “${BY_TIME}” with phone/email/external_id + current_day + current_time.`);
+  }
+  if (!has(identity.phone) && !has(identity.email) && !has(identity.externalId)) {
+    return fail(400, "invalid_request", "Provide phone, email, or external_id (with current_day + current_time) to identify the appointment by time.");
+  }
+  if (!has(identity.currentDay) || !has(identity.currentTime)) {
+    return fail(400, "invalid_request", "current_day (YYYY-MM-DD) and current_time are required to find the appointment by time.");
+  }
+  const hhmm = parseClockTime(identity.currentTime);
+  if (!hhmm) return fail(400, "invalid_request", `Could not read current_time “${identity.currentTime}”. Use “14:30” (24h) or “9:00 am”.`);
+  const contactIds = await resolveContactIds(auth, identity);
+  const m = await resolveActiveAppointmentByLocalTime(auth.tenantId, auth.clientId, contactIds, identity.currentDay!.trim(), hhmm);
+  if (m.status === "ok") return { ok: true, value: m.id };
+  if (m.status === "ambiguous") {
+    return fail(400, "ambiguous_match", `More than one active appointment matches: ${m.matches.map((x) => `${x.service} on ${x.day} at ${x.time} (${x.id})`).join("; ")}. Pass the appointment id to choose.`);
+  }
+  const listing = m.active.length
+    ? ` That contact's active appointments: ${m.active.map((x) => `${x.day} ${x.time} ${x.service}`).join("; ")}.`
+    : " That contact has no active appointments.";
+  return fail(404, "appointment_not_found", `No active appointment for that contact at ${identity.currentDay} ${identity.currentTime}.${listing}`);
+}
+
+/** Resolve phone/email/external_id → the client's contact-id set (may be empty). */
+export async function resolveContactIds(
+  auth: SchedulingAuth,
+  identity: { phone?: string | null; email?: string | null; externalId?: string | null },
+): Promise<string[]> {
+  if (!has(identity.phone) && !has(identity.email) && !has(identity.externalId)) return [];
+  return findContactIdsByIdentity({
+    tenantId: auth.tenantId,
+    clientId: auth.clientId,
+    phone: identity.phone ?? undefined,
+    email: identity.email ?? undefined,
+    channelUserId: identity.externalId ?? undefined,
+  });
+}
+
+/**
+ * §2 recovery aid: when a requested day+time isn't bookable, name a few real available
+ * times THAT day so the agent can re-offer immediately (empty string if none / on error).
+ */
+export async function nearestTimesHint(
+  auth: SchedulingAuth,
+  siteId: string,
+  serviceId: string,
+  staffId: string | null,
+  around: Date,
+  tz: string,
+): Promise<string> {
+  try {
+    const p = utcToZonedParts(around, tz);
+    const pad = (n: number): string => String(n).padStart(2, "0");
+    const dayStart = combineLocalDayTime(`${p.year}-${pad(p.month)}-${pad(p.day)}`, "00:00", tz);
+    if (!dayStart) return "";
+    const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+    const av = await loadAvailability({ tenantId: auth.tenantId, siteId, serviceId, staffId, from: dayStart, to: dayEnd, now: new Date() });
+    if (!av || av.slots.length === 0) return " No other times are available that day — offer another day.";
+    const times = av.slots.slice(0, 6).map((s) => {
+      const q = utcToZonedParts(s.start_at, tz);
+      return `${pad(q.hour)}:${pad(q.minute)}`;
+    });
+    return ` Available that day: ${times.join(", ")}.`;
+  } catch {
+    return "";
+  }
+}
