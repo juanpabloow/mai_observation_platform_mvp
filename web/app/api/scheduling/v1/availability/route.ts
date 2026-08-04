@@ -36,20 +36,22 @@ export async function GET(req: Request): Promise<Response> {
   if (to.getTime() - from.getTime() > MAX_WINDOW_MS) {
     return schedulingError(400, "invalid_request", "Requested window is too large (max 45 days).");
   }
-  const owned = await resolveOwnedSite(auth.auth, siteId);
+  // requireActive: availability is a NEW-booking read, so a deactivated site returns
+  // site_inactive (409), not a misleading not_found — this was the operator's dead end.
+  const owned = await resolveOwnedSite(auth.auth, siteId, { requireActive: true });
   if (!owned.ok) return owned.response;
 
-  // Validate resource shapes + membership BEFORE the engine (no 22P02, no
-  // foreign/unknown/not-enabled leaking): service must be enabled at this site,
-  // and a given staff_id must be an active staff OF this site.
+  // Validate resource shapes + membership BEFORE the engine. Malformed id → 400 (§3: a
+  // fabricated/mistyped id must fail loudly, never a 404 or empty result). A well-formed
+  // but unknown/not-enabled resource → the SPECIFIC, actionable 404 so an agent can recover.
   if (!isUuid(serviceId) || (staffId && !isUuid(staffId))) {
-    return schedulingError(404, "not_found", "Not found.");
+    return schedulingError(400, "invalid_request", "service_id and staff_id must be valid UUIDs.");
   }
   if (!(await isServiceEnabledAtSite(auth.auth.tenantId, owned.site.id, serviceId))) {
-    return schedulingError(404, "not_found", "Not found.");
+    return schedulingError(404, "service_not_found", "No service with that id is offered at this site. Call GET /api/scheduling/v1/services?site_id=… to get valid service ids.");
   }
   if (staffId && !(await isActiveStaffOfSite(auth.auth.tenantId, owned.site.id, staffId))) {
-    return schedulingError(404, "not_found", "Not found.");
+    return schedulingError(404, "staff_not_found", "No active staff with that id at this site. Call GET /api/scheduling/v1/staff?site_id=… to get valid staff ids.");
   }
 
   const result = await loadAvailability({
@@ -61,7 +63,7 @@ export async function GET(req: Request): Promise<Response> {
     to,
     now: new Date(),
   });
-  if (!result) return schedulingError(404, "not_found", "Service is not offered at this site.");
+  if (!result) return schedulingError(404, "service_not_found", "That service isn’t offered at this site. Call GET /api/scheduling/v1/services?site_id=… to get valid service ids.");
 
   // Label timezone: the ?tz override, else the site's own timezone (the physical place).
   const tz = labels.tzOverride ?? result.site.timezone;

@@ -83,21 +83,48 @@ export async function authenticateScheduling(req: Request, capability: Capabilit
 
 /**
  * Resolve a `site_id` request value to a site OWNED BY the authenticated client.
- * Invalid UUID, unknown site, or a site of another client all return the SAME
- * generic 404 (never revealing it exists under a different client). Every
- * site-scoped read (services/staff/availability/appointments filter) routes
- * through this so a token can't point at a foreign site.
+ *
+ * Post-AUTH resource errors are SPECIFIC (the caller already has full access to this
+ * client's data, so naming the resource leaks nothing), and a foreign site is
+ * indistinguishable from a nonexistent one (both → `site_not_found`) so nothing
+ * cross-client leaks:
+ *   - malformed UUID              → 400 invalid_request  (a client mistake, never a 404)
+ *   - unknown / another client's  → 404 site_not_found   (actionable: list valid ids)
+ *   - exists but deactivated,     → 409 site_inactive    (only when opts.requireActive —
+ *     and requireActive             so the caller can tell "wrong id" from "deactivated")
+ *
+ * `requireActive` is TRUE for availability / services / staff / new bookings (an inactive
+ * site can't be booked) and FALSE for reads of EXISTING data (the appointments list must
+ * still show a deactivated site's history — deactivation is forward-looking).
  */
 export async function resolveOwnedSite(
   auth: SchedulingAuth,
   siteId: string | null | undefined,
+  opts: { requireActive?: boolean } = {},
 ): Promise<{ ok: true; site: SiteRow } | { ok: false; response: Response }> {
   if (!siteId || !isUuid(siteId)) {
-    return { ok: false, response: schedulingError(404, "not_found", "Not found.") };
+    return { ok: false, response: schedulingError(400, "invalid_request", "site_id must be a valid UUID.") };
   }
   const site = await getSiteById(auth.tenantId, siteId);
   if (!site || site.client_id !== auth.clientId) {
-    return { ok: false, response: schedulingError(404, "not_found", "Not found.") };
+    return {
+      ok: false,
+      response: schedulingError(
+        404,
+        "site_not_found",
+        "No site with that id exists for this client. Call GET /api/scheduling/v1/sites to list valid site ids.",
+      ),
+    };
+  }
+  if (opts.requireActive && !site.active) {
+    return {
+      ok: false,
+      response: schedulingError(
+        409,
+        "site_inactive",
+        "This site exists but is deactivated, so it can’t be used for availability or new bookings. Reactivate it in scheduling settings, or use a different site_id (GET /api/scheduling/v1/sites lists active sites).",
+      ),
+    };
   }
   return { ok: true, site };
 }
@@ -118,6 +145,40 @@ export function bookingErrorStatus(error: BookingError): number {
     default:
       return 400;
   }
+}
+
+/**
+ * Translate a booking-engine error into a SPECIFIC, actionable machine-API response
+ * WITHOUT touching the engine (its `not_found` is also the cross-client security guard and
+ * is byte-identical across tests). A transition/read only fails "not found" because the
+ * appointment doesn't exist for this client (a cross-client id stays indistinguishable —
+ * still `appointment_not_found`); every other error keeps its own code + message.
+ */
+export function appointmentErrorResponse(result: { error: BookingError; message: string }): Response {
+  if (result.error === "not_found") {
+    return schedulingError(
+      404,
+      "appointment_not_found",
+      "No appointment with that id exists for this client. Call GET /api/scheduling/v1/appointments to list valid ids.",
+    );
+  }
+  return schedulingError(bookingErrorStatus(result.error), result.error, result.message);
+}
+
+/**
+ * Same idea for CREATE: the create route pre-validates site/service/staff, so a residual
+ * engine `not_found` means the service isn't bookable at this site. Map it to the specific,
+ * actionable `service_not_found`; keep conflicts/unavailable/no_staff/module_disabled as-is.
+ */
+export function createErrorResponse(result: { error: BookingError; message: string }): Response {
+  if (result.error === "not_found") {
+    return schedulingError(
+      404,
+      "service_not_found",
+      "That service isn’t bookable at this site. Call GET /api/scheduling/v1/services?site_id=… to get valid service ids.",
+    );
+  }
+  return schedulingError(bookingErrorStatus(result.error), result.error, result.message);
 }
 
 /** The public projection of an appointment (safe to return to n8n / the customer).

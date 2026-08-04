@@ -28,10 +28,10 @@ export async function GET(req: Request, { params }: { params: Promise<{ contactI
   const auth = await authenticateCrm(req, "crm.read");
   if (!auth.ok) return auth.response;
   const { contactId } = await params;
-  if (!isUuid(contactId)) return crmError(404, "not_found", "Contact not found.");
+  if (!isUuid(contactId)) return crmError(400, "invalid_request", "contact id must be a valid UUID.");
 
   const contact = await loadMachineContact(auth.auth.tenantId, auth.auth.clientId, contactId);
-  if (!contact) return crmError(404, "not_found", "Contact not found.");
+  if (!contact) return crmError(404, "contact_not_found", "No contact with that id exists for this client. Call GET /api/crm/v1/contacts/lookup or POST /api/crm/v1/contacts/upsert to resolve one.");
   return Response.json({ contact });
 }
 
@@ -40,7 +40,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ contac
   if (!auth.ok) return auth.response;
   const { tenantId, clientId } = auth.auth;
   const { contactId } = await params;
-  if (!isUuid(contactId)) return crmError(404, "not_found", "Contact not found.");
+  if (!isUuid(contactId)) return crmError(400, "invalid_request", "contact id must be a valid UUID.");
 
   let raw: unknown;
   try {
@@ -54,7 +54,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ contac
 
   // The contact must belong to this client (missing/cross-client → the same 404).
   const existing = await getContactById(tenantId, contactId, clientId);
-  if (!existing) return crmError(404, "not_found", "Contact not found.");
+  if (!existing) return crmError(404, "contact_not_found", "No contact with that id exists for this client. Call GET /api/crm/v1/contacts/lookup or POST /api/crm/v1/contacts/upsert to resolve one.");
 
   // Custom fields validated against the client's definitions BEFORE any write.
   let customValue: Record<string, unknown> | undefined;

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
   authenticateScheduling,
-  bookingErrorStatus,
+  createErrorResponse,
   parseIsoDate,
   projectAppointment,
   resolveLabelParams,
@@ -12,7 +12,9 @@ import { isUuid } from "@/lib/clientModuleValidation";
 import { createAppointment } from "@worker/scheduling/booking.js";
 import { listAppointments, type AppointmentStatus } from "@worker/db/repositories/scheduling/appointments.js";
 import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
-import { getContactCardById, findContactIdsByIdentity } from "@worker/db/repositories/contactIdentities.js";
+import { isServiceEnabledAtSite } from "@worker/db/repositories/scheduling/services.js";
+import { isActiveStaffOfSite, staffBelongsToClient } from "@worker/db/repositories/scheduling/staff.js";
+import { getContactCardById, findContactIdsByIdentity, contactBelongsToClient } from "@worker/db/repositories/contactIdentities.js";
 
 /**
  * /api/scheduling/v1/appointments
@@ -107,7 +109,9 @@ export async function GET(req: Request): Promise<Response> {
     to = d;
   }
 
-  // Optional site_id must be OWNED by the resolved client (foreign/unknown → 404).
+  // Optional site_id must be OWNED by the resolved client. NO requireActive: this is a
+  // read of EXISTING data, so a deactivated site's appointments must still be listable
+  // (deactivation is forward-looking) — a foreign/unknown site is still site_not_found.
   const siteIdParam = p.get("site_id");
   let siteId: string | undefined;
   if (siteIdParam) {
@@ -115,13 +119,22 @@ export async function GET(req: Request): Promise<Response> {
     if (!owned.ok) return owned.response;
     siteId = owned.site.id;
   }
-  // UUID-validate the other id filters so a malformed value can't 22P02 (and a
-  // foreign but valid id simply matches nothing under the mandatory clientId).
+  // UUID-validate the other id filters so a malformed value can't 22P02.
   const staffIdParam = p.get("staff_id");
   const contactIdParam = p.get("contact_id");
   const conversationIdParam = p.get("conversation_id");
   for (const v of [staffIdParam, contactIdParam, conversationIdParam]) {
     if (v && !isUuid(v)) return schedulingError(400, "invalid_request", "Filter ids must be UUIDs.");
+  }
+  // §3: a well-formed but NONEXISTENT filter id must fail LOUDLY — never a silent empty
+  // list (that is exactly how a fabricated contact_id read back as "you have no
+  // appointments"). A foreign id is indistinguishable from a nonexistent one (both →
+  // *_not_found), so nothing cross-client leaks. Historical filters, so active is ignored.
+  if (staffIdParam && !(await staffBelongsToClient(auth.auth.tenantId, auth.auth.clientId, staffIdParam))) {
+    return schedulingError(404, "staff_not_found", "No staff with that id exists for this client. Call GET /api/scheduling/v1/staff?site_id=… to get valid staff ids.");
+  }
+  if (contactIdParam && !(await contactBelongsToClient(auth.auth.tenantId, auth.auth.clientId, contactIdParam))) {
+    return schedulingError(404, "contact_not_found", "No contact with that id exists for this client. Resolve it via GET /api/crm/v1/contacts/lookup or POST /api/crm/v1/contacts/upsert.");
   }
 
   // Identity filters (C-2 spine): resolve phone/email/external_id → a contact-id set.
@@ -211,6 +224,20 @@ export async function POST(req: Request): Promise<Response> {
   const startAt = parseIsoDate(b.start_at);
   if (!startAt) return schedulingError(422, "invalid_body", "start_at must be an ISO-8601 datetime.");
 
+  // Pre-validate the referenced resources so a bad id gets a SPECIFIC, actionable error
+  // (site_inactive / site_not_found / service_not_found / staff_not_found) instead of the
+  // engine's single generic not_found. The engine still re-checks everything under
+  // scopeClientId, so this is defense-in-depth, not the only guard. (Body id SHAPE is
+  // already enforced by zod → 422 invalid_body, satisfying §3's "never 404/empty".)
+  const site = await resolveOwnedSite(auth.auth, b.site_id, { requireActive: true });
+  if (!site.ok) return site.response;
+  if (!(await isServiceEnabledAtSite(auth.auth.tenantId, site.site.id, b.service_id))) {
+    return schedulingError(404, "service_not_found", "No service with that id is offered at this site. Call GET /api/scheduling/v1/services?site_id=… to get valid service ids.");
+  }
+  if (b.staff_id && !(await isActiveStaffOfSite(auth.auth.tenantId, site.site.id, b.staff_id))) {
+    return schedulingError(404, "staff_not_found", "No active staff with that id at this site. Call GET /api/scheduling/v1/staff?site_id=… to get valid staff ids.");
+  }
+
   const result = await createAppointment({
     tenantId: auth.auth.tenantId,
     siteId: b.site_id,
@@ -235,7 +262,7 @@ export async function POST(req: Request): Promise<Response> {
   });
 
   if (!result.ok) {
-    return schedulingError(bookingErrorStatus(result.error), result.error, result.message);
+    return createErrorResponse(result);
   }
   // Label timezone: the ?tz override, else the appointment's site tz.
   const tz = labels.tzOverride ?? (await getSiteById(auth.auth.tenantId, result.value.site_id))?.timezone ?? "UTC";

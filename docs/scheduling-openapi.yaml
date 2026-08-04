@@ -145,8 +145,9 @@ components:
       description: >
         Missing X-Workflow-Ref (`workflow_ref_required`); an unrecognized query
         param (`unknown_parameter`) or one sent with an empty value
-        (`empty_parameter`); a malformed id, unknown status value, non-boolean
-        `active`, or bad `from`/`to` (`invalid_request`).
+        (`empty_parameter`); a MALFORMED id (not a UUID), unknown status value,
+        non-boolean `active`, or bad `from`/`to` (`invalid_request`). A malformed id
+        is always a 400 — never a 404 and never a silent empty result.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
     Forbidden:
       description: >
@@ -155,13 +156,20 @@ components:
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
     NotFound:
       description: >
-        Workflow not found (unknown/foreign/wrong-connection ref), or a resource
-        (site/appointment) that doesn't resolve under this client — `not_found`.
-        Foreign resources are indistinguishable from missing ones.
+        AUTH-stage (indistinguishable): an unknown/foreign/wrong-connection
+        X-Workflow-Ref → `not_found` "Workflow not found." RESOURCE-stage (specific,
+        actionable — the caller already has this client's data, so naming the missing
+        resource leaks nothing): `site_not_found` · `service_not_found` ·
+        `staff_not_found` · `contact_not_found` · `appointment_not_found`. The message
+        names the endpoint to call for valid ids. A foreign id is indistinguishable
+        from a nonexistent one (same `*_not_found`). A well-formed but fabricated id
+        NEVER returns an empty success — it returns the matching `*_not_found`.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
     Conflict:
       description: >
-        Slot taken (`conflict_slot`), no longer available (`unavailable`), no staff
+        `site_inactive` — the site exists but is deactivated (distinct from
+        `site_not_found`; reactivate it or use another site_id). Booking conflicts:
+        slot taken (`conflict_slot`), no longer available (`unavailable`), no staff
         (`no_staff`), idempotency-key reuse with a different payload
         (`conflict_idempotency`), or an illegal state transition (`invalid_transition`).
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
@@ -196,6 +204,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /staff:
     get:
       summary: List staff at a site (optionally filtered to a service)
@@ -209,6 +218,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /availability:
     get:
       summary: Real availability for a service in a window
@@ -240,6 +250,7 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /appointments:
     get:
       summary: List appointments (safe filters; the resolved client only)

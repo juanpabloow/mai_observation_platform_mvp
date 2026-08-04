@@ -20,7 +20,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ contact
   if (!auth.ok) return auth.response;
   const { tenantId, clientId } = auth.auth;
   const { contactId } = await params;
-  if (!isUuid(contactId)) return crmError(404, "not_found", "Contact not found.");
+  if (!isUuid(contactId)) return crmError(400, "invalid_request", "contact id must be a valid UUID.");
 
   let raw: unknown;
   try {
@@ -33,7 +33,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ contact
   const name = parsed.data.tag;
 
   // Verify the contact is this client's BEFORE creating a tag (no orphan tag on a foreign id).
-  if (!(await getContactById(tenantId, contactId, clientId))) return crmError(404, "not_found", "Contact not found.");
+  if (!(await getContactById(tenantId, contactId, clientId))) return crmError(404, "contact_not_found", "No contact with that id exists for this client. Call GET /api/crm/v1/contacts/lookup or POST /api/crm/v1/contacts/upsert to resolve one.");
 
   // Find-or-create the tag by name (names are unique case-insensitively per client).
   const created = await createTag({ tenantId, clientId, name, color: "gray" });
@@ -47,7 +47,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ contact
   }
 
   const att = await attachTag({ tenantId, clientId, contactId, tagId, actorUserId: null, actorKind: "automation" });
-  if (!att.ok) return crmError(404, "not_found", "Contact not found.");
+  if (!att.ok) return crmError(404, "contact_not_found", "No contact with that id exists for this client. Call GET /api/crm/v1/contacts/lookup or POST /api/crm/v1/contacts/upsert to resolve one.");
 
   const contact = await loadMachineContact(tenantId, clientId, contactId);
   return Response.json({ contact });

@@ -25,9 +25,9 @@ export async function GET(req: Request): Promise<Response> {
   const ids = await findContactIdsByIdentity(
     { tenantId: auth.auth.tenantId, clientId: auth.auth.clientId, channelUserId: externalId, phone, email },
   );
-  if (ids.length === 0) return crmError(404, "not_found", "No contact matches that identity.");
+  if (ids.length === 0) return crmError(404, "contact_not_found", "No contact matches that identity. Call POST /api/crm/v1/contacts/upsert to create one, or check the phone/email/external id.");
 
   const contact = await loadMachineContact(auth.auth.tenantId, auth.auth.clientId, ids[0]);
-  if (!contact) return crmError(404, "not_found", "No contact matches that identity.");
+  if (!contact) return crmError(404, "contact_not_found", "No contact matches that identity. Call POST /api/crm/v1/contacts/upsert to create one, or check the phone/email/external id.");
   return Response.json({ contact });
 }

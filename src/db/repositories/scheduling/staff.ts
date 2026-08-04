@@ -85,6 +85,20 @@ export async function isActiveStaffOfSite(tenantId: string, siteId: string, staf
   return r.rows.length > 0;
 }
 
+/** Does `staffId` belong to this client (via its site), REGARDLESS of active state?
+ * Used by the appointments-list filter to fail loudly on a fabricated/foreign staff_id
+ * (§3) instead of returning an empty list. Historical reads must still resolve a
+ * deactivated staff member, so this deliberately does NOT filter on active. */
+export async function staffBelongsToClient(tenantId: string, clientId: string, staffId: string): Promise<boolean> {
+  const r = await query<{ ok: boolean }>(
+    `SELECT true AS ok
+       FROM staff s JOIN sites si ON si.id = s.site_id AND si.tenant_id = s.tenant_id
+      WHERE s.id = $3 AND s.tenant_id = $1 AND si.client_id = $2`,
+    [tenantId, clientId, staffId],
+  );
+  return r.rows.length > 0;
+}
+
 export interface CreateStaffInput {
   tenantId: string;
   siteId: string;

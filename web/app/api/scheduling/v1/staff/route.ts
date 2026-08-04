@@ -17,15 +17,19 @@ export async function GET(req: Request): Promise<Response> {
   const siteId = params.get("site_id");
   const serviceId = params.get("service_id");
   if (!siteId) return schedulingError(400, "invalid_request", "site_id is required.");
-  const owned = await resolveOwnedSite(auth.auth, siteId);
+  // requireActive: this lists bookable staff at a site; a deactivated site → site_inactive (409).
+  const owned = await resolveOwnedSite(auth.auth, siteId, { requireActive: true });
   if (!owned.ok) return owned.response;
 
   let rows;
   if (serviceId) {
-    // Validate the service_id shape (avoid a 22P02) and that it's actually
-    // enabled at THIS site — a malformed/unknown/not-enabled service → generic 404.
-    if (!isUuid(serviceId) || !(await isServiceEnabledAtSite(auth.auth.tenantId, owned.site.id, serviceId))) {
-      return schedulingError(404, "not_found", "Not found.");
+    // Malformed service_id → 400 (§3: fail loudly, never 404/empty). A well-formed but
+    // unknown/not-enabled service → the specific, actionable service_not_found.
+    if (!isUuid(serviceId)) {
+      return schedulingError(400, "invalid_request", "service_id must be a valid UUID.");
+    }
+    if (!(await isServiceEnabledAtSite(auth.auth.tenantId, owned.site.id, serviceId))) {
+      return schedulingError(404, "service_not_found", "No service with that id is offered at this site. Call GET /api/scheduling/v1/services?site_id=… to get valid service ids.");
     }
     rows = await listStaffForService(auth.auth.tenantId, owned.site.id, serviceId);
   } else {

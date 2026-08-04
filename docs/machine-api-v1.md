@@ -85,15 +85,33 @@ reach another connection's workflow or another client's data. **`tenant_id` and
 One shape everywhere: `{ "error": { "code": <machine code>, "message": <human, Spanish-
 paraphrasable> } }`. Never leak internals.
 
+**Two error stages.** *Auth-stage* failures (before the client is resolved) are deliberately
+**indistinguishable** — a bad/missing/revoked token and a token lacking the capability all
+return the SAME `401`, and any unknown/foreign `X-Workflow-Ref` returns the SAME `404
+not_found` "Workflow not found." — so a caller can't probe what exists. *Resource-stage*
+failures (AFTER auth, within the caller's own client) are **specific and actionable**: the
+caller already has full access to that client, so naming the missing resource leaks nothing,
+and an LLM agent needs the code to recover. A foreign id is still indistinguishable from a
+nonexistent one (both → the same `*_not_found`), so nothing cross-client leaks.
+
 | Status | code | When |
 |---|---|---|
-| 401 | `unauthorized` | bad/missing/revoked token, or a token lacking the required capability |
+| 401 | `unauthorized` | bad/missing/revoked token, or a token lacking the required capability (auth-stage; indistinguishable) |
 | 400 | `workflow_ref_required` | `X-Workflow-Ref` missing/blank (scheduling, CRM) |
-| 404 | `not_found` | workflow not under this token's connection; unknown contact/appointment; a foreign id |
+| 404 | `not_found` | workflow not under this token's connection / unknown / foreign (auth-stage, "Workflow not found.") |
+| 400 | `invalid_request` | a **malformed** id (not a UUID) or bad query param — fails loudly, never a 404 or empty result |
+| 404 | `site_not_found` · `service_not_found` · `staff_not_found` · `contact_not_found` · `appointment_not_found` | a **well-formed** id with no such resource for this client. Message names the recovery endpoint (e.g. "Call GET /api/scheduling/v1/services?site_id=… to get valid ids") |
+| 409 | `site_inactive` | the site exists but is **deactivated** — distinct from `site_not_found` so an operator can tell "wrong id" from "deactivated". Reactivate it, or use another site_id |
 | 403 | `module_disabled` | the resolved client has the family's module off (or is the default client) |
-| 422 | `invalid_body` / `invalid_request` | malformed JSON / failed schema |
+| 422 | `invalid_body` | malformed JSON / failed schema (create/patch bodies — id shape enforced here → never a silent empty result) |
 | 422 | `validation` | a custom-field value fails its definition (names the field) |
 | 409 | `conflict_slot` / `unavailable` / `conflict_idempotency` / `no_staff` / `invalid_transition` | booking conflicts |
+
+A **fabricated but well-formed** id never reads back as an empty success: a filter like
+`GET /appointments?contact_id=<uuid that never existed>` returns `404 contact_not_found`,
+not `{ "appointments": [] }` — so an agent learns the id is wrong instead of concluding
+"no appointments". Reads of EXISTING data still show a deactivated resource's history: an
+inactive site's appointments remain listable via `GET /appointments?site_id=…`.
 
 ### 1.6 Idempotency-Key (agents retry)
 Every **write** accepts an optional `Idempotency-Key` header. A retry with the same key

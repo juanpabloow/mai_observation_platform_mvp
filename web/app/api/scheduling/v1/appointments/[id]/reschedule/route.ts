@@ -1,7 +1,7 @@
 import { z } from "zod";
 import {
+  appointmentErrorResponse,
   authenticateScheduling,
-  bookingErrorStatus,
   parseIsoDate,
   projectAppointment,
   resolveLabelParams,
@@ -29,7 +29,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   if (!labels.ok) return labels.response;
   const { id } = await params;
   // Validate the id BEFORE reading the body (a bad id never touches the body/DB).
-  if (!isUuid(id)) return schedulingError(404, "not_found", "Not found.");
+  if (!isUuid(id)) return schedulingError(400, "invalid_request", "appointment id must be a valid UUID.");
 
   let json: unknown;
   try {
@@ -50,7 +50,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
     actorType: "n8n",
     scopeClientId: auth.auth.clientId,
   });
-  if (!result.ok) return schedulingError(bookingErrorStatus(result.error), result.error, result.message);
+  if (!result.ok) return appointmentErrorResponse(result);
   const tz = labels.tzOverride ?? (await getSiteById(auth.auth.tenantId, result.value.site_id))?.timezone ?? "UTC";
   const contact = result.value.contact_id ? await getContactCardById(auth.auth.tenantId, auth.auth.clientId, result.value.contact_id) : null;
   return Response.json({ appointment: projectAppointment(result.value, tz, labels.locale, contact) });

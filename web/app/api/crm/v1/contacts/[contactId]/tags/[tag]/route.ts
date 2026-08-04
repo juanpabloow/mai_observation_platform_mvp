@@ -17,10 +17,10 @@ export async function DELETE(req: Request, { params }: { params: Promise<{ conta
   if (!auth.ok) return auth.response;
   const { tenantId, clientId } = auth.auth;
   const { contactId, tag } = await params;
-  if (!isUuid(contactId)) return crmError(404, "not_found", "Contact not found.");
+  if (!isUuid(contactId)) return crmError(400, "invalid_request", "contact id must be a valid UUID.");
   const name = decodeURIComponent(tag).trim();
 
-  if (!(await getContactById(tenantId, contactId, clientId))) return crmError(404, "not_found", "Contact not found.");
+  if (!(await getContactById(tenantId, contactId, clientId))) return crmError(404, "contact_not_found", "No contact with that id exists for this client. Call GET /api/crm/v1/contacts/lookup or POST /api/crm/v1/contacts/upsert to resolve one.");
 
   const found = (await listTags(tenantId, clientId)).find((t) => t.name.toLowerCase() === name.toLowerCase());
   if (found) {

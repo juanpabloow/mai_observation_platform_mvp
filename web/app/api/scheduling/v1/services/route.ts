@@ -13,7 +13,9 @@ export async function GET(req: Request): Promise<Response> {
   if (!auth.ok) return auth.response;
   const siteId = new URL(req.url).searchParams.get("site_id");
   if (!siteId) return schedulingError(400, "invalid_request", "site_id is required.");
-  const owned = await resolveOwnedSite(auth.auth, siteId);
+  // requireActive: the service catalogue is for BOOKING at this site; a deactivated site
+  // returns site_inactive (409), not a misleading site_not_found.
+  const owned = await resolveOwnedSite(auth.auth, siteId, { requireActive: true });
   if (!owned.ok) return owned.response;
   const services = await listServicesForSite(auth.auth.tenantId, owned.site.id);
   return Response.json({
