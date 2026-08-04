@@ -2,6 +2,8 @@ import { authenticateScheduling, parseIsoDate, resolveLabelParams, resolveOwnedS
 import { resolveServiceParam, resolveStaffParam } from "@/lib/semanticParams";
 import { localTimeFields } from "@/lib/localTime";
 import { loadAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
+import { listStaff, listStaffForService } from "@worker/db/repositories/scheduling/staff.js";
+import { getServiceById } from "@worker/db/repositories/scheduling/services.js";
 
 /**
  * GET /api/scheduling/v1/availability?site_id=&(service_id|service)=&(staff_id|staff)?=&from=&to=
@@ -9,9 +11,11 @@ import { loadAvailability } from "@worker/db/repositories/scheduling/availabilit
  * Real availability from the shared engine (identical rules to the public page).
  * The service may be given by `service_id` (UUID) OR `service` (NAME); staff optionally by
  * `staff_id` OR `staff` (NAME) — an LLM transcribes a name far more reliably than a UUID.
- * When staff is omitted, slots across all qualified staff are returned, each carrying the
- * deterministically chosen staff plus available_staff_ids. The window [from,to] is capped
- * to the site's booking horizon by the engine.
+ * A `staff` filter returns ONLY that staff's slots (the engine does the set membership, not
+ * the agent). Each slot additionally carries `staff_name` and `available_staff` [{id,name}]
+ * so an agent can say "5:00 p.m. with Padre G" without mapping ids. When staff is omitted,
+ * slots across all qualified staff are returned. The window [from,to] is capped to the
+ * site's booking horizon by the engine.
  */
 export const dynamic = "force-dynamic";
 
@@ -46,6 +50,27 @@ export async function GET(req: Request): Promise<Response> {
   const stf = await resolveStaffParam(auth.auth, owned.site.id, p.get("staff_id"), p.get("staff"));
   if (!stf.ok) return stf.response;
 
+  // Staff name map for the slot labels (ids in slots are always active staff of the site).
+  const staffRows = await listStaff(auth.auth.tenantId, { siteId: owned.site.id, includeInactive: true });
+  const nameById = new Map(staffRows.map((s) => [s.id, s.name] as const));
+
+  // If a specific staff was requested, verify they actually PERFORM this service. A barber
+  // who doesn't do the service is a real business case; returning it as an empty slot list
+  // is indistinguishable from "no availability", so answer with a distinct, readable error.
+  if (stf.value) {
+    const qualified = await listStaffForService(auth.auth.tenantId, owned.site.id, svc.value);
+    if (!qualified.some((q) => q.id === stf.value)) {
+      const staffName = nameById.get(stf.value) ?? "That staff member";
+      const service = await getServiceById(auth.auth.tenantId, auth.auth.clientId, svc.value);
+      const who = qualified.map((q) => q.name).join(", ") || "no one at this site";
+      return schedulingError(
+        409,
+        "staff_service_mismatch",
+        `${staffName} doesn’t perform ${service?.name ?? "that service"}. Staff who do: ${who}. Omit the staff filter to see all availability, or pick a service ${staffName} performs.`,
+      );
+    }
+  }
+
   const result = await loadAvailability({
     tenantId: auth.auth.tenantId,
     siteId: owned.site.id,
@@ -71,7 +96,11 @@ export async function GET(req: Request): Promise<Response> {
       service_end_at: s.service_end_at,
       ...localTimeFields(s.start_at, s.service_end_at, tz, labels.locale),
       staff_id: s.staff_id,
+      // Additive (E-1 addendum): names so an agent can say "with Padre G" without mapping
+      // ids. The id fields above are unchanged for programmatic callers.
+      staff_name: nameById.get(s.staff_id) ?? null,
       available_staff_ids: s.available_staff_ids,
+      available_staff: s.available_staff_ids.map((id) => ({ id, name: nameById.get(id) ?? null })),
       candidates: s.candidates,
     })),
   });

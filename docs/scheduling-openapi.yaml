@@ -94,9 +94,18 @@ components:
         start_at: { type: string, format: date-time, description: Canonical UTC; pass back verbatim to book. }
         service_end_at: { type: string, format: date-time, description: For the chosen staff (duration can differ per staff). }
         staff_id: { type: string, format: uuid, description: Deterministically chosen staff for "any". }
+        staff_name: { type: [string, "null"], description: "E-1: name for staff_id, so an agent can say 'with Padre G' without mapping ids." }
         available_staff_ids:
           type: array
           items: { type: string, format: uuid }
+        available_staff:
+          type: array
+          description: "E-1: additive {id,name} for each available staff (available_staff_ids is unchanged)."
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: [string, "null"] }
         candidates:
           type: array
           description: Per-staff service windows for this start (each staff's own duration).
@@ -172,7 +181,9 @@ components:
     Conflict:
       description: >
         `site_inactive` — the site exists but is deactivated (distinct from
-        `site_not_found`; reactivate it or use another site_id). Booking conflicts:
+        `site_not_found`; reactivate it or use another site_id).
+        `staff_service_mismatch` — availability: the requested staff doesn't perform the
+        requested service; the message names who does (never an empty slot list). Booking conflicts:
         slot taken (`conflict_slot`), no longer available (`unavailable`), no staff
         (`no_staff`), idempotency-key reuse with a different payload
         (`conflict_idempotency`), or an illegal state transition (`invalid_transition`).
@@ -227,7 +238,7 @@ paths:
   /availability:
     get:
       summary: Real availability for a service in a window
-      description: "E-1: the service may be given by `service_id` (UUID) OR `service` (NAME); staff optionally by `staff_id` OR `staff` (NAME). A bad name → 400 service_not_found/staff_not_found (message lists valid names); an ambiguous name → 400 ambiguous_match."
+      description: "E-1: the service may be given by `service_id` (UUID) OR `service` (NAME); staff optionally by `staff_id` OR `staff` (NAME). A bad name → 400 service_not_found/staff_not_found (message lists valid names); an ambiguous name → 400 ambiguous_match. A `staff` filter returns ONLY that staff's slots; a staff who doesn't perform the service → 409 staff_service_mismatch (naming who does), never an empty list. Each slot carries staff_name + available_staff [{id,name}]."
       parameters:
         - { $ref: "#/components/parameters/WorkflowRef" }
         - { name: site_id, in: query, required: true, schema: { type: string, format: uuid } }

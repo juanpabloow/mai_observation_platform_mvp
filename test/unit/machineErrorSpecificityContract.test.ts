@@ -45,6 +45,14 @@ test('availability/services/staff resolve the site with requireActive: true (ina
   }
 });
 
+test('availability labels slots with staff names + rejects an unqualified staff/service pair', () => {
+  const src = web('app/api/scheduling/v1/availability/route.ts');
+  // E-1 addendum: additive names on every slot, and the distinct mismatch error.
+  assert.ok(src.includes('staff_name:'), 'slot carries staff_name');
+  assert.ok(src.includes('available_staff:') && src.includes('available_staff_ids:'), 'slot keeps ids AND adds {id,name}');
+  assert.ok(src.includes('listStaffForService(') && src.includes('"staff_service_mismatch"'), 'unqualified staff+service → distinct error, not empty slots');
+});
+
 test('availability resolves service/staff via the semantic layer; specific codes live there', () => {
   const src = web('app/api/scheduling/v1/availability/route.ts');
   assert.ok(src.includes('resolveServiceParam(') && src.includes('resolveStaffParam('), 'availability resolves service/staff (id or name)');

@@ -104,6 +104,7 @@ nonexistent one (both → the same `*_not_found`), so nothing cross-client leaks
 | 409 | `site_inactive` | the site exists but is **deactivated** — distinct from `site_not_found` so an operator can tell "wrong id" from "deactivated". Reactivate it, or use another site_id |
 | 400 | `ambiguous_match` | a `service`/`staff` name (or a `by-time` identity) matched more than one row — the message lists the candidates (E-1) |
 | 400 | `param_conflict` | an id and a name, or `start_at` and `day`+`time`, were both sent and disagree — send only one (E-1) |
+| 409 | `staff_service_mismatch` | availability: the requested `staff`/`staff_id` doesn't perform the requested service — the message names who does (never an empty slot list) (E-1) |
 | 403 | `module_disabled` | the resolved client has the family's module off (or is the default client) |
 | 422 | `invalid_body` | malformed JSON / failed schema (create/patch bodies — id shape enforced here → never a silent empty result) |
 | 422 | `validation` | a custom-field value fails its definition (names the field) |
@@ -203,6 +204,32 @@ whitespace-collapsed).
 No match → `400 service_not_found` / `staff_not_found` whose message **lists the valid
 names** for that site. Two names both matching → `400 ambiguous_match` listing the
 candidates (never a silent pick). An id and a name that disagree → `400 param_conflict`.
+
+**Staff in availability (E-1 addendum).** Every availability slot additionally carries
+`staff_name` (for the chosen `staff_id`) and `available_staff` — an array of `{ id, name }`
+(the id fields `staff_id` / `available_staff_ids` are unchanged) — so an agent can say
+"5:00 p.m. with Padre G" without mapping ids. A `staff` (or `staff_id`) filter returns
+**only** that staff's slots — the engine does the set membership, not the model. A staff
+member who exists but **doesn't perform the requested service** returns a distinct
+`409 staff_service_mismatch` naming who does — **not** an empty slot list (which reads as
+"no availability" and would make the agent report the wrong thing). Executed:
+
+```
+GET /api/scheduling/v1/availability?site_id=…&service=Corte&staff=Beto&from=…&to=…
+→ 200  { "slots": [ { "start_at": "2026-08-20T14:00:00.000Z", "start_label": "9:00 a. m.",
+                      "staff_id": "3682…", "staff_name": "Beto",
+                      "available_staff_ids": ["3682…"],
+                      "available_staff": [ { "id": "3682…", "name": "Beto" } ], … }, … ] }
+
+GET …/availability?site_id=…&service=Color&staff=Beto&from=…&to=…
+→ 409  { "error": { "code": "staff_service_mismatch",
+                    "message": "Beto doesn’t perform Color. Staff who do: Ana. Omit the staff
+                                filter to see all availability, or pick a service Beto performs." } }
+
+GET …/availability?site_id=…&service=Corte&staff=Simón&from=…&to=…
+→ 400  { "error": { "code": "staff_not_found",
+                    "message": "No staff named “Simón” at this site. Valid staff: Ana, Beto." } }
+```
 
 **Local day + time** — booking and reschedule accept, instead of `start_at`:
 - **`day`** — `YYYY-MM-DD` in the SITE's timezone.
