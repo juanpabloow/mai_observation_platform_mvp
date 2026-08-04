@@ -3,6 +3,10 @@
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import {
+  activateServiceAction,
+  activateSiteAction,
+  activateStaffAction,
+  countUpcomingAppointmentsAction,
   createExceptionAction,
   createServiceAction,
   createSiteAction,
@@ -153,6 +157,10 @@ function WhyNothingAvailable({ sites, staff }: { sites: Site[]; staff: Staff[] }
     return own ? Boolean(own[dow]?.[0]) : siteOpen; // inheriting staff work iff the site is open
   };
   const working = staff.filter(worksThisDay);
+  // 3e — distinguish "everyone is deactivated" from "no one works this weekday". If the
+  // site has staff but every one is inactive, say so exactly (that was a blind guess before).
+  const staffAtSite = staff.filter((st) => st.site_id === siteId);
+  const allStaffInactive = staffAtSite.length > 0 && staffAtSite.every((st) => !st.active);
 
   return (
     <Section title="Why is nothing available?">
@@ -171,7 +179,13 @@ function WhyNothingAvailable({ sites, staff }: { sites: Site[]; staff: Staff[] }
         </p>
         <p>
           <span className="text-faint">Staff working:</span>{" "}
-          {working.length === 0 ? <span className="text-danger">none — nothing can be booked</span> : working.map((s) => s.name).join(", ")}
+          {working.length > 0 ? (
+            working.map((s) => s.name).join(", ")
+          ) : allStaffInactive ? (
+            <span className="text-danger">none — every staff member at this site is inactive. Reactivate one under Staff below.</span>
+          ) : (
+            <span className="text-danger">none — nothing can be booked</span>
+          )}
         </p>
         <p className="text-[11px] text-faint">One-off blocks (vacations/holidays) are listed under Exceptions below.</p>
       </div>
@@ -180,6 +194,89 @@ function WhyNothingAvailable({ sites, staff }: { sites: Site[]; staff: Staff[] }
 }
 
 type Run = (fn: () => Promise<{ ok: boolean; error?: string }>) => void;
+type ToggleKind = "site" | "service" | "staff";
+
+const DEACTIVATE: Record<ToggleKind, (clientId: string, id: string) => Promise<{ ok: boolean; error?: string }>> = {
+  site: deactivateSiteAction,
+  service: deactivateServiceAction,
+  staff: deactivateStaffAction,
+};
+const ACTIVATE: Record<ToggleKind, (clientId: string, id: string) => Promise<{ ok: boolean; error?: string }>> = {
+  site: activateSiteAction,
+  service: activateServiceAction,
+  staff: activateStaffAction,
+};
+
+/**
+ * The state-reflecting Active/Deactivate control (3a + 3d). Deactivation is a
+ * forward-looking switch, so:
+ *  - INACTIVE → a single "Activate" button (the inverse that was missing — no more
+ *    one-way door).
+ *  - ACTIVE → "Deactivate"; on click it first counts FUTURE appointments and, when any
+ *    exist, shows an inline confirmation stating the count. It never cancels or cascades
+ *    — the operator may legitimately be deactivating someone who left; existing
+ *    appointments stay and remain visible.
+ */
+function ActiveToggle({
+  clientId, kind, id, name, active, run, pending,
+}: {
+  clientId: string; kind: ToggleKind; id: string; name: string; active: boolean; run: Run; pending: boolean;
+}) {
+  const [confirmMsg, setConfirmMsg] = useState<string | null>(null);
+  const [checking, startCheck] = useTransition();
+
+  if (!active) {
+    return (
+      <button className={GHOST} disabled={pending} onClick={() => run(() => ACTIVATE[kind](clientId, id))}>
+        Activate
+      </button>
+    );
+  }
+  if (confirmMsg) {
+    return (
+      <ConfirmInline
+        label={confirmMsg}
+        busy={pending}
+        onConfirm={() => { setConfirmMsg(null); run(() => DEACTIVATE[kind](clientId, id)); }}
+        onCancel={() => setConfirmMsg(null)}
+      />
+    );
+  }
+  const onDeactivate = () => {
+    startCheck(async () => {
+      const c = await countUpcomingAppointmentsAction(clientId, kind, id);
+      const count = c.ok ? c.count : 0;
+      if (count > 0) {
+        setConfirmMsg(
+          `${name} has ${count} upcoming appointment${count === 1 ? "" : "s"}. Deactivating stops new bookings; existing appointments stay and remain visible.`,
+        );
+      } else {
+        run(() => DEACTIVATE[kind](clientId, id));
+      }
+    });
+  };
+  return (
+    <button className={GHOST} disabled={pending || checking} onClick={onDeactivate}>
+      {checking ? "Checking…" : "Deactivate"}
+    </button>
+  );
+}
+
+/** Inline confirmation (mirrors the inbox ConfirmInline) — a warning + Confirm/Cancel,
+ *  never a blocking browser dialog. */
+function ConfirmInline({ label, busy, onConfirm, onCancel }: { label: string; busy: boolean; onConfirm: () => void; onCancel: () => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-2">
+      <span className="text-xs text-amber-700 dark:text-amber-400">{label}</span>
+      <button type="button" disabled={busy} onClick={onConfirm} className="rounded border border-amber-500/40 px-2 py-0.5 text-[11px] text-amber-700 transition-colors hover:bg-amber-500/10 disabled:opacity-50 dark:text-amber-400">
+        {busy ? "Working…" : "Deactivate anyway"}
+      </button>
+      <button type="button" onClick={onCancel} className="rounded border border-line px-2 py-0.5 text-[11px] transition-colors hover:bg-subtle">
+        Cancel
+      </button>
+    </div>
+  );
+}
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
@@ -232,7 +329,7 @@ function EditableSite({ clientId, site, run, pending }: { clientId: string; site
     <div className={`flex flex-col gap-2 rounded-lg border border-line px-3 py-2 ${site.active ? "" : "bg-subtle/40"}`}>
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-medium">{site.name} {site.active ? "" : <em className="text-faint">(inactive)</em>}</span>
-        {site.active ? <button className={GHOST} disabled={pending} onClick={() => run(() => deactivateSiteAction(clientId, site.id))}>Deactivate</button> : null}
+        <ActiveToggle clientId={clientId} kind="site" id={site.id} name={site.name} active={site.active} run={run} pending={pending} />
       </div>
       <CopyId label="Site id" value={site.id} />
       <div className="flex flex-wrap gap-2">
@@ -307,7 +404,7 @@ function EditableService({ clientId, service, activeSites, siteServiceMap, run, 
     <div className={`flex flex-col gap-2 rounded-lg border border-line px-3 py-2 ${service.active ? "" : "bg-subtle/40"}`}>
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-medium">{service.name} {service.active ? "" : <em className="text-faint">(inactive)</em>}</span>
-        {service.active ? <button className={GHOST} disabled={pending} onClick={() => run(() => deactivateServiceAction(clientId, service.id))}>Deactivate</button> : null}
+        <ActiveToggle clientId={clientId} kind="service" id={service.id} name={service.name} active={service.active} run={run} pending={pending} />
       </div>
       <CopyId label="Service id" value={service.id} />
       <div className="flex flex-wrap items-end gap-2">
@@ -438,7 +535,7 @@ function EditableStaff({ clientId, staff, siteName, offered, run, pending }: {
     <div className={`flex flex-col gap-2 rounded-lg border border-line px-3 py-2 ${staff.active ? "" : "bg-subtle/40"}`}>
       <div className="flex items-center justify-between gap-2">
         <span className="text-sm font-medium">{staff.name} <span className="text-faint">· {siteName}</span> {staff.active ? "" : <em className="text-faint">(inactive)</em>}</span>
-        {staff.active ? <button className={GHOST} disabled={pending} onClick={() => run(() => deactivateStaffAction(clientId, staff.id))}>Deactivate</button> : null}
+        <ActiveToggle clientId={clientId} kind="staff" id={staff.id} name={staff.name} active={staff.active} run={run} pending={pending} />
       </div>
       <CopyId label="Staff id" value={staff.id} />
       <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wider text-faint">Name<input value={name} onChange={(e) => setName(e.target.value)} className={INPUT} /></label>

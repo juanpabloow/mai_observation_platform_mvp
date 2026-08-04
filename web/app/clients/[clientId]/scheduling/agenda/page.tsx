@@ -90,13 +90,21 @@ export default async function ClientAgendaPage({
   const dayStart = zonedPartsToUtc(y, m, d, 0, 0, site.timezone);
   const dayEnd = zonedPartsToUtc(y, m, d + 1, 0, 0, site.timezone);
 
-  const [staff, services, appts, crmEnabled, inboxEnabled] = await Promise.all([
-    listStaff(tenantId, { siteId: site.id, clientId: client.id }),
+  const [allStaff, services, appts, crmEnabled, inboxEnabled] = await Promise.all([
+    // includeInactive: a deactivated barber must still get a lane IF they have
+    // appointments this day — otherwise their (intact) appointments have nowhere to
+    // render and disappear. The booking form still offers ACTIVE staff only (AgendaView).
+    listStaff(tenantId, { siteId: site.id, clientId: client.id, includeInactive: true }),
     listServicesForSite(tenantId, site.id),
     listAppointments(tenantId, { siteId: site.id, from: dayStart, to: dayEnd, clientId: client.id }),
     isClientModuleEnabled(tenantId, client.id, "crm"),
     isClientModuleEnabled(tenantId, client.id, "inbox"),
   ]);
+  // Lanes = every ACTIVE staff member + any INACTIVE one who still has an appointment in
+  // this window. Deactivation is forward-looking: it stops new bookings, never hides the
+  // history that already points at that resource.
+  const apptStaffIds = new Set(appts.map((a) => a.staff_id));
+  const staff = allStaff.filter((s) => s.active || apptStaffIds.has(s.id));
 
   // C-4.1 book-for-contact deep-link: prefill the "new appointment" modal with the
   // contact (locked, not typed) so staff never retype identity already on the record.
@@ -129,7 +137,7 @@ export default async function ClientAgendaPage({
       dayEndIso={dayEnd.toISOString()}
       sites={sites.map((s) => ({ id: s.id, name: s.name, timezone: s.timezone }))}
       currentSiteId={site.id}
-      staff={staff.map((s) => ({ id: s.id, name: s.name }))}
+      staff={staff.map((s) => ({ id: s.id, name: s.name, active: s.active }))}
       services={services.map((s) => ({ id: s.id, name: s.name, duration_min: s.effective_duration_min }))}
       appointments={appts.map((a) => ({
         id: a.id,

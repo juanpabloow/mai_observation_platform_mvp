@@ -15,7 +15,10 @@ import {
 
 /** Serializable shapes passed from the server page. */
 interface SiteOpt { id: string; name: string; timezone: string }
-interface StaffOpt { id: string; name: string }
+/** `active` = false means the staff member is deactivated. Such a lane still renders (so
+ *  their existing appointments stay visible) with an "inactive" chip, but they are NOT
+ *  offered for NEW bookings (the modal's Barber dropdown filters to active). */
+interface StaffOpt { id: string; name: string; active: boolean }
 interface ServiceOpt { id: string; name: string; duration_min: number }
 interface Appt {
   id: string;
@@ -186,7 +189,17 @@ export function AgendaView(props: {
         <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto">
           {props.staff.map((st) => (
             <section key={st.id} className="flex w-64 shrink-0 flex-col gap-2">
-              <h2 className="sticky top-0 border-b border-line pb-1 text-sm font-medium">{st.name}</h2>
+              <h2 className="sticky top-0 flex items-center gap-1.5 border-b border-line pb-1 text-sm font-medium">
+                {st.name}
+                {!st.active ? (
+                  <span
+                    title="This staff member is inactive — existing appointments are shown, but new bookings are off. Reactivate in Scheduling settings."
+                    className="rounded bg-subtle px-1.5 py-0.5 text-[10px] font-normal text-faint"
+                  >
+                    inactive
+                  </span>
+                ) : null}
+              </h2>
               {activeByStaff(st.id).length === 0 ? (
                 <p className="text-xs text-faint">No appointments</p>
               ) : (
@@ -398,7 +411,9 @@ function AppointmentModal(props: {
             <span className="text-xs text-muted">Barber</span>
             <select value={staffId} onChange={(e) => setStaffId(e.target.value)} className="rounded-lg border border-line-strong bg-transparent px-2 py-1.5">
               <option value="">Any</option>
-              {props.staff.map((s) => (
+              {/* NEW bookings offer ACTIVE staff only — an inactive barber's lane is visible
+                  for history but must not be selectable for a new appointment. */}
+              {props.staff.filter((s) => s.active).map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>

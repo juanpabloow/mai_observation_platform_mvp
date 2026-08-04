@@ -138,3 +138,14 @@ export async function deactivateStaff(tenantId: string, id: string): Promise<boo
   );
   return (r.rowCount ?? 0) > 0;
 }
+
+/** The inverse of deactivateStaff — reactivation restores availability + new bookings
+ * for this staff member with no data migration and no side effects. Returns true if a
+ * staff member was reactivated (false if not found / already active). */
+export async function reactivateStaff(tenantId: string, id: string): Promise<boolean> {
+  const r = await query(
+    `UPDATE staff SET active = true, updated_at = now() WHERE id = $1 AND tenant_id = $2 AND active = false`,
+    [id, tenantId],
+  );
+  return (r.rowCount ?? 0) > 0;
+}

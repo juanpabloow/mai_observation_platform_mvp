@@ -182,6 +182,18 @@ export async function deactivateService(tenantId: string, clientId: string, id: 
   return (r.rowCount ?? 0) > 0;
 }
 
+/** The inverse of deactivateService — reactivation makes the service bookable again
+ * (where its site_services enablement is active) with no data migration. Returns true
+ * if a service was reactivated (false if not found / already active). */
+export async function reactivateService(tenantId: string, clientId: string, id: string): Promise<boolean> {
+  const r = await query(
+    `UPDATE services SET active = true, updated_at = now()
+      WHERE id = $1 AND tenant_id = $2 AND client_id = $3 AND active = false`,
+    [id, tenantId, clientId],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
 // ── site_services ────────────────────────────────────────────────────────────
 
 /** Enable (upsert) a service at a site. Validates STRUCTURALLY that the site and

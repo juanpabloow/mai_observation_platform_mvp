@@ -330,6 +330,31 @@ export async function listAppointments(
   return r.rows;
 }
 
+/**
+ * Count FUTURE, still-active (scheduled|confirmed) appointments tied to a resource —
+ * powers the deactivation guard (3d): "Padre G has 3 upcoming appointments." Scoped by
+ * tenant + client; exactly one of staffId/serviceId/siteId identifies the resource.
+ * Cancelled/completed/no-show and past appointments are NOT counted (they can't be
+ * affected by deactivating a resource going forward). This never blocks or mutates —
+ * it only informs the confirmation.
+ */
+export async function countUpcomingAppointmentsForResource(
+  tenantId: string,
+  filter: { clientId: string; staffId?: string; serviceId?: string; siteId?: string },
+  now: Date = new Date(),
+): Promise<number> {
+  const col = filter.staffId ? 'staff_id' : filter.serviceId ? 'service_id' : filter.siteId ? 'site_id' : null;
+  const val = filter.staffId ?? filter.serviceId ?? filter.siteId;
+  if (!col || !val || !filter.clientId) return 0; // fail closed: no resource → nothing to warn about
+  const r = await query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM appointments
+      WHERE tenant_id = $1 AND client_id = $2 AND ${col} = $3
+        AND status IN ('scheduled', 'confirmed') AND start_at >= $4`,
+    [tenantId, filter.clientId, val, now],
+  );
+  return r.rows[0]?.n ?? 0;
+}
+
 export interface AppointmentEventRow {
   id: string;
   event_type: AppointmentEventType;

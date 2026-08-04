@@ -9,23 +9,27 @@ import {
   createSite,
   deactivateSite,
   getSiteById,
+  reactivateSite,
   updateSite,
 } from "@worker/db/repositories/scheduling/sites.js";
 import {
   createStaff,
   deactivateStaff,
   getStaffById,
+  reactivateStaff,
   updateStaff,
 } from "@worker/db/repositories/scheduling/staff.js";
 import {
   createService,
   deactivateService,
   getServiceById,
+  reactivateService,
   removeStaffService,
   setSiteService,
   setStaffService,
   updateService,
 } from "@worker/db/repositories/scheduling/services.js";
+import { countUpcomingAppointmentsForResource } from "@worker/db/repositories/scheduling/appointments.js";
 import {
   createException,
   deleteException,
@@ -137,6 +141,17 @@ export async function deactivateSiteAction(clientId: string, id: string): Promis
   return { ok: true };
 }
 
+/** The inverse of deactivateSiteAction (3a). Owner/admin only, same client scoping. */
+export async function activateSiteAction(clientId: string, id: string): Promise<AdminResult> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  if (!(await siteInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
+  const ok = await reactivateSite(auth.tenantId, id);
+  if (!ok) return { ok: false, error: "Site not found or already active." };
+  revalidateAdmin(clientId);
+  return { ok: true };
+}
+
 // ── Services (this CLIENT's own catalogue, enabled per THIS client's sites) ─────
 
 export async function createServiceAction(input: {
@@ -192,6 +207,16 @@ export async function deactivateServiceAction(clientId: string, id: string): Pro
   if (!auth.ok) return auth;
   const ok = await deactivateService(auth.tenantId, clientId, id);
   if (!ok) return { ok: false, error: "Service not found or already inactive." };
+  revalidateAdmin(clientId);
+  return { ok: true };
+}
+
+/** The inverse of deactivateServiceAction (3a). Owner/admin only, same client scoping. */
+export async function activateServiceAction(clientId: string, id: string): Promise<AdminResult> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  const ok = await reactivateService(auth.tenantId, clientId, id);
+  if (!ok) return { ok: false, error: "Service not found or already active." };
   revalidateAdmin(clientId);
   return { ok: true };
 }
@@ -257,6 +282,44 @@ export async function deactivateStaffAction(clientId: string, id: string): Promi
   if (!ok) return { ok: false, error: "Staff not found or already inactive." };
   revalidateAdmin(clientId);
   return { ok: true };
+}
+
+/** The inverse of deactivateStaffAction (3a). Owner/admin only, same client scoping. */
+export async function activateStaffAction(clientId: string, id: string): Promise<AdminResult> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  if (!(await staffInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
+  const ok = await reactivateStaff(auth.tenantId, id);
+  if (!ok) return { ok: false, error: "Staff not found or already active." };
+  revalidateAdmin(clientId);
+  return { ok: true };
+}
+
+/**
+ * The deactivation GUARD (3d): count FUTURE active appointments for a resource so the UI
+ * can warn before deactivating ("Padre G has 3 upcoming appointments"). READ-ONLY — it
+ * never blocks, cascades, or cancels. Owner/admin + client scoping like every action; a
+ * forged/foreign id returns 0 (nothing to warn about) rather than leaking existence.
+ */
+export type UpcomingCountResult = { ok: true; count: number } | { ok: false; error: string };
+export async function countUpcomingAppointmentsAction(
+  clientId: string,
+  kind: "staff" | "service" | "site",
+  id: string,
+): Promise<UpcomingCountResult> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  const belongs =
+    kind === "site"
+      ? await siteInClient(auth.tenantId, clientId, id)
+      : kind === "staff"
+        ? await staffInClient(auth.tenantId, clientId, id)
+        : !!(await getServiceById(auth.tenantId, clientId, id));
+  if (!belongs) return { ok: true, count: 0 };
+  const filter =
+    kind === "site" ? { clientId, siteId: id } : kind === "staff" ? { clientId, staffId: id } : { clientId, serviceId: id };
+  const count = await countUpcomingAppointmentsForResource(auth.tenantId, filter);
+  return { ok: true, count };
 }
 
 export async function setStaffServiceAction(
