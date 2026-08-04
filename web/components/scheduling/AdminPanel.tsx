@@ -42,6 +42,8 @@ interface Site {
 interface Service {
   id: string; name: string; description: string | null; duration_min: number;
   price: string | null; buffer_before_min: number; buffer_after_min: number; active: boolean;
+  /** Operator-chosen "offer this first" flag — the assistant leads with featured services. */
+  featured: boolean;
 }
 interface Staff {
   id: string; site_id: string; name: string; active: boolean; serviceIds: string[];
@@ -454,6 +456,7 @@ function EditableService({ clientId, service, activeSites, siteServiceMap, run, 
   const [price, setPrice] = useState(service.price ?? "");
   const [bBefore, setBBefore] = useState(String(service.buffer_before_min));
   const [bAfter, setBAfter] = useState(String(service.buffer_after_min));
+  const [featured, setFeatured] = useState(service.featured);
   const save = () =>
     run(() =>
       updateServiceAction(clientId, service.id, {
@@ -462,16 +465,24 @@ function EditableService({ clientId, service, activeSites, siteServiceMap, run, 
         price: price === "" ? null : Number(price),
         bufferBeforeMin: Number(bBefore),
         bufferAfterMin: Number(bAfter),
+        featured,
       }),
     );
   const L = "flex flex-col gap-0.5 text-[10px] uppercase tracking-wider text-faint";
   return (
     <div className={`flex flex-col gap-2 rounded-lg border border-line px-3 py-2 ${service.active ? "" : "bg-subtle/40"}`}>
       <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium">{service.name} {service.active ? "" : <em className="text-faint">(inactive)</em>}</span>
+        <span className="text-sm font-medium">
+          {service.name} {service.active ? "" : <em className="text-faint">(inactive)</em>}
+          {service.featured ? <span className="ml-1 rounded bg-accent/10 px-1.5 py-0.5 text-[10px] font-normal text-accent">featured</span> : null}
+        </span>
         <ActiveToggle clientId={clientId} kind="service" id={service.id} name={service.name} active={service.active} run={run} pending={pending} />
       </div>
       <CopyId label="Service id" value={service.id} />
+      <label className="flex w-fit items-center gap-1.5 text-xs text-muted">
+        <input type="checkbox" checked={featured} onChange={(e) => setFeatured(e.target.checked)} />
+        Featured — offered first by the assistant
+      </label>
       <div className="flex flex-wrap items-end gap-2">
         <label className={L}>Name<input value={name} onChange={(e) => setName(e.target.value)} className={INPUT} /></label>
         <label className={L}>Duration (min)<input value={duration} onChange={(e) => setDuration(e.target.value)} className={`${INPUT} w-24`} /></label>
@@ -548,6 +559,10 @@ function ServicesSection({
 
   return (
     <Section title="Services">
+      <p className="text-[11px] text-faint">
+        Featured services are the ones the assistant offers first when a customer hasn’t said
+        what they want. If none are marked, it offers all of them.
+      </p>
       <div className="flex flex-col gap-3">
         {services.map((s) => (
           <EditableService key={s.id} clientId={clientId} service={s} activeSites={activeSites} siteServiceMap={siteServiceMap} run={run} pending={pending} />

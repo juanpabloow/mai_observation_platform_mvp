@@ -210,11 +210,32 @@ paths:
   /services:
     get:
       summary: List services enabled at a site
+      description: "E-2 Featured: each service carries `featured`; featured services are returned FIRST (then the rest, each group name-ordered). `?featured=true` returns ONLY featured — EXCEPT when none are marked, where it falls back to the FULL list (never an empty offer)."
       parameters:
         - { $ref: "#/components/parameters/WorkflowRef" }
         - { name: site_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: featured, in: query, required: false, description: "true → only featured services (falls back to ALL when none are marked featured).", schema: { type: boolean } }
       responses:
-        "200": { description: OK }
+        "200":
+          description: "OK — services (featured first). `featured` is a boolean per service."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  services:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        name: { type: string }
+                        description: { type: [string, "null"] }
+                        duration_min: { type: integer, description: effective (after any site override) }
+                        price: { type: [string, "null"] }
+                        buffer_before_min: { type: integer }
+                        buffer_after_min: { type: integer }
+                        featured: { type: boolean, description: "E-2: operator-chosen; featured services are listed first." }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }

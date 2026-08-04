@@ -24,6 +24,9 @@ export interface ServiceRow {
   buffer_before_min: number;
   buffer_after_min: number;
   active: boolean;
+  /** Operator-chosen "offer this first" flag (default false). The API returns featured
+   *  services ahead of the rest and can filter to only them (see listServicesForSite). */
+  featured: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -36,7 +39,7 @@ export async function listServices(
   const r = await query<ServiceRow>(
     `SELECT * FROM services
       WHERE tenant_id = $1 AND client_id = $2 ${includeInactive ? '' : 'AND active = true'}
-      ORDER BY name`,
+      ORDER BY featured DESC, name`,
     [tenantId, clientId],
   );
   return r.rows;
@@ -79,7 +82,7 @@ export async function listServicesForSite(tenantId: string, siteId: string): Pro
          ON s.id = ss.service_id AND s.tenant_id = si.tenant_id
         AND s.client_id = si.client_id AND s.active = true
       WHERE si.id = $2 AND si.tenant_id = $1 AND si.active = true
-      ORDER BY s.name`,
+      ORDER BY s.featured DESC, s.name`,
     [tenantId, siteId],
   );
   return r.rows;
@@ -158,6 +161,7 @@ export interface UpdateServiceInput {
   bufferBeforeMin?: number;
   bufferAfterMin?: number;
   active?: boolean;
+  featured?: boolean;
 }
 
 export async function updateService(
@@ -179,6 +183,7 @@ export async function updateService(
   if (patch.bufferBeforeMin !== undefined) add('buffer_before_min', patch.bufferBeforeMin);
   if (patch.bufferAfterMin !== undefined) add('buffer_after_min', patch.bufferAfterMin);
   if (patch.active !== undefined) add('active', patch.active);
+  if (patch.featured !== undefined) add('featured', patch.featured);
   if (sets.length === 0) return getServiceById(tenantId, clientId, id);
   sets.push('updated_at = now()');
   const r = await query<ServiceRow>(

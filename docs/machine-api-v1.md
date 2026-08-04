@@ -254,6 +254,31 @@ On reschedule via `by-time`, `current_day`/`current_time` identify the appointme
 is unchanged. **`site_id` is the one parameter with no name alternative today** (there is
 normally one site; a `site`/slug alternative is a candidate follow-up).
 
+### 1.11 Featured services (E-2, additive)
+
+An agent asked "quiero agendar mañana a las 11" must pick a service before it can check
+availability (durations differ). To let a shop lead with 2–3 signature services instead of
+dumping the whole catalogue (or guessing), `GET /api/scheduling/v1/services`:
+- adds **`featured: true|false`** to each service object (no version bump);
+- returns **featured services FIRST** (then the rest, each group name-ordered), so a caller
+  reading in order naturally leads with them;
+- accepts **`?featured=true`** to return only the featured ones.
+
+**Empty-fallback (important):** if the client has marked NO service as featured,
+`?featured=true` returns the **FULL list**, never an empty one — an agent must never be left
+with nothing to offer because the operator hasn't configured anything yet. Executed:
+
+```
+GET /api/scheduling/v1/services?site_id=e5793e2a-…
+→ 200  { "services": [ { "id":"…","name":"Color","featured":true, … },      # featured first
+                        { "id":"…","name":"Barba","featured":false, … },
+                        { "id":"…","name":"Corte","featured":false, … } ] }
+
+GET /api/scheduling/v1/services?site_id=e5793e2a-…&featured=true
+→ 200  { "services": [ { "name":"Color","featured":true, … } ] }             # only featured
+        # …but with NONE marked featured, the same call returns all three (never []).
+```
+
 ---
 
 ## 2. The three families

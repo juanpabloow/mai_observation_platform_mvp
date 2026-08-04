@@ -198,7 +198,7 @@ export async function createServiceAction(input: {
 export async function updateServiceAction(
   clientId: string,
   id: string,
-  patch: { name?: string; description?: string; durationMin?: number; price?: number | null; bufferBeforeMin?: number; bufferAfterMin?: number; active?: boolean },
+  patch: { name?: string; description?: string; durationMin?: number; price?: number | null; bufferBeforeMin?: number; bufferAfterMin?: number; active?: boolean; featured?: boolean },
 ): Promise<AdminResult> {
   const auth = await requireSchedulingAdmin(clientId);
   if (!auth.ok) return auth;
