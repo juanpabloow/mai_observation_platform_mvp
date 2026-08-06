@@ -32,6 +32,7 @@
     "seed:machine-demo": "tsx src/scripts/seedMachineDemo.ts",
     "backfill:contact-spine": "tsx src/scripts/backfillContactIdentities.ts",
     "backfill:token-capabilities": "tsx src/scripts/backfillTokenCapabilities.ts",
+    "backfill:conversation-contacts": "tsx src/scripts/backfillConversationContacts.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

@@ -1,6 +1,7 @@
 import type { PoolClient, QueryResultRow } from 'pg';
 import { query, firstRowOrThrow, withTransaction } from '../client.js';
 import { normalizeE164 } from '../../scheduling/phone.js';
+import { logger } from '../../logger.js';
 import type { ContactRow } from './contacts.js';
 
 /**
@@ -127,12 +128,137 @@ async function recordCandidate(run: Run, tenantId: string, clientId: string, kee
 }
 
 /**
+ * E-5: link this client's UNLINKED conversations to `contactId` when their conversation_ref
+ * (raw channel id, e.g. "573058830676") normalizes to one of the contact's PHONE identities
+ * (stored E.164, "+573058830676"). ONE indexed UPDATE that:
+ *  - fills only NULL contact_id — NEVER overwrites an existing link;
+ *  - is strictly tenant+client scoped (the conversation's CANONICAL workflow must belong to
+ *    the client — the same rule the inbox + contact record use), so a phone in another
+ *    client can never link across;
+ *  - links ALL matches (a contact may have conversations across several client workflows).
+ * The ref is normalized in SQL exactly as normalizeE164 treats a digit string — strip
+ * non-digits, prepend '+' — and compared to the C-2-normalized phone identities (never raw
+ * string equality). Because a phone identity is UNIQUE per (tenant,client), a NULL match
+ * can only be this contact's; a conversation already linked to a different contact is left
+ * untouched (the identity spine already records duplicate candidates for real collisions).
+ * Returns the number of conversations newly linked.
+ */
+export async function linkNullConversationsByPhone(
+  tenantId: string,
+  clientId: string,
+  contactId: string,
+  client?: PoolClient,
+): Promise<number> {
+  const run = runner(client);
+  const r = await run(
+    `UPDATE conversations c
+        SET contact_id = $3, updated_at = now()
+      WHERE c.tenant_id = $1
+        AND c.contact_id IS NULL
+        AND ('+' || regexp_replace(c.conversation_ref, '[^0-9]', '', 'g')) IN (
+          SELECT ci.value FROM contact_identities ci
+           WHERE ci.tenant_id = $1 AND ci.client_id = $2 AND ci.contact_id = $3 AND ci.kind = 'phone'
+        )
+        AND EXISTS (
+          SELECT 1 FROM (
+            SELECT DISTINCT ON (w.n8n_workflow_id) w.client_id
+              FROM workflows w
+             WHERE w.tenant_id = c.tenant_id AND w.n8n_workflow_id = c.n8n_workflow_id
+             ORDER BY w.n8n_workflow_id, w.last_synced_at DESC NULLS LAST
+          ) cw WHERE cw.client_id = $2
+        )`,
+    [tenantId, clientId, contactId],
+  );
+  return r.rowCount ?? 0;
+}
+
+/**
+ * Best-effort auto-link at the chokepoint. When inside a caller transaction (booking), the
+ * UPDATE runs in a SAVEPOINT so a failure ROLLS BACK ONLY the link and NEVER aborts the
+ * caller — the appointment matters more than the association (log + continue).
+ */
+async function tryLinkConversationsByPhone(
+  client: PoolClient | undefined,
+  tenantId: string,
+  clientId: string,
+  contactId: string,
+): Promise<void> {
+  const run = runner(client);
+  const inTxn = !!client;
+  try {
+    if (inTxn) await run('SAVEPOINT e5_link_conv', []);
+    await linkNullConversationsByPhone(tenantId, clientId, contactId, client);
+    if (inTxn) await run('RELEASE SAVEPOINT e5_link_conv', []);
+  } catch (err) {
+    if (inTxn) {
+      try {
+        await run('ROLLBACK TO SAVEPOINT e5_link_conv', []);
+      } catch {
+        /* the txn is already aborted; nothing more we can do here */
+      }
+    }
+    logger.warn({ err: String(err), tenantId, clientId, contactId }, 'E-5: conversation auto-link failed; continuing');
+  }
+}
+
+// The NULL-contact conversations + their canonical client + phone-normalized ref, and the
+// contacts each matches — shared by the E-5 backfill's count + link passes.
+const BACKFILL_CTE = `
+  nullconv AS (
+    SELECT c.id AS conv_id, c.tenant_id,
+           ('+' || regexp_replace(c.conversation_ref, '[^0-9]', '', 'g')) AS e164,
+           (SELECT cw.client_id FROM (
+               SELECT DISTINCT ON (w.n8n_workflow_id) w.client_id
+                 FROM workflows w
+                WHERE w.tenant_id = c.tenant_id AND w.n8n_workflow_id = c.n8n_workflow_id
+                ORDER BY w.n8n_workflow_id, w.last_synced_at DESC NULLS LAST
+             ) cw LIMIT 1) AS client_id
+      FROM conversations c
+     WHERE c.contact_id IS NULL
+  ),
+  matched AS (
+    SELECT nc.conv_id, nc.tenant_id, array_agg(DISTINCT ci.contact_id) AS contact_ids
+      FROM nullconv nc
+      JOIN contact_identities ci
+        ON ci.tenant_id = nc.tenant_id AND ci.client_id = nc.client_id
+       AND ci.kind = 'phone' AND ci.value = nc.e164
+     WHERE nc.client_id IS NOT NULL
+     GROUP BY nc.conv_id, nc.tenant_id
+  )`;
+
+/**
+ * E-5 backfill (idempotent, no migration). Links every NULL-contact conversation whose
+ * conversation_ref normalizes (phone) to EXACTLY ONE contact in the same tenant+client;
+ * leaves ambiguous (>1) and no-match untouched. Running twice is a no-op (linked rows leave
+ * the NULL set). Never overwrites an existing link.
+ */
+export async function backfillConversationContacts(): Promise<{ scanned: number; linked: number; ambiguous: number; noMatch: number }> {
+  const scanned = (await query<{ n: number }>(`SELECT count(*)::int n FROM conversations WHERE contact_id IS NULL`)).rows[0].n;
+  const ambiguous = (await query<{ n: number }>(`WITH ${BACKFILL_CTE} SELECT count(*)::int n FROM matched WHERE array_length(contact_ids, 1) > 1`)).rows[0].n;
+  const linkRes = await query(
+    `WITH ${BACKFILL_CTE}
+     UPDATE conversations c
+        SET contact_id = m.contact_ids[1], updated_at = now()
+       FROM matched m
+      WHERE c.id = m.conv_id AND c.tenant_id = m.tenant_id
+        AND c.contact_id IS NULL
+        AND array_length(m.contact_ids, 1) = 1`,
+  );
+  const linked = linkRes.rowCount ?? 0;
+  return { scanned, linked, ambiguous, noMatch: scanned - linked - ambiguous };
+}
+
+/**
  * THE resolution chokepoint. Normalizes the inbound identities, resolves them through
  * contact_identities (creating the contact + identities on first sight), and returns
  * the contact. A value already claimed by an EXISTING contact resolves to that contact
  * — so a wa_id and a later typed phone for the same number can never become two
  * contacts. If the write's identities split across MULTIPLE existing contacts, the
  * OLDEST wins and a duplicate candidate is recorded for each other (never auto-merged).
+ *
+ * E-5: after resolving, it AUTO-LINKS the client's unlinked conversations of the same phone
+ * (best-effort — never fails the caller). This is why a contact created by the booking/CRM
+ * API now shows its WhatsApp chat, not just its appointments.
  */
 export async function resolveContactByIdentity(
   input: ResolveIdentityInput,
@@ -172,9 +298,12 @@ export async function resolveContactByIdentity(
       await run(`DELETE FROM contacts WHERE id=$1 AND tenant_id=$2 AND client_id=$3`, [created.id, input.tenantId, input.clientId]);
       const existingId = owner.rows[0].contact_id;
       await attachIdentities(run, input, existingId, idents);
-      return { contact: await fillEmptyAndTouch(run, input, existingId), candidatesRecorded: 0 };
+      const adopted = await fillEmptyAndTouch(run, input, existingId);
+      await tryLinkConversationsByPhone(client, input.tenantId, input.clientId, adopted.id);
+      return { contact: adopted, candidatesRecorded: 0 };
     }
     await attachIdentities(run, input, created.id, idents.slice(1));
+    await tryLinkConversationsByPhone(client, input.tenantId, input.clientId, created.id);
     return { contact: created, candidatesRecorded: 0 };
   }
 
@@ -191,7 +320,9 @@ export async function resolveContactByIdentity(
   }
   // Attach any of this write's still-free identities to the winner (claimed ones skip).
   await attachIdentities(run, input, winner.id, idents);
-  return { contact: await fillEmptyAndTouch(run, input, winner.id), candidatesRecorded };
+  const finalWinner = await fillEmptyAndTouch(run, input, winner.id);
+  await tryLinkConversationsByPhone(client, input.tenantId, input.clientId, finalWinner.id);
+  return { contact: finalWinner, candidatesRecorded };
 }
 
 // ── READ-ONLY lookups for the book-by-contact path (C-4.1) ──────────────────────────

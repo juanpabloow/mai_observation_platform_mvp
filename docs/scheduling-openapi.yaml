@@ -380,7 +380,7 @@ paths:
                 `start_at` (ISO) OR `day` (YYYY-MM-DD, site-local) + `time` (clock). An
                 id-and-name or start_at-and-day/time disagreement → 400 param_conflict.
               properties:
-                conversation_ref: { type: string }
+                conversation_ref: { type: string, description: "E-5: the chat's channel id (same value as the handoff/inbox conversation_ref). When present it sets the appointment's source_conversation_id and links that conversation to the resolved contact — pass it so the timeline shows which chat produced the booking. Separately, resolving any contact by phone auto-links the client's matching conversations." }
                 channel: { type: string, description: "e.g. whatsapp — with channel_user_id, attaches a contact" }
                 channel_user_id: { type: string, description: "wa_id or stable channel id" }
                 customer_name: { type: string }
