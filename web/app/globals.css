@@ -18,47 +18,238 @@
  * bg-sidebar / text-accent / text-danger / text-success).
  */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
-  --muted: #525252; /* secondary text — 7:1 on white */
-  --faint: #6b7280; /* tertiary / hints — ~5:1 on white */
-  --line: rgba(0, 0, 0, 0.12); /* default hairline border */
-  --line-strong: rgba(0, 0, 0, 0.2); /* inputs / emphasized borders */
-  --card: rgba(0, 0, 0, 0.025); /* subtle raised panel */
-  --subtle: rgba(0, 0, 0, 0.05); /* hover / inset surface */
+  /* CANVAS vs SURFACE (operative-tool layering). The canvas is the very soft
+     gray/white page behind everything; surfaces are the white panels that sit on
+     it, separated by 1px cool hairlines — never by shadows or gradients. */
+  --background: #eff1f5; /* app canvas — deliberately DARKER than the spec's
+                            #f8f9fb, which was indistinguishable from the white
+                            panel and made the floating card look full-bleed. */
+  --surface: #ffffff; /* panels, tables, cards, drawers */
+  --chip: #edeff3; /* neutral chip / inset fill */
+  --foreground: #12151b; /* ink */
+  --muted: #6e7075; /* secondary text — 5.0:1 on white (AA) */
+  --faint: #7e8085; /* tertiary labels — 3.95:1 (AA large / non-body only) */
+  --faintest: #9ba3b2; /* 2.7:1 — DECORATIVE only, never sole carrier of meaning */
+  --line: #e1e4e9; /* default hairline border */
+  --line-strong: #d8dae0; /* inputs / emphasized borders */
+  --card: rgba(15, 23, 42, 0.025); /* subtle raised panel */
+  --subtle: rgba(15, 23, 42, 0.05); /* hover / inset surface */
   --popover: #ffffff; /* dropdowns + modals */
-  --popover-foreground: #171717;
-  --sidebar: rgba(0, 0, 0, 0.025);
+  --popover-foreground: #0f172a;
+  --sidebar: #eef0f3; /* cool light gray — recedes behind the canvas */
   /* accent text colors — darker in light mode for contrast, brighter in dark */
   --accent: #059669; /* emerald — links, ✓ */
   --danger: #dc2626; /* red — destructive, errors */
-  --success: #15803d; /* green — connected / complete */
+  --success: #15803d; /* green — ONLY success / positive action */
+  /* BRAND RED — selection and urgency (rows, left rules, active markers). The
+     `-soft` tint is the selected-row fill; `-rule` is the 2px left rule. */
+  --brand: #e60a2f; /* spec accent — 4.7:1 for white-on-brand (AA) */
+  --brand-soft: rgba(230, 10, 47, 0.07);
+  --brand-rule: #e60a2f;
+  /* WARN amber — "needs attention" / overdue, distinct from destructive red. */
+  --warn: #b45309;
+  --warn-soft: rgba(180, 83, 9, 0.08);
+  --warn-rule: #d97706;
   /* minimal scrollbars (H-8.2): subtle-but-visible translucent thumb, both themes */
   --scrollbar-thumb: rgba(0, 0, 0, 0.22);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.38);
 }
 
 .dark {
-  --background: #0a0a0a;
-  --foreground: #ededed;
-  --muted: #a3a3a3; /* ~6:1 on near-black */
-  --faint: #8f8f8f; /* ~4.6:1 */
-  --line: rgba(255, 255, 255, 0.12);
+  /* Dark is LAYERED near-black: the sidebar is slightly DARKER than the content
+     canvas, and surfaces are raised by contrast (a lighter fill + a hairline),
+     never by a shadow. */
+  --background: #101012; /* canvas — content region */
+  --surface: #171719; /* elevated panels (lighter than the canvas) */
+  --foreground: #ededed; /* off-white */
+  --muted: #a8a8ad; /* ~6.5:1 on the canvas */
+  --faint: #8b8b92; /* metadata — ~4.7:1, still AA for its size */
+  --line: rgba(255, 255, 255, 0.11);
   --line-strong: rgba(255, 255, 255, 0.2);
-  --card: rgba(255, 255, 255, 0.03);
-  --subtle: rgba(255, 255, 255, 0.06);
-  --popover: #171717;
+  --card: rgba(255, 255, 255, 0.035);
+  --subtle: rgba(255, 255, 255, 0.07);
+  --chip: #24242a;
+  --faintest: #6f7480;
+  --popover: #1c1c1f;
   --popover-foreground: #ededed;
-  --sidebar: rgba(255, 255, 255, 0.02);
+  --sidebar: #0a0a0b; /* slightly darker than the content canvas */
   --accent: #34d399; /* emerald-400 */
   --danger: #f87171; /* red-400 */
   --success: #4ade80; /* green-400 */
+  /* Elevated red so selection/urgency still reads against near-black. */
+  --brand: #f2555a;
+  --brand-soft: rgba(242, 85, 90, 0.12);
+  --brand-rule: #f2555a;
+  --warn: #fbbf24;
+  --warn-soft: rgba(251, 191, 36, 0.11);
+  --warn-rule: #f59e0b;
   --scrollbar-thumb: rgba(255, 255, 255, 0.2);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.34);
 }
 
+/*
+ * ── SIDEBAR APPEARANCE (personal preference: Light | Black) ──────────────────
+ * The rail reads ONLY these tokens, never the global ones, so switching it can't
+ * leak into the content, header or tables. The defaults below simply track the
+ * active app theme (so "Light" still means a dark rail in dark mode — it is the
+ * NORMAL rail); `[data-sidebar-theme="black"]` pins the near-black palette in
+ * BOTH app themes, because Black is an independent choice.
+ */
+:root {
+  --sidebar-bg: var(--sidebar);
+  --sidebar-border: var(--line);
+  --sidebar-fg: var(--foreground);
+  --sidebar-muted: var(--muted);
+  --sidebar-section: var(--faint);
+  --sidebar-hover: var(--subtle);
+}
+
+[data-sidebar-theme='black'] {
+  /*
+   * The spec's cool dark rail (#141518–#1A1D24). We take the BLUEST end of that
+   * range so it also honours the navy picked earlier — near-black, but clearly
+   * cool beside the white panel. The cookie VALUE stays `black` so preferences
+   * saved before the repaint keep resolving; only the palette + label changed.
+   */
+  --sidebar-bg: #1a1d24;
+  --sidebar-border: #262a33;
+  --sidebar-fg: #f5f6f8; /* ~14.7:1 on the fill */
+  --sidebar-muted: #a2a8b4; /* ~6.8:1 — AA for body text */
+  --sidebar-section: #7e8695; /* ~4.6:1 — AA for the small-caps section labels */
+  --sidebar-hover: var(--sidebar-hover-red);
+}
+
+/*
+ * On a DARK rail the hover is the brand red rather than a neutral lift — it makes
+ * the row you're pointing at unmistakable against near-black. It is deliberately a
+ * TINT, not the solid fill: the solid red is reserved for the ACTIVE row, so hover
+ * and active stay tellable apart (hovering the active row doesn't make a second
+ * row look current). Hovered labels switch to --sidebar-fg (#F4F4F5), which clears
+ * AA against this tint.
+ */
+:root {
+  --sidebar-hover-red: #7f1d1d; /* off-white on this is ~10:1 — comfortably AA */
+  /*
+   * The ACTIVE nav fill. Deliberately NOT --brand: that token is lifted in dark
+   * mode (#f2555a) so red TEXT stays legible on near-black, which made the active
+   * pill read salmon in dark and a different colour from light. This is a solid
+   * fill behind white text, so one fixed red works in both modes — and the rail's
+   * "you are here" mark is then identical everywhere. White on it is 4.8:1 (AA).
+   */
+  --nav-active: #e60a2f;
+}
+
+/*
+ * ── Agenda (Scheduling) ──────────────────────────────────────────────────────
+ * Appointment-card and calendar-grid colours. Kept as tokens so the Agenda never
+ * hardcodes hex, and so the dark rail/theme can flip them independently.
+ *   --service-purple  the default service accent (card left border + service dot)
+ *   --danger-tint     a wash for cards needing attention (overlap / payment due)
+ *   --blocked-*       non-bookable time (buffers, closed days)
+ *   --hover           neutral row/cell hover inside the grid
+ *   --radius-card     appointment-card radius (a step above the panel radius)
+ */
+:root {
+  --service-purple: #5b4ba6;
+  --danger-tint: #f2c0c9;
+  --blocked-bg: #dce3eb;
+  --blocked-fg: #8fa3b8;
+  --hover: #eeeff2;
+  --radius-card: 10px;
+}
+.dark {
+  --service-purple: #8b7bd8;
+  --danger-tint: #4a2029;
+  --blocked-bg: #23272e;
+  --blocked-fg: #7b8794;
+  --hover: #1e1e22;
+}
+
+/*
+ * ── Thread bubbles ───────────────────────────────────────────────────────────
+ * The three senders read as a light → mid → dark ramp, so who said what is clear
+ * at a glance without spending a hue:
+ *   customer    → white surface + hairline (left)
+ *   BOT         → this distinctly grey fill (right)
+ *   human agent → solid near-black / off-white inverse (right)
+ * The bot fill is deliberately well below the canvas in lightness: at --subtle it
+ * sat within a couple of percent of the thread background and the bubbles all but
+ * disappeared in light mode. Green is intentionally NOT used — it is reserved for
+ * success, and red for selection/urgency.
+ */
+:root {
+  /* CUSTOMER (left) — cool light grey. */
+  --bubble-in: #eef0f3;
+  --bubble-in-border: #d3d8de;
+  --bubble-in-fg: #0f172a;
+  /* BOT (right) — a clearly darker step of the SAME cool grey, so the two
+     inbound-ish voices separate by luminosity alone. */
+  --bubble-bot: #dcdfe5;
+  --bubble-bot-border: #bfc5ce;
+  --bubble-bot-fg: #0f172a;
+  /* HUMAN AGENT (right) — the brand RED. This is the one place a person speaking
+     outranks everything else in the thread, and it spends no new hue: it is the
+     same red as the rail's active mark. White on it is 4.8:1 (AA). */
+  --bubble-agent: #e60a2f;
+  --bubble-agent-fg: #ffffff;
+}
+.dark {
+  --bubble-in: #1a1c20;
+  --bubble-in-border: rgba(255, 255, 255, 0.13);
+  --bubble-in-fg: #e8eaee;
+  --bubble-bot: #26292f;
+  --bubble-bot-border: rgba(255, 255, 255, 0.17);
+  --bubble-bot-fg: #eceef2;
+  /* The same red in dark — a solid fill behind white text needs no lift. */
+  --bubble-agent: #e60a2f;
+  --bubble-agent-fg: #ffffff;
+}
+.dark {
+  --sidebar-hover: var(--sidebar-hover-red);
+}
+
 @theme inline {
+  --color-chip: var(--chip);
+  --color-faintest: var(--faintest);
+  --color-service-purple: var(--service-purple);
+  --color-danger-tint: var(--danger-tint);
+  --color-blocked-bg: var(--blocked-bg);
+  --color-blocked-fg: var(--blocked-fg);
+  --color-hover: var(--hover);
+  --radius-card: var(--radius-card);
+  /*
+   * TIGHT RADIUS SCALE (3–5px). Overriding the scale here re-tunes every existing
+   * rounded-* utility at once, which keeps the geometry consistent instead of
+   * leaving a trail of one-off overrides across the surfaces.
+   */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 8px; /* the floating panel */
+  --radius-xl: 10px;
+  --radius-2xl: 12px;
+  --color-nav-active: var(--nav-active);
+  --color-bubble-in: var(--bubble-in);
+  --color-bubble-in-border: var(--bubble-in-border);
+  --color-bubble-in-fg: var(--bubble-in-fg);
+  --color-bubble-bot: var(--bubble-bot);
+  --color-bubble-bot-border: var(--bubble-bot-border);
+  --color-bubble-bot-fg: var(--bubble-bot-fg);
+  --color-bubble-agent: var(--bubble-agent);
+  --color-bubble-agent-fg: var(--bubble-agent-fg);
+  --color-sidebar-bg: var(--sidebar-bg);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-fg: var(--sidebar-fg);
+  --color-sidebar-muted: var(--sidebar-muted);
+  --color-sidebar-section: var(--sidebar-section);
+  --color-sidebar-hover: var(--sidebar-hover);
   --color-background: var(--background);
+  --color-surface: var(--surface);
+  --color-brand: var(--brand);
+  --color-brand-soft: var(--brand-soft);
+  --color-brand-rule: var(--brand-rule);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-warn-rule: var(--warn-rule);
   --color-foreground: var(--foreground);
   --color-muted: var(--muted);
   --color-faint: var(--faint);
@@ -74,6 +265,33 @@
   --color-success: var(--success);
   --font-sans: var(--font-geist-sans);
   --font-mono: var(--font-geist-mono);
+}
+
+/*
+ * GLOBAL UI SCALE. The default 16px root made the operative surfaces feel oversized;
+ * 90% (14.4px) reproduces the density of viewing the app at 90% browser zoom, which
+ * is the target. Because Tailwind's type AND spacing scales are rem-based, this one
+ * declaration rescales the whole UI coherently — it is NOT a font-only change.
+ * Anything sized in literal px would stay put and drift out of proportion, so the
+ * redesigned surfaces express their small type and icons in rem instead.
+ */
+html {
+  font-size: 90%;
+}
+
+/*
+ * ── Shell geometry ───────────────────────────────────────────────────────────
+ * Fixed PIXEL values on purpose: these are chrome dimensions, not content, so
+ * they must NOT ride the 90% rem scale (a 236px rail that silently became 212px
+ * is exactly the drift this round is fixing). Content inside them still scales.
+ */
+:root {
+  --sidebar-width: 238px;
+  --topbar-height: 54px;
+  --content-pad: 16px; /* visible gutter around the floating panel + rhythm */
+  --panel-pad: 16px; /* panel inner padding (see note in the delivery summary) */
+  --control-h: 38px; /* search, facets, buttons */
+  --row-h: 41px; /* table rows */
 }
 
 body {
@@ -129,5 +347,90 @@ body {
 @media (prefers-reduced-motion: reduce) {
   .row-enter {
     animation: none;
+  }
+}
+
+/*
+ * ── Shared operative-tool rules (Contacts / Contact record / Inbox) ──────────
+ * These are DESIGN-SYSTEM level, not per-page classes: every redesigned surface
+ * routes through them so light and dark keep exactly the same structure.
+ */
+
+/* App-wide visible focus. A 2px brand ring with a 1px canvas gap reads on every
+   surface in both themes and never relies on color alone (the ring is a shape). */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--brand);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+/* Mono for timestamps, ids, metadata and table headings (Geist Mono). */
+.u-mono {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* The sidebar's section labels — same type as .u-th but on the rail's own token,
+   so Black recolors them without touching any table heading. */
+.u-th-sidebar {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.625rem;
+  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--sidebar-section);
+}
+
+/* Table heading row: mono, uppercase, tracked-out, metadata gray. */
+.u-th {
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
+  font-size: 0.625rem;
+  line-height: 1.2;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+/* Selected / urgent row: a soft fill plus a 2px LEFT RULE (shape + color, so the
+   state survives grayscale and high-contrast modes). */
+.u-row-selected {
+  background-color: var(--brand-soft);
+  box-shadow: inset 2px 0 0 0 var(--brand-rule);
+}
+.u-row-overdue {
+  background-color: var(--warn-soft);
+  box-shadow: inset 2px 0 0 0 var(--warn-rule);
+}
+/* A row carrying something genuinely OVERDUE: a pink wash plus a 3px brand-red
+   left bar. Distinct from .u-row-overdue above, which is the inbox's amber
+   "needs a human" state — attention-worthy, but not late. */
+.u-row-danger {
+  background-color: color-mix(in srgb, var(--brand) 6%, transparent);
+  box-shadow: inset 3px 0 0 0 var(--brand-rule);
+}
+
+/* Minimum 40px touch target for compact icon controls, without changing layout. */
+.u-tap {
+  position: relative;
+}
+.u-tap::after {
+  content: "";
+  position: absolute;
+  inset: 50% auto auto 50%;
+  width: max(100%, 40px);
+  height: max(100%, 40px);
+  transform: translate(-50%, -50%);
+}
+
+/* Honor reduced motion globally for the redesigned surfaces' transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
   }
 }

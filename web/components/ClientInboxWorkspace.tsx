@@ -226,7 +226,7 @@ export function ClientInboxWorkspace({
         onClick={() => setDetailsInline((o) => !o)}
         aria-label={detailsInline ? "Hide customer details" : "Show customer details"}
         aria-pressed={detailsInline}
-        className="hidden rounded-lg border border-black/10 px-2 py-1 text-xs text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground xl:inline-flex dark:border-line-strong dark:hover:bg-subtle"
+        className="hidden h-8 items-center rounded-md border border-line-strong px-2 text-xs text-muted transition-colors hover:bg-subtle hover:text-foreground xl:inline-flex"
       >
         Details
       </button>
@@ -235,7 +235,7 @@ export function ClientInboxWorkspace({
         type="button"
         onClick={() => setDetailsDrawer(true)}
         aria-label="Show customer details"
-        className="inline-flex rounded-lg border border-black/10 px-2 py-1 text-xs text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground xl:hidden dark:border-line-strong dark:hover:bg-subtle"
+        className="inline-flex h-8 items-center rounded-md border border-line-strong px-2 text-xs text-muted transition-colors hover:bg-subtle hover:text-foreground xl:hidden"
       >
         Details
       </button>
@@ -247,31 +247,41 @@ export function ClientInboxWorkspace({
       {/* ── LEFT — conversation list ── */}
       <aside
         aria-label="Conversations"
-        className={`min-h-0 w-full shrink-0 flex-col border-r border-line lg:flex lg:w-[320px] ${
+        // Desktop queue: 350–390px so the ref + preview + stamp fit without wrapping,
+        // and the CENTER column keeps the rest (no dead space beside a thread).
+        className={`min-h-0 w-full shrink-0 flex-col border-r border-line lg:flex lg:w-[360px] xl:w-[380px] ${
           selectedId ? "hidden lg:flex" : "flex"
         }`}
       >
-        <div className="flex shrink-0 flex-col gap-2 border-b border-line px-4 py-3">
-          <div className="flex items-center justify-between gap-2">
-            <h1 className="text-lg font-semibold tracking-tight">Inbox</h1>
+        {/* h-14 title strip — the SAME height as the thread header, the customer
+            panel header and the app header, so all four line up across the seams. */}
+        <div className="flex flex-col border-b border-line">
+          <div className="flex h-[var(--topbar-height)] shrink-0 items-center justify-between gap-2 px-3">
+            <h1 className="text-sm font-semibold tracking-tight text-foreground">Inbox</h1>
+            {/* The pending counter is the REAL count over the scoped list — the same
+                number the sidebar badge polls. Amber = needs attention (not an error). */}
             <span
-              className="rounded-full bg-amber-500/15 px-2 py-0.5 text-xs font-medium text-amber-700 tabular-nums dark:text-amber-400"
+              className={`u-mono rounded-full px-2 py-0.5 text-[0.6875rem] font-medium ${
+                pending > 0 ? "bg-warn-soft text-warn" : "text-faint"
+              }`}
               title="Conversations awaiting a human"
             >
               {pending} pending
             </span>
           </div>
-          <input
-            type="search"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            placeholder="Search name, number, or message…"
-            aria-label="Search conversations"
-            className="h-9 w-full rounded-lg border border-line bg-transparent px-3 text-sm outline-none focus:border-line-strong"
-          />
-          {/* No in-panel workflow selector (W-2): the header switcher is the single
-              workflow selector; this list follows the active scope. */}
-          {stale ? <span className="text-xs text-faint">Reconnecting…</span> : null}
+          <div className="flex shrink-0 flex-col gap-1 px-3 pb-3">
+            <input
+              type="search"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search name, number, or message…"
+              aria-label="Search conversations"
+              className="h-10 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-foreground outline-none placeholder:text-faint focus:border-brand"
+            />
+            {/* No in-panel workflow selector (W-2): the header switcher is the single
+                workflow selector; this list follows the active scope. */}
+            {stale ? <span className="u-mono text-[0.6875rem] text-faint">Reconnecting…</span> : null}
+          </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -290,10 +300,11 @@ export function ClientInboxWorkspace({
           ) : (
             groups.map((g) => (
               <div key={g.key} role="group" aria-label={g.meta.label}>
-                <div className="flex items-center gap-2 px-4 pb-1 pt-3">
+                {/* Sticky group header so the queue stays legible while scrolling. */}
+                <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-line/60 bg-background/95 px-3 py-1.5 backdrop-blur-none">
                   <GroupDot tone={g.meta.tone} />
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-faint">{g.meta.label}</span>
-                  <span className="text-[11px] tabular-nums text-faint">{g.items.length}</span>
+                  <span className="u-th">{g.meta.label}</span>
+                  <span className="u-mono ml-auto text-[0.6875rem] text-faint">{g.items.length}</span>
                 </div>
                 <ul>
                   {g.items.map((v) => (
@@ -318,7 +329,9 @@ export function ClientInboxWorkspace({
       {/* ── CENTER — chat ── */}
       <section
         aria-label="Conversation"
-        className={`min-h-0 flex-1 flex-col ${selectedId ? "flex" : "hidden lg:flex"}`}
+        // min-w-0 is what actually stops the thread from being squeezed by a long
+        // unbroken message and leaving dead space beside the queue.
+        className={`min-h-0 min-w-0 flex-1 flex-col ${selectedId ? "flex" : "hidden lg:flex"}`}
       >
         {!selectedId ? (
           <EmptyChat />
@@ -352,7 +365,7 @@ export function ClientInboxWorkspace({
 
       {/* ── RIGHT — customer details (inline on xl) ── */}
       {selectedId && selectedView && detailsInline ? (
-        <aside aria-label="Customer details" className="hidden w-[320px] shrink-0 flex-col border-l border-line xl:flex">
+        <aside aria-label="Customer details" className="hidden w-[320px] shrink-0 flex-col border-l border-line xl:flex 2xl:w-[340px]">
           <CustomerDetailsPanel
             key={selectedView.id}
             clientId={clientId}
@@ -376,7 +389,7 @@ export function ClientInboxWorkspace({
           />
           <aside
             aria-label="Customer details"
-            className="fixed inset-y-0 right-0 z-50 flex w-[320px] max-w-[85vw] flex-col border-l border-line bg-background shadow-xl"
+            className="fixed inset-y-0 right-0 z-50 flex w-[320px] max-w-[85vw] flex-col border-l border-line-strong bg-surface"
           >
             <CustomerDetailsPanel
               key={selectedView.id}
@@ -397,12 +410,7 @@ export function ClientInboxWorkspace({
 /** A colored+shaped status dot for a group header (color is NOT the only signal — it
  * sits beside the group's text label). */
 function GroupDot({ tone }: { tone: InboxGroupMeta["tone"] }) {
-  const cls =
-    tone === "attention"
-      ? "bg-amber-500"
-      : tone === "human"
-        ? "bg-emerald-500"
-        : "bg-neutral-400 dark:bg-neutral-500";
+  const cls = tone === "attention" ? "bg-warn-rule" : tone === "human" ? "bg-success" : "bg-faint";
   return <span aria-hidden className={`size-2 shrink-0 rounded-full ${cls}`} />;
 }
 
@@ -458,17 +466,19 @@ function ConversationRow({
       scroll={false}
       aria-current={selected ? "page" : undefined}
       aria-label={`${view.conversationRef} — ${stateLabel}`}
-      className={`flex items-center gap-3 border-b border-line/60 px-4 py-3 transition-colors ${
-        selected ? "bg-subtle" : "hover:bg-black/[0.03] dark:hover:bg-card"
+      // SELECTED = soft brand fill + a 2px LEFT RULE; a row still awaiting a human
+      // keeps the amber rule so urgency survives even while another row is selected.
+      className={`relative flex min-h-[56px] items-center gap-3 border-b border-line/60 px-3 py-2.5 transition-colors ${
+        selected ? "u-row-selected" : view.mode === "pending" ? "u-row-overdue" : "hover:bg-subtle"
       }`}
     >
       <span
         aria-hidden
         className={`relative flex size-9 shrink-0 items-center justify-center rounded-full border text-sm font-semibold ${
           view.mode === "pending"
-            ? "border-amber-500/40 bg-amber-500/10 text-amber-700 dark:text-amber-400"
+            ? "border-warn/40 bg-warn-soft text-warn"
             : view.mode === "human"
-              ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+              ? "border-success/40 bg-success/10 text-success"
               : "border-line-strong bg-subtle text-foreground"
         }`}
       >
@@ -476,17 +486,17 @@ function ConversationRow({
       </span>
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="flex items-center justify-between gap-2">
-          <span className="truncate text-sm font-medium text-foreground">{view.conversationRef}</span>
+          <span className="u-mono truncate text-[0.8125rem] font-semibold text-foreground">{view.conversationRef}</span>
           <span className="flex shrink-0 items-center gap-1.5">
             <ActivityDot active={view.active} windowHours={activityWindowHours} />
             {view.lastMessageAt ? (
-              <span className="text-[11px] text-faint">{relTime(view.lastMessageAt, now)}</span>
+              <span className="u-mono text-[0.6875rem] text-faint">{relTime(view.lastMessageAt, now)}</span>
             ) : null}
           </span>
         </span>
         <span className="truncate text-xs text-muted">{conversationPreview(view)}</span>
         {showWorkflow && view.workflowName ? (
-          <span className="mt-0.5 w-fit max-w-full truncate rounded bg-subtle px-1.5 py-0.5 text-[10px] font-medium text-faint">
+          <span className="u-mono mt-0.5 w-fit max-w-full truncate rounded border border-line px-1.5 py-0.5 text-[0.625rem] text-faint">
             {view.workflowName}
           </span>
         ) : null}

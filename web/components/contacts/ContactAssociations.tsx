@@ -1,22 +1,19 @@
 "use client";
 
-import Link from "next/link";
-import { PanelCard } from "@/components/analytics-primitives";
+import { Panel, PanelHeader } from "@/components/ui/primitives";
 import type { AppointmentSummary, MemberOption, TagView, TaskView } from "@/lib/contactShared";
 import { AppointmentsSection } from "./shared/AppointmentsSection";
 import { TasksSection } from "./shared/TasksSection";
 import { TagsSection } from "./shared/TagsSection";
 
 /**
- * The record's RIGHT rail (C-4): next/upcoming/past appointments, open tasks, tags, and
- * quick actions — all assembled from the SHARED sections (so the inbox panel renders the
- * same pieces). Every action respects the module + access gates server-side.
+ * The record's RIGHT rail (C-4): next/upcoming/past appointments, open tasks and tags —
+ * all assembled from the SHARED sections (so the inbox panel renders the same pieces).
+ * Every action respects the module + access gates server-side.
  *
- * "Book appointment" DEEP-LINKS to the agenda: the existing new-appointment modal does
- * not accept a prefilled contact (no contactId on the booking input), so per the phase
- * plan we link rather than build a new booking form — prefill is reported as a gap.
- * "Open conversation" targets the most recent conversation's inbox thread (?c=), hidden
- * when the contact has none.
+ * The two PRIMARY actions that used to sit on top of this rail now live in the record's
+ * compact header, so each appears exactly once per page. The rail is purely
+ * associations; the appointment actions inside AppointmentsSection are unchanged.
  */
 export function ContactAssociations({
   clientId,
@@ -29,7 +26,6 @@ export function ContactAssociations({
   viewerUserId,
   viewerIsFullAccess,
   canManageTags,
-  mostRecentConversationId,
   schedulingEnabled,
   onChanged,
 }: {
@@ -43,60 +39,51 @@ export function ContactAssociations({
   viewerUserId: string;
   viewerIsFullAccess: boolean;
   canManageTags: boolean;
+  /** Accepted for the caller's convenience but no longer rendered here: the
+   *  conversation shortcut moved to the record header (one per page). */
   mostRecentConversationId: string | null;
   schedulingEnabled: boolean;
   onChanged?: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-4">
-      {/* Quick actions */}
-      <div className="flex flex-wrap gap-2">
-        {schedulingEnabled ? (
-          <Link
-            href={`/clients/${clientId}/scheduling/agenda?book=${encodeURIComponent(contactId)}&return=${encodeURIComponent(contactId)}`}
-            className="rounded-lg border border-line px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-subtle"
-          >
-            Book appointment
-          </Link>
-        ) : null}
-        {mostRecentConversationId ? (
-          <Link
-            href={`/clients/${clientId}/inbox?c=${encodeURIComponent(mostRecentConversationId)}`}
-            className="rounded-lg border border-line px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-subtle"
-          >
-            Open conversation
-          </Link>
-        ) : null}
-      </div>
-
+    <div className="flex flex-col gap-3">
       {schedulingEnabled ? (
-        <PanelCard title="Appointments">
-          <AppointmentsSection clientId={clientId} appointments={appointments} onChanged={onChanged} showHistory returnContactId={contactId} />
-        </PanelCard>
+        <Panel>
+          <PanelHeader title="Appointments" />
+          <div className="p-3">
+            <AppointmentsSection clientId={clientId} appointments={appointments} onChanged={onChanged} showHistory returnContactId={contactId} />
+          </div>
+        </Panel>
       ) : null}
 
-      <PanelCard title="Open tasks">
-        <TasksSection
-          clientId={clientId}
-          contactId={contactId}
-          tasks={openTasks}
-          assignableMembers={assignableMembers}
-          viewerUserId={viewerUserId}
-          viewerIsFullAccess={viewerIsFullAccess}
-          onChanged={onChanged}
-        />
-      </PanelCard>
+      <Panel>
+        <PanelHeader title="Open tasks" />
+        <div className="p-3">
+          <TasksSection
+            clientId={clientId}
+            contactId={contactId}
+            tasks={openTasks}
+            assignableMembers={assignableMembers}
+            viewerUserId={viewerUserId}
+            viewerIsFullAccess={viewerIsFullAccess}
+            onChanged={onChanged}
+          />
+        </div>
+      </Panel>
 
-      <PanelCard title="Tags">
-        <TagsSection
-          clientId={clientId}
-          contactId={contactId}
-          tags={tags}
-          catalogue={tagCatalogue}
-          canManageCatalog={canManageTags}
-          onChanged={onChanged}
-        />
-      </PanelCard>
+      <Panel>
+        <PanelHeader title="Tags" />
+        <div className="p-3">
+          <TagsSection
+            clientId={clientId}
+            contactId={contactId}
+            tags={tags}
+            catalogue={tagCatalogue}
+            canManageCatalog={canManageTags}
+            onChanged={onChanged}
+          />
+        </div>
+      </Panel>
     </div>
   );
 }

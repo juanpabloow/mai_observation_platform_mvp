@@ -31,42 +31,57 @@ function slice(src: string, start: string, end: string): string {
 
 // ─────────────────────────────── Sidebar ────────────────────────────────────
 
-test('sidebar: sections are ordered Workflows → Conversations → CRM → Scheduling → Administration', () => {
-  // W-3 renamed the first section "Automation" → "Workflows" (the client's workflow
-  // surfaces: Executions / Analytics / Settings, scope-driven).
+test('sidebar: sections are ordered Workspace → CRM → Scheduling → Administration', () => {
+  // FINAL DESIGN: the rail is grouped by PLACE, not by workflow surface. The old
+  // "Workflows / Conversations" split collapsed into one WORKSPACE group holding
+  // Hub, Workflows and Inbox — see the next test for why.
   const src = read('components/AppSidebar.tsx');
   const ctx = slice(src, 'if (clientId) {', '} else if (isMember) {');
-  const order = [
-    'label: "Workflows"',
-    'label: "Conversations"',
-    'label: "CRM"',
-    'label: "Scheduling"',
-    'label: "Administration"',
-  ];
+  const order = ['label: "Workspace"', 'label: "CRM"', 'label: "Scheduling"', 'label: "Administration"'];
   let prev = -1;
   for (const marker of order) {
     const i = idx(ctx, marker);
     assert.ok(i > prev, `section ${marker} is in the expected order`);
     prev = i;
   }
+  assert.ok(!ctx.includes('label: "Conversations"'), 'Inbox lives in Workspace, not its own group');
 });
 
-test('sidebar: Workflows section = scope-driven Executions → Analytics → Settings(owner/admin)', () => {
-  // W-1/W-3: the old Workflows-list + Overview pair was replaced by scope-driven
-  // Executions / Analytics / Settings items. Their hrefs come from the single
-  // scopeHref() source of truth (the current workflow scope from context), and they're
-  // active across every /workflows/… route (split by analytics/settings).
+test('sidebar: WORKSPACE is Hub → Workflows → Inbox; workflow SURFACES are not rail items', () => {
+  // Executions / Analytics / Settings are surfaces INSIDE a workflow, reached from
+  // the Workflows list and the header scope switcher. As rail items they appeared as
+  // peers of Inbox and CRM while pointing at a different context entirely — so the
+  // client rail now shows the workflow CONTEXT once, as "Workflows".
   const src = read('components/AppSidebar.tsx');
-  const workflows = slice(src, 'const workflows: NavItem[] = [', '];');
-  assert.ok(idx(workflows, 'key: "executions"') < idx(workflows, 'key: "analytics"'), 'Executions precedes Analytics');
-  assert.ok(workflows.includes('scopeHref(clientId, "executions", scope)'), 'Executions href via scopeHref');
-  assert.ok(workflows.includes('scopeHref(clientId, "analytics", scope)'), 'Analytics href via scopeHref');
-  // Active across all /workflows/… routes (the scope-aware split lives on top of this).
+  const workspace = slice(src, 'const workspace: NavItem[] = [', '];');
+  assert.ok(idx(workspace, 'key: "hub"') < idx(workspace, 'key: "workflows"'), 'Hub precedes Workflows');
+  assert.ok(workspace.includes('scopeHref(clientId, "executions", scope)'), 'Workflows href still comes from scopeHref');
   assert.ok(src.includes('const onWorkflows = pathname.startsWith(c("/workflows"));'), 'active across all /workflows/… routes');
-  // Settings is owner/admin only (pushed inside the !isMember block) + scope-driven.
-  const settingsPush = slice(src, 'if (!isMember) {', 'sections = [{ label: "Workflows"');
-  assert.ok(settingsPush.includes('key: "settings"') && settingsPush.includes('scopeHref(clientId, "settings", scope)'), 'Settings is owner/admin-only + scope-driven');
-  assert.ok(src.includes('sections = [{ label: "Workflows", items: workflows }];'), 'the first section is Workflows');
+  // Inbox is appended to the SAME group (module-gated), so it renders under Workspace.
+  assert.ok(src.includes('workspace.push({'), 'Inbox joins the Workspace group');
+  assert.ok(src.includes('sections = [{ label: "Workspace", items: workspace }];'), 'Workspace is the first section');
+
+  // The client rail must NOT offer the per-surface workflow items any more.
+  const ctx = slice(src, 'if (clientId) {', '} else if (isMember) {');
+  for (const gone of ['key: "executions"', 'key: "analytics"', 'key: "settings"']) {
+    assert.ok(!ctx.includes(gone), `${gone} is no longer a rail item`);
+  }
+});
+
+test('sidebar: the brand sits at the TOP of the rail (the header no longer carries it)', () => {
+  const src = read('components/AppSidebar.tsx');
+  assert.ok(src.includes('function Brand('), 'the rail owns the brand block');
+  assert.ok(src.includes('<Brand homeHref={homeHref}'), 'and renders it above the nav');
+  const header = read('components/HeaderBar.tsx');
+  assert.ok(!header.includes('Observability'), 'the header no longer renders a wordmark');
+  assert.ok(!/homeHref/.test(header), 'and no longer needs a home target');
+});
+
+test('shell: the header starts AFTER the sidebar, not across the whole viewport', () => {
+  const layout = read('app/layout.tsx');
+  const sidebarAt = idx(layout, '<AppSidebarServer />');
+  const headerAt = idx(layout, '<AppHeader />');
+  assert.ok(sidebarAt < headerAt, 'the sidebar is the first column; the header renders inside the content column');
 });
 
 test('sidebar: NO full workflow list — no workflows prop, no workflow query', () => {
@@ -114,7 +129,9 @@ test('sidebar: collapsed mode keeps navigation accessible (aria-label + tooltip 
 
 test('sidebar: has a fixed account footer that opens the SHARED account menu', () => {
   const src = read('components/AppSidebar.tsx');
-  assert.ok(src.includes('border-t border-line'), 'a bottom footer area exists');
+  // The footer sits on the rail's own surface, separated by the rail's border —
+  // so it follows the Sidebar-appearance preference with the rest of the rail.
+  assert.ok(src.includes('border-t border-sidebar-border'), 'a bottom footer area exists');
   assert.ok(src.includes('<AccountMenu'), 'the footer opens the shared AccountMenu (no duplicated actions)');
   assert.ok(src.includes('aria-haspopup="menu"'), 'the account trigger is a menu button');
 });

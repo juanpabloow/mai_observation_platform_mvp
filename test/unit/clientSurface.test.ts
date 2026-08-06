@@ -9,17 +9,38 @@ const CID = '5f0c3d54-1234-4abc-9def-0123456789ab';
 test('recognizes every client-level surface', () => {
   assert.deepEqual(parseClientSurface(`/clients/${CID}/team`), { clientId: CID, label: 'Team' });
   assert.deepEqual(parseClientSurface(`/clients/${CID}/modules`), { clientId: CID, label: 'Modules' });
-  assert.deepEqual(parseClientSurface(`/clients/${CID}/contacts`), { clientId: CID, label: 'Contacts' });
+  assert.deepEqual(parseClientSurface(`/clients/${CID}/contacts`), { clientId: CID, label: 'Contacts', group: 'CRM' });
   // Detail routes still resolve to the same surface.
-  assert.deepEqual(parseClientSurface(`/clients/${CID}/contacts/abc-123`), { clientId: CID, label: 'Contacts' });
-  assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/agenda`), { clientId: CID, label: 'Agenda' });
-  assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/agenda/`), { clientId: CID, label: 'Agenda' });
+  assert.deepEqual(parseClientSurface(`/clients/${CID}/contacts/abc-123`), { clientId: CID, label: 'Contacts', group: 'CRM' });
+  assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/agenda`), { clientId: CID, label: 'Agenda', group: 'Scheduling' });
+  assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/agenda/`), { clientId: CID, label: 'Agenda', group: 'Scheduling' });
   // Per-client scheduling admin (canonical route).
-  assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/admin`), { clientId: CID, label: 'Scheduling settings' });
+  assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/admin`), {
+    clientId: CID,
+    label: 'Scheduling settings',
+    group: 'Scheduling',
+  });
   // Final design: the Workflows LIST page + the client-level Inbox (incl. its thread).
   assert.deepEqual(parseClientSurface(`/clients/${CID}/workflows`), { clientId: CID, label: 'Workflows' });
   assert.deepEqual(parseClientSurface(`/clients/${CID}/inbox`), { clientId: CID, label: 'Inbox' });
   assert.deepEqual(parseClientSurface(`/clients/${CID}/inbox/abc-123`), { clientId: CID, label: 'Inbox' });
+});
+
+test('Contacts is grouped under CRM — never under Scheduling', () => {
+  // The reference mock renders "Gallery Barber Club / Scheduling / Contacts". That is
+  // a design inconsistency: the route is gated by the `crm` module, so the breadcrumb
+  // must not invent a Contacts-inside-Scheduling hierarchy.
+  const contacts = parseClientSurface(`/clients/${CID}/contacts`);
+  assert.equal(contacts?.group, 'CRM');
+  assert.notEqual(contacts?.group, 'Scheduling');
+});
+
+test('surfaces that hang directly off the client carry NO group segment', () => {
+  // "Client / Inbox", not "Client / <something> / Inbox".
+  assert.equal(parseClientSurface(`/clients/${CID}/inbox`)?.group, undefined);
+  assert.equal(parseClientSurface(`/clients/${CID}/team`)?.group, undefined);
+  assert.equal(parseClientSurface(`/clients/${CID}/modules`)?.group, undefined);
+  assert.equal(parseClientSurface(`/clients/${CID}/workflows`)?.group, undefined);
 });
 
 test('workflow routes and non-client paths are NOT client surfaces', () => {

@@ -19,7 +19,7 @@ function parseClientId(pathname: string): string | null {
 
 // ── Inline SVG icon set (no icon dependency is installed; the app uses inline SVG).
 // 18px, 1.5 stroke, currentColor — consistent weight across the rail. ─────────────
-const iconCls = "size-[18px] shrink-0";
+const iconCls = "size-[1.125rem] shrink-0";
 const Icon = {
   workflows: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
@@ -124,12 +124,15 @@ function NavLink({
   collapsed: boolean;
   onNavigate?: () => void;
 }) {
-  const base = `group relative flex items-center rounded-lg text-sm transition-colors ${
+  // Final design: the ACTIVE row is a SOLID BRAND fill with white text (the single
+  // strongest mark in the shell, so "where am I" is answered at a glance and only
+  // ever by one row); everything else is quiet metadata gray until hovered.
+  const base = `group relative flex min-h-10 items-center rounded-lg text-sm transition-colors ${
     collapsed ? "justify-center px-0 py-2" : "gap-2.5 px-3 py-2"
   } ${
     item.active
-      ? "bg-subtle font-medium text-foreground"
-      : "text-muted hover:bg-subtle hover:text-foreground"
+      ? "bg-nav-active font-medium text-white"
+      : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-fg"
   }`;
   return (
     <Link
@@ -151,12 +154,37 @@ function NavLink({
 function SectionHeader({ label, collapsed, first }: { label: string; collapsed: boolean; first: boolean }) {
   if (collapsed) {
     // A hairline divider stands in for the label; the group still carries aria-label.
-    return first ? null : <div aria-hidden className="mx-2 my-2 border-t border-line" />;
+    return first ? null : <div aria-hidden className="mx-2 my-2 border-t border-sidebar-border" />;
   }
+  return <p className={`u-th-sidebar px-3 pb-1 ${first ? "pt-1" : "pt-4"}`}>{label}</p>;
+}
+
+/**
+ * The BRAND block at the top of the rail (final design): the red mark plus the
+ * wordmark, linking home. It lives here — not in the header — because the sidebar
+ * is now the full-height first column, so the brand sits above the nav and the
+ * header starts after the rail.
+ */
+function Brand({ homeHref, collapsed, onNavigate }: { homeHref: string; collapsed: boolean; onNavigate?: () => void }) {
   return (
-    <p className={`px-3 pb-1 text-[10px] font-medium uppercase tracking-wider text-faint ${first ? "pt-1" : "pt-4"}`}>
-      {label}
-    </p>
+    <div
+      className={`flex h-[var(--topbar-height)] shrink-0 items-center border-b border-sidebar-border ${
+        collapsed ? "justify-center px-2" : "px-[16px]"
+      }`}
+    >
+      <Link
+        href={homeHref}
+        onClick={onNavigate}
+        aria-label="M_AI — home"
+        title={collapsed ? "M_AI — home" : undefined}
+        className="flex items-center gap-2.5 rounded-md transition-opacity hover:opacity-80"
+      >
+        <span aria-hidden className="size-6 shrink-0 rounded bg-nav-active" />
+        {collapsed ? null : (
+          <span className="text-[0.9375rem] font-semibold tracking-tight text-sidebar-fg">M_AI</span>
+        )}
+      </Link>
+    </div>
   );
 }
 
@@ -165,7 +193,7 @@ function Avatar({ initial }: { initial: string }) {
   return (
     <span
       aria-hidden
-      className="flex size-7 shrink-0 items-center justify-center rounded-full border border-line-strong bg-subtle text-xs font-semibold text-foreground"
+      className="flex size-7 shrink-0 items-center justify-center rounded-full border border-sidebar-border bg-sidebar-border text-xs font-semibold text-sidebar-fg"
     >
       {initial}
     </span>
@@ -173,6 +201,8 @@ function Avatar({ initial }: { initial: string }) {
 }
 
 interface Account {
+  /** Display name — the footer's primary label (an email is a fallback, not a label). */
+  name: string | null;
   email: string;
   role: "owner" | "admin" | "member";
   clientLabel: string | null;
@@ -185,11 +215,13 @@ function RailBody({
   sections,
   collapsed,
   account,
+  homeHref,
   onNavigate,
 }: {
   sections: NavSection[];
   collapsed: boolean;
   account: Account;
+  homeHref: string;
   onNavigate?: () => void;
 }) {
   const [acctOpen, setAcctOpen] = useState(false);
@@ -212,10 +244,12 @@ function RailBody({
     };
   }, [acctOpen]);
 
-  const initial = account.email.trim()[0]?.toUpperCase() ?? "?";
+  const label = account.name?.trim() || account.email;
+  const initial = label.trim()[0]?.toUpperCase() ?? "?";
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
+      <Brand homeHref={homeHref} collapsed={collapsed} onNavigate={onNavigate} />
       <nav
         aria-label="Primary"
         className={`flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto py-3 ${collapsed ? "px-2" : "px-3"}`}
@@ -245,23 +279,28 @@ function RailBody({
 
       {/* Fixed account footer — opens the SHARED account menu (same one the header
           uses). Flyout above when expanded, to the right when collapsed. */}
-      <div ref={footerRef} className={`relative shrink-0 border-t border-line ${collapsed ? "p-2" : "p-3"}`}>
+      <div ref={footerRef} className={`relative shrink-0 border-t border-sidebar-border ${collapsed ? "p-2" : "p-3"}`}>
         <button
           type="button"
           onClick={() => setAcctOpen((o) => !o)}
           aria-haspopup="menu"
           aria-expanded={acctOpen}
-          aria-label={collapsed ? `Account: ${account.email}` : undefined}
-          title={collapsed ? account.email : undefined}
-          className={`flex w-full items-center rounded-lg text-sm text-muted transition-colors hover:bg-subtle hover:text-foreground ${
-            collapsed ? "justify-center p-1" : "gap-2.5 px-2 py-1.5"
+          aria-label={collapsed ? `Account: ${label}` : undefined}
+          title={account.email}
+          className={`w-full rounded-lg text-sm text-sidebar-muted transition-colors hover:bg-sidebar-hover hover:text-sidebar-fg ${
+            collapsed
+              ? "flex items-center justify-center p-1"
+              : "grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2.5 px-2 py-1.5 text-left"
           }`}
         >
           <Avatar initial={initial} />
           {collapsed ? null : (
-            <span className="flex min-w-0 flex-1 flex-col text-left">
-              <span className="truncate text-sm font-medium text-foreground">{account.email}</span>
-              <span className="truncate text-xs capitalize text-faint">{account.role}</span>
+            // Track 2 of the grid: it starts AFTER the avatar's track + the gap, so
+            // the label can never render on top of the avatar. minmax(0,1fr) lets it
+            // shrink below its content width, which is what makes truncate work.
+            <span className="flex min-w-0 flex-col overflow-hidden">
+              <span className="truncate text-sm font-medium text-sidebar-fg">{label}</span>
+              <span className="truncate text-xs capitalize text-sidebar-section">{account.role}</span>
             </span>
           )}
         </button>
@@ -269,7 +308,7 @@ function RailBody({
         {acctOpen ? (
           <div
             role="menu"
-            className={`absolute z-50 overflow-hidden rounded-xl border border-line bg-background shadow-xl ${
+            className={`absolute z-50 overflow-hidden rounded-lg border border-line bg-popover ${
               collapsed ? "bottom-2 left-full ml-2 w-60" : "inset-x-2 bottom-full mb-2"
             }`}
           >
@@ -313,6 +352,7 @@ function RailBody({
  * Reactive via usePathname; hidden on auth screens.
  */
 export function AppSidebar({
+  name,
   memberClientId,
   defaultClientId,
   enabledModules,
@@ -320,6 +360,8 @@ export function AppSidebar({
   role,
   clientLabel,
 }: {
+  /** Display name for the account footer; falls back to the email when absent. */
+  name: string | null;
   memberClientId: string | null;
   /** The tenant's default/"Unassigned" client id (owner/admin; null for members or
    * logged-out) — the rail hides Modules for it (it can't have modules). */
@@ -352,7 +394,11 @@ export function AppSidebar({
 
   const clientId = parseClientId(pathname);
   const isMember = memberClientId !== null;
+  // Brand target: the Hub for owner/admin; a member has no Hub access, so their
+  // brand links to their own client (mirrors the header's memberLandingHref).
+  const homeHref = memberClientId ? `/clients/${memberClientId}/workflows` : "/";
   const account: Account = {
+    name,
     email,
     role,
     clientLabel,
@@ -370,63 +416,68 @@ export function AppSidebar({
     // active split keys off whether the path is an analytics route.
     const scope = scopeFor(clientId);
     const onWorkflows = pathname.startsWith(c("/workflows"));
-    const onAnalytics = /\/workflows\/[^/]+\/analytics(?:\/|$)/.test(pathname);
-    const onSettings =
-      /\/workflows\/[^/]+\/conversations\/settings(?:\/|$)/.test(pathname) ||
-      /\/workflows\/all\/settings(?:\/|$)/.test(pathname);
-    const workflows: NavItem[] = [
+    // WORKSPACE — the top-level places, exactly as the final design lists them:
+    // Hub (the tenant lobby), Workflows (the client's workflow CONTEXT), Inbox.
+    // Executions / Analytics / Settings are NOT rail items: they are surfaces INSIDE
+    // a workflow, reached from the Workflows list and the header's scope switcher.
+    // Putting them in the rail made workflow-only surfaces look like peers of Inbox
+    // and CRM while sitting on a completely unrelated route.
+    const workspace: NavItem[] = [
+      { key: "hub", label: "Hub", href: "/", icon: Icon.hub, active: pathname === "/" },
       {
-        key: "executions",
-        label: "Executions",
+        key: "workflows",
+        label: "Workflows",
         href: scopeHref(clientId, "executions", scope),
         icon: Icon.workflows,
-        active: onWorkflows && !onAnalytics && !onSettings,
-      },
-      {
-        key: "analytics",
-        label: "Analytics",
-        href: scopeHref(clientId, "analytics", scope),
-        icon: Icon.overview,
-        active: onWorkflows && onAnalytics,
+        active: onWorkflows,
       },
     ];
-    // Settings (Handoff webhook + field mappings) — owner/admin only, scope-aware like
-    // its siblings: the current workflow's settings page, or the picker at scope 'all'.
-    // Members never see it (the page's handoff section + actions refuse them server-side).
-    if (!isMember) {
-      workflows.push({
-        key: "settings",
-        label: "Settings",
-        href: scopeHref(clientId, "settings", scope),
-        icon: Icon.settings,
-        active: onWorkflows && onSettings,
-      });
-    }
-    sections = [{ label: "Workflows", items: workflows }];
-    // CONVERSATIONS (Inbox) only when the `inbox` module is enabled — hides the link,
-    // the badge, and (no countEndpoint rendered) stops the pending-count polling.
+    // Inbox only when the `inbox` module is enabled — hides the link, the badge, and
+    // (no countEndpoint rendered) stops the pending-count polling.
     if (moduleKeys.includes("inbox")) {
-      sections.push({
-        label: "Conversations",
-        items: [
-          {
-            key: "inbox",
-            label: "Inbox",
-            href: c("/inbox"),
-            icon: Icon.inbox,
-            active: pathname.startsWith(c("/inbox")),
-            countEndpoint: `/api/inbox/${clientId}/pending-count`,
-          },
-        ],
+      workspace.push({
+        key: "inbox",
+        label: "Inbox",
+        href: c("/inbox"),
+        icon: Icon.inbox,
+        active: pathname.startsWith(c("/inbox")),
+        countEndpoint: `/api/inbox/${clientId}/pending-count`,
       });
     }
+    // TODO(nav): the target design's CRM group also lists "Tasks" and "Sites", and
+    // SCHEDULING lists "Scheduling analytics". None of those routes exist in this
+    // build, so they are deliberately NOT rendered — a rail item that 404s is worse
+    // than an absent one. Confirm before I add them (each needs a real page first).
+    // TODO(nav): the target puts "Team" inside CRM and drops "Modules" entirely;
+    // here Team + Modules live under ADMINISTRATION because both are owner/admin
+    // client-administration surfaces, not CRM ones. Confirm before moving.
+    // TODO(nav): the target has no "Custom fields" row; this build does, because
+    // /contacts/fields is a real page. Confirm before hiding it.
+    sections = [{ label: "Workspace", items: workspace }];
     if (moduleKeys.includes("crm")) {
-      sections.push({
-        label: "CRM",
-        items: [
-          { key: "contacts", label: "Contacts", href: c("/contacts"), icon: Icon.contacts, active: pathname.startsWith(c("/contacts")) },
-        ],
-      });
+      const onFields = pathname.startsWith(c("/contacts/fields"));
+      const crm: NavItem[] = [
+        {
+          key: "contacts",
+          label: "Contacts",
+          href: c("/contacts"),
+          icon: Icon.contacts,
+          // Exclude the fields sub-route so exactly ONE row is ever active.
+          active: pathname.startsWith(c("/contacts")) && !onFields,
+        },
+      ];
+      // The only other REAL CRM route. The reference also shows Tasks and Sites —
+      // neither exists in the app, so they are deliberately not invented here.
+      if (!isMember) {
+        crm.push({
+          key: "contact-fields",
+          label: "Custom fields",
+          href: c("/contacts/fields"),
+          icon: Icon.modules,
+          active: onFields,
+        });
+      }
+      sections.push({ label: "CRM", items: crm });
     }
     if (moduleKeys.includes("scheduling")) {
       const scheduling: NavItem[] = [
@@ -501,11 +552,12 @@ export function AppSidebar({
       {/* DESKTOP rail — full (w-60) or collapsed icon-only (w-16). */}
       <aside
         data-collapsed={collapsed}
-        className={`hidden shrink-0 flex-col border-r border-line bg-sidebar transition-[width] duration-200 md:flex ${
-          collapsed ? "w-16" : "w-60"
+        style={collapsed ? undefined : { width: "var(--sidebar-width)" }}
+        className={`hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar-bg transition-[width] duration-200 md:flex ${
+          collapsed ? "w-16" : ""
         }`}
       >
-        <RailBody sections={sections} collapsed={collapsed} account={account} />
+        <RailBody sections={sections} collapsed={collapsed} account={account} homeHref={homeHref} />
       </aside>
 
       {/* MOBILE drawer — off-canvas, over a backdrop. Always expanded content. */}
@@ -519,12 +571,13 @@ export function AppSidebar({
           />
           <aside
             aria-label="Sidebar"
-            className="fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-line bg-background shadow-xl"
+            className="fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-sidebar-border bg-sidebar-bg"
           >
             <RailBody
               sections={sections}
               collapsed={false}
               account={account}
+              homeHref={homeHref}
               onNavigate={() => setMobileOpen(false)}
             />
           </aside>

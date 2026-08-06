@@ -6,8 +6,9 @@ const GROUP_GAP_MS = 3 * 60_000; // same sender within 3min stacks into one grou
 /**
  * The shared chat transcript used by BOTH the inbox thread drawer and the
  * execution-detail pane (H-8.2). Renders WhatsApp-style bubbles from
- * InboxMessageView[]: user left/neutral, bot right/emerald, human_agent
- * right/indigo (name once per consecutive-sender run), in-bubble bottom-right
+ * InboxMessageView[]: customer left (white surface), bot right (grey fill),
+ * human_agent right (solid inverse) — name once per consecutive-sender run,
+ * in-bubble bottom-right
  * timestamps, and date separators on day change.
  *
  * `onRetry` is optional — the inbox passes it (a failed own-send can be retried);
@@ -74,13 +75,13 @@ export function MessageTranscript({
       {blocks.map((b) =>
         b.type === "date" ? (
           <div key={b.key} className="my-1 flex justify-center">
-            <span className="rounded-full bg-black/5 px-2.5 py-0.5 text-[11px] text-neutral-500 dark:bg-white/10 dark:text-muted">
+            <span className="rounded-full bg-black/5 px-2.5 py-0.5 text-[0.6875rem] text-neutral-500 dark:bg-white/10 dark:text-muted">
               {b.label}
             </span>
           </div>
         ) : b.type === "marker" ? (
           <div key={b.key} className="my-1 flex justify-center">
-            <span className="rounded-full bg-amber-400/15 px-2.5 py-0.5 text-[11px] font-medium uppercase tracking-wider text-amber-600 dark:text-amber-400">
+            <span className="rounded-full bg-amber-400/15 px-2.5 py-0.5 text-[0.6875rem] font-medium uppercase tracking-wider text-amber-600 dark:text-amber-400">
               {b.label}
             </span>
           </div>
@@ -125,7 +126,7 @@ function MessageRun({
   return (
     <div className={`flex flex-col gap-0.5 ${isUser ? "items-start" : "items-end"}`}>
       {isAgent && agentName ? (
-        <span className="px-1 text-[11px] font-medium text-faint">{agentName}</span>
+        <span className="px-1 text-[0.6875rem] font-medium text-faint">{agentName}</span>
       ) : null}
       {run.items.map((m) => (
         <Bubble key={m.id} msg={m} onRetry={onRetry} highlighted={highlightIds?.has(m.id) ?? false} />
@@ -135,8 +136,9 @@ function MessageRun({
 }
 
 /**
- * A single bubble. user → left neutral; bot → right emerald; human_agent → right
- * indigo (failed → red). Timestamp in-bubble bottom-right, small + muted. A
+ * A single bubble. customer → left, white surface + hairline; bot → right, grey
+ * fill; human_agent → right, solid inverse (failed → red). A light→mid→dark ramp,
+ * so the sender reads without spending a hue. Timestamp bottom-right, muted. A
  * highlighted (this-execution) bubble gets an amber ring.
  */
 function Bubble({
@@ -154,20 +156,24 @@ function Bubble({
   const failed = msg.status === "failed";
   const time = formatChatTime(new Date(msg.occurredAt));
 
+  // THREE distinct senders (H.6), each carrying shape + fill, never color alone:
+  //   customer  → left, a bordered neutral surface;
+  //   bot       → right, a quiet filled surface (the automation "voice");
+  //   human age → right, the solid inverse fill (a person typed this).
   const bubbleClass = isUser
-    ? "bg-black/5 text-foreground dark:bg-white/10"
+    ? "border border-bubble-in-border bg-bubble-in text-bubble-in-fg"
     : isAgent
       ? failed
-        ? "bg-red-600/90 text-red-50"
-        : "bg-indigo-600 text-indigo-50"
-      : "bg-emerald-700 text-emerald-50";
+        ? "border border-danger bg-danger/12 text-danger"
+        : "bg-bubble-agent text-bubble-agent-fg"
+      : "border border-bubble-bot-border bg-bubble-bot text-bubble-bot-fg";
   const metaClass = isUser
-    ? "text-faint"
+    ? "text-bubble-in-fg/60"
     : isAgent
       ? failed
-        ? "text-red-100/80"
-        : "text-indigo-100/80"
-      : "text-emerald-100/80";
+        ? "text-danger/80"
+        : "text-bubble-agent-fg/75"
+      : "text-bubble-bot-fg/65";
 
   const body =
     msg.text && msg.text.trim() !== ""
@@ -178,23 +184,25 @@ function Bubble({
 
   return (
     <div
-      className={`max-w-[70%] rounded-xl px-3 py-2 text-sm leading-snug shadow-sm ${bubbleClass} ${
+      className={`max-w-[70%] rounded-lg px-3 py-2 text-sm leading-snug ${bubbleClass} ${
         sending ? "opacity-70" : ""
-      } ${highlighted ? "ring-2 ring-amber-400/70" : ""}`}
+      } ${highlighted ? "ring-2 ring-[var(--warn-rule)]" : ""}`}
     >
       <span className="whitespace-pre-wrap break-words align-middle">{body}</span>
+      {/* The FAILED bubble is now an outlined red (a normal agent message is the
+          solid red), so its inner detail + Retry must read on a LIGHT fill. */}
       {failed && msg.failureDetail ? (
-        <span className="mt-1 block rounded bg-black/20 px-1.5 py-1 text-[11px] text-red-50">
+        <span className="mt-1 block rounded bg-danger/12 px-1.5 py-1 text-[0.6875rem] text-danger">
           {msg.failureDetail}
         </span>
       ) : null}
-      <span className={`ml-2 inline-flex items-center gap-1.5 align-middle text-[10px] ${metaClass}`}>
+      <span className={`ml-2 inline-flex items-center gap-1.5 align-middle text-[0.625rem] ${metaClass}`}>
         {sending ? <span>sending…</span> : null}
         {failed && onRetry ? (
           <button
             type="button"
             onClick={() => onRetry(msg.id)}
-            className="rounded bg-white/20 px-1 text-[10px] font-medium text-white hover:bg-white/30"
+            className="rounded border border-danger/40 px-1 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/12"
           >
             Retry
           </button>

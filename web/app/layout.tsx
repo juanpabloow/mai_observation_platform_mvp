@@ -1,11 +1,13 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { cookies } from "next/headers";
 import { Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { AppSidebarServer } from "@/components/AppSidebarServer";
 import { ScopeProviderServer } from "@/components/ScopeProviderServer";
 import { ScopeSync } from "@/components/ScopeSync";
 import { Providers } from "./providers";
+import { parseSidebarTheme, SIDEBAR_THEME_COOKIE } from "@/lib/sidebarTheme";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -23,24 +25,34 @@ export const metadata: Metadata = {
   description: "Multi-tenant observability for n8n automations",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  // Sidebar appearance is a personal cookie preference, read HERE (server) and
+  // stamped on <html> so the very first painted frame already has the right rail —
+  // no flash, no client round-trip. An absent/unknown cookie resolves to Light.
+  const sidebarTheme = parseSidebarTheme((await cookies()).get(SIDEBAR_THEME_COOKIE)?.value);
+
   return (
     <html
       lang="en"
+      data-sidebar-theme={sidebarTheme}
       // next-themes sets the theme class on <html> before hydration; suppress the
       // resulting server/client class mismatch warning (no-flash approach).
       suppressHydrationWarning
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       {/* FIXED SHELL: the body is exactly the viewport and never scrolls; the
-          header + sidebar are pinned (they're non-scrolling flex items), and ONLY
+          sidebar + header are pinned (they're non-scrolling flex items), and ONLY
           the content region scrolls. This is the single shell-level scroll
           architecture — pages don't manage the shell, they just render into the
-          scrolling content region (or, under the workflow layout, into its slot). */}
+          scrolling content region (or, under the workflow layout, into its slot).
+
+          FINAL DESIGN: the SIDEBAR is the full-height first column and carries the
+          brand at its top; the header starts AFTER it and spans only the content
+          column (it is no longer a full-width bar above everything). */}
       <body className="h-full overflow-hidden flex flex-col">
         <Providers>
           {/* ScopeProviderServer seeds the client scope context (per-client "current
@@ -51,20 +63,28 @@ export default function RootLayout({
             <Suspense fallback={null}>
               <ScopeSync />
             </Suspense>
-            <Suspense fallback={null}>
-              <AppHeader />
-            </Suspense>
-            {/* Below the full-width header: [sidebar | content]. On auth screens both
-                the header and sidebar render null, so content fills the full width. */}
+            {/* [sidebar | (header / content)]. On auth screens both the sidebar and
+                the header render null, so content fills the full viewport. */}
             <div className="flex min-h-0 flex-1">
               <Suspense
                 fallback={<div className="hidden w-60 shrink-0 border-r border-line bg-sidebar md:block" />}
               >
                 <AppSidebarServer />
               </Suspense>
-              {/* THE scroll container. min-h-0 lets it shrink within the fixed shell
-                  so its own overflow (or a child's) scrolls instead of growing. */}
-              <div className="flex min-w-0 min-h-0 flex-1 flex-col overflow-y-auto">{children}</div>
+              <div className="flex min-w-0 min-h-0 flex-1 flex-col">
+                <Suspense fallback={null}>
+                  <AppHeader />
+                </Suspense>
+                {/* THE scroll container — and the single owner of the content
+                    GUTTER. Pages used to pad themselves, which meant every new page
+                    had to remember to, and any page that set its own width/height
+                    could cancel it. Putting the padding here makes the floating-card
+                    look structural: the canvas (--background) shows through on all
+                    four sides of whatever the page renders. */}
+                <div className="flex min-w-0 min-h-0 flex-1 flex-col overflow-y-auto p-[var(--content-pad)]">
+                  {children}
+                </div>
+              </div>
             </div>
           </ScopeProviderServer>
         </Providers>

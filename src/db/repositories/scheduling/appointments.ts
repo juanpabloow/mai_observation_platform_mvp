@@ -237,7 +237,9 @@ export interface AppointmentListItem extends AppointmentRow {
   site_timezone: string;
   contact_name: string | null;
   /** The contact's main phone-or-email (C-7 identification), from ONE lateral join —
-   *  never a per-row lookup. NULL for walk-ins / a contact with no phone/email. */
+   *  never a per-row lookup. NULL for walk-ins / a contact with no phone/email.
+   *  This SUPERSEDES the redesign's contact_phone: identity is canonical now, so the
+   *  agenda drawer reads this instead of a raw contacts.phone_e164 column. */
   primary_identity: string | null;
 }
 

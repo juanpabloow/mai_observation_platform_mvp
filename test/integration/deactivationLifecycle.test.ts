@@ -133,15 +133,15 @@ test('SITE: deactivate removes availability, keeps history; reactivate restores 
 test('GUARD: counts FUTURE active appointments per resource without mutating anything', async () => {
   const { s, appt, contactId } = await scenarioWithAppt();
   // One upcoming appointment for staff A / the haircut service / the site.
-  assert.equal(await countUpcomingAppointmentsForResource(s.tenantId, { clientId: s.clientId, staffId: s.staffA }), 1);
-  assert.equal(await countUpcomingAppointmentsForResource(s.tenantId, { clientId: s.clientId, serviceId: s.serviceHaircut }), 1);
-  assert.equal(await countUpcomingAppointmentsForResource(s.tenantId, { clientId: s.clientId, siteId: s.siteId }), 1);
+  assert.equal(await countUpcomingAppointmentsForResource(s.tenantId, { clientId: s.clientId, staffId: s.staffA }, NOW), 1);
+  assert.equal(await countUpcomingAppointmentsForResource(s.tenantId, { clientId: s.clientId, serviceId: s.serviceHaircut }, NOW), 1);
+  assert.equal(await countUpcomingAppointmentsForResource(s.tenantId, { clientId: s.clientId, siteId: s.siteId }, NOW), 1);
   // Staff B (no appointments) → 0.
-  assert.equal(await countUpcomingAppointmentsForResource(s.tenantId, { clientId: s.clientId, staffId: s.staffB }), 0);
+  assert.equal(await countUpcomingAppointmentsForResource(s.tenantId, { clientId: s.clientId, staffId: s.staffB }, NOW), 0);
 
   // Cancelled/past do NOT count: cancelling the only appointment drops the count to 0.
   await transitionStatus('cancelled', { tenantId: s.tenantId, appointmentId: appt.id, actorType: 'agent', scopeClientId: s.clientId });
-  assert.equal(await countUpcomingAppointmentsForResource(s.tenantId, { clientId: s.clientId, staffId: s.staffA }), 0, 'cancelled not counted');
+  assert.equal(await countUpcomingAppointmentsForResource(s.tenantId, { clientId: s.clientId, staffId: s.staffA }, NOW), 0, 'cancelled not counted');
 
   // The count is read-only — the appointment still exists (now cancelled) and is still listed.
   assert.equal((await listAppointmentsForContact(s.tenantId, contactId, s.clientId)).length, 1, 'nothing was deleted by counting');

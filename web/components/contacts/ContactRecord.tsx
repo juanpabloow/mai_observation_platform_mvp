@@ -1,6 +1,8 @@
 "use client";
 
+import Link from "next/link";
 import { useRouter } from "next/navigation";
+import { Chip, StageChip } from "@/components/ui/primitives";
 import type { AppointmentSummary, ContactSummary, IdentityView, MemberOption, TagView, TaskView } from "@/lib/contactShared";
 import { ContactProperties, type FieldDefView } from "./ContactProperties";
 import { ContactTimeline, type TimelineItemView } from "./ContactTimeline";
@@ -57,8 +59,19 @@ export function ContactRecord(props: ContactRecordProps) {
   const onChanged = () => router.refresh();
 
   return (
-    <div className="flex flex-col gap-6 xl:grid xl:grid-cols-[280px_minmax(0,1fr)_320px] xl:items-start">
-      <div className="xl:sticky xl:top-6">
+    <div className="flex flex-col gap-4">
+      <ContactRecordHeader
+        clientId={props.clientId}
+        contactId={props.contactId}
+        summary={props.summary}
+        source={props.properties.source}
+        ownerName={props.ownerName}
+        mostRecentConversationId={props.mostRecentConversationId}
+        schedulingEnabled={props.schedulingEnabled}
+      />
+
+      <div className="flex flex-col gap-4 xl:grid xl:grid-cols-[300px_minmax(0,1fr)_340px] xl:items-start">
+        <div className="xl:sticky xl:top-4">
         <ContactProperties
           clientId={props.clientId}
           contactId={props.contactId}
@@ -95,8 +108,84 @@ export function ContactRecord(props: ContactRecordProps) {
         canManageTags={props.canManageTags}
         mostRecentConversationId={props.mostRecentConversationId}
         schedulingEnabled={props.schedulingEnabled}
-        onChanged={onChanged}
-      />
+          onChanged={onChanged}
+        />
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The record's COMPACT HEADER (final design): who this is (name + stage + customer
+ * badge), the operative facts an agent needs before acting (source, owner, visits,
+ * no-shows), and the two primary actions. The actions moved UP here from the right
+ * rail so the rail is purely associations — the rail no longer renders them, so
+ * there is exactly one "Open conversation" / "Book appointment" per page.
+ */
+function ContactRecordHeader({
+  clientId,
+  contactId,
+  summary,
+  source,
+  ownerName,
+  mostRecentConversationId,
+  schedulingEnabled,
+}: {
+  clientId: string;
+  contactId: string;
+  summary: ContactSummary;
+  source: string;
+  ownerName: string | null;
+  mostRecentConversationId: string | null;
+  schedulingEnabled: boolean;
+}) {
+  const action =
+    "inline-flex h-10 items-center rounded-md border border-line-strong bg-surface px-3 text-sm text-foreground transition-colors hover:bg-subtle";
+  return (
+    <header className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-lg border border-line bg-surface px-4 py-3">
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <div className="flex flex-wrap items-center gap-2">
+          <h1 className="truncate text-lg font-semibold tracking-tight text-foreground">{summary.displayName}</h1>
+          <StageChip stage={summary.stage} />
+          {summary.isCustomer ? <Chip tone="muted">customer</Chip> : null}
+          {/* Consent surfaces ONLY when opted out — quiet, informational, not an error. */}
+          {summary.consent === "opted_out" ? (
+            <Chip tone="warn" title="This contact has opted out of messaging">
+              opted out
+            </Chip>
+          ) : null}
+        </div>
+        <dl className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
+          <Fact label="Source" value={source} />
+          <Fact label="Owner" value={ownerName ?? "Unassigned"} />
+          <Fact label="Visits" value={String(summary.visitCount)} mono />
+          <Fact label="No-shows" value={String(summary.noShowCount)} mono />
+        </dl>
+      </div>
+      <div className="flex shrink-0 flex-wrap items-center gap-2">
+        {mostRecentConversationId ? (
+          <Link href={`/clients/${clientId}/inbox?c=${encodeURIComponent(mostRecentConversationId)}`} className={action}>
+            Open conversation
+          </Link>
+        ) : null}
+        {schedulingEnabled ? (
+          <Link
+            href={`/clients/${clientId}/scheduling/agenda?book=${encodeURIComponent(contactId)}&return=${encodeURIComponent(contactId)}`}
+            className={action}
+          >
+            Book appointment
+          </Link>
+        ) : null}
+      </div>
+    </header>
+  );
+}
+
+function Fact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <div className="flex items-baseline gap-1.5">
+      <dt className="u-th">{label}</dt>
+      <dd className={`text-foreground ${mono ? "u-mono" : ""}`}>{value}</dd>
     </div>
   );
 }

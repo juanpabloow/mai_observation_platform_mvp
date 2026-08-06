@@ -197,14 +197,15 @@ export function InboxThread({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      {/* Compact header */}
-      <div className="flex shrink-0 items-start justify-between gap-2 border-b border-line px-4 py-3">
+      {/* Compact header — min-h-14 matches the queue header, the customer panel
+          header and the app header, so the four strips align across the seams. */}
+      <div className="flex min-h-[var(--topbar-height)] shrink-0 items-center justify-between gap-2 border-b border-line px-3 py-2">
         {onBack ? (
           <button
             type="button"
             onClick={onBack}
             aria-label="Back to conversations"
-            className="mt-0.5 shrink-0 rounded-lg border border-black/10 px-2 py-1 text-xs text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground lg:hidden dark:border-line-strong dark:hover:bg-subtle"
+            className="shrink-0 rounded-md border border-line-strong px-2 py-1 text-xs text-muted transition-colors hover:bg-subtle hover:text-foreground lg:hidden"
           >
             ‹ Back
           </button>
@@ -218,7 +219,7 @@ export function InboxThread({
           <div className="truncate text-xs text-faint">
             {header.workflowName ?? "Unknown workflow"}
             {header.mode === "human" && header.assignedAgentName ? (
-              <span className="text-emerald-700 dark:text-emerald-400"> · ● {header.assignedAgentName}</span>
+              <span className="text-success"> · ● {header.assignedAgentName}</span>
             ) : null}
           </div>
         </div>
@@ -270,14 +271,14 @@ function ActivityTag({ active, windowHours }: { active: boolean; windowHours: nu
   return active ? (
     <span
       title={`Active — the customer wrote within the last ${windowHours}h`}
-      className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[11px] font-medium text-emerald-700 dark:text-emerald-400"
+      className="rounded-full bg-success/15 px-1.5 py-0.5 text-[0.6875rem] font-medium text-success"
     >
       Active
     </span>
   ) : (
     <span
       title={`Inactive — no customer message in the last ${windowHours}h`}
-      className="rounded-full bg-subtle px-1.5 py-0.5 text-[11px] font-medium text-faint"
+      className="rounded-full bg-subtle px-1.5 py-0.5 text-[0.6875rem] font-medium text-faint"
     >
       Inactive
     </span>
@@ -292,21 +293,24 @@ function HistoryDisclosure({ turns }: { turns: HistoryTurnView[] }) {
         History before handoff · {turns.length} {turns.length === 1 ? "turn" : "turns"}
       </summary>
       <div className="flex flex-col gap-2 border-t border-line px-3 py-3">
-        <p className="text-[11px] text-faint">
+        <p className="text-[0.6875rem] text-faint">
           Reconstructed from executions before live handoff was wired (read-only).
         </p>
         {turns.map((t) => (
           <div key={t.id} className="flex flex-col gap-1">
+            {/* Same customer/bot treatment as the live transcript — this reconstructed
+                history used to render the bot in green, which both clashed with the
+                live thread and spent a hue the system reserves for success. */}
             {t.userText ? (
               <div className="flex justify-start">
-                <div className="max-w-[70%] rounded-xl bg-black/5 px-3 py-2 text-sm text-foreground dark:bg-white/10">
+                <div className="max-w-[70%] rounded-lg border border-bubble-in-border bg-bubble-in px-3 py-2 text-sm text-bubble-in-fg">
                   {t.userText}
                 </div>
               </div>
             ) : null}
             {t.aiText ? (
               <div className="flex justify-end">
-                <div className="max-w-[70%] rounded-xl bg-emerald-700/80 px-3 py-2 text-sm text-emerald-50">
+                <div className="max-w-[70%] rounded-lg border border-bubble-bot-border bg-bubble-bot px-3 py-2 text-sm text-bubble-bot-fg">
                   {t.aiText}
                 </div>
               </div>

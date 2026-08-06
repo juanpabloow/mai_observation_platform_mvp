@@ -76,6 +76,57 @@ export function formatAgeShort(from: Date, now: Date): string {
   return `${Math.floor(days / 7)}w`;
 }
 
+/**
+ * Compact ABSOLUTE stamp for the operative tables: "Jul 29, 2026, 02:32 PM".
+ * Paired with formatAgeShort in the same cell so a row carries both the absolute
+ * fact and the relative feel — the redesign's rule for every timestamp column.
+ */
+export function formatStampShort(date: Date): string {
+  // "Jul 29, 2026, 02:32 PM" — the year is always shown (a table of dates that
+  // silently omits it for the current year is harder to scan, not easier).
+  return date.toLocaleString("en-US", {
+    month: "short",
+    day: "2-digit",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+/** Full, unambiguous stamp for `title=` tooltips on a compact timestamp. */
+export function formatStampFull(date: Date): string {
+  return date.toLocaleString("en-GB", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
+}
+
+/**
+ * Money, Colombian pesos. pg returns numeric as a string, so this takes either and
+ * renders "$60.000" — es-CO grouping (dot), no decimals (COP has no cent in
+ * practice). The ONLY place prices are formatted; nothing formats inline.
+ */
+export function formatMoneyCOP(value: string | number | null | undefined): string | null {
+  if (value === null || value === undefined || value === "") return null;
+  const n = typeof value === "number" ? value : Number(value);
+  if (!Number.isFinite(n)) return null;
+  // es-CO emits "$ 60.000" with a NON-BREAKING space after the symbol; the design
+  // wants "$60.000", so strip any whitespace between symbol and digits.
+  return new Intl.NumberFormat("es-CO", {
+    style: "currency",
+    currency: "COP",
+    maximumFractionDigits: 0,
+  })
+    .format(n)
+    .replace(/\s/gu, "");
+}
+
 /** Tailwind classes for a status badge (green success / red error / neutral). */
 export function statusBadgeClasses(status: string): string {
   const base =
