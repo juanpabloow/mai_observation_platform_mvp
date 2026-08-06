@@ -30,12 +30,15 @@ test('availability exposes free_blocks, has_availability and a compact mode', ()
   assert.ok(src.includes('compact') && src.includes('computeFreeBlocks('), 'compact param + engine-side grouping');
 });
 
-test('CRM contact routes honor the tz/locale presentation params', () => {
+test('CRM routes that emit timestamps honor the tz/locale presentation params', () => {
+  // Only the responses that carry a timestamp need a tz/locale label. D-3 made the
+  // enrichment WRITES (upsert, tags) return a timestamp-free shape, so they no longer
+  // resolve tz/locale — the rule "no timestamp without a local label" is satisfied by
+  // there being NO timestamp. The reads (GET contact, lookup) and the note timestamp still do.
   for (const rel of [
-    'app/api/crm/v1/contacts/[contactId]/route.ts',
+    'app/api/crm/v1/contacts/[contactId]/route.ts', // GET (read) labels next_appointment
     'app/api/crm/v1/contacts/lookup/route.ts',
-    'app/api/crm/v1/contacts/upsert/route.ts',
-    'app/api/crm/v1/contacts/[contactId]/tags/route.ts',
+    'app/api/crm/v1/contacts/[contactId]/notes/route.ts', // note created_at label
   ]) {
     assert.ok(web(rel).includes('resolveLabelParams('), `${rel} resolves tz/locale`);
   }

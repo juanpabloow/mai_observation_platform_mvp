@@ -6,7 +6,8 @@ import { resolveWorkflowForConnection } from "@worker/db/repositories/workflows.
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { withTransaction } from "@worker/db/client.js";
 import { getContactById, setContactConsent, type ContactRow, type MessagingConsent } from "@worker/db/repositories/contacts.js";
-import { listIdentitiesForContact } from "@worker/db/repositories/contactIdentities.js";
+import { listIdentitiesForContact, findContactIdsByIdentity } from "@worker/db/repositories/contactIdentities.js";
+import { isUuid } from "@/lib/clientModuleValidation";
 import { listNotesForContact } from "@worker/db/repositories/contactNotes.js";
 import { listTagsForContact } from "@worker/db/repositories/contactTags.js";
 import { listAppointmentsForContact } from "@worker/db/repositories/scheduling/appointments.js";
@@ -72,6 +73,54 @@ export async function authenticateCrm(req: Request, capability: Capability): Pro
 export function idempotencyKey(req: Request): string | null {
   const v = (req.headers.get("idempotency-key") ?? "").trim();
   return v.length > 0 ? v : null;
+}
+
+/** The path segment that means "resolve the contact from the body identity, not a UUID"
+ *  — the CRM analogue of scheduling's `by-time` (semanticParams.BY_TIME). Same convention:
+ *  a literal sentinel occupying the existing `[contactId]` dynamic segment; the identity
+ *  (phone/email/external_id) rides in the request body. */
+export const BY_IDENTITY = "by-identity";
+
+const hasText = (v: string | null | undefined): v is string => v != null && v.trim() !== "";
+
+/**
+ * §1: resolve which contact a write (notes / tags) targets. `pathId` is either a UUID
+ * (existing callers, byte-identical) or the literal `by-identity`, in which case the body
+ * carries phone/email/external_id and we resolve — READ-ONLY, through the C-2 normalization
+ * (findContactIdsByIdentity: E.164 for phones, lowercased email, never a string compare).
+ *
+ * These routes NEVER create — creation belongs to `upsert` and to D-2's inbound hook, so a
+ * write to an unknown identity is an ERROR, not an invitation: no match → 404
+ * contact_not_found (with the actionable next step); more than one → 400 ambiguous_match.
+ * A UUID is returned as-is (downstream verifies it belongs to the client → the same 404).
+ * Mirrors resolveAppointmentTarget exactly.
+ */
+export async function resolveContactTarget(
+  auth: CrmAuth,
+  pathId: string,
+  identity: { phone?: string | null; email?: string | null; externalId?: string | null },
+): Promise<{ ok: true; contactId: string } | { ok: false; response: Response }> {
+  if (isUuid(pathId)) return { ok: true, contactId: pathId };
+  if (pathId !== BY_IDENTITY) {
+    return { ok: false, response: crmError(400, "invalid_request", `contact id must be a valid UUID, or “${BY_IDENTITY}” with phone, email, or external_id in the body.`) };
+  }
+  if (!hasText(identity.phone) && !hasText(identity.email) && !hasText(identity.externalId)) {
+    return { ok: false, response: crmError(400, "invalid_request", "Provide phone, email, or external_id in the body to identify the contact.") };
+  }
+  const ids = await findContactIdsByIdentity({
+    tenantId: auth.tenantId,
+    clientId: auth.clientId,
+    phone: identity.phone ?? undefined,
+    email: identity.email ?? undefined,
+    channelUserId: identity.externalId ?? undefined,
+  });
+  if (ids.length === 0) {
+    return { ok: false, response: crmError(404, "contact_not_found", "No contact matches that identity for this client. Call POST /api/crm/v1/contacts/upsert to create one, or check the phone/email/external id.") };
+  }
+  if (ids.length > 1) {
+    return { ok: false, response: crmError(400, "ambiguous_match", `That identity matches more than one contact (${ids.join(", ")}). Pass the contact id to choose.`) };
+  }
+  return { ok: true, contactId: ids[0] };
 }
 
 /** Record an automation-driven CRM audit fact in its own small transaction (actor is the
@@ -227,6 +276,49 @@ export async function loadMachineContact(
   let notesTz = labels.tzOverride ?? appts[0]?.site_timezone ?? null;
   if (!notesTz) notesTz = (await listSites(tenantId, { clientId }))[0]?.timezone ?? "UTC";
   return projectContact(contact, identities, appts, notes, tags, { tzOverride: labels.tzOverride ?? null, locale, notesTz });
+}
+
+/**
+ * D-3: the response for a contact ENRICHMENT WRITE (upsert / PATCH / tag change). It carries
+ * ONLY the CRM profile the caller just touched — and DELIBERATELY nothing appointment-shaped:
+ * no next_appointment, no appointment id/time/status, nothing a model could read as "the
+ * booking is done". A non-booking write must never look like a booking (the phantom-appointment
+ * failure mode that got the old registrar_cliente tool removed). Reads (GET / lookup) still
+ * return the full MachineContact with next_appointment. It also skips the appointment + notes
+ * queries entirely, so a write is cheaper than a read.
+ */
+export interface EnrichmentContact {
+  id: string;
+  name: string | null;
+  stage: string;
+  consent: string;
+  custom_fields: Record<string, unknown>;
+  identities: Array<{ kind: string; value: string; label: string | null }>;
+  tags: string[];
+}
+
+/** Load the lean enrichment projection (no appointment data). Null when the contact isn't
+ *  this client's (missing OR cross-client — indistinguishable). */
+export async function loadEnrichmentContact(
+  tenantId: string,
+  clientId: string,
+  contactId: string,
+): Promise<EnrichmentContact | null> {
+  const contact = await getContactById(tenantId, contactId, clientId);
+  if (!contact) return null;
+  const [identities, tags] = await Promise.all([
+    listIdentitiesForContact(tenantId, clientId, contactId),
+    listTagsForContact(tenantId, clientId, contactId),
+  ]);
+  return {
+    id: contact.id,
+    name: contact.name,
+    stage: contact.stage,
+    consent: contact.messaging_consent,
+    custom_fields: contact.custom_fields ?? {},
+    identities: identities.map((i) => ({ kind: i.kind, value: i.value, label: i.label })),
+    tags: tags.map((t) => t.name),
+  };
 }
 
 export function projectContact(

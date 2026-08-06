@@ -110,13 +110,21 @@ test('CRM contact routes: malformed → 400; not-found → contact_not_found (ne
     assert.ok(!src.includes('"not_found", "Contact not found."'), `${rel}: no generic contact not_found`);
     assert.ok(!src.includes('"not_found", "No contact matches that identity."'), `${rel}: lookup uses contact_not_found`);
   }
-  // The id-taking contact routes 400 a malformed id (not 404).
+  // A malformed id still 400s (not 404). The GET/PATCH contact route stays UUID-only and
+  // guards inline; the identity-addressable notes/tags accept a UUID OR the `by-identity`
+  // sentinel, so their guard lives in the shared resolveContactTarget (mirroring how the
+  // scheduling by-time guard lives in resolveAppointmentTarget) and 400s anything else.
+  assert.ok(
+    web('app/api/crm/v1/contacts/[contactId]/route.ts').includes('"invalid_request", "contact id must be a valid UUID."'),
+    'contact GET/PATCH: malformed id → 400 inline',
+  );
   for (const rel of [
-    'app/api/crm/v1/contacts/[contactId]/route.ts',
     'app/api/crm/v1/contacts/[contactId]/tags/route.ts',
     'app/api/crm/v1/contacts/[contactId]/tags/[tag]/route.ts',
     'app/api/crm/v1/contacts/[contactId]/notes/route.ts',
   ]) {
-    assert.ok(web(rel).includes('"invalid_request", "contact id must be a valid UUID."'), `${rel}: malformed id → 400`);
+    assert.ok(web(rel).includes('resolveContactTarget('), `${rel}: resolves id/identity via the shared helper`);
   }
+  const crmApi = web('lib/crmApi.ts');
+  assert.ok(crmApi.includes('"invalid_request"') && crmApi.includes('must be a valid UUID'), 'resolveContactTarget 400s a malformed id');
 });

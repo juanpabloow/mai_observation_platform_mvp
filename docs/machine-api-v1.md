@@ -380,11 +380,20 @@ See §3 for a runnable end-to-end sequence.
 Fully specified here (no other document). **Channel-blind**: no field or code names a
 channel; identities are `phone` / `email` / `external`.
 
-#### The contact summary (returned by lookup, GET, upsert, PATCH, tag writes)
-`GET /contacts/{id}` and `/lookup` accept **`?compact=true`** for a conversational caller —
-the leaner shape in §1.13 (drops `owner_user_id`, `next_appointment.public_reference`, the raw
-note `created_at` pair, identity labels; keeps the spoken labels). The full shape below is the
-default.
+#### Contact shapes: full (reads) vs enrichment (writes)
+Two response shapes, split deliberately:
+- **Reads** — `GET /contacts/{id}` and `/lookup` — return the **full contact summary** below
+  (incl. `next_appointment`). They accept **`?compact=true`** for a conversational caller —
+  the leaner shape in §1.13 (drops `owner_user_id`, `next_appointment.public_reference`, the raw
+  note `created_at` pair, identity labels; keeps the spoken labels).
+- **Writes** — `upsert`, `PATCH /contacts/{id}`, and tag attach/detach — return the
+  **enrichment shape** (D-3): `{ id, name, stage, consent, custom_fields, identities[], tags[] }`
+  and **nothing appointment-shaped** — no `next_appointment`, no appointment id / time / status.
+  A contact write must never look like a booking confirmation (a bot that saw a booking-like
+  field in a non-booking response once announced an appointment it had never made). To read a
+  contact's `next_appointment`, call the GET/lookup read.
+
+The full read shape:
 ```json
 {
   "id": "…", "name": "…|null", "stage": "new|active|customer|archived",
@@ -430,19 +439,29 @@ Authorization: Bearer hk_…      X-Workflow-Ref: demo-crm-wf
 
 #### `POST /api/crm/v1/contacts/upsert` — `crm.write`
 Body: `{ phone?, email?, external_id?, name?, custom_fields?, consent?, source_label? }`
-(at least one identity required). The **only** path that may create a contact — through the
-identity chokepoint (the same person can't fork into two contacts; duplicate candidates are
-recorded, never silently merged). Profile fields are **fill-empty** (a non-empty name is
-never overwritten); **consent overwrites** (an explicit opt-out sticks).
+(at least one identity required). The **only** write path that may create a contact — through
+the identity chokepoint (the same person can't fork into two contacts; duplicate candidates
+are recorded, never silently merged). Field semantics an integrator can rely on:
+- **`name`, `email` — fill-empty.** Written only when the stored value is empty; a non-empty
+  stored value is **never** overwritten (correcting a name is a human's job, not a bot's guess).
+- **`consent` — overwrites.** An explicit `opted_out` sticks, always. Consent is STORE-ONLY:
+  recorded and displayed, and **never** gates a service reply — a handoff/inbox send is never
+  blocked by it.
+- **`custom_fields` — PARTIAL, validated.** Only the keys you send are touched; every other
+  stored key is **preserved** (a merge, not a replace — a full-object replace would erase every
+  unsent field). Send a key as `""`/`null` to clear just that one. Each key is validated against
+  the client's field definitions — unknown key or wrong type → `422 validation` naming the field.
 
+Returns the **enrichment shape** (no `next_appointment` — see "Contact shapes" above):
 ```
 POST /api/crm/v1/contacts/upsert
 Authorization: Bearer hk_…      X-Workflow-Ref: demo-crm-wf
 { "phone": "+57 300 123 4567", "name": "Camila Torres", "source_label": "whatsapp" }
 → 200
 { "contact": { "id": "0e40…", "name": "Camila Torres", "stage": "new", "consent": "unknown",
+  "custom_fields": {},
   "identities": [ { "kind": "phone", "value": "+573001234567", "label": "whatsapp" } ],
-  "tags": [], "next_appointment": null, "recent_notes": [], … } }
+  "tags": [] } }
 ```
 Re-upserting with a **differently-formatted** phone resolves the SAME contact and does not
 overwrite the name (verified live):
@@ -455,9 +474,12 @@ POST …/upsert   { "phone": "573-001-234-567", "name": "Should Not Overwrite" }
 Returns the contact summary; `404` (indistinguishable) for an unknown or cross-client id.
 
 #### `PATCH /api/crm/v1/contacts/{contact_id}` — `crm.write`
-Body: `{ name?, email?, stage?, consent?, custom_fields? }`. Custom fields are validated
-against the client's definitions — an unknown key or wrong type is `422 validation` naming
-the field:
+Body: `{ name?, email?, stage?, consent?, custom_fields? }`. This is the operator/UUID
+correction path: `name`/`email` **overwrite** here (distinct from upsert's fill-empty), and
+`stage`/`consent` overwrite. `custom_fields` is the same **PARTIAL** merge as upsert (only the
+sent keys change; `""`/`null` clears one), validated against the client's definitions — an
+unknown key or wrong type is `422 validation` naming the field. Returns the **enrichment shape**
+(no `next_appointment`):
 ```
 PATCH …/{id}   { "stage": "active", "consent": "opted_out", "custom_fields": { "barbero_preferido": "Ana" } }
 → 200   contact stage="active", consent="opted_out", custom_fields={ "barbero_preferido": "Ana" }
@@ -469,25 +491,45 @@ PATCH …/{id}   { "custom_fields": { "barbero_preferido": 123 } }
 → 422   { "error": { "code": "validation", "message": "barbero_preferido must be text" } }
 ```
 
+#### Identity-addressable writes — `by-identity` (D-3, additive)
+An agent must never handle a contact UUID (single-character transcription errors caused two
+production incidents). So the notes + tags write routes accept the literal path segment
+**`by-identity`** in place of `{contact_id}` — the CRM analogue of scheduling's **`by-time`**
+(§1.10), the SAME convention: a sentinel occupying the existing dynamic segment, with the
+identity in the request **body**. Then `phone` (or `email` / `external_id`) in the body
+resolves the contact through the identity model (normalized first — E.164 phone, lowercased
+email — never a string compare).
+
+These routes **never create** a contact — creation belongs to `upsert` and the D-2 inbound
+hook. A write to an unknown identity is an **error**, not an invitation:
+- exactly one match → act on it;
+- none → `404 contact_not_found` (message names the next step: upsert, or check the id);
+- more than one (e.g. a `phone` and an `email` that belong to different contacts) →
+  `400 ambiguous_match` listing the ids.
+
+A UUID `{contact_id}` still works, byte-identically, for programmatic callers.
+
 #### `POST /api/crm/v1/contacts/{contact_id}/notes` — `crm.write`
-Body: `{ body }`. An **automation-authored** note (it renders in the timeline as
-"Automation"). Replay-safe with `Idempotency-Key`:
+`{contact_id}` is a UUID **or** `by-identity`. Body: `{ body, phone?, email?, external_id? }`
+(the identity fields are read only on the `by-identity` path). An **automation-authored** note
+(renders in the timeline as "Automation"). Replay-safe with `Idempotency-Key`:
 ```
-POST …/{id}/notes   Idempotency-Key: note-key-1   { "body": "Cliente prefiere las mañanas." }
+POST …/{id}/notes            Idempotency-Key: note-key-1   { "body": "Cliente prefiere las mañanas." }
 → 201   { "note": { "id": "4c37…", "body": "Cliente prefiere las mañanas.", "author": "automation", "created_at": "…" } }
-POST …/{id}/notes   Idempotency-Key: note-key-1   (same body)
-→ 200   same note id (no duplicate)
+POST …/by-identity/notes     { "body": "…", "phone": "+573001234567" }   → 201   (resolved by phone; never creates)
+POST …/by-identity/notes     { "body": "…", "phone": "+570000000000" }   → 404   contact_not_found
 ```
 
 #### `POST /api/crm/v1/contacts/{contact_id}/tags` — `crm.write`
-Body: `{ tag }` **by name** (agents don't know ids): creates the tag for the client if
-absent, then attaches idempotently. Returns the contact summary (now including the tag).
-`DELETE /api/crm/v1/contacts/{contact_id}/tags/{tag}` (name, url-encoded) detaches
-idempotently.
+`{contact_id}` is a UUID **or** `by-identity`. Body: `{ tag, phone?, email?, external_id? }`
+— tag **by name** (agents don't know ids): creates the tag for the client if absent, then
+attaches idempotently. Returns the **enrichment shape** (now including the tag; no
+`next_appointment`). `DELETE /api/crm/v1/contacts/{contact_id}/tags/{tag}` (name, url-encoded)
+detaches idempotently — for `by-identity`, the identity rides in the DELETE body.
 ```
-POST …/{id}/tags   { "tag": "VIP" }   → 200   contact.tags: [ "VIP" ]
-POST …/{id}/tags   { "tag": "VIP" }   → 200   (idempotent no-op)
-DELETE …/{id}/tags/VIP                 → 200   contact.tags: [ ]
+POST …/{id}/tags              { "tag": "VIP" }                       → 200   contact.tags: [ "VIP" ]
+POST …/by-identity/tags       { "tag": "VIP", "phone": "+573001234567" }  → 200   (resolved by phone)
+DELETE …/by-identity/tags/VIP { "phone": "+573001234567" }           → 200   contact.tags: [ ]
 ```
 
 #### `GET /api/crm/v1/field-definitions` — `crm.read`

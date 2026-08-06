@@ -82,6 +82,18 @@ it here; don't duplicate per-surface.
   recipient model (who watches which client/workflow) — deferred until the Human-Agent
   role lands. `/api/health`-style polling is not a substitute for a push notification.
 
+## CRM / contacts (D-2)
+
+- **Contacts list: separate genuine leads from inbound noise.** D-2 auto-creates a contact for
+  everyone who writes, so the list will accumulate nameless, appointment-less contacts — some
+  are real leads (asked a price, haven't booked), some are spam / wrong numbers / one-word
+  "hola". Revisit once real customer traffic exists — decide the criterion from the observed
+  shape of the junk, not from a guess. **Do NOT build the filter now:** the current signal is
+  9 contacts over 3 weeks at 0% single-message, all operator testing — a filter now would risk
+  hiding genuine leads. **Trigger:** `pct_single_msg` above ~20%, or the contacts list exceeding
+  a few hundred rows. **Sizing query:** `docs/ops/d2-inbound-contact-sizing.sql` (re-runnable,
+  read-only) — the D-2 rate + junk-fraction estimate this decision keys off.
+
 ## Outbound send (H-3)
 
 - **Webhook egress hardening (SSRF).** The send webhook URL is customer-supplied. v1

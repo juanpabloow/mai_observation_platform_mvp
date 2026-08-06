@@ -102,22 +102,33 @@ export async function updateFieldDefinition(
 
 /**
  * Validate a `custom_fields` blob against the (enabled) definitions. Unknown key or
- * wrong type → error (the caller returns 422). Empty/null values CLEAR the field (are
- * dropped from the stored blob). Returns the clean, validated object to store.
+ * wrong type → error (the caller returns 422). The write is a PARTIAL update: only the
+ * keys present here are touched, every other stored key is preserved. So the return
+ * splits the request into two intents:
+ *  - `value` — the keys to SET (non-empty, type-checked).
+ *  - `clear` — the keys the caller explicitly emptied (null/undefined/''); these are the
+ *    ONLY keys removed from the stored blob. (Under partial-merge semantics an omitted
+ *    key preserves; an emptied key clears — the two must be distinguished, which a plain
+ *    "drop empties" object cannot express.)
+ * Unknown keys are rejected regardless of value, so `clear` only ever names real fields.
  */
 export function validateCustomFieldValues(
   defs: FieldDefinition[],
   values: unknown,
-): { ok: true; value: Record<string, unknown> } | { ok: false; error: string } {
+): { ok: true; value: Record<string, unknown>; clear: string[] } | { ok: false; error: string } {
   if (values == null || typeof values !== 'object' || Array.isArray(values)) {
     return { ok: false, error: 'custom_fields must be an object' };
   }
   const byKey = new Map(defs.filter((d) => d.enabled).map((d) => [d.key, d]));
   const out: Record<string, unknown> = {};
+  const clear: string[] = [];
   for (const [k, v] of Object.entries(values as Record<string, unknown>)) {
     const def = byKey.get(k);
     if (!def) return { ok: false, error: `unknown custom field: ${k}` };
-    if (v === null || v === undefined || v === '') continue; // clear
+    if (v === null || v === undefined || v === '') {
+      clear.push(k); // explicit clear (removes just this key; others are preserved)
+      continue;
+    }
     switch (def.type) {
       case 'text':
         if (typeof v !== 'string') return { ok: false, error: `${k} must be text` };
@@ -141,5 +152,5 @@ export function validateCustomFieldValues(
         break;
     }
   }
-  return { ok: true, value: out };
+  return { ok: true, value: out, clear };
 }

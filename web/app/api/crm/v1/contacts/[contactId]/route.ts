@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { authenticateCrm, crmError, loadMachineContact, toCompactContact, applyConsentAsAutomation, recordAutomationActivity } from "@/lib/crmApi";
+import { authenticateCrm, crmError, loadMachineContact, loadEnrichmentContact, toCompactContact, applyConsentAsAutomation, recordAutomationActivity } from "@/lib/crmApi";
 import { resolveLabelParams } from "@/lib/schedulingApi";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { getContactById, updateContact } from "@worker/db/repositories/contacts.js";
@@ -45,8 +45,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ contac
   const { tenantId, clientId } = auth.auth;
   const { contactId } = await params;
   if (!isUuid(contactId)) return crmError(400, "invalid_request", "contact id must be a valid UUID.");
-  const labels = resolveLabelParams(req);
-  if (!labels.ok) return labels.response;
+  // No tz/locale here: a PATCH returns the enrichment shape, which carries no timestamps.
 
   let raw: unknown;
   try {
@@ -64,19 +63,25 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ contac
 
   // Custom fields validated against the client's definitions BEFORE any write.
   let customValue: Record<string, unknown> | undefined;
+  let customClear: string[] = [];
   if (body.custom_fields !== undefined) {
     const defs = await listFieldDefinitions(tenantId, clientId, { enabledOnly: true });
     const check = validateCustomFieldValues(defs, body.custom_fields);
     if (!check.ok) return crmError(422, "validation", check.error);
     customValue = check.value;
+    customClear = check.clear;
   }
 
-  // Apply the profile fields (name/email/stage/custom_fields) in one update.
+  // Apply the profile fields (name/email/stage/custom_fields) in one update. custom_fields
+  // is a PARTIAL merge (+ clear) — never a destructive replace.
   const patch: Record<string, unknown> = {};
   if (body.name !== undefined) patch.name = body.name;
   if (body.email !== undefined) patch.email = body.email;
   if (body.stage !== undefined) patch.stage = body.stage;
-  if (customValue !== undefined) patch.custom_fields = customValue;
+  if (customValue !== undefined) {
+    patch.custom_fields = customValue;
+    patch.custom_fields_clear = customClear;
+  }
   if (Object.keys(patch).length > 0) {
     await updateContact(tenantId, contactId, patch, clientId);
   }
@@ -88,6 +93,8 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ contac
     await applyConsentAsAutomation(tenantId, clientId, contactId, body.consent, "api");
   }
 
-  const contact = await loadMachineContact(tenantId, clientId, contactId, { tzOverride: labels.tzOverride, locale: labels.locale });
+  // A WRITE returns the enrichment shape — no next_appointment (a write must not look like a
+  // booking). GET (below) is the read that surfaces the full contact incl. next_appointment.
+  const contact = await loadEnrichmentContact(tenantId, clientId, contactId);
   return Response.json({ contact });
 }

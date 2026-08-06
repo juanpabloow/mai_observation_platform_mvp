@@ -60,7 +60,11 @@ export async function updateContactAction(
     const defs = await listFieldDefinitions(scope.tenantId, client.id, { enabledOnly: true });
     const check = validateCustomFieldValues(defs, custom_fields);
     if (!check.ok) return { ok: false, error: check.error };
+    // Partial merge: set these keys, clear the emptied ones, preserve the rest. The
+    // operator form submits every defined field each save, so the observable result is
+    // unchanged; a form that omits a field no longer wipes it.
     repoPatch.custom_fields = check.value;
+    repoPatch.custom_fields_clear = check.clear;
   }
 
   const row = await updateContact(scope.tenantId, contactId, repoPatch, client.id);

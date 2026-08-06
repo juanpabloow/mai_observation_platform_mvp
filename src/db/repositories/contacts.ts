@@ -420,9 +420,13 @@ export interface UpdateContactInput {
   assigned_to?: string | null;
   messaging_consent?: MessagingConsent;
   consent_source?: string | null;
-  /** Full custom-fields blob — the caller MUST have validated it against the client's
-   * field definitions first (see validateCustomFields). */
+  /** Custom-fields to SET, already validated against the client's field definitions (see
+   * validateCustomFieldValues). PARTIAL: these keys are merged into the stored blob; every
+   * key NOT named here is preserved. To remove a key, name it in `custom_fields_clear`. */
   custom_fields?: Record<string, unknown>;
+  /** Custom-field keys to REMOVE from the stored blob (the caller emptied them). Applied
+   * after the merge, so a key can't be both set and cleared. */
+  custom_fields_clear?: string[];
 }
 
 export async function updateContact(
@@ -449,9 +453,17 @@ export async function updateContact(
     // consent_source moves with the consent change (null clears it).
     add('consent_source', patch.consent_source ?? null);
   }
-  if (patch.custom_fields !== undefined) {
-    params.push(JSON.stringify(patch.custom_fields));
-    sets.push(`custom_fields = $${params.length}::jsonb`);
+  if (patch.custom_fields !== undefined || patch.custom_fields_clear !== undefined) {
+    // PARTIAL MERGE — never a destructive replace. Merge the sent keys into the stored
+    // blob (`||`), then remove ONLY the keys the caller explicitly cleared (`- text[]`).
+    // Keys not mentioned are preserved. A bot enriching one field must never erase another
+    // — a silent full-object replace was the data-loss bug this guards against. Atomic in
+    // SQL, so concurrent enrichments don't clobber via read-modify-write.
+    params.push(JSON.stringify(patch.custom_fields ?? {}));
+    const setIdx = params.length;
+    params.push(patch.custom_fields_clear ?? []);
+    const clearIdx = params.length;
+    sets.push(`custom_fields = (COALESCE(custom_fields, '{}'::jsonb) || $${setIdx}::jsonb) - $${clearIdx}::text[]`);
   }
   if (sets.length === 0) return getContactById(tenantId, id, clientId);
   sets.push('updated_at = now()');

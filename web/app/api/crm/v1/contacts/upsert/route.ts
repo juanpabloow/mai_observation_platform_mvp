@@ -1,6 +1,5 @@
 import { z } from "zod";
-import { authenticateCrm, crmError, loadMachineContact, applyConsentAsAutomation } from "@/lib/crmApi";
-import { resolveLabelParams } from "@/lib/schedulingApi";
+import { authenticateCrm, crmError, loadEnrichmentContact, applyConsentAsAutomation } from "@/lib/crmApi";
 import { resolveContactByIdentity } from "@worker/db/repositories/contactIdentities.js";
 import { updateContact } from "@worker/db/repositories/contacts.js";
 import { listFieldDefinitions, validateCustomFieldValues } from "@worker/db/repositories/clientFieldDefinitions.js";
@@ -33,8 +32,6 @@ const Body = z
 export async function POST(req: Request): Promise<Response> {
   const auth = await authenticateCrm(req, "crm.write");
   if (!auth.ok) return auth.response;
-  const labels = resolveLabelParams(req);
-  if (!labels.ok) return labels.response;
   const { tenantId, clientId } = auth.auth;
 
   let raw: unknown;
@@ -53,11 +50,13 @@ export async function POST(req: Request): Promise<Response> {
 
   // Validate custom fields (if any) BEFORE creating/mutating anything.
   let customValue: Record<string, unknown> | undefined;
+  let customClear: string[] = [];
   if (body.custom_fields !== undefined) {
     const defs = await listFieldDefinitions(tenantId, clientId, { enabledOnly: true });
     const check = validateCustomFieldValues(defs, body.custom_fields);
     if (!check.ok) return crmError(422, "validation", check.error);
     customValue = check.value;
+    customClear = check.clear;
   }
 
   // Resolve (create-or-match) through the identity spine — fill-empty for name/phone/email.
@@ -72,12 +71,15 @@ export async function POST(req: Request): Promise<Response> {
   });
 
   if (customValue !== undefined) {
-    await updateContact(tenantId, contact.id, { custom_fields: customValue }, clientId);
+    // PARTIAL: merge these keys, clear the emptied ones, preserve everything else.
+    await updateContact(tenantId, contact.id, { custom_fields: customValue, custom_fields_clear: customClear }, clientId);
   }
   if (body.consent !== undefined && body.consent !== contact.messaging_consent) {
     await applyConsentAsAutomation(tenantId, clientId, contact.id, body.consent, body.source_label ?? "api");
   }
 
-  const summary = await loadMachineContact(tenantId, clientId, contact.id, { tzOverride: labels.tzOverride, locale: labels.locale });
+  // Enrichment response — NO appointment-shaped field (see loadEnrichmentContact). A contact
+  // write must never look like a booking confirmation.
+  const summary = await loadEnrichmentContact(tenantId, clientId, contact.id);
   return Response.json({ contact: summary });
 }

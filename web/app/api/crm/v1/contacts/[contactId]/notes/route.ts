@@ -1,7 +1,6 @@
 import { z } from "zod";
-import { authenticateCrm, crmError, idempotencyKey } from "@/lib/crmApi";
+import { authenticateCrm, crmError, idempotencyKey, resolveContactTarget } from "@/lib/crmApi";
 import { resolveLabelParams } from "@/lib/schedulingApi";
-import { isUuid } from "@/lib/clientModuleValidation";
 import { isUniqueViolation } from "@worker/db/client.js";
 import { createNote, getNoteByIdempotencyKey, type ContactNoteRow } from "@worker/db/repositories/contactNotes.js";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
@@ -14,10 +13,22 @@ import { localMomentFields } from "@/lib/localTime";
  * appears in the C-4 timeline attributed to "Automation". Replay-safe: with an
  * Idempotency-Key, a retry returns the ORIGINAL note (201 fresh / 200 replay) instead of
  * a duplicate. Channel-blind.
+ *
+ * Identity-addressable (§1): {contact_id} is a UUID OR the literal `by-identity`, in which
+ * case phone/email/external_id in the body identify the contact. NEVER creates — an unknown
+ * identity is a 404, not a new contact.
  */
 export const dynamic = "force-dynamic";
 
-const Body = z.object({ body: z.string().trim().min(1).max(10000) }).strict();
+const Body = z
+  .object({
+    body: z.string().trim().min(1).max(10000),
+    // Only read when the path is `by-identity`; ignored for a UUID path.
+    phone: z.string().trim().max(64).optional(),
+    email: z.string().trim().max(256).optional(),
+    external_id: z.string().trim().max(256).optional(),
+  })
+  .strict();
 
 // Rule: no machine timestamp without a local label. A note has no site, so the label uses
 // the ?tz override, else the client's first site timezone, else UTC.
@@ -31,7 +42,6 @@ export async function POST(req: Request, { params }: { params: Promise<{ contact
   if (!auth.ok) return auth.response;
   const { tenantId, clientId } = auth.auth;
   const { contactId } = await params;
-  if (!isUuid(contactId)) return crmError(400, "invalid_request", "contact id must be a valid UUID.");
   const labels = resolveLabelParams(req);
   if (!labels.ok) return labels.response;
   const locale = labels.locale;
@@ -46,6 +56,15 @@ export async function POST(req: Request, { params }: { params: Promise<{ contact
   const parsed = Body.safeParse(raw);
   if (!parsed.success) return crmError(422, "invalid_body", parsed.error.issues[0]?.message ?? "Invalid request body.");
 
+  // UUID path OR by-identity (phone/email/external_id in the body). Unknown identity → 404,
+  // creates nothing.
+  const target = await resolveContactTarget(auth.auth, contactId, {
+    phone: parsed.data.phone,
+    email: parsed.data.email,
+    externalId: parsed.data.external_id,
+  });
+  if (!target.ok) return target.response;
+
   const key = idempotencyKey(req);
   if (key) {
     const existing = await getNoteByIdempotencyKey(tenantId, key);
@@ -56,7 +75,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ contact
     const note = await createNote({
       tenantId,
       clientId,
-      contactId,
+      contactId: target.contactId,
       body: parsed.data.body,
       createdByUserId: null,
       authorKind: "automation",
