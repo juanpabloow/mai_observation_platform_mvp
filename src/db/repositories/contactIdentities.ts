@@ -201,6 +201,33 @@ async function tryLinkConversationsByPhone(
   }
 }
 
+/**
+ * D-2: on a first inbound user message, make sure the person exists in the CRM. Reuses the
+ * C-2 spine — CHANNEL-BLIND: `conversationRef` is classified by VALUE (phone/email/external),
+ * never assumed to be a phone. resolveContactByIdentity resolves-or-creates the contact
+ * (name NULL, stage 'new', channel/source = `label`) and is concurrency-safe (the UNIQUE
+ * identity index makes two simultaneous first messages converge on one contact). Then THIS
+ * conversation is linked with a NULL-guarded UPDATE, so an existing link is NEVER overwritten
+ * even under a race. The caller (the hot message endpoint) gates on sender='user' + a NULL
+ * conversation contact + CRM enabled, and wraps this best-effort so a failure never fails the
+ * push. One indexed identity lookup + an occasional insert; runs only on the FIRST inbound
+ * message of a conversation (afterwards contact_id is set and the caller skips it).
+ */
+export async function ensureContactForInboundMessage(
+  tenantId: string,
+  clientId: string,
+  conversationId: string,
+  conversationRef: string,
+  label: string,
+): Promise<void> {
+  const { contact } = await resolveContactByIdentity({ tenantId, clientId, channel: label, channelUserId: conversationRef });
+  await query(
+    `UPDATE conversations SET contact_id = $3, updated_at = now()
+      WHERE id = $2 AND tenant_id = $1 AND contact_id IS NULL`,
+    [tenantId, conversationId, contact.id],
+  );
+}
+
 // The NULL-contact conversations + their canonical client + phone-normalized ref, and the
 // contacts each matches — shared by the E-5 backfill's count + link passes.
 const BACKFILL_CTE = `

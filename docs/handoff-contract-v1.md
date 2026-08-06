@@ -85,9 +85,12 @@ Request:
   "content_detail": "optional free text, e.g. 'voice note, 12s' — displayed, never parsed",
   "external_message_id": "optional string — channel's own message id, used for dedup",
   "occurred_at": "optional ISO-8601 UTC — defaults to receipt time",
-  "metadata": "optional object — stored verbatim, never interpreted"
+  "metadata": "optional object — stored verbatim, never interpreted",
+  "identity_label": "optional string (≤64) — free-text SOURCE hint ('whatsapp', 'instagram', 'webchat')"
 }
 ```
+
+> **`identity_label` (added, non-breaking).** Additive to contract v1 — omitting it changes nothing. When CRM is enabled for the workflow's client, the first inbound `sender: "user"` message on an unlinked conversation auto-creates a CRM contact (see D-2 rule below); `identity_label` becomes that contact's **source** and its identity **label**. It is a display hint only — stored and shown, **never parsed or branched on**. Absent → a neutral `"conversation"`. The platform stays channel-blind: the `conversation_ref` itself is classified by value (phone / email / external), so this label does not need to match any channel taxonomy.
 
 Response `201` (or `200` on dedup replay):
 ```json
@@ -106,6 +109,7 @@ Rules:
 - Same `external_message_id` within a conversation → dedup: `200`, original `message_id`, message not duplicated.
 - `sender: "bot"` lets the workflow push its own replies so the inbox thread is complete in real time (see decision D3).
 - Human-agent messages are **never pushed** — the platform records those itself during Exchange 4.
+- **D-2 (auto-create contact).** The first `sender: "user"` push on an unlinked conversation, *when CRM is enabled for the client*, resolves-or-creates a CRM contact from the `conversation_ref` identity and links the conversation to it — so anyone who writes is in the CRM even if they never book. `sender: "bot"` creates nothing; CRM-disabled clients create nothing. This is **fail-safe**: any error in the contact path is swallowed, so the push response is unaffected (same body, same status). Runs once per conversation.
 
 ### Exchange 2 — Mode check (workflow → platform)
 
@@ -312,7 +316,8 @@ token; the token authorizes ONLY workflows of its connection). Errors:
 
 1. **`POST /messages`** — record an inbound message. Body: `workflow_ref`,
    `conversation_ref`, `sender` (`user` | `bot`), `text`, optional `content_type`,
-   `content_detail`, `external_message_id` (dedup key), `occurred_at`, `metadata`.
+   `content_detail`, `external_message_id` (dedup key), `occurred_at`, `metadata`,
+   `identity_label` (source hint for the D-2 auto-created contact; additive, display-only).
    → `201` new / `200` deduped, `{ message_id, conversation: { id, mode, assigned_agent } }`.
 2. **`GET /mode?workflow_ref=&conversation_ref=`** — `{ mode, as_of }`; unknown → `bot`.
 3. **`POST /escalations`** — request human handoff. `bot`→`pending` (201); already

@@ -18,6 +18,9 @@ export interface ConversationRow {
   tenant_id: string;
   n8n_workflow_id: string;
   conversation_ref: string;
+  /** The CRM contact this conversation belongs to, or NULL when unlinked (D-1/D-2). The
+   *  column exists; getOrCreateConversation returns it via RETURNING */
+  contact_id: string | null;
   mode: ConversationMode;
   assigned_agent_user_id: string | null;
   last_message_at: Date | null;

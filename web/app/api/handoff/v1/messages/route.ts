@@ -6,6 +6,9 @@ import {
   resolveWorkflowOr404,
 } from "@/lib/handoffApi";
 import { getOrCreateConversation, insertMessage } from "@worker/db/repositories/handoff.js";
+import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
+import { ensureContactForInboundMessage } from "@worker/db/repositories/contactIdentities.js";
+import { logger } from "@worker/logger.js";
 
 /**
  * POST /api/handoff/v1/messages — record an inbound conversation message.
@@ -34,6 +37,10 @@ const Body = z
     external_message_id: z.string().min(1).optional(),
     occurred_at: z.string().optional(),
     metadata: z.record(z.string(), z.unknown()).optional(),
+    // D-2 (additive to handoff contract v1): a free-text SOURCE hint for an auto-created
+    // contact ("whatsapp", "instagram", "webchat"). Stored as the identity label + the
+    // contact's channel; DISPLAYED, never branched on. Absent → a neutral "conversation".
+    identity_label: z.string().min(1).max(64).optional(),
   })
   .refine(
     (d) => {
@@ -88,6 +95,21 @@ export async function POST(req: Request): Promise<Response> {
     occurredAt,
     metadata: b.metadata ?? null,
   });
+
+  // D-2: a real person who writes must exist in the CRM. Only for an inbound USER message on
+  // a still-unlinked conversation, and only when CRM is ON for the client. FAIL-SAFE: any
+  // failure here must NOT fail the push — the message reaching the inbox matters more, and
+  // the workflow's gate depends on this response. Runs once (first message); afterwards
+  // conv.contact_id is set and this is skipped, so no cost on the hot path.
+  if (b.sender === "user" && conv.contact_id === null) {
+    try {
+      if (await isClientModuleEnabled(auth.auth.tenantId, wf.clientId, "crm")) {
+        await ensureContactForInboundMessage(auth.auth.tenantId, wf.clientId, conv.id, b.conversation_ref, b.identity_label ?? "conversation");
+      }
+    } catch (err) {
+      logger.warn({ err: String(err), conversationId: conv.id, clientId: wf.clientId }, "D-2: auto-create contact failed; message push unaffected");
+    }
+  }
 
   return Response.json(
     { message_id: message.id, conversation: await formatConversation(conv) },
