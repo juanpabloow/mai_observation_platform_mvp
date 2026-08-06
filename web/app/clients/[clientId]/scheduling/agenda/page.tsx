@@ -101,8 +101,8 @@ export default async function ClientAgendaPage({
   const dayEnd = zonedPartsToUtc(y, m, d + 1, 0, 0, site.timezone);
 
   // View mode. `week` widens ONLY the range handed to listAppointments — same query,
-  // same repository, same client scoping. Month/Staff are not implemented (see the
-  // TODO in AgendaView) so anything else falls back to `day`.
+  // same repository, same client scoping. Month is not implemented (see the TODO in
+  // AgendaView) so anything else falls back to `day`.
   const view = sp.view === "week" ? "week" : "day";
   // Week starts Monday, in the SITE's timezone (never the server's).
   const weekdayOfDate = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Sun
@@ -117,14 +117,24 @@ export default async function ClientAgendaPage({
   const prevStart = new Date(rangeStart.getTime() - rangeMs);
   const prevEnd = new Date(rangeStart.getTime());
 
-  const [staff, services, appts, prevAppts, crmEnabled, inboxEnabled] = await Promise.all([
-    listStaff(tenantId, { siteId: site.id, clientId: client.id }),
+  const [allStaff, services, appts, prevAppts, crmEnabled, inboxEnabled] = await Promise.all([
+    // includeInactive: a deactivated barber must still get a lane IF they have
+    // appointments in the VISIBLE RANGE — otherwise their (intact) appointments have
+    // nowhere to render and disappear. Note the range is now day OR week, so this
+    // covers a barber deactivated mid-week too. The booking form still offers ACTIVE
+    // staff only (AgendaView).
+    listStaff(tenantId, { siteId: site.id, clientId: client.id, includeInactive: true }),
     listServicesForSite(tenantId, site.id),
     listAppointments(tenantId, { siteId: site.id, from: rangeStart, to: rangeEnd, clientId: client.id }),
     listAppointments(tenantId, { siteId: site.id, from: prevStart, to: prevEnd, clientId: client.id }),
     isClientModuleEnabled(tenantId, client.id, "crm"),
     isClientModuleEnabled(tenantId, client.id, "inbox"),
   ]);
+  // Lanes = every ACTIVE staff member + any INACTIVE one who still has an appointment in
+  // this window. Deactivation is forward-looking: it stops new bookings, never hides the
+  // history that already points at that resource.
+  const apptStaffIds = new Set(appts.map((a) => a.staff_id));
+  const staff = allStaff.filter((s) => s.active || apptStaffIds.has(s.id));
 
   /** The same four metrics the view shows, computed over an arbitrary window. */
   const summarise = (rows: typeof appts) => {
@@ -169,7 +179,7 @@ export default async function ClientAgendaPage({
       dayEndIso={dayEnd.toISOString()}
       sites={sites.map((s) => ({ id: s.id, name: s.name, timezone: s.timezone }))}
       currentSiteId={site.id}
-      staff={staff.map((s) => ({ id: s.id, name: s.name }))}
+      staff={staff.map((s) => ({ id: s.id, name: s.name, active: s.active }))}
       services={services.map((s) => ({ id: s.id, name: s.name, duration_min: s.effective_duration_min }))}
       view={view}
       kpis={summarise(appts)}
@@ -191,7 +201,7 @@ export default async function ClientAgendaPage({
         origin: a.origin,
         contact_id: a.contact_id,
         contact_name: a.contact_name,
-        contact_phone: a.contact_phone,
+        primary_identity: a.primary_identity,
         source_conversation_id: a.source_conversation_id,
       }))}
     />

@@ -1,4 +1,5 @@
 import { query, firstRowOrThrow } from '../../client.js';
+import { matchByName, type NameMatch } from '../../../scheduling/nameMatch.js';
 
 /**
  * Services repository — the per-CLIENT service catalogue (tenant_id + client_id) plus
@@ -23,6 +24,9 @@ export interface ServiceRow {
   buffer_before_min: number;
   buffer_after_min: number;
   active: boolean;
+  /** Operator-chosen "offer this first" flag (default false). The API returns featured
+   *  services ahead of the rest and can filter to only them (see listServicesForSite). */
+  featured: boolean;
   created_at: Date;
   updated_at: Date;
 }
@@ -35,7 +39,7 @@ export async function listServices(
   const r = await query<ServiceRow>(
     `SELECT * FROM services
       WHERE tenant_id = $1 AND client_id = $2 ${includeInactive ? '' : 'AND active = true'}
-      ORDER BY name`,
+      ORDER BY featured DESC, name`,
     [tenantId, clientId],
   );
   return r.rows;
@@ -78,10 +82,24 @@ export async function listServicesForSite(tenantId: string, siteId: string): Pro
          ON s.id = ss.service_id AND s.tenant_id = si.tenant_id
         AND s.client_id = si.client_id AND s.active = true
       WHERE si.id = $2 AND si.tenant_id = $1 AND si.active = true
-      ORDER BY s.name`,
+      ORDER BY s.featured DESC, s.name`,
     [tenantId, siteId],
   );
   return r.rows;
+}
+
+/** Resolve a service NAME (case/accent-insensitive) to its id, among the services ENABLED
+ * at this site (the set an availability/booking call can actually use). Returns a
+ * discriminated match so the route can emit not_found (with the valid names) or
+ * ambiguous_match (with the candidates) — never a silent pick. Client scope flows through
+ * the site (resolved as owned before this is called). */
+export async function resolveServiceByNameAtSite(
+  tenantId: string,
+  siteId: string,
+  name: string | null | undefined,
+): Promise<NameMatch> {
+  const rows = await listServicesForSite(tenantId, siteId);
+  return matchByName(rows.map((r) => ({ id: r.id, name: r.name })), name);
 }
 
 /** Is a service ENABLED at a site (active site_services row), same-tenant, same-CLIENT,
@@ -143,6 +161,7 @@ export interface UpdateServiceInput {
   bufferBeforeMin?: number;
   bufferAfterMin?: number;
   active?: boolean;
+  featured?: boolean;
 }
 
 export async function updateService(
@@ -164,6 +183,7 @@ export async function updateService(
   if (patch.bufferBeforeMin !== undefined) add('buffer_before_min', patch.bufferBeforeMin);
   if (patch.bufferAfterMin !== undefined) add('buffer_after_min', patch.bufferAfterMin);
   if (patch.active !== undefined) add('active', patch.active);
+  if (patch.featured !== undefined) add('featured', patch.featured);
   if (sets.length === 0) return getServiceById(tenantId, clientId, id);
   sets.push('updated_at = now()');
   const r = await query<ServiceRow>(
@@ -177,6 +197,18 @@ export async function deactivateService(tenantId: string, clientId: string, id: 
   const r = await query(
     `UPDATE services SET active = false, updated_at = now()
       WHERE id = $1 AND tenant_id = $2 AND client_id = $3 AND active = true`,
+    [id, tenantId, clientId],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** The inverse of deactivateService — reactivation makes the service bookable again
+ * (where its site_services enablement is active) with no data migration. Returns true
+ * if a service was reactivated (false if not found / already active). */
+export async function reactivateService(tenantId: string, clientId: string, id: string): Promise<boolean> {
+  const r = await query(
+    `UPDATE services SET active = true, updated_at = now()
+      WHERE id = $1 AND tenant_id = $2 AND client_id = $3 AND active = false`,
     [id, tenantId, clientId],
   );
   return (r.rowCount ?? 0) > 0;

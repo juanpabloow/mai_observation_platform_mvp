@@ -214,6 +214,34 @@ export async function contactBelongsToClient(
   return (r.rowCount ?? 0) > 0;
 }
 
+export interface ContactCard {
+  id: string;
+  name: string | null;
+  primary_identity: string | null;
+}
+
+/** A contact's display card — id, name, and main phone-or-email — for a machine response
+ *  (C-7). ONE query, client-scoped (null for a missing/cross-client id). */
+export async function getContactCardById(
+  tenantId: string,
+  clientId: string,
+  contactId: string,
+  client?: PoolClient,
+): Promise<ContactCard | null> {
+  const run = runner(client);
+  const r = await run<ContactCard>(
+    `SELECT c.id, c.name,
+            (SELECT ci.value FROM contact_identities ci
+              WHERE ci.tenant_id = c.tenant_id AND ci.client_id = c.client_id AND ci.contact_id = c.id
+                AND ci.kind IN ('phone','email')
+              ORDER BY (ci.kind = 'phone') DESC, ci.created_at ASC LIMIT 1) AS primary_identity
+       FROM contacts c
+      WHERE c.id = $1 AND c.tenant_id = $2 AND c.client_id = $3`,
+    [contactId, tenantId, clientId],
+  );
+  return r.rows[0] ?? null;
+}
+
 /** The DISTINCT contact ids the given identity strings currently map to within this
  *  client (via contact_identities). Empty when none are claimed yet. Read-only — used to
  *  detect a contact_id-vs-typed-identity conflict WITHOUT resolving (which would create). */

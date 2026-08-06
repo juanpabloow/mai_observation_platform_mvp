@@ -16,7 +16,10 @@ import {
 
 /** Serializable shapes passed from the server page. */
 interface SiteOpt { id: string; name: string; timezone: string }
-interface StaffOpt { id: string; name: string }
+/** `active` = false means the staff member is deactivated. Such a lane still renders (so
+ *  their existing appointments stay visible) with an "inactive" chip, but they are NOT
+ *  offered for NEW bookings (the modal's Barber dropdown filters to active). */
+interface StaffOpt { id: string; name: string; active: boolean }
 interface ServiceOpt { id: string; name: string; duration_min: number }
 interface Appt {
   id: string;
@@ -34,7 +37,10 @@ interface Appt {
   origin: string;
   contact_id: string | null;
   contact_name: string | null;
-  contact_phone: string | null;
+  /** The contact's main phone-or-email, resolved from contact_identities by ONE
+   *  lateral join in the repository. Replaces the old contact_phone: identity is
+   *  canonical now. NULL for walk-ins / contacts with no phone or email. */
+  primary_identity: string | null;
   source_conversation_id: string | null;
 }
 interface Slot { start_at: string; service_end_at: string; staff_id: string; available_staff_ids: string[] }
@@ -296,7 +302,15 @@ export function AgendaView(props: {
   // Picking a barber in the "All staff" facet collapses the grid to that column —
   // the job the removed chips used to do, using a control that already existed.
   const shownStaff = staffFilter ? props.staff.filter((s) => s.id === staffFilter) : props.staff;
-  const columns: { key: string; label: string; sub?: string; initial?: string; dayNum?: string; isToday?: boolean }[] = isWeek
+  const columns: {
+    key: string;
+    label: string;
+    sub?: string;
+    initial?: string;
+    dayNum?: string;
+    isToday?: boolean;
+    inactive?: boolean;
+  }[] = isWeek
     ? weekDays.map((dk) => {
         const n = visible.filter((a) => zonedParts(a.start_at, tz).dayKey === dk).length;
         const [yy, mm, dd] = dk.split("-").map(Number);
@@ -310,11 +324,12 @@ export function AgendaView(props: {
         };
       })
     : shownStaff.map((st) => {
-        // Avatar + name ONLY — the appointment count lives on the staff chip above,
-        // and repeating it here just crowded the column header.
-        // No avatar image exists on staff, so the initial IS the avatar.
+        // Avatar + name ONLY — repeating the appointment count here crowded the
+        // header. No avatar image exists on staff, so the initial IS the avatar.
         // TODO(agenda): swap for a real photo if staff ever gains an avatar_url.
-        return { key: st.id, label: st.name, initial: st.name };
+        // An INACTIVE barber still gets a lane (the server only includes them when
+        // they have appointments in range) so their history stays reachable.
+        return { key: st.id, label: st.name, initial: st.name, inactive: !st.active };
       });
 
   const inColumn = (a: Appt, colKey: string) =>
@@ -560,6 +575,14 @@ export function AgendaView(props: {
                       <span className="truncate text-xs font-semibold text-foreground">{col.label}</span>
                       {col.sub ? <span className="truncate text-[0.625rem] text-faint">{col.sub}</span> : null}
                     </span>
+                    {col.inactive ? (
+                      <span
+                        title="This barber is inactive — existing appointments still show here, but they can't take new bookings. Reactivate in Scheduling settings."
+                        className="shrink-0 rounded-full border border-line-strong bg-chip px-1.5 py-0.5 text-[0.625rem] font-medium text-muted"
+                      >
+                        Inactive
+                      </span>
+                    ) : null}
                   </div>
                   <div className="relative" style={{ height: bodyHeight }}>
                     {hours.map((h) => (
@@ -946,10 +969,10 @@ function ApptDrawer({
           </span>
           <div className="min-w-0">
             <p className="truncate text-sm font-semibold text-foreground">{appt.contact_name ?? "Walk-in"}</p>
-            {/* The contact's PHONE — never the internal appointment UUID. Absent
-                phone renders nothing at all. */}
-            {appt.contact_phone ? (
-              <p className="u-mono truncate text-[0.625rem] text-faint">{appt.contact_phone}</p>
+            {/* The canonical IDENTITY (phone or email) — never the internal
+                appointment UUID. Absent identity renders nothing at all. */}
+            {appt.primary_identity ? (
+              <p className="u-mono truncate text-[0.625rem] text-faint">{appt.primary_identity}</p>
             ) : null}
           </div>
         </div>
@@ -1187,7 +1210,9 @@ function AppointmentModal(props: {
             <span className="text-xs text-muted">Barber</span>
             <select value={staffId} onChange={(e) => setStaffId(e.target.value)} className="rounded-lg border border-line-strong bg-transparent px-2 py-1.5">
               <option value="">Any</option>
-              {props.staff.map((s) => (
+              {/* NEW bookings offer ACTIVE staff only — an inactive barber's lane is visible
+                  for history but must not be selectable for a new appointment. */}
+              {props.staff.filter((s) => s.active).map((s) => (
                 <option key={s.id} value={s.id}>{s.name}</option>
               ))}
             </select>

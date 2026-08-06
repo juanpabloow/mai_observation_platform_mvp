@@ -10,8 +10,10 @@ import { listIdentitiesForContact } from "@worker/db/repositories/contactIdentit
 import { listNotesForContact } from "@worker/db/repositories/contactNotes.js";
 import { listTagsForContact } from "@worker/db/repositories/contactTags.js";
 import { listAppointmentsForContact } from "@worker/db/repositories/scheduling/appointments.js";
+import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 import { recordCrmActivity, type CrmEventType } from "@worker/db/repositories/crmActivityEvents.js";
 import { summarizeAppointments } from "@/lib/contactPanel";
+import { DEFAULT_LABEL_LOCALE, localMomentFields, localStartFields } from "@/lib/localTime";
 
 /**
  * Shared auth + scope + projection for the n8n-facing CRM API (app/api/crm/v1/*).
@@ -135,17 +137,81 @@ export interface MachineContact {
     public_reference: string;
     service_name: string;
     staff_name: string | null;
+    // UTC stays the canonical wire value; the *_local / *_label / day fields are the C-6
+    // labels an agent reads aloud (in the appointment's SITE tz unless `tz` overrides).
     start_at: string;
+    start_local: string;
+    start_label: string;
+    date_label: string;
+    day: string;
     status: string;
   } | null;
-  recent_notes: Array<{ id: string; body: string; author: "user" | "automation" | "system"; created_at: string }>;
+  recent_notes: Array<{
+    id: string;
+    body: string;
+    author: "user" | "automation" | "system";
+    created_at: string;
+    created_at_local: string;
+    created_at_label: string;
+  }>;
 }
 
 const RECENT_NOTES = 5;
 
+/** E-4 compact contact for a conversational caller (`?compact=true`): drop the fields an
+ *  agent never reads — owner_user_id, next_appointment.public_reference + its raw UTC pair,
+ *  identity labels, and note created_at + created_at_local (keep the spoken label). The full
+ *  shape stays the default. */
+export interface CompactContact {
+  id: string;
+  name: string | null;
+  stage: string;
+  is_customer: boolean;
+  visits: number;
+  no_shows: number;
+  consent: string;
+  custom_fields: Record<string, unknown>;
+  identities: Array<{ kind: string; value: string }>;
+  tags: string[];
+  next_appointment: { id: string; service_name: string; staff_name: string | null; start_label: string; date_label: string; day: string; status: string } | null;
+  recent_notes: Array<{ id: string; body: string; author: "user" | "automation" | "system"; created_at_label: string }>;
+}
+
+export function toCompactContact(c: MachineContact): CompactContact {
+  const n = c.next_appointment;
+  return {
+    id: c.id,
+    name: c.name,
+    stage: c.stage,
+    is_customer: c.is_customer,
+    visits: c.visits,
+    no_shows: c.no_shows,
+    consent: c.consent,
+    custom_fields: c.custom_fields,
+    identities: c.identities.map((i) => ({ kind: i.kind, value: i.value })),
+    tags: c.tags,
+    next_appointment: n
+      ? { id: n.id, service_name: n.service_name, staff_name: n.staff_name, start_label: n.start_label, date_label: n.date_label, day: n.day, status: n.status }
+      : null,
+    recent_notes: c.recent_notes.map((r) => ({ id: r.id, body: r.body, author: r.author, created_at_label: r.created_at_label })),
+  };
+}
+
+/** Optional presentation controls for a machine contact response (mirrors the scheduling
+ *  routes' `tz`/`locale`). tz defaults to the appointment's / client's site timezone. */
+export interface ContactLabelOpts {
+  tzOverride?: string | null;
+  locale?: string;
+}
+
 /** Load + project a contact for the API. Returns null when the contact isn't found under
  *  this client (missing OR cross-client — indistinguishable). Bounded queries only. */
-export async function loadMachineContact(tenantId: string, clientId: string, contactId: string): Promise<MachineContact | null> {
+export async function loadMachineContact(
+  tenantId: string,
+  clientId: string,
+  contactId: string,
+  labels: ContactLabelOpts = {},
+): Promise<MachineContact | null> {
   const contact = await getContactById(tenantId, contactId, clientId);
   if (!contact) return null;
   const [identities, appts, notes, tags] = await Promise.all([
@@ -154,7 +220,13 @@ export async function loadMachineContact(tenantId: string, clientId: string, con
     listNotesForContact(tenantId, clientId, contactId),
     listTagsForContact(tenantId, clientId, contactId),
   ]);
-  return projectContact(contact, identities, appts, notes, tags);
+  // A single presentation tz for site-less fields (notes): the ?tz override, else any of
+  // this contact's appointment site tzs, else the client's first site, else UTC. One extra
+  // query only when there is no override and no appointment to borrow a tz from.
+  const locale = labels.locale ?? DEFAULT_LABEL_LOCALE;
+  let notesTz = labels.tzOverride ?? appts[0]?.site_timezone ?? null;
+  if (!notesTz) notesTz = (await listSites(tenantId, { clientId }))[0]?.timezone ?? "UTC";
+  return projectContact(contact, identities, appts, notes, tags, { tzOverride: labels.tzOverride ?? null, locale, notesTz });
 }
 
 export function projectContact(
@@ -163,8 +235,13 @@ export function projectContact(
   appts: Parameters<typeof summarizeAppointments>[0],
   notes: Array<{ id: string; body: string; author_kind: "user" | "automation"; created_by_user_id: string | null; created_at: Date }>,
   tags: Array<{ name: string }>,
+  labels: { tzOverride: string | null; locale: string; notesTz: string },
 ): MachineContact {
   const summary = summarizeAppointments(appts);
+  const next = summary.next;
+  // next_appointment labels use the appointment's OWN site tz (unless `tz` overrides), since
+  // it happens at a physical place; a raw UTC alone made the agent say "4 p. m." for 11 a. m.
+  const nextTz = labels.tzOverride ?? next?.siteTimezone ?? labels.notesTz;
   return {
     id: contact.id,
     name: contact.name,
@@ -177,21 +254,27 @@ export function projectContact(
     custom_fields: contact.custom_fields ?? {},
     identities: identities.map((i) => ({ kind: i.kind, value: i.value, label: i.label })),
     tags: tags.map((t) => t.name),
-    next_appointment: summary.next
+    next_appointment: next
       ? {
-          id: summary.next.id,
-          public_reference: summary.next.publicReference,
-          service_name: summary.next.serviceName,
-          staff_name: summary.next.staffName,
-          start_at: summary.next.startAt,
-          status: summary.next.status,
+          id: next.id,
+          public_reference: next.publicReference,
+          service_name: next.serviceName,
+          staff_name: next.staffName,
+          start_at: next.startAt,
+          ...localStartFields(new Date(next.startAt), nextTz, labels.locale),
+          status: next.status,
         }
       : null,
-    recent_notes: notes.slice(0, RECENT_NOTES).map((n) => ({
-      id: n.id,
-      body: n.body,
-      author: n.author_kind === "automation" ? "automation" : n.created_by_user_id ? "user" : "system",
-      created_at: n.created_at.toISOString(),
-    })),
+    recent_notes: notes.slice(0, RECENT_NOTES).map((n) => {
+      const m = localMomentFields(n.created_at, labels.notesTz, labels.locale);
+      return {
+        id: n.id,
+        body: n.body,
+        author: n.author_kind === "automation" ? "automation" : n.created_by_user_id ? "user" : "system",
+        created_at: n.created_at.toISOString(),
+        created_at_local: m.local,
+        created_at_label: m.label,
+      };
+    }),
   };
 }

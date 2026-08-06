@@ -1,5 +1,6 @@
 import { query, firstRowOrThrow } from '../../client.js';
 import type { WeeklyHours } from '../../../scheduling/types.js';
+import { matchByName, type NameMatch } from '../../../scheduling/nameMatch.js';
 
 /**
  * Staff repository — agendable resources (a barber), each belonging to exactly one
@@ -85,6 +86,33 @@ export async function isActiveStaffOfSite(tenantId: string, siteId: string, staf
   return r.rows.length > 0;
 }
 
+/** Resolve a staff NAME (case/accent-insensitive) to its id, among the ACTIVE staff at
+ * this site (the set that can take new bookings). Discriminated result → the route emits
+ * not_found (valid names) or ambiguous_match (candidates), never a silent pick. Whether the
+ * staff can perform the chosen service is validated downstream by the engine. */
+export async function resolveStaffByNameAtSite(
+  tenantId: string,
+  siteId: string,
+  name: string | null | undefined,
+): Promise<NameMatch> {
+  const rows = await listStaff(tenantId, { siteId });
+  return matchByName(rows.map((r) => ({ id: r.id, name: r.name })), name);
+}
+
+/** Does `staffId` belong to this client (via its site), REGARDLESS of active state?
+ * Used by the appointments-list filter to fail loudly on a fabricated/foreign staff_id
+ * (§3) instead of returning an empty list. Historical reads must still resolve a
+ * deactivated staff member, so this deliberately does NOT filter on active. */
+export async function staffBelongsToClient(tenantId: string, clientId: string, staffId: string): Promise<boolean> {
+  const r = await query<{ ok: boolean }>(
+    `SELECT true AS ok
+       FROM staff s JOIN sites si ON si.id = s.site_id AND si.tenant_id = s.tenant_id
+      WHERE s.id = $3 AND s.tenant_id = $1 AND si.client_id = $2`,
+    [tenantId, clientId, staffId],
+  );
+  return r.rows.length > 0;
+}
+
 export interface CreateStaffInput {
   tenantId: string;
   siteId: string;
@@ -134,6 +162,17 @@ export async function updateStaff(tenantId: string, id: string, patch: UpdateSta
 export async function deactivateStaff(tenantId: string, id: string): Promise<boolean> {
   const r = await query(
     `UPDATE staff SET active = false, updated_at = now() WHERE id = $1 AND tenant_id = $2 AND active = true`,
+    [id, tenantId],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/** The inverse of deactivateStaff — reactivation restores availability + new bookings
+ * for this staff member with no data migration and no side effects. Returns true if a
+ * staff member was reactivated (false if not found / already active). */
+export async function reactivateStaff(tenantId: string, id: string): Promise<boolean> {
+  const r = await query(
+    `UPDATE staff SET active = true, updated_at = now() WHERE id = $1 AND tenant_id = $2 AND active = false`,
     [id, tenantId],
   );
   return (r.rowCount ?? 0) > 0;

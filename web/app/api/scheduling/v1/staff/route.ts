@@ -1,12 +1,11 @@
 import { authenticateScheduling, resolveOwnedSite, schedulingError } from "@/lib/schedulingApi";
-import { isUuid } from "@/lib/clientModuleValidation";
+import { resolveServiceParam } from "@/lib/semanticParams";
 import { listStaff, listStaffForService } from "@worker/db/repositories/scheduling/staff.js";
-import { isServiceEnabledAtSite } from "@worker/db/repositories/scheduling/services.js";
 
 /**
- * GET /api/scheduling/v1/staff?site_id=&service_id= — active staff at a site
- * OWNED BY the resolved client. When service_id is given, only staff who can
- * perform it. MACHINE endpoint; foreign/unknown site_id → generic 404.
+ * GET /api/scheduling/v1/staff?site_id=&(service_id|service)= — active staff at a site
+ * OWNED BY the resolved client. When a service is given (by `service_id` UUID or `service`
+ * NAME), only staff who can perform it. MACHINE endpoint; foreign/unknown site_id → 404.
  */
 export const dynamic = "force-dynamic";
 
@@ -15,19 +14,19 @@ export async function GET(req: Request): Promise<Response> {
   if (!auth.ok) return auth.response;
   const params = new URL(req.url).searchParams;
   const siteId = params.get("site_id");
-  const serviceId = params.get("service_id");
+  const serviceIdParam = params.get("service_id");
+  const serviceName = params.get("service");
   if (!siteId) return schedulingError(400, "invalid_request", "site_id is required.");
-  const owned = await resolveOwnedSite(auth.auth, siteId);
+  // requireActive: this lists bookable staff at a site; a deactivated site → site_inactive (409).
+  const owned = await resolveOwnedSite(auth.auth, siteId, { requireActive: true });
   if (!owned.ok) return owned.response;
 
   let rows;
-  if (serviceId) {
-    // Validate the service_id shape (avoid a 22P02) and that it's actually
-    // enabled at THIS site — a malformed/unknown/not-enabled service → generic 404.
-    if (!isUuid(serviceId) || !(await isServiceEnabledAtSite(auth.auth.tenantId, owned.site.id, serviceId))) {
-      return schedulingError(404, "not_found", "Not found.");
-    }
-    rows = await listStaffForService(auth.auth.tenantId, owned.site.id, serviceId);
+  if (serviceIdParam || serviceName) {
+    // service_id (UUID) or service (NAME) → the specific 400/404/ambiguous errors.
+    const svc = await resolveServiceParam(auth.auth, owned.site.id, serviceIdParam, serviceName);
+    if (!svc.ok) return svc.response;
+    rows = await listStaffForService(auth.auth.tenantId, owned.site.id, svc.value);
   } else {
     rows = await listStaff(auth.auth.tenantId, { siteId: owned.site.id, clientId: auth.auth.clientId });
   }

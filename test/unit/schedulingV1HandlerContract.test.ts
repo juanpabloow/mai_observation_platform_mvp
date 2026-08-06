@@ -104,28 +104,74 @@ function assertBefore(rel: string, a: string, b: string): void {
   assert.ok(ia < ib, `${rel}: ${JSON.stringify(a)} must precede ${JSON.stringify(b)}`);
 }
 
-test('every appointment id route validates the id (isUuid) BEFORE calling the domain', () => {
+test('confirm/complete/no-show validate the id (isUuid) BEFORE calling the domain', () => {
+  // These have no semantic alternative, so the id must still be a UUID validated up front.
   assertBefore('appointments/[id]/confirm/route.ts', 'isUuid(id)', 'transitionStatus(');
   assertBefore('appointments/[id]/complete/route.ts', 'isUuid(id)', 'transitionStatus(');
   assertBefore('appointments/[id]/no-show/route.ts', 'isUuid(id)', 'transitionStatus(');
-  assertBefore('appointments/[id]/cancel/route.ts', 'isUuid(id)', 'transitionStatus(');
-  assertBefore('appointments/[id]/reschedule/route.ts', 'isUuid(id)', 'rescheduleAppointment(');
 });
 
-test('cancel and reschedule validate the id BEFORE reading the body', () => {
-  assertBefore('appointments/[id]/cancel/route.ts', 'isUuid(id)', 'readReason(req)');
-  assertBefore('appointments/[id]/reschedule/route.ts', 'isUuid(id)', 'req.json(');
+test('cancel and reschedule resolve the appointment target (UUID or by-time) BEFORE the domain', () => {
+  // E-1 §3: the id may be a UUID OR `by-time` (identity+day+time in the body), so the
+  // target is resolved (and its failure returned) before any mutation.
+  for (const [rel, domain] of [
+    ['appointments/[id]/cancel/route.ts', 'transitionStatus('],
+    ['appointments/[id]/reschedule/route.ts', 'rescheduleAppointment('],
+  ] as const) {
+    assertBefore(rel, 'resolveAppointmentTarget(', domain);
+    assertBefore(rel, 'if (!target.ok) return target.response', domain);
+  }
 });
 
-test('staff/availability validate resource shape + membership before the engine', () => {
-  // staff: service_id UUID + enabled-at-site check.
-  assertContains('staff/route.ts', 'isUuid(serviceId)');
-  assertContains('staff/route.ts', 'isServiceEnabledAtSite(');
-  // availability: service_id/staff_id UUID + service-enabled + staff-of-site checks.
-  assertContains('availability/route.ts', 'isUuid(serviceId)');
-  assertContains('availability/route.ts', 'isServiceEnabledAtSite(');
-  assertContains('availability/route.ts', 'isActiveStaffOfSite(');
-  // …and those run before the engine call.
-  assertBefore('availability/route.ts', 'isServiceEnabledAtSite(', 'loadAvailability(');
-  assertBefore('staff/route.ts', 'isServiceEnabledAtSite(', 'listStaffForService(');
+test('staff/availability resolve service/staff (id OR name) before the engine', () => {
+  // E-1: shape + membership + name resolution now live in the shared resolveServiceParam/
+  // resolveStaffParam (which enforce the enabled-at-site / active-staff checks), and run
+  // before the engine call.
+  assertContains('availability/route.ts', 'resolveServiceParam(');
+  assertContains('availability/route.ts', 'resolveStaffParam(');
+  assertBefore('availability/route.ts', 'resolveServiceParam(', 'loadAvailability(');
+  assertContains('staff/route.ts', 'resolveServiceParam(');
+  assertBefore('staff/route.ts', 'resolveServiceParam(', 'listStaffForService(');
+});
+
+// ── C-7 wiring guards (the handler can't run here; guard the source shapes) ──────
+
+test('appointments GET rejects unknown + empty params instead of silently dropping a filter', () => {
+  const rel = 'appointments/route.ts';
+  // The over-return bug: an unrecognized or empty-valued param used to widen the
+  // query to the whole client. Both must now be LOUD 400s.
+  assertContains(rel, 'unknown_parameter');
+  assertContains(rel, 'empty_parameter');
+  // The allowlist gate + the empty-value gate both run BEFORE listAppointments.
+  assertBefore(rel, 'unknown_parameter', 'listAppointments(');
+  assertBefore(rel, 'empty_parameter', 'listAppointments(');
+});
+
+test('appointments GET resolves identity filters through the C-2 spine (never trusts a raw filter)', () => {
+  const rel = 'appointments/route.ts';
+  // phone/email/external_id resolve to a contact-id SET; an empty set → 0 rows.
+  assertContains(rel, 'findContactIdsByIdentity(');
+  assertContains(rel, 'contactIds');
+  // resolution feeds the mandatory-client list (clientId is still forced).
+  assertBefore(rel, 'findContactIdsByIdentity(', 'listAppointments(');
+  assertContains(rel, 'clientId: auth.auth.clientId');
+});
+
+test('every appointment-returning route projects the contact identity + staff_name (Task 2 / E-4)', () => {
+  // The list builds the contact inline from its join (and passes r.staff_name); the
+  // single-appointment routes go through projectSingleAppointment, which resolves the
+  // contact card AND the staff name in one lookup each. Either way the caller gets both.
+  assertContains('appointments/route.ts', 'primary_identity');
+  for (const rel of [
+    'appointments/[id]/cancel/route.ts',
+    'appointments/[id]/confirm/route.ts',
+    'appointments/[id]/complete/route.ts',
+    'appointments/[id]/no-show/route.ts',
+    'appointments/[id]/reschedule/route.ts',
+  ]) {
+    assertContains(rel, 'projectSingleAppointment(');
+  }
+  // Create also uses it; the list passes the row's staff_name (no per-row lookup).
+  assertContains('appointments/route.ts', 'projectSingleAppointment(auth.auth, result.value');
+  assertContains('appointments/route.ts', 'r.staff_name');
 });

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { authenticateCrm, crmError, loadMachineContact, applyConsentAsAutomation } from "@/lib/crmApi";
+import { resolveLabelParams } from "@/lib/schedulingApi";
 import { resolveContactByIdentity } from "@worker/db/repositories/contactIdentities.js";
 import { updateContact } from "@worker/db/repositories/contacts.js";
 import { listFieldDefinitions, validateCustomFieldValues } from "@worker/db/repositories/clientFieldDefinitions.js";
@@ -32,6 +33,8 @@ const Body = z
 export async function POST(req: Request): Promise<Response> {
   const auth = await authenticateCrm(req, "crm.write");
   if (!auth.ok) return auth.response;
+  const labels = resolveLabelParams(req);
+  if (!labels.ok) return labels.response;
   const { tenantId, clientId } = auth.auth;
 
   let raw: unknown;
@@ -75,6 +78,6 @@ export async function POST(req: Request): Promise<Response> {
     await applyConsentAsAutomation(tenantId, clientId, contact.id, body.consent, body.source_label ?? "api");
   }
 
-  const summary = await loadMachineContact(tenantId, clientId, contact.id);
+  const summary = await loadMachineContact(tenantId, clientId, contact.id, { tzOverride: labels.tzOverride, locale: labels.locale });
   return Response.json({ contact: summary });
 }

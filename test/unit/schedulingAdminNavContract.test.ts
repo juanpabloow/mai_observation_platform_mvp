@@ -62,7 +62,10 @@ test('AdminPanel: no client selector — a single route client threads into ever
   assert.ok(src.includes('clientId: string'), 'takes a single clientId');
   // Actions all receive the clientId.
   assert.ok(src.includes('createSiteAction({ clientId'), 'createSite carries clientId');
-  assert.ok(src.includes('deactivateSiteAction(clientId'), 'deactivateSite carries clientId');
+  // Deactivate/activate now thread clientId through the shared ActiveToggle (kind → action
+  // map), not a per-row inline call — the client scoping is unchanged.
+  assert.ok(src.includes('DEACTIVATE[kind](clientId, id)'), 'deactivate carries clientId (via ActiveToggle)');
+  assert.ok(src.includes('ACTIVATE[kind](clientId, id)'), 'activate (the inverse) carries clientId');
   assert.ok(src.includes('setSiteServiceAction(clientId'), 'setSiteService carries clientId');
   assert.ok(src.includes('setStaffServiceAction(clientId'), 'setStaffService carries clientId');
   assert.ok(src.includes('deleteExceptionAction(clientId'), 'deleteException carries clientId');

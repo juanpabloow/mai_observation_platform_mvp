@@ -150,3 +150,14 @@ export async function deactivateSite(tenantId: string, id: string): Promise<bool
   );
   return (r.rowCount ?? 0) > 0;
 }
+
+/** The inverse of deactivateSite — a deactivation is a forward-looking switch, never a
+ * one-way door. Restores normal behavior (availability, new bookings) with no data
+ * migration. Returns true if a site was reactivated (false if not found / already active). */
+export async function reactivateSite(tenantId: string, id: string): Promise<boolean> {
+  const r = await query(
+    `UPDATE sites SET active = true, updated_at = now() WHERE id = $1 AND tenant_id = $2 AND active = false`,
+    [id, tenantId],
+  );
+  return (r.rowCount ?? 0) > 0;
+}

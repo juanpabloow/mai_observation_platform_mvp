@@ -2,11 +2,14 @@ import "server-only";
 import { authenticateHandoffRequest } from "@/lib/handoffApi";
 import type { Capability } from "@worker/db/repositories/handoffTokens.js";
 import { isUuid } from "@/lib/clientModuleValidation";
+import { localTimeFields, isValidTimeZone, isSupportedLocale, DEFAULT_LABEL_LOCALE } from "@/lib/localTime";
 import type { AppointmentRow } from "@worker/db/repositories/scheduling/appointments.js";
 import type { BookingError } from "@worker/scheduling/booking.js";
 import { resolveMachineSchedulingScope } from "@worker/scheduling/machineScope.js";
 import { parseWorkflowRef } from "@worker/scheduling/workflowRef.js";
 import { getSiteById, type SiteRow } from "@worker/db/repositories/scheduling/sites.js";
+import { getStaffById } from "@worker/db/repositories/scheduling/staff.js";
+import { getContactCardById } from "@worker/db/repositories/contactIdentities.js";
 
 /**
  * Shared auth + scope for the n8n-facing scheduling API (app/api/scheduling/v1/*).
@@ -82,21 +85,48 @@ export async function authenticateScheduling(req: Request, capability: Capabilit
 
 /**
  * Resolve a `site_id` request value to a site OWNED BY the authenticated client.
- * Invalid UUID, unknown site, or a site of another client all return the SAME
- * generic 404 (never revealing it exists under a different client). Every
- * site-scoped read (services/staff/availability/appointments filter) routes
- * through this so a token can't point at a foreign site.
+ *
+ * Post-AUTH resource errors are SPECIFIC (the caller already has full access to this
+ * client's data, so naming the resource leaks nothing), and a foreign site is
+ * indistinguishable from a nonexistent one (both → `site_not_found`) so nothing
+ * cross-client leaks:
+ *   - malformed UUID              → 400 invalid_request  (a client mistake, never a 404)
+ *   - unknown / another client's  → 404 site_not_found   (actionable: list valid ids)
+ *   - exists but deactivated,     → 409 site_inactive    (only when opts.requireActive —
+ *     and requireActive             so the caller can tell "wrong id" from "deactivated")
+ *
+ * `requireActive` is TRUE for availability / services / staff / new bookings (an inactive
+ * site can't be booked) and FALSE for reads of EXISTING data (the appointments list must
+ * still show a deactivated site's history — deactivation is forward-looking).
  */
 export async function resolveOwnedSite(
   auth: SchedulingAuth,
   siteId: string | null | undefined,
+  opts: { requireActive?: boolean } = {},
 ): Promise<{ ok: true; site: SiteRow } | { ok: false; response: Response }> {
   if (!siteId || !isUuid(siteId)) {
-    return { ok: false, response: schedulingError(404, "not_found", "Not found.") };
+    return { ok: false, response: schedulingError(400, "invalid_request", "site_id must be a valid UUID.") };
   }
   const site = await getSiteById(auth.tenantId, siteId);
   if (!site || site.client_id !== auth.clientId) {
-    return { ok: false, response: schedulingError(404, "not_found", "Not found.") };
+    return {
+      ok: false,
+      response: schedulingError(
+        404,
+        "site_not_found",
+        "No site with that id exists for this client. Call GET /api/scheduling/v1/sites to list valid site ids.",
+      ),
+    };
+  }
+  if (opts.requireActive && !site.active) {
+    return {
+      ok: false,
+      response: schedulingError(
+        409,
+        "site_inactive",
+        "This site exists but is deactivated, so it can’t be used for availability or new bookings. Reactivate it in scheduling settings, or use a different site_id (GET /api/scheduling/v1/sites lists active sites).",
+      ),
+    };
   }
   return { ok: true, site };
 }
@@ -119,19 +149,75 @@ export function bookingErrorStatus(error: BookingError): number {
   }
 }
 
+/**
+ * Translate a booking-engine error into a SPECIFIC, actionable machine-API response
+ * WITHOUT touching the engine (its `not_found` is also the cross-client security guard and
+ * is byte-identical across tests). A transition/read only fails "not found" because the
+ * appointment doesn't exist for this client (a cross-client id stays indistinguishable —
+ * still `appointment_not_found`); every other error keeps its own code + message.
+ */
+export function appointmentErrorResponse(result: { error: BookingError; message: string }): Response {
+  if (result.error === "not_found") {
+    return schedulingError(
+      404,
+      "appointment_not_found",
+      "No appointment with that id exists for this client. Call GET /api/scheduling/v1/appointments to list valid ids.",
+    );
+  }
+  return schedulingError(bookingErrorStatus(result.error), result.error, result.message);
+}
+
+/**
+ * Same idea for CREATE: the create route pre-validates site/service/staff, so a residual
+ * engine `not_found` means the service isn't bookable at this site. Map it to the specific,
+ * actionable `service_not_found`; keep conflicts/unavailable/no_staff/module_disabled as-is.
+ */
+export function createErrorResponse(result: { error: BookingError; message: string }): Response {
+  if (result.error === "not_found") {
+    return schedulingError(
+      404,
+      "service_not_found",
+      "That service isn’t bookable at this site. Call GET /api/scheduling/v1/services?site_id=… to get valid service ids.",
+    );
+  }
+  return schedulingError(bookingErrorStatus(result.error), result.error, result.message);
+}
+
 /** The public projection of an appointment (safe to return to n8n / the customer).
- * Never leaks internal ids beyond what's needed; exposes public_reference. */
-export function projectAppointment(a: AppointmentRow): Record<string, unknown> {
+ * Never leaks internal ids beyond what's needed; exposes public_reference.
+ *
+ * C-6 additive: `start_at`/`service_end_at` stay UTC (the canonical value to pass back
+ * when booking); the *_local / *_label / date_label / day fields are display-only,
+ * formatted in `tz` (the site's timezone unless a `tz` param overrode it) + `locale`.
+ *
+ * C-7 additive: `contact` = { id, name, primary_identity } | null so a human/agent can
+ * tell whose appointment it is (not just a UUID). `contact_id` is unchanged. */
+export interface AppointmentContact {
+  id: string;
+  name: string | null;
+  primary_identity: string | null;
+}
+export function projectAppointment(
+  a: AppointmentRow,
+  tz: string,
+  locale: string = DEFAULT_LABEL_LOCALE,
+  contact: AppointmentContact | null = null,
+  staffName: string | null = null,
+): Record<string, unknown> {
   return {
     id: a.id,
     public_reference: a.public_reference,
     site_id: a.site_id,
     staff_id: a.staff_id,
+    // E-4 additive: the staff NAME so an agent can say "con Ana" without mapping a UUID.
+    staff_name: staffName,
     service_id: a.service_id,
     contact_id: a.contact_id,
+    contact,
     source_conversation_id: a.source_conversation_id,
     start_at: a.start_at,
     service_end_at: a.service_end_at,
+    ...localTimeFields(a.start_at, a.service_end_at, tz, locale),
     status: a.status,
     origin: a.origin,
     service_name: a.service_name_snapshot,
@@ -141,6 +227,46 @@ export function projectAppointment(a: AppointmentRow): Record<string, unknown> {
     created_at: a.created_at,
     updated_at: a.updated_at,
   };
+}
+
+/**
+ * Project a SINGLE appointment returned by a mutation (create / cancel / confirm / complete /
+ * no-show / reschedule): resolves the site timezone, the contact card, and the staff NAME
+ * (E-4) in parallel — one lookup each for the one row, never N. Used by every
+ * single-appointment route so `staff_name` is present everywhere.
+ */
+export async function projectSingleAppointment(
+  auth: SchedulingAuth,
+  appt: AppointmentRow,
+  labels: { tzOverride: string | null; locale: string },
+): Promise<Record<string, unknown>> {
+  const [site, staff, contact] = await Promise.all([
+    getSiteById(auth.tenantId, appt.site_id),
+    getStaffById(auth.tenantId, appt.staff_id),
+    appt.contact_id ? getContactCardById(auth.tenantId, auth.clientId, appt.contact_id) : Promise.resolve(null),
+  ]);
+  const tz = labels.tzOverride ?? site?.timezone ?? "UTC";
+  return projectAppointment(appt, tz, labels.locale, contact, staff?.name ?? null);
+}
+
+/**
+ * Resolve the optional `tz` + `locale` presentation params (C-6). `tz` defaults to the
+ * caller-supplied site tz (per route); `locale` defaults to es-CO. An unknown IANA tz or
+ * unsupported locale → 400 naming the parameter (an agent reads the message) — NEVER a
+ * silent UTC fallback, which is how a wrong hour reaches a customer. Returns the override
+ * tz (or null to mean "use the context default") + the resolved locale.
+ */
+export function resolveLabelParams(req: Request): { ok: true; tzOverride: string | null; locale: string } | { ok: false; response: Response } {
+  const p = new URL(req.url).searchParams;
+  const tzParam = (p.get("tz") ?? "").trim();
+  const localeParam = (p.get("locale") ?? "").trim();
+  if (tzParam && !isValidTimeZone(tzParam)) {
+    return { ok: false, response: schedulingError(400, "invalid_request", `tz is not a valid IANA timezone name: ${tzParam}`) };
+  }
+  if (localeParam && !isSupportedLocale(localeParam)) {
+    return { ok: false, response: schedulingError(400, "invalid_request", `locale is not supported: ${localeParam}`) };
+  }
+  return { ok: true, tzOverride: tzParam || null, locale: localeParam || DEFAULT_LABEL_LOCALE };
 }
 
 /** Parse an ISO-8601 datetime query/body value → Date, or null when invalid. */

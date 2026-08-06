@@ -1,4 +1,4 @@
-import { authenticateScheduling, bookingErrorStatus, projectAppointment, schedulingError } from "@/lib/schedulingApi";
+import { appointmentErrorResponse, authenticateScheduling, projectSingleAppointment, resolveLabelParams, schedulingError } from "@/lib/schedulingApi";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { transitionStatus } from "@worker/scheduling/booking.js";
 
@@ -8,9 +8,11 @@ export const dynamic = "force-dynamic";
 export async function POST(req: Request, { params }: { params: Promise<{ id: string }> }): Promise<Response> {
   const auth = await authenticateScheduling(req, "scheduling.write");
   if (!auth.ok) return auth.response;
+  const labels = resolveLabelParams(req);
+  if (!labels.ok) return labels.response;
   const { id } = await params;
-  if (!isUuid(id)) return schedulingError(404, "not_found", "Not found.");
+  if (!isUuid(id)) return schedulingError(400, "invalid_request", "appointment id must be a valid UUID.");
   const result = await transitionStatus("no_show", { tenantId: auth.auth.tenantId, appointmentId: id, actorType: "n8n" , scopeClientId: auth.auth.clientId });
-  if (!result.ok) return schedulingError(bookingErrorStatus(result.error), result.error, result.message);
-  return Response.json({ appointment: projectAppointment(result.value) });
+  if (!result.ok) return appointmentErrorResponse(result);
+  return Response.json({ appointment: await projectSingleAppointment(auth.auth, result.value, labels) });
 }

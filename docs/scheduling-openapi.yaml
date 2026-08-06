@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: MT_AI Scheduling API (n8n)
-  version: "1.1.0"
+  version: "1.2.0"
   description: >
     Machine API for the MT_AI scheduling engine. Bearer-token authenticated,
     reusing the existing per-tenant handoff token (Authorization: Bearer <token>).
@@ -16,10 +16,14 @@ info:
     A missing X-Workflow-Ref is 400; an unknown/foreign workflow is 404; a workflow whose
     client is the default ("Unassigned") client or has scheduling disabled is 403.
 
-    Times are ISO-8601 timestamps in UTC; each site presents them in its own IANA
-    timezone. Double-booking is impossible at the database level (a Postgres GiST
-    exclusion constraint); a lost race — or a slot taken since the availability read —
-    returns 409.
+    Times are ISO-8601 timestamps in UTC — the canonical value to pass back when booking.
+    v1.2 (C-6, ADDITIVE): availability slots and appointment objects also carry
+    display-only local fields (start_local/end_local/start_label/end_label/date_label/day)
+    formatted in the site's timezone by default, tunable per request with the `tz` and
+    `locale` query params (an invalid `tz`/`locale` is 400, never a silent UTC fallback).
+    UTC fields are unchanged, so existing consumers are unaffected. Double-booking is
+    impossible at the database level (a Postgres GiST exclusion constraint); a lost race —
+    or a slot taken since the availability read — returns 409.
 servers:
   - url: https://YOUR-APP.up.railway.app/api/scheduling/v1
     description: Railway deployment (replace host)
@@ -42,6 +46,24 @@ components:
       description: >
         The n8n workflow id (in n8n, `{{ $workflow.id }}`). Resolves the CLIENT this
         request acts on. Required on every endpoint; missing/blank → 400.
+    Tz:
+      name: tz
+      in: query
+      required: false
+      schema: { type: string }
+      description: >
+        C-6, PRESENTATION ONLY. IANA timezone for the *_local/*_label fields (e.g.
+        America/Mexico_City). Default: the site's own timezone. An unknown IANA name →
+        400 invalid_request naming `tz` (never a silent UTC fallback). Does not change
+        what is stored, available, or computed.
+    Locale:
+      name: locale
+      in: query
+      required: false
+      schema: { type: string, default: es-CO }
+      description: >
+        C-6, PRESENTATION ONLY. BCP-47 locale for the label text (default es-CO,
+        12-hour a. m./p. m.). An unsupported locale → 400 naming `locale`.
   schemas:
     Error:
       type: object
@@ -51,15 +73,39 @@ components:
           properties:
             code: { type: string }
             message: { type: string }
+    LocalTimeFields:
+      type: object
+      description: >
+        C-6 additive, DISPLAY-ONLY local-time fields (formatted in the `tz`/`locale` of
+        the request; `tz` defaults to the site's timezone). `start_at`/`service_end_at`
+        stay UTC and remain the canonical value to pass back when booking.
+      properties:
+        start_local: { type: string, description: "ISO-8601 with local offset, e.g. 2026-08-05T08:00:00-05:00" }
+        end_local: { type: string }
+        start_label: { type: string, description: "Short spoken 12-hour time, e.g. es-CO \"8:00 a. m.\"" }
+        end_label: { type: string }
+        date_label: { type: string, description: "Spoken local date, e.g. \"miércoles, 5 de agosto\"" }
+        day: { type: string, description: "LOCAL calendar date YYYY-MM-DD (can differ from the UTC date near midnight)" }
     Slot:
       type: object
+      allOf:
+        - $ref: "#/components/schemas/LocalTimeFields"
       properties:
-        start_at: { type: string, format: date-time }
+        start_at: { type: string, format: date-time, description: Canonical UTC; pass back verbatim to book. }
         service_end_at: { type: string, format: date-time, description: For the chosen staff (duration can differ per staff). }
         staff_id: { type: string, format: uuid, description: Deterministically chosen staff for "any". }
+        staff_name: { type: [string, "null"], description: "E-1: name for staff_id, so an agent can say 'with Padre G' without mapping ids." }
         available_staff_ids:
           type: array
           items: { type: string, format: uuid }
+        available_staff:
+          type: array
+          description: "E-1: additive {id,name} for each available staff (available_staff_ids is unchanged)."
+          items:
+            type: object
+            properties:
+              id: { type: string, format: uuid }
+              name: { type: [string, "null"] }
         candidates:
           type: array
           description: Per-staff service windows for this start (each staff's own duration).
@@ -70,13 +116,27 @@ components:
               service_end_at: { type: string, format: date-time }
     Appointment:
       type: object
+      allOf:
+        - $ref: "#/components/schemas/LocalTimeFields"
       properties:
         id: { type: string, format: uuid }
         public_reference: { type: string, format: uuid }
         site_id: { type: string, format: uuid }
         staff_id: { type: string, format: uuid }
+        staff_name: { type: [string, "null"], description: "E-4 additive: the staff name (so an agent needn't map staff_id)." }
         service_id: { type: string, format: uuid }
         contact_id: { type: [string, "null"], format: uuid }
+        contact:
+          description: >
+            C-7 (additive): who the appointment is for. `null` for a walk-in.
+            `primary_identity` is the contact's main phone (else email).
+          oneOf:
+            - type: "null"
+            - type: object
+              properties:
+                id: { type: string, format: uuid }
+                name: { type: [string, "null"] }
+                primary_identity: { type: [string, "null"] }
         source_conversation_id: { type: [string, "null"], format: uuid }
         start_at: { type: string, format: date-time }
         service_end_at: { type: string, format: date-time }
@@ -93,8 +153,15 @@ components:
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
     BadRequest:
       description: >
-        Missing X-Workflow-Ref (`workflow_ref_required`), a missing/invalid query
-        parameter, or a malformed id (`invalid_request`).
+        Missing X-Workflow-Ref (`workflow_ref_required`); an unrecognized query
+        param (`unknown_parameter`) or one sent with an empty value
+        (`empty_parameter`); a MALFORMED id (not a UUID), unknown status value,
+        non-boolean `active`, bad `from`/`to`, or an unparseable `day`/`time`
+        (`invalid_request`). E-1 semantic params: a `service`/`staff` NAME with no
+        match → `service_not_found`/`staff_not_found` (message lists the valid names);
+        a name matching more than one row → `ambiguous_match`; an id-and-name or
+        start_at-and-day/time disagreement → `param_conflict`. A malformed id is always
+        a 400 — never a 404 and never a silent empty result.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
     Forbidden:
       description: >
@@ -103,13 +170,22 @@ components:
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
     NotFound:
       description: >
-        Workflow not found (unknown/foreign/wrong-connection ref), or a resource
-        (site/appointment) that doesn't resolve under this client — `not_found`.
-        Foreign resources are indistinguishable from missing ones.
+        AUTH-stage (indistinguishable): an unknown/foreign/wrong-connection
+        X-Workflow-Ref → `not_found` "Workflow not found." RESOURCE-stage (specific,
+        actionable — the caller already has this client's data, so naming the missing
+        resource leaks nothing): `site_not_found` · `service_not_found` ·
+        `staff_not_found` · `contact_not_found` · `appointment_not_found`. The message
+        names the endpoint to call for valid ids. A foreign id is indistinguishable
+        from a nonexistent one (same `*_not_found`). A well-formed but fabricated id
+        NEVER returns an empty success — it returns the matching `*_not_found`.
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
     Conflict:
       description: >
-        Slot taken (`conflict_slot`), no longer available (`unavailable`), no staff
+        `site_inactive` — the site exists but is deactivated (distinct from
+        `site_not_found`; reactivate it or use another site_id).
+        `staff_service_mismatch` — availability: the requested staff doesn't perform the
+        requested service; the message names who does (never an empty slot list). Booking conflicts:
+        slot taken (`conflict_slot`), no longer available (`unavailable`), no staff
         (`no_staff`), idempotency-key reuse with a different payload
         (`conflict_idempotency`), or an illegal state transition (`invalid_transition`).
       content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
@@ -135,15 +211,38 @@ paths:
   /services:
     get:
       summary: List services enabled at a site
+      description: "E-2 Featured: each service carries `featured`; featured services are returned FIRST (then the rest, each group name-ordered). `?featured=true` returns ONLY featured — EXCEPT when none are marked, where it falls back to the FULL list (never an empty offer)."
       parameters:
         - { $ref: "#/components/parameters/WorkflowRef" }
         - { name: site_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: featured, in: query, required: false, description: "true → only featured services (falls back to ALL when none are marked featured).", schema: { type: boolean } }
       responses:
-        "200": { description: OK }
+        "200":
+          description: "OK — services (featured first). `featured` is a boolean per service."
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  services:
+                    type: array
+                    items:
+                      type: object
+                      properties:
+                        id: { type: string, format: uuid }
+                        name: { type: string }
+                        description: { type: [string, "null"] }
+                        duration_min: { type: integer, description: effective (after any site override) }
+                        price: { type: [string, "null"] }
+                        price_label: { type: [string, "null"], description: "E-4: Colombian money label from price, e.g. \"$35.000\"." }
+                        buffer_before_min: { type: integer }
+                        buffer_after_min: { type: integer }
+                        featured: { type: boolean, description: "E-2: operator-chosen; featured services are listed first." }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /staff:
     get:
       summary: List staff at a site (optionally filtered to a service)
@@ -151,25 +250,33 @@ paths:
         - { $ref: "#/components/parameters/WorkflowRef" }
         - { name: site_id, in: query, required: true, schema: { type: string, format: uuid } }
         - { name: service_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: service, in: query, required: false, description: "E-1: service NAME (case/accent-insensitive) — alternative to service_id.", schema: { type: string } }
       responses:
         "200": { description: OK }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /availability:
     get:
       summary: Real availability for a service in a window
+      description: "E-1: service by `service_id` (UUID) OR `service` (NAME); staff optionally by `staff_id` OR `staff` (NAME); bad name → 400 service_not_found/staff_not_found (lists valid names); ambiguous → 400 ambiguous_match; a `staff` filter returns ONLY that staff's slots; unqualified staff+service → 409 staff_service_mismatch (never empty). Each slot carries staff_name + available_staff [{id,name}]. E-3: the response also carries `free_blocks` (contiguous free ranges, per day+staff, with read-aloud labels), `has_availability` ({day:bool} per requested day), and `?compact=true` trims each slot to {day,start_label,end_label,time,staff_name}. A conversational caller should use compact=true + free_blocks."
       parameters:
         - { $ref: "#/components/parameters/WorkflowRef" }
         - { name: site_id, in: query, required: true, schema: { type: string, format: uuid } }
-        - { name: service_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: service_id, in: query, required: false, description: "Provide service_id OR service (the name).", schema: { type: string, format: uuid } }
+        - { name: service, in: query, required: false, description: "Service NAME (case/accent-insensitive) — alternative to service_id.", schema: { type: string } }
         - { name: staff_id, in: query, required: false, schema: { type: string, format: uuid } }
+        - { name: staff, in: query, required: false, description: "Staff NAME (case/accent-insensitive) — alternative to staff_id.", schema: { type: string } }
         - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
         - { name: to, in: query, required: true, schema: { type: string, format: date-time }, description: "Window; max 45 days from `from`." }
+        - { name: compact, in: query, required: false, description: "E-3: trim each slot to {day,start_label,end_label,time,staff_name}. free_blocks + has_availability are unchanged.", schema: { type: boolean } }
+        - { $ref: "#/components/parameters/Tz" }
+        - { $ref: "#/components/parameters/Locale" }
       responses:
         "200":
-          description: OK
+          description: "OK. `slots` is the full Slot shape by default, or the compact shape when `compact=true`. `free_blocks` + `has_availability` are always present (E-3)."
           content:
             application/json:
               schema:
@@ -179,26 +286,69 @@ paths:
                     type: object
                     properties:
                       id: { type: string, format: uuid }
-                      timezone: { type: string, description: IANA tz the slots are presented in. }
-                  slots: { type: array, items: { $ref: "#/components/schemas/Slot" } }
+                      timezone: { type: string, description: The site's own IANA timezone. }
+                      timezone_used: { type: string, description: "The tz the *_local/*_label fields were formatted in (differs from `timezone` only when `tz` was passed)." }
+                  has_availability:
+                    type: object
+                    additionalProperties: { type: boolean }
+                    description: "E-3: { 'YYYY-MM-DD': true|false } for each requested local day."
+                  free_blocks:
+                    type: array
+                    description: "E-3: contiguous free runs collapsed per day+staff, labels ready to read aloud."
+                    items:
+                      type: object
+                      properties:
+                        day: { type: string }
+                        date_label: { type: string }
+                        staff_name: { type: [string, "null"] }
+                        from_label: { type: string, description: "start of the first slot in the run" }
+                        to_label: { type: string, description: "END of the last slot in the run" }
+                        first_start_at: { type: string, format: date-time }
+                        first_start_local: { type: string }
+                        first_time: { type: string, description: "24h HH:MM of the first slot" }
+                  slots:
+                    type: array
+                    description: "Full Slot (default) OR the compact shape {day,start_label,end_label,time,staff_name} when compact=true."
+                    items: { $ref: "#/components/schemas/Slot" }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
+        "409": { $ref: "#/components/responses/Conflict" }
   /appointments:
     get:
       summary: List appointments (safe filters; the resolved client only)
+      description: >
+        C-7: filters only NARROW within the token's one client. A filter is never
+        silently ignored — an unrecognized param → `400 unknown_parameter`; a
+        recognized param sent empty → `400 empty_parameter`. Identity filters
+        (`phone`/`email`/`external_id`) resolve to that contact's appointments; an
+        identity matching nobody returns 0 rows (never the whole client) and excludes
+        walk-ins. `status` accepts one-or-more values (comma-separated/repeated);
+        `active=true` is shorthand for scheduled+confirmed. E-4: every row carries
+        `staff_name`; `compact=true` trims each row to
+        {id,status,service_name,staff_name,day,date_label,start_label,end_label,time,contact{name}}.
       parameters:
         - { $ref: "#/components/parameters/WorkflowRef" }
         - { name: site_id, in: query, schema: { type: string, format: uuid } }
+        - { name: compact, in: query, description: "E-4: trim each row to the conversational fields.", schema: { type: boolean } }
         - { name: staff_id, in: query, schema: { type: string, format: uuid } }
-        - { name: status, in: query, schema: { type: string, enum: [scheduled, confirmed, completed, cancelled, no_show] } }
+        - name: status
+          in: query
+          description: One or more statuses, comma-separated and/or the param repeated.
+          schema: { type: array, items: { type: string, enum: [scheduled, confirmed, completed, cancelled, no_show] } }
+        - { name: active, in: query, description: "true → scheduled+confirmed (convenience).", schema: { type: boolean } }
         - { name: contact_id, in: query, schema: { type: string, format: uuid } }
+        - { name: phone, in: query, description: "Resolve via the identity spine → that contact's appointments.", schema: { type: string } }
+        - { name: email, in: query, description: "Resolve via the identity spine → that contact's appointments.", schema: { type: string } }
+        - { name: external_id, in: query, description: "Resolve via the identity spine → that contact's appointments.", schema: { type: string } }
         - { name: conversation_id, in: query, schema: { type: string, format: uuid } }
         - { name: from, in: query, schema: { type: string, format: date-time } }
         - { name: to, in: query, schema: { type: string, format: date-time } }
+        - { $ref: "#/components/parameters/Tz" }
+        - { $ref: "#/components/parameters/Locale" }
       responses:
-        "200": { description: OK }
+        "200": { description: "OK — { appointments: [Appointment] }, each with UTC + local fields (per-row site tz unless `tz` was passed) and a contact object." }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
@@ -207,6 +357,8 @@ paths:
       summary: Create an appointment (idempotent)
       parameters:
         - { $ref: "#/components/parameters/WorkflowRef" }
+        - { $ref: "#/components/parameters/Tz" }
+        - { $ref: "#/components/parameters/Locale" }
         - name: Idempotency-Key
           in: header
           required: true
@@ -218,12 +370,15 @@ paths:
           application/json:
             schema:
               type: object
-              required: [site_id, service_id, start_at]
+              required: [site_id]
               description: >
                 The workflow (and thus client) comes from the X-Workflow-Ref HEADER, never
                 the body. Sending a contact identity (channel + channel_user_id) attaches
                 the appointment to a CRM contact (resolve-or-create); omit them for an
-                anonymous booking (contact_id stays null).
+                anonymous booking (contact_id stays null). E-1: the SERVICE may be `service_id`
+                (UUID) OR `service` (NAME); STAFF `staff_id` OR `staff` (NAME); the START
+                `start_at` (ISO) OR `day` (YYYY-MM-DD, site-local) + `time` (clock). An
+                id-and-name or start_at-and-day/time disagreement → 400 param_conflict.
               properties:
                 conversation_ref: { type: string }
                 channel: { type: string, description: "e.g. whatsapp — with channel_user_id, attaches a contact" }
@@ -232,9 +387,13 @@ paths:
                 customer_phone: { type: string, description: normalized to E.164 when possible }
                 customer_email: { type: string }
                 site_id: { type: string, format: uuid }
-                service_id: { type: string, format: uuid }
+                service_id: { type: string, format: uuid, description: "service_id OR service (name)" }
+                service: { type: string, description: "service NAME (case/accent-insensitive) — alternative to service_id" }
                 staff_id: { type: string, format: uuid, description: omit for "any barber" }
-                start_at: { type: string, format: date-time }
+                staff: { type: string, description: "staff NAME — alternative to staff_id" }
+                start_at: { type: string, format: date-time, description: "start_at OR day+time" }
+                day: { type: string, description: "YYYY-MM-DD in the site timezone (with time)" }
+                time: { type: string, description: "clock time: 24h HH:MM, or 12h like '9:00 am' / '5 pm'" }
       responses:
         "201": { description: Created, content: { application/json: { schema: { type: object, properties: { appointment: { $ref: "#/components/schemas/Appointment" } } } } } }
         "200": { description: Idempotent replay (same key+payload) — returns the existing appointment }
@@ -247,12 +406,23 @@ paths:
   /appointments/{id}/cancel:
     post:
       summary: Cancel (status change; never a physical delete)
+      description: "E-1: {id} may be a UUID OR the literal `by-time`, then the body identifies the appointment by phone/email/external_id + current_day + current_time (no match → 404 appointment_not_found listing active; >1 → 400 ambiguous_match)."
       parameters:
         - { $ref: "#/components/parameters/WorkflowRef" }
-        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: id, in: path, required: true, description: "Appointment UUID, or `by-time` to identify from the body.", schema: { type: string } }
       requestBody:
         required: false
-        content: { application/json: { schema: { type: object, properties: { reason: { type: string } } } } }
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
+                phone: { type: string, description: "by-time: identify the contact" }
+                email: { type: string }
+                external_id: { type: string }
+                current_day: { type: string, description: "by-time: YYYY-MM-DD (site-local) of the appointment to cancel" }
+                current_time: { type: string, description: "by-time: its clock time (24h or 12h)" }
       responses:
         "200": { description: OK }
         "400": { $ref: "#/components/responses/BadRequest" }
@@ -296,19 +466,27 @@ paths:
   /appointments/{id}/reschedule:
     post:
       summary: Reschedule (keeps the same id; re-validates availability)
+      description: "E-1: {id} may be a UUID OR `by-time` (identify via phone/email/external_id + current_day + current_time). The NEW slot is `start_at` OR `day`+`time` (site-local); new staff `staff_id` OR `staff` (name), omit to keep. An unbookable slot → 409 whose message names the nearest available times that day."
       parameters:
         - { $ref: "#/components/parameters/WorkflowRef" }
-        - { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+        - { name: id, in: path, required: true, description: "Appointment UUID, or `by-time` to identify from the body.", schema: { type: string } }
       requestBody:
         required: true
         content:
           application/json:
             schema:
               type: object
-              required: [start_at]
               properties:
-                start_at: { type: string, format: date-time }
+                start_at: { type: string, format: date-time, description: "NEW slot: start_at OR day+time" }
+                day: { type: string, description: "NEW slot day, YYYY-MM-DD (site-local)" }
+                time: { type: string, description: "NEW slot clock time (24h or 12h)" }
                 staff_id: { type: string, format: uuid }
+                staff: { type: string, description: "new staff NAME — alternative to staff_id" }
+                phone: { type: string, description: "by-time: identify the contact" }
+                email: { type: string }
+                external_id: { type: string }
+                current_day: { type: string, description: "by-time: the CURRENT appointment's day (site-local)" }
+                current_time: { type: string, description: "by-time: the CURRENT appointment's clock time" }
       responses:
         "200": { description: OK }
         "400": { $ref: "#/components/responses/BadRequest" }

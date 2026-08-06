@@ -66,6 +66,8 @@ export default async function ClientSchedulingAdminPage({
         address: s.address,
         timezone: s.timezone,
         active: s.active,
+        opening_hours: s.opening_hours, // C-6: shown + editable
+        scheduling_config: s.scheduling_config, // min notice / horizon / slot granularity — shown + editable
       }))}
       services={services.map((s) => ({
         id: s.id,
@@ -76,8 +78,9 @@ export default async function ClientSchedulingAdminPage({
         buffer_before_min: s.buffer_before_min,
         buffer_after_min: s.buffer_after_min,
         active: s.active,
+        featured: s.featured,
       }))}
-      staff={staff.map((s) => ({ id: s.id, site_id: s.site_id, name: s.name, active: s.active, serviceIds: staffServiceMap[s.id] ?? [] }))}
+      staff={staff.map((s) => ({ id: s.id, site_id: s.site_id, name: s.name, active: s.active, serviceIds: staffServiceMap[s.id] ?? [], working_hours: s.working_hours }))}
       siteServiceMap={siteServiceMap}
       exceptions={exceptions.map((e) => ({
         id: e.id,
