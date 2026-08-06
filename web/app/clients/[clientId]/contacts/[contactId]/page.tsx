@@ -74,8 +74,12 @@ export default async function ClientContactDetailPage({
   const fromQS = from ? `?from=${encodeURIComponent(from)}` : "";
 
   return (
-    <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-5 px-6 py-6">
-      <Link href={`/clients/${client.id}/contacts${fromQS}`} className="text-sm text-muted hover:text-foreground">
+    <main className="flex w-full flex-1 flex-col gap-[var(--content-pad)]">
+      {/* Back to the list, carrying `from` (the origin workflow) unchanged. */}
+      <Link
+        href={`/clients/${client.id}/contacts${fromQS}`}
+        className="u-th inline-flex w-fit items-center gap-1.5 rounded-md py-1 transition-colors hover:text-foreground"
+      >
         ← Contacts
       </Link>
 

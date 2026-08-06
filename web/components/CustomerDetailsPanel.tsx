@@ -29,7 +29,7 @@ interface PanelResponse {
   schedulingEnabled: boolean;
 }
 
-const SECTION_LABEL = "text-[10px] font-medium uppercase tracking-wider text-faint";
+const SECTION_LABEL = "text-[0.625rem] font-medium uppercase tracking-wider text-faint";
 
 export function CustomerDetailsPanel({
   clientId,
@@ -82,21 +82,22 @@ export function CustomerDetailsPanel({
 
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
-      <div className="flex shrink-0 items-center justify-between border-b border-line px-4 py-3">
+      {/* h-14 — aligned with the queue header, the thread header and the app header. */}
+      <div className="flex h-[var(--topbar-height)] shrink-0 items-center justify-between border-b border-line px-3">
         <h2 className="text-sm font-semibold">Customer</h2>
         {onClose ? (
           <button
             type="button"
             onClick={onClose}
             aria-label="Close customer details"
-            className="rounded-lg border border-black/10 px-2 py-1 text-xs text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground dark:border-line-strong dark:hover:bg-subtle"
+            className="u-tap rounded-md border border-line-strong px-2 py-1 text-xs text-muted transition-colors hover:bg-subtle hover:text-foreground"
           >
             ✕
           </button>
         ) : null}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4">
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-4">
         {state.status === "loading" ? (
           <p className="text-sm text-faint">Loading…</p>
         ) : state.status === "error" ? (

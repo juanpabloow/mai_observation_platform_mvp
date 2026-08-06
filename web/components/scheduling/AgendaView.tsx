@@ -2,8 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import { AutoRefresh } from "@/components/AutoRefresh";
+import { formatMoneyCOP } from "@/lib/format";
 import {
   cancelAppointmentAction,
   completeAppointmentAction,
@@ -19,16 +20,21 @@ interface StaffOpt { id: string; name: string }
 interface ServiceOpt { id: string; name: string; duration_min: number }
 interface Appt {
   id: string;
+  public_reference: string;
   staff_id: string;
   staff_name: string | null;
   service_id: string;
   start_at: string;
   service_end_at: string;
   service_name: string;
+  duration_min: number;
+  /** numeric from pg → string; null when the service has no price. */
+  price: string | null;
   status: string;
   origin: string;
   contact_id: string | null;
   contact_name: string | null;
+  contact_phone: string | null;
   source_conversation_id: string | null;
 }
 interface Slot { start_at: string; service_end_at: string; staff_id: string; available_staff_ids: string[] }
@@ -39,18 +45,99 @@ type ModalState =
   | { mode: "new" | "walkin"; contact?: ContactPrefill }
   | { mode: "reschedule"; appt: Appt };
 
-const STATUS_STYLE: Record<string, string> = {
-  scheduled: "bg-subtle text-foreground",
-  confirmed: "bg-accent/15 text-accent",
-  completed: "bg-success/15 text-success",
-  cancelled: "text-faint line-through",
-  no_show: "text-danger",
+/** The calendar body's vertical scale. One hour = this many px. */
+const HOUR_PX = 56;
+/**
+ * The grid's OPERATING WINDOW. Fixed on purpose: deriving it from the data meant a
+ * single stray early booking stretched the grid to 3 AM and pushed the real working
+ * hours off-screen. Appointments outside the window are clamped to its edges (never
+ * dropped), so nothing becomes invisible or unclickable.
+ * TODO(agenda): read these from the site's configured opening hours once the agenda
+ *   is wired to them — `sites` already stores a weekly schedule.
+ */
+const GRID_FROM_HOUR = 9;
+const GRID_TO_HOUR = 20;
+
+const STATUSES = ["scheduled", "confirmed", "completed", "cancelled", "no_show"] as const;
+const STATUS_LABEL: Record<string, string> = {
+  scheduled: "Unconfirmed",
+  confirmed: "Confirmed",
+  completed: "Completed",
+  cancelled: "Cancelled",
+  no_show: "No show",
+};
+/** Drawer header copy, mirroring the design's "Appointment confirmed". */
+const STATUS_TITLE: Record<string, string> = {
+  scheduled: "Appointment unconfirmed",
+  confirmed: "Appointment confirmed",
+  completed: "Appointment completed",
+  cancelled: "Appointment cancelled",
+  no_show: "Marked as no show",
 };
 
+// ── Timezone helpers. Every hour/minute below is the SITE's local time, never the
+// browser's — the agenda of a shop in Bogota must not shift for a viewer elsewhere.
+function zonedParts(iso: string, tz: string): { h: number; m: number; dayKey: string } {
+  const p = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(new Date(iso));
+  const get = (t: string) => p.find((x) => x.type === t)?.value ?? "0";
+  return { h: Number(get("hour")), m: Number(get("minute")), dayKey: `${get("year")}-${get("month")}-${get("day")}` };
+}
 function fmtTime(iso: string, tz: string): string {
-  return new Intl.DateTimeFormat("es-CO", { timeZone: tz, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(new Date(iso));
+  return new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true }).format(
+    new Date(iso),
+  );
+}
+/** "GMT-5" for the hour rail's corner label. */
+function gmtLabel(tz: string): string {
+  const name = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "shortOffset" })
+    .formatToParts(new Date())
+    .find((p) => p.type === "timeZoneName")?.value;
+  return name ?? tz;
+}
+const minutesOf = (p: { h: number; m: number }) => p.h * 60 + p.m;
+/** YYYY-MM-DD arithmetic that never touches the local timezone. */
+function addDays(dateStr: string, days: number): string {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d + days));
+  return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
 }
 
+/**
+ * The Agenda: a real time-grid calendar over the EXISTING appointment model.
+ *
+ * DAY view = one column per barber; WEEK view = one column per day. The toggle is a
+ * URL param the server reads to widen the fetch window (same query, wider range).
+ *
+ * Everything rendered here is backed by real data. The reference design also showed a
+ * waitlist, "vs last week" KPI deltas, a per-appointment checklist and note, multiple
+ * services per appointment, blocked/team-meeting entries and per-barber free-slot
+ * counts — none of which exist in this schema, so they are deliberately NOT rendered
+ * rather than faked. See the TODOs below.
+ *
+ * TODO(agenda): no waitlist model exists, so the design's "N WAITLIST" control and its
+ *   "Avg waitlist time" KPI card are omitted. Needs a waitlist table first.
+ * TODO(agenda): KPI deltas ("+12% vs last week") need a second, previous-period query.
+ *   Omitted rather than shown as a fabricated percentage.
+ * TODO(agenda): appointments have no note, no checklist (reminder sent / confirmed /
+ *   follow-up booked) and exactly ONE service, so the drawer omits those blocks.
+ * TODO(agenda): there is no blocked-time / "team meeting" entity (blocked_from/until
+ *   are per-appointment buffers), so no blocked cards are drawn.
+ * TODO(agenda): "N FREE" per barber needs an availability computation over the day.
+ * TODO(agenda): staff_id is NOT NULL, so an unassigned walk-in cannot exist; the
+ *   design's red "?" Unassigned column/chip is omitted.
+ * TODO(agenda): Month and Staff views are not implemented -- the segmented control
+ *   shows them disabled rather than pretending to switch.
+ * TODO(agenda): "Mark as arrived", "Duplicate", "Remind customer" and "Edit" have no
+ *   server action; the drawer exposes only the real lifecycle actions.
+ */
 export function AgendaView(props: {
   /** The validated owning client — every action is sent with this id. */
   clientId: string;
@@ -74,6 +161,13 @@ export function AgendaView(props: {
   canManage: boolean;
   timezone: string;
   date: string;
+  view: string;
+  /** The four headline metrics for the visible range, computed server-side. */
+  kpis: { total: number; completedPct: number | null; noShowPct: number | null; revenue: number };
+  /** The SAME metrics for the preceding equivalent window — powers the deltas. */
+  previousKpis: { total: number; completedPct: number | null; noShowPct: number | null; revenue: number };
+  rangeStartIso: string;
+  rangeEndIso: string;
   dayStartIso: string;
   dayEndIso: string;
   sites: SiteOpt[];
@@ -85,6 +179,9 @@ export function AgendaView(props: {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
+  const isWeek = props.view === "week";
+  const tz = props.timezone;
+
   // Auto-open from a deep-link (book-for-contact / reschedule) on first render — the
   // reschedule appointment is in props.appointments because the page forced its site+day.
   const initialModal: ModalState | null = props.prefillBook
@@ -96,22 +193,44 @@ export function AgendaView(props: {
         })()
       : null;
   const [modal, setModal] = useState<ModalState | null>(initialModal);
+  /** The appointment open in the side drawer (never a modal — the grid stays visible). */
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  /** Client-side facets over the ALREADY loaded range. */
+  const [statusFilter, setStatusFilter] = useState("");
+  const [staffFilter, setStaffFilter] = useState("");
 
-  const navigate = (patch: { site?: string; date?: string }) => {
+  const navigate = (patch: { site?: string; date?: string; view?: string }) => {
     const params = new URLSearchParams();
     params.set("site", patch.site ?? props.currentSiteId);
     params.set("date", patch.date ?? props.date);
+    const nextView = patch.view ?? props.view;
+    if (nextView === "week") params.set("view", "week");
     if (props.from) params.set("from", props.from); // keep the origin workflow
     router.push(`${props.basePath}?${params.toString()}`);
   };
 
   const fromQS = props.from ? `?from=${encodeURIComponent(props.from)}` : "";
+  const shiftDate = (days: number) => navigate({ date: addDays(props.date, days) });
 
-  const shiftDate = (days: number) => {
-    const [y, m, d] = props.date.split("-").map(Number);
-    const dt = new Date(Date.UTC(y, m - 1, d + days));
-    navigate({ date: `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}` });
-  };
+  /**
+   * ⌘A / Ctrl+A opens the new-appointment modal, so the badge on the button is a
+   * real binding rather than decoration. It is IGNORED while focus is in a field
+   * (input / textarea / select / contenteditable) so "select all" keeps working
+   * where people actually expect it, and it never fires while a modal is already
+   * open. NOTE: on the page body this does override the browser's select-all.
+   */
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "a") return;
+      const el = e.target as HTMLElement | null;
+      if (el?.closest("input, textarea, select, [contenteditable='true']")) return;
+      if (modal) return;
+      e.preventDefault();
+      setModal({ mode: "new" });
+    };
+    document.addEventListener("keydown", onKey);
+    return () => document.removeEventListener("keydown", onKey);
+  }, [modal]);
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
     setError(null);
@@ -122,124 +241,389 @@ export function AgendaView(props: {
     });
   };
 
-  const activeByStaff = (staffId: string) =>
-    props.appointments
-      .filter((a) => a.staff_id === staffId)
-      .sort((a, b) => a.start_at.localeCompare(b.start_at));
+  // ── Derived, all from the loaded range ──────────────────────────────────────
+  const visible = useMemo(
+    () =>
+      props.appointments.filter(
+        (a) => (!statusFilter || a.status === statusFilter) && (!staffFilter || a.staff_id === staffFilter),
+      ),
+    [props.appointments, statusFilter, staffFilter],
+  );
 
-  return (
-    <main className="flex min-h-0 flex-1 flex-col gap-4 px-6 py-6">
-      <header className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex items-center gap-3">
-          <h1 className="text-xl font-semibold tracking-tight">Agenda</h1>
-          <select
-            value={props.currentSiteId}
-            onChange={(e) => navigate({ site: e.target.value })}
-            className="rounded-lg border border-line-strong bg-transparent px-2 py-1 text-sm"
-          >
-            {props.sites.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
-          </select>
-          <div className="flex items-center gap-1">
-            <button onClick={() => shiftDate(-1)} className="rounded-lg border border-line px-2 py-1 text-sm hover:bg-subtle">←</button>
-            <input
-              type="date"
-              value={props.date}
-              onChange={(e) => e.target.value && navigate({ date: e.target.value })}
-              className="rounded-lg border border-line-strong bg-transparent px-2 py-1 text-sm"
-            />
-            <button onClick={() => shiftDate(1)} className="rounded-lg border border-line px-2 py-1 text-sm hover:bg-subtle">→</button>
-          </div>
-          <AutoRefresh intervalSeconds={20} />
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => setModal({ mode: "walkin" })}
-            className="rounded-lg border border-line px-3 py-1.5 text-sm hover:bg-subtle"
-          >
-            Walk-in
-          </button>
-          <button
-            onClick={() => setModal({ mode: "new" })}
-            className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white"
-          >
-            New appointment
-          </button>
-        </div>
-      </header>
+  const kpis = props.kpis;
+  const prev = props.previousKpis;
+  const rangeCaption = isWeek ? "This week" : "Today";
+  const vsCaption = isWeek ? "vs last week" : "vs yesterday";
 
-      {error ? <p className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p> : null}
+  /** Same barber, overlapping service windows — a real conflict, derived not stored. */
+  const overlapIds = useMemo(() => {
+    const out = new Set<string>();
+    const byStaff = new Map<string, Appt[]>();
+    for (const a of props.appointments) {
+      if (a.status === "cancelled") continue;
+      const list = byStaff.get(a.staff_id) ?? [];
+      list.push(a);
+      byStaff.set(a.staff_id, list);
+    }
+    for (const list of byStaff.values()) {
+      const sorted = [...list].sort((x, z) => x.start_at.localeCompare(z.start_at));
+      for (let i = 1; i < sorted.length; i++) {
+        if (sorted[i].start_at < sorted[i - 1].service_end_at) {
+          out.add(sorted[i].id);
+          out.add(sorted[i - 1].id);
+        }
+      }
+    }
+    return out;
+  }, [props.appointments]);
 
-      {props.staff.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-line-strong px-5 py-8">
+  const fromHour = GRID_FROM_HOUR;
+  const toHour = GRID_TO_HOUR;
+  const hours = Array.from({ length: toHour - fromHour }, (_, i) => fromHour + i);
+  const bodyHeight = (toHour - fromHour) * HOUR_PX;
+  const offsetTop = (mins: number) => ((mins - fromHour * 60) / 60) * HOUR_PX;
+
+  /** The "now" marker — only drawn when today is inside the rendered range. */
+  const nowParts = zonedParts(new Date().toISOString(), tz);
+  const weekDays = useMemo(() => {
+    if (!isWeek) return [];
+    const start = zonedParts(props.rangeStartIso, tz).dayKey;
+    return Array.from({ length: 7 }, (_, i) => addDays(start, i));
+  }, [isWeek, props.rangeStartIso, tz]);
+  const shownDayKeys = isWeek ? weekDays : [zonedParts(props.dayStartIso, tz).dayKey];
+  const nowVisible = shownDayKeys.includes(nowParts.dayKey) && nowParts.h >= fromHour && nowParts.h < toHour;
+
+  // Picking a barber in the "All staff" facet collapses the grid to that column —
+  // the job the removed chips used to do, using a control that already existed.
+  const shownStaff = staffFilter ? props.staff.filter((s) => s.id === staffFilter) : props.staff;
+  const columns: { key: string; label: string; sub?: string; initial?: string; dayNum?: string; isToday?: boolean }[] = isWeek
+    ? weekDays.map((dk) => {
+        const n = visible.filter((a) => zonedParts(a.start_at, tz).dayKey === dk).length;
+        const [yy, mm, dd] = dk.split("-").map(Number);
+        const wd = new Date(Date.UTC(yy, mm - 1, dd)).getUTCDay();
+        return {
+          key: dk,
+          label: ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"][wd],
+          sub: `${n} appointment${n === 1 ? "" : "(s)"}`,
+          dayNum: String(dd),
+          isToday: dk === nowParts.dayKey,
+        };
+      })
+    : shownStaff.map((st) => {
+        // Avatar + name ONLY — the appointment count lives on the staff chip above,
+        // and repeating it here just crowded the column header.
+        // No avatar image exists on staff, so the initial IS the avatar.
+        // TODO(agenda): swap for a real photo if staff ever gains an avatar_url.
+        return { key: st.id, label: st.name, initial: st.name };
+      });
+
+  const inColumn = (a: Appt, colKey: string) =>
+    isWeek ? zonedParts(a.start_at, tz).dayKey === colKey : a.staff_id === colKey;
+
+  const selected = selectedId ? props.appointments.find((a) => a.id === selectedId) ?? null : null;
+  /**
+   * COMPACT, STABLE date label: "4 Aug" + a muted "2026".
+   *
+   * The long form ("Tuesday August 4") swung between ~13 and ~22 characters, so
+   * every control to its right slid sideways on each day-step. Three things stop
+   * that: the short format (small variance), tabular figures (1 and 30 occupy the
+   * same width), and a reserved min-width on the block (see the markup) so even
+   * the widest label cannot push its neighbours.
+   */
+  const labelDate = new Date(`${props.date}T12:00:00Z`);
+  const dateLabel = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "UTC",
+    month: "short",
+    ...(isWeek ? {} : { day: "numeric" }),
+  }).format(labelDate);
+  const yearLabel = new Intl.DateTimeFormat("en-US", { timeZone: "UTC", year: "numeric" }).format(labelDate);
+  /** The weekday moves OUT of the shifting slot — it is context, not the control. */
+  const weekdayLabel = isWeek
+    ? null
+    : new Intl.DateTimeFormat("en-US", { timeZone: "UTC", weekday: "long" }).format(labelDate);
+
+  if (props.staff.length === 0) {
+    return (
+      <main className="flex min-h-0 flex-1 flex-col gap-[var(--content-pad)]">
+        <div className="rounded-lg border border-dashed border-line-strong bg-surface px-5 py-8">
           {props.canManage ? (
             <p className="text-sm text-muted">
-              No staff at this site yet. <Link href={`/clients/${props.clientId}/scheduling/admin`} className="text-accent hover:underline">Add staff</Link>.
+              No staff at this site yet.{" "}
+              <Link href={`/clients/${props.clientId}/scheduling/admin`} className="text-accent hover:underline">
+                Add staff
+              </Link>
+              .
             </p>
           ) : (
             // A member can't open the tenant-level Scheduling admin — message only.
             <p className="text-sm text-muted">No staff at this site yet. Ask your administrator to add staff.</p>
           )}
         </div>
-      ) : (
-        <div className="flex min-h-0 flex-1 gap-3 overflow-x-auto">
-          {props.staff.map((st) => (
-            <section key={st.id} className="flex w-64 shrink-0 flex-col gap-2">
-              <h2 className="sticky top-0 border-b border-line pb-1 text-sm font-medium">{st.name}</h2>
-              {activeByStaff(st.id).length === 0 ? (
-                <p className="text-xs text-faint">No appointments</p>
-              ) : (
-                activeByStaff(st.id).map((a) => (
-                  <article key={a.id} className="rounded-lg border border-line bg-card p-3 text-sm">
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium">{fmtTime(a.start_at, props.timezone)}–{fmtTime(a.service_end_at, props.timezone)}</span>
-                      <span className={`rounded px-1.5 py-0.5 text-[11px] ${STATUS_STYLE[a.status] ?? ""}`}>{a.status}</span>
-                    </div>
-                    <p className="mt-1">{a.service_name}</p>
-                    <p className="text-xs text-muted">
-                      {/* Contact links only when CRM is enabled for this client. */}
-                      {a.contact_id && props.contactsBase ? (
-                        <Link href={`${props.contactsBase}/${a.contact_id}${fromQS}`} className="hover:underline">
-                          {a.contact_name ?? "Contact"}
-                        </Link>
-                      ) : (
-                        <span>{a.contact_id ? (a.contact_name ?? "Contact") : "Walk-in"}</span>
-                      )}
-                      {" · "}
-                      <span className="text-faint">{a.origin}</span>
-                    </p>
-                    {a.source_conversation_id && props.inboxBase ? (
-                      <p className="text-xs">
-                        {/* Appointment → conversation: deep-link into the inbox thread (?c=).
-                            The per-workflow inbox was removed in W-2; the client inbox is
-                            the single surface. */}
-                        <Link
-                          href={`${props.inboxBase}?c=${encodeURIComponent(a.source_conversation_id)}`}
-                          className="text-accent hover:underline"
-                        >
-                          View conversation
-                        </Link>
-                      </p>
-                    ) : null}
-                    {a.status === "scheduled" || a.status === "confirmed" ? (
-                      <div className="mt-2 flex flex-wrap gap-1">
-                        {a.status === "scheduled" ? (
-                          <ActBtn label="Confirm" disabled={pending} onClick={() => run(() => confirmAppointmentAction(props.clientId, a.id))} />
-                        ) : null}
-                        <ActBtn label="Complete" disabled={pending} onClick={() => run(() => completeAppointmentAction(props.clientId, a.id))} />
-                        <ActBtn label="No-show" disabled={pending} onClick={() => run(() => noShowAppointmentAction(props.clientId, a.id))} />
-                        <ActBtn label="Reschedule" disabled={pending} onClick={() => setModal({ mode: "reschedule", appt: a })} />
-                        <ActBtn label="Cancel" danger disabled={pending} onClick={() => run(() => cancelAppointmentAction(props.clientId, a.id))} />
-                      </div>
-                    ) : null}
-                  </article>
-                ))
-              )}
-            </section>
-          ))}
+      </main>
+    );
+  }
+
+  return (
+    // The gutter comes from the shell (app/layout.tsx); this owns only the rhythm.
+    // ONE continuous surface. Every region below is a band inside the same white
+    // card, separated by hairlines — not a row of independent boxes floating on the
+    // canvas, which made the screen read as five unrelated widgets.
+    <main className="flex min-h-0 flex-1 flex-col">
+      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-surface">
+      {/* ── CONTROL BAR ── */}
+      <div className="flex flex-wrap items-center gap-2 border-b border-line px-[var(--panel-pad)] py-2.5">
+        <button
+          type="button"
+          onClick={() => navigate({ date: zonedParts(new Date().toISOString(), tz).dayKey })}
+          className="inline-flex h-[var(--control-h)] items-center rounded-md border border-line-strong px-3 text-sm transition-colors hover:bg-hover"
+        >
+          Today
+        </button>
+        {/* Today → DATE → steppers. The steppers sit after the label because it has a
+            RESERVED width, so "1 Sep" → "30 Sept" never drags them sideways. The
+            reserve is PER VIEW: week renders only "Sept 2026" (9 chars) against
+            day's "30 Sept 2026" (12), and reserving the day width in week mode left
+            an obvious dead gap before the arrows. */}
+        <h1
+          className={`ml-1 text-base tracking-tight tabular-nums ${isWeek ? "min-w-[5.25rem]" : "min-w-[7.5rem]"}`}
+        >
+          <span className="font-semibold text-foreground">{dateLabel}</span>{" "}
+          <span className="font-normal text-faint">{yearLabel}</span>
+          {weekdayLabel ? (
+            // Fixed width too: "Monday" vs "Wednesday" would otherwise shift the
+            // steppers on its own, which the outer min-width cannot absorb.
+            <span className="ml-1.5 hidden w-[4.5rem] text-xs font-normal text-faintest xl:inline-block">
+              {weekdayLabel}
+            </span>
+          ) : null}
+        </h1>
+        <div className="flex items-center gap-1">
+          <IconBtn label="Previous" onClick={() => shiftDate(isWeek ? -7 : -1)}>&lsaquo;</IconBtn>
+          <IconBtn label="Next" onClick={() => shiftDate(isWeek ? 7 : 1)}>&rsaquo;</IconBtn>
         </div>
-      )}
+
+        {/* Hairline separator, as in the reference — it also visually pins the start
+            of the view controls so the eye has a fixed edge to return to. */}
+        <span aria-hidden className="mx-1 hidden h-5 w-px bg-line sm:block" />
+
+        {/* Segmented view toggle: a recessed grey track with a RAISED WHITE pill on
+            the active item — the pill reads as "lifted out" of the track, which is
+            why it needs no drop shadow (a hairline does the same job). Month/Staff
+            are disabled — see the TODO above. */}
+        <div className="ml-1 flex items-center gap-0.5 rounded-full bg-chip p-0.5">
+          <Seg active={!isWeek} onClick={() => navigate({ view: "day" })}>Day</Seg>
+          <Seg active={isWeek} onClick={() => navigate({ view: "week" })}>Week</Seg>
+          <Seg disabled title="Month view isn't implemented yet">Month</Seg>
+        </div>
+
+        <Facet
+          icon={<StatusIcon />}
+          label="All status"
+          value={statusFilter}
+          onChange={setStatusFilter}
+          options={[{ value: "", label: "All status" }, ...STATUSES.map((s) => ({ value: s, label: STATUS_LABEL[s] }))]}
+        />
+        <Facet
+          icon={<StaffIcon />}
+          label="All staff"
+          value={staffFilter}
+          onChange={setStaffFilter}
+          options={[{ value: "", label: "All staff" }, ...props.staff.map((s) => ({ value: s.id, label: s.name }))]}
+        />
+        {props.sites.length > 1 ? (
+          <Facet
+            label="Site"
+            value={props.currentSiteId}
+            onChange={(v) => navigate({ site: v })}
+            options={props.sites.map((s) => ({ value: s.id, label: s.name }))}
+          />
+        ) : null}
+
+        <div className="ml-auto flex items-center gap-2">
+          <AutoRefresh intervalSeconds={20} />
+          <button
+            type="button"
+            onClick={() => setModal({ mode: "walkin" })}
+            className="inline-flex h-[var(--control-h)] items-center rounded-md border border-line-strong px-3 text-sm transition-colors hover:bg-hover"
+          >
+            Walk-in
+          </button>
+          <button
+            type="button"
+            onClick={() => setModal({ mode: "new" })}
+            className="inline-flex h-[var(--control-h)] items-center gap-2 rounded-md bg-brand px-3 text-sm font-medium text-white transition-opacity hover:opacity-90"
+          >
+            Add appointment
+            <kbd className="u-mono rounded bg-white/20 px-1 text-[0.625rem] font-normal">&#8984;A</kbd>
+          </button>
+        </div>
+      </div>
+
+      {error ? (
+        <p role="alert" className="border-b border-line bg-danger/10 px-[var(--panel-pad)] py-2 text-sm text-danger">
+          {error}
+        </p>
+      ) : null}
+
+      {/* ── KPI STRIP — three REAL metrics over the loaded range. The design's
+             "Avg waitlist time" card and the "vs last week" deltas are omitted
+             (no waitlist model, no previous-period query). ── */}
+      <div className="grid gap-[var(--content-pad)] border-b border-line p-[var(--panel-pad)] sm:grid-cols-2 xl:grid-cols-4">
+        <Kpi
+          label="Total appointments"
+          unit="%"
+          caption={rangeCaption}
+          value={String(kpis.total)}
+          delta={ratioDelta(kpis.total, prev.total)}
+          vs={vsCaption}
+        />
+        <Kpi
+          label="Compl. appointments"
+          unit="pp"
+          caption={rangeCaption}
+          value={kpis.completedPct === null ? "—" : `${kpis.completedPct}%`}
+          delta={pointDelta(kpis.completedPct, prev.completedPct)}
+          vs={vsCaption}
+        />
+        <Kpi
+          label="No show appointments"
+          unit="pp"
+          caption={rangeCaption}
+          value={kpis.noShowPct === null ? "—" : `${kpis.noShowPct}%`}
+          delta={pointDelta(kpis.noShowPct, prev.noShowPct)}
+          // More no-shows is WORSE, so the delta's colour has to invert.
+          higherIsBetter={false}
+          vs={vsCaption}
+        />
+        {/* Replaces the design's "Avg. waitlist time" — no waitlist model exists, and
+            this is a number the data can actually answer. */}
+        <Kpi
+          label="Booked revenue"
+          unit="%"
+          caption={`${rangeCaption} · excl. cancelled`}
+          value={formatMoneyCOP(kpis.revenue) ?? "—"}
+          delta={ratioDelta(kpis.revenue, prev.revenue)}
+          vs={vsCaption}
+        />
+      </div>
+
+      {/* ── CALENDAR GRID + DRAWER ── */}
+      <div className="flex min-h-0 flex-1">
+        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="min-h-0 flex-1 overflow-auto">
+            <div className="flex min-w-max">
+              {/* Hour rail */}
+              <div className="sticky left-0 z-20 w-14 shrink-0 border-r border-line bg-surface">
+                <div className="flex h-12 items-end justify-center border-b border-line pb-1">
+                  <span className="u-mono text-[0.625rem] text-faintest">{gmtLabel(tz)}</span>
+                </div>
+                <div className="relative" style={{ height: bodyHeight }}>
+                  {hours.map((h) => (
+                    <div key={h} className="absolute right-2 -translate-y-1/2" style={{ top: offsetTop(h * 60) }}>
+                      <span className="u-mono text-[0.625rem] text-faint">
+                        {new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: true }).format(
+                          new Date(Date.UTC(2020, 0, 1, h)),
+                        )}
+                      </span>
+                    </div>
+                  ))}
+                  {nowVisible ? (
+                    <div
+                      aria-hidden
+                      className="absolute right-0 -translate-y-1/2 rounded-l bg-brand px-1 py-px"
+                      style={{ top: offsetTop(minutesOf(nowParts)) }}
+                    >
+                      <span className="u-mono text-[0.5625rem] font-semibold text-white">
+                        {String(nowParts.h).padStart(2, "0")}:{String(nowParts.m).padStart(2, "0")}
+                      </span>
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+
+              {/* Columns */}
+              {columns.map((col) => (
+                <div key={col.key} className="w-[13rem] shrink-0 border-r border-line last:border-r-0">
+                  <div className="sticky top-0 z-10 flex h-12 items-center gap-2 border-b border-line bg-surface px-2">
+                    {col.dayNum ? (
+                      // Today's date sits in a filled badge, as in the reference.
+                      <span
+                        className={`u-mono flex size-7 shrink-0 items-center justify-center rounded-md text-sm font-semibold ${
+                          col.isToday ? "bg-brand text-white" : "text-foreground"
+                        }`}
+                      >
+                        {col.dayNum}
+                      </span>
+                    ) : null}
+                    {col.initial ? <Initial name={col.initial} /> : null}
+                    <span className="flex min-w-0 flex-col leading-tight">
+                      <span className="truncate text-xs font-semibold text-foreground">{col.label}</span>
+                      {col.sub ? <span className="truncate text-[0.625rem] text-faint">{col.sub}</span> : null}
+                    </span>
+                  </div>
+                  <div className="relative" style={{ height: bodyHeight }}>
+                    {hours.map((h) => (
+                      <div
+                        key={h}
+                        aria-hidden
+                        className="absolute inset-x-0 border-t border-line/70"
+                        style={{ top: offsetTop(h * 60) }}
+                      />
+                    ))}
+                    {nowVisible ? (
+                      <div
+                        aria-hidden
+                        className="absolute inset-x-0 z-10 border-t-2 border-brand"
+                        style={{ top: offsetTop(minutesOf(nowParts)) }}
+                      />
+                    ) : null}
+                    {visible
+                      .filter((a) => inColumn(a, col.key))
+                      .map((a) => {
+                        // Clamp to the operating window so an out-of-hours booking
+                        // still renders (at the edge) instead of drawing off-grid.
+                        const lo = fromHour * 60;
+                        const hi = toHour * 60;
+                        const startMin = Math.min(Math.max(minutesOf(zonedParts(a.start_at, tz)), lo), hi);
+                        const endMin = Math.min(Math.max(minutesOf(zonedParts(a.service_end_at, tz)), startMin), hi);
+                        return (
+                          <ApptCard
+                            key={a.id}
+                            appt={a}
+                            tz={tz}
+                            top={offsetTop(startMin)}
+                            height={Math.max(22, ((endMin - startMin) / 60) * HOUR_PX - 2)}
+                            overlapping={overlapIds.has(a.id)}
+                            selected={a.id === selectedId}
+                            onOpen={() => setSelectedId(a.id)}
+                          />
+                        );
+                      })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </section>
+
+        {selected ? (
+          <ApptDrawer
+            appt={selected}
+            tz={tz}
+            pending={pending}
+            contactsBase={props.contactsBase}
+            inboxBase={props.inboxBase}
+            fromQS={fromQS}
+            onClose={() => setSelectedId(null)}
+            onReschedule={() => setModal({ mode: "reschedule", appt: selected })}
+            onConfirm={() => run(() => confirmAppointmentAction(props.clientId, selected.id))}
+            onComplete={() => run(() => completeAppointmentAction(props.clientId, selected.id))}
+            onNoShow={() => run(() => noShowAppointmentAction(props.clientId, selected.id))}
+            onCancel={() => run(() => cancelAppointmentAction(props.clientId, selected.id))}
+          />
+        ) : null}
+      </div>
+      </section>
 
       {modal ? (
         <AppointmentModal
@@ -260,17 +644,422 @@ export function AgendaView(props: {
   );
 }
 
-function ActBtn({ label, onClick, danger, disabled }: { label: string; onClick: () => void; danger?: boolean; disabled?: boolean }) {
+// ── Small presentational pieces ───────────────────────────────────────────────
+
+function IconBtn({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
   return (
     <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className="inline-flex size-7 items-center justify-center rounded-full border border-line text-sm text-muted transition-colors hover:bg-hover hover:text-foreground"
+    >
+      {children}
+    </button>
+  );
+}
+
+function Seg({
+  active,
+  disabled,
+  title,
+  onClick,
+  children,
+}: {
+  active?: boolean;
+  disabled?: boolean;
+  title?: string;
+  onClick?: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
       onClick={onClick}
       disabled={disabled}
-      className={`rounded border px-1.5 py-0.5 text-[11px] transition-colors disabled:opacity-50 ${
-        danger ? "border-danger/40 text-danger hover:bg-danger/10" : "border-line hover:bg-subtle"
+      aria-pressed={active}
+      title={title}
+      className={`rounded-full px-3 py-1.5 text-xs transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+        active
+          ? "border border-line bg-surface font-semibold text-brand"
+          : "font-medium text-muted hover:text-foreground"
       }`}
     >
-      {label}
+      {children}
     </button>
+  );
+}
+
+/** A native <select> under a styled shell — full keyboard/AT behaviour, no portal. */
+function Facet({
+  label,
+  value,
+  options,
+  onChange,
+  icon,
+}: {
+  label: string;
+  value: string;
+  options: { value: string; label: string }[];
+  onChange: (v: string) => void;
+  icon?: React.ReactNode;
+}) {
+  const current = options.find((o) => o.value === value);
+  return (
+    <div className="relative inline-flex h-[var(--control-h)] items-center gap-1.5 rounded-md border border-line-strong bg-surface px-3 text-sm text-foreground">
+      {icon ? <span className="pointer-events-none shrink-0 text-faint">{icon}</span> : null}
+      <span className="pointer-events-none whitespace-nowrap">{current?.label ?? label}</span>
+      <span aria-hidden className="pointer-events-none text-faint">&#9662;</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        aria-label={label}
+        className="absolute inset-0 cursor-pointer opacity-0"
+      >
+        {options.map((o) => (
+          <option key={o.value || "any"} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+/** Check-in-circle — the "status" facet. */
+function StatusIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" fill="none" aria-hidden>
+      <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.6" />
+      <path d="m8.5 12 2.5 2.5 4.5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+/** Person — the "staff" facet. */
+function StaffIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" fill="none" aria-hidden>
+      <circle cx="12" cy="8" r="3.25" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M5.5 19a6.5 6.5 0 0 1 13 0" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** Percent CHANGE, for counts and money. null when there is no base to compare to. */
+function ratioDelta(now: number, before: number): number | null {
+  if (!before) return null; // 0 → n has no meaningful percentage
+  return Math.round(((now - before) / before) * 100);
+}
+/** Percentage-POINT difference, for rates. Comparing 85% to 80% is +5 points, not
+ *  +6% — reporting it as a percent change would overstate the move. */
+function pointDelta(now: number | null, before: number | null): number | null {
+  if (now === null || before === null) return null;
+  return now - before;
+}
+
+/**
+ * One headline metric: title, the window it covers, the number, and how it moved
+ * against the preceding equivalent window. The delta is a real comparison (the page
+ * queries the previous range) — never a decorative figure. `higherIsBetter` flips
+ * the colour for metrics where up is bad, e.g. no-shows.
+ */
+function Kpi({
+  label,
+  caption,
+  value,
+  delta,
+  vs,
+  unit,
+  higherIsBetter = true,
+}: {
+  label: string;
+  caption: string;
+  value: string;
+  delta: number | null;
+  vs: string;
+  /** "%" for counts/money (percent change), "pp" for rates (point difference). */
+  unit: "%" | "pp";
+  higherIsBetter?: boolean;
+}) {
+  const good = delta === null || delta === 0 ? null : higherIsBetter ? delta > 0 : delta < 0;
+  return (
+    <div className="rounded-lg border border-line px-4 py-3">
+      <p className="text-sm font-semibold text-foreground">{label}</p>
+      <p className="mt-0.5 text-xs text-faint">{caption}</p>
+      <div className="mt-2 flex flex-wrap items-baseline gap-2">
+        <span className="u-mono text-2xl font-medium leading-none text-foreground">{value}</span>
+        {delta !== null ? (
+          <>
+            <span
+              className={`rounded-full px-1.5 py-0.5 text-[0.6875rem] font-medium ${
+                good === null
+                  ? "bg-chip text-muted"
+                  : good
+                    ? "bg-success/12 text-success"
+                    : "bg-brand-soft text-brand"
+              }`}
+            >
+              {delta > 0 ? "+" : ""}
+              {delta}
+              {unit}
+            </span>
+            <span className="text-xs text-faint">{vs}</span>
+          </>
+        ) : (
+          <span className="text-xs text-faintest">no prior data</span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function Initial({ name }: { name: string | null }) {
+  const ch = (name?.match(/[a-z0-9]/i)?.[0] ?? "?").toUpperCase();
+  return (
+    <span
+      aria-hidden
+      className="flex size-4 shrink-0 items-center justify-center rounded-full bg-service-purple text-[0.5625rem] font-semibold text-white"
+    >
+      {ch}
+    </span>
+  );
+}
+
+/**
+ * One appointment. A 3px LEFT BORDER carries the category, the fill carries the
+ * exception: `scheduled` (unconfirmed) is an outline, an overlap or a no-show gets
+ * the danger tint, cancelled is struck through. Never colour alone — each state also
+ * spells itself out in the meta line.
+ */
+function ApptCard({
+  appt,
+  tz,
+  top,
+  height,
+  overlapping,
+  selected,
+  onOpen,
+}: {
+  appt: Appt;
+  tz: string;
+  top: number;
+  height: number;
+  overlapping: boolean;
+  selected: boolean;
+  onOpen: () => void;
+}) {
+  const unconfirmed = appt.status === "scheduled";
+  const cancelled = appt.status === "cancelled";
+  const attention = overlapping || appt.status === "no_show";
+  const fill = attention
+    ? "bg-danger-tint/60 border-brand"
+    : cancelled
+      ? "bg-blocked-bg text-blocked-fg border-blocked-fg"
+      : unconfirmed
+        ? "bg-surface border-line-strong"
+        : appt.status === "completed"
+          ? "bg-chip border-success"
+          : "bg-chip border-service-purple";
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-label={`${fmtTime(appt.start_at, tz)} ${appt.contact_name ?? "Walk-in"} — ${appt.service_name}`}
+      className={`absolute inset-x-1 overflow-hidden rounded-card border border-l-[3px] px-1.5 py-1 text-left ${fill} ${
+        unconfirmed ? "border-dashed" : ""
+      } ${selected ? "ring-2 ring-service-purple" : ""}`}
+      style={{ top, height }}
+    >
+      <span className="flex items-start justify-between gap-1">
+        <span className="u-mono truncate text-[0.5625rem] text-muted">
+          {fmtTime(appt.start_at, tz)} — {fmtTime(appt.service_end_at, tz)}
+        </span>
+        <Initial name={appt.staff_name} />
+      </span>
+      <span className={`block truncate text-[0.6875rem] font-semibold ${cancelled ? "line-through" : ""}`}>
+        {appt.contact_name ?? "Walk-in"}
+      </span>
+      <span className="block truncate text-[0.625rem] text-muted">
+        {appt.service_name}
+        {unconfirmed ? " · unconfirmed" : ""}
+        {overlapping ? " · overlap" : ""}
+        {appt.status === "no_show" ? " · no show" : ""}
+        {cancelled ? " · cancelled" : ""}
+      </span>
+    </button>
+  );
+}
+
+/**
+ * The detail DRAWER — a side panel, never a modal, so the grid stays readable while
+ * you act. Only the real lifecycle actions are offered (confirm / complete / no-show /
+ * cancel / reschedule); see the TODOs on AgendaView for what the design showed that
+ * has no server action behind it.
+ */
+function ApptDrawer({
+  appt,
+  tz,
+  pending,
+  contactsBase,
+  inboxBase,
+  fromQS,
+  onClose,
+  onReschedule,
+  onConfirm,
+  onComplete,
+  onNoShow,
+  onCancel,
+}: {
+  appt: Appt;
+  tz: string;
+  pending: boolean;
+  contactsBase: string | null;
+  inboxBase: string | null;
+  fromQS: string;
+  onClose: () => void;
+  onReschedule: () => void;
+  onConfirm: () => void;
+  onComplete: () => void;
+  onNoShow: () => void;
+  onCancel: () => void;
+}) {
+  const live = appt.status === "scheduled" || appt.status === "confirmed";
+  return (
+    <aside
+      aria-label="Appointment details"
+      className="hidden w-[19rem] shrink-0 flex-col overflow-hidden border-l border-line xl:flex 2xl:w-[21rem]"
+    >
+      <div className="flex h-10 shrink-0 items-center justify-between gap-2 bg-service-purple px-3">
+        <span className="truncate text-xs font-semibold text-white">{STATUS_TITLE[appt.status] ?? appt.status}</span>
+        <button type="button" onClick={onClose} aria-label="Close details" className="u-tap text-white/80 hover:text-white">
+          &#10005;
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+        <div className="flex items-center gap-2">
+          <span
+            aria-hidden
+            className="flex size-8 shrink-0 items-center justify-center rounded-full bg-chip text-xs font-semibold text-foreground"
+          >
+            {(appt.contact_name?.match(/[a-z0-9]/i)?.[0] ?? "?").toUpperCase()}
+          </span>
+          <div className="min-w-0">
+            <p className="truncate text-sm font-semibold text-foreground">{appt.contact_name ?? "Walk-in"}</p>
+            {/* The contact's PHONE — never the internal appointment UUID. Absent
+                phone renders nothing at all. */}
+            {appt.contact_phone ? (
+              <p className="u-mono truncate text-[0.625rem] text-faint">{appt.contact_phone}</p>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="mt-3 border-t border-line pt-3">
+          <p className="u-mono text-sm font-semibold text-foreground">
+            {fmtTime(appt.start_at, tz)} &rarr; {fmtTime(appt.service_end_at, tz)}
+          </p>
+          <p className="mt-0.5 flex flex-wrap items-center gap-1.5 text-xs text-muted">
+            <span className="u-mono">{appt.duration_min} min</span>
+            {appt.staff_name ? (
+              <>
+                <span aria-hidden className="text-faintest">&middot;</span>
+                <Initial name={appt.staff_name} />
+                <span className="truncate">{appt.staff_name}</span>
+              </>
+            ) : null}
+            {live ? (
+              <button
+                type="button"
+                onClick={onReschedule}
+                disabled={pending}
+                className="ml-auto text-brand hover:underline disabled:opacity-50"
+              >
+                Reschedule
+              </button>
+            ) : null}
+          </p>
+        </div>
+
+        {live ? (
+          <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-3">
+            {appt.status === "scheduled" ? (
+              <button
+                type="button"
+                onClick={onConfirm}
+                disabled={pending}
+                className="inline-flex h-8 items-center rounded-md bg-foreground px-3 text-xs font-medium text-background disabled:opacity-50"
+              >
+                Confirm
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={onComplete}
+              disabled={pending}
+              className="inline-flex h-8 items-center rounded-md border border-line-strong px-3 text-xs transition-colors hover:bg-hover disabled:opacity-50"
+            >
+              Mark as completed
+            </button>
+            <button
+              type="button"
+              onClick={onNoShow}
+              disabled={pending}
+              className="inline-flex h-8 items-center rounded-md border border-line-strong px-3 text-xs transition-colors hover:bg-hover disabled:opacity-50"
+            >
+              No show
+            </button>
+          </div>
+        ) : null}
+
+        {/* SERVICES — the model stores exactly ONE service per appointment, with its
+            price snapshotted at booking time. The design's multi-service list is not
+            representable (see TODO on AgendaView). */}
+        <div className="mt-3 border-t border-line pt-3">
+          <p className="u-th">Service</p>
+          <div className="mt-1.5 flex items-center gap-2">
+            <span aria-hidden className="size-2.5 shrink-0 rounded-full bg-service-purple" />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm text-foreground">{appt.service_name}</p>
+              <p className="u-mono text-[0.625rem] text-faint">
+                {appt.duration_min} min{appt.staff_name ? ` · ${appt.staff_name}` : ""}
+              </p>
+            </div>
+            {formatMoneyCOP(appt.price) ? (
+              <span className="u-mono shrink-0 text-sm text-foreground">{formatMoneyCOP(appt.price)}</span>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="mt-3 flex flex-col gap-1.5 border-t border-line pt-3">
+          {appt.contact_id && contactsBase ? (
+            <Link
+              href={`${contactsBase}/${appt.contact_id}${fromQS}`}
+              className="inline-flex h-9 items-center justify-center rounded-md bg-brand text-sm font-medium text-white transition-opacity hover:opacity-90"
+            >
+              Open contact &#8599;
+            </Link>
+          ) : null}
+          {appt.source_conversation_id && inboxBase ? (
+            <Link
+              href={`${inboxBase}?c=${encodeURIComponent(appt.source_conversation_id)}`}
+              className="inline-flex h-9 items-center justify-center rounded-md border border-line-strong text-sm transition-colors hover:bg-hover"
+            >
+              View conversation
+            </Link>
+          ) : null}
+          {live ? (
+            <button
+              type="button"
+              onClick={onCancel}
+              disabled={pending}
+              className="inline-flex h-9 items-center justify-center rounded-md text-sm text-danger transition-colors hover:bg-danger/10 disabled:opacity-50"
+            >
+              Cancel appointment&hellip;
+            </button>
+          ) : null}
+        </div>
+      </div>
+    </aside>
   );
 }
 

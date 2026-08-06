@@ -1,6 +1,6 @@
 import { headers } from "next/headers";
 import { getServerSession } from "@/lib/session";
-import { getSessionScope, memberLandingHref } from "@/lib/access";
+import { getSessionScope } from "@/lib/access";
 import { listClientsForTenant } from "@worker/db/repositories/clients.js";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { HeaderBar, type HeaderClient, type HeaderWorkflow } from "./HeaderBar";
@@ -70,10 +70,8 @@ export async function AppHeader() {
       name={session.user.name ?? null}
       clients={clientOptions}
       workflows={workflowOptions}
-      // A member can't switch clients (they have exactly one); the home logo and
-      // any "/" target route them to their own client, not the (forbidden) Hub.
+      // A member can't switch clients (they have exactly one).
       canSwitchClients={memberClientId === null}
-      homeHref={memberLandingHref(scope)}
       role={scope.role}
       clientLabel={clientLabel}
     />

@@ -68,6 +68,30 @@ export interface ContactListItem extends ContactRow {
   next_appointment_at: Date | null;
   last_conversation_at: Date | null;
   visit_count: number;
+  /** Open (not completed/cancelled) tasks on this contact. */
+  open_task_count: number;
+  /** Of those, the ones whose due_at is in the past. */
+  overdue_task_count: number;
+}
+
+/** The Tasks facet on the contacts list. */
+export type ContactTaskFilter = 'open' | 'overdue';
+
+/** Sentinel owner value meaning "no owner assigned" (a real filter, not a user id). */
+export const UNASSIGNED_OWNER = 'unassigned';
+
+/**
+ * Compact counters for the contacts list summary strip. ONE grouped query over
+ * the same client-scoped set the list pages through — never a per-row lookup and
+ * never a second round-trip per metric.
+ */
+export interface ContactsSummary {
+  total: number;
+  new: number;
+  active: number;
+  customer: number;
+  overdueTasks: number;
+  unassigned: number;
 }
 
 export interface ListContactsResult {
@@ -127,6 +151,10 @@ export async function listContacts(
   opts: {
     search?: string;
     stage?: ContactStage;
+    /** Owner filter: a user id, or 'unassigned' for contacts with no owner. */
+    owner?: string;
+    /** Task filter: contacts with ≥1 open task, or ≥1 OVERDUE open task. */
+    tasks?: ContactTaskFilter;
     limit?: number;
     clientId?: string | null;
     /** Opaque cursor from a previous result's nextCursor. Malformed → ignored. */
@@ -143,6 +171,21 @@ export async function listContacts(
   if (opts.stage) {
     params.push(opts.stage);
     where.push(`c.stage = $${params.length}`);
+  }
+  // Owner: a concrete user, or the "nobody owns this" bucket. Both are plain
+  // predicates on the already client-scoped contacts row (no extra join).
+  if (opts.owner === UNASSIGNED_OWNER) {
+    where.push('c.assigned_to IS NULL');
+  } else if (opts.owner) {
+    params.push(opts.owner);
+    where.push(`c.assigned_to = $${params.length}`);
+  }
+  // Tasks: served by the `t` aggregate below (open counts per contact), which is
+  // index-backed by crm_tasks_contact_idx / crm_tasks_open_due_idx.
+  if (opts.tasks === 'open') {
+    where.push('COALESCE(t.open_count, 0) > 0');
+  } else if (opts.tasks === 'overdue') {
+    where.push('COALESCE(t.overdue_count, 0) > 0');
   }
   const search = opts.search?.trim();
   if (search) {
@@ -177,6 +220,8 @@ export async function listContacts(
             (COALESCE(a.completed_count, 0) > 0) AS is_customer,
             COALESCE(a.completed_count, 0) AS visit_count,
             a.next_appointment_at,
+            COALESCE(t.open_count, 0)::int AS open_task_count,
+            COALESCE(t.overdue_count, 0)::int AS overdue_task_count,
             conv.last_conversation_at,
             -- Microsecond-precise cursor key (a JS Date would drop precision; see codec).
             to_char(c.last_contact_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts
@@ -189,6 +234,17 @@ export async function listContacts(
           WHERE tenant_id = $1 AND contact_id IS NOT NULL
           GROUP BY contact_id, client_id
        ) a ON a.contact_id = c.id AND a.client_id = c.client_id
+       -- OPEN TASKS (the list column + the Tasks filter). ONE grouped aggregate,
+       -- never a per-row lookup, and client-scoped on both sides of the join so a
+       -- mislinked cross-client task can never be counted onto a contact.
+       LEFT JOIN (
+         SELECT contact_id, client_id,
+                COUNT(*)::int AS open_count,
+                (COUNT(*) FILTER (WHERE due_at IS NOT NULL AND due_at < now()))::int AS overdue_count
+           FROM crm_tasks
+          WHERE tenant_id = $1 AND status = 'open'
+          GROUP BY contact_id, client_id
+       ) t ON t.contact_id = c.id AND t.client_id = c.client_id
        LEFT JOIN (
          SELECT co.contact_id, cw.client_id,
                 MAX(COALESCE(co.last_message_at, co.updated_at)) AS last_conversation_at
@@ -215,6 +271,96 @@ export async function listContacts(
   // reads named fields), and `ContactListItem & {cursor_ts}` is assignable to the
   // ContactListItem[] contract.
   return { items: kept, nextCursor };
+}
+
+/**
+ * The contacts-list summary counters, in ONE grouped query over the SAME
+ * tenant+client scope (and the same search facet) the list itself uses — so the
+ * strip can never disagree with the table, and adding it costs a single bounded
+ * round-trip rather than one query per metric or an N+1 over the rows.
+ *
+ * NOTE the deliberate asymmetry: `total`/stage/owner counters describe the whole
+ * FILTERED set (not just the current keyset page), which is what an operator
+ * needs from a summary. `overdueTasks` counts CONTACTS carrying ≥1 overdue open
+ * task, matching the row-level OVERDUE marker.
+ */
+export async function summarizeContacts(
+  tenantId: string,
+  opts: {
+    search?: string;
+    stage?: ContactStage;
+    owner?: string;
+    tasks?: ContactTaskFilter;
+    clientId?: string | null;
+  } = {},
+): Promise<ContactsSummary> {
+  const params: unknown[] = [tenantId];
+  const where: string[] = ['c.tenant_id = $1'];
+  if (opts.clientId) {
+    params.push(opts.clientId);
+    where.push(`c.client_id = $${params.length}`);
+  }
+  if (opts.stage) {
+    params.push(opts.stage);
+    where.push(`c.stage = $${params.length}`);
+  }
+  if (opts.owner === UNASSIGNED_OWNER) {
+    where.push('c.assigned_to IS NULL');
+  } else if (opts.owner) {
+    params.push(opts.owner);
+    where.push(`c.assigned_to = $${params.length}`);
+  }
+  if (opts.tasks === 'open') {
+    where.push('COALESCE(t.open_count, 0) > 0');
+  } else if (opts.tasks === 'overdue') {
+    where.push('COALESCE(t.overdue_count, 0) > 0');
+  }
+  const search = opts.search?.trim();
+  if (search) {
+    params.push(`%${search}%`);
+    const clauses = [`${CONTACT_SEARCH_DOC} ILIKE $${params.length}`];
+    const digits = search.replace(/\D/g, '');
+    if (digits.length >= 2 && digits !== search) {
+      params.push(`%${digits}%`);
+      clauses.push(`${CONTACT_SEARCH_DOC} ILIKE $${params.length}`);
+    }
+    where.push(`(${clauses.join(' OR ')})`);
+  }
+  const r = await query<{
+    total: string;
+    new_count: string;
+    active_count: string;
+    customer_count: string;
+    overdue_tasks: string;
+    unassigned: string;
+  }>(
+    `SELECT COUNT(*) AS total,
+            COUNT(*) FILTER (WHERE c.stage = 'new') AS new_count,
+            COUNT(*) FILTER (WHERE c.stage = 'active') AS active_count,
+            COUNT(*) FILTER (WHERE c.stage = 'customer') AS customer_count,
+            COUNT(*) FILTER (WHERE COALESCE(t.overdue_count, 0) > 0) AS overdue_tasks,
+            COUNT(*) FILTER (WHERE c.assigned_to IS NULL) AS unassigned
+       FROM contacts c
+       LEFT JOIN (
+         SELECT contact_id, client_id,
+                COUNT(*)::int AS open_count,
+                (COUNT(*) FILTER (WHERE due_at IS NOT NULL AND due_at < now()))::int AS overdue_count
+           FROM crm_tasks
+          WHERE tenant_id = $1 AND status = 'open'
+          GROUP BY contact_id, client_id
+       ) t ON t.contact_id = c.id AND t.client_id = c.client_id
+      WHERE ${where.join(' AND ')}`,
+    params,
+  );
+  const row = r.rows[0];
+  return {
+    total: Number(row?.total ?? 0),
+    new: Number(row?.new_count ?? 0),
+    active: Number(row?.active_count ?? 0),
+    customer: Number(row?.customer_count ?? 0),
+    overdueTasks: Number(row?.overdue_tasks ?? 0),
+    unassigned: Number(row?.unassigned ?? 0),
+  };
 }
 
 /**

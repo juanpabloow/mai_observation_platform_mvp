@@ -25,7 +25,15 @@ export default async function ClientAgendaPage({
   searchParams,
 }: {
   params: Promise<{ clientId: string }>;
-  searchParams: Promise<{ site?: string; date?: string; from?: string; book?: string; reschedule?: string; return?: string }>;
+  searchParams: Promise<{
+    site?: string;
+    date?: string;
+    view?: string;
+    from?: string;
+    book?: string;
+    reschedule?: string;
+    return?: string;
+  }>;
 }) {
   await connection();
   const { clientId } = await params;
@@ -87,16 +95,48 @@ export default async function ClientAgendaPage({
       ? sp.date
       : `${todayParts.year}-${String(todayParts.month).padStart(2, "0")}-${String(todayParts.day).padStart(2, "0")}`;
   const [y, m, d] = dateStr.split("-").map(Number);
+  // The DAY window is what booking/availability always uses (the modal asks for slots
+  // inside it), so it is computed unconditionally and passed through untouched.
   const dayStart = zonedPartsToUtc(y, m, d, 0, 0, site.timezone);
   const dayEnd = zonedPartsToUtc(y, m, d + 1, 0, 0, site.timezone);
 
-  const [staff, services, appts, crmEnabled, inboxEnabled] = await Promise.all([
+  // View mode. `week` widens ONLY the range handed to listAppointments — same query,
+  // same repository, same client scoping. Month/Staff are not implemented (see the
+  // TODO in AgendaView) so anything else falls back to `day`.
+  const view = sp.view === "week" ? "week" : "day";
+  // Week starts Monday, in the SITE's timezone (never the server's).
+  const weekdayOfDate = new Date(Date.UTC(y, m - 1, d)).getUTCDay(); // 0=Sun
+  const mondayOffset = weekdayOfDate === 0 ? -6 : 1 - weekdayOfDate;
+  const rangeStart = view === "week" ? zonedPartsToUtc(y, m, d + mondayOffset, 0, 0, site.timezone) : dayStart;
+  const rangeEnd = view === "week" ? zonedPartsToUtc(y, m, d + mondayOffset + 7, 0, 0, site.timezone) : dayEnd;
+
+  // PREVIOUS equivalent window, for the KPI deltas. Same query, same client scoping,
+  // just shifted back by the range's own length — so "vs last week" compares like
+  // with like (a 7-day week against the prior 7 days, a day against the day before).
+  const rangeMs = rangeEnd.getTime() - rangeStart.getTime();
+  const prevStart = new Date(rangeStart.getTime() - rangeMs);
+  const prevEnd = new Date(rangeStart.getTime());
+
+  const [staff, services, appts, prevAppts, crmEnabled, inboxEnabled] = await Promise.all([
     listStaff(tenantId, { siteId: site.id, clientId: client.id }),
     listServicesForSite(tenantId, site.id),
-    listAppointments(tenantId, { siteId: site.id, from: dayStart, to: dayEnd, clientId: client.id }),
+    listAppointments(tenantId, { siteId: site.id, from: rangeStart, to: rangeEnd, clientId: client.id }),
+    listAppointments(tenantId, { siteId: site.id, from: prevStart, to: prevEnd, clientId: client.id }),
     isClientModuleEnabled(tenantId, client.id, "crm"),
     isClientModuleEnabled(tenantId, client.id, "inbox"),
   ]);
+
+  /** The same four metrics the view shows, computed over an arbitrary window. */
+  const summarise = (rows: typeof appts) => {
+    const settled = rows.filter((a) => a.status !== "cancelled");
+    const pct = (n: number) => (settled.length === 0 ? null : Math.round((n / settled.length) * 100));
+    return {
+      total: rows.length,
+      completedPct: pct(rows.filter((a) => a.status === "completed").length),
+      noShowPct: pct(rows.filter((a) => a.status === "no_show").length),
+      revenue: settled.reduce((sum, a) => sum + (Number(a.price_snapshot) || 0), 0),
+    };
+  };
 
   // C-4.1 book-for-contact deep-link: prefill the "new appointment" modal with the
   // contact (locked, not typed) so staff never retype identity already on the record.
@@ -131,18 +171,27 @@ export default async function ClientAgendaPage({
       currentSiteId={site.id}
       staff={staff.map((s) => ({ id: s.id, name: s.name }))}
       services={services.map((s) => ({ id: s.id, name: s.name, duration_min: s.effective_duration_min }))}
+      view={view}
+      kpis={summarise(appts)}
+      previousKpis={summarise(prevAppts)}
+      rangeStartIso={rangeStart.toISOString()}
+      rangeEndIso={rangeEnd.toISOString()}
       appointments={appts.map((a) => ({
         id: a.id,
+        public_reference: a.public_reference,
         staff_id: a.staff_id,
         staff_name: a.staff_name,
         service_id: a.service_id,
         start_at: a.start_at.toISOString(),
         service_end_at: a.service_end_at.toISOString(),
         service_name: a.service_name_snapshot,
+        duration_min: a.duration_min_snapshot,
+        price: a.price_snapshot,
         status: a.status,
         origin: a.origin,
         contact_id: a.contact_id,
         contact_name: a.contact_name,
+        contact_phone: a.contact_phone,
         source_conversation_id: a.source_conversation_id,
       }))}
     />

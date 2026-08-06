@@ -1,7 +1,6 @@
 "use client";
 
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
-import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { createPortal } from "react-dom";
 import { useSidebar } from "@/components/SidebarContext";
@@ -37,7 +36,7 @@ function MiniLogo({ name, logoUrl, size = "size-5" }: { name: string; logoUrl: s
   return (
     <span
       aria-hidden
-      className={`${size} flex shrink-0 items-center justify-center rounded border border-line bg-subtle text-[10px] font-semibold text-foreground`}
+      className={`${size} flex shrink-0 items-center justify-center rounded border border-line bg-subtle text-[0.625rem] font-semibold text-foreground`}
     >
       {name.trim()[0]?.toUpperCase() ?? "?"}
     </span>
@@ -160,7 +159,6 @@ export function HeaderBar({
   clients,
   workflows,
   canSwitchClients,
-  homeHref,
   role,
   clientLabel,
 }: {
@@ -170,8 +168,6 @@ export function HeaderBar({
   workflows: HeaderWorkflow[];
   /** false for a member (one client, no switcher) — also hides tenant-wide settings. */
   canSwitchClients: boolean;
-  /** Logo / home target: "/" (Hub) for owner/admin, the member's client otherwise. */
-  homeHref: string;
   /** The signed-in user's role (shown in the profile menu). */
   role: "owner" | "admin" | "member";
   /** A member's client name (so they always see where they're scoped); else null. */
@@ -278,8 +274,11 @@ export function HeaderBar({
   const initial = (name?.trim()[0] ?? email.trim()[0] ?? "?").toUpperCase();
 
   return (
-    <header className="flex shrink-0 items-center justify-between gap-3 border-b border-black/10 px-4 py-2.5 dark:border-line">
-      {/* LEFT — sidebar controls + text logo → home */}
+    // The header now starts AFTER the sidebar and spans only the content column;
+    // the brand moved into the rail, so this bar carries navigation state only.
+    // h-14 matches the rail's brand block, so the two line up across the seam.
+    <header className="flex h-[var(--topbar-height)] shrink-0 items-center justify-between gap-3 border-b border-line px-[14px]">
+      {/* LEFT — sidebar controls */}
       <div className="flex shrink-0 items-center gap-2">
         {/* Mobile: opens the sidebar as a drawer. */}
         <button
@@ -301,16 +300,11 @@ export function HeaderBar({
         >
           <PanelIcon />
         </button>
-        <Link
-          href={homeHref}
-          className="font-semibold tracking-tight text-foreground transition-opacity hover:opacity-70"
-        >
-          Observability
-        </Link>
       </div>
 
-      {/* CENTER — route-aware breadcrumb */}
-      <nav className="flex min-w-0 flex-1 items-center justify-center gap-1 text-sm">
+      {/* CENTER — route-aware breadcrumb (left-aligned beside the rail, as in the
+          reference; the brand no longer competes with it for the leading slot). */}
+      <nav className="flex min-w-0 flex-1 items-center gap-1 text-sm">
         {/* Client segment — a picker for owner/admin; static text for a member */}
         {canSwitchClients ? (
         <div className="contents">
@@ -320,7 +314,9 @@ export function HeaderBar({
             data-menu-root
             onClick={() => setOpenMenu(openMenu === "client" ? null : "client")}
             aria-expanded={openMenu === "client"}
-            className="inline-flex min-w-0 items-center gap-1.5 rounded-md px-2 py-1 text-foreground transition-colors hover:bg-black/[0.05] dark:hover:bg-subtle"
+            // A DELIMITED compact control, so the client scope reads as a real
+            // selector rather than loose breadcrumb text.
+            className="inline-flex h-7 min-w-0 max-w-[240px] items-center gap-1.5 rounded-md border border-line px-2 text-foreground transition-colors hover:bg-subtle"
           >
             {currentClient ? (
               currentClient.isDefault ? (
@@ -331,7 +327,7 @@ export function HeaderBar({
               ) : (
                 <>
                   <MiniLogo name={currentClient.name} logoUrl={currentClient.logoUrl} />
-                  <span className="truncate font-medium">{currentClient.name}</span>
+                  <span className="truncate text-sm font-medium">{currentClient.name}</span>
                 </>
               )
             ) : (
@@ -341,7 +337,7 @@ export function HeaderBar({
           </button>
           {openMenu === "client" ? (
             <PortalPanel anchorRef={clientBtn} align="left" width={264}>
-              <p className="px-3 pb-1 pt-2 text-[10px] font-medium uppercase tracking-wider text-neutral-500">
+              <p className="px-3 pb-1 pt-2 text-[0.625rem] font-medium uppercase tracking-wider text-neutral-500">
                 Clients
               </p>
               <div className="max-h-72 overflow-y-auto pb-1">
@@ -381,6 +377,15 @@ export function HeaderBar({
             since the switcher itself carries that identity. */}
         {clientSurface && (!surface || surface.section === "inbox") ? (
           <>
+            {/* Module GROUP segment ("CRM", "Scheduling") — present only for the
+                surfaces that really live inside a module, so the trail reads
+                "Client / CRM / Contacts" and never invents a hierarchy. */}
+            {clientSurface.group ? (
+              <>
+                <span aria-hidden className="text-faint">/</span>
+                <span className="inline-flex items-center px-2 py-1 text-muted">{clientSurface.group}</span>
+              </>
+            ) : null}
             <span aria-hidden className="text-faint">/</span>
             <span className="inline-flex items-center px-2 py-1 font-medium text-foreground">
               {clientSurface.label}

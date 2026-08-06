@@ -227,6 +227,8 @@ export interface AppointmentListItem extends AppointmentRow {
   staff_name: string | null;
   site_name: string | null;
   contact_name: string | null;
+  /** For the agenda drawer's subtitle — never show the internal id to a user. */
+  contact_phone: string | null;
 }
 
 /**
@@ -280,7 +282,8 @@ export async function listAppointments(
             a.buffer_before_min_snapshot, a.buffer_after_min_snapshot,
             a.status, a.origin, a.created_by_type, a.created_by_user_id,
             a.idempotency_key, a.version, a.created_at, a.updated_at,
-            st.name AS staff_name, si.name AS site_name, ct.name AS contact_name
+            st.name AS staff_name, si.name AS site_name, ct.name AS contact_name,
+            ct.phone_e164 AS contact_phone
        FROM appointments a
        JOIN sites si
          ON si.id = a.site_id AND si.tenant_id = a.tenant_id AND si.client_id = a.client_id

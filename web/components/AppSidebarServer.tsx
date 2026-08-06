@@ -35,6 +35,7 @@ export async function AppSidebarServer() {
   if (!scope) return null;
   const session = await getServerSession();
   const email = session?.user?.email ?? "";
+  const name = session?.user?.name ?? null;
 
   let defaultClientId: string | null = null;
   let enabledModules: Record<string, string[]> = {};
@@ -65,6 +66,7 @@ export async function AppSidebarServer() {
 
   return (
     <AppSidebar
+      name={name}
       memberClientId={scope.memberClientId}
       defaultClientId={defaultClientId}
       enabledModules={enabledModules}

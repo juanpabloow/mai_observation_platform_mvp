@@ -77,9 +77,11 @@ export function InboxTabLink({
     };
   }, [load]);
 
-  const base = `group relative flex items-center rounded-lg text-sm transition-colors ${
+  // Same active treatment as the static rows (solid brand fill) so the rail only
+  // ever shows ONE active mark, whichever component rendered it.
+  const base = `group relative flex min-h-10 items-center rounded-lg text-sm transition-colors ${
     collapsed ? "justify-center px-0 py-2" : "gap-2.5 px-3 py-2"
-  } ${active ? "bg-subtle font-medium text-foreground" : "text-muted hover:bg-subtle hover:text-foreground"}`;
+  } ${active ? "bg-nav-active font-medium text-white" : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-fg"}`;
 
   // Collapsed: icon only, tooltip + count folded into the accessible name; a small dot
   // signals pending without a number (there's no room for the badge).
@@ -95,10 +97,7 @@ export function InboxTabLink({
       >
         {icon ? <span className="shrink-0" aria-hidden>{icon}</span> : <span>{label}</span>}
         {count > 0 ? (
-          <span
-            aria-hidden
-            className="absolute right-1.5 top-1.5 size-2 rounded-full bg-amber-500 dark:bg-amber-400"
-          />
+          <span aria-hidden className={`absolute right-1.5 top-1.5 size-2 rounded-full ${active ? "bg-white" : "bg-nav-active"}`} />
         ) : null}
       </Link>
     );
@@ -114,9 +113,14 @@ export function InboxTabLink({
       {icon ? <span className="shrink-0" aria-hidden>{icon}</span> : null}
       <span className="flex-1 truncate">{label}</span>
       {count > 0 ? (
-        <span className="ml-2 inline-flex min-w-[1.25rem] items-center justify-center rounded-full bg-amber-500/20 px-1.5 py-0.5 text-[11px] font-semibold tabular-nums text-amber-700 dark:text-amber-400">
-          {count}
-        </span>
+        // A red DOT rather than a number, per the design. The count is not lost —
+        // it rides the accessible name and the tooltip.
+        <span
+          role="status"
+          aria-label={`${count} pending`}
+          title={`${count} pending`}
+          className={`ml-2 size-2 shrink-0 rounded-full ${active ? "bg-white" : "bg-nav-active"}`}
+        />
       ) : null}
     </Link>
   );
