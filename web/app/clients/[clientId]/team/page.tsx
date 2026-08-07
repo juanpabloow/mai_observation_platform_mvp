@@ -15,13 +15,20 @@ function fmtDate(d: Date): string {
 }
 
 /**
- * Per-client Team (CLIENT level — the first non-workflow route under a client).
- * Owner/admin only (requireFullAccessOrLand sends a member to their own client);
- * the clientId is resolved tenant-scoped via getClientForTenant, so a foreign/bogus
- * client 404s and the URL is never trusted. Manages THIS client's MEMBERS — the
- * client is implied by the route (no picker): invite a member here and they're
- * auto-scoped to this client; reassign moves them to another client; remove revokes.
- * Reuses the proven RBAC-3 components/actions.
+ * USERS & ACCESS for one client (CLIENT level — the route is still /team, and the
+ * components and identifiers still say Team; only the label a person reads changed,
+ * so no link or import breaks).
+ *
+ * Owner/admin only (requireFullAccessOrLand sends a member to their own client); the
+ * clientId is resolved tenant-scoped via getClientForTenant, so a foreign/bogus client
+ * 404s and the URL is never trusted. This screen answers exactly one question: WHO CAN
+ * LOG IN and with what role. Invite a member here and they're auto-scoped to this
+ * client; reassign moves them to another client; remove revokes.
+ *
+ * The barber ROSTER briefly lived here and does not any more — a barber is not a
+ * platform user. It is SCHEDULING → Staff (/clients/{id}/scheduling/staff), which is
+ * also where the employee contact details are read; this page loads no staff row at
+ * all, let alone a PII one.
  */
 export default async function ClientTeamPage({
   params,
@@ -81,10 +88,15 @@ export default async function ClientTeamPage({
         >
           &larr; {clientLabel}
         </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">{clientLabel} · Team</h1>
+        <h1 className="text-2xl font-semibold tracking-tight">{clientLabel} &middot; Users &amp; access</h1>
         <p className="text-sm text-muted">
           Members of <span className="text-foreground">{clientLabel}</span> can see only this
-          client&rsquo;s data. Admins (full access) are managed at the Hub.
+          client&rsquo;s data. Admins (full access) are managed at the Hub. Looking for barbers?
+          They live in{" "}
+          <Link href={`/clients/${clientId}/scheduling/staff`} className="text-accent hover:underline">
+            Scheduling &rarr; Staff
+          </Link>
+          .
         </p>
       </div>
 
@@ -100,7 +112,7 @@ export default async function ClientTeamPage({
       </section>
 
       <section className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Invite a member</h2>
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Invite teammate</h2>
         <InviteForm mode="member" clientId={clientId} clientName={clientLabel} />
       </section>
 

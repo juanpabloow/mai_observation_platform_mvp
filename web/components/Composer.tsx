@@ -39,27 +39,54 @@ export function Composer({ mode, onSend }: { mode: InboxMode; onSend: (text: str
   };
 
   return (
-    <div className="border-t border-line pt-3">
-      <div className="flex items-end gap-2">
-        <textarea
-          value={enabled ? text : ""}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={onKeyDown}
-          disabled={!enabled}
-          rows={2}
-          placeholder={enabled ? "Type a reply… (Enter to send, Shift+Enter for a newline)" : (helper ?? "")}
-          className="min-h-[2.5rem] flex-1 resize-none rounded-lg border border-line bg-transparent px-3 py-2 text-sm outline-none focus:border-line-strong disabled:cursor-not-allowed disabled:bg-black/[0.02] disabled:opacity-60 dark:disabled:bg-card"
-        />
+    // ONE bordered card holds the field and its toolbar, as in the design — the
+    // reply area reads as a single object docked to the thread, not an input with
+    // loose buttons under it.
+    <div className="rounded-bubble border border-line-strong bg-surface">
+      <textarea
+        value={enabled ? text : ""}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={onKeyDown}
+        disabled={!enabled}
+        rows={2}
+        placeholder={enabled ? "Type a reply… (Enter to send, Shift+Enter for a newline)" : (helper ?? "")}
+        className="min-h-[2.75rem] w-full resize-none bg-transparent px-3 pb-1 pt-2.5 text-sm outline-none placeholder:text-faint disabled:cursor-not-allowed disabled:opacity-60"
+      />
+      <div className="flex items-center gap-2 px-2 pb-2">
+        {/* TODO(inbox): "Insert slot" and "Saved reply" are in the design but have no
+            backend — there is no saved-replies model, and the availability engine is
+            not wired into the composer (inserting a slot would also have to book it).
+            They render DISABLED and say why on hover rather than being dropped, so the
+            intended shape of the toolbar survives; wire them to
+            /api/scheduling/internal/availability + a canned-replies table. */}
+        <ToolbarButton label="Insert slot" title="Not wired yet — needs the availability engine in the composer" />
+        <ToolbarButton label="Saved reply" title="Not wired yet — there is no saved-replies model" />
+        {/* This one is NOT decoration: taking a conversation sets mode=human, which is
+            exactly what stops the bot from answering. */}
+        {enabled ? <span className="hidden text-xs text-faint sm:inline">Bot stays paused while you reply</span> : null}
         <button
           type="button"
           disabled={!enabled || text.trim() === ""}
           onClick={submit}
-          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
+          className="ml-auto inline-flex h-8 items-center rounded-md bg-brand px-4 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
         >
           Send
         </button>
       </div>
-      {/* H-8: no caption — the disabled-mode helper lives in the placeholder only. */}
     </div>
+  );
+}
+
+/** A composer affordance that exists in the design but has nothing behind it yet. */
+function ToolbarButton({ label, title }: { label: string; title: string }) {
+  return (
+    <button
+      type="button"
+      disabled
+      title={title}
+      className="inline-flex h-8 cursor-not-allowed items-center rounded-md border border-line px-2.5 text-xs text-faint"
+    >
+      {label}
+    </button>
   );
 }

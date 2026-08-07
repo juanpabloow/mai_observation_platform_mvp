@@ -574,7 +574,29 @@ export interface InboxConversationRow {
   pending_since: Date | null;
   /** ACTIVE iff the last customer message is within ACTIVITY_WINDOW_HOURS (SQL-computed). */
   active: boolean;
+  /** The linked contact's display name + channel, when the conversation is attributed
+   *  to one. Resolved by the CONTACT LATERAL below, which re-scopes the contact to the
+   *  conversation's own client — `conversations.contact_id` is a plain FK with no
+   *  client constraint, so a mislinked row must resolve to NULL rather than leak a
+   *  name across clients. NULL for an unattributed conversation. */
+  contact_name: string | null;
+  contact_channel: string | null;
 }
+
+/**
+ * The CONTACT lateral, shared by the inbox reads. `conversations.contact_id` is a
+ * bare FK: nothing in the schema stops it pointing at a contact of ANOTHER client,
+ * so every read re-scopes it by (tenant, client) exactly the way the appointments
+ * repository does. A mislinked contact resolves to NULL — the row still renders, it
+ * just falls back to the conversation identifier. `$client` is substituted with
+ * whichever expression carries the client in the calling query.
+ */
+const contactLateral = (client: string): string => `
+  SELECT ct.name AS contact_name, ct.channel AS contact_channel
+    FROM contacts ct
+   WHERE ct.id = c.contact_id
+     AND ct.tenant_id = c.tenant_id
+     AND ct.client_id = ${client}`;
 
 // The canonical-workflow lateral, shared by the inbox reads: resolves one workflow
 // row per n8n id (most recently synced) and exposes its client_id + name.
@@ -588,6 +610,9 @@ const CANONICAL_WORKFLOW_LATERAL = `
 export interface InboxConversationDetail extends ConversationRow {
   workflow_name: string | null;
   assigned_agent_name: string | null;
+  /** Same client-scoped contact resolution as the list — see contactLateral. */
+  contact_name: string | null;
+  contact_channel: string | null;
   /** The linked contact (conversations.contact_id) — nullable; returned by the SELECT c.*
    *  detail reads. Scoped by the canonical-workflow client, but the pointed-at contact is
    *  NOT guaranteed same-client, so a consumer must re-scope via getContactById(...,client). */
@@ -605,9 +630,11 @@ export async function getConversationForClient(
   conversationId: string,
 ): Promise<InboxConversationDetail | null> {
   const r = await query<InboxConversationDetail>(
-    `SELECT c.*, cw.workflow_name, u.name AS assigned_agent_name
+    `SELECT c.*, cw.workflow_name, u.name AS assigned_agent_name,
+            ct.contact_name, ct.contact_channel
        FROM conversations c
        JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON cw.client_id = $2
+       LEFT JOIN LATERAL (${contactLateral('$2')}) ct ON true
        LEFT JOIN "user" u ON u.id = c.assigned_agent_user_id
       WHERE c.tenant_id = $1 AND c.id = $3`,
     [tenantId, clientId, conversationId],
@@ -673,9 +700,11 @@ export async function listConversationsForWorkflow(
        lm.sender AS last_message_sender,
        lm.content_type AS last_message_content_type,
        ps.pending_since,
+       ct.contact_name, ct.contact_channel,
        COALESCE(c.last_user_message_at >= now() - make_interval(hours => $3::int), false) AS active
      FROM conversations c
      LEFT JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON true
+     LEFT JOIN LATERAL (${contactLateral('cw.client_id')}) ct ON true
      LEFT JOIN "user" u ON u.id = c.assigned_agent_user_id
      LEFT JOIN LATERAL (
        SELECT text, sender, content_type
@@ -722,9 +751,11 @@ export async function listConversationsForClient(
        lm.sender AS last_message_sender,
        lm.content_type AS last_message_content_type,
        ps.pending_since,
+       ct.contact_name, ct.contact_channel,
        COALESCE(c.last_user_message_at >= now() - make_interval(hours => $3::int), false) AS active
      FROM conversations c
      JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON cw.client_id = $2
+     LEFT JOIN LATERAL (${contactLateral('$2')}) ct ON true
      LEFT JOIN "user" u ON u.id = c.assigned_agent_user_id
      LEFT JOIN LATERAL (
        SELECT text, sender, content_type
@@ -842,6 +873,42 @@ export async function listThreadMessages(
        LEFT JOIN "user" u ON u.id = hm.agent_user_id
       WHERE hm.tenant_id = $1 AND hm.conversation_id = $2
       ORDER BY hm.occurred_at ASC, hm.id ASC`,
+    [tenantId, conversationId],
+  );
+  return r.rows;
+}
+
+/**
+ * A conversation's MODE TRANSITIONS, oldest→newest, with the acting agent's name.
+ *
+ * These are the thread's turning points — the bot escalating, a person taking over,
+ * the conversation going back to the bot — and they have always been persisted; the
+ * thread simply never read them. Rendered interleaved with the messages, they answer
+ * "who was answering at this point?", which the bubbles alone cannot.
+ *
+ * Tenant-scoped. Bounded by conversation, so it is one small query per thread open —
+ * the ~4s poll asks for it too, since a takeover by a colleague must appear live.
+ */
+export interface ModeTransitionRow {
+  id: string;
+  from_mode: ConversationMode;
+  to_mode: ConversationMode;
+  source: TransitionSource;
+  agent_name: string | null;
+  reason_code: string | null;
+  created_at: Date;
+}
+export async function listModeTransitions(
+  tenantId: string,
+  conversationId: string,
+): Promise<ModeTransitionRow[]> {
+  const r = await query<ModeTransitionRow>(
+    `SELECT t.id, t.from_mode, t.to_mode, t.source, t.reason_code, t.created_at,
+            u.name AS agent_name
+       FROM conversation_mode_transitions t
+       LEFT JOIN "user" u ON u.id = t.agent_user_id
+      WHERE t.tenant_id = $1 AND t.conversation_id = $2
+      ORDER BY t.created_at ASC, t.id ASC`,
     [tenantId, conversationId],
   );
   return r.rows;

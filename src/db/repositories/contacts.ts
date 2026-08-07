@@ -68,6 +68,15 @@ export interface ContactListItem extends ContactRow {
   next_appointment_at: Date | null;
   last_conversation_at: Date | null;
   visit_count: number;
+  /** EVERY appointment on record (any status) — the list's "appts" column. */
+  appointment_count: number;
+  /** The last COMPLETED appointment that has already happened: "last visit" in the
+   *  operational sense, distinct from last_contact_at (a message counts as contact,
+   *  not as a visit). */
+  last_visit_at: Date | null;
+  /** The staff member this contact has completed the most appointments with — their
+   *  "usual barber". Ties resolve arbitrarily but stably (Postgres `mode()`). */
+  usual_staff_name: string | null;
   /** Open (not completed/cancelled) tasks on this contact. */
   open_task_count: number;
   /** Of those, the ones whose due_at is in the past. */
@@ -219,6 +228,9 @@ export async function listContacts(
             COALESCE(a.completed_count, 0) AS completed_count,
             (COALESCE(a.completed_count, 0) > 0) AS is_customer,
             COALESCE(a.completed_count, 0) AS visit_count,
+            COALESCE(a.appointment_count, 0)::int AS appointment_count,
+            a.last_visit_at,
+            us.name AS usual_staff_name,
             a.next_appointment_at,
             COALESCE(t.open_count, 0)::int AS open_task_count,
             COALESCE(t.overdue_count, 0)::int AS overdue_task_count,
@@ -226,14 +238,26 @@ export async function listContacts(
             -- Microsecond-precise cursor key (a JS Date would drop precision; see codec).
             to_char(c.last_contact_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts
        FROM contacts c
+       -- ONE grouped rollup over appointments feeds every operational column on the
+       -- row (count, last visit, usual barber, next appointment). Adding them as
+       -- separate joins — or worse, per-row lookups — is what turns this list into an
+       -- N+1 the moment a shop has a few hundred customers.
        LEFT JOIN (
          SELECT contact_id, client_id,
+                COUNT(*)::int AS appointment_count,
                 (COUNT(*) FILTER (WHERE status = 'completed'))::int AS completed_count,
-                MIN(start_at) FILTER (WHERE status IN ('scheduled','confirmed') AND start_at >= now()) AS next_appointment_at
+                MIN(start_at) FILTER (WHERE status IN ('scheduled','confirmed') AND start_at >= now()) AS next_appointment_at,
+                MAX(start_at) FILTER (WHERE status = 'completed' AND start_at <= now()) AS last_visit_at,
+                -- mode() ignores NULLs, so the CASE restricts the vote to completed
+                -- appointments without needing a FILTER on an ordered-set aggregate.
+                mode() WITHIN GROUP (
+                  ORDER BY CASE WHEN status = 'completed' THEN staff_id END
+                ) AS usual_staff_id
            FROM appointments
           WHERE tenant_id = $1 AND contact_id IS NOT NULL
           GROUP BY contact_id, client_id
        ) a ON a.contact_id = c.id AND a.client_id = c.client_id
+       LEFT JOIN staff us ON us.id = a.usual_staff_id AND us.tenant_id = $1
        -- OPEN TASKS (the list column + the Tasks filter). ONE grouped aggregate,
        -- never a per-row lookup, and client-scoped on both sides of the join so a
        -- mislinked cross-client task can never be counted onto a contact.

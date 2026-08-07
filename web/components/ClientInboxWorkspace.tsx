@@ -5,13 +5,20 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { InboxThread } from "./InboxThread";
 import { CustomerDetailsPanel } from "./CustomerDetailsPanel";
+import { PageShell } from "@/components/ui/PageShell";
+import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
+import { PageTitle } from "@/components/ui/PageTitle";
+import { avatarColor } from "@/lib/avatarColor";
 import { formatAgeShort } from "@/lib/format";
 import {
+  conversationAvatarLabel,
   conversationPreview,
+  formatConversationRef,
   type HistoryTurnView,
   type InboxConversationView,
   type InboxHeaderView,
   type InboxMessageView,
+  type ThreadEventView,
 } from "@/lib/inboxView";
 import { groupConversations, pendingCount, type InboxGroupMeta } from "@/lib/inboxGroups";
 import { scopeHref } from "@/lib/scopeSurface";
@@ -24,6 +31,7 @@ interface GridPayload {
 interface ThreadPayload {
   header: InboxHeaderView;
   messages: InboxMessageView[];
+  events?: ThreadEventView[];
   history?: HistoryTurnView[];
   activityWindowHours: number;
   asOf: string;
@@ -74,7 +82,6 @@ export function ClientInboxWorkspace({
   const router = useRouter();
   const pathname = usePathname();
   const selectedId = searchParams.get("c");
-  const showWorkflow = scope === "all"; // per-row workflow chip only makes sense in 'all'
 
   // ── List state + polling. The poll mirrors the active scope (?workflow=) so its
   // groups/counts stay consistent with the server-scoped initial payload. ──
@@ -137,6 +144,9 @@ export function ClientInboxWorkspace({
     return all.filter(
       (v) =>
         v.conversationRef.toLowerCase().includes(needle) ||
+        // also match what the row actually SHOWS, so typing "+57 304" finds the
+        // row whose stored ref is the bare "573043906303".
+        formatConversationRef(v.conversationRef).toLowerCase().includes(needle) ||
         (v.lastMessageText ?? "").toLowerCase().includes(needle) ||
         (v.workflowName ?? "").toLowerCase().includes(needle),
     );
@@ -207,6 +217,11 @@ export function ClientInboxWorkspace({
   // ── Details panel: inline (desktop) collapse + mobile/tablet drawer ──
   const [detailsInline, setDetailsInline] = useState(true);
   const [detailsDrawer, setDetailsDrawer] = useState(false);
+  // The mobile customer panel is an overlay, so it gets the shared overlay contract.
+  const customerDrawerRef = useTrappedPanel({
+    active: detailsDrawer,
+    onClose: () => setDetailsDrawer(false),
+  });
   useEffect(() => {
     if (!detailsDrawer) return;
     const onKey = (e: KeyboardEvent) => {
@@ -243,41 +258,74 @@ export function ClientInboxWorkspace({
   );
 
   return (
-    <div className="flex min-h-0 flex-1">
+    // ONE floating card holds all three panes (the SHARED page shell — the same
+    // component Contacts and the Agenda render into). The panes are separated by the
+    // card's own 1px hairlines, never by a strip of canvas showing between them:
+    // before this, the workspace root was a bare flex box with no fill, so the grey
+    // canvas painted straight through the middle of the screen and no section had a
+    // visible edge.
+    <PageShell as="main" row ariaLabel="Inbox">
       {/* ── LEFT — conversation list ── */}
       <aside
         aria-label="Conversations"
-        // Desktop queue: 350–390px so the ref + preview + stamp fit without wrapping,
-        // and the CENTER column keeps the rest (no dead space beside a thread).
-        className={`min-h-0 w-full shrink-0 flex-col border-r border-line lg:flex lg:w-[360px] xl:w-[380px] ${
+        // Desktop queue: ~320-380px so the ref + preview + stamp fit without wrapping,
+        // and the CENTER column keeps the rest (no dead space beside a thread). The
+        // column is WHITE like the rest of the card and separated by one hairline —
+        // the tint belongs to the SELECTED ROW, not to the whole column.
+        className={`min-h-0 w-full shrink-0 border-r border-line lg:flex lg:w-[336px] xl:w-[360px] ${
           selectedId ? "hidden lg:flex" : "flex"
         }`}
       >
-        {/* h-14 title strip — the SAME height as the thread header, the customer
-            panel header and the app header, so all four line up across the seams. */}
+        <div className="flex min-h-0 w-full flex-col overflow-hidden">
+        {/* The queue owns the screen's title. The Inbox is THREE panes, not one list,
+            so the title belongs to the column it names rather than to a band across
+            all three — but it renders through the SAME <PageTitle/> as Customers and
+            the Agenda, so the three screens agree on what a title looks like. */}
         <div className="flex flex-col border-b border-line">
-          <div className="flex h-[var(--topbar-height)] shrink-0 items-center justify-between gap-2 px-3">
-            <h1 className="text-sm font-semibold tracking-tight text-foreground">Inbox</h1>
-            {/* The pending counter is the REAL count over the scoped list — the same
-                number the sidebar badge polls. Amber = needs attention (not an error). */}
-            <span
-              className={`u-mono rounded-full px-2 py-0.5 text-[0.6875rem] font-medium ${
-                pending > 0 ? "bg-warn-soft text-warn" : "text-faint"
-              }`}
-              title="Conversations awaiting a human"
-            >
-              {pending} pending
-            </span>
+          <div className="flex h-[var(--topbar-height)] shrink-0 items-center px-3">
+            <PageTitle
+              title="Inbox"
+              context={
+                <span
+                  className={`u-mono text-[0.625rem] font-semibold uppercase tracking-wider ${
+                    pending > 0 ? "text-brand" : "text-faint"
+                  }`}
+                  title="Conversations awaiting a human"
+                >
+                  {pending} need you
+                </span>
+              }
+            />
           </div>
           <div className="flex shrink-0 flex-col gap-1 px-3 pb-3">
-            <input
-              type="search"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search name, number, or message…"
-              aria-label="Search conversations"
-              className="h-10 w-full rounded-md border border-line-strong bg-surface px-3 text-sm text-foreground outline-none placeholder:text-faint focus:border-brand"
-            />
+            {/* Search sits in a bordered shell with the glass inside it, so the icon
+                can't be mistaken for a control — it's the field's own affordance. */}
+            <div className="flex h-10 items-center gap-2 rounded-bubble border border-line-strong bg-surface px-3 focus-within:border-brand">
+              <SearchIcon />
+              <input
+                type="search"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search name, number, or message…"
+                aria-label="Search conversations"
+                className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
+              />
+              {/* TODO(inbox): the design puts a FILTER control at the right of the
+                  search field, but this list has no facets to open: the only scope
+                  that exists is the workflow, and that selector lives in the app
+                  header (W-2, deliberately not duplicated here). It renders disabled
+                  and says so on hover rather than opening an empty menu — wire it up
+                  when the list gains real facets (channel / intent / assignee). */}
+              <button
+                type="button"
+                disabled
+                title="No list filters yet — the workflow scope lives in the header switcher"
+                aria-label="Filter conversations"
+                className="-mr-1 inline-flex size-7 shrink-0 cursor-not-allowed items-center justify-center rounded-md text-faint"
+              >
+                <FilterIcon />
+              </button>
+            </div>
             {/* No in-panel workflow selector (W-2): the header switcher is the single
                 workflow selector; this list follows the active scope. */}
             {stale ? <span className="u-mono text-[0.6875rem] text-faint">Reconnecting…</span> : null}
@@ -298,10 +346,18 @@ export function ClientInboxWorkspace({
           ) : groups.length === 0 ? (
             <p className="px-4 py-10 text-center text-sm text-faint">No conversations match your filters.</p>
           ) : (
+            // TODO(inbox): the design's third lane, "CLOSED TODAY", has no state
+            //   behind it — `conversations.mode` is DB-constrained to bot|pending|human
+            //   and resolving a conversation sets it back to `bot` (see lib/inboxGroups.ts),
+            //   so a closed conversation is indistinguishable from a bot-handled one.
+            //   The lane (and its count) would be fabricated, so it is NOT rendered.
+            //   Needs a `closed_at` / terminal state on the conversation first.
             groups.map((g) => (
               <div key={g.key} role="group" aria-label={g.meta.label}>
                 {/* Sticky group header so the queue stays legible while scrolling. */}
-                <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-line/60 bg-background/95 px-3 py-1.5 backdrop-blur-none">
+                {/* Sticky lane header, on the queue's own tinted ground so rows slide
+                    under it without a colour seam. */}
+                <div className="sticky top-0 z-10 flex items-center gap-2 bg-surface px-3 pb-2 pt-3.5">
                   <GroupDot tone={g.meta.tone} />
                   <span className="u-th">{g.meta.label}</span>
                   <span className="u-mono ml-auto text-[0.6875rem] text-faint">{g.items.length}</span>
@@ -314,7 +370,6 @@ export function ClientInboxWorkspace({
                         href={hrefFor(v.id)}
                         selected={v.id === selectedId}
                         now={now}
-                        showWorkflow={showWorkflow}
                         activityWindowHours={data.activityWindowHours}
                       />
                     </li>
@@ -323,6 +378,7 @@ export function ClientInboxWorkspace({
               </div>
             ))
           )}
+        </div>
         </div>
       </aside>
 
@@ -341,7 +397,7 @@ export function ClientInboxWorkspace({
             <button
               type="button"
               onClick={close}
-              className="rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
+              className="inline-flex h-8 items-center rounded-md border border-line-strong px-3 text-sm transition-colors hover:bg-hover"
             >
               Close
             </button>
@@ -380,15 +436,22 @@ export function ClientInboxWorkspace({
 
       {/* ── RIGHT (tablet/mobile) — customer details drawer ── */}
       {selectedId && selectedView && detailsDrawer ? (
+        // Same overlay contract as the staff drawer: scrim, tap-to-close, Escape and a
+        // focus trap. The scrim was already here; Escape and the trap were not, so a
+        // keyboard reader could tab straight out into the thread behind it.
         <div className="xl:hidden">
           <button
             type="button"
             aria-label="Close customer details"
             onClick={() => setDetailsDrawer(false)}
-            className="fixed inset-0 z-40 bg-black/40"
+            className={OVERLAY_SCRIM}
           />
           <aside
+            ref={customerDrawerRef as React.RefObject<HTMLElement>}
             aria-label="Customer details"
+            role="dialog"
+            aria-modal
+            tabIndex={-1}
             className="fixed inset-y-0 right-0 z-50 flex w-[320px] max-w-[85vw] flex-col border-l border-line-strong bg-surface"
           >
             <CustomerDetailsPanel
@@ -403,15 +466,42 @@ export function ClientInboxWorkspace({
           </aside>
         </div>
       ) : null}
-    </div>
+    </PageShell>
   );
 }
 
 /** A colored+shaped status dot for a group header (color is NOT the only signal — it
  * sits beside the group's text label). */
 function GroupDot({ tone }: { tone: InboxGroupMeta["tone"] }) {
-  const cls = tone === "attention" ? "bg-warn-rule" : tone === "human" ? "bg-success" : "bg-faint";
+  // The live lanes carry a filled dot; the bot lane a hollow ring, so the queue
+  // reads as "someone is on it" vs "nobody is" before any colour is perceived.
+  if (tone === "bot") return <span aria-hidden className="size-2 shrink-0 rounded-full border border-line-strong" />;
+  const cls = tone === "attention" ? "bg-brand" : "bg-success";
   return <span aria-hidden className={`size-2 shrink-0 rounded-full ${cls}`} />;
+}
+
+/** Funnel — the search shell's filter affordance (see the TODO at its call site). */
+function FilterIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4" fill="none" aria-hidden>
+      <path
+        d="M4 6h16l-6.2 7.2v4.6L10.2 20v-6.8L4 6Z"
+        stroke="currentColor"
+        strokeWidth="1.6"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+/** Magnifier for the queue's search shell. */
+function SearchIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="size-4 shrink-0 text-faint" fill="none" aria-hidden>
+      <circle cx="11" cy="11" r="6.25" stroke="currentColor" strokeWidth="1.6" />
+      <path d="m15.8 15.8 3.7 3.7" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  );
 }
 
 function relTime(iso: string, now: Date): string {
@@ -431,7 +521,7 @@ function ActivityDot({ active, windowHours }: { active: boolean; windowHours: nu
     <span
       title={`Active — the customer wrote within the last ${windowHours}h`}
       aria-label="Active"
-      className="size-1.5 shrink-0 rounded-full bg-emerald-500"
+      className="size-1.5 shrink-0 rounded-full bg-success"
     />
   ) : (
     <span
@@ -447,17 +537,30 @@ function ConversationRow({
   href,
   selected,
   now,
-  showWorkflow,
   activityWindowHours,
 }: {
   view: InboxConversationView;
   href: string;
   selected: boolean;
   now: Date;
-  showWorkflow: boolean;
   activityWindowHours: number;
 }) {
-  const initial = (view.conversationRef.match(/[a-z0-9]/i)?.[0] ?? "?").toUpperCase();
+  // TODO(inbox): the design shows the customer's NAME (falling back to the phone) and
+  //   an unread-message counter on the avatar. Neither exists on this payload: the list
+  //   row carries only `conversationRef` (the channel identifier), and there is no
+  //   read/unread model on messages at all. Both would have to be fabricated here, so
+  //   the row shows the real identifier and an initial-only avatar. Needs the contact
+  //   join on the list query + a per-viewer read cursor.
+  // TODO(inbox): the design's second chip is the conversation's INTENT + CHANNEL
+  //   ("RESCHEDULING · WHATSAPP"). Only the workflow name is on this payload, so that
+  //   is the single chip rendered; intent has no model and the channel isn't exposed
+  //   on the list view.
+  const title = view.contactName?.trim() || formatConversationRef(view.conversationRef);
+  const named = Boolean(view.contactName?.trim());
+  const initial = conversationAvatarLabel(view.conversationRef, view.contactName);
+  // "RESCHEDULING · WHATSAPP" — the workflow the conversation belongs to and the
+  // channel the person is on, as one quiet metadata line rather than two filled pills.
+  const meta = [view.workflowName, view.channel].filter(Boolean).join(" · ");
   const stateLabel =
     view.mode === "pending" ? "Needs attention" : view.mode === "human" ? "Human" : "Bot";
   return (
@@ -466,27 +569,38 @@ function ConversationRow({
       scroll={false}
       aria-current={selected ? "page" : undefined}
       aria-label={`${view.conversationRef} — ${stateLabel}`}
-      // SELECTED = soft brand fill + a 2px LEFT RULE; a row still awaiting a human
-      // keeps the amber rule so urgency survives even while another row is selected.
-      className={`relative flex min-h-[56px] items-center gap-3 border-b border-line/60 px-3 py-2.5 transition-colors ${
-        selected ? "u-row-selected" : view.mode === "pending" ? "u-row-overdue" : "hover:bg-subtle"
+      // The row is an INSET rounded card. Its state is a FILL plus a 1px border —
+      // never an inset left bar: a 2px bar cannot follow a 15px radius, so it read as
+      // a dark sliver clipped against the lane header above it. Every state carries a
+      // border (transparent when idle) so selecting a row can't shift the geometry by
+      // a pixel.
+      className={`relative mx-2 my-0.5 flex min-h-[56px] items-center gap-3 overflow-hidden rounded-xl border px-3 py-2.5 transition-colors ${
+        selected
+          ? "border-transparent bg-queue-row-active"
+          : view.mode === "pending"
+            ? "border-warn/25 bg-warn-soft"
+            : "border-transparent hover:bg-queue-row-active/50"
       }`}
     >
+      {/* The disc is the CONTACT's colour, not the conversation's state: state is
+          already carried by the lane, the row fill and the row's left rule, and a
+          per-person tone is what lets you re-find someone in a long queue. Same
+          helper, same identifier, so the thread shows the identical disc. */}
       <span
         aria-hidden
-        className={`relative flex size-9 shrink-0 items-center justify-center rounded-full border text-sm font-semibold ${
-          view.mode === "pending"
-            ? "border-warn/40 bg-warn-soft text-warn"
-            : view.mode === "human"
-              ? "border-success/40 bg-success/10 text-success"
-              : "border-line-strong bg-subtle text-foreground"
-        }`}
+        className={`u-mono relative flex size-9 shrink-0 items-center justify-center rounded-full text-[0.8125rem] font-semibold ${avatarColor(
+          view.conversationRef,
+        )}`}
       >
         {initial}
       </span>
-      <span className="flex min-w-0 flex-1 flex-col">
+      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex items-center justify-between gap-2">
-          <span className="u-mono truncate text-[0.8125rem] font-semibold text-foreground">{view.conversationRef}</span>
+          <span
+            className={`truncate text-[13px] font-semibold text-foreground ${named ? "" : "u-mono"}`}
+          >
+            {title}
+          </span>
           <span className="flex shrink-0 items-center gap-1.5">
             <ActivityDot active={view.active} windowHours={activityWindowHours} />
             {view.lastMessageAt ? (
@@ -494,10 +608,12 @@ function ConversationRow({
             ) : null}
           </span>
         </span>
-        <span className="truncate text-xs text-muted">{conversationPreview(view)}</span>
-        {showWorkflow && view.workflowName ? (
-          <span className="u-mono mt-0.5 w-fit max-w-full truncate rounded border border-line px-1.5 py-0.5 text-[0.625rem] text-faint">
-            {view.workflowName}
+        <span className="truncate text-[12px] text-muted">{conversationPreview(view)}</span>
+        {meta ? (
+          // Metadata reads as small caps on the row's own ground — a filled pill here
+          // competed with the avatar and the timestamp for the same glance.
+          <span className="u-mono mt-0.5 truncate text-[0.5625rem] font-medium uppercase tracking-wider text-faint">
+            {meta}
           </span>
         ) : null}
       </span>

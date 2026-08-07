@@ -4,6 +4,9 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useEffect, useMemo, useState, useTransition } from "react";
 import { AutoRefresh } from "@/components/AutoRefresh";
+import { PageShell } from "@/components/ui/PageShell";
+import { PageTitle } from "@/components/ui/PageTitle";
+import { apptCategory, apptCategoryClass, type ApptCategory } from "@/lib/agendaCategory";
 import { formatMoneyCOP } from "@/lib/format";
 import {
   cancelAppointmentAction,
@@ -16,10 +19,18 @@ import {
 
 /** Serializable shapes passed from the server page. */
 interface SiteOpt { id: string; name: string; timezone: string }
+/** A local wall-clock range in the SITE's timezone, mirroring the worker's
+ *  `HoursRange`. Declared here (not imported) so this client component keeps no
+ *  import edge into the worker package. */
+interface HoursRange { start: string; end: string }
+/** weekday key ("mon"…"sun") → the ranges worked that day. A MISSING or empty
+ *  weekday means closed — that is the model's own convention, not an inference. */
+type WeeklyHours = Partial<Record<string, HoursRange[]>>;
 /** `active` = false means the staff member is deactivated. Such a lane still renders (so
  *  their existing appointments stay visible) with an "inactive" chip, but they are NOT
- *  offered for NEW bookings (the modal's Barber dropdown filters to active). */
-interface StaffOpt { id: string; name: string; active: boolean }
+ *  offered for NEW bookings (the modal's Barber dropdown filters to active).
+ *  `workingHours` = {} means "inherit the site's opening hours" (the common case). */
+interface StaffOpt { id: string; name: string; active: boolean; workingHours: WeeklyHours }
 interface ServiceOpt { id: string; name: string; duration_min: number }
 interface Appt {
   id: string;
@@ -30,6 +41,9 @@ interface Appt {
   start_at: string;
   service_end_at: string;
   service_name: string;
+  /** `services.category` — the stored colour family, NULL when unset (see
+   *  lib/agendaCategory.ts, which then falls back to the service name). */
+  service_category: string | null;
   duration_min: number;
   /** numeric from pg → string; null when the service has no price. */
   price: string | null;
@@ -51,8 +65,10 @@ type ModalState =
   | { mode: "new" | "walkin"; contact?: ContactPrefill }
   | { mode: "reschedule"; appt: Appt };
 
-/** The calendar body's vertical scale. One hour = this many px. */
-const HOUR_PX = 56;
+/** The calendar body's vertical scale. One hour = this many px. 60 is the floor
+ *  at which a 45-minute card still fits its three lines (time / customer /
+ *  service) without cropping the last one. */
+const HOUR_PX = 60;
 /**
  * The grid's OPERATING WINDOW. Fixed on purpose: deriving it from the data meant a
  * single stray early booking stretched the grid to 3 AM and pushed the real working
@@ -114,6 +130,29 @@ function addDays(dateStr: string, days: number): string {
   const [y, m, d] = dateStr.split("-").map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d + days));
   return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+}
+
+// ── Opening hours. The weekday keys are the model's own ("sun".."sat", see
+// scheduling/timezone.ts) and every lookup happens on the SITE's local day.
+const WEEKDAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
+/** The weekday key of a YYYY-MM-DD day. Computed in UTC so it can't shift. */
+function weekdayKeyOf(dayKey: string): string {
+  const [y, m, d] = dayKey.split("-").map(Number);
+  return WEEKDAY_KEYS[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+}
+const hasAnyHours = (h: WeeklyHours | undefined) => !!h && Object.keys(h).length > 0;
+/** A weekly map opens on a weekday when it lists at least one range for it. */
+const opensOn = (h: WeeklyHours | undefined, wd: string) => (h?.[wd]?.length ?? 0) > 0;
+/**
+ * Is this BARBER working that day? `working_hours = {}` is the model's "inherit
+ * the site's opening hours", so an empty map falls through to the site's — it is
+ * NOT "never works". A site with no hours configured at all is treated as OPEN
+ * (unknown, not closed): hatching a whole agenda because nobody filled the
+ * settings in would hide real appointments behind a "closed" wash.
+ */
+function staffWorksOn(staffHours: WeeklyHours | undefined, siteHours: WeeklyHours, wd: string): boolean {
+  if (!hasAnyHours(siteHours)) return true;
+  return opensOn(hasAnyHours(staffHours) ? staffHours : siteHours, wd);
 }
 
 /**
@@ -178,6 +217,9 @@ export function AgendaView(props: {
   dayEndIso: string;
   sites: SiteOpt[];
   currentSiteId: string;
+  /** The current site's weekly opening hours — drives the CLOSED columns. Already
+   *  on the site row the page loads; nothing extra is fetched for it. */
+  openingHours: WeeklyHours;
   staff: StaffOpt[];
   services: ServiceOpt[];
   appointments: Appt[];
@@ -216,6 +258,8 @@ export function AgendaView(props: {
   };
 
   const fromQS = props.from ? `?from=${encodeURIComponent(props.from)}` : "";
+  /** The site whose day is on screen — the scope line in the title band. */
+  const currentSite = props.sites.find((s) => s.id === props.currentSiteId) ?? props.sites[0];
   const shiftDate = (days: number) => navigate({ date: addDays(props.date, days) });
 
   /**
@@ -302,6 +346,9 @@ export function AgendaView(props: {
   // Picking a barber in the "All staff" facet collapses the grid to that column —
   // the job the removed chips used to do, using a control that already existed.
   const shownStaff = staffFilter ? props.staff.filter((s) => s.id === staffFilter) : props.staff;
+  /** The site-local day a DAY view is showing — the weekday every barber lane is
+   *  checked against. */
+  const dayWeekday = weekdayKeyOf(zonedParts(props.dayStartIso, tz).dayKey);
   const columns: {
     key: string;
     label: string;
@@ -310,17 +357,22 @@ export function AgendaView(props: {
     dayNum?: string;
     isToday?: boolean;
     inactive?: boolean;
+    /** The shop doesn't open (week) / this barber doesn't work (day) — the lane is
+     *  hatched out and its header greys, so it can't read as bookable whitespace. */
+    closed?: boolean;
   }[] = isWeek
     ? weekDays.map((dk) => {
         const n = visible.filter((a) => zonedParts(a.start_at, tz).dayKey === dk).length;
         const [yy, mm, dd] = dk.split("-").map(Number);
         const wd = new Date(Date.UTC(yy, mm - 1, dd)).getUTCDay();
+        const closed = hasAnyHours(props.openingHours) && !opensOn(props.openingHours, WEEKDAY_KEYS[wd]);
         return {
           key: dk,
           label: ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"][wd],
-          sub: `${n} appointment${n === 1 ? "" : "(s)"}`,
+          sub: closed ? "Closed" : `${n} appointment${n === 1 ? "" : "(s)"}`,
           dayNum: String(dd),
           isToday: dk === nowParts.dayKey,
+          closed,
         };
       })
     : shownStaff.map((st) => {
@@ -329,7 +381,15 @@ export function AgendaView(props: {
         // TODO(agenda): swap for a real photo if staff ever gains an avatar_url.
         // An INACTIVE barber still gets a lane (the server only includes them when
         // they have appointments in range) so their history stays reachable.
-        return { key: st.id, label: st.name, initial: st.name, inactive: !st.active };
+        const closed = !staffWorksOn(st.workingHours, props.openingHours, dayWeekday);
+        return {
+          key: st.id,
+          label: st.name,
+          initial: st.name,
+          inactive: !st.active,
+          closed,
+          sub: closed ? "Closed" : undefined,
+        };
       });
 
   const inColumn = (a: Appt, colKey: string) =>
@@ -384,9 +444,23 @@ export function AgendaView(props: {
     // card, separated by hairlines — not a row of independent boxes floating on the
     // canvas, which made the screen read as five unrelated widgets.
     <main className="flex min-h-0 flex-1 flex-col">
-      <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-surface">
+      <PageShell>
+      {/* ── PAGE TITLE ── the same band Customers renders. The Agenda had no title at
+             all: its date stepper was standing in for one, which left the screen
+             unnamed and made the three surfaces disagree about what a title is. */}
+      {/* No hairline under the title / control bar / KPI strip: the top of the Agenda
+          is ONE object (name it, steer it, read its numbers), and three rules across
+          it chopped that into four slabs. The grid below still gets its own rule —
+          that seam is real, it separates chrome from the canvas. */}
+      <div className="px-[var(--panel-pad)] pt-3">
+        <PageTitle
+          title="Agenda"
+          context={`${currentSite?.name ?? ""}${props.sites.length > 1 ? ` · ${props.sites.length} sites` : " · 1 site"}`}
+        />
+      </div>
+
       {/* ── CONTROL BAR ── */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-line px-[var(--panel-pad)] py-2.5">
+      <div className="flex flex-wrap items-center gap-2 px-[var(--panel-pad)] py-2.5">
         <button
           type="button"
           onClick={() => navigate({ date: zonedParts(new Date().toISOString(), tz).dayKey })}
@@ -483,7 +557,7 @@ export function AgendaView(props: {
       {/* ── KPI STRIP — three REAL metrics over the loaded range. The design's
              "Avg waitlist time" card and the "vs last week" deltas are omitted
              (no waitlist model, no previous-period query). ── */}
-      <div className="grid gap-[var(--content-pad)] border-b border-line p-[var(--panel-pad)] sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-[var(--content-pad)] border-b border-line px-[var(--panel-pad)] pb-[var(--panel-pad)] pt-1 sm:grid-cols-2 xl:grid-cols-4">
         <Kpi
           label="Total appointments"
           unit="%"
@@ -526,7 +600,11 @@ export function AgendaView(props: {
       <div className="flex min-h-0 flex-1">
         <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div className="min-h-0 flex-1 overflow-auto">
-            <div className="flex min-w-max">
+            {/* min-w-full (NOT min-w-max) is what lets the lanes BREATHE: the row is
+                at least as wide as the viewport, the lanes divide it evenly, and
+                only their own min-width can push the row past it — at which point
+                this scroller takes over horizontally. */}
+            <div className="flex min-w-full">
               {/* Hour rail */}
               <div className="sticky left-0 z-20 w-14 shrink-0 border-r border-line bg-surface">
                 <div className="flex h-12 items-end justify-center border-b border-line pb-1">
@@ -536,7 +614,11 @@ export function AgendaView(props: {
                   {hours.map((h) => (
                     <div key={h} className="absolute right-2 -translate-y-1/2" style={{ top: offsetTop(h * 60) }}>
                       <span className="u-mono text-[0.625rem] text-faint">
-                        {new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: true }).format(
+                        {/* timeZone: "UTC" is REQUIRED: `h` is already the site's
+                            local hour, so formatting the synthetic UTC instant in
+                            the BROWSER's zone re-shifted it — the rail read "4 AM"
+                            beside a 9 AM card for any viewer outside the site. */}
+                        {new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: true, timeZone: "UTC" }).format(
                           new Date(Date.UTC(2020, 0, 1, h)),
                         )}
                       </span>
@@ -558,22 +640,46 @@ export function AgendaView(props: {
 
               {/* Columns */}
               {columns.map((col) => (
-                <div key={col.key} className="w-[13rem] shrink-0 border-r border-line last:border-r-0">
-                  <div className="sticky top-0 z-10 flex h-12 items-center gap-2 border-b border-line bg-surface px-2">
+                <div
+                  key={col.key}
+                  // GROW to fill, but never past a comfortable reading width and
+                  // never below the min — three barbers spread across the panel,
+                  // twelve fall back to the min and scroll. Day lanes carry a
+                  // customer name + service so they need more floor than week's.
+                  // grow-[999] (vs the tail's grow-1) is what makes the max-width
+                  // behave: the lanes take everything up to their cap, and only the
+                  // slack they refuse falls through to the empty tail.
+                  className={`grow-[999] border-r border-line ${
+                    isWeek ? "min-w-[7.5rem] max-w-[20rem]" : "min-w-[13rem] max-w-[34rem]"
+                  }`}
+                >
+                  <div
+                    className={`sticky top-0 z-10 flex h-12 items-center gap-2 border-b border-line px-2 ${
+                      col.closed ? "bg-closed-bg" : "bg-surface"
+                    }`}
+                  >
                     {col.dayNum ? (
                       // Today's date sits in a filled badge, as in the reference.
                       <span
                         className={`u-mono flex size-7 shrink-0 items-center justify-center rounded-md text-sm font-semibold ${
-                          col.isToday ? "bg-brand text-white" : "text-foreground"
+                          col.isToday ? "bg-brand text-white" : col.closed ? "text-closed-fg" : "text-foreground"
                         }`}
                       >
                         {col.dayNum}
                       </span>
                     ) : null}
-                    {col.initial ? <Initial name={col.initial} /> : null}
+                    {col.initial ? <Initial name={col.initial} muted={col.closed} /> : null}
                     <span className="flex min-w-0 flex-col leading-tight">
-                      <span className="truncate text-xs font-semibold text-foreground">{col.label}</span>
-                      {col.sub ? <span className="truncate text-[0.625rem] text-faint">{col.sub}</span> : null}
+                      <span
+                        className={`truncate text-xs font-semibold ${col.closed ? "text-closed-fg" : "text-foreground"}`}
+                      >
+                        {col.label}
+                      </span>
+                      {col.sub ? (
+                        <span className={`truncate text-[0.625rem] ${col.closed ? "text-closed-fg" : "text-faint"}`}>
+                          {col.sub}
+                        </span>
+                      ) : null}
                     </span>
                     {col.inactive ? (
                       <span
@@ -585,6 +691,10 @@ export function AgendaView(props: {
                     ) : null}
                   </div>
                   <div className="relative" style={{ height: bodyHeight }}>
+                    {/* CLOSED wash — under the hour lines and under any card, so an
+                        appointment booked into a closed day stays fully readable
+                        (it exists; it just shouldn't look bookable around it). */}
+                    {col.closed ? <div aria-hidden className="u-closed-hatch absolute inset-0" /> : null}
                     {hours.map((h) => (
                       <div
                         key={h}
@@ -625,6 +735,31 @@ export function AgendaView(props: {
                   </div>
                 </div>
               ))}
+
+              {/* EMPTY TAIL. With one or two barbers the lanes hit their max-width
+                  and leave slack; this carries the hour lines across it so the
+                  remainder reads as empty calendar rather than a torn-off grid. It
+                  takes ONLY what the lanes refuse (grow 1 against their 999). */}
+              <div aria-hidden className="min-w-0 grow">
+                <div className="sticky top-0 z-10 h-12 border-b border-line bg-surface" />
+                <div className="relative" style={{ height: bodyHeight }}>
+                  {hours.map((h) => (
+                    <div
+                      key={h}
+                      className="absolute inset-x-0 border-t border-line/70"
+                      style={{ top: offsetTop(h * 60) }}
+                    />
+                  ))}
+                  {/* The now-line runs to the edge of the grid, not to the edge of
+                      the last lane — otherwise it stops mid-panel. */}
+                  {nowVisible ? (
+                    <div
+                      className="absolute inset-x-0 z-10 border-t-2 border-brand"
+                      style={{ top: offsetTop(minutesOf(nowParts)) }}
+                    />
+                  ) : null}
+                </div>
+              </div>
             </div>
           </div>
         </section>
@@ -646,7 +781,7 @@ export function AgendaView(props: {
           />
         ) : null}
       </div>
-      </section>
+      </PageShell>
 
       {modal ? (
         <AppointmentModal
@@ -836,12 +971,22 @@ function Kpi({
   );
 }
 
-function Initial({ name }: { name: string | null }) {
+/**
+ * The staff disc. `on="card"` makes it ride an appointment card, where it takes
+ * the CARD's family tones (a light puck with the family's saturated letter)
+ * instead of the global purple — so the avatar belongs to its card rather than
+ * punching a purple hole in every tint.
+ */
+function Initial({ name, muted, on }: { name: string | null; muted?: boolean; on?: "card" }) {
   const ch = (name?.match(/[a-z0-9]/i)?.[0] ?? "?").toUpperCase();
   return (
     <span
       aria-hidden
-      className="flex size-4 shrink-0 items-center justify-center rounded-full bg-service-purple text-[0.5625rem] font-semibold text-white"
+      className={`flex shrink-0 items-center justify-center rounded-full font-semibold ${
+        on === "card"
+          ? "u-appt-avatar size-[1.125rem] text-[0.625rem]"
+          : `size-4 text-[0.5625rem] text-white ${muted ? "bg-closed-fg" : "bg-service-purple"}`
+      }`}
     >
       {ch}
     </span>
@@ -849,10 +994,12 @@ function Initial({ name }: { name: string | null }) {
 }
 
 /**
- * One appointment. A 3px LEFT BORDER carries the category, the fill carries the
- * exception: `scheduled` (unconfirmed) is an outline, an overlap or a no-show gets
- * the danger tint, cancelled is struck through. Never colour alone — each state also
- * spells itself out in the meta line.
+ * One appointment, painted by CATEGORY (see lib/agendaCategory.ts): a soft family
+ * FILL, a 3px saturated LEFT RULE of the same family, and the service line in that
+ * family's ink — a tinted block, not a white box with a stripe. State outranks
+ * service: unconfirmed is the one outline card, an overlap/no-show goes red, a
+ * cancelled one greys out and strikes through. Never colour alone — every state
+ * also spells itself out in the meta line.
  */
 function ApptCard({
   appt,
@@ -873,42 +1020,60 @@ function ApptCard({
 }) {
   const unconfirmed = appt.status === "scheduled";
   const cancelled = appt.status === "cancelled";
-  const attention = overlapping || appt.status === "no_show";
-  const fill = attention
-    ? "bg-danger-tint/60 border-brand"
-    : cancelled
-      ? "bg-blocked-bg text-blocked-fg border-blocked-fg"
-      : unconfirmed
-        ? "bg-surface border-line-strong"
-        : appt.status === "completed"
-          ? "bg-chip border-success"
-          : "bg-chip border-service-purple";
+  const category: ApptCategory = apptCategory(appt, { attention: overlapping });
+  const unassigned = category === "unassigned";
+  /** Everything the card says about its STATE, in words — never colour alone. */
+  const state =
+    (unassigned ? " · no staff assigned" : "") +
+    (unconfirmed ? " · unconfirmed" : "") +
+    // `completed` no longer owns a colour (the family does), so it says so here —
+    // otherwise a done appointment would be indistinguishable.
+    (appt.status === "completed" ? " · completed" : "") +
+    (overlapping ? " · overlap" : "") +
+    (appt.status === "no_show" ? " · no show" : "") +
+    (cancelled ? " · cancelled" : "");
+  /** A SHORT booking (≈30 min) has room for two lines, not three. Rather than
+   *  crop the third mid-glyph, it drops the service line and folds the state onto
+   *  the time — the grid already says when it is, and the drawer has the rest. */
+  const compact = height < 40;
   return (
     <button
       type="button"
       onClick={onOpen}
       aria-label={`${fmtTime(appt.start_at, tz)} ${appt.contact_name ?? "Walk-in"} — ${appt.service_name}`}
-      className={`absolute inset-x-1 overflow-hidden rounded-card border border-l-[3px] px-1.5 py-1 text-left ${fill} ${
-        unconfirmed ? "border-dashed" : ""
+      // leading-tight is load-bearing: at the default line-height the three lines
+      // don't fit a 45-minute card and the service name gets cropped in half.
+      className={`u-appt ${apptCategoryClass(category)} absolute inset-x-1 overflow-hidden px-1.5 text-left leading-tight ${
+        compact ? "py-0.5" : "py-1"
       } ${selected ? "ring-2 ring-service-purple" : ""}`}
       style={{ top, height }}
     >
       <span className="flex items-start justify-between gap-1">
-        <span className="u-mono truncate text-[0.5625rem] text-muted">
+        <span className="u-appt-ink u-mono truncate text-[0.5625rem]">
           {fmtTime(appt.start_at, tz)} — {fmtTime(appt.service_end_at, tz)}
+          {compact ? state : ""}
         </span>
-        <Initial name={appt.staff_name} />
+        {unassigned ? (
+          // Nobody is on this walk-in: a red "?" disc where the barber would be.
+          <span
+            aria-hidden
+            className="flex size-[1.125rem] shrink-0 items-center justify-center rounded-full bg-brand text-[0.625rem] font-semibold text-white"
+          >
+            ?
+          </span>
+        ) : (
+          <Initial name={appt.staff_name} on="card" />
+        )}
       </span>
       <span className={`block truncate text-[0.6875rem] font-semibold ${cancelled ? "line-through" : ""}`}>
         {appt.contact_name ?? "Walk-in"}
       </span>
-      <span className="block truncate text-[0.625rem] text-muted">
-        {appt.service_name}
-        {unconfirmed ? " · unconfirmed" : ""}
-        {overlapping ? " · overlap" : ""}
-        {appt.status === "no_show" ? " · no show" : ""}
-        {cancelled ? " · cancelled" : ""}
-      </span>
+      {compact ? null : (
+        <span className="u-appt-ink block truncate text-[0.625rem]">
+          {appt.service_name}
+          {state}
+        </span>
+      )}
     </button>
   );
 }

@@ -67,7 +67,13 @@ test('AdminPanel: no client selector — a single route client threads into ever
   assert.ok(src.includes('DEACTIVATE[kind](clientId, id)'), 'deactivate carries clientId (via ActiveToggle)');
   assert.ok(src.includes('ACTIVATE[kind](clientId, id)'), 'activate (the inverse) carries clientId');
   assert.ok(src.includes('setSiteServiceAction(clientId'), 'setSiteService carries clientId');
-  assert.ok(src.includes('setStaffServiceAction(clientId'), 'setStaffService carries clientId');
+  // Staff moved to the TEAM screen's roster tab; the pairing action went with it and
+  // still threads the SAME clientId. Asserted at its new home so the contract
+  // follows the code instead of quietly passing on a file that no longer does this.
+  assert.ok(
+    read('components/scheduling/staff/StaffEditDialog.tsx').includes('setStaffServiceAction(clientId'),
+    'setStaffService carries clientId (now on the Staff roster)',
+  );
   assert.ok(src.includes('deleteExceptionAction(clientId'), 'deleteException carries clientId');
 });
 

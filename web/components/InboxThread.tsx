@@ -5,13 +5,15 @@ import { ModeBadge } from "./ModeBadge";
 import { ThreadActions } from "./ThreadActions";
 import { Composer } from "./Composer";
 import { MessageTranscript } from "./MessageTranscript";
-import type { HistoryTurnView, InboxHeaderView, InboxMessageView } from "@/lib/inboxView";
+import { avatarColor } from "@/lib/avatarColor";
+import { conversationAvatarLabel, formatConversationRef, type ThreadEventView, type HistoryTurnView, type InboxHeaderView, type InboxMessageView } from "@/lib/inboxView";
 import type { InboxActionResult } from "@/lib/inboxActions";
 import { sendMessageAction, retrySendAction } from "@/lib/sendActions";
 
 interface ThreadPayload {
   header: InboxHeaderView;
   messages: InboxMessageView[];
+  events?: ThreadEventView[];
   history?: HistoryTurnView[];
   activityWindowHours: number;
   asOf: string;
@@ -58,6 +60,9 @@ export function InboxThread({
 }) {
   const [header, setHeader] = useState(initial.header);
   const [serverMessages, setServerMessages] = useState(initial.messages);
+  // Turning points come back on every poll, so a colleague taking the conversation
+  // over shows up in your open thread without a reload.
+  const [events, setEvents] = useState<ThreadEventView[]>(initial.events ?? []);
   const [pending, setPending] = useState<PendingSend[]>([]);
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
   const [now, setNow] = useState(() => new Date(initial.asOf));
@@ -84,6 +89,7 @@ export function InboxThread({
       const p: ThreadPayload = await res.json();
       setHeader(p.header);
       setServerMessages(p.messages);
+      setEvents(p.events ?? []);
       setNow(new Date(p.asOf));
     } catch {
       /* keep last-known state */
@@ -210,16 +216,36 @@ export function InboxThread({
             ‹ Back
           </button>
         ) : null}
+        {/* TODO(inbox): the design's header shows the customer's NAME above the phone
+            number and a live "seen · typing" presence line. This payload has neither —
+            `InboxHeaderView` carries the channel identifier only, and no read receipt
+            or typing signal is delivered by any channel we ingest. Rendering them would
+            mean inventing state, so the header shows the identifier, the real mode
+            badge, the workflow and the REAL activity tag (customer wrote inside the
+            activity window) instead. */}
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <div className="flex flex-wrap items-center gap-2">
             <ModeBadge mode={header.mode} />
-            <span className="truncate font-semibold">{header.conversationRef}</span>
+            <span
+              className={`truncate text-sm font-semibold text-foreground ${
+                header.contactName?.trim() ? "" : "u-mono"
+              }`}
+            >
+              {header.contactName?.trim() || formatConversationRef(header.conversationRef)}
+            </span>
+            {/* When the person has a name, the identifier stays beside it — the agent
+                still needs the number to hand, just not as the headline. */}
+            {header.contactName?.trim() ? (
+              <span className="u-mono truncate text-xs text-faint">
+                {formatConversationRef(header.conversationRef)}
+              </span>
+            ) : null}
             <ActivityTag active={header.active} windowHours={initial.activityWindowHours} />
           </div>
           <div className="truncate text-xs text-faint">
             {header.workflowName ?? "Unknown workflow"}
             {header.mode === "human" && header.assignedAgentName ? (
-              <span className="text-success"> · ● {header.assignedAgentName}</span>
+              <span className="text-success"> &middot; &#9679; {header.assignedAgentName}</span>
             ) : null}
           </div>
         </div>
@@ -236,9 +262,9 @@ export function InboxThread({
             type="button"
             onClick={onClose}
             aria-label="Close conversation"
-            className="rounded-lg border border-black/10 px-2 py-1 text-xs text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground dark:border-line-strong dark:hover:bg-subtle"
+            className="inline-flex size-8 items-center justify-center rounded-md border border-line-strong text-xs text-muted transition-colors hover:bg-hover hover:text-foreground"
           >
-            ✕
+            &#10005;
           </button>
         </div>
       </div>
@@ -246,21 +272,55 @@ export function InboxThread({
       {notice ? (
         <p
           className={`shrink-0 px-4 py-2 text-sm ${
-            notice.kind === "error" ? "text-danger" : "text-amber-700 dark:text-amber-400"
+            notice.kind === "error" ? "text-danger" : "text-warn"
           }`}
         >
           {notice.text}
         </p>
       ) : null}
 
-      {/* Messages (scrolls) */}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-black/[0.02] px-4 py-3 dark:bg-card">
+      {/*
+        Messages (scrolls).
+
+        TODO(inbox): four blocks from the design are NOT rendered here, because each
+        would have to be invented rather than read:
+        - "TODAY · BOT PICKED UP 10:28" / "SANTIAGO TOOK OVER 10:36" markers. The
+          transitions ARE persisted (`conversation_mode_transitions`), but this
+          thread payload doesn't carry them — surfacing them means widening the
+          messages endpoint, which is a data change, not a restyle. The transcript
+          does label a human agent's run with their name today.
+        - "SLOTS OFRECIDOS" (the slots the bot proposed, with the chosen one in red).
+          Offered slots are not persisted anywhere — a message's text is all we keep.
+        - The "REAGENDADA POR EL BOT … Ver en agenda ↗" pill. The LINK is real in the
+          other direction (`appointments.source_conversation_id`), but the thread
+          payload has no appointment attached to it.
+        - The "… está escribiendo" typing indicator: no channel we ingest delivers a
+          typing signal.
+      */}
+      {/* The transcript is the BRIGHT surface of the workspace — the queue beside it
+          carries the tint. The customer's bubbles are the light-grey objects on it;
+          the business answers in near-black. */}
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-surface px-4 py-3">
         {history.length > 0 ? <HistoryDisclosure turns={history} /> : null}
-        <MessageTranscript messages={merged} now={now} onRetry={handleRetry} />
+        <MessageTranscript
+          messages={merged}
+          now={now}
+          onRetry={handleRetry}
+          // The SAME disc the queue row shows for this conversation — one helper for
+          // the label and one for the tone, so the person can't wear two different
+          // avatars across the two columns.
+          events={events}
+          incomingAvatar={{
+            label: conversationAvatarLabel(header.conversationRef, header.contactName),
+            toneClass: avatarColor(header.conversationRef),
+          }}
+        />
       </div>
 
       {/* Composer (pinned) */}
-      <div className="shrink-0 px-4 pb-3">
+      {/* The composer floats on the same surface as the transcript — its own hairline
+          card is what separates it, not a rule across the column. */}
+      <div className="shrink-0 bg-surface px-4 pb-3 pt-1">
         <Composer mode={header.mode} onSend={handleSend} />
       </div>
     </div>
@@ -288,7 +348,7 @@ function ActivityTag({ active, windowHours }: { active: boolean; windowHours: nu
 /** Collapsed pre-handoff history at the top (read-only derived turns). */
 function HistoryDisclosure({ turns }: { turns: HistoryTurnView[] }) {
   return (
-    <details className="mb-3 rounded-xl border border-black/10 dark:border-line">
+    <details className="mb-3 rounded-lg border border-line">
       <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-muted hover:text-foreground">
         History before handoff · {turns.length} {turns.length === 1 ? "turn" : "turns"}
       </summary>

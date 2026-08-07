@@ -56,7 +56,9 @@ test('the persisted cookie is scoped to the whole app and long-lived', () => {
 
 test('the cookie is read during SSR and stamped on <html> — no flash', () => {
   const layout = read('app/layout.tsx');
-  assert.ok(layout.includes('await cookies()).get(SIDEBAR_THEME_COOKIE)'), 'read server-side…');
+  // The jar is read once now (the text-size preference shares it), so the assertion
+  // is on the LOOKUP rather than the inline await.
+  assert.ok(layout.includes('jar.get(SIDEBAR_THEME_COOKIE)'), 'read server-side…');
   assert.ok(layout.includes('parseSidebarTheme('), '…through the shared parser…');
   assert.ok(layout.includes('data-sidebar-theme={sidebarTheme}'), '…and stamped before the first paint');
 });

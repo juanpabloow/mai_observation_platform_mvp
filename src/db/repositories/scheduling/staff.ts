@@ -6,7 +6,38 @@ import { matchByName, type NameMatch } from '../../../scheduling/nameMatch.js';
  * Staff repository — agendable resources (a barber), each belonging to exactly one
  * site in V1. working_hours = {} means "inherit the site's opening hours".
  * Tenant-scoped throughout.
+ *
+ * ── PII: WHY THERE IS NO `SELECT *` IN THIS FILE ────────────────────────────────
+ * `staff` now carries employee personal data (phone, email, emergency contact). This
+ * repository is read by surfaces at very different trust levels — the PUBLIC booking
+ * API, machine-API tokens, the operator UI — so "remember to project only what you
+ * need" at each call site is one forgotten `...s` away from publishing an employee's
+ * phone number on a booking page.
+ *
+ * So the projection is the permission. There are exactly two shapes:
+ *   StaffRow      — the OPERATIONAL row. What every existing caller already gets, plus
+ *                   the non-sensitive new fields. Selected via STAFF_COLS, an explicit
+ *                   list that CANNOT pick up a PII column, today or after the next
+ *                   migration. This is the default: no caller opts out of it.
+ *   StaffAdminRow — StaffRow + the PII. Returned ONLY by the two functions suffixed
+ *                   `...Admin`, which must be called behind the owner/admin gate
+ *                   (requireFullAccessOrLand / requireFullAccessForAction). Nothing in
+ *                   the public or machine API imports them, and a source-level test
+ *                   (test/unit/staffPiiContract.test.ts) fails the build if that changes.
+ *
+ * TypeScript then does the rest of the work: a route holding a StaffRow has no `.phone`
+ * to leak, so exposure requires deliberately switching to the admin read.
  */
+
+/** The operational projection — every staff column EXCEPT the personal ones. */
+const STAFF_COLS = `s.id, s.tenant_id, s.site_id, s.name, s.working_hours, s.active,
+       s.title, s.employment_type, s.weekly_hours, s.start_date,
+       COALESCE(s.skills, '{}') AS skills, s.takes_bookings,
+       s.created_at, s.updated_at`;
+/** The same list for queries with no `s` alias. */
+const STAFF_COLS_BARE = STAFF_COLS.replace(/\bs\./g, '');
+/** Appended to STAFF_COLS by the admin reads only. */
+const STAFF_PII_COLS = `s.phone, s.email, s.emergency_contact_name, s.emergency_contact_phone`;
 
 export interface StaffRow {
   id: string;
@@ -15,8 +46,36 @@ export interface StaffRow {
   name: string;
   working_hours: WeeklyHours;
   active: boolean;
+  /** Free-text label ("Colour specialist"). NOT a permission — see the migration. */
+  title: string | null;
+  employment_type: EmploymentType | null;
+  /** Contracted hours per week. The ROSTER's capacity still comes from working_hours;
+   *  this is what the contract says, which is a different (and comparable) number. */
+  weekly_hours: number | null;
+  /** Seniority is DERIVED from this — never stored. */
+  start_date: Date | null;
+  /** Never null on the way out: the projection coalesces NULL to an empty array. */
+  skills: string[];
+  /** Works here AND has a chair. `active` is the harder state (no longer employed);
+   *  a front-desk hire is active with takes_bookings = false. */
+  takes_bookings: boolean;
   created_at: Date;
   updated_at: Date;
+}
+
+/** The closed set the CHECK constraint enforces. */
+export type EmploymentType = 'full_time' | 'part_time' | 'contractor';
+
+/**
+ * StaffRow + employee personal data. Only ever produced by listStaffAdmin /
+ * getStaffByIdAdmin. Do NOT widen a public or machine-API handler to accept this type
+ * — reach for StaffRow instead.
+ */
+export interface StaffAdminRow extends StaffRow {
+  phone: string | null;
+  email: string | null;
+  emergency_contact_name: string | null;
+  emergency_contact_phone: string | null;
 }
 
 export async function listStaff(
@@ -36,7 +95,7 @@ export async function listStaff(
   }
   if (!opts.includeInactive) where.push('s.active = true');
   const r = await query<StaffRow>(
-    `SELECT s.* FROM staff s JOIN sites si ON si.id = s.site_id
+    `SELECT ${STAFF_COLS} FROM staff s JOIN sites si ON si.id = s.site_id
       WHERE ${where.join(' AND ')} ORDER BY s.name`,
     params,
   );
@@ -44,7 +103,49 @@ export async function listStaff(
 }
 
 export async function getStaffById(tenantId: string, id: string): Promise<StaffRow | null> {
-  const r = await query<StaffRow>(`SELECT * FROM staff WHERE id = $1 AND tenant_id = $2`, [id, tenantId]);
+  const r = await query<StaffRow>(
+    `SELECT ${STAFF_COLS_BARE} FROM staff WHERE id = $1 AND tenant_id = $2`,
+    [id, tenantId],
+  );
+  return r.rows[0] ?? null;
+}
+
+// ── ADMIN READS (PII) ─────────────────────────────────────────────────────────
+// The only two functions that project phone/email/emergency contact. Both are
+// tenant-scoped like everything else here; the OWNER/ADMIN check is the caller's
+// (requireFullAccessOrLand on a page, requireFullAccessForAction in a server action),
+// because this layer has no session. Call them from nowhere else.
+
+/** listStaff, plus the employee's personal data. Owner/admin surfaces only. */
+export async function listStaffAdmin(
+  tenantId: string,
+  opts: { siteId?: string; includeInactive?: boolean; clientId?: string | null } = {},
+): Promise<StaffAdminRow[]> {
+  const params: unknown[] = [tenantId];
+  const where = ['s.tenant_id = $1'];
+  if (opts.siteId) {
+    params.push(opts.siteId);
+    where.push(`s.site_id = $${params.length}`);
+  }
+  if (opts.clientId) {
+    params.push(opts.clientId);
+    where.push(`si.client_id = $${params.length}`);
+  }
+  if (!opts.includeInactive) where.push('s.active = true');
+  const r = await query<StaffAdminRow>(
+    `SELECT ${STAFF_COLS}, ${STAFF_PII_COLS} FROM staff s JOIN sites si ON si.id = s.site_id
+      WHERE ${where.join(' AND ')} ORDER BY s.name`,
+    params,
+  );
+  return r.rows;
+}
+
+/** getStaffById, plus the employee's personal data. Owner/admin surfaces only. */
+export async function getStaffByIdAdmin(tenantId: string, id: string): Promise<StaffAdminRow | null> {
+  const r = await query<StaffAdminRow>(
+    `SELECT ${STAFF_COLS}, ${STAFF_PII_COLS} FROM staff s WHERE s.id = $1 AND s.tenant_id = $2`,
+    [id, tenantId],
+  );
   return r.rows[0] ?? null;
 }
 
@@ -58,7 +159,7 @@ export async function listStaffForService(
   serviceId: string,
 ): Promise<StaffRow[]> {
   const r = await query<StaffRow>(
-    `SELECT s.*
+    `SELECT ${STAFF_COLS}
        FROM sites si
        JOIN site_services ss
          ON ss.site_id = si.id AND ss.tenant_id = si.tenant_id AND ss.service_id = $3 AND ss.active = true
@@ -122,10 +223,13 @@ export interface CreateStaffInput {
 
 export async function createStaff(input: CreateStaffInput): Promise<StaffRow> {
   const r = await query<StaffRow>(
+    // RETURNING the explicit list, not `*`: an INSERT is not a licence to hand PII
+    // back to whoever called it. The profile fields are set by a follow-up update
+    // through the owner/admin action, so creation stays exactly as narrow as it was.
     `INSERT INTO staff (tenant_id, site_id, name, working_hours)
        SELECT $1, $2, $3, $4
         WHERE EXISTS (SELECT 1 FROM sites WHERE id = $2 AND tenant_id = $1)
-     RETURNING *`,
+     RETURNING ${STAFF_COLS_BARE}`,
     [input.tenantId, input.siteId, input.name, JSON.stringify(input.workingHours ?? {})],
   );
   if (!r.rows[0]) throw new Error('createStaff: site not found for tenant');
@@ -137,6 +241,19 @@ export interface UpdateStaffInput {
   workingHours?: WeeklyHours;
   active?: boolean;
   siteId?: string;
+  // ── Profile (all nullable in the schema; `null` CLEARS the field) ────────────
+  title?: string | null;
+  employmentType?: EmploymentType | null;
+  weeklyHours?: number | null;
+  /** ISO yyyy-mm-dd, or null. Seniority is derived from it at read time. */
+  startDate?: string | null;
+  skills?: string[];
+  takesBookings?: boolean;
+  // ── PII. Writable here, readable only through the ...Admin reads ─────────────
+  phone?: string | null;
+  email?: string | null;
+  emergencyContactName?: string | null;
+  emergencyContactPhone?: string | null;
 }
 
 export async function updateStaff(tenantId: string, id: string, patch: UpdateStaffInput): Promise<StaffRow | null> {
@@ -150,13 +267,33 @@ export async function updateStaff(tenantId: string, id: string, patch: UpdateSta
   if (patch.workingHours !== undefined) add('working_hours', JSON.stringify(patch.workingHours));
   if (patch.active !== undefined) add('active', patch.active);
   if (patch.siteId !== undefined) add('site_id', patch.siteId);
+  if (patch.title !== undefined) add('title', emptyToNull(patch.title));
+  if (patch.employmentType !== undefined) add('employment_type', patch.employmentType);
+  if (patch.weeklyHours !== undefined) add('weekly_hours', patch.weeklyHours);
+  if (patch.startDate !== undefined) add('start_date', emptyToNull(patch.startDate));
+  // Tags: trimmed, blanks dropped, de-duplicated. An empty array stores '{}' (asked,
+  // none) rather than NULL (never asked) — the distinction the column exists for.
+  if (patch.skills !== undefined) {
+    add('skills', [...new Set(patch.skills.map((s) => s.trim()).filter(Boolean))]);
+  }
+  if (patch.takesBookings !== undefined) add('takes_bookings', patch.takesBookings);
+  if (patch.phone !== undefined) add('phone', emptyToNull(patch.phone));
+  if (patch.email !== undefined) add('email', emptyToNull(patch.email));
+  if (patch.emergencyContactName !== undefined) add('emergency_contact_name', emptyToNull(patch.emergencyContactName));
+  if (patch.emergencyContactPhone !== undefined) add('emergency_contact_phone', emptyToNull(patch.emergencyContactPhone));
   if (sets.length === 0) return getStaffById(tenantId, id);
   sets.push('updated_at = now()');
   const r = await query<StaffRow>(
-    `UPDATE staff SET ${sets.join(', ')} WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+    `UPDATE staff SET ${sets.join(', ')} WHERE id = $1 AND tenant_id = $2 RETURNING ${STAFF_COLS_BARE}`,
     params,
   );
   return r.rows[0] ?? null;
+}
+
+/** A cleared input arrives as "" from a form; the column's empty state is NULL. */
+function emptyToNull(v: string | null | undefined): string | null {
+  const t = (v ?? '').trim();
+  return t === '' ? null : t;
 }
 
 export async function deactivateStaff(tenantId: string, id: string): Promise<boolean> {

@@ -59,21 +59,14 @@ export async function AppHeader() {
     active: w.active,
   }));
 
-  // For the profile menu: a member's client label (so they always see where they
-  // are). owner/admin have no single client.
-  const memberClient = memberClientId ? visibleClients[0] : null;
-  const clientLabel = memberClient ? (memberClient.is_default ? "Unassigned" : memberClient.name) : null;
-
+  // The account (name, role, client label) is the SIDEBAR FOOTER's job — the header
+  // used to repeat it as an initial-only disc, which said less and said it twice.
   return (
     <HeaderBar
-      email={session.user.email}
-      name={session.user.name ?? null}
       clients={clientOptions}
       workflows={workflowOptions}
       // A member can't switch clients (they have exactly one).
       canSwitchClients={memberClientId === null}
-      role={scope.role}
-      clientLabel={clientLabel}
     />
   );
 }

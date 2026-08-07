@@ -3,17 +3,26 @@
  * server page and the client toolbar agree on exactly which columns exist and
  * which are optional — and so it is unit-testable.
  *
- * The REQUIRED columns are the reference design's spine and are never togglable:
- * NAME · CHANNEL · STAGE · LAST ACTIVITY · NEXT APPT · OPEN TASKS. Everything the
- * Columns menu offers is additive and PRESENTATIONAL ONLY — `?cols=` can change
- * which columns render, never which rows are returned or what a value says.
+ * The REQUIRED columns are the OPERATIONAL spine — what a shop actually scans a
+ * customer list for: NAME · EMAIL · PHONE · LAST VISIT · USUAL BARBER · APPTS. Everything the Columns menu offers is additive and PRESENTATIONAL
+ * ONLY — `?cols=` can change which columns render, never which rows are returned or
+ * what a value says.
+ *
+ * Channel, Stage and Next appt used to be part of that spine. They are still here,
+ * one toggle away: the CRM-generic view (which channel, which funnel stage) is a
+ * different question from the operational one, and only one of them can own the
+ * default seven columns.
  */
 
 export const OPTIONAL_COLUMNS = [
+  { key: "channel", label: "Channel" },
+  { key: "stage", label: "Stage" },
   { key: "owner", label: "Owner" },
+  { key: "nextAppt", label: "Next appt" },
   { key: "visits", label: "Visits" },
   { key: "consent", label: "Consent" },
   { key: "created", label: "Created" },
+  { key: "openTasks", label: "Open tasks" },
 ] as const;
 
 export type ContactColumnKey = (typeof OPTIONAL_COLUMNS)[number]["key"];

@@ -162,6 +162,9 @@ export default async function ClientAgendaPage({
   // used only to build the in-app /contacts/{id} path.
   const returnContactId = sp.return && isUuid(sp.return) ? sp.return : null;
 
+  // serviceId → stored category, built once for the whole board.
+  const serviceCategoryById = new Map(services.map((s) => [s.id, s.category]));
+
   return (
     <AgendaView
       clientId={client.id}
@@ -179,7 +182,10 @@ export default async function ClientAgendaPage({
       dayEndIso={dayEnd.toISOString()}
       sites={sites.map((s) => ({ id: s.id, name: s.name, timezone: s.timezone }))}
       currentSiteId={site.id}
-      staff={staff.map((s) => ({ id: s.id, name: s.name, active: s.active }))}
+      // Weekly hours come off the site/staff rows ALREADY loaded above — no extra
+      // query. They only drive the "closed" hatching of a day / barber lane.
+      openingHours={site.opening_hours}
+      staff={staff.map((s) => ({ id: s.id, name: s.name, active: s.active, workingHours: s.working_hours }))}
       services={services.map((s) => ({ id: s.id, name: s.name, duration_min: s.effective_duration_min }))}
       view={view}
       kpis={summarise(appts)}
@@ -195,6 +201,11 @@ export default async function ClientAgendaPage({
         start_at: a.start_at.toISOString(),
         service_end_at: a.service_end_at.toISOString(),
         service_name: a.service_name_snapshot,
+        // The colour family the OPERATOR chose, resolved through the live catalogue
+        // (the appointment stores only a name snapshot). A service that has since been
+        // removed from the site yields undefined → the card falls back to inferring
+        // the family from the snapshot name, exactly as before this column existed.
+        service_category: serviceCategoryById.get(a.service_id) ?? null,
         duration_min: a.duration_min_snapshot,
         price: a.price_snapshot,
         status: a.status,
