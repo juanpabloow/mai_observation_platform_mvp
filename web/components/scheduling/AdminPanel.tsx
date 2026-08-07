@@ -2,6 +2,8 @@
 
 import { useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
+import { DAYS, gridFromWeekly, HoursGrid, weeklyFromGrid, type HourGrid } from "./HoursGrid";
 import {
   activateServiceAction,
   activateSiteAction,
@@ -10,16 +12,13 @@ import {
   createExceptionAction,
   createServiceAction,
   createSiteAction,
-  createStaffAction,
   deactivateServiceAction,
   deactivateSiteAction,
   deactivateStaffAction,
   deleteExceptionAction,
   setSiteServiceAction,
-  setStaffServiceAction,
   updateServiceAction,
   updateSiteAction,
-  updateStaffAction,
 } from "@/lib/schedulingAdminActions";
 
 type WeeklyHours = Record<string, Array<{ start: string; end: string }>>;
@@ -51,42 +50,8 @@ interface Staff {
   working_hours: WeeklyHours;
 }
 
-// ── Weekly-hours grid: the shared 7-day editor + WeeklyHours ↔ grid converters ──────
-type HourRow = { on: boolean; start: string; end: string };
-type HourGrid = Record<string, HourRow>;
-
-function gridFromWeekly(weekly: WeeklyHours): HourGrid {
-  return Object.fromEntries(
-    DAYS.map((d) => {
-      const slot = weekly?.[d]?.[0];
-      return [d, slot ? { on: true, start: slot.start, end: slot.end } : { on: false, start: "09:00", end: "18:00" }];
-    }),
-  );
-}
-function weeklyFromGrid(grid: HourGrid): WeeklyHours {
-  const out: WeeklyHours = {};
-  for (const d of DAYS) if (grid[d].on) out[d] = [{ start: grid[d].start, end: grid[d].end }];
-  return out;
-}
-function HoursGrid({ grid, setGrid }: { grid: HourGrid; setGrid: (g: HourGrid) => void }) {
-  return (
-    <div className="flex flex-col gap-1">
-      {DAYS.map((d) => (
-        <div key={d} className="flex items-center gap-2 text-xs">
-          <label className="flex w-16 items-center gap-1">
-            <input type="checkbox" checked={grid[d].on} onChange={(e) => setGrid({ ...grid, [d]: { ...grid[d], on: e.target.checked } })} />
-            {d}
-          </label>
-          <input type="time" value={grid[d].start} disabled={!grid[d].on} onChange={(e) => setGrid({ ...grid, [d]: { ...grid[d], start: e.target.value } })} className={INPUT} />
-          <input type="time" value={grid[d].end} disabled={!grid[d].on} onChange={(e) => setGrid({ ...grid, [d]: { ...grid[d], end: e.target.value } })} className={INPUT} />
-        </div>
-      ))}
-    </div>
-  );
-}
 interface Exception { id: string; site_id: string; staff_id: string | null; starts_at: string; ends_at: string; reason: string | null }
 
-const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 const INPUT = "rounded-lg border border-line-strong bg-transparent px-2 py-1.5 text-sm";
 const BTN = "rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50";
 const GHOST = "rounded-lg border border-line px-2 py-1 text-xs hover:bg-subtle";
@@ -140,7 +105,22 @@ export function AdminPanel({
       <WhyNothingAvailable sites={sites} staff={staff} />
       <SitesSection clientId={clientId} sites={sites} run={run} pending={pending} />
       <ServicesSection clientId={clientId} sites={sites} services={services} siteServiceMap={siteServiceMap} run={run} pending={pending} />
-      <StaffSection clientId={clientId} sites={sites} services={services} staff={staff} siteServiceMap={siteServiceMap} run={run} pending={pending} />
+      {/* STAFF moved OUT of this page (ADMINISTRATION → Team → Staff): the roster, its statuses,
+          performance, creating a barber and their weekly hours all live there now. The
+          7-day grid those two screens share was extracted to ./HoursGrid rather than
+          copied — this page still uses it for a SITE's opening hours. */}
+      <div className="rounded-lg border border-line bg-surface px-4 py-3 text-sm">
+        <p className="text-muted">
+          The staff <strong className="font-medium text-foreground">roster</strong> — who is working, who is free,
+          performance, hours and services — now lives on the Team screen.{" "}
+          <Link href={`/clients/${clientId}/team`} className="text-accent hover:underline">
+            Open Team &rarr; Staff
+          </Link>
+        </p>
+        <p className="mt-1 text-xs text-faint">
+          What stays here: sites, the service catalogue and blocked time.
+        </p>
+      </div>
       <ExceptionsSection clientId={clientId} sites={sites} staff={staff} exceptions={exceptions} run={run} pending={pending} />
     </main>
   );
@@ -596,134 +576,6 @@ function ServicesSection({
         >
           Add service
         </button>
-      </div>
-    </Section>
-  );
-}
-
-/** An EXISTING staff member: editable name + weekly WORKING HOURS (seeded from the stored
- *  values; all days off = inherit the site's opening hours) + which services they perform
- *  + a copyable id. Save persists via updateStaffAction and immediately changes
- *  availability. */
-function EditableStaff({ clientId, staff, siteName, offered, run, pending }: {
-  clientId: string; staff: Staff; siteName: string; offered: Service[]; run: Run; pending: boolean;
-}) {
-  const [name, setName] = useState(staff.name);
-  const [grid, setGrid] = useState<HourGrid>(gridFromWeekly(staff.working_hours));
-  const save = () => run(() => updateStaffAction(clientId, staff.id, { name: name.trim(), workingHours: weeklyFromGrid(grid) }));
-  return (
-    <div className={`flex flex-col gap-2 rounded-lg border border-line px-3 py-2 ${staff.active ? "" : "bg-subtle/40"}`}>
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-sm font-medium">{staff.name} <span className="text-faint">· {siteName}</span> {staff.active ? "" : <em className="text-faint">(inactive)</em>}</span>
-        <ActiveToggle clientId={clientId} kind="staff" id={staff.id} name={staff.name} active={staff.active} run={run} pending={pending} />
-      </div>
-      <CopyId label="Staff id" value={staff.id} />
-      <label className="flex flex-col gap-0.5 text-[10px] uppercase tracking-wider text-faint">Name<input value={name} onChange={(e) => setName(e.target.value)} className={INPUT} /></label>
-      <span className="text-[10px] uppercase tracking-wider text-faint">Working hours (all days off = inherit the site&rsquo;s opening hours)</span>
-      <HoursGrid grid={grid} setGrid={setGrid} />
-      <div className="flex flex-wrap items-center gap-1">
-        <span className="text-[10px] uppercase tracking-wider text-faint">Services:</span>
-        {offered.length === 0 ? (
-          <span className="text-[11px] text-faint">No services enabled at this site yet.</span>
-        ) : (
-          offered.map((sv) => {
-            const on = staff.serviceIds.includes(sv.id);
-            return (
-              <button
-                key={sv.id}
-                disabled={pending}
-                onClick={() => run(() => setStaffServiceAction(clientId, staff.id, sv.id, !on))}
-                className={`rounded border px-1.5 py-0.5 text-[11px] ${on ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:bg-subtle"}`}
-              >
-                {sv.name}
-              </button>
-            );
-          })
-        )}
-      </div>
-      <button className={`${BTN} self-start`} disabled={pending || !name} onClick={save}>Save changes</button>
-    </div>
-  );
-}
-
-function StaffSection({
-  clientId,
-  sites,
-  services,
-  staff,
-  siteServiceMap,
-  run,
-  pending,
-}: {
-  clientId: string;
-  sites: Site[];
-  services: Service[];
-  staff: Staff[];
-  siteServiceMap: Record<string, string[]>;
-  run: Run;
-  pending: boolean;
-}) {
-  const [name, setName] = useState("");
-  const [siteId, setSiteId] = useState(sites[0]?.id ?? "");
-  const [serviceIds, setServiceIds] = useState<string[]>([]);
-
-  // A barber can only be assigned services their SITE offers (site_services) —
-  // otherwise the pairing is unreachable by availability/booking anyway.
-  const servicesAtSite = (sid: string): Service[] =>
-    services.filter((sv) => sv.active && (siteServiceMap[sid] ?? []).includes(sv.id));
-
-  const submit = () =>
-    run(async () => {
-      const r = await createStaffAction({ clientId, siteId, name: name.trim(), serviceIds });
-      if (r.ok) { setName(""); setServiceIds([]); }
-      return r;
-    });
-
-  const toggle = (id: string) => setServiceIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-
-  return (
-    <Section title="Staff">
-      <div className="flex flex-col gap-3">
-        {staff.map((s) => (
-          <EditableStaff
-            key={s.id}
-            clientId={clientId}
-            staff={s}
-            siteName={sites.find((x) => x.id === s.site_id)?.name ?? "—"}
-            offered={servicesAtSite(s.site_id)}
-            run={run}
-            pending={pending}
-          />
-        ))}
-      </div>
-      <div className="flex flex-col gap-2 rounded-lg border-2 border-dashed border-line-strong p-3">
-        <p className="text-sm font-semibold">Add a new staff member</p>
-        <div className="flex flex-wrap gap-2">
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Name" className={INPUT} />
-          <select
-            value={siteId}
-            onChange={(e) => {
-              setSiteId(e.target.value);
-              // Selections that the new site doesn't offer are dropped.
-              setServiceIds((prev) => prev.filter((id) => (siteServiceMap[e.target.value] ?? []).includes(id)));
-            }}
-            className={INPUT}
-          >
-            {sites.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-          </select>
-        </div>
-        <div className="flex flex-wrap gap-1">
-          {servicesAtSite(siteId).length === 0 ? (
-            <span className="text-[11px] text-faint">No services enabled at this site — enable some above first.</span>
-          ) : (
-            servicesAtSite(siteId).map((s) => (
-              <button key={s.id} onClick={() => toggle(s.id)} className={`rounded border px-1.5 py-0.5 text-[11px] ${serviceIds.includes(s.id) ? "border-accent bg-accent/10 text-accent" : "border-line text-muted hover:bg-subtle"}`}>
-                {s.name}
-              </button>
-            ))
-          )}
-        </div>
-        <button className={BTN} disabled={pending || !name || !siteId} onClick={submit}>Add staff</button>
       </div>
     </Section>
   );

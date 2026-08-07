@@ -37,10 +37,17 @@ test('whitespace around keys is tolerated', () => {
 });
 
 test('the REQUIRED columns are not part of the optional set (they can never be hidden)', () => {
-  // NAME · CHANNEL · STAGE · LAST ACTIVITY · NEXT APPT · OPEN TASKS are the design's
-  // spine — the Columns menu must not be able to switch them off.
+  // The spine is now the OPERATIONAL one — NAME · EMAIL · PHONE · LAST VISIT ·
+  // USUAL BARBER · APPTS · OPEN TASKS — and the Columns menu must not be able to
+  // switch any of it off. (Channel, stage and next-appt moved INTO the optional set
+  // in the same change: they are the CRM-generic view, one toggle away.)
   const optional = new Set<string>(OPTIONAL_COLUMNS.map((c) => c.key));
-  for (const required of ['name', 'channel', 'stage', 'lastActivity', 'nextAppt', 'openTasks']) {
+  for (const required of ['name', 'email', 'phone', 'lastVisit', 'usualBarber', 'appts']) {
     assert.equal(optional.has(required), false, `${required} is not togglable`);
+  }
+  // …and the ones that moved really are togglable now (open tasks joined them: the
+  // row still shows an OVERDUE chip, so the red row rule is never unexplained).
+  for (const movable of ['channel', 'stage', 'nextAppt', 'openTasks']) {
+    assert.equal(optional.has(movable), true, `${movable} is togglable`);
   }
 });

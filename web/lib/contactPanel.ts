@@ -133,7 +133,25 @@ export async function loadContactPanel(
     listTagsForContact(tenantId, clientId, contactId),
   ]);
 
+  // IDENTITIES + the contact's OWN columns. `contact_identities` is the canonical
+  // spine, but `contacts.email` / `contacts.phone_e164` are still written directly
+  // (the edit dialog and the CRM API both set them), so a contact can carry an email
+  // that has no identity row yet. Reading only the spine made those addresses
+  // invisible in the panel while the LIST column showed them — same person, two
+  // answers. Merge, de-duplicated by normalised value, spine first.
   const identityViews: IdentityView[] = identities.map((i) => ({ kind: i.kind, value: i.value, label: i.label }));
+  const seen = new Set(identityViews.map((i) => i.value.toLowerCase().replace(/[^a-z0-9@.]/g, "")));
+  const addColumn = (kind: IdentityView["kind"], value: string | null) => {
+    const v = value?.trim();
+    if (!v) return;
+    const key = v.toLowerCase().replace(/[^a-z0-9@.]/g, "");
+    if (seen.has(key)) return;
+    seen.add(key);
+    identityViews.push({ kind, value: v, label: null });
+  };
+  addColumn("email", contact.email);
+  addColumn("phone", contact.phone_e164);
+
   const appointments = summarizeAppointments(appts);
   const summary: ContactSummary = {
     id: contact.id,

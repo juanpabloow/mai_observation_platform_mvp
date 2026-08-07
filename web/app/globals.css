@@ -156,6 +156,26 @@
   --blocked-fg: #8fa3b8;
   --hover: #eeeff2;
   --radius-card: 10px;
+  /* The QUEUE is a BOX, not a column: the workspace card is white end to end and
+     the conversation list sits inside it as its own recessed panel, with the white
+     showing around it. Two values: the box's ground, and the one step darker that
+     marks the thread you have open (a white card there would read as "raised out of
+     the list", which is the opposite of what selection means here). */
+  /* The customer panel's IDENTITY band — the only tinted strip in that panel; the
+     tabs and their content stay on the surface below it. */
+  --panel-hero: #f4f6fa;
+  /* The table HEAD band — a hair off the panel so the column labels read as a
+     ledge over the rows rather than as a first row. */
+  --thead-bg: #fafbfc;
+  --queue-bg: #eef0f4;
+  /* The SELECTED conversation: a grey card on the white queue (the reference's
+     #EEF0F5). The column is white, so the tint marks the one row you are reading
+     rather than the whole list. */
+  --queue-row-active: #eef0f5;
+  /* The INBOX's soft radius. One token for the chat bubbles, the composer, the
+     queue rows and the search field, so the whole surface curves by the same
+     amount — at the 4–8px global scale the thread read as a stack of boxes. */
+  --radius-bubble: 15px;
 }
 .dark {
   --service-purple: #8b7bd8;
@@ -163,46 +183,191 @@
   --blocked-bg: #23272e;
   --blocked-fg: #7b8794;
   --hover: #1e1e22;
+  /* Dark: the box RECEDES below the panel instead of rising above it. */
+  --panel-hero: #17181b;
+  --thead-bg: #141416;
+  --queue-bg: #0e0e10;
+  --queue-row-active: #26262b;
+}
+
+/*
+ * ── Agenda: appointment CATEGORY palette ─────────────────────────────────────
+ * An appointment card is a TINTED BLOCK, not a white box with a stripe: a soft
+ * family fill, a saturated left rule from the same family, and the service line
+ * in that family's ink. Every family exposes the SAME four slots, so the card
+ * markup only ever reads `var(--appt-*)` and never a hex:
+ *   --appt-*-fill   the card background
+ *   --appt-*-rule   the 3px left rule (the most saturated tone)
+ *   --appt-*-ink    the service line / time (mid tone)
+ *   --appt-*-title  the customer name (darkest tone)
+ * Families: COLOUR (lilac), GROOMING (sand), CUT (cool neutral), FEATURE (a
+ * solid, high-emphasis block for premium packages), DANGER (payment due /
+ * overlap), TENTATIVE (unconfirmed — outline, no fill) and UNASSIGNED (a walk-in
+ * with nobody on it: brand red + a "?" badge). CANCELLED reuses --blocked-*.
+ * Dark mode inverts the ramp: dim fills, LIGHT rules and ink.
+ */
+:root {
+  --appt-color-fill: #eae6f7;
+  --appt-color-rule: #5b4ba6;
+  --appt-color-ink: #655a94;
+  --appt-color-title: #342d5c;
+
+  --appt-grooming-fill: #f0e7d5;
+  --appt-grooming-rule: #8a6a2e;
+  --appt-grooming-ink: #7a6845;
+  --appt-grooming-title: #4a3c1f;
+
+  --appt-cut-fill: #dce3eb;
+  --appt-cut-rule: #29323d;
+  --appt-cut-ink: #6c7484;
+  --appt-cut-title: #29323d;
+
+  /* The one SOLID family — reserved for a premium package, so at most a couple
+     of cards per day carry it and it keeps its "look at me" weight. */
+  --appt-feature-fill: #5b4ba6;
+  --appt-feature-rule: #3f3277;
+  --appt-feature-ink: rgba(255, 255, 255, 0.78);
+  --appt-feature-title: #ffffff;
+
+  /* The pink is the --danger-tint (#f2c0c9) family, lightened to stay readable
+     under dark text; the rule is the brand red so urgency reads at a glance. */
+  --appt-danger-fill: #fbe3e8;
+  --appt-danger-rule: #e60a2f;
+  --appt-danger-ink: #a3505f;
+  --appt-danger-title: #7d2a3a;
+
+  --appt-tentative-fill: #ffffff;
+  --appt-tentative-rule: #b7bec9;
+  --appt-tentative-ink: #7b8494;
+  --appt-tentative-title: #4d5561;
+
+  --appt-unassigned-fill: #fad9e0;
+  --appt-unassigned-rule: #e60a2f;
+  --appt-unassigned-ink: #a3505f;
+  --appt-unassigned-title: #8c2233;
+
+  /* The staff avatar disc that rides on top of a tinted card. */
+  --appt-avatar-bg: rgba(255, 255, 255, 0.8);
+}
+.dark {
+  --appt-color-fill: #2a2440;
+  --appt-color-rule: #9b8be0;
+  --appt-color-ink: #b6abe6;
+  --appt-color-title: #ece8fa;
+
+  --appt-grooming-fill: #332a1a;
+  --appt-grooming-rule: #cba55c;
+  --appt-grooming-ink: #cfb98a;
+  --appt-grooming-title: #f2e6cd;
+
+  --appt-cut-fill: #242a32;
+  --appt-cut-rule: #9db0c4;
+  --appt-cut-ink: #9aa5b4;
+  --appt-cut-title: #e4e9ef;
+
+  --appt-feature-fill: #5b4ba6;
+  --appt-feature-rule: #b7a9f0;
+  --appt-feature-ink: rgba(255, 255, 255, 0.78);
+  --appt-feature-title: #ffffff;
+
+  --appt-danger-fill: #3d1b23;
+  --appt-danger-rule: #f2555a;
+  --appt-danger-ink: #e79aa6;
+  --appt-danger-title: #ffdbe0;
+
+  --appt-tentative-fill: transparent;
+  --appt-tentative-rule: rgba(255, 255, 255, 0.28);
+  --appt-tentative-ink: #99a0ab;
+  --appt-tentative-title: #d6d9df;
+
+  --appt-unassigned-fill: #45161f;
+  --appt-unassigned-rule: #f2555a;
+  --appt-unassigned-ink: #eda3ad;
+  --appt-unassigned-title: #ffe2e6;
+
+  --appt-avatar-bg: rgba(0, 0, 0, 0.32);
+}
+
+/*
+ * ── Agenda: a CLOSED day / column ────────────────────────────────────────────
+ * A day the shop doesn't open, or a barber who doesn't work it, is not "empty" —
+ * it is unavailable, and must not read as bookable whitespace. It gets a flat
+ * grey wash under a fine diagonal hatch (shape + colour, so it survives grayscale
+ * and high-contrast), and its header goes grey with a "Closed" caption.
+ */
+:root {
+  --closed-bg: #f1f3f6;
+  --closed-stripe: rgba(41, 50, 61, 0.08);
+  --closed-fg: #98a0ab;
+}
+.dark {
+  --closed-bg: #17181b;
+  --closed-stripe: rgba(255, 255, 255, 0.055);
+  --closed-fg: #6f7480;
+}
+
+/*
+ * ── Contact avatar palette ───────────────────────────────────────────────────
+ * Eight tones, picked by hashing the contact's identifier (lib/avatarColor.ts), so
+ * one person keeps one colour across the queue and the thread. Every value is a
+ * solid fill carrying WHITE text at >= 4.5:1, which is why the same eight work in
+ * both themes: a saturated disc reads the same on a white panel and a near-black
+ * one. Colour here is a recognition aid, never a state — no meaning is encoded in
+ * which tone you get.
+ */
+:root {
+  --avatar-1: #0f766e; /* teal    */
+  --avatar-2: #1d4ed8; /* blue    */
+  --avatar-3: #6d28d9; /* purple  */
+  --avatar-4: #15803d; /* green   */
+  --avatar-5: #b45309; /* orange  */
+  --avatar-6: #be185d; /* rose    */
+  --avatar-7: #0e7490; /* cyan    */
+  --avatar-8: #4338ca; /* indigo  */
 }
 
 /*
  * ── Thread bubbles ───────────────────────────────────────────────────────────
- * The three senders read as a light → mid → dark ramp, so who said what is clear
- * at a glance without spending a hue:
- *   customer    → white surface + hairline (left)
- *   BOT         → this distinctly grey fill (right)
- *   human agent → solid near-black / off-white inverse (right)
- * The bot fill is deliberately well below the canvas in lightness: at --subtle it
- * sat within a couple of percent of the thread background and the bubbles all but
- * disappeared in light mode. Green is intentionally NOT used — it is reserved for
- * success, and red for selection/urgency.
+ * Two SIDES, three voices: the customer speaks on the left in a light bubble, the
+ * business on the right in a dark one, and the one voice that is a PERSON on the
+ * business side is the brand red:
+ *   customer    → light cool grey + hairline (left)
+ *   BOT         → dark near-black fill (right)
+ *   human agent → brand red (right)
+ * Green is intentionally NOT used — it is reserved for success.
  */
 :root {
-  /* CUSTOMER (left) — cool light grey. */
+  /* CUSTOMER (left) — a cool light grey object on the WHITE transcript, outlined
+     with the SAME hairline the rest of the app uses, so the bubble's edge and a
+     panel's edge are one decision (--line). (The tint moved to the queue column;
+     a white bubble on a white transcript would have no edge but its border.) */
   --bubble-in: #eef0f3;
-  --bubble-in-border: #d3d8de;
+  --bubble-in-border: var(--line);
   --bubble-in-fg: #0f172a;
-  /* BOT (right) — a clearly darker step of the SAME cool grey, so the two
-     inbound-ish voices separate by luminosity alone. */
-  --bubble-bot: #dcdfe5;
-  --bubble-bot-border: #bfc5ce;
-  --bubble-bot-fg: #0f172a;
-  /* HUMAN AGENT (right) — the brand RED. This is the one place a person speaking
-     outranks everything else in the thread, and it spends no new hue: it is the
-     same red as the rail's active mark. White on it is 4.8:1 (AA). */
-  --bubble-agent: #e60a2f;
-  --bubble-agent-fg: #ffffff;
+  /* BOT (right) — the BUSINESS side of the thread, so it is the dark end of the
+     ramp rather than a second grey: at #dcdfe5 the bot and the customer sat within
+     a few percent of each other and a glance couldn't tell who was speaking. */
+  --bubble-bot: #22262e;
+  --bubble-bot-border: #22262e;
+  --bubble-bot-fg: #f2f4f7;
+  /* HUMAN AGENT (right) — the OUTLINED bubble. A person answering sits on the
+     business side but must not be mistaken for the bot, so it keeps the side and
+     drops the fill: white with the standard hairline, plus the agent's name over the
+     run and their initials on the disc beside it. (This replaced a solid brand red:
+     at three or four replies in a row the thread turned into a wall of red, which
+     read as errors rather than as a colleague typing.) */
+  --bubble-agent: var(--surface);
+  --bubble-agent-fg: var(--foreground);
 }
 .dark {
   --bubble-in: #1a1c20;
-  --bubble-in-border: rgba(255, 255, 255, 0.13);
+  --bubble-in-border: var(--line);
   --bubble-in-fg: #e8eaee;
   --bubble-bot: #26292f;
   --bubble-bot-border: rgba(255, 255, 255, 0.17);
   --bubble-bot-fg: #eceef2;
-  /* The same red in dark — a solid fill behind white text needs no lift. */
-  --bubble-agent: #e60a2f;
-  --bubble-agent-fg: #ffffff;
+  --bubble-agent: var(--surface);
+  --bubble-agent-fg: var(--foreground);
 }
 .dark {
   --sidebar-hover: var(--sidebar-hover-red);
@@ -215,8 +380,16 @@
   --color-danger-tint: var(--danger-tint);
   --color-blocked-bg: var(--blocked-bg);
   --color-blocked-fg: var(--blocked-fg);
+  --color-panel-hero: var(--panel-hero);
+  --color-thead-bg: var(--thead-bg);
+  --color-queue-bg: var(--queue-bg);
+  --color-queue-row-active: var(--queue-row-active);
+  --color-closed-bg: var(--closed-bg);
+  --color-closed-fg: var(--closed-fg);
   --color-hover: var(--hover);
   --radius-card: var(--radius-card);
+  /* Exposed as `rounded-bubble` — the inbox's single softness knob. */
+  --radius-bubble: var(--radius-bubble);
   /*
    * TIGHT RADIUS SCALE (3–5px). Overriding the scale here re-tunes every existing
    * rounded-* utility at once, which keeps the geometry consistent instead of
@@ -268,15 +441,26 @@
 }
 
 /*
- * GLOBAL UI SCALE. The default 16px root made the operative surfaces feel oversized;
- * 90% (14.4px) reproduces the density of viewing the app at 90% browser zoom, which
- * is the target. Because Tailwind's type AND spacing scales are rem-based, this one
- * declaration rescales the whole UI coherently — it is NOT a font-only change.
- * Anything sized in literal px would stay put and drift out of proportion, so the
- * redesigned surfaces express their small type and icons in rem instead.
+ * GLOBAL UI SCALE — now a PREFERENCE (see lib/textScale.ts), not a constant.
+ *
+ * This used to be a hard `90%`: it reproduced the density of viewing the app at 90%
+ * browser zoom, which suits dense tables and makes everything else read a notch
+ * small. Because Tailwind's type AND spacing scales are rem-based, one declaration
+ * rescales the whole UI coherently — it is NOT a font-only change. The shell
+ * geometry tokens stay in fixed px on purpose, so chrome holds its size while the
+ * content grows.
+ *
+ * The root layout stamps `data-text-scale` from a cookie during SSR, so the first
+ * painted frame is already at the chosen size.
  */
 html {
-  font-size: 90%;
+  font-size: 100%;
+}
+html[data-text-scale='compact'] {
+  font-size: 90%; /* the original density */
+}
+html[data-text-scale='large'] {
+  font-size: 110%;
 }
 
 /*
@@ -409,6 +593,136 @@ body {
 .u-row-danger {
   background-color: color-mix(in srgb, var(--brand) 6%, transparent);
   box-shadow: inset 3px 0 0 0 var(--brand-rule);
+}
+
+/*
+ * ── Agenda appointment card ──────────────────────────────────────────────────
+ * ONE card shape, seven palettes. The family class sets the four --appt-* slots
+ * and the base class consumes them, so a category is added by writing a palette
+ * here — never by threading a colour through the component.
+ */
+.u-appt {
+  border-radius: 8px;
+  background-color: var(--appt-fill);
+  color: var(--appt-title);
+  border: 1px solid var(--appt-edge, transparent);
+  border-left: 3px solid var(--appt-rule);
+}
+/* The secondary lines (time range, service, state) sit a step back from the name. */
+.u-appt-ink {
+  color: var(--appt-ink);
+}
+/* The staff disc: a light puck that carries the family's saturated tone. */
+.u-appt-avatar {
+  background-color: var(--appt-avatar-bg);
+  color: var(--appt-avatar-fg, var(--appt-rule));
+}
+
+.u-appt-color {
+  --appt-fill: var(--appt-color-fill);
+  --appt-rule: var(--appt-color-rule);
+  --appt-ink: var(--appt-color-ink);
+  --appt-title: var(--appt-color-title);
+  --appt-edge: color-mix(in srgb, var(--appt-color-rule) 16%, transparent);
+}
+.u-appt-grooming {
+  --appt-fill: var(--appt-grooming-fill);
+  --appt-rule: var(--appt-grooming-rule);
+  --appt-ink: var(--appt-grooming-ink);
+  --appt-title: var(--appt-grooming-title);
+  --appt-edge: color-mix(in srgb, var(--appt-grooming-rule) 16%, transparent);
+}
+.u-appt-cut {
+  --appt-fill: var(--appt-cut-fill);
+  --appt-rule: var(--appt-cut-rule);
+  --appt-ink: var(--appt-cut-ink);
+  --appt-title: var(--appt-cut-title);
+  --appt-edge: color-mix(in srgb, var(--appt-cut-rule) 12%, transparent);
+}
+.u-appt-feature {
+  --appt-fill: var(--appt-feature-fill);
+  --appt-rule: var(--appt-feature-rule);
+  --appt-ink: var(--appt-feature-ink);
+  --appt-title: var(--appt-feature-title);
+  --appt-edge: transparent;
+  /* On the solid block the disc keeps a fixed white/purple pair in BOTH themes —
+     the family rule is too dark (light) / too light (dark) to invert cleanly. */
+  --appt-avatar-bg: #ffffff;
+  --appt-avatar-fg: #5b4ba6;
+}
+.u-appt-danger {
+  --appt-fill: var(--appt-danger-fill);
+  --appt-rule: var(--appt-danger-rule);
+  --appt-ink: var(--appt-danger-ink);
+  --appt-title: var(--appt-danger-title);
+  --appt-edge: color-mix(in srgb, var(--appt-danger-rule) 20%, transparent);
+}
+.u-appt-unassigned {
+  --appt-fill: var(--appt-unassigned-fill);
+  --appt-rule: var(--appt-unassigned-rule);
+  --appt-ink: var(--appt-unassigned-ink);
+  --appt-title: var(--appt-unassigned-title);
+  --appt-edge: color-mix(in srgb, var(--appt-unassigned-rule) 26%, transparent);
+}
+/* UNCONFIRMED is the only outline card: no fill, a dashed hairline all round and
+   a solid (but pale) left rule, so "not committed yet" reads as a shape too. */
+.u-appt-tentative {
+  --appt-fill: var(--appt-tentative-fill);
+  --appt-rule: var(--appt-tentative-rule);
+  --appt-ink: var(--appt-tentative-ink);
+  --appt-title: var(--appt-tentative-title);
+  --appt-edge: var(--appt-tentative-rule);
+  border-style: dashed;
+  border-left-style: solid;
+}
+.u-appt-cancelled {
+  --appt-fill: var(--blocked-bg);
+  --appt-rule: var(--blocked-fg);
+  --appt-ink: var(--blocked-fg);
+  --appt-title: var(--blocked-fg);
+  --appt-edge: color-mix(in srgb, var(--blocked-fg) 30%, transparent);
+}
+
+/* The eight contact-avatar tones. The component picks the class; the palette
+   above owns the values. */
+.u-avatar-1 {
+  background-color: var(--avatar-1);
+  color: #ffffff;
+}
+.u-avatar-2 {
+  background-color: var(--avatar-2);
+  color: #ffffff;
+}
+.u-avatar-3 {
+  background-color: var(--avatar-3);
+  color: #ffffff;
+}
+.u-avatar-4 {
+  background-color: var(--avatar-4);
+  color: #ffffff;
+}
+.u-avatar-5 {
+  background-color: var(--avatar-5);
+  color: #ffffff;
+}
+.u-avatar-6 {
+  background-color: var(--avatar-6);
+  color: #ffffff;
+}
+.u-avatar-7 {
+  background-color: var(--avatar-7);
+  color: #ffffff;
+}
+.u-avatar-8 {
+  background-color: var(--avatar-8);
+  color: #ffffff;
+}
+
+/* A CLOSED column body: flat grey under a fine 45° hatch. Purely decorative — the
+   header always spells "Closed" in words next to it. */
+.u-closed-hatch {
+  background-color: var(--closed-bg);
+  background-image: repeating-linear-gradient(45deg, var(--closed-stripe) 0 2px, transparent 2px 8px);
 }
 
 /* Minimum 40px touch target for compact icon controls, without changing layout. */

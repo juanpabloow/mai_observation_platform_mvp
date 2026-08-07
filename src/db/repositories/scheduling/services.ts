@@ -269,6 +269,31 @@ export async function listStaffServices(tenantId: string, staffId: string): Prom
   return r.rows;
 }
 
+/**
+ * The service ids each of these staff can perform, as a MAP — one grouped query for
+ * the whole roster. `listStaffServices` above is per-staff, which is an N+1 the
+ * moment a screen renders a card per barber (the Staff roster does exactly that).
+ */
+export async function listStaffServiceIds(
+  tenantId: string,
+  staffIds: string[],
+): Promise<Map<string, string[]>> {
+  const out = new Map<string, string[]>();
+  if (staffIds.length === 0) return out;
+  const r = await query<{ staff_id: string; service_id: string }>(
+    `SELECT staff_id, service_id
+       FROM staff_services
+      WHERE tenant_id = $1 AND staff_id = ANY($2::uuid[]) AND active = true`,
+    [tenantId, staffIds],
+  );
+  for (const row of r.rows) {
+    const list = out.get(row.staff_id) ?? [];
+    list.push(row.service_id);
+    out.set(row.staff_id, list);
+  }
+  return out;
+}
+
 /** Assign (upsert) a service to a staff member. Validates STRUCTURALLY that the
  * staff's SITE and the service belong to the SAME client: staff → site.client_id must
  * equal service.client_id. A cross-client service id is a silent no-op (0 rows). */

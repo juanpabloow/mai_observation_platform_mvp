@@ -8,6 +8,7 @@ import { ScopeProviderServer } from "@/components/ScopeProviderServer";
 import { ScopeSync } from "@/components/ScopeSync";
 import { Providers } from "./providers";
 import { parseSidebarTheme, SIDEBAR_THEME_COOKIE } from "@/lib/sidebarTheme";
+import { parseTextScale, TEXT_SCALE_COOKIE } from "@/lib/textScale";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -33,12 +34,17 @@ export default async function RootLayout({
   // Sidebar appearance is a personal cookie preference, read HERE (server) and
   // stamped on <html> so the very first painted frame already has the right rail —
   // no flash, no client round-trip. An absent/unknown cookie resolves to Light.
-  const sidebarTheme = parseSidebarTheme((await cookies()).get(SIDEBAR_THEME_COOKIE)?.value);
+  const jar = await cookies();
+  const sidebarTheme = parseSidebarTheme(jar.get(SIDEBAR_THEME_COOKIE)?.value);
+  // Text size is the same kind of preference (see lib/textScale.ts): read here so the
+  // very first frame is already at the chosen scale, with no resize flash.
+  const textScale = parseTextScale(jar.get(TEXT_SCALE_COOKIE)?.value);
 
   return (
     <html
       lang="en"
       data-sidebar-theme={sidebarTheme}
+      data-text-scale={textScale}
       // next-themes sets the theme class on <html> before hydration; suppress the
       // resulting server/client class mismatch warning (no-flash approach).
       suppressHydrationWarning

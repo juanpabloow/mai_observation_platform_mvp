@@ -40,7 +40,10 @@ test('an INACTIVE barber still gets a lane when they have appointments in range'
 
 test('an inactive barber is LABELLED, and their appointments stay openable', () => {
   const src = read(VIEW);
-  assert.ok(src.includes('interface StaffOpt { id: string; name: string; active: boolean }'), 'StaffOpt carries active');
+  // The shape has grown (workingHours drives the "closed" lanes), so match the
+  // FIELD rather than the whole declaration — the contract is `active`, not the
+  // exact list of siblings it travels with.
+  assert.ok(/interface StaffOpt \{[^}]*active: boolean/.test(src), 'StaffOpt carries active');
   assert.ok(src.includes('inactive: !st.active'), 'the column knows the barber is inactive');
   assert.ok(src.includes('>\n                        Inactive\n                      </span>'), 'the header shows an Inactive chip');
   // Accessible: the chip explains itself rather than relying on colour/'!'.

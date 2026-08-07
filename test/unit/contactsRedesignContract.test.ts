@@ -72,7 +72,11 @@ test('shell: chrome geometry is fixed px, so it does not ride the 90% rem scale'
   ] as const) {
     assert.ok(css.includes(`${token}: ${value}`), `${token} is ${value}`);
   }
-  assert.ok(/html\s*{\s*font-size:\s*90%/.test(css), 'content still scales at 90%');
+  // The root scale is a PREFERENCE now (lib/textScale.ts), not a constant: 100% by
+  // default, with the original 90% kept as "Compact". The point of the assertion
+  // stands — chrome is px and does not ride it, content is rem and does.
+  assert.ok(/html\s*{\s*font-size:\s*100%/.test(css), 'content scales from the root…');
+  assert.ok(/html\[data-text-scale='compact'\]\s*{\s*font-size:\s*90%/.test(css), '…and Compact is the old density');
   // Radius is retuned once, at the scale — not with per-component overrides.
   // Softened one step from the original 3-6px spec — still a tight, tool-like
   // scale, tuned once here rather than per component.
@@ -92,6 +96,14 @@ test('shell: the four header strips all resolve to the SAME height token', () =>
   }
   // The thread header is min-height (its content can wrap) but shares the token.
   assert.ok(read('components/InboxThread.tsx').includes('min-h-[var(--topbar-height)]'), 'the thread header too');
+  // And every screen is titled by the ONE band, at one size.
+  for (const rel of [
+    'app/clients/[clientId]/contacts/page.tsx',
+    'components/scheduling/AgendaView.tsx',
+    'components/ClientInboxWorkspace.tsx',
+  ]) {
+    assert.ok(read(rel).includes('<PageTitle'), `${rel} uses the shared page title`);
+  }
 });
 
 test('sidebar: the footer row is a GRID, so the label cannot overlap the avatar', () => {
@@ -121,7 +133,34 @@ test('contacts: the panel gutter is actually VISIBLE against the canvas', () => 
     read('app/layout.tsx').includes('overflow-y-auto p-[var(--content-pad)]'),
     'the shell pads on all four sides',
   );
-  assert.ok(read(CONTACTS_PAGE).includes('rounded-lg border border-line bg-surface'), 'the card has its own radius + hairline');
+  // The card's radius + hairline now come from the SHARED page shell, not from a
+  // class string copied into this page (that duplication is exactly why the
+  // floating-card look kept landing on some screens and not others).
+  assert.ok(read(CONTACTS_PAGE).includes('<PageShell>'), 'the page renders the shared shell');
+  assert.ok(
+    read('components/ui/PageShell.tsx').includes('rounded-xl border border-line bg-surface'),
+    'the shell has the radius + hairline + fill',
+  );
+});
+
+test('page shell: ONE component owns the floating card, and all three screens use it', () => {
+  const shell = read('components/ui/PageShell.tsx');
+  // The full contract: fill + hairline + 6px radius, and a height chain that lets it
+  // grow to the bottom of the scrolling region (min-h-0 + flex-1), clipping children
+  // to the rounded corners.
+  assert.ok(shell.includes('rounded-xl border border-line bg-surface'), 'fill + hairline + radius');
+  assert.ok(shell.includes('flex min-h-0 min-w-0 flex-1 overflow-hidden'), 'it grows to the bottom and clips');
+  for (const f of [CONTACTS_PAGE, 'components/scheduling/AgendaView.tsx', 'components/ClientInboxWorkspace.tsx']) {
+    assert.ok(read(f).includes('from "@/components/ui/PageShell"'), `${f} imports the shared shell`);
+    assert.ok(read(f).includes('<PageShell'), `${f} renders it`);
+  }
+  // And nobody hand-rolls the old string any more.
+  for (const f of [CONTACTS_PAGE, 'components/scheduling/AgendaView.tsx', 'components/ClientInboxWorkspace.tsx']) {
+    assert.ok(
+      !read(f).includes('flex-col overflow-hidden rounded-lg border border-line bg-surface'),
+      `${f} no longer copies the panel classes`,
+    );
+  }
 });
 
 test('sidebar: the footer labels the person, not a truncated email', () => {
@@ -153,18 +192,24 @@ test('shell: the GUTTER is owned by the layout, not by each page', () => {
   }
 });
 
-test('contacts: one continuous surface — summary, table and end-of-list inside it', () => {
+test('contacts: ONE card holds the screen, with the table recessed inside it', () => {
   const src = read(CONTACTS_PAGE);
+  assert.ok(src.includes('<PageShell>'), 'one bordered floating card holds the whole screen');
+  // Title band and toolbar band render INSIDE it, on the surface, hairline-separated…
+  assert.ok(src.includes('<ContactsToolbar owners={ownerOptions} />'), 'the toolbar renders');
   assert.ok(
-    src.includes('flex min-h-0 flex-1 flex-col overflow-hidden rounded-lg border border-line bg-surface'),
-    'one bordered floating panel',
+    src.indexOf('<PageShell>') < src.indexOf('<ContactsToolbar owners={ownerOptions} />'),
+    'and the bands are inside the card, not floating above it',
   );
-  // The toolbar and the stats row are INSIDE the panel (it is a card, not a bare table).
-  assert.ok(src.includes('<ContactsToolbar owners={ownerOptions} />'), 'the toolbar lives in the panel');
-  assert.ok(src.includes('px-[var(--panel-pad)]'), 'panel rows share one inner padding token');
+  // …and the table is its OWN bordered card on a recessed ground, which is what stops
+  // the toolbar and the rows reading as one undifferentiated slab.
+  assert.ok(src.includes('bg-background p-3'), 'the body is recessed');
+  assert.ok(
+    src.includes('overflow-hidden rounded-xl border border-line-strong bg-surface'),
+    'the table sits in its own card',
+  );
   assert.ok(src.includes('min-h-0 flex-1 overflow-auto'), 'the table region grows inside it');
-  assert.ok(src.includes('END OF LIST'), 'the end-of-list marker lives in the same surface');
-  // The page owns only the rhythm BETWEEN blocks; the gutter is the layout's.
+  assert.ok(src.includes('END OF LIST'), 'the end-of-list marker lives in that same surface');
   assert.ok(src.includes('gap-[var(--content-pad)]'), 'block rhythm is the token');
 });
 
@@ -226,9 +271,15 @@ test('contacts: keyset pagination is untouched (cursor in, opaque cursor out)', 
 test('contacts: `from` (the origin workflow) survives search, facets, paging and row clicks', () => {
   const src = read(CONTACTS_PAGE);
   // Every generated href merges the CURRENT params, `from` included.
-  assert.ok(src.includes('{ q, from, stage, owner, tasks, cols, ...patch }'), 'hrefWith merges from');
+  assert.ok(
+    src.includes('{ q, from, stage, owner, tasks, cols, c: selectedId, ...patch }'),
+    'hrefWith merges from (and the open panel)',
+  );
   assert.ok(src.includes('const fromQS = from ? `?from=${encodeURIComponent(from)}` : ""'), 'from is preserved…');
-  assert.ok(src.includes('`${base}/${c.id}${fromQS}`'), '…on the row link into the record');
+  // The row now SELECTS (?c=) rather than navigating away, so `from` rides hrefWith;
+  // the link on into the full record lives in the panel and still carries fromQS.
+  assert.ok(src.includes('href={hrefWith({ c: c.id })}'), '…on the row link, which opens the panel');
+  assert.ok(src.includes('recordHref={`${base}/${panelId}${fromQS}`}'), '…and on the panel link into the record');
   // The toolbar preserves whatever is in the URL rather than rebuilding it.
   const toolbar = read(TOOLBAR);
   assert.ok(toolbar.includes('new URLSearchParams(searchParams.toString())'), 'the toolbar preserves existing params');
@@ -261,7 +312,8 @@ test('contacts: Columns is presentational — it writes ?cols= and touches nothi
 test('contacts: the row is fully clickable via ONE real link (no duplicate tab stops)', () => {
   const src = read(CONTACTS_PAGE);
   assert.ok(src.includes('after:absolute after:inset-0'), 'the name link stretches over the row');
-  assert.ok(src.includes('className={`relative h-[var(--row-h)] border-b'), 'the row is the positioning context');
+  // 46px rather than the dense --row-h: this is the customer list, not a log.
+  assert.ok(src.includes('className={`relative h-[46px] border-b'), 'the row is the positioning context');
   // Underline is a hover/focus affordance only — never a permanent decoration.
   assert.ok(src.includes('no-underline'), 'the name link is not permanently underlined');
   assert.ok(src.includes('hover:underline focus-visible:underline'), '…but underlines on hover AND focus');
@@ -350,14 +402,23 @@ test('inbox: the real groups and the real pending count still drive the queue', 
   const src = read(WORKSPACE);
   assert.ok(src.includes('groupConversations('), 'grouping comes from the pure state mapping');
   assert.ok(src.includes('pendingCount('), 'the counter is computed from the real list');
-  assert.ok(src.includes('{pending} pending'), 'and is rendered');
+  assert.ok(src.includes('{pending} need you'), 'and is rendered (as the queue\'s "N need you")');
 });
 
-test('inbox: the selected row is marked by a soft fill AND a left rule', () => {
+test('inbox: the selected row is marked by a fill AND a shape, and never shifts', () => {
   const src = read(WORKSPACE);
-  assert.ok(src.includes('u-row-selected'), 'selection uses the shared treatment');
-  const css = read('app/globals.css');
-  assert.ok(/\.u-row-selected[^}]*box-shadow:\s*inset 2px 0/s.test(css), 'which includes the 2px left rule');
+  // The queue row is a ROUNDED inset card, so its mark is a fill + a 1px BORDER —
+  // an inset 2px left rule cannot follow a 15px radius and read as a dark sliver
+  // clipped against the lane header. The red .u-row-selected stays in use on the
+  // surfaces where selection really is urgency; the inbox is not one of them.
+  // The queue column is WHITE (the reference's), so selection is the GREY CARD on
+  // it — the inverse of tinting the whole column and darkening one row.
+  assert.ok(src.includes('border-transparent bg-queue-row-active'), 'selected = the grey card on the white queue');
+  assert.ok(!src.includes('u-row-selected'), 'the inbox no longer paints selection brand-red');
+  // EVERY state carries a border (transparent when idle) so selecting a row cannot
+  // move its neighbours by a pixel.
+  assert.ok(src.includes('border-transparent hover:bg-queue-row-active/50'), 'the idle row reserves the same border');
+  assert.ok(src.includes('border-warn/25 bg-warn-soft'), 'a pending row keeps its own amber mark');
 });
 
 test('inbox: customer / bot / human-agent messages stay visually distinct', () => {
@@ -366,7 +427,7 @@ test('inbox: customer / bot / human-agent messages stay visually distinct', () =
   assert.ok(src.includes('const isAgent = msg.sender === "human_agent"'), 'the human agent is identified');
   // Three different fills — a light → mid → dark ramp, no hue spent.
   assert.ok(src.includes('border border-bubble-in-border bg-bubble-in text-bubble-in-fg'), 'customer bubble');
-  assert.ok(src.includes('bg-bubble-agent text-bubble-agent-fg'), 'human-agent bubble (the brand red)');
+  assert.ok(src.includes('bg-bubble-agent text-bubble-agent-fg'), 'human-agent bubble (outlined, on the business side)');
   assert.ok(src.includes('border border-bubble-bot-border bg-bubble-bot text-bubble-bot-fg'), 'bot bubble');
   // A FAILED agent send must not be mistaken for a normal one now that both are red:
   // normal is the SOLID fill, failed is OUTLINED.
@@ -377,17 +438,26 @@ test('inbox: the bot fill is clearly separated from the canvas in BOTH themes', 
   const css = read('app/globals.css');
   // At --subtle the bot bubble sat within ~2% lightness of the thread background and
   // effectively vanished in light mode; it now has its own token, well below the canvas.
-  assert.ok(/--bubble-in:\s*#eef0f3/.test(css), 'light inbound is cool light grey');
-  assert.ok(/--bubble-bot:\s*#dcdfe5/.test(css), 'light bot is a darker step of the same grey');
+  // The Inbox redesign pushed it FURTHER: the bot speaks for the business, so in light
+  // mode it is the dark end of the ramp rather than a second grey (#dcdfe5 still read
+  // as "another customer bubble" at a glance).
+  assert.ok(/--bubble-in:\s*#eef0f3/.test(css), 'light inbound is the cool grey object on the white transcript');
+  assert.ok(/--bubble-bot:\s*#22262e/.test(css), 'light bot is the dark, business-side fill');
   assert.ok(/--bubble-in:\s*#1a1c20/.test(css), 'dark inbound');
   assert.ok(/--bubble-bot:\s*#26292f/.test(css), 'dark bot');
   assert.ok(css.includes('--color-bubble-bot: var(--bubble-bot)'), 'exposed as a utility');
   // Inbound and bot must not collapse into the same fill in either theme.
-  assert.notEqual('#eef0f3', '#dcdfe5');
+  assert.notEqual('#eef0f3', '#22262e');
   assert.notEqual('#1a1c20', '#26292f');
-  // The agent's red is the SAME red as the rail's active mark, in both themes.
-  assert.equal(css.match(/--bubble-agent:\s*#e60a2f/g)?.length, 2, 'one agent red, light + dark');
-  assert.ok(/--nav-active:\s*#e60a2f/.test(css), 'and it matches the nav active red (spec accent)');
+  // The HUMAN AGENT is the outlined bubble, not a third fill: it keeps the business
+  // SIDE and drops the colour, so a run of replies can't turn the thread red. It is
+  // told apart from the customer by the side, the hairline, the agent's name over the
+  // run and the initials on its disc.
+  assert.equal(css.match(/--bubble-agent:\s*var\(--surface\)/g)?.length, 2, 'outlined in both themes');
+  assert.ok(
+    read('components/MessageTranscript.tsx').includes('border border-line-strong bg-bubble-agent'),
+    'and the bubble actually draws that hairline',
+  );
   // No BUBBLE may use green — that hue is reserved for success/positive state (the
   // "Active" pill and the assigned-agent dot legitimately keep it, via --success).
   const transcript = read('components/MessageTranscript.tsx');
