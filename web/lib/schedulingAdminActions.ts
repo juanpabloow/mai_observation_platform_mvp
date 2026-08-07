@@ -28,6 +28,7 @@ import {
   setSiteService,
   setStaffService,
   updateService,
+  parseServiceCategory,
 } from "@worker/db/repositories/scheduling/services.js";
 import { countUpcomingAppointmentsForResource } from "@worker/db/repositories/scheduling/appointments.js";
 import {
@@ -169,6 +170,10 @@ export async function createServiceAction(input: {
   bufferBeforeMin?: number;
   bufferAfterMin?: number;
   siteIds?: string[];
+  /** Colour family. Anything unrecognised is stored as NULL rather than rejected —
+   *  the agenda then falls back to inferring it from the name, which is the old
+   *  behaviour, so a bad value degrades instead of failing a save. */
+  category?: string | null;
 }): Promise<AdminResult> {
   const auth = await requireSchedulingAdmin(input.clientId);
   if (!auth.ok) return auth;
@@ -187,6 +192,7 @@ export async function createServiceAction(input: {
     price: input.price ?? null,
     bufferBeforeMin: input.bufferBeforeMin ?? 0,
     bufferAfterMin: input.bufferAfterMin ?? 0,
+    category: parseServiceCategory(input.category),
   });
   for (const siteId of input.siteIds ?? []) {
     await setSiteService(auth.tenantId, siteId, svc.id);
@@ -198,11 +204,18 @@ export async function createServiceAction(input: {
 export async function updateServiceAction(
   clientId: string,
   id: string,
-  patch: { name?: string; description?: string; durationMin?: number; price?: number | null; bufferBeforeMin?: number; bufferAfterMin?: number; active?: boolean; featured?: boolean },
+  patch: { name?: string; description?: string; durationMin?: number; price?: number | null; bufferBeforeMin?: number; bufferAfterMin?: number; active?: boolean; featured?: boolean; category?: string | null },
 ): Promise<AdminResult> {
   const auth = await requireSchedulingAdmin(clientId);
   if (!auth.ok) return auth;
-  const row = await updateService(auth.tenantId, clientId, id, patch);
+  // `category` is pulled OUT of the spread so the raw string never reaches the
+  // repository: absent = not in the patch, present = narrowed to a storable family
+  // (or NULL, which means "go back to inferring it from the name").
+  const { category, ...rest } = patch;
+  const row = await updateService(auth.tenantId, clientId, id, {
+    ...rest,
+    ...(category !== undefined ? { category: parseServiceCategory(category) } : {}),
+  });
   if (!row) return { ok: false, error: "Service not found." };
   revalidateAdmin(clientId);
   return { ok: true, id };

@@ -13,6 +13,15 @@ import { matchByName, type NameMatch } from '../../../scheduling/nameMatch.js';
  * against another client's resources. Filtering by tenant alone is never enough.
  */
 
+/** The families with a real palette — mirrors the services_category_valid CHECK. */
+export const SERVICE_CATEGORIES = ['color', 'grooming', 'cut', 'feature'] as const;
+export type ServiceCategory = (typeof SERVICE_CATEGORIES)[number];
+
+/** Narrow arbitrary input (a form value, an API body) to a storable category. */
+export function parseServiceCategory(v: unknown): ServiceCategory | null {
+  return (SERVICE_CATEGORIES as readonly unknown[]).includes(v) ? (v as ServiceCategory) : null;
+}
+
 export interface ServiceRow {
   id: string;
   tenant_id: string;
@@ -27,6 +36,10 @@ export interface ServiceRow {
   /** Operator-chosen "offer this first" flag (default false). The API returns featured
    *  services ahead of the rest and can filter to only them (see listServicesForSite). */
   featured: boolean;
+  /** The colour family this service wears on the agenda. NULL = the operator hasn't
+   *  said, and the caller falls back to matching keywords in the NAME (see
+   *  web/lib/agendaCategory.ts). CHECK-constrained to the families that have a palette. */
+  category: ServiceCategory | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -133,12 +146,13 @@ export interface CreateServiceInput {
   price?: number | null;
   bufferBeforeMin?: number;
   bufferAfterMin?: number;
+  category?: ServiceCategory | null;
 }
 
 export async function createService(input: CreateServiceInput): Promise<ServiceRow> {
   const r = await query<ServiceRow>(
-    `INSERT INTO services (tenant_id, client_id, name, description, duration_min, price, buffer_before_min, buffer_after_min)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+    `INSERT INTO services (tenant_id, client_id, name, description, duration_min, price, buffer_before_min, buffer_after_min, category)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
     [
       input.tenantId,
       input.clientId,
@@ -148,6 +162,7 @@ export async function createService(input: CreateServiceInput): Promise<ServiceR
       input.price ?? null,
       input.bufferBeforeMin ?? 0,
       input.bufferAfterMin ?? 0,
+      input.category ?? null,
     ],
   );
   return firstRowOrThrow(r, 'createService');
@@ -162,6 +177,8 @@ export interface UpdateServiceInput {
   bufferAfterMin?: number;
   active?: boolean;
   featured?: boolean;
+  /** null CLEARS it, back to keyword inference. */
+  category?: ServiceCategory | null;
 }
 
 export async function updateService(
@@ -184,6 +201,7 @@ export async function updateService(
   if (patch.bufferAfterMin !== undefined) add('buffer_after_min', patch.bufferAfterMin);
   if (patch.active !== undefined) add('active', patch.active);
   if (patch.featured !== undefined) add('featured', patch.featured);
+  if (patch.category !== undefined) add('category', patch.category);
   if (sets.length === 0) return getServiceById(tenantId, clientId, id);
   sets.push('updated_at = now()');
   const r = await query<ServiceRow>(

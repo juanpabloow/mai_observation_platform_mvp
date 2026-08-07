@@ -11,11 +11,14 @@
  * is struck out and grey. Only when a card is in a normal state does the SERVICE
  * choose the family.
  *
- * TODO(agenda): services have no `category` column, so the family is inferred
- *   from the service NAME by keyword (bilingual EN/ES — the demo data is Spanish).
- *   A service whose name matches nothing falls back to the neutral CUT family.
- *   Add `services.category` (colour | grooming | cut | feature) and read it here;
- *   the keyword table then becomes the migration's backfill rule.
+ * WHERE THE FAMILY COMES FROM, in order:
+ *   1. `services.category` — what the operator actually chose. Authoritative.
+ *   2. Keywords in the service NAME — the FALLBACK, for rows where nobody has set a
+ *      category yet (bilingual EN/ES; the demo data is Spanish). Still guessing, but
+ *      only for services that never got classified, and it is now correctable in one
+ *      place instead of being the only mechanism.
+ *   3. The neutral CUT family, so a card is never unstyled.
+ *
  * TODO(agenda): there is no `payment_due` / balance on an appointment, so the
  *   DANGER family is currently driven only by overlap + no-show. Wire the unpaid
  *   state in here once the model carries one.
@@ -48,9 +51,25 @@ export function apptCategoryClass(category: ApptCategory): string {
 }
 
 /**
+ * The families a SERVICE can be stored as (services.category, CHECK-constrained).
+ * The state families (danger/tentative/cancelled/unassigned) are deliberately NOT
+ * storable: they describe an appointment, not a service.
+ */
+const STORABLE: readonly ApptCategory[] = ["color", "grooming", "cut", "feature"];
+
+/** Narrow the raw column value; anything unexpected is treated as "not set". */
+function fromColumn(category: string | null | undefined): ApptCategory | null {
+  return category && (STORABLE as readonly string[]).includes(category) ? (category as ApptCategory) : null;
+}
+
+/**
  * Service-name keywords, most specific FIRST — "keratin package" must land on
  * `feature` before "package"/"colour" can claim it. Accent-insensitive: the input
  * is normalised (NFD, marks stripped) so "queratina" and "coloración" both match.
+ *
+ * This is now the FALLBACK only. It is also the classification rule the optional
+ * backfill script applies (src/scripts/backfillServiceCategory.ts), so a shop that
+ * runs it gets exactly today's colours, stored and editable.
  */
 const SERVICE_KEYWORDS: Array<{ category: ApptCategory; words: string[] }> = [
   // FEATURE — the solid, high-emphasis block. Deliberately a SHORT list: it is
@@ -74,13 +93,18 @@ function normalise(s: string): string {
     .replace(/[\u0300-\u036f]/g, "");
 }
 
-/** The family a SERVICE belongs to, ignoring appointment state. */
-export function serviceCategory(serviceName: string): ApptCategory {
+/**
+ * The family a SERVICE belongs to, ignoring appointment state.
+ * `category` is the stored `services.category`; pass it whenever the caller has it.
+ */
+export function serviceCategory(serviceName: string, category?: string | null): ApptCategory {
+  const stored = fromColumn(category);
+  if (stored) return stored; // the operator's choice wins
   const name = normalise(serviceName);
-  for (const { category, words } of SERVICE_KEYWORDS) {
-    if (words.some((w) => name.includes(w))) return category;
+  for (const { category: guess, words } of SERVICE_KEYWORDS) {
+    if (words.some((w) => name.includes(w))) return guess;
   }
-  // Neutral fallback — never an unstyled card. See the TODO at the top.
+  // Neutral fallback — never an unstyled card.
   return "cut";
 }
 
@@ -90,7 +114,17 @@ export function serviceCategory(serviceName: string): ApptCategory {
  * whole range in the view, not per card, so it is passed in rather than sniffed.
  */
 export function apptCategory(
-  appt: { service_name: string; status: string; staff_name: string | null; origin: string },
+  appt: {
+    service_name: string;
+    /** `services.category` for this appointment's service, when the service still
+     *  exists. NULL/absent → the name-keyword fallback. The appointment itself keeps
+     *  only a NAME snapshot, so a deleted service correctly falls back rather than
+     *  rewriting history with a category it never had. */
+    service_category?: string | null;
+    status: string;
+    staff_name: string | null;
+    origin: string;
+  },
   opts: { attention: boolean },
 ): ApptCategory {
   if (appt.status === "cancelled") return "cancelled";
@@ -101,5 +135,5 @@ export function apptCategory(
   // looking like a normal booking.
   if (appt.origin === "walk_in" && !appt.staff_name) return "unassigned";
   if (appt.status === "scheduled") return "tentative";
-  return serviceCategory(appt.service_name);
+  return serviceCategory(appt.service_name, appt.service_category);
 }
