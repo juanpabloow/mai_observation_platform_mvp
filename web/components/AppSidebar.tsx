@@ -338,7 +338,7 @@ function RailBody({
  *   CONVERSATIONS → Inbox — the client-level UNIFIED inbox with a live AGGREGATED
  *                   pending badge; never nested under a workflow.
  *   CRM           → Contacts (iff the crm module is enabled).
- *   SCHEDULING    → Agenda (iff the scheduling module is enabled).
+ *   SCHEDULING    → Agenda, Staff, Scheduling settings (iff the module is enabled).
  *   ADMINISTRATION (owner/admin only) → Team, and Modules (hidden for the real
  *                   default/"Unassigned" client, which can't have modules).
  * NO individual workflow names appear in the rail — switching workflows is the
@@ -448,8 +448,8 @@ export function AppSidebar({
     // SCHEDULING lists "Scheduling analytics". None of those routes exist in this
     // build, so they are deliberately NOT rendered — a rail item that 404s is worse
     // than an absent one. Confirm before I add them (each needs a real page first).
-    // TODO(nav): the target puts "Team" inside CRM and drops "Modules" entirely;
-    // here Team + Modules live under ADMINISTRATION because both are owner/admin
+    // TODO(nav): the target puts "Users & access" inside CRM and drops "Modules"
+    // entirely; here both live under ADMINISTRATION because they are owner/admin
     // client-administration surfaces, not CRM ones. Confirm before moving.
     // TODO(nav): the target has no "Custom fields" row; this build does, because
     // /contacts/fields is a real page. Confirm before hiding it.
@@ -483,10 +483,17 @@ export function AppSidebar({
       const scheduling: NavItem[] = [
         { key: "agenda", label: "Agenda", href: c("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(c("/scheduling/agenda")) },
       ];
-      // Scheduling settings (the per-client admin) — owner/admin only, and never for
-      // the DEFAULT client (it can't have scheduling). The module gate already
-      // ensured `scheduling` is enabled for this client.
+      // STAFF (the roster) and Scheduling settings are both owner/admin only, and
+      // never for the DEFAULT client (it can't have scheduling). The module gate
+      // already ensured `scheduling` is enabled for this client.
       if (!isMember && clientId !== defaultClientId) {
+        scheduling.push({
+          key: "staff",
+          label: "Staff",
+          href: c("/scheduling/staff"),
+          icon: Icon.team,
+          active: pathname.startsWith(c("/scheduling/staff")),
+        });
         scheduling.push({
           key: "scheduling-settings",
           label: "Scheduling settings",
@@ -499,7 +506,10 @@ export function AppSidebar({
     }
     if (!isMember) {
       const admin: NavItem[] = [
-        { key: "team", label: "Team", href: c("/team"), icon: Icon.team, active: pathname.startsWith(c("/team")) },
+        // The LABEL is "Users & access"; the key, the route and the components stay
+        // `team` so no link, import or test id breaks. This row is logins and roles —
+        // the barber roster is SCHEDULING → Staff.
+        { key: "team", label: "Users & access", href: c("/team"), icon: Icon.team, active: pathname.startsWith(c("/team")) },
       ];
       // Modules is hidden for the DEFAULT client (it can't have modules).
       if (clientId !== defaultClientId) {

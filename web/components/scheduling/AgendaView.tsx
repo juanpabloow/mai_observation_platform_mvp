@@ -41,6 +41,9 @@ interface Appt {
   start_at: string;
   service_end_at: string;
   service_name: string;
+  /** `services.category` — the stored colour family, NULL when unset (see
+   *  lib/agendaCategory.ts, which then falls back to the service name). */
+  service_category: string | null;
   duration_min: number;
   /** numeric from pg → string; null when the service has no price. */
   price: string | null;

@@ -10,13 +10,15 @@ const CLIENT_SURFACE_LABELS: ReadonlyArray<{ pattern: RegExp; label: string; gro
   // (…/workflows/<id>/…) is a workflow route, handled by parseWorkflowRoute, not here.
   { pattern: /^\/clients\/([^/]+)\/workflows$/, label: "Workflows" },
   { pattern: /^\/clients\/([^/]+)\/inbox(?:\/|$)/, label: "Inbox" },
-  { pattern: /^\/clients\/([^/]+)\/team(?:\/|$)/, label: "Team" },
+  // The route stays /team; only the label a person reads is "Users & access".
+  { pattern: /^\/clients\/([^/]+)\/team(?:\/|$)/, label: "Users & access" },
   { pattern: /^\/clients\/([^/]+)\/modules(?:\/|$)/, label: "Modules" },
   // Contacts belongs to CRM — NOT to Scheduling. The reference mock shows it under
   // "Scheduling", which is an inconsistency in the design, not the information
   // architecture: the route is `crm`-module gated, so the trail says CRM / Contacts.
   { pattern: /^\/clients\/([^/]+)\/contacts(?:\/|$)/, label: "Contacts", group: "CRM" },
   { pattern: /^\/clients\/([^/]+)\/scheduling\/agenda(?:\/|$)/, label: "Agenda", group: "Scheduling" },
+  { pattern: /^\/clients\/([^/]+)\/scheduling\/staff(?:\/|$)/, label: "Staff", group: "Scheduling" },
   { pattern: /^\/clients\/([^/]+)\/scheduling\/admin(?:\/|$)/, label: "Scheduling settings", group: "Scheduling" },
 ];
 
@@ -24,7 +26,7 @@ export interface ClientSurface {
   clientId: string;
   label: string;
   /** The owning module group rendered before the label ("CRM" / "Scheduling"), or
-   *  undefined for the surfaces that hang directly off the client (Inbox, Team, …). */
+   *  undefined for the surfaces that hang directly off the client (Inbox, /team, …). */
   group?: string;
 }
 

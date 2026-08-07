@@ -144,12 +144,10 @@ export default async function ClientContactsPage({
     <main className="flex min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]">
       {isFullAccess ? <DuplicateCandidates clientId={client.id} candidates={candidates} /> : null}
 
-      {/* ONE white card holds the whole screen (the reference's layout): a title band,
-          a toolbar band — both on the surface, separated by hairlines — and then a
-          RECESSED body where the table sits as its own bordered card. That inner
-          contrast is what stopped the toolbar and the rows reading as one slab; the
-          two used to be split into separate floating boxes instead, which is the
-          "despegado" the layout had. */}
+      {/* ONE white card holds the whole screen: the title + stats band, the toolbar
+          band, the table and END OF LIST, separated by hairlines rather than by strips
+          of canvas. The table is NOT a bordered card inside this one — an inner card
+          would double the border and reproduce the "despegado" look this replaced. */}
       <PageShell>
       <div className="flex shrink-0 flex-col gap-3 border-b border-line px-[var(--panel-pad)] py-3">
         <PageTitle title="Customers" count={summary.total} context={client.name}>

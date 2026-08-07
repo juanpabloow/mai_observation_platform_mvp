@@ -83,57 +83,56 @@ export function ContactSidePanel({
       // butted against it. The two are separated by the ground showing between them.
       className="hidden w-[360px] shrink-0 flex-col overflow-hidden rounded-xl border border-line-strong bg-surface xl:flex 2xl:w-[392px]"
     >
-      <div className="flex h-[var(--topbar-height)] shrink-0 items-center justify-between border-b border-line px-3">
-        <h2 className="text-sm font-semibold">Customer details</h2>
-        <Link
-          href={closeHref}
-          scroll={false}
-          aria-label="Close customer details"
-          className="inline-flex size-8 items-center justify-center rounded-md border border-line-strong text-xs text-muted transition-colors hover:bg-hover hover:text-foreground"
-        >
-          &#10005;
-        </Link>
-      </div>
-
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {/* ONLY the identity block is tinted — it is the "who is this" band. The tabs
-            and everything under them stay on the surface, so the panel reads as one
-            card with a header rather than as a grey column. */}
-        <div className="border-b border-line bg-panel-hero px-4 pb-4 pt-5">
+      {/* HEADER — one compact row, the same shape the staff drawer uses: identity
+          left, the primary action and the close control right. The separate "Customer
+          details" bar is gone with it; it existed only to hold the X. */}
+      <div className="flex shrink-0 flex-col gap-2 border-b border-line bg-panel-hero px-4 py-3">
+        {/* Identity on one line; the close control is the only thing that shares it —
+            360px will not hold a name, two handles and three buttons, and squeezing
+            them in is what cut the row off. */}
         <ContactIdentitySummary
           summary={data.summary}
           identities={data.identities}
           dense
-          centered
+          row
           action={
-            <div className="mt-1 flex flex-wrap items-center justify-center gap-2">
-              {schedulingEnabled ? (
-                <Link
-                  href={`/clients/${clientId}/scheduling/agenda?book=${contactId}`}
-                  className="inline-flex h-9 items-center rounded-md bg-brand px-3 text-sm font-medium text-white transition-opacity hover:opacity-90"
-                >
-                  Book appointment
-                </Link>
-              ) : null}
-              <Link
-                href={recordHref}
-                className="inline-flex h-9 items-center rounded-md border border-line-strong bg-surface px-3 text-sm transition-colors hover:bg-hover"
-              >
-                Open record
-              </Link>
-              {/* One real action behind the control, spelled out: a "…" that does
-                  exactly one thing is a worse affordance than the word for it. */}
-              <button
-                type="button"
-                onClick={() => setEditing(true)}
-                className="inline-flex h-9 items-center rounded-md border border-line-strong bg-surface px-3 text-sm transition-colors hover:bg-hover"
-              >
-                Edit
-              </button>
-            </div>
+            <Link
+              href={closeHref}
+              scroll={false}
+              aria-label="Close customer details"
+              className="inline-flex size-8 shrink-0 items-center justify-center rounded-md border border-line-strong text-xs text-muted transition-colors hover:bg-hover hover:text-foreground"
+            >
+              &#10005;
+            </Link>
           }
         />
+        {/* The actions get their own line, still one row tall. */}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {schedulingEnabled ? (
+            <Link
+              href={`/clients/${clientId}/scheduling/agenda?book=${contactId}`}
+              className="inline-flex h-8 items-center whitespace-nowrap rounded-md bg-brand px-3 text-xs font-medium text-white transition-opacity hover:opacity-90"
+            >
+              Book appointment
+            </Link>
+          ) : null}
+          <Link
+            href={recordHref}
+            className="inline-flex h-8 items-center whitespace-nowrap rounded-md border border-line-strong bg-surface px-2.5 text-xs transition-colors hover:bg-hover"
+          >
+            Open record
+          </Link>
+          <button
+            type="button"
+            onClick={() => setEditing(true)}
+            className="inline-flex h-8 items-center rounded-md border border-line-strong bg-surface px-2.5 text-xs transition-colors hover:bg-hover"
+          >
+            Edit
+          </button>
         </div>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto">
 
         {/* The tab strip is a real segmented control, not links: switching tabs must
             not re-run the page's queries — everything the four tabs show was already

@@ -20,9 +20,12 @@ import type { StaffMember, StaffServiceOpt, StaffSiteOpt } from "./StaffTab";
  * member" card. Creating and editing a barber both live here now; Scheduling settings
  * kept sites, the service catalogue and blocked time.
  *
- * TODO(staff): the design's form also has ROLE, PHONE and EMAIL. `staff` has no such
- *   columns (id, site, name, working_hours, active), so those inputs render DISABLED
- *   with the reason on hover rather than pretending to save.
+ * ROLE, PHONE and EMAIL are real columns now, but they are NOT duplicated here: the
+ * Details tab of the drawer edits the whole profile with an unsaved-changes bar, and
+ * two forms writing the same fields is two places to keep in step. This dialog stays
+ * what it was — identity, services, hours — plus the one flag that decides whether the
+ * person gets an agenda lane at all.
+ *
  * TODO(staff): moving a barber between SITES is not an update the repo supports
  *   (site_id is set at creation and staff belong to exactly one site in V1), so the
  *   site select is read-only here.
@@ -48,6 +51,7 @@ export function StaffEditDialog({
   const [name, setName] = useState(member?.name ?? "");
   const [serviceIds, setServiceIds] = useState<string[]>(member?.serviceIds ?? []);
   const [active, setActive] = useState(member?.active ?? true);
+  const [takesBookings, setTakesBookings] = useState(member?.takesBookings ?? true);
   const [grid, setGrid] = useState<HourGrid>(gridFromWeekly((member?.workingHours ?? {}) as never));
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
@@ -88,7 +92,7 @@ export function StaffEditDialog({
         return;
       }
 
-      const r = await updateStaffAction(clientId, member.id, { name: trimmed, active, workingHours });
+      const r = await updateStaffAction(clientId, member.id, { name: trimmed, active, takesBookings, workingHours });
       if (!r.ok) {
         setError(r.error);
         return;
@@ -129,44 +133,20 @@ export function StaffEditDialog({
             <input value={name} onChange={(e) => setName(e.target.value)} className={INPUT} placeholder="Full name" />
           </Field>
 
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Role">
-              <input
-                disabled
-                placeholder="No role field yet"
-                title="`staff` has no role column — adding one is a migration"
-                className={`${INPUT} cursor-not-allowed opacity-60`}
-              />
-            </Field>
-            <Field label="Site">
-              <input
-                disabled
-                value={siteName}
-                readOnly
-                title="A barber belongs to one site in V1; moving them is not an update the repository supports"
-                className={`${INPUT} cursor-not-allowed opacity-60`}
-              />
-            </Field>
-          </div>
-
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Phone">
-              <input
-                disabled
-                placeholder="No phone field yet"
-                title="`staff` has no contact columns — adding them is a migration"
-                className={`${INPUT} cursor-not-allowed opacity-60`}
-              />
-            </Field>
-            <Field label="Email">
-              <input
-                disabled
-                placeholder="No email field yet"
-                title="`staff` has no contact columns — adding them is a migration"
-                className={`${INPUT} cursor-not-allowed opacity-60`}
-              />
-            </Field>
-          </div>
+          <Field label="Site">
+            <input
+              disabled
+              value={siteName}
+              readOnly
+              title="A barber belongs to one site in V1; moving them is not an update the repository supports"
+              className={`${INPUT} cursor-not-allowed opacity-60`}
+            />
+          </Field>
+          {member ? (
+            <p className="text-[11px] text-faint">
+              Role, contact details, skills and certifications live in the Details tab of the panel.
+            </p>
+          ) : null}
 
           <div className="flex flex-col gap-1.5 border-t border-line pt-3">
             <span className="text-xs text-muted">Services</span>
@@ -204,17 +184,36 @@ export function StaffEditDialog({
             <HoursGrid grid={grid} setGrid={setGrid} />
           </div>
 
-          {/* ACTIVE is the real "holds a chair" flag: an inactive barber keeps their
-              history and their lane on the agenda but takes no new bookings. */}
-          <label className={`flex items-center gap-2 border-t border-line pt-3 text-sm ${member ? "" : "hidden"}`}>
-            <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} className="size-4" />
-            <span>
-              Takes bookings
-              <span className="ml-1.5 text-xs text-faint">
-                — off keeps their history and lane, but no new appointments
+          {/* TWO different facts, and they used to be one checkbox.
+              takes_bookings = does this person get an agenda lane? A front-desk hire
+                works every day and takes none — that is not the same as having left.
+              active         = do they still work here? Deactivating is the harder
+                state: it keeps their history and their lane, and stops new bookings. */}
+          <div className={`flex flex-col gap-2 border-t border-line pt-3 text-sm ${member ? "" : "hidden"}`}>
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={takesBookings}
+                onChange={(e) => setTakesBookings(e.target.checked)}
+                className="size-4"
+              />
+              <span>
+                Takes bookings
+                <span className="ml-1.5 text-xs text-faint">
+                  — off for front desk or management: they work here, but hold no chair
+                </span>
               </span>
-            </span>
-          </label>
+            </label>
+            <label className="flex items-center gap-2">
+              <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} className="size-4" />
+              <span>
+                Still works here
+                <span className="ml-1.5 text-xs text-faint">
+                  — off keeps their history and lane, but no new appointments
+                </span>
+              </span>
+            </label>
+          </div>
         </div>
 
         {error ? (

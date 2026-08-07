@@ -43,6 +43,9 @@ interface Service {
   price: string | null; buffer_before_min: number; buffer_after_min: number; active: boolean;
   /** Operator-chosen "offer this first" flag — the assistant leads with featured services. */
   featured: boolean;
+  /** The colour family the agenda paints this service with; null = unclassified, and
+   *  the agenda falls back to guessing from the name. */
+  category: string | null;
 }
 interface Staff {
   id: string; site_id: string; name: string; active: boolean; serviceIds: string[];
@@ -105,16 +108,17 @@ export function AdminPanel({
       <WhyNothingAvailable sites={sites} staff={staff} />
       <SitesSection clientId={clientId} sites={sites} run={run} pending={pending} />
       <ServicesSection clientId={clientId} sites={sites} services={services} siteServiceMap={siteServiceMap} run={run} pending={pending} />
-      {/* STAFF moved OUT of this page (ADMINISTRATION → Team → Staff): the roster, its statuses,
-          performance, creating a barber and their weekly hours all live there now. The
-          7-day grid those two screens share was extracted to ./HoursGrid rather than
-          copied — this page still uses it for a SITE's opening hours. */}
+      {/* STAFF moved OUT of this page to its own SCHEDULING route: the roster, its
+          statuses, performance, creating a barber and their weekly hours all live
+          there now. The 7-day grid those two screens share was extracted to
+          ./HoursGrid rather than copied — this page still uses it for a SITE's
+          opening hours. */}
       <div className="rounded-lg border border-line bg-surface px-4 py-3 text-sm">
         <p className="text-muted">
           The staff <strong className="font-medium text-foreground">roster</strong> — who is working, who is free,
-          performance, hours and services — now lives on the Team screen.{" "}
-          <Link href={`/clients/${clientId}/team`} className="text-accent hover:underline">
-            Open Team &rarr; Staff
+          performance, hours and services — lives on its own screen.{" "}
+          <Link href={`/clients/${clientId}/scheduling/staff`} className="text-accent hover:underline">
+            Open Scheduling &rarr; Staff
           </Link>
         </p>
         <p className="mt-1 text-xs text-faint">
@@ -426,8 +430,22 @@ function SitesSection({ clientId, sites, run, pending }: { clientId: string; sit
   );
 }
 
-/** An EXISTING service's editable settings (name/duration/price/buffers) + its per-site
- *  enablement toggles + a copyable id. Save persists via updateServiceAction. */
+/**
+ * The colour families a service can be filed under — the ones with a palette on the
+ * agenda (globals.css `.u-appt-*`), which is the same closed set the
+ * services_category_valid CHECK enforces. "Unclassified" is a real, storable choice:
+ * it returns the service to being coloured by keywords in its name.
+ */
+const CATEGORY_OPTIONS = [
+  { value: "", label: "Unclassified" },
+  { value: "color", label: "Colour" },
+  { value: "grooming", label: "Grooming / beard" },
+  { value: "cut", label: "Cut" },
+  { value: "feature", label: "Featured treatment" },
+] as const;
+
+/** An EXISTING service's editable settings (name/duration/price/buffers/category) + its
+ *  per-site enablement toggles + a copyable id. Save persists via updateServiceAction. */
 function EditableService({ clientId, service, activeSites, siteServiceMap, run, pending }: {
   clientId: string; service: Service; activeSites: Site[]; siteServiceMap: Record<string, string[]>; run: Run; pending: boolean;
 }) {
@@ -437,6 +455,7 @@ function EditableService({ clientId, service, activeSites, siteServiceMap, run, 
   const [bBefore, setBBefore] = useState(String(service.buffer_before_min));
   const [bAfter, setBAfter] = useState(String(service.buffer_after_min));
   const [featured, setFeatured] = useState(service.featured);
+  const [category, setCategory] = useState(service.category ?? "");
   const save = () =>
     run(() =>
       updateServiceAction(clientId, service.id, {
@@ -446,6 +465,9 @@ function EditableService({ clientId, service, activeSites, siteServiceMap, run, 
         bufferBeforeMin: Number(bBefore),
         bufferAfterMin: Number(bAfter),
         featured,
+        // "" clears it back to NULL; the action narrows anything unexpected with
+        // parseServiceCategory, so a stale value degrades instead of failing a save.
+        category: category === "" ? null : category,
       }),
     );
   const L = "flex flex-col gap-0.5 text-[10px] uppercase tracking-wider text-faint";
@@ -469,6 +491,13 @@ function EditableService({ clientId, service, activeSites, siteServiceMap, run, 
         <label className={L}>Price<input value={price} onChange={(e) => setPrice(e.target.value)} className={`${INPUT} w-24`} /></label>
         <label className={L}>Buffer before<input value={bBefore} onChange={(e) => setBBefore(e.target.value)} className={`${INPUT} w-24`} /></label>
         <label className={L}>Buffer after<input value={bAfter} onChange={(e) => setBAfter(e.target.value)} className={`${INPUT} w-24`} /></label>
+        <label className={L}>Category
+          <select value={category} onChange={(e) => setCategory(e.target.value)} className={`${INPUT} w-44`}>
+            {CATEGORY_OPTIONS.map((c) => (
+              <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
+        </label>
       </div>
       {service.active ? (
         <div className="flex flex-wrap items-center gap-1">
@@ -515,6 +544,7 @@ function ServicesSection({
   const [price, setPrice] = useState("");
   const [bBefore, setBBefore] = useState("0");
   const [bAfter, setBAfter] = useState("0");
+  const [category, setCategory] = useState("");
   // Sites the new service will be enabled at — default ALL active sites, so a
   // freshly created service is bookable everywhere unless narrowed.
   const [siteIds, setSiteIds] = useState<string[]>(activeSites.map((s) => s.id));
@@ -532,8 +562,9 @@ function ServicesSection({
         bufferBeforeMin: Number(bBefore),
         bufferAfterMin: Number(bAfter),
         siteIds,
+        category: category === "" ? null : category,
       });
-      if (r.ok) { setName(""); setSiteIds(activeSites.map((s) => s.id)); }
+      if (r.ok) { setName(""); setCategory(""); setSiteIds(activeSites.map((s) => s.id)); }
       return r;
     });
 
@@ -541,7 +572,9 @@ function ServicesSection({
     <Section title="Services">
       <p className="text-[11px] text-faint">
         Featured services are the ones the assistant offers first when a customer hasn’t said
-        what they want. If none are marked, it offers all of them.
+        what they want. If none are marked, it offers all of them. The category decides the
+        colour a booking wears on the agenda; leave it unclassified to keep inferring it
+        from the name.
       </p>
       <div className="flex flex-col gap-3">
         {services.map((s) => (
@@ -556,6 +589,11 @@ function ServicesSection({
           <input value={price} onChange={(e) => setPrice(e.target.value)} placeholder="price" className={`${INPUT} w-24`} />
           <input value={bBefore} onChange={(e) => setBBefore(e.target.value)} placeholder="buf before" className={`${INPUT} w-24`} />
           <input value={bAfter} onChange={(e) => setBAfter(e.target.value)} placeholder="buf after" className={`${INPUT} w-24`} />
+          <select value={category} onChange={(e) => setCategory(e.target.value)} className={`${INPUT} w-44`} aria-label="Category">
+            {CATEGORY_OPTIONS.map((c) => (
+              <option key={c.value} value={c.value}>{c.label}</option>
+            ))}
+          </select>
         </div>
         <div className="flex flex-wrap items-center gap-1">
           <span className="text-[10px] uppercase tracking-wider text-faint">Enable at:</span>

@@ -400,6 +400,9 @@
   --radius-lg: 8px; /* the floating panel */
   --radius-xl: 10px;
   --radius-2xl: 12px;
+  /* `rounded-table` — the roster card sits 1px tighter than the header card above it
+     so the two do not read as one box split in half. */
+  --radius-table: 11px;
   --color-nav-active: var(--nav-active);
   --color-bubble-in: var(--bubble-in);
   --color-bubble-in-border: var(--bubble-in-border);
