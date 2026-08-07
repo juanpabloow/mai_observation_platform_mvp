@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { avatarColor } from "@/lib/avatarColor";
+import { OVERLAY_SCRIM, useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
 import {
   addStaffCertificationAction,
   deleteStaffCertificationAction,
@@ -359,7 +360,21 @@ export function StaffTab(
         // height the table happens to leave. Under lg there is no room to reserve a
         // lane, so it covers the content full-width; it used to not render at all below
         // 1280, which meant clicking a barber on a laptop appeared to do nothing.
-        <div className="pointer-events-none absolute inset-y-0 right-0 flex max-w-full items-stretch">
+        <>
+          {/* SCRIM — overlay mode only. Beside the roster the drawer needs nothing; the
+              moment it COVERS the roster the content underneath has to visibly recede,
+              or the panel reads as part of the page. A Link and not a button, because
+              closing this drawer is a navigation: the selection lives in the URL. */}
+          <Link
+            href={hrefFor(null)}
+            scroll={false}
+            aria-label="Close staff details"
+            className={`${OVERLAY_SCRIM} lg:hidden`}
+          />
+          {/* FIXED while overlaying, ABSOLUTE once it has a lane. Anchoring the overlay
+              to the region put it inside the layout's gutter, so a full-width panel
+              started 16px in and ran 16px off the right edge. */}
+          <div className="pointer-events-none fixed inset-0 z-50 flex items-stretch justify-end lg:absolute lg:inset-y-0 lg:left-auto lg:right-0">
                   <StaffDetail
                     // Keyed: selecting another barber must reset the hours and profile
                     // drafts, not carry one person's unsaved edits onto the next.
@@ -377,7 +392,8 @@ export function StaffTab(
                     onSaved={() => router.refresh()}
                     initialTab={props.detailTab}
                   />
-        </div>
+          </div>
+        </>
       ) : null}
 
       {editing || creating ? (
@@ -529,6 +545,11 @@ function StaffDetail({
   const [profile, setProfile] = useState<ProfileDraft>(() => profileFromMember(member));
   const [saving, startSave] = useTransition();
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Overlay mode only: trapping focus in a panel the reader can see BESIDE the roster
+  // would make the rest of the screen unreachable by keyboard for no reason.
+  const router = useRouter();
+  const overlaying = useIsOverlayWidth();
+  const panelRef = useTrappedPanel({ active: overlaying, onClose: () => router.push(closeHref, { scroll: false }) });
   const dirtyDays = countDirtyDays(draft, member.workingHours);
   const dirtyFields = dirtyProfileFields(profile, member);
   const changes = dirtyDays + dirtyFields.length;
@@ -566,7 +587,11 @@ function StaffDetail({
 
   return (
     <aside
+      ref={panelRef as React.RefObject<HTMLElement>}
       aria-label="Staff details"
+      aria-modal={overlaying || undefined}
+      role={overlaying ? "dialog" : undefined}
+      tabIndex={-1}
       // No drop shadow: in this system elevation is SURFACE CONTRAST, not a blur (see
       // the house rules in components/ui/primitives.tsx). The panel already reads as
       // "on top" from its own fill and hairline against the recessed roster behind it —
@@ -574,7 +599,7 @@ function StaffDetail({
       // No shadow, and the same hairline as the two cards it sits beside: the drawer
       // is part of the screen's card family, not something lifted off it. Depth here
       // is surface contrast against the canvas, as everywhere else in this system.
-      className="pointer-events-auto flex h-full w-screen max-w-full flex-col overflow-hidden bg-surface lg:w-[440px] lg:rounded-2xl lg:border lg:border-line-strong"
+      className="pointer-events-auto flex h-full w-full max-w-full flex-col overflow-hidden bg-surface lg:w-[440px] lg:rounded-2xl lg:border lg:border-line-strong"
     >
       <div className="flex h-[var(--topbar-height)] shrink-0 items-center justify-between border-b border-line px-3">
         <h2 className="text-sm font-semibold">Staff details</h2>
@@ -588,7 +613,7 @@ function StaffDetail({
         </Link>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         <div className="flex flex-col items-center gap-[7px] border-b border-line bg-panel-hero px-[18px] pb-[13px] pt-[15px] text-center">
           <span className="relative">
             <span
@@ -1231,8 +1256,8 @@ function FieldRow({
   children?: React.ReactNode;
 }) {
   return (
-    <label className="flex items-center gap-3 px-4 py-1">
-      <span className="w-[120px] shrink-0 text-xs text-muted">{label}</span>
+    <label className="flex min-w-0 items-center gap-3 px-4 py-1">
+      <span className="w-[104px] shrink-0 truncate text-xs text-muted sm:w-[120px]">{label}</span>
       {children ?? (
         <input
           type={type ?? "text"}

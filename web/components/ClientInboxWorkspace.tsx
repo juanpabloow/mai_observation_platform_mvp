@@ -6,6 +6,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { InboxThread } from "./InboxThread";
 import { CustomerDetailsPanel } from "./CustomerDetailsPanel";
 import { PageShell } from "@/components/ui/PageShell";
+import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
 import { PageTitle } from "@/components/ui/PageTitle";
 import { avatarColor } from "@/lib/avatarColor";
 import { formatAgeShort } from "@/lib/format";
@@ -216,6 +217,11 @@ export function ClientInboxWorkspace({
   // ── Details panel: inline (desktop) collapse + mobile/tablet drawer ──
   const [detailsInline, setDetailsInline] = useState(true);
   const [detailsDrawer, setDetailsDrawer] = useState(false);
+  // The mobile customer panel is an overlay, so it gets the shared overlay contract.
+  const customerDrawerRef = useTrappedPanel({
+    active: detailsDrawer,
+    onClose: () => setDetailsDrawer(false),
+  });
   useEffect(() => {
     if (!detailsDrawer) return;
     const onKey = (e: KeyboardEvent) => {
@@ -430,15 +436,22 @@ export function ClientInboxWorkspace({
 
       {/* ── RIGHT (tablet/mobile) — customer details drawer ── */}
       {selectedId && selectedView && detailsDrawer ? (
+        // Same overlay contract as the staff drawer: scrim, tap-to-close, Escape and a
+        // focus trap. The scrim was already here; Escape and the trap were not, so a
+        // keyboard reader could tab straight out into the thread behind it.
         <div className="xl:hidden">
           <button
             type="button"
             aria-label="Close customer details"
             onClick={() => setDetailsDrawer(false)}
-            className="fixed inset-0 z-40 bg-black/40"
+            className={OVERLAY_SCRIM}
           />
           <aside
+            ref={customerDrawerRef as React.RefObject<HTMLElement>}
             aria-label="Customer details"
+            role="dialog"
+            aria-modal
+            tabIndex={-1}
             className="fixed inset-y-0 right-0 z-50 flex w-[320px] max-w-[85vw] flex-col border-l border-line-strong bg-surface"
           >
             <CustomerDetailsPanel
