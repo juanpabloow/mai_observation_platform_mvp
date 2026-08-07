@@ -149,6 +149,10 @@ async function loadRoster(
       startAt: a.start_at.toISOString(),
       durationMin: a.duration_min_snapshot,
       status: a.status,
+      // Already on the row this query returns — the "top services" bars count it. The
+      // SNAPSHOT, not a join: a renamed or deleted service still counts under the name
+      // it was actually sold as.
+      serviceName: a.service_name_snapshot,
     })),
     timeOff: exceptions
       // Site-wide closures are not one barber's time off — the roster only shows

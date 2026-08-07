@@ -83,6 +83,7 @@ export function ContactIdentitySummary({
   identities,
   dense = false,
   centered = false,
+  row = false,
   action,
 }: {
   summary: ContactSummary;
@@ -90,7 +91,10 @@ export function ContactIdentitySummary({
   dense?: boolean;
   /** Stack the avatar over a centred name (the inbox customer panel). */
   centered?: boolean;
-  /** Rendered under the name in the centred variant — e.g. "Open full record". */
+  /** ONE compact line: small avatar, name + handles beside it, `action` on the right.
+   *  The CRM side panel uses this; the inbox panel keeps `centered` untouched. */
+  row?: boolean;
+  /** Rendered under the name in the centred variant, or at the right end of `row`. */
   action?: ReactNode;
 }) {
   // The phone is the identity the inbox knows this person by, so it is what the tone
@@ -108,6 +112,38 @@ export function ContactIdentitySummary({
       ) : null}
     </div>
   );
+
+  if (row) {
+    // The panel header is the strip the reader spends the least time in and the most
+    // vertical space on: a hero avatar over a centred name restates what they just
+    // clicked. Identity left, the actions worth a button right, one line.
+    const inline = identities.slice(0, 2);
+    return (
+      // w-full + min-w-0 all the way down: without them this row sizes to max-content
+      // and a long email pushes the actions straight out of a 360px panel.
+      <div className="flex w-full min-w-0 items-center gap-3">
+        <Avatar name={summary.displayName} size="dense" colorKey={colorKey} />
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-[15px] font-semibold tracking-[-0.015em] text-foreground">
+            {summary.displayName}
+          </span>
+          {inline.length > 0 ? (
+            <span className="flex min-w-0 items-center gap-1.5 text-[11.5px]">
+              {inline.map((i, idx) => (
+                <span key={`${i.kind}:${i.value}:${idx}`} className="flex min-w-0 items-center gap-1.5">
+                  {idx > 0 ? <span aria-hidden className="text-faintest">&middot;</span> : null}
+                  <span className={`truncate ${i.kind === "phone" ? "u-mono text-muted" : "text-muted"}`}>
+                    {i.value}
+                  </span>
+                </span>
+              ))}
+            </span>
+          ) : null}
+        </span>
+        {action}
+      </div>
+    );
+  }
 
   if (centered) {
     // The identities read as ONE line under the name (email · phone) rather than a

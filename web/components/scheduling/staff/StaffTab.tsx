@@ -69,6 +69,9 @@ export interface StaffWindowAppointment {
   startAt: string;
   durationMin: number;
   status: string;
+  /** The appointment's OWN service-name snapshot — so a service renamed or removed
+   *  since still counts under the name it was sold as. */
+  serviceName: string;
 }
 export interface StaffTimeOff {
   staffId: string;
@@ -118,6 +121,20 @@ function minutesBetween(start: string, end: string): number {
   const [sh, sm] = start.split(":").map(Number);
   const [eh, em] = end.split(":").map(Number);
   return Math.max(0, eh * 60 + em - (sh * 60 + sm));
+}
+
+/**
+ * The presence line in the drawer header. For a barber mid-appointment it reports how
+ * long they have BEEN in the chair rather than when they get out: on a card you are
+ * planning around, "23 min in" is the number that tells you whether to interrupt.
+ * The roster row keeps "UNTIL 12:30", which is the number you scan a column for.
+ */
+function presenceChip(key: StatusKey, appts: StaffAppointment[], now: Date, tz: string): string {
+  if (key !== "with_client") return STATUS[key].label;
+  const current = appts.find((a) => new Date(a.startAt) <= now && new Date(a.endAt) > now);
+  if (!current) return STATUS[key].label;
+  const mins = Math.max(0, Math.round((now.getTime() - new Date(current.startAt).getTime()) / 60_000));
+  return `${mins} MIN IN CHAIR`;
 }
 
 const STATUS: Record<StatusKey, { label: string; dot: string; text: string }> = {
@@ -309,8 +326,11 @@ export function StaffTab(
                     one of them the same visual weight and wasted a screen on six; a row
                     per person puts presence, load and what's next on one scannable line. */}
                 <div className="flex flex-col overflow-hidden rounded-table border border-line-strong bg-surface">
-                  <div className="flex h-9 shrink-0 items-center gap-3.5 border-b border-line bg-thead-bg px-4">
-                    <span className="w-[38px] shrink-0" />
+                  {/* The column header sits on the SAME white as the rows: the roster
+                      is already its own card on grey, so a tinted strip inside it was
+                      a second surface doing nothing the hairline below does not. */}
+                  <div className="flex h-9 shrink-0 items-center gap-3 border-b border-line bg-surface px-4">
+                    <span className="w-[30px] shrink-0" />
                     <span className="u-th min-w-0 flex-1">Member</span>
                     <span className="u-th hidden w-[190px] shrink-0 lg:block">Presence</span>
                     <span className="u-th hidden w-[104px] shrink-0 sm:block">Today</span>
@@ -450,22 +470,22 @@ function StaffRow({
       href={href}
       scroll={false}
       aria-current={selected ? "true" : undefined}
-      className={`flex h-[74px] shrink-0 items-center gap-3.5 border-b border-line/70 px-4 transition-colors last:border-0 ${
+      className={`flex h-[56px] shrink-0 items-center gap-3 border-b border-line/70 px-4 transition-colors last:border-0 ${
         selected ? "bg-chip" : "hover:bg-subtle"
       }`}
     >
       <span
         aria-hidden
-        className={`u-mono flex size-[38px] shrink-0 items-center justify-center rounded-full text-[13px] font-semibold ${avatarColor(member.name)}`}
+        className={`u-mono flex size-[30px] shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${avatarColor(member.name)}`}
       >
         {initials(member.name)}
       </span>
 
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate text-[14.5px] font-semibold tracking-[-0.01em] text-foreground">{member.name}</span>
-        {/* TODO(staff): no `role` column — the design shows "Senior stylist · Chair 3"
-            here, so the site name stands in until that migration lands. */}
-        <span className="truncate text-xs text-muted">{member.siteName}</span>
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-[13.5px] font-semibold tracking-[-0.01em] text-foreground">{member.name}</span>
+        {/* The ROLE, now that there is a column for it. The site name is not repeated
+            on every row — one site is the common case, and the filter above names it. */}
+        <span className="truncate text-[11px] text-muted">{member.title ?? member.siteName}</span>
       </span>
 
       <span className={`u-mono hidden w-[190px] shrink-0 items-center gap-1.5 whitespace-nowrap text-[9.5px] font-medium uppercase tracking-[0.07em] lg:flex ${s.text}`}>
@@ -584,6 +604,20 @@ function StaffDetail({
   );
   const capacityHours = Math.round((weeklyMinutes * (30 / 7)) / 60);
 
+  /** The five services this barber was booked for most in the window, biggest first. */
+  const topServices = useMemo(() => {
+    const counts = new Map<string, number>();
+    for (const a of settled) {
+      const name = a.serviceName?.trim();
+      if (!name) continue;
+      counts.set(name, (counts.get(name) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .map(([name, count]) => ({ name, count }))
+      .sort((x, z) => z.count - x.count || x.name.localeCompare(z.name))
+      .slice(0, 5);
+  }, [settled]);
+
 
   return (
     <aside
@@ -601,53 +635,53 @@ function StaffDetail({
       // is surface contrast against the canvas, as everywhere else in this system.
       className="pointer-events-auto flex h-full w-full max-w-full flex-col overflow-hidden bg-surface lg:w-[440px] lg:rounded-2xl lg:border lg:border-line-strong"
     >
-      <div className="flex h-[var(--topbar-height)] shrink-0 items-center justify-between border-b border-line px-3">
-        <h2 className="text-sm font-semibold">Staff details</h2>
+      {/* HEADER — one row, not a centred stack. The panel is 440px and the reader
+          already knows whose card they opened, so a 58px avatar over three centred
+          lines was spending the most valuable strip of the drawer on restating it.
+          Identity goes left, the one action worth a button goes right.
+          The separate "Staff details" bar above this is gone with it: it existed only
+          to hold the close control, which now sits in this row. */}
+      <div className="flex shrink-0 items-center gap-3 border-b border-line bg-panel-hero px-[18px] py-3">
+        <span className="relative shrink-0">
+          <span
+            aria-hidden
+            className={`u-mono flex size-[38px] items-center justify-center rounded-full text-[13px] font-semibold ${avatarColor(member.name)}`}
+          >
+            {initials(member.name)}
+          </span>
+          <span aria-hidden className={`absolute -bottom-px -right-px size-[11px] rounded-full border-2 border-panel-hero ${s.dot}`} />
+        </span>
+
+        <span className="flex min-w-0 flex-1 flex-col">
+          <span className="truncate text-[15px] font-semibold tracking-[-0.015em] text-foreground">{member.name}</span>
+          {/* Role and presence on ONE line. No chair: there is no chair column and
+              deliberately never will be (see the staff-fields migration). */}
+          <span className="flex min-w-0 items-center gap-1.5 text-[11.5px]">
+            {member.title ? <span className="truncate text-muted">{member.title}</span> : null}
+            {member.title ? <span aria-hidden className="text-faintest">·</span> : null}
+            <span className={`u-mono shrink-0 tracking-wider ${s.text}`}>
+              {presenceChip(status.key, status.appts, now, tz)}
+            </span>
+          </span>
+        </span>
+
+        <Link
+          href={`/clients/${clientId}/scheduling/agenda?staff=${member.id}`}
+          className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md bg-brand px-3 text-xs font-medium text-white transition-opacity hover:opacity-90"
+        >
+          View agenda
+        </Link>
         <Link
           href={closeHref}
           scroll={false}
           aria-label="Close staff details"
-          className="inline-flex size-8 items-center justify-center rounded-md border border-line-strong text-xs text-muted transition-colors hover:bg-hover hover:text-foreground"
+          className="inline-flex size-8 shrink-0 items-center justify-center rounded-md border border-line-strong text-xs text-muted transition-colors hover:bg-hover hover:text-foreground"
         >
           &#10005;
         </Link>
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-        <div className="flex flex-col items-center gap-[7px] border-b border-line bg-panel-hero px-[18px] pb-[13px] pt-[15px] text-center">
-          <span className="relative">
-            <span
-              aria-hidden
-              className={`u-mono flex size-[58px] items-center justify-center rounded-full text-[19px] font-semibold ${avatarColor(member.name)}`}
-            >
-              {initials(member.name)}
-            </span>
-            <span aria-hidden className={`absolute bottom-px right-px size-[13px] rounded-full border-[2.5px] border-panel-hero ${s.dot}`} />
-          </span>
-          <span className="text-[16.5px] font-semibold tracking-[-0.015em] text-foreground">{member.name}</span>
-          {/* The subtitle is the ROLE, per the design — no chair, because there is no
-              chair column and deliberately never will be (see the migration). */}
-          <span className="text-xs text-muted">
-            {member.title ? `${member.title} · ${member.siteName}` : member.siteName}
-          </span>
-          <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
-            <button
-              type="button"
-              disabled
-              title="Staff have no messaging identity yet — no phone or email column"
-              className="inline-flex h-8 cursor-not-allowed items-center rounded-md border border-line px-3 text-xs text-faint"
-            >
-              Message
-            </button>
-            <button
-              type="button"
-              onClick={onEdit}
-              className="inline-flex h-8 items-center rounded-md border border-line-strong bg-surface px-3 text-xs transition-colors hover:bg-hover"
-            >
-              Edit profile
-            </button>
-          </div>
-        </div>
 
         <div className="flex items-center gap-3.5 border-b border-line px-4" role="tablist">
           {DETAIL_TABS.map((t) => (
@@ -690,6 +724,9 @@ function StaffDetail({
             {/* The window toggle drives the sparkline; the KPIs below stay on 30 days,
                 which is the window the page actually loaded. */}
             <div className="flex items-center gap-2">
+              {/* TODO(staff): the design puts "CHAIR 3" at the right of this row. There
+                  is no chair column and we decided not to add one, so the slot is left
+                  empty rather than filled with a number nobody stored. */}
               {([14, 30] as const).map((r) => (
                 <button
                   key={r}
@@ -751,6 +788,33 @@ function StaffDetail({
                 Open this day in the agenda &#8599;
               </Link>
             </div>
+
+            {/* TOP SERVICES — what this barber actually gets booked for. Counted from
+                the SAME 30-day window the KPIs above use, off the appointment's own
+                service-name snapshot, so a renamed or deleted service still counts
+                under the name it was sold as. Cancelled rows are already excluded. */}
+            {topServices.length > 0 ? (
+              <div className="flex flex-col gap-2 pt-1">
+                <span className="u-th">Top services · 30d</span>
+                <div className="flex flex-col gap-1.5">
+                  {topServices.map((t) => (
+                    <div key={t.name} className="flex items-center gap-2.5">
+                      <span className="w-[116px] shrink-0 truncate text-xs text-foreground" title={t.name}>
+                        {t.name}
+                      </span>
+                      <span className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-chip">
+                        <span
+                          aria-hidden
+                          className="block h-full rounded-full bg-service-purple"
+                          style={{ width: `${Math.round((t.count / topServices[0].count) * 100)}%` }}
+                        />
+                      </span>
+                      <span className="u-mono w-6 shrink-0 text-right text-[11px] text-muted">{t.count}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </div>
         ) : tab === "details" ? (
           <div className="flex flex-col">
@@ -867,6 +931,26 @@ function StaffDetail({
                 />
               </div>
             </DetailSection>
+
+            {/* TODO(staff): the design ends Details with two more sections, and NEITHER
+                is rendered because neither has anything behind it.
+
+                ACCESS (system role, "can see the inbox", last sign-in, "Change role")
+                would need a link between a STAFF row and a platform USER. There is
+                none: `staff` is a bookable resource (id, site, name, hours) and
+                `tenant_members` is a login with a role scoped to a client. They are
+                separate populations on purpose — most barbers never log in. Wiring it
+                would mean a nullable `staff.user_id` (unique per tenant) plus a
+                decision about what happens on unlink, and "last sign-in" needs a
+                column better_auth does not expose today.
+
+                INTERNAL NOTES (note + author + date + "Add note") would need its own
+                table: staff_notes (tenant_id, staff_id, author_user_id, body,
+                created_at), tenant-checked FK like staff_certifications. Nothing here
+                can stand in for it — a note is not a skill and not a certification.
+
+                Both are left out rather than shipped as empty shells, so the tab does
+                not promise a feature that has no storage. */}
 
             {/* CERTIFICATIONS are their own rows, so they save immediately rather than
                 riding the draft — adding one is a create, not a field edit. */}
