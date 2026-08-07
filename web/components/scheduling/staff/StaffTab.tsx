@@ -144,7 +144,15 @@ export interface StaffTabProps {
   detailTab?: string;
 }
 
-export function StaffTab(props: StaffTabProps & { clientId: string; openCreate?: number }) {
+export function StaffTab(
+  props: StaffTabProps & {
+    clientId: string;
+    openCreate?: number;
+    /** The screen's title + tab rows. They belong to the page, but they are drawn
+     *  INSIDE this component's header card so the card is one box, not two. */
+    header?: React.ReactNode;
+  },
+) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [serviceFilter, setServiceFilter] = useState("");
@@ -159,6 +167,7 @@ export function StaffTab(props: StaffTabProps & { clientId: string; openCreate?:
     if (props.openCreate) setCreating(true);
   }, [props.openCreate]);
 
+  const { header } = props;
   const tz = props.timezone;
   const now = new Date(props.todayIso);
   const windowAppointments = props.windowAppointments ?? [];
@@ -238,8 +247,18 @@ export function StaffTab(props: StaffTabProps & { clientId: string; openCreate?:
 
   return (
     <>
-            {/* FILTERS + the status legend. */}
-            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-[var(--panel-pad)] py-3">
+      {/* THE CONTENT COLUMN — two cards on the canvas, never one card holding both:
+          the header (title, tabs, filters) and the roster read as separate objects,
+          and the gap between them is the canvas showing through. The right padding
+          RESERVES the drawer's lane so a full-height panel never covers the table;
+          it lives here rather than on the region, because the drawer is positioned
+          against the region's padding box and padding there would push it inward. */}
+      <div className={`flex min-h-0 flex-1 flex-col gap-3 ${selected ? "lg:pr-[452px]" : ""}`}>
+        <div className="shrink-0 overflow-hidden rounded-2xl border border-line-strong bg-surface">
+          {header}
+          {/* FILTERS + the status legend — the header card's second row, under the
+              tabs' rule and drawing none of its own. */}
+          <div className="flex flex-wrap items-center gap-2 px-[15px] pb-[14px] pt-3">
               <div className="flex h-9 min-w-0 max-w-[280px] flex-1 items-center gap-2 rounded-md border border-line-strong px-3">
                 <SearchIcon />
                 <input
@@ -281,14 +300,14 @@ export function StaffTab(props: StaffTabProps & { clientId: string; openCreate?:
                 <span aria-hidden className="text-faintest">·</span>
                 <Legend dot="bg-faintest" n={counts.off} label="off" />
               </div>
-            </div>
+          </div>
+        </div>
 
-            <div className="relative flex min-h-0 flex-1">
-              <div className={`min-h-0 flex-1 overflow-y-auto bg-background p-3 ${selected ? "xl:pr-[476px]" : ""}`}>
-                {/* THE ROSTER, as a list. Cards gave every barber the same visual
-                    weight and wasted a screen on six of them; a row per person puts
-                    presence, load and what's next on one scannable line. */}
-                <div className="flex flex-col overflow-hidden rounded-xl border border-line-strong bg-surface">
+        <div className="min-h-0 flex-1 overflow-y-auto">
+                {/* THE ROSTER, as a list, in its OWN card. A card per barber gave every
+                    one of them the same visual weight and wasted a screen on six; a row
+                    per person puts presence, load and what's next on one scannable line. */}
+                <div className="flex flex-col overflow-hidden rounded-table border border-line-strong bg-surface">
                   <div className="flex h-9 shrink-0 items-center gap-3.5 border-b border-line bg-thead-bg px-4">
                     <span className="w-[38px] shrink-0" />
                     <span className="u-th min-w-0 flex-1">Member</span>
@@ -320,22 +339,27 @@ export function StaffTab(props: StaffTabProps & { clientId: string; openCreate?:
                   ) : null}
                 </div>
 
-                {/* The Team screen is owner/admin only, so everyone who reaches this
-                    tab can manage the roster — no second permission check. */}
+                {/* This screen is owner/admin only, so everyone who reaches it can
+                    manage the roster — no second permission check. mb-0.5 keeps the
+                    dashed edge off the bottom of the scroll area. */}
                 <button
                     type="button"
                     onClick={() => setCreating(true)}
-                    className="mt-3 flex h-[52px] w-full items-center justify-center gap-2 rounded-xl border border-dashed border-line-strong text-sm text-muted transition-colors hover:border-faint hover:text-foreground"
+                    className="mb-0.5 mt-3 flex h-[52px] w-full items-center justify-center gap-2 rounded-table border border-dashed border-line-strong text-sm text-muted transition-colors hover:border-faint hover:text-foreground"
                   >
                   + Add staff member
                 </button>
-              </div>
+        </div>
+      </div>
 
-              {selected ? (
-                // FLOATING: the drawer sits over the list with a shadow rather than
-                // butting against it as a column, so the roster keeps its full width
-                // and the panel reads as "opened on top of" what you were scanning.
-                <div className="pointer-events-none absolute inset-y-0 right-0 hidden items-stretch p-3 xl:flex">
+      {selected ? (
+        // FULL HEIGHT. The drawer is positioned against the page REGION, not against
+        // the roster, so it runs the whole content column — from just under the top bar
+        // to the bottom gutter — instead of starting below the filters at whatever
+        // height the table happens to leave. Under lg there is no room to reserve a
+        // lane, so it covers the content full-width; it used to not render at all below
+        // 1280, which meant clicking a barber on a laptop appeared to do nothing.
+        <div className="pointer-events-none absolute inset-y-0 right-0 flex max-w-full items-stretch">
                   <StaffDetail
                     // Keyed: selecting another barber must reset the hours and profile
                     // drafts, not carry one person's unsaved edits onto the next.
@@ -353,9 +377,8 @@ export function StaffTab(props: StaffTabProps & { clientId: string; openCreate?:
                     onSaved={() => router.refresh()}
                     initialTab={props.detailTab}
                   />
-                </div>
-              ) : null}
-            </div>
+        </div>
+      ) : null}
 
       {editing || creating ? (
         <StaffEditDialog
@@ -548,7 +571,10 @@ function StaffDetail({
       // the house rules in components/ui/primitives.tsx). The panel already reads as
       // "on top" from its own fill and hairline against the recessed roster behind it —
       // the shadow the reference used only muddied the edge.
-      className="pointer-events-auto flex h-full w-[440px] flex-col overflow-hidden rounded-xl border border-line-strong bg-surface"
+      // No shadow, and the same hairline as the two cards it sits beside: the drawer
+      // is part of the screen's card family, not something lifted off it. Depth here
+      // is surface contrast against the canvas, as everywhere else in this system.
+      className="pointer-events-auto flex h-full w-screen max-w-full flex-col overflow-hidden bg-surface lg:w-[440px] lg:rounded-2xl lg:border lg:border-line-strong"
     >
       <div className="flex h-[var(--topbar-height)] shrink-0 items-center justify-between border-b border-line px-3">
         <h2 className="text-sm font-semibold">Staff details</h2>
@@ -563,7 +589,7 @@ function StaffDetail({
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto">
-        <div className="flex flex-col items-center gap-2 border-b border-line bg-panel-hero px-4 pb-4 pt-5 text-center">
+        <div className="flex flex-col items-center gap-[7px] border-b border-line bg-panel-hero px-[18px] pb-[13px] pt-[15px] text-center">
           <span className="relative">
             <span
               aria-hidden
@@ -1020,10 +1046,12 @@ function StaffDetail({
           settings form always used. */}
       {changes > 0 || saveError ? (
         <div className="flex shrink-0 items-center gap-2 border-t border-line bg-panel-hero px-4 py-3">
-          <span className="min-w-0 truncate text-xs text-muted">
+          {/* The SENTENCE is the flexible one: it shrinks and truncates. The two
+              buttons never wrap — "Save changes" breaking onto two lines made the bar
+              grow a row every time the message got long. */}
+          <span className="min-w-0 flex-1 truncate text-xs text-muted">
             {invalid ?? saveError ?? `${changes} unsaved ${changes === 1 ? "change" : "changes"}`}
           </span>
-          {invalid || saveError ? null : null}
           <button
             type="button"
             onClick={() => {
@@ -1031,7 +1059,7 @@ function StaffDetail({
               setDraft(draftFromWeekly(member.workingHours));
               setProfile(profileFromMember(member));
             }}
-            className="ml-auto inline-flex h-8 items-center rounded-md border border-line-strong px-3 text-xs transition-colors hover:bg-hover"
+            className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md border border-line-strong px-3 text-xs transition-colors hover:bg-hover"
           >
             Discard
           </button>
@@ -1058,7 +1086,7 @@ function StaffDetail({
                 else onSaved();
               });
             }}
-            className="inline-flex h-8 items-center rounded-md bg-brand px-3 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md bg-brand px-3 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
           >
             {saving ? "Saving…" : "Save changes"}
           </button>

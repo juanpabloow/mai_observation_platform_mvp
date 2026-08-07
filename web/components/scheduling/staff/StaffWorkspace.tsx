@@ -46,11 +46,12 @@ export function StaffWorkspace({
   // the TODO above) — a count there would be the first fabricated thing on the screen.
   const [creating, setCreating] = useState(0);
 
-  return (
-    <main className="flex min-h-0 w-full flex-1 flex-col">
-      <PageShell>
-        <div className="flex shrink-0 flex-col gap-3 px-[var(--panel-pad)] pt-3">
-          <PageTitle
+  // The title + tab rows. They are the PAGE's, but they are handed to StaffTab so it
+  // can draw them inside the header card — one box, not a box per row.
+  const header = (
+    <>
+      <div className="px-[15px] pt-[14px]">
+        <PageTitle
             title="Staff"
             context={clientLabel}
             actions={
@@ -64,10 +65,11 @@ export function StaffWorkspace({
               >
                 + Add staff member
               </button>
-            }
-          />
+          }
+        />
+      </div>
 
-          <div className="flex items-center gap-5 border-b border-line" role="tablist">
+      <div className="flex items-center gap-5 border-b border-line px-[15px]" role="tablist">
             {TABS.map((t) => (
               <button
                 key={t.key}
@@ -88,39 +90,65 @@ export function StaffWorkspace({
                   </span>
                 ) : null}
               </button>
-            ))}
-          </div>
-        </div>
+        ))}
+      </div>
+    </>
+  );
 
+  return (
+    <main className="flex min-h-0 w-full flex-1 flex-col">
+      {/* `surface="canvas"`: this screen is NOT one card. PageShell contributes the
+          region (flex, min-h-0, flex-1) and lets the layout's canvas show through;
+          the cards below are the page's own, so there is no card inside a card and no
+          doubled border. `relative` makes this the drawer's positioning context, which
+          is what lets the drawer run the FULL height of the region. */}
+      <PageShell surface="canvas" className="relative">
         {tab === "staff" ? (
           staff ? (
-            <StaffTab clientId={clientId} openCreate={creating} {...staff} />
+            <StaffTab clientId={clientId} openCreate={creating} header={header} {...staff} />
           ) : (
+            <StubCard header={header}>
             <Empty
               title="No roster yet"
               hint="This client has no site, and a barber belongs to one. Create a site in Scheduling settings first."
             />
+            </StubCard>
           )
         ) : tab === "shifts" ? (
-          <Empty
-            title="Shifts"
-            hint="Coming soon. A barber has weekly working hours today, not published shifts — a rota needs its own model."
-          />
+          <StubCard header={header}>
+            <Empty
+              title="Shifts"
+              hint="Coming soon. A barber has weekly working hours today, not published shifts — a rota needs its own model."
+            />
+          </StubCard>
         ) : (
-          <Empty
-            title="Time off"
-            hint="Coming soon. Blocked time exists on the schedule, but there is no request or approval flow behind it yet."
-          />
+          <StubCard header={header}>
+            <Empty
+              title="Time off"
+              hint="Coming soon. Blocked time exists on the schedule, but there is no request or approval flow behind it yet."
+            />
+          </StubCard>
         )}
       </PageShell>
     </main>
   );
 }
 
+/** The header card plus whatever the tab has to show — so a stub tab keeps exactly the
+ *  same two-card geometry as the roster instead of losing the header. */
+function StubCard({ header, children }: { header: ReactNode; children: ReactNode }) {
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="shrink-0 overflow-hidden rounded-2xl border border-line-strong bg-surface">{header}</div>
+      {children}
+    </div>
+  );
+}
+
 function Empty({ title, hint }: { title: string; hint: ReactNode }) {
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center bg-background p-10">
-      <div className="flex max-w-sm flex-col items-center gap-1 rounded-xl border border-dashed border-line-strong bg-surface px-8 py-10 text-center">
+    <div className="flex min-h-0 flex-1 items-center justify-center p-10">
+      <div className="flex max-w-sm flex-col items-center gap-1 rounded-table border border-dashed border-line-strong bg-surface px-8 py-10 text-center">
         <p className="text-sm font-medium text-muted">{title}</p>
         <p className="text-sm text-faint">{hint}</p>
       </div>

@@ -145,11 +145,18 @@ test('contacts: the panel gutter is actually VISIBLE against the canvas', () => 
 
 test('page shell: ONE component owns the floating card, and all three screens use it', () => {
   const shell = read('components/ui/PageShell.tsx');
-  // The full contract: fill + hairline + 6px radius, and a height chain that lets it
-  // grow to the bottom of the scrolling region (min-h-0 + flex-1), clipping children
-  // to the rounded corners.
-  assert.ok(shell.includes('rounded-xl border border-line bg-surface'), 'fill + hairline + radius');
-  assert.ok(shell.includes('flex min-h-0 min-w-0 flex-1 overflow-hidden'), 'it grows to the bottom and clips');
+  // The full contract, in two halves.
+  // REGION (both surfaces): the height chain that lets it grow to the bottom of the
+  // scrolling region. Screens that float several cards of their own opt out of the
+  // card chrome with surface="canvas", but never out of this.
+  assert.ok(shell.includes('flex min-h-0 min-w-0 flex-1'), 'it grows to the bottom of the region');
+  // CARD (the default surface): fill + hairline + radius, clipping children to the
+  // rounded corners.
+  assert.ok(
+    shell.includes('overflow-hidden rounded-xl border border-line bg-surface'),
+    'the default surface is a clipped card: fill + hairline + radius',
+  );
+  assert.ok(shell.includes('surface === "card"'), 'the card chrome is what the surface prop switches');
   for (const f of [CONTACTS_PAGE, 'components/scheduling/AgendaView.tsx', 'components/ClientInboxWorkspace.tsx']) {
     assert.ok(read(f).includes('from "@/components/ui/PageShell"'), `${f} imports the shared shell`);
     assert.ok(read(f).includes('<PageShell'), `${f} renders it`);
