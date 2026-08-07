@@ -82,6 +82,44 @@ test('no API route reads staff PII (public booking, machine API)', () => {
   }
 });
 
+test('the Team page is the ONLY page that reads staff PII, and it is owner/admin gated', () => {
+  const readers = filesUnder('web/app')
+    .filter((f) => /listStaffAdmin|getStaffByIdAdmin/.test(readFileSync(f, 'utf8')))
+    .map((f) => f.replace(/.*\/web\/app\//, ''));
+  assert.deepEqual(readers, ['clients/[clientId]/team/page.tsx'], 'exactly one page reads the PII');
+
+  const page = root('web/app/clients/[clientId]/team/page.tsx');
+  assert.ok(page.includes('requireFullAccessOrLand()'), 'behind the owner/admin gate');
+  // The other loaders on the same page must NOT have been switched over with it.
+  assert.ok(!/\blistStaff\(/.test(page), 'the admin read replaced listStaff here rather than sitting beside it');
+
+  // Agenda and availability keep the PII-free read.
+  assert.ok(
+    root('web/app/clients/[clientId]/scheduling/agenda/page.tsx').includes('listStaff('),
+    'the agenda still uses the operational read',
+  );
+});
+
+test('NO CHAIR is derived from takes_bookings, not from active', () => {
+  const src = root('web/components/team/StaffTab.tsx');
+  assert.ok(/if \(!s\.takesBookings\) key = "no_chair";/.test(src), 'no_chair comes from takes_bookings');
+  assert.ok(
+    !/if \(!s\.active\) key = "no_chair";/.test(src),
+    'active must not stand in for it — "no longer works here" and "holds no chair" are different facts',
+  );
+});
+
+test('the service form can set a category (so a bad classification is correctable)', () => {
+  const src = root('web/components/scheduling/AdminPanel.tsx');
+  assert.ok(src.includes('const CATEGORY_OPTIONS'), 'the closed set is declared once');
+  for (const v of ['color', 'grooming', 'cut', 'feature']) {
+    assert.ok(new RegExp(`value: "${v}"`).test(src), `the form offers ${v}`);
+  }
+  assert.ok(/value: "",\s*label: "Unclassified"/.test(src), 'clearing back to unclassified is offered');
+  // Both the create and the edit path must send it.
+  assert.equal(src.split('category: category === "" ? null : category').length - 1, 2, 'create AND edit send it');
+});
+
 test('services.category is the primary source of the colour family; keywords are the fallback', () => {
   const src = root('web/lib/agendaCategory.ts');
   assert.ok(

@@ -4,7 +4,11 @@ import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { avatarColor } from "@/lib/avatarColor";
-import { updateStaffAction } from "@/lib/schedulingAdminActions";
+import {
+  addStaffCertificationAction,
+  deleteStaffCertificationAction,
+  updateStaffAction,
+} from "@/lib/schedulingAdminActions";
 import { StaffEditDialog } from "./StaffEditDialog";
 
 /** Serializable shapes from the server page. */
@@ -16,15 +20,39 @@ export interface StaffServiceOpt {
   durationMin: number;
   description: string | null;
 }
+export interface StaffCertification {
+  id: string;
+  name: string;
+  issuer: string | null;
+  /** yyyy-mm-dd, or null when unknown. */
+  issuedOn: string | null;
+  expiresOn: string | null;
+}
 export interface StaffMember {
   id: string;
   name: string;
+  /** Still employed. Deactivating keeps their history and their agenda lane. */
   active: boolean;
   siteId: string;
   siteName: string;
   /** weekday → ranges; {} means "inherit the site's opening hours". */
   workingHours: Record<string, { start: string; end: string }[]>;
   serviceIds: string[];
+  // ── Profile (staff-fields migration). null = nobody has filled it in. ────────
+  title: string | null;
+  employmentType: string | null;
+  weeklyHours: number | null;
+  /** yyyy-mm-dd. Seniority is derived from it — never stored. */
+  startDate: string | null;
+  skills: string[];
+  /** Has a chair. Distinct from `active`: a front-desk hire works here and takes none. */
+  takesBookings: boolean;
+  // PII. Only this screen receives it (the page uses listStaffAdmin).
+  phone: string | null;
+  email: string | null;
+  emergencyContactName: string | null;
+  emergencyContactPhone: string | null;
+  certifications: StaffCertification[];
 }
 export interface StaffAppointment {
   id: string;
@@ -154,7 +182,11 @@ export function StaffTab(props: StaffTabProps & { clientId: string }) {
 
     let key: StatusKey;
     let suffix = "";
-    if (!s.active) key = "no_chair";
+    // NO CHAIR is takes_bookings, NOT active. They are different facts: `active =
+    // false` means they no longer work here (and the page does not even load them),
+    // while takes_bookings = false is a front-desk hire who works every day and
+    // simply has no agenda lane. Deriving this from `active` conflated the two.
+    if (!s.takesBookings) key = "no_chair";
     else if (off) {
       key = "time_off";
       const days = Math.max(1, Math.round((new Date(off.endsAt).getTime() - new Date(off.startsAt).getTime()) / 86_400_000));
@@ -298,6 +330,9 @@ export function StaffTab(props: StaffTabProps & { clientId: string }) {
                 // and the panel reads as "opened on top of" what you were scanning.
                 <div className="pointer-events-none absolute inset-y-0 right-0 hidden items-stretch p-3 xl:flex">
                   <StaffDetail
+                    // Keyed: selecting another barber must reset the hours and profile
+                    // drafts, not carry one person's unsaved edits onto the next.
+                    key={selected.id}
                     member={selected}
                     status={describe(selected)}
                     tz={tz}
@@ -459,9 +494,17 @@ function StaffDetail({
   const [range, setRange] = useState<14 | 30>(14);
   // HOURS DRAFT — the Hours tab edits a local copy; the unsaved bar commits it.
   const [draft, setDraft] = useState<HourDraft>(() => draftFromWeekly(member.workingHours));
+  // PROFILE DRAFT — the Details tab edits a local copy through the same unsaved bar as
+  // Hours, so one Save writes the whole panel rather than each field racing the others.
+  const [profile, setProfile] = useState<ProfileDraft>(() => profileFromMember(member));
   const [saving, startSave] = useTransition();
   const [saveError, setSaveError] = useState<string | null>(null);
   const dirtyDays = countDirtyDays(draft, member.workingHours);
+  const dirtyFields = dirtyProfileFields(profile, member);
+  const changes = dirtyDays + dirtyFields.length;
+  // Mirror the CHECK constraints client-side: the schema already refuses these, this
+  // just says so before the round trip.
+  const invalid = profileError(profile);
   const s = STATUS[status.key];
 
   // ── Performance, all computed from the 30-day window this page loaded ──
@@ -524,9 +567,11 @@ function StaffDetail({
             <span aria-hidden className={`absolute bottom-px right-px size-[13px] rounded-full border-[2.5px] border-panel-hero ${s.dot}`} />
           </span>
           <span className="text-[16.5px] font-semibold tracking-[-0.015em] text-foreground">{member.name}</span>
-          {/* TODO(staff): role, phone and email have no columns on `staff`; the design
-              shows "Colour specialist · Gallery" and a phone/email line here. */}
-          <span className="text-xs text-muted">{member.siteName}</span>
+          {/* The subtitle is the ROLE, per the design — no chair, because there is no
+              chair column and deliberately never will be (see the migration). */}
+          <span className="text-xs text-muted">
+            {member.title ? `${member.title} · ${member.siteName}` : member.siteName}
+          </span>
           <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
             <button
               type="button"
@@ -650,24 +695,156 @@ function StaffDetail({
             </div>
           </div>
         ) : tab === "details" ? (
-          <dl className="flex flex-col gap-3 px-4 py-4 text-sm">
-            <Row term="Site" value={member.siteName} />
-            <Row
-              term="Takes bookings"
-              value={member.active ? "Yes" : "No — keeps history and lane, no new appointments"}
-            />
-            <Row
-              term="Hours"
-              value={
-                Object.keys(member.workingHours).length === 0
-                  ? "Inherits the site's opening hours"
-                  : `${WEEKDAYS.filter((d) => member.workingHours[d]?.length).length} days a week`
-              }
-            />
-            <Row term="Staff id" value={<span className="u-mono text-[11px] break-all">{member.id}</span>} />
-            {/* TODO(staff): the design also lists role, chair, contact and commission
-                here — none of them are columns on `staff` yet. */}
-          </dl>
+          <div className="flex flex-col">
+            {/* CONTACT — employee PII. It only reaches this component because the page
+                used listStaffAdmin behind the owner/admin gate; every other reader of
+                `staff` still gets the projection without these columns. */}
+            <DetailSection title="Contact">
+              <FieldRow
+                label="Phone"
+                value={profile.phone}
+                onChange={(v) => setProfile((d) => ({ ...d, phone: v }))}
+                placeholder="Add a phone number"
+                type="tel"
+              />
+              <FieldRow
+                label="Email"
+                value={profile.email}
+                onChange={(v) => setProfile((d) => ({ ...d, email: v }))}
+                placeholder="Add an email"
+                type="email"
+              />
+              <FieldRow
+                label="Emergency"
+                value={profile.emergencyContactName}
+                onChange={(v) => setProfile((d) => ({ ...d, emergencyContactName: v }))}
+                placeholder="Add a contact name"
+              />
+              <FieldRow
+                label="Emergency phone"
+                value={profile.emergencyContactPhone}
+                onChange={(v) => setProfile((d) => ({ ...d, emergencyContactPhone: v }))}
+                placeholder="Add a phone number"
+                type="tel"
+              />
+            </DetailSection>
+
+            <DetailSection title="Contract">
+              <FieldRow
+                label="Role"
+                value={profile.title}
+                onChange={(v) => setProfile((d) => ({ ...d, title: v }))}
+                placeholder="e.g. Colour specialist"
+              />
+              <FieldRow label="Employment">
+                <select
+                  value={profile.employmentType}
+                  onChange={(e) => setProfile((d) => ({ ...d, employmentType: e.target.value }))}
+                  className={`${CELL} ${profile.employmentType ? "" : "text-faint"}`}
+                >
+                  <option value="">Not set</option>
+                  {EMPLOYMENT_TYPES.map((t) => (
+                    <option key={t.value} value={t.value}>
+                      {t.label}
+                    </option>
+                  ))}
+                </select>
+              </FieldRow>
+              <FieldRow label="Weekly hours">
+                <input
+                  type="number"
+                  min={1}
+                  max={168}
+                  value={profile.weeklyHours}
+                  onChange={(e) => setProfile((d) => ({ ...d, weeklyHours: e.target.value }))}
+                  placeholder="Not set"
+                  className={CELL}
+                />
+              </FieldRow>
+              <FieldRow label="Started">
+                <input
+                  type="date"
+                  value={profile.startDate}
+                  onChange={(e) => setProfile((d) => ({ ...d, startDate: e.target.value }))}
+                  className={`${CELL} ${profile.startDate ? "" : "text-faint"}`}
+                />
+              </FieldRow>
+              {/* SENIORITY is derived on every render from the date above — storing it
+                  would guarantee it is wrong within a year. */}
+              <FieldRow label="Seniority">
+                <span className="px-1.5 text-sm text-muted">{seniority(profile.startDate) ?? "—"}</span>
+              </FieldRow>
+              <FieldRow label="Site">
+                <span
+                  className="px-1.5 text-sm text-muted"
+                  title="A barber belongs to one site in V1; moving them is not an update the repository supports"
+                >
+                  {member.siteName}
+                </span>
+              </FieldRow>
+            </DetailSection>
+
+            <DetailSection title="Skills">
+              <div className="flex flex-wrap items-center gap-1.5 px-4 pb-3">
+                {profile.skills.map((sk) => (
+                  <span
+                    key={sk}
+                    className="inline-flex h-7 items-center gap-1.5 rounded-md border border-line-strong bg-surface pl-2.5 pr-1.5 text-xs"
+                  >
+                    {sk}
+                    <button
+                      type="button"
+                      aria-label={`Remove ${sk}`}
+                      onClick={() => setProfile((d) => ({ ...d, skills: d.skills.filter((x) => x !== sk) }))}
+                      className="text-faint transition-colors hover:text-danger"
+                    >
+                      &#10005;
+                    </button>
+                  </span>
+                ))}
+                <TagInput
+                  onAdd={(v) =>
+                    setProfile((d) => (d.skills.includes(v) ? d : { ...d, skills: [...d.skills, v] }))
+                  }
+                />
+              </div>
+            </DetailSection>
+
+            {/* CERTIFICATIONS are their own rows, so they save immediately rather than
+                riding the draft — adding one is a create, not a field edit. */}
+            <DetailSection title="Certifications">
+              <div className="flex flex-col gap-1.5 px-4 pb-3">
+                {member.certifications.length === 0 ? (
+                  <p className="text-xs text-faint">None recorded.</p>
+                ) : (
+                  member.certifications.map((c) => (
+                    <CertificationRow
+                      key={c.id}
+                      cert={c}
+                      now={now}
+                      onDelete={() =>
+                        startSave(async () => {
+                          const r = await deleteStaffCertificationAction(clientId, member.id, c.id);
+                          if (!r.ok) setSaveError(r.error);
+                          else onSaved();
+                        })
+                      }
+                    />
+                  ))
+                )}
+                <CertificationForm
+                  busy={saving}
+                  onAdd={(input) =>
+                    startSave(async () => {
+                      const r = await addStaffCertificationAction({ clientId, staffId: member.id, ...input });
+                      if (!r.ok) setSaveError(r.error);
+                      else onSaved();
+                    })
+                  }
+                />
+              </div>
+            </DetailSection>
+          </div>
         ) : tab === "services" ? (
           <div className="flex flex-col gap-2 px-4 py-4">
             {services.length === 0 ? (
@@ -834,17 +1011,18 @@ function StaffDetail({
       {/* UNSAVED CHANGES — only when there are any. It reports DAYS, which is the unit
           the editor above works in, and saves through the same updateStaffAction the
           settings form always used. */}
-      {dirtyDays > 0 ? (
+      {changes > 0 || saveError ? (
         <div className="flex shrink-0 items-center gap-2 border-t border-line bg-panel-hero px-4 py-3">
-          <span className="text-xs text-muted">
-            {dirtyDays} {dirtyDays === 1 ? "day" : "days"} changed
+          <span className="min-w-0 truncate text-xs text-muted">
+            {invalid ?? saveError ?? `${changes} unsaved ${changes === 1 ? "change" : "changes"}`}
           </span>
-          {saveError ? <span className="truncate text-xs text-danger">{saveError}</span> : null}
+          {invalid || saveError ? null : null}
           <button
             type="button"
             onClick={() => {
               setSaveError(null);
               setDraft(draftFromWeekly(member.workingHours));
+              setProfile(profileFromMember(member));
             }}
             className="ml-auto inline-flex h-8 items-center rounded-md border border-line-strong px-3 text-xs transition-colors hover:bg-hover"
           >
@@ -852,15 +1030,23 @@ function StaffDetail({
           </button>
           <button
             type="button"
-            disabled={saving}
+            disabled={saving || changes === 0 || invalid !== null}
             onClick={() => {
               setSaveError(null);
               startSave(async () => {
-                // Drop empty days: `{}` for a weekday is the model's "off", and an
-                // entirely empty map is its "inherit the site's hours".
-                const weekly: Record<string, { start: string; end: string }[]> = {};
-                for (const d of WEEKDAYS) if ((draft[d] ?? []).length > 0) weekly[d] = draft[d];
-                const r = await updateStaffAction(clientId, member.id, { workingHours: weekly as never });
+                // ONE patch for everything that changed. Fields that were not touched
+                // are absent, so a save never rewrites a column the operator did not
+                // look at (and `null` for a cleared field is meaningful, not a no-op).
+                const patch: Parameters<typeof updateStaffAction>[2] = {};
+                if (dirtyDays > 0) {
+                  // Drop empty days: `{}` for a weekday is the model's "off", and an
+                  // entirely empty map is its "inherit the site's hours".
+                  const weekly: Record<string, { start: string; end: string }[]> = {};
+                  for (const d of WEEKDAYS) if ((draft[d] ?? []).length > 0) weekly[d] = draft[d];
+                  patch.workingHours = weekly as never;
+                }
+                Object.assign(patch, profilePatch(profile, dirtyFields));
+                const r = await updateStaffAction(clientId, member.id, patch);
                 if (!r.ok) setSaveError(r.error);
                 else onSaved();
               });
@@ -872,6 +1058,291 @@ function StaffDetail({
         </div>
       ) : null}
     </aside>
+  );
+}
+
+
+// ── PROFILE DRAFT ────────────────────────────────────────────────────────────
+// Everything on the Details tab is a plain string in the draft (that is what an
+// <input> gives you); the empty string means "cleared", which maps to NULL on the way
+// out — the column's own empty state. Keeping that translation in ONE place is why
+// these are functions and not inline ternaries in the JSX.
+interface ProfileDraft {
+  title: string;
+  employmentType: string;
+  weeklyHours: string;
+  startDate: string;
+  phone: string;
+  email: string;
+  emergencyContactName: string;
+  emergencyContactPhone: string;
+  skills: string[];
+}
+
+/** The stored employment types — mirrors the staff_employment_type_valid CHECK. */
+const EMPLOYMENT_TYPES = [
+  { value: "full_time", label: "Full time" },
+  { value: "part_time", label: "Part time" },
+  { value: "contractor", label: "Contractor" },
+] as const;
+
+function profileFromMember(m: StaffMember): ProfileDraft {
+  return {
+    title: m.title ?? "",
+    employmentType: m.employmentType ?? "",
+    weeklyHours: m.weeklyHours === null ? "" : String(m.weeklyHours),
+    startDate: m.startDate ?? "",
+    phone: m.phone ?? "",
+    email: m.email ?? "",
+    emergencyContactName: m.emergencyContactName ?? "",
+    emergencyContactPhone: m.emergencyContactPhone ?? "",
+    skills: [...m.skills],
+  };
+}
+
+type ProfileKey = keyof ProfileDraft;
+
+/** Which fields differ from what is stored — the number the unsaved bar reports, and
+ *  the exact set the patch will carry. */
+function dirtyProfileFields(d: ProfileDraft, m: StaffMember): ProfileKey[] {
+  const stored = profileFromMember(m);
+  return (Object.keys(d) as ProfileKey[]).filter((k) =>
+    k === "skills"
+      ? JSON.stringify(d.skills) !== JSON.stringify(stored.skills)
+      : d[k] !== stored[k],
+  );
+}
+
+/** The same rules the CHECK constraints enforce, stated before the round trip.
+ *  Returns a sentence to show in the bar, or null when the draft is storable. */
+function profileError(d: ProfileDraft): string | null {
+  if (d.weeklyHours !== "") {
+    const n = Number(d.weeklyHours);
+    if (!Number.isInteger(n) || n < 1 || n > 168) return "Weekly hours must be a whole number from 1 to 168.";
+  }
+  if (d.employmentType !== "" && !EMPLOYMENT_TYPES.some((t) => t.value === d.employmentType)) {
+    return "Unknown employment type.";
+  }
+  return null;
+}
+
+/** Only the changed fields, translated to the repository's shape ("" → null). */
+function profilePatch(d: ProfileDraft, dirty: ProfileKey[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  const blank = (v: string) => (v.trim() === "" ? null : v.trim());
+  for (const k of dirty) {
+    if (k === "skills") out.skills = d.skills;
+    else if (k === "weeklyHours") out.weeklyHours = d.weeklyHours === "" ? null : Number(d.weeklyHours);
+    else if (k === "employmentType") out.employmentType = d.employmentType === "" ? null : d.employmentType;
+    else out[k] = blank(d[k] as string);
+  }
+  return out;
+}
+
+/** "Since Mar 2023 · 2y 5m", computed from start_date every render. */
+function seniority(startDate: string): string | null {
+  if (!startDate) return null;
+  const [y, mo, day] = startDate.split("-").map(Number);
+  if (!y || !mo || !day) return null;
+  const start = new Date(Date.UTC(y, mo - 1, day));
+  const now = new Date();
+  let months = (now.getUTCFullYear() - y) * 12 + (now.getUTCMonth() - (mo - 1));
+  if (now.getUTCDate() < day) months -= 1;
+  if (months < 0) return `Starts ${start.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" })}`;
+  const years = Math.floor(months / 12);
+  const rest = months % 12;
+  const span = years > 0 ? `${years}y ${rest}m` : `${rest}m`;
+  return `Since ${start.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" })} · ${span}`;
+}
+
+/** Days until a certification lapses; null when it never does. */
+function daysUntil(iso: string | null, now: Date): number | null {
+  if (!iso) return null;
+  const [y, m, d] = iso.split("-").map(Number);
+  return Math.round((Date.UTC(y, m - 1, d) - Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate())) / 86_400_000);
+}
+
+const CELL =
+  "min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-right text-sm outline-none transition-colors hover:border-line focus:border-brand focus:text-left";
+
+/** A titled block inside the drawer. */
+function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="border-b border-line last:border-0">
+      <h3 className="u-th px-4 pb-1.5 pt-3.5">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+/**
+ * One label/value line. The value is an INPUT, not text with a pencil next to it: a
+ * field with no data still shows its placeholder and still takes a click, which is
+ * what "empty but editable" has to look like for it to be discoverable.
+ */
+function FieldRow({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type,
+  children,
+}: {
+  label: string;
+  value?: string;
+  onChange?: (v: string) => void;
+  placeholder?: string;
+  type?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <label className="flex items-center gap-3 px-4 py-1">
+      <span className="w-[120px] shrink-0 text-xs text-muted">{label}</span>
+      {children ?? (
+        <input
+          type={type ?? "text"}
+          value={value ?? ""}
+          onChange={(e) => onChange?.(e.target.value)}
+          placeholder={placeholder}
+          className={`${CELL} placeholder:text-faint`}
+        />
+      )}
+    </label>
+  );
+}
+
+/** "New tag" — enter commits, blur discards, so a half-typed tag never sticks. */
+function TagInput({ onAdd }: { onAdd: (v: string) => void }) {
+  const [value, setValue] = useState("");
+  return (
+    <input
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onKeyDown={(e) => {
+        if (e.key !== "Enter") return;
+        e.preventDefault();
+        const v = value.trim();
+        if (v) onAdd(v);
+        setValue("");
+      }}
+      onBlur={() => setValue("")}
+      placeholder="New tag"
+      aria-label="Add a skill"
+      className="h-7 w-[104px] rounded-md border border-dashed border-line-strong bg-transparent px-2 text-xs outline-none placeholder:text-faint focus:border-brand"
+    />
+  );
+}
+
+function CertificationRow({
+  cert,
+  now,
+  onDelete,
+}: {
+  cert: StaffCertification;
+  now: Date;
+  onDelete: () => void;
+}) {
+  const left = daysUntil(cert.expiresOn, now);
+  // Expired / expiring is the whole reason these are rows with dates rather than tags.
+  const state =
+    left === null ? null : left < 0 ? { label: "EXPIRED", cls: "text-brand" } : left <= 60 ? { label: `${left}D LEFT`, cls: "text-warn" } : null;
+  return (
+    <div
+      className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 ${
+        state?.label === "EXPIRED" ? "border-danger-tint bg-danger-tint/20" : "border-line"
+      }`}
+    >
+      <span className="flex min-w-0 flex-1 flex-col">
+        <span className="truncate text-xs font-semibold text-foreground">{cert.name}</span>
+        <span className="u-mono truncate text-[10.5px] text-muted">
+          {[cert.issuer, cert.issuedOn ? `issued ${cert.issuedOn}` : null, cert.expiresOn ? `expires ${cert.expiresOn}` : "no expiry"]
+            .filter(Boolean)
+            .join(" · ")}
+        </span>
+      </span>
+      {state ? <span className={`u-mono shrink-0 text-[10px] ${state.cls}`}>{state.label}</span> : null}
+      <button
+        type="button"
+        onClick={onDelete}
+        aria-label={`Remove ${cert.name}`}
+        className="shrink-0 text-xs text-faint transition-colors hover:text-danger"
+      >
+        &#10005;
+      </button>
+    </div>
+  );
+}
+
+/** Collapsed to a link until used — four inputs permanently open would dominate a tab
+ *  that is mostly a list of two or three credentials. */
+function CertificationForm({
+  busy,
+  onAdd,
+}: {
+  busy: boolean;
+  onAdd: (input: { name: string; issuer: string | null; issuedOn: string | null; expiresOn: string | null }) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [name, setName] = useState("");
+  const [issuer, setIssuer] = useState("");
+  const [issuedOn, setIssuedOn] = useState("");
+  const [expiresOn, setExpiresOn] = useState("");
+  // The CHECK says the same thing; saying it here avoids a round trip to be told off.
+  const bad = issuedOn && expiresOn && expiresOn < issuedOn ? "Expiry can’t be before the issue date." : null;
+
+  if (!open) {
+    return (
+      <button type="button" onClick={() => setOpen(true)} className="self-start text-xs text-accent hover:underline">
+        + Add certification
+      </button>
+    );
+  }
+  const I = "h-8 min-w-0 rounded-md border border-line-strong bg-transparent px-2 text-xs outline-none focus:border-brand";
+  return (
+    <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-line-strong p-2.5">
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Certification" className={I} autoFocus />
+      <input value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="Issuer (optional)" className={I} />
+      <div className="grid grid-cols-2 gap-1.5">
+        <label className="flex flex-col gap-0.5">
+          <span className="u-th">Issued</span>
+          <input type="date" value={issuedOn} onChange={(e) => setIssuedOn(e.target.value)} className={I} />
+        </label>
+        <label className="flex flex-col gap-0.5">
+          <span className="u-th">Expires</span>
+          <input type="date" value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} className={I} />
+        </label>
+      </div>
+      {bad ? <p className="text-[11px] text-danger">{bad}</p> : null}
+      <div className="flex justify-end gap-1.5">
+        <button
+          type="button"
+          onClick={() => setOpen(false)}
+          className="inline-flex h-7 items-center rounded-md border border-line-strong px-2.5 text-xs hover:bg-hover"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          disabled={busy || !name.trim() || bad !== null}
+          onClick={() => {
+            onAdd({
+              name: name.trim(),
+              issuer: issuer.trim() || null,
+              issuedOn: issuedOn || null,
+              expiresOn: expiresOn || null,
+            });
+            setOpen(false);
+            setName("");
+            setIssuer("");
+            setIssuedOn("");
+            setExpiresOn("");
+          }}
+          className="inline-flex h-7 items-center rounded-md bg-brand px-2.5 text-xs font-medium text-white disabled:opacity-50"
+        >
+          Add
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -898,16 +1369,6 @@ function Sparkline({ series }: { series: number[] }) {
       />
       <circle cx={last[0]} cy={last[1]} r="3" fill="var(--service-purple)" />
     </svg>
-  );
-}
-
-/** One term/value line in the Details tab. */
-function Row({ term, value }: { term: string; value: React.ReactNode }) {
-  return (
-    <div className="flex items-baseline gap-3 border-b border-line/70 pb-2.5 last:border-0">
-      <dt className="u-th w-28 shrink-0">{term}</dt>
-      <dd className="min-w-0 flex-1 text-muted">{value}</dd>
-    </div>
   );
 }
 

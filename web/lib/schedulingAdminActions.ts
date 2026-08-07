@@ -18,7 +18,12 @@ import {
   getStaffById,
   reactivateStaff,
   updateStaff,
+  type EmploymentType,
 } from "@worker/db/repositories/scheduling/staff.js";
+import {
+  createStaffCertification,
+  deleteStaffCertification,
+} from "@worker/db/repositories/scheduling/staffCertifications.js";
 import {
   createService,
   deactivateService,
@@ -79,9 +84,15 @@ async function staffInClient(tenantId: string, clientId: string, staffId: string
 
 const FOREIGN = "Not found for this client.";
 
+/** Mirrors the staff_employment_type_valid CHECK. */
+const EMPLOYMENT_TYPES: readonly string[] = ["full_time", "part_time", "contractor"];
+
 function revalidateAdmin(clientId: string): void {
   revalidatePath(`/clients/${clientId}/scheduling/admin`);
   revalidatePath(`/clients/${clientId}/scheduling/agenda`);
+  // The roster moved to Team, so a staff edit has to invalidate that page too —
+  // otherwise a saved profile keeps showing the old values until a hard reload.
+  revalidatePath(`/clients/${clientId}/team`);
 }
 
 // ── Sites ──────────────────────────────────────────────────────────────────────
@@ -282,12 +293,42 @@ export async function createStaffAction(input: {
 export async function updateStaffAction(
   clientId: string,
   id: string,
-  patch: { name?: string; workingHours?: WeeklyHours; active?: boolean },
+  // The profile fields the Staff screen edits. PII (phone/email/emergency contact) is
+  // WRITTEN here — behind the same owner/admin + client-scope gate as everything else —
+  // but is only ever READ back through listStaffAdmin/getStaffByIdAdmin.
+  patch: {
+    name?: string;
+    workingHours?: WeeklyHours;
+    active?: boolean;
+    title?: string | null;
+    employmentType?: string | null;
+    weeklyHours?: number | null;
+    startDate?: string | null;
+    skills?: string[];
+    takesBookings?: boolean;
+    phone?: string | null;
+    email?: string | null;
+    emergencyContactName?: string | null;
+    emergencyContactPhone?: string | null;
+  },
 ): Promise<AdminResult> {
   const auth = await requireSchedulingAdmin(clientId);
   if (!auth.ok) return auth;
   if (!(await staffInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
-  const row = await updateStaff(auth.tenantId, id, patch);
+  // Narrow what the CHECK constraints already restrict, so a bad value is a readable
+  // error here instead of a 500 from Postgres. Same rule, stated twice on purpose.
+  const { employmentType, weeklyHours, ...rest } = patch;
+  if (employmentType !== undefined && employmentType !== null && !EMPLOYMENT_TYPES.includes(employmentType)) {
+    return { ok: false, error: "Unknown employment type." };
+  }
+  if (weeklyHours !== undefined && weeklyHours !== null && !(Number.isInteger(weeklyHours) && weeklyHours >= 1 && weeklyHours <= 168)) {
+    return { ok: false, error: "Weekly hours must be between 1 and 168." };
+  }
+  const row = await updateStaff(auth.tenantId, id, {
+    ...rest,
+    ...(employmentType !== undefined ? { employmentType: employmentType as EmploymentType | null } : {}),
+    ...(weeklyHours !== undefined ? { weeklyHours } : {}),
+  });
   if (!row) return { ok: false, error: "Staff not found." };
   revalidateAdmin(clientId);
   return { ok: true, id };
@@ -321,6 +362,56 @@ export async function activateStaffAction(clientId: string, id: string): Promise
  * forged/foreign id returns 0 (nothing to warn about) rather than leaking existence.
  */
 export type UpcomingCountResult = { ok: true; count: number } | { ok: false; error: string };
+// ── Staff certifications ───────────────────────────────────────────────────────
+// Separate rows, so they are created and deleted one at a time rather than riding
+// the profile patch. Same four-way gate, plus the staff-belongs-to-this-client check.
+
+export async function addStaffCertificationAction(input: {
+  clientId: string;
+  staffId: string;
+  name: string;
+  issuer?: string | null;
+  issuedOn?: string | null;
+  expiresOn?: string | null;
+}): Promise<AdminResult> {
+  const auth = await requireSchedulingAdmin(input.clientId);
+  if (!auth.ok) return auth;
+  if (!(await staffInClient(auth.tenantId, input.clientId, input.staffId))) return { ok: false, error: FOREIGN };
+  if (!input.name.trim()) return { ok: false, error: "A certification needs a name." };
+  // The CHECK enforces this too; saying it here gives the operator a sentence.
+  if (input.issuedOn && input.expiresOn && input.expiresOn < input.issuedOn) {
+    return { ok: false, error: "The expiry date can’t be before the issue date." };
+  }
+  try {
+    const row = await createStaffCertification({
+      tenantId: auth.tenantId,
+      staffId: input.staffId,
+      name: input.name,
+      issuer: input.issuer ?? null,
+      issuedOn: input.issuedOn ?? null,
+      expiresOn: input.expiresOn ?? null,
+    });
+    revalidateAdmin(input.clientId);
+    return { ok: true, id: row.id };
+  } catch (err) {
+    return { ok: false, error: errText(err, "Could not add the certification.") };
+  }
+}
+
+export async function deleteStaffCertificationAction(
+  clientId: string,
+  staffId: string,
+  id: string,
+): Promise<AdminResult> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  if (!(await staffInClient(auth.tenantId, clientId, staffId))) return { ok: false, error: FOREIGN };
+  const ok = await deleteStaffCertification(auth.tenantId, id);
+  if (!ok) return { ok: false, error: "Certification not found." };
+  revalidateAdmin(clientId);
+  return { ok: true };
+}
+
 export async function countUpcomingAppointmentsAction(
   clientId: string,
   kind: "staff" | "service" | "site",

@@ -79,6 +79,7 @@ export default async function ClientSchedulingAdminPage({
         buffer_after_min: s.buffer_after_min,
         active: s.active,
         featured: s.featured,
+        category: s.category,
       }))}
       staff={staff.map((s) => ({ id: s.id, site_id: s.site_id, name: s.name, active: s.active, serviceIds: staffServiceMap[s.id] ?? [], working_hours: s.working_hours }))}
       siteServiceMap={siteServiceMap}
