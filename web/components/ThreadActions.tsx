@@ -9,10 +9,13 @@ import {
 } from "@/lib/inboxActions";
 import type { InboxHeaderView } from "@/lib/inboxView";
 
+// The header's action pair, on tokens rather than raw palette colours: the primary
+// is the solid near-black button from the design ("Return to bot" reads as the one
+// committing action in the strip), the secondary a hairline shell.
 const primaryBtn =
-  "rounded-lg bg-emerald-600 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50";
+  "inline-flex h-8 items-center rounded-md bg-foreground px-3 text-xs font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50";
 const secondaryBtn =
-  "rounded-lg border border-black/10 px-3 py-1.5 text-sm transition-colors hover:bg-black/[0.04] disabled:opacity-50 dark:border-line-strong dark:hover:bg-subtle";
+  "inline-flex h-8 items-center rounded-md border border-line-strong px-3 text-xs transition-colors hover:bg-hover disabled:opacity-50";
 
 /**
  * Thread action buttons, gated by mode + viewer (the SERVER actions re-check
@@ -85,7 +88,7 @@ export function ThreadActions({
             onCancel={() => setConfirming(null)}
           />
         ) : (
-          <button type="button" disabled={pending} onClick={() => setConfirming("return")} className={secondaryBtn}>
+          <button type="button" disabled={pending} onClick={() => setConfirming("return")} className={primaryBtn}>
             Return to bot
           </button>
         )
@@ -112,14 +115,14 @@ function ConfirmInline({
         type="button"
         disabled={busy}
         onClick={onConfirm}
-        className="rounded-lg border border-amber-500/40 px-2.5 py-1 text-xs text-amber-700 transition-colors hover:bg-amber-500/10 disabled:opacity-50 dark:text-amber-400"
+        className="inline-flex h-8 items-center rounded-md border border-warn-rule/50 px-2.5 text-xs text-warn transition-colors hover:bg-warn-soft disabled:opacity-50"
       >
         {busy ? "Working…" : "Confirm"}
       </button>
       <button
         type="button"
         onClick={onCancel}
-        className="rounded-lg border border-black/10 px-2.5 py-1 text-xs transition-colors hover:bg-black/[0.04] dark:border-line-strong dark:hover:bg-subtle"
+        className="inline-flex h-8 items-center rounded-md border border-line-strong px-2.5 text-xs transition-colors hover:bg-hover"
       >
         Cancel
       </button>

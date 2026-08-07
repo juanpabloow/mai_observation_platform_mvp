@@ -9,6 +9,7 @@ import {
   getLatestEscalationReasons,
   listConversationsForClient,
   listConversationsForWorkflow,
+  listModeTransitions,
   listThreadMessages,
   type EscalationReasonRow,
   type InboxConversationRow,
@@ -17,6 +18,7 @@ import {
 } from "@worker/db/repositories/handoff.js";
 import type {
   HistoryTurnView,
+  ThreadEventView,
   InboxConversationView,
   InboxHeaderView,
   InboxMessageView,
@@ -79,6 +81,8 @@ function toConversationView(
     // Escalation reason is attached only for pending cards (batched, see loader).
     escalationReasonCode: reason?.reason_code ?? null,
     escalationDetail: reason?.detail ?? null,
+    contactName: r.contact_name,
+    channel: r.contact_channel,
   };
 }
 
@@ -111,6 +115,8 @@ export function toHeaderView(
     active,
     assignedAgentUserId: c.assigned_agent_user_id,
     assignedAgentName: c.assigned_agent_name,
+    contactName: c.contact_name,
+    channel: c.contact_channel,
   };
 }
 
@@ -186,6 +192,10 @@ export interface InboxThreadPayload {
   messages: InboxMessageView[];
   /** Pre-handoff derived turns (only when requested — for the drawer's initial load). */
   history?: HistoryTurnView[];
+  /** Mode turning points, interleaved with the messages by the thread. Loaded on the
+   *  POLL too, not just the first open: a colleague taking the conversation over must
+   *  appear in your thread within the poll interval, not on your next reload. */
+  events: ThreadEventView[];
   activityWindowHours: number;
   asOf: string;
 }
@@ -206,7 +216,10 @@ export async function loadInboxThread(
   if (!isUuid(conversationId)) return null; // never let a non-UUID reach the id= query
   const conversation = await getConversationForClient(tenantId, clientId, conversationId);
   if (!conversation) return null;
-  const messages = await listThreadMessages(tenantId, conversationId);
+  const [messages, transitions] = await Promise.all([
+    listThreadMessages(tenantId, conversationId),
+    listModeTransitions(tenantId, conversationId),
+  ]);
 
   let history: HistoryTurnView[] | undefined;
   if (opts.includeHistory) {
@@ -226,6 +239,13 @@ export async function loadInboxThread(
   return {
     header: toHeaderView(conversation),
     messages: messages.map(toMessageView),
+    events: transitions.map((t) => ({
+      id: t.id,
+      fromMode: t.from_mode,
+      toMode: t.to_mode,
+      agentName: t.agent_name,
+      at: t.created_at.toISOString(),
+    })),
     history,
     activityWindowHours: ACTIVITY_WINDOW_HOURS,
     asOf: new Date().toISOString(),

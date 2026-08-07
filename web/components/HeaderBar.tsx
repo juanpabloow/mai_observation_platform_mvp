@@ -8,7 +8,6 @@ import { useScope } from "@/components/ScopeProvider";
 import { parseClientSurface } from "@/lib/clientSurface";
 import { parseScopeSurface, scopeHref } from "@/lib/scopeSurface";
 import { WorkflowSwitcherPanel } from "@/components/WorkflowSwitcherPanel";
-import { AccountMenu } from "@/components/AccountMenu";
 
 export interface HeaderClient {
   id: string;
@@ -154,35 +153,24 @@ function PortalPanel({
 }
 
 export function HeaderBar({
-  email,
-  name,
   clients,
   workflows,
   canSwitchClients,
-  role,
-  clientLabel,
 }: {
-  email: string;
-  name: string | null;
   clients: HeaderClient[];
   workflows: HeaderWorkflow[];
   /** false for a member (one client, no switcher) — also hides tenant-wide settings. */
   canSwitchClients: boolean;
-  /** The signed-in user's role (shown in the profile menu). */
-  role: "owner" | "admin" | "member";
-  /** A member's client name (so they always see where they're scoped); else null. */
-  clientLabel: string | null;
 }) {
   const pathname = usePathname();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { toggle: toggleSidebar, setMobileOpen } = useSidebar();
   const { scopeFor, setScope } = useScope();
-  const [openMenu, setOpenMenu] = useState<null | "client" | "workflow" | "profile">(null);
+  const [openMenu, setOpenMenu] = useState<null | "client" | "workflow">(null);
 
   const clientBtn = useRef<HTMLButtonElement>(null);
   const workflowBtn = useRef<HTMLButtonElement>(null);
-  const profileBtn = useRef<HTMLButtonElement>(null);
 
   // Close on outside-click (sparing the trigger + the portaled panel) or Escape.
   useEffect(() => {
@@ -270,8 +258,6 @@ export function HeaderBar({
   const clientWorkflows = currentClient
     ? workflows.filter((w) => w.clientId === currentClient.id).sort(byName)
     : [];
-
-  const initial = (name?.trim()[0] ?? email.trim()[0] ?? "?").toUpperCase();
 
   return (
     // The header now starts AFTER the sidebar and spans only the content column;
@@ -427,31 +413,9 @@ export function HeaderBar({
         ) : null}
       </nav>
 
-      {/* RIGHT — profile menu */}
-      <div className="contents">
-        <button
-          ref={profileBtn}
-          type="button"
-          data-menu-root
-          onClick={() => setOpenMenu(openMenu === "profile" ? null : "profile")}
-          aria-label="Account"
-          aria-expanded={openMenu === "profile"}
-          className="flex size-8 shrink-0 items-center justify-center rounded-full border border-line-strong bg-subtle text-sm font-semibold text-foreground transition-colors hover:bg-subtle"
-        >
-          {initial}
-        </button>
-        {openMenu === "profile" ? (
-          <PortalPanel anchorRef={profileBtn} align="right" width={232}>
-            <AccountMenu
-              email={email}
-              role={role}
-              clientLabel={clientLabel}
-              canSwitchClients={canSwitchClients}
-              onNavigate={() => setOpenMenu(null)}
-            />
-          </PortalPanel>
-        ) : null}
-      </div>
+      {/* The account lives ONCE, in the sidebar footer. The header used to repeat it
+          as an initial-only disc up here, which said less (an initial, not the name)
+          and said it twice. */}
     </header>
   );
 }

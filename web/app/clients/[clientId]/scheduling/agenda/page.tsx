@@ -179,7 +179,10 @@ export default async function ClientAgendaPage({
       dayEndIso={dayEnd.toISOString()}
       sites={sites.map((s) => ({ id: s.id, name: s.name, timezone: s.timezone }))}
       currentSiteId={site.id}
-      staff={staff.map((s) => ({ id: s.id, name: s.name, active: s.active }))}
+      // Weekly hours come off the site/staff rows ALREADY loaded above — no extra
+      // query. They only drive the "closed" hatching of a day / barber lane.
+      openingHours={site.opening_hours}
+      staff={staff.map((s) => ({ id: s.id, name: s.name, active: s.active, workingHours: s.working_hours }))}
       services={services.map((s) => ({ id: s.id, name: s.name, duration_min: s.effective_duration_min }))}
       view={view}
       kpis={summarise(appts)}

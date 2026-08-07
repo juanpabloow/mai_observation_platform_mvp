@@ -11,6 +11,14 @@ import {
   sidebarThemeCookie,
   type SidebarTheme,
 } from "@/lib/sidebarTheme";
+import {
+  DEFAULT_TEXT_SCALE,
+  TEXT_SCALES,
+  TEXT_SCALE_LABELS,
+  parseTextScale,
+  textScaleCookie,
+  type TextScale,
+} from "@/lib/textScale";
 
 /**
  * The shared ACCOUNT menu content (identity + theme + real account actions). ONE
@@ -70,6 +78,7 @@ export function AccountMenu({
         </div>
       </div>
       <SidebarAppearance />
+      <TextSize />
       <div className="py-1">
         {/* Owner/admin-only management — hidden for a member (they'd be bounced). */}
         {canSwitchClients ? (
@@ -122,6 +131,48 @@ export function AccountMenu({
  * SSR), and choosing an option writes the attribute immediately (instant feedback,
  * no re-render, no round-trip) AND the cookie (so the next SSR agrees).
  */
+/**
+ * TEXT SIZE — the same mechanics as SidebarAppearance above: seed from the attribute
+ * the server stamped, write the attribute (instant rescale) and the cookie (so the
+ * next SSR agrees). Scaling the rem root moves type AND spacing together, which is
+ * why this reads as a density control rather than a font-size slider.
+ */
+function TextSize() {
+  const [scale, setScale] = useState<TextScale>(() =>
+    typeof document === "undefined"
+      ? DEFAULT_TEXT_SCALE
+      : parseTextScale(document.documentElement.dataset.textScale),
+  );
+
+  useEffect(() => {
+    document.documentElement.dataset.textScale = scale;
+    document.cookie = textScaleCookie(scale);
+  }, [scale]);
+
+  return (
+    <div className="border-b border-line px-3 py-2.5">
+      <p id="text-size-label" className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-faint">
+        Text size
+      </p>
+      <div role="group" aria-labelledby="text-size-label" className="flex gap-0.5 rounded-lg border border-line p-0.5">
+        {TEXT_SCALES.map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => setScale(opt)}
+            aria-pressed={scale === opt}
+            className={`flex-1 rounded-md px-2 py-1 text-xs transition-colors ${
+              scale === opt ? "bg-subtle font-medium text-foreground" : "text-muted hover:text-foreground"
+            }`}
+          >
+            {TEXT_SCALE_LABELS[opt]}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function SidebarAppearance() {
   // Seeded from the attribute the server stamped. The menu only ever mounts AFTER
   // the user opens the popover, so this initializer never runs during SSR — the

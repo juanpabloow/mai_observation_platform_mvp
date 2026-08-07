@@ -156,28 +156,44 @@ function Ready({
 }) {
   return (
     <div className="flex flex-col gap-4">
-      <ContactIdentitySummary summary={data.summary} identities={data.identities} dense />
-
-      <div className="flex flex-wrap gap-2">
-        <Link
-          href={`/clients/${clientId}/contacts/${contactId}`}
-          className="rounded-lg border border-line px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-subtle"
-        >
-          Open full record
-        </Link>
-        {schedulingEnabled ? (
+      {/* Same information, stacked: the disc over a centred name, with "Open full
+          record" as the link under it (it used to be one of two equal buttons, which
+          made the panel open on two competing calls to action). */}
+      <ContactIdentitySummary
+        summary={data.summary}
+        identities={data.identities}
+        dense
+        centered
+        action={
           <Link
-            href={`/clients/${clientId}/scheduling/agenda`}
-            className="rounded-lg border border-line px-3 py-1.5 text-sm text-foreground transition-colors hover:bg-subtle"
+            href={`/clients/${clientId}/contacts/${contactId}`}
+            className="text-sm font-medium text-accent hover:underline"
           >
-            Book appointment
+            Open full record
           </Link>
-        ) : null}
-      </div>
+        }
+      />
+
+      {schedulingEnabled ? (
+        <Link
+          href={`/clients/${clientId}/scheduling/agenda`}
+          className="inline-flex h-9 items-center justify-center rounded-md bg-brand px-3 text-sm font-medium text-white transition-opacity hover:opacity-90"
+        >
+          Book appointment
+        </Link>
+      ) : null}
 
       {schedulingEnabled ? (
         <section className="flex flex-col gap-2 border-t border-line pt-3">
-          <p className={SECTION_LABEL}>Next appointment</p>
+          {/* The count of appointments ON RECORD rides the section label — one number
+              where it means something, instead of a visits/no-shows pair floating
+              under the name. Upcoming + past is every appointment this contact has. */}
+          <div className="flex items-baseline justify-between gap-2">
+            <p className={SECTION_LABEL}>Next appointment</p>
+            <span className="u-mono text-[0.625rem] text-faint">
+              {data.appointments.upcoming.length + data.appointments.past.length} total
+            </span>
+          </div>
           <AppointmentsSection clientId={clientId} appointments={data.appointments} onChanged={onChanged} showHistory={false} />
         </section>
       ) : null}
