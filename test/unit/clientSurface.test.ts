@@ -7,7 +7,7 @@ import { parseClientSurface } from '../../web/lib/clientSurface.js';
 const CID = '5f0c3d54-1234-4abc-9def-0123456789ab';
 
 test('recognizes every client-level surface', () => {
-  assert.deepEqual(parseClientSurface(`/clients/${CID}/team`), { clientId: CID, label: 'Team' });
+  assert.deepEqual(parseClientSurface(`/clients/${CID}/team`), { clientId: CID, label: 'Users & access' });
   assert.deepEqual(parseClientSurface(`/clients/${CID}/modules`), { clientId: CID, label: 'Modules' });
   assert.deepEqual(parseClientSurface(`/clients/${CID}/contacts`), { clientId: CID, label: 'Contacts', group: 'CRM' });
   // Detail routes still resolve to the same surface.
@@ -57,5 +57,5 @@ test('workflow routes and non-client paths are NOT client surfaces', () => {
 
 test('client id is URL-decoded', () => {
   const parsed = parseClientSurface('/clients/a%20b/team');
-  assert.deepEqual(parsed, { clientId: 'a b', label: 'Team' });
+  assert.deepEqual(parsed, { clientId: 'a b', label: 'Users & access' });
 });

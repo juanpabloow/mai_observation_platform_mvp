@@ -32,19 +32,19 @@ test('AgendaView shows an inactive lane chip but offers only active staff for ne
   assert.ok(/props\.staff\.filter\(\(s\)\s*=>\s*s\.active\)/.test(src), 'the booking dropdown filters to active staff');
 });
 
-test('every deactivate has an inverse: site/service in AdminPanel, staff on the Team roster', () => {
+test('every deactivate has an inverse: site/service in AdminPanel, staff on the Staff roster', () => {
   const src = web('components/scheduling/AdminPanel.tsx');
   // The state-reflecting toggle replaces the old `active ? <Deactivate/> : null` one-way door.
-  // STAFF moved to the Team screen's roster tab; its inverse is asserted below.
+  // STAFF moved to SCHEDULING → Staff; its inverse is asserted below.
   for (const kind of ['site', 'service']) {
     assert.ok(src.includes(`kind="${kind}"`), `ActiveToggle rendered for ${kind}`);
   }
   assert.ok(!/deactivate\w+Action\(clientId,[^)]*\)\)}>Deactivate<\/button>\s*:\s*null/.test(src), 'the old one-way `? Deactivate : null` is gone');
   assert.ok(src.includes('Activate'), 'an Activate affordance exists');
   // Deactivating a barber must stay reversible wherever the control lives. On the
-  // Team roster it is a CHECKBOX bound to the same `active` flag, so the same patch
+  // Staff roster it is a CHECKBOX bound to the same `active` flag, so the same patch
   // turns it off and on — there is no separate, irreversible "deactivate" path.
-  const dialog = web('components/team/StaffEditDialog.tsx');
+  const dialog = web('components/scheduling/staff/StaffEditDialog.tsx');
   assert.ok(dialog.includes('checked={active}'), 'the control reflects the stored state');
   assert.ok(dialog.includes('onChange={(e) => setActive(e.target.checked)}'), 'and can set it either way');
   assert.ok(/updateStaffAction\(clientId, member\.id, \{ name: trimmed, active/.test(dialog), 'saved through the same action');

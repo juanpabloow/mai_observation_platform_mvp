@@ -108,16 +108,17 @@ export function AdminPanel({
       <WhyNothingAvailable sites={sites} staff={staff} />
       <SitesSection clientId={clientId} sites={sites} run={run} pending={pending} />
       <ServicesSection clientId={clientId} sites={sites} services={services} siteServiceMap={siteServiceMap} run={run} pending={pending} />
-      {/* STAFF moved OUT of this page (ADMINISTRATION → Team → Staff): the roster, its statuses,
-          performance, creating a barber and their weekly hours all live there now. The
-          7-day grid those two screens share was extracted to ./HoursGrid rather than
-          copied — this page still uses it for a SITE's opening hours. */}
+      {/* STAFF moved OUT of this page to its own SCHEDULING route: the roster, its
+          statuses, performance, creating a barber and their weekly hours all live
+          there now. The 7-day grid those two screens share was extracted to
+          ./HoursGrid rather than copied — this page still uses it for a SITE's
+          opening hours. */}
       <div className="rounded-lg border border-line bg-surface px-4 py-3 text-sm">
         <p className="text-muted">
           The staff <strong className="font-medium text-foreground">roster</strong> — who is working, who is free,
-          performance, hours and services — now lives on the Team screen.{" "}
-          <Link href={`/clients/${clientId}/team`} className="text-accent hover:underline">
-            Open Team &rarr; Staff
+          performance, hours and services — lives on its own screen.{" "}
+          <Link href={`/clients/${clientId}/scheduling/staff`} className="text-accent hover:underline">
+            Open Scheduling &rarr; Staff
           </Link>
         </p>
         <p className="mt-1 text-xs text-faint">

@@ -82,14 +82,21 @@ test('no API route reads staff PII (public booking, machine API)', () => {
   }
 });
 
-test('the Team page is the ONLY page that reads staff PII, and it is owner/admin gated', () => {
+test('the Staff page is the ONLY page that reads staff PII, and it is owner/admin gated', () => {
+  // The roster moved from Team to SCHEDULING → Staff, and the PII read moved WITH it.
+  // The assertion is unchanged in intent: exactly one page, and this is the one.
   const readers = filesUnder('web/app')
     .filter((f) => /listStaffAdmin|getStaffByIdAdmin/.test(readFileSync(f, 'utf8')))
     .map((f) => f.replace(/.*\/web\/app\//, ''));
-  assert.deepEqual(readers, ['clients/[clientId]/team/page.tsx'], 'exactly one page reads the PII');
+  assert.deepEqual(readers, ['clients/[clientId]/scheduling/staff/page.tsx'], 'exactly one page reads the PII');
 
-  const page = root('web/app/clients/[clientId]/team/page.tsx');
+  const page = root('web/app/clients/[clientId]/scheduling/staff/page.tsx');
   assert.ok(page.includes('requireFullAccessOrLand()'), 'behind the owner/admin gate');
+  assert.ok(page.includes('requireClientModulePage(clientId, "scheduling")'), 'and behind the module gate');
+
+  // Team is logins and roles now — it must not read a staff row at all.
+  const team = root('web/app/clients/[clientId]/team/page.tsx');
+  assert.ok(!/listStaff/.test(team), 'Users & access loads no staff row, PII or otherwise');
   // The other loaders on the same page must NOT have been switched over with it.
   assert.ok(!/\blistStaff\(/.test(page), 'the admin read replaced listStaff here rather than sitting beside it');
 
@@ -101,7 +108,7 @@ test('the Team page is the ONLY page that reads staff PII, and it is owner/admin
 });
 
 test('NO CHAIR is derived from takes_bookings, not from active', () => {
-  const src = root('web/components/team/StaffTab.tsx');
+  const src = root('web/components/scheduling/staff/StaffTab.tsx');
   assert.ok(/if \(!s\.takesBookings\) key = "no_chair";/.test(src), 'no_chair comes from takes_bookings');
   assert.ok(
     !/if \(!s\.active\) key = "no_chair";/.test(src),

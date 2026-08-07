@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { avatarColor } from "@/lib/avatarColor";
@@ -144,13 +144,20 @@ export interface StaffTabProps {
   detailTab?: string;
 }
 
-export function StaffTab(props: StaffTabProps & { clientId: string }) {
+export function StaffTab(props: StaffTabProps & { clientId: string; openCreate?: number }) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [serviceFilter, setServiceFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [editing, setEditing] = useState<StaffMember | null>(null);
   const [creating, setCreating] = useState(false);
+
+  // The page title's "+ Add staff member" lives in the workspace above this component,
+  // so it asks for the dialog by bumping a counter rather than by lifting the whole
+  // dialog (and its services/hours state) out of the tab that owns it.
+  useEffect(() => {
+    if (props.openCreate) setCreating(true);
+  }, [props.openCreate]);
 
   const tz = props.timezone;
   const now = new Date(props.todayIso);
