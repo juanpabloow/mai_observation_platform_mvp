@@ -276,8 +276,21 @@ export function StaffTab(props: StaffTabProps & { clientId: string }) {
               </div>
             </div>
 
-            <div className="relative flex min-h-0 flex-1">
-              <div className={`min-h-0 flex-1 overflow-y-auto bg-background p-3 ${selected ? "xl:pr-[476px]" : ""}`}>
+            {/* DRAWER WIDTH is fluid and lives in ONE variable, because two numbers have
+                to agree: the panel's own width and the padding that keeps the roster
+                from sliding under it. Hard-coding 440 left the panel cramped on a wide
+                monitor while the roster sat on dead space beside it; clamping to a
+                third of the viewport lets it grow with the screen and still keeps a
+                floor on a laptop and a ceiling on an ultrawide. */}
+            <div
+              className="relative flex min-h-0 flex-1"
+              style={{ "--drawer-w": "clamp(420px, 33vw, 640px)" } as React.CSSProperties}
+            >
+              <div
+                className={`min-h-0 flex-1 overflow-y-auto bg-background p-3 ${
+                  selected ? "xl:pr-[calc(var(--drawer-w)+0.75rem)]" : ""
+                }`}
+              >
                 {/* THE ROSTER, as a list. Cards gave every barber the same visual
                     weight and wasted a screen on six of them; a row per person puts
                     presence, load and what's next on one scannable line. */}
@@ -325,10 +338,13 @@ export function StaffTab(props: StaffTabProps & { clientId: string }) {
               </div>
 
               {selected ? (
-                // FLOATING: the drawer sits over the list with a shadow rather than
-                // butting against it as a column, so the roster keeps its full width
-                // and the panel reads as "opened on top of" what you were scanning.
-                <div className="pointer-events-none absolute inset-y-0 right-0 hidden items-stretch p-3 xl:flex">
+                // FLOATING: the drawer sits over the list rather than butting against
+                // it as a column, so the roster keeps its full width and the panel reads
+                // as "opened on top of" what you were scanning. Under xl there is not
+                // enough width to reserve room for it, so it simply covers the roster —
+                // it used to not render at all below 1280, which meant clicking a barber
+                // on a laptop appeared to do nothing whatsoever.
+                <div className="pointer-events-none absolute inset-y-0 right-0 flex max-w-full items-stretch p-3">
                   <StaffDetail
                     // Keyed: selecting another barber must reset the hours and profile
                     // drafts, not carry one person's unsaved edits onto the next.
@@ -541,7 +557,7 @@ function StaffDetail({
       // the house rules in components/ui/primitives.tsx). The panel already reads as
       // "on top" from its own fill and hairline against the recessed roster behind it —
       // the shadow the reference used only muddied the edge.
-      className="pointer-events-auto flex h-full w-[440px] flex-col overflow-hidden rounded-xl border border-line-strong bg-surface"
+      className="pointer-events-auto flex h-full w-[var(--drawer-w,420px)] max-w-full flex-col overflow-hidden rounded-xl border border-line-strong bg-surface"
     >
       <div className="flex h-[var(--topbar-height)] shrink-0 items-center justify-between border-b border-line px-3">
         <h2 className="text-sm font-semibold">Staff details</h2>
