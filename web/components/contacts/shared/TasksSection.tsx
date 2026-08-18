@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { formatDateTime } from "@/lib/format";
 import type { MemberOption, TaskView } from "@/lib/contactShared";
 import { completeTaskAction, createTaskAction } from "@/lib/crmActions";
+import { CRM_COPY } from "@/lib/contactLabels";
 
 /**
  * SHARED open-tasks block (C-4): the contact's open tasks with a Complete action, and a
@@ -76,7 +77,7 @@ export function TasksSection({
   return (
     <div className="flex flex-col gap-2">
       {tasks.length === 0 ? (
-        <p className="text-sm text-faint">No open tasks.</p>
+        <p className="text-sm text-faint">{CRM_COPY.empty.tasks}</p>
       ) : (
         <ul className="flex flex-col gap-1.5">
           {tasks.map((t) => (
@@ -95,7 +96,7 @@ export function TasksSection({
                   disabled={pending}
                   className="shrink-0 rounded-lg border border-line px-2 py-1 text-xs text-muted transition-colors hover:bg-subtle hover:text-foreground disabled:opacity-50"
                 >
-                  Complete
+                  Completar
                 </button>
               ) : null}
             </li>
@@ -106,9 +107,9 @@ export function TasksSection({
       {allowCreate ? (
         adding ? (
           <div className="flex flex-col gap-1.5 rounded-lg border border-line p-2.5">
-            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Task title" className={INPUT} autoFocus />
+            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título de la tarea" className={INPUT} autoFocus />
             <div className="flex flex-wrap items-center gap-1.5">
-              <input type="date" value={due} onChange={(e) => setDue(e.target.value)} className={INPUT} aria-label="Due date" />
+              <input type="date" value={due} onChange={(e) => setDue(e.target.value)} className={INPUT} aria-label="Fecha límite" />
               {assignableMembers.length > 0 ? (
                 <select value={assignee} onChange={(e) => setAssignee(e.target.value)} className={INPUT} aria-label="Assignee">
                   <option value="">Unassigned</option>
@@ -121,11 +122,11 @@ export function TasksSection({
               ) : null}
             </div>
             <div className="flex items-center gap-2">
-              <button type="button" onClick={create} disabled={pending || !title.trim()} className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">
-                Add task
+              <button type="button" onClick={create} disabled={pending || !title.trim()} className="rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50">
+                {CRM_COPY.actions.create}
               </button>
               <button type="button" onClick={() => setAdding(false)} className="text-xs text-faint hover:text-foreground">
-                Cancel
+                {CRM_COPY.actions.cancel}
               </button>
               {err ? <span className="text-xs text-danger">{err}</span> : null}
             </div>
@@ -133,7 +134,7 @@ export function TasksSection({
         ) : (
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => setAdding(true)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:bg-subtle hover:text-foreground">
-              Add task
+              {CRM_COPY.actions.addTask}
             </button>
             {err ? <span className="text-xs text-danger">{err}</span> : null}
           </div>

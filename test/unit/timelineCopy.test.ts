@@ -19,10 +19,32 @@ test('timelineCopy maps every kind to its source bucket + a factual title', () =
   for (const k of ['task_created', 'task_completed', 'tag_added', 'tag_removed', 'owner_changed', 'stage_changed', 'contact_merged', 'consent_changed']) {
     assert.equal(timelineCopy(k).source, 'activity', `${k} → activity source`);
   }
-  // Factual titles (no exclamation, sentence-ish, short).
-  assert.equal(timelineCopy('appointment_created').title, 'Appointment booked');
-  assert.equal(timelineCopy('appointment_no_show').title, 'No-show');
-  assert.equal(timelineCopy('owner_changed').title, 'Owner changed');
+  // Factual titles, in the product's language (Spanish). The stored `kind` stays
+  // English because it is storage; the words a human reads are not.
+  assert.equal(timelineCopy('appointment_created').title, 'Cita agendada');
+  assert.equal(timelineCopy('appointment_no_show').title, 'No asistió');
+  assert.equal(timelineCopy('owner_changed').title, 'Cambio de dueño');
+});
+
+test('timelineCopy: every kind is really mapped — no raw key leaks to the screen', () => {
+  // The fallback exists for kinds the platform has not seen yet. A KNOWN kind resolving
+  // to it (or to its own key) means an entry renders as storage in the timeline.
+  const known = [
+    'conversation', 'note',
+    'appointment_created', 'appointment_rescheduled', 'appointment_confirmed',
+    'appointment_completed', 'appointment_cancelled', 'appointment_no_show',
+    'task_created', 'task_completed', 'task_reopened', 'task_cancelled', 'task_assigned',
+    'tag_added', 'tag_removed', 'owner_changed', 'stage_changed', 'contact_merged', 'consent_changed',
+  ];
+  const fallbackTitle = timelineCopy('__definitely_not_a_kind__').title;
+  for (const k of known) {
+    const t = timelineCopy(k).title;
+    assert.ok(t.length > 0, `${k} has a title`);
+    assert.notEqual(t, k, `${k} does not render its own key`);
+    assert.notEqual(t, fallbackTitle, `${k} is mapped, not falling back`);
+  }
+  // Titles are short — they sit on one line beside a timestamp.
+  for (const k of known) assert.ok(timelineCopy(k).title.length <= 30, `${k} title stays short`);
 });
 
 test('timelineCopy weight: appointments/conversations/notes substantive; CRM facts quiet', () => {
@@ -42,7 +64,7 @@ test('timelineCopy falls back safely for an unknown kind (never throws)', () => 
 
 test('TIMELINE_FILTERS: All is null; each other chip pushes exactly one valid source', () => {
   const valid = new Set(['conversation', 'appointment', 'note', 'activity']);
-  assert.equal(TIMELINE_FILTERS[0].label, 'All');
+  assert.equal(TIMELINE_FILTERS[0].label, 'Todo');
   assert.equal(TIMELINE_FILTERS[0].sources, null);
   const covered = new Set<string>();
   for (const f of TIMELINE_FILTERS.slice(1)) {

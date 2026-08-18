@@ -78,7 +78,7 @@ export function AutoRefresh({ intervalSeconds = 30 }: { intervalSeconds?: number
       className="inline-flex items-center gap-1.5 text-xs text-neutral-500 transition-colors hover:text-foreground"
     >
       <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-400" />
-      Refreshes in {secondsLeft}s
+      Actualiza en {secondsLeft}s
     </button>
   );
 }

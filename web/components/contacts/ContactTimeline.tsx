@@ -5,6 +5,7 @@ import Link from "next/link";
 import { formatDateTime, formatChatTime, formatDayLabel, localDayKey } from "@/lib/format";
 import { agendaDateKey } from "@/lib/contactShared";
 import { timelineCopy, TIMELINE_FILTERS } from "@/lib/timelineCopy";
+import { CRM_COPY } from "@/lib/contactLabels";
 import { KindIcon } from "./KindIcon";
 import { addNoteAction, createTaskAction, loadContactTimelineAction } from "@/lib/crmActions";
 import type { TimelineSource } from "@worker/db/repositories/contactTimeline.js";
@@ -74,7 +75,7 @@ function AppointmentExtra({ clientId, item }: { clientId: string; item: Timeline
       {staff ? <span>· {staff}</span> : null}
       {startAt ? (
         <Link href={`/clients/${clientId}/scheduling/agenda?date=${agendaDateKey(startAt)}`} className="text-muted hover:text-foreground">
-          View on agenda →
+          Ver en la agenda →
         </Link>
       ) : null}
     </div>
@@ -214,23 +215,23 @@ export function ContactTimeline({
     <div className="flex flex-col gap-3">
       {/* Inline composers */}
       <div className="flex flex-col gap-2 rounded-xl border border-line bg-card p-3">
-        <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Add a note…" rows={2} className={INPUT} />
+        <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Agregar nota…" rows={2} className={INPUT} />
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={addNote} disabled={pending || !note.trim()} className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">
-            Add note
+          <button type="button" onClick={addNote} disabled={pending || !note.trim()} className="rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50">
+            Agregar nota
           </button>
           {taskOpen ? null : (
             <button type="button" onClick={() => setTaskOpen(true)} className="rounded-lg border border-line px-2.5 py-1.5 text-sm text-muted hover:bg-subtle hover:text-foreground">
-              Add task
+              Agregar tarea
             </button>
           )}
           {composerErr ? <span className="text-xs text-danger">{composerErr}</span> : null}
         </div>
         {taskOpen ? (
           <div className="flex flex-wrap items-center gap-2 border-t border-line pt-2">
-            <input value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} placeholder="Task title" className="min-w-40 flex-1 rounded-lg border border-line-strong bg-transparent px-2 py-1.5 text-sm" autoFocus />
+            <input value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} placeholder="Título de la tarea" className="min-w-40 flex-1 rounded-lg border border-line-strong bg-transparent px-2 py-1.5 text-sm" autoFocus />
             <input type="date" value={taskDue} onChange={(e) => setTaskDue(e.target.value)} className="rounded-lg border border-line-strong bg-transparent px-2 py-1.5 text-sm" aria-label="Due date" />
-            <button type="button" onClick={addTask} disabled={pending || !taskTitle.trim()} className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">
+            <button type="button" onClick={addTask} disabled={pending || !taskTitle.trim()} className="rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50">
               Add
             </button>
             <button type="button" onClick={() => setTaskOpen(false)} className="text-xs text-faint hover:text-foreground">
@@ -260,9 +261,9 @@ export function ContactTimeline({
       {/* Timeline */}
       {items.length === 0 ? (
         <div className="rounded-2xl border border-dashed border-line px-6 py-12 text-center">
-          <p className="text-sm font-medium text-muted">Nothing here yet</p>
+          <p className="text-sm font-medium text-muted">Todavía no hay nada aquí</p>
           <p className="mx-auto mt-1 max-w-sm text-sm text-faint">
-            Conversations, appointments, notes and changes for this contact will appear here as they happen.
+            Las conversaciones, citas, notas y cambios de este contacto aparecerán aquí a medida que ocurran.
           </p>
         </div>
       ) : (
@@ -287,7 +288,7 @@ export function ContactTimeline({
       {cursor ? (
         <div className="flex justify-center pt-1">
           <button type="button" onClick={loadMore} disabled={loading} className="rounded-lg border border-line px-3 py-1.5 text-sm text-muted transition-colors hover:bg-subtle hover:text-foreground disabled:opacity-50">
-            {loading ? "Loading…" : "Load more"}
+            {loading ? "Cargando…" : CRM_COPY.actions.loadMore}
           </button>
         </div>
       ) : null}

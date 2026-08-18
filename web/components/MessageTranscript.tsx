@@ -254,10 +254,11 @@ function initialsOf(name: string | null): string {
 }
 
 /**
- * A single bubble. customer → left, white surface + hairline; bot → right, grey
- * fill; human_agent → right, solid inverse (failed → red). A light→mid→dark ramp,
- * so the sender reads without spending a hue. Timestamp bottom-right, muted. A
- * highlighted (this-execution) bubble gets an amber ring.
+ * A single bubble on the grey transcript. customer → left, WHITE + hairline; bot →
+ * right, dark fill; human_agent → right, faint brand tint (failed → outlined red). The
+ * sender reads from side + fill, never from colour alone. Timestamp bottom-right, tucked
+ * against the last line as WhatsApp does. A highlighted (this-execution) bubble gets an
+ * amber ring.
  */
 function Bubble({
   msg,
@@ -273,6 +274,8 @@ function Bubble({
   const sending = msg.status === "sending";
   const failed = msg.status === "failed";
   const time = formatChatTime(new Date(msg.occurredAt));
+  // Only a plain, settled message gets the tucked stamp — see the note on the layout.
+  const tucked = !sending && !failed;
 
   // THREE distinct senders (H.6), each carrying shape + fill, never color alone:
   //   customer  → left, a bordered neutral surface;
@@ -301,32 +304,55 @@ function Bubble({
         : "…";
 
   return (
+    // WHATSAPP'S ARRANGEMENT. The text flows at the FULL bubble width and an invisible
+    // copy of the stamp reserves room for it on the LAST line only; the real stamp is
+    // absolutely positioned into that gap. This matters: making the stamp a flex sibling
+    // (the obvious approach) takes its width from EVERY line, so a two-line message
+    // wrapped into three and the bubble looked crushed.
+    //
+    // `sending` and `failed` keep the plain inline layout instead: their meta is not a
+    // timestamp but a status and a Retry button, whose width the invisible spacer cannot
+    // predict — reserving the wrong gap would let the button sit on top of the text.
     <div
       className={`max-w-[70%] rounded-bubble px-3.5 py-2 text-sm leading-snug ${bubbleClass} ${
         sending ? "opacity-70" : ""
       } ${highlighted ? "ring-2 ring-[var(--warn-rule)]" : ""}`}
     >
-      <span className="whitespace-pre-wrap break-words align-middle">{body}</span>
-      {/* The FAILED bubble is now an outlined red (a normal agent message is the
-          solid red), so its inner detail + Retry must read on a LIGHT fill. */}
-      {failed && msg.failureDetail ? (
-        <span className="mt-1 block rounded bg-danger/12 px-1.5 py-1 text-[0.6875rem] text-danger">
-          {msg.failureDetail}
-        </span>
-      ) : null}
-      <span className={`ml-2 inline-flex items-center gap-1.5 align-middle text-[0.625rem] ${metaClass}`}>
-        {sending ? <span>sending…</span> : null}
-        {failed && onRetry ? (
-          <button
-            type="button"
-            onClick={() => onRetry(msg.id)}
-            className="rounded border border-danger/40 px-1 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/12"
-          >
-            Retry
-          </button>
-        ) : null}
-        <span>{time}</span>
-      </span>
+      {tucked ? (
+        <div className="relative">
+          <span className="whitespace-pre-wrap break-words">
+            {body}
+            <span aria-hidden className="invisible ml-2 select-none whitespace-nowrap text-[0.625rem]">
+              {time}
+            </span>
+          </span>
+          <span className={`absolute bottom-0 right-0 whitespace-nowrap text-[0.625rem] ${metaClass}`}>{time}</span>
+        </div>
+      ) : (
+        <>
+          <span className="whitespace-pre-wrap break-words align-middle">{body}</span>
+          {/* The FAILED bubble is an outlined red (a normal agent message is tinted), so
+              its inner detail + Retry must read on a LIGHT fill. */}
+          {failed && msg.failureDetail ? (
+            <span className="mt-1 block rounded bg-danger/12 px-1.5 py-1 text-[0.6875rem] text-danger">
+              {msg.failureDetail}
+            </span>
+          ) : null}
+          <span className={`ml-2 inline-flex items-center gap-1.5 align-middle text-[0.625rem] ${metaClass}`}>
+            {sending ? <span>enviando…</span> : null}
+            {failed && onRetry ? (
+              <button
+                type="button"
+                onClick={() => onRetry(msg.id)}
+                className="rounded border border-danger/40 px-1 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/12"
+              >
+                Reintentar
+              </button>
+            ) : null}
+            <span>{time}</span>
+          </span>
+        </>
+      )}
     </div>
   );
 }

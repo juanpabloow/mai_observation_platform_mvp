@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import { formatDateTime } from "@/lib/format";
 import type { NoteView } from "@/lib/contactShared";
 import { addNoteAction, deleteNoteAction } from "@/lib/crmActions";
+import { CRM_COPY } from "@/lib/contactLabels";
 
 /**
  * SHARED notes block (C-4): a list of notes (body + author + time) with an inline
@@ -14,7 +15,11 @@ import { addNoteAction, deleteNoteAction } from "@/lib/crmActions";
  */
 
 const INPUT = "w-full rounded-lg border border-line-strong bg-transparent px-2 py-1.5 text-sm";
-const PRIMARY = "rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50";
+/** Primary action. `bg-brand`, not the emerald `--accent`: accent is reserved for
+ *  links and success ticks, and a green submit button read as "confirmed" before the
+ *  note existed. Same correction already applied in Inbox and Staff. */
+const PRIMARY =
+  "rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50";
 
 export function NotesSection({
   clientId,
@@ -67,30 +72,30 @@ export function NotesSection({
         <textarea
           value={body}
           onChange={(e) => setBody(e.target.value)}
-          placeholder="Add a note…"
+          placeholder="Agregar nota…"
           rows={dense ? 2 : 3}
           className={INPUT}
         />
         <div className="flex items-center gap-2">
           <button type="button" onClick={add} disabled={pending || !body.trim()} className={PRIMARY}>
-            Add
+            {CRM_COPY.actions.addNote}
           </button>
           {err ? <span className="text-xs text-danger">{err}</span> : null}
         </div>
       </div>
 
       {notes.length === 0 ? (
-        <p className="text-sm text-faint">No notes yet.</p>
+        <p className="text-sm text-faint">{CRM_COPY.empty.notes}</p>
       ) : (
         <ul className="flex flex-col gap-2">
           {notes.map((n) => (
             <li key={n.id} className="rounded-lg border border-line bg-card p-2.5">
               <p className="whitespace-pre-wrap break-words text-sm text-foreground">{n.body}</p>
               <div className="mt-1 flex items-center gap-2 text-[11px] text-faint">
-                <span>{n.authorName ?? "System"}</span>
+                <span>{n.authorName ?? "Sistema"}</span>
                 <span aria-hidden>·</span>
                 <span>{formatDateTime(new Date(n.createdAt))}</span>
-                {n.edited ? <span className="text-faint">· edited</span> : null}
+                {n.edited ? <span className="text-faint">· editada</span> : null}
                 {canEdit(n) ? (
                   <button
                     type="button"
@@ -98,7 +103,7 @@ export function NotesSection({
                     disabled={pending}
                     className="ml-auto text-faint transition-colors hover:text-danger disabled:opacity-50"
                   >
-                    Delete
+                    Eliminar
                   </button>
                 ) : null}
               </div>

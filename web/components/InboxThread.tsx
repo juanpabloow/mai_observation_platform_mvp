@@ -9,6 +9,7 @@ import { avatarColor } from "@/lib/avatarColor";
 import { conversationAvatarLabel, formatConversationRef, type ThreadEventView, type HistoryTurnView, type InboxHeaderView, type InboxMessageView } from "@/lib/inboxView";
 import type { InboxActionResult } from "@/lib/inboxActions";
 import { sendMessageAction, retrySendAction } from "@/lib/sendActions";
+import { serviceWindow, serviceWindowNotice } from "@/lib/inboxView";
 
 interface ThreadPayload {
   header: InboxHeaderView;
@@ -152,6 +153,12 @@ export function InboxThread({
     setNotice(r.ok ? null : { kind: r.conflict ? "info" : "error", text: r.error ?? "Something went wrong." });
     void load();
   };
+
+  // WhatsApp's 24-hour service window, from the customer's last INBOUND message. The
+  // clock only advances when this component re-renders (the thread already polls), so a
+  // tab left open can show the window as open for up to one poll after it closes — the
+  // provider is the real gate; this is a courtesy so nobody types a doomed reply.
+  const windowNotice = serviceWindowNotice(serviceWindow(header.channel, merged, new Date()));
 
   const handleSend = (text: string) => {
     const tempId = `optimistic-${tempCounter.current++}`;
@@ -300,7 +307,7 @@ export function InboxThread({
       {/* The transcript is the BRIGHT surface of the workspace — the queue beside it
           carries the tint. The customer's bubbles are the light-grey objects on it;
           the business answers in near-black. */}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-surface px-4 py-3">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-[var(--thread-bg)] px-4 py-3">
         {history.length > 0 ? <HistoryDisclosure turns={history} /> : null}
         <MessageTranscript
           messages={merged}
@@ -321,7 +328,7 @@ export function InboxThread({
       {/* The composer floats on the same surface as the transcript — its own hairline
           card is what separates it, not a rule across the column. */}
       <div className="shrink-0 bg-surface px-4 pb-3 pt-1">
-        <Composer mode={header.mode} onSend={handleSend} />
+        <Composer mode={header.mode} onSend={handleSend} blockedReason={windowNotice} />
       </div>
     </div>
   );

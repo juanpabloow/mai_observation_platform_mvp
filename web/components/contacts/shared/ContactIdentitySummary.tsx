@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { avatarColor } from "@/lib/avatarColor";
+import { consentLabel } from "@/lib/contactLabels";
 import type { ContactSummary, IdentityView } from "@/lib/contactShared";
 
 /**
@@ -103,11 +104,11 @@ export function ContactIdentitySummary({
 
   const badges = (
     <div className={`flex flex-wrap items-center gap-1.5 ${centered ? "justify-center" : ""}`}>
-      {summary.isCustomer ? <span className={`${BADGE} bg-success/15 text-success`}>Customer</span> : null}
+      {summary.isCustomer ? <span className={`${BADGE} bg-success/15 text-success`}>cliente</span> : null}
       {/* Consent surfaces ONLY when opted out — quiet, informational, not an error. */}
       {summary.consent === "opted_out" ? (
-        <span className={`${BADGE} bg-subtle text-muted`} title="This contact has opted out of messaging">
-          Opted out
+        <span className={`${BADGE} bg-subtle text-muted`} title="Este contacto rechazó recibir mensajes">
+          {consentLabel("opted_out")}
         </span>
       ) : null}
     </div>
@@ -204,7 +205,7 @@ function Stats({ summary }: { summary: ContactSummary }) {
   return (
     <div className="flex items-center gap-4 text-xs text-muted">
       <span>
-        <span className="font-medium text-foreground tabular-nums">{summary.visitCount}</span> visits
+        <span className="font-medium text-foreground tabular-nums">{summary.visitCount}</span> visitas
       </span>
       <span>
         <span className="font-medium text-foreground tabular-nums">{summary.noShowCount}</span> no-shows

@@ -190,3 +190,68 @@ export function conversationPreview(view: InboxConversationView): string {
         : `${firstName(view.assignedAgentName)}: `;
   return `${prefix}${body}`;
 }
+
+// ── WhatsApp's 24-hour customer-service window ────────────────────────────────
+
+/** WhatsApp only accepts free-form replies within this many hours of the customer's
+ *  last inbound message. Outside it, the provider rejects anything but an approved
+ *  template — so a send that looks fine here comes back as failed. */
+export const SERVICE_WINDOW_HOURS = 24;
+
+export type ServiceWindow =
+  | { state: "open"; closesAt: string }
+  | { state: "never_opened" }
+  | { state: "closed"; lastInboundAt: string }
+  | { state: "not_applicable" };
+
+/**
+ * Whether we may still send a free-form reply on this conversation.
+ *
+ * The window is measured from the customer's LAST INBOUND message — not from the last
+ * message of any kind. Measuring from the last message would keep the window "open"
+ * forever on a thread where only the business is talking, which is exactly the case the
+ * rule exists to stop.
+ *
+ * It is CHANNEL-SPECIFIC: only WhatsApp imposes it, so every other channel returns
+ * `not_applicable` rather than being quietly restricted by someone else's policy. The
+ * channel is matched on the value (it is a free-text label), consistent with how the
+ * rest of the platform treats it.
+ *
+ * PURE, so the rule is unit-testable and the same in every caller. Note the UI is a
+ * courtesy, not enforcement: the provider is the real gate, and this only stops an
+ * agent from typing a reply that was always going to bounce.
+ */
+export function serviceWindow(
+  channel: string | null | undefined,
+  messages: ReadonlyArray<{ sender: InboxSender; occurredAt: string }>,
+  now: Date,
+): ServiceWindow {
+  if (!/whatsapp/i.test(channel ?? "")) return { state: "not_applicable" };
+
+  let lastInbound: number | null = null;
+  for (const m of messages) {
+    if (m.sender !== "user") continue;
+    const t = new Date(m.occurredAt).getTime();
+    if (Number.isNaN(t)) continue;
+    if (lastInbound === null || t > lastInbound) lastInbound = t;
+  }
+  // No inbound message at all: the window was never opened, so it is not "closed" —
+  // the distinction matters because the two need different wording.
+  if (lastInbound === null) return { state: "never_opened" };
+
+  const closes = lastInbound + SERVICE_WINDOW_HOURS * 3600_000;
+  if (now.getTime() >= closes) return { state: "closed", lastInboundAt: new Date(lastInbound).toISOString() };
+  return { state: "open", closesAt: new Date(closes).toISOString() };
+}
+
+/** The quiet one-liner shown under a disabled composer. Null when sending is allowed. */
+export function serviceWindowNotice(w: ServiceWindow): string | null {
+  switch (w.state) {
+    case "closed":
+      return `Pasaron más de ${SERVICE_WINDOW_HOURS} h desde su último mensaje. WhatsApp solo permite responder dentro de esa ventana.`;
+    case "never_opened":
+      return "WhatsApp solo permite escribir después de que la persona te escriba primero.";
+    default:
+      return null;
+  }
+}

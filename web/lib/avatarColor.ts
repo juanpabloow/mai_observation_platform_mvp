@@ -28,6 +28,12 @@ export const AVATAR_TONE_COUNT = 8;
  * ("+57 318 598 0405"), and both must land on one colour.
  */
 export function avatarColor(id: string): string {
+  return `u-avatar-${avatarToneIndex(id)}`;
+}
+
+/** The 1-based tone index for an id. Both the disc class and the tone variable derive
+ *  from THIS, so a header tint can never disagree with the avatar beside it. */
+export function avatarToneIndex(id: string): number {
   const key = id.toLowerCase().replace(/[^a-z0-9]/g, "");
   let h = 2166136261; // FNV-1a offset basis
   for (let i = 0; i < key.length; i++) {
@@ -36,5 +42,27 @@ export function avatarColor(id: string): string {
   }
   // >>> 0 makes the 32-bit hash unsigned before the modulo, so the index can never
   // come out negative (Math.imul returns a SIGNED int32).
-  return `u-avatar-${((h >>> 0) % AVATAR_TONE_COUNT) + 1}`;
+  return ((h >>> 0) % AVATAR_TONE_COUNT) + 1;
+}
+
+/**
+ * The tone as a CSS variable reference, for anything that needs the COLOUR rather than
+ * the disc — e.g. the contact panel's header wash. Returning the var (not a hex) is
+ * what keeps the eight tones defined in exactly one place, globals.css.
+ */
+export function avatarToneVar(id: string): string {
+  return `var(--avatar-${avatarToneIndex(id)})`;
+}
+
+/**
+ * The two-letter disc label for a STAFF name — first initial of the first two words.
+ *
+ * It lives beside `avatarColor` because the two are always spent together: a second
+ * implementation somewhere else is how the same person ends up as "TS" on one surface and
+ * "T1" on another. (Contacts has its own rule — `initialsFor` in lib/contactForm — because
+ * a contact may have no name at all and falls back to a phone number.)
+ */
+export function staffInitials(name: string): string {
+  const w = name.trim().split(/\s+/).filter(Boolean);
+  return w.length === 0 ? "?" : w.slice(0, 2).map((x) => x[0]).join("").toUpperCase();
 }

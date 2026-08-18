@@ -300,7 +300,7 @@ export function ClientInboxWorkspace({
           <div className="flex shrink-0 flex-col gap-1 px-3 pb-3">
             {/* Search sits in a bordered shell with the glass inside it, so the icon
                 can't be mistaken for a control — it's the field's own affordance. */}
-            <div className="flex h-10 items-center gap-2 rounded-bubble border border-line-strong bg-surface px-3 focus-within:border-brand">
+            <div className="u-focus flex h-10 items-center gap-2 rounded-bubble border border-line-strong bg-surface px-3">
               <SearchIcon />
               <input
                 type="search"

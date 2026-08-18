@@ -2,7 +2,7 @@
 
 import { useState, type ReactNode } from "react";
 import { PageShell } from "@/components/ui/PageShell";
-import { PageTitle } from "@/components/ui/PageTitle";
+import { StaffHeaderCard, type StaffHeaderSlots } from "./StaffHeaderCard";
 import { StaffTab, type StaffTabProps } from "./StaffTab";
 
 /**
@@ -42,58 +42,40 @@ export function StaffWorkspace({
   const [tab, setTab] = useState<TabKey>(
     (TABS.find((t) => t.key === activeTab)?.key ?? "staff") as TabKey,
   );
-  // Only Staff has a number to show. Shifts and Time off have no model to count (see
-  // the TODO above) — a count there would be the first fabricated thing on the screen.
-  const [creating, setCreating] = useState(0);
 
-  // The title + tab rows. They are the PAGE's, but they are handed to StaffTab so it
-  // can draw them inside the header card — one box, not a box per row.
-  const header = (
-    <>
-      <div className="px-[15px] pt-[14px]">
-        <PageTitle
-            title="Staff"
-            context={clientLabel}
-            actions={
-              // The roster's own primary action. Inviting a USER is a different job on
-              // a different screen (Users & access) — this button adds a barber.
-              <button
-                type="button"
-                onClick={() => setCreating((n) => n + 1)}
-                disabled={!staff}
-                className="inline-flex h-9 items-center rounded-md bg-brand px-3 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
-              >
-                + Add staff member
-              </button>
-          }
-        />
-      </div>
-
-      <div className="flex items-center gap-5 border-b border-line px-[15px]" role="tablist">
-            {TABS.map((t) => (
-              <button
-                key={t.key}
-                type="button"
-                role="tab"
-                aria-selected={tab === t.key}
-                onClick={() => setTab(t.key)}
-                className={`-mb-px flex items-center gap-1.5 whitespace-nowrap border-b-2 pb-2.5 text-[13px] font-medium transition-colors ${
-                  tab === t.key
-                    ? "border-brand text-foreground"
-                    : "border-transparent text-muted hover:text-foreground"
-                }`}
-              >
-                {t.label}
-                {t.key === "staff" && staff ? (
-                  <span className="u-mono rounded bg-chip px-1.5 text-[10px] font-medium text-muted">
-                    {staff.members.length}
-                  </span>
-                ) : null}
-              </button>
+  // The title band's pieces and the tab strip. They belong to the PAGE, but they are
+  // drawn inside StaffHeaderCard so the card is one box; the roster fills in the
+  // counters and the controls, which are the parts only it knows.
+  //
+  // The count moved OFF the tab and onto the title, beside the screen's name, which is
+  // where Contacts puts it. Only Staff has a number at all: Shifts and Time off have no
+  // model to count (see the TODO above), and a count there would be the first fabricated
+  // thing on the screen.
+  const slots: StaffHeaderSlots = {
+    title: "Staff",
+    context: clientLabel,
+    count: staff ? staff.members.length : undefined,
+    tabs: (
+      <div className="flex items-center gap-5 border-b border-line px-[var(--panel-pad)]" role="tablist">
+        {TABS.map((t) => (
+          <button
+            key={t.key}
+            type="button"
+            role="tab"
+            aria-selected={tab === t.key}
+            onClick={() => setTab(t.key)}
+            className={`-mb-px flex items-center gap-1.5 whitespace-nowrap border-b-2 pb-2.5 text-[13px] font-medium transition-colors ${
+              tab === t.key
+                ? "border-brand text-foreground"
+                : "border-transparent text-muted hover:text-foreground"
+            }`}
+          >
+            {t.label}
+          </button>
         ))}
       </div>
-    </>
-  );
+    ),
+  };
 
   return (
     <main className="flex min-h-0 w-full flex-1 flex-col">
@@ -105,9 +87,9 @@ export function StaffWorkspace({
       <PageShell surface="canvas" className="relative">
         {tab === "staff" ? (
           staff ? (
-            <StaffTab clientId={clientId} openCreate={creating} header={header} {...staff} />
+            <StaffTab clientId={clientId} header={slots} {...staff} />
           ) : (
-            <StubCard header={header}>
+            <StubCard slots={slots}>
             <Empty
               title="No roster yet"
               hint="This client has no site, and a barber belongs to one. Create a site in Scheduling settings first."
@@ -115,14 +97,14 @@ export function StaffWorkspace({
             </StubCard>
           )
         ) : tab === "shifts" ? (
-          <StubCard header={header}>
+          <StubCard slots={slots}>
             <Empty
               title="Shifts"
               hint="Coming soon. A barber has weekly working hours today, not published shifts — a rota needs its own model."
             />
           </StubCard>
         ) : (
-          <StubCard header={header}>
+          <StubCard slots={slots}>
             <Empty
               title="Time off"
               hint="Coming soon. Blocked time exists on the schedule, but there is no request or approval flow behind it yet."
@@ -136,10 +118,10 @@ export function StaffWorkspace({
 
 /** The header card plus whatever the tab has to show — so a stub tab keeps exactly the
  *  same two-card geometry as the roster instead of losing the header. */
-function StubCard({ header, children }: { header: ReactNode; children: ReactNode }) {
+function StubCard({ slots, children }: { slots: StaffHeaderSlots; children: ReactNode }) {
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-3">
-      <div className="shrink-0 overflow-hidden rounded-2xl border border-line-strong bg-surface">{header}</div>
+      <StaffHeaderCard slots={slots} />
       {children}
     </div>
   );
@@ -147,11 +129,16 @@ function StubCard({ header, children }: { header: ReactNode; children: ReactNode
 
 function Empty({ title, hint }: { title: string; hint: ReactNode }) {
   return (
-    <div className="flex min-h-0 flex-1 items-center justify-center p-10">
-      <div className="flex max-w-sm flex-col items-center gap-1 rounded-table border border-dashed border-line-strong bg-surface px-8 py-10 text-center">
-        <p className="text-sm font-medium text-muted">{title}</p>
-        <p className="text-sm text-faint">{hint}</p>
+    // The empty state is the tab's CARD, not a dashed box floating on the canvas: a stub
+    // tab must keep the same two-card silhouette the roster has, or switching tabs
+    // changes the shape of the screen and not just its contents.
+    <PageShell>
+      <div className="flex min-h-0 flex-1 items-center justify-center p-10">
+        <div className="flex max-w-sm flex-col items-center gap-1 text-center">
+          <p className="text-sm font-medium text-muted">{title}</p>
+          <p className="text-sm text-faint">{hint}</p>
+        </div>
       </div>
-    </div>
+    </PageShell>
   );
 }

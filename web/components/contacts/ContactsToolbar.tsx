@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { CONTROL_CLS } from "@/components/ui/primitives";
+import { CONTROL_CLS, SEARCH_SHELL_CLS } from "@/components/ui/primitives";
 import { OPTIONAL_COLUMNS, type ContactColumnKey } from "@/lib/contactColumns";
 
 /**
@@ -55,19 +55,24 @@ export function ContactsToolbar({ owners }: { owners: { userId: string; label: s
           e.preventDefault();
           apply({ q: draft.trim() });
         }}
-        className="flex h-[var(--control-h)] min-w-[220px] flex-1 items-center gap-2 rounded-md border border-line-strong bg-surface px-3 focus-within:border-brand"
+        className={`${SEARCH_SHELL_CLS} min-w-[220px] max-w-[420px] flex-1`}
       >
         <SearchIcon />
         <input
           name="q"
           value={draft}
           onChange={(e) => setDraft(e.target.value)}
-          placeholder="Search name, phone, email, id…"
-          aria-label="Search contacts"
+          placeholder="Buscar nombre, email o teléfono…"
+          aria-label="Buscar contactos"
           className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
         />
-        <span aria-hidden className="u-mono hidden shrink-0 text-[0.6875rem] text-faint sm:inline">
-          press Enter
+        {/* A key badge, not a sentence: the reference shows the glyph the reader
+            presses, which stays legible at any width. */}
+        <span
+          aria-hidden
+          className="u-mono hidden shrink-0 rounded border border-line-strong bg-surface px-1.5 text-[0.625rem] leading-4 text-faint sm:inline"
+        >
+          ↵
         </span>
         {q ? (
           <button
@@ -76,7 +81,7 @@ export function ContactsToolbar({ owners }: { owners: { userId: string; label: s
               setDraft("");
               apply({ q: "" });
             }}
-            aria-label="Clear search"
+            aria-label="Limpiar búsqueda"
             className="u-tap shrink-0 rounded text-faint transition-colors hover:text-foreground"
           >
             ✕
@@ -89,31 +94,31 @@ export function ContactsToolbar({ owners }: { owners: { userId: string; label: s
         value={stage}
         onChange={(v) => apply({ stage: v })}
         options={[
-          { value: "", label: "Any stage" },
-          { value: "new", label: "New" },
-          { value: "active", label: "Active" },
-          { value: "customer", label: "Customer" },
-          { value: "archived", label: "Archived" },
+          { value: "", label: "Cualquier stage" },
+          { value: "new", label: "Nuevo" },
+          { value: "active", label: "Activo" },
+          { value: "customer", label: "Cliente" },
+          { value: "archived", label: "Archivado" },
         ]}
       />
       <Facet
-        label="Owner"
+        label="Dueño"
         value={owner}
         onChange={(v) => apply({ owner: v })}
         options={[
-          { value: "", label: "Any owner" },
-          { value: "unassigned", label: "Unassigned" },
+          { value: "", label: "Cualquier dueño" },
+          { value: "unassigned", label: "Sin dueño" },
           ...owners.map((o) => ({ value: o.userId, label: o.label })),
         ]}
       />
       <Facet
-        label="Tasks"
+        label="Tareas"
         value={tasks}
         onChange={(v) => apply({ tasks: v })}
         options={[
-          { value: "", label: "Any tasks" },
-          { value: "open", label: "Has open tasks" },
-          { value: "overdue", label: "Has overdue tasks" },
+          { value: "", label: "Cualquier tarea" },
+          { value: "open", label: "Con tareas abiertas" },
+          { value: "overdue", label: "Con tareas vencidas" },
         ]}
       />
     </div>
@@ -216,7 +221,7 @@ export function ContactsColumnsMenu({ visibleColumns }: { visibleColumns: Contac
         aria-expanded={open}
         className="u-th inline-flex h-[var(--control-h)] shrink-0 items-center gap-1 rounded-md px-2 transition-colors hover:text-foreground"
       >
-        Columns
+        Columnas
         <Chevron />
       </button>
       {open ? (

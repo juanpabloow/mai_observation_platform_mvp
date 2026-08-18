@@ -15,14 +15,14 @@
  */
 
 export const OPTIONAL_COLUMNS = [
-  { key: "channel", label: "Channel" },
+  { key: "channel", label: "Canal" },
   { key: "stage", label: "Stage" },
-  { key: "owner", label: "Owner" },
-  { key: "nextAppt", label: "Next appt" },
-  { key: "visits", label: "Visits" },
-  { key: "consent", label: "Consent" },
-  { key: "created", label: "Created" },
-  { key: "openTasks", label: "Open tasks" },
+  { key: "owner", label: "Dueño" },
+  { key: "nextAppt", label: "Próxima cita" },
+  { key: "visits", label: "Visitas" },
+  { key: "consent", label: "Consentimiento" },
+  { key: "created", label: "Creado" },
+  { key: "openTasks", label: "Tareas abiertas" },
 ] as const;
 
 export type ContactColumnKey = (typeof OPTIONAL_COLUMNS)[number]["key"];

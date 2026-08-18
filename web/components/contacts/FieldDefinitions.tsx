@@ -85,7 +85,7 @@ export function FieldDefinitions({ clientId, defs }: { clientId: string; defs: D
           <input value={options} onChange={(e) => setOptions(e.target.value)} placeholder="options, comma-separated" className={INPUT} />
         ) : null}
         <div className="flex items-center gap-3">
-          <button onClick={create} disabled={pending || !key.trim() || !label.trim()} className="self-start rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">
+          <button onClick={create} disabled={pending || !key.trim() || !label.trim()} className="self-start rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50">
             Add field
           </button>
           {err ? <span className="text-xs text-red-600 dark:text-red-400">{err}</span> : null}

@@ -1,14 +1,18 @@
 import "server-only";
-import { getContactById } from "@worker/db/repositories/contacts.js";
+import { getContactById, listContactConversations } from "@worker/db/repositories/contacts.js";
 import { listIdentitiesForContact } from "@worker/db/repositories/contactIdentities.js";
 import { listAppointmentsForContact, type AppointmentListItem } from "@worker/db/repositories/scheduling/appointments.js";
 import { listTasksForContact } from "@worker/db/repositories/crmTasks.js";
 import { listNotesForContact } from "@worker/db/repositories/contactNotes.js";
-import { listTagsForContact } from "@worker/db/repositories/contactTags.js";
+import { listTagsForContact, listTags } from "@worker/db/repositories/contactTags.js";
+import { listFieldDefinitions } from "@worker/db/repositories/clientFieldDefinitions.js";
+import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
+import type { FieldDefView } from "@/components/contacts/ContactProperties";
 import {
   contactDisplayName,
   type AppointmentSummary,
   type AppointmentView,
+  type ContactEditInitial,
   type ContactSummary,
   type IdentityView,
   type NoteView,
@@ -100,6 +104,113 @@ export function toTaskView(t: {
     assigneeName: t.assignee_name,
     createdByUserId: t.created_by_user_id,
     assignedToUserId: t.assigned_to_user_id,
+  };
+}
+
+/** Non-empty, case-insensitively unique, order preserved. */
+function dedupeValues(values: Array<string | null>): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const v of values) {
+    const t = v?.trim();
+    if (!t || seen.has(t.toLowerCase())) continue;
+    seen.add(t.toLowerCase());
+    out.push(t);
+  }
+  return out;
+}
+
+export interface ContactEditPayload {
+  initial: ContactEditInitial;
+  owners: Array<{ userId: string; label: string }>;
+  fieldDefs: FieldDefView[];
+  tags: TagView[];
+  tagCatalogue: TagView[];
+  notes: NoteView[];
+  canDelete: boolean;
+  canManageTagCatalog: boolean;
+}
+
+/**
+ * THE contact-edit payload, built in ONE place for BOTH doors — the record header and
+ * the list's customer panel.
+ *
+ * This function exists because there used to be two editors. The list panel opened a
+ * small modal that knew about one email and one phone; the record opened something
+ * else. That is how a contact with two addresses ended up with one of them invisible
+ * and silently overwritable. One loader means the two entry points cannot disagree
+ * about what a contact IS, only about where the button sits.
+ *
+ * IDENTITIES COME FROM BOTH SURFACES. contact_identities is the canonical spine, but
+ * most rows on a real database predate it and carry only the scalar phone_e164 / email
+ * (4 of 5 on the dev database). Reading the spine alone told the drawer that a contact
+ * with a perfectly good number had no way to be reached at all, which tripped the
+ * "at least one" guard and blocked every save. Same merge the panel already does.
+ *
+ * Returns null for a missing OR cross-client contact (indistinguishable, deliberately).
+ */
+export async function loadContactEditPayload(
+  tenantId: string,
+  clientId: string,
+  contactId: string,
+  viewer: { userId: string; isFullAccess: boolean },
+): Promise<ContactEditPayload | null> {
+  const contact = await getContactById(tenantId, contactId, clientId);
+  if (!contact) return null;
+
+  const [identities, fieldDefs, members, tags, tagCatalogue, notes, appts, conversations] = await Promise.all([
+    listIdentitiesForContact(tenantId, clientId, contactId),
+    listFieldDefinitions(tenantId, clientId, { enabledOnly: true }),
+    listMembersForTenant(tenantId),
+    listTagsForContact(tenantId, clientId, contactId),
+    listTags(tenantId, clientId),
+    listNotesForContact(tenantId, clientId, contactId),
+    listAppointmentsForContact(tenantId, contactId, clientId),
+    listContactConversations(tenantId, contactId, clientId),
+  ]);
+
+  const identityViews: IdentityView[] = identities.map((i) => ({ kind: i.kind, value: i.value, label: i.label }));
+
+  // Owner options: owner/admin may assign anyone with access to this client; a member
+  // only themselves. The server action re-checks this — here it only shapes the picker.
+  const owners = members
+    .filter((m) => (viewer.isFullAccess ? m.member_client_id === null || m.member_client_id === clientId : m.user_id === viewer.userId))
+    .map((m) => ({ userId: m.user_id, label: m.name ?? m.email }));
+
+  return {
+    initial: {
+      contactId: contact.id,
+      displayName: contactDisplayName(contact.name, identityViews, contact.channel_user_id),
+      name: contact.name,
+      stage: contact.stage,
+      // Same derivation the record and the panel use — computed once, from the
+      // appointments this loader already read.
+      isCustomer: appts.some((a) => a.status === 'completed'),
+      assignedTo: contact.assigned_to,
+      preferredChannel: contact.preferred_channel,
+      doNotContact: contact.do_not_contact,
+      consent: contact.messaging_consent,
+      consentUpdatedAt: contact.consent_updated_at?.toISOString() ?? null,
+      consentSource: contact.consent_source,
+      customFields: (contact.custom_fields ?? {}) as Record<string, unknown>,
+      createdAt: contact.created_at.toISOString(),
+      lastContactAt: contact.last_contact_at.toISOString(),
+      // Derived from what was just loaded, so the header count and the page can never
+      // disagree — a stored counter could.
+      activityCount: appts.length + conversations.length + notes.length,
+      sourceChannel: contact.channel,
+      phones: dedupeValues([...identityViews.filter((i) => i.kind === "phone").map((i) => i.value), contact.phone_e164]),
+      emails: dedupeValues([...identityViews.filter((i) => i.kind === "email").map((i) => i.value), contact.email]),
+    },
+    owners,
+    fieldDefs: fieldDefs.map((d) => ({ id: d.id, key: d.key, label: d.label, type: d.type, options: d.options })),
+    tags: tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
+    tagCatalogue: tagCatalogue.map((t) => ({ id: t.id, name: t.name, color: t.color })),
+    notes: notes.map(toNoteView),
+    // Deleting a person and extending the tag catalogue are both owner/admin, matching
+    // how merge and the field definitions are already gated.
+    canDelete: viewer.isFullAccess,
+    canManageTagCatalog: viewer.isFullAccess,
   };
 }
 

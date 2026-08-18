@@ -1,6 +1,8 @@
 "use client";
 
-import { Panel, PanelHeader } from "@/components/ui/primitives";
+import { Panel } from "@/components/ui/primitives";
+import { CRM_COPY } from "@/lib/contactLabels";
+import { IconCalendar, IconInternal, IconTask, SectionHeading } from "./form/formPrimitives";
 import type { AppointmentSummary, MemberOption, TagView, TaskView } from "@/lib/contactShared";
 import { AppointmentsSection } from "./shared/AppointmentsSection";
 import { TasksSection } from "./shared/TasksSection";
@@ -49,16 +51,16 @@ export function ContactAssociations({
     <div className="flex flex-col gap-3">
       {schedulingEnabled ? (
         <Panel>
-          <PanelHeader title="Appointments" />
-          <div className="p-3">
+          <div className="flex flex-col gap-3 p-3">
+            <SectionHeading title={CRM_COPY.headings.appointments} icon={<IconCalendar />} />
             <AppointmentsSection clientId={clientId} appointments={appointments} onChanged={onChanged} showHistory returnContactId={contactId} />
           </div>
         </Panel>
       ) : null}
 
       <Panel>
-        <PanelHeader title="Open tasks" />
-        <div className="p-3">
+        <div className="flex flex-col gap-3 p-3">
+          <SectionHeading title={CRM_COPY.headings.openTasks} icon={<IconTask />} />
           <TasksSection
             clientId={clientId}
             contactId={contactId}
@@ -72,8 +74,8 @@ export function ContactAssociations({
       </Panel>
 
       <Panel>
-        <PanelHeader title="Tags" />
-        <div className="p-3">
+        <div className="flex flex-col gap-3 p-3">
+          <SectionHeading title={CRM_COPY.headings.tags} icon={<IconInternal />} />
           <TagsSection
             clientId={clientId}
             contactId={contactId}

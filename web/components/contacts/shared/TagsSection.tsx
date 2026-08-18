@@ -4,6 +4,7 @@ import { useState, useTransition } from "react";
 import type { TagView } from "@/lib/contactShared";
 import { tagChipClass } from "@/lib/tagColors";
 import { attachTagAction, createTagAction, detachTagAction } from "@/lib/crmActions";
+import { CRM_COPY } from "@/lib/contactLabels";
 
 /**
  * SHARED tags block (C-4): current tags as colored chips with a remove ✕, plus an add
@@ -76,7 +77,7 @@ export function TagsSection({
   return (
     <div className="flex flex-col gap-2">
       <div className="flex flex-wrap gap-1.5">
-        {tags.length === 0 ? <span className="text-sm text-faint">No tags.</span> : null}
+        {tags.length === 0 ? <span className="text-sm text-faint">{CRM_COPY.empty.tags}</span> : null}
         {tags.map((t) => (
           <span
             key={t.id}
@@ -87,7 +88,7 @@ export function TagsSection({
               type="button"
               onClick={() => detach(t.id)}
               disabled={pending}
-              aria-label={`Remove ${t.name}`}
+              aria-label={`Quitar ${t.name}`}
               className="opacity-60 transition-opacity hover:opacity-100 disabled:opacity-40"
             >
               ×
@@ -98,8 +99,8 @@ export function TagsSection({
 
       <div className="flex flex-wrap items-center gap-2">
         {suggestable.length > 0 ? (
-          <select value={pick} onChange={(e) => attach(e.target.value)} disabled={pending} className={INPUT} aria-label="Add existing tag">
-            <option value="">Add tag…</option>
+          <select value={pick} onChange={(e) => attach(e.target.value)} disabled={pending} className={INPUT} aria-label="Agregar etiqueta existente">
+            <option value="">{CRM_COPY.actions.addTag}</option>
             {suggestable.map((t) => (
               <option key={t.id} value={t.id}>
                 {t.name}
@@ -114,20 +115,20 @@ export function TagsSection({
               <input
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="New tag name"
+                placeholder="Nombre de la etiqueta"
                 className={INPUT}
                 autoFocus
               />
               <button type="button" onClick={create} disabled={pending || !newName.trim()} className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-subtle disabled:opacity-50">
-                Create
+                {CRM_COPY.actions.create}
               </button>
               <button type="button" onClick={() => { setCreating(false); setNewName(""); }} className="text-xs text-faint hover:text-foreground">
-                Cancel
+                {CRM_COPY.actions.cancel}
               </button>
             </span>
           ) : (
             <button type="button" onClick={() => setCreating(true)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:bg-subtle hover:text-foreground">
-              New tag
+              {CRM_COPY.actions.newTag}
             </button>
           )
         ) : null}

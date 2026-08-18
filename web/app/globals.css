@@ -44,6 +44,13 @@
   /* BRAND RED — selection and urgency (rows, left rules, active markers). The
      `-soft` tint is the selected-row fill; `-rule` is the 2px left rule. */
   --brand: #e60a2f; /* spec accent — 4.7:1 for white-on-brand (AA) */
+  /* FOCUS. Derived from --brand so the two can never disagree, but deliberately NOT the
+     brand itself: a full-saturation #e60a2f ring is the loudest thing on the screen, and
+     it fires on every click. The EDGE is opaque (mixed into --line-strong, not into
+     transparency) so its contrast against the control is predictable in both themes. It
+     recomputes under .dark because custom properties substitute textually — --brand and
+     --line-strong are re-declared there and the mix resolves at use. */
+  --focus-edge: color-mix(in srgb, var(--brand) 60%, var(--line-strong));
   --brand-soft: rgba(230, 10, 47, 0.07);
   --brand-rule: #e60a2f;
   /* WARN amber — "needs attention" / overdue, distinct from destructive red. */
@@ -53,6 +60,11 @@
   /* minimal scrollbars (H-8.2): subtle-but-visible translucent thumb, both themes */
   --scrollbar-thumb: rgba(0, 0, 0, 0.22);
   --scrollbar-thumb-hover: rgba(0, 0, 0, 0.38);
+  /* THE card shadow. One token, so elevation is a system decision rather than a value
+     re-typed per screen — the thing the old "no shadows" rule was really protecting.
+     Deliberately tiny (1px, 4% black): it separates a card from the canvas without
+     reading as a floating dialog. */
+  --shadow-card: 0 1px 2px rgba(16, 20, 28, 0.04);
 }
 
 .dark {
@@ -85,6 +97,9 @@
   --warn-rule: #f59e0b;
   --scrollbar-thumb: rgba(255, 255, 255, 0.2);
   --scrollbar-thumb-hover: rgba(255, 255, 255, 0.34);
+  /* Darker and slightly stronger: 4% black over a #101012 canvas is invisible, so the
+     dark theme carries the elevation itself rather than inheriting a no-op. */
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
 }
 
 /*
@@ -327,6 +342,26 @@
 }
 
 /*
+ * CONTACT HEADER WASH. The panel's header carries a vertical fade of the CONTACT'S OWN
+ * avatar tone — 10% at the top to 2% at the bottom, exactly the reference's ramp. It is
+ * the same tone the disc uses (see avatarToneVar), so the header and the avatar can
+ * never disagree, and it makes a panel recognisable as "this person's" before the name
+ * is read.
+ *
+ * The tone arrives as an inline `--tone` custom property; the RECIPE lives here so the
+ * two panels cannot drift into two different ramps. Deliberately faint: at 10% a
+ * saturated tone is a tint on white, not a coloured header, so the text above it keeps
+ * its contrast in both themes.
+ */
+.u-contact-wash {
+  background-image: linear-gradient(
+    180deg,
+    color-mix(in srgb, var(--tone, transparent) 10%, transparent) 0%,
+    color-mix(in srgb, var(--tone, transparent) 2%, transparent) 100%
+  );
+}
+
+/*
  * ── Thread bubbles ───────────────────────────────────────────────────────────
  * Two SIDES, three voices: the customer speaks on the left in a light bubble, the
  * business on the right in a dark one, and the one voice that is a PERSON on the
@@ -337,11 +372,15 @@
  * Green is intentionally NOT used — it is reserved for success.
  */
 :root {
-  /* CUSTOMER (left) — a cool light grey object on the WHITE transcript, outlined
-     with the SAME hairline the rest of the app uses, so the bubble's edge and a
-     panel's edge are one decision (--line). (The tint moved to the queue column;
-     a white bubble on a white transcript would have no edge but its border.) */
-  --bubble-in: #eef0f3;
+  /* THE TRANSCRIPT's own ground: a grey canvas, so the bubbles read as objects ON
+     something rather than as tinted patches of the panel. This is what lets the
+     customer bubble be WHITE (below) instead of a grey-on-grey near-miss. */
+  --thread-bg: #eff1f5;
+  /* CUSTOMER (left) — WHITE on the grey transcript, outlined with the SAME hairline the
+     rest of the app uses, so the bubble's edge and a panel's edge are one decision
+     (--line). It was a light grey while the transcript was white; the two swapped
+     together, because a #eef0f3 bubble on a #eff1f5 ground is a 1% difference. */
+  --bubble-in: var(--surface);
   --bubble-in-border: var(--line);
   --bubble-in-fg: #0f172a;
   /* BOT (right) — the BUSINESS side of the thread, so it is the dark end of the
@@ -350,23 +389,24 @@
   --bubble-bot: #22262e;
   --bubble-bot-border: #22262e;
   --bubble-bot-fg: #f2f4f7;
-  /* HUMAN AGENT (right) — the OUTLINED bubble. A person answering sits on the
-     business side but must not be mistaken for the bot, so it keeps the side and
-     drops the fill: white with the standard hairline, plus the agent's name over the
-     run and their initials on the disc beside it. (This replaced a solid brand red:
-     at three or four replies in a row the thread turned into a wall of red, which
-     read as errors rather than as a colleague typing.) */
-  --bubble-agent: var(--surface);
+  /* HUMAN AGENT (right) — a faint BRAND TINT. A person answering sits on the business
+     side but must not be mistaken for the bot, so it keeps the side and drops the dark
+     fill. It used to be plain white, which worked while the customer bubble was grey;
+     now that the customer is white, white-on-white would leave SIDE as the only cue.
+     A 7% brand wash is enough to tell a colleague from the customer and is nowhere near
+     the wall of solid red this replaced (four replies in a row read as errors). */
+  --bubble-agent: var(--brand-soft);
   --bubble-agent-fg: var(--foreground);
 }
 .dark {
-  --bubble-in: #1a1c20;
+  --thread-bg: #101012;
+  --bubble-in: #1f2126;
   --bubble-in-border: var(--line);
   --bubble-in-fg: #e8eaee;
   --bubble-bot: #26292f;
   --bubble-bot-border: rgba(255, 255, 255, 0.17);
   --bubble-bot-fg: #eceef2;
-  --bubble-agent: var(--surface);
+  --bubble-agent: var(--brand-soft);
   --bubble-agent-fg: var(--foreground);
 }
 .dark {
@@ -474,7 +514,11 @@ html[data-text-scale='large'] {
  */
 :root {
   --sidebar-width: 238px;
-  --topbar-height: 54px;
+  /* 44px, down from 54. The scope bar carries one line of 12px text and a client
+     chip — 54px gave it ~20px of dead air above and below, on every screen, forever.
+     The token is shared by the four header strips (see the contract test), so they
+     compact together rather than drifting apart. */
+  --topbar-height: 44px;
   --content-pad: 16px; /* visible gutter around the floating panel + rhythm */
   --panel-pad: 16px; /* panel inner padding (see note in the delivery summary) */
   --control-h: 38px; /* search, facets, buttons */
@@ -517,6 +561,55 @@ body {
   background: transparent;
 }
 
+/* THE contact panel width — one value, read by BOTH the list's quick view and the edit
+   drawer, so they always match each other exactly (that is a hard requirement: opening
+   the editor must not move the frame).
+
+   It is a variable rather than a constant because the panel shares its row with the
+   contacts table, whose columns need ~880px before they start clipping mid-word. At
+   30rem the panel left the table 826px at a 1600px viewport — the "cortado" look. 24rem
+   leaves it 922px, so nothing is cut; the wider value returns only once the screen is
+   big enough that the table fits regardless. */
+:root {
+  --contact-panel-w: 24rem;
+  /* The roster's detail column. WIDER than the contact panel on purpose and not a
+     drift: it holds an editable weekly-hours grid and a certification form, both of
+     which are rows of four controls. The two screens share the panel's FRAME (corners,
+     hairline, fill, shadow — PageShell), which is what the eye reads as one product;
+     they do not share a measurement neither of them chose. */
+  --staff-panel-w: 440px;
+}
+@media (min-width: 1800px) {
+  :root {
+    --contact-panel-w: 28rem;
+  }
+}
+
+/* CONTACT PANEL SWAP. The edit drawer lands on exactly the same box as the quick view
+   it replaces, so it does not announce itself with a scrim — dimming the whole window
+   for a panel that never moves read as a jolt. The MOTION carries the message instead:
+   the editor fades in and rises a few pixels, which says "this became something else"
+   without darkening anything. Short enough (140ms) to feel like a state change rather
+   than a transition. Honors reduced-motion. */
+@keyframes contact-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.u-panel-in {
+  animation: contact-panel-in 140ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .u-panel-in {
+    animation: none;
+  }
+}
+
 /* New-row highlight: a fresh execution arriving via auto-refresh fades from an
    accent tint back to transparent. Applied only to genuinely new rows (see
    ExecutionsTable). Honors reduced-motion. */
@@ -543,12 +636,61 @@ body {
  * routes through them so light and dark keep exactly the same structure.
  */
 
-/* App-wide visible focus. A 2px brand ring with a 1px canvas gap reads on every
-   surface in both themes and never relies on color alone (the ring is a shape). */
-:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
-  outline: 2px solid var(--brand);
-  outline-offset: 1px;
-  border-radius: 4px;
+/*
+ * App-wide visible focus: a 2px ring with a 1px gap. Still a SHAPE, so it never relies on
+ * colour alone, and still 2px, so it meets the minimum indicator area.
+ *
+ * Three things it used to get wrong.
+ *
+ *  1. It set `border-radius: 4px` on the focused element, which DEFORMED every control
+ *     bigger than that — an 8px search field snapped to square-ish corners the moment it
+ *     took focus. An outline already follows the element's own radius; there is nothing
+ *     to set.
+ *  2. It painted the ring in full --brand, the loudest colour in the system, on an event
+ *     that fires on every click.
+ *  3. IT WAS UNLAYERED, which is why `outline-none` on an input never suppressed it.
+ *     Unlayered CSS beats every cascade layer regardless of specificity, and Tailwind's
+ *     utilities live in `@layer utilities` — so a search input that explicitly asked for
+ *     no outline drew one anyway, INSIDE the ring its wrapper was already drawing. Two
+ *     rectangles per field, and no way to opt out of the inner one. Declaring this in
+ *     `@layer base` puts it where a base style belongs: utilities beat it, which is the
+ *     relationship every `outline-none` in this codebase was written expecting.
+ */
+@layer base {
+  :where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--focus-edge);
+    outline-offset: 1px;
+  }
+}
+
+/*
+ * The FOCUS treatment for a control that owns its own border — an input, or a wrapper
+ * holding one (a search shell, a stepper).
+ *
+ * ONE ring, and it is entirely OUTSIDE the control. The control's own border does not
+ * change: tinting it as well drew a second, inner line, and two concentric red edges
+ * around one field is what read as a slab rather than as a highlight. The outer ring is
+ * the whole indicator, so the box underneath looks identical focused or not.
+ *
+ * `:has(:focus-visible)` is what lets a WRAPPER light up for the input inside it, which
+ * is the case the old `focus-within:border-brand` was covering — and `focus-within` was
+ * itself part of the problem, because it also fires for a programmatic focus where
+ * `:focus-visible` correctly stays quiet.
+ */
+.u-focus:focus-visible,
+.u-focus:has(:focus-visible) {
+  outline: 2px solid var(--focus-edge);
+  outline-offset: 2px;
+}
+
+/*
+ * ...and the control INSIDE such a wrapper draws nothing. The wrapper's ring is the whole
+ * indicator, so the input, the select, or the button in a stepper never adds a second
+ * rectangle of its own. This is the rule that makes "only the outside" true everywhere
+ * rather than only on the wrapper itself.
+ */
+.u-focus :focus-visible {
+  outline: none;
 }
 
 /* Mono for timestamps, ids, metadata and table headings (Geist Mono). */

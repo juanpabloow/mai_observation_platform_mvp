@@ -44,12 +44,24 @@ test('every deactivate has an inverse: site/service in AdminPanel, staff on the 
   // Deactivating a barber must stay reversible wherever the control lives. On the
   // Staff roster it is a CHECKBOX bound to the same `active` flag, so the same patch
   // turns it off and on — there is no separate, irreversible "deactivate" path.
-  const dialog = web('components/scheduling/staff/StaffEditDialog.tsx');
-  assert.ok(dialog.includes('checked={active}'), 'the control reflects the stored state');
-  assert.ok(dialog.includes('onChange={(e) => setActive(e.target.checked)}'), 'and can set it either way');
-  assert.ok(/updateStaffAction\(clientId, member\.id, \{ name: trimmed, active/.test(dialog), 'saved through the same action');
+  // The flag lives in the barber's OWN PANEL now — the Status section of the Details
+  // tab — not in a separate editor. That move is what makes it a single write path, and
+  // reversibility has to hold at the new home.
+  const panel = web('components/scheduling/staff/StaffTab.tsx');
+  assert.ok(panel.includes('checked={profile.active}'), 'the control reflects the stored state');
+  assert.ok(
+    panel.includes('onChange={(v) => setProfile((d) => ({ ...d, active: v }))}'),
+    'and can set it either way — the same field turns it off and back on',
+  );
+  assert.ok(
+    /onChange=\{\(e\) => onChange\(e\.target\.checked\)\}/.test(panel),
+    'the CheckRow it routes through reads the checkbox, not a toggle guess',
+  );
+  // It rides the panel's ONE unsaved bar, through the same patch as every other field.
+  assert.ok(/'takesBookings' \|\| k === 'active'|"takesBookings" \|\| k === "active"/.test(panel), 'carried by profilePatch');
+  assert.ok(panel.includes('Object.assign(patch, profilePatch(profile, dirtyFields))'), 'saved through updateStaffAction');
   // Deactivation is forward-looking: the barber keeps their history and their lane.
-  assert.ok(dialog.includes('keeps their history and lane'), 'the consequence is spelled out');
+  assert.ok(panel.includes('keeps their history and lane'), 'the consequence is spelled out');
   assert.ok(src.includes('countUpcomingAppointmentsAction'), 'deactivate is guarded by the upcoming-count');
 });
 

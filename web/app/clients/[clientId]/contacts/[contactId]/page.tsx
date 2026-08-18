@@ -13,7 +13,7 @@ import { listTasksForContact } from "@worker/db/repositories/crmTasks.js";
 import { listTagsForContact, listTags } from "@worker/db/repositories/contactTags.js";
 import { listAppointmentsForContact } from "@worker/db/repositories/scheduling/appointments.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
-import { summarizeAppointments, toTaskView } from "@/lib/contactPanel";
+import { loadContactEditPayload, summarizeAppointments, toTaskView } from "@/lib/contactPanel";
 import { contactDisplayName, type IdentityView } from "@/lib/contactShared";
 import { ContactRecord } from "@/components/contacts/ContactRecord";
 
@@ -43,7 +43,7 @@ export default async function ClientContactDetailPage({
   const contact = await getContactById(tenantId, contactId, client.id);
   if (!contact) notFound();
 
-  const [identities, fieldDefs, members, timeline, openTasks, attachedTags, tagCatalogue, appts, conversations, schedulingEnabled, candidates] =
+  const [identities, fieldDefs, members, timeline, openTasks, attachedTags, tagCatalogue, appts, conversations, schedulingEnabled, candidates, editPayload] =
     await Promise.all([
       listIdentitiesForContact(tenantId, client.id, contactId),
       listFieldDefinitions(tenantId, client.id, { enabledOnly: true }),
@@ -57,6 +57,9 @@ export default async function ClientContactDetailPage({
       isClientModuleEnabled(tenantId, client.id, "scheduling"),
       // The duplicate banner + merge/dismiss are owner/admin only — only they need the query.
       fullAccess ? listCandidatesForContact(tenantId, client.id, contactId) : Promise.resolve([]),
+      // The whole-contact edit payload, from the SAME loader the list's customer panel
+      // uses — one shape, so the two doors into editing cannot drift apart.
+      loadContactEditPayload(tenantId, client.id, contactId, { userId: scope.userId, isFullAccess: fullAccess }),
     ]);
 
   const identityViews: IdentityView[] = identities.map((i) => ({ kind: i.kind, value: i.value, label: i.label }));
@@ -74,13 +77,16 @@ export default async function ClientContactDetailPage({
   const fromQS = from ? `?from=${encodeURIComponent(from)}` : "";
 
   return (
-    <main className="flex w-full flex-1 flex-col gap-[var(--content-pad)]">
+    // `relative` makes this the record's PANEL REGION: the edit drawer anchors to the
+    // content column, exactly as it does to the panel column on the list, instead of
+    // to the window. Same frame, same width, on both pages.
+    <main className="relative flex w-full flex-1 flex-col gap-[var(--content-pad)]">
       {/* Back to the list, carrying `from` (the origin workflow) unchanged. */}
       <Link
         href={`/clients/${client.id}/contacts${fromQS}`}
         className="u-th inline-flex w-fit items-center gap-1.5 rounded-md py-1 transition-colors hover:text-foreground"
       >
-        ← Contacts
+        ← Contactos
       </Link>
 
       <ContactRecord
@@ -108,16 +114,24 @@ export default async function ClientContactDetailPage({
         canManageDuplicates={fullAccess}
         canEditFieldDefs={fullAccess}
         canManageTags={fullAccess}
+        // READ values come from the SAME payload the drawer edits, so the two modes
+        // cannot show different facts about the same contact.
         properties={{
           name: contact.name,
+          phones: editPayload?.initial.phones ?? [],
+          emails: editPayload?.initial.emails ?? [],
+          ownerLabel: ownerName,
           stage: contact.stage,
-          assignedTo: contact.assigned_to,
+          preferredChannel: contact.preferred_channel,
+          doNotContact: contact.do_not_contact,
           consent: contact.messaging_consent,
+          consentUpdatedAt: contact.consent_updated_at?.toISOString() ?? null,
           consentSource: contact.consent_source,
-          source: contact.channel,
-          createdAt: contact.created_at.toISOString(),
-          customFields: contact.custom_fields ?? {},
+          customFields: (contact.custom_fields ?? {}) as Record<string, unknown>,
+          tags: attachedTags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
         }}
+        source={contact.channel}
+        createdAt={contact.created_at.toISOString()}
         members={assignableMembers}
         ownerName={ownerName}
         fieldDefs={fieldDefs.map((d) => ({ id: d.id, key: d.key, label: d.label, type: d.type, options: d.options }))}
@@ -133,6 +147,7 @@ export default async function ClientContactDetailPage({
         viewerIsFullAccess={fullAccess}
         mostRecentConversationId={conversations[0]?.id ?? null}
         schedulingEnabled={schedulingEnabled}
+        edit={editPayload}
       />
     </main>
   );

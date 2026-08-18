@@ -5,6 +5,7 @@ import Link from "next/link";
 import { formatDateTime } from "@/lib/format";
 import { agendaDateKey, type AppointmentSummary, type AppointmentView } from "@/lib/contactShared";
 import { cancelAppointmentAction } from "@/lib/schedulingActions";
+import { CRM_COPY, appointmentStatusLabel } from "@/lib/contactLabels";
 import type { AppointmentStatus } from "@worker/db/repositories/scheduling/appointments.js";
 
 /**
@@ -17,24 +18,22 @@ import type { AppointmentStatus } from "@worker/db/repositories/scheduling/appoi
  * rather than duplicating that picker here.
  */
 
+/**
+ * Status tones from the TOKENS, not raw Tailwind. `bg-emerald-500/15` and
+ * `bg-amber-500/15` were hard-coded palette: they don't flip with the theme the way
+ * --success / --warn do, and emerald is not a colour this system otherwise spends.
+ */
 const STATUS_CLASS: Record<AppointmentStatus, string> = {
   scheduled: "bg-subtle text-muted",
-  confirmed: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
-  completed: "bg-emerald-500/15 text-emerald-700 dark:text-emerald-400",
+  confirmed: "bg-success/10 text-success",
+  completed: "bg-success/10 text-success",
   cancelled: "bg-subtle text-faint",
-  no_show: "bg-amber-500/15 text-amber-700 dark:text-amber-400",
-};
-const STATUS_LABEL: Record<AppointmentStatus, string> = {
-  scheduled: "Scheduled",
-  confirmed: "Confirmed",
-  completed: "Completed",
-  cancelled: "Cancelled",
-  no_show: "No-show",
+  no_show: "bg-warn-soft text-warn",
 };
 const BADGE = "inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-xs font-medium";
 
 function StatusBadge({ status }: { status: AppointmentStatus }) {
-  return <span className={`${BADGE} ${STATUS_CLASS[status]}`}>{STATUS_LABEL[status]}</span>;
+  return <span className={`${BADGE} ${STATUS_CLASS[status]}`}>{appointmentStatusLabel(status)}</span>;
 }
 
 function agendaHref(clientId: string, a: AppointmentView): string {
@@ -79,7 +78,7 @@ function NextCard({
           href={`/clients/${clientId}/scheduling/agenda?reschedule=${encodeURIComponent(appt.id)}${returnContactId ? `&return=${encodeURIComponent(returnContactId)}` : ""}`}
           className="rounded-lg border border-line px-2 py-1 text-xs text-foreground transition-colors hover:bg-subtle"
         >
-          Reschedule
+          {CRM_COPY.actions.reschedule}
         </Link>
         <button
           type="button"
@@ -87,7 +86,7 @@ function NextCard({
           disabled={pending}
           className="rounded-lg border border-line px-2 py-1 text-xs text-muted transition-colors hover:bg-subtle hover:text-foreground disabled:opacity-50"
         >
-          Cancel
+          {CRM_COPY.actions.cancel}
         </button>
         {err ? <span className="text-xs text-danger">{err}</span> : null}
       </div>
@@ -135,12 +134,12 @@ export function AppointmentsSection({
       {next ? (
         <NextCard clientId={clientId} appt={next} onChanged={onChanged} returnContactId={returnContactId} />
       ) : (
-        <p className="text-sm text-faint">No upcoming appointment.</p>
+        <p className="text-sm text-faint">{CRM_COPY.empty.appointments}</p>
       )}
 
       {showHistory && laterUpcoming.length > 0 ? (
         <div className="flex flex-col gap-1">
-          <p className="text-[10px] font-medium uppercase tracking-wider text-faint">Also upcoming</p>
+          <p className="text-[10px] font-medium uppercase tracking-wider text-faint">También próximas</p>
           <ul className="flex flex-col">
             {laterUpcoming.map((a) => (
               <PastRow key={a.id} clientId={clientId} appt={a} />
@@ -151,7 +150,7 @@ export function AppointmentsSection({
 
       {showHistory && past.length > 0 ? (
         <div className="flex flex-col gap-1">
-          <p className="text-[10px] font-medium uppercase tracking-wider text-faint">Recent</p>
+          <p className="text-[10px] font-medium uppercase tracking-wider text-faint">Recientes</p>
           <ul className="flex flex-col">
             {past.slice(0, 5).map((a) => (
               <PastRow key={a.id} clientId={clientId} appt={a} />
