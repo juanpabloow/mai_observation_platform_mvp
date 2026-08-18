@@ -12,7 +12,16 @@
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
     "declaration": true,
-    "sourceMap": true
+    "sourceMap": true,
+    // Mirrors web/tsconfig.json's alias so a web/lib module that imports worker code
+    // can be unit-tested from the root runner (tsx resolves paths from here). It has
+    // no effect on `npm run build`: `include` is src/**/* and nothing under src uses
+    // the alias. Without it, testing a pure web/lib helper would mean duplicating the
+    // worker function it wraps — and a second copy of normalizeE164 that drifts from
+    // the spine's is precisely the bug the shared import prevents.
+    "paths": {
+      "@worker/*": ["./src/*"]
+    }
   },
   "include": ["src/**/*"],
   "exclude": ["node_modules", "dist"]

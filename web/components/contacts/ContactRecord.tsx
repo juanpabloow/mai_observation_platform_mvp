@@ -3,11 +3,16 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Chip, StageChip } from "@/components/ui/primitives";
+import { activityLabel, contactSince } from "@/lib/contactForm";
+import { consentLabel, sourceLabel } from "@/lib/contactLabels";
 import type { AppointmentSummary, ContactSummary, IdentityView, MemberOption, TagView, TaskView } from "@/lib/contactShared";
 import { ContactProperties, type FieldDefView } from "./ContactProperties";
+import type { ContactReadValues } from "./form/ContactSections";
 import { ContactTimeline, type TimelineItemView } from "./ContactTimeline";
 import { ContactAssociations } from "./ContactAssociations";
 import type { CandidateView } from "./DuplicateBanner";
+import { EditContactButton } from "./form/EditContactButton";
+import type { ContactEditPayload } from "@/lib/contactPanel";
 
 /**
  * The unified contact RECORD (C-4) — a three-region layout that replaces the deleted
@@ -29,17 +34,13 @@ export interface ContactRecordProps {
   canManageDuplicates: boolean;
   canEditFieldDefs: boolean;
   canManageTags: boolean;
-  properties: {
-    name: string | null;
-    stage: string;
-    assignedTo: string | null;
-    consent: string;
-    consentSource: string | null;
-    source: string;
-    createdAt: string;
-    customFields: Record<string, unknown>;
-  };
+  /** The contact's properties for READ mode — the same field set the drawer edits. */
+  properties: ContactReadValues;
+  /** Origin channel + creation date: record-only facts, shown in the header. */
+  source: string;
+  createdAt: string;
   members: MemberOption[];
+  /** Resolved owner display name — a record-header fact. */
   ownerName: string | null;
   fieldDefs: FieldDefView[];
   timelineItems: TimelineItemView[];
@@ -52,6 +53,16 @@ export interface ContactRecordProps {
   viewerIsFullAccess: boolean;
   mostRecentConversationId: string | null;
   schedulingEnabled: boolean;
+  /**
+   * Everything the whole-contact edit drawer needs, from loadContactEditPayload — the
+   * SAME loader the list's customer panel uses, so the two doors into editing show one
+   * contact, not two versions of one. Null only if the contact couldn't be re-resolved
+   * under this client, in which case no Edit button is offered.
+   *
+   * The record still edits field by field in the left column; this is the "change
+   * several things at once" door.
+   */
+  edit: ContactEditPayload | null;
 }
 
 export function ContactRecord(props: ContactRecordProps) {
@@ -64,10 +75,13 @@ export function ContactRecord(props: ContactRecordProps) {
         clientId={props.clientId}
         contactId={props.contactId}
         summary={props.summary}
-        source={props.properties.source}
+        source={props.source}
+        createdAt={props.createdAt}
+        activityCount={props.edit?.initial.activityCount ?? 0}
         ownerName={props.ownerName}
         mostRecentConversationId={props.mostRecentConversationId}
         schedulingEnabled={props.schedulingEnabled}
+        edit={props.edit}
       />
 
       <div className="flex flex-col gap-4 xl:grid xl:grid-cols-[300px_minmax(0,1fr)_340px] xl:items-start">
@@ -79,10 +93,7 @@ export function ContactRecord(props: ContactRecordProps) {
           identities={props.identities}
           candidates={props.candidates}
           canManageDuplicates={props.canManageDuplicates}
-          canEditFieldDefs={props.canEditFieldDefs}
-          initial={props.properties}
-          members={props.members}
-          ownerName={props.ownerName}
+          values={props.properties}
           fieldDefs={props.fieldDefs}
           onChanged={onChanged}
         />
@@ -127,17 +138,23 @@ function ContactRecordHeader({
   contactId,
   summary,
   source,
+  createdAt,
+  activityCount,
   ownerName,
   mostRecentConversationId,
   schedulingEnabled,
+  edit,
 }: {
   clientId: string;
   contactId: string;
   summary: ContactSummary;
   source: string;
+  createdAt: string;
+  activityCount: number;
   ownerName: string | null;
   mostRecentConversationId: string | null;
   schedulingEnabled: boolean;
+  edit: ContactRecordProps["edit"];
 }) {
   const action =
     "inline-flex h-10 items-center rounded-md border border-line-strong bg-surface px-3 text-sm text-foreground transition-colors hover:bg-subtle";
@@ -147,25 +164,44 @@ function ContactRecordHeader({
         <div className="flex flex-wrap items-center gap-2">
           <h1 className="truncate text-lg font-semibold tracking-tight text-foreground">{summary.displayName}</h1>
           <StageChip stage={summary.stage} />
-          {summary.isCustomer ? <Chip tone="muted">customer</Chip> : null}
+          {summary.isCustomer ? <Chip tone="muted">cliente</Chip> : null}
           {/* Consent surfaces ONLY when opted out — quiet, informational, not an error. */}
           {summary.consent === "opted_out" ? (
-            <Chip tone="warn" title="This contact has opted out of messaging">
-              opted out
+            <Chip tone="warn" title="Este contacto rechazó recibir mensajes">
+              {consentLabel("opted_out").toLowerCase()}
             </Chip>
           ) : null}
         </div>
+        {/* The same derived line the drawer's subtitle carries, so opening the editor
+            does not restate the contact in different words. */}
+        <p className="text-xs text-muted">
+          {contactSince(createdAt)} · {activityLabel(activityCount)}
+        </p>
         <dl className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted">
-          <Fact label="Source" value={source} />
-          <Fact label="Owner" value={ownerName ?? "Unassigned"} />
-          <Fact label="Visits" value={String(summary.visitCount)} mono />
+          <Fact label="Origen" value={sourceLabel(source)} />
+          <Fact label="Dueño" value={ownerName ?? "Sin asignar"} />
+          <Fact label="Visitas" value={String(summary.visitCount)} mono />
           <Fact label="No-shows" value={String(summary.noShowCount)} mono />
         </dl>
       </div>
       <div className="flex shrink-0 flex-wrap items-center gap-2">
+        {edit ? (
+          <EditContactButton
+            clientId={clientId}
+            initial={edit.initial}
+            owners={edit.owners}
+              fieldDefs={edit.fieldDefs}
+            tags={edit.tags}
+            tagCatalogue={edit.tagCatalogue}
+            notes={edit.notes}
+            canDelete={edit.canDelete}
+            canManageTagCatalog={edit.canManageTagCatalog}
+            className={action}
+          />
+        ) : null}
         {mostRecentConversationId ? (
           <Link href={`/clients/${clientId}/inbox?c=${encodeURIComponent(mostRecentConversationId)}`} className={action}>
-            Open conversation
+            Ver conversación
           </Link>
         ) : null}
         {schedulingEnabled ? (
@@ -173,7 +209,7 @@ function ContactRecordHeader({
             href={`/clients/${clientId}/scheduling/agenda?book=${encodeURIComponent(contactId)}&return=${encodeURIComponent(contactId)}`}
             className={action}
           >
-            Book appointment
+            Agendar cita
           </Link>
         ) : null}
       </div>

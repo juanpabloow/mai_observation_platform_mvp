@@ -15,19 +15,19 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 import { DuplicateCandidates } from "@/components/contacts/DuplicateCandidates";
 import { ContactsColumnsMenu, ContactsToolbar } from "@/components/contacts/ContactsToolbar";
 import { parseColumns } from "@/lib/contactColumns";
-import { Chip, EmptyState, Meta, StageChip, Td, Th } from "@/components/ui/primitives";
+import { Chip, EmptyState, Meta, StageChip, SummaryBit, Td, Th } from "@/components/ui/primitives";
 import { formatAgeShort, formatStampFull, formatStampShort } from "@/lib/format";
 import { PageShell } from "@/components/ui/PageShell";
 import { avatarColor } from "@/lib/avatarColor";
 import { conversationAvatarLabel } from "@/lib/inboxView";
-import { loadContactPanel } from "@/lib/contactPanel";
+import { loadContactEditPayload, loadContactPanel } from "@/lib/contactPanel";
 import { getContactTimeline } from "@worker/db/repositories/contactTimeline.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { ContactSidePanel } from "@/components/contacts/ContactSidePanel";
-import { getContactById } from "@worker/db/repositories/contacts.js";
 import { listFieldDefinitions } from "@worker/db/repositories/clientFieldDefinitions.js";
 import { PageTitle } from "@/components/ui/PageTitle";
+import { NewContactButton } from "@/components/contacts/form/NewContactButton";
 
 const STAGES = new Set<string>(["new", "active", "customer", "archived"]);
 const TASK_FILTERS = new Set<string>(["open", "overdue"]);
@@ -61,7 +61,7 @@ export default async function ClientContactsPage({
     /** The contact whose panel is open, mirroring the inbox's `?c=`. */
     c?: string;
     /** `1` opens that panel with the edit dialog already up — what the row's
-     *  "+ Add email" / "+ Add number" placeholders link to. */
+     *  "+ Agregar email" / "+ Agregar número" placeholders link to. */
     edit?: string;
   }>;
 }) {
@@ -93,29 +93,41 @@ export default async function ClientContactsPage({
 
   // Duplicate merge + custom-field management are owner/admin only (server-gated too).
   const isFullAccess = hasFullAccess(scope);
-  const [{ items: contacts, nextCursor }, summary, candidates] = await Promise.all([
+  const [{ items: contacts, nextCursor }, summary, candidates, formFieldDefs] = await Promise.all([
     listContacts(scope.tenantId, { ...filters, cursor: cursor || undefined, limit: 50 }),
     summarizeContacts(scope.tenantId, filters),
     isFullAccess ? listOpenCandidates(scope.tenantId, client.id) : Promise.resolve([]),
+    // The create drawer's "configured by the business" block. Loaded with the list (one
+    // small bounded query) rather than on open, so the form has no loading state.
+    listFieldDefinitions(scope.tenantId, client.id, { enabledOnly: true }),
   ]);
+
+  // Who this user may assign a contact to — the SAME rule the record page applies:
+  // owner/admin may pick anyone with access to this client, a member only themselves.
+  // The server action re-checks it; this only shapes the picker.
+  const assignableOwners = members
+    .filter((m) => (isFullAccess ? m.member_client_id === null || m.member_client_id === client.id : m.user_id === scope.userId))
+    .map((m) => ({ userId: m.user_id, label: m.name ?? m.email }));
 
   // The SELECTED contact's panel. Loaded server-side alongside the list — the panel
   // is `?c=`, so a selection is a normal navigation and its data arrives with the
   // page instead of a second client round-trip. An id from another client resolves to
   // null (loadContactPanel re-scopes it), so a forged `?c=` opens nothing.
   const panelId = selectedId && isUuid(selectedId) ? selectedId : null;
-  const [panel, panelTimeline, schedulingEnabled, panelContact, panelFieldDefs] = panelId
+  const [panel, panelTimeline, schedulingEnabled, panelEdit] = panelId
     ? await Promise.all([
         loadContactPanel(scope.tenantId, client.id, panelId),
         getContactTimeline(scope.tenantId, client.id, panelId, {}),
         isClientModuleEnabled(scope.tenantId, client.id, "scheduling"),
-        // The raw row + the client's field definitions feed the EDIT dialog. Both are
-        // client-scoped reads; a `?c=` from another client resolves to null above and
-        // the panel never renders.
-        getContactById(scope.tenantId, panelId, client.id),
-        listFieldDefinitions(scope.tenantId, client.id, { enabledOnly: true }),
+        // The whole-contact edit payload, from the SAME loader the record header uses,
+        // so the two doors into editing cannot disagree. Client-scoped: a `?c=` from
+        // another client resolves to null and no Edit button is offered.
+        loadContactEditPayload(scope.tenantId, client.id, panelId, {
+          userId: scope.userId,
+          isFullAccess,
+        }),
       ])
-    : [null, null, false, null, []];
+    : ([null, null, false, null] as const);
 
   const visibleColumns = parseColumns(cols);
   const base = `/clients/${client.id}/contacts`;
@@ -144,56 +156,71 @@ export default async function ClientContactsPage({
     <main className="flex min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]">
       {isFullAccess ? <DuplicateCandidates clientId={client.id} candidates={candidates} /> : null}
 
-      {/* ONE white card holds the whole screen: the title + stats band, the toolbar
-          band, the table and END OF LIST, separated by hairlines rather than by strips
-          of canvas. The table is NOT a bordered card inside this one — an inner card
-          would double the border and reproduce the "despegado" look this replaced. */}
-      <PageShell>
-      <div className="flex shrink-0 flex-col gap-3 border-b border-line px-[var(--panel-pad)] py-3">
-        <PageTitle title="Customers" count={summary.total} context={client.name}>
-          <SummaryBit label="new" value={summary.new} />
-          <SummaryBit label="active" value={summary.active} />
-          <SummaryBit label="customer" value={summary.customer} />
+      {/* THREE CARDS on the canvas: title+filters, table, and the detail panel. They
+          are siblings, so each keeps its own four corners and they share a top edge —
+          which is also what stopped the title band from being cut short of the right
+          edge back when the panel lived inside it. */}
+      <div className="flex min-h-0 flex-1 gap-3">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+      {/* CARD 1 — title, counters and filters. Sizes to its content.
+          `clip={false}` because this card hosts the COLUMNAS dropdown: the menu is
+          absolutely positioned inside it, so the card's own `overflow-hidden` cut it off
+          at the bottom edge and it appeared not to open at all. Nothing in this card is
+          full-bleed, so there is no radius to protect. */}
+      <PageShell grow={false} clip={false}>
+      <div className="flex flex-col gap-3 px-[var(--panel-pad)] py-3">
+        {/* ROW 1 — WHAT this screen is: the title, the counters, and the one live
+            indicator. Status only, no controls. The two secondary controls used to sit
+            here behind an `ml-auto`, which meant that as soon as the counters filled
+            the line the pair wrapped as a unit and left a nearly empty band across the
+            middle of the card. They now live with the other controls, one row down. */}
+        <PageTitle title="Contactos" count={summary.total} actions={<AutoRefresh intervalSeconds={30} />}>
+          <SummaryBit label="nuevos" value={summary.new} />
+          <SummaryBit label="activos" value={summary.active} tone="info" />
+          <SummaryBit label="clientes" value={summary.customer} tone="success" />
           <SummaryBit
-            label={summary.overdueTasks === 1 ? "task overdue" : "tasks overdue"}
+            label={summary.overdueTasks === 1 ? "tarea vencida" : "tareas vencidas"}
             value={summary.overdueTasks}
             urgent
           />
-          <SummaryBit label="unassigned" value={summary.unassigned} />
-          <div className="ml-auto flex shrink-0 items-center gap-3">
-            <ContactsColumnsMenu visibleColumns={visibleColumns} />
-            {isFullAccess ? (
-              <Link
-                href={`${base}/fields`}
-                className="u-th hidden rounded-md transition-colors hover:text-foreground sm:inline-flex"
-              >
-                Custom fields
-              </Link>
-            ) : null}
-            <AutoRefresh intervalSeconds={30} />
-          </div>
+          <SummaryBit label="sin dueño" value={summary.unassigned} tone="brand" />
         </PageTitle>
 
-        {/* Search + facets, then the primary action on the right. The client selector
-            and the CRM / Contacts trail live in the HEADER (the single scope bar) —
-            never duplicated here. */}
+        {/* ROW 2 — everything you can DO: search and facets on the left, the table's own
+            controls and the primary action on the right. Grouping controls with controls
+            is what lets the card be two rows instead of three. */}
         <div className="flex flex-wrap items-center gap-2">
           <div className="min-w-0 flex-1">
             <ContactsToolbar owners={ownerOptions} />
           </div>
-          <NewContactButton />
+          <div className="flex shrink-0 items-center gap-3">
+            <ContactsColumnsMenu visibleColumns={visibleColumns} />
+            {isFullAccess ? (
+              <Link
+                href={`${base}/fields`}
+                className="u-th hidden whitespace-nowrap rounded-md transition-colors hover:text-foreground lg:inline-flex"
+              >
+                Campos del negocio
+              </Link>
+            ) : null}
+          </div>
+          <NewContactButton
+            clientId={client.id}
+            owners={assignableOwners}
+            fieldDefs={formFieldDefs.map((d) => ({ id: d.id, key: d.key, label: d.label, type: d.type, options: d.options }))}
+            defaultOwnerId={assignableOwners.some((o) => o.userId === scope.userId) ? scope.userId : null}
+          />
         </div>
       </div>
 
-      {/* BODY: the table's own card on the recessed ground, with the customer panel as
-          its sibling column so the bands above span both. */}
-      <div className="flex min-h-0 flex-1">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background p-3">
-          <div className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-line-strong bg-surface">
+      </PageShell>
+
+      {/* CARD 2 — the table. Absorbs the leftover height. */}
+      <PageShell>
         {contacts.length === 0 ? (
           <div className="p-4">
             <EmptyState
-              title={filtered ? "No contacts match these filters." : "No contacts yet."}
+              title={filtered ? "Ningún contacto coincide con estos filtros." : "Todavía no hay contactos."}
               hint={
                 filtered ? (
                   <Link
@@ -215,20 +242,20 @@ export default async function ClientContactsPage({
             <table className="w-full min-w-[880px] border-collapse text-sm">
               <thead className="sticky top-0 z-10 bg-thead-bg">
                 <tr className="border-b border-line">
-                  <Th className="min-w-[220px]">Client name</Th>
+                  <Th className="min-w-[220px]">Nombre</Th>
                   <Th className="min-w-[180px]">Email</Th>
-                  <Th className="min-w-[150px]">Phone</Th>
-                  {visibleColumns.includes("channel") ? <Th>Channel</Th> : null}
+                  <Th className="min-w-[150px]">Teléfono</Th>
+                  {visibleColumns.includes("channel") ? <Th>Canal</Th> : null}
                   {visibleColumns.includes("stage") ? <Th>Stage</Th> : null}
-                  {visibleColumns.includes("owner") ? <Th>Owner</Th> : null}
-                  <Th className="min-w-[170px]">Last visit</Th>
-                  <Th className="min-w-[140px]">Usual barber</Th>
-                  {visibleColumns.includes("nextAppt") ? <Th className="min-w-[180px]">Next appt</Th> : null}
-                  <Th align="right">Appts</Th>
-                  {visibleColumns.includes("visits") ? <Th align="right">Visits</Th> : null}
-                  {visibleColumns.includes("consent") ? <Th>Consent</Th> : null}
-                  {visibleColumns.includes("created") ? <Th>Created</Th> : null}
-                  {visibleColumns.includes("openTasks") ? <Th align="right">Open tasks</Th> : null}
+                  {visibleColumns.includes("owner") ? <Th>Dueño</Th> : null}
+                  <Th className="min-w-[170px]">Última visita</Th>
+                  <Th className="min-w-[140px]">Barbero habitual</Th>
+                  {visibleColumns.includes("nextAppt") ? <Th className="min-w-[180px]">Próxima cita</Th> : null}
+                  <Th align="right">Citas</Th>
+                  {visibleColumns.includes("visits") ? <Th align="right">Visitas</Th> : null}
+                  {visibleColumns.includes("consent") ? <Th>Consentimiento</Th> : null}
+                  {visibleColumns.includes("created") ? <Th>Creado</Th> : null}
+                  {visibleColumns.includes("openTasks") ? <Th align="right">Tareas</Th> : null}
                 </tr>
               </thead>
               <tbody>
@@ -246,7 +273,11 @@ export default async function ClientContactsPage({
                       // but not the 56px I first tried, which pushed a page of customers
                       // off the fold. The executions table keeps the dense row.
                       className={`relative h-[46px] border-b border-line/70 transition-colors last:border-0 ${
-                        c.id === panelId ? "bg-chip" : "hover:bg-subtle"
+                        // The SELECTED row gets the shared selection treatment — a brand wash plus a
+                        // 2px brand left bar (shape AND colour, so it survives greyscale).
+                        // `bg-chip` alone read as a hover, not as "this is the one open in
+                        // the panel beside you".
+                        c.id === panelId ? "u-row-selected" : "hover:bg-subtle"
                       } ${overdue ? "u-row-danger" : ""}`}
                     >
                       <Td>
@@ -299,7 +330,7 @@ export default async function ClientContactsPage({
                             scroll={false}
                             className="relative z-10 text-[0.8125rem] text-faint hover:text-foreground hover:underline"
                           >
-                            + Add email
+                            + Agregar email
                           </Link>
                         )}
                       </Td>
@@ -312,7 +343,7 @@ export default async function ClientContactsPage({
                             scroll={false}
                             className="relative z-10 text-[0.8125rem] text-faint hover:text-foreground hover:underline"
                           >
-                            + Add number
+                            + Agregar número
                           </Link>
                         )}
                       </Td>
@@ -393,7 +424,7 @@ export default async function ClientContactsPage({
               </>
             ) : (
               <Meta>
-                END OF LIST · {contacts.length} OF {summary.total}
+                Fin de la lista · {contacts.length} de {summary.total}
               </Meta>
             )}
             {cursor ? (
@@ -403,11 +434,13 @@ export default async function ClientContactsPage({
             ) : null}
           </div>
         ) : null}
-          </div>
-        </div>
+      </PageShell>
+      </div>
 
         {panel && panelId ? (
-          <div className="hidden shrink-0 bg-background py-3 pr-3 xl:block">
+          // flex-col (not block) so the panel can stretch to the row's height: as a
+          // block child it sized to its own content, which is why every tab left the
+          // panel a different height and the page jumped on each switch.
           <ContactSidePanel
             key={panelId}
             clientId={client.id}
@@ -429,48 +462,11 @@ export default async function ClientContactsPage({
             openEdit={edit === "1"}
             closeHref={hrefWith({ c: undefined, edit: undefined })}
             recordHref={`${base}/${panelId}${fromQS}`}
-            editInitial={{
-              name: panelContact?.name ?? null,
-              email: panelContact?.email ?? null,
-              phone: panelContact?.phone_e164 ?? null,
-              customFields: (panelContact?.custom_fields ?? {}) as Record<string, unknown>,
-            }}
-            fieldDefs={panelFieldDefs.map((d) => ({
-              id: d.id,
-              key: d.key,
-              label: d.label,
-              type: d.type,
-              options: d.options,
-            }))}
+            edit={panelEdit}
           />
-          </div>
         ) : null}
       </div>
-      </PageShell>
     </main>
-  );
-}
-
-/**
- * "New contact" — rendered in the reference's position (right of the filters) so the
- * toolbar geometry matches, but DISABLED: this build has no UI creation flow, and
- * every contact must enter through C-2's identity chokepoint (`contacts/upsert`,
- * booking, or handoff) or it would create duplicate identities. This round was
- * explicitly scoped to visuals ("no cambies lógica de datos/fetching"), so wiring a
- * real create form is out of scope here rather than forgotten.
- * TODO(crm): enable once a create flow that goes through resolveContactIdentity exists.
- */
-function NewContactButton() {
-  return (
-    <button
-      type="button"
-      disabled
-      aria-disabled="true"
-      title="Contact creation isn't available yet — contacts are created by a workflow, a booking, or the CRM API."
-      className="inline-flex h-[var(--control-h)] shrink-0 items-center rounded-md bg-foreground px-3 text-sm font-medium text-background transition-opacity disabled:cursor-not-allowed disabled:opacity-40"
-    >
-      New contact
-    </button>
   );
 }
 
@@ -502,19 +498,6 @@ function ContactAvatar({ name, fallback }: { name: string | null; fallback: stri
 }
 
 /** One "· 4 new" fragment of the summary line. Urgent counts turn brand-red. */
-function SummaryBit({ label, value, urgent = false }: { label: string; value: number; urgent?: boolean }) {
-  const hot = urgent && value > 0;
-  return (
-    <>
-      <span aria-hidden className="text-faint">
-        ·
-      </span>
-      <span className={`text-sm ${hot ? "font-medium text-brand" : "text-muted"}`}>
-        <span className="u-mono">{value}</span> {label}
-      </span>
-    </>
-  );
-}
 
 /**
  * A timestamp cell: the ABSOLUTE stamp (mono) plus the RELATIVE feel in gray, with

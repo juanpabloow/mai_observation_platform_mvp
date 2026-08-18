@@ -5,24 +5,42 @@ import type { InboxMode } from "@/lib/inboxView";
 
 /**
  * The reply composer (H-3 activation).
- *   - bot     → disabled input, "The bot is handling this conversation. Take it to reply."
- *   - pending → disabled input, "Take this conversation to reply."
- *   - human   → input + Send ENABLED for anyone with client access.
+ *   - bot     → disabled input, "El bot está atendiendo esta conversación…"
+ *   - pending → disabled input, "Toma esta conversación para responder."
+ *   - human   → input + Send ENABLED for anyone with client access,
+ *               UNLESS `blockedReason` says the provider will not accept it.
  *
  * Enter sends, Shift+Enter inserts a newline. Sending is OPTIMISTIC and fire-and-
  * forget: on submit the input clears immediately (the parent renders the sending
  * bubble), so the agent can compose the next message right away — the input is not
  * blocked while a prior send is in flight.
  */
-export function Composer({ mode, onSend }: { mode: InboxMode; onSend: (text: string) => void }) {
+export function Composer({
+  mode,
+  onSend,
+  blockedReason = null,
+}: {
+  mode: InboxMode;
+  onSend: (text: string) => void;
+  /**
+   * A provider-side rule that makes replying impossible right now — today only
+   * WhatsApp's 24-hour service window (see serviceWindow). Null when sending is fine.
+   *
+   * It is checked ALONGSIDE `mode`, not instead of it: a conversation can be both
+   * bot-handled and outside the window, and the reason the agent needs to read first is
+   * the one they cannot fix by taking the conversation.
+   */
+  blockedReason?: string | null;
+}) {
   const [text, setText] = useState("");
-  const enabled = mode === "human";
+  const enabled = mode === "human" && blockedReason === null;
   const helper =
-    mode === "bot"
-      ? "The bot is handling this conversation. Take it to reply."
+    blockedReason ??
+    (mode === "bot"
+      ? "El bot está atendiendo esta conversación. Tómala para responder."
       : mode === "pending"
-        ? "Take this conversation to reply."
-        : null;
+        ? "Toma esta conversación para responder."
+        : null);
 
   const submit = () => {
     const trimmed = text.trim();
@@ -42,14 +60,18 @@ export function Composer({ mode, onSend }: { mode: InboxMode; onSend: (text: str
     // ONE bordered card holds the field and its toolbar, as in the design — the
     // reply area reads as a single object docked to the thread, not an input with
     // loose buttons under it.
-    <div className="rounded-bubble border border-line-strong bg-surface">
+    // `u-focus`: the ring goes on THIS card, not on the textarea inside it. The textarea
+    // asks for `outline-none` and now actually gets it (the app-wide focus rule moved into
+    // @layer base), so without this the composer would take focus with nothing to show
+    // for it.
+    <div className="u-focus rounded-bubble border border-line-strong bg-surface">
       <textarea
         value={enabled ? text : ""}
         onChange={(e) => setText(e.target.value)}
         onKeyDown={onKeyDown}
         disabled={!enabled}
         rows={2}
-        placeholder={enabled ? "Type a reply… (Enter to send, Shift+Enter for a newline)" : (helper ?? "")}
+        placeholder={enabled ? "Escribe una respuesta… (Enter envía, Shift+Enter salto de línea)" : (helper ?? "")}
         className="min-h-[2.75rem] w-full resize-none bg-transparent px-3 pb-1 pt-2.5 text-sm outline-none placeholder:text-faint disabled:cursor-not-allowed disabled:opacity-60"
       />
       <div className="flex items-center gap-2 px-2 pb-2">
@@ -59,18 +81,24 @@ export function Composer({ mode, onSend }: { mode: InboxMode; onSend: (text: str
             They render DISABLED and say why on hover rather than being dropped, so the
             intended shape of the toolbar survives; wire them to
             /api/scheduling/internal/availability + a canned-replies table. */}
-        <ToolbarButton label="Insert slot" title="Not wired yet — needs the availability engine in the composer" />
-        <ToolbarButton label="Saved reply" title="Not wired yet — there is no saved-replies model" />
+        <ToolbarButton label="Insertar horario" title="Todavía sin conectar — necesita el motor de disponibilidad en el composer" />
+        <ToolbarButton label="Respuesta guardada" title="Todavía sin conectar — no existe el modelo de respuestas guardadas" />
         {/* This one is NOT decoration: taking a conversation sets mode=human, which is
             exactly what stops the bot from answering. */}
-        {enabled ? <span className="hidden text-xs text-faint sm:inline">Bot stays paused while you reply</span> : null}
+        {enabled ? (
+          <span className="hidden text-xs text-faint sm:inline">El bot queda en pausa mientras respondes</span>
+        ) : blockedReason ? (
+          /* SUBTLE, not an alarm: the same quiet helper slot the bot/pending states use,
+             so an unavailable composer reads as a state rather than as an error. */
+          <span className="min-w-0 text-xs text-faint">{blockedReason}</span>
+        ) : null}
         <button
           type="button"
           disabled={!enabled || text.trim() === ""}
           onClick={submit}
           className="ml-auto inline-flex h-8 items-center rounded-md bg-brand px-4 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
         >
-          Send
+          Enviar
         </button>
       </div>
     </div>

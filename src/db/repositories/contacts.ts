@@ -15,6 +15,11 @@ export type BotHumanMode = 'bot' | 'human';
 export type ContactStage = 'new' | 'active' | 'customer' | 'archived';
 export type MessagingConsent = 'unknown' | 'opted_in' | 'opted_out';
 
+/** The channels the contact form offers. MUST stay in sync with the CHECK constraint in
+ *  migrations/1783300000000_contact-communication.ts — a fifth entry is a migration. */
+export const PREFERRED_CHANNELS = ['whatsapp', 'email', 'phone', 'sms'] as const;
+export type PreferredChannel = (typeof PREFERRED_CHANNELS)[number];
+
 export interface ContactRow {
   id: string;
   tenant_id: string;
@@ -32,6 +37,12 @@ export interface ContactRow {
   messaging_consent: MessagingConsent;
   consent_updated_at: Date | null;
   consent_source: string | null;
+  /** NULL = no preference on record, which is not the same as "WhatsApp". */
+  preferred_channel: PreferredChannel | null;
+  /** The SHOP suppressing its own sends — a different statement from the customer's
+   *  consent, which is why it is a separate column. Stored this phase; the send paths
+   *  adopt it when they exist (same staging as consent). */
+  do_not_contact: boolean;
   custom_fields: Record<string, unknown>;
   first_contact_at: Date;
   last_contact_at: Date;
@@ -444,6 +455,9 @@ export interface UpdateContactInput {
   assigned_to?: string | null;
   messaging_consent?: MessagingConsent;
   consent_source?: string | null;
+  /** null clears the preference (back to "nobody chose"). */
+  preferred_channel?: PreferredChannel | null;
+  do_not_contact?: boolean;
   /** Custom-fields to SET, already validated against the client's field definitions (see
    * validateCustomFieldValues). PARTIAL: these keys are merged into the stored blob; every
    * key NOT named here is preserved. To remove a key, name it in `custom_fields_clear`. */
@@ -471,6 +485,8 @@ export async function updateContact(
   if (patch.stage !== undefined) add('stage', patch.stage);
   if (patch.bot_human_mode !== undefined) add('bot_human_mode', patch.bot_human_mode);
   if (patch.assigned_to !== undefined) add('assigned_to', patch.assigned_to);
+  if (patch.preferred_channel !== undefined) add('preferred_channel', patch.preferred_channel);
+  if (patch.do_not_contact !== undefined) add('do_not_contact', patch.do_not_contact);
   if (patch.messaging_consent !== undefined) {
     add('messaging_consent', patch.messaging_consent);
     sets.push('consent_updated_at = now()');
@@ -501,6 +517,29 @@ export async function updateContact(
     params,
   );
   return r.rows[0] ?? null;
+}
+
+/**
+ * Delete a contact, tenant + client scoped. Returns false when nothing matched (a
+ * foreign id writes nothing rather than 500-ing).
+ *
+ * A HARD delete, deliberately, and the schema is what makes that safe rather than
+ * lossy: contact_identities / contact_notes / contact_tags / crm_tasks all carry
+ * ON DELETE CASCADE, while conversations.contact_id and appointments.contact_id are
+ * ON DELETE SET NULL — so the person's record goes and the shop's operational history
+ * (the chat, the appointments that were actually served) survives, unlinked. Freeing
+ * the identities is the point: the number becomes claimable again, so a contact deleted
+ * by mistake is re-created intact by the next inbound message through the C-2 spine.
+ *
+ * NOTE the asymmetry with MERGE, which snapshots into contact_merges before dropping a
+ * row. Merge is automatic-ish and reversible-by-design; this one is an explicit human
+ * action behind a typed confirmation, so the audit trail is the operator's intent, not
+ * a JSON blob nobody will read. `stage = 'archived'` remains the reversible option and
+ * is what the form suggests first.
+ */
+export async function deleteContact(tenantId: string, clientId: string, contactId: string): Promise<boolean> {
+  const r = await query(`DELETE FROM contacts WHERE id=$1 AND tenant_id=$2 AND client_id=$3`, [contactId, tenantId, clientId]);
+  return (r.rowCount ?? 0) > 0;
 }
 
 /** Record messaging consent (STORE-ONLY — never gates anything). Client-aware so the

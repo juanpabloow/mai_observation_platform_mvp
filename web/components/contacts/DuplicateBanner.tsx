@@ -60,9 +60,9 @@ export function DuplicateBanner({
   };
 
   return (
-    <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-3">
-      <p className="text-xs font-medium text-amber-700 dark:text-amber-400">
-        Possible duplicate{candidates.length > 1 ? "s" : ""}
+    <div className="rounded-xl border border-warn/35 bg-warn-soft p-3">
+      <p className="text-xs font-medium text-warn">
+        {candidates.length > 1 ? "Posibles duplicados" : "Posible duplicado"}
       </p>
       <ul className="mt-2 flex flex-col gap-2">
         {candidates.map((c) => {

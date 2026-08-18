@@ -37,12 +37,12 @@ export function DuplicateCandidates({ clientId, candidates }: { clientId: string
   };
 
   return (
-    <section className="rounded-xl border border-amber-500/40 bg-amber-500/5 p-3">
-      <h2 className="text-sm font-semibold text-amber-700 dark:text-amber-400">
-        Possible duplicates ({candidates.length})
+    <section className="rounded-xl border border-warn/35 bg-warn-soft p-3">
+      <h2 className="text-sm font-semibold text-warn">
+        Posibles duplicados ({candidates.length})
       </h2>
       <p className="mt-0.5 text-xs text-muted">
-        Same identity value across two contacts. New activity attaches to the survivor; merge to combine histories.
+        Dos contactos comparten un mismo dato de identidad. La actividad nueva se asocia al que sobrevive; fusiona para combinar sus historiales.
       </p>
       <ul className="mt-2 flex flex-col gap-2">
         {candidates.map((c) => (
@@ -57,7 +57,7 @@ export function DuplicateCandidates({ clientId, candidates }: { clientId: string
                 type="button"
                 disabled={pending}
                 onClick={() => run(() => mergeContactsAction(clientId, c.contact_id_keep, c.contact_id_duplicate))}
-                className="rounded-lg bg-accent px-2.5 py-1 text-xs font-medium text-white disabled:opacity-50"
+                className="rounded-md bg-brand px-2.5 py-1 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
               >
                 Merge
               </button>
@@ -73,7 +73,7 @@ export function DuplicateCandidates({ clientId, candidates }: { clientId: string
           </li>
         ))}
       </ul>
-      {err ? <p className="mt-1 text-xs text-red-600 dark:text-red-400">{err}</p> : null}
+      {err ? <p className="mt-1 text-xs text-danger">{err}</p> : null}
     </section>
   );
 }

@@ -1,5 +1,5 @@
 import type { AppointmentStatus } from "@worker/db/repositories/scheduling/appointments.js";
-import type { ContactStage, MessagingConsent } from "@worker/db/repositories/contacts.js";
+import type { ContactStage, MessagingConsent, PreferredChannel } from "@worker/db/repositories/contacts.js";
 import type { IdentityKind } from "@worker/db/repositories/contactIdentities.js";
 
 /**
@@ -78,6 +78,36 @@ export interface AppointmentSummary {
   visitCount: number; // completed
   noShowCount: number;
   isCustomer: boolean; // ≥1 completed
+}
+
+/**
+ * The contact-edit drawer's pre-filled state. It lives HERE, with the other wire
+ * shapes, rather than in the drawer component, because BOTH doors into editing (the
+ * record header and the list's customer panel) build it server-side — and a shape
+ * owned by one of the two callers is how they drift apart.
+ */
+export interface ContactEditInitial {
+  contactId: string;
+  displayName: string;
+  name: string | null;
+  stage: string;
+  /** DERIVED (≥1 completed appointment), never stored — the header's "cliente" chip.
+   *  It rides on this payload so the drawer and the quick view show the same chips. */
+  isCustomer: boolean;
+  assignedTo: string | null;
+  preferredChannel: PreferredChannel | null;
+  doNotContact: boolean;
+  consent: string;
+  consentUpdatedAt: string | null; // ISO
+  consentSource: string | null;
+  customFields: Record<string, unknown>;
+  createdAt: string; // ISO
+  lastContactAt: string; // ISO
+  activityCount: number;
+  sourceChannel: string;
+  /** Identities ALREADY on record, shown as facts. The drawer only ADDS. */
+  phones: string[];
+  emails: string[];
 }
 
 /** Display name: the contact's name, else its primary phone identity, else a fallback. */

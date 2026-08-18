@@ -7,6 +7,7 @@ import {
   INBOX_GROUP_ORDER,
 } from '../../web/lib/inboxGroups.js';
 import type { InboxConversationView, InboxMode } from '../../web/lib/inboxView.js';
+import { serviceWindow, serviceWindowNotice, SERVICE_WINDOW_HOURS } from '../../web/lib/inboxView.js';
 
 /**
  * The pure state-mapping behind the three-column inbox list. REAL modes only
@@ -80,4 +81,69 @@ test('Human / Bot groups are sorted most-recent-activity first', () => {
 test('pendingCount counts only pending (needs-attention) conversations', () => {
   assert.equal(pendingCount([view('pending'), view('pending'), view('bot'), view('human')]), 2);
   assert.equal(pendingCount([view('bot'), view('human')]), 0);
+});
+
+
+// ── WhatsApp's 24-hour service window ─────────────────────────────────────────
+
+const HOUR = 3600_000;
+const at = (now: Date, hoursAgo: number) => new Date(now.getTime() - hoursAgo * HOUR).toISOString();
+const NOW = new Date("2026-08-12T12:00:00.000Z");
+
+test('service window: only WhatsApp is restricted — other channels are never blocked', () => {
+  const stale = [{ sender: 'user' as const, occurredAt: at(NOW, 100) }];
+  for (const ch of ['webchat', 'instagram', 'telegram', null, undefined, '']) {
+    assert.equal(serviceWindow(ch, stale, NOW).state, 'not_applicable', `${ch} is not WhatsApp's problem`);
+    assert.equal(serviceWindowNotice(serviceWindow(ch, stale, NOW)), null, 'and shows no notice');
+  }
+  // Matched on the VALUE, and the label is free text, so casing/decoration must not matter.
+  for (const ch of ['whatsapp', 'WhatsApp', 'whatsapp_business', 'WA whatsapp cloud']) {
+    assert.equal(serviceWindow(ch, stale, NOW).state, 'closed', `${ch} is WhatsApp`);
+  }
+});
+
+test('service window: measured from the last INBOUND message, not the last message', () => {
+  // The business talking does NOT reopen the window — this is the case the rule exists
+  // for, and measuring from "the last message" would keep it open forever.
+  const w = serviceWindow('whatsapp', [
+    { sender: 'user', occurredAt: at(NOW, 30) },
+    { sender: 'bot', occurredAt: at(NOW, 1) },
+    { sender: 'human_agent', occurredAt: at(NOW, 0.5) },
+  ], NOW);
+  assert.equal(w.state, 'closed');
+});
+
+test('service window: open inside 24h, closed at the boundary and after', () => {
+  assert.equal(serviceWindow('whatsapp', [{ sender: 'user', occurredAt: at(NOW, 23.9) }], NOW).state, 'open');
+  // Exactly at the boundary counts as CLOSED — the provider is not generous about it.
+  assert.equal(serviceWindow('whatsapp', [{ sender: 'user', occurredAt: at(NOW, SERVICE_WINDOW_HOURS) }], NOW).state, 'closed');
+  assert.equal(serviceWindow('whatsapp', [{ sender: 'user', occurredAt: at(NOW, 25) }], NOW).state, 'closed');
+});
+
+test('service window: the LATEST inbound wins, whatever order they arrive in', () => {
+  const w = serviceWindow('whatsapp', [
+    { sender: 'user', occurredAt: at(NOW, 40) },
+    { sender: 'user', occurredAt: at(NOW, 2) },
+    { sender: 'user', occurredAt: at(NOW, 30) },
+  ], NOW);
+  assert.equal(w.state, 'open', 'a recent inbound reopens it regardless of list order');
+});
+
+test('service window: never-opened is a DIFFERENT state from closed, with its own wording', () => {
+  const none = serviceWindow('whatsapp', [{ sender: 'bot', occurredAt: at(NOW, 1) }], NOW);
+  assert.equal(none.state, 'never_opened', 'a thread the business started has no window yet');
+  assert.equal(serviceWindow('whatsapp', [], NOW).state, 'never_opened');
+  const a = serviceWindowNotice(none);
+  const b = serviceWindowNotice(serviceWindow('whatsapp', [{ sender: 'user', occurredAt: at(NOW, 99) }], NOW));
+  assert.ok(a && b && a !== b, 'the two blocked states do not share one message');
+  // An open window must never produce a notice — that is what enables the composer.
+  assert.equal(serviceWindowNotice(serviceWindow('whatsapp', [{ sender: 'user', occurredAt: at(NOW, 1) }], NOW)), null);
+});
+
+test('service window: a malformed timestamp is ignored, never treated as "now"', () => {
+  const w = serviceWindow('whatsapp', [
+    { sender: 'user', occurredAt: 'not-a-date' },
+    { sender: 'user', occurredAt: at(NOW, 50) },
+  ], NOW);
+  assert.equal(w.state, 'closed', 'the unparseable one does not silently open the window');
 });

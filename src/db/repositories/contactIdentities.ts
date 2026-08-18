@@ -47,6 +47,21 @@ export interface ResolveIdentityInput {
   name?: string | null;
   phone?: string | null;
   email?: string | null;
+  /**
+   * ADDITIONAL phones/emails beyond the primary pair — an operator who typed a person's
+   * two numbers, or a contact that already carries two emails. Purely ADDITIVE to the
+   * identity set: the scalar contacts.phone_e164 / contacts.email columns still come from
+   * `phone` / `email` alone, so every existing caller (booking, handoff, /contacts/upsert)
+   * behaves byte-for-byte as before.
+   *
+   * They go through buildIdentities rather than a separate INSERT after the resolve, and
+   * that is the whole point: the lookup below queries the FULL identity set, so a second
+   * email already claimed by another contact is found here — oldest still wins and a
+   * duplicate candidate is still recorded. Attaching extras afterwards would slip them
+   * past exactly the collision rules this chokepoint exists to enforce.
+   */
+  phones?: string[];
+  emails?: string[];
 }
 
 type Run = <T extends QueryResultRow>(text: string, params: unknown[]) => Promise<{ rows: T[]; rowCount: number | null }>;
@@ -73,6 +88,9 @@ function buildIdentities(input: ResolveIdentityInput): LabeledIdentity[] {
   add(input.channelUserId); // primary
   add(input.phone);
   add(input.email);
+  // Secondary identities last, so `idents[0]` stays the primary the create path claims.
+  for (const p of input.phones ?? []) add(p);
+  for (const e of input.emails ?? []) add(e);
   return out;
 }
 
@@ -428,6 +446,110 @@ export async function findContactIdsByIdentity(
     [input.tenantId, input.clientId, kinds, values],
   );
   return r.rows.map((row) => row.contact_id);
+}
+
+export interface IdentityMatch {
+  contact_id: string;
+  name: string | null;
+  /** The stored identity that matched — E.164 for a phone, lowercased for an email. */
+  matched_value: string;
+  stage: string;
+  last_contact_at: Date;
+  created_at: Date;
+}
+
+/**
+ * The contacts that already carry one typed identity — the form's inline duplicate
+ * check. STRICTLY READ-ONLY: it resolves nothing and creates nothing, which is what
+ * lets the form run it on every keystroke-settle without a half-typed number minting
+ * a contact. (resolveContactByIdentity would create; findContactIdsByIdentity doesn't
+ * but returns bare ids, and the operator needs to SEE who they'd be duplicating.)
+ *
+ * IT SEARCHES TWO SURFACES, AND MUST. `contact_identities` is UNIQUE per
+ * (tenant, client, kind, value), so an identities-only query could never return more
+ * than ONE row — it would be structurally incapable of reporting "ya existen 3
+ * contactos con este número". The duplicates that actually exist live in the SCALAR
+ * columns: contacts predating the C-2 spine (and any row insertContact created without
+ * identity rows) have a phone_e164 / channel_user_id and no identity at all, and
+ * contacts_tenant_client_phone_idx is a plain index, not a unique one. On the dev
+ * database today that is 4 of 5 contacts, with one phone already shared by two of them
+ * — so the identities-only version reported "no existe un contacto con este dato" for a
+ * number that visibly duplicates, which is precisely the failure this feature exists to
+ * prevent.
+ *
+ * Both surfaces are compared NORMALIZED, never as raw strings: the phone side strips
+ * non-digits and re-prefixes '+' in SQL exactly as normalizeE164 treats a digit string
+ * (the same expression linkNullConversationsByPhone uses), so a stored "573043906303"
+ * and a stored "+57 304 390 6303" both match one typed value. The email side lowercases.
+ *
+ * Returns at most `limit` rows plus the TRUE total, because the UI says "Ya existen 3
+ * contactos" while showing two — a count taken from the truncated array would say 2.
+ * Oldest first: that is the contact the spine would pick as the survivor, so the first
+ * card is the one the operator most likely wants to open.
+ */
+export async function findContactMatchesByIdentity(
+  tenantId: string,
+  clientId: string,
+  rawValue: string,
+  opts: { limit?: number; excludeContactId?: string | null } = {},
+): Promise<{ matches: IdentityMatch[]; total: number }> {
+  const n = classifyIdentity(rawValue);
+  // `external` is not an identity a human types into the phone/email fields.
+  if (!n || n.kind === 'external') return { matches: [], total: 0 };
+  const limit = Math.min(Math.max(opts.limit ?? 3, 1), 10);
+
+  // The scalar-column predicate, per kind. `channel_user_id` is included because a
+  // contact born from a WhatsApp message keeps the raw wa_id there and may have nothing
+  // else; it is NOT included for email-kind matching of a phone value (classifyIdentity
+  // already decided which kind we are looking for).
+  const digits = `('+' || regexp_replace($4, '[^0-9]', '', 'g'))`;
+  const scalarMatch =
+    n.kind === 'phone'
+      ? `('+' || regexp_replace(coalesce(c.phone_e164, ''), '[^0-9]', '', 'g')) = ${digits}
+         OR ('+' || regexp_replace(coalesce(c.channel_user_id, ''), '[^0-9]', '', 'g')) = ${digits}`
+      : `lower(coalesce(c.email, '')) = $4 OR lower(coalesce(c.channel_user_id, '')) = $4`;
+
+  const params: unknown[] = [tenantId, clientId, n.kind, n.value];
+  let exclude = '';
+  if (opts.excludeContactId) {
+    params.push(opts.excludeContactId);
+    exclude = ` AND c.id <> $${params.length}::uuid`;
+  }
+  params.push(limit);
+
+  // ONE query. The window count is the untruncated total, so the heading and the cards
+  // can never disagree (a second COUNT round-trip could also race against a write).
+  // `matched_value` prefers the stored identity when there is one, else the scalar the
+  // row actually matched on — the card shows what is ON RECORD, not what was typed.
+  const r = await query<IdentityMatch & { total: string }>(
+    `SELECT c.id AS contact_id, c.name,
+            COALESCE(
+              (SELECT ci.value FROM contact_identities ci
+                WHERE ci.tenant_id = c.tenant_id AND ci.client_id = c.client_id
+                  AND ci.contact_id = c.id AND ci.kind = $3 AND ci.value = $4),
+              CASE WHEN $3 = 'phone' THEN COALESCE(c.phone_e164, c.channel_user_id)
+                   ELSE COALESCE(c.email, c.channel_user_id) END
+            ) AS matched_value,
+            c.stage, c.last_contact_at, c.created_at,
+            COUNT(*) OVER () AS total
+       FROM contacts c
+      WHERE c.tenant_id = $1 AND c.client_id = $2${exclude}
+        AND (
+          EXISTS (
+            SELECT 1 FROM contact_identities ci
+             WHERE ci.tenant_id = c.tenant_id AND ci.client_id = c.client_id
+               AND ci.contact_id = c.id AND ci.kind = $3 AND ci.value = $4
+          )
+          OR (${scalarMatch})
+        )
+      ORDER BY c.created_at ASC, c.id ASC
+      LIMIT $${params.length}`,
+    params,
+  );
+  return {
+    matches: r.rows.map(({ total: _total, ...m }) => m),
+    total: Number(r.rows[0]?.total ?? 0),
+  };
 }
 
 // ── Identity display / candidate management ────────────────────────────────────────

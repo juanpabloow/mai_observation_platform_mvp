@@ -1,16 +1,39 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { avatarColor } from "@/lib/avatarColor";
+import { avatarColor, avatarToneVar, staffInitials as initials } from "@/lib/avatarColor";
 import { OVERLAY_SCRIM, useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
+import { ACT_PRIMARY } from "@/components/ui/panelChrome";
 import {
   addStaffCertificationAction,
   deleteStaffCertificationAction,
+  setStaffServiceAction,
   updateStaffAction,
 } from "@/lib/schedulingAdminActions";
-import { StaffEditDialog } from "./StaffEditDialog";
+import { PageShell } from "@/components/ui/PageShell";
+import {
+  CONTROL_CLS,
+  MetricBox,
+  MetricCell,
+  PanelSection,
+  SEARCH_SHELL_CLS,
+  SectionHeading,
+  SummaryBit,
+  TOOLBAR_PRIMARY_CLS,
+} from "@/components/ui/primitives";
+import {
+  IconAssign,
+  IconBusiness,
+  IconCalendar,
+  IconIdentity,
+  IconInternal,
+  IconPhone,
+  IconTask,
+} from "@/components/ui/icons";
+import { StaffCreateDrawer } from "./StaffCreateDrawer";
+import { StaffHeaderCard, type StaffHeaderSlots } from "./StaffHeaderCard";
 
 /** Serializable shapes from the server page. */
 export interface StaffSiteOpt { id: string; name: string; timezone: string }
@@ -165,25 +188,16 @@ export interface StaffTabProps {
 export function StaffTab(
   props: StaffTabProps & {
     clientId: string;
-    openCreate?: number;
-    /** The screen's title + tab rows. They belong to the page, but they are drawn
-     *  INSIDE this component's header card so the card is one box, not two. */
-    header?: React.ReactNode;
+    /** The screen's title pieces and tab strip. They belong to the page, but they are
+     *  drawn INSIDE this component's header card so the card is one box, not two. */
+    header: StaffHeaderSlots;
   },
 ) {
   const router = useRouter();
   const [search, setSearch] = useState("");
   const [serviceFilter, setServiceFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
-  const [editing, setEditing] = useState<StaffMember | null>(null);
   const [creating, setCreating] = useState(false);
-
-  // The page title's "+ Add staff member" lives in the workspace above this component,
-  // so it asks for the dialog by bumping a counter rather than by lifting the whole
-  // dialog (and its services/hours state) out of the tab that owns it.
-  useEffect(() => {
-    if (props.openCreate) setCreating(true);
-  }, [props.openCreate]);
 
   const { header } = props;
   const tz = props.timezone;
@@ -265,175 +279,208 @@ export function StaffTab(
 
   return (
     <>
-      {/* THE CONTENT COLUMN — two cards on the canvas, never one card holding both:
-          the header (title, tabs, filters) and the roster read as separate objects,
-          and the gap between them is the canvas showing through. The right padding
-          RESERVES the drawer's lane so a full-height panel never covers the table;
-          it lives here rather than on the region, because the drawer is positioned
-          against the region's padding box and padding there would push it inward. */}
-      <div className={`flex min-h-0 flex-1 flex-col gap-3 ${selected ? "lg:pr-[452px]" : ""}`}>
-        <div className="shrink-0 overflow-hidden rounded-2xl border border-line-strong bg-surface">
-          {header}
-          {/* FILTERS + the status legend — the header card's second row, under the
-              tabs' rule and drawing none of its own. */}
-          <div className="flex flex-wrap items-center gap-2 px-[15px] pb-[14px] pt-3">
-              <div className="flex h-9 min-w-0 max-w-[280px] flex-1 items-center gap-2 rounded-md border border-line-strong px-3">
-                <SearchIcon />
-                <input
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search staff"
-                  aria-label="Search staff"
-                  className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
-                />
-              </div>
-              <Facet
-                label="Service"
-                value={serviceFilter}
-                onChange={setServiceFilter}
-                options={[{ value: "", label: "Service" }, ...props.services.filter((s) => s.active).map((s) => ({ value: s.id, label: s.name }))]}
-              />
-              <Facet
-                label="Site"
-                value={props.currentSiteId ?? ""}
-                onChange={(v) => router.push(`?site=${v}`)}
-                options={props.sites.map((s) => ({ value: s.id, label: s.name }))}
-              />
-              <Facet
-                label="Status"
-                value={statusFilter}
-                onChange={setStatusFilter}
-                options={[
-                  { value: "", label: "Status" },
-                  { value: "with_client", label: "With a client" },
-                  { value: "available", label: "Available" },
-                  { value: "off_today", label: "Off today" },
-                  { value: "time_off", label: "Time off" },
-                ]}
-              />
-              <div className="ml-auto flex items-center gap-2 text-xs text-muted">
-                <Legend dot="bg-service-purple" n={counts.withClient} label="with a client" />
-                <span aria-hidden className="text-faintest">·</span>
-                <Legend dot="bg-success" n={counts.available} label="available" />
-                <span aria-hidden className="text-faintest">·</span>
-                <Legend dot="bg-faintest" n={counts.off} label="off" />
-              </div>
-          </div>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto">
-                {/* THE ROSTER, as a list, in its OWN card. A card per barber gave every
-                    one of them the same visual weight and wasted a screen on six; a row
-                    per person puts presence, load and what's next on one scannable line. */}
-                <div className="flex flex-col overflow-hidden rounded-table border border-line-strong bg-surface">
-                  {/* The column header sits on the SAME white as the rows: the roster
-                      is already its own card on grey, so a tinted strip inside it was
-                      a second surface doing nothing the hairline below does not. */}
-                  <div className="flex h-9 shrink-0 items-center gap-3 border-b border-line bg-surface px-4">
-                    <span className="w-[30px] shrink-0" />
-                    <span className="u-th min-w-0 flex-1">Member</span>
-                    <span className="u-th hidden w-[190px] shrink-0 lg:block">Presence</span>
-                    <span className="u-th hidden w-[104px] shrink-0 sm:block">Today</span>
-                    <span className="u-th hidden w-[146px] shrink-0 lg:block">Next</span>
-                    <span className="w-5 shrink-0" />
+      {/* THREE CARDS ON THE CANVAS — header, roster, detail — as SIBLINGS in a row, the
+          same arrangement Contacts uses. The detail panel is a real column here, not a
+          drawer floating over a reserved `pr-[452px]` lane: the lane trick meant the
+          roster's right edge and the panel's left edge were set by two independent
+          numbers that had to be kept in step by hand. As siblings the gap is the
+          canvas showing through, and each card keeps its own four corners. */}
+      <div className="flex min-h-0 flex-1 gap-3">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+          <StaffHeaderCard
+            slots={header}
+            counters={
+              // The presence legend, promoted out of the filter row into the title band
+              // as Contacts' counters. Real counts over the WHOLE roster, not the
+              // filtered view — unchanged from where they came from.
+              <>
+                <SummaryBit tone="busy" value={counts.withClient} label="with a client" />
+                <SummaryBit tone="success" value={counts.available} label="available" />
+                <SummaryBit value={counts.off} label="off" />
+              </>
+            }
+            controls={
+              <>
+                <div className="min-w-0 flex-1">
+                  <div className={`${SEARCH_SHELL_CLS} min-w-0 max-w-[280px]`}>
+                    <SearchIcon />
+                    <input
+                      value={search}
+                      onChange={(e) => setSearch(e.target.value)}
+                      placeholder="Search staff"
+                      aria-label="Search staff"
+                      className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
+                    />
                   </div>
-
-                  {filtered.map((s) => {
-                    const d = describe(s);
-                    return (
-                      <StaffRow
-                        key={s.id}
-                        member={s}
-                        status={d.key}
-                        suffix={d.suffix}
-                        appts={d.appts}
-                        next={d.next}
-                        tz={tz}
-                        href={hrefFor(s.id)}
-                        selected={s.id === props.selectedId}
-                      />
-                    );
-                  })}
-
-                  {filtered.length === 0 ? (
-                    <p className="px-4 py-10 text-center text-sm text-faint">No staff match these filters.</p>
-                  ) : null}
                 </div>
-
-                {/* This screen is owner/admin only, so everyone who reaches it can
-                    manage the roster — no second permission check. mb-0.5 keeps the
-                    dashed edge off the bottom of the scroll area. */}
+                <Facet
+                  label="Service"
+                  value={serviceFilter}
+                  onChange={setServiceFilter}
+                  options={[{ value: "", label: "Service" }, ...props.services.filter((s) => s.active).map((s) => ({ value: s.id, label: s.name }))]}
+                />
+                <Facet
+                  label="Site"
+                  value={props.currentSiteId ?? ""}
+                  onChange={(v) => router.push(`?site=${v}`)}
+                  options={props.sites.map((s) => ({ value: s.id, label: s.name }))}
+                />
+                <Facet
+                  label="Status"
+                  value={statusFilter}
+                  onChange={setStatusFilter}
+                  options={[
+                    { value: "", label: "Status" },
+                    { value: "with_client", label: "With a client" },
+                    { value: "available", label: "Available" },
+                    { value: "off_today", label: "Off today" },
+                    { value: "time_off", label: "Time off" },
+                  ]}
+                />
+                {/* THE PRIMARY ACTION, at the far right of the control band — where
+                    Contacts puts "Nuevo contacto". It used to sit up on the title line,
+                    which is the band that says what you are LOOKING at. This screen is
+                    owner/admin only, so everyone who reaches it can manage the roster;
+                    there is no second permission check. */}
                 <button
-                    type="button"
-                    onClick={() => setCreating(true)}
-                    className="mb-0.5 mt-3 flex h-[52px] w-full items-center justify-center gap-2 rounded-table border border-dashed border-line-strong text-sm text-muted transition-colors hover:border-faint hover:text-foreground"
-                  >
+                  type="button"
+                  onClick={() => setCreating(true)}
+                  className={`ml-auto ${TOOLBAR_PRIMARY_CLS}`}
+                >
                   + Add staff member
                 </button>
-        </div>
-      </div>
-
-      {selected ? (
-        // FULL HEIGHT. The drawer is positioned against the page REGION, not against
-        // the roster, so it runs the whole content column — from just under the top bar
-        // to the bottom gutter — instead of starting below the filters at whatever
-        // height the table happens to leave. Under lg there is no room to reserve a
-        // lane, so it covers the content full-width; it used to not render at all below
-        // 1280, which meant clicking a barber on a laptop appeared to do nothing.
-        <>
-          {/* SCRIM — overlay mode only. Beside the roster the drawer needs nothing; the
-              moment it COVERS the roster the content underneath has to visibly recede,
-              or the panel reads as part of the page. A Link and not a button, because
-              closing this drawer is a navigation: the selection lives in the URL. */}
-          <Link
-            href={hrefFor(null)}
-            scroll={false}
-            aria-label="Close staff details"
-            className={`${OVERLAY_SCRIM} lg:hidden`}
+              </>
+            }
           />
-          {/* FIXED while overlaying, ABSOLUTE once it has a lane. Anchoring the overlay
-              to the region put it inside the layout's gutter, so a full-width panel
-              started 16px in and ran 16px off the right edge. */}
-          <div className="pointer-events-none fixed inset-0 z-50 flex items-stretch justify-end lg:absolute lg:inset-y-0 lg:left-auto lg:right-0">
-                  <StaffDetail
-                    // Keyed: selecting another barber must reset the hours and profile
-                    // drafts, not carry one person's unsaved edits onto the next.
-                    key={selected.id}
-                    member={selected}
-                    status={describe(selected)}
-                    tz={tz}
-                    now={now}
-                    clientId={props.clientId}
-                    services={props.services}
-                    windowAppointments={windowAppointments.filter((a) => a.staffId === selected.id)}
-                    timeOff={timeOff.filter((t) => t.staffId === selected.id)}
-                    closeHref={hrefFor(null)}
-                    onEdit={() => setEditing(selected)}
-                    onSaved={() => router.refresh()}
-                    initialTab={props.detailTab}
-                  />
-          </div>
-        </>
-      ) : null}
 
-      {editing || creating ? (
-        <StaffEditDialog
-          clientId={props.clientId}
-          member={editing}
-          siteId={props.currentSiteId}
-          services={props.services}
-          sites={props.sites}
-          onClose={() => {
-            setEditing(null);
-            setCreating(false);
-          }}
-          onSaved={() => {
-            setEditing(null);
-            setCreating(false);
-            router.refresh();
-          }}
-        />
-      ) : null}
+          {/* THE ROSTER CARD — PageShell, so its corners, hairline, fill and shadow are
+              the table card's on Contacts rather than a second hand-rolled set. The
+              scroll is INSIDE the card: it used to wrap the card, so the roster's own
+              bottom edge scrolled up out of view with the rows. */}
+          <PageShell>
+            {/* The column header sits on the SAME white as the rows: the roster is
+                already its own card on grey, so a tinted strip inside it was a second
+                surface doing nothing the hairline below does not. */}
+            <div className="flex h-9 shrink-0 items-center gap-3 border-b border-line bg-surface px-4">
+              <span className="w-[30px] shrink-0" />
+              <span className="u-th min-w-0 flex-1">Member</span>
+              <span className="u-th hidden w-[190px] shrink-0 lg:block">Presence</span>
+              <span className="u-th hidden w-[104px] shrink-0 sm:block">Today</span>
+              <span className="u-th hidden w-[146px] shrink-0 lg:block">Next</span>
+              <span className="w-5 shrink-0" />
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              {/* A card per barber gave every one of them the same visual weight and
+                  wasted a screen on six; a row per person puts presence, load and
+                  what's next on one scannable line. */}
+              {filtered.map((s) => {
+                const d = describe(s);
+                return (
+                  <StaffRow
+                    key={s.id}
+                    member={s}
+                    status={d.key}
+                    suffix={d.suffix}
+                    appts={d.appts}
+                    next={d.next}
+                    tz={tz}
+                    href={hrefFor(s.id)}
+                    selected={s.id === props.selectedId}
+                  />
+                );
+              })}
+
+              {filtered.length === 0 ? (
+                <p className="px-4 py-10 text-center text-sm text-faint">No staff match these filters.</p>
+              ) : null}
+
+              {/* The dashed row keeps its place at the end of the list — it is the
+                  "next empty row" of the roster, not a second primary action. */}
+              <button
+                type="button"
+                onClick={() => setCreating(true)}
+                className="m-3 flex h-[52px] w-[calc(100%-1.5rem)] items-center justify-center gap-2 rounded-table border border-dashed border-line-strong text-sm text-muted transition-colors hover:border-faint hover:text-foreground"
+              >
+                + Add staff member
+              </button>
+            </div>
+          </PageShell>
+        </div>
+
+        {/* THE DETAIL COLUMN — a third sibling card, in flow, so the roster shrinks to
+            make room instead of hiding under an overlay.
+            ONE instance, two geometries. From `lg` up the wrapper is a plain flex child
+            of the row and the panel is a column beside the roster; below it, the SAME
+            element goes `fixed` and covers the content, because there is no room for a
+            third column on a laptop. Rendering it twice (once per geometry) would give
+            the reader two independent copies of the hours and profile drafts, and two
+            focus traps. Its width is a token read through a class, not an inline style,
+            so it can be breakpoint-scoped at all. */}
+        {selected || creating ? (
+          <>
+            {/* SCRIM — overlay mode only, and only for the READ-ONLY panel: the editor
+                brings its own catcher (it must intercept a click on a roster row so a
+                stray click cannot navigate away from unsaved edits). A Link and not a
+                button, because closing the panel is a navigation: the selection lives in
+                the URL. */}
+            {selected && !creating ? (
+              <Link
+                href={hrefFor(null)}
+                scroll={false}
+                aria-label="Close staff details"
+                className={`${OVERLAY_SCRIM} lg:hidden`}
+              />
+            ) : null}
+            {/* THE PANEL REGION. `lg:relative` — in flow as a column, AND the positioning
+                context the editor anchors to. That is the whole reason the editor can land
+                exactly on the box the read-only panel occupied: same top, same bottom,
+                same right edge, same width, contents swapping. `lg:static` would put the
+                editor's `absolute` against the page instead. */}
+            <div className="pointer-events-none fixed inset-0 z-50 flex items-stretch justify-end lg:pointer-events-auto lg:relative lg:inset-auto lg:z-auto lg:min-h-0 lg:w-[var(--staff-panel-w)] lg:shrink-0 lg:self-stretch">
+              {selected ? (
+              <StaffDetail
+                // Keyed: selecting another barber must reset the hours and profile
+                // drafts, not carry one person's unsaved edits onto the next.
+                key={selected.id}
+                member={selected}
+                status={describe(selected)}
+                tz={tz}
+                now={now}
+                clientId={props.clientId}
+                services={props.services}
+                windowAppointments={windowAppointments.filter((a) => a.staffId === selected.id)}
+                timeOff={timeOff.filter((t) => t.staffId === selected.id)}
+                closeHref={hrefFor(null)}
+                onSaved={() => router.refresh()}
+                initialTab={props.detailTab}
+              />
+              ) : null}
+              {/* THE EDITOR, absolutely over the panel it replaces. Both live in the same
+                  region, so pressing Edit swaps the contents without moving the frame.
+                  When CREATING there is no barber selected and the region holds only this
+                  — the roster still shrinks to make its lane, exactly as it would for a
+                  selection. */}
+              {/* CREATE only. There is no edit drawer any more — a barber who exists is
+                  changed in the tabs of their own panel. This one exists because a barber
+                  who does NOT exist has no panel to be edited in. */}
+              {creating ? (
+                <StaffCreateDrawer
+                  clientId={props.clientId}
+                  siteId={props.currentSiteId}
+                  services={props.services}
+                  sites={props.sites}
+                  onClose={() => setCreating(false)}
+                  onSaved={() => {
+                    setCreating(false);
+                    router.refresh();
+                  }}
+                />
+              ) : null}
+            </div>
+          </>
+        ) : null}
+      </div>
     </>
   );
 }
@@ -532,7 +579,6 @@ function StaffDetail({
   windowAppointments,
   timeOff,
   closeHref,
-  onEdit,
   onSaved,
   initialTab,
 }: {
@@ -545,7 +591,6 @@ function StaffDetail({
   windowAppointments: StaffWindowAppointment[];
   timeOff: StaffTimeOff[];
   closeHref: string;
-  onEdit: () => void;
   onSaved: () => void;
   initialTab?: string;
 }) {
@@ -577,6 +622,13 @@ function StaffDetail({
   // just says so before the round trip.
   const invalid = profileError(profile);
   const s = STATUS[status.key];
+  // The header's ONE meta line, the contact panel's "identity · contacto desde" applied
+  // to an employee: what they do and how long they have done it. Both facts were already
+  // on this screen (the role on the old header's second line, the seniority in Details);
+  // neither is new, they are just introduced together now.
+  const headerMeta = [member.title, member.startDate ? seniority(member.startDate) : null]
+    .filter(Boolean)
+    .join(" · ");
 
   // ── Performance, all computed from the 30-day window this page loaded ──
   const settled = windowAppointments.filter((a) => a.status !== "cancelled");
@@ -633,57 +685,89 @@ function StaffDetail({
       // No shadow, and the same hairline as the two cards it sits beside: the drawer
       // is part of the screen's card family, not something lifted off it. Depth here
       // is surface contrast against the canvas, as everywhere else in this system.
-      className="pointer-events-auto flex h-full w-full max-w-full flex-col overflow-hidden bg-surface lg:w-[440px] lg:rounded-2xl lg:border lg:border-line-strong"
+      // The FRAME is PageShell's, class for class, so this panel is the same card as the
+      // header and the roster beside it — 12px radius, --line hairline, --shadow-card.
+      // It used to draw its own 16px radius on a --line-strong hairline with no shadow,
+      // which is why it read as a different KIND of object next to the two cards it
+      // shares a row with. Its WIDTH comes from the wrapper (see --staff-panel-w), which
+      // is what lets one element be a column here and a full-bleed overlay below `lg`.
+      className="pointer-events-auto flex h-full w-full max-w-full min-h-0 flex-col overflow-hidden bg-surface lg:rounded-xl lg:border lg:border-line lg:shadow-[var(--shadow-card)]"
     >
-      {/* HEADER — one row, not a centred stack. The panel is 440px and the reader
-          already knows whose card they opened, so a 58px avatar over three centred
-          lines was spending the most valuable strip of the drawer on restating it.
-          Identity goes left, the one action worth a button goes right.
-          The separate "Staff details" bar above this is gone with it: it existed only
-          to hold the close control, which now sits in this row. */}
-      <div className="flex shrink-0 items-center gap-3 border-b border-line bg-panel-hero px-[18px] py-3">
-        <span className="relative shrink-0">
-          <span
-            aria-hidden
-            className={`u-mono flex size-[38px] items-center justify-center rounded-full text-[13px] font-semibold ${avatarColor(member.name)}`}
-          >
-            {initials(member.name)}
-          </span>
-          <span aria-hidden className={`absolute -bottom-px -right-px size-[11px] rounded-full border-2 border-panel-hero ${s.dot}`} />
-        </span>
-
-        <span className="flex min-w-0 flex-1 flex-col">
-          <span className="truncate text-[15px] font-semibold tracking-[-0.015em] text-foreground">{member.name}</span>
-          {/* Role and presence on ONE line. No chair: there is no chair column and
-              deliberately never will be (see the staff-fields migration). */}
-          <span className="flex min-w-0 items-center gap-1.5 text-[11.5px]">
-            {member.title ? <span className="truncate text-muted">{member.title}</span> : null}
-            {member.title ? <span aria-hidden className="text-faintest">·</span> : null}
-            <span className={`u-mono shrink-0 tracking-wider ${s.text}`}>
-              {presenceChip(status.key, status.appts, now, tz)}
+      {/* HEADER — the contact panel's header, applied to a barber: a faint wash in this
+          person's OWN colour, two lines (name + presence chip, then the role/seniority
+          meta), and the actions in their own row UNDERNEATH rather than crowded onto the
+          name line. That last part is the difference the two panels were reading as: a
+          red button beside the name made this header an action bar, while the contact
+          panel's header is an introduction with the actions below it.
+          Nothing here is new information — the same name, the same presence words, the
+          same role and the same "View agenda" link, in the shared arrangement. */}
+      <div
+        style={{ ["--tone" as string]: avatarToneVar(member.name) } as React.CSSProperties}
+        className="u-contact-wash flex shrink-0 flex-col gap-2.5 border-b border-line px-4 pb-3 pt-3.5"
+      >
+        <div className="flex w-full min-w-0 items-start gap-2.5">
+          <span className="relative shrink-0">
+            <span
+              aria-hidden
+              className={`u-mono flex size-[38px] items-center justify-center rounded-full text-[13px] font-semibold ${avatarColor(member.name)}`}
+            >
+              {initials(member.name)}
             </span>
+            <span aria-hidden className={`absolute -bottom-px -right-px size-[11px] rounded-full border-2 border-surface ${s.dot}`} />
           </span>
-        </span>
 
-        <Link
-          href={`/clients/${clientId}/scheduling/agenda?staff=${member.id}`}
-          className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md bg-brand px-3 text-xs font-medium text-white transition-opacity hover:opacity-90"
-        >
-          View agenda
-        </Link>
-        <Link
-          href={closeHref}
-          scroll={false}
-          aria-label="Close staff details"
-          className="inline-flex size-8 shrink-0 items-center justify-center rounded-md border border-line-strong text-xs text-muted transition-colors hover:bg-hover hover:text-foreground"
-        >
-          &#10005;
-        </Link>
+          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+            {/* Name + presence as a CHIP on the same line — the shape the contact panel
+                uses for name + stage. Presence was a line of mono text below the name,
+                which is the same fact wearing a different costume. */}
+            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
+              <h2 className="min-w-0 truncate text-base font-semibold tracking-tight text-foreground">{member.name}</h2>
+              <span
+                className={`u-mono inline-flex items-center rounded-full border border-line-strong bg-chip px-2 py-[0.1rem] text-[0.625rem] font-medium uppercase leading-4 tracking-wider ${s.text}`}
+              >
+                {presenceChip(status.key, status.appts, now, tz)}
+              </span>
+            </div>
+            {/* ONE meta line. No chair: there is no chair column and deliberately never
+                will be (see the staff-fields migration). */}
+            <p className="truncate text-[0.6875rem] leading-4 text-faint" title={headerMeta}>
+              {headerMeta}
+            </p>
+          </div>
+
+          <Link
+            href={closeHref}
+            scroll={false}
+            aria-label="Close staff details"
+            className="-mr-1 shrink-0 rounded-md p-1 text-faint transition-colors hover:bg-subtle hover:text-foreground"
+          >
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+              <path d="M6 6l12 12M18 6L6 18" />
+            </svg>
+          </Link>
+        </div>
+
+        {/* THE ACTION ROW. There is no "Edit" here any more, and that is the point: an
+            Edit button implied a SECOND place where a barber gets changed, so the same
+            columns had two owners — the drawer wrote name/services/hours/flags while the
+            tabs below wrote the profile, and whichever saved last won. Every one of those
+            fields now lives in the tabs, behind one unsaved bar. What is left is the one
+            action that is not an edit at all, so it takes the whole row. */}
+        <div className="flex items-center gap-1.5">
+          <Link
+            href={`/clients/${clientId}/scheduling/agenda?staff=${member.id}`}
+            className={ACT_PRIMARY}
+          >
+            View agenda
+          </Link>
+        </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
-
-        <div className="flex items-center gap-3.5 border-b border-line px-4" role="tablist">
+      {/* THREE ZONES, as on the contact panel: a fixed header, a FIXED tab strip, and one
+          scrolling body. The strip used to live inside the scroll container, so scrolling
+          the Hours grid carried the tabs off the top of the panel and the reader lost the
+          control that got them there. */}
+      <div className="flex shrink-0 items-center gap-3.5 border-b border-line px-4" role="tablist">
           {DETAIL_TABS.map((t) => (
             <button
               key={t}
@@ -708,94 +792,115 @@ function StaffDetail({
               ) : null}
             </button>
           ))}
-        </div>
+      </div>
 
+      {/* THE only scrolling zone. Its `key` sends it back to the top on a tab change:
+          without it, opening Hours after scrolling Performance drops the reader into the
+          middle of a grid whose first rows they never saw. */}
+      <div key={tab} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         {tab === "performance" ? (
-          <div className="flex flex-col gap-3 px-4 py-4">
+          // NO wrapper padding. Each section brings its own and closes with a full-width
+          // rule, so the column reads as one continuous document — the contact panel's
+          // arrangement. This used to be a padded stack of individually bordered cards,
+          // which put a second border inside a panel that already has one and broke the
+          // tab into floating slabs. That is the single biggest reason the two panels
+          // felt like different products with the same tabs.
+          <>
             {completedPct !== null && completedPct >= 90 ? (
-              <div className="flex items-center gap-2.5 rounded-xl border border-danger-tint bg-danger-tint/25 px-3 py-2.5">
-                <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-brand" />
-                <p className="text-xs text-foreground">
-                  Completed {completedPct}% of booked appointments over the last 30 days.
-                </p>
+              <div className="border-b border-line px-4 py-3">
+                <div className="flex items-center gap-2.5 rounded-lg border border-brand/35 bg-brand-soft px-3 py-2.5">
+                  <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-brand" />
+                  <p className="text-xs text-foreground">
+                    Completed {completedPct}% of booked appointments over the last 30 days.
+                  </p>
+                </div>
               </div>
             ) : null}
 
             {/* The window toggle drives the sparkline; the KPIs below stay on 30 days,
-                which is the window the page actually loaded. */}
-            <div className="flex items-center gap-2">
-              {/* TODO(staff): the design puts "CHAIR 3" at the right of this row. There
-                  is no chair column and we decided not to add one, so the slot is left
-                  empty rather than filled with a number nobody stored. */}
-              {([14, 30] as const).map((r) => (
-                <button
-                  key={r}
-                  type="button"
-                  onClick={() => setRange(r)}
-                  aria-pressed={range === r}
-                  className={`inline-flex h-8 items-center rounded-md px-3 text-xs font-medium transition-colors ${
-                    range === r
-                      ? "bg-foreground text-background"
-                      : "border border-line-strong text-muted hover:bg-hover"
-                  }`}
-                >
-                  Last {r} days
-                </button>
-              ))}
-            </div>
-
-            <div className="flex flex-col gap-2.5 rounded-xl border border-line p-3">
-              <div className="flex items-baseline gap-2">
-                <span className="u-th">Appointments per day</span>
-                <span className="ml-auto text-[11px] text-faint">last {range} days</span>
-              </div>
-              <Sparkline series={series} />
-            </div>
-
-            <div className="grid grid-cols-2 gap-2.5">
-              <Kpi label="Appointments · 30d" value={settled.length} />
-              <Kpi label="Completed" value={completed} note={completedPct === null ? undefined : `${completedPct}%`} />
-              <Kpi label="No-shows" value={noShows} tone={noShows > 0 ? "brand" : undefined} />
-              <Kpi
-                label="Hours booked"
-                value={Math.round(minutes / 60)}
-                note={weeklyMinutes > 0 ? `of ${capacityHours} h` : "no hours set"}
-              />
-            </div>
-
-            <div className="flex flex-col gap-2 pt-1">
-              <span className="u-th">Today · {new Intl.DateTimeFormat("en-GB", { timeZone: tz, weekday: "short", day: "numeric", month: "short" }).format(now)}</span>
-              {status.appts.length === 0 ? (
-                <p className="rounded-xl border border-line px-3 py-4 text-center text-xs text-faint">Nothing booked today.</p>
-              ) : (
-                <div className="flex flex-col rounded-xl border border-line">
-                  {status.appts.map((a) => (
-                    <div key={a.id} className="flex items-center gap-2.5 border-b border-line/70 px-3 py-2 last:border-0">
-                      <span aria-hidden className="h-6 w-[3px] shrink-0 rounded-sm bg-service-purple" />
-                      <span className="flex min-w-0 flex-1 flex-col">
-                        <span className="truncate text-xs font-semibold text-foreground">{a.contactName ?? "Walk-in"}</span>
-                        <span className="truncate text-[11px] text-faint">{a.serviceName}</span>
-                      </span>
-                      <span className="u-mono shrink-0 text-[11px] text-muted">{fmtTime(a.startAt, tz)}</span>
-                    </div>
+                which is the window the page actually loaded. It is the heading's
+                TRAILING slot now, not a row of standalone buttons above the chart —
+                a control that only changes this section belongs to this section. */}
+            <PanelSection
+              title="Appointments per day"
+              icon={<IconCalendar />}
+              trailing={
+                // TODO(staff): the design puts "CHAIR 3" at the right of this row. There
+                // is no chair column and we decided not to add one, so the slot holds the
+                // window toggle rather than a number nobody stored.
+                <span className="inline-flex items-center gap-0.5 rounded-md bg-chip p-0.5">
+                  {([14, 30] as const).map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => setRange(r)}
+                      aria-pressed={range === r}
+                      className={`inline-flex h-6 items-center whitespace-nowrap rounded px-2 text-[11px] font-medium transition-colors ${
+                        range === r ? "bg-surface text-foreground shadow-[var(--shadow-card)]" : "text-muted hover:text-foreground"
+                      }`}
+                    >
+                      Last {r} days
+                    </button>
                   ))}
-                </div>
-              )}
-              <Link
-                href={`/clients/${clientId}/scheduling/agenda?staff=${member.id}`}
-                className="text-xs text-accent hover:underline"
-              >
-                Open this day in the agenda &#8599;
-              </Link>
-            </div>
+                </span>
+              }
+            >
+              <Sparkline series={series} />
+            </PanelSection>
+
+            <PanelSection title="Last 30 days" icon={<IconTask />}>
+              {/* ONE divided box, not four floating cards — the same MetricBox the
+                  contact panel's CITAS / ÚLTIMA / CANAL strip is built from. 2×2 because
+                  "Appointments · 30d" and "Hours booked" cannot share one row at 440px. */}
+              <MetricBox cols={2}>
+                <MetricCell label="Appointments · 30d" value={settled.length} />
+                <MetricCell label="Completed" value={completed} note={completedPct === null ? undefined : `${completedPct}%`} />
+                <MetricCell label="No-shows" value={noShows} tone={noShows > 0 ? "brand" : undefined} />
+                <MetricCell
+                  label="Hours booked"
+                  value={Math.round(minutes / 60)}
+                  note={weeklyMinutes > 0 ? `of ${capacityHours} h` : "no hours set"}
+                />
+              </MetricBox>
+            </PanelSection>
+
+            <PanelSection
+              title={`Today · ${new Intl.DateTimeFormat("en-GB", { timeZone: tz, weekday: "short", day: "numeric", month: "short" }).format(now)}`}
+              icon={<IconCalendar />}
+              trailing={status.appts.length > 0 ? `${status.appts.length} booked` : undefined}
+            >
+              <div className="flex flex-col gap-2">
+                {status.appts.length === 0 ? (
+                  <p className="text-xs text-faint">Nothing booked today.</p>
+                ) : (
+                  <div className="flex flex-col rounded-lg border border-line">
+                    {status.appts.map((a) => (
+                      <div key={a.id} className="flex items-center gap-2.5 border-b border-line/70 px-3 py-2 last:border-0">
+                        <span aria-hidden className="h-6 w-[3px] shrink-0 rounded-sm bg-service-purple" />
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span className="truncate text-xs font-semibold text-foreground">{a.contactName ?? "Walk-in"}</span>
+                          <span className="truncate text-[11px] text-faint">{a.serviceName}</span>
+                        </span>
+                        <span className="u-mono shrink-0 text-[11px] text-muted">{fmtTime(a.startAt, tz)}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <Link
+                  href={`/clients/${clientId}/scheduling/agenda?staff=${member.id}`}
+                  className="self-start text-xs text-accent hover:underline"
+                >
+                  Open this day in the agenda &#8599;
+                </Link>
+              </div>
+            </PanelSection>
 
             {/* TOP SERVICES — what this barber actually gets booked for. Counted from
                 the SAME 30-day window the KPIs above use, off the appointment's own
                 service-name snapshot, so a renamed or deleted service still counts
                 under the name it was sold as. Cancelled rows are already excluded. */}
             {topServices.length > 0 ? (
-              <div className="flex flex-col gap-2 pt-1">
-                <span className="u-th">Top services · 30d</span>
+              <PanelSection title="Top services · 30d" icon={<IconTask />}>
                 <div className="flex flex-col gap-1.5">
                   {topServices.map((t) => (
                     <div key={t.name} className="flex items-center gap-2.5">
@@ -813,15 +918,33 @@ function StaffDetail({
                     </div>
                   ))}
                 </div>
-              </div>
+              </PanelSection>
             ) : null}
-          </div>
+          </>
         ) : tab === "details" ? (
           <div className="flex flex-col">
+            {/* IDENTITY — the name, and the site it belongs to. This section is why there
+                is no longer an "Edit" button above: the name was the last field that lived
+                only in a separate editor, so the panel's own tabs are now the ONE write
+                path for everything about a barber. Every field here goes through the same
+                unsaved bar at the bottom, which means one Save writes the whole person
+                instead of two forms racing over the same columns. */}
+            <DetailSection title="Identity" icon={<IconIdentity />}>
+              <FieldRow
+                label="Name"
+                value={profile.name}
+                onChange={(v) => setProfile((d) => ({ ...d, name: v }))}
+                placeholder="Full name"
+              />
+              {/* SITE is read-only: a barber belongs to exactly one site in V1 and moving
+                  them is not an update the repository supports. */}
+              <ReadRow label="Site" value={member.siteName} />
+            </DetailSection>
+
             {/* CONTACT — employee PII. It only reaches this component because the page
                 used listStaffAdmin behind the owner/admin gate; every other reader of
                 `staff` still gets the projection without these columns. */}
-            <DetailSection title="Contact">
+            <DetailSection title="Contact" icon={<IconPhone />}>
               <FieldRow
                 label="Phone"
                 value={profile.phone}
@@ -851,7 +974,7 @@ function StaffDetail({
               />
             </DetailSection>
 
-            <DetailSection title="Contract">
+            <DetailSection title="Contract" icon={<IconInternal />}>
               <FieldRow
                 label="Role"
                 value={profile.title}
@@ -906,7 +1029,27 @@ function StaffDetail({
               </FieldRow>
             </DetailSection>
 
-            <DetailSection title="Skills">
+            {/* STATUS — two DIFFERENT facts, and they used to be one checkbox in a modal.
+                Deactivating stays reversible precisely because it is this field: the same
+                control that turns it off turns it back on, through the same patch. */}
+            <DetailSection title="Status" icon={<IconAssign />}>
+              <div className="flex flex-col gap-2.5 px-4 pb-3.5">
+                <CheckRow
+                  checked={profile.takesBookings}
+                  onChange={(v) => setProfile((d) => ({ ...d, takesBookings: v }))}
+                  label="Takes bookings"
+                  hint="off for front desk or management: they work here, but hold no chair"
+                />
+                <CheckRow
+                  checked={profile.active}
+                  onChange={(v) => setProfile((d) => ({ ...d, active: v }))}
+                  label="Still works here"
+                  hint="off keeps their history and lane, but no new appointments"
+                />
+              </div>
+            </DetailSection>
+
+            <DetailSection title="Skills" icon={<IconTask />}>
               <div className="flex flex-wrap items-center gap-1.5 px-4 pb-3">
                 {profile.skills.map((sk) => (
                   <span
@@ -954,7 +1097,7 @@ function StaffDetail({
 
             {/* CERTIFICATIONS are their own rows, so they save immediately rather than
                 riding the draft — adding one is a create, not a field edit. */}
-            <DetailSection title="Certifications">
+            <DetailSection title="Certifications" icon={<IconBusiness />}>
               <div className="flex flex-col gap-1.5 px-4 pb-3">
                 {member.certifications.length === 0 ? (
                   <p className="text-xs text-faint">None recorded.</p>
@@ -988,17 +1131,43 @@ function StaffDetail({
             </DetailSection>
           </div>
         ) : tab === "services" ? (
-          <div className="flex flex-col gap-2 px-4 py-4">
+          <PanelSection
+            title="Services performed"
+            icon={<IconTask />}
+            trailing={`${member.serviceIds.length} of ${services.length}`}
+          >
+          <div className="flex flex-col gap-2">
             {services.length === 0 ? (
               <p className="text-sm text-faint">This client has no services yet.</p>
             ) : (
               services.map((sv) => {
                 const on = member.serviceIds.includes(sv.id);
                 return (
-                  <div
+                  // The ROW IS THE CONTROL. It used to be a read-only list under a
+                  // "Change services →" link that opened a separate editor — so seeing
+                  // what a barber performs and changing it were two different screens.
+                  // Toggling writes IMMEDIATELY rather than joining the unsaved bar,
+                  // because the action is per-pairing (setStaffServiceAction takes one
+                  // service and one boolean), exactly as adding a certification does in
+                  // the section below.
+                  <button
                     key={sv.id}
-                    className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 text-sm ${
-                      on ? "border-line-strong bg-surface text-foreground" : "border-line text-faint"
+                    type="button"
+                    role="switch"
+                    aria-checked={on}
+                    disabled={saving}
+                    onClick={() =>
+                      startSave(async () => {
+                        setSaveError(null);
+                        const r = await setStaffServiceAction(clientId, member.id, sv.id, !on);
+                        if (!r.ok) setSaveError(r.error);
+                        else onSaved();
+                      })
+                    }
+                    className={`u-focus flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
+                      on
+                        ? "border-line-strong bg-surface text-foreground hover:bg-hover"
+                        : "border-line text-faint hover:border-line-strong hover:text-muted"
                     }`}
                   >
                     <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${on ? "bg-success" : "bg-faintest"}`} />
@@ -1006,25 +1175,24 @@ function StaffDetail({
                     <span className="u-mono shrink-0 text-[10px] uppercase tracking-wider">
                       {on ? "performs" : "not offered"}
                     </span>
-                  </div>
+                  </button>
                 );
               })
             )}
-            <button
-              type="button"
-              onClick={onEdit}
-              className="mt-1 self-start text-xs text-accent hover:underline"
-            >
-              Change services &rarr;
-            </button>
           </div>
+          </PanelSection>
         ) : tab === "hours" ? (
-          <div className="flex flex-col gap-3 px-4 py-4">
+          <PanelSection
+            title="Weekly hours"
+            icon={<IconCalendar />}
+            trailing={dirtyDays > 0 ? `${dirtyDays} changed` : undefined}
+          >
+          <div className="flex flex-col gap-3">
             <p className="text-[11px] text-faint">
               A day with no shift = off. All days off means this barber inherits{" "}
               {member.siteName}&rsquo;s opening hours.
             </p>
-            <div className="flex flex-col rounded-xl border border-line">
+            <div className="flex flex-col rounded-lg border border-line">
               {WEEKDAYS.map((d) => {
                 const ranges = draft[d] ?? [];
                 const on = ranges.length > 0;
@@ -1110,12 +1278,16 @@ function StaffDetail({
               <span className="u-mono">{WEEKDAYS.filter((d) => (draft[d] ?? []).length > 0).length} DAYS</span>
             </div>
           </div>
+          </PanelSection>
         ) : (
-          <div className="flex flex-col gap-2 px-4 py-4">
+          <PanelSection
+            title="Time off"
+            icon={<IconCalendar />}
+            trailing={timeOff.length > 0 ? `${timeOff.length} booked` : undefined}
+          >
+          <div className="flex flex-col gap-2">
             {timeOff.length === 0 ? (
-              <p className="rounded-lg border border-line px-3 py-3 text-sm text-muted">
-                No time off booked.
-              </p>
+              <p className="text-sm text-muted">No time off booked.</p>
             ) : (
               timeOff.map((t) => {
                 const days = Math.max(
@@ -1147,6 +1319,7 @@ function StaffDetail({
                 approval flow and no way to request one from here. Blocked time is
                 created in Scheduling settings. */}
           </div>
+          </PanelSection>
         )}
       </div>
 
@@ -1154,7 +1327,7 @@ function StaffDetail({
           the editor above works in, and saves through the same updateStaffAction the
           settings form always used. */}
       {changes > 0 || saveError ? (
-        <div className="flex shrink-0 items-center gap-2 border-t border-line bg-panel-hero px-4 py-3">
+        <div className="flex shrink-0 items-center gap-2 border-t border-line bg-surface px-4 py-3">
           {/* The SENTENCE is the flexible one: it shrinks and truncates. The two
               buttons never wrap — "Save changes" breaking onto two lines made the bar
               grow a row every time the message got long. */}
@@ -1168,7 +1341,7 @@ function StaffDetail({
               setDraft(draftFromWeekly(member.workingHours));
               setProfile(profileFromMember(member));
             }}
-            className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md border border-line-strong px-3 text-xs transition-colors hover:bg-hover"
+            className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md border border-line-strong bg-surface px-3 text-xs transition-colors hover:bg-hover"
           >
             Discard
           </button>
@@ -1212,6 +1385,10 @@ function StaffDetail({
 // out — the column's own empty state. Keeping that translation in ONE place is why
 // these are functions and not inline ternaries in the JSX.
 interface ProfileDraft {
+  /** The barber's NAME. It lives in this draft — and so behind the panel's unsaved bar —
+   *  rather than in a separate editor, because there is exactly one write path per field
+   *  on this screen. */
+  name: string;
   title: string;
   employmentType: string;
   weeklyHours: string;
@@ -1221,6 +1398,12 @@ interface ProfileDraft {
   emergencyContactName: string;
   emergencyContactPhone: string;
   skills: string[];
+  /** Does this person get an agenda lane? A front-desk hire works every day and takes
+   *  none — that is not the same as having left. */
+  takesBookings: boolean;
+  /** Do they still work here? Deactivating keeps their history and their lane and stops
+   *  new bookings, so it is the harder state and it is reversible from the same field. */
+  active: boolean;
 }
 
 /** The stored employment types — mirrors the staff_employment_type_valid CHECK. */
@@ -1232,6 +1415,7 @@ const EMPLOYMENT_TYPES = [
 
 function profileFromMember(m: StaffMember): ProfileDraft {
   return {
+    name: m.name,
     title: m.title ?? "",
     employmentType: m.employmentType ?? "",
     weeklyHours: m.weeklyHours === null ? "" : String(m.weeklyHours),
@@ -1241,6 +1425,8 @@ function profileFromMember(m: StaffMember): ProfileDraft {
     emergencyContactName: m.emergencyContactName ?? "",
     emergencyContactPhone: m.emergencyContactPhone ?? "",
     skills: [...m.skills],
+    takesBookings: m.takesBookings,
+    active: m.active,
   };
 }
 
@@ -1260,6 +1446,7 @@ function dirtyProfileFields(d: ProfileDraft, m: StaffMember): ProfileKey[] {
 /** The same rules the CHECK constraints enforce, stated before the round trip.
  *  Returns a sentence to show in the bar, or null when the draft is storable. */
 function profileError(d: ProfileDraft): string | null {
+  if (d.name.trim() === "") return "A name is required.";
   if (d.weeklyHours !== "") {
     const n = Number(d.weeklyHours);
     if (!Number.isInteger(n) || n < 1 || n > 168) return "Weekly hours must be a whole number from 1 to 168.";
@@ -1276,6 +1463,9 @@ function profilePatch(d: ProfileDraft, dirty: ProfileKey[]): Record<string, unkn
   const blank = (v: string) => (v.trim() === "" ? null : v.trim());
   for (const k of dirty) {
     if (k === "skills") out.skills = d.skills;
+    // NAME is never nulled — an empty one is refused above, not stored as absent.
+    else if (k === "name") out.name = d.name.trim();
+    else if (k === "takesBookings" || k === "active") out[k] = d[k];
     else if (k === "weeklyHours") out.weeklyHours = d.weeklyHours === "" ? null : Number(d.weeklyHours);
     else if (k === "employmentType") out.employmentType = d.employmentType === "" ? null : d.employmentType;
     else out[k] = blank(d[k] as string);
@@ -1307,13 +1497,32 @@ function daysUntil(iso: string | null, now: Date): number | null {
 }
 
 const CELL =
-  "min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-right text-sm outline-none transition-colors hover:border-line focus:border-brand focus:text-left";
+  "u-focus min-w-0 flex-1 rounded-md border border-transparent bg-transparent px-1.5 py-1 text-right text-sm transition-colors hover:border-line focus:text-left";
 
 /** A titled block inside the drawer. */
-function DetailSection({ title, children }: { title: string; children: React.ReactNode }) {
+/**
+ * A titled block in the Details / Services / Hours tabs.
+ *
+ * It draws the SHARED SectionHeading — icon, mono caps label, hairline running to the
+ * edge — rather than a bare `u-th` line. The bare version was a near-miss: same words,
+ * same colour, no rule, so a Details tab beside a contact panel read as a rougher draft
+ * of the same idea. The rows keep their own edge-to-edge padding, which is why this
+ * pads the heading only.
+ */
+function DetailSection({
+  title,
+  icon,
+  trailing,
+  children,
+}: {
+  title: string;
+  icon?: React.ReactNode;
+  trailing?: React.ReactNode;
+  children: React.ReactNode;
+}) {
   return (
     <section className="border-b border-line last:border-0">
-      <h3 className="u-th px-4 pb-1.5 pt-3.5">{title}</h3>
+      <SectionHeading title={title} icon={icon} trailing={trailing} className="px-4 pb-2 pt-3.5" />
       {children}
     </section>
   );
@@ -1355,6 +1564,54 @@ function FieldRow({
   );
 }
 
+/**
+ * A field row that is NOT editable — same label column and same right-aligned value, so a
+ * read-only fact sits in the grid instead of breaking it. Used for Site (a barber belongs
+ * to one site in V1) and for anything derived, like Seniority.
+ */
+function ReadRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex min-w-0 items-center gap-3 px-4 py-1">
+      <span className="w-[104px] shrink-0 truncate text-xs text-muted sm:w-[120px]">{label}</span>
+      <span className="min-w-0 flex-1 truncate px-1.5 py-1 text-right text-sm text-muted" title={value}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * A checkbox over its label and its CONSEQUENCE. The consequence is not decoration: both
+ * flags here are easy to confuse with each other and with deleting the person, so each
+ * one says what turning it off actually does.
+ */
+function CheckRow({
+  checked,
+  onChange,
+  label,
+  hint,
+}: {
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  label: string;
+  hint: string;
+}) {
+  return (
+    <label className="flex cursor-pointer items-start gap-2.5">
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(e) => onChange(e.target.checked)}
+        className="mt-0.5 size-4 shrink-0 accent-[var(--brand)]"
+      />
+      <span className="flex min-w-0 flex-col">
+        <span className="text-sm text-foreground">{label}</span>
+        <span className="text-[11px] leading-4 text-faint">{hint}</span>
+      </span>
+    </label>
+  );
+}
+
 /** "New tag" — enter commits, blur discards, so a half-typed tag never sticks. */
 function TagInput({ onAdd }: { onAdd: (v: string) => void }) {
   const [value, setValue] = useState("");
@@ -1372,7 +1629,7 @@ function TagInput({ onAdd }: { onAdd: (v: string) => void }) {
       onBlur={() => setValue("")}
       placeholder="New tag"
       aria-label="Add a skill"
-      className="h-7 w-[104px] rounded-md border border-dashed border-line-strong bg-transparent px-2 text-xs outline-none placeholder:text-faint focus:border-brand"
+      className="u-focus h-7 w-[104px] rounded-md border border-dashed border-line-strong bg-transparent px-2 text-xs placeholder:text-faint"
     />
   );
 }
@@ -1441,7 +1698,7 @@ function CertificationForm({
       </button>
     );
   }
-  const I = "h-8 min-w-0 rounded-md border border-line-strong bg-transparent px-2 text-xs outline-none focus:border-brand";
+  const I = "u-focus h-8 min-w-0 rounded-md border border-line-strong bg-transparent px-2 text-xs";
   return (
     <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-line-strong p-2.5">
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Certification" className={I} autoFocus />
@@ -1516,28 +1773,6 @@ function Sparkline({ series }: { series: number[] }) {
   );
 }
 
-function Kpi({ label, value, note, tone }: { label: string; value: number; note?: string; tone?: "brand" }) {
-  return (
-    <div className="flex flex-col gap-1 rounded-xl border border-line px-3 py-2.5">
-      <span className="u-th truncate">{label}</span>
-      <span className="flex items-baseline gap-1.5">
-        <span className={`text-xl font-semibold tracking-tight ${tone === "brand" ? "text-brand" : "text-foreground"}`}>
-          {value}
-        </span>
-        {note ? <span className="u-mono text-[11px] text-faint">{note}</span> : null}
-      </span>
-    </div>
-  );
-}
-
-function Legend({ dot, n, label }: { dot: string; n: number; label: string }) {
-  return (
-    <span className="flex items-center gap-1.5">
-      <span aria-hidden className={`size-[7px] rounded-full ${dot}`} />
-      {n} {label}
-    </span>
-  );
-}
 
 function Facet({
   label,
@@ -1552,7 +1787,7 @@ function Facet({
 }) {
   const current = options.find((o) => o.value === value);
   return (
-    <div className="relative inline-flex h-9 items-center gap-1.5 rounded-md border border-line-strong bg-surface px-3 text-sm">
+    <div className={`relative ${CONTROL_CLS}`}>
       <span className="pointer-events-none whitespace-nowrap">{current?.label ?? label}</span>
       <span aria-hidden className="pointer-events-none text-faint">&#9662;</span>
       <select
@@ -1581,10 +1816,6 @@ function SearchIcon() {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
-function initials(name: string): string {
-  const w = name.trim().split(/\s+/).filter(Boolean);
-  return w.length === 0 ? "?" : w.slice(0, 2).map((x) => x[0]).join("").toUpperCase();
-}
 function fmtTime(iso: string, tz: string): string {
   return new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true }).format(new Date(iso));
 }
