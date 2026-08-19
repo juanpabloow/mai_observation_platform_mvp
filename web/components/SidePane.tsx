@@ -111,7 +111,7 @@ export function SidePane({
           "--pane-w": `${width}px`,
         } as React.CSSProperties
       }
-      className={`fixed inset-0 z-40 flex w-full flex-col border-l border-line bg-background shadow-2xl md:bottom-0 md:left-auto md:right-0 md:top-[var(--pane-top)] md:w-[var(--pane-w)] md:max-w-[65vw] md:min-w-[380px] ${
+      className={`fixed inset-0 z-40 flex w-full flex-col border-l border-line bg-surface shadow-2xl md:bottom-0 md:left-auto md:right-0 md:top-[var(--pane-top)] md:w-[var(--pane-w)] md:max-w-[65vw] md:min-w-[380px] ${
         dragging ? "select-none" : ""
       }`}
       role="dialog"
