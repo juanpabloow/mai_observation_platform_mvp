@@ -2,7 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useMemo, useState, type RefObject } from "react";
 import type { ContactPanelData } from "@/lib/contactPanel";
 import { AppointmentsSection } from "@/components/contacts/shared/AppointmentsSection";
 import { TasksSection } from "@/components/contacts/shared/TasksSection";
@@ -24,6 +24,7 @@ import {
   PanelCloseIcon,
 } from "@/components/contacts/shared/ContactPanelShell";
 import { contactToneVar, type ContactHeaderFacts, type ContactMetricFacts } from "@/components/contacts/shared/ContactHeaderBlock";
+import { OVERLAY_SCRIM, useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
 
 /**
  * The contacts list's CUSTOMER PANEL: pick a row, read the person, act — without
@@ -129,18 +130,48 @@ export function ContactSidePanel({
   // One clock for every relative age in the header.
   const now = useMemo(() => new Date(), []);
 
+  // Below xl the panel COVERS the table, so it is an overlay (a right sheet over a scrim),
+  // not a beside-table column — otherwise a click below 1280px selected the row but
+  // rendered NOTHING (the redesign bug). Esc and the scrim close it by navigating to
+  // closeHref, since the selection lives in ?c=. At xl+ it is the in-flow card and the
+  // focus trap stays OFF, so the rest of the screen is reachable by keyboard.
+  const overlaying = useIsOverlayWidth(1279.98);
+  const panelRef = useTrappedPanel({ active: overlaying, onClose: () => router.push(closeHref, { scroll: false }) });
+
   return (
-    // THE PANEL REGION. The quick view sits in flow inside it and the edit drawer
-    // overlays it absolutely, so both occupy the identical box — same top, same
-    // bottom, same right edge, same width. Pressing "Editar" swaps the contents
-    // without moving the frame.
-    <div className={`hidden shrink-0 self-stretch xl:flex ${CONTACT_PANEL_REGION}`} style={{ width: CONTACT_PANEL_WIDTH }}>
+    <>
+      {/* The scrim to close against when the panel COVERS the table (below xl). A Link,
+          not a button, because closing is a navigation — the selection lives in ?c=.
+          display:none at xl+, where the panel is a column beside the list, not over it. */}
+      <Link
+        href={closeHref}
+        scroll={false}
+        aria-label="Cerrar detalles del contacto"
+        className={`${OVERLAY_SCRIM} xl:hidden`}
+      />
+      {/* POSITIONING LAYER: a fixed right-side overlay below xl; `xl:contents` makes this
+          wrapper vanish at xl+, so the region drops straight into the table row and the
+          desktop layout is byte-identical to the beside-card it has always been. This is
+          what a row click produces at EVERY width now — a sheet below xl, the column above
+          it — instead of a selected row and no visible panel. */}
+      <div className="fixed inset-y-0 right-0 z-50 flex xl:contents">
+        {/* THE PANEL REGION. The quick view sits in flow inside it and the edit drawer
+            overlays it absolutely, so both occupy the identical box — same top, same
+            bottom, same right edge, same width. Pressing "Editar" swaps the contents
+            without moving the frame. (Was `hidden xl:flex` — the bug; now always `flex`,
+            with the layer above deciding overlay vs column.) */}
+        <div className={`flex max-w-[90vw] shrink-0 self-stretch ${CONTACT_PANEL_REGION}`} style={{ width: CONTACT_PANEL_WIDTH }}>
       <aside
+        ref={panelRef as RefObject<HTMLElement>}
         aria-label="Detalles del contacto"
-        // A card that lives BESIDE the table — no scrim, nothing dimmed. min-h-0 +
-        // flex-1 so its height comes from the ROW, not from the active tab: switching
-        // tabs never resizes it. The shared frame's overflow-hidden keeps the body's
-        // scrollbar inside the rounded corners instead of cutting the border.
+        // A card that lives BESIDE the table at xl+ — no scrim, nothing dimmed; a dialog
+        // with a focus trap below xl, where it covers the table. min-h-0 + flex-1 so its
+        // height comes from the ROW, not from the active tab: switching tabs never resizes
+        // it. The shared frame's overflow-hidden keeps the body's scrollbar inside the
+        // rounded corners instead of cutting the border.
+        role={overlaying ? "dialog" : undefined}
+        aria-modal={overlaying || undefined}
+        tabIndex={-1}
         className={`min-h-0 flex-1 ${CONTACT_PANEL_FRAME}`}
       >
       <ContactPanelShell
@@ -343,6 +374,8 @@ export function ContactSidePanel({
           onClose={() => setEditing(false)}
         />
       ) : null}
-    </div>
+        </div>
+      </div>
+    </>
   );
 }

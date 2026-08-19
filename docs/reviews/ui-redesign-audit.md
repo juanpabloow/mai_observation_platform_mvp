@@ -227,6 +227,28 @@ aggregate). Same rows, different value.
   execution-detail view shows two bubble styles, and `ChatTranscript` won't follow the theme.
 - *Suggested fix:* consolidate to one money formatter and one transcript component.
 
+**M-4 — The contacts side panel does not render below 1280px — a row click selects but shows nothing.**
+Reported from production; **missed by this audit because claude-in-chrome was unavailable and
+M-1's class of finding was inferred from tokens, not a live render.** On the contacts page the
+customer panel region is `hidden shrink-0 self-stretch xl:flex` (`ContactSidePanel.tsx:137`) —
+Tailwind `xl` = **1280px**, so below 1280px the panel is `display:none`. The row is a `?c=` Link,
+so the click still navigates and the row gets `u-row-selected` (the selection state machine works
+— only the rendering is gated), but no panel, no sheet, and no explanation appear. Common laptop
+widths (1024–1279, e.g. the operator's ~1200px) silently lose the core "open a contact" action.
+- *Where:* `web/components/contacts/ContactSidePanel.tsx:137`; the breakpoint is `xl` (1280px).
+- *Mechanism:* a CSS `hidden … xl:flex` display toggle with **no sub-breakpoint fallback** (unlike
+  the other panels — see below).
+- *Reproduce:* contacts page at ≤1279px wide → click a row → row highlights, nothing opens.
+- *Other panel surfaces (same audit question):* **none share the silent-nothing bug.** The
+  executions `?execution=` pane (`SidePane`) is `fixed inset-0 … md:` (full-screen sheet below md,
+  right panel above) — reachable at every width. The inbox three-panel workspace shows the *thread*
+  as the click result at all widths and offers the customer details as an overlay drawer below xl
+  (`OVERLAY_SCRIM` + `useTrappedPanel`). The staff drawer uses `useIsOverlayWidth` + `OVERLAY_SCRIM`
+  (beside ≥lg, overlay below). Only `ContactSidePanel` lacked the overlay fallback.
+- *Suggested fix:* give it the shared overlay behavior — a beside-card at `xl+`, a `fixed` sheet
+  over a scrim below `xl`, Esc/scrim close (navigating `?c=` away), focus-trapped while overlaying —
+  reusing `ui/Overlay.tsx` (as the staff/inbox panels do), NOT a third panel. *(Fixed — see below.)*
+
 ### Low
 
 - **L-1 — Full-bleed `(workspace)` executions is no longer edge-to-edge:** it now sits inside

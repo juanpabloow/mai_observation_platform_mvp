@@ -802,6 +802,22 @@ test('quick view and drawer are the SAME box — one geometry, one anchor', () =
   assert.ok(regionValue.includes('relative'), 'but it does establish the positioning context');
 });
 
+test('M-4: the customer panel is reachable at EVERY width — a sheet below xl, not display:none', () => {
+  // The bug: the region was `hidden ... xl:flex`, so below 1280px a row click selected the
+  // row and rendered NOTHING, with no sheet and no explanation. The fix is the shared
+  // overlay contract (the same one the staff drawer and inbox details use): a scrim + a
+  // fixed sheet below the beside-breakpoint, a focus trap while it covers the table, and
+  // Esc / scrim close by navigating ?c= away. At xl+ the layer is display:contents, so the
+  // beside-card row is byte-identical to before.
+  const panel = stripComments(read('components/contacts/ContactSidePanel.tsx')); // a comment may quote the old class
+  assert.equal(/hidden[^"'`]*\bxl:flex\b/.test(panel), false, 'the region no longer hides itself below xl with no fallback');
+  assert.ok(panel.includes('OVERLAY_SCRIM'), 'it renders the shared scrim below the breakpoint');
+  assert.ok(panel.includes('useIsOverlayWidth(1279.98)'), 'it knows when it is an overlay (below xl, matching xl:contents)');
+  assert.ok(panel.includes('useTrappedPanel'), 'the overlay traps focus + closes on Esc');
+  assert.ok(/role=\{overlaying \? "dialog"/.test(panel), 'dialog semantics only while it covers the table');
+  assert.ok(panel.includes('xl:contents'), 'the positioning layer vanishes at xl+, leaving the beside-card row untouched');
+});
+
 test('panel widths are inline styles, not scanner-invisible Tailwind classes', () => {
   // The hazard is interpolating a VALUE inside an arbitrary-value bracket —
   // `max-w-[min(${CONST},100vw)]` is not an extractable candidate, so the utility only

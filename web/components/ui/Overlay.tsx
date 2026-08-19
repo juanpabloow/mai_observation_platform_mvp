@@ -27,18 +27,21 @@ import { useEffect, useRef, useState, type RefObject } from "react";
  *  "close" is a state change in one place and a navigation in the other. */
 export const OVERLAY_SCRIM = "fixed inset-0 z-40 bg-black/40";
 
-/** True while the viewport is NARROWER than Tailwind's `lg`, i.e. while a panel that
- *  is a column on desktop is an overlay here. SSR-safe: false until mounted, which is
- *  the desktop assumption and matches what the server rendered. */
-export function useIsOverlayWidth(): boolean {
+/** True while the viewport is NARROWER than the panel's beside-breakpoint, i.e. while a
+ *  panel that is a column on desktop is an overlay here. Defaults to Tailwind's `lg`
+ *  (1023.98px) — the staff drawer's breakpoint; the contacts panel is wider so it beside-s
+ *  only from `xl` and passes 1279.98. Pass the value that matches the component's own
+ *  `<bp>:` classes. SSR-safe: false until mounted, which is the desktop assumption and
+ *  matches what the server rendered. */
+export function useIsOverlayWidth(maxWidthPx = 1023.98): boolean {
   const [narrow, setNarrow] = useState(false);
   useEffect(() => {
-    const mq = window.matchMedia("(max-width: 1023.98px)");
+    const mq = window.matchMedia(`(max-width: ${maxWidthPx}px)`);
     const sync = () => setNarrow(mq.matches);
     sync();
     mq.addEventListener("change", sync);
     return () => mq.removeEventListener("change", sync);
-  }, []);
+  }, [maxWidthPx]);
   return narrow;
 }
 
