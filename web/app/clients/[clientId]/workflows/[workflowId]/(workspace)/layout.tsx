@@ -11,5 +11,9 @@
  * Route groups don't affect the URL.
  */
 export default function WorkspaceLayout({ children }: { children: React.ReactNode }) {
-  return <div className="flex min-h-0 flex-1 flex-col">{children}</div>;
+  // Cancel the app shell's universal content gutter (layout.tsx applies
+  // p-[var(--content-pad)] to every page) so a full-bleed section really reaches the
+  // edges. The negative margin exactly equals the padding, so it never causes overflow;
+  // (padded) sections keep the gutter.
+  return <div className="-m-[var(--content-pad)] flex min-h-0 flex-1 flex-col">{children}</div>;
 }

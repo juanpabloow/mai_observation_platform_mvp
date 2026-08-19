@@ -86,18 +86,18 @@ export function ContactRecord(props: ContactRecordProps) {
 
       <div className="flex flex-col gap-4 xl:grid xl:grid-cols-[300px_minmax(0,1fr)_340px] xl:items-start">
         <div className="xl:sticky xl:top-4">
-        <ContactProperties
-          clientId={props.clientId}
-          contactId={props.contactId}
-          summary={props.summary}
-          identities={props.identities}
-          candidates={props.candidates}
-          canManageDuplicates={props.canManageDuplicates}
-          values={props.properties}
-          fieldDefs={props.fieldDefs}
-          onChanged={onChanged}
-        />
-      </div>
+          <ContactProperties
+            clientId={props.clientId}
+            contactId={props.contactId}
+            summary={props.summary}
+            identities={props.identities}
+            candidates={props.candidates}
+            canManageDuplicates={props.canManageDuplicates}
+            values={props.properties}
+            fieldDefs={props.fieldDefs}
+            onChanged={onChanged}
+          />
+        </div>
 
       <ContactTimeline
         clientId={props.clientId}

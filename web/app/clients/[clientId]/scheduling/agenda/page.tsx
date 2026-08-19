@@ -45,7 +45,7 @@ export default async function ClientAgendaPage({
   const sites = await listSites(tenantId, { clientId: client.id });
   if (sites.length === 0) {
     return (
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 py-20">
+      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 py-20">
         <h1 className="text-2xl font-semibold tracking-tight">Agenda</h1>
         <div className="flex flex-col items-start gap-3 rounded-xl border border-dashed border-line-strong px-5 py-8">
           {hasFullAccess(scope) ? (

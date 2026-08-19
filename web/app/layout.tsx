@@ -73,7 +73,7 @@ export default async function RootLayout({
                 the header render null, so content fills the full viewport. */}
             <div className="flex min-h-0 flex-1">
               <Suspense
-                fallback={<div className="hidden w-60 shrink-0 border-r border-line bg-sidebar md:block" />}
+                fallback={<div className="hidden w-[var(--sidebar-width)] shrink-0 border-r border-sidebar-border bg-sidebar-bg md:block" />}
               >
                 <AppSidebarServer />
               </Suspense>
