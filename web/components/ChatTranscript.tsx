@@ -5,22 +5,24 @@ function hasText(value: string | null): value is string {
   return value !== null && value.trim() !== "";
 }
 
-/** One chat bubble: inbound (user, left, gray) or outbound (AI, right, green). */
+/** One chat bubble: inbound (user, left) or outbound (AI, right). Shares the redesign's
+ *  bubble-* tokens with MessageTranscript, so the execution-detail transcript reads the
+ *  same in both the handoff and non-handoff branches (no second bubble palette). */
 function Bubble({ side, text, time }: { side: "in" | "out"; text: string; time: string }) {
   const out = side === "out";
   return (
     <div className={`flex ${out ? "justify-end" : "justify-start"}`}>
       <div
-        className={`max-w-[78%] rounded-2xl px-3 py-2 shadow-sm ${
+        className={`max-w-[78%] rounded-bubble px-3 py-2 ${
           out
-            ? "rounded-br-sm bg-emerald-700/90 text-emerald-50"
-            : "rounded-bl-sm bg-neutral-200 text-neutral-900 dark:bg-neutral-800 dark:text-foreground"
+            ? "rounded-br-sm border border-bubble-bot-border bg-bubble-bot text-bubble-bot-fg"
+            : "rounded-bl-sm border border-bubble-in-border bg-bubble-in text-bubble-in-fg"
         }`}
       >
         <div className="max-h-96 overflow-y-auto whitespace-pre-wrap break-words text-sm leading-relaxed">
           {text}
         </div>
-        <div className={`mt-1 text-right text-[10px] ${out ? "text-emerald-100/70" : "text-neutral-500"}`}>
+        <div className={`mt-1 text-right text-[10px] ${out ? "text-bubble-bot-fg/65" : "text-bubble-in-fg/60"}`}>
           {time}
         </div>
       </div>
@@ -63,7 +65,7 @@ export function ChatTranscript({
       {groups.map((group) => (
         <div key={group.key} className="flex flex-col gap-2">
           <div className="my-2 flex justify-center">
-            <span className="rounded-full bg-black/5 px-3 py-1 text-xs text-neutral-500 dark:bg-card dark:text-muted">
+            <span className="rounded-full bg-chip px-3 py-1 text-xs text-faint">
               {group.label}
             </span>
           </div>
