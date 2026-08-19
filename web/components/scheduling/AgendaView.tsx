@@ -7,7 +7,7 @@ import { AutoRefresh } from "@/components/AutoRefresh";
 import { PageShell } from "@/components/ui/PageShell";
 import { PageTitle } from "@/components/ui/PageTitle";
 import { apptCategory, apptCategoryClass, type ApptCategory } from "@/lib/agendaCategory";
-import { formatMoneyCOP } from "@/lib/format";
+import { priceLabelCOP } from "@/lib/money";
 import {
   cancelAppointmentAction,
   completeAppointmentAction,
@@ -590,7 +590,7 @@ export function AgendaView(props: {
           label="Booked revenue"
           unit="%"
           caption={`${rangeCaption} · excl. cancelled`}
-          value={formatMoneyCOP(kpis.revenue) ?? "—"}
+          value={priceLabelCOP(kpis.revenue) ?? "—"}
           delta={ratioDelta(kpis.revenue, prev.revenue)}
           vs={vsCaption}
         />
@@ -1212,8 +1212,8 @@ function ApptDrawer({
                 {appt.duration_min} min{appt.staff_name ? ` · ${appt.staff_name}` : ""}
               </p>
             </div>
-            {formatMoneyCOP(appt.price) ? (
-              <span className="u-mono shrink-0 text-sm text-foreground">{formatMoneyCOP(appt.price)}</span>
+            {priceLabelCOP(appt.price) ? (
+              <span className="u-mono shrink-0 text-sm text-foreground">{priceLabelCOP(appt.price)}</span>
             ) : null}
           </div>
         </div>

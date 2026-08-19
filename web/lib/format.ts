@@ -107,25 +107,10 @@ export function formatStampFull(date: Date): string {
   });
 }
 
-/**
- * Money, Colombian pesos. pg returns numeric as a string, so this takes either and
- * renders "$60.000" — es-CO grouping (dot), no decimals (COP has no cent in
- * practice). The ONLY place prices are formatted; nothing formats inline.
- */
-export function formatMoneyCOP(value: string | number | null | undefined): string | null {
-  if (value === null || value === undefined || value === "") return null;
-  const n = typeof value === "number" ? value : Number(value);
-  if (!Number.isFinite(n)) return null;
-  // es-CO emits "$ 60.000" with a NON-BREAKING space after the symbol; the design
-  // wants "$60.000", so strip any whitespace between symbol and digits.
-  return new Intl.NumberFormat("es-CO", {
-    style: "currency",
-    currency: "COP",
-    maximumFractionDigits: 0,
-  })
-    .format(n)
-    .replace(/\s/gu, "");
-}
+// Money formatting lives in ONE place — web/lib/money.ts:priceLabelCOP — used by both the
+// machine API (price_label) and the agenda, so a price never reads two ways. The former
+// formatMoneyCOP here was a second implementation that rounded cents away ("$2.501" vs
+// "$2.500,50"); it was removed in favour of the cents-preserving canonical helper.
 
 /** Tailwind classes for a status badge (green success / red error / neutral). */
 export function statusBadgeClasses(status: string): string {
