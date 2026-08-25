@@ -1,8 +1,9 @@
 import { isDeadlock, isExclusionViolation, isUniqueViolation, query, withTransaction } from '../db/client.js';
 import { logger } from '../logger.js';
-import { linkConversationToContact, setContactConsent, type MessagingConsent } from '../db/repositories/contacts.js';
-import { resolveContactByIdentity, contactBelongsToClient, findContactIdsByIdentity } from '../db/repositories/contactIdentities.js';
+import { linkConversationToContactIfUnlinked, setContactConsent, type MessagingConsent } from '../db/repositories/contacts.js';
+import { resolveContactByIdentity, contactBelongsToClient, findContactIdsByIdentity, classifyIdentity } from '../db/repositories/contactIdentities.js';
 import { getOrCreateConversation } from '../db/repositories/handoff.js';
+import { normalizeE164, dialingRegionForTimezone } from './phone.js';
 import {
   isSlotAvailable,
   loadAvailability,
@@ -41,7 +42,8 @@ export type BookingError =
   | 'conflict_idempotency' // same key, different payload
   | 'invalid_transition' // illegal status change / reschedule from terminal
   | 'module_disabled' // the client's scheduling module is off (incl. concurrent disable)
-  | 'contact_conflict'; // explicit contact_id disagrees with the typed identity (C-4.1)
+  | 'contact_conflict' // explicit contact_id disagrees with the typed identity (C-4.1)
+  | 'invalid_phone'; // customer_phone can't be normalized for the site's region (QA-3)
 
 export type BookingResult<T> = { ok: true; value: T; deduped?: boolean } | { ok: false; error: BookingError; message: string };
 
@@ -185,6 +187,25 @@ export async function createAppointment(
   const blockedFrom = new Date(input.startAt.getTime() - avail.buffers.before_min * MS_PER_MIN);
   const blockedUntil = new Date(serviceEnd.getTime() + avail.buffers.after_min * MS_PER_MIN);
 
+  // 2b. §2: a customer_phone typed in chat may be LOCAL (no country code). Normalize it
+  //     against the SITE's dialing region (derived from its timezone) BEFORE any write, so
+  //     "3058830676", "573058830676" and "+57 305 883 0676" all resolve to ONE contact.
+  //     Ambiguous → reject (ask for the country code) rather than guess a wrong country.
+  //     channel_user_id (the wa_id) is NOT touched — it already carries its country code.
+  let normalizedCustomerPhone: string | null = null;
+  if (typeof input.customerPhone === 'string' && input.customerPhone.trim() !== '') {
+    normalizedCustomerPhone = normalizeE164(input.customerPhone, {
+      defaultRegion: dialingRegionForTimezone(avail.site.timezone),
+    });
+    if (!normalizedCustomerPhone) {
+      return {
+        ok: false,
+        error: 'invalid_phone',
+        message: `Could not read the phone number “${input.customerPhone.trim()}”. Send it with the country code, e.g. +57 300 123 4567.`,
+      };
+    }
+  }
+
   // 3. Transaction: RE-CHECK the scheduling module (FOR SHARE, so a concurrent
   //    disable serializes with us), then resolve identity, insert
   //    (exclusion-guarded), audit event — all or nothing.
@@ -196,6 +217,11 @@ export async function createAppointment(
         return { kind: 'module_disabled' as const };
       }
       let contactId: string | null = null;
+      // QA-3: may the conversation be linked to the appointment contact? ONLY when that
+      // contact owns the conversation's OWN identity (channel_user_id) — never when the
+      // appointment is for a different customer_phone (a third party). Set per branch.
+      let contactOwnsConversation = false;
+
       if (input.contactId) {
         // C-4.1: an EXPLICIT contact (e.g. booked from the contact record). Validate it
         // belongs to this client — fail closed — and NEVER create or mutate it.
@@ -206,7 +232,7 @@ export async function createAppointment(
         // existing contact (read-only check — no resolution/creation). contact_id wins.
         if (input.channel && input.channelUserId) {
           const mapped = await findContactIdsByIdentity(
-            { tenantId: input.tenantId, clientId, channelUserId: input.channelUserId, phone: input.customerPhone, email: input.customerEmail },
+            { tenantId: input.tenantId, clientId, channelUserId: input.channelUserId, phone: normalizedCustomerPhone, email: input.customerEmail },
             client,
           );
           if (mapped.some((id) => id !== input.contactId)) {
@@ -214,11 +240,40 @@ export async function createAppointment(
           }
         }
         contactId = input.contactId;
+        // The conflict check proved channel_user_id maps to this contact (or to nobody), so
+        // the explicit contact owns the conversation identity — safe to link.
+        contactOwnsConversation = true;
         // NB: no consent write here — recording consent would mutate the contact, which
         // the explicit-contact path must not do.
+      } else if (normalizedCustomerPhone) {
+        // §1b: customer_phone identifies WHO THE APPOINTMENT IS FOR. Resolve/create THAT
+        // contact from the PHONE ALONE — never mixing in the writer's channel_user_id, which
+        // would merge two different people into one contact. This contact owns the booking.
+        const forWhom = await resolveContactByIdentity(
+          {
+            tenantId: input.tenantId,
+            clientId,
+            channel: input.channel ?? 'booking',
+            channelUserId: normalizedCustomerPhone,
+            name: input.customerName,
+            phone: normalizedCustomerPhone,
+            email: input.customerEmail,
+          },
+          client,
+        );
+        contactId = forWhom.contact.id;
+        if (input.messagingConsent) {
+          await setContactConsent(input.tenantId, clientId, contactId, input.messagingConsent, input.consentSource ?? null, client);
+        }
+        // The conversation belongs to the WRITER (channel_user_id), NOT to this phone —
+        // unless the phone IS the writer's own number (self-booking with a redundant phone),
+        // in which case they resolve to the same identity and linking is correct.
+        const convIdent = classifyIdentity(input.channelUserId)?.value;
+        const phoneIdent = classifyIdentity(normalizedCustomerPhone)?.value;
+        contactOwnsConversation = !!convIdent && convIdent === phoneIdent;
       } else if (input.channel && input.channelUserId) {
-        // C-2: resolve through the identity spine (normalizes → the same person can't
-        // fork into two contacts). Consent, when supplied, is recorded store-only.
+        // Normal case (no customer_phone): the WRITER is the customer. Unchanged — resolve
+        // through the identity spine from the conversation's own identity.
         const resolved = await resolveContactByIdentity(
           {
             tenantId: input.tenantId,
@@ -226,7 +281,6 @@ export async function createAppointment(
             channel: input.channel,
             channelUserId: input.channelUserId,
             name: input.customerName,
-            phone: input.customerPhone,
             email: input.customerEmail,
           },
           client,
@@ -235,13 +289,20 @@ export async function createAppointment(
         if (input.messagingConsent) {
           await setContactConsent(input.tenantId, clientId, contactId, input.messagingConsent, input.consentSource ?? null, client);
         }
+        contactOwnsConversation = true;
       }
 
       let sourceConversationId: string | null = null;
       if (input.workflowRef && input.conversationRef) {
-        const conv = await getOrCreateConversation(input.tenantId, input.workflowRef, input.conversationRef);
+        const conv = await getOrCreateConversation(input.tenantId, input.workflowRef, input.conversationRef, client);
+        // Attribution is UNCONDITIONAL — the appointment records where the request came from.
         sourceConversationId = conv.id;
-        if (contactId) await linkConversationToContact(input.tenantId, conv.id, contactId, client);
+        // Linking the conversation to the contact is NULL-GUARDED (never overwrites) AND only
+        // when that contact owns the conversation's own identity — so a third-party booking
+        // records attribution without ever re-pointing the writer's conversation.
+        if (contactId && contactOwnsConversation) {
+          await linkConversationToContactIfUnlinked(input.tenantId, conv.id, contactId, client);
+        }
       }
 
       const appt = await insertAppointment(client, {

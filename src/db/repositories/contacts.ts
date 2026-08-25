@@ -446,6 +446,28 @@ export async function linkConversationToContact(
   );
 }
 
+/**
+ * Link a conversation to a contact ONLY when it is not already linked (contact_id IS NULL).
+ * Unlike linkConversationToContact, it NEVER overwrites an existing link — so a booking can
+ * attach a NEW conversation to the customer without re-pointing a conversation that already
+ * belongs to someone else (the third-party-booking corruption guard, QA-3). No-op if the
+ * conversation is already linked to anyone (including this same contact).
+ */
+export async function linkConversationToContactIfUnlinked(
+  tenantId: string,
+  conversationId: string,
+  contactId: string,
+  client?: PoolClient,
+): Promise<void> {
+  const run = (text: string, params: unknown[]) =>
+    client ? client.query(text, params) : query(text, params);
+  await run(
+    `UPDATE conversations SET contact_id = $3, updated_at = now()
+      WHERE id = $2 AND tenant_id = $1 AND contact_id IS NULL`,
+    [tenantId, conversationId, contactId],
+  );
+}
+
 export interface UpdateContactInput {
   name?: string | null;
   phone?: string | null;

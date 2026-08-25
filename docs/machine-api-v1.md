@@ -606,6 +606,49 @@ POST /api/scheduling/v1/appointments   Idempotency-Key: book-key-1
 Round-trip verified live: the availability slot's `start_at` passed back verbatim books
 that exact instant, and the appointment's local fields match the slot's.
 
+**Who the appointment is FOR vs. where the request CAME FROM (QA-3).** These are two
+different things and the fields are split accordingly — get this wrong and one person's
+appointment lands on another's record:
+
+- **`customer_phone` identifies WHO THE APPOINTMENT IS FOR.** When present it resolves (or
+  creates) that person's contact through the identity spine, and **that contact owns the
+  appointment** — even if the message came from someone else's WhatsApp. So a customer
+  booking for a brother sends the brother's `customer_phone`; the brother becomes his own
+  contact and the appointment is his. `customer_phone` is NEVER merged with `channel_user_id`
+  into one contact.
+- **`channel_user_id` / `conversation_ref` identify WHERE THE REQUEST CAME FROM** — the
+  writer's conversation. They set the appointment's `source_conversation_id` (attribution)
+  and **never re-link that conversation to the `customer_phone` contact.** The conversation
+  stays owned by the writer.
+- **Omit `customer_phone` for a normal self-booking** — then `channel_user_id` is the
+  customer, exactly as before.
+
+**Booking for a third party — the n8n request shape.** Send the writer's conversation fields
+AND the attendee's phone; omit nothing else:
+```
+POST /api/scheduling/v1/appointments   Idempotency-Key: book-key-3
+{ "site_id": "…", "service_id": "…", "start_at": "…",
+  "channel": "whatsapp", "channel_user_id": "573058830676",   // WHERE it came from (the writer)
+  "conversation_ref": "573058830676",                          // → source_conversation_id (attribution)
+  "customer_phone": "3058830677", "customer_name": "Hermano" } // WHO it's for (the third party)
+→ 201  appointment.contact_id = the BROTHER's contact; the writer's conversation is untouched.
+```
+
+**Local phone numbers (no country code).** A WhatsApp `channel_user_id` always carries the
+country code, but a `customer_phone` a customer TYPES may be local ("3058830677",
+"305 883 0676"). It is normalized against the **site's dialing region, derived from the
+site's timezone** (e.g. `America/Bogota` → +57, national length 10): a local number gets the
+country code prepended, a number that already carries one (or a `+`) is left as-is, and the
+LOCAL and full forms of the same number resolve to the **same** contact. A number whose
+length matches no known format is **rejected** rather than guessed:
+```
+POST …/appointments   { …, "customer_phone": "88830676" }
+→ 400 { "error": { "code": "invalid_phone",
+        "message": "Could not read the phone number “88830676”. Send it with the country code, e.g. +57 300 123 4567." } }
+```
+(For a site whose timezone is not a mapped dialing region, a bare local number falls back to
+the prior behavior; send `customer_phone` with a `+` and its country code to be unambiguous.)
+
 **6. Retry safely** — the same key replays the original (no double-book):
 ```
 POST /api/scheduling/v1/appointments   Idempotency-Key: book-key-1   (same body)

@@ -1,4 +1,5 @@
 import { pool, query, firstRowOrThrow } from '../client.js';
+import type { PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { isInboxEnabledForUpdate } from './clientModules.js';
 
 /**
@@ -125,8 +126,16 @@ export async function getOrCreateConversation(
   tenantId: string,
   n8nWorkflowId: string,
   conversationRef: string,
+  client?: PoolClient,
 ): Promise<ConversationRow> {
-  const inserted = await query<ConversationRow>(
+  // Run on the caller's transaction client when given: a booking resolves the contact
+  // (which locks this conversation's row via the E-5 auto-link) BEFORE getting the
+  // conversation, so running the get-or-create on a SEPARATE pool connection makes its
+  // INSERT ... ON CONFLICT wait on the txn's own uncommitted row lock — a self-deadlock
+  // that hangs forever (the txn is awaiting this call). Same connection → no wait.
+  const run = <T extends QueryResultRow>(text: string, params: unknown[]): Promise<QueryResult<T>> =>
+    client ? client.query<T>(text, params) : query<T>(text, params);
+  const inserted = await run<ConversationRow>(
     `INSERT INTO conversations (tenant_id, n8n_workflow_id, conversation_ref)
      VALUES ($1, $2, $3)
      ON CONFLICT (tenant_id, n8n_workflow_id, conversation_ref) DO NOTHING
@@ -135,7 +144,7 @@ export async function getOrCreateConversation(
   );
   if (inserted.rows[0]) return inserted.rows[0];
 
-  const existing = await query<ConversationRow>(
+  const existing = await run<ConversationRow>(
     `SELECT * FROM conversations
       WHERE tenant_id = $1 AND n8n_workflow_id = $2 AND conversation_ref = $3`,
     [tenantId, n8nWorkflowId, conversationRef],
