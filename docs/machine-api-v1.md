@@ -179,8 +179,8 @@ never widen the result to the whole client:
 |---|---|
 | `contact_id` | a single contact (UUID) |
 | `phone` / `email` / `external_id` | resolve an identity → that contact's appointments; an identity matching nobody returns **0 rows** (never the whole list) and excludes walk-ins |
-| `status` | one or more of `scheduled,confirmed,completed,cancelled,no_show` (comma-separated and/or repeated) |
-| `active=true` | convenience for `scheduled`+`confirmed` |
+| `status` | one or more of `scheduled,confirmed,completed,cancelled,no_show` (comma-separated and/or repeated). **No time bound** — `status=scheduled` returns past scheduled rows too, whatever the date. |
+| `active=true` | **"still actionable"**: `status IN (scheduled, confirmed)` **AND `service_end_at >= now`**. It NEVER returns an appointment that already ended, so an agent won't quote a date that has passed. The boundary is `service_end_at` (not `start_at`), so an appointment **in progress right now stays active**; one that has ended drops out. `active` is a SEPARATE filter from `status` (not an alias): they are ANDed if both are sent. `active=false` is a no-op (the unfiltered list already spans every status and date). The boundary is an absolute instant, so `tz` (a label-only param) never shifts what it returns. |
 | `site_id` / `staff_id` / `conversation_id` / `from` / `to` | as before |
 
 Error bodies: `400 unknown_parameter` (an unsupported param, named), `400

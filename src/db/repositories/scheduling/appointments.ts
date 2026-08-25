@@ -226,6 +226,14 @@ export interface ListAppointmentsFilters {
   conversationId?: string;
   from?: Date;
   to?: Date;
+  /**
+   * The machine list's `active=true`: "still actionable" — status IN (scheduled,
+   * confirmed) AND service_end_at >= this instant. SEPARATE from `status` (they AND if
+   * both are given); the boundary is service_end_at, not start_at, so an appointment in
+   * progress right now stays in. An absolute timestamptz compare, so it never shifts with
+   * a presentation `tz`. Pass `new Date()` at request time.
+   */
+  activeAt?: Date;
   limit?: number;
 }
 
@@ -283,6 +291,14 @@ export async function listAppointments(
   if (filters.status) {
     const arr = Array.isArray(filters.status) ? filters.status : [filters.status];
     add((i) => `a.status = ANY($${i}::text[])`, arr);
+  }
+  // active=true: still-actionable only — the two "open" statuses AND not yet ended. The
+  // boundary is service_end_at (not start_at), so an appointment in progress stays active;
+  // an ended one drops out. This is why the machine list stops returning past "scheduled"
+  // rows that nothing ever transitions. Independent of `status` (both apply if both given).
+  if (filters.activeAt) {
+    add((i) => `a.status = ANY($${i}::text[])`, ['scheduled', 'confirmed']);
+    add((i) => `a.service_end_at >= $${i}`, filters.activeAt);
   }
   if (filters.from) add((i) => `a.start_at >= $${i}`, filters.from);
   if (filters.to) add((i) => `a.start_at < $${i}`, filters.to);

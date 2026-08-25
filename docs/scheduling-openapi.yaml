@@ -324,8 +324,12 @@ paths:
         recognized param sent empty → `400 empty_parameter`. Identity filters
         (`phone`/`email`/`external_id`) resolve to that contact's appointments; an
         identity matching nobody returns 0 rows (never the whole client) and excludes
-        walk-ins. `status` accepts one-or-more values (comma-separated/repeated);
-        `active=true` is shorthand for scheduled+confirmed. E-4: every row carries
+        walk-ins. `status` accepts one-or-more values (comma-separated/repeated) with
+        NO time bound (status=scheduled returns past scheduled rows too). `active=true`
+        is a DIFFERENT, time-bounded filter — status IN (scheduled,confirmed) AND
+        service_end_at >= now — so it never returns an appointment that already ended
+        (an in-progress one stays in; the boundary is service_end_at, not start_at).
+        `active` and `status` are independent (ANDed if both are sent). E-4: every row carries
         `staff_name`; `compact=true` trims each row to
         {id,status,service_name,staff_name,day,date_label,start_label,end_label,time,contact{name}}.
       parameters:
@@ -337,7 +341,7 @@ paths:
           in: query
           description: One or more statuses, comma-separated and/or the param repeated.
           schema: { type: array, items: { type: string, enum: [scheduled, confirmed, completed, cancelled, no_show] } }
-        - { name: active, in: query, description: "true → scheduled+confirmed (convenience).", schema: { type: boolean } }
+        - { name: active, in: query, description: "true → still-actionable: status IN (scheduled,confirmed) AND service_end_at >= now (never returns ended appointments; in-progress stays). Separate from status=, which has no time bound. false is a no-op.", schema: { type: boolean } }
         - { name: contact_id, in: query, schema: { type: string, format: uuid } }
         - { name: phone, in: query, description: "Resolve via the identity spine → that contact's appointments.", schema: { type: string } }
         - { name: email, in: query, description: "Resolve via the identity spine → that contact's appointments.", schema: { type: string } }

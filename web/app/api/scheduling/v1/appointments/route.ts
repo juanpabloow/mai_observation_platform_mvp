@@ -34,8 +34,10 @@ import { findContactIdsByIdentity, contactBelongsToClient } from "@worker/db/rep
  *        dropped). Identity filters (phone/email/external_id) resolve through the
  *        C-2 identity spine to a contact-id set; an identity that matches NObody
  *        yields 0 rows (never the whole client) and excludes walk-ins (NULL
- *        contact_id). `status` accepts one-or-more values; `active=true` is a
- *        convenience for scheduled+confirmed.
+ *        contact_id). `status` accepts one-or-more values, WITHOUT any time bound
+ *        (status=scheduled returns past scheduled rows too). `active=true` is the
+ *        DIFFERENT "still actionable" filter: status IN (scheduled, confirmed) AND
+ *        service_end_at >= now — so it never returns appointments that already ended.
  * POST — create an appointment for the resolved client. Requires Idempotency-Key.
  *        Provenance is the X-Workflow-Ref header (auth.workflowRef), NEVER a body
  *        field. scopeClientId pins the booking to the resolved client.
@@ -82,16 +84,19 @@ export async function GET(req: Request): Promise<Response> {
       statusSet.add(s as AppointmentStatus);
     }
   }
-  // active=true → scheduled+confirmed (additive convenience). Only true/false allowed.
+  // active=true → "still actionable": status IN (scheduled, confirmed) AND not yet ended
+  // (service_end_at >= now). This is a SEPARATE filter from `status=`, NOT a status alias —
+  // `status=scheduled` still returns past scheduled rows, whatever the date; `active=true`
+  // never does. Only true/false allowed; `active=false` is a no-op (the unfiltered list
+  // already spans every status and date). The boundary is an absolute instant, so `tz`
+  // (a label-only param) cannot shift what the filter returns.
+  let activeAt: Date | undefined;
   const activeParam = p.get("active");
   if (activeParam != null) {
     if (activeParam !== "true" && activeParam !== "false") {
       return schedulingError(400, "invalid_request", "active must be 'true' or 'false'.");
     }
-    if (activeParam === "true") {
-      statusSet.add("scheduled");
-      statusSet.add("confirmed");
-    }
+    if (activeParam === "true") activeAt = new Date();
   }
   const status = statusSet.size ? [...statusSet] : undefined;
 
@@ -164,6 +169,7 @@ export async function GET(req: Request): Promise<Response> {
     contactIds,
     conversationId: conversationIdParam ?? undefined,
     status,
+    activeAt,
     from,
     to,
     limit: 500,
