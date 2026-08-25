@@ -160,11 +160,18 @@ export async function resolveAppointmentTarget(
   const contactIds = await resolveContactIds(auth, identity);
   const m = await resolveActiveAppointmentByLocalTime(auth.tenantId, auth.clientId, contactIds, identity.currentDay!.trim(), hhmm);
   if (m.status === "ok") return { ok: true, value: m.id };
+  // Read-aloud description of an active appointment: the SPOKEN date + time label (in the
+  // appointment's OWN site tz), never the raw 24h string — an agent reads these back to a
+  // customer. Uses the one shared label helper, so it matches every other spoken time.
+  const describe = (x: { startAt: string; siteTimezone: string; service: string }): string => {
+    const l = localStartFields(new Date(x.startAt), x.siteTimezone, DEFAULT_LABEL_LOCALE);
+    return `${l.date_label} at ${l.start_label} — ${x.service}`;
+  };
   if (m.status === "ambiguous") {
-    return fail(400, "ambiguous_match", `More than one active appointment matches: ${m.matches.map((x) => `${x.service} on ${x.day} at ${x.time} (${x.id})`).join("; ")}. Pass the appointment id to choose.`);
+    return fail(400, "ambiguous_match", `More than one active appointment matches: ${m.matches.map((x) => `${describe(x)} (${x.id})`).join("; ")}. Pass the appointment id to choose.`);
   }
   const listing = m.active.length
-    ? ` That contact's active appointments: ${m.active.map((x) => `${x.day} ${x.time} ${x.service}`).join("; ")}.`
+    ? ` That contact's active appointments: ${m.active.map(describe).join("; ")}.`
     : " That contact has no active appointments.";
   return fail(404, "appointment_not_found", `No active appointment for that contact at ${identity.currentDay} ${identity.currentTime}.${listing}`);
 }

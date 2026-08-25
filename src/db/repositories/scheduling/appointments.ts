@@ -379,8 +379,12 @@ export async function countUpcomingAppointmentsForResource(
 export interface ActiveAppointmentView {
   id: string;
   day: string; // YYYY-MM-DD (site-local)
-  time: string; // HH:MM (site-local, 24h)
+  time: string; // HH:MM (site-local, 24h) — machine-readable
   service: string;
+  /** The UTC instant + the appointment's own site tz, so a caller can render a spoken
+   *  read-aloud label ("miércoles, 2 de septiembre at 3:30 p. m.") without re-deriving it. */
+  startAt: string; // ISO-8601 UTC
+  siteTimezone: string;
 }
 export type AppointmentByTimeMatch =
   | { status: 'ok'; id: string }
@@ -395,6 +399,8 @@ function toActiveView(a: AppointmentListItem): ActiveAppointmentView {
     day: `${p.year}-${pad(p.month)}-${pad(p.day)}`,
     time: `${pad(p.hour)}:${pad(p.minute)}`,
     service: a.service_name_snapshot,
+    startAt: a.start_at.toISOString(),
+    siteTimezone: a.site_timezone,
   };
 }
 
