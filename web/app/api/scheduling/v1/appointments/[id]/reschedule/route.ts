@@ -84,7 +84,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   });
   if (!result.ok) {
     if (result.error === "unavailable" || result.error === "no_staff" || result.error === "conflict_slot") {
-      const hint = await nearestTimesHint(auth.auth, appt.site_id, appt.service_id, stf.value, start.value, siteTz);
+      const hint = await nearestTimesHint(auth.auth, appt.site_id, appt.service_id, stf.value, start.value, siteTz, labels.locale);
       return schedulingError(bookingErrorStatus(result.error), result.error, result.message + hint);
     }
     return appointmentErrorResponse(result);

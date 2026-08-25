@@ -288,7 +288,7 @@ export async function POST(req: Request): Promise<Response> {
     // A slot problem gets the nearest real times THAT day appended, so the agent can
     // re-offer immediately instead of guessing (§2).
     if (result.error === "unavailable" || result.error === "no_staff" || result.error === "conflict_slot") {
-      const hint = await nearestTimesHint(auth.auth, site.site.id, svc.value, stf.value, startAt, site.site.timezone);
+      const hint = await nearestTimesHint(auth.auth, site.site.id, svc.value, stf.value, startAt, site.site.timezone, labels.locale);
       return schedulingError(bookingErrorStatus(result.error), result.error, result.message + hint);
     }
     return createErrorResponse(result);

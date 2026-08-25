@@ -3,10 +3,12 @@ import { parseIsoDate, schedulingError, type SchedulingAuth } from "@/lib/schedu
 import { isUuid } from "@/lib/clientModuleValidation";
 import { combineLocalDayTime, parseClockTime, utcToZonedParts } from "@worker/scheduling/timezone.js";
 import { isServiceEnabledAtSite, resolveServiceByNameAtSite } from "@worker/db/repositories/scheduling/services.js";
-import { isActiveStaffOfSite, resolveStaffByNameAtSite } from "@worker/db/repositories/scheduling/staff.js";
+import { isActiveStaffOfSite, resolveStaffByNameAtSite, getStaffById } from "@worker/db/repositories/scheduling/staff.js";
 import { findContactIdsByIdentity } from "@worker/db/repositories/contactIdentities.js";
 import { resolveActiveAppointmentByLocalTime } from "@worker/db/repositories/scheduling/appointments.js";
 import { loadAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
+import { localStartFields, DEFAULT_LABEL_LOCALE } from "@/lib/localTime";
+import { spreadNearest } from "@/lib/suggestTimes";
 
 /**
  * SEMANTIC PARAMETERS — the values an LLM handles reliably (a service/staff NAME, a local
@@ -183,8 +185,14 @@ export async function resolveContactIds(
 }
 
 /**
- * §2 recovery aid: when a requested day+time isn't bookable, name a few real available
- * times THAT day so the agent can re-offer immediately (empty string if none / on error).
+ * §2 recovery aid: when a requested day+time isn't bookable, suggest REAL alternatives from
+ * the CANONICAL availability path (loadAvailability) for the SAME service, the SAME staff
+ * filter (when one was given) and the SAME day — a strict subset of what GET /availability
+ * returns, so the suggestion list can't drift from the source of truth (past / min-notice
+ * times are already excluded by `now`). The times are spread across the day and nearest to
+ * the requested time (see spreadNearest), rendered as spoken labels ("5:30 p. m."), and the
+ * message NAMES the staff member when the request was for one — so an agent can never read a
+ * time for the wrong person. Empty string on error (the caller appends this to its message).
  */
 export async function nearestTimesHint(
   auth: SchedulingAuth,
@@ -193,6 +201,7 @@ export async function nearestTimesHint(
   staffId: string | null,
   around: Date,
   tz: string,
+  locale: string = DEFAULT_LABEL_LOCALE,
 ): Promise<string> {
   try {
     const p = utcToZonedParts(around, tz);
@@ -201,12 +210,26 @@ export async function nearestTimesHint(
     if (!dayStart) return "";
     const dayEnd = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
     const av = await loadAvailability({ tenantId: auth.tenantId, siteId, serviceId, staffId, from: dayStart, to: dayEnd, now: new Date() });
-    if (!av || av.slots.length === 0) return " No other times are available that day — offer another day.";
-    const times = av.slots.slice(0, 6).map((s) => {
-      const q = utcToZonedParts(s.start_at, tz);
-      return `${pad(q.hour)}:${pad(q.minute)}`;
-    });
-    return ` Available that day: ${times.join(", ")}.`;
+
+    // Whose availability is this? Name the requested staff member, so the suggestions can't be
+    // read out against the wrong person; say "any staff" when no staff filter was in play.
+    let withWhom = "";
+    if (staffId) {
+      const st = await getStaffById(auth.tenantId, staffId);
+      withWhom = st?.name ? ` with ${st.name}` : "";
+    }
+    const scope = staffId ? `available${withWhom}` : "available (any staff)";
+
+    if (!av || av.slots.length === 0) {
+      return staffId
+        ? ` No other times are ${scope} that day — offer another day, or another staff member.`
+        : " No other times are available that day — offer another day.";
+    }
+    const labels = spreadNearest(
+      av.slots.map((s) => s.start_at),
+      around,
+    ).map((d) => localStartFields(d, tz, locale).start_label);
+    return ` Other times ${scope} that day: ${labels.join(", ")}.`;
   } catch {
     return "";
   }
