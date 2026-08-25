@@ -71,6 +71,7 @@ async function runCycle(): Promise<void> {
     let totalSynced = 0;
     let totalNew = 0;
     let totalErrors = 0;
+    let totalSkipped = 0;
     let totalTurns = 0;
 
     for (let i = 0; i < connections.length; i += CONNECTION_CONCURRENCY) {
@@ -85,6 +86,7 @@ async function runCycle(): Promise<void> {
           totalSynced += sync.synced;
           totalNew += ingest.new;
           totalErrors += ingest.errors + derive.errors;
+          totalSkipped += ingest.skipped;
           totalTurns += derive.upserted;
           logger.info(
             {
@@ -95,6 +97,7 @@ async function runCycle(): Promise<void> {
               fetched: ingest.fetched,
               new: ingest.new,
               errors: ingest.errors,
+              skipped: ingest.skipped,
               newCursor: ingest.newCursor,
               turnsUpserted: derive.upserted,
               turnsDeleted: derive.deleted,
@@ -119,6 +122,7 @@ async function runCycle(): Promise<void> {
         totalWorkflowsSynced: totalSynced,
         totalNew,
         totalErrors,
+        totalSkipped,
         totalTurns,
         durationMs: Date.now() - startedAt,
       },

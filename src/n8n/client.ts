@@ -1,10 +1,12 @@
 import { logger } from '../logger.js';
 import {
   n8nExecutionDetailSchema,
-  n8nExecutionListResponseSchema,
+  n8nExecutionListEnvelopeSchema,
+  n8nExecutionSummarySchema,
   n8nWorkflowListResponseSchema,
   type N8nExecutionDetail,
   type N8nExecutionListResponse,
+  type N8nExecutionSummary,
   type N8nWorkflowListResponse,
 } from './types.js';
 
@@ -129,7 +131,25 @@ export function createN8nClient(options: N8nClientOptions): N8nClient {
       }
       // No includeData here: list responses are summaries only.
       const json = await get('/executions', sp);
-      return n8nExecutionListResponseSchema.parse(json);
+      // Validate the ENVELOPE, then each row PER ROW: a row we can't read an id from is
+      // skipped + logged, never failing the whole page (the 12-day-outage failure mode).
+      const env = n8nExecutionListEnvelopeSchema.parse(json);
+      const data: N8nExecutionSummary[] = [];
+      let skipped = 0;
+      for (const row of env.data) {
+        const parsed = n8nExecutionSummarySchema.safeParse(row);
+        if (parsed.success) {
+          data.push(parsed.data);
+        } else {
+          skipped += 1;
+          const rawId = (row as { id?: unknown } | null)?.id;
+          logger.warn(
+            { issue: parsed.error.issues[0], rawId: rawId === undefined ? undefined : String(rawId) },
+            'n8n execution list row failed validation; skipped',
+          );
+        }
+      }
+      return { data, nextCursor: env.nextCursor, skipped };
     },
 
     async getExecution(id: string): Promise<N8nExecutionDetail> {

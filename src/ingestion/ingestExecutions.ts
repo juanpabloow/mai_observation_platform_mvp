@@ -21,21 +21,27 @@ export interface IngestResult {
   fetched: number;
   /** Rows newly inserted (excludes ON CONFLICT DO NOTHING duplicates). */
   new: number;
-  /** Per-execution detail-fetch failures (skipped, not fatal). */
+  /** Per-execution detail-fetch/parse failures (not fatal — the rest still ingest). */
   errors: number;
+  /** Rows validly skipped, NOT errors: list rows without a usable id + executions with no
+   *  start time yet. Counted + logged so a schema drift degrades visibly instead of silently. */
+  skipped: number;
   /** Cursor we persisted: max numeric id seen, as a string (null if none yet). */
   newCursor: string | null;
   /** Internal UUIDs of the rows newly inserted this run (for turn derivation). */
   newExecutionIds: string[];
 }
 
-/** Map a full n8n execution detail into an `executions` row. */
+/** Map a full n8n execution detail into an `executions` row, or null when it can't be
+ *  stored — a not-yet-started execution has no `startedAt`, and `executions.started_at` is
+ *  NOT NULL. Returning null (rather than throwing) lets the caller skip+count it. */
 function mapDetailToRow(
   tenantId: string,
   connectionId: string,
   detail: N8nExecutionDetail,
-): NewExecution {
+): NewExecution | null {
   const { startedAt, stoppedAt } = detail;
+  if (startedAt === null) return null; // never started → nothing to observe yet; skip
 
   let durationMs: number | null = null;
   if (stoppedAt) {
@@ -61,23 +67,37 @@ function mapDetailToRow(
   };
 }
 
-/** Fetch one execution's full payload; returns null (and logs) on failure. */
+/** The outcome of trying to turn one summary into a storable row. `error` = the detail
+ *  fetch/parse failed; `skip` = fetched fine but not storable (e.g. not yet started). Both
+ *  are per-row and never fatal to the rest of the page. */
+type FetchOutcome = { kind: 'row'; row: NewExecution } | { kind: 'error' } | { kind: 'skip' };
+
+/** Fetch one execution's full payload and map it; never throws. */
 async function fetchRow(
   n8n: N8nClient,
   tenantId: string,
   connectionId: string,
   summary: N8nExecutionSummary,
-): Promise<NewExecution | null> {
+): Promise<FetchOutcome> {
+  let detail: N8nExecutionDetail;
   try {
-    const detail = await n8n.getExecution(summary.id);
-    return mapDetailToRow(tenantId, connectionId, detail);
+    detail = await n8n.getExecution(summary.id);
   } catch (err) {
     logger.warn(
       { err, connectionId, executionId: summary.id },
       'failed to fetch execution detail; skipping',
     );
-    return null;
+    return { kind: 'error' };
   }
+  const row = mapDetailToRow(tenantId, connectionId, detail);
+  if (!row) {
+    logger.warn(
+      { connectionId, executionId: summary.id, status: detail.status },
+      'execution has no start time (not yet started); skipping this row, ingesting the rest',
+    );
+    return { kind: 'skip' };
+  }
+  return { kind: 'row', row };
 }
 
 /**
@@ -104,12 +124,14 @@ export async function ingestExecutionsForConnection(
   // --- 1. Discover new execution summaries (newest first). ---
   const newSummaries: N8nExecutionSummary[] = [];
   let pages = 0;
+  let listSkipped = 0; // list rows the client couldn't read an id from (already logged there)
 
   try {
     let cursor: string | undefined;
     for (;;) {
       const page = await n8n.listExecutions({ limit: PAGE_LIMIT, cursor });
       pages += 1;
+      listSkipped += page.skipped;
 
       let reachedSeen = false;
       for (const summary of page.data) {
@@ -135,12 +157,13 @@ export async function ingestExecutionsForConnection(
       { err, connection: connection.name, connectionId, pages },
       'ingestion failed while listing executions',
     );
-    return { fetched: 0, new: 0, errors: 1, newCursor: prevLastSeen, newExecutionIds: [] };
+    return { fetched: 0, new: 0, errors: 1, skipped: 0, newCursor: prevLastSeen, newExecutionIds: [] };
   }
 
   // --- 2. Fetch full payloads with bounded concurrency. ---
   const rows: NewExecution[] = [];
   let errors = 0;
+  let mappingSkipped = 0; // fetched fine but not storable (e.g. not yet started)
   let batches = 0;
 
   for (let i = 0; i < newSummaries.length; i += CONCURRENCY) {
@@ -149,14 +172,13 @@ export async function ingestExecutionsForConnection(
     const settled = await Promise.all(
       chunk.map((s) => fetchRow(n8n, tenantId, connectionId, s)),
     );
-    for (const row of settled) {
-      if (row) {
-        rows.push(row);
-      } else {
-        errors += 1;
-      }
+    for (const outcome of settled) {
+      if (outcome.kind === 'row') rows.push(outcome.row);
+      else if (outcome.kind === 'error') errors += 1;
+      else mappingSkipped += 1;
     }
   }
+  const skipped = listSkipped + mappingSkipped;
 
   // --- 3. Persist rows (idempotent) and advance the cursor. ---
   const insertedIds = await upsertMany(rows);
@@ -173,6 +195,7 @@ export async function ingestExecutionsForConnection(
     fetched: rows.length,
     new: insertedIds.length,
     errors,
+    skipped,
     newCursor,
     newExecutionIds: insertedIds,
   };
@@ -185,6 +208,7 @@ export async function ingestExecutionsForConnection(
       fetched: result.fetched,
       new: result.new,
       errors: result.errors,
+      skipped: result.skipped,
       newCursor: result.newCursor,
       pages,
       batches,
