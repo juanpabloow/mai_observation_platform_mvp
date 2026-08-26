@@ -17,6 +17,7 @@ import { createAppointment } from "@worker/scheduling/booking.js";
 import { listAppointments, type AppointmentStatus } from "@worker/db/repositories/scheduling/appointments.js";
 import { staffBelongsToClient } from "@worker/db/repositories/scheduling/staff.js";
 import { findContactIdsByIdentity, contactBelongsToClient } from "@worker/db/repositories/contactIdentities.js";
+import { identitiesSchema } from "@/lib/identities";
 
 /**
  * /api/scheduling/v1/appointments
@@ -223,6 +224,9 @@ const CreateBody = z.object({
   start_at: z.string().min(1).optional(),
   day: z.string().min(1).max(10).optional(),
   time: z.string().min(1).max(16).optional(),
+  // I-1: additional identities for the appointment's contact (the attendee), attached through
+  // the same identity chokepoint. Ignored on the explicit contact_id path (never mutates).
+  identities: identitiesSchema,
 });
 
 export async function POST(req: Request): Promise<Response> {
@@ -275,6 +279,7 @@ export async function POST(req: Request): Promise<Response> {
     customerName: b.customer_name ?? null,
     customerPhone: b.customer_phone ?? null,
     customerEmail: b.customer_email ?? null,
+    identities: b.identities,
     messagingConsent: b.messaging_consent ?? null,
     consentSource: b.consent_source ?? null,
     origin: "n8n",

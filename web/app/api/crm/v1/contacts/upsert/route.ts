@@ -3,6 +3,7 @@ import { authenticateCrm, crmError, loadEnrichmentContact, applyConsentAsAutomat
 import { resolveContactByIdentity } from "@worker/db/repositories/contactIdentities.js";
 import { updateContact } from "@worker/db/repositories/contacts.js";
 import { listFieldDefinitions, validateCustomFieldValues } from "@worker/db/repositories/clientFieldDefinitions.js";
+import { identitiesSchema } from "@/lib/identities";
 
 /**
  * POST /api/crm/v1/contacts/upsert   [crm.write]
@@ -26,6 +27,9 @@ const Body = z
     custom_fields: z.record(z.string(), z.unknown()).optional(),
     consent: z.enum(["unknown", "opted_in", "opted_out"]).optional(),
     source_label: z.string().trim().max(64).optional(),
+    // I-1: additional identities to attach to the resolved contact (phone/email/external),
+    // beyond the primary phone/email/external_id. All go through the same collision rules.
+    identities: identitiesSchema,
   })
   .strict();
 
@@ -68,6 +72,7 @@ export async function POST(req: Request): Promise<Response> {
     name: body.name ?? null,
     phone: body.phone ?? null,
     email: body.email ?? null,
+    identities: body.identities,
   });
 
   if (customValue !== undefined) {

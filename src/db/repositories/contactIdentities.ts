@@ -37,6 +37,29 @@ export function classifyIdentity(raw: string | null | undefined): NormalizedIden
   return { kind: 'external', value: trimmed };
 }
 
+/**
+ * I-1: classify a workflow-DECLARED identity, HONORING its kind (unlike classifyIdentity,
+ * which infers from the value). `external` is stored VERBATIM as opaque — so an opaque id
+ * that happens to be all digits is never misfiled as a phone, which is the whole point of
+ * letting a workflow declare a phone AND an opaque user id for the same person. phone/email
+ * are still normalized (E.164 / lowercased); a value that isn't valid for its declared kind
+ * returns null (the caller skips it — one bad identity never fails the write).
+ */
+export function classifyDeclaredIdentity(kind: IdentityKind, raw: string | null | undefined): NormalizedIdentity | null {
+  if (raw == null) return null;
+  const trimmed = String(raw).trim();
+  if (!trimmed) return null;
+  if (kind === 'phone') {
+    const p = normalizeE164(trimmed);
+    return p ? { kind: 'phone', value: p } : null;
+  }
+  if (kind === 'email') {
+    const l = trimmed.toLowerCase();
+    return EMAIL_RE.test(l) ? { kind: 'email', value: l } : null;
+  }
+  return { kind: 'external', value: trimmed };
+}
+
 export interface ResolveIdentityInput {
   tenantId: string;
   clientId: string;
@@ -62,6 +85,20 @@ export interface ResolveIdentityInput {
    */
   phones?: string[];
   emails?: string[];
+  /**
+   * I-1 MULTI-IDENTITY PUSH: every identity a workflow declares for one person in a single
+   * call — [{kind, value, label}] using the C-2 vocabulary (phone|email|external), each with
+   * its own free-text origin `label`. ADDITIVE to the identity set (like `phones`/`emails`):
+   * ALL attach to the resolved contact, and — crucially — they go through the SAME lookup
+   * below, so a declared identity already owned by ANOTHER contact triggers the collision
+   * rules (oldest wins, duplicate candidate recorded, never auto-merged) instead of forking or
+   * stealing. Unlike the value-inferred paths above, the DECLARED kind is honored: an
+   * `external` value is stored VERBATIM as opaque (never re-read as a phone), which is exactly
+   * what lets a WhatsApp phone (wa_id) and an opaque user id land on one contact. The scalar
+   * contacts.phone_e164 / contacts.email columns STILL come from `phone`/`email` alone, so a
+   * caller that omits `identities` behaves byte-for-byte as before.
+   */
+  identities?: Array<{ kind: IdentityKind; value: string; label?: string | null }>;
 }
 
 type Run = <T extends QueryResultRow>(text: string, params: unknown[]) => Promise<{ rows: T[]; rowCount: number | null }>;
@@ -91,6 +128,15 @@ function buildIdentities(input: ResolveIdentityInput): LabeledIdentity[] {
   // Secondary identities last, so `idents[0]` stays the primary the create path claims.
   for (const p of input.phones ?? []) add(p);
   for (const e of input.emails ?? []) add(e);
+  // I-1: workflow-DECLARED identities — kind honored (external kept opaque), per-identity label.
+  for (const it of input.identities ?? []) {
+    const n = classifyDeclaredIdentity(it.kind, it.value);
+    if (!n) continue;
+    const k = `${n.kind}:${n.value}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push({ ...n, label: it.label ?? label });
+  }
   return out;
 }
 
@@ -237,8 +283,13 @@ export async function ensureContactForInboundMessage(
   conversationId: string,
   conversationRef: string,
   label: string,
+  identities?: ResolveIdentityInput['identities'],
 ): Promise<void> {
-  const { contact } = await resolveContactByIdentity({ tenantId, clientId, channel: label, channelUserId: conversationRef });
+  // I-1: pass the DECLARED identities through the same chokepoint. On the first message they
+  // seed a new contact carrying every id; on a later message (conversation already linked) the
+  // resolve still ATTACHES any newly-learned identity to the existing contact — the NULL-guarded
+  // UPDATE below simply no-ops, so an existing link is never re-pointed.
+  const { contact } = await resolveContactByIdentity({ tenantId, clientId, channel: label, channelUserId: conversationRef, identities });
   await query(
     `UPDATE conversations SET contact_id = $3, updated_at = now()
       WHERE id = $2 AND tenant_id = $1 AND contact_id IS NULL`,
@@ -352,22 +403,33 @@ export async function resolveContactByIdentity(
     return { contact: created, candidatesRecorded: 0 };
   }
 
-  // One or more existing contacts matched. Oldest wins.
+  // One or more existing contacts matched. Oldest wins (deterministic).
   const winnerRow = await run<ContactRow>(
     `SELECT * FROM contacts WHERE tenant_id=$1 AND client_id=$2 AND id = ANY($3::uuid[]) ORDER BY created_at ASC, id ASC LIMIT 1`,
     [input.tenantId, input.clientId, matchedIds],
   );
   const winner = firstRowOrThrow(winnerRow as never, 'resolveContactByIdentity.winner') as ContactRow;
 
+  if (matchedIds.length === 1) {
+    // SAME person: every declared identity resolved to this one contact. Attach the ones it
+    // doesn't have yet (a claimed value skips), fill only empty survivor fields, touch.
+    await attachIdentities(run, input, winner.id, idents);
+    const finalWinner = await fillEmptyAndTouch(run, input, winner.id);
+    await tryLinkConversationsByPhone(client, input.tenantId, input.clientId, finalWinner.id);
+    return { contact: finalWinner, candidatesRecorded: 0 };
+  }
+
+  // I-1: the declared identities span DIFFERENT existing contacts. NEVER auto-merge on a
+  // workflow's assertion — that would silently fuse two real customers. Record the collision
+  // for a human (one directed row per other contact — the candidate query is symmetric, so it
+  // surfaces on BOTH contacts; a reverse row would falsely suggest keeping the newer), resolve
+  // DETERMINISTICALLY to the oldest, and MUTATE NOTHING: attach no identity, steal none, fill
+  // nothing — so both originals keep their data exactly as it was.
   let candidatesRecorded = 0;
   for (const other of matchedIds.filter((id) => id !== winner.id)) {
     candidatesRecorded += await recordCandidate(run, input.tenantId, input.clientId, winner.id, other, 'identity_collision');
   }
-  // Attach any of this write's still-free identities to the winner (claimed ones skip).
-  await attachIdentities(run, input, winner.id, idents);
-  const finalWinner = await fillEmptyAndTouch(run, input, winner.id);
-  await tryLinkConversationsByPhone(client, input.tenantId, input.clientId, finalWinner.id);
-  return { contact: finalWinner, candidatesRecorded };
+  return { contact: winner, candidatesRecorded };
 }
 
 // ── READ-ONLY lookups for the book-by-contact path (C-4.1) ──────────────────────────

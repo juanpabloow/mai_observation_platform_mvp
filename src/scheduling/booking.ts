@@ -1,7 +1,7 @@
 import { isDeadlock, isExclusionViolation, isUniqueViolation, query, withTransaction } from '../db/client.js';
 import { logger } from '../logger.js';
 import { linkConversationToContactIfUnlinked, setContactConsent, type MessagingConsent } from '../db/repositories/contacts.js';
-import { resolveContactByIdentity, contactBelongsToClient, findContactIdsByIdentity, classifyIdentity } from '../db/repositories/contactIdentities.js';
+import { resolveContactByIdentity, contactBelongsToClient, findContactIdsByIdentity, classifyIdentity, type ResolveIdentityInput } from '../db/repositories/contactIdentities.js';
 import { getOrCreateConversation } from '../db/repositories/handoff.js';
 import { normalizeE164, dialingRegionForTimezone } from './phone.js';
 import {
@@ -66,6 +66,11 @@ export interface CreateAppointmentInput {
   customerName?: string | null;
   customerPhone?: string | null;
   customerEmail?: string | null;
+  /** I-1: additional identities the booking declares for the appointment's contact (the
+   *  attendee) — attached through the same identity chokepoint as everything else. Applies to
+   *  the resolve paths (customer_phone / channel_user_id); the EXPLICIT-contact path (contactId)
+   *  never mutates the contact, so identities are ignored there. */
+  identities?: ResolveIdentityInput['identities'];
   // Consent (C-2, STORE-ONLY): an automation may record an opt-in/opt-out on the contact.
   messagingConsent?: MessagingConsent | null;
   consentSource?: string | null;
@@ -258,6 +263,8 @@ export async function createAppointment(
             name: input.customerName,
             phone: normalizedCustomerPhone,
             email: input.customerEmail,
+            // I-1: the declared identities describe WHO the appointment is for → the attendee.
+            identities: input.identities,
           },
           client,
         );
@@ -282,6 +289,8 @@ export async function createAppointment(
             channelUserId: input.channelUserId,
             name: input.customerName,
             email: input.customerEmail,
+            // I-1: the writer is the customer — attach every identity they declared.
+            identities: input.identities,
           },
           client,
         );

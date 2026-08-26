@@ -86,11 +86,14 @@ Request:
   "external_message_id": "optional string — channel's own message id, used for dedup",
   "occurred_at": "optional ISO-8601 UTC — defaults to receipt time",
   "metadata": "optional object — stored verbatim, never interpreted",
-  "identity_label": "optional string (≤64) — free-text SOURCE hint ('whatsapp', 'instagram', 'webchat')"
+  "identity_label": "optional string (≤64) — free-text SOURCE hint ('whatsapp', 'instagram', 'webchat')",
+  "identities": "optional array (≤20) of { kind: 'phone'|'email'|'external', value, label? } — every identity known for THIS person"
 }
 ```
 
 > **`identity_label` (added, non-breaking).** Additive to contract v1 — omitting it changes nothing. When CRM is enabled for the workflow's client, the first inbound `sender: "user"` message on an unlinked conversation auto-creates a CRM contact (see D-2 rule below); `identity_label` becomes that contact's **source** and its identity **label**. It is a display hint only — stored and shown, **never parsed or branched on**. Absent → a neutral `"conversation"`. The platform stays channel-blind: the `conversation_ref` itself is classified by value (phone / email / external), so this label does not need to match any channel taxonomy.
+
+> **`identities` (I-1 — added, non-breaking).** Additive to contract v1 (no version bump) — omitting it is **byte-identical** to today's behavior. Lets a workflow declare **every** identifier it knows for one person in a single push (a WhatsApp phone/`wa_id` **and** an opaque user id; an Instagram scoped-id **and** a handle; a web session **and** an email). Each entry is `{ kind, value, label? }` where `kind` is the C-2 vocabulary (`phone` | `email` | `external`) and `label` is a free-text origin hint like `identity_label`. **`conversation_ref` is unchanged** — it still identifies the *conversation*, not the person; `identities` only add to the resolved *contact*. `phone`/`email` values are normalized (E.164 / lowercased); an **`external`** value is stored **verbatim as opaque** and never re-read as a phone (this is what lets a numeric-looking opaque id coexist with the real phone). All declared identities attach to the resolved contact — on the first message they seed the new contact, and on any **later** message they enrich the already-linked contact with a newly-learned identifier (an existing conversation link is never re-pointed). One malformed entry is skipped, never failing the push. See the I-1 resolution rules below.
 
 Response `201` (or `200` on dedup replay):
 ```json
@@ -109,7 +112,13 @@ Rules:
 - Same `external_message_id` within a conversation → dedup: `200`, original `message_id`, message not duplicated.
 - `sender: "bot"` lets the workflow push its own replies so the inbox thread is complete in real time (see decision D3).
 - Human-agent messages are **never pushed** — the platform records those itself during Exchange 4.
-- **D-2 (auto-create contact).** The first `sender: "user"` push on an unlinked conversation, *when CRM is enabled for the client*, resolves-or-creates a CRM contact from the `conversation_ref` identity and links the conversation to it — so anyone who writes is in the CRM even if they never book. `sender: "bot"` creates nothing; CRM-disabled clients create nothing. This is **fail-safe**: any error in the contact path is swallowed, so the push response is unaffected (same body, same status). Runs once per conversation.
+- **D-2 (auto-create contact).** The first `sender: "user"` push on an unlinked conversation, *when CRM is enabled for the client*, resolves-or-creates a CRM contact from the `conversation_ref` identity and links the conversation to it — so anyone who writes is in the CRM even if they never book. `sender: "bot"` creates nothing; CRM-disabled clients create nothing. This is **fail-safe**: any error in the contact path is swallowed, so the push response is unaffected (same body, same status). Runs once per conversation (unless `identities` is present — see I-1).
+- **I-1 (multi-identity resolution).** When `identities` is supplied (`sender: "user"`, CRM enabled), all declared identities are resolved through the **one** C-2 chokepoint, strictly scoped to `(tenant, client)`. The rules, chosen so a workflow's assertion can never silently fuse two real customers:
+  - **None of them exist yet** → one contact is created carrying all of them.
+  - **They all resolve to the same contact** → the ones it doesn't have yet are attached (missing identity added).
+  - **They resolve to *different* existing contacts** → **no auto-merge.** A duplicate-candidate is recorded for a human to review (it surfaces on **both** contacts), resolution is the **oldest** contact (deterministic), and **nothing is attached or changed** — both originals keep their data exactly. An identity already owned by another contact is never stolen.
+
+  This runs on the first message *and* on later messages that carry `identities`, so a workflow can add a newly-learned identifier at any time; a plain later message (no `identities`) still does nothing. Because a conversation's own identifier and a contact's identifier are unrelated opaque strings, this links **going forward only** — it does not retroactively join a client's historical conversations and contacts.
 
 ### Exchange 2 — Mode check (workflow → platform)
 
@@ -317,7 +326,9 @@ token; the token authorizes ONLY workflows of its connection). Errors:
 1. **`POST /messages`** — record an inbound message. Body: `workflow_ref`,
    `conversation_ref`, `sender` (`user` | `bot`), `text`, optional `content_type`,
    `content_detail`, `external_message_id` (dedup key), `occurred_at`, `metadata`,
-   `identity_label` (source hint for the D-2 auto-created contact; additive, display-only).
+   `identity_label` (source hint for the D-2 auto-created contact; additive, display-only),
+   `identities` (I-1 — array of `{kind, value, label?}`, every identity known for the person;
+   additive, resolved to ONE contact; different-contact collisions flag a candidate, never merge).
    → `201` new / `200` deduped, `{ message_id, conversation: { id, mode, assigned_agent } }`.
 2. **`GET /mode?workflow_ref=&conversation_ref=`** — `{ mode, as_of }`; unknown → `bot`.
 3. **`POST /escalations`** — request human handoff. `bot`→`pending` (201); already
