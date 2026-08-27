@@ -1,8 +1,7 @@
 "use client";
 
-import type { ContactSummary, IdentityView } from "@/lib/contactShared";
-import { ContactIdentitySummary } from "./shared/ContactIdentitySummary";
 import { DuplicateBanner, type CandidateView } from "./DuplicateBanner";
+import { Panel } from "@/components/ui/primitives";
 import { ContactSections, type ContactReadValues } from "./form/ContactSections";
 
 /**
@@ -35,8 +34,6 @@ export interface FieldDefView {
 export function ContactProperties({
   clientId,
   contactId,
-  summary,
-  identities,
   candidates,
   canManageDuplicates,
   values,
@@ -45,8 +42,6 @@ export function ContactProperties({
 }: {
   clientId: string;
   contactId: string;
-  summary: ContactSummary;
-  identities: IdentityView[];
   candidates: CandidateView[];
   canManageDuplicates: boolean;
   /** The contact's properties, already humanised-ready (raw stored values in, labels
@@ -56,14 +51,27 @@ export function ContactProperties({
   onChanged?: () => void;
 }) {
   return (
-    <div className="flex flex-col gap-3">
-      <ContactIdentitySummary summary={summary} identities={identities} />
-
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      {/* The duplicate banner sits OUTSIDE the card: it is about a problem with this
+          record, not one of its sections, and putting it inside would make the card's
+          first hairline separate an alert from a field list. */}
       {canManageDuplicates ? (
         <DuplicateBanner clientId={clientId} contactId={contactId} candidates={candidates} onChanged={onChanged} />
       ) : null}
 
-      <ContactSections mode="read" columns={1} clientId={clientId} fieldDefs={fieldDefs} read={values} />
+      {/*
+        ONE WHITE CARD holds every section, divided by hairlines (artboard 23a).
+
+        The sections used to sit straight on the grey canvas, which made the column read as
+        four loose lists rather than as one document about a person — and it was the single
+        biggest reason the page did not look like the design. Each section already brings
+        its own padding and closes with a full-width rule (see ContactSections), so the
+        card only has to supply the fill, the edge and the clip; `overflow-hidden` is what
+        lets those edge-to-edge rules stop at the rounded corners instead of squaring them.
+      */}
+      <Panel className="flex flex-1 flex-col overflow-hidden shadow-[var(--shadow-card)]">
+        <ContactSections mode="read" columns={1} clientId={clientId} fieldDefs={fieldDefs} read={values} />
+      </Panel>
     </div>
   );
 }

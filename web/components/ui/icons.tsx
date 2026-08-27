@@ -65,6 +65,15 @@ export const IconPencil = () => (
     <path d="M13.5 6.5 17.5 10.5" />
   </svg>
 );
+/** A NOTE — a page with two lines of writing on it. The Notas section used to borrow
+ *  IconInternal (a tag), which is the glyph for Etiquetas sitting right above it. */
+export const IconNote = () => (
+  <svg {...ico} aria-hidden>
+    <path d="M6 3.5h9l4 4V20a.5.5 0 0 1-.5.5h-12A.5.5 0 0 1 6 20V4a.5.5 0 0 1 .5-.5z" />
+    <path d="M14.5 3.5V8h4.5M9.5 13h6M9.5 16.5h4" strokeLinecap="round" />
+  </svg>
+);
+
 /** The `+` on a create action. 1.8 stroke like the rest, so it sits on the same weight
  *  as the glyphs beside it rather than reading as a heavier plus. */
 export const IconPlus = () => (

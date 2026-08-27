@@ -713,13 +713,23 @@ test('quick view + drawer: same components, deliberately different geometry', ()
   assert.ok(panel.includes('<FormSection'), 'the quick view uses the drawer section card');
   assert.equal(/className="flex flex-col gap-2 border-t border-line pt-3"/.test(panel), false, 'no flat divided blocks left');
   for (const src of [panel, editForm]) {
-    // Both compose the header through the shared helper, which mounts the identity
-    // block and the metric tiles — one call site each, so neither can add a fourth
-    // tile or reorder the two without the other following.
+    // Both compose the header through the shared helper, so neither can restate the
+    // identity differently from the other.
     assert.ok(src.includes('<ContactPanelHeader'), 'both use the shared header');
   }
   const shell = read('components/contacts/shared/ContactPanelShell.tsx');
-  assert.ok(shell.includes('<ContactHeaderBlock') && shell.includes('<ContactMetrics'), 'which composes both pieces');
+  assert.ok(shell.includes('<ContactHeaderBlock'), 'which composes the identity block');
+  // THE METRIC STRIP IS GONE, and with it ContactMetrics. It was a CITAS / ÚLTIMA / CANAL
+  // band that the artboard (22a) does not draw, and every one of the three was restated
+  // within 200px: CITAS is now "· 14 citas" on the name line, CANAL is "Canal preferido"
+  // in Mensajería, ÚLTIMA is derivable from the appointments one tab away. It spent ~56px
+  // of a 380px panel repeating the panel.
+  assert.equal(/<ContactMetrics/.test(shell), false, 'and no longer a metric strip');
+  assert.equal(
+    /export function ContactMetrics/.test(read('components/contacts/shared/ContactHeaderBlock.tsx')),
+    false,
+    'the component went with it rather than being kept unused',
+  );
 
   // DIFFERENT BEHAVIOUR, on purpose: looking must not interrupt, changing must.
   // The drawer no longer DIMS (it opens on the quick view's own box, so a scrim was a
@@ -962,10 +972,16 @@ test('panel widths are inline styles, not scanner-invisible Tailwind classes', (
 
 test('quick view: the header facts come from the same payload the drawer opens with', () => {
   const panel = read('components/contacts/ContactSidePanel.tsx');
-  // A second source for "N actividades" is how the two surfaces start quoting
-  // different totals for one contact.
+  // A second source for a header fact is how the two surfaces start quoting different
+  // numbers for one contact.
   assert.ok(panel.includes('edit?.initial.activityCount'), 'activity count comes from the shared payload');
-  assert.ok(panel.includes('edit.initial.lastContactAt') && panel.includes('edit.initial.sourceChannel'), 'so do the metrics');
+  // The visit count on the name line comes from the panel payload's own summary, which is
+  // the SAME derivation the list and the record read (summarizeAppointments) — not a
+  // second count computed here.
+  assert.ok(panel.includes('visitCount: data.summary.visitCount'), 'and the visit count from the summary');
+  // `lastContactAt` / `sourceChannel` were the metric strip's inputs. That strip is gone
+  // (see the case above), so requiring them here would be requiring dead plumbing.
+  assert.equal(panel.includes('edit.initial.sourceChannel'), false, 'the metric inputs are no longer threaded');
   const loader = read('lib/contactPanel.ts');
   assert.ok(loader.includes('isCustomer: appts.some('), 'the customer flag is derived once, in the loader');
 });

@@ -138,10 +138,20 @@ function ReadField({ label, children }: { label: string; children: ReactNode }) 
 }
 
 /**
- * A communication setting as a STATE ROW: a dot, the setting, the value hard right.
- * The reference tints these because each one answers "may I message this person, and
- * how" — the tone previews the answer before the words are read. Green = a live route,
- * amber = something unresolved, grey = nothing set.
+ * A communication setting as a FACT ROW with a state dot.
+ *
+ * It used to be a tinted BOX per setting — a green wash for a live route, amber for
+ * something unresolved, grey for nothing set. Three filled rows stacked in a 320px column
+ * turned "Mensajería" into the loudest block on the record, louder than the money, and
+ * the tint restated what the dot and the words already said.
+ *
+ * The design (artboard 23a) renders them as the same label/value rows as every other
+ * section, keeping only the DOT. That is enough: the dot previews the answer, the value
+ * states it, and the row no longer shouts. The reading order in the column is now uniform,
+ * which is the whole point of the left card being one document.
+ *
+ * The dot is decoration carrying a hint, never the meaning — each row still prints its own
+ * value, so the block survives greyscale.
  */
 function StateRow({
   label,
@@ -152,14 +162,12 @@ function StateRow({
   value: ReactNode;
   tone: "ok" | "pending" | "off";
 }) {
-  const box =
-    tone === "ok" ? "bg-success/8" : tone === "pending" ? "bg-warn-soft" : "bg-subtle";
   const dot = tone === "ok" ? "bg-success" : tone === "pending" ? "bg-warn" : "bg-line-strong";
   return (
-    <div className={`flex items-center gap-2.5 rounded-lg px-3 py-2.5 ${box}`}>
+    <div className="flex items-center gap-2.5 py-1">
       <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${dot}`} />
-      <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground">{label}</span>
-      <span className="shrink-0 text-[0.8125rem] font-medium text-foreground">{value}</span>
+      <span className="min-w-0 flex-1 truncate text-[0.71875rem] text-faint">{label}</span>
+      <span className="shrink-0 text-[0.78125rem] text-foreground">{value}</span>
     </div>
   );
 }
@@ -345,9 +353,20 @@ export function ContactSections(props: Props) {
         )}
       </FormSection>
 
-      <div className="border-b border-line px-4 py-3">
-        <OptionalDivider label={COPY.optionalDivider} />
-      </div>
+      {/*
+        "Todo lo de abajo es opcional" is an EDITING affordance — it tells someone filling
+        the form that they can stop here. Two reasons it used to be wrong:
+        it rendered in READ mode, where there is nothing to fill in and "opcional" states
+        nothing about the facts below it; and it rendered even with no business fields
+        defined, announcing an optional section that then did not exist.
+        It now appears only when it is both true and useful: editing, and there is
+        something below it to introduce.
+      */}
+      {mode === "edit" && fieldDefs.length > 0 ? (
+        <div className="border-b border-line px-4 py-3">
+          <OptionalDivider label={COPY.optionalDivider} />
+        </div>
+      ) : null}
 
       {/* ── CONFIGURADO POR EL NEGOCIO ────────────────────────────────────── */}
       {/* Renders NOTHING when the tenant defined no fields — in BOTH modes, so the

@@ -35,7 +35,10 @@ export default async function ClientStaffPage({
   searchParams,
 }: {
   params: Promise<{ clientId: string }>;
-  searchParams: Promise<{ tab?: string; s?: string; site?: string; dtab?: string }>;
+  // No `tab`: the roster is the only view now (the Turnos/Ausencias stubs are gone —
+  // see StaffWorkspace), so there is nothing for it to select. An old `?tab=shifts`
+  // bookmark simply lands on the roster.
+  searchParams: Promise<{ s?: string; site?: string; dtab?: string }>;
 }) {
   await connection();
   await requireFullAccessOrLand(); // owner/admin only
@@ -46,8 +49,6 @@ export default async function ClientStaffPage({
   return (
     <StaffWorkspace
       clientId={client.id}
-      clientLabel={client.name}
-      activeTab={sp.tab ?? "staff"}
       staff={await loadRoster(scope.tenantId, client.id, sp)}
     />
   );

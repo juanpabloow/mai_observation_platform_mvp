@@ -21,8 +21,18 @@ import { stageLabel } from "@/lib/contactLabels";
  * token is what protects that now.
  */
 
-/** An inset surface: 1px hairline, small radius, NO shadow — the lift is reserved
- *  for the page-level cards (see the elevation note above). */
+/**
+ * A CARD surface: 1px hairline, THE card radius, NO shadow of its own.
+ *
+ * `rounded-xl` — the same 14px every other card on a screen uses (see the radius scale in
+ * globals.css). It was `rounded-lg` (11px), one step tighter, on the theory that this is an
+ * INSET surface nested inside a page card; on the record page these sit directly on the
+ * canvas as page-level cards themselves, and two radii a few pixels apart in one column
+ * reads as a mistake rather than as a hierarchy.
+ *
+ * The lift still comes from the caller: a card ON the canvas wants --shadow-card, a panel
+ * nested inside one wants nothing.
+ */
 export function Panel({
   children,
   className = "",
@@ -32,7 +42,7 @@ export function Panel({
   className?: string;
   as?: "div" | "section" | "aside";
 }) {
-  return <As className={`rounded-lg border border-line bg-surface ${className}`}>{children}</As>;
+  return <As className={`rounded-xl border border-line bg-surface ${className}`}>{children}</As>;
 }
 
 /** Panel header strip — compact title on the left, actions on the right. */
@@ -466,42 +476,67 @@ export const OUTLINE_CLS =
  * combinations — the pills are one-of-N — which is why the `Filtrar` control beside them
  * still exists for the multi-facet case.
  *
- * Rendered as LINKS, not buttons: a facet is a URL, so it deep-links, middle-clicks into
- * a new tab, and works before hydration. `aria-current` (not colour) is what tells a
- * screen reader which one is on.
+ * TWO MECHANISMS, one look. Contacts filters SERVER-SIDE, so its pills are real `<Link>`s
+ * — a facet is a URL there, which deep-links, middle-clicks into a new tab and works
+ * before hydration. The staff roster is fully loaded and filters in client state, where a
+ * URL would be a lie about what changed; its pills are `<button>`s. Passing `onPick`
+ * selects the button form.
+ *
+ * They share this component because the look and the a11y contract are the shared part:
+ * `aria-current` / `aria-pressed` (not colour) is what tells a screen reader which one is
+ * on, and neither screen should be re-deriving the pill's geometry.
  */
 export function FacetPills({
   items,
   className = "",
   label,
+  onPick,
 }: {
-  items: { key: string; label: string; count?: number; href: string; active: boolean }[];
+  items: { key: string; label: string; count?: number; href?: string; active: boolean }[];
   className?: string;
   /** Names the group for assistive tech — the pills alone don't say what they filter. */
   label: string;
+  /** Client-side mode: render buttons and hand the picked key back. Omit for links. */
+  onPick?: (key: string) => void;
 }) {
+  const cls = (active: boolean) =>
+    `inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-sm no-underline transition-colors ${
+      active ? "bg-ink font-semibold text-ink-fg" : "text-muted hover:bg-subtle hover:text-foreground"
+    }`;
+  const count = (it: { count?: number; active: boolean }) =>
+    it.count !== undefined ? (
+      <span className={`u-mono text-[0.65625rem] ${it.active ? "opacity-70" : "text-faint"}`}>
+        {it.count}
+      </span>
+    ) : null;
+
   return (
     <nav aria-label={label} className={`flex min-w-0 flex-wrap items-center gap-1 ${className}`}>
-      {items.map((it) => (
-        <Link
-          key={it.key}
-          href={it.href}
-          scroll={false}
-          aria-current={it.active ? "page" : undefined}
-          className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-sm no-underline transition-colors ${
-            it.active
-              ? "bg-ink font-semibold text-ink-fg"
-              : "text-muted hover:bg-subtle hover:text-foreground"
-          }`}
-        >
-          {it.label}
-          {it.count !== undefined ? (
-            <span className={`u-mono text-[0.65625rem] ${it.active ? "opacity-70" : "text-faint"}`}>
-              {it.count}
-            </span>
-          ) : null}
-        </Link>
-      ))}
+      {items.map((it) =>
+        onPick ? (
+          <button
+            key={it.key}
+            type="button"
+            onClick={() => onPick(it.key)}
+            aria-pressed={it.active}
+            className={cls(it.active)}
+          >
+            {it.label}
+            {count(it)}
+          </button>
+        ) : (
+          <Link
+            key={it.key}
+            href={it.href ?? "#"}
+            scroll={false}
+            aria-current={it.active ? "page" : undefined}
+            className={cls(it.active)}
+          >
+            {it.label}
+            {count(it)}
+          </Link>
+        ),
+      )}
     </nav>
   );
 }
@@ -691,6 +726,41 @@ export function FactRow({
       >
         {children}
       </span>
+    </div>
+  );
+}
+
+/**
+ * A panel's bottom ALERT strip — a dot, a sentence, and the action that resolves it.
+ *
+ * The redesign puts one at the foot of the contact quick view (artboard 22a): "Falta
+ * confirmar el consentimiento de mensajería · Completar". It is deliberately NOT a
+ * `PanelBanner` at the top of the body: an unresolved fact about a contact is not news
+ * about the page you just opened, and a banner above the content pushes the content down
+ * every time. Pinned to the bottom it stays visible while the body scrolls and costs the
+ * content nothing.
+ *
+ * It renders NOTHING when there is nothing outstanding — the caller passes null. A strip
+ * that says "todo en orden" is chrome asserting its own usefulness.
+ */
+export function PanelAlertStrip({
+  children,
+  action,
+  tone = "warn",
+}: {
+  children: ReactNode;
+  /** The affordance that resolves it. Omitted when the fact is informational only. */
+  action?: ReactNode;
+  tone?: "warn" | "danger";
+}) {
+  return (
+    <div className="flex items-center gap-2.5 px-4 py-3">
+      <span
+        aria-hidden
+        className={`size-1.5 shrink-0 rounded-full ${tone === "danger" ? "bg-danger" : "bg-warn"}`}
+      />
+      <p className="min-w-0 flex-1 text-[0.75rem] leading-snug text-muted">{children}</p>
+      {action ? <span className="shrink-0">{action}</span> : null}
     </div>
   );
 }
