@@ -11,7 +11,6 @@ import {
 } from "@worker/db/repositories/contacts.js";
 import { listOpenCandidates } from "@worker/db/repositories/contactIdentities.js";
 import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
-import { AutoRefresh } from "@/components/AutoRefresh";
 import { DuplicateCandidates } from "@/components/contacts/DuplicateCandidates";
 import {
   ContactsColumnsMenu,
@@ -26,12 +25,10 @@ import { EmptyState, FacetPills, GHOST_ACTION_CLS, Pagination } from "@/componen
 import { PAGE_SIZE } from "@/lib/contactColumns";
 import { PageShell } from "@/components/ui/PageShell";
 import { loadContactEditPayload, loadContactPanel } from "@/lib/contactPanel";
-import { getContactTimeline } from "@worker/db/repositories/contactTimeline.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { ContactSidePanel } from "@/components/contacts/ContactSidePanel";
 import { listFieldDefinitions } from "@worker/db/repositories/clientFieldDefinitions.js";
-import { PageTitle } from "@/components/ui/PageTitle";
 import { NewContactButton } from "@/components/contacts/form/NewContactButton";
 
 const STAGES = new Set<string>(["new", "active", "customer", "archived"]);
@@ -130,10 +127,13 @@ export default async function ClientContactsPage({
   // page instead of a second client round-trip. An id from another client resolves to
   // null (loadContactPanel re-scopes it), so a forged `?c=` opens nothing.
   const panelId = selectedId && isUuid(selectedId) ? selectedId : null;
-  const [panel, panelTimeline, schedulingEnabled, panelEdit] = panelId
+  // NO TIMELINE QUERY. The panel used to open an `Actividad` tab, so this page fetched a
+  // page of the unified timeline on every selection. That tab is gone (three tabs now,
+  // matching the artboard), and with it the query — the timeline is the record's centre
+  // column, one click away, and paying for it here on every row click bought nothing.
+  const [panel, schedulingEnabled, panelEdit] = panelId
     ? await Promise.all([
         loadContactPanel(scope.tenantId, client.id, panelId),
-        getContactTimeline(scope.tenantId, client.id, panelId, {}),
         isClientModuleEnabled(scope.tenantId, client.id, "scheduling"),
         // The whole-contact edit payload, from the SAME loader the record header uses,
         // so the two doors into editing cannot disagree. Client-scoped: a `?c=` from
@@ -143,7 +143,7 @@ export default async function ClientContactsPage({
           isFullAccess,
         }),
       ])
-    : ([null, null, false, null] as const);
+    : ([null, false, null] as const);
 
   // `matched` is the count for THESE filters; summary.total is the client's whole book.
   // The footer and the pager both read `matched`, so "Mostrando 1–15 de 312" and the
@@ -365,16 +365,6 @@ export default async function ClientContactsPage({
             clientId={client.id}
             contactId={panelId}
             data={panel}
-            timelineItems={(panelTimeline?.items ?? []).map((it) => ({
-              id: it.id,
-              kind: it.kind,
-              occurred_at: it.occurred_at,
-              actor: it.actor,
-              summary: it.summary,
-              ref: it.ref,
-              meta: it.meta,
-            }))}
-            timelineCursor={panelTimeline?.nextCursor ?? null}
             viewerUserId={scope.userId}
             viewerIsFullAccess={isFullAccess}
             schedulingEnabled={schedulingEnabled}

@@ -855,14 +855,26 @@ body {
 }
 
 /* Table heading row: mono, uppercase, tracked-out, metadata gray. */
+/*
+ * THE small-label voice: table heads, metric-tile labels, panel titles.
+ *
+ * SENTENCE-CASE SANS at 600, not the mono uppercase it used to be. The CRM rework moved
+ * every table head and panel heading to this voice, and the reason is legibility at
+ * density: `ÚLTIMA INTERACCIÓN` tracked out to 0.08em is ~40% wider than "Última
+ * interacción" and competes with the content under it for the same column. Mono uppercase
+ * is now reserved for what it is good at — ids, timestamps, counts, and the structured
+ * labels inside a message payload.
+ *
+ * Changed HERE rather than per screen: this is the one definition every small label reads,
+ * so one edit moves them together. A per-screen version of the new voice is how three
+ * surfaces get converted and the fourth stays mono for a year.
+ */
 .u-th {
-  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   line-height: 1.2;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--faint);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--muted);
 }
 
 /* Selected / urgent row: a soft fill plus a 2px LEFT RULE (shape + color, so the

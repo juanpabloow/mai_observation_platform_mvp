@@ -20,7 +20,7 @@ import {
   PanelSection,
   SEARCH_SHELL_CLS,
   SectionHeading,
-  SummaryBit,
+  FacetPills,
   TOOLBAR_PRIMARY_CLS,
 } from "@/components/ui/primitives";
 import {
@@ -157,16 +157,22 @@ function presenceChip(key: StatusKey, appts: StaffAppointment[], now: Date, tz: 
   const current = appts.find((a) => new Date(a.startAt) <= now && new Date(a.endAt) > now);
   if (!current) return STATUS[key].label;
   const mins = Math.max(0, Math.round((now.getTime() - new Date(current.startAt).getTime()) / 60_000));
-  return `${mins} MIN IN CHAIR`;
+  return `${mins} min en silla`;
 }
 
+/*
+ * The presence vocabulary. SENTENCE CASE and Spanish: these are read together with their
+ * dot, so the uppercase added emphasis the colour was already carrying, three or four
+ * times per screen. The KEYS stay English because they are state, not copy — `statusFilter`
+ * and the facet pills both key off them.
+ */
 const STATUS: Record<StatusKey, { label: string; dot: string; text: string }> = {
-  with_client: { label: "WITH CLIENT", dot: "bg-service-purple", text: "text-service-purple" },
-  available: { label: "AVAILABLE NOW", dot: "bg-success", text: "text-success" },
-  on_shift: { label: "ON SHIFT", dot: "bg-success/60", text: "text-muted" },
-  off_today: { label: "OFF TODAY", dot: "bg-faintest", text: "text-faint" },
-  time_off: { label: "TIME OFF", dot: "bg-brand", text: "text-brand" },
-  no_chair: { label: "NO CHAIR", dot: "bg-faintest", text: "text-faint" },
+  with_client: { label: "Con cliente", dot: "bg-service-purple", text: "text-service-purple" },
+  available: { label: "Disponible", dot: "bg-success", text: "text-success" },
+  on_shift: { label: "En turno", dot: "bg-success/60", text: "text-muted" },
+  off_today: { label: "Sin turno hoy", dot: "bg-faintest", text: "text-faint" },
+  time_off: { label: "Ausente", dot: "bg-brand", text: "text-brand" },
+  no_chair: { label: "Sin silla", dot: "bg-faintest", text: "text-faint" },
 };
 
 export interface StaffTabProps {
@@ -289,30 +295,65 @@ export function StaffTab(
         <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
           <StaffHeaderCard
             slots={header}
-            counters={
-              // The presence legend, promoted out of the filter row into the title band
-              // as Contacts' counters. Real counts over the WHOLE roster, not the
-              // filtered view — unchanged from where they came from.
-              <>
-                <SummaryBit tone="busy" value={counts.withClient} label="with a client" />
-                <SummaryBit tone="success" value={counts.available} label="available" />
-                <SummaryBit value={counts.off} label="off" />
-              </>
-            }
             controls={
               <>
-                <div className="min-w-0 flex-1">
-                  <div className={`${SEARCH_SHELL_CLS} min-w-0 max-w-[280px]`}>
-                    <SearchIcon />
-                    <input
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Search staff"
-                      aria-label="Search staff"
-                      className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
-                    />
-                  </div>
+                {/* The SEARCH takes the title row's slack, capped at the artboard's 420px —
+                    the same shell and the same sizing as Contacts. */}
+                <div className={`${SEARCH_SHELL_CLS} min-w-0 max-w-[420px] flex-1`}>
+                  <SearchIcon />
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Buscar en el equipo"
+                    aria-label="Buscar en el equipo"
+                    className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
+                  />
                 </div>
+                {/* THE PRIMARY, far right. This screen is owner/admin only, so everyone who
+                    reaches it can manage the roster; there is no second permission check. */}
+                <button
+                  type="button"
+                  onClick={() => setCreating(true)}
+                  className={`ml-auto ${TOOLBAR_PRIMARY_CLS}`}
+                >
+                  + Agregar miembro
+                </button>
+              </>
+            }
+          />
+
+          {/* THE ROSTER CARD — PageShell, so its corners, hairline, fill and shadow are
+              the table card's on Contacts rather than a second hand-rolled set. The
+              scroll is INSIDE the card: it used to wrap the card, so the roster's own
+              bottom edge scrolled up out of view with the rows. */}
+          <PageShell clip={false}>
+            {/*
+              THE FILTER ROW, inside the list card and above the column header — exactly
+              where Contacts puts its facet pills (§2.2).
+
+              It used to live up in the header card as read-only counters beside a `Status ▾`
+              dropdown offering the same buckets. Two problems that fixed: the header card
+              was three bands deep, and the number was a statistic you read before opening a
+              menu to act on it. Now the number IS the filter, and it sits beside the rows it
+              filters.
+
+              Counts are over the WHOLE roster, never the filtered view, so clicking a pill
+              cannot change the numbers beside it.
+            */}
+            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line-row px-3.5 py-2.5">
+              <FacetPills
+                label="Filtrar el equipo por presencia"
+                items={[
+                  { key: "all", label: "Todos", count: props.members.length, active: statusFilter === "" },
+                  { key: "with_client", label: "Con cliente", count: counts.withClient, active: statusFilter === "with_client" },
+                  { key: "available", label: "Disponibles", count: counts.available, active: statusFilter === "available" },
+                  { key: "off_today", label: "Sin turno", count: counts.off, active: statusFilter === "off_today" },
+                ]}
+                // CLIENT-side mode: the roster is fully loaded, so a URL would be a lie
+                // about what changed. Contacts filters server-side and its pills are links.
+                onPick={(key: string) => setStatusFilter(key === "all" ? "" : key)}
+              />
+              <span className="ml-auto flex shrink-0 items-center gap-1.5">
                 <Facet
                   label="Service"
                   value={serviceFilter}
@@ -325,48 +366,18 @@ export function StaffTab(
                   onChange={(v) => router.push(`?site=${v}`)}
                   options={props.sites.map((s) => ({ value: s.id, label: s.name }))}
                 />
-                <Facet
-                  label="Status"
-                  value={statusFilter}
-                  onChange={setStatusFilter}
-                  options={[
-                    { value: "", label: "Status" },
-                    { value: "with_client", label: "With a client" },
-                    { value: "available", label: "Available" },
-                    { value: "off_today", label: "Off today" },
-                    { value: "time_off", label: "Time off" },
-                  ]}
-                />
-                {/* THE PRIMARY ACTION, at the far right of the control band — where
-                    Contacts puts "Nuevo contacto". It used to sit up on the title line,
-                    which is the band that says what you are LOOKING at. This screen is
-                    owner/admin only, so everyone who reaches it can manage the roster;
-                    there is no second permission check. */}
-                <button
-                  type="button"
-                  onClick={() => setCreating(true)}
-                  className={`ml-auto ${TOOLBAR_PRIMARY_CLS}`}
-                >
-                  + Add staff member
-                </button>
-              </>
-            }
-          />
+              </span>
+            </div>
 
-          {/* THE ROSTER CARD — PageShell, so its corners, hairline, fill and shadow are
-              the table card's on Contacts rather than a second hand-rolled set. The
-              scroll is INSIDE the card: it used to wrap the card, so the roster's own
-              bottom edge scrolled up out of view with the rows. */}
-          <PageShell>
             {/* The column header sits on the SAME white as the rows: the roster is
                 already its own card on grey, so a tinted strip inside it was a second
                 surface doing nothing the hairline below does not. */}
             <div className="flex h-9 shrink-0 items-center gap-3 border-b border-line bg-surface px-4">
               <span className="w-[30px] shrink-0" />
-              <span className="u-th min-w-0 flex-1">Member</span>
-              <span className="u-th hidden w-[190px] shrink-0 lg:block">Presence</span>
-              <span className="u-th hidden w-[104px] shrink-0 sm:block">Today</span>
-              <span className="u-th hidden w-[146px] shrink-0 lg:block">Next</span>
+              <span className="u-th min-w-0 flex-1">Miembro</span>
+              <span className="u-th hidden w-[190px] shrink-0 lg:block">Presencia</span>
+              <span className="u-th hidden w-[104px] shrink-0 sm:block">Hoy</span>
+              <span className="u-th hidden w-[146px] shrink-0 lg:block">Siguiente</span>
               <span className="w-5 shrink-0" />
             </div>
 
@@ -402,7 +413,7 @@ export function StaffTab(
                 onClick={() => setCreating(true)}
                 className="m-3 flex h-[52px] w-[calc(100%-1.5rem)] items-center justify-center gap-2 rounded-table border border-dashed border-line-strong text-sm text-muted transition-colors hover:border-faint hover:text-foreground"
               >
-                + Add staff member
+                + Agregar miembro
               </button>
             </div>
           </PageShell>
@@ -542,7 +553,7 @@ function StaffRow({
       </span>
 
       <span className="u-mono hidden w-[104px] shrink-0 whitespace-nowrap text-[11.5px] text-foreground sm:block">
-        {status === "no_chair" ? "NO CHAIR" : `${appts.length} TODAY`}
+        {status === "no_chair" ? "Sin silla" : `${appts.length} hoy`}
       </span>
 
       <span
@@ -551,14 +562,14 @@ function StaffRow({
         }`}
       >
         {status === "no_chair"
-          ? "handles inbox & walk-ins"
+          ? "atiende inbox y walk-ins"
           : attention
-            ? `${appts.length} to reassign`
+            ? `${appts.length} por reasignar`
             : status === "off_today"
-              ? "rest day"
+              ? "día de descanso"
               : next
-                ? `${status === "with_client" ? "then" : "next"} ${fmtTime(next.startAt, tz)}`
-                : "nothing booked"}
+                ? `${status === "with_client" ? "luego" : "sigue"} ${fmtTime(next.startAt, tz)}`
+                : "sin nada agendado"}
       </span>
 
       <span aria-hidden className="w-5 shrink-0 text-center text-xs text-faintest">
@@ -776,7 +787,7 @@ function StaffDetail({
               aria-selected={tab === t}
               onClick={() => setTab(t)}
               className={`-mb-px flex items-center gap-1.5 whitespace-nowrap border-b-2 pb-2.5 pt-3 text-[12.5px] font-medium capitalize transition-colors ${
-                tab === t ? "border-brand text-foreground" : "border-transparent text-muted hover:text-foreground"
+                tab === t ? "border-ink font-semibold text-foreground" : "border-transparent text-muted hover:text-foreground"
               }`}
             >
               {t}

@@ -2,18 +2,17 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useMemo, useState, type RefObject } from "react";
+import { useState, type RefObject } from "react";
 import type { ContactPanelData } from "@/lib/contactPanel";
 import { AppointmentsSection } from "@/components/contacts/shared/AppointmentsSection";
 import { TasksSection } from "@/components/contacts/shared/TasksSection";
 import { NotesSection } from "@/components/contacts/shared/NotesSection";
 import { TagsSection } from "@/components/contacts/shared/TagsSection";
-import { ContactTimeline, type TimelineItemView } from "@/components/contacts/ContactTimeline";
 import { ContactEditForm } from "@/components/contacts/form/ContactEditForm";
 import type { ContactEditPayload } from "@/lib/contactPanel";
 import { CRM_COPY } from "@/lib/contactLabels";
-import { FormSection, IconCalendar, IconInternal, IconPencil, IconTask } from "@/components/contacts/form/formPrimitives";
-import { BOOK_CLS } from "@/components/ui/primitives";
+import { FormSection, IconCalendar, IconInternal, IconNote, IconPencil, IconTask } from "@/components/contacts/form/formPrimitives";
+import { BOOK_CLS, PanelAlertStrip } from "@/components/ui/primitives";
 import { IconPlus } from "@/components/ui/icons";
 import { ContactSections } from "@/components/contacts/form/ContactSections";
 import {
@@ -25,7 +24,7 @@ import {
   PANEL_CLOSE_CLS,
   PanelCloseIcon,
 } from "@/components/contacts/shared/ContactPanelShell";
-import { contactToneStyle, type ContactHeaderFacts, type ContactMetricFacts } from "@/components/contacts/shared/ContactHeaderBlock";
+import { contactToneStyle, type ContactHeaderFacts } from "@/components/contacts/shared/ContactHeaderBlock";
 import { OVERLAY_SCRIM, useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
 
 /**
@@ -47,32 +46,32 @@ import { OVERLAY_SCRIM, useIsOverlayWidth, useTrappedPanel } from "@/components/
  */
 
 /*
- * FOUR TABS. The design draws three — Resumen / Citas / Notas (§2.5) — and folds what
- * used to be a separate `Datos` tab into Resumen, which is right: "the contact's fields"
- * and "a summary of this contact" were never two different questions, and splitting them
- * meant checking an owner or a consent took two clicks from a panel that had room for
- * neither tab.
+ * THREE TABS — Resumen / Citas / Notas, exactly the artboard's (§2.5).
  *
- * `activity` survives as a fourth. The artboard simply does not draw it, which is not the
- * same as removing it: the unified timeline is real content with its own keyset pager,
- * and it does not fit inside Resumen the way the field list does.
+ * `Datos` folded into Resumen: "the contact's fields" and "a summary of this contact" were
+ * never two different questions, and splitting them meant checking an owner or a consent
+ * cost two clicks in a panel with room for neither tab.
+ *
+ * `Actividad` came out too, and that one is a real removal rather than a merge. Four tabs
+ * plus the red `Agendar cita` do not fit across 380px — they overflowed into a horizontal
+ * scrollbar, which is a tab strip announcing that it does not fit. The unified timeline it
+ * opened is not lost: it is the whole CENTER COLUMN of the record, one click away through
+ * `Ficha ↗`, with five filters and a keyset pager instead of a 380px column. A quick view
+ * beside a list is the wrong place to read history.
  */
-const TABS = ["summary", "appointments", "notes", "activity"] as const;
+const TABS = ["summary", "appointments", "notes"] as const;
 type Tab = (typeof TABS)[number];
 /** Label per tab. The KEY stays English — it is state, not copy. */
 const TAB_LABEL: Record<Tab, string> = {
   summary: CRM_COPY.tabs.summary,
   appointments: CRM_COPY.tabs.appointments,
   notes: CRM_COPY.tabs.notes,
-  activity: CRM_COPY.tabs.activity,
 };
 
 export function ContactSidePanel({
   clientId,
   contactId,
   data,
-  timelineItems,
-  timelineCursor,
   viewerUserId,
   viewerIsFullAccess,
   schedulingEnabled,
@@ -84,8 +83,6 @@ export function ContactSidePanel({
   clientId: string;
   contactId: string;
   data: ContactPanelData;
-  timelineItems: TimelineItemView[];
-  timelineCursor: string | null;
   viewerUserId: string;
   viewerIsFullAccess: boolean;
   schedulingEnabled: boolean;
@@ -127,20 +124,13 @@ export function ContactSidePanel({
     stage: data.summary.stage,
     isCustomer: data.summary.isCustomer,
     consent: data.summary.consent,
+    // The "· 14 citas" on the name line. From the panel payload's own summary, which is
+    // the SAME derivation (summarizeAppointments) the list and the record read — a second
+    // count computed here is how two surfaces start quoting different numbers.
+    visitCount: data.summary.visitCount,
     createdAt: edit?.initial.createdAt ?? new Date().toISOString(),
     activityCount: edit?.initial.activityCount ?? 0,
   };
-  // Null only when the contact could not be re-resolved under this client, in which
-  // case the panel offers no editing either — see `edit`.
-  const metricFacts: ContactMetricFacts | null = edit
-    ? {
-        activityCount: edit.initial.activityCount,
-        lastContactAt: edit.initial.lastContactAt,
-        sourceChannel: edit.initial.sourceChannel,
-      }
-    : null;
-  // One clock for every relative age in the header.
-  const now = useMemo(() => new Date(), []);
 
   // Below xl the panel COVERS the table, so it is an overlay (a right sheet over a scrim),
   // not a beside-table column — otherwise a click below 1280px selected the row but
@@ -188,12 +178,36 @@ export function ContactSidePanel({
       >
       <ContactPanelShell
         scrollResetKey={tab}
+        /*
+          THE ALERT STRIP (artboard 22a). Consent is the one fact about a contact that is
+          both unresolved-by-default and consequential: `unknown` means nobody has asked,
+          which is a different state from a recorded refusal and is the one an operator can
+          act on. `opted_out` is deliberately NOT surfaced here — it is already a chip on
+          the name, and there is nothing to "complete" about a decision the customer made.
+          `Completar` opens the same edit drawer the pencil does, because that is where
+          consent is recorded; a second writer for one field is how the two drift.
+        */
+        footer={
+          data.summary.consent === "unknown" && edit ? (
+            <PanelAlertStrip
+              action={
+                <button
+                  type="button"
+                  onClick={() => setEditing(true)}
+                  className="text-[0.75rem] font-semibold text-foreground underline-offset-2 hover:underline"
+                >
+                  Completar
+                </button>
+              }
+            >
+              Falta confirmar el consentimiento de mensajería
+            </PanelAlertStrip>
+          ) : undefined
+        }
         headerToneStyle={contactToneStyle(headerFacts)}
         header={
           <ContactPanelHeader
-            now={now}
             facts={headerFacts}
-            metrics={metricFacts}
             /*
               THE ACTION ROW IS GONE, and that is the design's point (§2.5).
               It was three same-sized buttons stacked under the metrics: a red primary,
@@ -318,16 +332,37 @@ export function ContactSidePanel({
                 />
               ) : null}
 
-              <FormSection
-                title={CRM_COPY.headings.nextAppointment}
-                icon={<IconCalendar />}
-                trailing={<span className="u-mono">{CRM_COPY.totalCount(apptCount)}</span>}
-              >
-                <AppointmentsSection
+              {/*
+                THE ORDER IS THE ARTBOARD'S (22a): facts → Etiquetas → Notas.
+
+                `Próxima cita` moved OUT of Resumen and into the Citas tab: it is an
+                appointment, the tab beside it lists appointments, and showing the next one
+                twice made Resumen the longest tab in a panel whose point is a summary.
+                `Tareas abiertas` stays, LAST — the artboard does not draw it, but this is
+                the only surface in the panel where a task is visible at all, and dropping
+                it to match a drawing would remove function. Placing it after Notas means
+                everything the artboard does show appears in the artboard's order.
+              */}
+              <FormSection title={CRM_COPY.headings.tags} icon={<IconInternal />}>
+                <TagsSection
                   clientId={clientId}
-                  appointments={data.appointments}
+                  contactId={contactId}
+                  tags={data.tags}
+                  catalogue={[]}
+                  canManageCatalog={viewerIsFullAccess}
                   onChanged={onChanged}
-                  showHistory={false}
+                />
+              </FormSection>
+
+              <FormSection title={CRM_COPY.headings.notes} icon={<IconNote />}>
+                <NotesSection
+                  clientId={clientId}
+                  contactId={contactId}
+                  notes={data.recentNotes}
+                  viewerUserId={viewerUserId}
+                  viewerIsFullAccess={viewerIsFullAccess}
+                  onChanged={onChanged}
+                  dense
                 />
               </FormSection>
 
@@ -342,22 +377,17 @@ export function ContactSidePanel({
                   onChanged={onChanged}
                 />
               </FormSection>
-
-              <FormSection title={CRM_COPY.headings.tags} icon={<IconInternal />}>
-                <TagsSection
-                  clientId={clientId}
-                  contactId={contactId}
-                  tags={data.tags}
-                  catalogue={[]}
-                  canManageCatalog={viewerIsFullAccess}
-                  onChanged={onChanged}
-                />
-              </FormSection>
             </div>
           ) : null}
 
           {tab === "appointments" ? (
-            <FormSection title={CRM_COPY.headings.appointments} icon={<IconCalendar />}>
+            <FormSection
+              title={CRM_COPY.headings.appointments}
+              icon={<IconCalendar />}
+              trailing={<span className="u-mono">{CRM_COPY.totalCount(apptCount)}</span>}
+            >
+              {/* `showHistory` puts the NEXT appointment first and the past ones under it,
+                  which is why Resumen no longer needs its own copy of the next one. */}
               <AppointmentsSection clientId={clientId} appointments={data.appointments} onChanged={onChanged} showHistory />
             </FormSection>
           ) : null}
@@ -376,16 +406,6 @@ export function ContactSidePanel({
             </FormSection>
           ) : null}
 
-          {tab === "activity" ? (
-            <div className="p-4">
-              <ContactTimeline
-                clientId={clientId}
-                contactId={contactId}
-                initialItems={timelineItems}
-                initialCursor={timelineCursor}
-              />
-            </div>
-          ) : null}
       </ContactPanelShell>
 
       </aside>

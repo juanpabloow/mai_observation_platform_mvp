@@ -50,7 +50,7 @@ export function ContactAssociations({
   return (
     <div className="flex flex-col gap-3">
       {schedulingEnabled ? (
-        <Panel>
+        <Panel className="shadow-[var(--shadow-card)]">
           <div className="flex flex-col gap-3 p-3">
             <SectionHeading title={CRM_COPY.headings.appointments} icon={<IconCalendar />} />
             <AppointmentsSection clientId={clientId} appointments={appointments} onChanged={onChanged} showHistory returnContactId={contactId} />
@@ -58,7 +58,7 @@ export function ContactAssociations({
         </Panel>
       ) : null}
 
-      <Panel>
+      <Panel className="shadow-[var(--shadow-card)]">
         <div className="flex flex-col gap-3 p-3">
           <SectionHeading title={CRM_COPY.headings.openTasks} icon={<IconTask />} />
           <TasksSection
@@ -73,7 +73,7 @@ export function ContactAssociations({
         </div>
       </Panel>
 
-      <Panel>
+      <Panel className="shadow-[var(--shadow-card)]">
         <div className="flex flex-col gap-3 p-3">
           <SectionHeading title={CRM_COPY.headings.tags} icon={<IconInternal />} />
           <TagsSection

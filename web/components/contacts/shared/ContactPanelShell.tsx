@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode } from "react";
-import { ContactHeaderBlock, ContactMetrics, type ContactHeaderFacts, type ContactMetricFacts } from "./ContactHeaderBlock";
+import { ContactHeaderBlock, type ContactHeaderFacts } from "./ContactHeaderBlock";
 import { PANEL_FRAME } from "@/components/ui/panelChrome";
 
 /**
@@ -85,7 +85,18 @@ export function ContactPanelShell({
   /** Edge-to-edge strip under the header — the quick view's tab bar. */
   subheader?: ReactNode;
   banner?: ReactNode;
-  /** Omitted by the quick view: a surface that saves nothing has no footer. */
+  /**
+   * The fixed bottom strip.
+   *
+   * The rule used to be "a surface that saves nothing has no footer", which is still true
+   * of SAVE BARS: the presence of one is what tells an operator they are changing things
+   * rather than reading them, so the quick view must never grow one.
+   *
+   * An ALERT strip is a different object and the quick view does carry one (artboard 22a):
+   * a dot, a sentence naming something unresolved about this contact, and the action that
+   * resolves it. It sits in the same slot because it has the same job — stay put while the
+   * body scrolls — but it asserts nothing about whether the panel writes.
+   */
   footer?: ReactNode;
   /**
    * Change this to send the body back to the top — the quick view passes its active
@@ -132,16 +143,12 @@ export function ContactPanelShell({
  */
 export function ContactPanelHeader({
   facts,
-  metrics,
-  now,
   closeAction,
   recordAction,
   extra,
 }: {
   facts: ContactHeaderFacts;
   /** Null only when the contact could not be re-resolved under this client. */
-  metrics: ContactMetricFacts | null;
-  now: Date;
   closeAction?: ReactNode;
   /** The quiet `Ficha ↗` link on the name line — see ContactHeaderBlock. */
   recordAction?: ReactNode;
@@ -152,7 +159,17 @@ export function ContactPanelHeader({
   return (
     <div className="flex flex-col gap-2.5">
       <ContactHeaderBlock facts={facts} actions={closeAction} recordAction={recordAction} />
-      {metrics ? <ContactMetrics facts={metrics} now={now} /> : null}
+      {/*
+        NO METRIC STRIP. It was a three-tile band — CITAS / ÚLTIMA / CANAL — and the
+        artboard (22a) has none, for a good reason: every one of the three is restated
+        within 200px of it. CITAS is now "· 14 citas" on the name line, CANAL is "Canal
+        preferido" in Mensajería, and ÚLTIMA is derivable from the appointments one tab
+        away. It spent ~56px of a 380px panel saying what the panel already said.
+
+        `ContactMetrics` went with it rather than being kept "in case": this shell was its
+        only caller, and a component nothing renders is dead code regardless of which
+        surface might theoretically want it back.
+      */}
       {extra}
     </div>
   );

@@ -484,3 +484,121 @@ export async function listEventsForContact(
   );
   return r.rows;
 }
+
+/**
+ * A contact's COMMERCIAL profile — what they are worth, and how they behave.
+ *
+ * Feeds the record page's "Valor del cliente" card and its "Preferencias" card
+ * (docs/ui-redesign-crm-inbox.md — artboard 23a). Every field is DERIVED from
+ * appointments this contact actually completed; nothing here is stored, so nothing can
+ * go stale against the appointments it describes.
+ *
+ * ONE query with three CTEs rather than three round-trips, because the card renders as a
+ * single block and a partially-loaded "$1.240.000 in — citas" is worse than a spinner.
+ *
+ * `price_snapshot` is the price AS BOOKED, not the service's price today — which is the
+ * whole reason the snapshot column exists. A shop that raises its prices must not have
+ * every past visit silently revalued.
+ */
+export interface ContactValueProfile {
+  /** Sum of price_snapshot over COMPLETED appointments. Null when none have a price. */
+  lifetime_value: string | null;
+  /** Completed appointments — the "en N citas" beside the money. */
+  completed_count: number;
+  /** lifetime_value / completed_count, or null when there is nothing to average. */
+  average_ticket: string | null;
+  /**
+   * Where this contact's lifetime value ranks among the client's OTHER CUSTOMERS —
+   * 8 means "top 8%". Null when the comparison would not mean anything.
+   *
+   * The cohort is contacts with AT LEAST ONE completed appointment, not every contact.
+   * Including leads with zero spend would put anyone who has ever paid in the top few
+   * percent, which is a flattering number that tells an operator nothing.
+   *
+   * It is also null below MIN_PERCENTILE_COHORT customers. A percentile over three
+   * people is arithmetic, not information: two tied customers out of two came back as
+   * "top 1%", which reads as a precise claim about a shop that has served two people.
+   * Better to show nothing than a number that will embarrass the product.
+   */
+  value_percentile: number | null;
+  /** The staff member with the most completed appointments — their "usual barber". */
+  usual_staff_name: string | null;
+  /** The most-booked service name, from the same snapshots. */
+  usual_service_name: string | null;
+  /**
+   * Mean days between consecutive completed visits — the "cada N días" frequency.
+   * Null with fewer than two visits, because one visit establishes no rhythm.
+   */
+  avg_days_between_visits: number | null;
+}
+
+/**
+ * How many paying customers a client needs before "Top N%" is worth printing.
+ *
+ * 10 is the point where one position is ~10 percentage points, so the number moves in
+ * steps a person can reason about. Below it the rank is dominated by who happens to have
+ * booked, and the design's own example ("Top 8%") is not even expressible.
+ */
+const MIN_PERCENTILE_COHORT = 10;
+
+export async function getContactValueProfile(
+  tenantId: string,
+  clientId: string,
+  contactId: string,
+): Promise<ContactValueProfile | null> {
+  const r = await query<ContactValueProfile>(
+    `WITH mine AS (
+       SELECT price_snapshot, staff_id, service_name_snapshot, start_at
+         FROM appointments
+        WHERE tenant_id = $1 AND client_id = $2 AND contact_id = $3 AND status = 'completed'
+     ),
+     agg AS (
+       SELECT SUM(price_snapshot) AS lifetime_value,
+              COUNT(*)::int       AS completed_count,
+              AVG(price_snapshot) AS average_ticket,
+              mode() WITHIN GROUP (ORDER BY staff_id)              AS usual_staff_id,
+              mode() WITHIN GROUP (ORDER BY service_name_snapshot) AS usual_service_name,
+              -- Mean gap between consecutive visits: the span from first to last divided
+              -- by the number of GAPS (n-1), which is what "cada N días" means. Dividing
+              -- by n would understate the rhythm by a whole interval.
+              CASE WHEN COUNT(*) > 1
+                   THEN EXTRACT(EPOCH FROM (MAX(start_at) - MIN(start_at)))
+                        / 86400.0 / (COUNT(*) - 1)
+              END AS avg_days_between_visits
+         FROM mine
+     ),
+     cohort AS (
+       -- Every OTHER customer of this client, by lifetime value. Restricted to contacts
+       -- with a completed appointment — see the note on value_percentile.
+       SELECT contact_id, SUM(price_snapshot) AS lv
+         FROM appointments
+        WHERE tenant_id = $1 AND client_id = $2 AND contact_id IS NOT NULL
+              AND status = 'completed'
+        GROUP BY contact_id
+       HAVING SUM(price_snapshot) IS NOT NULL
+     )
+     SELECT agg.lifetime_value::text,
+            agg.completed_count,
+            round(agg.average_ticket)::text AS average_ticket,
+            -- The share of the cohort that this contact OUTRANKS, inverted into a
+            -- "top N%", and only once the cohort is big enough for a percentage to carry
+            -- information at all (see MIN_PERCENTILE_COHORT).
+            CASE WHEN (SELECT count(*) FROM cohort) >= $4
+                 THEN GREATEST(1, round(
+                        100.0 * (SELECT count(*) FROM cohort c WHERE c.lv > (SELECT lv FROM cohort WHERE contact_id = $3))
+                        / (SELECT count(*) FROM cohort)
+                      ))::int
+            END AS value_percentile,
+            s.name AS usual_staff_name,
+            agg.usual_service_name,
+            round(agg.avg_days_between_visits)::int AS avg_days_between_visits
+       FROM agg
+       LEFT JOIN staff s ON s.id = agg.usual_staff_id AND s.tenant_id = $1`,
+    [tenantId, clientId, contactId, MIN_PERCENTILE_COHORT],
+  );
+  const row = r.rows[0];
+  // COUNT(*) over an empty set still returns a row, with 0 and nulls throughout — that
+  // is a contact who has never completed a visit, which the card renders as its empty
+  // state rather than as "$0".
+  return row && row.completed_count > 0 ? row : null;
+}

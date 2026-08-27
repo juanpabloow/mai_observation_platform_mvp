@@ -214,7 +214,9 @@ export function ContactTimeline({
   return (
     <div className="flex flex-col gap-3">
       {/* Inline composers */}
-      <div className="flex flex-col gap-2 rounded-xl border border-line bg-card p-3">
+      {/* THE COMPOSER — its own white card (artboard 23a). It was `bg-card`, a 2%-black
+          tint, which on a grey canvas read as neither the canvas nor a card. */}
+      <div className="flex flex-col gap-2.5 rounded-xl border border-line bg-surface p-3.5 shadow-[var(--shadow-card)]">
         <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Agregar nota…" rows={2} className={INPUT} />
         <div className="flex flex-wrap items-center gap-2">
           <button type="button" onClick={addNote} disabled={pending || !note.trim()} className="rounded-md bg-ink px-3 py-1.5 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50">
@@ -241,39 +243,73 @@ export function ContactTimeline({
         ) : null}
       </div>
 
-      {/* Filter chips — push down to the API */}
-      <div className="flex flex-wrap gap-1.5">
+      {/*
+        THE FILTER ROW, as a TAB STRIP (artboard 23a) rather than the pills it used to be.
+        They were `rounded-full` chips, which read as one more set of controls in a column
+        that already has a composer above it; an underlined tab row reads as "these are
+        views of the thing below", which is what they are. Each still pushes down to the
+        C-3 API at source granularity — never a client-side hide.
+
+        `role="tablist"` and `aria-selected` replace the old `aria-pressed`: these are
+        mutually exclusive VIEWS of one region, not five independent toggles, and a screen
+        reader should hear them that way.
+      */}
+      {/*
+        THE TIMELINE CARD (artboard 23a): the tab row is the card's own header strip and the
+        entries fill its body. Both used to sit straight on the grey canvas, so the tabs
+        looked like loose controls and the rows like a list with no container — which is
+        what made this column not read as the design.
+
+        `overflow-hidden` clips the tab row's bottom rule and the rows' dividers to the
+        rounded corners; without it they square off the card's top and bottom edges.
+      */}
+      <div className="flex min-w-0 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]">
+      <div className="flex items-center gap-4 border-b border-line-soft px-4" role="tablist">
         {TIMELINE_FILTERS.map((f, idx) => (
           <button
             key={f.label}
             type="button"
+            role="tab"
             onClick={() => pickFilter(idx)}
-            aria-pressed={filter === idx}
-            className={`rounded-full px-2.5 py-1 text-xs font-medium transition-colors ${
-              filter === idx ? "bg-subtle text-foreground" : "text-muted hover:bg-subtle hover:text-foreground"
+            aria-selected={filter === idx}
+            className={`-mb-px shrink-0 whitespace-nowrap border-b-2 pb-2.5 pt-3 text-[0.78125rem] transition-colors ${
+              filter === idx
+                ? "border-ink font-semibold text-foreground"
+                : "border-transparent text-muted hover:text-foreground"
             }`}
           >
             {f.label}
           </button>
         ))}
+        {/* The count is of what is LOADED, so it says so — "5 eventos" beside a keyset
+            list that has more pages would otherwise read as a total. */}
+        <span className="ml-auto shrink-0 pb-2.5 pt-3 text-[0.71875rem] text-faint">
+          {items.length} {items.length === 1 ? "evento" : "eventos"}
+          {/* A trailing "+" when a further page exists, so the count cannot be read as
+              a total. */}
+          {cursor ? "+" : ""}
+        </span>
       </div>
 
       {/* Timeline */}
       {items.length === 0 ? (
-        <div className="rounded-2xl border border-dashed border-line px-6 py-12 text-center">
+        <div className="px-6 py-12 text-center">
           <p className="text-sm font-medium text-muted">Todavía no hay nada aquí</p>
           <p className="mx-auto mt-1 max-w-sm text-sm text-faint">
             Las conversaciones, citas, notas y cambios de este contacto aparecerán aquí a medida que ocurran.
           </p>
         </div>
       ) : (
-        <div className="flex flex-col">
+        <div className="flex flex-col px-4 pb-2">
           {groups.map((g) => (
             <div key={g.key}>
-              <div className="my-1 flex justify-center">
-                <span className="rounded-full bg-black/5 px-2.5 py-0.5 text-[11px] text-neutral-500 dark:bg-white/10 dark:text-muted">
-                  {g.label}
-                </span>
+              {/* The day label is a LEFT-ALIGNED heading, not a centred pill (artboard
+                  23a). Inside a card the pill read as a chip floating over the list; a
+                  quiet left-aligned line reads as what it is — a heading for the entries
+                  under it. (The inbox thread keeps its centred seam: there the label
+                  divides two sides of a conversation, so centring it is meaningful.) */}
+              <div className="px-1 pb-1 pt-3 text-[0.6875rem] font-semibold text-faint first:pt-1">
+                {g.label}
               </div>
               <ul className="flex flex-col divide-y divide-line/60">
                 {g.items.map((it) => (
@@ -286,12 +322,13 @@ export function ContactTimeline({
       )}
 
       {cursor ? (
-        <div className="flex justify-center pt-1">
+        <div className="flex justify-center border-t border-line-soft py-2.5">
           <button type="button" onClick={loadMore} disabled={loading} className="rounded-lg border border-line px-3 py-1.5 text-sm text-muted transition-colors hover:bg-subtle hover:text-foreground disabled:opacity-50">
             {loading ? "Cargando…" : CRM_COPY.actions.loadMore}
           </button>
         </div>
       ) : null}
+      </div>
     </div>
   );
 }

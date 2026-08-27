@@ -186,7 +186,6 @@ export function ContactEditForm({
     });
   };
 
-  const now = useMemo(() => new Date(), []);
 
   return (
     <ContactFormDrawer
@@ -197,7 +196,6 @@ export function ContactEditForm({
       })}
       titleBlock={
         <ContactPanelHeader
-          now={now}
           closeAction={
             <button type="button" onClick={onClose} aria-label="Cerrar" className={PANEL_CLOSE_CLS}>
               <PanelCloseIcon />
@@ -211,11 +209,6 @@ export function ContactEditForm({
             consent: initial.consent,
             createdAt: initial.createdAt,
             activityCount: initial.activityCount,
-          }}
-          metrics={{
-            activityCount: initial.activityCount,
-            lastContactAt: initial.lastContactAt,
-            sourceChannel: initial.sourceChannel,
           }}
         />
       }
