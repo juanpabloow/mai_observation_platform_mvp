@@ -27,7 +27,7 @@ export function ContactFormDrawer({
   title,
   subtitle,
   titleBlock,
-  headerTone,
+  headerToneStyle,
   onClose,
   banner,
   footer,
@@ -41,7 +41,7 @@ export function ContactFormDrawer({
    *  line the quick view does; creating one has no person to introduce yet. */
   titleBlock?: ReactNode;
   /** The contact's own tone for the header wash. Absent when creating: no contact yet. */
-  headerTone?: string;
+  headerToneStyle?: Record<string, string>;
   onClose: () => void;
   /** The state line above the form (ready / review matches / unsaved changes). */
   banner?: ReactNode;
@@ -73,7 +73,7 @@ export function ContactFormDrawer({
         className={`u-panel-in absolute inset-y-0 right-0 z-50 ${CONTACT_PANEL_FRAME}`}
       >
         <ContactPanelShell
-          headerTone={headerTone}
+          headerToneStyle={headerToneStyle}
           banner={banner}
           footer={footer}
           header={

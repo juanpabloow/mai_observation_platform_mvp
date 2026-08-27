@@ -300,9 +300,11 @@ export function HeaderBar({
             data-menu-root
             onClick={() => setOpenMenu(openMenu === "client" ? null : "client")}
             aria-expanded={openMenu === "client"}
-            // A DELIMITED compact control, so the client scope reads as a real
-            // selector rather than loose breadcrumb text.
-            className="inline-flex h-7 min-w-0 max-w-[240px] items-center gap-1.5 rounded-md border border-line px-2 text-foreground transition-colors hover:bg-subtle"
+            // A FILLED chip, so the client scope reads as a real selector rather than
+            // loose breadcrumb text. It was a 1px-outlined 28px control, which at that
+            // height read as an empty input sitting in the trail; a soft `--chip` fill
+            // with no border says "object" without spending a line on it.
+            className="inline-flex h-7 min-w-0 max-w-[240px] items-center gap-1.5 rounded-md bg-chip px-2 text-foreground transition-colors hover:bg-subtle"
           >
             {currentClient ? (
               currentClient.isDefault ? (
@@ -317,15 +319,13 @@ export function HeaderBar({
                 </>
               )
             ) : (
-              <span className="text-muted">Select a client</span>
+              <span className="text-muted">Elige un cliente</span>
             )}
             <ChevronUpDown />
           </button>
           {openMenu === "client" ? (
             <PortalPanel anchorRef={clientBtn} align="left" width={264}>
-              <p className="px-3 pb-1 pt-2 text-[0.625rem] font-medium uppercase tracking-wider text-neutral-500">
-                Clients
-              </p>
+              <p className="px-3 pb-1 pt-2 text-[0.6875rem] font-semibold text-faint">Clientes</p>
               <div className="max-h-72 overflow-y-auto pb-1">
                 {clients.map((c) => (
                   <button
@@ -363,16 +363,11 @@ export function HeaderBar({
             since the switcher itself carries that identity. */}
         {clientSurface && (!surface || surface.section === "inbox") ? (
           <>
-            {/* Module GROUP segment ("CRM", "Scheduling") — present only for the
-                surfaces that really live inside a module, so the trail reads
-                "Client / CRM / Contacts" and never invents a hierarchy. */}
-            {clientSurface.group ? (
-              <>
-                <span aria-hidden className="text-faint">/</span>
-                <span className="inline-flex items-center px-2 py-1 text-muted">{clientSurface.group}</span>
-              </>
-            ) : null}
-            <span aria-hidden className="text-faint">/</span>
+            {/* NO module GROUP segment. The trail is "Client / Page": the rail already
+                groups these pages under CRM / SCHEDULING headings a few hundred pixels
+                to the left, and "CRM" was not clickable — a segment that restates
+                visible context and navigates nowhere. */}
+            <span aria-hidden className="text-faintest">/</span>
             <span className="inline-flex items-center px-2 py-1 font-medium text-foreground">
               {clientSurface.label}
             </span>

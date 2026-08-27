@@ -9,20 +9,21 @@ import {
 } from "@/lib/inboxActions";
 import type { InboxHeaderView } from "@/lib/inboxView";
 
-// The header's action pair, on tokens rather than raw palette colours: the primary
-// is the solid near-black button from the design ("Return to bot" reads as the one
-// committing action in the strip), the secondary a hairline shell.
+// The header's action pair. The primary is the design's INK button — `--ink` rather than
+// `--foreground`, because a filled button carrying white text and body text are two
+// different jobs and tying them together means a text-colour tweak restyles every button
+// (see the note on --ink in globals.css). The secondary is a hairline shell.
 const primaryBtn =
-  "inline-flex h-8 items-center rounded-md bg-foreground px-3 text-xs font-medium text-background transition-opacity hover:opacity-90 disabled:opacity-50";
+  "inline-flex h-8 items-center rounded-lg bg-ink px-3.5 text-xs font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50";
 const secondaryBtn =
-  "inline-flex h-8 items-center rounded-md border border-line-strong px-3 text-xs transition-colors hover:bg-hover disabled:opacity-50";
+  "inline-flex h-8 items-center rounded-lg border border-line-strong px-3 text-xs text-muted transition-colors hover:border-faint hover:text-foreground disabled:opacity-50";
 
 /**
  * Thread action buttons, gated by mode + viewer (the SERVER actions re-check
  * everything; this only decides what to show):
- *   - Take        — bot | pending, any user with access.
- *   - Dismiss     — pending, any user with access (confirm).
- *   - Return to bot — human, only the assigned agent OR owner/admin (confirm).
+ *   - Atender       — bot | pending, any user with access.
+ *   - Descartar     — pending, any user with access (confirm).
+ *   - Devolver al bot — human, only the assigned agent OR owner/admin (confirm).
  */
 export function ThreadActions({
   clientId,
@@ -60,21 +61,21 @@ export function ThreadActions({
           onClick={() => run(() => takeConversationAction(clientId, header.id))}
           className={primaryBtn}
         >
-          {pending ? "Working…" : "Take"}
+          {pending ? "Un momento…" : "Atender"}
         </button>
       ) : null}
 
       {header.mode === "pending" ? (
         confirming === "dismiss" ? (
           <ConfirmInline
-            label="Return to bot without taking?"
+            label="¿Devolver al bot sin atenderla?"
             busy={pending}
             onConfirm={() => run(() => dismissConversationAction(clientId, header.id))}
             onCancel={() => setConfirming(null)}
           />
         ) : (
           <button type="button" disabled={pending} onClick={() => setConfirming("dismiss")} className={secondaryBtn}>
-            Dismiss
+            Descartar
           </button>
         )
       ) : null}
@@ -82,14 +83,14 @@ export function ThreadActions({
       {canReturn ? (
         confirming === "return" ? (
           <ConfirmInline
-            label="Return this conversation to the bot?"
+            label="¿Devolver esta conversación al bot?"
             busy={pending}
             onConfirm={() => run(() => returnConversationToBotAction(clientId, header.id))}
             onCancel={() => setConfirming(null)}
           />
         ) : (
           <button type="button" disabled={pending} onClick={() => setConfirming("return")} className={primaryBtn}>
-            Return to bot
+            Devolver al bot
           </button>
         )
       ) : null}
@@ -117,14 +118,14 @@ function ConfirmInline({
         onClick={onConfirm}
         className="inline-flex h-8 items-center rounded-md border border-warn-rule/50 px-2.5 text-xs text-warn transition-colors hover:bg-warn-soft disabled:opacity-50"
       >
-        {busy ? "Working…" : "Confirm"}
+        {busy ? "Un momento…" : "Confirmar"}
       </button>
       <button
         type="button"
         onClick={onCancel}
         className="inline-flex h-8 items-center rounded-md border border-line-strong px-2.5 text-xs transition-colors hover:bg-hover"
       >
-        Cancel
+        Cancelar
       </button>
     </div>
   );

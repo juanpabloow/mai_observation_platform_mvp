@@ -8,6 +8,8 @@ import { useScope } from "@/components/ScopeProvider";
 import { scopeHref } from "@/lib/scopeSurface";
 import { InboxTabLink } from "@/components/InboxTabLink";
 import { AccountMenu } from "@/components/AccountMenu";
+import { avatarColor } from "@/lib/avatarColor";
+import { RAIL_ROW } from "@/components/railRow";
 
 const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password"];
 
@@ -19,7 +21,10 @@ function parseClientId(pathname: string): string | null {
 
 // ── Inline SVG icon set (no icon dependency is installed; the app uses inline SVG).
 // 18px, 1.5 stroke, currentColor — consistent weight across the rail. ─────────────
-const iconCls = "size-[1.125rem] shrink-0";
+/* 17px. The design specifies 15px against its own 13.5px label; at the 14px label this
+   rail actually renders, 15px read as a smaller glyph beside a bigger word. */
+const iconCls = "size-[1.0625rem] shrink-0";
+
 const Icon = {
   workflows: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
@@ -124,14 +129,25 @@ function NavLink({
   collapsed: boolean;
   onNavigate?: () => void;
 }) {
-  // Final design: the ACTIVE row is a SOLID BRAND fill with white text (the single
-  // strongest mark in the shell, so "where am I" is answered at a glance and only
-  // ever by one row); everything else is quiet metadata gray until hovered.
-  const base = `group relative flex min-h-10 items-center rounded-lg text-sm transition-colors ${
-    collapsed ? "justify-center px-0 py-2" : "gap-2.5 px-3 py-2"
+  // The ACTIVE row is a SOLID BRAND fill with white text — the single strongest mark in
+  // the shell, so "where am I" is answered at a glance and only ever by one row.
+  // Everything else is quiet metadata grey until hovered, and hover is a change of
+  // GROUND, never a hue (see --sidebar-hover-dark in globals.css).
+  //
+  // DENSITY is the design's (`padding: 8px 18px`, no min-height, no gap between rows):
+  // ~32px per row against the 40px `min-h-10` this used to force. Eleven rows at 40px
+  // pushed Administration toward the fold on a laptop and made the rail read as a
+  // marketing menu rather than as a tool's chrome.
+  //
+  // The active row is INSET (`mx-2.5`) rather than full-bleed: a red band running edge to
+  // edge is a second border on the content, where an inset pill reads as an object in a
+  // list. The idle rows carry the same inset as transparent margin, so nothing shifts by
+  // a pixel when selection moves.
+  const base = `${RAIL_ROW} ${
+    collapsed ? "justify-center px-0 py-2.5" : "gap-3 px-2.5 py-2.5"
   } ${
     item.active
-      ? "bg-nav-active font-medium text-white"
+      ? "bg-nav-active font-semibold text-white"
       : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-fg"
   }`;
   return (
@@ -156,7 +172,9 @@ function SectionHeader({ label, collapsed, first }: { label: string; collapsed: 
     // A hairline divider stands in for the label; the group still carries aria-label.
     return first ? null : <div aria-hidden className="mx-2 my-2 border-t border-sidebar-border" />;
   }
-  return <p className={`u-th-sidebar px-3 pb-1 ${first ? "pt-1" : "pt-4"}`}>{label}</p>;
+  // 18px of side padding to line the label up with the row TEXT (a row is inset 10px and
+  // padded 8px), and the design's 6px below / 16px above the next group.
+  return <p className={`u-th-sidebar px-[18px] pb-1.5 ${first ? "pt-0.5" : "pt-4"}`}>{label}</p>;
 }
 
 /**
@@ -168,8 +186,11 @@ function SectionHeader({ label, collapsed, first }: { label: string; collapsed: 
 function Brand({ homeHref, collapsed, onNavigate }: { homeHref: string; collapsed: boolean; onNavigate?: () => void }) {
   return (
     <div
-      className={`flex h-[var(--topbar-height)] shrink-0 items-center border-b border-sidebar-border ${
-        collapsed ? "justify-center px-2" : "px-[16px]"
+      // NO bottom rule. The brand is part of the rail, not a titlebar over it: a hairline
+      // here cut the rail into two panels and made the first section heading look like it
+      // belonged to a different list. The padding below is the separation.
+      className={`flex h-[var(--topbar-height)] shrink-0 items-center ${
+        collapsed ? "justify-center px-2" : "px-[18px]"
       }`}
     >
       <Link
@@ -188,12 +209,24 @@ function Brand({ homeHref, collapsed, onNavigate }: { homeHref: string; collapse
   );
 }
 
-/** Avatar circle with the user's initial. */
-function Avatar({ initial }: { initial: string }) {
+/**
+ * The account disc in the rail's footer — a two-tone gradient SPHERE, the same object the
+ * contacts table and the inbox queue draw (see `.u-avatar-*` in globals.css).
+ *
+ * It used to be a flat `--sidebar-border` fill, which made the one person who is always
+ * on screen the only person in the app without an identity colour. Seeding it from the
+ * account's own identifier means it is stable across sessions and consistent with how
+ * every other person is coloured.
+ *
+ * `seed` is the email rather than the display name: a name can be edited or absent, and
+ * the disc changing colour because someone fixed their capitalisation is exactly the kind
+ * of instability the hash is meant to avoid.
+ */
+function Avatar({ initial, seed }: { initial: string; seed: string }) {
   return (
     <span
       aria-hidden
-      className="flex size-7 shrink-0 items-center justify-center rounded-full border border-sidebar-border bg-sidebar-border text-xs font-semibold text-sidebar-fg"
+      className={`flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${avatarColor(seed)}`}
     >
       {initial}
     </span>
@@ -252,10 +285,10 @@ function RailBody({
       <Brand homeHref={homeHref} collapsed={collapsed} onNavigate={onNavigate} />
       <nav
         aria-label="Primary"
-        className={`flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto py-3 ${collapsed ? "px-2" : "px-3"}`}
+        className={`flex min-h-0 flex-1 flex-col overflow-y-auto py-4 ${collapsed ? "px-2" : "px-0"}`}
       >
         {sections.map((section, i) => (
-          <div key={section.label} role="group" aria-label={section.label} className="flex flex-col gap-0.5">
+          <div key={section.label} role="group" aria-label={section.label} className="flex flex-col">
             <SectionHeader label={section.label} collapsed={collapsed} first={i === 0} />
             {section.items.map((item) =>
               item.countEndpoint ? (
@@ -277,9 +310,13 @@ function RailBody({
         ))}
       </nav>
 
-      {/* Fixed account footer — opens the SHARED account menu (same one the header
-          uses). Flyout above when expanded, to the right when collapsed. */}
-      <div ref={footerRef} className={`relative shrink-0 border-t border-sidebar-border ${collapsed ? "p-2" : "p-3"}`}>
+      {/* Fixed account footer — opens the SHARED account menu (same one the header uses).
+          Flyout above when expanded, to the right when collapsed.
+
+          It KEEPS its top rule, unlike the brand above: this one separates navigation from
+          the account, which is a real boundary — above it is where you can go, below it is
+          who you are. */}
+      <div ref={footerRef} className={`relative shrink-0 border-t border-sidebar-border ${collapsed ? "p-2" : "py-2"}`}>
         <button
           type="button"
           onClick={() => setAcctOpen((o) => !o)}
@@ -287,20 +324,24 @@ function RailBody({
           aria-expanded={acctOpen}
           aria-label={collapsed ? `Account: ${label}` : undefined}
           title={account.email}
-          className={`w-full rounded-lg text-sm text-sidebar-muted transition-colors hover:bg-sidebar-hover hover:text-sidebar-fg ${
+          // The SAME row as the nav items above (RAIL_ROW): same inset, same 10px radius,
+          // same hover. It used to be a full-width `rounded-lg` block with its own
+          // padding, so the one row that is always on screen was the one row shaped
+          // differently from every other.
+          className={`${RAIL_ROW} w-[calc(100%-1.25rem)] text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-fg ${
             collapsed
               ? "flex items-center justify-center p-1"
-              : "grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2.5 px-2 py-1.5 text-left"
+              : "grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 px-2.5 py-2 text-left"
           }`}
         >
-          <Avatar initial={initial} />
+          <Avatar initial={initial} seed={account.email} />
           {collapsed ? null : (
             // Track 2 of the grid: it starts AFTER the avatar's track + the gap, so
             // the label can never render on top of the avatar. minmax(0,1fr) lets it
             // shrink below its content width, which is what makes truncate work.
             <span className="flex min-w-0 flex-col overflow-hidden">
-              <span className="truncate text-sm font-medium text-sidebar-fg">{label}</span>
-              <span className="truncate text-xs capitalize text-sidebar-section">{account.role}</span>
+              <span className="truncate text-[0.8125rem] font-medium leading-tight text-sidebar-fg">{label}</span>
+              <span className="truncate text-[0.6875rem] capitalize leading-tight text-sidebar-section">{account.role}</span>
             </span>
           )}
         </button>

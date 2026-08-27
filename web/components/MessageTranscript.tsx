@@ -1,22 +1,35 @@
+import Link from "next/link";
 import { formatChatTime, formatDayLabel, localDayKey } from "@/lib/format";
-import type { InboxMessageView, ThreadEventView } from "@/lib/inboxView";
+import type {
+  InboxMessageView,
+  MessagePayload,
+  ThreadEventView,
+  ThreadSchedulingEventView,
+} from "@/lib/inboxView";
 
 const GROUP_GAP_MS = 3 * 60_000; // same sender within 3min stacks into one group
 
 /**
- * The shared chat transcript used by BOTH the inbox thread drawer and the
- * execution-detail pane (H-8.2). Renders WhatsApp-style bubbles from
- * InboxMessageView[]: customer left (white surface), bot right (grey fill),
- * human_agent right (solid inverse) — name once per consecutive-sender run,
- * in-bubble bottom-right
- * timestamps, and date separators on day change.
+ * The shared chat transcript used by BOTH the inbox thread and the execution-detail pane.
  *
- * `onRetry` is optional — the inbox passes it (a failed own-send can be retried);
- * the read-only execution-detail transcript omits it. `highlightIds` marks the
- * messages that belong to a specific execution ("THIS EXECUTION"): those bubbles
- * get an amber ring, and — when `highlightLabel` is set (an id-precise match, not
- * the silent time-window fallback) — a centered "this execution" divider is shown
- * before the first highlighted message.
+ * Restyled to the redesign (docs/ui-redesign-crm-inbox.md §3.3). Three voices, each
+ * carrying SHAPE + FILL and never colour alone:
+ *
+ *   customer    → left,  white + hairline,  tail bottom-LEFT
+ *   bot         → right, near-black fill,   tail bottom-RIGHT
+ *   human agent → right, white + INK border, tail bottom-RIGHT
+ *
+ * THE TIMESTAMP MOVED OUT. It used to be tucked inside the bubble bottom-right, which
+ * needed an invisible copy of the stamp to reserve room on the last line only — because
+ * making it a flex sibling took its width from EVERY line and wrapped two-line messages
+ * into three. The design puts it below the bubble, outside, which deletes that entire
+ * mechanism: the text now flows at the full bubble width with nothing to route around.
+ * The `sending` / `failed` states keep their meta inline because it is a status and a
+ * Retry button, not a stamp.
+ *
+ * `onRetry` is optional — the inbox passes it (a failed own-send can be retried); the
+ * read-only execution-detail transcript omits it. `highlightIds` marks the messages that
+ * belong to a specific execution ("esta ejecución").
  */
 export function MessageTranscript({
   messages,
@@ -26,6 +39,8 @@ export function MessageTranscript({
   highlightLabel = false,
   incomingAvatar,
   events,
+  schedulingEvents,
+  agendaHref,
 }: {
   messages: InboxMessageView[];
   now: Date;
@@ -33,46 +48,65 @@ export function MessageTranscript({
   highlightIds?: ReadonlySet<string>;
   highlightLabel?: boolean;
   /**
-   * The disc to draw beside the CUSTOMER's message groups: its two characters plus
-   * the palette class for this contact (see lib/conversationAvatarLabel +
-   * lib/avatarColor — the queue row derives both from the same identifier, so one
-   * person is one colour across the whole surface). Omitted by the read-only
-   * execution transcript, which has no conversation identity in hand and therefore
-   * keeps its current, avatar-less layout.
+   * The disc to draw beside the CUSTOMER's message groups: its two characters plus the
+   * palette class for this contact (see lib/conversationAvatarLabel + lib/avatarColor —
+   * the queue row derives both from the same identifier, so one person is one colour
+   * across the whole surface). Omitted by the read-only execution transcript, which has
+   * no conversation identity in hand.
    */
   incomingAvatar?: { label: string; toneClass: string } | null;
   /**
-   * Mode turning points, interleaved with the messages by timestamp — "Santiago took
-   * over", "Escalated to a human", "Returned to the bot". They break the sender run
-   * on purpose: the bubbles above and below a takeover came from different people.
+   * Mode turning points, interleaved with the messages by timestamp — "Santiago entró al
+   * chat", "Escalado a una persona", "Volvió al bot". They break the sender run on
+   * purpose: the bubbles above and below a takeover came from different people.
    *
-   * TODO(inbox): the design also opens the thread with "BOT PICKED UP 10:28". A
-   *   conversation STARTS in bot mode with no transition row, so there is nothing to
-   *   read for it — it would need a row written at creation (or to be inferred from
-   *   the first bot message, which is a guess, not a fact).
+   * The design also opens the thread with "el bot tomó la conversación 10:28". A
+   * conversation STARTS in bot mode with no transition row, so there is nothing to read
+   * for it — it would need a row written at creation, or to be inferred from the first
+   * bot message, which is a guess rather than a fact. Deliberately absent.
    */
   events?: ThreadEventView[];
+  /**
+   * SCHEDULING turning points — the appointment this conversation booked and what has
+   * happened to it since ("REAGENDADA POR EL BOT · Keratina movida a … · Ver en agenda").
+   * Backed by `appointments.source_conversation_id` + `appointment_events`; see
+   * listConversationSchedulingEvents.
+   */
+  schedulingEvents?: ThreadSchedulingEventView[];
+  /** Where "Ver en agenda ↗" points. Omitted ⇒ the strip renders without the link. */
+  agendaHref?: (appointmentId: string) => string;
 }) {
   if (messages.length === 0) {
-    return <p className="py-8 text-center text-sm text-faint">No messages yet.</p>;
+    return <p className="py-8 text-center text-sm text-faint">Todavía no hay mensajes.</p>;
   }
   const firstHighlightId =
     highlightIds && highlightIds.size > 0
       ? messages.find((m) => highlightIds.has(m.id))?.id ?? null
       : null;
 
-  // Build date separators + consecutive-sender runs; a "this execution" marker
-  // (when labeled) breaks the run before the first highlighted message. Mode
-  // transitions are merged into the same pass, in timestamp order, so a takeover
-  // lands exactly between the messages it separates.
-  const pending = [...(events ?? [])].sort((a, b) => a.at.localeCompare(b.at));
-  const blocks: (Run | DateSep | Marker)[] = [];
+  // Build date separators + consecutive-sender runs; a "this execution" marker (when
+  // labeled) breaks the run before the first highlighted message. BOTH kinds of event are
+  // merged into the same pass, in timestamp order, so a takeover or a reschedule lands
+  // exactly between the messages it separates.
+  type Pending =
+    | { at: string; kind: "mode"; e: ThreadEventView }
+    | { at: string; kind: "scheduling"; e: ThreadSchedulingEventView };
+  const pending: Pending[] = [
+    ...(events ?? []).map((e) => ({ at: e.at, kind: "mode" as const, e })),
+    ...(schedulingEvents ?? []).map((e) => ({ at: e.at, kind: "scheduling" as const, e })),
+  ].sort((a, b) => a.at.localeCompare(b.at));
+
+  const blocks: Block[] = [];
   let lastDay: string | null = null;
   let run: Run | null = null;
   const flushEventsBefore = (iso: string | null) => {
     while (pending.length > 0 && (iso === null || pending[0].at <= iso)) {
-      const e = pending.shift()!;
-      blocks.push({ type: "marker", key: `event-${e.id}`, label: eventLabel(e), tone: "event" });
+      const p = pending.shift()!;
+      if (p.kind === "mode") {
+        blocks.push({ type: "mode", key: `event-${p.e.id}`, event: p.e });
+      } else {
+        blocks.push({ type: "scheduling", key: `sched-${p.e.id}`, event: p.e });
+      }
       run = null; // the run cannot continue across a change of who is answering
     }
   };
@@ -86,7 +120,7 @@ export function MessageTranscript({
       run = null;
     }
     if (highlightLabel && firstHighlightId && m.id === firstHighlightId) {
-      blocks.push({ type: "marker", key: `marker-${m.id}`, label: "this execution" });
+      blocks.push({ type: "marker", key: `marker-${m.id}`, label: "esta ejecución" });
       run = null;
     }
     const prev = run?.items[run.items.length - 1];
@@ -105,34 +139,22 @@ export function MessageTranscript({
   flushEventsBefore(null); // anything after the last message (e.g. a fresh takeover)
 
   return (
-    <div className="flex flex-col gap-3">
+    // gap-4 — the design's 16px. The bubbles carry their own timestamp below them now, so
+    // a tighter gap would run one group's stamp into the next group's first bubble.
+    <div className="flex flex-col gap-4">
       {blocks.map((b) =>
         b.type === "date" ? (
-          // A centred label between two hairlines — the day is a SEAM in the thread,
-          // not a floating chip, which is what the redesign's separator reads as.
-          <div key={b.key} className="my-1 flex items-center gap-3">
-            <span aria-hidden className="h-px flex-1 bg-line" />
-            <span className="u-mono text-[0.625rem] font-medium uppercase tracking-wider text-faint">{b.label}</span>
-            <span aria-hidden className="h-px flex-1 bg-line" />
-          </div>
+          <Seam key={b.key} label={b.label} />
+        ) : b.type === "mode" ? (
+          <ModeStrip key={b.key} event={b.event} />
+        ) : b.type === "scheduling" ? (
+          <SchedulingStrip key={b.key} event={b.event} agendaHref={agendaHref} />
         ) : b.type === "marker" ? (
-          b.tone === "event" ? (
-            // A change of WHO is answering — same shape as the day seam, so the thread
-            // has one vocabulary for "something structural happened here".
-            <div key={b.key} className="my-1 flex items-center gap-3">
-              <span aria-hidden className="h-px flex-1 bg-line" />
-              <span className="u-mono rounded-full bg-brand-soft px-2 py-0.5 text-[0.625rem] font-semibold uppercase tracking-wider text-brand">
-                {b.label}
-              </span>
-              <span aria-hidden className="h-px flex-1 bg-line" />
-            </div>
-          ) : (
-            <div key={b.key} className="my-1 flex justify-center">
-              <span className="rounded-full bg-amber-400/15 px-2.5 py-0.5 text-[0.6875rem] font-medium uppercase tracking-wider text-amber-600 dark:text-amber-400">
-                {b.label}
-              </span>
-            </div>
-          )
+          <div key={b.key} className="my-1 flex justify-center">
+            <span className="u-mono rounded-sm bg-warn-soft px-2.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wider text-warn">
+              {b.label}
+            </span>
+          </div>
         ) : (
           <MessageRun
             key={b.key}
@@ -153,37 +175,143 @@ interface Run {
   sender: InboxMessageView["sender"];
   items: InboxMessageView[];
 }
-interface DateSep {
-  type: "date";
-  key: string;
-  label: string;
-}
-interface Marker {
-  type: "marker";
-  key: string;
-  label: string;
-  /** "execution" is the amber this-execution highlight; "event" is a mode change. */
-  tone?: "execution" | "event";
-}
+type Block =
+  | Run
+  | { type: "date"; key: string; label: string }
+  | { type: "marker"; key: string; label: string }
+  | { type: "mode"; key: string; event: ThreadEventView }
+  | { type: "scheduling"; key: string; event: ThreadSchedulingEventView };
 
-/** The words for a turning point. Built here, never stored. */
-function eventLabel(e: ThreadEventView): string {
-  if (e.toMode === "human") {
-    const who = (e.agentName ?? "").trim().split(/\s+/)[0];
-    return who ? `${who} took over` : "A teammate took over";
-  }
-  if (e.toMode === "pending") return "Escalated to a human";
-  return e.fromMode === "human" ? "Returned to the bot" : "Back to the bot";
+/** A DAY seam: a centred caption between two hairlines. */
+function Seam({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <span aria-hidden className="h-px flex-1 bg-line" />
+      <span className="whitespace-nowrap text-[0.6875rem] text-muted">{label}</span>
+      <span aria-hidden className="h-px flex-1 bg-line" />
+    </div>
+  );
 }
 
 /**
- * One consecutive-sender group: name once at the top, bubbles stacked tightly.
+ * A change of WHO is answering — a small bordered pill sitting ON the seam rule.
  *
- * The CUSTOMER's group carries an avatar disc on its left — once per group, aligned
- * with the first bubble, so a burst of three messages doesn't stack three identical
- * discs down the margin. The outgoing side (bot / human agent, dark on the right)
- * deliberately has none: the business is the constant in every thread, and a second
- * column of discs would only take width from the bubbles.
+ * It used to be a brand-red chip. Red is now reserved (see the note on --ink in
+ * globals.css) and, more to the point, a takeover is not an alarm: it is a fact about who
+ * you are reading. The design gives it an ink dot and a mono label on the panel's own
+ * surface, which reads as structural rather than urgent.
+ */
+function ModeStrip({ event }: { event: ThreadEventView }) {
+  return (
+    <div className="flex items-center gap-2.5">
+      <span aria-hidden className="h-px flex-1 bg-line" />
+      <span className="flex shrink-0 items-center gap-2 rounded-sm border border-line-strong bg-surface px-2.5 py-1 shadow-[var(--shadow-card)]">
+        <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-foreground" />
+        <span className="u-mono text-[0.59375rem] uppercase tracking-[0.09em] text-foreground">
+          {modeEventLabel(event)}
+        </span>
+        <span className="u-mono text-[0.65625rem] text-faint">
+          {formatChatTime(new Date(event.at))}
+        </span>
+      </span>
+      <span aria-hidden className="h-px flex-1 bg-line" />
+    </div>
+  );
+}
+
+/**
+ * THE appointment this thread produced — centred, self-contained, and linked.
+ *
+ * A card rather than a pill on a rule (which is what ModeStrip above is): this carries
+ * three facts and an action, so it needs a box. It is the one place in the transcript
+ * where red appears, on the outbound link, because "go look at the booking" is the one
+ * thing a reader might want to do from inside the thread.
+ */
+function SchedulingStrip({
+  event,
+  agendaHref,
+}: {
+  event: ThreadSchedulingEventView;
+  agendaHref?: (appointmentId: string) => string;
+}) {
+  const when = new Date(event.startAt);
+  const whenLabel = when.toLocaleString("es", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+  return (
+    <div className="flex justify-center">
+      <span className="flex max-w-full flex-wrap items-center gap-2.5 rounded-sm border border-line-strong bg-surface px-3 py-2 shadow-[var(--shadow-card)]">
+        <span className="u-mono shrink-0 text-[0.59375rem] uppercase tracking-[0.09em] text-foreground">
+          {schedulingEventLabel(event)}
+        </span>
+        <span className="min-w-0 text-[0.78125rem] text-muted">
+          {event.serviceName ? `${event.serviceName} · ` : ""}
+          <span className="font-semibold text-foreground">{whenLabel}</span>
+          {event.staffName ? ` con ${event.staffName}` : ""}
+        </span>
+        {agendaHref ? (
+          <Link
+            href={agendaHref(event.appointmentId)}
+            className="shrink-0 text-[0.75rem] text-brand no-underline hover:underline"
+          >
+            Ver en agenda ↗
+          </Link>
+        ) : null}
+      </span>
+    </div>
+  );
+}
+
+/** The words for a MODE turning point. Built here, never stored. */
+function modeEventLabel(e: ThreadEventView): string {
+  if (e.toMode === "human") {
+    const who = (e.agentName ?? "").trim().split(/\s+/)[0];
+    return who ? `${who} entró al chat` : "Un compañero entró al chat";
+  }
+  if (e.toMode === "pending") return "Escalado a una persona";
+  return e.fromMode === "human" ? "Devuelta al bot" : "De vuelta al bot";
+}
+
+/**
+ * The words for a SCHEDULING turning point: what happened, and by whom.
+ *
+ * The actor is part of the label because it is the fact that matters most in a handoff
+ * thread — "reagendada por el bot" and "reagendada por Santiago" call for different
+ * follow-ups. `event_type` is free-ish text in the schema, so an unmapped value degrades
+ * to a readable form of itself rather than being dropped.
+ */
+function schedulingEventLabel(e: ThreadSchedulingEventView): string {
+  const VERB: Record<string, string> = {
+    booked: "Agendada",
+    created: "Agendada",
+    rescheduled: "Reagendada",
+    confirmed: "Confirmada",
+    cancelled: "Cancelada",
+    canceled: "Cancelada",
+    completed: "Completada",
+    no_show: "No asistió",
+  };
+  const key = e.eventType.toLowerCase().replace(/^appointment_/, "");
+  const verb = VERB[key] ?? key.replace(/[_-]+/g, " ");
+  const who =
+    e.actorType === "bot"
+      ? "el bot"
+      : e.actorName?.trim().split(/\s+/)[0] ?? (e.actorType === "system" ? "el sistema" : null);
+  return who ? `${verb} por ${who}` : verb;
+}
+
+/**
+ * One consecutive-sender group: the signature once at the top, bubbles stacked tightly.
+ *
+ * The CUSTOMER's group carries an avatar disc on its left — once per group, aligned with
+ * the first bubble, so a burst of three messages doesn't stack three identical discs down
+ * the margin. The OUTGOING side is signed too, on the right: a solid near-black "BOT" for
+ * the automation, or a white disc with an ink ring for a person, which is the same
+ * distinction the bubbles themselves draw.
  */
 function MessageRun({
   run,
@@ -200,28 +328,38 @@ function MessageRun({
   const isAgent = run.sender === "human_agent";
   const agentName = isAgent ? run.items.find((m) => m.agentName)?.agentName ?? null : null;
   const bubbles = (
-    <div className={`flex min-w-0 flex-col gap-0.5 ${isUser ? "items-start" : "items-end"}`}>
+    <div className={`flex min-w-0 flex-col gap-1 ${isUser ? "items-start" : "items-end"}`}>
+      {/* The agent's signature ABOVE their run — mono, tracked, and it says EQUIPO so a
+          customer reading a screenshot can tell a colleague from the automation. */}
       {isAgent && agentName ? (
-        <span className="px-1 text-[0.6875rem] font-medium text-faint">{agentName}</span>
+        <span className="u-mono px-0.5 text-[0.5625rem] uppercase tracking-[0.08em] text-faint">
+          {agentName.trim().split(/\s+/)[0]} · equipo
+        </span>
       ) : null}
       {run.items.map((m) => (
-        <Bubble key={m.id} msg={m} onRetry={onRetry} highlighted={highlightIds?.has(m.id) ?? false} />
+        <Bubble
+          key={m.id}
+          msg={m}
+          onRetry={onRetry}
+          highlighted={highlightIds?.has(m.id) ?? false}
+        />
       ))}
     </div>
   );
 
   if (!isUser) {
-    // The OUTGOING side is signed too: a dark disc saying who answered — "BOT" for
-    // the automation, the agent's initials for a person. It sits on the right, once
-    // per group, mirroring the customer's disc on the left.
     const sig = isAgent ? initialsOf(agentName) : "BOT";
     return (
-      <div className="flex items-start justify-end gap-2">
+      <div className="flex items-end justify-end gap-2.5">
         {bubbles}
         <span
           aria-hidden
-          title={isAgent ? (agentName ?? "Agent") : "Sent by the bot"}
-          className="u-mono mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full bg-foreground text-[0.5rem] font-semibold tracking-tight text-background"
+          title={isAgent ? (agentName ?? "Agente") : "Enviado por el bot"}
+          className={`u-mono mb-5 flex size-[26px] shrink-0 items-center justify-center rounded-full text-[0.53125rem] font-semibold tracking-tight ${
+            isAgent
+              ? "border-[1.5px] border-ink bg-surface text-foreground"
+              : "bg-bubble-bot text-bubble-bot-fg"
+          }`}
         >
           {sig}
         </span>
@@ -230,10 +368,10 @@ function MessageRun({
   }
   if (!incomingAvatar) return bubbles;
   return (
-    <div className="flex items-start gap-2">
+    <div className="flex items-start gap-2.5">
       <span
         aria-hidden
-        className={`u-mono mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full text-[0.625rem] font-semibold ${incomingAvatar.toneClass}`}
+        className={`u-mono mt-0.5 flex size-[26px] shrink-0 items-center justify-center rounded-full text-[0.59375rem] font-semibold ${incomingAvatar.toneClass}`}
       >
         {incomingAvatar.label}
       </span>
@@ -245,7 +383,8 @@ function MessageRun({
 /** Two initials for the disc that signs a human agent's run. */
 function initialsOf(name: string | null): string {
   const words = (name ?? "").trim().split(/\s+/).filter(Boolean);
-  if (words.length === 0) return "YOU";
+  if (words.length === 0) return "YO";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
   return words
     .slice(0, 2)
     .map((w) => w[0])
@@ -254,11 +393,12 @@ function initialsOf(name: string | null): string {
 }
 
 /**
- * A single bubble on the grey transcript. customer → left, WHITE + hairline; bot →
- * right, dark fill; human_agent → right, faint brand tint (failed → outlined red). The
- * sender reads from side + fill, never from colour alone. Timestamp bottom-right, tucked
- * against the last line as WhatsApp does. A highlighted (this-execution) bubble gets an
- * amber ring.
+ * A single bubble, plus its timestamp below it.
+ *
+ * THE TAIL is what says who is speaking, alongside the fill: three corners take
+ * --radius-bubble and the one pointing at the speaker collapses to --radius-bubble-tail
+ * (bottom-left for the customer, bottom-right for the business). Two tokens rather than
+ * four literals, so the two sides cannot drift apart.
  */
 function Bubble({
   msg,
@@ -274,27 +414,16 @@ function Bubble({
   const sending = msg.status === "sending";
   const failed = msg.status === "failed";
   const time = formatChatTime(new Date(msg.occurredAt));
-  // Only a plain, settled message gets the tucked stamp — see the note on the layout.
-  const tucked = !sending && !failed;
 
-  // THREE distinct senders (H.6), each carrying shape + fill, never color alone:
-  //   customer  → left, a bordered neutral surface;
-  //   bot       → right, a quiet filled surface (the automation "voice");
-  //   human age → right, the solid inverse fill (a person typed this).
   const bubbleClass = isUser
-    ? "border border-bubble-in-border bg-bubble-in text-bubble-in-fg"
+    ? "border border-bubble-in-border bg-bubble-in text-bubble-in-fg rounded-bl-bubble-tail"
     : isAgent
       ? failed
-        ? "border border-danger bg-danger/12 text-danger"
-        : "border border-line-strong bg-bubble-agent text-bubble-agent-fg"
-      : "border border-bubble-bot-border bg-bubble-bot text-bubble-bot-fg";
-  const metaClass = isUser
-    ? "text-bubble-in-fg/60"
-    : isAgent
-      ? failed
-        ? "text-danger/80"
-        : "text-bubble-agent-fg/55"
-      : "text-bubble-bot-fg/65";
+        ? "border border-danger bg-danger/12 text-danger rounded-br-bubble-tail"
+        : // WHITE with an INK edge. It sits on the business side but must not be mistaken
+          // for the bot, so it keeps the side and drops the dark fill.
+          "border border-bubble-agent-border bg-bubble-agent text-bubble-agent-fg shadow-[var(--shadow-card)] rounded-br-bubble-tail"
+      : "bg-bubble-bot text-bubble-bot-fg rounded-br-bubble-tail";
 
   const body =
     msg.text && msg.text.trim() !== ""
@@ -304,55 +433,103 @@ function Bubble({
         : "…";
 
   return (
-    // WHATSAPP'S ARRANGEMENT. The text flows at the FULL bubble width and an invisible
-    // copy of the stamp reserves room for it on the LAST line only; the real stamp is
-    // absolutely positioned into that gap. This matters: making the stamp a flex sibling
-    // (the obvious approach) takes its width from EVERY line, so a two-line message
-    // wrapped into three and the bubble looked crushed.
-    //
-    // `sending` and `failed` keep the plain inline layout instead: their meta is not a
-    // timestamp but a status and a Retry button, whose width the invisible spacer cannot
-    // predict — reserving the wrong gap would let the button sit on top of the text.
+    <div className={`flex min-w-0 max-w-full flex-col gap-1 ${isUser ? "items-start" : "items-end"}`}>
+      <div
+        className={`max-w-[min(62ch,100%)] rounded-bubble px-3.5 py-2.5 text-[0.8125rem] leading-[1.45] ${bubbleClass} ${
+          sending ? "opacity-70" : ""
+        } ${highlighted ? "ring-2 ring-[var(--warn-rule)]" : ""}`}
+      >
+        <span className="whitespace-pre-wrap break-words [text-wrap:pretty]">{body}</span>
+        {/* THE STRUCTURED BLOCK — the slots the bot offered, and which one was taken.
+            Separated from the prose by a rule inside the bubble, exactly as the design
+            does it, so the payload reads as data attached to the message rather than as
+            more of the sentence. */}
+        {msg.payload ? <PayloadBlock payload={msg.payload} onDark={!isUser && !isAgent} /> : null}
+        {failed && msg.failureDetail ? (
+          <span className="mt-1.5 block rounded-sm bg-danger/12 px-1.5 py-1 text-[0.6875rem] text-danger">
+            {msg.failureDetail}
+          </span>
+        ) : null}
+      </div>
+      {/* The stamp, OUTSIDE the bubble. `sending` / `failed` replace it with their status
+          and the Retry affordance, which is why this is one line rather than two states
+          of the same span. */}
+      <span className="u-mono flex items-center gap-1.5 px-0.5 text-[0.65625rem] text-faint">
+        {sending ? <span>enviando…</span> : null}
+        {failed && onRetry ? (
+          <button
+            type="button"
+            onClick={() => onRetry(msg.id)}
+            className="rounded-sm border border-danger/40 px-1 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/12"
+          >
+            Reintentar
+          </button>
+        ) : null}
+        <span>{time}</span>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * The offered-slots block inside a bot bubble (§3.3).
+ *
+ * `onDark` is not a theme flag — it is which SIDE this bubble is on. The bot's bubble is
+ * a near-black fill in both light and dark mode, so the block inside it always needs the
+ * light-on-dark ramp; an agent's bubble is a white card and needs the opposite. Reading
+ * the theme instead would get the bot's bubble wrong in light mode.
+ *
+ * The CHOSEN slot is marked three ways — a left rule, a weight change, and the words "✓
+ * elegido" — so it survives greyscale and does not depend on the reader noticing a 2px
+ * bar.
+ */
+function PayloadBlock({ payload, onDark }: { payload: MessagePayload; onDark: boolean }) {
+  if (payload.kind !== "offered_slots") return null;
+  return (
     <div
-      className={`max-w-[70%] rounded-bubble px-3.5 py-2 text-sm leading-snug ${bubbleClass} ${
-        sending ? "opacity-70" : ""
-      } ${highlighted ? "ring-2 ring-[var(--warn-rule)]" : ""}`}
+      className={`mt-2.5 flex flex-col gap-1.5 border-t pt-2.5 ${
+        onDark ? "border-bubble-bot-rule" : "border-line"
+      }`}
     >
-      {tucked ? (
-        <div className="relative">
-          <span className="whitespace-pre-wrap break-words">
-            {body}
-            <span aria-hidden className="invisible ml-2 select-none whitespace-nowrap text-[0.625rem]">
-              {time}
+      <span
+        className={`u-mono text-[0.59375rem] uppercase tracking-[0.09em] ${
+          onDark ? "text-bubble-bot-label" : "text-faint"
+        }`}
+      >
+        {payload.label ?? "Slots ofrecidos"}
+      </span>
+      {payload.slots.map((s, i) => {
+        const label = new Date(s.at).toLocaleString("es", {
+          weekday: "short",
+          day: "numeric",
+          month: "short",
+          hour: "numeric",
+          minute: "2-digit",
+        });
+        return (
+          <span
+            key={`${s.at}-${i}`}
+            className={`flex items-center gap-2 rounded-md px-2.5 py-1.5 ${
+              onDark ? "bg-bubble-bot-inset" : "bg-chip"
+            } ${s.chosen ? (onDark ? "shadow-[inset_2px_0_0_#fff]" : "shadow-[inset_2px_0_0_var(--ink)]") : ""}`}
+          >
+            <span
+              className={`u-mono text-[0.71875rem] uppercase ${
+                s.chosen ? "font-semibold" : ""
+              } ${onDark ? "text-bubble-bot-fg" : "text-foreground"}`}
+            >
+              {label}
+            </span>
+            <span
+              className={`ml-auto shrink-0 text-[0.71875rem] ${
+                onDark ? "text-bubble-bot-label" : "text-muted"
+              }`}
+            >
+              {s.chosen ? "✓ elegido" : (s.staffName ?? "")}
             </span>
           </span>
-          <span className={`absolute bottom-0 right-0 whitespace-nowrap text-[0.625rem] ${metaClass}`}>{time}</span>
-        </div>
-      ) : (
-        <>
-          <span className="whitespace-pre-wrap break-words align-middle">{body}</span>
-          {/* The FAILED bubble is an outlined red (a normal agent message is tinted), so
-              its inner detail + Retry must read on a LIGHT fill. */}
-          {failed && msg.failureDetail ? (
-            <span className="mt-1 block rounded bg-danger/12 px-1.5 py-1 text-[0.6875rem] text-danger">
-              {msg.failureDetail}
-            </span>
-          ) : null}
-          <span className={`ml-2 inline-flex items-center gap-1.5 align-middle text-[0.625rem] ${metaClass}`}>
-            {sending ? <span>enviando…</span> : null}
-            {failed && onRetry ? (
-              <button
-                type="button"
-                onClick={() => onRetry(msg.id)}
-                className="rounded border border-danger/40 px-1 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/12"
-              >
-                Reintentar
-              </button>
-            ) : null}
-            <span>{time}</span>
-          </span>
-        </>
-      )}
+        );
+      })}
     </div>
   );
 }

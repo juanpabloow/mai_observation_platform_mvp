@@ -3,7 +3,7 @@
 import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { avatarColor, avatarToneVar, staffInitials as initials } from "@/lib/avatarColor";
+import { avatarColor, avatarToneStyle, staffInitials as initials } from "@/lib/avatarColor";
 import { OVERLAY_SCRIM, useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
 import { ACT_PRIMARY } from "@/components/ui/panelChrome";
 import {
@@ -702,7 +702,7 @@ function StaffDetail({
           Nothing here is new information — the same name, the same presence words, the
           same role and the same "View agenda" link, in the shared arrangement. */}
       <div
-        style={{ ["--tone" as string]: avatarToneVar(member.name) } as React.CSSProperties}
+        style={avatarToneStyle(member.name) as React.CSSProperties}
         className="u-contact-wash flex shrink-0 flex-col gap-2.5 border-b border-line px-4 pb-3 pt-3.5"
       >
         <div className="flex w-full min-w-0 items-start gap-2.5">

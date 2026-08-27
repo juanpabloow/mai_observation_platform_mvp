@@ -8,9 +8,9 @@ import type { InboxConversationView, InboxMode } from "./inboxView";
  * resolve/return-to-bot/dismiss actions all set the mode back to `bot`, so a
  * "resolved" conversation is indistinguishable from a bot-active one and is therefore
  * NOT a separate group. The three operative groups map straight from the mode:
- *   - pending → "Needs human attention" (escalated, waiting for a human);
- *   - human   → "Human is handling" (taken/assigned; assignedAgentName says who);
- *   - bot     → "Bot is handling" (bot active, no human requested).
+ *   - pending → "Necesita a una persona" (escalated, waiting for a human);
+ *   - human   → "Un humano atiende" (taken/assigned; assignedAgentName says who);
+ *   - bot     → "El bot atiende" (bot active, no human requested).
  */
 
 export type InboxGroupKey = "needs_attention" | "human" | "bot";
@@ -24,9 +24,9 @@ export interface InboxGroupMeta {
 
 /** Fixed display order: most-urgent first. */
 export const INBOX_GROUP_ORDER: InboxGroupMeta[] = [
-  { key: "needs_attention", label: "Needs human attention", tone: "attention" },
-  { key: "human", label: "Human is handling", tone: "human" },
-  { key: "bot", label: "Bot is handling", tone: "bot" },
+  { key: "needs_attention", label: "Necesita a una persona", tone: "attention" },
+  { key: "human", label: "Un humano atiende", tone: "human" },
+  { key: "bot", label: "El bot atiende", tone: "bot" },
 ];
 
 /** The operative group for a conversation's REAL mode. Total over the three modes. */

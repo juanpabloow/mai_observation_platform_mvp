@@ -9,6 +9,7 @@ import {
   getLatestEscalationReasons,
   listConversationsForClient,
   listConversationsForWorkflow,
+  listConversationSchedulingEvents,
   listModeTransitions,
   listThreadMessages,
   type EscalationReasonRow,
@@ -16,9 +17,11 @@ import {
   type InboxConversationDetail,
   type ThreadMessageRow,
 } from "@worker/db/repositories/handoff.js";
+import { parseMessagePayload } from "./inboxView";
 import type {
   HistoryTurnView,
   ThreadEventView,
+  ThreadSchedulingEventView,
   InboxConversationView,
   InboxHeaderView,
   InboxMessageView,
@@ -82,6 +85,7 @@ function toConversationView(
     escalationReasonCode: reason?.reason_code ?? null,
     escalationDetail: reason?.detail ?? null,
     contactName: r.contact_name,
+    contactVisitCount: r.contact_visit_count,
     channel: r.contact_channel,
   };
 }
@@ -97,6 +101,9 @@ export function toMessageView(m: ThreadMessageRow): InboxMessageView {
     failureCode: m.failure_code,
     failureDetail: m.failure_detail,
     occurredAt: m.occurred_at.toISOString(),
+    // Defensive by construction — `metadata` is an unknown jsonb column and a malformed
+    // payload must degrade to a plain text message, never break the thread.
+    payload: parseMessagePayload(m.metadata),
   };
 }
 
@@ -196,6 +203,10 @@ export interface InboxThreadPayload {
    *  POLL too, not just the first open: a colleague taking the conversation over must
    *  appear in your thread within the poll interval, not on your next reload. */
   events: ThreadEventView[];
+  /** Scheduling turning points — the appointment this conversation booked, and what has
+   *  happened to it since. Loaded on the POLL too: a customer who reschedules through the
+   *  bot must show up in an open thread within the poll interval. */
+  schedulingEvents: ThreadSchedulingEventView[];
   activityWindowHours: number;
   asOf: string;
 }
@@ -216,9 +227,10 @@ export async function loadInboxThread(
   if (!isUuid(conversationId)) return null; // never let a non-UUID reach the id= query
   const conversation = await getConversationForClient(tenantId, clientId, conversationId);
   if (!conversation) return null;
-  const [messages, transitions] = await Promise.all([
+  const [messages, transitions, scheduling] = await Promise.all([
     listThreadMessages(tenantId, conversationId),
     listModeTransitions(tenantId, conversationId),
+    listConversationSchedulingEvents(tenantId, clientId, conversationId),
   ]);
 
   let history: HistoryTurnView[] | undefined;
@@ -245,6 +257,18 @@ export async function loadInboxThread(
       toMode: t.to_mode,
       agentName: t.agent_name,
       at: t.created_at.toISOString(),
+    })),
+    schedulingEvents: scheduling.map((e) => ({
+      id: e.id,
+      appointmentId: e.appointment_id,
+      eventType: e.event_type,
+      actorType: e.actor_type,
+      actorName: e.actor_name,
+      serviceName: e.service_name,
+      startAt: e.start_at.toISOString(),
+      staffName: e.staff_name,
+      status: e.status,
+      at: e.created_at.toISOString(),
     })),
     history,
     activityWindowHours: ACTIVITY_WINDOW_HOURS,

@@ -64,10 +64,27 @@ test('workspace: keyboard + a11y — aria-current selection, Escape closes the d
 test('customer panel: assembled from SHARED contact components, loads the linked contact (C-4)', () => {
   const src = read('components/CustomerDetailsPanel.tsx');
   // C-4: the panel is the COMPACT variant of the record — the same shared components,
-  // not a parallel implementation.
-  for (const comp of ['ContactIdentitySummary', 'AppointmentsSection', 'TasksSection', 'NotesSection', 'TagsSection']) {
+  // not a parallel implementation. The four SECTIONS are the substance of that claim and
+  // are unchanged.
+  for (const comp of ['AppointmentsSection', 'TasksSection', 'NotesSection', 'TagsSection']) {
     assert.ok(src.includes(comp), `reuses the shared ${comp}`);
   }
+  // The IDENTITY block is now local, and deliberately (docs/ui-redesign-crm-inbox.md
+  // §3.5.2). `ContactIdentitySummary` is a CENTRED profile card — a disc over a centred
+  // name over a link — which is right for the record's left column and wrong beside a live
+  // conversation, where the design puts the identity on one line and hands the vertical
+  // space to the content. Expressing both shapes through one component would have meant a
+  // second `centered`-style flag on top of the two it already had.
+  //
+  // What must NOT be re-implemented is the DISC, which is the recognition cue shared
+  // across the queue, the thread and both panels — so that stays the shared component.
+  assert.ok(src.includes('<ContactAvatar'), 'the identity disc is the shared one');
+  assert.equal(/function (ContactAvatar|Avatar)\(/.test(src), false, 'and is not redeclared here');
+  // The section HEADING is shared too — this panel used to define its own SECTION_LABEL
+  // string, which is how the inbox's headings and the contact panel's ended up as two
+  // different sizes of the same idea.
+  assert.ok(src.includes('<SectionHeading'), 'headings come from the shared primitive');
+  assert.equal(src.includes('const SECTION_LABEL'), false, 'no private heading style survives');
   // Contact data loads from the session-authed, client-scoped route (re-validated
   // server-side) — the client panel imports NO worker/db module directly.
   assert.ok(src.includes('conversations/${conversationId}/contact'), 'fetches the contact payload route');

@@ -67,7 +67,7 @@ export const CONTACT_PANEL_REGION = "relative min-h-0 flex-col";
 
 export function ContactPanelShell({
   header,
-  headerTone,
+  headerToneStyle,
   subheader,
   banner,
   footer,
@@ -77,11 +77,11 @@ export function ContactPanelShell({
   /** The header's CONTENT (see ContactPanelHeader); the chrome around it is ours. */
   header: ReactNode;
   /**
-   * The CONTACT'S own tone (see contactToneVar), painted as a faint vertical wash
+   * The CONTACT'S own tone pair (see contactToneStyle), painted as a faint vertical wash
    * behind the header. Omitted where there is no contact yet — the create form has
    * nobody to be the colour of.
    */
-  headerTone?: string;
+  headerToneStyle?: Record<string, string>;
   /** Edge-to-edge strip under the header — the quick view's tab bar. */
   subheader?: ReactNode;
   banner?: ReactNode;
@@ -106,8 +106,8 @@ export function ContactPanelShell({
       <div
         // The wash sits on the header only, and fades out downward, so the body below
         // stays a neutral reading surface.
-        style={headerTone ? ({ ["--tone" as string]: headerTone } as React.CSSProperties) : undefined}
-        className={`shrink-0 border-b border-line bg-surface px-4 pb-3 pt-3.5 ${headerTone ? "u-contact-wash" : ""}`}
+        style={headerToneStyle as React.CSSProperties | undefined}
+        className={`shrink-0 border-b border-line bg-surface px-4 pb-3 pt-3.5 ${headerToneStyle ? "u-contact-wash" : ""}`}
       >
         {header}
       </div>
@@ -135,6 +135,7 @@ export function ContactPanelHeader({
   metrics,
   now,
   closeAction,
+  recordAction,
   extra,
 }: {
   facts: ContactHeaderFacts;
@@ -142,12 +143,15 @@ export function ContactPanelHeader({
   metrics: ContactMetricFacts | null;
   now: Date;
   closeAction?: ReactNode;
-  /** Rendered under the metrics — the quick view's Agendar / Abrir ficha / Editar. */
+  /** The quiet `Ficha ↗` link on the name line — see ContactHeaderBlock. */
+  recordAction?: ReactNode;
+  /** Rendered under the metrics. Now empty on the contacts panel: the redesign moved
+   *  its three buttons onto the name line and the tab row (see ContactSidePanel). */
   extra?: ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-2.5">
-      <ContactHeaderBlock facts={facts} actions={closeAction} />
+      <ContactHeaderBlock facts={facts} actions={closeAction} recordAction={recordAction} />
       {metrics ? <ContactMetrics facts={metrics} now={now} /> : null}
       {extra}
     </div>

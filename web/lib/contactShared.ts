@@ -68,6 +68,13 @@ export interface ContactSummary {
   consent: MessagingConsent;
   visitCount: number;
   noShowCount: number;
+  /**
+   * The channel this person asked to be reached on, or null when nobody has recorded
+   * one. NULL is not "WhatsApp": the inbox panel prints the channel beside their number
+   * (§3.5.2) and a defaulted value there would state a preference the customer never
+   * gave.
+   */
+  preferredChannel: PreferredChannel | null;
 }
 
 /** Derived-status + appointment split computed once from a contact's appointments. */

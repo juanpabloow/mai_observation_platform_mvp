@@ -65,6 +65,13 @@ export const IconPencil = () => (
     <path d="M13.5 6.5 17.5 10.5" />
   </svg>
 );
+/** The `+` on a create action. 1.8 stroke like the rest, so it sits on the same weight
+ *  as the glyphs beside it rather than reading as a heavier plus. */
+export const IconPlus = () => (
+  <svg {...ico} aria-hidden>
+    <path d="M12 5v14M5 12h14" strokeLinecap="round" />
+  </svg>
+);
 export const IconMail = () => (
   <svg {...ico} aria-hidden>
     <rect x="2.5" y="5" width="19" height="14" rx="2" />

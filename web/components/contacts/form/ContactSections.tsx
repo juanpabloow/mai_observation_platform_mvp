@@ -108,17 +108,31 @@ type Props =
  * ORDER are identical either way — only the density adapts.
  */
 function ReadGrid({ columns, children }: { columns: 1 | 2; children: ReactNode }) {
-  return <div className={`grid gap-x-3 gap-y-3.5 ${columns === 2 ? "grid-cols-2" : "grid-cols-1"}`}>{children}</div>;
+  // gap-y is 0: each ReadField now pays its own `py-1`, so a second gap here would
+  // reintroduce exactly the airiness the one-line fact row was meant to remove.
+  return <div className={`grid gap-x-4 ${columns === 2 ? "grid-cols-2" : "grid-cols-1"}`}>{children}</div>;
 }
 
-/** A read-mode value: the same label as `Field`, then plain text. No border, no input. */
+/**
+ * A read-mode value, in the redesign's FACT ROW shape (§2.5): the label on a fixed-width
+ * left column, the value hard right on the same line.
+ *
+ * It used to stack — a mono-uppercase label with the value beneath it — which cost two
+ * lines per fact and made a nine-fact panel scroll. Putting them on one line halves that,
+ * and right-aligning the values gives the column an edge the eye can run down, which is
+ * the whole reason the design does it: you scan for the VALUE ("who owns this?"), not for
+ * the label you already know is there.
+ *
+ * The value keeps `min-w-0` and its own wrapping so a long email still truncates rather
+ * than pushing the label out of the panel.
+ */
 function ReadField({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1">
-      {/* Mono caps, like the section headings: in read mode the label is metadata and
-          the VALUE is the content, so the label steps back instead of competing. */}
-      <span className="u-th">{label}</span>
-      <div className="min-w-0 text-sm text-foreground">{children}</div>
+    <div className="flex min-w-0 items-baseline gap-2.5 py-1">
+      <span className="w-[6.5rem] shrink-0 text-[0.71875rem] leading-5 text-faint">{label}</span>
+      <div className="flex min-w-0 flex-1 justify-end text-right text-[0.8125rem] text-foreground">
+        {children}
+      </div>
     </div>
   );
 }
@@ -175,7 +189,7 @@ export function ContactSections(props: Props) {
   return (
     <div className="flex flex-col">
       {/* ── IDENTIDAD ─────────────────────────────────────────────────────── */}
-      <FormSection title="IDENTIDAD" icon={<IconIdentity />}>
+      <FormSection title="Contacto" icon={<IconIdentity />}>
         {mode === "read" ? (
           <ReadGrid columns={cols}>
             <ReadField label="Nombre">{props.read.name?.trim() || <Empty />}</ReadField>
@@ -219,7 +233,7 @@ export function ContactSections(props: Props) {
       </FormSection>
 
       {/* ── ASIGNACIÓN ────────────────────────────────────────────────────── */}
-      <FormSection title="ASIGNACIÓN" icon={<IconAssign />}>
+      <FormSection title="Asignación" icon={<IconAssign />}>
         {mode === "read" ? (
           <ReadGrid columns={cols}>
             <ReadField label="Dueño">{props.read.ownerLabel ?? <span className="text-faint">Sin asignar</span>}</ReadField>
@@ -241,7 +255,7 @@ export function ContactSections(props: Props) {
       </FormSection>
 
       {/* ── COMUNICACIÓN ──────────────────────────────────────────────────── */}
-      <FormSection title="COMUNICACIÓN" icon={<IconComms />}>
+      <FormSection title="Mensajería" icon={<IconComms />}>
         {mode === "read" ? (
           <div className="flex flex-col gap-1.5">
             <StateRow
@@ -290,7 +304,7 @@ export function ContactSections(props: Props) {
       </FormSection>
 
       {/* ── INTERNO ───────────────────────────────────────────────────────── */}
-      <FormSection title="INTERNO" icon={<IconInternal />}>
+      <FormSection title="Interno" icon={<IconInternal />}>
         {mode === "read" ? (
           <ReadField label="Etiquetas">
             {props.read.tags.length === 0 ? (

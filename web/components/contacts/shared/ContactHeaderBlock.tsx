@@ -5,7 +5,7 @@ import { Chip, MetricBox, MetricCell, StageChip } from "@/components/ui/primitiv
 import { contactSince, relativeAge } from "@/lib/contactForm";
 import { consentLabel, sourceLabel } from "@/lib/contactLabels";
 import { Avatar } from "@/components/contacts/form/formPrimitives";
-import { avatarToneVar } from "@/lib/avatarColor";
+import { avatarToneStyle } from "@/lib/avatarColor";
 
 /**
  * The contact HEADER, shared by the list's quick view and the edit drawer.
@@ -50,20 +50,35 @@ export function contactToneSeed(facts: Pick<ContactHeaderFacts, "displayName" | 
   return facts.displayName?.trim() ? facts.displayName : (facts.primaryIdentity ?? facts.displayName);
 }
 
-/** The contact's tone as a CSS var, for the header wash. */
-export function contactToneVar(facts: Pick<ContactHeaderFacts, "displayName" | "primaryIdentity">): string {
-  return avatarToneVar(contactToneSeed(facts));
+/**
+ * The contact's tone as the inline style the header wash needs — BOTH stops of their
+ * avatar pair, because the discs are two-tone spheres and the wash fades the same
+ * gradient (see `avatarToneStyle`). It returns a style object rather than a single var
+ * so no caller has to know the `--tone-a` / `--tone-b` custom-property names.
+ */
+export function contactToneStyle(
+  facts: Pick<ContactHeaderFacts, "displayName" | "primaryIdentity">,
+): Record<string, string> {
+  return avatarToneStyle(contactToneSeed(facts));
 }
 
 /** Avatar + name + chips + the context line. One introduction, two surfaces. */
 export function ContactHeaderBlock({
   facts,
   actions,
+  recordAction,
   size = "regular",
 }: {
   facts: ContactHeaderFacts;
   /** Rendered at the right of the name row (the panel's close control). */
   actions?: ReactNode;
+  /**
+   * A quiet NAVIGATION affordance on the name line — the design's `Ficha ↗`
+   * (§2.5 / §3.5). Separate from `actions` because it is neither a control on this
+   * panel nor an action on the customer: it is a link out, and the design gives it the
+   * lightest weight available for exactly that reason.
+   */
+  recordAction?: ReactNode;
   /** `compact` trims the avatar for the 360px panel; the type scale is unchanged. */
   size?: "regular" | "compact";
 }) {
@@ -93,6 +108,7 @@ export function ContactHeaderBlock({
           {meta}
         </p>
       </div>
+      {recordAction ? <div className="shrink-0 self-start pt-1">{recordAction}</div> : null}
       {actions ? <div className="flex shrink-0 items-center gap-1.5">{actions}</div> : null}
     </div>
   );

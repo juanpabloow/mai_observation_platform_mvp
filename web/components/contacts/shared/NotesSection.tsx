@@ -15,11 +15,17 @@ import { CRM_COPY } from "@/lib/contactLabels";
  */
 
 const INPUT = "w-full rounded-lg border border-line-strong bg-transparent px-2 py-1.5 text-sm";
-/** Primary action. `bg-brand`, not the emerald `--accent`: accent is reserved for
- *  links and success ticks, and a green submit button read as "confirmed" before the
- *  note existed. Same correction already applied in Inbox and Staff. */
+/**
+ * Primary action — INK.
+ *
+ * It was `bg-brand`, with a note explaining that the emerald `--accent` was reserved for
+ * links. Both halves of that reasoning still hold; what changed is that red is no longer
+ * what a primary button is. The redesign spends red on the active nav item, `Agendar
+ * cita`, and the "a human is handling this" marker — see the note on --ink in globals.css.
+ * "Save this note" is not one of the three.
+ */
 const PRIMARY =
-  "rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50";
+  "rounded-md bg-ink px-3 py-1.5 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50";
 
 export function NotesSection({
   clientId,

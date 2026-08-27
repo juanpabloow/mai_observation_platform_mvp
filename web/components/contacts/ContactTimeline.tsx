@@ -217,7 +217,7 @@ export function ContactTimeline({
       <div className="flex flex-col gap-2 rounded-xl border border-line bg-card p-3">
         <textarea value={note} onChange={(e) => setNote(e.target.value)} placeholder="Agregar nota…" rows={2} className={INPUT} />
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={addNote} disabled={pending || !note.trim()} className="rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50">
+          <button type="button" onClick={addNote} disabled={pending || !note.trim()} className="rounded-md bg-ink px-3 py-1.5 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50">
             Agregar nota
           </button>
           {taskOpen ? null : (
@@ -231,7 +231,7 @@ export function ContactTimeline({
           <div className="flex flex-wrap items-center gap-2 border-t border-line pt-2">
             <input value={taskTitle} onChange={(e) => setTaskTitle(e.target.value)} placeholder="Título de la tarea" className="min-w-40 flex-1 rounded-lg border border-line-strong bg-transparent px-2 py-1.5 text-sm" autoFocus />
             <input type="date" value={taskDue} onChange={(e) => setTaskDue(e.target.value)} className="rounded-lg border border-line-strong bg-transparent px-2 py-1.5 text-sm" aria-label="Due date" />
-            <button type="button" onClick={addTask} disabled={pending || !taskTitle.trim()} className="rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50">
+            <button type="button" onClick={addTask} disabled={pending || !taskTitle.trim()} className="rounded-md bg-ink px-3 py-1.5 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50">
               Add
             </button>
             <button type="button" onClick={() => setTaskOpen(false)} className="text-xs text-faint hover:text-foreground">

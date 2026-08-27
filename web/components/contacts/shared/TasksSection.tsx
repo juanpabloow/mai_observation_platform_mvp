@@ -122,7 +122,7 @@ export function TasksSection({
               ) : null}
             </div>
             <div className="flex items-center gap-2">
-              <button type="button" onClick={create} disabled={pending || !title.trim()} className="rounded-md bg-brand px-3 py-1.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50">
+              <button type="button" onClick={create} disabled={pending || !title.trim()} className="rounded-md bg-ink px-3 py-1.5 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50">
                 {CRM_COPY.actions.create}
               </button>
               <button type="button" onClick={() => setAdding(false)} className="text-xs text-faint hover:text-foreground">
