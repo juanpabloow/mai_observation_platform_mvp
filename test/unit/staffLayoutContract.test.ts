@@ -109,8 +109,17 @@ test('the presence counts live in the title band as SummaryBit, from one definit
   // ONE definition, shared. Contacts must not have kept a private copy.
   const primitives = read('web/components/ui/primitives.tsx');
   assert.ok(primitives.includes('export function SummaryBit('), 'SummaryBit is a shared primitive');
-  assert.ok(!stripComments(read(CONTACTS)).includes('function SummaryBit('), 'Contacts imports it, not redeclares it');
-  assert.ok(read(CONTACTS).includes('SummaryBit'), 'and still uses it');
+  assert.ok(!stripComments(read(CONTACTS)).includes('function SummaryBit('), 'Contacts does not redeclare it');
+  // Contacts no longer RENDERS SummaryBit, and that is the CRM rework rather than a
+  // regression (docs/ui-redesign-crm-inbox.md §2.2): its five counters became segmented
+  // FACET PILLS, where the number is a filter you click instead of a statistic you read
+  // and then act on separately. The counts come from the same `summarizeContacts` call.
+  const contactsSrc = read(CONTACTS);
+  assert.ok(contactsSrc.includes('<FacetPills'), 'Contacts counts through the facet pills instead');
+  assert.ok(
+    contactsSrc.includes('count: summary.new') && contactsSrc.includes('count: summary.unassigned'),
+    'and they are the same real counters, from the same summary',
+  );
 });
 
 test('the primary action sits in the control band, and the roster keeps its dashed row', () => {
@@ -203,7 +212,9 @@ test("the panel header is an introduction, not an action bar", () => {
   // The per-person wash, from the SAME tone helper the avatar hashes on — two seeds
   // would mean a teal disc on a purple header.
   assert.ok(src.includes('u-contact-wash'), 'the header carries the tone wash');
-  assert.ok(src.includes('avatarToneVar(member.name)'), 'and the tone is this person\'s own');
+  // The discs became two-tone gradient SPHERES, so the wash fades the same PAIR — one
+  // stop would let the header and the avatar above it disagree.
+  assert.ok(src.includes('avatarToneStyle(member.name)'), 'and the tone is this person\'s own');
   assert.ok(src.includes('avatarColor(member.name)'), 'the same seed as the avatar');
   assert.equal(src.includes('bg-panel-hero'), false, 'no third fill inside a two-fill panel');
   // Actions in their OWN row, in the contact panel's proportion: primary takes the
@@ -211,11 +222,15 @@ test("the panel header is an introduction, not an action bar", () => {
   // The shared header-action primary, filling the row. There is no Edit button beside it
   // any more: see the single-write-path test below.
   assert.ok(src.includes('className={ACT_PRIMARY}'), 'primary fills the row');
+  // ACT_PRIMARY is INK now, not brand red. The CRM rework spends red on the active nav
+  // item, `Agendar cita`, and the "a human is handling this" marker, and nothing else —
+  // see the note on --ink in globals.css. The PROPORTION this test is really about
+  // (primary takes the leftover width, secondaries size to their labels) is unchanged.
   assert.ok(
     read('web/components/ui/panelChrome.tsx').includes(
-      'inline-flex h-9 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-lg bg-brand',
+      'inline-flex h-9 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-lg bg-ink',
     ),
-    'and ACT_PRIMARY is the proportion the contact panel uses',
+    'and ACT_PRIMARY is the proportion the roster uses',
   );
   // The quiet close control both panels share, in place of a bordered ✕ box. Scoped to
   // the CLOSE control: the inline ✕ that removes a skill chip or a time range is a

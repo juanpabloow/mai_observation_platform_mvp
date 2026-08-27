@@ -222,6 +222,9 @@ async function deliverMessage(
     failureCode,
     failureDetail,
     occurredAt: (updated?.occurred_at ?? new Date()).toISOString(),
+    // A human reply sent from the composer is plain text; structured payloads are
+    // written by the agent side, never here.
+    payload: null,
   };
 }
 

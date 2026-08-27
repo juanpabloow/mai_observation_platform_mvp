@@ -42,14 +42,26 @@ const SIDEBAR = 'components/AppSidebar.tsx';
 test('sidebar: exactly ONE active treatment, and it is the solid brand fill', () => {
   const src = read(SIDEBAR);
   // The active row is the single strongest mark in the shell.
-  assert.ok(src.includes('bg-nav-active font-medium text-white'), 'active row uses the fixed solid red');
+  assert.ok(src.includes('bg-nav-active font-semibold text-white'), 'active row uses the fixed solid red');
   // Activity is always derived from the pathname — never from a second source that
   // could light up two rows at once.
   assert.ok(src.includes('active: pathname.startsWith('), 'active state derives from the pathname');
   // The badge-bearing Inbox item must use the SAME active treatment, or two rows
   // could render as "current" in different styles.
   const tab = read('components/InboxTabLink.tsx');
-  assert.ok(tab.includes('bg-nav-active font-medium text-white'), 'the Inbox item shares the active treatment');
+  assert.ok(tab.includes('bg-nav-active font-semibold text-white'), 'the Inbox item shares the active treatment');
+  // …and the same GEOMETRY. The two are separate components, so the row height is the
+  // thing that silently drifts: the Inbox row stayed 40px tall for one commit while its
+  // neighbours went to the design's 32px, which is visible as a single loose row.
+  // …and the same GEOMETRY, from ONE constant rather than three class strings. The row
+  // height is what drifts silently when each component spells it out: one of them sat at
+  // 40px for a commit while the others went to 32, which reads as a single loose row.
+  assert.ok(src.includes('${RAIL_ROW}') && tab.includes('${RAIL_ROW}'), 'both read the shared row constant');
+  const rail = read('components/railRow.ts');
+  assert.ok(rail.includes('export const RAIL_ROW'), 'which is declared in one place');
+  // Its own module, because AppSidebar imports InboxTabLink — exporting it from there and
+  // importing it back would be a cycle.
+  assert.equal(/import .*InboxTabLink/.test(rail), false, 'and that place has no rail imports of its own');
 });
 
 test('sidebar: the Inbox badge is fed by the REAL pending-count endpoint', () => {
@@ -87,10 +99,22 @@ test('shell: chrome geometry is fixed px, so it does not ride the 90% rem scale'
   assert.ok(/html\s*{\s*font-size:\s*100%/.test(css), 'content scales from the root…');
   assert.ok(/html\[data-text-scale='compact'\]\s*{\s*font-size:\s*90%/.test(css), '…and Compact is the old density');
   // Radius is retuned once, at the scale — not with per-component overrides.
-  // Softened one step from the original 3-6px spec — still a tight, tool-like
-  // scale, tuned once here rather than per component.
-  assert.ok(css.includes('--radius-lg: 8px'), 'the panel radius is 8px, not 10-12px');
-  assert.ok(css.includes('--radius-md: 6px') && css.includes('--radius-sm: 4px'), 'the scale is 4-8px');
+  //
+  // Re-tuned again by the CRM/Inbox rework (docs/ui-redesign-crm-inbox.md §1): the
+  // artboard is deliberately NOT on one radius, it steps by the SIZE of the object —
+  // a 14px card, an 11px control, a 9px chip, a 7px badge. The assertion that matters
+  // is that the steps are ordered and declared here rather than sprinkled per
+  // component, so this checks the ladder, not one value.
+  const radius = (name: string): number => {
+    const m = new RegExp(`--radius-${name}:\\s*(\\d+)px`).exec(css);
+    assert.ok(m, `--radius-${name} is declared at the scale`);
+    return Number(m![1]);
+  };
+  const [sm, md, lg, xl] = [radius('sm'), radius('md'), radius('lg'), radius('xl')];
+  assert.ok(sm < md && md < lg && lg < xl, `the ladder ascends: ${sm} < ${md} < ${lg} < ${xl}`);
+  assert.equal(xl, 14, 'THE card radius is the artboard\'s 14px');
+  assert.equal(lg, 11, 'a control is 11px');
+  assert.equal(md, 9, 'a chip is 9px');
 });
 
 test('shell: the four header strips all resolve to the SAME height token', () => {
@@ -105,14 +129,20 @@ test('shell: the four header strips all resolve to the SAME height token', () =>
   }
   // The thread header is min-height (its content can wrap) but shares the token.
   assert.ok(read('components/InboxThread.tsx').includes('min-h-[var(--topbar-height)]'), 'the thread header too');
-  // And every screen is titled by the ONE band, at one size.
-  for (const rel of [
-    'app/clients/[clientId]/contacts/page.tsx',
-    'components/scheduling/AgendaView.tsx',
-    'components/ClientInboxWorkspace.tsx',
-  ]) {
+  // And every screen that has a TITLE BAND is titled by the one band, at one size.
+  for (const rel of ['components/scheduling/AgendaView.tsx', 'components/ClientInboxWorkspace.tsx']) {
     assert.ok(read(rel).includes('<PageTitle'), `${rel} uses the shared page title`);
   }
+  // Contacts is the exception, and deliberately so (docs/ui-redesign-crm-inbox.md §2.1):
+  // its title row is ONE line holding the title, the search field, the two data actions
+  // and the primary — a shape PageTitle cannot express, since PageTitle's contract is
+  // "a title, counters, and a right-aligned scope line". What must still hold is the
+  // SIZE, so the screen's name is the same weight as every other screen's.
+  const contactsPage = read('app/clients/[clientId]/contacts/page.tsx');
+  assert.ok(
+    /<h1[^>]*text-\[15px\][^>]*font-semibold/.test(contactsPage.replace(/\s+/g, ' ')),
+    'contacts titles itself at the shared size even though it does not use PageTitle',
+  );
 });
 
 test('sidebar: the footer row is a GRID, so the label cannot overlap the avatar', () => {
@@ -120,20 +150,25 @@ test('sidebar: the footer row is a GRID, so the label cannot overlap the avatar'
   // The earlier min-w-0/overflow-hidden fix only governed truncation on the RIGHT;
   // it could not stop the label from starting on top of the avatar. Grid tracks
   // cannot overlap: track 2 begins after the avatar's track plus the gap.
-  assert.ok(src.includes('grid grid-cols-[auto_minmax(0,1fr)] items-center gap-2.5'), 'two real tracks with a gap');
+  assert.ok(src.includes('grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3'), 'two real tracks with a gap');
   // minmax(0,1fr) is what still allows the label to shrink and truncate.
   assert.ok(src.includes('minmax(0,1fr)'), 'the label track can shrink below its content');
-  assert.ok(src.includes('truncate text-sm font-medium text-sidebar-fg'), 'long names still truncate on the right');
+  assert.ok(src.includes('truncate text-[0.8125rem] font-medium leading-tight text-sidebar-fg'), 'long names still truncate on the right');
   // The avatar must not pick up the RED hover token as its fill.
   assert.ok(!/bg-sidebar-hover text-xs font-semibold/.test(src), 'the avatar is not filled with the hover red');
-  assert.ok(src.includes('bg-sidebar-border text-xs font-semibold'), 'it uses the neutral rail border tone');
+  // It is now the SAME two-tone gradient sphere every other person in the app gets
+  // (`.u-avatar-*`), seeded from the account's own identifier. It used to be a flat
+  // --sidebar-border fill, which made the one person always on screen the only person
+  // without an identity colour.
+  assert.ok(src.includes('avatarColor(seed)'), 'the rail disc is coloured from the shared avatar hash');
+  assert.ok(src.includes('seed={account.email}'), 'seeded on the email, which cannot be edited away');
 });
 
 test('contacts: the panel gutter is actually VISIBLE against the canvas', () => {
   const css = read('app/globals.css');
   // The margin existed before but #f8f9fb vs #ffffff is ~2.7%/channel — invisible,
   // so the card read as full-bleed. The canvas is now a genuinely distinguishable grey.
-  assert.ok(css.includes('--background: #eff1f5'), 'the canvas is distinguishable from the panel');
+  assert.ok(css.includes('--background: #eff0f3'), 'the canvas is distinguishable from the panel');
   assert.ok(css.includes('--surface: #ffffff'), 'the panel stays white');
   assert.ok(css.includes('--content-pad: 16px'), 'and the gutter is wide enough to read');
   // The gutter is the LAYOUT's (see the dedicated test); the page only supplies the
@@ -189,6 +224,11 @@ test('sidebar: the footer labels the person, not a truncated email', () => {
   assert.ok(read('components/AppSidebarServer.tsx').includes('name={name}'), 'the server passes the display name');
 });
 
+/** The table's own component. The rework moved the rows out of the page (§2.3) — the
+ *  design's row is a 7-track GRID with three two-line cells, which a `<table>` cannot
+ *  lay out to fixed proportions. */
+const CONTACTS_TABLE = 'components/contacts/ContactsTable.tsx';
+
 // ──────────────────────────── Contacts list ─────────────────────────────────
 
 test('shell: the GUTTER is owned by the layout, not by each page', () => {
@@ -213,25 +253,49 @@ test('contacts: ONE card holds the screen, with the table recessed inside it', (
   const src = read(CONTACTS_PAGE);
   // THREE cards on the canvas: title+filters, table, panel. The first sizes to its
   // content (grow={false}); only the table absorbs the leftover height.
-  assert.ok(/<PageShell grow=\{false\}( clip=\{false\})?>/.test(src), 'the title+filters card sizes to its content');
-  assert.ok(src.includes('<ContactsToolbar owners={ownerOptions} />'), 'the toolbar renders');
+  assert.ok(/<PageShell grow=\{false\}( clip=\{false\})?>/.test(src), 'the title card sizes to its content');
+  // The rework split the old single toolbar into three places (§2.1–2.2): the SEARCH is
+  // in the title row, the common facets are a server-rendered pill row inside the table
+  // card, and what is left sits behind Filtrar / Orden / Columnas beside the pills.
+  assert.ok(src.includes('<ContactsSearch />'), 'the search renders in the title row');
+  assert.ok(src.includes('<FacetPills'), 'the facet pills render');
+  assert.ok(src.includes('<ContactsFilterMenu owners={ownerOptions} />'), 'the residual facets render');
   assert.ok(
-    src.indexOf('<PageShell grow={false}>') < src.indexOf('<ContactsToolbar owners={ownerOptions} />'),
-    'and the bands are inside that first card, not floating above it',
+    src.indexOf('<PageShell grow={false}') < src.indexOf('<ContactsSearch />'),
+    'and the title row is inside that first card, not floating above it',
   );
-  assert.equal((src.match(/<PageShell/g) ?? []).length, 2, 'title+filters and table are two separate cards');
+  assert.equal((src.match(/<PageShell/g) ?? []).length, 2, 'title and table are two separate cards');
   // The table is its own card DIRECTLY on the canvas — no card-inside-a-card, which is
   // what the three-box layout replaced (a recessed grey ground inside a white shell).
   assert.equal(/bg-background p-3/.test(src), false, 'the table is not recessed inside another card');
   assert.ok(src.includes('min-h-0 flex-1 overflow-auto'), 'the table region grows inside its card');
-  assert.ok(src.includes('Fin de la lista'), 'the end-of-list marker lives in that same surface');
+  // The end-of-list marker became a PAGER (§2.4): page numbers instead of "load more",
+  // and a range line that names the whole filtered set.
+  assert.ok(src.includes('Mostrando {firstShown}'), 'the range line lives in that same surface');
+  assert.ok(src.includes('<Pagination'), 'and the pager sits beside it');
   assert.ok(src.includes('gap-[var(--content-pad)]'), 'block rhythm is the token');
 });
 
-test('contacts: the toolbar is a single row on desktop', () => {
+test('contacts: the controls are ONE row each, and share one height', () => {
   const toolbar = read(TOOLBAR);
-  assert.ok(toolbar.includes('lg:flex-nowrap'), 'it stops wrapping at desktop');
-  assert.ok(toolbar.includes('h-[var(--control-h)]'), 'controls share the 38px height');
+  // The old single wrapping toolbar became two rows by design (§2.1–2.2), so "it stops
+  // wrapping at lg" no longer describes anything. What still has to hold — and is what
+  // that assertion was really protecting — is that every control in the band is the same
+  // height, so the row cannot look ragged.
+  // The height now comes from the SHARED shell + the shared primary rather than being
+  // re-typed in the toolbar, which is what the assertion was protecting: three screens
+  // used to draw three search boxes at three heights.
+  const primitives = read('components/ui/primitives.tsx');
+  for (const cls of ['SEARCH_SHELL_CLS', 'TOOLBAR_PRIMARY_CLS', 'GHOST_ACTION_CLS']) {
+    const decl = primitives.slice(primitives.indexOf(`export const ${cls} =`), primitives.indexOf(`export const ${cls} =`) + 400);
+    assert.ok(decl.includes('h-[var(--control-h)]'), `${cls} is control height`);
+  }
+  assert.ok(toolbar.includes('SEARCH_SHELL_CLS'), 'and the toolbar reads them rather than re-typing a box');
+  const page = read(CONTACTS_PAGE);
+  // The title row is a single non-wrapping line: the search takes the slack (flex-1) and
+  // everything else is shrink-0, which is what stops the primary from being pushed off.
+  assert.ok(/<div className="flex items-center gap-1 px-3 py-2">/.test(page), 'the title row does not wrap');
+  assert.ok(toolbar.includes('min-w-0 max-w-\[420px\] flex-1') || toolbar.includes('max-w-[420px] flex-1'), 'the search absorbs the slack, capped at the artboard\'s 420px');
 });
 
 test('contacts: "Nuevo contacto" is LIVE, and creation goes through the identity chokepoint', () => {
@@ -242,7 +306,14 @@ test('contacts: "Nuevo contacto" is LIVE, and creation goes through the identity
   assert.ok(src.includes('<NewContactButton'), 'the button occupies its designed slot');
   assert.ok(!src.includes('aria-disabled="true"'), 'it is no longer inert');
   assert.ok(!src.includes('TODO(crm)'), 'and the TODO that tracked this is gone');
+  // IMPORT is still deliberately absent. The artboard draws it, but it is a FEATURE
+  // (file upload, column mapping, dedup against the identity spine), not a restyle, and
+  // a button that opens nothing is worse than one that is not there.
   assert.ok(!src.includes('Import contacts'), 'import stays out entirely');
+  assert.ok(!/>\s*Importar\s*</.test(src), 'and it is absent under its Spanish label too');
+  // EXPORT is the one that shipped, and it exports the FILTERED view rather than
+  // "everything", which is the classic export bug.
+  assert.ok(src.includes('<ContactsExportLink'), 'export is offered');
 
   // The real guarantee, checked at the source: the create action resolves through the
   // spine and never issues its own INSERT.
@@ -306,8 +377,8 @@ test('contacts: EVERY door into editing opens the same drawer', () => {
   assert.ok(button.includes('<ContactEditForm'), 'the record header opens the same drawer');
 
   // The row prompts still route through the panel's ?edit=1 one-shot.
-  const list = read(CONTACTS_PAGE);
-  assert.ok(list.includes("hrefWith({ c: c.id, edit: \"1\" })"), 'the empty-cell prompts still open editing');
+  const list = read(CONTACTS_TABLE);
+  assert.ok(list.includes('hrefWith({ c: c.id, edit: "1" })'), 'the empty-cell prompts still open editing');
 });
 
 test('contacts: both doors build their payload from ONE server loader', () => {
@@ -384,35 +455,56 @@ test('contacts: summary counters come from ONE grouped query — never an N+1', 
   assert.ok(repo.includes('GROUP BY contact_id, client_id'), 'task counts are aggregated, then joined');
 });
 
-test('contacts: keyset pagination is untouched (cursor in, opaque cursor out)', () => {
+test('contacts: the list is OFFSET-paged with page numbers, and the keyset still exists', () => {
+  // THE CONTRACT INVERTED, deliberately (docs/ui-redesign-crm-inbox.md §2.4). The design
+  // paginates by NUMBER, which needs a total COUNT and an OFFSET read. The trade is real:
+  // offset paging can skip or repeat a row if the set changes while someone is on page 3.
+  // For a contacts book that changes a few times an hour that is acceptable and page
+  // numbers are worth more; for the executions log it is not, which is why the keyset
+  // codec below must SURVIVE rather than be deleted.
   const src = read(CONTACTS_PAGE);
-  assert.ok(src.includes('cursor: cursor || undefined'), 'the cursor is forwarded to the repository');
-  assert.ok(src.includes('nextCursor ? hrefWith({ cursor: nextCursor })'), 'the next page link carries the next cursor');
+  assert.ok(src.includes('offset: (requestedPage - 1) * PAGE_SIZE'), 'the page number becomes an offset');
+  assert.ok(src.includes('withTotal: true'), 'and the read asks for the count the pager needs');
+  assert.ok(src.includes('const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE))'), 'the page count is derived from that total');
+  // ONE page size, read by the query, the offset arithmetic and the range line.
+  assert.ok(read('lib/contactColumns.ts').includes('export const PAGE_SIZE'), 'the page size is a single constant');
+
   const repo = readFileSync(fileURLToPath(new URL('../../src/db/repositories/contacts.ts', import.meta.url)), 'utf8');
-  assert.ok(repo.includes('ORDER BY c.last_contact_at DESC, c.id DESC'), 'the keyset ordering is unchanged');
-  assert.ok(repo.includes('encodeContactCursor'), 'the cursor codec is unchanged');
+  assert.ok(repo.includes('ORDER BY c.last_contact_at DESC, c.id DESC'), 'the ordering is unchanged');
+  assert.ok(repo.includes('encodeContactCursor'), 'the keyset codec still exists for the callers that need it');
+  // Both may not apply at once, or a keyset caller would be silently re-paged.
+  assert.ok(repo.includes('const offset = cursor ? 0 : Math.max(0'), 'a cursor wins over an offset');
+  // The offset is BOUND, never interpolated.
+  assert.ok(repo.includes('LIMIT $${limitIdx} OFFSET $${offsetIdx}'), 'the offset is a bound parameter');
 });
 
 test('contacts: `from` (the origin workflow) survives search, facets, paging and row clicks', () => {
   const src = read(CONTACTS_PAGE);
   // Every generated href merges the CURRENT params, `from` included.
   assert.ok(
-    src.includes('{ q, from, stage, owner, tasks, cols, c: selectedId, ...patch }'),
+    /const merged: Record<string, string \| undefined> = \{\s*q,\s*from,/.test(src),
     'hrefWith merges from (and the open panel)',
   );
+  assert.ok(src.includes('page: page > 1 ? String(page) : undefined'), 'and the page number rides along');
   assert.ok(src.includes('const fromQS = from ? `?from=${encodeURIComponent(from)}` : ""'), 'from is preserved…');
   // The row now SELECTS (?c=) rather than navigating away, so `from` rides hrefWith;
   // the link on into the full record lives in the panel and still carries fromQS.
-  assert.ok(src.includes('href={hrefWith({ c: c.id })}'), '…on the row link, which opens the panel');
+  assert.ok(read(CONTACTS_TABLE).includes('href={hrefWith({ c: c.id })}'), '…on the row link, which opens the panel');
   assert.ok(src.includes('recordHref={`${base}/${panelId}${fromQS}`}'), '…and on the panel link into the record');
   // The toolbar preserves whatever is in the URL rather than rebuilding it.
   const toolbar = read(TOOLBAR);
   assert.ok(toolbar.includes('new URLSearchParams(searchParams.toString())'), 'the toolbar preserves existing params');
 });
 
-test('contacts: changing a facet RESETS the keyset cursor (a stale cursor would skip rows)', () => {
+test('contacts: changing a facet RESETS paging (a stale page would show different people)', () => {
   const toolbar = read(TOOLBAR);
-  assert.ok(toolbar.includes('p.delete("cursor")'), 'every facet write drops the cursor');
+  // Both pagers are dropped, not just the one this screen uses: `page` because page 3 of
+  // the previous filter set points at different people, and `cursor` because a keyset
+  // cursor from it is meaningless.
+  assert.ok(toolbar.includes('const PAGING_PARAMS = ["page", "cursor"] as const'), 'both pagers are named in one place');
+  assert.ok(toolbar.includes('for (const k of PAGING_PARAMS) p.delete(k)'), 'every facet write drops them');
+  // …except the COLUMNS control, which cannot change which rows match.
+  assert.ok(toolbar.includes('{ keepPaging: true }'), 'a purely presentational write keeps the page');
 });
 
 test('contacts: Enter runs the search (a real form submit)', () => {
@@ -426,7 +518,7 @@ test('contacts: Columns is presentational — it writes ?cols= and touches nothi
   // It now lives in the STATS row (it belongs to the table, not to the search), as
   // its own exported component driving the same URL param.
   assert.ok(toolbar.includes('export function ContactsColumnsMenu'), 'Columns is its own control');
-  assert.ok(toolbar.includes('p.set("cols", cols.join(","))'), 'Columns only writes ?cols=');
+  assert.ok(toolbar.includes('apply({ cols: next.join(",") }, { keepPaging: true })'), 'Columns only writes ?cols=');
   assert.ok(read(CONTACTS_PAGE).includes('<ContactsColumnsMenu visibleColumns={visibleColumns} />'), 'rendered in the stats row');
   const page = read(CONTACTS_PAGE);
   // `cols` must never be forwarded into a query — it is parsed for rendering only.
@@ -435,37 +527,52 @@ test('contacts: Columns is presentational — it writes ?cols= and touches nothi
 });
 
 test('contacts: the row is fully clickable via ONE real link (no duplicate tab stops)', () => {
-  const src = read(CONTACTS_PAGE);
+  const src = read(CONTACTS_TABLE);
   assert.ok(src.includes('after:absolute after:inset-0'), 'the name link stretches over the row');
-  // 46px rather than the dense --row-h: this is the customer list, not a log.
-  assert.ok(src.includes('className={`relative h-[46px] border-b'), 'the row is the positioning context');
+  // 54px, the artboard's row (§2.3) — up from 46px, because the name cell is now two
+  // lines. Still not the dense --row-h: this is the customer list, not a log.
+  assert.ok(src.includes('h-[54px]'), 'the row is the artboard height');
+  assert.ok(src.includes('className={`relative grid h-[54px]'), 'the row is the positioning context');
+  // A grid, not a table — and the head and the rows read the SAME template, which is
+  // what keeps the sticky head aligned with its body.
+  assert.ok((src.match(/gridTemplateColumns: template/g) ?? []).length === 2, 'head and rows share one template');
+  // Semantics are preserved explicitly rather than inherited from the tag.
+  for (const role of ['role="table"', 'role="row"', 'role="columnheader"', 'role="cell"']) {
+    assert.ok(src.includes(role), `the grid still announces ${role}`);
+  }
   // Underline is a hover/focus affordance only — never a permanent decoration.
   assert.ok(src.includes('no-underline'), 'the name link is not permanently underlined');
   assert.ok(src.includes('hover:underline focus-visible:underline'), '…but underlines on hover AND focus');
 });
 
-test('contacts: a number without a name shows the phone AND an explicit "no name"', () => {
-  const src = read(CONTACTS_PAGE);
+test('contacts: a number without a name shows the phone, in mono so it reads as an id', () => {
+  const src = read(CONTACTS_TABLE);
   assert.ok(src.includes('c.name?.trim() || c.channel_user_id'), 'falls back to the channel identifier');
-  assert.ok(src.includes('<Meta>no name</Meta>'), 'and says so, rather than rendering a blank cell');
+  // The "no name" chip is gone: the design's name cell is two lines, and the identifier
+  // rendering in MONO where every other row shows a proper name in sans already says
+  // "this is an id, not a person's name" — without spending a chip on it. The mono
+  // fallback is the assertion that replaces it.
+  assert.ok(src.includes('named ? "" : "u-mono"'), 'an unnamed contact renders its id in mono');
 });
 
 test('contacts: an overdue row is marked by SHAPE + color, not color alone', () => {
-  const src = read(CONTACTS_PAGE);
-  assert.ok(src.includes('u-row-danger'), 'the row carries the overdue treatment');
-  assert.ok(src.includes('OVERDUE'), 'and a text chip, so the state survives grayscale');
+  const src = read(CONTACTS_TABLE);
+  // It moved from `.u-row-danger` (a red wash + 3px red bar) to `.u-row-overdue` (amber),
+  // because red is no longer available for it: the redesign spends red on the active nav
+  // item, `Agendar cita`, and the "a human is handling this" marker. "Late" is exactly
+  // what --warn is for, and the amber still carries a LEFT RULE, so the state is a shape
+  // as well as a colour.
+  assert.ok(src.includes('u-row-overdue'), 'the row carries the overdue treatment');
   const css = read('app/globals.css');
-  // Pink wash + a 3px BRAND-RED left bar. Distinct from .u-row-overdue, which is the
-  // inbox's amber "needs a human" state — attention-worthy but not late.
-  assert.ok(/\.u-row-danger[^}]*box-shadow:\s*inset 3px 0 0 0 var\(--brand-rule\)/s.test(css), '3px red left bar');
-  assert.ok(/\.u-row-danger[^}]*var\(--brand\) 6%/s.test(css), 'pink wash from the brand');
+  assert.ok(/\.u-row-overdue[^}]*box-shadow:\s*inset 2px 0 0 0 var\(--warn-rule\)/s.test(css), 'a left rule, not colour alone');
+  assert.ok(/\.u-row-overdue[^}]*background-color:\s*var\(--warn-soft\)/s.test(css), 'and an amber wash');
 });
 
 test('contacts: loading / empty / error states exist and the empty state can clear filters', () => {
   const src = read(CONTACTS_PAGE);
   assert.ok(src.includes('Ningún contacto coincide con estos filtros.'), 'filtered-empty is distinct…');
   assert.ok(src.includes('Todavía no hay contactos.'), '…from genuinely-empty');
-  assert.ok(src.includes('Clear filters'), 'the filtered-empty state offers a way out');
+  assert.ok(src.includes('Quitar los filtros'), 'the filtered-empty state offers a way out');
 });
 
 // ─────────────────────────── Contact record ─────────────────────────────────
@@ -483,7 +590,10 @@ test('record + drawer: ONE component declares the sections, their order and thei
   // cosmetic: both surfaces render the SAME component, so a field added to one is
   // necessarily in the other. If either stops doing that, they can diverge again.
   const body = read('components/contacts/form/ContactSections.tsx');
-  const order = ['IDENTIDAD', 'ASIGNACIÓN', 'COMUNICACIÓN', 'INTERNO'].map((t) => body.indexOf(`title="${t}"`));
+  // Sentence case, per the rework — `SectionHeading` moved to sans/590 and the labels
+  // stopped shouting (§2.5). "COMUNICACIÓN" also became "Mensajería", matching the
+  // artboard's own word for that group.
+  const order = ['Contacto', 'Asignación', 'Mensajería', 'Interno'].map((t) => body.indexOf(`title="${t}"`));
   assert.ok(order.every((i) => i > 0), 'all four sections are declared in one place');
   assert.deepEqual(order, [...order].sort((a, b) => a - b), 'and in a fixed order');
   // The optional divider and the tenant-configured block come last, in both modes.
@@ -637,23 +747,34 @@ test('panel header: the wash is the CONTACT\'S OWN tone, from the avatar hash', 
   // A header tinted from a second derivation would put a teal disc on a purple header.
   const block = read('components/contacts/shared/ContactHeaderBlock.tsx');
   assert.ok(block.includes('export function contactToneSeed'), 'one seed rule');
-  assert.ok(block.includes('avatarToneVar(contactToneSeed('), 'and the tone comes from the avatar hash');
+  // The discs became two-tone gradient SPHERES, so the wash fades the same PAIR rather
+  // than a single hex — otherwise the header and the avatar 40px above it disagree.
+  assert.ok(block.includes('avatarToneStyle(contactToneSeed('), 'and the tone comes from the avatar hash');
   const avatar = read('lib/avatarColor.ts');
   assert.ok(avatar.includes('export function avatarToneIndex'), 'the index is shared');
   assert.ok(/avatarColor\(id: string\): string \{\s*return `u-avatar-\$\{avatarToneIndex\(id\)\}`/.test(avatar),
     'the disc class derives from that same index, not a second hash');
   // The var, never a hex: the eight tones stay defined in globals.css alone.
   assert.ok(/return `var\(--avatar-\$\{avatarToneIndex\(id\)\}\)`/.test(avatar), 'the tone is a var, not a literal');
+  // The discs became two-tone gradient SPHERES ("avatares esfera"), so a wash needs BOTH
+  // stops of the pair or the header disagrees with the avatar above it.
+  assert.ok(avatar.includes('export function avatarToneStyle'), 'a pair-aware helper exists');
+  assert.ok(/"--tone-a": `var\(--avatar-\$\{i\}-a\)`/.test(avatar), 'it emits the first stop');
+  assert.ok(/"--tone-b": `var\(--avatar-\$\{i\}-b\)`/.test(avatar), '…and the second');
 
   // The RAMP lives in one place so the two panels cannot drift.
   const css = read('app/globals.css');
   assert.ok(/\.u-contact-wash \{[\s\S]*?linear-gradient\(/.test(css), 'the wash recipe is a single class');
-  assert.ok(/var\(--tone, transparent\) 10%[\s\S]*?var\(--tone, transparent\) 2%/.test(css), '10% → 2%, as the reference');
+  // The ramp now fades the PAIR — 10% of the first stop into 3.5% of the second, which
+  // is the artboard's own recipe (§2.5).
+  assert.ok(/--tone-a[\s\S]*?10%[\s\S]*?--tone-b[\s\S]*?3\.5%/.test(css), '10% of A → 3.5% of B, as the artboard');
+  // ONE gradient recipe for all eight discs, keyed off the pair each class declares.
+  assert.ok(/\[class\*='u-avatar-'\] \{[\s\S]*?linear-gradient\(\s*135deg/.test(css), 'and one disc recipe for all eight tones');
 
   // Both panels feed it; the create form does NOT — there is no contact to be the
   // colour of yet.
-  assert.ok(read('components/contacts/ContactSidePanel.tsx').includes('headerTone={contactToneVar('), 'the quick view tints');
-  assert.ok(read('components/contacts/form/ContactEditForm.tsx').includes('headerTone={contactToneVar('), 'the drawer tints');
+  assert.ok(read('components/contacts/ContactSidePanel.tsx').includes('headerToneStyle={contactToneStyle('), 'the quick view tints');
+  assert.ok(read('components/contacts/form/ContactEditForm.tsx').includes('headerToneStyle={contactToneStyle('), 'the drawer tints');
   assert.equal(read('components/contacts/form/ContactCreateForm.tsx').includes('headerTone'), false, 'creating tints nothing');
   // And the wash only ever paints the header, never the scrolling body.
   const shell = read('components/contacts/shared/ContactPanelShell.tsx');
@@ -661,14 +782,18 @@ test('panel header: the wash is the CONTACT\'S OWN tone, from the avatar hash', 
   assert.equal(body.includes('u-contact-wash'), false, 'the body stays a neutral reading surface');
 });
 
-test('quick view: the Datos tab reads the contact WITHOUT opening the editor', () => {
+test('quick view: the contact READS without opening the editor, now inside Resumen', () => {
   const panel = read('components/contacts/ContactSidePanel.tsx');
-  // The gap this closes: owner, consent and "no contactar" were readable only by
-  // opening the edit drawer — reading through an editing surface, which is exactly the
-  // pattern the record page dropped when its left column went read-only.
-  assert.ok(panel.includes('"data"'), 'the panel has a Datos tab');
-  assert.ok(/tab === "data" \?/.test(panel), 'and renders it');
-  // It must be the SHARED read-mode body, not a second spelling of what a contact is.
+  // The gap this closes is unchanged: owner, consent and "no contactar" were readable
+  // only by opening the edit drawer — reading through an editing surface, which is
+  // exactly the pattern the record page dropped when its left column went read-only.
+  //
+  // What changed is WHERE. The separate `Datos` tab folded into `Resumen` (§2.5): "the
+  // contact's fields" and "a summary of this contact" were never two different
+  // questions, and splitting them cost two clicks in a panel with room for neither tab.
+  assert.equal(panel.includes('"data"'), false, 'the separate Datos tab is gone');
+  assert.ok(/tab === "summary" \?/.test(panel), 'Resumen is what renders');
+  // It must still be the SHARED read-mode body, not a second spelling of what a contact is.
   assert.ok(/<ContactSections\s+mode="read"/.test(panel), 'it renders the shared sections in read mode');
   // …fed by the payload the panel ALREADY loaded for the Editar button: no new query.
   assert.ok(panel.includes('edit.initial.consent'), 'from the existing payload');
@@ -677,11 +802,11 @@ test('quick view: the Datos tab reads the contact WITHOUT opening the editor', (
   // not even build).
   assert.ok(/import type \{[^}]*ContactEditPayload/.test(panel), 'the payload arrives as a prop, type-only');
   assert.equal(/loadContactEditPayload\s*\(/.test(panel), false, 'the panel never calls the loader itself');
-  // Read mode only: the tab must not smuggle an editing control back in.
-  const dataTab = panel.slice(panel.indexOf('tab === "data"'), panel.indexOf('tab === "appointments"'));
-  assert.equal(/mode="edit"|onChange=|<input/.test(dataTab), false, 'the Datos tab writes nothing');
-  // The label comes from the shared copy helper, like every other tab.
-  assert.ok(read('lib/contactLabels.ts').includes('data: "Datos"'), 'the label is centralised');
+  // Read mode only: the facts block must not smuggle an editing control back in.
+  const facts = panel.slice(panel.indexOf('<ContactSections'), panel.indexOf('<FormSection'));
+  assert.equal(/mode="edit"|<input/.test(facts), false, 'the facts block writes nothing');
+  // ONE column at the panel's 380px — two would leave ~70px for a phone number.
+  assert.ok(facts.includes('columns={1}'), 'and it is a single column of fact rows');
 });
 
 test('quick view + drawer: ONE panel interior — no double frame, one fill, one width', () => {
@@ -753,7 +878,10 @@ test('both panels are THREE zones — fixed header, one scrolling body, fixed fo
   // edge (square top-right corner against a round top-left) and pushed the panel a
   // gutter below the shell's top. As siblings in one row they share a top and a bottom.
   assert.ok(/<div className="flex min-h-0 flex-1 gap-3">/.test(page), 'the shell and the panel share a row');
-  assert.ok(page.indexOf('<PageShell>') > page.indexOf('flex min-h-0 flex-1 gap-3'), 'the shell is inside that row');
+  // The table card now opts out of clipping, because the facet row beside it hosts the
+  // Filtrar / Orden / Columnas popovers and a card's overflow-hidden cuts an
+  // absolutely-positioned menu off at its edge.
+  assert.ok(page.indexOf('<PageShell clip={false}>') > page.indexOf('flex min-h-0 flex-1 gap-3'), 'the shell is inside that row');
   assert.ok(page.indexOf('<ContactSidePanel') > page.indexOf('</PageShell>'), 'and the panel is its sibling, not its child');
   assert.equal(/xl:block/.test(page), false, 'the panel column is never a block');
   // The panel must not GROW on the row axis: `flex-1` there swallowed its own width and
@@ -954,7 +1082,9 @@ test('inbox: the real groups and the real pending count still drive the queue', 
   const src = read(WORKSPACE);
   assert.ok(src.includes('groupConversations('), 'grouping comes from the pure state mapping');
   assert.ok(src.includes('pendingCount('), 'the counter is computed from the real list');
-  assert.ok(src.includes('{pending} need you'), 'and is rendered (as the queue\'s "N need you")');
+  // Spanish, and sentence case (§3.1): it was a mono uppercase badge, which on the pane's
+  // own title read as a status chip rather than as a count.
+  assert.ok(src.includes('{pending === 1 ? "te necesita" : "te necesitan"}'), 'and is rendered, pluralised');
 });
 
 test('inbox: the selected row is marked by a fill AND a shape, and never shifts', () => {
@@ -979,39 +1109,49 @@ test('inbox: customer / bot / human-agent messages stay visually distinct', () =
   assert.ok(src.includes('const isAgent = msg.sender === "human_agent"'), 'the human agent is identified');
   // Three different fills — a light → mid → dark ramp, no hue spent.
   assert.ok(src.includes('border border-bubble-in-border bg-bubble-in text-bubble-in-fg'), 'customer bubble');
-  assert.ok(src.includes('bg-bubble-agent text-bubble-agent-fg'), 'human-agent bubble (outlined, on the business side)');
-  assert.ok(src.includes('border border-bubble-bot-border bg-bubble-bot text-bubble-bot-fg'), 'bot bubble');
+  // The human agent is WHITE with an INK edge — it sits on the business side but must not
+  // be mistaken for the bot, so it keeps the side and drops the dark fill (§3.3).
+  assert.ok(src.includes('border border-bubble-agent-border bg-bubble-agent text-bubble-agent-fg'), 'human-agent bubble (ink-edged, on the business side)');
+  // The bot is a SOLID near-black fill with no border — a border on a dark fill is
+  // invisible and only existed to keep the old three-grey ramp apart.
+  assert.ok(src.includes('bg-bubble-bot text-bubble-bot-fg'), 'bot bubble');
+  // THE TAIL is what says who is speaking, alongside the fill: three corners take
+  // --radius-bubble and the one pointing at the speaker collapses to the tail token.
+  assert.ok(src.includes('rounded-bl-bubble-tail'), 'the customer\'s tail points bottom-left');
+  assert.ok(src.includes('rounded-br-bubble-tail'), 'the business side points bottom-right');
   // A FAILED agent send must not be mistaken for a normal one now that both are red:
   // normal is the SOLID fill, failed is OUTLINED.
   assert.ok(src.includes('border border-danger bg-danger/12 text-danger'), 'failed is outlined, not solid');
 });
 
-test('inbox: the timestamp tucks into the last line and steals width from no other line', () => {
+test('inbox: the timestamp sits OUTSIDE the bubble, so it steals width from no line', () => {
   const src = stripComments(read('components/MessageTranscript.tsx'));
-  // WhatsApp's arrangement: the text runs at the FULL bubble width, an INVISIBLE copy of
-  // the stamp reserves its room at the end of the text, and the real stamp is positioned
-  // into that reserved gap.
-  assert.ok(/aria-hidden[^>]*className="invisible ml-2/.test(src), 'an invisible spacer reserves the stamp');
-  assert.ok(src.includes('absolute bottom-0 right-0 whitespace-nowrap'), 'the real stamp sits in that gap');
-  assert.ok(src.includes('const tucked = !sending && !failed'), 'only a settled message tucks');
-
-  // THE REGRESSION THIS EXISTS FOR. Making the stamp a flex SIBLING of the text looks
-  // identical on a one-line message and wrong on every longer one: the stamp's width is
-  // subtracted from EVERY line, so a two-line message wrapped into three short ones and
-  // the bubble read as crushed. The bubble must not be a flex row.
-  const bubble = src.slice(src.indexOf('max-w-[70%]'), src.indexOf('max-w-[70%]') + 200);
-  assert.ok(!/(^|\s)flex(\s|$)/.test(bubble), 'the bubble is not a flex row — the stamp is not a sibling of the text');
-  assert.ok(!bubble.includes('items-end'), 'nor bottom-aligned columns');
+  // THE CONTRACT INVERTED — and the regression it was written for is now impossible
+  // rather than merely guarded.
+  //
+  // The old arrangement tucked the stamp into the bubble's last line, which needed an
+  // INVISIBLE copy of it to reserve room: making the stamp a flex sibling of the text
+  // subtracted its width from EVERY line, so a two-line message wrapped into three and
+  // the bubble read as crushed. The design (§3.3) puts the stamp below the bubble,
+  // outside it, which deletes the whole mechanism: the text flows at the full bubble
+  // width with nothing to route around, and there is no width to steal.
+  assert.equal(/className="invisible ml-2/.test(src), false, 'no invisible spacer is needed any more');
+  assert.equal(src.includes('absolute bottom-0 right-0'), false, 'nor an absolutely-positioned stamp');
+  assert.equal(src.includes('const tucked ='), false, 'nor a tucked/untucked split');
+  // The stamp is a SIBLING OF THE BUBBLE, in the column that wraps it.
+  assert.ok(/flex min-w-0 max-w-full flex-col gap-1/.test(src), 'the bubble and its stamp are a column');
+  // `sending` / `failed` replace the stamp with a status and a Retry, on the same line.
+  assert.ok(src.includes('Reintentar'), 'a failed send still offers a retry');
   // And the text still wraps on its own terms.
   assert.ok(src.includes('whitespace-pre-wrap break-words'), 'the body keeps its own wrapping');
 });
 
-test('inbox: the three bubble fills stay distinct from each other AND from the ground', () => {
+test('inbox: the three voices stay distinguishable — by fill, edge AND side', () => {
   const css = read('app/globals.css');
   // The transcript now has its OWN grey ground, which is what lets the customer bubble
   // be white. Before, the transcript was white and the customer was grey — the two
   // swapped together, because a #eef0f3 bubble on a #eff1f5 ground is a 1% difference.
-  assert.ok(/--thread-bg:\s*#eff1f5/.test(css), 'light transcript is the grey ground');
+  assert.ok(/--thread-bg:\s*#edeef1/.test(css), 'light transcript is the grey ground');
   assert.ok(/--thread-bg:\s*#101012/.test(css), 'dark transcript too');
   assert.ok(
     read('components/InboxThread.tsx').includes('bg-[var(--thread-bg)]'),
@@ -1071,21 +1211,40 @@ test('inbox: the three bubble fills stay distinct from each other AND from the g
     const bot = resolve(map, 'bubble-bot');
     const agent = resolve(map, 'bubble-agent');
     assert.ok(inbound && bot && agent, `${theme}: all three fills are defined`);
-    assert.equal(new Set([inbound, bot, agent]).size, 3, `${theme}: three DISTINCT fills, not two`);
+    // TWO fills, not three — and that is the design (§3.3), not a regression.
+    //
+    // The customer and the human agent are BOTH white. What separates them is the EDGE
+    // (a hairline vs a 1px INK border) and the SIDE (left vs right). The old third fill
+    // was a brand-red wash on the agent, which put a fourth colour in a thread that only
+    // needs to answer "who said this" — and red is now spent elsewhere.
+    //
+    // So the assertion that matters is no longer "three fills". It is: the BOT is
+    // unmistakable by fill alone, and the two white bubbles are told apart by something
+    // that is not colour. The border half is asserted below, on the markup.
+    assert.notEqual(bot, inbound, `${theme}: the bot's fill is not the customer's`);
+    assert.notEqual(bot, agent, `${theme}: nor the agent's`);
+    assert.equal(inbound, agent, `${theme}: the two white bubbles share a fill, by design`);
     // None of them may be the ground itself, or that bubble has no edge but its border.
     assert.notEqual(inbound, resolve(map, 'thread-bg'), `${theme}: inbound is not the ground`);
     assert.notEqual(bot, resolve(map, 'thread-bg'), `${theme}: bot is not the ground`);
   }
   assert.ok(css.includes('--color-bubble-bot: var(--bubble-bot)'), 'exposed as a utility');
 
-  // The HUMAN AGENT is a faint BRAND TINT, not a third grey and not solid red: it keeps
-  // the business SIDE, stays clearly not-the-customer now that the customer is white,
-  // and a run of replies still cannot turn the thread into a wall of red.
-  assert.equal(css.match(/--bubble-agent:\s*var\(--brand-soft\)/g)?.length, 2, 'brand-tinted in both themes');
+  // THE AGENT'S EDGE is what carries the distinction the fill no longer does: white with
+  // an INK border, in both themes, so a colleague's reply is as loud as the bot's without
+  // spending a hue on it.
+  assert.equal(css.match(/--bubble-agent-border:\s*var\(--ink\)/g)?.length, 2, 'ink-edged in both themes');
+  const transcript = read('components/MessageTranscript.tsx');
   assert.ok(
-    read('components/MessageTranscript.tsx').includes('border border-line-strong bg-bubble-agent'),
-    'and the bubble actually draws that hairline',
+    transcript.includes('border border-bubble-agent-border bg-bubble-agent'),
+    'and the bubble actually draws that edge',
   );
+  // …plus the SIDE, which is the redundant cue that makes the pair survive greyscale.
+  assert.ok(transcript.includes('rounded-bl-bubble-tail'), 'the customer sits left');
+  assert.ok(transcript.includes('rounded-br-bubble-tail'), 'the business sits right');
+  // The bot's fill needs no border — a border on a dark fill is invisible and only
+  // existed to keep the old three-grey ramp apart.
+  assert.equal(/border border-bubble-bot-border/.test(transcript), false, 'the bot is a solid fill, unbordered');
 });
 
 test('inbox: no function crosses the server→client boundary', () => {
@@ -1124,26 +1283,42 @@ test('theme: the dark sidebar is layered against the content canvas, not lighter
   assert.ok(/--surface:\s*#171719/.test(dark), 'panels are raised above the canvas');
 });
 
-test('theme: no gradients, no glassmorphism, and ONE shadow — from one token', () => {
-  // The rule moved from "no shadows at all" to "one shadow, from one token": page-level
-  // CARDS lift off the canvas, everything else still does not. What the original rule
-  // protected against was a different shadow value per screen, and the token is what
-  // protects that now — so the assertion is no longer "none", it is "not ad-hoc".
+test('theme: no gradients, no glassmorphism, and every shadow from a token', () => {
+  // The rule moved from "no shadows at all" to "one shadow, from one token", and the
+  // rework widened it to THREE tokens — still not to ad-hoc values, which is the thing
+  // this test actually protects:
+  //   --shadow-card   the 1px lift that separates a card from the canvas
+  //   --shadow-float  something that floats OVER content: a dropdown, the composer
+  //   --shadow-book   the one red-tinted lift, on `Agendar cita`
+  // Three because the three say different things; declared in globals.css because
+  // "elevation is a system decision, not a value re-typed per screen" is the rule.
+  const SHADOW_TOKENS = ['--shadow-card', '--shadow-float', '--shadow-book'];
+  const css = read('app/globals.css');
+  for (const t of SHADOW_TOKENS) {
+    assert.ok(css.includes(`${t}:`), `${t} is declared at the theme`);
+  }
+  // GRADIENTS are still banned as a FILL — with one carved-out exception, the avatar
+  // spheres, whose whole point is a two-tone gradient (see `[class*='u-avatar-']`). That
+  // exception lives in CSS, on one class, which is why the per-component ban below is
+  // unchanged: no COMPONENT may reach for `bg-gradient`.
   for (const rel of [CONTACTS_PAGE, RECORD, WORKSPACE, TOOLBAR, 'components/ui/primitives.tsx']) {
     const src = read(rel);
     assert.ok(!src.includes('bg-gradient'), `${rel} uses no gradient`);
     assert.ok(!/backdrop-blur-(?!none)/.test(src), `${rel} uses no glassmorphism`);
     // Tailwind's shadow scale is still banned: it is a value nobody chose.
     assert.ok(!/\bshadow-(sm|md|lg|xl|2xl)\b/.test(src), `${rel} uses no off-the-shelf shadow scale`);
-    // …and so is a hand-rolled one.
-    assert.equal(/shadow-\[(?!var\(--shadow-card\))/.test(src), false, `${rel} rolls no shadow of its own`);
+    // …and so is a hand-rolled one. `shadow-[inset_…]` is exempt: an inset rule is a
+    // SHAPE (a left marker), not elevation — the same thing `.u-row-selected` does.
+    const adHoc = new RegExp(
+      `shadow-\\[(?!inset_)(?!var\\((?:${SHADOW_TOKENS.map((t) => t.replace('--', '--')).join('|')})\\))`,
+    );
+    assert.equal(adHoc.test(src), false, `${rel} rolls no shadow of its own`);
   }
 
   // The card surfaces DO carry it, and both take the same token.
   for (const rel of ['components/ui/PageShell.tsx', 'components/ui/panelChrome.tsx']) {
     assert.ok(read(rel).includes('shadow-[var(--shadow-card)]'), `${rel} lifts its card with the shared token`);
   }
-  const css = read('app/globals.css');
   assert.ok(/--shadow-card:\s*0 1px 2px/.test(css), 'the token is defined for light');
   // Dark needs its own value: 4% black over a #101012 canvas is a no-op.
   const dark = css.slice(css.indexOf('.dark {'));
@@ -1229,14 +1404,22 @@ test('a card that hosts a dropdown does not clip it away', () => {
   // Without this the menu was cut off a few px below the button and looked like it
   // never opened.
   const page = read(CONTACTS_PAGE);
-  assert.ok(page.includes('<PageShell grow={false} clip={false}>'), 'the toolbar card opts out');
-  assert.ok(
-    read('components/contacts/ContactsToolbar.tsx').includes('absolute right-0 top-full z-50'),
-    'because the menu it holds is positioned inside it',
-  );
+  // BOTH cards opt out now: the title card so the search field's focus ring is not
+  // clipped, and the TABLE card because the facet row beside it hosts the Filtrar /
+  // Orden / Columnas popovers.
+  assert.ok(page.includes('<PageShell grow={false} clip={false}>'), 'the title card opts out');
+  assert.ok(page.includes('<PageShell clip={false}>'), 'and so does the table card, which holds the menus');
+  const toolbarSrc = read('components/contacts/ContactsToolbar.tsx');
+  // The three menus (Filtrar / Orden / Columnas) share ONE popover, so the positioning is
+  // interpolated (`right-0` or `left-0`) rather than a fixed literal. What must hold is
+  // that it is absolutely positioned inside the card at all.
+  assert.ok(/absolute \$\{align === "right" \? "right-0" : "left-0"\} top-full z-50/.test(toolbarSrc),
+    'because the menu it holds is positioned inside it');
+  // ONE popover for all three, so they cannot drift into three dismissal behaviours.
+  assert.equal((toolbarSrc.match(/top-full z-50/g) ?? []).length, 1, 'and there is exactly one such popover');
   // A card that opts out must have nothing full-bleed to clip — the toolbar card's rows
   // are padded, so there is no radius to protect.
-  const card1 = page.slice(page.indexOf('clip={false}'), page.indexOf('CARD 2'));
+  const card1 = page.slice(page.indexOf('clip={false}'), page.indexOf('CARD 2 —'));
   assert.equal(/className="[^"]*\b(-mx-|w-screen)/.test(card1), false, 'and nothing in it bleeds to the edge');
 
   // Any OTHER card holding a top-full menu would need the same opt-out; assert there is

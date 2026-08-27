@@ -100,6 +100,7 @@ export default async function ClientContactDetailPage({
           consent: contact.messaging_consent,
           visitCount: appointments.visitCount,
           noShowCount: appointments.noShowCount,
+          preferredChannel: contact.preferred_channel,
         }}
         identities={identityViews}
         candidates={candidates.map((c) => ({

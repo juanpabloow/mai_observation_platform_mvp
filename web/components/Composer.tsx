@@ -64,7 +64,7 @@ export function Composer({
     // asks for `outline-none` and now actually gets it (the app-wide focus rule moved into
     // @layer base), so without this the composer would take focus with nothing to show
     // for it.
-    <div className="u-focus rounded-bubble border border-line-strong bg-surface">
+    <div className="u-focus rounded-xl border border-line bg-surface shadow-[var(--shadow-float)]">
       <textarea
         value={enabled ? text : ""}
         onChange={(e) => setText(e.target.value)}
@@ -74,7 +74,7 @@ export function Composer({
         placeholder={enabled ? "Escribe una respuesta… (Enter envía, Shift+Enter salto de línea)" : (helper ?? "")}
         className="min-h-[2.75rem] w-full resize-none bg-transparent px-3 pb-1 pt-2.5 text-sm outline-none placeholder:text-faint disabled:cursor-not-allowed disabled:opacity-60"
       />
-      <div className="flex items-center gap-2 px-2 pb-2">
+      <div className="flex items-center gap-2.5 border-t border-line-soft px-3 py-2">
         {/* TODO(inbox): "Insert slot" and "Saved reply" are in the design but have no
             backend — there is no saved-replies model, and the availability engine is
             not wired into the composer (inserting a slot would also have to book it).
@@ -96,7 +96,7 @@ export function Composer({
           type="button"
           disabled={!enabled || text.trim() === ""}
           onClick={submit}
-          className="ml-auto inline-flex h-8 items-center rounded-md bg-brand px-4 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+          className="ml-auto inline-flex h-8 items-center rounded-md bg-ink px-4 text-xs font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           Enviar
         </button>

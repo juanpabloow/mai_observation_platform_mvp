@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { RAIL_ROW } from "@/components/railRow";
 
 const POLL_MS = 5000;
 
@@ -77,11 +78,12 @@ export function InboxTabLink({
     };
   }, [load]);
 
-  // Same active treatment as the static rows (solid brand fill) so the rail only
-  // ever shows ONE active mark, whichever component rendered it.
-  const base = `group relative flex min-h-10 items-center rounded-lg text-sm transition-colors ${
-    collapsed ? "justify-center px-0 py-2" : "gap-2.5 px-3 py-2"
-  } ${active ? "bg-nav-active font-medium text-white" : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-fg"}`;
+  // The SAME row as every other rail row, from the SAME constant — see the note on
+  // RAIL_ROW in components/railRow.ts. Imported rather than re-typed: the row height is
+  // exactly what drifts when two components spell it out separately.
+  const base = `${RAIL_ROW} ${
+    collapsed ? "justify-center px-0 py-2.5" : "gap-3 px-2.5 py-2.5"
+  } ${active ? "bg-nav-active font-semibold text-white" : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-fg"}`;
 
   // Collapsed: icon only, tooltip + count folded into the accessible name; a small dot
   // signals pending without a number (there's no room for the badge).

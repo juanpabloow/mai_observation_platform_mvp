@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import Link from "next/link";
 import { stageLabel } from "@/lib/contactLabels";
 
 /**
@@ -196,8 +197,21 @@ export function SummaryBit({
 }
 
 /**
- * THE section heading inside a panel — an icon, a mono uppercase label, a hairline
- * running to the edge, and an optional right-aligned count.
+ * THE section heading inside a panel — an optional icon, the label, a hairline running to
+ * the edge, and an optional right-aligned count or affordance.
+ *
+ * SENTENCE-CASE SANS at 590, not the mono uppercase it used to be. The redesign
+ * (docs/ui-redesign-crm-inbox.md §2.5 / §3.5) moves every panel heading and every table
+ * head to this one voice, and the reason is legibility at density: `PRÓXIMA CITA` tracked
+ * out to 0.08em is 40% wider than "Próxima cita" and competes with the content under it
+ * for the same 340px. Mono uppercase is now reserved for what it is actually good at —
+ * ids, timestamps, counts, and the structured labels inside a message payload.
+ *
+ * Changed HERE rather than per panel on purpose: this component is the vocabulary of
+ * every detail surface in the app (the contact quick view, the record's rail, the staff
+ * roster's panel, the inbox's client panel), so one edit moves them together. A
+ * per-screen version of the new voice is how three of those four end up converted and
+ * the fourth stays mono for a year.
  *
  * NOT a bordered card's title. A card per section puts a second border inside a panel
  * that already has one and breaks the column into floating slabs; every panel in this
@@ -228,9 +242,9 @@ export function SectionHeading({
           {icon}
         </span>
       ) : null}
-      <h3 className="u-th shrink-0">{title}</h3>
-      <span aria-hidden className="h-px min-w-4 flex-1 bg-line" />
-      {trailing ? <span className="shrink-0 text-[0.625rem] text-faint">{trailing}</span> : null}
+      <h3 className="shrink-0 text-[0.6875rem] font-semibold text-muted">{title}</h3>
+      <span aria-hidden className="h-px min-w-4 flex-1 bg-line-soft" />
+      {trailing ? <span className="shrink-0 text-[0.71875rem] text-muted">{trailing}</span> : null}
     </div>
   );
 }
@@ -359,13 +373,16 @@ export const CONTROL_CLS =
   "inline-flex h-[var(--control-h)] items-center gap-1.5 rounded-lg border border-line-strong bg-surface px-3 text-sm text-foreground transition-colors hover:bg-subtle disabled:cursor-not-allowed disabled:opacity-50";
 
 /**
- * THE toolbar's search field — the shell, not the input. A soft `--chip` fill with no
- * visible border until focus, which is what makes it read as a place to type rather than
- * as one more button in the row.
+ * THE search field — the shell, not the input. A soft `--chip` fill whose border only
+ * appears on hover or focus, which is what makes it read as a place to TYPE rather than as
+ * one more button in the row.
  *
- * `rounded-lg`, the same radius as the facets and the primary beside it. Not `rounded-full`:
- * a 38px control taken to a full pill reads as a tag, and next to the 12px cards it sits
- * inside it looks like it came from a different kit.
+ * The border is 1.5px and TRANSPARENT at rest (the design's treatment — §2.1/§3.1), not
+ * absent: a border that appears from nothing on hover shifts the control by 1.5px and the
+ * whole row twitches. Declaring it transparent reserves the space.
+ *
+ * `rounded-lg`, the same radius as the facets and the primary beside it. Not
+ * `rounded-full`: a 38px control taken to a full pill reads as a tag.
  *
  * Shared because the control band is the same object on every list screen: Contacts and
  * the staff roster used to draw two search boxes with two radii and two heights (one
@@ -373,12 +390,19 @@ export const CONTROL_CLS =
  * the moment the two screens sit one click apart.
  */
 export const SEARCH_SHELL_CLS =
-  "u-focus flex h-[var(--control-h)] items-center gap-2 rounded-lg border border-transparent bg-chip px-3 transition-colors focus-within:bg-surface";
+  "u-focus flex h-[var(--control-h)] items-center gap-2 rounded-lg border-[1.5px] border-transparent bg-chip px-3 transition-colors hover:border-line-strong focus-within:border-line-strong";
 
-/** The screen's PRIMARY action in the control band — solid brand, control height, and the
- *  SAME radius as the search and the facets it shares the row with. */
+/**
+ * The screen's PRIMARY action in the control band — control height, and the SAME radius
+ * as the search and the facets it shares the row with.
+ *
+ * INK, not brand red. See the note on --ink in globals.css: the redesign spends red on
+ * the active nav item, `Agendar cita`, and the "a human is handling this" marker, and
+ * nothing else. This button was the loudest red on every list screen in the app, which
+ * is precisely what stopped red from reading as a signal.
+ */
 export const TOOLBAR_PRIMARY_CLS =
-  "inline-flex h-[var(--control-h)] shrink-0 items-center whitespace-nowrap rounded-lg bg-brand px-4 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex h-[var(--control-h)] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg bg-ink px-3.5 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50";
 
 /** Empty state — a single calm sentence inside a dashed hairline. */
 export function EmptyState({ title, hint }: { title: string; hint?: ReactNode }) {
@@ -396,5 +420,277 @@ export function ErrorState({ children }: { children: ReactNode }) {
     <p role="alert" className="rounded-lg border border-danger/35 bg-danger/8 px-3 py-2 text-sm text-danger">
       {children}
     </p>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════════
+   REDESIGN PRIMITIVES (CRM + Inbox)
+
+   Added for the visual rework specified in docs/ui-redesign-crm-inbox.md. They live
+   here, beside the primitives they replace, because the point of that document is
+   that these are the SHARED vocabulary of the two screens — a facet pill drawn twice
+   is how the two screens start disagreeing about what a facet looks like.
+   ═══════════════════════════════════════════════════════════════════════════════ */
+
+/**
+ * The SHORT primary — for a panel's tab row and a card's footer, where the
+ * control-height `TOOLBAR_PRIMARY_CLS` is too tall. Same ink, same role.
+ */
+export const PRIMARY_SM_CLS =
+  "inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-ink px-3 text-xs font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50";
+
+/**
+ * The RED primary — reserved for `Agendar cita`, and deliberately awkward to reach for
+ * anywhere else. It carries a faint red-tinted lift (the artboard's
+ * `0 1px 2px rgba(230,10,47,0.30)`) which no other button in the system has, so the one
+ * action that books a customer in is visibly a different kind of thing.
+ */
+export const BOOK_CLS =
+  "inline-flex h-8 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-brand px-3 text-xs font-semibold text-white shadow-[var(--shadow-book)] transition-colors hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-50";
+
+/** A GHOST toolbar action (Importar / Exportar): no border until hover. */
+export const GHOST_ACTION_CLS =
+  "inline-flex h-[var(--control-h)] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-sm text-muted transition-colors hover:bg-subtle hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50";
+
+/** An OUTLINED secondary control (Filtrar / Orden / Reagendar / Cancelar). */
+export const OUTLINE_CLS =
+  "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-line-strong px-2.5 py-1.5 text-xs text-muted transition-colors hover:border-faint hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50";
+
+/**
+ * A segmented FACET row — the redesign's replacement for the three `<select>` facets.
+ *
+ * Why this is better here than the dropdowns it replaces: the counts. `Nuevos 28 ·
+ * Activos 96 · Clientes 188` answers "how is my book distributed" at a glance and makes
+ * the filter one click instead of open-read-pick. The old controls could not do that
+ * because a `<select>` cannot show five numbers at once. What is LOST is arbitrary
+ * combinations — the pills are one-of-N — which is why the `Filtrar` control beside them
+ * still exists for the multi-facet case.
+ *
+ * Rendered as LINKS, not buttons: a facet is a URL, so it deep-links, middle-clicks into
+ * a new tab, and works before hydration. `aria-current` (not colour) is what tells a
+ * screen reader which one is on.
+ */
+export function FacetPills({
+  items,
+  className = "",
+  label,
+}: {
+  items: { key: string; label: string; count?: number; href: string; active: boolean }[];
+  className?: string;
+  /** Names the group for assistive tech — the pills alone don't say what they filter. */
+  label: string;
+}) {
+  return (
+    <nav aria-label={label} className={`flex min-w-0 flex-wrap items-center gap-1 ${className}`}>
+      {items.map((it) => (
+        <Link
+          key={it.key}
+          href={it.href}
+          scroll={false}
+          aria-current={it.active ? "page" : undefined}
+          className={`inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-sm no-underline transition-colors ${
+            it.active
+              ? "bg-ink font-semibold text-ink-fg"
+              : "text-muted hover:bg-subtle hover:text-foreground"
+          }`}
+        >
+          {it.label}
+          {it.count !== undefined ? (
+            <span className={`u-mono text-[0.65625rem] ${it.active ? "opacity-70" : "text-faint"}`}>
+              {it.count}
+            </span>
+          ) : null}
+        </Link>
+      ))}
+    </nav>
+  );
+}
+
+/**
+ * The VISITS cell: a magnitude bar plus the number.
+ *
+ * Deliberately UNTINTED (a neutral track and a grey fill). A visit count means neither
+ * good nor bad — a 2-visit new lead and a 30-visit regular are both fine — so a red or
+ * green bar would assert something the number does not support. The bar is scaled
+ * against `max`, the largest count on the page, so it reads as "busy relative to this
+ * shop" rather than against an invented ceiling.
+ *
+ * The number is the accessible value; the bar is `aria-hidden` decoration on top of it.
+ */
+export function VisitsMeter({ value, max }: { value: number; max: number }) {
+  // A single visit on a page where the busiest contact has 30 must still be a visible
+  // sliver, or the column reads as empty for most of the list.
+  const pct = max > 0 && value > 0 ? Math.max(4, Math.round((value / max) * 100)) : 0;
+  return (
+    <span className="flex items-center gap-2.5">
+      <span aria-hidden className="h-1 min-w-6 flex-1 overflow-hidden rounded-sm bg-meter-track">
+        <span className="block h-full rounded-sm bg-meter-fill" style={{ width: `${pct}%` }} />
+      </span>
+      <span className="u-mono shrink-0 text-[0.71875rem] text-muted">{value}</span>
+    </span>
+  );
+}
+
+/**
+ * The OWNER cell: a small initials disc, NOT a gradient sphere.
+ *
+ * The spheres identify CUSTOMERS; a colleague who owns the row is a different kind of
+ * person and gets the design's flat outlined disc, so a glance down the table never
+ * confuses "who this is" with "whose it is". An unowned row prints an em dash rather
+ * than an empty cell, because blank reads as "not loaded".
+ */
+export function OwnerDisc({ name }: { name: string | null }) {
+  if (!name) return <span className="text-faint">—</span>;
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  // ALWAYS two characters. One initial per word for a real name ("Paola Ruiz" → PR), but
+  // the first TWO letters when there is only one word — a lone "J" in a 26px disc reads
+  // as a rendering bug, and plenty of these are usernames rather than full names.
+  const initials =
+    (words.length >= 2
+      ? `${words[0][0]}${words[1][0]}`
+      : (words[0] ?? "").slice(0, 2)
+    ).toUpperCase() || "?";
+  return (
+    <span
+      title={name}
+      className="u-mono inline-flex size-[26px] items-center justify-center rounded-full border border-line bg-chip text-[0.53125rem] font-semibold text-muted"
+    >
+      {initials}
+    </span>
+  );
+}
+
+/**
+ * A TWO-LINE table cell — a value over a quieter qualifier.
+ *
+ * The design uses this shape three times (name over email, channel over "hace 2 h",
+ * service over staff), so it is one component rather than three near-identical pairs of
+ * spans. `mono` is for the cells whose primary line is a number or an id.
+ */
+export function StackedCell({
+  primary,
+  secondary,
+  mono = false,
+}: {
+  primary: ReactNode;
+  secondary?: ReactNode;
+  mono?: boolean;
+}) {
+  return (
+    <span className="flex min-w-0 flex-col gap-px">
+      <span
+        className={`truncate text-[0.8125rem] tracking-[-0.01em] text-foreground ${mono ? "u-mono" : ""}`}
+      >
+        {primary}
+      </span>
+      {secondary ? <span className="truncate text-[0.6875rem] text-faint">{secondary}</span> : null}
+    </span>
+  );
+}
+
+/**
+ * Page-number pagination.
+ *
+ * This replaces a keyset ("Load more") cursor, and the trade is real: page numbers need
+ * a total COUNT, which the summary strip already pays for on this screen, plus an OFFSET
+ * read instead of a keyset one. Offset paging drifts if rows are inserted while someone
+ * is on page 3 — acceptable for a contacts book that changes a few times an hour, and
+ * not acceptable for the executions log, which is why that table keeps its cursor.
+ *
+ * Windowed to `span` pages either side of the current one so a 40-page shop does not
+ * render 40 links; the first and last page are always reachable, with an ellipsis
+ * standing in for what was dropped.
+ */
+export function Pagination({
+  page,
+  pageCount,
+  hrefForPage,
+  span = 1,
+}: {
+  page: number;
+  pageCount: number;
+  hrefForPage: (page: number) => string;
+  span?: number;
+}) {
+  if (pageCount <= 1) return null;
+  const pages: (number | "gap")[] = [];
+  for (let p = 1; p <= pageCount; p++) {
+    if (p === 1 || p === pageCount || Math.abs(p - page) <= span) pages.push(p);
+    else if (pages[pages.length - 1] !== "gap") pages.push("gap");
+  }
+  const cell =
+    "inline-flex size-[26px] items-center justify-center rounded-sm text-[0.6875rem] no-underline transition-colors";
+  return (
+    <nav aria-label="Paginación" className="flex items-center gap-1.5">
+      {pages.map((p, i) =>
+        p === "gap" ? (
+          <span key={`gap-${i}`} aria-hidden className="px-0.5 text-[0.6875rem] text-faint">
+            …
+          </span>
+        ) : p === page ? (
+          <span key={p} aria-current="page" className={`u-mono ${cell} bg-ink font-medium text-ink-fg`}>
+            {p}
+          </span>
+        ) : (
+          <Link
+            key={p}
+            href={hrefForPage(p)}
+            scroll={false}
+            aria-label={`Página ${p}`}
+            className={`u-mono ${cell} text-muted hover:bg-subtle hover:text-foreground`}
+          >
+            {p}
+          </Link>
+        ),
+      )}
+      {page < pageCount ? (
+        <Link
+          href={hrefForPage(page + 1)}
+          scroll={false}
+          aria-label="Página siguiente"
+          className={`${cell} text-faint hover:bg-subtle hover:text-foreground`}
+        >
+          ›
+        </Link>
+      ) : null}
+    </nav>
+  );
+}
+
+/**
+ * ONE fact in a panel: a fixed-width label and its value.
+ *
+ * `align` exists because the two panels in the design genuinely differ — the contacts
+ * panel right-aligns its values into a clean column, the inbox's client panel
+ * left-aligns them next to their labels. That is a deliberate difference (one is a
+ * record you read down, the other a summary you glance at), so it is a prop rather than
+ * two components or one flattened compromise.
+ */
+export function FactRow({
+  label,
+  children,
+  align = "right",
+  mono = false,
+  labelWidth = "6.5rem",
+}: {
+  label: string;
+  children: ReactNode;
+  align?: "right" | "left";
+  mono?: boolean;
+  labelWidth?: string;
+}) {
+  return (
+    <div className="flex items-center gap-2.5 py-1.5">
+      <span style={{ width: labelWidth }} className="shrink-0 text-[0.71875rem] text-faint">
+        {label}
+      </span>
+      <span
+        className={`min-w-0 flex-1 truncate text-[0.78125rem] text-foreground ${
+          align === "right" ? "text-right" : ""
+        } ${mono ? "u-mono" : ""}`}
+      >
+        {children}
+      </span>
+    </div>
   );
 }

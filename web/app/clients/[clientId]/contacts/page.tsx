@@ -13,13 +13,18 @@ import { listOpenCandidates } from "@worker/db/repositories/contactIdentities.js
 import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { DuplicateCandidates } from "@/components/contacts/DuplicateCandidates";
-import { ContactsColumnsMenu, ContactsToolbar } from "@/components/contacts/ContactsToolbar";
+import {
+  ContactsColumnsMenu,
+  ContactsExportLink,
+  ContactsFilterMenu,
+  ContactsSearch,
+  ContactsSortMenu,
+} from "@/components/contacts/ContactsToolbar";
+import { ContactsTable } from "@/components/contacts/ContactsTable";
 import { parseColumns } from "@/lib/contactColumns";
-import { Chip, EmptyState, Meta, StageChip, SummaryBit, Td, Th } from "@/components/ui/primitives";
-import { formatAgeShort, formatStampFull, formatStampShort } from "@/lib/format";
+import { EmptyState, FacetPills, GHOST_ACTION_CLS, Pagination } from "@/components/ui/primitives";
+import { PAGE_SIZE } from "@/lib/contactColumns";
 import { PageShell } from "@/components/ui/PageShell";
-import { avatarColor } from "@/lib/avatarColor";
-import { conversationAvatarLabel } from "@/lib/inboxView";
 import { loadContactEditPayload, loadContactPanel } from "@/lib/contactPanel";
 import { getContactTimeline } from "@worker/db/repositories/contactTimeline.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
@@ -53,7 +58,8 @@ export default async function ClientContactsPage({
   searchParams: Promise<{
     q?: string;
     from?: string;
-    cursor?: string;
+    /** 1-based page number — the redesign's numbered pagination (§2.4). */
+    page?: string;
     stage?: string;
     owner?: string;
     tasks?: string;
@@ -68,7 +74,7 @@ export default async function ClientContactsPage({
   await connection();
   const { clientId } = await params;
   const { scope, client } = await requireClientModulePage(clientId, "crm");
-  const { q, from, cursor, stage, owner, tasks, cols, c: selectedId, edit } = await searchParams;
+  const { q, from, page: pageRaw, stage, owner, tasks, cols, c: selectedId, edit } = await searchParams;
 
   // Validate every facet before it reaches SQL — an unknown value is simply no
   // filter (never an error page, never an unfiltered tenant-wide read).
@@ -91,10 +97,20 @@ export default async function ClientContactsPage({
     clientId: client.id, // ALWAYS the validated client — the list stays inside it
   };
 
+  // PAGE NUMBER. Clamped to >= 1 here; the upper bound needs the total, which arrives
+  // with the query below, so an out-of-range page is corrected AFTER the read rather
+  // than guessed at before it.
+  const requestedPage = Math.max(1, Math.trunc(Number(pageRaw)) || 1);
+
   // Duplicate merge + custom-field management are owner/admin only (server-gated too).
   const isFullAccess = hasFullAccess(scope);
-  const [{ items: contacts, nextCursor }, summary, candidates, formFieldDefs] = await Promise.all([
-    listContacts(scope.tenantId, { ...filters, cursor: cursor || undefined, limit: 50 }),
+  const [{ items: contacts, total: matched }, summary, candidates, formFieldDefs] = await Promise.all([
+    listContacts(scope.tenantId, {
+      ...filters,
+      limit: PAGE_SIZE,
+      offset: (requestedPage - 1) * PAGE_SIZE,
+      withTotal: true,
+    }),
     summarizeContacts(scope.tenantId, filters),
     isFullAccess ? listOpenCandidates(scope.tenantId, client.id) : Promise.resolve([]),
     // The create drawer's "configured by the business" block. Loaded with the list (one
@@ -129,6 +145,15 @@ export default async function ClientContactsPage({
       ])
     : ([null, null, false, null] as const);
 
+  // `matched` is the count for THESE filters; summary.total is the client's whole book.
+  // The footer and the pager both read `matched`, so "Mostrando 1–15 de 312" and the
+  // number of pages can never describe two different sets.
+  const total = matched ?? contacts.length;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const page = Math.min(requestedPage, pageCount);
+  const firstShown = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
+  const lastShown = (page - 1) * PAGE_SIZE + contacts.length;
+
   const visibleColumns = parseColumns(cols);
   const base = `/clients/${client.id}/contacts`;
   const fromQS = from ? `?from=${encodeURIComponent(from)}` : "";
@@ -137,13 +162,24 @@ export default async function ClientContactsPage({
   /** Any page link keeps the whole facet set (and `from`) intact. */
   const hrefWith = (patch: Record<string, string | undefined>): string => {
     const p = new URLSearchParams();
-    const merged: Record<string, string | undefined> = { q, from, stage, owner, tasks, cols, c: selectedId, ...patch };
+    const merged: Record<string, string | undefined> = {
+      q,
+      from,
+      stage,
+      owner,
+      tasks,
+      cols,
+      // Page 1 is the default and stays out of the URL, so a fresh list has a clean
+      // link and `?page=1` never shows up in someone's address bar.
+      page: page > 1 ? String(page) : undefined,
+      c: selectedId,
+      ...patch,
+    };
     // `edit` is a one-shot: it must never ride along on the next link the user clicks.
     for (const [k, v] of Object.entries(merged)) if (v) p.set(k, v);
     const qs = p.toString();
     return qs ? `${base}?${qs}` : base;
   };
-  const nextHref = nextCursor ? hrefWith({ cursor: nextCursor }) : null;
 
   const now = new Date();
   const ownerOptions = members
@@ -162,61 +198,112 @@ export default async function ClientContactsPage({
           edge back when the panel lived inside it. */}
       <div className="flex min-h-0 flex-1 gap-3">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-      {/* CARD 1 — title, counters and filters. Sizes to its content.
-          `clip={false}` because this card hosts the COLUMNAS dropdown: the menu is
-          absolutely positioned inside it, so the card's own `overflow-hidden` cut it off
-          at the bottom edge and it appeared not to open at all. Nothing in this card is
-          full-bleed, so there is no radius to protect. */}
-      <PageShell grow={false} clip={false}>
-      <div className="flex flex-col gap-3 px-[var(--panel-pad)] py-3">
-        {/* ROW 1 — WHAT this screen is: the title, the counters, and the one live
-            indicator. Status only, no controls. The two secondary controls used to sit
-            here behind an `ml-auto`, which meant that as soon as the counters filled
-            the line the pair wrapped as a unit and left a nearly empty band across the
-            middle of the card. They now live with the other controls, one row down. */}
-        <PageTitle title="Contactos" count={summary.total} actions={<AutoRefresh intervalSeconds={30} />}>
-          <SummaryBit label="nuevos" value={summary.new} />
-          <SummaryBit label="activos" value={summary.active} tone="info" />
-          <SummaryBit label="clientes" value={summary.customer} tone="success" />
-          <SummaryBit
-            label={summary.overdueTasks === 1 ? "tarea vencida" : "tareas vencidas"}
-            value={summary.overdueTasks}
-            urgent
-          />
-          <SummaryBit label="sin dueño" value={summary.unassigned} tone="brand" />
-        </PageTitle>
+      {/*
+        CARD 1 — the TITLE ROW (§2.1). Title, the search, the two data actions, and the
+        primary. One line, not three: the counters that used to live up here moved INTO
+        the facet pills below, where a number is a filter you can click rather than a
+        statistic you read and then act on separately.
 
-        {/* ROW 2 — everything you can DO: search and facets on the left, the table's own
-            controls and the primary action on the right. Grouping controls with controls
-            is what lets the card be two rows instead of three. */}
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="min-w-0 flex-1">
-            <ContactsToolbar owners={ownerOptions} />
-          </div>
-          <div className="flex shrink-0 items-center gap-3">
-            <ContactsColumnsMenu visibleColumns={visibleColumns} />
+        `clip={false}` because this card hosts no dropdowns any more but the next one
+        does — kept false here only so the card's own radius never clips the search
+        field's focus ring.
+      */}
+      <PageShell grow={false} clip={false}>
+        <div className="flex items-center gap-1 px-3 py-2">
+          <h1 className="shrink-0 px-1.5 text-[15px] font-semibold tracking-[-0.015em] text-foreground">
+            Contactos
+          </h1>
+          <ContactsSearch />
+          <span className="ml-auto flex shrink-0 items-center gap-1">
+            {/* IMPORT is the one control in the artboard that is not built. It is a
+                feature (file upload, column mapping, dedup against the identity spine),
+                not a restyle, so it is deliberately absent rather than present and
+                inert — a button that opens nothing is worse than one that isn't there.
+                See the note in docs/ui-redesign-crm-inbox.md. */}
+            <ContactsExportLink clientId={client.id} />
+            {/* CUSTOM FIELDS. Not in the artboard, but it is this screen's only door to
+                the field editor, so it keeps a home — as a ghost action in the same group
+                as Exportar, and hidden below `lg` where the row runs out of width before
+                the primary does. */}
             {isFullAccess ? (
               <Link
                 href={`${base}/fields`}
-                className="u-th hidden whitespace-nowrap rounded-md transition-colors hover:text-foreground lg:inline-flex"
+                // `GHOST_ACTION_CLS` starts with `inline-flex`, so it cannot simply be
+                // prefixed with `lg:` — Tailwind resolves variants per utility, not per
+                // string. The base class hides it and `lg:flex` brings it back.
+                className={`${GHOST_ACTION_CLS} hidden lg:flex`}
               >
                 Campos del negocio
               </Link>
             ) : null}
-          </div>
-          <NewContactButton
-            clientId={client.id}
-            owners={assignableOwners}
-            fieldDefs={formFieldDefs.map((d) => ({ id: d.id, key: d.key, label: d.label, type: d.type, options: d.options }))}
-            defaultOwnerId={assignableOwners.some((o) => o.userId === scope.userId) ? scope.userId : null}
-          />
+            <NewContactButton
+              clientId={client.id}
+              owners={assignableOwners}
+              fieldDefs={formFieldDefs.map((d) => ({ id: d.id, key: d.key, label: d.label, type: d.type, options: d.options }))}
+              defaultOwnerId={assignableOwners.some((o) => o.userId === scope.userId) ? scope.userId : null}
+            />
+          </span>
         </div>
-      </div>
-
       </PageShell>
 
-      {/* CARD 2 — the table. Absorbs the leftover height. */}
-      <PageShell>
+      {/* CARD 2 — the facet row, the table, and the pager. Absorbs the leftover height.
+          `clip={false}`: the facet row hosts the Filtrar / Orden / Columnas popovers, and
+          a card's `overflow-hidden` cuts an absolutely-positioned menu off at its edge. */}
+      <PageShell clip={false}>
+        {/* ── The facet pills (§2.2). Rendered HERE, on the server, from the summary the
+               page already queries — which is the whole reason they can carry counts. ── */}
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line-row px-3.5 py-2.5">
+          <FacetPills
+            label="Filtrar contactos por estado"
+            items={[
+              {
+                key: "all",
+                label: "Todos",
+                count: summary.total,
+                href: hrefWith({ stage: undefined, owner: undefined, page: undefined }),
+                active: !stageFilter && ownerFilter !== UNASSIGNED_OWNER,
+              },
+              {
+                key: "new",
+                label: "Nuevos",
+                count: summary.new,
+                href: hrefWith({ stage: "new", owner: undefined, page: undefined }),
+                active: stageFilter === "new",
+              },
+              {
+                key: "active",
+                label: "Activos",
+                count: summary.active,
+                href: hrefWith({ stage: "active", owner: undefined, page: undefined }),
+                active: stageFilter === "active",
+              },
+              {
+                key: "customer",
+                label: "Clientes",
+                count: summary.customer,
+                href: hrefWith({ stage: "customer", owner: undefined, page: undefined }),
+                active: stageFilter === "customer",
+              },
+              {
+                // The one pill that is an OWNER filter rather than a stage. It sits with
+                // the stages because "nobody has picked this up" is the same KIND of
+                // question as "where is this person in the funnel" — and because it is
+                // the bucket an operator most needs to empty.
+                key: "unassigned",
+                label: "Sin dueño",
+                count: summary.unassigned,
+                href: hrefWith({ owner: UNASSIGNED_OWNER, stage: undefined, page: undefined }),
+                active: ownerFilter === UNASSIGNED_OWNER,
+              },
+            ]}
+          />
+          <span className="ml-auto flex shrink-0 items-center gap-1.5">
+            <ContactsFilterMenu owners={ownerOptions} />
+            <ContactsSortMenu />
+            <ContactsColumnsMenu visibleColumns={visibleColumns} />
+          </span>
+        </div>
+
         {contacts.length === 0 ? (
           <div className="p-4">
             <EmptyState
@@ -224,216 +311,48 @@ export default async function ClientContactsPage({
               hint={
                 filtered ? (
                   <Link
-                    href={hrefWith({ q: undefined, stage: undefined, owner: undefined, tasks: undefined, cursor: undefined })}
+                    href={hrefWith({ q: undefined, stage: undefined, owner: undefined, tasks: undefined, page: undefined })}
                     className="text-accent hover:underline"
                   >
-                    Clear filters
+                    Quitar los filtros
                   </Link>
                 ) : (
-                  "People appear here as soon as a workflow, a booking or an agent creates them."
+                  "Las personas aparecen aquí en cuanto un flujo, una reserva o un agente las crea."
                 )
               }
             />
           </div>
         ) : (
-          // flex-1 so the white surface continues below the last row instead of
-          // stopping at the table and exposing the canvas.
-          <div className="min-h-0 flex-1 overflow-auto">
-            <table className="w-full min-w-[880px] border-collapse text-sm">
-              <thead className="sticky top-0 z-10 bg-thead-bg">
-                <tr className="border-b border-line">
-                  <Th className="min-w-[220px]">Nombre</Th>
-                  <Th className="min-w-[180px]">Email</Th>
-                  <Th className="min-w-[150px]">Teléfono</Th>
-                  {visibleColumns.includes("channel") ? <Th>Canal</Th> : null}
-                  {visibleColumns.includes("stage") ? <Th>Stage</Th> : null}
-                  {visibleColumns.includes("owner") ? <Th>Dueño</Th> : null}
-                  <Th className="min-w-[170px]">Última visita</Th>
-                  <Th className="min-w-[140px]">Barbero habitual</Th>
-                  {visibleColumns.includes("nextAppt") ? <Th className="min-w-[180px]">Próxima cita</Th> : null}
-                  <Th align="right">Citas</Th>
-                  {visibleColumns.includes("visits") ? <Th align="right">Visitas</Th> : null}
-                  {visibleColumns.includes("consent") ? <Th>Consentimiento</Th> : null}
-                  {visibleColumns.includes("created") ? <Th>Creado</Th> : null}
-                  {visibleColumns.includes("openTasks") ? <Th align="right">Tareas</Th> : null}
-                </tr>
-              </thead>
-              <tbody>
-                {contacts.map((c) => {
-                  const overdue = c.overdue_task_count > 0;
-                  const named = Boolean(c.name?.trim());
-                  return (
-                    <tr
-                      key={c.id}
-                      // `relative` + the stretched link in the Name cell makes the WHOLE
-                      // row clickable while keeping exactly one real link per row (no
-                      // duplicated tab stops, no JS row handler).
-                      // 46px — the reference's row height. Taller than the dense
-                      // --row-h (this table is scanned for a person, not read as a log)
-                      // but not the 56px I first tried, which pushed a page of customers
-                      // off the fold. The executions table keeps the dense row.
-                      className={`relative h-[46px] border-b border-line/70 transition-colors last:border-0 ${
-                        // The SELECTED row gets the shared selection treatment — a brand wash plus a
-                        // 2px brand left bar (shape AND colour, so it survives greyscale).
-                        // `bg-chip` alone read as a hover, not as "this is the one open in
-                        // the panel beside you".
-                        c.id === panelId ? "u-row-selected" : "hover:bg-subtle"
-                      } ${overdue ? "u-row-danger" : ""}`}
-                    >
-                      <Td>
-                        <span className="flex items-center gap-2">
-                          <ContactAvatar name={c.name} fallback={c.channel_user_id} />
-                          {/* Selecting opens the PANEL (?c=) instead of leaving the
-                              list; the panel itself links on to the full record. */}
-                          <Link
-                            href={hrefWith({ c: c.id })}
-                            scroll={false}
-                            aria-current={c.id === panelId ? "true" : undefined}
-                            className="font-semibold text-foreground no-underline after:absolute after:inset-0 after:content-[''] hover:underline focus-visible:underline"
-                          >
-                            <span className={`text-[0.8125rem] tracking-[-0.01em] ${named ? "" : "u-mono"}`}>
-                              {c.name?.trim() || c.channel_user_id}
-                            </span>
-                          </Link>
-                          {named ? null : <Meta>no name</Meta>}
-                          {/* CONSENT stays on the name, not in an optional column: a
-                              contact who opted out must be visible as such wherever
-                              someone might decide to message them. */}
-                          {c.messaging_consent === "opted_out" ? (
-                            <Chip tone="muted" title="This contact has opted out of messaging">
-                              opted out
-                            </Chip>
-                          ) : null}
-                          {/* The red row rule must never be the only thing saying why:
-                              the count moved into the Columns menu, so the EXCEPTION
-                              stays here in words. */}
-                          {overdue ? (
-                            <Chip tone="danger" mono title={`${c.overdue_task_count} overdue`}>
-                              OVERDUE
-                            </Chip>
-                          ) : null}
-                        </span>
-                      </Td>
-                      {/* Email / phone come off the contact row itself. An empty one is
-                          a PROMPT, not a dash — the whole row already links to the
-                          record, which is where an identity gets added. */}
-                      {/* An empty cell is a PROMPT, and the prompt does the thing: it
-                          opens this contact's panel with the edit dialog already up.
-                          `relative z-10` lifts it over the row's stretched link so the
-                          click lands here and not on plain selection. */}
-                      <Td>
-                        {c.email ? (
-                          <span className="truncate text-[0.8125rem] text-brand">{c.email}</span>
-                        ) : (
-                          <Link
-                            href={hrefWith({ c: c.id, edit: "1" })}
-                            scroll={false}
-                            className="relative z-10 text-[0.8125rem] text-faint hover:text-foreground hover:underline"
-                          >
-                            + Agregar email
-                          </Link>
-                        )}
-                      </Td>
-                      <Td>
-                        {c.phone_e164 ? (
-                          <span className="u-mono text-[0.75rem] text-foreground">{c.phone_e164}</span>
-                        ) : (
-                          <Link
-                            href={hrefWith({ c: c.id, edit: "1" })}
-                            scroll={false}
-                            className="relative z-10 text-[0.8125rem] text-faint hover:text-foreground hover:underline"
-                          >
-                            + Agregar número
-                          </Link>
-                        )}
-                      </Td>
-                      {visibleColumns.includes("channel") ? <Td className="text-muted">{c.channel}</Td> : null}
-                      {visibleColumns.includes("stage") ? (
-                        <Td>
-                          <StageChip stage={c.stage} />
-                        </Td>
-                      ) : null}
-                      {visibleColumns.includes("owner") ? (
-                        <Td className="text-muted">{c.assigned_to ? ownerName.get(c.assigned_to) ?? "—" : "—"}</Td>
-                      ) : null}
-                      {/* LAST VISIT is the last completed appointment — not
-                          last_contact_at, which a message also bumps. A customer who
-                          wrote yesterday but last sat in the chair in March is exactly
-                          the case this column exists to make visible. */}
-                      <Td>
-                        {c.last_visit_at ? (
-                          <span className="u-mono text-[0.8125rem] text-foreground" title={formatStampFull(c.last_visit_at)}>
-                            {formatVisitDay(c.last_visit_at)}
-                          </span>
-                        ) : (
-                          <span className="text-faint">Never</span>
-                        )}
-                      </Td>
-                      <Td className="truncate text-muted">{c.usual_staff_name ?? "—"}</Td>
-                      {visibleColumns.includes("nextAppt") ? (
-                        <Td>
-                          <Stamp date={c.next_appointment_at} now={now} future emphasize />
-                        </Td>
-                      ) : null}
-                      <Td align="right" className="u-mono text-foreground">
-                        {c.appointment_count}
-                      </Td>
-                      {visibleColumns.includes("visits") ? (
-                        <Td align="right" className="u-mono text-muted">
-                          {c.visit_count}
-                        </Td>
-                      ) : null}
-                      {visibleColumns.includes("consent") ? (
-                        <Td className="text-muted">{c.messaging_consent.replace("_", " ")}</Td>
-                      ) : null}
-                      {visibleColumns.includes("created") ? (
-                        <Td>
-                          <Stamp date={c.created_at} now={now} />
-                        </Td>
-                      ) : null}
-                      {visibleColumns.includes("openTasks") ? (
-                        <Td align="right">
-                          <span className={`u-mono ${c.open_task_count > 0 ? "text-foreground" : "text-faint"}`}>
-                            {c.open_task_count}
-                          </span>
-                        </Td>
-                      ) : null}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+          <>
+            {/* flex-1 so the white surface continues below the last row instead of
+                stopping at the table and exposing the canvas. */}
+            <div className="min-h-0 flex-1 overflow-auto">
+              <ContactsTable
+                contacts={contacts}
+                selectedId={panelId}
+                ownerName={ownerName}
+                optionalColumns={visibleColumns}
+                hrefWith={hrefWith}
+                now={now}
+              />
+            </div>
 
-        {/* Keyset pagination — unchanged semantics, restyled. */}
-        {contacts.length > 0 ? (
-          <div className="flex shrink-0 flex-col items-center gap-2 border-t border-line px-3 py-3">
-            {nextHref ? (
-              <>
-                <Meta>
-                  SHOWING {contacts.length} OF {summary.total}
-                </Meta>
-                <Link
-                  href={nextHref}
-                  scroll={false}
-                  className="inline-flex h-10 items-center rounded-md border border-line-strong bg-surface px-4 text-sm text-foreground transition-colors hover:bg-subtle"
-                >
-                  Next page →
-                </Link>
-              </>
-            ) : (
-              <Meta>
-                Fin de la lista · {contacts.length} de {summary.total}
-              </Meta>
-            )}
-            {cursor ? (
-              <Link href={hrefWith({ cursor: undefined })} scroll={false} className="text-xs text-muted hover:text-foreground">
-                ← Back to first page
-              </Link>
-            ) : null}
-          </div>
-        ) : null}
+            {/* ── The pager (§2.4) ── */}
+            <div className="flex shrink-0 items-center gap-3 border-t border-line-row px-4 py-2.5">
+              <span className="text-[0.71875rem] text-faint">
+                Mostrando {firstShown}–{lastShown} de {total}
+                {total === 1 ? " contacto" : " contactos"}
+              </span>
+              <span className="ml-auto">
+                <Pagination
+                  page={page}
+                  pageCount={pageCount}
+                  hrefForPage={(n) => hrefWith({ page: n > 1 ? String(n) : undefined })}
+                />
+              </span>
+            </div>
+          </>
+        )}
       </PageShell>
       </div>
 
@@ -467,65 +386,5 @@ export default async function ClientContactsPage({
         ) : null}
       </div>
     </main>
-  );
-}
-
-/** "Tue 4 Aug" — the day someone last sat in the chair, with no relative suffix:
- *  a visit is a date, and "· 12d ago" beside every row was noise at this density. */
-function formatVisitDay(date: Date | string): string {
-  const d = new Date(date);
-  return new Intl.DateTimeFormat("en-GB", { weekday: "short", day: "numeric", month: "short" }).format(d);
-}
-
-/**
- * The row's contact disc: two initials on the contact's own deterministic colour —
- * the SAME helper the inbox queue, the thread and the customer panel use, so a person
- * carries one mark across the whole app. A contact with no name falls back to the two
- * recognisable characters of its channel id.
- */
-function ContactAvatar({ name, fallback }: { name: string | null; fallback: string }) {
-  const label = conversationAvatarLabel(fallback, name);
-  return (
-    <span
-      aria-hidden
-      className={`u-mono flex size-[26px] shrink-0 items-center justify-center rounded-full text-[0.5938rem] font-semibold ${avatarColor(
-        name?.trim() ? name : fallback,
-      )}`}
-    >
-      {label}
-    </span>
-  );
-}
-
-/** One "· 4 new" fragment of the summary line. Urgent counts turn brand-red. */
-
-/**
- * A timestamp cell: the ABSOLUTE stamp (mono) plus the RELATIVE feel in gray, with
- * the full unambiguous stamp on hover. `future` flips the relative wording, and
- * `emphasize` bolds an imminent appointment the way the reference does.
- */
-function Stamp({
-  date,
-  now,
-  future = false,
-  emphasize = false,
-}: {
-  date: Date | string | null;
-  now: Date;
-  future?: boolean;
-  emphasize?: boolean;
-}) {
-  if (!date) return <span className="text-faint">—</span>;
-  const d = new Date(date);
-  if (Number.isNaN(d.getTime())) return <span className="text-faint">—</span>;
-  const rel = future ? `in ${formatAgeShort(now, d)}` : `${formatAgeShort(d, now)} ago`;
-  const soon = future && d.getTime() - now.getTime() < 24 * 60 * 60 * 1000;
-  return (
-    <span className="flex min-w-0 items-baseline gap-1.5" title={formatStampFull(d)}>
-      <span className={`u-mono text-[0.75rem] ${emphasize && soon ? "font-semibold text-foreground" : "text-foreground"}`}>
-        {formatStampShort(d)}
-      </span>
-      <Meta className="truncate text-faintest">· {rel}</Meta>
-    </span>
   );
 }

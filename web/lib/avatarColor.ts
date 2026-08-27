@@ -49,9 +49,29 @@ export function avatarToneIndex(id: string): number {
  * The tone as a CSS variable reference, for anything that needs the COLOUR rather than
  * the disc — e.g. the contact panel's header wash. Returning the var (not a hex) is
  * what keeps the eight tones defined in exactly one place, globals.css.
+ *
+ * This is the SINGLE-tone form (the pair's first stop). A surface that fades the tone
+ * wants both stops — see `avatarToneStyle` below.
  */
 export function avatarToneVar(id: string): string {
   return `var(--avatar-${avatarToneIndex(id)})`;
+}
+
+/**
+ * The tone as the inline style a WASH needs: both stops of the contact's pair.
+ *
+ * The discs are two-tone spheres (`.u-avatar-*` in globals.css), and the panel header
+ * fades the same person's gradient behind their name. Handing the wash only one stop
+ * is what would let the header and the avatar 40px above it disagree, which is exactly
+ * the recognition cue the tone exists to provide.
+ *
+ * Returned as a plain object so callers spread it into `style` and never type the
+ * custom-property names themselves — the `--tone-a` / `--tone-b` contract with
+ * `.u-contact-wash` stays in this one function.
+ */
+export function avatarToneStyle(id: string): Record<string, string> {
+  const i = avatarToneIndex(id);
+  return { "--tone-a": `var(--avatar-${i}-a)`, "--tone-b": `var(--avatar-${i}-b)` };
 }
 
 /**

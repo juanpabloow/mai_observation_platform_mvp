@@ -88,23 +88,33 @@ test('the DOM is never touched on the server, and only ever written from an effe
   assert.ok(menu.includes('onClick={() => setTheme(opt)}'), 'the handler only updates React state');
 });
 
-test('the dark rail is the spec cool-dark, and it overrides ONLY the rail tokens', () => {
+test('the dark rail is NEUTRAL near-black, and it overrides ONLY the rail tokens', () => {
   const css = read('app/globals.css');
   // Just the Black RULE BODY — other token blocks follow it, and including them
   // would make the "touches nothing else" check below meaningless.
   const blackStart = css.indexOf("[data-sidebar-theme='black']");
   const black = css.slice(blackStart, css.indexOf('}', blackStart));
+  // NEUTRAL, not cool. The rail used to be #1A1D24 — the bluest end of the old spec's
+  // range, chosen to read "cool beside the white panel"; that cast is exactly what made it
+  // look NAVY rather than black. Every value is now on the grey axis.
   for (const [token, value] of [
-    ['--sidebar-bg', '#1a1d24'],
-    ['--sidebar-border', '#262a33'],
-    ['--sidebar-fg', '#f5f6f8'],
-    ['--sidebar-muted', '#a2a8b4'],
-    ['--sidebar-section', '#7e8695'],
+    ['--sidebar-bg', '#1a1a1a'],
+    ['--sidebar-border', '#272727'],
+    ['--sidebar-fg', '#f5f5f5'],
+    ['--sidebar-muted', '#ababab'],
+    ['--sidebar-section', '#858585'],
   ] as const) {
     assert.ok(black.includes(`${token}: ${value}`), `${token} is ${value}`);
   }
-  // Hover on a dark rail is the brand RED (supersedes the original #1A1A1D).
-  assert.ok(black.includes('--sidebar-hover: var(--sidebar-hover-red)'), 'Black hover is the red token');
+  // The GUARANTEE, checked structurally rather than by value: every colour the Black rail
+  // declares is a neutral grey (R=G=B). A hex that drifts back off the grey axis fails
+  // here, which is what "black, not navy" actually means.
+  for (const m of black.matchAll(/--sidebar-[a-z-]+:\s*#([0-9a-f]{6})\b/g)) {
+    const [r, g, b] = [m[1].slice(0, 2), m[1].slice(2, 4), m[1].slice(4, 6)];
+    assert.ok(r === g && g === b, `#${m[1]} is a neutral grey, not a tinted one`);
+  }
+  // Hover on a dark rail is a NEUTRAL warm lift — see the dedicated case below.
+  assert.ok(black.includes('--sidebar-hover: var(--sidebar-hover-dark)'), 'Black hover is the neutral token');
   // Nothing the CONTENT uses may be redefined under the Black selector — that is
   // the whole guarantee: only the sidebar changes.
   for (const contentToken of ['--background:', '--surface:', '--foreground:', '--muted:', '--faint:', '--line:', '--brand:']) {
@@ -129,39 +139,58 @@ test('the rail reads sidebar tokens only; the content never reads them', () => {
   }
 });
 
-test('a DARK rail hovers red — but a TINT, so hover never impersonates the active row', () => {
+test('a DARK rail hovers NEUTRAL — hover is a ground change, never a second red', () => {
   const css = read('app/globals.css');
-  assert.ok(css.includes('--sidebar-hover-red: #7f1d1d'), 'the dark-rail hover is a red');
+  // THE CONTRACT INVERTED. Hover used to be a dark RED tint (#7f1d1d), chosen so that it
+  // and the solid-red ACTIVE row stayed tellable apart. In practice they didn't: a
+  // hovered row and the current row read as two reds of similar weight, so the rail
+  // appeared to have two "you are here" marks.
+  //
+  // The accent rule settles it — red marks the active nav item, and a colour on every row
+  // you merely sweep past is the dilution that stops it meaning anything. Hover is a
+  // change of GROUND (the design's #22262F), and the hovered label lifts to --sidebar-fg.
+  assert.ok(css.includes('--sidebar-hover-dark: #242424'), 'the dark-rail hover is a neutral lift');
+  // And the misleading name is gone with the value: a token called `-red` that is not red
+  // is how the next person reintroduces this.
+  assert.equal(/--sidebar-hover-red\s*:/.test(css), false, 'no token still claims to be red');
   // Applied to BOTH dark rails: the app's dark theme and the Black preference.
   const darkHover = css.slice(css.indexOf('.dark {\n  --sidebar-hover'));
-  assert.ok(darkHover.startsWith('.dark {\n  --sidebar-hover: var(--sidebar-hover-red);'), 'dark app theme hovers red');
-  const black = css.slice(css.indexOf("[data-sidebar-theme='black']"), css.indexOf('--sidebar-hover-red:'));
-  assert.ok(black.includes('--sidebar-hover: var(--sidebar-hover-red)'), 'the Black rail hovers red');
-  // A LIGHT rail in a LIGHT app keeps the neutral lift — the red is dark-only.
+  assert.ok(darkHover.startsWith('.dark {\n  --sidebar-hover: var(--sidebar-hover-dark);'), 'dark app theme hovers neutral');
+  const black = css.slice(css.indexOf("[data-sidebar-theme='black']"), css.indexOf('--sidebar-hover-dark:'));
+  assert.ok(black.includes('--sidebar-hover: var(--sidebar-hover-dark)'), 'the Black rail hovers neutral');
+  // A LIGHT rail in a LIGHT app keeps its own neutral lift.
   const root = css.slice(css.indexOf('--sidebar-bg: var(--sidebar)'), css.indexOf("[data-sidebar-theme='black']"));
   assert.ok(root.includes('--sidebar-hover: var(--subtle)'), 'the light rail keeps a neutral hover');
-  // Hover must stay distinguishable from the solid active fill.
-  assert.notEqual('#7f1d1d', '#dc2626');
+  // The ONE red in the rail is the active fill, and hover is nowhere near it.
+  assert.ok(css.includes('--nav-active: #e60a2f'), 'the active fill is the only red');
 });
 
 test('Black keeps the active row red with white text/icon, and the brand white', () => {
   const src = read('components/AppSidebar.tsx');
   // The active treatment is theme-independent (it is NOT a sidebar token), so it
   // stays the same solid red in both appearances; icons inherit currentColor.
-  assert.ok(src.includes('bg-nav-active font-medium text-white'), 'active row: solid red + white');
+  assert.ok(src.includes('bg-nav-active font-semibold text-white'), 'active row: solid red + white');
   assert.ok(read('app/globals.css').includes('--nav-active: #e60a2f'), 'the spec accent, fixed in both modes');
   assert.ok(src.includes('stroke="currentColor"'), 'icons inherit the row colour');
   // The brand wordmark tracks the rail foreground, which is #F4F4F5 under Black.
   assert.ok(src.includes('tracking-tight text-sidebar-fg">M_AI'), 'the wordmark uses the rail foreground');
   const css = read('app/globals.css');
   const black = css.slice(css.indexOf("[data-sidebar-theme='black']"), css.indexOf('@theme inline {'));
-  assert.ok(black.includes('--sidebar-fg: #f5f6f8'), 'which is near-white on the dark rail');
+  assert.ok(black.includes('--sidebar-fg: #f5f5f5'), 'which is near-white on the dark rail');
 });
 
 test('the account footer sits on the rail background, separated by a border', () => {
   const src = read('components/AppSidebar.tsx');
   assert.ok(src.includes('relative shrink-0 border-t border-sidebar-border'), 'footer separated by a rail border');
-  assert.ok(src.includes('text-sidebar-muted transition-colors hover:bg-sidebar-hover'), 'footer uses rail tokens');
+  assert.ok(src.includes('text-sidebar-muted hover:bg-sidebar-hover'), 'footer uses rail tokens');
+  // It is the SAME ROW as the nav items above it — same inset, radius and hover, from the
+  // shared constant. It used to be a full-width `rounded-lg` block with its own padding,
+  // which made the one row that is always on screen the one row shaped differently.
+  assert.ok(src.includes('`${RAIL_ROW} w-[calc(100%-1.25rem)]'), 'and is shaped like every other rail row');
+  // The BRAND block above, by contrast, has no rule under it: a hairline there cut the
+  // rail into two panels and made the first section heading look like another list's.
+  const brand = src.slice(src.indexOf('function Brand('), src.indexOf('function Brand(') + 1200);
+  assert.equal(/border-b border-sidebar-border/.test(brand), false, 'the brand carries no bottom rule');
   // It is inside the <aside>, which carries bg-sidebar-bg — no separate fill.
   assert.ok(src.includes('bg-sidebar-bg'), 'the rail (and therefore the footer) is one surface');
 });
@@ -181,7 +210,7 @@ test('the appearance change did not alter navigation, gating or permissions', ()
   assert.ok(src.includes('sections = [{ label: "Workspace", items: workspace }];'), 'Workspace is still first');
   assert.ok(src.includes('countEndpoint: `/api/inbox/${clientId}/pending-count`'), 'the real badge endpoint is intact');
   // And exactly one active treatment still exists.
-  assert.equal(src.match(/bg-nav-active font-medium text-white/g)?.length, 1, 'one active treatment in the rail');
+  assert.equal(src.match(/bg-nav-active font-semibold text-white/g)?.length, 1, 'one active treatment in the rail');
 });
 
 test('the repaint kept the stored cookie VALUE, so saved preferences still resolve', () => {

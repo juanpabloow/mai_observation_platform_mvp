@@ -45,3 +45,18 @@ export function parseColumns(raw: string | undefined | null): ContactColumnKey[]
   // header and every row build their cells in the same sequence.
   return OPTIONAL_COLUMNS.filter((c) => seen.has(c.key)).map((c) => c.key);
 }
+
+/**
+ * Rows per page on the contacts list.
+ *
+ * A constant rather than a magic 50 in the page, because the redesign's numbered
+ * pagination needs the SAME value in three places — the `limit` on the query, the
+ * `offset` arithmetic, and the "Mostrando 1–15 de 312" line. Three copies of a page
+ * size is how a footer starts claiming a range the list does not show.
+ *
+ * 25, down from the old keyset page's 50: the design's rows are 54px (up from 46px) and
+ * it paginates by number rather than by "load more", so a page should be about what fits
+ * a screen — scrolling past a second screenful only to find a pager is the worst of both
+ * models.
+ */
+export const PAGE_SIZE = 25;
