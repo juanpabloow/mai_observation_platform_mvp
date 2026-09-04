@@ -324,21 +324,27 @@
 /*
  * ── Contact avatar palette ───────────────────────────────────────────────────
  * Eight tones, picked by hashing the contact's identifier (lib/avatarColor.ts), so
- * one person keeps one colour across the queue and the thread. Every value is a
- * solid fill carrying WHITE text at >= 4.5:1, which is why the same eight work in
- * both themes: a saturated disc reads the same on a white panel and a near-black
- * one. Colour here is a recognition aid, never a state — no meaning is encoded in
- * which tone you get.
+ * one person keeps one colour across the queue and the thread. Colour here is a
+ * recognition aid, never a state — no meaning is encoded in which tone you get.
+ *
+ * COLOUR-REFACTOR (design "orbes de color"): each disc is now a 155° two-stop
+ * GRADIENT rather than a flat fill — the `*-a` (saturated, top-left) → `*-b`
+ * (lighter, bottom-right) pair renders in `.u-avatar-*` below. `--avatar-N` stays
+ * defined as the SOLID anchor (the saturated `*-a` end) because avatarToneVar()
+ * feeds it to the header wash (.u-contact-wash) — so the panel's tint keeps
+ * agreeing with the disc beside it. The same eight serve both themes (a saturated
+ * disc reads on a white panel and a near-black one). White initials sit centred on
+ * the mid-tone; the disc is decoration, never the sole carrier of meaning.
  */
 :root {
-  --avatar-1: #0f766e; /* teal    */
-  --avatar-2: #1d4ed8; /* blue    */
-  --avatar-3: #6d28d9; /* purple  */
-  --avatar-4: #15803d; /* green   */
-  --avatar-5: #b45309; /* orange  */
-  --avatar-6: #be185d; /* rose    */
-  --avatar-7: #0e7490; /* cyan    */
-  --avatar-8: #4338ca; /* indigo  */
+  --avatar-1-a: #10b981; --avatar-1-b: #84cc16; --avatar-1: var(--avatar-1-a); /* emerald → lime   */
+  --avatar-2-a: #0ea5e9; --avatar-2-b: #6366f1; --avatar-2: var(--avatar-2-a); /* sky → indigo     */
+  --avatar-3-a: #d946ef; --avatar-3-b: #8b5cf6; --avatar-3: var(--avatar-3-a); /* fuchsia → violet */
+  --avatar-4-a: #22c55e; --avatar-4-b: #a3e635; --avatar-4: var(--avatar-4-a); /* green → lime     */
+  --avatar-5-a: #f59e0b; --avatar-5-b: #ec4899; --avatar-5: var(--avatar-5-a); /* amber → pink     */
+  --avatar-6-a: #ec4899; --avatar-6-b: #fdba74; --avatar-6: var(--avatar-6-a); /* pink → peach     */
+  --avatar-7-a: #7c3aed; --avatar-7-b: #38bdf8; --avatar-7: var(--avatar-7-a); /* violet → sky     */
+  --avatar-8-a: #4f46e5; --avatar-8-b: #c084fc; --avatar-8: var(--avatar-8-a); /* indigo → purple  */
 }
 
 /*
@@ -828,38 +834,49 @@ body {
   --appt-edge: color-mix(in srgb, var(--blocked-fg) 30%, transparent);
 }
 
-/* The eight contact-avatar tones. The component picks the class; the palette
-   above owns the values. */
+/* The eight contact-avatar tones. The component picks the class; the palette above
+   owns the values. COLOUR-REFACTOR: each disc is a 155° gradient (the design's
+   "orbes de color"). A solid `background-color` anchor sits under the gradient as a
+   fallback tone, so a browser that can't paint the image still gets a saturated
+   disc rather than a transparent one. */
 .u-avatar-1 {
   background-color: var(--avatar-1);
+  background-image: linear-gradient(155deg, var(--avatar-1-a), var(--avatar-1-b));
   color: #ffffff;
 }
 .u-avatar-2 {
   background-color: var(--avatar-2);
+  background-image: linear-gradient(155deg, var(--avatar-2-a), var(--avatar-2-b));
   color: #ffffff;
 }
 .u-avatar-3 {
   background-color: var(--avatar-3);
+  background-image: linear-gradient(155deg, var(--avatar-3-a), var(--avatar-3-b));
   color: #ffffff;
 }
 .u-avatar-4 {
   background-color: var(--avatar-4);
+  background-image: linear-gradient(155deg, var(--avatar-4-a), var(--avatar-4-b));
   color: #ffffff;
 }
 .u-avatar-5 {
   background-color: var(--avatar-5);
+  background-image: linear-gradient(155deg, var(--avatar-5-a), var(--avatar-5-b));
   color: #ffffff;
 }
 .u-avatar-6 {
   background-color: var(--avatar-6);
+  background-image: linear-gradient(155deg, var(--avatar-6-a), var(--avatar-6-b));
   color: #ffffff;
 }
 .u-avatar-7 {
   background-color: var(--avatar-7);
+  background-image: linear-gradient(155deg, var(--avatar-7-a), var(--avatar-7-b));
   color: #ffffff;
 }
 .u-avatar-8 {
   background-color: var(--avatar-8);
+  background-image: linear-gradient(155deg, var(--avatar-8-a), var(--avatar-8-b));
   color: #ffffff;
 }
 
