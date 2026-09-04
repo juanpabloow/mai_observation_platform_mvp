@@ -257,22 +257,24 @@ export function ClientInboxWorkspace({
         // `aria-pressed` carries the open/closed state, so the LABEL stays constant — a
         // button whose text flips between "Ver" and "Ocultar" makes a screen reader
         // announce the action twice and reads as two different controls.
-        className={`hidden h-8 items-center rounded-md border px-2.5 text-xs transition-colors xl:inline-flex ${
+        className={`hidden h-8 items-center gap-1.5 rounded-md border px-2.5 text-xs transition-colors xl:inline-flex ${
           detailsInline
             ? "border-ink text-foreground"
             : "border-line-strong text-muted hover:border-faint hover:text-foreground"
         }`}
       >
-        Detalles
+        <PersonGlyph />
+        Ver ficha
       </button>
       {/* Tablet/mobile: open the details drawer. */}
       <button
         type="button"
         onClick={() => setDetailsDrawer(true)}
         aria-label="Ver los datos del cliente"
-        className="inline-flex h-8 items-center rounded-md border border-line-strong px-2.5 text-xs text-muted transition-colors hover:border-faint hover:text-foreground xl:hidden"
+        className="inline-flex h-8 items-center gap-1.5 rounded-md border border-line-strong px-2.5 text-xs text-muted transition-colors hover:border-faint hover:text-foreground xl:hidden"
       >
-        Detalles
+        <PersonGlyph />
+        Ver ficha
       </button>
     </>
   );
@@ -700,5 +702,15 @@ function EmptyChat() {
         Elige una conversación de la lista para leer el hilo y actuar.
       </p>
     </div>
+  );
+}
+
+/** The person glyph on the "Ver ficha" control (design image). */
+function PersonGlyph() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" aria-hidden className="size-3.5 shrink-0">
+      <circle cx="8" cy="5.2" r="2.6" stroke="currentColor" strokeWidth="1.4" />
+      <path d="M3.5 13c0-2.3 2-3.6 4.5-3.6s4.5 1.3 4.5 3.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+    </svg>
   );
 }

@@ -92,7 +92,11 @@ export function MessageTranscript({
     | { at: string; kind: "mode"; e: ThreadEventView }
     | { at: string; kind: "scheduling"; e: ThreadSchedulingEventView };
   const pending: Pending[] = [
-    ...(events ?? []).map((e) => ({ at: e.at, kind: "mode" as const, e })),
+    // "X entró al chat" (a human took over) is DROPPED: the bubbles beneath it are already
+    // signed with who sent them, so the strip is redundant. Escalations ("Escalado a una
+    // persona") and returns to the bot ("Devuelta al bot") are kept — they change WHO is
+    // answering without a bubble to announce it.
+    ...(events ?? []).filter((e) => e.toMode !== "human").map((e) => ({ at: e.at, kind: "mode" as const, e })),
     ...(schedulingEvents ?? []).map((e) => ({ at: e.at, kind: "scheduling" as const, e })),
   ].sort((a, b) => a.at.localeCompare(b.at));
 
@@ -202,17 +206,14 @@ function Seam({ label }: { label: string }) {
  * surface, which reads as structural rather than urgent.
  */
 function ModeStrip({ event }: { event: ThreadEventView }) {
+  // A plain centred caption on a hairline (design image): "ESCALADO A UNA PERSONA · 2:56 PM".
+  // No card, no dot — a takeover is structural context, not an alarm.
   return (
     <div className="flex items-center gap-2.5">
       <span aria-hidden className="h-px flex-1 bg-line" />
-      <span className="flex shrink-0 items-center gap-2 rounded-sm border border-line-strong bg-surface px-2.5 py-1 shadow-[var(--shadow-card)]">
-        <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-foreground" />
-        <span className="u-mono text-[0.59375rem] uppercase tracking-[0.09em] text-foreground">
-          {modeEventLabel(event)}
-        </span>
-        <span className="u-mono text-[0.65625rem] text-faint">
-          {formatChatTime(new Date(event.at))}
-        </span>
+      <span className="u-mono flex shrink-0 items-center gap-1.5 whitespace-nowrap text-[0.59375rem] uppercase tracking-[0.09em] text-muted">
+        {modeEventLabel(event)}
+        <span className="text-faint">· {formatChatTime(new Date(event.at))}</span>
       </span>
       <span aria-hidden className="h-px flex-1 bg-line" />
     </div>
@@ -414,15 +415,18 @@ function Bubble({
   const sending = msg.status === "sending";
   const failed = msg.status === "failed";
   const time = formatChatTime(new Date(msg.occurredAt));
+  // The stamp now sits INSIDE the bubble (design image): light on the dark team/bot fills,
+  // faint on the white customer bubble, danger on a failed send.
+  const timeColor = failed ? "text-danger/70" : isUser ? "text-faint" : "text-white/55";
 
   const bubbleClass = isUser
     ? "border border-bubble-in-border bg-bubble-in text-bubble-in-fg rounded-bl-bubble-tail"
     : isAgent
       ? failed
         ? "border border-danger bg-danger/12 text-danger rounded-br-bubble-tail"
-        : // WHITE with an INK edge. It sits on the business side but must not be mistaken
-          // for the bot, so it keeps the side and drops the dark fill.
-          "border border-bubble-agent-border bg-bubble-agent text-bubble-agent-fg shadow-[var(--shadow-card)] rounded-br-bubble-tail"
+        : // The TEAM bubble is a near-black fill with light text (design image); the EQUIPO
+          // signature above and the agent's disc distinguish it from the bot beside it.
+          "bg-bubble-bot text-bubble-bot-fg rounded-br-bubble-tail"
       : "bg-bubble-bot text-bubble-bot-fg rounded-br-bubble-tail";
 
   const body =
@@ -439,34 +443,38 @@ function Bubble({
           sending ? "opacity-70" : ""
         } ${highlighted ? "ring-2 ring-[var(--warn-rule)]" : ""}`}
       >
-        <span className="whitespace-pre-wrap break-words [text-wrap:pretty]">{body}</span>
-        {/* THE STRUCTURED BLOCK — the slots the bot offered, and which one was taken.
-            Separated from the prose by a rule inside the bubble, exactly as the design
-            does it, so the payload reads as data attached to the message rather than as
-            more of the sentence. */}
-        {msg.payload ? <PayloadBlock payload={msg.payload} onDark={!isUser && !isAgent} /> : null}
+        <span className="whitespace-pre-wrap break-words [text-wrap:pretty]">
+          {body}
+          {/* THE STAMP, INSIDE the bubble (design image) — it trails the last line, so a
+              short message keeps it on the same row and a long one drops it bottom-right. */}
+          <span className={`u-mono ml-2 inline whitespace-nowrap align-baseline text-[0.625rem] tabular-nums ${timeColor}`}>
+            {time}
+          </span>
+        </span>
+        {/* THE STRUCTURED BLOCK — the slots the bot offered, and which one was taken. */}
+        {msg.payload ? <PayloadBlock payload={msg.payload} onDark={!isUser} /> : null}
         {failed && msg.failureDetail ? (
           <span className="mt-1.5 block rounded-sm bg-danger/12 px-1.5 py-1 text-[0.6875rem] text-danger">
             {msg.failureDetail}
           </span>
         ) : null}
       </div>
-      {/* The stamp, OUTSIDE the bubble. `sending` / `failed` replace it with their status
-          and the Retry affordance, which is why this is one line rather than two states
-          of the same span. */}
-      <span className="u-mono flex items-center gap-1.5 px-0.5 text-[0.65625rem] text-faint">
-        {sending ? <span>enviando…</span> : null}
-        {failed && onRetry ? (
-          <button
-            type="button"
-            onClick={() => onRetry(msg.id)}
-            className="rounded-sm border border-danger/40 px-1 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/12"
-          >
-            Reintentar
-          </button>
-        ) : null}
-        <span>{time}</span>
-      </span>
+      {/* A status line BELOW the bubble ONLY while sending or after a failure — the normal
+          delivered stamp now lives inside the bubble. */}
+      {sending || failed ? (
+        <span className="u-mono flex items-center gap-1.5 px-0.5 text-[0.65625rem] text-faint">
+          {sending ? <span>enviando…</span> : null}
+          {failed && onRetry ? (
+            <button
+              type="button"
+              onClick={() => onRetry(msg.id)}
+              className="rounded-sm border border-danger/40 px-1 text-[0.625rem] font-medium text-danger transition-colors hover:bg-danger/12"
+            >
+              Reintentar
+            </button>
+          ) : null}
+        </span>
+      ) : null}
     </div>
   );
 }

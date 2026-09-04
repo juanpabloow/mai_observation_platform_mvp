@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ModeBadge } from "./ModeBadge";
 import { ThreadActions } from "./ThreadActions";
 import { Composer } from "./Composer";
 import { MessageTranscript } from "./MessageTranscript";
@@ -249,7 +248,6 @@ export function InboxThread({
             mean inventing state, so the header shows the identifier, the real mode
             badge, the workflow and the REAL activity tag (customer wrote inside the
             activity window) instead. */}
-        <ModeBadge mode={header.mode} />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
             <span

@@ -34,13 +34,14 @@ export function Composer({
 }) {
   const [text, setText] = useState("");
   const enabled = mode === "human" && blockedReason === null;
-  const helper =
-    blockedReason ??
-    (mode === "bot"
+  // The placeholder reflects the MODE when the agent can't type; the 24h-window reason
+  // shows in the amber banner above, never doubled into the field.
+  const placeholder =
+    mode === "bot"
       ? "El bot está atendiendo esta conversación. Tómala para responder."
       : mode === "pending"
         ? "Toma esta conversación para responder."
-        : null);
+        : "Escribe un mensaje…";
 
   const submit = () => {
     const trimmed = text.trim();
@@ -57,64 +58,48 @@ export function Composer({
   };
 
   return (
-    // ONE bordered card holds the field and its toolbar, as in the design — the
-    // reply area reads as a single object docked to the thread, not an input with
-    // loose buttons under it.
-    // `u-focus`: the ring goes on THIS card, not on the textarea inside it. The textarea
-    // asks for `outline-none` and now actually gets it (the app-wide focus rule moved into
-    // @layer base), so without this the composer would take focus with nothing to show
-    // for it.
-    <div className="u-focus rounded-xl border border-line bg-surface shadow-[var(--shadow-float)]">
-      <textarea
-        value={enabled ? text : ""}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={onKeyDown}
-        disabled={!enabled}
-        rows={2}
-        placeholder={enabled ? "Escribe una respuesta… (Enter envía, Shift+Enter salto de línea)" : (helper ?? "")}
-        className="min-h-[2.75rem] w-full resize-none bg-transparent px-3 pb-1 pt-2.5 text-sm outline-none placeholder:text-faint disabled:cursor-not-allowed disabled:opacity-60"
-      />
-      <div className="flex items-center gap-2.5 border-t border-line-soft px-3 py-2">
-        {/* TODO(inbox): "Insert slot" and "Saved reply" are in the design but have no
-            backend — there is no saved-replies model, and the availability engine is
-            not wired into the composer (inserting a slot would also have to book it).
-            They render DISABLED and say why on hover rather than being dropped, so the
-            intended shape of the toolbar survives; wire them to
-            /api/scheduling/internal/availability + a canned-replies table. */}
-        <ToolbarButton label="Insertar horario" title="Todavía sin conectar — necesita el motor de disponibilidad en el composer" />
-        <ToolbarButton label="Respuesta guardada" title="Todavía sin conectar — no existe el modelo de respuestas guardadas" />
-        {/* This one is NOT decoration: taking a conversation sets mode=human, which is
-            exactly what stops the bot from answering. */}
-        {enabled ? (
-          <span className="hidden text-xs text-faint sm:inline">El bot queda en pausa mientras respondes</span>
-        ) : blockedReason ? (
-          /* SUBTLE, not an alarm: the same quiet helper slot the bot/pending states use,
-             so an unavailable composer reads as a state rather than as an error. */
-          <span className="min-w-0 text-xs text-faint">{blockedReason}</span>
-        ) : null}
+    <div className="flex flex-col gap-2">
+      {/* THE 24h WINDOW notice (design image): an amber strip above the field. WhatsApp
+          only accepts free-form replies inside 24h of the customer's last message; outside
+          it, only an approved template can be sent. */}
+      {blockedReason ? (
+        <div className="flex items-center gap-2.5 rounded-lg border border-warn/30 bg-warn-soft px-3 py-2.5">
+          <svg aria-hidden viewBox="0 0 16 16" fill="none" className="size-4 shrink-0 text-warn">
+            <circle cx="8" cy="8" r="6.4" stroke="currentColor" strokeWidth="1.4" />
+            <path d="M8 5v3.4M8 10.8h.01" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+          </svg>
+          <span className="min-w-0 flex-1 text-[0.8125rem] leading-snug text-warn">{blockedReason}</span>
+          <button
+            type="button"
+            disabled
+            title="Las plantillas de WhatsApp aún no están conectadas"
+            className="shrink-0 text-[0.8125rem] font-semibold text-warn transition-opacity hover:opacity-80 disabled:cursor-not-allowed"
+          >
+            Enviar plantilla
+          </button>
+        </div>
+      ) : null}
+      {/* The field + Enviar on one clean row (design image). `u-focus` puts the ring on the
+          card, not the textarea (which is outline-none). */}
+      <div className="u-focus flex items-end gap-2 rounded-xl border border-line bg-surface px-2.5 py-2 shadow-[var(--shadow-float)]">
+        <textarea
+          value={enabled ? text : ""}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={onKeyDown}
+          disabled={!enabled}
+          rows={1}
+          placeholder={placeholder}
+          className="min-h-[2.25rem] w-full flex-1 resize-none bg-transparent px-1.5 py-1.5 text-sm outline-none placeholder:text-faint disabled:cursor-not-allowed disabled:opacity-60"
+        />
         <button
           type="button"
           disabled={!enabled || text.trim() === ""}
           onClick={submit}
-          className="ml-auto inline-flex h-8 items-center rounded-md bg-ink px-4 text-xs font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50"
+          className="mb-0.5 inline-flex h-9 shrink-0 items-center rounded-lg bg-ink px-4 text-sm font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50"
         >
           Enviar
         </button>
       </div>
     </div>
-  );
-}
-
-/** A composer affordance that exists in the design but has nothing behind it yet. */
-function ToolbarButton({ label, title }: { label: string; title: string }) {
-  return (
-    <button
-      type="button"
-      disabled
-      title={title}
-      className="inline-flex h-8 cursor-not-allowed items-center rounded-md border border-line px-2.5 text-xs text-faint"
-    >
-      {label}
-    </button>
   );
 }
