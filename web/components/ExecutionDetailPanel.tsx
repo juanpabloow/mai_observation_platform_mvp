@@ -154,14 +154,21 @@ export async function ExecutionDetailPanel({
           turnCount={views.length}
           openHref={`${clientInboxBase}&c=${encodeURIComponent(handoffId)}`}
         >
-          <div className="bg-black/[0.02] px-4 py-3 dark:bg-card">
+          {/* CAP the transcript's height and scroll INSIDE it, so a long bot conversation
+              (thousands of messages) no longer pushes the node outputs seconds of scrolling
+              away. Opens centred on THIS execution's turn (the "esta ejecución" marker),
+              else at the newest message. */}
+          <ChatScroll
+            focusSelector='[data-focus="true"]'
+            className="max-h-[26rem] overflow-y-auto bg-black/[0.02] px-4 py-3 dark:bg-card"
+          >
             <MessageTranscript
               messages={views}
               now={now}
               highlightIds={highlight}
               highlightLabel={labeled}
             />
-          </div>
+          </ChatScroll>
         </ConversationPanel>
       );
     } else {
@@ -178,7 +185,7 @@ export async function ExecutionDetailPanel({
         >
           <ChatScroll
             focusSelector='[data-focus="true"]'
-            className="max-h-[55vh] overflow-y-auto bg-black/[0.02] px-4 py-3 dark:bg-card"
+            className="max-h-[26rem] overflow-y-auto bg-black/[0.02] px-4 py-3 dark:bg-card"
           >
             {/* Highlight + center THIS execution's turn (canonical DB id). */}
             <ChatTranscript turns={thread} now={now} highlightExecutionId={execution.id} />

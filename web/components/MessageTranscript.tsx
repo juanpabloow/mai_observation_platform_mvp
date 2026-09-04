@@ -154,7 +154,7 @@ export function MessageTranscript({
         ) : b.type === "scheduling" ? (
           <SchedulingStrip key={b.key} event={b.event} agendaHref={agendaHref} />
         ) : b.type === "marker" ? (
-          <div key={b.key} className="my-1 flex justify-center">
+          <div key={b.key} data-focus="true" className="my-1 flex justify-center">
             <span className="u-mono rounded-sm bg-warn-soft px-2.5 py-0.5 text-[0.625rem] font-medium uppercase tracking-wider text-warn">
               {b.label}
             </span>
