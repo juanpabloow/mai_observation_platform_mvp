@@ -173,7 +173,7 @@ test('Black keeps the active row red with white text/icon, and the brand white',
   assert.ok(read('app/globals.css').includes('--nav-active: #e60a2f'), 'the spec accent, fixed in both modes');
   assert.ok(src.includes('stroke="currentColor"'), 'icons inherit the row colour');
   // The brand wordmark tracks the rail foreground, which is #F4F4F5 under Black.
-  assert.ok(src.includes('tracking-tight text-sidebar-fg">M_AI'), 'the wordmark uses the rail foreground');
+  assert.ok(src.includes('tracking-tight text-sidebar-fg">MONTSERRAT_AI'), 'the wordmark uses the rail foreground');
   const css = read('app/globals.css');
   const black = css.slice(css.indexOf("[data-sidebar-theme='black']"), css.indexOf('@theme inline {'));
   assert.ok(black.includes('--sidebar-fg: #f5f5f5'), 'which is near-white on the dark rail');

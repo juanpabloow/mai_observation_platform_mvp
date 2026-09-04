@@ -196,13 +196,16 @@ function Brand({ homeHref, collapsed, onNavigate }: { homeHref: string; collapse
       <Link
         href={homeHref}
         onClick={onNavigate}
-        aria-label="M_AI — home"
-        title={collapsed ? "M_AI — home" : undefined}
-        className="flex items-center gap-2.5 rounded-md transition-opacity hover:opacity-80"
+        aria-label="MONTSERRAT_AI — home"
+        title={collapsed ? "MONTSERRAT_AI — home" : undefined}
+        className="flex min-w-0 items-center gap-2.5 rounded-md transition-opacity hover:opacity-80"
       >
-        <span aria-hidden className="size-6 shrink-0 rounded bg-nav-active" />
-        {collapsed ? null : (
-          <span className="text-[0.9375rem] font-semibold tracking-tight text-sidebar-fg">M_AI</span>
+        {/* The wordmark only — "MONTSERRAT_AI" — when expanded; the collapsed rail keeps a
+            compact red mark so the brand still has a glyph in the narrow strip. */}
+        {collapsed ? (
+          <span aria-hidden className="size-6 shrink-0 rounded bg-nav-active" />
+        ) : (
+          <span className="truncate text-[0.8125rem] font-semibold tracking-tight text-sidebar-fg">MONTSERRAT_AI</span>
         )}
       </Link>
     </div>
