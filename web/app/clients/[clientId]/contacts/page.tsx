@@ -192,45 +192,46 @@ export default async function ClientContactsPage({
     <main className="flex min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]">
       {isFullAccess ? <DuplicateCandidates clientId={client.id} candidates={candidates} /> : null}
 
-      {/* THREE CARDS on the canvas: title+filters, table, and the detail panel. They
-          are siblings, so each keeps its own four corners and they share a top edge —
-          which is also what stopped the title band from being cut short of the right
-          edge back when the panel lived inside it. */}
-      <div className="flex min-h-0 flex-1 gap-3">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-      {/* THE TOOLBAR (design, image 16): title + count, search, the filter/sort/columns
-          controls + export/custom-fields, and the primary — ONE row on the table card's
-          top edge, then the table and the pager. The separate title card and the facet-pill
-          row it used to carry are folded into here to match the design; stage/owner filtering
-          now lives in the Filtrar menu. `clip={false}` so the Filtrar / Orden / Columnas
-          popovers are not clipped by the card's `overflow-hidden`. */}
-      <PageShell clip={false}>
-        <div className="flex flex-none flex-wrap items-center gap-2.5 border-b border-line-row px-3 py-2.5">
+      {/* HEADER CARD (design image 23, the Equipo layout): the title + count, a WIDE
+          search, and the primary — its own card, SEPARATE from the table. It spans the full
+          width above the table+panel row, so the search stays wide even with the panel open. */}
+      <PageShell grow={false} clip={false}>
+        <div className="flex flex-wrap items-center gap-2.5 px-3 py-2.5">
           <div className="flex shrink-0 items-baseline gap-2">
             <h1 className="text-[15px] font-semibold tracking-[-0.015em] text-foreground">Contactos</h1>
             <span className="u-mono text-[0.71875rem] text-faint">{summary.total}</span>
           </div>
-          <ContactsSearch compact={!!panelId} />
-          <span className="ml-auto flex shrink-0 items-center gap-1.5">
-            <ContactsFilterMenu owners={ownerOptions} />
-            <ContactsSortMenu />
-            {/* Space optimization when the detail panel is open (image 18): drop Columnas
-                and Campos, and let Exportar + the primary go compact. */}
-            {panelId ? null : <ContactsColumnsMenu visibleColumns={visibleColumns} />}
-            <ContactsExportLink clientId={client.id} compact={!!panelId} />
-            {isFullAccess && !panelId ? (
-              <Link href={`${base}/fields`} className={`${GHOST_ACTION_CLS} hidden lg:flex`}>
-                Campos del negocio
-              </Link>
-            ) : null}
+          <ContactsSearch />
+          <span className="ml-auto shrink-0">
             <NewContactButton
               clientId={client.id}
               owners={assignableOwners}
               fieldDefs={formFieldDefs.map((d) => ({ id: d.id, key: d.key, label: d.label, type: d.type, options: d.options }))}
               defaultOwnerId={assignableOwners.some((o) => o.userId === scope.userId) ? scope.userId : null}
-              compact={!!panelId}
             />
           </span>
+        </div>
+      </PageShell>
+
+      {/* Table + detail panel: siblings on one row, each keeping its own four corners. */}
+      <div className="flex min-h-0 flex-1 gap-3">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+      {/* THE TABLE CARD: a controls row (Filtrar / Orden / Columnas / Exportar / Campos),
+          then the table and the pager. `clip={false}` so the popovers are not clipped by
+          the card's `overflow-hidden`. */}
+      <PageShell clip={false}>
+        <div className="flex flex-none flex-wrap items-center gap-1.5 border-b border-line-row px-3 py-2">
+          <ContactsFilterMenu owners={ownerOptions} />
+          <ContactsSortMenu />
+          {/* Space optimization when the detail panel is open (image 18): drop Columnas and
+              Campos, and let Exportar go icon-only. */}
+          {panelId ? null : <ContactsColumnsMenu visibleColumns={visibleColumns} />}
+          <ContactsExportLink clientId={client.id} compact={!!panelId} />
+          {isFullAccess && !panelId ? (
+            <Link href={`${base}/fields`} className={`${GHOST_ACTION_CLS} hidden lg:flex`}>
+              Campos del negocio
+            </Link>
+          ) : null}
         </div>
 
         {contacts.length === 0 ? (
