@@ -406,35 +406,29 @@
 /*
  * ── Contact avatar palette ───────────────────────────────────────────────────
  * Eight tones, picked by hashing the contact's identifier (lib/avatarColor.ts), so
- * one person keeps one colour across the queue and the thread. Colour here is a
- * recognition aid, never a state — no meaning is encoded in which tone you get.
- *
- * VALUES: the "CRM Color Refactor" design's exact "orbes de color" gradient
- * vocabulary — vivid a→b pairs. These render through the sphere RECIPE below
- * (the `[class*="u-avatar-"]` plateau-crossover gradient), so the disc keeps its
- * lit-sphere shape; only the hues are the design's. NOTE: unlike the previous
- * AA-tuned pairs, the design's lighter `-b` stops (peach/lime/violet) do NOT all
- * carry white text at >= 4.5:1 — but the initials sit on the mid-tone crossover
- * and the disc is decoration (state is carried by the row/badge/text), so this is
- * an accepted, deliberate trade for the design's look.
+ * one person keeps one colour across the queue and the thread. Every value is a
+ * solid fill carrying WHITE text at >= 4.5:1, which is why the same eight work in
+ * both themes: a saturated disc reads the same on a white panel and a near-black
+ * one. Colour here is a recognition aid, never a state — no meaning is encoded in
+ * which tone you get.
  */
 :root {
-  --avatar-1-a: #10b981;
-  --avatar-1-b: #84cc16; /* emerald → lime   */
-  --avatar-2-a: #0ea5e9;
-  --avatar-2-b: #6366f1; /* sky → indigo     */
-  --avatar-3-a: #d946ef;
-  --avatar-3-b: #8b5cf6; /* fuchsia → violet */
-  --avatar-4-a: #22c55e;
-  --avatar-4-b: #a3e635; /* green → lime     */
-  --avatar-5-a: #f59e0b;
-  --avatar-5-b: #ec4899; /* amber → pink     */
-  --avatar-6-a: #ec4899;
-  --avatar-6-b: #fdba74; /* pink → peach     */
-  --avatar-7-a: #7c3aed;
-  --avatar-7-b: #38bdf8; /* violet → sky     */
-  --avatar-8-a: #4f46e5;
-  --avatar-8-b: #c084fc; /* indigo → purple  */
+  --avatar-1-a: #2e9c7f;
+  --avatar-1-b: #2f6fa8;
+  --avatar-2-a: #4e7bd0;
+  --avatar-2-b: #7e6bd6;
+  --avatar-3-a: #7e6bd6;
+  --avatar-3-b: #4e7bd0;
+  --avatar-4-a: #3f9d6b;
+  --avatar-4-b: #2f8fa8;
+  --avatar-5-a: #e0863f;
+  --avatar-5-b: #d0564e;
+  --avatar-6-a: #e0568c;
+  --avatar-6-b: #8e4bc4;
+  --avatar-7-a: #2f8fa8;
+  --avatar-7-b: #3f6bc4;
+  --avatar-8-a: #6b5bd0;
+  --avatar-8-b: #3f5bc4;
   /*
    * The SINGLE-tone alias. Anything that needs one colour rather than the pair — a dot,
    * a border, an older consumer — reads `--avatar-N` and gets the disc's first stop, so
