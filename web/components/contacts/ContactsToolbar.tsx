@@ -64,7 +64,7 @@ function useApply() {
  * button in the row, which is exactly what it looked like when it was a bordered control
  * sitting between two dropdowns.
  */
-export function ContactsSearch() {
+export function ContactsSearch({ compact = false }: { compact?: boolean } = {}) {
   const { searchParams, apply } = useApply();
   const q = searchParams.get("q") ?? "";
 
@@ -82,16 +82,18 @@ export function ContactsSearch() {
         e.preventDefault();
         apply({ q: draft.trim() });
       }}
-      // The SHARED shell (§2.1). Only the SIZING is local: the search takes the title
-      // row's slack, capped at the artboard's 420px.
-      className={`${SEARCH_SHELL_CLS} min-w-0 max-w-[420px] flex-1`}
+      // The SHARED shell (§2.1). Only the SIZING is local: the search takes the row's
+      // slack, capped at the artboard's 420px — and tightens to 240px with a shorter
+      // placeholder when the detail panel is open (design frame 20f), so the toolbar
+      // stays on one line beside the narrowed table.
+      className={`${SEARCH_SHELL_CLS} min-w-0 flex-1 ${compact ? "max-w-[240px]" : "max-w-[420px]"}`}
     >
       <SearchIcon />
       <input
         name="q"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        placeholder="Buscar nombre, email o teléfono…"
+        placeholder={compact ? "Buscar contacto…" : "Buscar nombre, email o teléfono…"}
         aria-label="Buscar contactos"
         className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
       />
@@ -306,7 +308,7 @@ export function ContactsFilterMenu({ owners }: { owners: { userId: string; label
  */
 export function ContactsSortMenu() {
   return (
-    <Menu label="Orden: última interacción" width="w-64">
+    <Menu label="Orden" width="w-64">
       {() => (
         <>
           <MenuOption label="Última interacción (más reciente)" selected onSelect={() => {}} />

@@ -304,7 +304,7 @@ export function HeaderBar({
             // loose breadcrumb text. It was a 1px-outlined 28px control, which at that
             // height read as an empty input sitting in the trail; a soft `--chip` fill
             // with no border says "object" without spending a line on it.
-            className="inline-flex h-7 min-w-0 max-w-[240px] items-center gap-1.5 rounded-md bg-chip px-2 text-foreground transition-colors hover:bg-subtle"
+            className="inline-flex h-7 min-w-0 max-w-[240px] items-center gap-1.5 rounded-lg border border-line bg-surface px-2 text-foreground transition-colors hover:border-line-strong"
           >
             {currentClient ? (
               currentClient.isDefault ? (
@@ -368,7 +368,7 @@ export function HeaderBar({
                 to the left, and "CRM" was not clickable — a segment that restates
                 visible context and navigates nowhere. */}
             <span aria-hidden className="text-faintest">/</span>
-            <span className="inline-flex items-center px-2 py-1 font-medium text-foreground">
+            <span className="inline-flex items-center px-2 py-1 text-muted">
               {clientSurface.label}
             </span>
           </>
