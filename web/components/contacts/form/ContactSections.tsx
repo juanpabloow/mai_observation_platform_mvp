@@ -108,26 +108,50 @@ type Props =
  * ORDER are identical either way — only the density adapts.
  */
 function ReadGrid({ columns, children }: { columns: 1 | 2; children: ReactNode }) {
-  return <div className={`grid gap-x-3 gap-y-3.5 ${columns === 2 ? "grid-cols-2" : "grid-cols-1"}`}>{children}</div>;
+  // gap-y is 0: each ReadField now pays its own `py-1`, so a second gap here would
+  // reintroduce exactly the airiness the one-line fact row was meant to remove.
+  return <div className={`grid gap-x-4 ${columns === 2 ? "grid-cols-2" : "grid-cols-1"}`}>{children}</div>;
 }
 
-/** A read-mode value: the same label as `Field`, then plain text. No border, no input. */
+/**
+ * A read-mode value, in the redesign's FACT ROW shape (§2.5): the label on a fixed-width
+ * left column, the value hard right on the same line.
+ *
+ * It used to stack — a mono-uppercase label with the value beneath it — which cost two
+ * lines per fact and made a nine-fact panel scroll. Putting them on one line halves that,
+ * and right-aligning the values gives the column an edge the eye can run down, which is
+ * the whole reason the design does it: you scan for the VALUE ("who owns this?"), not for
+ * the label you already know is there.
+ *
+ * The value keeps `min-w-0` and its own wrapping so a long email still truncates rather
+ * than pushing the label out of the panel.
+ */
 function ReadField({ label, children }: { label: string; children: ReactNode }) {
   return (
-    <div className="flex min-w-0 flex-col gap-1">
-      {/* Mono caps, like the section headings: in read mode the label is metadata and
-          the VALUE is the content, so the label steps back instead of competing. */}
-      <span className="u-th">{label}</span>
-      <div className="min-w-0 text-sm text-foreground">{children}</div>
+    <div className="flex min-w-0 items-baseline gap-2.5 py-1">
+      <span className="w-[6.5rem] shrink-0 text-[0.71875rem] leading-5 text-faint">{label}</span>
+      <div className="flex min-w-0 flex-1 justify-end text-right text-[0.8125rem] text-foreground">
+        {children}
+      </div>
     </div>
   );
 }
 
 /**
- * A communication setting as a STATE ROW: a dot, the setting, the value hard right.
- * The reference tints these because each one answers "may I message this person, and
- * how" — the tone previews the answer before the words are read. Green = a live route,
- * amber = something unresolved, grey = nothing set.
+ * A communication setting as a FACT ROW with a state dot.
+ *
+ * It used to be a tinted BOX per setting — a green wash for a live route, amber for
+ * something unresolved, grey for nothing set. Three filled rows stacked in a 320px column
+ * turned "Mensajería" into the loudest block on the record, louder than the money, and
+ * the tint restated what the dot and the words already said.
+ *
+ * The design (artboard 23a) renders them as the same label/value rows as every other
+ * section, keeping only the DOT. That is enough: the dot previews the answer, the value
+ * states it, and the row no longer shouts. The reading order in the column is now uniform,
+ * which is the whole point of the left card being one document.
+ *
+ * The dot is decoration carrying a hint, never the meaning — each row still prints its own
+ * value, so the block survives greyscale.
  */
 function StateRow({
   label,
@@ -138,14 +162,12 @@ function StateRow({
   value: ReactNode;
   tone: "ok" | "pending" | "off";
 }) {
-  const box =
-    tone === "ok" ? "bg-success/8" : tone === "pending" ? "bg-warn-soft" : "bg-subtle";
   const dot = tone === "ok" ? "bg-success" : tone === "pending" ? "bg-warn" : "bg-line-strong";
   return (
-    <div className={`flex items-center gap-2.5 rounded-lg px-3 py-2.5 ${box}`}>
+    <div className="flex items-center gap-2.5 py-1">
       <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${dot}`} />
-      <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground">{label}</span>
-      <span className="shrink-0 text-[0.8125rem] font-medium text-foreground">{value}</span>
+      <span className="min-w-0 flex-1 truncate text-[0.71875rem] text-faint">{label}</span>
+      <span className="shrink-0 text-[0.78125rem] text-foreground">{value}</span>
     </div>
   );
 }
@@ -175,7 +197,7 @@ export function ContactSections(props: Props) {
   return (
     <div className="flex flex-col">
       {/* ── IDENTIDAD ─────────────────────────────────────────────────────── */}
-      <FormSection title="IDENTIDAD" icon={<IconIdentity />}>
+      <FormSection title="Contacto" icon={<IconIdentity />}>
         {mode === "read" ? (
           <ReadGrid columns={cols}>
             <ReadField label="Nombre">{props.read.name?.trim() || <Empty />}</ReadField>
@@ -219,7 +241,7 @@ export function ContactSections(props: Props) {
       </FormSection>
 
       {/* ── ASIGNACIÓN ────────────────────────────────────────────────────── */}
-      <FormSection title="ASIGNACIÓN" icon={<IconAssign />}>
+      <FormSection title="Asignación" icon={<IconAssign />}>
         {mode === "read" ? (
           <ReadGrid columns={cols}>
             <ReadField label="Dueño">{props.read.ownerLabel ?? <span className="text-faint">Sin asignar</span>}</ReadField>
@@ -241,7 +263,7 @@ export function ContactSections(props: Props) {
       </FormSection>
 
       {/* ── COMUNICACIÓN ──────────────────────────────────────────────────── */}
-      <FormSection title="COMUNICACIÓN" icon={<IconComms />}>
+      <FormSection title="Mensajería" icon={<IconComms />}>
         {mode === "read" ? (
           <div className="flex flex-col gap-1.5">
             <StateRow
@@ -290,7 +312,7 @@ export function ContactSections(props: Props) {
       </FormSection>
 
       {/* ── INTERNO ───────────────────────────────────────────────────────── */}
-      <FormSection title="INTERNO" icon={<IconInternal />}>
+      <FormSection title="Interno" icon={<IconInternal />}>
         {mode === "read" ? (
           <ReadField label="Etiquetas">
             {props.read.tags.length === 0 ? (
@@ -331,9 +353,20 @@ export function ContactSections(props: Props) {
         )}
       </FormSection>
 
-      <div className="border-b border-line px-4 py-3">
-        <OptionalDivider label={COPY.optionalDivider} />
-      </div>
+      {/*
+        "Todo lo de abajo es opcional" is an EDITING affordance — it tells someone filling
+        the form that they can stop here. Two reasons it used to be wrong:
+        it rendered in READ mode, where there is nothing to fill in and "opcional" states
+        nothing about the facts below it; and it rendered even with no business fields
+        defined, announcing an optional section that then did not exist.
+        It now appears only when it is both true and useful: editing, and there is
+        something below it to introduce.
+      */}
+      {mode === "edit" && fieldDefs.length > 0 ? (
+        <div className="border-b border-line px-4 py-3">
+          <OptionalDivider label={COPY.optionalDivider} />
+        </div>
+      ) : null}
 
       {/* ── CONFIGURADO POR EL NEGOCIO ────────────────────────────────────── */}
       {/* Renders NOTHING when the tenant defined no fields — in BOTH modes, so the

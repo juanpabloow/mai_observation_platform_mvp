@@ -513,6 +513,7 @@ export {
   IconPhone,
   IconCalendar,
   IconTask,
+  IconNote,
   IconPencil,
   IconMail,
 } from "@/components/ui/icons";

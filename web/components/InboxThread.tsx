@@ -6,7 +6,15 @@ import { ThreadActions } from "./ThreadActions";
 import { Composer } from "./Composer";
 import { MessageTranscript } from "./MessageTranscript";
 import { avatarColor } from "@/lib/avatarColor";
-import { conversationAvatarLabel, formatConversationRef, type ThreadEventView, type HistoryTurnView, type InboxHeaderView, type InboxMessageView } from "@/lib/inboxView";
+import {
+  conversationAvatarLabel,
+  formatConversationRef,
+  type ThreadEventView,
+  type ThreadSchedulingEventView,
+  type HistoryTurnView,
+  type InboxHeaderView,
+  type InboxMessageView,
+} from "@/lib/inboxView";
 import type { InboxActionResult } from "@/lib/inboxActions";
 import { sendMessageAction, retrySendAction } from "@/lib/sendActions";
 import { serviceWindow, serviceWindowNotice } from "@/lib/inboxView";
@@ -15,6 +23,8 @@ interface ThreadPayload {
   header: InboxHeaderView;
   messages: InboxMessageView[];
   events?: ThreadEventView[];
+  /** Scheduling turning points — see MessageTranscript. Polled alongside the messages. */
+  schedulingEvents?: ThreadSchedulingEventView[];
   history?: HistoryTurnView[];
   activityWindowHours: number;
   asOf: string;
@@ -64,6 +74,9 @@ export function InboxThread({
   // Turning points come back on every poll, so a colleague taking the conversation
   // over shows up in your open thread without a reload.
   const [events, setEvents] = useState<ThreadEventView[]>(initial.events ?? []);
+  const [schedulingEvents, setSchedulingEvents] = useState<ThreadSchedulingEventView[]>(
+    initial.schedulingEvents ?? [],
+  );
   const [pending, setPending] = useState<PendingSend[]>([]);
   const [retrying, setRetrying] = useState<Set<string>>(new Set());
   const [now, setNow] = useState(() => new Date(initial.asOf));
@@ -91,6 +104,9 @@ export function InboxThread({
       setHeader(p.header);
       setServerMessages(p.messages);
       setEvents(p.events ?? []);
+      // A customer who reschedules through the bot mid-thread must appear within the poll
+      // interval, not on the next full reload.
+      setSchedulingEvents(p.schedulingEvents ?? []);
       setNow(new Date(p.asOf));
     } catch {
       /* keep last-known state */
@@ -172,6 +188,9 @@ export function InboxThread({
       failureCode: null,
       failureDetail: null,
       occurredAt: new Date().toISOString(),
+      // An outbound human reply is plain text; structured payloads come from the agent
+      // side, never from this composer.
+      payload: null,
     };
     forceScroll.current = true; // your own message → jump to bottom
     setPending((prev) => [...prev, { tempId, realId: null, view: optimistic }]);
@@ -230,11 +249,11 @@ export function InboxThread({
             mean inventing state, so the header shows the identifier, the real mode
             badge, the workflow and the REAL activity tag (customer wrote inside the
             activity window) instead. */}
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <ModeBadge mode={header.mode} />
+        <ModeBadge mode={header.mode} />
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
             <span
-              className={`truncate text-sm font-semibold text-foreground ${
+              className={`min-w-0 truncate text-[0.90625rem] tracking-[-0.015em] text-foreground ${
                 header.contactName?.trim() ? "" : "u-mono"
               }`}
             >
@@ -243,17 +262,24 @@ export function InboxThread({
             {/* When the person has a name, the identifier stays beside it — the agent
                 still needs the number to hand, just not as the headline. */}
             {header.contactName?.trim() ? (
-              <span className="u-mono truncate text-xs text-faint">
+              <span className="u-mono shrink-0 text-[0.71875rem] text-muted">
                 {formatConversationRef(header.conversationRef)}
               </span>
             ) : null}
-            <ActivityTag active={header.active} windowHours={initial.activityWindowHours} />
           </div>
-          <div className="truncate text-xs text-faint">
-            {header.workflowName ?? "Unknown workflow"}
+          <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 text-[0.71875rem]">
+            <span className="truncate text-faint">{header.workflowName ?? "Flujo desconocido"}</span>
             {header.mode === "human" && header.assignedAgentName ? (
-              <span className="text-success"> &middot; &#9679; {header.assignedAgentName}</span>
+              <>
+                <span aria-hidden className="text-faintest">·</span>
+                <span className="flex items-center gap-1.5 whitespace-nowrap text-success">
+                  <span aria-hidden className="size-1.5 rounded-full bg-success" />
+                  {header.assignedAgentName}
+                </span>
+              </>
             ) : null}
+            <span aria-hidden className="text-faintest">·</span>
+            <ActivityTag active={header.active} windowHours={initial.activityWindowHours} />
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
@@ -268,7 +294,7 @@ export function InboxThread({
           <button
             type="button"
             onClick={onClose}
-            aria-label="Close conversation"
+            aria-label="Cerrar la conversación"
             className="inline-flex size-8 items-center justify-center rounded-md border border-line-strong text-xs text-muted transition-colors hover:bg-hover hover:text-foreground"
           >
             &#10005;
@@ -289,25 +315,32 @@ export function InboxThread({
       {/*
         Messages (scrolls).
 
-        TODO(inbox): four blocks from the design are NOT rendered here, because each
-        would have to be invented rather than read:
-        - "TODAY · BOT PICKED UP 10:28" / "SANTIAGO TOOK OVER 10:36" markers. The
-          transitions ARE persisted (`conversation_mode_transitions`), but this
-          thread payload doesn't carry them — surfacing them means widening the
-          messages endpoint, which is a data change, not a restyle. The transcript
-          does label a human agent's run with their name today.
-        - "SLOTS OFRECIDOS" (the slots the bot proposed, with the chosen one in red).
-          Offered slots are not persisted anywhere — a message's text is all we keep.
-        - The "REAGENDADA POR EL BOT … Ver en agenda ↗" pill. The LINK is real in the
-          other direction (`appointments.source_conversation_id`), but the thread
-          payload has no appointment attached to it.
-        - The "… está escribiendo" typing indicator: no channel we ingest delivers a
-          typing signal.
+        Of the four blocks the design draws that this thread once could not render, TWO
+        are now real reads rather than inventions:
+
+          - "REAGENDADA POR EL BOT … Ver en agenda ↗" — read across
+            `appointments.source_conversation_id` + `appointment_events`
+            (listConversationSchedulingEvents). No new table; the link had always been
+            recorded and the thread simply never read it.
+          - "SLOTS OFRECIDOS" — a documented shape for `handoff_messages.metadata`, an
+            existing unused jsonb column (see MessagePayload / parseMessagePayload). It
+            renders when the agent side writes it and is silently absent until then,
+            which is why it is a schema for that column rather than a placeholder.
+
+        Two remain deliberately absent:
+
+          - "hoy · el bot tomó la conversación 10:28". A conversation STARTS in bot mode
+            with no transition row, so there is nothing to read. It needs a row written at
+            creation, or an inference from the first bot message — which is a guess.
+          - "… está escribiendo". No channel we ingest delivers a typing signal, so there
+            is no source for it at any layer.
       */}
       {/* The transcript is the BRIGHT surface of the workspace — the queue beside it
           carries the tint. The customer's bubbles are the light-grey objects on it;
           the business answers in near-black. */}
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto bg-[var(--thread-bg)] px-4 py-3">
+      <div ref={scrollRef} // Padding is the design's 20/24/14 — the transcript needs more side room than a
+          // panel because its bubbles cap at ~62% and float away from both edges.
+          className="min-h-0 flex-1 overflow-y-auto bg-[var(--thread-bg)] px-6 pb-3.5 pt-5">
         {history.length > 0 ? <HistoryDisclosure turns={history} /> : null}
         <MessageTranscript
           messages={merged}
@@ -317,6 +350,10 @@ export function InboxThread({
           // the label and one for the tone, so the person can't wear two different
           // avatars across the two columns.
           events={events}
+          schedulingEvents={schedulingEvents}
+          // "Ver en agenda ↗" — the agenda deep-links to the DAY of the appointment and
+          // focuses it, which is the view an operator actually wants from a thread.
+          agendaHref={(appointmentId) => `/clients/${clientId}/scheduling/agenda?appt=${appointmentId}`}
           incomingAvatar={{
             label: conversationAvatarLabel(header.conversationRef, header.contactName),
             toneClass: avatarColor(header.conversationRef),
@@ -327,27 +364,41 @@ export function InboxThread({
       {/* Composer (pinned) */}
       {/* The composer floats on the same surface as the transcript — its own hairline
           card is what separates it, not a rule across the column. */}
-      <div className="shrink-0 bg-surface px-4 pb-3 pt-1">
+      {/* The composer sits on the TRANSCRIPT's ground, not on the panel — that is what
+          lets its shadow read as "this floats over the conversation" instead of as a
+          box on a white card. Padding is the design's 10/20/18. */}
+      <div className="shrink-0 bg-[var(--thread-bg)] px-5 pb-4 pt-2.5">
         <Composer mode={header.mode} onSend={handleSend} blockedReason={windowNotice} />
       </div>
     </div>
   );
 }
 
+/**
+ * Whether the customer is still inside the reply window — a dot plus a word on the
+ * header's meta line, not a filled pill.
+ *
+ * The design's equivalent is "● visto · escribiendo", which we cannot render: no channel
+ * we ingest delivers read receipts or typing. What IS real is whether they wrote inside
+ * the activity window, which is the fact that actually governs whether a reply will
+ * deliver — so that is what this says, in the design's shape.
+ */
 function ActivityTag({ active, windowHours }: { active: boolean; windowHours: number }) {
   return active ? (
     <span
-      title={`Active — the customer wrote within the last ${windowHours}h`}
-      className="rounded-full bg-success/15 px-1.5 py-0.5 text-[0.6875rem] font-medium text-success"
+      title={`Activa — el cliente escribió en las últimas ${windowHours} h`}
+      className="flex items-center gap-1.5 whitespace-nowrap text-success"
     >
-      Active
+      <span aria-hidden className="size-1.5 rounded-full bg-success" />
+      activa
     </span>
   ) : (
     <span
-      title={`Inactive — no customer message in the last ${windowHours}h`}
-      className="rounded-full bg-subtle px-1.5 py-0.5 text-[0.6875rem] font-medium text-faint"
+      title={`Inactiva — el cliente no escribe desde hace más de ${windowHours} h`}
+      className="flex items-center gap-1.5 whitespace-nowrap text-faint"
     >
-      Inactive
+      <span aria-hidden className="size-1.5 rounded-full bg-line-strong" />
+      inactiva
     </span>
   );
 }

@@ -9,6 +9,7 @@ import { PageShell } from "@/components/ui/PageShell";
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
 import { PageTitle } from "@/components/ui/PageTitle";
 import { avatarColor } from "@/lib/avatarColor";
+import { SEARCH_SHELL_CLS } from "@/components/ui/primitives";
 import { formatAgeShort } from "@/lib/format";
 import {
   conversationAvatarLabel,
@@ -215,7 +216,19 @@ export function ClientInboxWorkspace({
   }, [selectedId, clientId]);
 
   // ── Details panel: inline (desktop) collapse + mobile/tablet drawer ──
-  const [detailsInline, setDetailsInline] = useState(true);
+  /*
+   * The client card starts CLOSED, on every width.
+   *
+   * It used to default open on xl+, which meant opening a conversation immediately spent
+   * ~340px on a panel nobody had asked for — and the thread, the thing you came to read,
+   * got whatever was left. The panel is an answer to "who is this?", which is a question
+   * you ask sometimes; the thread is why the screen exists.
+   *
+   * `Detalles` opens it and the state persists for the session, so someone who works with
+   * it open pays one click, once. It is deliberately NOT remembered in a cookie: that
+   * would quietly reintroduce "opens by default" for exactly the people who hit this.
+   */
+  const [detailsInline, setDetailsInline] = useState(false);
   const [detailsDrawer, setDetailsDrawer] = useState(false);
   // The mobile customer panel is an overlay, so it gets the shared overlay contract.
   const customerDrawerRef = useTrappedPanel({
@@ -239,20 +252,27 @@ export function ClientInboxWorkspace({
       <button
         type="button"
         onClick={() => setDetailsInline((o) => !o)}
-        aria-label={detailsInline ? "Hide customer details" : "Show customer details"}
+        aria-label={detailsInline ? "Ocultar los datos del cliente" : "Ver los datos del cliente"}
         aria-pressed={detailsInline}
-        className="hidden h-8 items-center rounded-md border border-line-strong px-2 text-xs text-muted transition-colors hover:bg-subtle hover:text-foreground xl:inline-flex"
+        // `aria-pressed` carries the open/closed state, so the LABEL stays constant — a
+        // button whose text flips between "Ver" and "Ocultar" makes a screen reader
+        // announce the action twice and reads as two different controls.
+        className={`hidden h-8 items-center rounded-md border px-2.5 text-xs transition-colors xl:inline-flex ${
+          detailsInline
+            ? "border-ink text-foreground"
+            : "border-line-strong text-muted hover:border-faint hover:text-foreground"
+        }`}
       >
-        Details
+        Detalles
       </button>
       {/* Tablet/mobile: open the details drawer. */}
       <button
         type="button"
         onClick={() => setDetailsDrawer(true)}
-        aria-label="Show customer details"
-        className="inline-flex h-8 items-center rounded-md border border-line-strong px-2 text-xs text-muted transition-colors hover:bg-subtle hover:text-foreground xl:hidden"
+        aria-label="Ver los datos del cliente"
+        className="inline-flex h-8 items-center rounded-md border border-line-strong px-2.5 text-xs text-muted transition-colors hover:border-faint hover:text-foreground xl:hidden"
       >
-        Details
+        Detalles
       </button>
     </>
   );
@@ -272,7 +292,11 @@ export function ClientInboxWorkspace({
         // and the CENTER column keeps the rest (no dead space beside a thread). The
         // column is WHITE like the rest of the card and separated by one hairline —
         // the tint belongs to the SELECTED ROW, not to the whole column.
-        className={`min-h-0 w-full shrink-0 border-r border-line lg:flex lg:w-[336px] xl:w-[360px] ${
+        // 280/300px, down from 336/360. The queue is scanned, not read: a row shows a
+        // name, a one-line preview and a flow, and none of those needed 360px — the
+        // preview truncates at any width, so the extra pixels bought a longer fragment of
+        // a sentence you are going to open anyway. The thread is where the width belongs.
+        className={`min-h-0 w-full shrink-0 border-r border-line lg:flex lg:w-[280px] xl:w-[300px] ${
           selectedId ? "hidden lg:flex" : "flex"
         }`}
       >
@@ -286,13 +310,15 @@ export function ClientInboxWorkspace({
             <PageTitle
               title="Inbox"
               context={
+                // Plain sentence case, per the design (§3.1) — a mono uppercase badge on
+                // the pane's own title read as a status chip rather than as a count. It
+                // still goes brand-red when it is non-zero, because "someone is waiting"
+                // is one of the three things red is for.
                 <span
-                  className={`u-mono text-[0.625rem] font-semibold uppercase tracking-wider ${
-                    pending > 0 ? "text-brand" : "text-faint"
-                  }`}
-                  title="Conversations awaiting a human"
+                  className={`text-[0.6875rem] ${pending > 0 ? "font-medium text-brand" : "text-faint"}`}
+                  title="Conversaciones esperando a una persona"
                 >
-                  {pending} need you
+                  {pending} {pending === 1 ? "te necesita" : "te necesitan"}
                 </span>
               }
             />
@@ -300,14 +326,16 @@ export function ClientInboxWorkspace({
           <div className="flex shrink-0 flex-col gap-1 px-3 pb-3">
             {/* Search sits in a bordered shell with the glass inside it, so the icon
                 can't be mistaken for a control — it's the field's own affordance. */}
-            <div className="u-focus flex h-10 items-center gap-2 rounded-bubble border border-line-strong bg-surface px-3">
+            {/* The SHARED search shell — the queue and the two list screens are one
+                object (§3.1), so the treatment lives in primitives, not here. */}
+            <div className={SEARCH_SHELL_CLS}>
               <SearchIcon />
               <input
                 type="search"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search name, number, or message…"
-                aria-label="Search conversations"
+                placeholder="Buscar nombre, número o mensaje…"
+                aria-label="Buscar conversaciones"
                 className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
               />
               {/* TODO(inbox): the design puts a FILTER control at the right of the
@@ -357,10 +385,12 @@ export function ClientInboxWorkspace({
                 {/* Sticky group header so the queue stays legible while scrolling. */}
                 {/* Sticky lane header, on the queue's own tinted ground so rows slide
                     under it without a colour seam. */}
-                <div className="sticky top-0 z-10 flex items-center gap-2 bg-surface px-3 pb-2 pt-3.5">
+                <div className="sticky top-0 z-10 flex items-center gap-2 bg-surface px-3.5 pb-2 pt-3.5">
                   <GroupDot tone={g.meta.tone} />
-                  <span className="u-th">{g.meta.label}</span>
-                  <span className="u-mono ml-auto text-[0.6875rem] text-faint">{g.items.length}</span>
+                  {/* Sentence case at 590 — the lane label is a heading, and mono
+                      uppercase made three of them read as a stack of status codes. */}
+                  <span className="text-[0.6875rem] font-semibold text-muted">{g.meta.label}</span>
+                  <span className="ml-auto text-[0.6875rem] text-faint">{g.items.length}</span>
                 </div>
                 <ul>
                   {g.items.map((v) => (
@@ -562,7 +592,11 @@ function ConversationRow({
   // channel the person is on, as one quiet metadata line rather than two filled pills.
   const meta = [view.workflowName, view.channel].filter(Boolean).join(" · ");
   const stateLabel =
-    view.mode === "pending" ? "Needs attention" : view.mode === "human" ? "Human" : "Bot";
+    view.mode === "pending"
+      ? "Necesita a una persona"
+      : view.mode === "human"
+        ? "Un humano atiende"
+        : "El bot atiende";
   return (
     <Link
       href={href}
@@ -574,7 +608,10 @@ function ConversationRow({
       // a dark sliver clipped against the lane header above it. Every state carries a
       // border (transparent when idle) so selecting a row can't shift the geometry by
       // a pixel.
-      className={`relative mx-2 my-0.5 flex min-h-[56px] items-center gap-3 overflow-hidden rounded-xl border px-3 py-2.5 transition-colors ${
+      // 50px, down from 56. Three lines of 11–13px type need ~44px; the rest was air, and
+      // at 300px wide the queue shows fewer rows per screen than it did at 360 unless the
+      // row gives some of it back.
+      className={`relative mx-1.5 my-px flex min-h-[50px] items-center gap-2.5 overflow-hidden rounded-lg border px-2.5 py-2 transition-colors ${
         selected
           ? "border-transparent bg-queue-row-active"
           : view.mode === "pending"
@@ -582,22 +619,31 @@ function ConversationRow({
             : "border-transparent hover:bg-queue-row-active/50"
       }`}
     >
-      {/* The disc is the CONTACT's colour, not the conversation's state: state is
-          already carried by the lane, the row fill and the row's left rule, and a
-          per-person tone is what lets you re-find someone in a long queue. Same
-          helper, same identifier, so the thread shows the identical disc. */}
+      {/*
+        THE DISC carries the person's VISIT COUNT, not their initials (§3.1).
+        Two reasons the design is right about this. The initials were redundant — the row
+        title one line to the right is already the name, or the number when there is no
+        name. And "how many times has this person been in" is the single most useful thing
+        to know before opening a thread: it separates a fourteen-visit regular from a lead
+        who has never walked in, which changes how you answer.
+        The TONE is still the contact's own (see lib/avatarColor), so the disc remains the
+        thing that lets you re-find someone in a long queue, and it matches the disc the
+        thread shows for the same person.
+        The count is 0 for an unattributed conversation. That is honest rather than blank:
+        we have no contact, so we have no visits on record.
+      */}
       <span
-        aria-hidden
-        className={`u-mono relative flex size-9 shrink-0 items-center justify-center rounded-full text-[0.8125rem] font-semibold ${avatarColor(
+        title={`${view.contactVisitCount} ${view.contactVisitCount === 1 ? "visita" : "visitas"} · ${initial}`}
+        className={`u-mono relative flex size-[30px] shrink-0 items-center justify-center rounded-full text-[0.6875rem] font-semibold ${avatarColor(
           view.conversationRef,
         )}`}
       >
-        {initial}
+        {view.contactVisitCount}
       </span>
-      <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+      <span className="flex min-w-0 flex-1 flex-col gap-1">
         <span className="flex items-center justify-between gap-2">
           <span
-            className={`truncate text-[13px] font-semibold text-foreground ${named ? "" : "u-mono"}`}
+            className={`truncate text-[13px] leading-tight text-foreground ${named ? "" : "u-mono"}`}
           >
             {title}
           </span>
@@ -608,13 +654,13 @@ function ConversationRow({
             ) : null}
           </span>
         </span>
-        <span className="truncate text-[12px] text-muted">{conversationPreview(view)}</span>
+        <span className="truncate text-[0.78125rem] leading-tight text-muted">{conversationPreview(view)}</span>
         {meta ? (
           // Metadata reads as small caps on the row's own ground — a filled pill here
           // competed with the avatar and the timestamp for the same glance.
-          <span className="u-mono mt-0.5 truncate text-[0.5625rem] font-medium uppercase tracking-wider text-faint">
-            {meta}
-          </span>
+          // Sentence case, matching the design's "Reagenda · WhatsApp". It was mono
+          // uppercase, which put a third type treatment on a 56px row.
+          <span className="truncate text-[0.6875rem] leading-tight text-faint">{meta}</span>
         ) : null}
       </span>
     </Link>
@@ -629,9 +675,9 @@ function ConversationRow({
 function WorkflowNotSetUp({ settingsHref }: { settingsHref: string | null }) {
   return (
     <div className="flex flex-col items-center gap-2 px-4 py-10 text-center">
-      <p className="text-sm font-medium text-muted">This workflow isn&rsquo;t set up for handoff yet.</p>
+      <p className="text-sm font-medium text-muted">Este flujo todavía no tiene handoff.</p>
       <p className="max-w-xs text-sm text-faint">
-        Connect it for handoff so your team can see and reply to its conversations here.
+        Conéctalo para que tu equipo pueda ver y responder sus conversaciones aquí.
       </p>
       {settingsHref ? (
         <Link
@@ -649,9 +695,9 @@ function EmptyChat() {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center">
       <span aria-hidden className="text-3xl opacity-40">💬</span>
-      <p className="text-sm font-medium text-muted">Select a conversation</p>
+      <p className="text-sm font-medium text-muted">Elige una conversación</p>
       <p className="max-w-xs text-sm text-faint">
-        Pick a conversation from the list to read the thread and take action.
+        Elige una conversación de la lista para leer el hilo y actuar.
       </p>
     </div>
   );

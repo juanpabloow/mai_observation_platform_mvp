@@ -36,7 +36,79 @@ export interface InboxConversationView {
    *  contact OF THIS CLIENT (the repository re-scopes the FK). Null otherwise, and
    *  the surface falls back to the conversation identifier. */
   contactName: string | null;
+  /** Completed appointments for the linked contact — the number the queue prints inside
+   *  the avatar disc (§3.1). 0 when the conversation has no contact attributed. */
+  contactVisitCount: number;
   channel: string | null;
+}
+
+/**
+ * A STRUCTURED PAYLOAD attached to a message — the redesign's "SLOTS OFRECIDOS" block
+ * inside a bot bubble (§3.3).
+ *
+ * NO MIGRATION. `handoff_messages.metadata` is a jsonb column that has existed since the
+ * table was created and is unused, so this is a documented SHAPE for it rather than a
+ * schema change. That also means the reader must be defensive: the column is `unknown`,
+ * anything may have written to it, and a malformed payload must degrade to "just a text
+ * message" and never break a thread. That is what `parseMessagePayload` below is for.
+ *
+ * ONE payload kind for now — `offered_slots`, the appointment times the bot proposed and
+ * which one the customer took. It is a discriminated union on `kind` so the next kind
+ * (an offered service list, a payment link, a form) is an added member rather than a
+ * reinterpretation of these fields.
+ *
+ * The writer is the agent side, not this app: the platform's booking flow records what it
+ * offered. Until it does, `metadata` stays null and the thread renders exactly as before,
+ * which is the point of shaping it this way rather than inventing a placeholder.
+ */
+export interface OfferedSlot {
+  /** ISO instant of the offered start time. Rendered in the client's timezone. */
+  at: string;
+  /** Who the slot was with, when the offer named a staff member. */
+  staffName?: string | null;
+  /** True for the slot the customer actually took ("✓ elegido"). At most one. */
+  chosen?: boolean;
+}
+
+export type MessagePayload = {
+  kind: "offered_slots";
+  /** The mono uppercase label above the block. Defaults to "SLOTS OFRECIDOS". */
+  label?: string | null;
+  slots: OfferedSlot[];
+};
+
+/**
+ * Read a message's `metadata` as a payload, or null.
+ *
+ * Deliberately total: every branch returns rather than throws, because this runs on
+ * every message of every thread and a single bad row must not blank the transcript.
+ * Unknown `kind`s return null (forward compatibility — a newer writer's payload is
+ * simply not rendered by an older reader), and a slot without a parseable `at` is
+ * dropped rather than rendered as "Invalid Date".
+ */
+export function parseMessagePayload(metadata: unknown): MessagePayload | null {
+  if (!metadata || typeof metadata !== "object" || Array.isArray(metadata)) return null;
+  const m = metadata as Record<string, unknown>;
+  if (m.kind !== "offered_slots") return null;
+  if (!Array.isArray(m.slots)) return null;
+  const slots: OfferedSlot[] = [];
+  for (const raw of m.slots) {
+    if (!raw || typeof raw !== "object") continue;
+    const r = raw as Record<string, unknown>;
+    const at = typeof r.at === "string" ? r.at : null;
+    if (!at || Number.isNaN(new Date(at).getTime())) continue;
+    slots.push({
+      at,
+      staffName: typeof r.staffName === "string" ? r.staffName : null,
+      chosen: r.chosen === true,
+    });
+  }
+  if (slots.length === 0) return null;
+  return {
+    kind: "offered_slots",
+    label: typeof m.label === "string" ? m.label : null,
+    slots,
+  };
 }
 
 export interface InboxMessageView {
@@ -49,6 +121,8 @@ export interface InboxMessageView {
   failureCode: string | null;
   failureDetail: string | null;
   occurredAt: string; // ISO
+  /** A structured block rendered under the message's prose — see MessagePayload. */
+  payload: MessagePayload | null;
 }
 
 export interface InboxHeaderView {
@@ -79,6 +153,35 @@ export interface ThreadEventView {
   at: string; // ISO
 }
 
+/**
+ * A SCHEDULING turning point inside the thread — the appointment this conversation
+ * produced, and what has happened to it since (§3.3).
+ *
+ * A second event kind beside `ThreadEventView` rather than one union, because the two
+ * carry different facts and render as different strips: a mode transition is a bare
+ * "who is handling this now" line on a rule, while this one names a service, a time, a
+ * staff member and links out to the agenda. Flattening them would give one type half of
+ * whose fields are always null.
+ *
+ * `actor` is what the strip's mono label says did it — "REAGENDADA POR EL BOT" vs
+ * "… POR SANTIAGO". The LABEL is composed in the component from these fields, not
+ * stored, exactly like the mode transitions.
+ */
+export interface ThreadSchedulingEventView {
+  id: string;
+  appointmentId: string;
+  /** The stored `appointment_events.event_type` (booked / rescheduled / cancelled / …). */
+  eventType: string;
+  actorType: string;
+  actorName: string | null;
+  /** The appointment AS IT STANDS NOW — see the note on the repository function. */
+  serviceName: string | null;
+  startAt: string; // ISO
+  staffName: string | null;
+  status: string;
+  at: string; // ISO
+}
+
 /** A pre-handoff derived turn (read-only history disclosure at the top of a thread). */
 export interface HistoryTurnView {
   id: string;
@@ -101,16 +204,16 @@ export type SendActionResult =
   | { ok: false; error: string; code: SendErrorCode; header?: InboxHeaderView };
 
 export const INBOX_FILTERS: { key: InboxFilter; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "pending", label: "Pending" },
-  { key: "human", label: "Human" },
+  { key: "all", label: "Todas" },
+  { key: "pending", label: "Pendientes" },
+  { key: "human", label: "Humano" },
   { key: "bot", label: "Bot" },
 ];
 
 export const ACTIVITY_SEGMENTS: { key: ActivitySegment; label: string }[] = [
-  { key: "all", label: "All" },
-  { key: "active", label: "Active" },
-  { key: "inactive", label: "Inactive" },
+  { key: "all", label: "Todas" },
+  { key: "active", label: "Activas" },
+  { key: "inactive", label: "Inactivas" },
 ];
 
 /**

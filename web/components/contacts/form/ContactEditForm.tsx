@@ -16,7 +16,7 @@ import {
   PANEL_CLOSE_CLS,
   PanelCloseIcon,
 } from "../shared/ContactPanelShell";
-import { contactToneVar } from "../shared/ContactHeaderBlock";
+import { contactToneStyle } from "../shared/ContactHeaderBlock";
 
 /** Re-exported so callers can keep importing it from the component they render; the
  *  shape itself lives in contactShared.ts because BOTH doors build it server-side. */
@@ -186,18 +186,16 @@ export function ContactEditForm({
     });
   };
 
-  const now = useMemo(() => new Date(), []);
 
   return (
     <ContactFormDrawer
       title={initial.displayName}
-      headerTone={contactToneVar({
+      headerToneStyle={contactToneStyle({
         displayName: initial.displayName,
         primaryIdentity: initial.phones[0] ?? initial.emails[0] ?? null,
       })}
       titleBlock={
         <ContactPanelHeader
-          now={now}
           closeAction={
             <button type="button" onClick={onClose} aria-label="Cerrar" className={PANEL_CLOSE_CLS}>
               <PanelCloseIcon />
@@ -211,11 +209,6 @@ export function ContactEditForm({
             consent: initial.consent,
             createdAt: initial.createdAt,
             activityCount: initial.activityCount,
-          }}
-          metrics={{
-            activityCount: initial.activityCount,
-            lastContactAt: initial.lastContactAt,
-            sourceChannel: initial.sourceChannel,
           }}
         />
       }

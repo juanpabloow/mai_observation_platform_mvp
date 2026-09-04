@@ -59,9 +59,13 @@ export function PanelCloseIcon() {
  * Footer buttons. `nowrap` on every one of them: these labels are long ("Guardar
  * cambios", "Add staff member") and a two-line button is the first thing that breaks
  * when a panel narrows.
+ *
+ * The primary is INK. Red is reserved for `Agendar cita` and two other markers — see
+ * the note on --ink in globals.css — so "save this form" is deliberately the same
+ * colour as "create a contact" and every other primary in the app.
  */
 export const BTN_PRIMARY =
-  "inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md bg-brand px-3.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-45";
+  "inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md bg-ink px-3.5 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-45";
 export const BTN_SECONDARY =
   "inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md border border-line-strong bg-surface px-3 text-sm text-foreground transition-colors hover:bg-subtle disabled:cursor-not-allowed disabled:opacity-45";
 export const BTN_QUIET =
@@ -75,7 +79,7 @@ export const BTN_DANGER =
  * labels, which is what makes the thing you most often do here unmissable.
  */
 export const ACT_PRIMARY =
-  "inline-flex h-9 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-lg bg-brand px-3 text-xs font-medium text-white transition-opacity hover:opacity-90";
+  "inline-flex h-9 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-lg bg-ink px-3 text-xs font-semibold text-ink-fg transition-colors hover:bg-ink-hover";
 export const ACT_SECONDARY =
   "inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-line-strong bg-surface px-3 text-xs transition-colors hover:bg-hover";
 

@@ -126,3 +126,35 @@ export function statusBadgeClasses(status: string): string {
       return `${base} bg-subtle text-muted ring-line`;
   }
 }
+
+/**
+ * COMPACT relative age — "hace 2 h", "hace 18 m", "hace 4 d", "hace 3 sem".
+ *
+ * A second relative formatter beside `relativeAge` in lib/contactForm.ts, and
+ * deliberately so: that one is prose for a duplicate-match card ("hace 6 meses"), this
+ * one is a TABLE CELL and a queue row, where the column is ~90px and the phrase has to
+ * survive beside a channel name. The redesign uses this shape in three places, so it is
+ * one function rather than three inline ternaries that drift.
+ *
+ * Units step at the point where the smaller one stops being informative: minutes up to
+ * an hour, hours up to a day, days up to a fortnight (a shop thinks in "hace 9 d"), then
+ * weeks, then months. No "hace 1 año" — at that range `hace 14 mes` is wrong-looking, so
+ * it degrades to years like the prose form.
+ */
+export function relativeAgeShort(from: Date | string, now: Date = new Date()): string {
+  const then = typeof from === "string" ? new Date(from) : from;
+  const secs = Math.max(0, Math.floor((now.getTime() - then.getTime()) / 1000));
+  if (secs < 60) return "ahora";
+  const mins = Math.floor(secs / 60);
+  if (mins < 60) return `hace ${mins} m`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24) return `hace ${hours} h`;
+  const days = Math.floor(hours / 24);
+  if (days < 14) return `hace ${days} d`;
+  const weeks = Math.floor(days / 7);
+  if (weeks < 9) return `hace ${weeks} sem`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `hace ${months} mes`;
+  const years = Math.floor(days / 365);
+  return years === 1 ? "hace 1 año" : `hace ${years} años`;
+}

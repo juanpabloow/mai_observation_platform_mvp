@@ -39,8 +39,12 @@ test('every roster card is a PageShell — no screen draws its own card twice', 
     assert.ok(!src.includes('rounded-table border border-line-strong bg-surface'), `${rel}: no hand-rolled table card`);
   }
   assert.ok(read(HEADER).includes('<PageShell grow={false}>'), 'the header card sizes to its content');
-  // The roster card GROWS (default) so the white surface continues under the last row.
-  assert.ok(/<PageShell>\s*\{\/\*/.test(read(TAB)), 'the roster card absorbs the leftover height');
+  // The roster card GROWS (grow defaults to true) so the white surface continues under the
+  // last row. It opts OUT of clipping because the filter row above the columns hosts the
+  // Service / Site popovers, and a card's overflow-hidden cuts an absolutely-positioned
+  // menu off at its edge — the same reason Contacts' table card does.
+  assert.ok(/<PageShell clip=\{false\}>/.test(read(TAB)), 'the roster card absorbs the leftover height');
+  assert.equal(/<PageShell grow=\{false\}[^>]*>\s*\{\/\* The column header/.test(read(TAB)), false, 'and is not pinned to its content');
 });
 
 test('the roster is three sibling cards in a row, not a drawer over a reserved lane', () => {
@@ -99,18 +103,39 @@ test('the detail panel is three zones: fixed header, FIXED tabs, one scrolling b
   assert.ok(!/overflow-y-auto[^"]*">\s*<div className="flex items-center gap-3.5 border-b/.test(src), 'tabs are not inside it');
 });
 
-test('the presence counts live in the title band as SummaryBit, from one definition', () => {
+test('the presence counts are CLICKABLE facet pills in the title band, from one primitive', () => {
   const src = stripComments(read(TAB));
   // They used to be a local `Legend` pushed to the right of the FILTER row — a smaller,
   // dimmer near-copy of the counters Contacts puts on the title line.
   assert.ok(!src.includes('function Legend('), 'the near-copy is gone, not left dead');
-  assert.equal(src.match(/<SummaryBit/g)?.length, 3, 'three counters, as before');
-  assert.ok(src.includes('tone="busy"'), 'and "with a client" keeps its purple');
+  // …then read-only `SummaryBit` counters above a `Status ▾` dropdown offering the SAME
+  // three buckets: the screen stated a number and made you open a menu to act on it. The
+  // counters are now the control, as Contacts' are.
+  assert.ok(src.includes('<FacetPills'), 'the roster counts through the shared pills');
+  assert.ok(src.includes('onPick={'), 'in client-side mode, since the roster is fully loaded');
+  for (const bucket of ['with_client', 'available', 'off_today']) {
+    assert.ok(src.includes(`key: "${bucket}"`), `${bucket} is a pill`);
+  }
+  // …and the dropdown that duplicated them is gone, so one filter cannot show two states.
+  assert.equal(/label="Status"/.test(src), false, 'the duplicate Status dropdown is gone');
+  // Counts must be over the WHOLE roster, never the filtered view, or clicking a pill
+  // would change the numbers beside it.
+  assert.ok(src.includes('props.members.reduce'), 'counts come from the full roster');
+  assert.equal(/counts = filtered\./.test(src), false, 'never from the filtered list');
   // ONE definition, shared. Contacts must not have kept a private copy.
   const primitives = read('web/components/ui/primitives.tsx');
-  assert.ok(primitives.includes('export function SummaryBit('), 'SummaryBit is a shared primitive');
-  assert.ok(!stripComments(read(CONTACTS)).includes('function SummaryBit('), 'Contacts imports it, not redeclares it');
-  assert.ok(read(CONTACTS).includes('SummaryBit'), 'and still uses it');
+  assert.ok(primitives.includes('export function FacetPills('), 'FacetPills is a shared primitive');
+  assert.ok(!stripComments(read(CONTACTS)).includes('function FacetPills('), 'Contacts does not redeclare it');
+  // Contacts no longer RENDERS SummaryBit, and that is the CRM rework rather than a
+  // regression (docs/ui-redesign-crm-inbox.md §2.2): its five counters became segmented
+  // FACET PILLS, where the number is a filter you click instead of a statistic you read
+  // and then act on separately. The counts come from the same `summarizeContacts` call.
+  const contactsSrc = read(CONTACTS);
+  assert.ok(contactsSrc.includes('<FacetPills'), 'Contacts counts through the facet pills instead');
+  assert.ok(
+    contactsSrc.includes('count: summary.new') && contactsSrc.includes('count: summary.unassigned'),
+    'and they are the same real counters, from the same summary',
+  );
 });
 
 test('the primary action sits in the control band, and the roster keeps its dashed row', () => {
@@ -125,9 +150,10 @@ test('the primary action sits in the control band, and the roster keeps its dash
     read('web/components/contacts/form/NewContactButton.tsx').includes('TOOLBAR_PRIMARY_CLS'),
     'and Contacts spends the same one',
   );
-  assert.ok(!stripComments(read(WORKSPACE)).includes('Add staff member'), 'the workspace no longer owns the button');
+  assert.ok(!stripComments(read(WORKSPACE)).includes('Agregar miembro'), 'the workspace no longer owns the button');
   // BOTH entry points survive — the dashed row is the "next empty row" of the list.
-  assert.equal(src.match(/\+ Add staff member/g)?.length, 2, 'button and dashed row both kept');
+  // Spanish now, like the rest of the CRM surfaces.
+  assert.equal(src.match(/\+ Agregar miembro/g)?.length, 2, 'button and dashed row both kept');
   assert.equal(src.match(/setCreating\(true\)/g)?.length, 2, 'and both open the same dialog');
   // The counter-and-effect handshake the moved button replaced.
   assert.ok(!src.includes('openCreate'), 'no counter prop, and so no setState in an effect');
@@ -135,14 +161,55 @@ test('the primary action sits in the control band, and the roster keeps its dash
 
 test('the roster still shows everything it showed before', () => {
   const src = read(TAB);
-  for (const label of ['Member', 'Presence', 'Today', 'Next', 'Search staff', 'with a client', 'available', 'off']) {
+  // SPANISH labels — the roster joined the rest of the CRM surfaces. The FACTS are what
+  // this case protects: every column and every presence bucket still shown.
+  for (const label of [
+    'Miembro',
+    'Presencia',
+    'Hoy',
+    'Siguiente',
+    'Buscar en el equipo',
+    'Con cliente',
+    'Disponibles',
+    'Sin turno',
+  ]) {
     assert.ok(src.includes(label), `${label} survived the re-layout`);
   }
-  for (const facet of ['Service', 'Site', 'Status']) assert.ok(src.includes(`label="${facet}"`), `${facet} facet kept`);
-  // The tabs and their count moved cards, not content: the count is now on the title.
+  // `Status` is no longer a dropdown — its buckets are the counted pills asserted above,
+  // and keeping both would let one filter show two active states. Service and Site stay:
+  // neither is expressible as a small fixed set of counted pills.
+  for (const facet of ['Service', 'Site']) assert.ok(src.includes(`label="${facet}"`), `${facet} facet kept`);
+  assert.equal(/label="Status"/.test(src), false, 'Status became the pills, not a second control');
+  // THE TAB STRIP IS GONE, and that is a removal rather than a move. Two of its three
+  // tabs were stubs rendering "Coming soon": Turnos needs a published-rota model (a barber
+  // has weekly `working_hours` today, not shifts) and Ausencias needs a request-and-approval
+  // flow on top of `schedule_exceptions`, which stores blocked time with no requester,
+  // state or decision. A tab that opens an empty panel spends a click to say the feature
+  // does not exist; the absence says it better.
   const ws = read(WORKSPACE);
-  for (const label of ['Staff', 'Shifts', 'Time off']) assert.ok(ws.includes(`label: "${label}"`), `${label} tab kept`);
-  assert.ok(ws.includes('count: staff ? staff.members.length : undefined'), 'the roster count is on the title band');
+  // Checked against the CODE, not the comments: the doc block above the component explains
+  // what was removed and names the stubs, so a raw substring search finds its own
+  // explanation and fails.
+  const wsCode = stripComments(ws);
+  assert.equal(/role="tablist"/.test(wsCode), false, 'no tab strip on the roster screen');
+  for (const stub of ['Turnos', 'Ausencias', 'Coming soon']) {
+    assert.equal(wsCode.includes(stub), false, `${stub} is gone, not hidden`);
+  }
+  // …and dropping it made this a SERVER component: the active tab was its only state.
+  assert.equal(/^"use client"/.test(ws), false, 'the workspace no longer needs to be a client component');
+  assert.equal(/useState/.test(ws), false, 'because it holds no state');
+  // The screen still names itself — as a real heading, since there is no active tab to
+  // carry the name any more.
+  assert.ok(ws.includes('title: "Equipo"'), 'the screen keeps its title');
+  assert.ok(read(HEADER).includes('<h1'), 'and it is a heading, not a styled span');
+  assert.equal(/sr-only/.test(read(HEADER)), false, 'a visible one');
+  // THE COUNT LEFT THE TITLE BAND, and the scope line with it — the title row is now one
+  // clean line (name, search, primary) like Contacts'. Neither fact is lost: the number is
+  // the "Todos N" facet pill in the list card, one row down and clickable, and the client
+  // is named by the breadcrumb on every screen.
+  assert.equal(/count:/.test(ws), false, 'no count chip on the title');
+  assert.equal(/context:/.test(ws), false, 'and no scope line');
+  assert.ok(read(TAB).includes('count: props.members.length'), 'the number is the "Todos" pill instead');
 });
 
 /**
@@ -182,11 +249,18 @@ test('the metric strip is ONE divided box on both screens, from one primitive', 
   const primitives = read(PRIMITIVES);
   assert.ok(primitives.includes('export function MetricBox'), 'MetricBox is a shared primitive');
   assert.ok(primitives.includes('export function MetricCell'), 'so is the cell');
-  // BOTH screens compose it — the contact header strip and the roster's four KPIs.
-  for (const rel of [TAB, 'web/components/contacts/shared/ContactHeaderBlock.tsx']) {
-    assert.ok(stripComments(read(rel)).includes('<MetricBox'), `${rel} composes MetricBox`);
-  }
-  // The contact panel kept a private MetricCell before this; one definition only.
+  // The ROSTER composes it — its four KPIs. The contact panel no longer does: its
+  // CITAS / ÚLTIMA / CANAL strip is gone (the artboard has none, and each of the three was
+  // restated within 200px of it — see the contacts contract). The primitive stays because
+  // the roster genuinely uses it, not "in case".
+  assert.ok(stripComments(read(TAB)).includes('<MetricBox'), `${TAB} composes MetricBox`);
+  assert.equal(
+    /<MetricBox/.test(stripComments(read('web/components/contacts/shared/ContactHeaderBlock.tsx'))),
+    false,
+    'the contact header no longer carries a metric strip',
+  );
+  // Wherever it IS used, there must be exactly one definition — the panel kept a private
+  // MetricCell before this.
   const defs = ['web/components/contacts/shared/ContactHeaderBlock.tsx', TAB].filter((rel) =>
     /function MetricCell\(/.test(read(rel)),
   );
@@ -203,7 +277,9 @@ test("the panel header is an introduction, not an action bar", () => {
   // The per-person wash, from the SAME tone helper the avatar hashes on — two seeds
   // would mean a teal disc on a purple header.
   assert.ok(src.includes('u-contact-wash'), 'the header carries the tone wash');
-  assert.ok(src.includes('avatarToneVar(member.name)'), 'and the tone is this person\'s own');
+  // The discs became two-tone gradient SPHERES, so the wash fades the same PAIR — one
+  // stop would let the header and the avatar above it disagree.
+  assert.ok(src.includes('avatarToneStyle(member.name)'), 'and the tone is this person\'s own');
   assert.ok(src.includes('avatarColor(member.name)'), 'the same seed as the avatar');
   assert.equal(src.includes('bg-panel-hero'), false, 'no third fill inside a two-fill panel');
   // Actions in their OWN row, in the contact panel's proportion: primary takes the
@@ -211,11 +287,15 @@ test("the panel header is an introduction, not an action bar", () => {
   // The shared header-action primary, filling the row. There is no Edit button beside it
   // any more: see the single-write-path test below.
   assert.ok(src.includes('className={ACT_PRIMARY}'), 'primary fills the row');
+  // ACT_PRIMARY is INK now, not brand red. The CRM rework spends red on the active nav
+  // item, `Agendar cita`, and the "a human is handling this" marker, and nothing else —
+  // see the note on --ink in globals.css. The PROPORTION this test is really about
+  // (primary takes the leftover width, secondaries size to their labels) is unchanged.
   assert.ok(
     read('web/components/ui/panelChrome.tsx').includes(
-      'inline-flex h-9 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-lg bg-brand',
+      'inline-flex h-9 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-lg bg-ink',
     ),
-    'and ACT_PRIMARY is the proportion the contact panel uses',
+    'and ACT_PRIMARY is the proportion the roster uses',
   );
   // The quiet close control both panels share, in place of a bordered ✕ box. Scoped to
   // the CLOSE control: the inline ✕ that removes a skill chip or a time range is a

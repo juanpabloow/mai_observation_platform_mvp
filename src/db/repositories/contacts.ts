@@ -92,6 +92,23 @@ export interface ContactListItem extends ContactRow {
   open_task_count: number;
   /** Of those, the ones whose due_at is in the past. */
   overdue_task_count: number;
+  /**
+   * Appointments this contact did not show up for. Distinct from `cancelled`: a
+   * cancellation is a message, a no-show is a cost, and the redesign's client panel
+   * surfaces it beside the visit count precisely so the two are never conflated.
+   */
+  no_show_count: number;
+  /**
+   * The channel we would REACH them on — their stated preference when they have one,
+   * else the kind of their most recently added identity.
+   *
+   * Deliberately not the same field as `channel`, which is how they first ARRIVED
+   * ('walk-in', 'referral', 'imported') and never changes. The contacts table shows
+   * both, in the `Origen` and `Última interacción` columns, and they legitimately
+   * differ: someone referred by a friend who now messages on Instagram is
+   * `channel: 'referral'` and `last_channel: 'instagram'`.
+   */
+  last_channel: string | null;
 }
 
 /** The Tasks facet on the contacts list. */
@@ -118,6 +135,8 @@ export interface ListContactsResult {
   items: ContactListItem[];
   /** Opaque keyset cursor for the NEXT page, or null when this is the last page. */
   nextCursor: string | null;
+  /** How many rows match the filters — only present when `withTotal` was set. */
+  total?: number;
 }
 
 /**
@@ -179,6 +198,23 @@ export async function listContacts(
     clientId?: string | null;
     /** Opaque cursor from a previous result's nextCursor. Malformed → ignored. */
     cursor?: string | null;
+    /**
+     * Zero-based OFFSET, for the redesign's numbered pagination.
+     *
+     * Mutually exclusive with `cursor` — passing both is a caller bug, and `cursor`
+     * wins so an existing keyset caller can never be silently re-paged. The trade
+     * against the cursor is real and deliberate: offset paging can skip or repeat a
+     * row if the set changes while someone is on page 3. For a contacts book that
+     * changes a few times an hour that is acceptable and page NUMBERS are worth more;
+     * for the executions log it is not, which is why that list keeps its cursor.
+     */
+    offset?: number;
+    /**
+     * Also return how many rows match, so the caller can render `Mostrando 1–15 de
+     * 312` and a page count. Off by default because it costs a second COUNT over the
+     * same predicate set, and the keyset callers do not need it.
+     */
+    withTotal?: boolean;
   } = {},
 ): Promise<ListContactsResult> {
   const pageSize = Math.min(Math.max(opts.limit ?? 50, 1), 200);
@@ -221,6 +257,9 @@ export async function listContacts(
     where.push(`(${clauses.join(' OR ')})`);
   }
   const cursor = decodeContactCursor(opts.cursor);
+  // A keyset caller must never be silently re-paged by an offset it did not intend, so
+  // the cursor takes precedence and the offset is dropped when both arrive.
+  const offset = cursor ? 0 : Math.max(0, Math.trunc(opts.offset ?? 0));
   if (cursor) {
     params.push(cursor.ts);
     const tsIdx = params.length;
@@ -229,6 +268,11 @@ export async function listContacts(
   }
   params.push(pageSize + 1);
   const limitIdx = params.length;
+  // Bound, not interpolated — `offset` is already clamped to a non-negative integer
+  // above, but every other value in this query is a parameter and a lone `${}` in the
+  // SQL is exactly the pattern that stops being safe the day someone widens the type.
+  params.push(offset);
+  const offsetIdx = params.length;
   // READ-SIDE CLIENT DEFENSE on the aggregates: appointment counts join on
   // contact_id AND client_id (a mislinked cross-client appointment never counts),
   // and last_conversation_at only considers conversations whose CANONICAL
@@ -245,6 +289,11 @@ export async function listContacts(
             a.next_appointment_at,
             COALESCE(t.open_count, 0)::int AS open_task_count,
             COALESCE(t.overdue_count, 0)::int AS overdue_task_count,
+            COALESCE(a.no_show_count, 0)::int AS no_show_count,
+            -- The channel we'd REACH them on: their stated preference, else the kind of
+            -- their most recent identity. COALESCE and not a join order, so a contact
+            -- with a preference but no identities still resolves.
+            COALESCE(c.preferred_channel, ident.last_kind) AS last_channel,
             conv.last_conversation_at,
             -- Microsecond-precise cursor key (a JS Date would drop precision; see codec).
             to_char(c.last_contact_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts
@@ -257,6 +306,7 @@ export async function listContacts(
          SELECT contact_id, client_id,
                 COUNT(*)::int AS appointment_count,
                 (COUNT(*) FILTER (WHERE status = 'completed'))::int AS completed_count,
+                (COUNT(*) FILTER (WHERE status = 'no_show'))::int AS no_show_count,
                 MIN(start_at) FILTER (WHERE status IN ('scheduled','confirmed') AND start_at >= now()) AS next_appointment_at,
                 MAX(start_at) FILTER (WHERE status = 'completed' AND start_at <= now()) AS last_visit_at,
                 -- mode() ignores NULLs, so the CASE restricts the vote to completed
@@ -280,6 +330,17 @@ export async function listContacts(
           WHERE tenant_id = $1 AND status = 'open'
           GROUP BY contact_id, client_id
        ) t ON t.contact_id = c.id AND t.client_id = c.client_id
+       -- The most recently added identity's KIND, as one grouped pass over the spine.
+       -- DISTINCT ON inside a grouped subquery rather than a LATERAL per row: this list
+       -- pages 50 at a time and a correlated lookup here is the difference between one
+       -- index scan and fifty.
+       LEFT JOIN (
+         SELECT DISTINCT ON (contact_id, client_id)
+                contact_id, client_id, kind AS last_kind
+           FROM contact_identities
+          WHERE tenant_id = $1
+          ORDER BY contact_id, client_id, created_at DESC, id DESC
+       ) ident ON ident.contact_id = c.id AND ident.client_id = c.client_id
        LEFT JOIN (
          SELECT co.contact_id, cw.client_id,
                 MAX(COALESCE(co.last_message_at, co.updated_at)) AS last_conversation_at
@@ -295,17 +356,50 @@ export async function listContacts(
        ) conv ON conv.contact_id = c.id AND conv.client_id = c.client_id
       WHERE ${where.join(' AND ')}
       ORDER BY c.last_contact_at DESC, c.id DESC
-      LIMIT $${limitIdx}`,
+      LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
     params,
   );
   const hasMore = r.rows.length > pageSize;
   const kept = hasMore ? r.rows.slice(0, pageSize) : r.rows;
   const last = kept[kept.length - 1];
   const nextCursor = hasMore && last ? encodeContactCursor(last.cursor_ts, last.id) : null;
+
+  // THE TOTAL, for numbered pagination. It re-derives the same WHERE from the same
+  // params rather than counting a second, hand-written predicate set — two copies of
+  // "which contacts match" is how a page count starts disagreeing with its own list.
+  //
+  // The `t` aggregate is joined because the Tasks facet filters ON it; the appointment,
+  // identity and conversation rollups are NOT, because nothing in `where` reads them,
+  // and joining them here would make the count several times more expensive than the
+  // question deserves. The cursor predicate is excluded for the same reason it must be:
+  // a total is about the whole filtered set, not the page's remainder.
+  let total: number | undefined;
+  if (opts.withTotal) {
+    const countWhere = where.filter((w) => !w.startsWith('(c.last_contact_at, c.id) <'));
+    const cr = await query<{ n: string }>(
+      `SELECT COUNT(*)::text AS n
+         FROM contacts c
+         LEFT JOIN (
+           SELECT contact_id, client_id,
+                  COUNT(*)::int AS open_count,
+                  (COUNT(*) FILTER (WHERE due_at IS NOT NULL AND due_at < now()))::int AS overdue_count
+             FROM crm_tasks
+            WHERE tenant_id = $1 AND status = 'open'
+            GROUP BY contact_id, client_id
+         ) t ON t.contact_id = c.id AND t.client_id = c.client_id
+        WHERE ${countWhere.join(' AND ')}`,
+      // Only the params the surviving predicates actually reference. The cursor pushes
+      // its two values LAST before the limit/offset pair, so dropping the tail is safe
+      // precisely because of that ordering — asserted by the slice length below.
+      params.slice(0, cursor ? params.length - 4 : params.length - 2),
+    );
+    total = Number(cr.rows[0]?.n ?? 0);
+  }
+
   // `kept` rows carry the internal cursor_ts; it never reaches the client (the page
   // reads named fields), and `ContactListItem & {cursor_ts}` is assignable to the
   // ContactListItem[] contract.
-  return { items: kept, nextCursor };
+  return { items: kept, nextCursor, total };
 }
 
 /**

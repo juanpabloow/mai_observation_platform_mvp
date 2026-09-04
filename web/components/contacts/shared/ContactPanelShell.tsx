@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type ReactNode } from "react";
-import { ContactHeaderBlock, ContactMetrics, type ContactHeaderFacts, type ContactMetricFacts } from "./ContactHeaderBlock";
+import { ContactHeaderBlock, type ContactHeaderFacts } from "./ContactHeaderBlock";
 import { PANEL_FRAME } from "@/components/ui/panelChrome";
 
 /**
@@ -67,7 +67,7 @@ export const CONTACT_PANEL_REGION = "relative min-h-0 flex-col";
 
 export function ContactPanelShell({
   header,
-  headerTone,
+  headerToneStyle,
   subheader,
   banner,
   footer,
@@ -77,15 +77,26 @@ export function ContactPanelShell({
   /** The header's CONTENT (see ContactPanelHeader); the chrome around it is ours. */
   header: ReactNode;
   /**
-   * The CONTACT'S own tone (see contactToneVar), painted as a faint vertical wash
+   * The CONTACT'S own tone pair (see contactToneStyle), painted as a faint vertical wash
    * behind the header. Omitted where there is no contact yet — the create form has
    * nobody to be the colour of.
    */
-  headerTone?: string;
+  headerToneStyle?: Record<string, string>;
   /** Edge-to-edge strip under the header — the quick view's tab bar. */
   subheader?: ReactNode;
   banner?: ReactNode;
-  /** Omitted by the quick view: a surface that saves nothing has no footer. */
+  /**
+   * The fixed bottom strip.
+   *
+   * The rule used to be "a surface that saves nothing has no footer", which is still true
+   * of SAVE BARS: the presence of one is what tells an operator they are changing things
+   * rather than reading them, so the quick view must never grow one.
+   *
+   * An ALERT strip is a different object and the quick view does carry one (artboard 22a):
+   * a dot, a sentence naming something unresolved about this contact, and the action that
+   * resolves it. It sits in the same slot because it has the same job — stay put while the
+   * body scrolls — but it asserts nothing about whether the panel writes.
+   */
   footer?: ReactNode;
   /**
    * Change this to send the body back to the top — the quick view passes its active
@@ -106,8 +117,8 @@ export function ContactPanelShell({
       <div
         // The wash sits on the header only, and fades out downward, so the body below
         // stays a neutral reading surface.
-        style={headerTone ? ({ ["--tone" as string]: headerTone } as React.CSSProperties) : undefined}
-        className={`shrink-0 border-b border-line bg-surface px-4 pb-3 pt-3.5 ${headerTone ? "u-contact-wash" : ""}`}
+        style={headerToneStyle as React.CSSProperties | undefined}
+        className={`shrink-0 border-b border-line bg-surface px-4 pb-3 pt-3.5 ${headerToneStyle ? "u-contact-wash" : ""}`}
       >
         {header}
       </div>
@@ -132,23 +143,33 @@ export function ContactPanelShell({
  */
 export function ContactPanelHeader({
   facts,
-  metrics,
-  now,
   closeAction,
+  recordAction,
   extra,
 }: {
   facts: ContactHeaderFacts;
   /** Null only when the contact could not be re-resolved under this client. */
-  metrics: ContactMetricFacts | null;
-  now: Date;
   closeAction?: ReactNode;
-  /** Rendered under the metrics — the quick view's Agendar / Abrir ficha / Editar. */
+  /** The quiet `Ficha ↗` link on the name line — see ContactHeaderBlock. */
+  recordAction?: ReactNode;
+  /** Rendered under the metrics. Now empty on the contacts panel: the redesign moved
+   *  its three buttons onto the name line and the tab row (see ContactSidePanel). */
   extra?: ReactNode;
 }) {
   return (
     <div className="flex flex-col gap-2.5">
-      <ContactHeaderBlock facts={facts} actions={closeAction} />
-      {metrics ? <ContactMetrics facts={metrics} now={now} /> : null}
+      <ContactHeaderBlock facts={facts} actions={closeAction} recordAction={recordAction} />
+      {/*
+        NO METRIC STRIP. It was a three-tile band — CITAS / ÚLTIMA / CANAL — and the
+        artboard (22a) has none, for a good reason: every one of the three is restated
+        within 200px of it. CITAS is now "· 14 citas" on the name line, CANAL is "Canal
+        preferido" in Mensajería, and ÚLTIMA is derivable from the appointments one tab
+        away. It spent ~56px of a 380px panel saying what the panel already said.
+
+        `ContactMetrics` went with it rather than being kept "in case": this shell was its
+        only caller, and a component nothing renders is dead code regardless of which
+        surface might theoretically want it back.
+      */}
       {extra}
     </div>
   );

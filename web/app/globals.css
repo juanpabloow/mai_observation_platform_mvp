@@ -21,9 +21,10 @@
   /* CANVAS vs SURFACE (operative-tool layering). The canvas is the very soft
      gray/white page behind everything; surfaces are the white panels that sit on
      it, separated by 1px cool hairlines — never by shadows or gradients. */
-  --background: #eff1f5; /* app canvas — deliberately DARKER than the spec's
-                            #f8f9fb, which was indistinguishable from the white
-                            panel and made the floating card look full-bleed. */
+  --background: #eff0f3; /* app canvas — the artboard's value. Deliberately DARKER
+                            than the earlier #f8f9fb, which was indistinguishable
+                            from the white panel and made the floating card look
+                            full-bleed. */
   --surface: #ffffff; /* panels, tables, cards, drawers */
   --chip: #edeff3; /* neutral chip / inset fill */
   --foreground: #12151b; /* ink */
@@ -65,6 +66,55 @@
      Deliberately tiny (1px, 4% black): it separates a card from the canvas without
      reading as a floating dialog. */
   --shadow-card: 0 1px 2px rgba(16, 20, 28, 0.04);
+  /*
+   * THE SECOND elevation, and the only other one.
+   *
+   * `--shadow-card` is the 1px lift that separates a card from the canvas. This is the
+   * lift for something that FLOATS OVER content: a dropdown, and the composer, which the
+   * design deliberately raises off the transcript (§3.4) so it reads as docked over the
+   * conversation rather than as a box on a panel.
+   *
+   * Two tokens rather than one because the two say different things, and two rather than
+   * three because "elevation is a system decision, not a value re-typed per screen" is
+   * the rule this file has always enforced — and a per-component `shadow-[…]` is exactly
+   * what the contract test forbids.
+   */
+  --shadow-float: 0 6px 16px rgba(18, 21, 27, 0.08), 0 1px 2px rgba(18, 21, 27, 0.05);
+  /*
+   * The one TINTED lift, on `Agendar cita`. It is the single red-tinted shadow in the
+   * system, which is what makes the one action that books a customer in visibly a
+   * different kind of object from every other button.
+   */
+  --shadow-book: 0 1px 2px rgba(230, 10, 47, 0.3);
+  /*
+   * INK — the design's PRIMARY action colour, and the biggest single departure from
+   * what shipped before it.
+   *
+   * The redesign spends red on exactly three things: the active nav item, `Agendar
+   * cita` (the one primary action inside a detail PANEL), and the "a human is
+   * handling this" marker. Everything else that used to be red — `Nuevo contacto`,
+   * `Devolver al bot`, `Enviar`, the active facet pill, the current pagination page —
+   * is ink. Red stopped being "the primary button colour" and went back to being a
+   * signal; ink is what a primary button is.
+   *
+   * It is NOT --foreground. Body text and a filled button that must clear AA against
+   * white text are two different jobs, and tying them together is how a text-colour
+   * tweak silently restyles every button on the screen.
+   */
+  --ink: #12151b; /* white on this is 16.4:1 */
+  --ink-hover: #2a2e36;
+  --ink-fg: #ffffff;
+  /* The inner rule INSIDE a card — table row separators, section dividers, the line
+     under a tab row. A step lighter than --line, which is the card's own edge: at one
+     value the rows read as heavy as the card border and the table looked gridded. */
+  --line-soft: #f1f2f5;
+  /* The table HEAD's bottom rule and the row separator, from the artboard. */
+  --line-row: #eeeff2;
+  /* The VISITS meter in the contacts table: a neutral track and a grey fill. It is a
+     magnitude, not a state, so it is deliberately not tinted — a red or green bar
+     would imply good/bad about a visit count that means neither. */
+  --meter-track: #eeeff2;
+  --meter-fill: #8792a6;
 }
 
 .dark {
@@ -100,6 +150,19 @@
   /* Darker and slightly stronger: 4% black over a #101012 canvas is invisible, so the
      dark theme carries the elevation itself rather than inheriting a no-op. */
   --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
+  /* Deeper on near-black: an 8% black lift over a #101012 canvas is invisible, so the
+     dark theme carries the float itself rather than inheriting a no-op. */
+  --shadow-float: 0 8px 20px rgba(0, 0, 0, 0.5), 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow-book: 0 1px 2px rgba(242, 85, 90, 0.3);
+  /* On near-black an ink button would vanish into the canvas, so the primary INVERTS:
+     a light fill with dark text. Same role, same component, opposite ends of the ramp. */
+  --ink: #ededed;
+  --ink-hover: #ffffff;
+  --ink-fg: #101012;
+  --line-soft: rgba(255, 255, 255, 0.08);
+  --line-row: rgba(255, 255, 255, 0.07);
+  --meter-track: rgba(255, 255, 255, 0.1);
+  --meter-fill: #7c828f;
 }
 
 /*
@@ -121,29 +184,45 @@
 
 [data-sidebar-theme='black'] {
   /*
-   * The spec's cool dark rail (#141518–#1A1D24). We take the BLUEST end of that
-   * range so it also honours the navy picked earlier — near-black, but clearly
-   * cool beside the white panel. The cookie VALUE stays `black` so preferences
-   * saved before the repaint keep resolving; only the palette + label changed.
+   * A NEUTRAL near-black rail. It used to be #1A1D24 — the bluest end of the old spec's
+   * range, picked deliberately to read "cool beside the white panel". In practice that
+   * cool cast is what made the rail look NAVY rather than black, and beside a neutral
+   * white content card a blue-grey rail reads as another product's chrome.
+   *
+   * Every value here is now on the neutral axis (R=G=B), so the rail is a pure value step
+   * and nothing in it competes with the one hue the rail is allowed to spend: the red
+   * active row.
+   *
+   * The cookie VALUE stays `black` so preferences saved before this keep resolving.
+   *
+   * Contrast against the #1a1a1a fill, approximate: fg ~15.8:1, muted ~7.4:1 (AA for body
+   * text), section ~4.8:1 (AA for the 9.5px small-caps labels).
    */
-  --sidebar-bg: #1a1d24;
-  --sidebar-border: #262a33;
-  --sidebar-fg: #f5f6f8; /* ~14.7:1 on the fill */
-  --sidebar-muted: #a2a8b4; /* ~6.8:1 — AA for body text */
-  --sidebar-section: #7e8695; /* ~4.6:1 — AA for the small-caps section labels */
-  --sidebar-hover: var(--sidebar-hover-red);
+  --sidebar-bg: #1a1a1a;
+  --sidebar-border: #272727;
+  --sidebar-fg: #f5f5f5;
+  --sidebar-muted: #ababab;
+  --sidebar-section: #858585;
+  --sidebar-hover: var(--sidebar-hover-dark);
 }
 
 /*
- * On a DARK rail the hover is the brand red rather than a neutral lift — it makes
- * the row you're pointing at unmistakable against near-black. It is deliberately a
- * TINT, not the solid fill: the solid red is reserved for the ACTIVE row, so hover
- * and active stay tellable apart (hovering the active row doesn't make a second
- * row look current). Hovered labels switch to --sidebar-fg (#F4F4F5), which clears
- * AA against this tint.
+ * On a DARK rail the hover is a NEUTRAL warm lift — the design's #22262F.
+ *
+ * It used to be a dark RED (#7f1d1d), chosen as a tint so that hover and the solid-red
+ * ACTIVE row stayed tellable apart. They didn't, in practice: a hovered row and the
+ * current row read as two reds of similar weight, so the rail appeared to have two
+ * "you are here" marks and the eye had to work out which was which.
+ *
+ * The accent rule settles it. Red marks the active nav item; a colour on every row you
+ * merely sweep past is exactly the dilution that stops it meaning anything. Hover is a
+ * change of GROUND, and the hovered label lifts to --sidebar-fg, which is enough.
+ *
+ * Renamed from `--sidebar-hover-red`, because it is not red and a token whose name
+ * contradicts its value is how the next person reintroduces the bug.
  */
 :root {
-  --sidebar-hover-red: #7f1d1d; /* off-white on this is ~10:1 — comfortably AA */
+  --sidebar-hover-dark: #242424; /* neutral, like the rail it sits on; off-white ~13:1 */
   /*
    * The ACTIVE nav fill. Deliberately NOT --brand: that token is lifted in dark
    * mode (#f2555a) so red TEXT stays legible on near-black, which made the active
@@ -182,15 +261,18 @@
   /* The table HEAD band — a hair off the panel so the column labels read as a
      ledge over the rows rather than as a first row. */
   --thead-bg: #fafbfc;
-  --queue-bg: #eef0f4;
+  --queue-bg: #fafafb;
   /* The SELECTED conversation: a grey card on the white queue (the reference's
      #EEF0F5). The column is white, so the tint marks the one row you are reading
      rather than the whole list. */
   --queue-row-active: #eef0f5;
-  /* The INBOX's soft radius. One token for the chat bubbles, the composer, the
-     queue rows and the search field, so the whole surface curves by the same
-     amount — at the 4–8px global scale the thread read as a stack of boxes. */
-  --radius-bubble: 15px;
+  /* The INBOX's bubble radius — 16px, plus the TAIL. A bubble in this design is not
+     uniformly rounded: three corners take --radius-bubble and the one pointing at its
+     own speaker collapses to --radius-bubble-tail, which is what actually says who is
+     talking. Two tokens rather than four literals, so the customer's bottom-left and
+     the bot's bottom-right can never drift apart. */
+  --radius-bubble: 16px;
+  --radius-bubble-tail: 6px;
 }
 .dark {
   --service-purple: #8b7bd8;
@@ -324,27 +406,42 @@
 /*
  * ── Contact avatar palette ───────────────────────────────────────────────────
  * Eight tones, picked by hashing the contact's identifier (lib/avatarColor.ts), so
- * one person keeps one colour across the queue and the thread. Colour here is a
- * recognition aid, never a state — no meaning is encoded in which tone you get.
- *
- * COLOUR-REFACTOR (design "orbes de color"): each disc is now a 155° two-stop
- * GRADIENT rather than a flat fill — the `*-a` (saturated, top-left) → `*-b`
- * (lighter, bottom-right) pair renders in `.u-avatar-*` below. `--avatar-N` stays
- * defined as the SOLID anchor (the saturated `*-a` end) because avatarToneVar()
- * feeds it to the header wash (.u-contact-wash) — so the panel's tint keeps
- * agreeing with the disc beside it. The same eight serve both themes (a saturated
- * disc reads on a white panel and a near-black one). White initials sit centred on
- * the mid-tone; the disc is decoration, never the sole carrier of meaning.
+ * one person keeps one colour across the queue and the thread. Every value is a
+ * solid fill carrying WHITE text at >= 4.5:1, which is why the same eight work in
+ * both themes: a saturated disc reads the same on a white panel and a near-black
+ * one. Colour here is a recognition aid, never a state — no meaning is encoded in
+ * which tone you get.
  */
 :root {
-  --avatar-1-a: #10b981; --avatar-1-b: #84cc16; --avatar-1: var(--avatar-1-a); /* emerald → lime   */
-  --avatar-2-a: #0ea5e9; --avatar-2-b: #6366f1; --avatar-2: var(--avatar-2-a); /* sky → indigo     */
-  --avatar-3-a: #d946ef; --avatar-3-b: #8b5cf6; --avatar-3: var(--avatar-3-a); /* fuchsia → violet */
-  --avatar-4-a: #22c55e; --avatar-4-b: #a3e635; --avatar-4: var(--avatar-4-a); /* green → lime     */
-  --avatar-5-a: #f59e0b; --avatar-5-b: #ec4899; --avatar-5: var(--avatar-5-a); /* amber → pink     */
-  --avatar-6-a: #ec4899; --avatar-6-b: #fdba74; --avatar-6: var(--avatar-6-a); /* pink → peach     */
-  --avatar-7-a: #7c3aed; --avatar-7-b: #38bdf8; --avatar-7: var(--avatar-7-a); /* violet → sky     */
-  --avatar-8-a: #4f46e5; --avatar-8-b: #c084fc; --avatar-8: var(--avatar-8-a); /* indigo → purple  */
+  --avatar-1-a: #2e9c7f;
+  --avatar-1-b: #2f6fa8;
+  --avatar-2-a: #4e7bd0;
+  --avatar-2-b: #7e6bd6;
+  --avatar-3-a: #7e6bd6;
+  --avatar-3-b: #4e7bd0;
+  --avatar-4-a: #3f9d6b;
+  --avatar-4-b: #2f8fa8;
+  --avatar-5-a: #e0863f;
+  --avatar-5-b: #d0564e;
+  --avatar-6-a: #e0568c;
+  --avatar-6-b: #8e4bc4;
+  --avatar-7-a: #2f8fa8;
+  --avatar-7-b: #3f6bc4;
+  --avatar-8-a: #6b5bd0;
+  --avatar-8-b: #3f5bc4;
+  /*
+   * The SINGLE-tone alias. Anything that needs one colour rather than the pair — a dot,
+   * a border, an older consumer — reads `--avatar-N` and gets the disc's first stop, so
+   * it can never disagree with the sphere beside it.
+   */
+  --avatar-1: var(--avatar-1-a);
+  --avatar-2: var(--avatar-2-a);
+  --avatar-3: var(--avatar-3-a);
+  --avatar-4: var(--avatar-4-a);
+  --avatar-5: var(--avatar-5-a);
+  --avatar-6: var(--avatar-6-a);
+  --avatar-7: var(--avatar-7-a);
+  --avatar-8: var(--avatar-8-a);
 }
 
 /*
@@ -362,8 +459,9 @@
 .u-contact-wash {
   background-image: linear-gradient(
     180deg,
-    color-mix(in srgb, var(--tone, transparent) 10%, transparent) 0%,
-    color-mix(in srgb, var(--tone, transparent) 2%, transparent) 100%
+    color-mix(in srgb, var(--tone-a, var(--tone, transparent)) 10%, transparent) 0%,
+    color-mix(in srgb, var(--tone-b, var(--tone, transparent)) 3.5%, transparent) 60%,
+    transparent 100%
   );
 }
 
@@ -381,7 +479,7 @@
   /* THE TRANSCRIPT's own ground: a grey canvas, so the bubbles read as objects ON
      something rather than as tinted patches of the panel. This is what lets the
      customer bubble be WHITE (below) instead of a grey-on-grey near-miss. */
-  --thread-bg: #eff1f5;
+  --thread-bg: #edeef1;
   /* CUSTOMER (left) — WHITE on the grey transcript, outlined with the SAME hairline the
      rest of the app uses, so the bubble's edge and a panel's edge are one decision
      (--line). It was a light grey while the transcript was white; the two swapped
@@ -392,16 +490,28 @@
   /* BOT (right) — the BUSINESS side of the thread, so it is the dark end of the
      ramp rather than a second grey: at #dcdfe5 the bot and the customer sat within
      a few percent of each other and a glance couldn't tell who was speaking. */
-  --bubble-bot: #22262e;
-  --bubble-bot-border: #22262e;
-  --bubble-bot-fg: #f2f4f7;
+  --bubble-bot: #16181d;
+  --bubble-bot-border: #16181d;
+  --bubble-bot-fg: #f5f6f8;
+  /* The panel INSIDE a dark bot bubble that carries a structured payload (the offered
+     slots). A step up from the bubble so the options read as rows in a list, plus the
+     rule that separates the payload from the prose above it. */
+  --bubble-bot-inset: #262a31;
+  --bubble-bot-rule: #2e323a;
+  --bubble-bot-label: #8a93a3;
   /* HUMAN AGENT (right) — a faint BRAND TINT. A person answering sits on the business
      side but must not be mistaken for the bot, so it keeps the side and drops the dark
      fill. It used to be plain white, which worked while the customer bubble was grey;
      now that the customer is white, white-on-white would leave SIDE as the only cue.
      A 7% brand wash is enough to tell a colleague from the customer and is nowhere near
      the wall of solid red this replaced (four replies in a row read as errors). */
-  --bubble-agent: var(--brand-soft);
+  /* HUMAN AGENT (right) — WHITE with an INK edge. It sits on the business side but must
+     not be mistaken for the bot, so it keeps the side and drops the dark fill; the ink
+     border is what makes a colleague's reply as loud as the bot's without spending a
+     hue on it. It was a brand-red wash, which put a fourth colour in a thread that only
+     needs to answer "who said this". */
+  --bubble-agent: var(--bubble-in);
+  --bubble-agent-border: var(--ink);
   --bubble-agent-fg: var(--foreground);
 }
 .dark {
@@ -412,11 +522,15 @@
   --bubble-bot: #26292f;
   --bubble-bot-border: rgba(255, 255, 255, 0.17);
   --bubble-bot-fg: #eceef2;
-  --bubble-agent: var(--brand-soft);
+  --bubble-agent: var(--bubble-in);
+  --bubble-agent-border: var(--ink);
   --bubble-agent-fg: var(--foreground);
+  --bubble-bot-inset: #2f333b;
+  --bubble-bot-rule: rgba(255, 255, 255, 0.14);
+  --bubble-bot-label: #9aa2b1;
 }
 .dark {
-  --sidebar-hover: var(--sidebar-hover-red);
+  --sidebar-hover: var(--sidebar-hover-dark);
 }
 
 @theme inline {
@@ -434,21 +548,28 @@
   --color-closed-fg: var(--closed-fg);
   --color-hover: var(--hover);
   --radius-card: var(--radius-card);
-  /* Exposed as `rounded-bubble` — the inbox's single softness knob. */
+  /* Exposed as `rounded-bubble` / `rounded-bubble-tail` — see the note on the pair. */
   --radius-bubble: var(--radius-bubble);
+  --radius-bubble-tail: var(--radius-bubble-tail);
   /*
-   * TIGHT RADIUS SCALE (3–5px). Overriding the scale here re-tunes every existing
-   * rounded-* utility at once, which keeps the geometry consistent instead of
-   * leaving a trail of one-off overrides across the surfaces.
+   * THE RADIUS SCALE, retuned to the artboard. Overriding it here re-tunes every
+   * existing `rounded-*` utility at once, which keeps the geometry consistent instead
+   * of leaving a trail of one-off overrides across the surfaces.
+   *
+   * The design is deliberately NOT on a single radius — it steps by the size of the
+   * object: a 14px card, an 11px control, a 9px chip, a 7px badge. That ordering is
+   * the whole point, so the scale mirrors it rather than flattening it.
    */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px; /* the floating panel */
-  --radius-xl: 10px;
-  --radius-2xl: 12px;
-  /* `rounded-table` — the roster card sits 1px tighter than the header card above it
-     so the two do not read as one box split in half. */
-  --radius-table: 11px;
+  --radius-sm: 7px; /* badge, pagination cell, status chip */
+  --radius-md: 9px; /* chip, facet pill, secondary button */
+  --radius-lg: 11px; /* control — search shell, primary button */
+  --radius-xl: 14px; /* THE card / panel / composer */
+  --radius-2xl: 16px; /* message bubble (see --radius-bubble) */
+  /* `rounded-table` — the roster card now matches the card radius exactly. It used to
+     sit 1px tighter so the two cards did not read as one box split in half; the design
+     separates them with a 12px GAP on the canvas instead, which does that job better
+     and lets every card on a screen share one radius. */
+  --radius-table: 14px;
   --color-nav-active: var(--nav-active);
   --color-bubble-in: var(--bubble-in);
   --color-bubble-in-border: var(--bubble-in-border);
@@ -457,7 +578,20 @@
   --color-bubble-bot-border: var(--bubble-bot-border);
   --color-bubble-bot-fg: var(--bubble-bot-fg);
   --color-bubble-agent: var(--bubble-agent);
+  --color-bubble-agent-border: var(--bubble-agent-border);
   --color-bubble-agent-fg: var(--bubble-agent-fg);
+  --color-bubble-bot-inset: var(--bubble-bot-inset);
+  --color-bubble-bot-rule: var(--bubble-bot-rule);
+  --color-bubble-bot-label: var(--bubble-bot-label);
+  /* The design's PRIMARY — `bg-ink` / `text-ink-fg` / `hover:bg-ink-hover`. */
+  --color-ink: var(--ink);
+  --color-ink-hover: var(--ink-hover);
+  --color-ink-fg: var(--ink-fg);
+  /* Inner rules: `border-line-soft` (section/tab dividers), `border-line-row` (table). */
+  --color-line-soft: var(--line-soft);
+  --color-line-row: var(--line-row);
+  --color-meter-track: var(--meter-track);
+  --color-meter-fill: var(--meter-fill);
   --color-sidebar-bg: var(--sidebar-bg);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-fg: var(--sidebar-fg);
@@ -709,23 +843,38 @@ body {
    so Black recolors them without touching any table heading. */
 .u-th-sidebar {
   font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.625rem;
+  /* 9.5px / 0.12em — the design's rail label. Tracked out further than a table heading
+     on purpose: at this size the extra letter-spacing is what stops four uppercase
+     section names from reading as one grey smear down the rail. */
+  font-size: 0.59375rem;
   line-height: 1.2;
   font-weight: 500;
-  letter-spacing: 0.08em;
+  letter-spacing: 0.12em;
   text-transform: uppercase;
   color: var(--sidebar-section);
 }
 
 /* Table heading row: mono, uppercase, tracked-out, metadata gray. */
+/*
+ * THE small-label voice: table heads, metric-tile labels, panel titles.
+ *
+ * SENTENCE-CASE SANS at 600, not the mono uppercase it used to be. The CRM rework moved
+ * every table head and panel heading to this voice, and the reason is legibility at
+ * density: `ÚLTIMA INTERACCIÓN` tracked out to 0.08em is ~40% wider than "Última
+ * interacción" and competes with the content under it for the same column. Mono uppercase
+ * is now reserved for what it is good at — ids, timestamps, counts, and the structured
+ * labels inside a message payload.
+ *
+ * Changed HERE rather than per screen: this is the one definition every small label reads,
+ * so one edit moves them together. A per-screen version of the new voice is how three
+ * surfaces get converted and the fourth stays mono for a year.
+ */
 .u-th {
-  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
-  font-size: 0.625rem;
+  font-size: 0.6875rem;
   line-height: 1.2;
-  font-weight: 500;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--faint);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  color: var(--muted);
 }
 
 /* Selected / urgent row: a soft fill plus a 2px LEFT RULE (shape + color, so the
@@ -834,50 +983,73 @@ body {
   --appt-edge: color-mix(in srgb, var(--blocked-fg) 30%, transparent);
 }
 
-/* The eight contact-avatar tones. The component picks the class; the palette above
-   owns the values. COLOUR-REFACTOR: each disc is a 155° gradient (the design's
-   "orbes de color"). A solid `background-color` anchor sits under the gradient as a
-   fallback tone, so a browser that can't paint the image still gets a saturated
-   disc rather than a transparent one. */
-.u-avatar-1 {
-  background-color: var(--avatar-1);
-  background-image: linear-gradient(155deg, var(--avatar-1-a), var(--avatar-1-b));
+/* The eight contact-avatar tones. The component picks the class; the palette
+   above owns the values. */
+/*
+ * THE eight contact-avatar tones — two-tone SPHERES, per the redesign's "avatares
+ * esfera". Each is a 135° gradient that holds its own colour for the first third,
+ * crosses over in the middle third, then holds the second colour: the artboard's
+ * `A 0%, A 34%, B 66%, B 100%` recipe. That plateau-crossover-plateau shape is what
+ * makes the disc read as a lit sphere rather than as a smooth two-colour wash.
+ *
+ * Both stops in every pair carry WHITE text at >= 4.5:1, which is why the same eight
+ * work on both themes: a saturated disc reads the same on a white panel and a
+ * near-black one.
+ *
+ * The pairs are ADJACENT hues, never complements. Eight discs in a table are scanned
+ * as a group, and a teal→orange sphere beside a blue→violet one reads as a status
+ * badge rather than as one person's colour. Colour here is a recognition aid, never a
+ * state — no meaning is encoded in which tone you get (see lib/avatarColor.ts).
+ */
+/*
+ * The disc RECIPE. The eight classes below only declare which PAIR they are; the
+ * gradient, the plateau-crossover-plateau stops and the white text live here once.
+ * `[class*="u-avatar-"]` rather than a list of eight selectors, so adding a ninth tone
+ * is one pair of custom properties and nothing else.
+ */
+[class*='u-avatar-'] {
+  background-image: linear-gradient(
+    135deg,
+    var(--tone-a) 0%,
+    var(--tone-a) 34%,
+    var(--tone-b) 66%,
+    var(--tone-b) 100%
+  );
+  background-color: var(--tone-a); /* fallback wherever a gradient cannot paint */
   color: #ffffff;
+}
+
+.u-avatar-1 {
+  --tone-a: var(--avatar-1-a);
+  --tone-b: var(--avatar-1-b);
 }
 .u-avatar-2 {
-  background-color: var(--avatar-2);
-  background-image: linear-gradient(155deg, var(--avatar-2-a), var(--avatar-2-b));
-  color: #ffffff;
+  --tone-a: var(--avatar-2-a);
+  --tone-b: var(--avatar-2-b);
 }
 .u-avatar-3 {
-  background-color: var(--avatar-3);
-  background-image: linear-gradient(155deg, var(--avatar-3-a), var(--avatar-3-b));
-  color: #ffffff;
+  --tone-a: var(--avatar-3-a);
+  --tone-b: var(--avatar-3-b);
 }
 .u-avatar-4 {
-  background-color: var(--avatar-4);
-  background-image: linear-gradient(155deg, var(--avatar-4-a), var(--avatar-4-b));
-  color: #ffffff;
+  --tone-a: var(--avatar-4-a);
+  --tone-b: var(--avatar-4-b);
 }
 .u-avatar-5 {
-  background-color: var(--avatar-5);
-  background-image: linear-gradient(155deg, var(--avatar-5-a), var(--avatar-5-b));
-  color: #ffffff;
+  --tone-a: var(--avatar-5-a);
+  --tone-b: var(--avatar-5-b);
 }
 .u-avatar-6 {
-  background-color: var(--avatar-6);
-  background-image: linear-gradient(155deg, var(--avatar-6-a), var(--avatar-6-b));
-  color: #ffffff;
+  --tone-a: var(--avatar-6-a);
+  --tone-b: var(--avatar-6-b);
 }
 .u-avatar-7 {
-  background-color: var(--avatar-7);
-  background-image: linear-gradient(155deg, var(--avatar-7-a), var(--avatar-7-b));
-  color: #ffffff;
+  --tone-a: var(--avatar-7-a);
+  --tone-b: var(--avatar-7-b);
 }
 .u-avatar-8 {
-  background-color: var(--avatar-8);
-  background-image: linear-gradient(155deg, var(--avatar-8-a), var(--avatar-8-b));
-  color: #ffffff;
+  --tone-a: var(--avatar-8-a);
+  --tone-b: var(--avatar-8-b);
 }
 
 /* A CLOSED column body: flat grey under a fine 45° hatch. Purely decorative — the

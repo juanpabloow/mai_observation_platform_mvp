@@ -1,11 +1,10 @@
 "use client";
 
 import type { ReactNode } from "react";
-import { Chip, MetricBox, MetricCell, StageChip } from "@/components/ui/primitives";
-import { contactSince, relativeAge } from "@/lib/contactForm";
-import { consentLabel, sourceLabel } from "@/lib/contactLabels";
+import { Chip, StageChip } from "@/components/ui/primitives";
+import { consentLabel } from "@/lib/contactLabels";
 import { Avatar } from "@/components/contacts/form/formPrimitives";
-import { avatarToneVar } from "@/lib/avatarColor";
+import { avatarToneStyle } from "@/lib/avatarColor";
 
 /**
  * The contact HEADER, shared by the list's quick view and the edit drawer.
@@ -30,6 +29,8 @@ import { avatarToneVar } from "@/lib/avatarColor";
  */
 
 export interface ContactHeaderFacts {
+  /** Completed visits — the "· 14 citas" beside the identity. */
+  visitCount?: number;
   displayName: string;
   /** The phone/email the reader recognises them by — shown under the name. */
   primaryIdentity: string | null;
@@ -50,28 +51,51 @@ export function contactToneSeed(facts: Pick<ContactHeaderFacts, "displayName" | 
   return facts.displayName?.trim() ? facts.displayName : (facts.primaryIdentity ?? facts.displayName);
 }
 
-/** The contact's tone as a CSS var, for the header wash. */
-export function contactToneVar(facts: Pick<ContactHeaderFacts, "displayName" | "primaryIdentity">): string {
-  return avatarToneVar(contactToneSeed(facts));
+/**
+ * The contact's tone as the inline style the header wash needs — BOTH stops of their
+ * avatar pair, because the discs are two-tone spheres and the wash fades the same
+ * gradient (see `avatarToneStyle`). It returns a style object rather than a single var
+ * so no caller has to know the `--tone-a` / `--tone-b` custom-property names.
+ */
+export function contactToneStyle(
+  facts: Pick<ContactHeaderFacts, "displayName" | "primaryIdentity">,
+): Record<string, string> {
+  return avatarToneStyle(contactToneSeed(facts));
 }
 
 /** Avatar + name + chips + the context line. One introduction, two surfaces. */
 export function ContactHeaderBlock({
   facts,
   actions,
+  recordAction,
   size = "regular",
 }: {
   facts: ContactHeaderFacts;
   /** Rendered at the right of the name row (the panel's close control). */
   actions?: ReactNode;
+  /**
+   * A quiet NAVIGATION affordance on the name line — the design's `Ficha ↗`
+   * (§2.5 / §3.5). Separate from `actions` because it is neither a control on this
+   * panel nor an action on the customer: it is a link out, and the design gives it the
+   * lightest weight available for exactly that reason.
+   */
+  recordAction?: ReactNode;
   /** `compact` trims the avatar for the 360px panel; the type scale is unchanged. */
   size?: "regular" | "compact";
 }) {
   const avatarSize = size === "compact" ? 34 : 38;
-  // ONE meta line, not three stacked ones. The activity count is deliberately absent:
-  // the ACTIVIDADES tile right below already states it, and printing the same number
-  // twice in a 360px header is what made this read as clutter.
-  const meta = [facts.primaryIdentity, contactSince(facts.createdAt)].filter(Boolean).join(" · ");
+  // ONE meta line: the identity, then how many times they have been in — the artboard's
+  // "+1 415 555 0134 · 14 citas".
+  //
+  // It used to print `contactSince` ("Contacto desde ago 2026") instead of the visit
+  // count, which truncated to "Contacto desde ago 2…" in a 380px panel and told an
+  // operator the least actionable fact available. When they first arrived is a record
+  // fact and lives in the Contacto section as "Cliente desde"; how often they come is
+  // what you want beside their name.
+  const visits = facts.visitCount ?? 0;
+  const meta = [facts.primaryIdentity, visits > 0 ? `${visits} ${visits === 1 ? "cita" : "citas"}` : null]
+    .filter(Boolean)
+    .join(" · ");
   return (
     <div className="flex w-full min-w-0 items-start gap-2.5">
       <Avatar name={facts.displayName} fallback={facts.primaryIdentity ?? facts.displayName} size={avatarSize} />
@@ -93,37 +117,9 @@ export function ContactHeaderBlock({
           {meta}
         </p>
       </div>
+      {recordAction ? <div className="shrink-0 self-start pt-1">{recordAction}</div> : null}
       {actions ? <div className="flex shrink-0 items-center gap-1.5">{actions}</div> : null}
     </div>
   );
 }
 
-export interface ContactMetricFacts {
-  activityCount: number;
-  /** ISO. */
-  lastContactAt: string;
-  /** The raw origin channel — humanised here, never printed as stored. */
-  sourceChannel: string;
-}
-
-/**
- * The three header metrics, as ONE divided box. Both surfaces show the SAME three, from
- * the same numbers: `activityCount` in particular comes from one loader, so the panel
- * and the drawer can never quote a different total for the same contact.
- */
-export function ContactMetrics({ facts, now }: { facts: ContactMetricFacts; now: Date }) {
-  return (
-    // ONE bordered box divided into three cells, not three separate tiles. The
-    // reference groups them because they are one reading — "how much, how recently, by
-    // which channel" — and three floating tiles read as three unrelated facts. The box
-    // and the cell are shared primitives: the staff panel draws its four KPIs from the
-    // same pair, so a metric strip means the same thing on both screens.
-    <MetricBox>
-      <MetricCell label="CITAS" value={String(facts.activityCount)} />
-      <MetricCell label="ÚLTIMA" value={relativeAge(facts.lastContactAt, now)} />
-      {/* The channel is a live route, so it carries a state dot; a count and a
-          timestamp are not states and get none. */}
-      <MetricCell label="CANAL" value={sourceLabel(facts.sourceChannel)} dot />
-    </MetricBox>
-  );
-}

@@ -272,6 +272,7 @@ export async function loadContactPanel(
     consent: contact.messaging_consent,
     visitCount: appointments.visitCount,
     noShowCount: appointments.noShowCount,
+    preferredChannel: contact.preferred_channel,
   };
 
   return {

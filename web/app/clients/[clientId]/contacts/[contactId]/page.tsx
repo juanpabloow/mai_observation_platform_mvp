@@ -11,7 +11,10 @@ import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
 import { getContactTimeline } from "@worker/db/repositories/contactTimeline.js";
 import { listTasksForContact } from "@worker/db/repositories/crmTasks.js";
 import { listTagsForContact, listTags } from "@worker/db/repositories/contactTags.js";
-import { listAppointmentsForContact } from "@worker/db/repositories/scheduling/appointments.js";
+import {
+  getContactValueProfile,
+  listAppointmentsForContact,
+} from "@worker/db/repositories/scheduling/appointments.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { loadContactEditPayload, summarizeAppointments, toTaskView } from "@/lib/contactPanel";
 import { contactDisplayName, type IdentityView } from "@/lib/contactShared";
@@ -43,7 +46,7 @@ export default async function ClientContactDetailPage({
   const contact = await getContactById(tenantId, contactId, client.id);
   if (!contact) notFound();
 
-  const [identities, fieldDefs, members, timeline, openTasks, attachedTags, tagCatalogue, appts, conversations, schedulingEnabled, candidates, editPayload] =
+  const [identities, fieldDefs, members, timeline, openTasks, attachedTags, tagCatalogue, appts, conversations, schedulingEnabled, candidates, editPayload, valueProfile] =
     await Promise.all([
       listIdentitiesForContact(tenantId, client.id, contactId),
       listFieldDefinitions(tenantId, client.id, { enabledOnly: true }),
@@ -60,6 +63,10 @@ export default async function ClientContactDetailPage({
       // The whole-contact edit payload, from the SAME loader the list's customer panel
       // uses — one shape, so the two doors into editing cannot drift apart.
       loadContactEditPayload(tenantId, client.id, contactId, { userId: scope.userId, isFullAccess: fullAccess }),
+      // The record's "Valor del cliente" + "Preferencias" cards. Null for a contact who
+      // has never completed a visit, which those cards render as their empty state — the
+      // alternative would be printing "$0" at somebody who simply has not come in yet.
+      getContactValueProfile(tenantId, client.id, contactId),
     ]);
 
   const identityViews: IdentityView[] = identities.map((i) => ({ kind: i.kind, value: i.value, label: i.label }));
@@ -100,7 +107,31 @@ export default async function ClientContactDetailPage({
           consent: contact.messaging_consent,
           visitCount: appointments.visitCount,
           noShowCount: appointments.noShowCount,
+          preferredChannel: contact.preferred_channel,
         }}
+        // Derived commercial facts (SUM/AVG/mode over completed appointments) — see
+        // getContactValueProfile. Null for a contact who has never completed a visit.
+        valueProfile={
+          valueProfile
+            ? {
+                lifetimeValue: valueProfile.lifetime_value,
+                completedCount: valueProfile.completed_count,
+                averageTicket: valueProfile.average_ticket,
+                valuePercentile: valueProfile.value_percentile,
+                usualStaffName: valueProfile.usual_staff_name,
+                usualServiceName: valueProfile.usual_service_name,
+                avgDaysBetweenVisits: valueProfile.avg_days_between_visits,
+              }
+            : null
+        }
+        // The last COMPLETED visit — not last_contact_at, which a message also bumps. The
+        // header says "última hace 4 d" about the chair, not about the chat.
+        lastVisitAt={
+          appointments.past.reduce<string | null>(
+            (latest, a) => (latest === null || a.startAt > latest ? a.startAt : latest),
+            null,
+          )
+        }
         identities={identityViews}
         candidates={candidates.map((c) => ({
           id: c.id,

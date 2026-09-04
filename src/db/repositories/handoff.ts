@@ -590,6 +590,15 @@ export interface InboxConversationRow {
    *  name across clients. NULL for an unattributed conversation. */
   contact_name: string | null;
   contact_channel: string | null;
+  /**
+   * How many times this person has actually been in — completed appointments.
+   *
+   * The queue draws it INSIDE the avatar disc (docs/ui-redesign-crm-inbox.md §3.1), so an
+   * operator can tell a 14-visit regular from a brand-new lead before opening the thread.
+   * 0 for an unattributed conversation, which is honest: we do not know who they are, so
+   * we do not know that they have never been in.
+   */
+  contact_visit_count: number;
 }
 
 /**
@@ -601,7 +610,26 @@ export interface InboxConversationRow {
  * whichever expression carries the client in the calling query.
  */
 const contactLateral = (client: string): string => `
-  SELECT ct.name AS contact_name, ct.channel AS contact_channel
+  SELECT ct.name AS contact_name,
+         ct.channel AS contact_channel,
+         -- COMPLETED appointments — the number the queue prints in the avatar disc.
+         --
+         -- A correlated count rather than a grouped rollup, deliberately: this lateral
+         -- already resolves ONE contact per conversation row, so the aggregate rides an
+         -- index lookup that is happening anyway, and a queue page is tens of rows. The
+         -- contacts LIST does the opposite (one grouped pass) because it pages 25 people
+         -- at a time and cares about the whole matching set.
+         --
+         -- Scoped on client_id as well as contact_id: an appointment mislinked across
+         -- clients must not inflate a count in another client's queue.
+         COALESCE((
+           SELECT count(*)
+             FROM appointments ap
+            WHERE ap.tenant_id = ct.tenant_id
+              AND ap.contact_id = ct.id
+              AND ap.client_id = ct.client_id
+              AND ap.status = 'completed'
+         ), 0)::int AS contact_visit_count
     FROM contacts ct
    WHERE ct.id = c.contact_id
      AND ct.tenant_id = c.tenant_id
@@ -622,6 +650,7 @@ export interface InboxConversationDetail extends ConversationRow {
   /** Same client-scoped contact resolution as the list — see contactLateral. */
   contact_name: string | null;
   contact_channel: string | null;
+  contact_visit_count: number;
   /** The linked contact (conversations.contact_id) — nullable; returned by the SELECT c.*
    *  detail reads. Scoped by the canonical-workflow client, but the pointed-at contact is
    *  NOT guaranteed same-client, so a consumer must re-scope via getContactById(...,client). */
@@ -640,7 +669,7 @@ export async function getConversationForClient(
 ): Promise<InboxConversationDetail | null> {
   const r = await query<InboxConversationDetail>(
     `SELECT c.*, cw.workflow_name, u.name AS assigned_agent_name,
-            ct.contact_name, ct.contact_channel
+            ct.contact_name, ct.contact_channel, ct.contact_visit_count
        FROM conversations c
        JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON cw.client_id = $2
        LEFT JOIN LATERAL (${contactLateral('$2')}) ct ON true
@@ -709,7 +738,7 @@ export async function listConversationsForWorkflow(
        lm.sender AS last_message_sender,
        lm.content_type AS last_message_content_type,
        ps.pending_since,
-       ct.contact_name, ct.contact_channel,
+       ct.contact_name, ct.contact_channel, ct.contact_visit_count,
        COALESCE(c.last_user_message_at >= now() - make_interval(hours => $3::int), false) AS active
      FROM conversations c
      LEFT JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON true
@@ -760,7 +789,7 @@ export async function listConversationsForClient(
        lm.sender AS last_message_sender,
        lm.content_type AS last_message_content_type,
        ps.pending_since,
-       ct.contact_name, ct.contact_channel,
+       ct.contact_name, ct.contact_channel, ct.contact_visit_count,
        COALESCE(c.last_user_message_at >= now() - make_interval(hours => $3::int), false) AS active
      FROM conversations c
      JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON cw.client_id = $2
@@ -934,4 +963,80 @@ export async function countPendingForClient(tenantId: string, clientId: string):
     [tenantId, clientId],
   );
   return r.rows[0]?.count ?? 0;
+}
+
+/**
+ * SCHEDULING EVENTS that happened INSIDE a conversation.
+ *
+ * The thread already interleaves mode transitions ("Santiago entró al chat"). The
+ * redesign (docs/ui-redesign-crm-inbox.md §3.3) adds the other kind of turning point a
+ * reader needs in a booking thread: the appointment the conversation actually produced —
+ * "REAGENDADA POR EL BOT · Keratina movida a vie 7 ago, 4:00 PM con Paola · Ver en
+ * agenda ↗".
+ *
+ * NO NEW TABLE. `appointments.source_conversation_id` has always recorded which
+ * conversation booked an appointment, and `appointment_events` has always recorded what
+ * then happened to it. The thread simply never read across that link. This is the read.
+ *
+ * The event carries a SNAPSHOT of the appointment as it is now (service, time, staff)
+ * rather than as it was at the event: the strip's job is "click here to see the booking
+ * this thread produced", and a historical time would send the reader to an appointment
+ * that no longer matches the words beside the link. `detail` keeps whatever the writer
+ * recorded, for the events that need it.
+ *
+ * Client-scoped on the APPOINTMENT, not just the conversation: a mislinked
+ * cross-client appointment can never surface in another client's thread.
+ */
+export type ConversationSchedulingEventType = string;
+
+export interface ConversationSchedulingEventRow {
+  id: string;
+  appointment_id: string;
+  event_type: ConversationSchedulingEventType;
+  /** 'bot' | 'user' | 'system' — what the strip's label says did it. */
+  actor_type: string;
+  actor_name: string | null;
+  detail: unknown;
+  created_at: Date;
+  /** The appointment as it stands now. */
+  service_name: string | null;
+  start_at: Date;
+  staff_name: string | null;
+  status: string;
+  public_reference: string | null;
+}
+
+export async function listConversationSchedulingEvents(
+  tenantId: string,
+  clientId: string,
+  conversationId: string,
+): Promise<ConversationSchedulingEventRow[]> {
+  const r = await query<ConversationSchedulingEventRow>(
+    `SELECT e.id,
+            e.appointment_id,
+            e.event_type,
+            e.actor_type,
+            u.name AS actor_name,
+            e.detail,
+            e.created_at,
+            a.service_name_snapshot AS service_name,
+            a.start_at,
+            s.name AS staff_name,
+            a.status,
+            a.public_reference
+       FROM appointment_events e
+       JOIN appointments a
+         ON a.id = e.appointment_id
+        AND a.tenant_id = e.tenant_id
+        -- BOTH scopes on the appointment: the conversation link alone would let a
+        -- cross-client mislink surface in the wrong thread.
+        AND a.client_id = $2
+        AND a.source_conversation_id = $3
+       LEFT JOIN staff s ON s.id = a.staff_id AND s.tenant_id = e.tenant_id
+       LEFT JOIN "user" u ON u.id = e.actor_user_id
+      WHERE e.tenant_id = $1
+      ORDER BY e.created_at ASC, e.id ASC`,
+    [tenantId, clientId, conversationId],
+  );
+  return r.rows;
 }
