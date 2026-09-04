@@ -281,6 +281,8 @@ export function InboxThread({
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {/* Order matches the design (image 20): Ver ficha → Humano|Bot → close. */}
+          {headerExtra}
           <ThreadActions
             clientId={clientId}
             header={header}
@@ -288,7 +290,6 @@ export function InboxThread({
             viewerIsFullAccess={viewerIsFullAccess}
             onResult={onActionResult}
           />
-          {headerExtra}
           <button
             type="button"
             onClick={onClose}
