@@ -374,7 +374,7 @@ export function ContactsColumnsMenu({ visibleColumns }: { visibleColumns: Contac
  * is showing, so what downloads is what is on screen (filters, search and all) and the
  * browser owns the download. Nothing is held in memory here.
  */
-export function ContactsExportLink({ clientId }: { clientId: string }) {
+export function ContactsExportLink({ clientId, compact = false }: { clientId: string; compact?: boolean }) {
   const { searchParams } = useApply();
   const p = new URLSearchParams(searchParams.toString());
   // Paging and panel state are about the VIEW, not the result set — an export is the
@@ -384,12 +384,20 @@ export function ContactsExportLink({ clientId }: { clientId: string }) {
   return (
     <a
       href={`/api/crm/v1/contacts/export/${clientId}${qs ? `?${qs}` : ""}`}
-      className={GHOST_ACTION_CLS}
+      // Compact (detail panel open, frame 20f): the download arrow ALONE, so the toolbar
+      // stays on one line; the label returns at full width.
+      className={
+        compact
+          ? "inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-subtle hover:text-foreground"
+          : GHOST_ACTION_CLS
+      }
+      aria-label={compact ? "Exportar" : undefined}
+      title={compact ? "Exportar" : undefined}
       // A same-origin download; `download` lets the route's filename win.
       download
     >
       <ExportIcon />
-      Exportar
+      {compact ? null : "Exportar"}
     </a>
   );
 }
