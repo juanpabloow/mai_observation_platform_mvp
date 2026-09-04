@@ -16,7 +16,9 @@ export const SIDEBAR_THEME_COOKIE = 'sidebar-theme';
 export const SIDEBAR_THEMES = ['light', 'black'] as const;
 export type SidebarTheme = (typeof SIDEBAR_THEMES)[number];
 /** Light is the default: an unset, unknown or tampered cookie must never break the rail. */
-export const DEFAULT_SIDEBAR_THEME: SidebarTheme = 'light';
+// CRM Color Refactor: the design ships the DARK rail as the standard shell, so it is the
+// default now. Users who explicitly pick "Light" still get it — their cookie overrides this.
+export const DEFAULT_SIDEBAR_THEME: SidebarTheme = 'black';
 
 /**
  * What each option is CALLED in the menu. Split from the stored value on purpose:
