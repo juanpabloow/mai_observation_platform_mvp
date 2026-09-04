@@ -111,11 +111,11 @@ export function Chip({
  * cannot disagree — which is the point.
  */
 export function StageChip({ stage }: { stage: string }) {
-  //   customer → SOLID near-black pill ("Cliente" — the converted row is the one that
-  //              pops out of a dense table, matching the design's frame 20f);
+  //   active   → SOLID near-black pill (the engaged rows pop out of a dense table
+  //              without spending the brand red, which means urgency here);
   //   others   → OUTLINE pill on the neutral chip fill.
   const cls =
-    stage === "customer"
+    stage === "active"
       ? "border-transparent bg-foreground text-background"
       : stage === "archived"
         ? "border-line bg-transparent text-faint"

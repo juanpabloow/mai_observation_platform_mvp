@@ -2,7 +2,7 @@ import Link from "next/link";
 import type { ContactListItem, PreferredChannel } from "@worker/db/repositories/contacts.js";
 import { ContactAvatar } from "@/components/contacts/ContactAvatar";
 import { Chip, OwnerDisc, StackedCell, StageChip, VisitsMeter } from "@/components/ui/primitives";
-import { channelLabel, sourceLabel, stageLabel } from "@/lib/contactLabels";
+import { channelLabel, sourceLabel } from "@/lib/contactLabels";
 import type { ContactColumnKey } from "@/lib/contactColumns";
 import { formatStampFull, formatStampShort, relativeAgeShort } from "@/lib/format";
 
@@ -159,7 +159,7 @@ export function ContactsTable({
                     thing — it opens this contact's panel with the edit dialog already
                     up — so it lifts above the row's stretched link. */}
                 {c.email ? (
-                  <span className="truncate text-[0.6875rem] u-contact-email">{c.email}</span>
+                  <span className="truncate text-[0.6875rem] text-faint">{c.email}</span>
                 ) : (
                   <Link
                     href={hrefWith({ c: c.id, edit: "1" })}
@@ -267,13 +267,7 @@ function OptionalCell({
     case "channel":
       return <>{sourceLabel(c.channel)}</>;
     case "stage":
-      // Design frame 20f: only "Cliente" (customer) is a solid badge; the other stages
-      // read as quiet plain text rather than chips.
-      return c.stage === "customer" ? (
-        <StageChip stage={c.stage} />
-      ) : (
-        <span className="text-[0.8125rem] text-muted">{stageLabel(c.stage)}</span>
-      );
+      return <StageChip stage={c.stage} />;
     case "owner":
       return <>{c.assigned_to ? ownerName.get(c.assigned_to) ?? "—" : "—"}</>;
     case "nextAppt":

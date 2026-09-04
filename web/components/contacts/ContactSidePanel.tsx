@@ -10,16 +10,18 @@ import { NotesSection } from "@/components/contacts/shared/NotesSection";
 import { TagsSection } from "@/components/contacts/shared/TagsSection";
 import { ContactEditForm } from "@/components/contacts/form/ContactEditForm";
 import type { ContactEditPayload } from "@/lib/contactPanel";
-import { CRM_COPY, stageLabel } from "@/lib/contactLabels";
-import { Avatar, FormSection, IconCalendar, IconInternal, IconNote, IconPencil, IconTask } from "@/components/contacts/form/formPrimitives";
-import { PanelAlertStrip } from "@/components/ui/primitives";
+import { CRM_COPY } from "@/lib/contactLabels";
+import { FormSection, IconCalendar, IconInternal, IconNote, IconPencil, IconTask } from "@/components/contacts/form/formPrimitives";
+import { BOOK_CLS, PanelAlertStrip } from "@/components/ui/primitives";
 import { IconPlus } from "@/components/ui/icons";
 import { ContactSections } from "@/components/contacts/form/ContactSections";
 import {
   CONTACT_PANEL_FRAME,
   CONTACT_PANEL_REGION,
   CONTACT_PANEL_WIDTH,
+  ContactPanelHeader,
   ContactPanelShell,
+  PANEL_CLOSE_CLS,
   PanelCloseIcon,
 } from "@/components/contacts/shared/ContactPanelShell";
 import { contactToneStyle, type ContactHeaderFacts } from "@/components/contacts/shared/ContactHeaderBlock";
@@ -65,20 +67,6 @@ const TAB_LABEL: Record<Tab, string> = {
   appointments: CRM_COPY.tabs.appointments,
   notes: CRM_COPY.tabs.notes,
 };
-
-/** One tile in the dark hero's stat strip (CITAS / ÚLTIMA / CANAL, design frame 20f):
- *  a mono uppercase label over a white value, on the near-black hero. */
-function HeroStat({ label, value, dot = false }: { label: string; value: string; dot?: boolean }) {
-  return (
-    <div className="flex min-w-0 flex-col gap-0.5 px-3 py-2.5">
-      <span className="u-mono text-[0.625rem] tracking-wider text-white/45">{label}</span>
-      <span className="flex items-center gap-1.5 truncate text-[0.8125rem] font-medium text-white">
-        {dot ? <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[#25c55e]" /> : null}
-        {value}
-      </span>
-    </div>
-  );
-}
 
 export function ContactSidePanel({
   clientId,
@@ -152,88 +140,6 @@ export function ContactSidePanel({
   const overlaying = useIsOverlayWidth(1279.98);
   const panelRef = useTrappedPanel({ active: overlaying, onClose: () => router.push(closeHref, { scroll: false }) });
 
-  // ── Facts for the dark hero (design frame 20f). CITAS is the completed-visit count;
-  //    ÚLTIMA is the most recent past appointment (past[] is most-recent-first); CANAL is
-  //    the contact's preferred channel. Dates are formatted in Spanish to match the copy. ──
-  const lastVisitIso = data.appointments.past[0]?.startAt ?? null;
-  const lastLabel = lastVisitIso
-    ? new Date(lastVisitIso).toLocaleDateString("es", { day: "numeric", month: "short" })
-    : "—";
-  const channelLabel = data.summary.preferredChannel
-    ? data.summary.preferredChannel.charAt(0).toUpperCase() + data.summary.preferredChannel.slice(1)
-    : "—";
-  const nextAppt = data.appointments.next;
-  const nextApptLabel = nextAppt
-    ? `${new Date(nextAppt.startAt).toLocaleDateString("es", { weekday: "long", day: "numeric", month: "short" })}, ${new Date(
-        nextAppt.startAt,
-      ).toLocaleTimeString("es", { hour: "numeric", minute: "2-digit" })}${nextAppt.serviceName ? ` · ${nextAppt.serviceName}` : ""}`
-    : null;
-
-  // A dark-hero icon button (close / edit) and outline pill (Abrir ficha / Editar).
-  const heroIconBtn =
-    "grid size-7 shrink-0 place-items-center rounded-md text-white/55 transition-colors hover:bg-white/10 hover:text-white";
-  const heroPillBtn =
-    "flex items-center justify-center gap-1.5 rounded-[10px] border border-white/25 px-3 py-2.5 text-[0.8125rem] text-white transition-colors hover:bg-white/10";
-
-  // THE DARK HERO (frame 20f): identity + stat strip + action row, white on near-black.
-  const hero = (
-    <div className="flex flex-col gap-3 p-4">
-      <div className="flex items-start gap-3">
-        <Avatar name={data.summary.displayName} fallback={headerFacts.primaryIdentity ?? data.summary.displayName} size={40} />
-        <div className="flex min-w-0 flex-1 flex-col gap-0.5 pt-0.5">
-          <div className="flex min-w-0 items-center gap-2">
-            <h2 className="min-w-0 truncate text-base font-semibold tracking-tight text-white">{data.summary.displayName}</h2>
-            <span className="u-mono shrink-0 rounded-full bg-white/[0.12] px-2 py-0.5 text-[0.625rem] uppercase tracking-wider text-white/85">
-              {stageLabel(data.summary.stage)}
-            </span>
-          </div>
-          {headerFacts.primaryIdentity ? (
-            <span className="truncate text-[0.78125rem] text-white/55" title={headerFacts.primaryIdentity}>
-              {headerFacts.primaryIdentity}
-            </span>
-          ) : null}
-        </div>
-        <div className="flex shrink-0 items-center gap-1">
-          {edit ? (
-            <button type="button" onClick={() => setEditing(true)} aria-label={CRM_COPY.actions.edit} title={CRM_COPY.actions.edit} className={heroIconBtn}>
-              <IconPencil />
-            </button>
-          ) : null}
-          <Link href={closeHref} scroll={false} aria-label="Cerrar detalles del contacto" className={heroIconBtn}>
-            <PanelCloseIcon />
-          </Link>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-3 divide-x divide-white/10 overflow-hidden rounded-[10px] border border-white/10 bg-white/[0.04]">
-        <HeroStat label="CITAS" value={String(data.summary.visitCount)} />
-        <HeroStat label="ÚLTIMA" value={lastLabel} />
-        <HeroStat label="CANAL" value={channelLabel} dot={channelLabel !== "—"} />
-      </div>
-
-      <div className="flex items-center gap-2">
-        {schedulingEnabled ? (
-          <Link
-            href={`/clients/${clientId}/scheduling/agenda?book=${contactId}`}
-            className="flex flex-1 items-center justify-center gap-1.5 rounded-[10px] bg-[#e60a2f] px-3 py-2.5 text-[0.8125rem] font-medium text-white transition-colors hover:bg-[#c10827]"
-          >
-            <IconPlus />
-            {CRM_COPY.actions.book}
-          </Link>
-        ) : null}
-        <Link href={recordHref} className={heroPillBtn}>
-          Abrir ficha
-        </Link>
-        {edit ? (
-          <button type="button" onClick={() => setEditing(true)} className={heroPillBtn}>
-            <IconPencil />
-            {CRM_COPY.actions.edit}
-          </button>
-        ) : null}
-      </div>
-    </div>
-  );
-
   return (
     <>
       {/* The scrim to close against when the panel COVERS the table (below xl). A Link,
@@ -299,13 +205,58 @@ export function ContactSidePanel({
           ) : undefined
         }
         headerToneStyle={contactToneStyle(headerFacts)}
-        heroDark
-        header={hero}
+        header={
+          <ContactPanelHeader
+            facts={headerFacts}
+            /*
+              THE ACTION ROW IS GONE, and that is the design's point (§2.5).
+              It was three same-sized buttons stacked under the metrics: a red primary,
+              "Abrir ficha", and "Editar". The redesign redistributes them by weight —
+              `Agendar cita` is the one thing you do here, so it moves to the TAB ROW
+              where it is always visible whichever tab is open; "Ficha ↗" is a
+              navigation, so it becomes a quiet link on the name line; and editing is a
+              28px pencil glyph beside the close, because it is a mode switch on this
+              panel rather than an action on the customer.
+              What this buys back is the ~44px band of chrome that used to sit between
+              the person's name and their actual content.
+            */
+            recordAction={
+              <Link
+                href={recordHref}
+                className="shrink-0 text-[0.71875rem] text-brand no-underline hover:underline"
+              >
+                Ficha ↗
+              </Link>
+            }
+            closeAction={
+              <>
+                {edit ? (
+                  <button
+                    type="button"
+                    onClick={() => setEditing(true)}
+                    aria-label={CRM_COPY.actions.edit}
+                    title={CRM_COPY.actions.edit}
+                    className={PANEL_CLOSE_CLS}
+                  >
+                    <IconPencil />
+                  </button>
+                ) : null}
+                <Link
+                  href={closeHref}
+                  scroll={false}
+                  aria-label="Cerrar detalles del contacto"
+                  className={PANEL_CLOSE_CLS}
+                >
+                  <PanelCloseIcon />
+                </Link>
+              </>
+            }
+          />
+        }
         subheader={
-          /* The tab strip is a real segmented control, not links: switching tabs must not
-             re-run the page's queries — everything the tabs show was already loaded with
-             the panel. The active tab carries the design's RED underline (frame 20f); the
-             other red thing, `Agendar cita`, lives in the hero action row above. */
+          /* The tab strip is a real segmented control, not links: switching tabs must
+             not re-run the page's queries — everything the four tabs show was already
+             loaded with the panel. */
           <div className="flex items-center gap-4 border-b border-line-soft px-4">
             <div className="flex min-w-0 items-center gap-4 overflow-x-auto" role="tablist">
               {TABS.map((t) => (
@@ -315,9 +266,12 @@ export function ContactSidePanel({
                   role="tab"
                   aria-selected={tab === t}
                   onClick={() => setTab(t)}
+                  // The active indicator is INK, not brand. There is exactly one red thing
+                  // in this panel and it is `Agendar cita`, two inches to the right; a red
+                  // underline as well made the tab row compete with the action.
                   className={`-mb-px shrink-0 whitespace-nowrap border-b-2 pb-2.5 pt-3 text-[0.78125rem] transition-colors ${
                     tab === t
-                      ? "border-[color:var(--nav-active)] font-semibold text-foreground"
+                      ? "border-ink font-semibold text-foreground"
                       : "border-transparent text-muted hover:text-foreground"
                   }`}
                 >
@@ -331,18 +285,22 @@ export function ContactSidePanel({
                 </button>
               ))}
             </div>
+            {/* THE one primary action, on the tab row — so it is reachable from every tab
+                without the panel spending a whole row on chrome. */}
+            {schedulingEnabled ? (
+              <Link
+                href={`/clients/${clientId}/scheduling/agenda?book=${contactId}`}
+                className={`ml-auto my-1.5 ${BOOK_CLS}`}
+              >
+                <IconPlus />
+                {CRM_COPY.actions.book}
+              </Link>
+            ) : null}
           </div>
         }
       >
           {tab === "summary" ? (
             <div className="flex flex-col">
-              {/* PRÓXIMA CITA — first in Resumen, per design frame 20f. */}
-              <FormSection title={CRM_COPY.headings.nextAppointment} icon={<IconCalendar />}>
-                <p className="text-[0.8125rem] text-foreground first-letter:uppercase">
-                  {nextApptLabel ?? CRM_COPY.empty.appointments}
-                </p>
-              </FormSection>
-
               {/* THE FACTS, first — Contacto / Asignación / Mensajería / Etiquetas, in
                   the design's order. Same component the record page renders in read
                   mode, from the payload the panel already loaded for the Editar button:
