@@ -68,6 +68,7 @@ export const CONTACT_PANEL_REGION = "relative min-h-0 flex-col";
 export function ContactPanelShell({
   header,
   headerToneStyle,
+  heroDark = false,
   subheader,
   banner,
   footer,
@@ -76,6 +77,13 @@ export function ContactPanelShell({
 }: {
   /** The header's CONTENT (see ContactPanelHeader); the chrome around it is ours. */
   header: ReactNode;
+  /**
+   * CRM Color Refactor (frame 20f): the quick view's header is a DARK hero rather than
+   * the light tone wash. When set, this drops the light chrome (border, surface fill,
+   * padding) and paints `.u-contact-hero-dark` — the header CONTENT then owns its own
+   * padding and white text. The edit drawer leaves it false, so it stays light.
+   */
+  heroDark?: boolean;
   /**
    * The CONTACT'S own tone pair (see contactToneStyle), painted as a faint vertical wash
    * behind the header. Omitted where there is no contact yet — the create form has
@@ -115,10 +123,15 @@ export function ContactPanelShell({
   return (
     <>
       <div
-        // The wash sits on the header only, and fades out downward, so the body below
-        // stays a neutral reading surface.
+        // The wash (or the dark hero) sits on the header only, so the body below stays a
+        // neutral reading surface. headerToneStyle still applies in BOTH modes — the dark
+        // hero reads --tone-a/--tone-b for its radial light, the same way the wash does.
         style={headerToneStyle as React.CSSProperties | undefined}
-        className={`shrink-0 border-b border-line bg-surface px-4 pb-3 pt-3.5 ${headerToneStyle ? "u-contact-wash" : ""}`}
+        className={
+          heroDark
+            ? "shrink-0 u-contact-hero-dark"
+            : `shrink-0 border-b border-line bg-surface px-4 pb-3 pt-3.5 ${headerToneStyle ? "u-contact-wash" : ""}`
+        }
       >
         {header}
       </div>

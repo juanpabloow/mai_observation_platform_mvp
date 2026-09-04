@@ -471,6 +471,29 @@
   );
 }
 
+/* CRM COLOR REFACTOR — the detail panel's DARK hero (design frame 20f). A near-black
+   fill lit by a radial wash of the contact's OWN avatar tones from the top-left, so the
+   panel reads as "this person's" before the name is. White text sits on it directly; the
+   --tone-a / --tone-b custom properties arrive inline from contactToneStyle(). */
+.u-contact-hero-dark {
+  background-color: #1c1c1e;
+  background-image: radial-gradient(
+    120% 95% at 0% 0%,
+    color-mix(in srgb, var(--tone-a, transparent) 34%, transparent) 0%,
+    color-mix(in srgb, var(--tone-b, transparent) 16%, transparent) 42%,
+    transparent 78%
+  );
+}
+
+/* Email links in the contacts table — the design's blue (#2F6BE4), a step brighter in
+   dark mode so it still reads on the near-black surface. */
+.u-contact-email {
+  color: #2f6be4;
+}
+.dark .u-contact-email {
+  color: #6f9bf0;
+}
+
 /*
  * ── Thread bubbles ───────────────────────────────────────────────────────────
  * Two SIDES, three voices: the customer speaks on the left in a light bubble, the
