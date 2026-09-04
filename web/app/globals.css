@@ -198,8 +198,8 @@
    * Contrast against the #1a1a1a fill, approximate: fg ~15.8:1, muted ~7.4:1 (AA for body
    * text), section ~4.8:1 (AA for the 9.5px small-caps labels).
    */
-  --sidebar-bg: #161618; /* a touch darker than the design's #1c1c1e, per request */
-  --sidebar-border: #29292b;
+  --sidebar-bg: #1c1c1e;
+  --sidebar-border: #2c2c2e;
   --sidebar-fg: #ffffff;
   --sidebar-muted: #c7c7cc; /* design's lighter idle nav text */
   --sidebar-section: #8a8a8e; /* design's section labels */
@@ -685,7 +685,7 @@ html[data-text-scale='large'] {
  * is exactly the drift this round is fixing). Content inside them still scales.
  */
 :root {
-  --sidebar-width: 216px;
+  --sidebar-width: 238px;
   /* 44px, down from 54. The scope bar carries one line of 12px text and a client
      chip — 54px gave it ~20px of dead air above and below, on every screen, forever.
      The token is shared by the four header strips (see the contract test), so they

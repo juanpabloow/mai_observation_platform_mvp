@@ -1,7 +1,6 @@
 "use client";
 
 import { TOOLBAR_PRIMARY_CLS } from "@/components/ui/primitives";
-import { IconPlus } from "@/components/ui/icons";
 
 import { useState } from "react";
 import type { FieldDefView } from "../ContactProperties";
@@ -21,14 +20,11 @@ export function NewContactButton({
   owners,
   fieldDefs,
   defaultOwnerId,
-  compact = false,
 }: {
   clientId: string;
   owners: OwnerOption[];
   fieldDefs: FieldDefView[];
   defaultOwnerId?: string | null;
-  /** When the detail panel is open (design frame 20f), shorten to "+ Nuevo". */
-  compact?: boolean;
 }) {
   const [open, setOpen] = useState(false);
   return (
@@ -38,8 +34,7 @@ export function NewContactButton({
         onClick={() => setOpen(true)}
         className={TOOLBAR_PRIMARY_CLS}
       >
-        <IconPlus />
-        {compact ? "Nuevo" : "Nuevo contacto"}
+        Nuevo contacto
       </button>
       {open ? (
         <ContactCreateForm

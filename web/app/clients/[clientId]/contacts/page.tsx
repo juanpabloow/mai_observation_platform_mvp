@@ -214,11 +214,9 @@ export default async function ClientContactsPage({
           <span className="ml-auto flex shrink-0 items-center gap-1.5">
             <ContactsFilterMenu owners={ownerOptions} />
             <ContactsSortMenu />
-            {/* Space optimization when the detail panel is open (frame 20f): drop Columnas
-                and Campos, and let Exportar + the primary go compact. */}
-            {panelId ? null : <ContactsColumnsMenu visibleColumns={visibleColumns} />}
-            <ContactsExportLink clientId={client.id} compact={!!panelId} />
-            {isFullAccess && !panelId ? (
+            <ContactsColumnsMenu visibleColumns={visibleColumns} />
+            <ContactsExportLink clientId={client.id} />
+            {isFullAccess ? (
               <Link href={`${base}/fields`} className={`${GHOST_ACTION_CLS} hidden lg:flex`}>
                 Campos del negocio
               </Link>
@@ -228,7 +226,6 @@ export default async function ClientContactsPage({
               owners={assignableOwners}
               fieldDefs={formFieldDefs.map((d) => ({ id: d.id, key: d.key, label: d.label, type: d.type, options: d.options }))}
               defaultOwnerId={assignableOwners.some((o) => o.userId === scope.userId) ? scope.userId : null}
-              compact={!!panelId}
             />
           </span>
         </div>
