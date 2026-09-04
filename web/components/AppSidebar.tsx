@@ -22,82 +22,82 @@ function parseClientId(pathname: string): string | null {
 // 18px, 1.5 stroke, currentColor — consistent weight across the rail. ─────────────
 /* 17px. The design specifies 15px against its own 13.5px label; at the 14px label this
    rail actually renders, 15px read as a smaller glyph beside a bigger word. */
-const iconCls = "size-[0.9375rem] shrink-0";
+const iconCls = "size-[1.0625rem] shrink-0";
 
 const Icon = {
   workflows: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
-      <rect x="3" y="3" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="15" y="15" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M9 6h4a3 3 0 0 1 3 3v6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <rect x="3" y="3" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="15" y="15" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M9 6h4a3 3 0 0 1 3 3v6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   ),
   overview: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
-      <rect x="3" y="3" width="8" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="3" y="15" width="8" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="14" y="3" width="7" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="14" y="12" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="3" y="3" width="8" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="3" y="15" width="8" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="14" y="3" width="7" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="14" y="12" width="7" height="9" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
     </svg>
   ),
   inbox: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
-      <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5.5Z" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M4 14h4a2 2 0 0 0 4 0h8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4h13A1.5 1.5 0 0 1 20 5.5V18a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V5.5Z" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M4 14h4a2 2 0 0 0 4 0h8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
   contacts: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
-      <circle cx="12" cy="8" r="3.25" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M5.5 19a6.5 6.5 0 0 1 13 0" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="12" cy="8" r="3.25" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M5.5 19a6.5 6.5 0 0 1 13 0" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   ),
   agenda: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
-      <rect x="4" y="5" width="16" height="15" rx="2" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M4 9h16M8 3v4M16 3v4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <rect x="4" y="5" width="16" height="15" rx="2" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M4 9h16M8 3v4M16 3v4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   ),
   team: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
-      <circle cx="9" cy="8" r="3" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M3.5 19a5.5 5.5 0 0 1 11 0" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <path d="M16 6.2a3 3 0 0 1 0 5.6M17.5 19a5.5 5.5 0 0 0-3-4.9" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <circle cx="9" cy="8" r="3" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M3.5 19a5.5 5.5 0 0 1 11 0" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <path d="M16 6.2a3 3 0 0 1 0 5.6M17.5 19a5.5 5.5 0 0 0-3-4.9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   ),
   modules: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
-      <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="3.5" y="3.5" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="13.5" y="3.5" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="3.5" y="13.5" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+      <rect x="13.5" y="13.5" width="7" height="7" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
     </svg>
   ),
   hub: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
-      <path d="M4 11 12 4l8 7M6 9.5V19h12V9.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M4 11 12 4l8 7M6 9.5V19h12V9.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   ),
   clients: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
-      <rect x="4" y="4" width="9" height="16" rx="1.5" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M13 9h6a1.5 1.5 0 0 1 1.5 1.5V20M7 8h3M7 12h3M7 16h3M16 13h1.5M16 16h1.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
+      <rect x="4" y="4" width="9" height="16" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M13 9h6a1.5 1.5 0 0 1 1.5 1.5V20M7 8h3M7 12h3M7 16h3M16 13h1.5M16 16h1.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   ),
   schedulingAdmin: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
-      <rect x="4" y="5" width="16" height="15" rx="2" stroke="currentColor" strokeWidth="1.4" />
-      <path d="M4 9h16M8 3v4M16 3v4" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-      <circle cx="12" cy="14.5" r="1.6" stroke="currentColor" strokeWidth="1.4" />
+      <rect x="4" y="5" width="16" height="15" rx="2" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M4 9h16M8 3v4M16 3v4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="12" cy="14.5" r="1.6" stroke="currentColor" strokeWidth="1.6" />
     </svg>
   ),
   settings: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
-      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.4" />
+      <circle cx="12" cy="12" r="3" stroke="currentColor" strokeWidth="1.6" />
       <path
         d="M12 3.5v2M12 18.5v2M3.5 12h2M18.5 12h2M6 6l1.4 1.4M16.6 16.6 18 18M18 6l-1.4 1.4M7.4 16.6 6 18"
         stroke="currentColor"
-        strokeWidth="1.4"
+        strokeWidth="1.6"
         strokeLinecap="round"
       />
     </svg>

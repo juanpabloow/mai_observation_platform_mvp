@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Geist, Geist_Mono } from "next/font/google";
 import { cookies } from "next/headers";
 import { Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
@@ -9,6 +10,16 @@ import { Providers } from "./providers";
 import { parseSidebarTheme, SIDEBAR_THEME_COOKIE } from "@/lib/sidebarTheme";
 import { parseTextScale, TEXT_SCALE_COOKIE } from "@/lib/textScale";
 import "./globals.css";
+
+const geistSans = Geist({
+  variable: "--font-geist-sans",
+  subsets: ["latin"],
+});
+
+const geistMono = Geist_Mono({
+  variable: "--font-geist-mono",
+  subsets: ["latin"],
+});
 
 export const metadata: Metadata = {
   title: "Observability Platform",
@@ -37,7 +48,7 @@ export default async function RootLayout({
       // next-themes sets the theme class on <html> before hydration; suppress the
       // resulting server/client class mismatch warning (no-flash approach).
       suppressHydrationWarning
-      className="h-full antialiased"
+      className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       {/* FIXED SHELL: the body is exactly the viewport and never scrolls; the
           sidebar + header are pinned (they're non-scrolling flex items), and ONLY

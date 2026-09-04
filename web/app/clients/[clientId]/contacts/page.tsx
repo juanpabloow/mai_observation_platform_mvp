@@ -210,7 +210,7 @@ export default async function ClientContactsPage({
             <h1 className="text-[15px] font-semibold tracking-[-0.015em] text-foreground">Contactos</h1>
             <span className="u-mono text-[0.71875rem] text-faint">{summary.total}</span>
           </div>
-          <ContactsSearch compact={!!panelId} />
+          <ContactsSearch />
           <span className="ml-auto flex shrink-0 items-center gap-1.5">
             <ContactsFilterMenu owners={ownerOptions} />
             <ContactsSortMenu />

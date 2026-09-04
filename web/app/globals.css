@@ -198,11 +198,11 @@
    * Contrast against the #1a1a1a fill, approximate: fg ~15.8:1, muted ~7.4:1 (AA for body
    * text), section ~4.8:1 (AA for the 9.5px small-caps labels).
    */
-  --sidebar-bg: #1c1c1e;
-  --sidebar-border: #2c2c2e;
-  --sidebar-fg: #ffffff;
-  --sidebar-muted: #c7c7cc; /* design's lighter idle nav text */
-  --sidebar-section: #8a8a8e; /* design's section labels */
+  --sidebar-bg: #1a1a1a;
+  --sidebar-border: #272727;
+  --sidebar-fg: #f5f5f5;
+  --sidebar-muted: #ababab;
+  --sidebar-section: #858585;
   --sidebar-hover: var(--sidebar-hover-dark);
 }
 
@@ -648,11 +648,8 @@
   --color-accent: var(--accent);
   --color-danger: var(--danger);
   --color-success: var(--success);
-  /* CRM Color Refactor: the design's Apple-system type (SF Pro / SF Mono), not Geist —
-     so the whole app matches the artboard's fonts, and the build no longer depends on a
-     Google-Fonts fetch. */
-  --font-sans: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
 }
 
 /*
@@ -700,7 +697,7 @@ html[data-text-scale='large'] {
 body {
   background: var(--background);
   color: var(--foreground);
-  font-family: var(--font-sans);
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
 /*
@@ -865,16 +862,16 @@ body {
   outline: none;
 }
 
-/* Mono for timestamps, ids, metadata and table headings (SF Mono / system mono). */
+/* Mono for timestamps, ids, metadata and table headings (Geist Mono). */
 .u-mono {
-  font-family: var(--font-mono);
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
   font-variant-numeric: tabular-nums;
 }
 
 /* The sidebar's section labels — same type as .u-th but on the rail's own token,
    so Black recolors them without touching any table heading. */
 .u-th-sidebar {
-  font-family: var(--font-mono);
+  font-family: var(--font-geist-mono), ui-monospace, SFMono-Regular, monospace;
   /* 9.5px / 0.12em — the design's rail label. Tracked out further than a table heading
      on purpose: at this size the extra letter-spacing is what stops four uppercase
      section names from reading as one grey smear down the rail. */
