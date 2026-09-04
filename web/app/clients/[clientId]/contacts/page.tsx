@@ -202,7 +202,19 @@ export default async function ClientContactsPage({
             <span className="u-mono text-[0.71875rem] text-faint">{summary.total}</span>
           </div>
           <ContactsSearch />
-          <span className="ml-auto shrink-0">
+          {/* Filtrar / Orden / Columnas / Exportar / Campos + the primary all live in the
+              header card's own row — the search section — filling the space beside the search
+              (design image 25), instead of a separate row on the table. */}
+          <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+            <ContactsFilterMenu owners={ownerOptions} />
+            <ContactsSortMenu />
+            <ContactsColumnsMenu visibleColumns={visibleColumns} />
+            <ContactsExportLink clientId={client.id} />
+            {isFullAccess ? (
+              <Link href={`${base}/fields`} className={`${GHOST_ACTION_CLS} hidden lg:flex`}>
+                Campos del negocio
+              </Link>
+            ) : null}
             <NewContactButton
               clientId={client.id}
               owners={assignableOwners}
@@ -216,24 +228,9 @@ export default async function ClientContactsPage({
       {/* Table + detail panel: siblings on one row, each keeping its own four corners. */}
       <div className="flex min-h-0 flex-1 gap-3">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-      {/* THE TABLE CARD: a controls row (Filtrar / Orden / Columnas / Exportar / Campos),
-          then the table and the pager. `clip={false}` so the popovers are not clipped by
-          the card's `overflow-hidden`. */}
+      {/* THE TABLE CARD: just the table and the pager now — the controls moved up into the
+          header card (design image 25). */}
       <PageShell clip={false}>
-        <div className="flex flex-none flex-wrap items-center gap-1.5 border-b border-line-row px-3 py-2">
-          <ContactsFilterMenu owners={ownerOptions} />
-          <ContactsSortMenu />
-          {/* Space optimization when the detail panel is open (image 18): drop Columnas and
-              Campos, and let Exportar go icon-only. */}
-          {panelId ? null : <ContactsColumnsMenu visibleColumns={visibleColumns} />}
-          <ContactsExportLink clientId={client.id} compact={!!panelId} />
-          {isFullAccess && !panelId ? (
-            <Link href={`${base}/fields`} className={`${GHOST_ACTION_CLS} hidden lg:flex`}>
-              Campos del negocio
-            </Link>
-          ) : null}
-        </div>
-
         {contacts.length === 0 ? (
           <div className="p-4">
             <EmptyState
