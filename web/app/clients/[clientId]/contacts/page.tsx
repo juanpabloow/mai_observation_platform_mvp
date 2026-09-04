@@ -21,7 +21,7 @@ import {
 } from "@/components/contacts/ContactsToolbar";
 import { ContactsTable } from "@/components/contacts/ContactsTable";
 import { parseColumns } from "@/lib/contactColumns";
-import { EmptyState, FacetPills, GHOST_ACTION_CLS, Pagination } from "@/components/ui/primitives";
+import { EmptyState, GHOST_ACTION_CLS, Pagination } from "@/components/ui/primitives";
 import { PAGE_SIZE } from "@/lib/contactColumns";
 import { PageShell } from "@/components/ui/PageShell";
 import { loadContactEditPayload, loadContactPanel } from "@/lib/contactPanel";
@@ -198,41 +198,26 @@ export default async function ClientContactsPage({
           edge back when the panel lived inside it. */}
       <div className="flex min-h-0 flex-1 gap-3">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-      {/*
-        CARD 1 — the TITLE ROW (§2.1). Title, the search, the two data actions, and the
-        primary. One line, not three: the counters that used to live up here moved INTO
-        the facet pills below, where a number is a filter you can click rather than a
-        statistic you read and then act on separately.
-
-        `clip={false}` because this card hosts no dropdowns any more but the next one
-        does — kept false here only so the card's own radius never clips the search
-        field's focus ring.
-      */}
-      <PageShell grow={false} clip={false}>
-        <div className="flex items-center gap-1 px-3 py-2">
-          <h1 className="shrink-0 px-1.5 text-[15px] font-semibold tracking-[-0.015em] text-foreground">
-            Contactos
-          </h1>
+      {/* THE TOOLBAR (design, image 16): title + count, search, the filter/sort/columns
+          controls + export/custom-fields, and the primary — ONE row on the table card's
+          top edge, then the table and the pager. The separate title card and the facet-pill
+          row it used to carry are folded into here to match the design; stage/owner filtering
+          now lives in the Filtrar menu. `clip={false}` so the Filtrar / Orden / Columnas
+          popovers are not clipped by the card's `overflow-hidden`. */}
+      <PageShell clip={false}>
+        <div className="flex flex-none flex-wrap items-center gap-2.5 border-b border-line-row px-3 py-2.5">
+          <div className="flex shrink-0 items-baseline gap-2">
+            <h1 className="text-[15px] font-semibold tracking-[-0.015em] text-foreground">Contactos</h1>
+            <span className="u-mono text-[0.71875rem] text-faint">{summary.total}</span>
+          </div>
           <ContactsSearch />
-          <span className="ml-auto flex shrink-0 items-center gap-1">
-            {/* IMPORT is the one control in the artboard that is not built. It is a
-                feature (file upload, column mapping, dedup against the identity spine),
-                not a restyle, so it is deliberately absent rather than present and
-                inert — a button that opens nothing is worse than one that isn't there.
-                See the note in docs/ui-redesign-crm-inbox.md. */}
+          <span className="ml-auto flex shrink-0 items-center gap-1.5">
+            <ContactsFilterMenu owners={ownerOptions} />
+            <ContactsSortMenu />
+            <ContactsColumnsMenu visibleColumns={visibleColumns} />
             <ContactsExportLink clientId={client.id} />
-            {/* CUSTOM FIELDS. Not in the artboard, but it is this screen's only door to
-                the field editor, so it keeps a home — as a ghost action in the same group
-                as Exportar, and hidden below `lg` where the row runs out of width before
-                the primary does. */}
             {isFullAccess ? (
-              <Link
-                href={`${base}/fields`}
-                // `GHOST_ACTION_CLS` starts with `inline-flex`, so it cannot simply be
-                // prefixed with `lg:` — Tailwind resolves variants per utility, not per
-                // string. The base class hides it and `lg:flex` brings it back.
-                className={`${GHOST_ACTION_CLS} hidden lg:flex`}
-              >
+              <Link href={`${base}/fields`} className={`${GHOST_ACTION_CLS} hidden lg:flex`}>
                 Campos del negocio
               </Link>
             ) : null}
@@ -242,65 +227,6 @@ export default async function ClientContactsPage({
               fieldDefs={formFieldDefs.map((d) => ({ id: d.id, key: d.key, label: d.label, type: d.type, options: d.options }))}
               defaultOwnerId={assignableOwners.some((o) => o.userId === scope.userId) ? scope.userId : null}
             />
-          </span>
-        </div>
-      </PageShell>
-
-      {/* CARD 2 — the facet row, the table, and the pager. Absorbs the leftover height.
-          `clip={false}`: the facet row hosts the Filtrar / Orden / Columnas popovers, and
-          a card's `overflow-hidden` cuts an absolutely-positioned menu off at its edge. */}
-      <PageShell clip={false}>
-        {/* ── The facet pills (§2.2). Rendered HERE, on the server, from the summary the
-               page already queries — which is the whole reason they can carry counts. ── */}
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line-row px-3.5 py-2.5">
-          <FacetPills
-            label="Filtrar contactos por estado"
-            items={[
-              {
-                key: "all",
-                label: "Todos",
-                count: summary.total,
-                href: hrefWith({ stage: undefined, owner: undefined, page: undefined }),
-                active: !stageFilter && ownerFilter !== UNASSIGNED_OWNER,
-              },
-              {
-                key: "new",
-                label: "Nuevos",
-                count: summary.new,
-                href: hrefWith({ stage: "new", owner: undefined, page: undefined }),
-                active: stageFilter === "new",
-              },
-              {
-                key: "active",
-                label: "Activos",
-                count: summary.active,
-                href: hrefWith({ stage: "active", owner: undefined, page: undefined }),
-                active: stageFilter === "active",
-              },
-              {
-                key: "customer",
-                label: "Clientes",
-                count: summary.customer,
-                href: hrefWith({ stage: "customer", owner: undefined, page: undefined }),
-                active: stageFilter === "customer",
-              },
-              {
-                // The one pill that is an OWNER filter rather than a stage. It sits with
-                // the stages because "nobody has picked this up" is the same KIND of
-                // question as "where is this person in the funnel" — and because it is
-                // the bucket an operator most needs to empty.
-                key: "unassigned",
-                label: "Sin dueño",
-                count: summary.unassigned,
-                href: hrefWith({ owner: UNASSIGNED_OWNER, stage: undefined, page: undefined }),
-                active: ownerFilter === UNASSIGNED_OWNER,
-              },
-            ]}
-          />
-          <span className="ml-auto flex shrink-0 items-center gap-1.5">
-            <ContactsFilterMenu owners={ownerOptions} />
-            <ContactsSortMenu />
-            <ContactsColumnsMenu visibleColumns={visibleColumns} />
           </span>
         </div>
 

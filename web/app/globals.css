@@ -200,9 +200,9 @@
    */
   --sidebar-bg: #1a1a1a;
   --sidebar-border: #272727;
-  --sidebar-fg: #f5f5f5;
-  --sidebar-muted: #ababab;
-  --sidebar-section: #858585;
+  --sidebar-fg: #f7f7f8;
+  --sidebar-muted: #d4d4d8; /* brighter idle nav text on the dark rail (per request) */
+  --sidebar-section: #9a9aa0; /* brighter section labels on the dark rail */
   --sidebar-hover: var(--sidebar-hover-dark);
 }
 
@@ -653,7 +653,7 @@ html[data-text-scale='large'] {
  * is exactly the drift this round is fixing). Content inside them still scales.
  */
 :root {
-  --sidebar-width: 238px;
+  --sidebar-width: 210px;
   /* 44px, down from 54. The scope bar carries one line of 12px text and a client
      chip — 54px gave it ~20px of dead air above and below, on every screen, forever.
      The token is shared by the four header strips (see the contract test), so they

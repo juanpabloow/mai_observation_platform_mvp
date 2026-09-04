@@ -8,7 +8,6 @@ import { useScope } from "@/components/ScopeProvider";
 import { scopeHref } from "@/lib/scopeSurface";
 import { InboxTabLink } from "@/components/InboxTabLink";
 import { AccountMenu } from "@/components/AccountMenu";
-import { avatarColor } from "@/lib/avatarColor";
 import { RAIL_ROW } from "@/components/railRow";
 
 const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password"];
@@ -221,15 +220,15 @@ function Brand({ homeHref, collapsed, onNavigate }: { homeHref: string; collapse
  * account's own identifier means it is stable across sessions and consistent with how
  * every other person is coloured.
  *
- * `seed` is the email rather than the display name: a name can be edited or absent, and
- * the disc changing colour because someone fixed their capitalisation is exactly the kind
- * of instability the hash is meant to avoid.
+ * CRM footer avatar: a NEUTRAL squared tile with the account's mono initials (per the
+ * design), not an identity-coloured disc — the one person the rail already names in words
+ * beside it needs no colour to be found.
  */
-function Avatar({ initial, seed }: { initial: string; seed: string }) {
+function Avatar({ initial }: { initial: string }) {
   return (
     <span
       aria-hidden
-      className={`flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${avatarColor(seed)}`}
+      className="u-mono flex size-[26px] shrink-0 items-center justify-center rounded-lg border border-sidebar-border bg-sidebar-border text-[0.625rem] font-semibold text-sidebar-fg"
     >
       {initial}
     </span>
@@ -281,7 +280,7 @@ function RailBody({
   }, [acctOpen]);
 
   const label = account.name?.trim() || account.email;
-  const initial = label.trim()[0]?.toUpperCase() ?? "?";
+  const initial = (label.trim().slice(0, 2) || "?").toUpperCase();
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -334,18 +333,24 @@ function RailBody({
           className={`${RAIL_ROW} w-[calc(100%-1.25rem)] text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-fg ${
             collapsed
               ? "flex items-center justify-center p-1"
-              : "grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 px-2.5 py-2 text-left"
+              : "grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5 px-2.5 py-2 text-left"
           }`}
         >
-          <Avatar initial={initial} seed={account.email} />
+          <Avatar initial={initial} />
           {collapsed ? null : (
-            // Track 2 of the grid: it starts AFTER the avatar's track + the gap, so
-            // the label can never render on top of the avatar. minmax(0,1fr) lets it
-            // shrink below its content width, which is what makes truncate work.
-            <span className="flex min-w-0 flex-col overflow-hidden">
-              <span className="truncate text-[0.8125rem] font-medium leading-tight text-sidebar-fg">{label}</span>
-              <span className="truncate text-[0.6875rem] capitalize leading-tight text-sidebar-section">{account.role}</span>
-            </span>
+            <>
+              {/* Track 2: starts AFTER the avatar's track + the gap, so the label can never
+                  render on top of the avatar. minmax(0,1fr) lets it shrink below its content
+                  width, which is what makes truncate work. */}
+              <span className="flex min-w-0 flex-col overflow-hidden">
+                <span className="truncate text-[0.8125rem] font-semibold leading-tight text-sidebar-fg">{label}</span>
+                <span className="u-mono truncate text-[0.625rem] uppercase leading-tight tracking-wide text-sidebar-section">
+                  {account.role}
+                </span>
+              </span>
+              {/* The disclosure caret (design) — the footer opens the account menu. */}
+              <span aria-hidden className="shrink-0 text-[0.5625rem] text-sidebar-section">▾</span>
+            </>
           )}
         </button>
 
@@ -460,14 +465,13 @@ export function AppSidebar({
     // active split keys off whether the path is an analytics route.
     const scope = scopeFor(clientId);
     const onWorkflows = pathname.startsWith(c("/workflows"));
-    // WORKSPACE — the top-level places, exactly as the final design lists them:
-    // Hub (the tenant lobby), Workflows (the client's workflow CONTEXT), Inbox.
+    // WORKSPACE — the top-level places. Hub was removed from the rail (per request); the
+    // brand wordmark still links home. Workflows (the client's workflow CONTEXT), then Inbox.
     // Executions / Analytics / Settings are NOT rail items: they are surfaces INSIDE
     // a workflow, reached from the Workflows list and the header's scope switcher.
     // Putting them in the rail made workflow-only surfaces look like peers of Inbox
     // and CRM while sitting on a completely unrelated route.
     const workspace: NavItem[] = [
-      { key: "hub", label: "Hub", href: "/", icon: Icon.hub, active: pathname === "/" },
       {
         key: "workflows",
         label: "Workflows",
@@ -588,7 +592,6 @@ export function AppSidebar({
       {
         label: "Workspace",
         items: [
-          { key: "hub", label: "Hub", href: "/", icon: Icon.hub, active: pathname === "/" },
           {
             key: "clients",
             label: "Clients & Workflows",
