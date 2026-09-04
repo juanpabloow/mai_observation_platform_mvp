@@ -221,6 +221,10 @@ export interface ContactPanelData {
   openTasks: TaskView[];
   recentNotes: NoteView[];
   tags: TagView[];
+  /** The contact's most-recent conversation (for the ficha's "Conversación" section), and
+   *  how many they have in total. Null when the contact has no linked conversation. */
+  recentConversation: { id: string; mode: string; lastMessageAt: string | null } | null;
+  conversationCount: number;
 }
 
 /**
@@ -236,12 +240,13 @@ export async function loadContactPanel(
   const contact = await getContactById(tenantId, contactId, clientId);
   if (!contact) return null;
 
-  const [identities, appts, openTasks, notes, tags] = await Promise.all([
+  const [identities, appts, openTasks, notes, tags, conversations] = await Promise.all([
     listIdentitiesForContact(tenantId, clientId, contactId),
     listAppointmentsForContact(tenantId, contactId, clientId),
     listTasksForContact(tenantId, clientId, contactId, { status: "open" }),
     listNotesForContact(tenantId, clientId, contactId),
     listTagsForContact(tenantId, clientId, contactId),
+    listContactConversations(tenantId, contactId, clientId),
   ]);
 
   // IDENTITIES + the contact's OWN columns. `contact_identities` is the canonical
@@ -282,5 +287,15 @@ export async function loadContactPanel(
     openTasks: openTasks.map(toTaskView),
     recentNotes: notes.slice(0, RECENT_NOTES).map(toNoteView),
     tags: tags.map((t) => ({ id: t.id, name: t.name, color: t.color })),
+    // The most-recent conversation drives the ficha's "Conversación" section (a link into
+    // the inbox); the count tells the reader whether there are more.
+    recentConversation: conversations[0]
+      ? {
+          id: conversations[0].id,
+          mode: conversations[0].mode,
+          lastMessageAt: conversations[0].last_message_at?.toISOString() ?? null,
+        }
+      : null,
+    conversationCount: conversations.length,
   };
 }

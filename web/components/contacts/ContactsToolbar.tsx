@@ -64,7 +64,7 @@ function useApply() {
  * button in the row, which is exactly what it looked like when it was a bordered control
  * sitting between two dropdowns.
  */
-export function ContactsSearch() {
+export function ContactsSearch({ compact = false }: { compact?: boolean } = {}) {
   const { searchParams, apply } = useApply();
   const q = searchParams.get("q") ?? "";
 
@@ -82,16 +82,17 @@ export function ContactsSearch() {
         e.preventDefault();
         apply({ q: draft.trim() });
       }}
-      // The SHARED shell (§2.1). Only the SIZING is local: the search takes the title
-      // row's slack, capped at the artboard's 420px.
-      className={`${SEARCH_SHELL_CLS} min-w-0 max-w-[420px] flex-1`}
+      // The SHARED shell (§2.1). Sizing is local: capped at 420px, but tightened to 240px
+      // with a shorter placeholder when the detail panel is open (design image 18), so the
+      // toolbar stays on one line beside the narrowed table.
+      className={`${SEARCH_SHELL_CLS} min-w-0 flex-1 ${compact ? "max-w-[240px]" : "max-w-[420px]"}`}
     >
       <SearchIcon />
       <input
         name="q"
         value={draft}
         onChange={(e) => setDraft(e.target.value)}
-        placeholder="Buscar nombre, email o teléfono…"
+        placeholder={compact ? "Buscar contacto…" : "Buscar nombre, email o teléfono…"}
         aria-label="Buscar contactos"
         className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
       />
@@ -372,7 +373,7 @@ export function ContactsColumnsMenu({ visibleColumns }: { visibleColumns: Contac
  * is showing, so what downloads is what is on screen (filters, search and all) and the
  * browser owns the download. Nothing is held in memory here.
  */
-export function ContactsExportLink({ clientId }: { clientId: string }) {
+export function ContactsExportLink({ clientId, compact = false }: { clientId: string; compact?: boolean }) {
   const { searchParams } = useApply();
   const p = new URLSearchParams(searchParams.toString());
   // Paging and panel state are about the VIEW, not the result set — an export is the
@@ -382,12 +383,20 @@ export function ContactsExportLink({ clientId }: { clientId: string }) {
   return (
     <a
       href={`/api/crm/v1/contacts/export/${clientId}${qs ? `?${qs}` : ""}`}
-      className={GHOST_ACTION_CLS}
+      // Compact (detail panel open, image 18): the download arrow ALONE, so the toolbar
+      // stays on one line; the label returns at full width.
+      className={
+        compact
+          ? "inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-subtle hover:text-foreground"
+          : GHOST_ACTION_CLS
+      }
+      aria-label={compact ? "Exportar" : undefined}
+      title={compact ? "Exportar" : undefined}
       // A same-origin download; `download` lets the route's filename win.
       download
     >
       <ExportIcon />
-      Exportar
+      {compact ? null : "Exportar"}
     </a>
   );
 }

@@ -98,6 +98,9 @@ type Props =
       read: ContactReadValues;
       /** 2 at panel width (the reference), 1 in the record's narrow rail. */
       columns?: 1 | 2;
+      /** "panel" (the contact ficha) hides consent, "No contactar" and the whole Interno
+       *  (tags) section for a cleaner quick view; the full record keeps them. Default "full". */
+      variant?: "full" | "panel";
     }
   | { mode: "edit"; clientId: string; fieldDefs: FieldDefView[]; edit: ContactEditHandles };
 
@@ -192,6 +195,9 @@ function IdentityList({ values, mono }: { values: string[]; mono?: boolean }) {
 
 export function ContactSections(props: Props) {
   const { clientId, fieldDefs, mode } = props;
+  // The ficha ("panel" variant) is a quick view: it hides consent, "No contactar" and the
+  // Interno/tags section (per design). The full record keeps everything.
+  const isPanel = mode === "read" && props.variant === "panel";
   const cols: 1 | 2 = mode === "read" ? (props.columns ?? 2) : 1;
 
   return (
@@ -277,25 +283,29 @@ export function ContactSections(props: Props) {
                 )
               }
             />
-            <StateRow
-              label="Consentimiento de mensajería"
-              tone={props.read.consent === "opted_in" ? "ok" : props.read.consent === "opted_out" ? "off" : "pending"}
-              value={
-                <span className="flex flex-col items-end">
-                  {consentLabel(props.read.consent)}
-                  <ConsentProvenance
-                    consent={props.read.consent}
-                    updatedAt={props.read.consentUpdatedAt}
-                    source={props.read.consentSource}
-                  />
-                </span>
-              }
-            />
-            <StateRow
-              label={COPY.doNotContact}
-              tone={props.read.doNotContact ? "pending" : "off"}
-              value={yesNoLabel(props.read.doNotContact)}
-            />
+            {isPanel ? null : (
+              <>
+                <StateRow
+                  label="Consentimiento de mensajería"
+                  tone={props.read.consent === "opted_in" ? "ok" : props.read.consent === "opted_out" ? "off" : "pending"}
+                  value={
+                    <span className="flex flex-col items-end">
+                      {consentLabel(props.read.consent)}
+                      <ConsentProvenance
+                        consent={props.read.consent}
+                        updatedAt={props.read.consentUpdatedAt}
+                        source={props.read.consentSource}
+                      />
+                    </span>
+                  }
+                />
+                <StateRow
+                  label={COPY.doNotContact}
+                  tone={props.read.doNotContact ? "pending" : "off"}
+                  value={yesNoLabel(props.read.doNotContact)}
+                />
+              </>
+            )}
           </div>
         ) : (
           <CommunicationSection
@@ -311,7 +321,8 @@ export function ContactSections(props: Props) {
         )}
       </FormSection>
 
-      {/* ── INTERNO ───────────────────────────────────────────────────────── */}
+      {/* ── INTERNO — hidden in the ficha ("panel" variant); shown on the full record. ── */}
+      {isPanel ? null : (
       <FormSection title="Interno" icon={<IconInternal />}>
         {mode === "read" ? (
           <ReadField label="Etiquetas">
@@ -352,6 +363,7 @@ export function ContactSections(props: Props) {
           </>
         )}
       </FormSection>
+      )}
 
       {/*
         "Todo lo de abajo es opcional" is an EDITING affordance — it tells someone filling

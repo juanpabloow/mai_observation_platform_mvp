@@ -7,11 +7,11 @@ import type { ContactPanelData } from "@/lib/contactPanel";
 import { AppointmentsSection } from "@/components/contacts/shared/AppointmentsSection";
 import { TasksSection } from "@/components/contacts/shared/TasksSection";
 import { NotesSection } from "@/components/contacts/shared/NotesSection";
-import { TagsSection } from "@/components/contacts/shared/TagsSection";
 import { ContactEditForm } from "@/components/contacts/form/ContactEditForm";
 import type { ContactEditPayload } from "@/lib/contactPanel";
 import { CRM_COPY } from "@/lib/contactLabels";
-import { FormSection, IconCalendar, IconInternal, IconNote, IconPencil, IconTask } from "@/components/contacts/form/formPrimitives";
+import { FormSection, IconCalendar, IconComms, IconInternal, IconNote, IconPencil, IconTask } from "@/components/contacts/form/formPrimitives";
+import { formatStampShort } from "@/lib/format";
 import { BOOK_CLS, PanelAlertStrip } from "@/components/ui/primitives";
 import { IconPlus } from "@/components/ui/icons";
 import { ContactSections } from "@/components/contacts/form/ContactSections";
@@ -308,6 +308,9 @@ export function ContactSidePanel({
               {edit ? (
                 <ContactSections
                   mode="read"
+                  // The ficha quick view: hides consent, "No contactar" and Interno/tags
+                  // for a cleaner read (the full record keeps them).
+                  variant="panel"
                   // ONE column. The panel is 380px and a fact row spends 6.5rem of it on
                   // the label; two columns leave ~70px for the value, which truncates a
                   // phone number.
@@ -332,26 +335,35 @@ export function ContactSidePanel({
                 />
               ) : null}
 
-              {/*
-                THE ORDER IS THE ARTBOARD'S (22a): facts → Etiquetas → Notas.
-
-                `Próxima cita` moved OUT of Resumen and into the Citas tab: it is an
-                appointment, the tab beside it lists appointments, and showing the next one
-                twice made Resumen the longest tab in a panel whose point is a summary.
-                `Tareas abiertas` stays, LAST — the artboard does not draw it, but this is
-                the only surface in the panel where a task is visible at all, and dropping
-                it to match a drawing would remove function. Placing it after Notas means
-                everything the artboard does show appears in the artboard's order.
-              */}
-              <FormSection title={CRM_COPY.headings.tags} icon={<IconInternal />}>
-                <TagsSection
-                  clientId={clientId}
-                  contactId={contactId}
-                  tags={data.tags}
-                  catalogue={[]}
-                  canManageCatalog={viewerIsFullAccess}
-                  onChanged={onChanged}
-                />
+              {/* CONVERSACIÓN — the ficha's window into the thread: last activity + a link
+                  that opens the conversation in the inbox. Etiquetas and the Interno tags
+                  were removed from the ficha for a cleaner quick view (tags are still managed
+                  from the edit drawer and the full record). Order: facts → Conversación →
+                  Notas → Tareas. */}
+              <FormSection title="Conversación" icon={<IconComms />}>
+                {data.recentConversation ? (
+                  <div className="flex flex-col gap-2">
+                    {data.recentConversation.lastMessageAt ? (
+                      <p className="text-[0.8125rem] text-muted">
+                        Última actividad{" "}
+                        <span className="text-foreground">
+                          {formatStampShort(new Date(data.recentConversation.lastMessageAt))}
+                        </span>
+                      </p>
+                    ) : null}
+                    <Link
+                      href={`/clients/${clientId}/inbox?c=${encodeURIComponent(data.recentConversation.id)}`}
+                      className="w-fit text-[0.8125rem] font-medium text-brand no-underline hover:underline"
+                    >
+                      Ver conversación ↗
+                    </Link>
+                    {data.conversationCount > 1 ? (
+                      <p className="text-[0.75rem] text-faint">{data.conversationCount} conversaciones en total</p>
+                    ) : null}
+                  </div>
+                ) : (
+                  <p className="text-[0.8125rem] text-faint">Sin conversaciones.</p>
+                )}
               </FormSection>
 
               <FormSection title={CRM_COPY.headings.notes} icon={<IconNote />}>
