@@ -173,7 +173,19 @@ export function InboxThread({
   // clock only advances when this component re-renders (the thread already polls), so a
   // tab left open can show the window as open for up to one poll after it closes — the
   // provider is the real gate; this is a courtesy so nobody types a doomed reply.
-  const windowNotice = serviceWindowNotice(serviceWindow(header.channel, merged, new Date()));
+  // The inbox is WhatsApp handoff, so the 24h service window ALWAYS applies here — keyed off
+  // the conversation's OWN last customer message (header.lastUserMessageAt: server-computed,
+  // authoritative, and immune to a paginated transcript). It previously passed header.channel
+  // — the CONTACT's free-text source label ("conversation" / "api" / …), NOT the transport —
+  // so WhatsApp chats whose contact wasn't labelled "whatsapp" returned "not_applicable" and
+  // stayed writable past 24h with no alert. That is the bug this fixes.
+  const windowNotice = serviceWindowNotice(
+    serviceWindow(
+      "whatsapp",
+      header.lastUserMessageAt ? [{ sender: "user", occurredAt: header.lastUserMessageAt }] : [],
+      new Date(),
+    ),
+  );
 
   const handleSend = (text: string) => {
     const tempId = `optimistic-${tempCounter.current++}`;

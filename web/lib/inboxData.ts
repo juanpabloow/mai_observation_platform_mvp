@@ -120,6 +120,7 @@ export function toHeaderView(
     workflowName: c.workflow_name,
     mode: c.mode,
     active,
+    lastUserMessageAt: c.last_user_message_at?.toISOString() ?? null,
     assignedAgentUserId: c.assigned_agent_user_id,
     assignedAgentName: c.assigned_agent_name,
     contactName: c.contact_name,

@@ -134,6 +134,11 @@ export interface InboxHeaderView {
   mode: InboxMode;
   /** ACTIVE iff the customer wrote within the activity window (for the drawer's tag). */
   active: boolean;
+  /** The customer's LAST inbound message time (ISO), authoritative from the conversation
+   *  row. Drives the WhatsApp 24h service window; null when they never wrote. Using this
+   *  rather than the loaded transcript avoids both a pagination gap and the wrong signal
+   *  (the contact's free-text `channel` label) that let expired chats stay writable. */
+  lastUserMessageAt: string | null;
   assignedAgentUserId: string | null;
   assignedAgentName: string | null;
 }
