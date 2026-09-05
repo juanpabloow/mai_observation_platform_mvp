@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
 import { PageShell } from "@/components/ui/PageShell";
+import { PageHeading } from "@/components/ui/PageTitle";
 
 /**
  * THE roster's header card — ONE LINE: the title, the search, the primary action.
@@ -43,10 +44,8 @@ export function StaffHeaderCard({
     // grow={false}: this card sizes to its content and the roster below absorbs the
     // leftover height — the same division of the region Contacts uses.
     <PageShell grow={false}>
-      <div className="flex items-center gap-1 px-3 py-2">
-        <h1 className="shrink-0 px-1.5 text-[15px] font-semibold tracking-[-0.015em] text-foreground">
-          {slots.title}
-        </h1>
+      <div className="flex flex-wrap items-center gap-2.5 px-3 py-2">
+        <PageHeading title={slots.title} className="px-1.5" />
         {controls}
       </div>
     </PageShell>

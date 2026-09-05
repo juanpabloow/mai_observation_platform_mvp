@@ -82,10 +82,12 @@ export function ContactsSearch({ compact = false }: { compact?: boolean } = {}) 
         e.preventDefault();
         apply({ q: draft.trim() });
       }}
-      // The SHARED shell (§2.1). Sizing is local: capped at 420px, but tightened to 240px
-      // with a shorter placeholder when the detail panel is open (design image 18), so the
-      // toolbar stays on one line beside the narrowed table.
-      className={`${SEARCH_SHELL_CLS} min-w-0 flex-1 ${compact ? "max-w-[240px]" : "max-w-[420px]"}`}
+      // The SHARED shell (§2.1). Sizing is local: it NEVER drops below 240px (min-w-[15rem])
+      // so the field can't compress to just its icon, grows to fill the slack (flex-1), and
+      // caps at 420px — 240px flat when the detail panel is open (image 18). When the row
+      // can't fit search + controls + primary, the header card wraps to a second band rather
+      // than squeezing the search.
+      className={`${SEARCH_SHELL_CLS} min-w-[15rem] flex-1 ${compact ? "max-w-[240px]" : "max-w-[420px]"}`}
     >
       <SearchIcon />
       <input

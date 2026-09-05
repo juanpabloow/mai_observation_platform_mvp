@@ -38,19 +38,42 @@ export function PageTitle({
 }) {
   return (
     <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
-      {/* 19px, in PIXELS on purpose. The reference's type is specified against a
-          16px root; this app runs a 90% root (see globals.css), so `text-xl` rendered
-          at 18px and the pane label at 13.5px — everything landed a notch small. The
-          shell geometry tokens already take the same exemption. */}
+      <PageHeading title={title} count={count} />
+      {children}
+      {context ? <span className="ml-auto text-xs text-muted">{context}</span> : null}
+      {actions ? <span className={`flex shrink-0 items-center gap-2 ${context ? "" : "ml-auto"}`}>{actions}</span> : null}
+    </div>
+  );
+}
+
+/**
+ * THE page-title typography, in ONE place. The main title of a list screen (Contacts, Staff,
+ * Agenda, and the PageTitle band above) renders through this, so size, weight, line-height
+ * and the count chip cannot drift between screens the way three hand-copied `text-[…]` did.
+ *
+ * 19px, in PIXELS on purpose: this app runs a 90% root (see globals.css), so `text-xl`
+ * landed a notch small — the shell geometry tokens take the same exemption.
+ *
+ * The Inbox queue keeps a distinct, smaller PANE LABEL (it labels one column of a workspace,
+ * not the screen) — that is a separate semantic role, not this one.
+ */
+export function PageHeading({
+  title,
+  count,
+  className = "",
+}: {
+  title: string;
+  count?: number | string;
+  className?: string;
+}) {
+  return (
+    <div className={`flex shrink-0 items-baseline gap-2 ${className}`}>
       <h1 className="text-[19px] font-semibold tracking-tight text-foreground">{title}</h1>
       {count !== undefined ? (
         <span className="u-mono rounded-full bg-chip px-2 py-0.5 text-[0.6875rem] font-medium text-muted">
           {count}
         </span>
       ) : null}
-      {children}
-      {context ? <span className="ml-auto text-xs text-muted">{context}</span> : null}
-      {actions ? <span className={`flex shrink-0 items-center gap-2 ${context ? "" : "ml-auto"}`}>{actions}</span> : null}
     </div>
   );
 }

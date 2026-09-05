@@ -126,16 +126,10 @@ test('the presence counts are CLICKABLE facet pills in the title band, from one 
   const primitives = read('web/components/ui/primitives.tsx');
   assert.ok(primitives.includes('export function FacetPills('), 'FacetPills is a shared primitive');
   assert.ok(!stripComments(read(CONTACTS)).includes('function FacetPills('), 'Contacts does not redeclare it');
-  // Contacts no longer RENDERS SummaryBit, and that is the CRM rework rather than a
-  // regression (docs/ui-redesign-crm-inbox.md §2.2): its five counters became segmented
-  // FACET PILLS, where the number is a filter you click instead of a statistic you read
-  // and then act on separately. The counts come from the same `summarizeContacts` call.
-  const contactsSrc = read(CONTACTS);
-  assert.ok(contactsSrc.includes('<FacetPills'), 'Contacts counts through the facet pills instead');
-  assert.ok(
-    contactsSrc.includes('count: summary.new') && contactsSrc.includes('count: summary.unassigned'),
-    'and they are the same real counters, from the same summary',
-  );
+  // Contacts USED to mirror these pills; the CRM toolbar consolidation later folded its
+  // stage/owner facets into the Filtrar menu, so Contacts no longer renders FacetPills.
+  // The staff roster keeps them because presence is a small fixed set worth one click.
+  assert.ok(!stripComments(read(CONTACTS)).includes('<FacetPills'), 'Contacts moved its facets into the Filtrar menu');
 });
 
 test('the primary action sits in the control band, and the roster keeps its dashed row', () => {
@@ -178,7 +172,7 @@ test('the roster still shows everything it showed before', () => {
   // `Status` is no longer a dropdown — its buckets are the counted pills asserted above,
   // and keeping both would let one filter show two active states. Service and Site stay:
   // neither is expressible as a small fixed set of counted pills.
-  for (const facet of ['Service', 'Site']) assert.ok(src.includes(`label="${facet}"`), `${facet} facet kept`);
+  for (const facet of ['Servicio', 'Sede']) assert.ok(src.includes(`label="${facet}"`), `${facet} facet kept`);
   assert.equal(/label="Status"/.test(src), false, 'Status became the pills, not a second control');
   // THE TAB STRIP IS GONE, and that is a removal rather than a move. Two of its three
   // tabs were stubs rendering "Coming soon": Turnos needs a published-rota model (a barber
@@ -201,7 +195,7 @@ test('the roster still shows everything it showed before', () => {
   // The screen still names itself — as a real heading, since there is no active tab to
   // carry the name any more.
   assert.ok(ws.includes('title: "Equipo"'), 'the screen keeps its title');
-  assert.ok(read(HEADER).includes('<h1'), 'and it is a heading, not a styled span');
+  assert.ok(read(HEADER).includes('<PageHeading'), 'and it is the shared PageHeading (an h1), not a hand-styled span');
   assert.equal(/sr-only/.test(read(HEADER)), false, 'a visible one');
   // THE COUNT LEFT THE TITLE BAND, and the scope line with it — the title row is now one
   // clean line (name, search, primary) like Contacts'. Neither fact is lost: the number is

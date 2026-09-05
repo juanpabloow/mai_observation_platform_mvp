@@ -340,25 +340,14 @@ export function ClientInboxWorkspace({
                 aria-label="Buscar conversaciones"
                 className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
               />
-              {/* TODO(inbox): the design puts a FILTER control at the right of the
-                  search field, but this list has no facets to open: the only scope
-                  that exists is the workflow, and that selector lives in the app
-                  header (W-2, deliberately not duplicated here). It renders disabled
-                  and says so on hover rather than opening an empty menu — wire it up
-                  when the list gains real facets (channel / intent / assignee). */}
-              <button
-                type="button"
-                disabled
-                title="No list filters yet — the workflow scope lives in the header switcher"
-                aria-label="Filter conversations"
-                className="-mr-1 inline-flex size-7 shrink-0 cursor-not-allowed items-center justify-center rounded-md text-faint"
-              >
-                <FilterIcon />
-              </button>
+              {/* No filter control here yet: this list has no facets to open (the only
+                  scope is the workflow, whose selector lives in the app header, W-2). The
+                  design's filter affordance is HIDDEN until real facets exist (channel /
+                  intent / assignee) rather than shown as a dead disabled button. */}
             </div>
             {/* No in-panel workflow selector (W-2): the header switcher is the single
                 workflow selector; this list follows the active scope. */}
-            {stale ? <span className="u-mono text-[0.6875rem] text-faint">Reconnecting…</span> : null}
+            {stale ? <span className="u-mono text-[0.6875rem] text-faint">Reconectando…</span> : null}
           </div>
         </div>
 
@@ -512,20 +501,6 @@ function GroupDot({ tone }: { tone: InboxGroupMeta["tone"] }) {
   return <span aria-hidden className={`size-2 shrink-0 rounded-full ${cls}`} />;
 }
 
-/** Funnel — the search shell's filter affordance (see the TODO at its call site). */
-function FilterIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-4" fill="none" aria-hidden>
-      <path
-        d="M4 6h16l-6.2 7.2v4.6L10.2 20v-6.8L4 6Z"
-        stroke="currentColor"
-        strokeWidth="1.6"
-        strokeLinejoin="round"
-      />
-    </svg>
-  );
-}
-
 /** Magnifier for the queue's search shell. */
 function SearchIcon() {
   return (
@@ -613,7 +588,7 @@ function ConversationRow({
       // 50px, down from 56. Three lines of 11–13px type need ~44px; the rest was air, and
       // at 300px wide the queue shows fewer rows per screen than it did at 360 unless the
       // row gives some of it back.
-      className={`relative mx-1.5 my-px flex min-h-[50px] items-center gap-2.5 overflow-hidden rounded-lg border px-2.5 py-2 transition-colors ${
+      className={`relative mx-1.5 my-px flex min-h-[var(--conversation-row-h)] items-center gap-2.5 overflow-hidden rounded-lg border px-2.5 py-2 transition-colors ${
         selected
           ? "border-transparent bg-queue-row-active"
           : view.mode === "pending"

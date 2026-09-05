@@ -84,7 +84,7 @@ test('shell: chrome geometry is fixed px, so it does not ride the 90% rem scale'
   // These are chrome dimensions, not content. Expressed in rem they would silently
   // shrink with the global scale (a 236px rail rendering at ~212px).
   for (const [token, value] of [
-    ['--sidebar-width', '238px'],
+    ['--sidebar-width', '210px'],
     ['--topbar-height', '44px'],
     ['--content-pad', '16px'],
     ['--panel-pad', '16px'],
@@ -133,15 +133,17 @@ test('shell: the four header strips all resolve to the SAME height token', () =>
   for (const rel of ['components/scheduling/AgendaView.tsx', 'components/ClientInboxWorkspace.tsx']) {
     assert.ok(read(rel).includes('<PageTitle'), `${rel} uses the shared page title`);
   }
-  // Contacts is the exception, and deliberately so (docs/ui-redesign-crm-inbox.md §2.1):
-  // its title row is ONE line holding the title, the search field, the two data actions
-  // and the primary — a shape PageTitle cannot express, since PageTitle's contract is
-  // "a title, counters, and a right-aligned scope line". What must still hold is the
-  // SIZE, so the screen's name is the same weight as every other screen's.
+  // Contacts and Staff title through the SHARED PageHeading (the one 19px definition,
+  // extracted from PageTitle) rather than a hand-copied h1 — so the screen's name is the
+  // same size and weight as every other screen's. Their header card is one line (title,
+  // search, controls, primary), a shape the full PageTitle band cannot express, so they
+  // use the heading primitive on its own.
   const contactsPage = read('app/clients/[clientId]/contacts/page.tsx');
+  assert.ok(contactsPage.includes('<PageHeading'), 'contacts titles itself with the shared PageHeading');
+  assert.ok(read('components/scheduling/staff/StaffHeaderCard.tsx').includes('<PageHeading'), 'staff too');
   assert.ok(
-    /<h1[^>]*text-\[15px\][^>]*font-semibold/.test(contactsPage.replace(/\s+/g, ' ')),
-    'contacts titles itself at the shared size even though it does not use PageTitle',
+    read('components/ui/PageTitle.tsx').includes('export function PageHeading('),
+    'and PageHeading is exported from PageTitle — one definition, not three hand-styled titles',
   );
 });
 
@@ -150,18 +152,17 @@ test('sidebar: the footer row is a GRID, so the label cannot overlap the avatar'
   // The earlier min-w-0/overflow-hidden fix only governed truncation on the RIGHT;
   // it could not stop the label from starting on top of the avatar. Grid tracks
   // cannot overlap: track 2 begins after the avatar's track plus the gap.
-  assert.ok(src.includes('grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3'), 'two real tracks with a gap');
+  assert.ok(src.includes('grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5'), 'three real tracks with a gap (avatar · label · caret)');
   // minmax(0,1fr) is what still allows the label to shrink and truncate.
   assert.ok(src.includes('minmax(0,1fr)'), 'the label track can shrink below its content');
-  assert.ok(src.includes('truncate text-[0.8125rem] font-medium leading-tight text-sidebar-fg'), 'long names still truncate on the right');
+  assert.ok(src.includes('truncate text-[0.8125rem] font-semibold leading-tight text-sidebar-fg'), 'long names still truncate on the right');
   // The avatar must not pick up the RED hover token as its fill.
   assert.ok(!/bg-sidebar-hover text-xs font-semibold/.test(src), 'the avatar is not filled with the hover red');
-  // It is now the SAME two-tone gradient sphere every other person in the app gets
-  // (`.u-avatar-*`), seeded from the account's own identifier. It used to be a flat
-  // --sidebar-border fill, which made the one person always on screen the only person
-  // without an identity colour.
-  assert.ok(src.includes('avatarColor(seed)'), 'the rail disc is coloured from the shared avatar hash');
-  assert.ok(src.includes('seed={account.email}'), 'seeded on the email, which cannot be edited away');
+  // The footer avatar is a NEUTRAL squared tile with mono initials (design image), NOT an
+  // identity-coloured disc: the one person the rail names in words right beside it needs no
+  // colour to be found.
+  assert.ok(src.includes('rounded-lg border border-sidebar-border bg-sidebar-border'), 'the rail disc is a neutral squared tile');
+  assert.ok(!src.includes('avatarColor(seed)'), 'and is not hashed from an identity colour');
 });
 
 test('contacts: the panel gutter is actually VISIBLE against the canvas', () => {
@@ -254,12 +255,12 @@ test('contacts: ONE card holds the screen, with the table recessed inside it', (
   // THREE cards on the canvas: title+filters, table, panel. The first sizes to its
   // content (grow={false}); only the table absorbs the leftover height.
   assert.ok(/<PageShell grow=\{false\}( clip=\{false\})?>/.test(src), 'the title card sizes to its content');
-  // The rework split the old single toolbar into three places (§2.1–2.2): the SEARCH is
-  // in the title row, the common facets are a server-rendered pill row inside the table
-  // card, and what is left sits behind Filtrar / Orden / Columnas beside the pills.
-  assert.ok(src.includes('<ContactsSearch />'), 'the search renders in the title row');
-  assert.ok(src.includes('<FacetPills'), 'the facet pills render');
-  assert.ok(src.includes('<ContactsFilterMenu owners={ownerOptions} />'), 'the residual facets render');
+  // The header card holds the title, the search and ALL the controls + the primary (image
+  // 25). The facet-pill row was later dropped: stage/owner filtering lives in the Filtrar
+  // menu now, so the header is one clean band rather than a title row over a pill row.
+  assert.ok(src.includes('<ContactsSearch'), 'the search renders in the header card');
+  assert.ok(!src.includes('<FacetPills'), 'the facet-pill row is gone — filtering is the Filtrar menu');
+  assert.ok(src.includes('<ContactsFilterMenu owners={ownerOptions} />'), 'the filter control renders');
   assert.ok(
     src.indexOf('<PageShell grow={false}') < src.indexOf('<ContactsSearch />'),
     'and the title row is inside that first card, not floating above it',
@@ -292,10 +293,12 @@ test('contacts: the controls are ONE row each, and share one height', () => {
   }
   assert.ok(toolbar.includes('SEARCH_SHELL_CLS'), 'and the toolbar reads them rather than re-typing a box');
   const page = read(CONTACTS_PAGE);
-  // The title row is a single non-wrapping line: the search takes the slack (flex-1) and
-  // everything else is shrink-0, which is what stops the primary from being pushed off.
-  assert.ok(/<div className="flex items-center gap-1 px-3 py-2">/.test(page), 'the title row does not wrap');
-  assert.ok(toolbar.includes('min-w-0 max-w-\[420px\] flex-1') || toolbar.includes('max-w-[420px] flex-1'), 'the search absorbs the slack, capped at the artboard\'s 420px');
+  // The header card is one BAND — title, search, controls, primary — that wraps DELIBERATELY
+  // (flex-wrap) to a second line when it can't fit, rather than squeezing the search. The
+  // search never drops below 240px (min-w-[15rem]), so it can't compress to just its icon
+  // (the reported ~917px-content bug).
+  assert.ok(/<div className="flex flex-wrap items-center gap-2.5 px-3 py-2.5">/.test(page), 'the header card is one wrapping band');
+  assert.ok(toolbar.includes('min-w-[15rem] flex-1') && toolbar.includes('max-w-[420px]'), 'the search is 240–420px, never narrower');
 });
 
 test('contacts: "Nuevo contacto" is LIVE, and creation goes through the identity chokepoint', () => {
@@ -529,10 +532,11 @@ test('contacts: Columns is presentational — it writes ?cols= and touches nothi
 test('contacts: the row is fully clickable via ONE real link (no duplicate tab stops)', () => {
   const src = read(CONTACTS_TABLE);
   assert.ok(src.includes('after:absolute after:inset-0'), 'the name link stretches over the row');
-  // 54px, the artboard's row (§2.3) — up from 46px, because the name cell is now two
-  // lines. Still not the dense --row-h: this is the customer list, not a log.
-  assert.ok(src.includes('h-[54px]'), 'the row is the artboard height');
-  assert.ok(src.includes('className={`relative grid h-[54px]'), 'the row is the positioning context');
+  // The row height is the SHARED entity-row token (--entity-row-h, 56px) so Contacts and
+  // Staff read as one list. Still not the dense --row-h: this is a customer list, not a log.
+  assert.ok(src.includes('${ENTITY_ROW_CLS}'), 'the row uses the shared entity-row geometry');
+  assert.ok(src.includes('className={`relative grid ${ENTITY_ROW_CLS}'), 'the row is the positioning context');
+  assert.ok(read('components/ui/primitives.tsx').includes('--entity-row-h'), 'and the shared token is defined');
   // A grid, not a table — and the head and the rows read the SAME template, which is
   // what keeps the sticky head aligned with its body.
   assert.ok((src.match(/gridTemplateColumns: template/g) ?? []).length === 2, 'head and rows share one template');
@@ -1082,7 +1086,7 @@ test('inbox: the restyle preserved ?c=, the workflow scope, search and polling',
   assert.ok(src.includes('searchParams.toString()'), '… preserving the other params');
   assert.ok(src.includes('No in-panel workflow selector'), 'the header remains the single workflow selector');
   assert.ok(src.includes('POLL_MS'), 'polling is intact');
-  assert.ok(src.includes('Reconnecting…'), 'the stale/reconnecting state is intact');
+  assert.ok(src.includes('Reconectando…'), 'the stale/reconnecting state is intact (in Spanish)');
 });
 
 test('inbox: three columns + the details collapse and drawer are intact', () => {
@@ -1123,14 +1127,13 @@ test('inbox: customer / bot / human-agent messages stay visually distinct', () =
   const src = read('components/MessageTranscript.tsx');
   assert.ok(src.includes('const isUser = msg.sender === "user"'), 'customer is identified');
   assert.ok(src.includes('const isAgent = msg.sender === "human_agent"'), 'the human agent is identified');
-  // Three different fills — a light → mid → dark ramp, no hue spent.
-  assert.ok(src.includes('border border-bubble-in-border bg-bubble-in text-bubble-in-fg'), 'customer bubble');
-  // The human agent is WHITE with an INK edge — it sits on the business side but must not
-  // be mistaken for the bot, so it keeps the side and drops the dark fill (§3.3).
-  assert.ok(src.includes('border border-bubble-agent-border bg-bubble-agent text-bubble-agent-fg'), 'human-agent bubble (ink-edged, on the business side)');
-  // The bot is a SOLID near-black fill with no border — a border on a dark fill is
-  // invisible and only existed to keep the old three-grey ramp apart.
-  assert.ok(src.includes('bg-bubble-bot text-bubble-bot-fg'), 'bot bubble');
+  // Customer = WHITE bubble on the left.
+  assert.ok(src.includes('border border-bubble-in-border bg-bubble-in text-bubble-in-fg'), 'customer bubble (white, left)');
+  // The BUSINESS side — bot AND human agent — is the SOLID near-black bubble (design image
+  // 19). They are told apart NOT by fill but by the EQUIPO signature above the run and the
+  // sender disc (initials vs BOT). The failed-agent case keeps its own outlined-red style.
+  assert.ok(src.includes('bg-bubble-bot text-bubble-bot-fg'), 'the business bubble is near-black');
+  assert.ok(/·\s*equipo/i.test(src), 'a human agent\'s run is signed "· equipo"');
   // THE TAIL is what says who is speaking, alongside the fill: three corners take
   // --radius-bubble and the one pointing at the speaker collapses to the tail token.
   assert.ok(src.includes('rounded-bl-bubble-tail'), 'the customer\'s tail points bottom-left');
@@ -1162,7 +1165,7 @@ test('inbox: the timestamp sits OUTSIDE the bubble, so it steals width from no l
   assert.ok(src.includes('whitespace-pre-wrap break-words'), 'the body keeps its own wrapping');
 });
 
-test('inbox: the three voices stay distinguishable — by fill, edge AND side', () => {
+test('inbox: the voices stay distinguishable — customer vs business by fill, bot vs agent by signature, and side', () => {
   const css = read('app/globals.css');
   // The transcript now has its OWN grey ground, which is what lets the customer bubble
   // be white. Before, the transcript was white and the customer was grey — the two
@@ -1224,43 +1227,27 @@ test('inbox: the three voices stay distinguishable — by fill, edge AND side', 
   for (const theme of ['light', 'dark'] as const) {
     const map = themeVars(theme);
     const inbound = resolve(map, 'bubble-in');
-    const bot = resolve(map, 'bubble-bot');
-    const agent = resolve(map, 'bubble-agent');
-    assert.ok(inbound && bot && agent, `${theme}: all three fills are defined`);
-    // TWO fills, not three — and that is the design (§3.3), not a regression.
-    //
-    // The customer and the human agent are BOTH white. What separates them is the EDGE
-    // (a hairline vs a 1px INK border) and the SIDE (left vs right). The old third fill
-    // was a brand-red wash on the agent, which put a fourth colour in a thread that only
-    // needs to answer "who said this" — and red is now spent elsewhere.
-    //
-    // So the assertion that matters is no longer "three fills". It is: the BOT is
-    // unmistakable by fill alone, and the two white bubbles are told apart by something
-    // that is not colour. The border half is asserted below, on the markup.
-    assert.notEqual(bot, inbound, `${theme}: the bot's fill is not the customer's`);
-    assert.notEqual(bot, agent, `${theme}: nor the agent's`);
-    assert.equal(inbound, agent, `${theme}: the two white bubbles share a fill, by design`);
-    // None of them may be the ground itself, or that bubble has no edge but its border.
+    const business = resolve(map, 'bubble-bot');
+    assert.ok(inbound && business, `${theme}: the customer + business fills are defined`);
+    // TWO fills (design image 19): the CUSTOMER is white, the BUSINESS side (bot AND human
+    // agent) is one near-black fill. The fill split is customer vs business; bot vs agent is
+    // the EQUIPO signature + the sender disc, asserted on the markup below — not a colour.
+    assert.notEqual(inbound, business, `${theme}: the customer's fill is not the business one`);
+    // Neither may BE the ground itself, or the bubble has no edge against it.
     assert.notEqual(inbound, resolve(map, 'thread-bg'), `${theme}: inbound is not the ground`);
-    assert.notEqual(bot, resolve(map, 'thread-bg'), `${theme}: bot is not the ground`);
+    assert.notEqual(business, resolve(map, 'thread-bg'), `${theme}: the business bubble is not the ground`);
   }
   assert.ok(css.includes('--color-bubble-bot: var(--bubble-bot)'), 'exposed as a utility');
 
-  // THE AGENT'S EDGE is what carries the distinction the fill no longer does: white with
-  // an INK border, in both themes, so a colleague's reply is as loud as the bot's without
-  // spending a hue on it.
-  assert.equal(css.match(/--bubble-agent-border:\s*var\(--ink\)/g)?.length, 2, 'ink-edged in both themes');
   const transcript = read('components/MessageTranscript.tsx');
-  assert.ok(
-    transcript.includes('border border-bubble-agent-border bg-bubble-agent'),
-    'and the bubble actually draws that edge',
-  );
-  // …plus the SIDE, which is the redundant cue that makes the pair survive greyscale.
+  // BOT vs AGENT is carried by the SIGNATURE (a human run is labelled "· equipo") + the
+  // sender disc (initials vs BOT), not by an edge or a hue.
+  assert.ok(/·\s*equipo/i.test(transcript), 'the agent run carries the EQUIPO signature');
+  // …plus the SIDE — customer left, business right — the cue that survives greyscale.
   assert.ok(transcript.includes('rounded-bl-bubble-tail'), 'the customer sits left');
   assert.ok(transcript.includes('rounded-br-bubble-tail'), 'the business sits right');
-  // The bot's fill needs no border — a border on a dark fill is invisible and only
-  // existed to keep the old three-grey ramp apart.
-  assert.equal(/border border-bubble-bot-border/.test(transcript), false, 'the bot is a solid fill, unbordered');
+  // The business bubble is a solid fill — a border on a dark fill is invisible.
+  assert.equal(/border border-bubble-bot-border/.test(transcript), false, 'the business bubble is unbordered');
 });
 
 test('inbox: no function crosses the server→client boundary', () => {
@@ -1444,4 +1431,55 @@ test('a card that hosts a dropdown does not clip it away', () => {
     (rel) => /absolute[^"]*top-full/.test(read(rel)) && rel !== 'components/contacts/ContactsToolbar.tsx',
   );
   assert.deepEqual(offenders, [], `every top-full menu is accounted for, found: ${offenders.join(', ')}`);
+});
+
+// ── The consistency grammar: Contacts + Staff share one visual system ────────────────
+// A single case that pins the consolidation so a future page cannot reintroduce a
+// 27px secondary button, a 36px header, a 54px row or a hand-copied title.
+test('grammar: toolbar controls, search and list rows are consolidated across Contacts + Staff', () => {
+  const primitives = read('components/ui/primitives.tsx');
+  const declOf = (name: string) =>
+    primitives.slice(primitives.indexOf(`export const ${name} =`), primitives.indexOf(`export const ${name} =`) + 400);
+
+  // Every FREE-STANDING toolbar control resolves to the ONE height token — search, select,
+  // primary, ghost, and the outlined secondary that used to be a shorter, smaller odd one.
+  for (const cls of ['CONTROL_CLS', 'SEARCH_SHELL_CLS', 'TOOLBAR_PRIMARY_CLS', 'GHOST_ACTION_CLS', 'OUTLINE_CLS']) {
+    assert.ok(declOf(cls).includes('h-[var(--control-h)]'), `${cls} is --control-h tall`);
+  }
+  // The outlined secondary shares the CONTROL radius (11px / rounded-lg) and text-sm — it is
+  // a control, not a chip. This is the specific regression the task called out.
+  const outline = declOf('OUTLINE_CLS');
+  assert.ok(outline.includes('rounded-lg'), 'OUTLINE_CLS is 11px (rounded-lg), a control not a 9px chip');
+  assert.ok(!outline.includes('rounded-md'), 'and not the chip radius it used to have');
+  assert.ok(!outline.includes('text-xs'), 'nor the smaller text a toolbar control must not use');
+
+  // Contacts and Staff search through the SAME primitive, never narrower than 240px.
+  const contactsToolbar = read('components/contacts/ContactsToolbar.tsx');
+  const staff = read('components/scheduling/staff/StaffTab.tsx');
+  for (const [src, who] of [[contactsToolbar, 'Contacts'], [staff, 'Staff']] as const) {
+    assert.ok(src.includes('SEARCH_SHELL_CLS'), `${who} search is the shared shell`);
+    assert.ok(src.includes('min-w-[15rem]'), `${who} search never drops below 240px`);
+  }
+
+  // Both lists' rows + headers come from the shared geometry (56px row, 38px header).
+  const contactsTable = read('components/contacts/ContactsTable.tsx');
+  for (const [src, who] of [[contactsTable, 'Contacts'], [staff, 'Staff']] as const) {
+    assert.ok(src.includes('ENTITY_ROW_CLS'), `${who} rows use the shared entity-row height`);
+    assert.ok(src.includes('TABLE_HEADER_CLS'), `${who} header uses the shared table-header height`);
+  }
+  assert.ok(primitives.includes('h-[var(--entity-row-h)]'), 'the entity row is the 56px token');
+  assert.ok(
+    declOf('TABLE_HEADER_CLS').includes('h-[var(--control-h)]'),
+    'the table header shares the 38px control height',
+  );
+
+  // Titles are the ONE shared heading, never hand-styled per page.
+  assert.ok(read('components/ui/PageTitle.tsx').includes('export function PageHeading('), 'PageHeading is the shared title');
+  assert.ok(read('app/clients/[clientId]/contacts/page.tsx').includes('<PageHeading'), 'Contacts titles through it');
+  assert.ok(read('components/scheduling/staff/StaffHeaderCard.tsx').includes('<PageHeading'), 'Staff titles through it');
+
+  // The Staff surface is in Spanish, like the rest of the CRM.
+  for (const es of ['Servicio', 'Sede', 'Ningún miembro coincide']) {
+    assert.ok(staff.includes(es), `Staff copy is Spanish: ${es}`);
+  }
 });

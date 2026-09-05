@@ -47,14 +47,15 @@ test('sidebar: sections are ordered Workspace → CRM → Scheduling → Adminis
   assert.ok(!ctx.includes('label: "Conversations"'), 'Inbox lives in Workspace, not its own group');
 });
 
-test('sidebar: WORKSPACE is Hub → Workflows → Inbox; workflow SURFACES are not rail items', () => {
+test('sidebar: WORKSPACE is Workflows → Inbox (Hub removed from the rail); workflow SURFACES are not rail items', () => {
   // Executions / Analytics / Settings are surfaces INSIDE a workflow, reached from
   // the Workflows list and the header scope switcher. As rail items they appeared as
   // peers of Inbox and CRM while pointing at a different context entirely — so the
   // client rail now shows the workflow CONTEXT once, as "Workflows".
   const src = read('components/AppSidebar.tsx');
   const workspace = slice(src, 'const workspace: NavItem[] = [', '];');
-  assert.ok(idx(workspace, 'key: "hub"') < idx(workspace, 'key: "workflows"'), 'Hub precedes Workflows');
+  assert.ok(!workspace.includes('key: "hub"'), 'Hub is no longer a rail item — the brand wordmark links home instead');
+  assert.ok(workspace.includes('key: "workflows"'), 'Workflows is the first workspace item');
   assert.ok(workspace.includes('scopeHref(clientId, "executions", scope)'), 'Workflows href still comes from scopeHref');
   assert.ok(src.includes('const onWorkflows = pathname.startsWith(c("/workflows"));'), 'active across all /workflows/… routes');
   // Inbox is appended to the SAME group (module-gated), so it renders under Workspace.

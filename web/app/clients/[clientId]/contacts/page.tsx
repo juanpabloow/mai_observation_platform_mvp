@@ -24,6 +24,7 @@ import { parseColumns } from "@/lib/contactColumns";
 import { EmptyState, GHOST_ACTION_CLS, Pagination } from "@/components/ui/primitives";
 import { PAGE_SIZE } from "@/lib/contactColumns";
 import { PageShell } from "@/components/ui/PageShell";
+import { PageHeading } from "@/components/ui/PageTitle";
 import { loadContactEditPayload, loadContactPanel } from "@/lib/contactPanel";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { isUuid } from "@/lib/clientModuleValidation";
@@ -197,10 +198,7 @@ export default async function ClientContactsPage({
           width above the table+panel row, so the search stays wide even with the panel open. */}
       <PageShell grow={false} clip={false}>
         <div className="flex flex-wrap items-center gap-2.5 px-3 py-2.5">
-          <div className="flex shrink-0 items-baseline gap-2">
-            <h1 className="text-[15px] font-semibold tracking-[-0.015em] text-foreground">Contactos</h1>
-            <span className="u-mono text-[0.71875rem] text-faint">{summary.total}</span>
-          </div>
+          <PageHeading title="Contactos" count={summary.total} />
           <ContactsSearch />
           {/* Filtrar / Orden / Columnas / Exportar / Campos + the primary all live in the
               header card's own row — the search section — filling the space beside the search

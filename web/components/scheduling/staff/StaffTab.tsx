@@ -15,12 +15,14 @@ import {
 import { PageShell } from "@/components/ui/PageShell";
 import {
   CONTROL_CLS,
+  ENTITY_ROW_CLS,
   MetricBox,
   MetricCell,
   PanelSection,
   SEARCH_SHELL_CLS,
   SectionHeading,
   FacetPills,
+  TABLE_HEADER_CLS,
   TOOLBAR_PRIMARY_CLS,
 } from "@/components/ui/primitives";
 import {
@@ -299,7 +301,7 @@ export function StaffTab(
               <>
                 {/* The SEARCH takes the title row's slack, capped at the artboard's 420px —
                     the same shell and the same sizing as Contacts. */}
-                <div className={`${SEARCH_SHELL_CLS} min-w-0 max-w-[420px] flex-1`}>
+                <div className={`${SEARCH_SHELL_CLS} min-w-[15rem] max-w-[420px] flex-1`}>
                   <SearchIcon />
                   <input
                     value={search}
@@ -355,13 +357,13 @@ export function StaffTab(
               />
               <span className="ml-auto flex shrink-0 items-center gap-1.5">
                 <Facet
-                  label="Service"
+                  label="Servicio"
                   value={serviceFilter}
                   onChange={setServiceFilter}
-                  options={[{ value: "", label: "Service" }, ...props.services.filter((s) => s.active).map((s) => ({ value: s.id, label: s.name }))]}
+                  options={[{ value: "", label: "Servicio" }, ...props.services.filter((s) => s.active).map((s) => ({ value: s.id, label: s.name }))]}
                 />
                 <Facet
-                  label="Site"
+                  label="Sede"
                   value={props.currentSiteId ?? ""}
                   onChange={(v) => router.push(`?site=${v}`)}
                   options={props.sites.map((s) => ({ value: s.id, label: s.name }))}
@@ -372,12 +374,12 @@ export function StaffTab(
             {/* The column header sits on the SAME white as the rows: the roster is
                 already its own card on grey, so a tinted strip inside it was a second
                 surface doing nothing the hairline below does not. */}
-            <div className="flex h-9 shrink-0 items-center gap-3 border-b border-line bg-surface px-4">
+            <div className={`flex shrink-0 bg-surface ${TABLE_HEADER_CLS}`}>
               <span className="w-[30px] shrink-0" />
-              <span className="u-th min-w-0 flex-1">Miembro</span>
-              <span className="u-th hidden w-[190px] shrink-0 lg:block">Presencia</span>
-              <span className="u-th hidden w-[104px] shrink-0 sm:block">Hoy</span>
-              <span className="u-th hidden w-[146px] shrink-0 lg:block">Siguiente</span>
+              <span className="min-w-0 flex-1">Miembro</span>
+              <span className="hidden w-[190px] shrink-0 lg:block">Presencia</span>
+              <span className="hidden w-[104px] shrink-0 sm:block">Hoy</span>
+              <span className="hidden w-[146px] shrink-0 lg:block">Siguiente</span>
               <span className="w-5 shrink-0" />
             </div>
 
@@ -403,7 +405,7 @@ export function StaffTab(
               })}
 
               {filtered.length === 0 ? (
-                <p className="px-4 py-10 text-center text-sm text-faint">No staff match these filters.</p>
+                <p className="px-4 py-10 text-center text-sm text-faint">Ningún miembro coincide con estos filtros.</p>
               ) : null}
 
               {/* The dashed row keeps its place at the end of the list — it is the
@@ -528,9 +530,7 @@ function StaffRow({
       href={href}
       scroll={false}
       aria-current={selected ? "true" : undefined}
-      className={`flex h-[56px] shrink-0 items-center gap-3 border-b border-line/70 px-4 transition-colors last:border-0 ${
-        selected ? "bg-chip" : "hover:bg-subtle"
-      }`}
+      className={`flex shrink-0 ${ENTITY_ROW_CLS} ${selected ? "bg-chip" : "hover:bg-subtle"}`}
     >
       <span
         aria-hidden
@@ -949,7 +949,7 @@ function StaffDetail({
               />
               {/* SITE is read-only: a barber belongs to exactly one site in V1 and moving
                   them is not an update the repository supports. */}
-              <ReadRow label="Site" value={member.siteName} />
+              <ReadRow label="Sede" value={member.siteName} />
             </DetailSection>
 
             {/* CONTACT — employee PII. It only reaches this component because the page

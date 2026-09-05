@@ -200,9 +200,9 @@
    */
   --sidebar-bg: #1a1a1a;
   --sidebar-border: #272727;
-  --sidebar-fg: #f7f7f8;
-  --sidebar-muted: #d4d4d8; /* brighter idle nav text on the dark rail (per request) */
-  --sidebar-section: #9a9aa0; /* brighter section labels on the dark rail */
+  --sidebar-fg: #f7f7f7;
+  --sidebar-muted: #d4d4d4; /* brighter idle nav text on the dark rail (per request) — neutral grey */
+  --sidebar-section: #9a9a9a; /* brighter section labels — neutral grey (R=G=B) */
   --sidebar-hover: var(--sidebar-hover-dark);
 }
 
@@ -664,8 +664,15 @@ html[data-text-scale='large'] {
   --topbar-height: 44px;
   --content-pad: 16px; /* visible gutter around the floating panel + rhythm */
   --panel-pad: 16px; /* panel inner padding (see note in the delivery summary) */
-  --control-h: 38px; /* search, facets, buttons */
-  --row-h: 41px; /* table rows */
+  --control-h: 38px; /* every free-standing toolbar control: search, selects, buttons */
+  --row-h: 41px; /* legacy table rows (agenda) */
+  /* THE operative-list row height, shared by Contacts + Staff so the two lists read as one
+     system. Their table HEADER uses --control-h (38px). */
+  --entity-row-h: 56px;
+  /* The Inbox queue row is DELIBERATELY taller: it stacks name + last message + metadata,
+     which the flat entity row does not. Documented as its own token so the difference is a
+     decision, not a drift. */
+  --conversation-row-h: 66px;
 }
 
 body {

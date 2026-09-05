@@ -100,9 +100,9 @@ test('the dark rail is NEUTRAL near-black, and it overrides ONLY the rail tokens
   for (const [token, value] of [
     ['--sidebar-bg', '#1a1a1a'],
     ['--sidebar-border', '#272727'],
-    ['--sidebar-fg', '#f5f5f5'],
-    ['--sidebar-muted', '#ababab'],
-    ['--sidebar-section', '#858585'],
+    ['--sidebar-fg', '#f7f7f7'],
+    ['--sidebar-muted', '#d4d4d4'],
+    ['--sidebar-section', '#9a9a9a'],
   ] as const) {
     assert.ok(black.includes(`${token}: ${value}`), `${token} is ${value}`);
   }
@@ -176,7 +176,7 @@ test('Black keeps the active row red with white text/icon, and the brand white',
   assert.ok(src.includes('tracking-tight text-sidebar-fg">MONTSERRAT_AI'), 'the wordmark uses the rail foreground');
   const css = read('app/globals.css');
   const black = css.slice(css.indexOf("[data-sidebar-theme='black']"), css.indexOf('@theme inline {'));
-  assert.ok(black.includes('--sidebar-fg: #f5f5f5'), 'which is near-white on the dark rail');
+  assert.ok(black.includes('--sidebar-fg: #f7f7f7'), 'which is near-white on the dark rail');
 });
 
 test('the account footer sits on the rail background, separated by a border', () => {

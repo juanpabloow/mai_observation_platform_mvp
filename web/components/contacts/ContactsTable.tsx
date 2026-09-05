@@ -1,7 +1,7 @@
 import Link from "next/link";
 import type { ContactListItem, PreferredChannel } from "@worker/db/repositories/contacts.js";
 import { ContactAvatar } from "@/components/contacts/ContactAvatar";
-import { Chip, OwnerDisc, StackedCell, StageChip, VisitsMeter } from "@/components/ui/primitives";
+import { Chip, ENTITY_ROW_CLS, OwnerDisc, StackedCell, StageChip, TABLE_HEADER_CLS, VisitsMeter } from "@/components/ui/primitives";
 import { channelLabel, sourceLabel } from "@/lib/contactLabels";
 import type { ContactColumnKey } from "@/lib/contactColumns";
 import { formatStampFull, formatStampShort, relativeAgeShort } from "@/lib/format";
@@ -92,7 +92,7 @@ export function ContactsTable({
       <div
         role="row"
         style={{ gridTemplateColumns: template }}
-        className="sticky top-0 z-10 grid h-[38px] items-center gap-2.5 border-b border-line-row bg-surface px-4 text-[0.6875rem] font-semibold tracking-[0.01em] text-muted"
+        className={`sticky top-0 z-10 grid bg-surface ${TABLE_HEADER_CLS}`}
       >
         {/* Sentence-case sans at 590 — NOT the app's older mono-uppercase `u-th`. The
             design moved the table head to the same voice as the panel section headings,
@@ -123,7 +123,7 @@ export function ContactsTable({
             role="row"
             key={c.id}
             style={{ gridTemplateColumns: template }}
-            className={`relative grid h-[54px] items-center gap-2.5 border-b border-line-soft px-4 transition-colors last:border-b-0 ${
+            className={`relative grid ${ENTITY_ROW_CLS} ${
               // The SELECTED row is one step darker — no tint, no left rule. The design
               // makes selection a change of GROUND rather than a coloured marker,
               // because the panel that opens beside it is already the loud signal that

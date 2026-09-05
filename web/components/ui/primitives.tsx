@@ -460,11 +460,26 @@ export const BOOK_CLS =
 
 /** A GHOST toolbar action (Importar / Exportar): no border until hover. */
 export const GHOST_ACTION_CLS =
-  "inline-flex h-[var(--control-h)] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 text-sm text-muted transition-colors hover:bg-subtle hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex h-[var(--control-h)] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-sm text-muted transition-colors hover:bg-subtle hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50";
 
-/** An OUTLINED secondary control (Filtrar / Orden / Reagendar / Cancelar). */
+/** An OUTLINED secondary control (Filtrar / Orden / Reagendar / Cancelar). A full toolbar
+ *  control: the same --control-h height, 11px radius and text-sm as the search and primary
+ *  beside it — only the emphasis (a hairline outline) differs. */
 export const OUTLINE_CLS =
-  "inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md border border-line-strong px-2.5 py-1.5 text-xs text-muted transition-colors hover:border-faint hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50";
+  "inline-flex h-[var(--control-h)] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-line-strong px-3 text-sm text-muted transition-colors hover:border-faint hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50";
+
+/**
+ * SHARED operative-list geometry, so Contacts and Staff read as one system. Each list keeps
+ * its own display (Contacts is a grid keyed off column templates, Staff a flex row), and
+ * adds its own hover + selected tint — but the height, the 16px horizontal padding, the
+ * column gap and the bottom divider come from here, once.
+ *   ENTITY_ROW_CLS   — a data row (--entity-row-h, 56px).
+ *   TABLE_HEADER_CLS — the column-label row (--control-h, 38px).
+ */
+export const ENTITY_ROW_CLS =
+  "h-[var(--entity-row-h)] items-center gap-2.5 border-b border-line-soft px-4 transition-colors last:border-b-0";
+export const TABLE_HEADER_CLS =
+  "h-[var(--control-h)] items-center gap-2.5 border-b border-line-row px-4 text-[0.6875rem] font-semibold tracking-[0.01em] text-muted";
 
 /**
  * A segmented FACET row — the redesign's replacement for the three `<select>` facets.
