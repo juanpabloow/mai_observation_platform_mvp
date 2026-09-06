@@ -382,8 +382,8 @@ function RailBody({
  * Left navigation, below the full-width header.
  *
  * INSIDE A CLIENT the rail is grouped by category (final visual design):
- *   AUTOMATION    → Workflows (the client's workflow LIST, active across every
- *                   /workflows/… route) then Overview (the aggregate analytics).
+ *   WORKSPACE     → Workflows (the client's workflow CONTEXT) then Analytics (the
+ *                   scope-aware analytics surface — aggregate, or the selected workflow).
  *   CONVERSATIONS → Inbox — the client-level UNIFIED inbox with a live AGGREGATED
  *                   pending badge; never nested under a workflow.
  *   CRM           → Contacts (iff the crm module is enabled).
@@ -465,19 +465,29 @@ export function AppSidebar({
     // active split keys off whether the path is an analytics route.
     const scope = scopeFor(clientId);
     const onWorkflows = pathname.startsWith(c("/workflows"));
+    // Analytics is a /workflows/<scope>/analytics route, so it lives UNDER /workflows; the
+    // active split between the two rows keys off whether the current path is that surface.
+    const onAnalytics = /\/workflows\/[^/]+\/analytics(?:\/|$)/.test(pathname);
     // WORKSPACE — the top-level places. Hub was removed from the rail (per request); the
-    // brand wordmark still links home. Workflows (the client's workflow CONTEXT), then Inbox.
-    // Executions / Analytics / Settings are NOT rail items: they are surfaces INSIDE
-    // a workflow, reached from the Workflows list and the header's scope switcher.
-    // Putting them in the rail made workflow-only surfaces look like peers of Inbox
-    // and CRM while sitting on a completely unrelated route.
+    // brand wordmark still links home. Workflows (the client's workflow CONTEXT), then
+    // Analytics (the aggregate / per-workflow analytics surface), then Inbox. Both
+    // Workflows and Analytics are SCOPE-AWARE: they follow the header's selected workflow,
+    // or the "all" aggregate — the same scope the switcher drives.
     const workspace: NavItem[] = [
       {
         key: "workflows",
         label: "Workflows",
         href: scopeHref(clientId, "executions", scope),
         icon: Icon.workflows,
-        active: onWorkflows,
+        // Only one row is active at a time — Workflows yields to Analytics on its route.
+        active: onWorkflows && !onAnalytics,
+      },
+      {
+        key: "analytics",
+        label: "Analytics",
+        href: scopeHref(clientId, "analytics", scope),
+        icon: Icon.overview,
+        active: onWorkflows && onAnalytics,
       },
     ];
     // Inbox only when the `inbox` module is enabled — hides the link, the badge, and

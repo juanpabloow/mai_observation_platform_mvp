@@ -47,25 +47,28 @@ test('sidebar: sections are ordered Workspace → CRM → Scheduling → Adminis
   assert.ok(!ctx.includes('label: "Conversations"'), 'Inbox lives in Workspace, not its own group');
 });
 
-test('sidebar: WORKSPACE is Workflows → Inbox (Hub removed from the rail); workflow SURFACES are not rail items', () => {
-  // Executions / Analytics / Settings are surfaces INSIDE a workflow, reached from
-  // the Workflows list and the header scope switcher. As rail items they appeared as
-  // peers of Inbox and CRM while pointing at a different context entirely — so the
-  // client rail now shows the workflow CONTEXT once, as "Workflows".
+test('sidebar: WORKSPACE is Workflows → Analytics → Inbox (Hub removed from the rail)', () => {
+  // Workflows and Analytics are the client's two SCOPE-AWARE surfaces and both ride the
+  // rail (Analytics restored per request — it was already built). Executions and the
+  // per-workflow Settings are NOT rail items: they are reached from the Workflows list
+  // and the header scope switcher.
   const src = read('components/AppSidebar.tsx');
   const workspace = slice(src, 'const workspace: NavItem[] = [', '];');
   assert.ok(!workspace.includes('key: "hub"'), 'Hub is no longer a rail item — the brand wordmark links home instead');
   assert.ok(workspace.includes('key: "workflows"'), 'Workflows is the first workspace item');
   assert.ok(workspace.includes('scopeHref(clientId, "executions", scope)'), 'Workflows href still comes from scopeHref');
+  assert.ok(workspace.includes('key: "analytics"'), 'Analytics is a rail item again');
+  assert.ok(workspace.includes('scopeHref(clientId, "analytics", scope)'), 'Analytics href is scope-aware too');
   assert.ok(src.includes('const onWorkflows = pathname.startsWith(c("/workflows"));'), 'active across all /workflows/… routes');
+  assert.ok(src.includes('const onAnalytics ='), 'the two rows split on the analytics route so only one is active');
   // Inbox is appended to the SAME group (module-gated), so it renders under Workspace.
   assert.ok(src.includes('workspace.push({'), 'Inbox joins the Workspace group');
   assert.ok(src.includes('sections = [{ label: "Workspace", items: workspace }];'), 'Workspace is the first section');
 
-  // The client rail must NOT offer the per-surface workflow items any more.
+  // Executions and per-workflow Settings are still NOT rail items.
   const ctx = slice(src, 'if (clientId) {', '} else if (isMember) {');
-  for (const gone of ['key: "executions"', 'key: "analytics"', 'key: "settings"']) {
-    assert.ok(!ctx.includes(gone), `${gone} is no longer a rail item`);
+  for (const gone of ['key: "executions"', 'key: "settings"']) {
+    assert.ok(!ctx.includes(gone), `${gone} is not a rail item`);
   }
 });
 
