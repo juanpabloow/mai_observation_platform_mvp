@@ -50,14 +50,14 @@ export default async function ClientAgendaPage({
         <div className="flex flex-col items-start gap-3 rounded-xl border border-dashed border-line-strong px-5 py-8">
           {hasFullAccess(scope) ? (
             <>
-              <p className="text-sm text-muted">No sites for {client.name} yet — create one to start scheduling.</p>
+              <p className="text-sm text-muted">Aún no hay sedes para {client.name} — crea una para empezar a agendar.</p>
               <Link href={`/clients/${client.id}/scheduling/admin`} className="text-sm text-accent hover:underline">
-                Go to Scheduling settings →
+                Ir a la configuración de Agenda →
               </Link>
             </>
           ) : (
             <p className="text-sm text-muted">
-              No sites are set up yet. Ask your administrator to configure scheduling for {client.name}.
+              Aún no hay sedes configuradas. Pide a tu administrador que configure la agenda para {client.name}.
             </p>
           )}
         </div>

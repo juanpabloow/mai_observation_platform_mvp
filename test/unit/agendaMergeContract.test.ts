@@ -45,10 +45,12 @@ test('an inactive barber is LABELLED, and their appointments stay openable', () 
   // exact list of siblings it travels with.
   assert.ok(/interface StaffOpt \{[^}]*active: boolean/.test(src), 'StaffOpt carries active');
   assert.ok(src.includes('inactive: !st.active'), 'the column knows the barber is inactive');
-  assert.ok(src.includes('>\n                        Inactive\n                      </span>'), 'the header shows an Inactive chip');
+  // The chip reads "Inactivo" now (the surface is in Spanish); the CONTRACT is that an
+  // inactive lane is still labelled in words, not the exact string.
+  assert.ok(src.includes('>\n                        Inactivo\n                      </span>'), 'the header shows an Inactivo chip');
   // Accessible: the chip explains itself rather than relying on colour/'!'.
-  const chip = src.slice(src.indexOf('col.inactive ? ('), src.indexOf('Inactive\n'));
-  assert.ok(/title="[^"]*new bookings/i.test(chip), 'the chip explains the consequence on hover');
+  const chip = src.slice(src.indexOf('col.inactive ? ('), src.indexOf('Inactivo\n'));
+  assert.ok(/title="[^"]*nuevas reservas/i.test(chip), 'the chip explains the consequence on hover');
   // Nothing filters cards out by staff.active — their history renders and the card
   // is the same <button> that opens the drawer.
   assert.ok(!/\.filter\([^)]*staff[^)]*\.active[^)]*\)[^;]*appointments/i.test(src), 'appointments are not filtered by active');
@@ -60,8 +62,8 @@ test('an inactive barber is NEVER offered for a new booking or a reschedule', ()
   // appointment; the server refuses inactive staff too, so this keeps the operator
   // from reaching a guaranteed error.
   assert.ok(src.includes('props.staff.filter((s) => s.active).map((s) => ('), 'the booking picker filters to active');
-  const picker = src.slice(src.indexOf('<span className="text-xs text-muted">Barber</span>'));
-  assert.ok(picker.includes('(s) => s.active'), '…in the Barber select specifically');
+  const picker = src.slice(src.indexOf('<span className="text-xs text-muted">Profesional</span>'));
+  assert.ok(picker.includes('(s) => s.active'), '…in the Profesional select specifically');
 });
 
 // ─────────────── main's rules: canonical identity ───────────────
@@ -80,11 +82,11 @@ test('identity is canonical — primary_identity replaced the raw phone column',
 
 test('the drawer shows name then identity — never the internal UUID', () => {
   const src = read(VIEW);
-  assert.ok(src.includes('{appt.contact_name ?? "Walk-in"}'), 'the name is the title');
+  assert.ok(src.includes('{appt.contact_name ?? "Sin cita"}'), 'the name is the title');
   assert.ok(src.includes('{appt.primary_identity}'), 'the identity is the subtitle');
   assert.ok(src.includes('appt.primary_identity ? ('), 'absent identity renders nothing');
   // public_reference is still carried for other uses, but must not be the subtitle.
-  const subtitle = src.slice(src.indexOf('{appt.contact_name ?? "Walk-in"}'), src.indexOf('{appt.primary_identity}'));
+  const subtitle = src.slice(src.indexOf('{appt.contact_name ?? "Sin cita"}'), src.indexOf('{appt.primary_identity}'));
   assert.ok(!subtitle.includes('public_reference'), 'the UUID/reference is not shown as identity');
 });
 
@@ -149,4 +151,60 @@ test('the TODOs explaining still-missing backend were not dropped', () => {
   // merge would make the omissions look accidental.
   assert.ok((src.match(/TODO\(agenda\)/g)?.length ?? 0) >= 5, 'the agenda TODOs survived');
   assert.ok(/TODO\(agenda\)[\s\S]*waitlist/i.test(src), 'the waitlist gap is still explained');
+});
+
+// ─────────────── the UX consolidation pass (Senior Frontend Engineer) ───────────────
+
+test('selecting an appointment ALWAYS shows its detail — inline on xl, overlay below', () => {
+  const src = read(VIEW);
+  // The fix for the sub-1280 dead click: the drawer decides its own frame off the
+  // viewport width and renders as a right-anchored overlay when it can't sit beside
+  // the grid.
+  assert.ok(src.includes('useIsOverlayWidth(1279.98)'), 'the drawer keys off the xl beside/overlay line');
+  assert.ok(src.includes('fixed inset-y-0 right-0') && src.includes('w-[min(360px,90vw)]'), 'overlay is a right drawer with a mobile-safe width');
+  assert.ok(src.includes('xl:flex'), 'the inline desktop column survives');
+  // The SAME body renders in both modes — proven by the header title resolving exactly
+  // once (a duplicated body would resolve it twice).
+  assert.equal(src.match(/STATUS_TITLE\[appt\.status\]/g)?.length, 1, 'the drawer body is written once, not per-mode');
+  // Overlay contract: scrim + focus trap (Escape/restore) come from the shared Overlay.
+  assert.ok(src.includes('OVERLAY_SCRIM') && src.includes('useTrappedPanel'), 'the overlay has a scrim and a focus trap');
+});
+
+test('the calendar speaks 24-hour time, never AM/PM', () => {
+  const src = read(VIEW);
+  assert.ok(src.includes('hourCycle: "h23"'), 'the time formatter is 24-hour');
+  assert.ok(!/hour12:\s*true/.test(src), 'no AM/PM formatting remains');
+});
+
+test('the screen has ONE h1 (Agenda) — the date is navigation text, not a heading', () => {
+  const src = read(VIEW);
+  // The title comes from the shared PageHeading; the view itself defines no <h1> of its
+  // own (the date stepper used to be one).
+  assert.ok(src.includes('<PageHeading title="Agenda"'), 'the title is the shared heading');
+  assert.ok(!src.includes('<h1'), 'the view renders no raw <h1> (so the date is not a second one)');
+});
+
+test('the Month view is not offered as a dead disabled control', () => {
+  const src = read(VIEW);
+  assert.ok(src.includes('>Día<') && src.includes('>Semana<'), 'Día/Semana are the toggle');
+  assert.ok(!/>\s*Month\s*</.test(src) && !/>\s*Mes\s*</.test(src), 'Month/Mes is hidden until it exists');
+  assert.ok(!src.includes('Seg disabled'), 'no permanently-disabled segment remains');
+});
+
+test('the new-appointment modal explains itself — search, empty, and disabled states', () => {
+  const src = read(VIEW);
+  assert.ok(src.includes('Buscando…'), 'the search shows a loading label');
+  assert.ok(src.includes('No hay horarios disponibles para esta combinación.'), 'an empty search says so out loud');
+  assert.ok(src.includes('Selecciona un horario para continuar.'), 'the disabled primary explains why');
+  // It is a real dialog for assistive tech, and Escape/focus are handled.
+  assert.ok(src.includes('role="dialog"') && src.includes('aria-modal="true"'), 'the modal is a labelled dialog');
+});
+
+test('control geometry is unified on the toolbar tokens', () => {
+  const src = read(VIEW);
+  // The date steppers clear the 36×36 minimum on their own; the Today button and the
+  // facets ride the shared control primitives / --control-h token.
+  assert.ok(src.includes('h-[var(--control-h)] w-9'), 'the steppers are 38×36, not the old 28px discs');
+  assert.ok(src.includes('className={CONTROL_CLS}'), 'Hoy reuses the shared control class');
+  assert.ok(!src.includes('rounded-md border border-line-strong px-3 text-sm transition-colors hover:bg-hover'), 'the old ad-hoc 9px control string is gone');
 });

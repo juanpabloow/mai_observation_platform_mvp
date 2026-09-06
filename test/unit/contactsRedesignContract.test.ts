@@ -130,17 +130,17 @@ test('shell: the four header strips all resolve to the SAME height token', () =>
   // The thread header is min-height (its content can wrap) but shares the token.
   assert.ok(read('components/InboxThread.tsx').includes('min-h-[var(--topbar-height)]'), 'the thread header too');
   // And every screen that has a TITLE BAND is titled by the one band, at one size.
-  for (const rel of ['components/scheduling/AgendaView.tsx', 'components/ClientInboxWorkspace.tsx']) {
-    assert.ok(read(rel).includes('<PageTitle'), `${rel} uses the shared page title`);
-  }
-  // Contacts and Staff title through the SHARED PageHeading (the one 19px definition,
-  // extracted from PageTitle) rather than a hand-copied h1 — so the screen's name is the
-  // same size and weight as every other screen's. Their header card is one line (title,
-  // search, controls, primary), a shape the full PageTitle band cannot express, so they
-  // use the heading primitive on its own.
+  // The Inbox keeps the FULL PageTitle band (title + scope + actions in one row).
+  assert.ok(read('components/ClientInboxWorkspace.tsx').includes('<PageTitle'), 'the inbox uses the shared page title');
+  // Contacts, Staff and the Agenda title through the SHARED PageHeading (the one 19px
+  // definition, extracted from PageTitle) rather than a hand-copied h1 — so the screen's
+  // name is the same size and weight as every other screen's. Their header row carries
+  // its own controls/actions beside the title, a shape the full PageTitle band cannot
+  // express, so they use the heading primitive on its own.
   const contactsPage = read('app/clients/[clientId]/contacts/page.tsx');
   assert.ok(contactsPage.includes('<PageHeading'), 'contacts titles itself with the shared PageHeading');
   assert.ok(read('components/scheduling/staff/StaffHeaderCard.tsx').includes('<PageHeading'), 'staff too');
+  assert.ok(read('components/scheduling/AgendaView.tsx').includes('<PageHeading title="Agenda"'), 'the agenda too');
   assert.ok(
     read('components/ui/PageTitle.tsx').includes('export function PageHeading('),
     'and PageHeading is exported from PageTitle — one definition, not three hand-styled titles',

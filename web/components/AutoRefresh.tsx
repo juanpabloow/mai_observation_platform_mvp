@@ -61,11 +61,11 @@ export function AutoRefresh({ intervalSeconds = 30 }: { intervalSeconds?: number
       <button
         type="button"
         onClick={() => setEnabled(true)}
-        title="Auto-refresh is off — click to resume"
+        title="La actualización automática está pausada — haz clic para reanudar"
         className="inline-flex items-center gap-1.5 text-xs text-neutral-500 transition-colors hover:text-foreground"
       >
         <span aria-hidden className="h-1.5 w-1.5 rounded-full bg-neutral-500" />
-        Auto-refresh off
+        Actualización automática · pausada
       </button>
     );
   }
@@ -74,11 +74,11 @@ export function AutoRefresh({ intervalSeconds = 30 }: { intervalSeconds?: number
     <button
       type="button"
       onClick={() => setEnabled(false)}
-      title="Click to pause auto-refresh"
+      title="Haz clic para pausar la actualización automática"
       className="inline-flex items-center gap-1.5 text-xs text-neutral-500 transition-colors hover:text-foreground"
     >
       <span aria-hidden className="h-1.5 w-1.5 animate-pulse rounded-full bg-green-400" />
-      Actualiza en {secondsLeft}s
+      Actualización automática · {secondsLeft} s
     </button>
   );
 }

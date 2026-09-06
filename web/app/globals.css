@@ -394,12 +394,15 @@
  */
 :root {
   --closed-bg: #f1f3f6;
-  --closed-stripe: rgba(41, 50, 61, 0.08);
+  /* Softer than it was (0.08): the hatch only needs to say "not bookable", and a heavier
+     stripe fought the appointments booked into a closed day for attention. The "Cerrado"
+     caption in the header carries the meaning; this is the quiet texture under it. */
+  --closed-stripe: rgba(41, 50, 61, 0.05);
   --closed-fg: #98a0ab;
 }
 .dark {
   --closed-bg: #17181b;
-  --closed-stripe: rgba(255, 255, 255, 0.055);
+  --closed-stripe: rgba(255, 255, 255, 0.04);
   --closed-fg: #6f7480;
 }
 
@@ -756,6 +759,29 @@ body {
 }
 @media (prefers-reduced-motion: reduce) {
   .u-panel-in {
+    animation: none;
+  }
+}
+
+/* The Agenda's detail DRAWER, when it arrives as an OVERLAY (below xl) rather than a
+   beside-content column: a short slide in from the right edge it is anchored to. The
+   scrim underneath fades with it. Reduced motion is honored both by the global rule
+   further down and this explicit opt-out. */
+@keyframes drawer-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.u-drawer-in {
+  animation: drawer-in 160ms ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  .u-drawer-in {
     animation: none;
   }
 }
