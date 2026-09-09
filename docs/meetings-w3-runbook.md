@@ -1,8 +1,12 @@
 # W-3 · Preflight y runbook de validación en staging
 
-**Estado: PROPUESTA. Nada ejecutado.** No se ha desplegado, no se ha creado
-bucket, no se ha migrado ninguna base remota y no se ha tocado la PC Linux.
-Este documento es lo que hay que aprobar antes de empezar.
+**Estado: pasos 1 y 2 HECHOS en local. Nada remoto tocado.** B-1 y B-3 están
+corregidos, los cuatro scripts existen y están probados, y todo el SQL de este
+documento se ejecuta contra el esquema real en la suite de esquema. No se ha
+desplegado, no se ha creado bucket, no se ha migrado ninguna base remota y no se
+ha tocado la PC Linux.
+
+**La puerta de revisión es AHORA**, antes del paso 3.
 
 Alcance: validar el recorrido completo con audio real, R2 real, ffprobe real,
 Whisper real y diarización real, contra `mai` corriendo en modo producción.
@@ -10,10 +14,14 @@ Whisper real y diarización real, contra `mai` corriendo en modo producción.
 
 ---
 
-## 0 · Bloqueantes que hay que resolver ANTES de empezar
+## 0 · Bloqueantes
 
-Los tres primeros impiden que W-3 funcione. No son opiniones: dos los verifiqué
-leyendo el código que se ejecutaría y el tercero leyendo `requirements.txt`.
+| # | qué | estado |
+|---|---|---|
+| B-1 | el middleware redirigía las rutas del worker a `/login` | **corregido** · `1dee6a7` |
+| B-2 | en esta rama no hay forma de subir un audio | **resuelto por diseño**: dos vías (§0 B-2), ambas implementadas |
+| B-3 | `requirements.txt` del worker incompleto | **corregido** · `d0bb600` (worker) |
+| — | la caché de rutas | **descartado con evidencia**: las once son `ƒ` Dynamic |
 
 ### B-1 · El middleware de Next redirige las rutas del worker a `/login`
 
@@ -33,13 +41,21 @@ prueba porque las pruebas de Route Handler **importan e invocan el handler**: no
 pasan por el middleware. Es exactamente el hueco que este runbook tiene que
 cerrar.
 
-**Corrección propuesta** (una línea, requiere tu aprobación):
+**Corregido en `1dee6a7`.** Sólo los dos subárboles de máquina:
 
 ```ts
 // en PUBLIC_PREFIXES
 "/api/meetings/v1/jobs",
 "/api/meetings/v1/maintenance",
 ```
+
+Cubierto por `web/tests/meetings-middleware.test.ts` (9 pruebas), que ejercita
+`middleware()` con `NextRequest` real: las seis de máquina continúan al handler
+y **cada una llama `authenticateWorker`** —que el middleware las deje pasar sólo
+es correcto si el handler autentica—, ninguna resuelve ámbito de sesión, las
+cinco de sesión siguen rebotando conservando `?redirect`, la lista de prefijos
+de meetings es exactamente esos dos, y `/api/meetings/v1/jobsomething` no se
+cuela por prefijo textual.
 
 Los subárboles de **máquina** y sólo ésos. Las cinco rutas de sesión
 (`/api/meetings/v1/meetings/**`) **se quedan fuera** a propósito: deben seguir
@@ -81,8 +97,19 @@ Declara `fastapi`, `uvicorn`, `pydantic-settings`, `torch`, `faster-whisper`.
 
 Instalar sólo lo declarado deja el worker arrancando y **fallando en la etapa
 `diarize`**, que es el peor momento para descubrirlo: después de gastar la GPU
-en transcribir. Hay que completar el fichero (cambio en el repo del worker,
-requiere tu aprobación) o instalar los cuatro a mano en el paso 3.
+en transcribir y un intento del job.
+
+**Corregido en `d0bb600`** (repo del worker), en tres piezas:
+
+| pieza | qué |
+|---|---|
+| `requirements/base.txt` | todo menos torch/torchaudio, con las cuatro que faltaban. Cada cota justificada por código, no por memoria |
+| `requirements/torch.txt` | la **pareja** torch+torchaudio, **sin versión ni índice**: la rueda depende del driver, y ese dato está en tu máquina |
+| `requirements/lock.txt` | vacío a propósito hasta W-3, para congelar el `pip freeze` de lo que realmente funcione |
+| `scripts/inspect_gpu.sh` | lee driver y CUDA soportado y sugiere el índice **más conservador** que admite. Imprime la entrada de la decisión; no decide |
+| `app/pull/preflight.py` | comprueba todo **antes del primer claim** y sale con **código 2** si falta algo |
+
+No hay ninguna rueda inventada en el repositorio.
 
 ### No-bloqueante ya resuelto · la caché de rutas
 
@@ -237,29 +264,32 @@ source .venv-w3/bin/activate
 python -m pip install --upgrade pip
 ```
 
-`torch` primero, con la rueda de CUDA que corresponda a tu driver (elige el
-índice en pytorch.org; no lo fijo aquí porque depende de tu driver):
+**Primero mira la máquina.** El repositorio no fija ninguna rueda CUDA a
+propósito: la correcta depende de tu driver, y una que el driver no soporta no
+falla al instalar — falla en `torch.cuda.is_available()` después de bajar dos
+gigas.
 
 ```bash
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu121
+bash scripts/inspect_gpu.sh
 ```
 
-Luego el resto, incluidos los cuatro de B-3:
+Imprime nombre de GPU, driver, memoria, capacidad de cómputo y el CUDA máximo
+que el driver admite, y sugiere el índice **más conservador** que sirve. Ejecuta
+el comando que sugiera — la pareja `torch torchaudio` del **mismo** índice:
 
 ```bash
-pip install -r requirements.txt
-pip install numpy scikit-learn "pyannote.audio>=3.1"
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/<el-que-diga>
 ```
 
-**Pass:** los cinco imports resuelven y la GPU se ve.
+Luego el resto:
 
 ```bash
-python - <<'PY'
-import torch, faster_whisper, numpy, sklearn, torchaudio
-from pyannote.audio import Model
-print("cuda:", torch.cuda.is_available(), "| gpu:", torch.cuda.get_device_name(0))
-PY
+pip install -r requirements/base.txt
 ```
+
+**Pass:** el preflight del worker (§3.4), que es quien lo comprueba de verdad.
+No hace falta un script de imports a mano.
+
 
 ### 3.3 · Modelos requeridos y descarga previa
 
@@ -300,10 +330,38 @@ set -a; . ./.env.w3; set +a      # fichero local, 0600, NO versionado
 python -m app.pull
 ```
 
-**Pass:** la primera línea del log describe el destino **sin el token** —
-`mai_host`, `capabilities: ["meetings.transcribe"]`, `worker_label`,
-`token_prefix` (8 caracteres, lo que la UI ya muestra).
-**Fail:** cualquier aparición del token completo o de una URL firmada con query.
+**Lo primero que hace es el PREFLIGHT**, antes de reclamar nada:
+
+```
+preflight · OK   ffmpeg — ffmpeg version …
+preflight · OK   ffprobe — ffprobe version …
+preflight · OK   torch — 2.x.y+cuXXX
+preflight · OK   torchaudio — 2.x.y+cuXXX
+preflight · OK   torch/torchaudio emparejados — … backends=[…]
+preflight · OK   CUDA — <tu GPU> · capacidad … · torch cuda …
+preflight · OK   numpy · faster_whisper · pyannote.audio (Model) · scikit-learn
+```
+
+**Pass:** las nueve líneas en `OK`, y después el log describe el destino **sin
+el token** — `mai_host`, `capabilities: ["meetings.transcribe"]`,
+`worker_label`, `token_prefix` (8 caracteres, lo que la UI ya muestra).
+
+**Fail:** cualquier `FALLO`. El proceso sale con **código 2** sin reclamar
+ningún job, y `RestartPreventExitStatus=2` evita que systemd lo reintente en
+bucle. Comprobado ejecutándolo en un venv sin la pila ML: siete fallos
+reportados de una vez, cero jobs reclamados, cero apariciones del token.
+
+**Fail también:** cualquier aparición del token completo o de una URL firmada
+con query.
+
+**Congela lo que funcionó**, en cuanto el preflight salga verde y W-3 termine:
+
+```bash
+pip freeze > requirements/lock.txt
+```
+
+`requirements/lock.txt` está vacío a propósito hasta ese momento: un lock que no
+viene de una instalación real es una suposición con formato de certeza.
 
 ### 3.5 · Proceso persistente
 
@@ -393,22 +451,53 @@ A mano son ~8 `INSERT` con uuids cruzados, y el token hay que **acuñarlo**
 `INSERT` a mano con un token inventado no autenticaría, y uno con el token en
 claro en la base sería peor que no tener credencial.
 
-Propongo **un script nuevo** `src/scripts/meetingsStagingSeed.ts` (pendiente de
-tu aprobación; no está escrito). Contrato:
+`src/scripts/meetingsStagingSeed.ts`, ya escrito y probado (`52600c7`):
 
-- entra: `--tenant-name`, `--client-name`, `--user-email` (una cuenta que ya
-  exista, para poder entrar por el navegador), `--pool-slug`, `--environment`;
-- hace, en **una transacción**: `tenants` → `clients` (`is_default = false`,
-  porque `resolveAppScope` rechaza el cliente por defecto) → membresía del
-  usuario → `client_modules (module_key='meetings', enabled=true)` →
-  `worker_pools` (`scope='single_tenant'`, `capabilities={meetings.transcribe}`,
-  `concurrency.limits={"meetings.transcribe":1}`) → `worker_credentials` con
-  `mintWorkerToken()`;
-- **imprime el token UNA sola vez, en stdout, y nada más**: ni logs, ni
-  ficheros, ni base. Tú lo pegas en `.env.w3` de la PC Linux;
-- imprime también los uuids de tenant y client, que **no** son secretos y hacen
-  falta para todas las verificaciones y para la limpieza;
-- es **idempotente por slug**: relanzarlo no duplica el pool.
+```bash
+MEETINGS_ENV_KIND=staging DATABASE_URL=… npm run w3:seed -- \
+  --tenant-name "W3" --client-name "Cliente W3" \
+  --user-email <tu-correo> --pool-slug w3-gpu --environment staging \
+  > /ruta/segura/token.txt
+```
+
+**Todo el resumen sale por STDERR; por STDOUT sale ÚNICAMENTE el token.** Así
+`> token.txt` captura el token y nada más. Los uuids de tenant y client —que no
+son secretos y hacen falta para todo lo demás— van en el resumen de stderr.
+
+En una transacción: `tenants` → `clients` (`is_default = false`, porque
+`resolveAppScope` rechaza el cliente por defecto) → `tenant_members` como
+`owner` → `client_modules (meetings, enabled)` → `worker_pools`
+(`single_tenant`, `{meetings.transcribe}`, `limits {meetings.transcribe: 1}`) →
+`worker_credentials` con `mintWorkerToken()`.
+
+**El usuario tiene que existir ANTES.** Regístralo por el flujo real (`/signup`
+del mai de staging). El script comprueba que existe **y** que tiene fila en
+`account` —distingue los dos casos, porque el arreglo es distinto— y **aborta
+sin escribir nada** si no. No inserta usuarios: `user`, `account` y `session`
+son de Better Auth, y una fila puesta a mano parece válida y no permite entrar.
+
+#### Idempotencia: relanzarlo se DETIENE, no reimprime
+
+De la credencial la base guarda `sha256(token)` y el prefijo. El token en claro
+no existe en ningún sitio después de la ejecución, así que «relanzar devuelve lo
+mismo» es imposible sin haberlo guardado — y guardarlo sería peor que cualquier
+alternativa. Relanzarlo con el pool ya creado sale con **código 2** y explica
+las dos salidas:
+
+```
+✗ El pool 'w3-gpu' (staging) ya existe con 1 credencial(es) viva(s).
+  NO se puede recuperar su token: la base sólo guarda el sha256 y el prefijo.
+  · Si perdiste el token → --rotate-token
+  · Si el worker ya está corriendo con él → no hace falta nada.
+```
+
+Y `--rotate-token` emite una nueva, la enlaza por `rotated_from_id` y **revoca
+la anterior en la misma transacción** — el ciclo que el esquema ya modela. Si
+fueran dos pasos, un fallo entre ellos dejaría dos credenciales vivas o ninguna.
+
+Comprobado contra PostgreSQL 18 desechable: seed (token de 48 bytes por stdout,
+resumen por stderr) → relanzar (código 2, **0 bytes en stdout**) → rotar (2
+credenciales, 1 viva, 1 con `rotated_from_id`).
 
 **Pass:**
 
@@ -474,7 +563,25 @@ No uses audio con datos personales de nadie que no haya consentido.
 
 ## 6 · Qué verificamos en cada paso
 
-Todo se consulta contra S2. `:m` = uuid de la reunión, `:r` = uuid del run.
+**Todo esto está en un script.** `npm run w3:verify` corre las consultas de esta
+sección y da un `PASS`/`FAIL`/`n/a` por comprobación:
+
+```bash
+MEETINGS_ENV_KIND=staging DATABASE_URL=… npm run w3:verify -- \
+  --tenant-id <uuid> [--meeting-id <uuid>]
+```
+
+**Sólo lectura** — ni un `INSERT`, ni un `UPDATE`, ni un `DELETE`, y hay una
+prueba que lee el fuente para exigirlo: una verificación que escribe mediría un
+estado que ella misma causó. `n/a` es para lo que aún no ha ocurrido y no cuenta
+como fallo, porque durante W-3 esto se ejecuta varias veces mientras el
+recorrido avanza. Las comprobaciones de tenant van antes de las de reunión, así
+que sirve ya justo después del seed.
+
+Las consultas de abajo son las mismas, para cuando quieras mirar a mano. **Todas
+se ejecutan contra el esquema real en `test/migrations/meetings/60-runbook-sql.sql`**,
+así que no pueden envejecer en silencio. `:m` = uuid de la reunión, `:r` = uuid
+del run, `:v` = uuid de la versión de transcript.
 
 ### Paso 1 · reunión creada
 
@@ -683,6 +790,22 @@ NODE_ENV=production npm run start:web        # = next start
 
 ### 7.2 · Middleware: las dos mitades, por separado
 
+**Está en un script:**
+
+```bash
+MEETINGS_ENV_KIND=staging MAI_BASE_URL=… MAI_WORKER_TOKEN=… \
+  W3_CLIENT_ID=<uuid> [MAI_SESSION_COOKIE=… W3_MEETING_ID=<uuid>] \
+  npm run w3:http
+```
+
+Cubre 7.2, 7.3 y 7.4 de una vez, y **sin `-L`**: seguir la redirección
+convertiría el 307 del middleware en el 200 de `/login`, y el fallo de B-1 se
+habría visto como un éxito raro. El token y la cookie se leen del entorno y
+nunca se imprimen; lo que sale es el código HTTP y el `error.code`, que es un
+literal del servidor.
+
+Los `curl` equivalentes, para mirar a mano:
+
 ```bash
 BASE="$MAI_BASE_URL"
 
@@ -769,11 +892,35 @@ es una vía de borrado: es la retirada del esquema **después** de limpiar.
 
 ### 8.2 · Limpieza completa
 
-**Orden explícito, no confiando en el cascade.** Verifiqué que
+**Está en un script, con tres cerrojos:**
+
+```bash
+# inventario, sin borrar nada — el DEFECTO
+MEETINGS_ENV_KIND=staging DATABASE_URL=… npm run w3:cleanup -- --tenant-id <uuid>
+
+# borrado de verdad
+MEETINGS_ENV_KIND=staging DATABASE_URL=… npm run w3:cleanup -- \
+  --tenant-id <uuid> --execute --confirm "BORRAR <el mismo uuid>"
+```
+
+1. `MEETINGS_ENV_KIND=staging`, la puerta común.
+2. `--tenant-id` explícito. No hay defecto, no hay «el último», no hay `--all`.
+3. `--execute` **y** `--confirm "BORRAR <uuid>"`. La frase lleva el uuid dentro,
+   así que copiarla del runbook o del historial **no sirve para otro tenant**, y
+   se valida antes de abrir la conexión.
+
+Imprime un inventario de quince conteos antes y después, avisa si existe algún
+pool `internal` (que no alcanza, porque tiene `tenant_id NULL`) y recuerda el
+prefijo de R2 que no puede borrar.
+
+Comprobado contra PostgreSQL 18 desechable: dry-run → frase de otro tenant (no
+borra, el tenant sigue ahí) → frase correcta (los quince conteos a 0).
+
+**Y el orden es explícito, no confiando en el cascade.** Verifiqué que
 `DELETE FROM tenants` sobrevive hoy al `ON DELETE RESTRICT` de las
 credenciales (el cascade retira jobs y eventos antes), pero ese orden depende
 de en qué secuencia se crearon las constraints, y no es algo sobre lo que
-apoyar una limpieza. Paso a paso:
+apoyar una limpieza. El script hace, y tú puedes hacer a mano:
 
 ```sql
 -- 1 · revocar la credencial (nunca borrarla para liberar jobs)
@@ -878,17 +1025,28 @@ es dato de la prueba y volver a bajar `medium` cuesta tiempo.
 | 11 | grabar/aportar el audio real de dos voces | — |
 | 12 | borrar los objetos de R2 y revocar el token S3 | Cloudflare |
 
-### Puedo ejecutar yo, con tu aprobación
+### Ya hecho, en local, sin push
+
+| # | acción | commit |
+|---|---|---|
+| 1 | B-1: los dos prefijos de máquina en el middleware, con 9 pruebas | `1dee6a7` |
+| 2 | B-3: dependencias declaradas, `inspect_gpu.sh`, preflight, 24 pruebas | `d0bb600` (worker) |
+| 3 | `meetingsStagingSeed.ts` | `52600c7` |
+| 4 | `meetingsStagingVerify.ts` (sólo lectura) | `52600c7` |
+| 5 | `meetingsStagingCleanup.ts` (tres cerrojos) | `52600c7` |
+| 6 | `test/e2e/w3HttpChecks.sh` | `52600c7` |
+| 7 | todo el SQL de este documento, ejecutado contra el esquema real | `4183d0b` |
+
+### Puedo ejecutar yo cuando lo autorices
 
 | # | acción | riesgo |
 |---|---|---|
-| 1 | **B-1**: añadir los dos prefijos de máquina al middleware, con prueba | bajo, dos líneas |
-| 2 | **B-3**: completar `requirements.txt` del worker | bajo, repo del worker |
-| 3 | escribir `src/scripts/meetingsStagingSeed.ts` (§4.2) | medio: crea datos, pero contra la base que tú le pases |
-| 4 | escribir `src/scripts/meetingsStagingVerify.ts`: corre las consultas del §6 y da un pass/fail por paso | ninguno, sólo lee |
-| 5 | escribir `src/scripts/meetingsStagingCleanup.ts` (§8.2), con `--dry-run` por defecto | alto: **borra**. Que sea un script es lo que hace revisable el orden |
-| 6 | preparar los `curl` del §7 como script parametrizado por env | ninguno |
-| 7 | correr las suites locales otra vez tras B-1 y B-3 | ninguno |
+| 1 | `npm run meetings:preflight` contra S2 | ninguno, sólo lee |
+| 2 | `node-pg-migrate up` contra S2 | **primera acción irreversible** |
+| 3 | `npm run w3:seed` contra S2 | crea datos en el tenant que le indiques |
+| 4 | `npm run w3:verify` durante el recorrido | ninguno, sólo lee |
+| 5 | `npm run w3:http` contra el mai desplegado | ninguno destructivo; crea una reunión de prueba si le das la cookie |
+| 6 | `npm run w3:cleanup --execute` al terminar | **borra**; tres cerrojos |
 
 ### No haré sin que lo pidas explícitamente
 
@@ -901,10 +1059,11 @@ secreto real.
 ## 10 · Orden de ejecución y puertas
 
 ```
-0 ·  apruebas este runbook
-1 ·  arreglo B-1 y B-3 · corro las suites locales           → commit local, sin push
-2 ·  escribo los tres scripts (seed / verify / cleanup)      → commit local, sin push
-     ── PUERTA: los revisas ──
+0 ·  apruebas este runbook                                   ✓ hecho
+1 ·  B-1 y B-3 corregidos · suites locales verdes            ✓ 1dee6a7 · d0bb600
+2 ·  los cuatro scripts, escritos y probados                 ✓ 52600c7
+     el SQL del runbook, validado contra el esquema real     ✓ 4183d0b
+     ── PUERTA: los revisas ← ESTAMOS AQUÍ ──
 3 ·  tú: PostgreSQL de staging + variables                   Railway
 4 ·  yo: `npm run meetings:preflight` contra S2              → PostgreSQL ≥ 15, gen_random_uuid, SET NULL por columna
      ── PUERTA: preflight verde ──
@@ -932,7 +1091,9 @@ que la versión lo dice.
 |---|---|---|
 | **R2 nunca ha recibido una petición firmada por este adaptador** | no hay bucket; el SDK oficial firma bien según sus propias pruebas, pero R2 tiene su implementación | primer PUT del paso 2. El candidato más probable es el trato del `Content-Length` firmado |
 | **Whisper y wespeaker reales nunca han corrido en este pipeline** | el cruzado usa etapas instantáneas | pasos 7–8. Riesgo principal: el lease caduca en un audio largo → ajustar `MEETINGS_LEASE_SECONDS` |
-| **el arreglo de B-1 amplía la superficie pública del middleware** | dos prefijos deja de rebotar a `/login` | §7.2 (c) exige que las rutas de sesión sigan rebotando. La autorización real de las de máquina es el token, y tiene pruebas |
+| **el arreglo de B-1 amplía la superficie pública del middleware** | dos prefijos dejan de rebotar a `/login` | 9 pruebas en `web/tests/meetings-middleware.test.ts` + §7.2 (c) en vivo. Cada una de las seis llama `authenticateWorker`, y eso también tiene prueba |
+| **`requirements/lock.txt` está vacío** | fijar versiones sin haberlas ejecutado sería una suposición con formato de certeza | se llena con el `pip freeze` de la PC Linux en cuanto el preflight salga verde (§3.4). Hasta entonces, la instalación no es bit-a-bit reproducible y hay que decirlo |
+| **el mapeo driver→CUDA de `inspect_gpu.sh` es una tabla escrita a mano** | los umbrales (525, 450) vienen de la tabla de NVIDIA, no de tu máquina | el script sugiere, no decide, y el preflight comprueba el resultado. Si la sugerencia es mala, `torch.cuda.is_available()` lo dice antes de reclamar nada |
 | **`jobs_claimable_idx` no incluye `tenant_id` ni `requires`** | decisión anterior, no corregida | con un solo tenant y una GPU no se nota; anotado para cuando haya volumen |
 | **9 errores de `eslint` preexistentes en `web/`** | ficheros que nunca toqué | no bloquean el build |
 | **el audio de la prueba es real** | contiene voces de personas | limpieza §8.3, y bucket dedicado que se borra entero |
