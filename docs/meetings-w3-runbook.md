@@ -231,11 +231,27 @@ Sólo para `w3:http`:
 | nombre | propósito |
 |---|---|
 | `MAI_BASE_URL` | origen del mai de staging |
+| `W3_EXPECTED_MAI_HOST` | el host que **afirmas** esperar. Se compara con el de `MAI_BASE_URL` **antes del primer curl** |
 | `W3_CLIENT_ID` | uuid del cliente sembrado (no es secreto) |
 | `MAI_WORKER_TOKEN` | opcional. Con él se prueba que el token autentica y que su ámbito no alcanza el mantenimiento. **No se usa para reclamar** |
 | `MAI_SESSION_COOKIE` | opcional. Tu cookie de navegador, para el bloque de sesión |
 | `W3_ALLOW_WRITES` | **obligatoria para el bloque mutante.** Sin `=1`, el bloque que crea reuniones se omite |
 | `W3_MEETING_ID` | opcional, para el chequeo de caché |
+
+**Por qué `W3_EXPECTED_MAI_HOST`.** Este script manda un token de worker y, en
+el bloque B, tu cookie de sesión. Mandarlos al host equivocado los **entrega**.
+Así que antes del primer `curl` se valida `MAI_BASE_URL`, cuatro cosas:
+
+| se comprueba | por qué |
+|---|---|
+| `hostname == W3_EXPECTED_MAI_HOST` | declarar el destino aparte convierte «pegué la URL equivocada» en un error en vez de en una fuga |
+| **https** salvo en localhost | el token viaja en cada petición; por http lo ve cualquiera en el camino. Es la misma regla que el worker aplica en `app/pull/settings.py` |
+| **sin usuario ni contraseña** embebidos | `https://u:p@host/` acabaría en el historial del shell y en los logs |
+| esquema `http`/`https` | nada de `file:` ni cosas raras |
+
+Si algo falla, el mensaje nombra el problema y el **hostname** — nunca la URL
+completa: si lleva credenciales embebidas, imprimirla sería la fuga que la
+comprobación existe para impedir.
 
 ### S4 · worker pull (PC Linux)
 
@@ -539,9 +555,24 @@ las dos salidas:
   · Si el worker ya está corriendo con él → no hace falta nada.
 ```
 
-Y `--rotate-token` emite una nueva, la enlaza por `rotated_from_id` y **revoca
-la anterior en la misma transacción** — el ciclo que el esquema ya modela. Si
-fueran dos pasos, un fallo entre ellos dejaría dos credenciales vivas o ninguna.
+Y `--rotate-token` hace tres cosas distintas según cuántas credenciales **vivas**
+tenga el pool:
+
+| vivas | qué hace |
+|---|---|
+| **0** | emite una nueva con `rotated_from_id = NULL`. No hay nada que revocar; es el caso de «revoqué a mano y necesito otra» |
+| **1** | la rotación normal: emite, enlaza por `rotated_from_id` y **revoca la anterior en la misma transacción**. Si fueran dos pasos, un fallo entre ellos dejaría dos vivas o ninguna |
+| **>1** | **aborta** sin emitir ni revocar, y lista las vivas por prefijo |
+
+El caso `>1` importa: rotar «la más reciente» dejaría las demás **vivas y sin
+avisar**, y el pool acabaría con más credenciales activas que antes — lo
+contrario de lo que uno cree que hace al rotar. Revocarlas todas por iniciativa
+propia tampoco vale: puede haber un worker corriendo con cualquiera de ellas, y
+cuál sobra no lo decide un script.
+
+Y antes de todo eso, si el pool ya existía, se valida su contrato completo —
+scope, tenant, `enabled`, capabilities exactas y concurrency. Cualquier
+diferencia aborta sin tocar credenciales.
 
 Comprobado contra PostgreSQL 18 desechable: seed (token de 48 bytes por stdout,
 resumen por stderr) → relanzar (código 2, **0 bytes en stdout**) → rotar (2
@@ -841,25 +872,38 @@ NODE_ENV=production npm run start:web        # = next start
 **Está en un script, con DOS bloques separados:**
 
 ```bash
-# BLOQUE A · smoke de enrutado, NO MUTANTE. Corre siempre.
-MEETINGS_ENV_KIND=staging MAI_BASE_URL=… MAI_WORKER_TOKEN=… \
-  W3_CLIENT_ID=<uuid> npm run w3:http
+# BLOQUE A · enrutado, SIN CAMBIOS DE DOMINIO. Corre siempre.
+MEETINGS_ENV_KIND=staging W3_EXPECTED_MAI_HOST=<host> MAI_BASE_URL=https://<host> \
+  MAI_WORKER_TOKEN=… W3_CLIENT_ID=<uuid> npm run w3:http
 
-# BLOQUE B · sesión, MUTANTE: crea reuniones. Hay que autorizarlo.
-MEETINGS_ENV_KIND=staging MAI_BASE_URL=… MAI_WORKER_TOKEN=… \
-  W3_CLIENT_ID=<uuid> MAI_SESSION_COOKIE='…' W3_ALLOW_WRITES=1 \
-  npm run w3:http
+# BLOQUE B · sesión, MUTANTE DE DOMINIO: crea reuniones. Hay que autorizarlo.
+MEETINGS_ENV_KIND=staging W3_EXPECTED_MAI_HOST=<host> MAI_BASE_URL=https://<host> \
+  MAI_WORKER_TOKEN=… W3_CLIENT_ID=<uuid> MAI_SESSION_COOKIE='…' \
+  W3_ALLOW_WRITES=1 npm run w3:http
 ```
 
-**El bloque A no escribe nada y no reclama trabajo.** Cada llamada lleva escrito
-por qué: las seis rutas de máquina sin token fallan en `authenticateWorker`,
-que es lo primero de cada handler; la negativa de `maintenance` con token
-(404) se decide antes de cualquier lectura; y la única llamada a `/claim` con
-token manda un cuerpo inválido, así que `readValidated` la corta antes de
-`claim()`.
+**El bloque A no cambia ningún estado de dominio**: no crea reuniones, no
+reclama jobs, no mueve nada del pipeline. Cada llamada lleva escrito por qué:
+las seis rutas de máquina sin token fallan en `authenticateWorker`, que es lo
+primero de cada handler; la negativa de `maintenance` con token (404) se decide
+antes de cualquier lectura del dominio; y la única llamada a `/claim` con token
+manda un cuerpo inválido, así que `readValidated` la corta antes de `claim()`.
 
-**El bloque B crea reuniones**, exige `W3_ALLOW_WRITES=1`, lista los
-`meetingId` creados al terminar y recuerda que `w3:cleanup` los retira.
+> **Lo que el bloque A SÍ escribe.** Autenticar con éxito dispara
+> `touchLastUsed()`: `UPDATE worker_credentials SET last_used_at = now()`,
+> best-effort. Las dos llamadas autenticadas de A.2 tocan esa columna. Es
+> telemetría de la credencial y **no se desactiva** — un camino de
+> autenticación distinto al de producción haría que el smoke dejara de probar
+> el camino real, que es su único motivo de existir. La cabecera del script
+> decía «NO MUTANTE» y era falso; ahora dice «sin cambios de dominio», que es
+> lo que se puede sostener.
+
+**El bloque B crea reuniones.** Exige **las tres cosas a la vez** —
+`MEETINGS_ENV_KIND=staging`, el host declarado correcto y `W3_ALLOW_WRITES=1` —
+reafirmadas en el propio bloque aunque dos ya hayan cortado antes: la
+precondición del único bloque que escribe en el dominio no debe depender de que
+nadie mueva un `exit` de la cabecera. Lista los `meetingId` creados al terminar
+y recuerda que `w3:cleanup` los retira.
 
 > **Lo que este script hacía y estaba mal.** La primera versión afirmaba «no
 > escribe en la base» y hacía **un `claim` con token válido**. Un claim válido
