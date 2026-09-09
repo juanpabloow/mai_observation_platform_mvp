@@ -13,6 +13,31 @@
  * el punto de que staging se parezca a producción. Hace falta una variable
  * propia que nadie tenga puesta por defecto.
  *
+ * ── Y por qué la declaración NO basta ───────────────────────────────────────
+ *
+ * `MEETINGS_ENV_KIND=staging` dice qué CREE quien ejecuta, no a dónde apunta
+ * `DATABASE_URL`. Las dos variables se ponen a mano, en la misma línea de
+ * shell o en el mismo panel de Railway, y equivocar una es exactamente el
+ * accidente que hay que impedir: `MEETINGS_ENV_KIND=staging` con la
+ * `DATABASE_URL` de producción pegada del portapapeles es una sola tecla de
+ * distancia.
+ *
+ * Así que hay una SEGUNDA afirmación, independiente: quien ejecuta declara el
+ * host y el nombre de base que espera (`MEETINGS_EXPECTED_DB_HOST`,
+ * `MEETINGS_EXPECTED_DB_NAME`) y el guardián los compara con `DATABASE_URL`
+ * ANTES de conectar. Para que un script destructivo arranque contra producción
+ * hay que equivocarse en tres variables de forma coherente, no en una.
+ *
+ * Y **después** de conectar se comprueba `current_database()` contra el nombre
+ * esperado: una `DATABASE_URL` puede llevar el nombre en la query, resolverse
+ * por un `search_path` raro o pasar por un pooler que redirige. Comparar la
+ * cadena y comparar el servidor son dos comprobaciones distintas, y la que
+ * vale de verdad es la segunda.
+ *
+ * Lo que NO se puede verificar tras conectar es el HOST: `inet_server_addr()`
+ * es nulo por socket unix y con un pooler devuelve el del pooler. Se dice en
+ * vez de fingir que se comprueba.
+ *
  * ── Y por qué nada de esto imprime la conexión ──────────────────────────────
  *
  * `DATABASE_URL` lleva usuario y contraseña. Un script de operaciones se corre
@@ -25,6 +50,9 @@
 export const ENV_KIND_VAR = 'MEETINGS_ENV_KIND';
 /** El único valor que estos scripts aceptan. */
 export const REQUIRED_ENV_KIND = 'staging';
+/** El destino que quien ejecuta AFIRMA esperar. Se compara con DATABASE_URL. */
+export const EXPECTED_HOST_VAR = 'MEETINGS_EXPECTED_DB_HOST';
+export const EXPECTED_NAME_VAR = 'MEETINGS_EXPECTED_DB_NAME';
 
 export class StagingGuardError extends Error {
   constructor(message: string) {
@@ -66,10 +94,12 @@ export function describeDatabase(
 }
 
 /**
- * Exige la declaración de entorno. Lanza si falta o no es `staging`.
+ * Exige la declaración de entorno **y** que el destino sea el esperado.
  *
  * Se llama ANTES de abrir la conexión: un script que se niega a operar no debe
- * haber tocado la base ni para leer.
+ * haber tocado la base ni para leer. La mitad que sólo se puede comprobar con
+ * la conexión abierta está en `assertConnectedDatabase`, y los tres scripts
+ * llaman a las dos.
  */
 export function requireStagingEnvironment(
   env: Readonly<Record<string, string | undefined>> = process.env,
@@ -92,7 +122,80 @@ export function requireStagingEnvironment(
   if ((env.DATABASE_URL ?? '').trim() === '') {
     throw new StagingGuardError('Falta DATABASE_URL.');
   }
-  return describeDatabase(env);
+
+  // ── La segunda afirmación, independiente de la primera ──────────────────
+  const expectedHost = (env[EXPECTED_HOST_VAR] ?? '').trim();
+  const expectedName = (env[EXPECTED_NAME_VAR] ?? '').trim();
+  const missing = [
+    ...(expectedHost === '' ? [EXPECTED_HOST_VAR] : []),
+    ...(expectedName === '' ? [EXPECTED_NAME_VAR] : []),
+  ];
+  if (missing.length > 0) {
+    throw new StagingGuardError(
+      `Faltan ${missing.join(' y ')}. Declarar '${REQUIRED_ENV_KIND}' dice qué CREES, ` +
+        `no a dónde apunta DATABASE_URL: son dos variables que se ponen a mano en la ` +
+        `misma línea, y equivocar una es el accidente que esto impide. Declara el ` +
+        `destino que esperas y se compara con la conexión antes de tocarla.`,
+    );
+  }
+
+  const actual = describeDatabase(env);
+  // El host se compara sin el puerto: la URL puede llevarlo o no, y obligar a
+  // declararlo idéntico convierte la protección en una molestia que alguien
+  // acabará rodeando.
+  const hostOf = (value: string): string => value.split(':')[0].toLowerCase();
+  if (hostOf(actual.host) !== hostOf(expectedHost)) {
+    throw new StagingGuardError(
+      `El host de DATABASE_URL no es el declarado.\n` +
+        `  ${EXPECTED_HOST_VAR}: ${expectedHost}\n` +
+        `  DATABASE_URL apunta a: ${actual.host}\n` +
+        `  No se ha conectado. Si el destino correcto es el segundo, corrige la ` +
+        `declaración a propósito; no al revés.`,
+    );
+  }
+  if (actual.database.toLowerCase() !== expectedName.toLowerCase()) {
+    throw new StagingGuardError(
+      `El nombre de base de DATABASE_URL no es el declarado.\n` +
+        `  ${EXPECTED_NAME_VAR}: ${expectedName}\n` +
+        `  DATABASE_URL apunta a: ${actual.database}\n` +
+        `  No se ha conectado.`,
+    );
+  }
+  return actual;
+}
+
+/**
+ * La mitad que sólo se puede comprobar con la conexión ABIERTA.
+ *
+ * `current_database()` lo responde el servidor, no la cadena de conexión. Una
+ * `DATABASE_URL` puede llevar el nombre en un parámetro de query, resolverse por
+ * un `search_path` inesperado, o pasar por un pooler que redirige a otra base
+ * — y en los tres casos la comparación de cadenas de `requireStagingEnvironment`
+ * habría dado por buena una base que no es.
+ *
+ * Se llama con la conexión ya abierta y ANTES de la primera escritura. Es una
+ * lectura, así que llamarla en un script de sólo lectura tampoco cambia nada.
+ */
+export async function assertConnectedDatabase(
+  executor: { query: (sql: string) => Promise<{ rows: Array<Record<string, unknown>> }> },
+  env: Readonly<Record<string, string | undefined>> = process.env,
+): Promise<string> {
+  const expectedName = (env[EXPECTED_NAME_VAR] ?? '').trim();
+  if (expectedName === '') {
+    throw new StagingGuardError(`Falta ${EXPECTED_NAME_VAR}.`);
+  }
+  const result = await executor.query('SELECT current_database() AS name');
+  const actual = String(result.rows[0]?.name ?? '');
+  if (actual.toLowerCase() !== expectedName.toLowerCase()) {
+    throw new StagingGuardError(
+      `Conectado a una base que NO es la declarada.\n` +
+        `  ${EXPECTED_NAME_VAR}: ${expectedName}\n` +
+        `  current_database(): ${actual}\n` +
+        `  La cadena de conexión decía otra cosa que el servidor: puede ser un pooler ` +
+        `que redirige. No se ha escrito nada.`,
+    );
+  }
+  return actual;
 }
 
 /**

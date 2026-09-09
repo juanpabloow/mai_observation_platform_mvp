@@ -2,6 +2,7 @@ import { closePool, query, withTransaction } from '../db/client.js';
 import type { Queryable } from '../db/repositories/meetings/types.js';
 import {
   StagingGuardError,
+  assertConnectedDatabase,
   parseArgs,
   requireStagingEnvironment,
   requireUuid,
@@ -90,6 +91,10 @@ async function takeInventory(tenantId: string, executor?: Queryable): Promise<In
 async function purge(tenantId: string): Promise<void> {
   await withTransaction(async (client) => {
     const executor = client as unknown as Queryable;
+    // Dentro de la transacción y antes del primer DELETE. La comprobación de
+    // `requireStagingEnvironment` compara CADENAS; ésta pregunta al servidor, y
+    // es la única que un pooler no puede engañar.
+    await assertConnectedDatabase(executor);
 
     // 1 · Revocar antes de borrar. No es ceremonia: si algo falla a mitad, lo
     //     que queda es una credencial revocada, no una viva cuyo pool ya no
@@ -173,6 +178,7 @@ async function main(): Promise<number> {
     out(`tenant: ${tenantId}`);
     out('');
 
+    await assertConnectedDatabase({ query });
     const before = await takeInventory(tenantId);
     const total = before.reduce((sum, item) => sum + item.count, 0);
     out('── inventario ──────────────────────────────────────────────');

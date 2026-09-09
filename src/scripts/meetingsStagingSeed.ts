@@ -4,6 +4,7 @@ import { mintWorkerToken } from '../db/repositories/meetings/credentials.js';
 import {
   ENV_KIND_VAR,
   StagingGuardError,
+  assertConnectedDatabase,
   assertNoSecrets,
   parseArgs,
   requireStagingEnvironment,
@@ -57,11 +58,15 @@ interface Args {
   readonly clientName: string;
   readonly userEmail: string;
   readonly poolSlug: string;
-  readonly environment: 'production' | 'staging' | 'development';
+  /**
+   * Sólo `staging`. Este script existe para W-3 y nada más: `worker_pools`
+   * admite tres entornos, pero permitir `production` aquí convertiría una
+   * herramienta de validación en una de aprovisionamiento — con su token
+   * impreso en una terminal y su idempotencia pensada para una prueba.
+   */
+  readonly environment: 'staging';
   readonly rotateToken: boolean;
 }
-
-const ENVIRONMENTS = ['production', 'staging', 'development'] as const;
 
 function readArgs(argv: readonly string[]): Args {
   const { flags, values } = parseArgs(argv);
@@ -71,8 +76,13 @@ function readArgs(argv: readonly string[]): Args {
     return value;
   };
   const environment = (values['environment'] ?? 'staging').trim();
-  if (!(ENVIRONMENTS as readonly string[]).includes(environment)) {
-    throw new StagingGuardError(`--environment debe ser uno de ${ENVIRONMENTS.join(', ')}.`);
+  if (environment !== 'staging') {
+    throw new StagingGuardError(
+      `--environment sólo admite 'staging' (recibido '${environment}'). Este script es ` +
+        `de W-3: imprime un token en una terminal y su idempotencia está pensada para ` +
+        `una prueba. Aprovisionar un pool de producción es otra tarea, con otras ` +
+        `garantías, y no debe compartir herramienta con ésta.`,
+    );
   }
   const userEmail = required('user-email').toLowerCase();
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(userEmail)) {
@@ -90,7 +100,7 @@ function readArgs(argv: readonly string[]): Args {
     clientName: required('client-name'),
     userEmail,
     poolSlug,
-    environment: environment as Args['environment'],
+    environment: 'staging',
     rotateToken: flags.has('rotate-token'),
   };
 }
@@ -149,13 +159,24 @@ interface SeedResult {
 async function seed(args: Args): Promise<SeedResult> {
   return withTransaction(async (client) => {
     const executor = client as unknown as Queryable;
+    // Lo primero dentro de la transacción, antes de leer o escribir nada: la
+    // cadena de conexión y el servidor pueden discrepar.
+    await assertConnectedDatabase(executor);
     const user = await findUser(executor, args.userEmail);
 
     // ── Pool: la clave de idempotencia ────────────────────────────────────
     // `pools_slug_env_key UNIQUE (slug, environment)`. Si ya existe, este
     // script no puede continuar sin decidir por ti qué hacer con su credencial.
-    const existingPool = await executor.query<{ id: string; tenant_id: string | null }>(
-      `SELECT id, tenant_id FROM worker_pools WHERE slug = $1 AND environment = $2`,
+    const existingPool = await executor.query<{
+      id: string;
+      tenant_id: string | null;
+      scope: string;
+      enabled: boolean;
+      capabilities: string[];
+      concurrency: { schema_version?: number; limits?: Record<string, number> } | null;
+    }>(
+      `SELECT id, tenant_id, scope, enabled, capabilities, concurrency
+         FROM worker_pools WHERE slug = $1 AND environment = $2`,
       [args.poolSlug, args.environment],
     );
     const poolExists = existingPool.rows.length > 0;
@@ -236,6 +257,55 @@ async function seed(args: Args): Promise<SeedResult> {
       [tenantId, clientId],
     );
 
+    // ── Si el pool ya existía, su contrato COMPLETO antes de rotar ────────
+    //
+    // `--rotate-token` emite y revoca. Hacerlo sobre un pool cuyo contrato no
+    // es el que este script crea sería peor que no hacer nada: se revocaría una
+    // credencial en uso y se emitiría otra con un alcance que nadie revisó. Así
+    // que se comprueban las cinco cosas, y cualquier diferencia aborta ANTES de
+    // emitir o revocar.
+    if (poolExists) {
+      const pool = existingPool.rows[0];
+      const problems: string[] = [];
+      if (pool.scope !== 'single_tenant') {
+        problems.push(`scope='${pool.scope}' (se esperaba 'single_tenant')`);
+      }
+      if (pool.tenant_id !== tenantId) {
+        problems.push(
+          `pertenece al tenant ${pool.tenant_id ?? 'NULO'} y no a ${tenantId}` +
+            ` — rotar hacia otro tenant sería darle alcance sobre datos ajenos`,
+        );
+      }
+      if (!pool.enabled) problems.push('está deshabilitado (enabled = false)');
+      const caps = [...(pool.capabilities ?? [])].sort();
+      if (caps.length !== 1 || caps[0] !== 'meetings.transcribe') {
+        problems.push(`capabilities={${caps.join(',')}} (se esperaba {meetings.transcribe})`);
+      }
+      const limits = pool.concurrency?.limits ?? {};
+      const limitKeys = Object.keys(limits).sort();
+      if (
+        pool.concurrency?.schema_version !== 1 ||
+        limitKeys.length !== 1 ||
+        limitKeys[0] !== 'meetings.transcribe' ||
+        limits['meetings.transcribe'] !== 1
+      ) {
+        problems.push(
+          `concurrency=${JSON.stringify(pool.concurrency)} ` +
+            `(se esperaba schema_version 1 y limits {"meetings.transcribe":1})`,
+        );
+      }
+      if (problems.length > 0) {
+        throw new StagingGuardError(
+          `El pool '${args.poolSlug}' (${args.environment}) existe pero su contrato NO es ` +
+            `el de W-3:\n` +
+            problems.map((problem) => `  · ${problem}`).join('\n') +
+            `\nNo se ha emitido ni revocado ninguna credencial. Revísalo a mano: rotar ` +
+            `sobre un pool que no reconozco revocaría una credencial en uso y emitiría ` +
+            `otra con un alcance que nadie ha revisado.`,
+        );
+      }
+    }
+
     // ── El pool: single_tenant, sólo transcribe ───────────────────────────
     // NUNCA 'internal' y NUNCA con meetings.maintenance: un worker normal no
     // debe poder reencolar trabajo de otros tenants.
@@ -254,12 +324,6 @@ async function seed(args: Args): Promise<SeedResult> {
           )
         ).rows[0].id;
 
-    if (poolExists && existingPool.rows[0].tenant_id !== tenantId) {
-      throw new StagingGuardError(
-        `El pool '${args.poolSlug}' existe pero pertenece a otro tenant. No se rota una ` +
-          `credencial hacia un tenant distinto: sería darle alcance sobre datos ajenos.`,
-      );
-    }
 
     // ── La credencial ─────────────────────────────────────────────────────
     const minted = mintWorkerToken();

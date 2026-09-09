@@ -1,6 +1,7 @@
 import { closePool, query } from '../db/client.js';
 import {
   StagingGuardError,
+  assertConnectedDatabase,
   parseArgs,
   requireStagingEnvironment,
   requireUuid,
@@ -39,6 +40,10 @@ function record(id: string, label: string, verdict: Verdict, detail: string): vo
 }
 
 async function run(tenantId: string, meetingId: string | null): Promise<void> {
+  // El servidor confirma a qué base se ha conectado de verdad. Aquí no se
+  // escribe nada, así que el riesgo es otro: dar un informe en verde de una
+  // base que no es la que se cree.
+  await assertConnectedDatabase({ query });
   // Las de ámbito de TENANT van primero y no dependen de que haya reunión: es
   // lo único verificable justo después del seed, que es cuando este script se
   // ejecuta por primera vez. Detrás del corte por «no hay reunión» habrían sido
