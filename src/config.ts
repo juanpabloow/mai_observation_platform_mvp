@@ -2,7 +2,13 @@ import dotenv from 'dotenv';
 import { z } from 'zod';
 
 // Load variables from .env into process.env before validation.
-dotenv.config();
+//
+// `quiet: true` silences dotenv 17's startup banner ("injected env (n) from
+// .env // tip: …"). It goes to STDOUT, so any script whose stdout is meant to
+// be parsed —`meetingsStagingSeed` writes only the worker token there, for
+// `> token.txt`— had its output prefixed with a line nobody asked for. It is
+// also noise in every worker log. Nothing reads it.
+dotenv.config({ quiet: true });
 
 /**
  * Schema for all environment variables the application depends on.
