@@ -1,10 +1,11 @@
 import {
   authenticateWorker,
   meetingsDeps,
-  readJsonBody,
-  readLeaseProof,
+  readValidated,
+  requireUuidParam,
   toResponse,
 } from '@/lib/meetingsApi';
+import { HeartbeatBody } from '@/lib/meetingsValidation';
 import { heartbeat } from '@worker/meetings/service.js';
 
 /**
@@ -20,16 +21,19 @@ export async function POST(
   try {
     const identity = await authenticateWorker(request);
     const { jobId } = await context.params;
-    const body = await readJsonBody(request);
-    const result = await heartbeat(
-      identity,
-      {
-        ...readLeaseProof(body, jobId),
-        progressPct: typeof body.progressPct === 'number' ? body.progressPct : null,
-      },
-      meetingsDeps(),
+    const body = await readValidated(request, HeartbeatBody);
+    return Response.json(
+      await heartbeat(
+        identity,
+        {
+          jobId: requireUuidParam(jobId, 'jobId'),
+          attempt: body.attempt,
+          leaseToken: body.leaseToken,
+          progressPct: body.progressPct ?? null,
+        },
+        meetingsDeps(),
+      ),
     );
-    return Response.json(result);
   } catch (error) {
     return toResponse(error);
   }

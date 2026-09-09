@@ -1,10 +1,5 @@
-import {
-  authenticateWorker,
-  meetingsDeps,
-  optionalString,
-  readJsonBody,
-  toResponse,
-} from '@/lib/meetingsApi';
+import { authenticateWorker, meetingsDeps, readValidated, toResponse } from '@/lib/meetingsApi';
+import { ClaimBody } from '@/lib/meetingsValidation';
 import { claim } from '@worker/meetings/service.js';
 
 /**
@@ -14,20 +9,18 @@ import { claim } from '@worker/meetings/service.js';
  * cola, no un error, y devolver un 404 o un 200 con `{job: null}` obligaría al
  * worker a distinguir dos formas de la misma nada.
  *
- * El cuerpo es opcional y sólo lleva telemetría (`workerLabel`) y una
- * restricción voluntaria de capacidades. Nada de él autoriza.
+ * El cuerpo sólo lleva telemetría (`workerLabel`) y una restricción voluntaria
+ * de capacidades. Nada de él autoriza.
  */
 export async function POST(request: Request): Promise<Response> {
   try {
     const identity = await authenticateWorker(request);
-    const body = request.headers.get('content-length') === '0' ? {} : await readJsonBody(request).catch(() => ({}));
+    const body = await readValidated(request, ClaimBody);
     const job = await claim(
       identity,
       {
-        workerLabel: optionalString(body as Record<string, unknown>, 'workerLabel'),
-        capabilities: Array.isArray((body as Record<string, unknown>).capabilities)
-          ? ((body as Record<string, unknown>).capabilities as string[])
-          : undefined,
+        workerLabel: body.workerLabel ?? null,
+        ...(body.capabilities ? { capabilities: body.capabilities } : {}),
       },
       meetingsDeps(),
     );

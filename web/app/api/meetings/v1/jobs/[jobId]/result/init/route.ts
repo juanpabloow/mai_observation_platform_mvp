@@ -1,12 +1,11 @@
 import {
   authenticateWorker,
   meetingsDeps,
-  readJsonBody,
-  readLeaseProof,
-  requireInt,
-  requireString,
+  readValidated,
+  requireUuidParam,
   toResponse,
 } from '@/lib/meetingsApi';
+import { ResultInitBody } from '@/lib/meetingsValidation';
 import { resultInit } from '@worker/meetings/service.js';
 
 /**
@@ -22,19 +21,22 @@ export async function POST(
   try {
     const identity = await authenticateWorker(request);
     const { jobId } = await context.params;
-    const body = await readJsonBody(request);
-    const result = await resultInit(
-      identity,
-      {
-        ...readLeaseProof(body, jobId),
-        bytes: requireInt(body, 'bytes'),
-        checksumSha256: requireString(body, 'checksumSha256'),
-        itemCount: typeof body.itemCount === 'number' ? body.itemCount : null,
-        schemaVersion: typeof body.schemaVersion === 'number' ? body.schemaVersion : 1,
-      },
-      meetingsDeps(),
+    const body = await readValidated(request, ResultInitBody);
+    return Response.json(
+      await resultInit(
+        identity,
+        {
+          jobId: requireUuidParam(jobId, 'jobId'),
+          attempt: body.attempt,
+          leaseToken: body.leaseToken,
+          bytes: body.bytes,
+          checksumSha256: body.checksumSha256,
+          itemCount: body.itemCount ?? null,
+          schemaVersion: body.schemaVersion ?? 1,
+        },
+        meetingsDeps(),
+      ),
     );
-    return Response.json(result);
   } catch (error) {
     return toResponse(error);
   }

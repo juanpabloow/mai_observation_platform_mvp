@@ -1,12 +1,11 @@
 import {
   authenticateWorker,
   meetingsDeps,
-  readJsonBody,
-  readLeaseProof,
-  requireInt,
-  requireString,
+  readValidated,
+  requireUuidParam,
   toResponse,
 } from '@/lib/meetingsApi';
+import { ResultCompleteBody } from '@/lib/meetingsValidation';
 import { resultComplete } from '@worker/meetings/service.js';
 
 /**
@@ -20,28 +19,30 @@ export async function POST(
   try {
     const identity = await authenticateWorker(request);
     const { jobId } = await context.params;
-    const body = await readJsonBody(request);
-    const probe = (body.probe ?? null) as Record<string, unknown> | null;
-    const result = await resultComplete(
-      identity,
-      {
-        ...readLeaseProof(body, jobId),
-        bytes: requireInt(body, 'bytes'),
-        checksumSha256: requireString(body, 'checksumSha256'),
-        ...(probe
-          ? {
-              probe: {
-                durationSeconds: typeof probe.durationSeconds === 'number' ? probe.durationSeconds : null,
-                sampleRate: typeof probe.sampleRate === 'number' ? probe.sampleRate : null,
-                channels: typeof probe.channels === 'number' ? probe.channels : null,
-                codec: typeof probe.codec === 'string' ? probe.codec : null,
-              },
-            }
-          : {}),
-      },
-      meetingsDeps(),
+    const body = await readValidated(request, ResultCompleteBody);
+    return Response.json(
+      await resultComplete(
+        identity,
+        {
+          jobId: requireUuidParam(jobId, 'jobId'),
+          attempt: body.attempt,
+          leaseToken: body.leaseToken,
+          bytes: body.bytes,
+          checksumSha256: body.checksumSha256,
+          ...(body.probe
+            ? {
+                probe: {
+                  durationSeconds: body.probe.durationSeconds ?? null,
+                  sampleRate: body.probe.sampleRate ?? null,
+                  channels: body.probe.channels ?? null,
+                  codec: body.probe.codec ?? null,
+                },
+              }
+            : {}),
+        },
+        meetingsDeps(),
+      ),
     );
-    return Response.json(result);
   } catch (error) {
     return toResponse(error);
   }

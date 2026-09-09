@@ -5,7 +5,8 @@ import { DEFAULT_LEASE_SECONDS, type MeetingsServiceDeps } from '@worker/meeting
 import { parseMediaLimits } from '@worker/meetings/mediaLimits.js';
 import { redactSignedUrl, resolveMeetingsStorage } from '@worker/storage/meetingsStorage.js';
 import { logger } from '@worker/logger.js';
-import { getAccessScope, canAccessClient } from './access';
+import { parseBody, type ParseResult } from './meetingsValidation';
+import type { z } from 'zod';
 
 /**
  * Adaptadores HTTP de `/api/meetings/v1`. Las rutas de Next son finas a
@@ -24,6 +25,15 @@ import { getAccessScope, canAccessClient } from './access';
  *     únicos (ver `errors.ts`).
  *   · Ninguna URL firmada entra en un log: `logMeetingsError` pasa por
  *     `redactSignedUrl` cualquier cosa que parezca una URL.
+ *
+ * ── Sin sesión ──────────────────────────────────────────────────────────────
+ *
+ * Este módulo NO importa nada de la pila de sesión. `resolveAppScope` vive
+ * aparte (`meetingsAppScope.ts`) por dos razones: la primera es que un endpoint
+ * de worker no tiene nada que ver con `getAccessScope`, y la segunda es que
+ * importarlo aquí arrastraba better-auth y React a los seis handlers de worker
+ * — que entonces no se podían ni cargar fuera del runtime de Next, y por tanto
+ * tampoco probar.
  */
 
 /** Cuerpo JSON, o error si no es un objeto. Nunca lanza sin traducir. */
@@ -80,41 +90,6 @@ export function meetingsDeps(): MeetingsServiceDeps {
 }
 
 /**
- * Ámbito de un llamador con sesión (la UI). Gatea por pertenencia al tenant y
- * acceso al cliente.
- *
- * COSTURA PENDIENTE: falta la comprobación de módulo
- * (`isClientModuleEnabled(tenant, client, 'meetings')`). No está porque en esta
- * rama ni `CLIENT_MODULE_KEYS` incluye `'meetings'` ni el CHECK de
- * `client_modules` lo admite: las dos cosas viven en el conjunto de registro del
- * módulo, que quedó deliberadamente fuera del commit de T-1. Se añade aquí, en
- * una línea, cuando ese conjunto entre — y hasta entonces la restricción
- * efectiva es la de ámbito, que es la que impide el acceso cruzado entre
- * clientes y tenants.
- */
-export async function resolveAppScope(clientId: string): Promise<{
-  tenantId: string;
-  clientId: string;
-  userId: string | null;
-  userLabel: string | null;
-}> {
-  const scope = await getAccessScope();
-  if (!canAccessClient(scope, clientId)) {
-    // El mismo 404 que un cliente inexistente: probar uuids no distingue.
-    throw new MeetingsApiError('not_found', 'No encontrado.');
-  }
-  return {
-    tenantId: scope.tenantId,
-    clientId,
-    userId: scope.userId,
-    // La etiqueta de atribución: el id del usuario, que es lo que AccessScope
-    // trae. No el correo — no está en el scope y buscarlo sólo para un log
-    // añadiría una consulta a cada operación.
-    userLabel: scope.userId,
-  };
-}
-
-/**
  * Traduce cualquier excepción a una respuesta. Un error que NO es
  * `MeetingsApiError` se registra completo y se responde como `internal` sin
  * detalle: un stack trace en el cuerpo le cuenta al cliente la estructura del
@@ -144,36 +119,36 @@ export function logMeetingsError(error: unknown): void {
   logger.error({ err: { message: safe, name: (error as Error)?.name } }, 'meetings api error');
 }
 
-/** Lecturas tipadas del cuerpo, con el error ya traducido. */
-export function requireString(body: Record<string, unknown>, field: string): string {
-  const value = body[field];
-  if (typeof value !== 'string' || value.trim().length === 0) {
-    throw new MeetingsApiError('invalid_request', `'${field}' es obligatorio.`);
+/**
+ * Lee el cuerpo y lo valida con un esquema. Un cuerpo inválido es un 400 con el
+ * campo nombrado, nunca un 500: los helpers campo-a-campo que había antes
+ * dejaban pasar un enum inválido con un cast y la violación de CHECK de la base
+ * salía como error interno.
+ */
+export async function readValidated<T extends z.ZodTypeAny>(
+  request: Request,
+  schema: T,
+): Promise<z.infer<T>> {
+  const body = await readJsonBody(request);
+  return unwrap(parseBody(schema, body));
+}
+
+/** Igual, para la query string. */
+export function validateQuery<T extends z.ZodTypeAny>(request: Request, schema: T): z.infer<T> {
+  const params = Object.fromEntries(new URL(request.url).searchParams.entries());
+  return unwrap(parseBody(schema, params));
+}
+
+function unwrap<T>(result: ParseResult<T>): T {
+  if (result.ok) return result.value;
+  throw new MeetingsApiError('invalid_request', result.error);
+}
+
+/** El uuid de un parámetro de ruta. Un `[meetingId]` que no es uuid es un 400,
+ *  no una consulta que PostgreSQL rechaza por tipo. */
+export function requireUuidParam(value: string, name: string): string {
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(value)) {
+    throw new MeetingsApiError('invalid_request', `${name}: se esperaba un uuid.`);
   }
   return value;
-}
-
-export function requireInt(body: Record<string, unknown>, field: string): number {
-  const value = body[field];
-  if (typeof value !== 'number' || !Number.isInteger(value)) {
-    throw new MeetingsApiError('invalid_request', `'${field}' debe ser un entero.`);
-  }
-  return value;
-}
-
-export function optionalString(body: Record<string, unknown>, field: string): string | null {
-  const value = body[field];
-  return typeof value === 'string' && value.trim().length > 0 ? value : null;
-}
-
-/** La prueba de lease que acompaña a toda operación sobre un job reclamado. */
-export function readLeaseProof(
-  body: Record<string, unknown>,
-  jobId: string,
-): { jobId: string; attempt: number; leaseToken: string } {
-  return {
-    jobId,
-    attempt: requireInt(body, 'attempt'),
-    leaseToken: requireString(body, 'leaseToken'),
-  };
 }
