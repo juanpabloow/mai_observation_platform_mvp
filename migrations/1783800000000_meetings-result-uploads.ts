@@ -34,6 +34,19 @@ import type { MigrationBuilder } from 'node-pg-migrate';
  * intento devuelve la MISMA fila y la misma URL firmada, en vez de crear otra.
  * Es el requisito explícito de T-1.
  *
+ * ── Un artefacto por etapa, con el mismo camino ────────────────────────────
+ *
+ * Las tres etapas del pipeline de transcripción suben por aquí: 'normalize' su
+ * audio normalizado, 'transcribe' su NDJSON de segmentos y 'diarize' su NDJSON
+ * de turnos. El worker no distingue etapas — mismo 'result/init', mismo
+ * 'result/complete', mismo registro de idempotencia, misma verificación.
+ *
+ * Lo que cambia es lo que mai hace DESPUÉS de verificar, y eso es asunto de mai:
+ * un 'normalized_media' verificado se traduce además a una fila de
+ * 'meeting_media' role='normalized'; un 'transcript' y un 'diarization'
+ * verificados esperan a que el pipeline resuelva para ingerirse juntos en una
+ * sola versión.
+ *
  * ── Estados ────────────────────────────────────────────────────────────────
  *
  * awaiting_upload → uploaded → verified → ingested
@@ -58,7 +71,25 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       -- producen dos artefactos, y ambos quedan para diagnóstico.
       attempt smallint NOT NULL CHECK (attempt >= 0),
 
-      kind text NOT NULL CHECK (kind IN ('transcript','analysis','raw')),
+      -- QUÉ ES este objeto. El vocabulario cubre las cuatro etapas más la
+      -- salida cruda auditable:
+      --
+      --   normalized_media  audio normalizado que produce 'normalize' y del que
+      --                     'transcribe' y 'diarize' son consumidores
+      --   transcript        NDJSON de segmentos con texto
+      --   diarization       NDJSON de turnos de hablante
+      --   analysis          resultado estructurado de 'analyze' (T-4)
+      --   raw               salida cruda conservada para auditoría, de la que
+      --                     NO se ingiere
+      --
+      -- La revisión anterior tenía sólo transcript/analysis/raw, y el artefacto
+      -- de diarización no encajaba en ninguno. Meterlo en 'transcript' habría
+      -- funcionado —la idempotencia es por job_id— al precio de que esta columna
+      -- dejara de responder qué es el objeto: para saber cómo parsearlo habría
+      -- que preguntárselo al job, y una consulta por kind='transcript'
+      -- devolvería diarizaciones.
+      kind text NOT NULL
+        CHECK (kind IN ('normalized_media','transcript','diarization','analysis','raw')),
       schema_version smallint NOT NULL CHECK (schema_version >= 1),
 
       storage_key text NOT NULL,

@@ -1,0 +1,295 @@
+import { q, type Queryable } from './types.js';
+import type { DiarizationState, MeetingMediaState, TranscriptState } from './types.js';
+
+/**
+ * Reuniones y sus medios.
+ *
+ * Toda lectura va SIEMPRE con `tenant_id` y `client_id` en el WHERE, aunque el
+ * `id` sea un uuid y por tanto único. No es redundante: un uuid adivinado o
+ * filtrado seguiría siendo válido, y con el ámbito en la consulta un id de otro
+ * cliente no devuelve fila — que es lo que convierte «no autorizado» en
+ * «no encontrado» sin que ninguna capa de arriba tenga que acordarse.
+ */
+
+export interface MeetingRow {
+  id: string;
+  tenant_id: string;
+  client_id: string;
+  title: string;
+  source_kind: string;
+  started_at: Date | null;
+  language_hint: string | null;
+  active_transcript_id: string | null;
+  media_state: MeetingMediaState;
+  transcript_state: TranscriptState;
+  diarization_state: DiarizationState;
+  analysis_state: string;
+  warnings: unknown[];
+  idempotency_key: string;
+  retention_policy: Record<string, unknown>;
+  cancelled_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface CreateMeetingInput {
+  readonly tenantId: string;
+  readonly clientId: string;
+  readonly title: string;
+  readonly sourceKind: 'file' | 'meet' | 'inbox' | 'room' | 'api';
+  readonly idempotencyKey: string;
+  readonly startedAt?: Date | null;
+  readonly languageHint?: string | null;
+  readonly createdByUserId?: string | null;
+  readonly requestedOptions?: Record<string, unknown>;
+}
+
+export interface CreateMeetingResult {
+  readonly meeting: MeetingRow;
+  /** false = ya existía con esa clave de idempotencia y se devuelve la misma. */
+  readonly created: boolean;
+}
+
+/**
+ * Crea una reunión, o devuelve la existente si la clave de idempotencia ya se
+ * usó en este cliente.
+ *
+ * `ON CONFLICT DO NOTHING` + relectura, en vez de `DO UPDATE`: si la fila ya
+ * existe no hay nada que actualizar —la reunión es de quien la creó primero— y
+ * un `DO UPDATE` permitiría que una segunda llamada con el mismo idempotency_key
+ * y otro título renombrara una reunión ajena.
+ */
+export async function createMeeting(
+  input: CreateMeetingInput,
+  executor?: Queryable,
+): Promise<CreateMeetingResult> {
+  const inserted = await q(executor).query<MeetingRow>(
+    `INSERT INTO meetings
+       (tenant_id, client_id, title, source_kind, idempotency_key,
+        started_at, language_hint, created_by_user_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+     ON CONFLICT (tenant_id, client_id, idempotency_key) DO NOTHING
+     RETURNING *`,
+    [
+      input.tenantId,
+      input.clientId,
+      input.title,
+      input.sourceKind,
+      input.idempotencyKey,
+      input.startedAt ?? null,
+      input.languageHint ?? null,
+      input.createdByUserId ?? null,
+    ],
+  );
+  if (inserted.rows.length === 1) return { meeting: inserted.rows[0], created: true };
+
+  const existing = await q(executor).query<MeetingRow>(
+    `SELECT * FROM meetings
+      WHERE tenant_id = $1 AND client_id = $2 AND idempotency_key = $3`,
+    [input.tenantId, input.clientId, input.idempotencyKey],
+  );
+  if (existing.rows.length !== 1) {
+    // Imposible salvo carrera con un borrado: ni se inserta ni se encuentra.
+    throw new Error('createMeeting: ni se insertó ni se encontró la reunión');
+  }
+  return { meeting: existing.rows[0], created: false };
+}
+
+export async function getMeetingScoped(
+  meetingId: string,
+  tenantId: string,
+  clientId: string,
+  executor?: Queryable,
+): Promise<MeetingRow | null> {
+  const result = await q(executor).query<MeetingRow>(
+    `SELECT * FROM meetings WHERE id = $1 AND tenant_id = $2 AND client_id = $3`,
+    [meetingId, tenantId, clientId],
+  );
+  return result.rows[0] ?? null;
+}
+
+/** Sin cliente: para el worker, que conoce el job y de él saca el ámbito. */
+export async function getMeetingById(
+  meetingId: string,
+  executor?: Queryable,
+): Promise<MeetingRow | null> {
+  const result = await q(executor).query<MeetingRow>(`SELECT * FROM meetings WHERE id = $1`, [meetingId]);
+  return result.rows[0] ?? null;
+}
+
+export async function setMediaState(
+  meetingId: string,
+  state: MeetingMediaState,
+  executor?: Queryable,
+): Promise<void> {
+  await q(executor).query(
+    `UPDATE meetings SET media_state = $2, updated_at = now() WHERE id = $1`,
+    [meetingId, state],
+  );
+}
+
+export interface PipelineStateUpdate {
+  readonly transcriptState?: TranscriptState;
+  readonly diarizationState?: DiarizationState;
+  readonly activeTranscriptId?: string | null;
+  /** Se AÑADEN a `warnings`; nunca se reemplaza el array. */
+  readonly appendWarnings?: readonly Record<string, unknown>[];
+}
+
+/**
+ * Actualiza los estados del pipeline. Los avisos se CONCATENAN con `||` en SQL
+ * en vez de leerse, modificarse y escribirse: dos etapas que terminan a la vez
+ * perderían uno de los dos avisos con read-modify-write, y perder un aviso es
+ * perder la única explicación de por qué una reunión salió «con avisos».
+ */
+export async function updatePipelineState(
+  meetingId: string,
+  update: PipelineStateUpdate,
+  executor?: Queryable,
+): Promise<void> {
+  const sets: string[] = ['updated_at = now()'];
+  const params: unknown[] = [meetingId];
+
+  if (update.transcriptState !== undefined) {
+    params.push(update.transcriptState);
+    sets.push(`transcript_state = $${params.length}`);
+  }
+  if (update.diarizationState !== undefined) {
+    params.push(update.diarizationState);
+    sets.push(`diarization_state = $${params.length}`);
+  }
+  if (update.activeTranscriptId !== undefined) {
+    params.push(update.activeTranscriptId);
+    sets.push(`active_transcript_id = $${params.length}`);
+  }
+  if (update.appendWarnings && update.appendWarnings.length > 0) {
+    params.push(JSON.stringify(update.appendWarnings));
+    sets.push(`warnings = warnings || $${params.length}::jsonb`);
+  }
+  await q(executor).query(`UPDATE meetings SET ${sets.join(', ')} WHERE id = $1`, params);
+}
+
+/** Cancela dejando el autor como etiqueta (ver `meetings_cancel_coherent`). */
+export async function cancelMeeting(
+  meetingId: string,
+  tenantId: string,
+  clientId: string,
+  actorLabel: string,
+  actorUserId: string | null,
+  executor?: Queryable,
+): Promise<boolean> {
+  const result = await q(executor).query(
+    `UPDATE meetings
+        SET cancelled_at = now(), cancelled_by_label = $4, cancelled_by_user_id = $5,
+            updated_at = now()
+      WHERE id = $1 AND tenant_id = $2 AND client_id = $3 AND cancelled_at IS NULL`,
+    [meetingId, tenantId, clientId, actorLabel, actorUserId],
+  );
+  return (result.rowCount ?? 0) > 0;
+}
+
+// ── meeting_media ──────────────────────────────────────────────────────────
+
+export interface MeetingMediaRow {
+  id: string;
+  tenant_id: string;
+  client_id: string;
+  meeting_id: string;
+  role: 'original' | 'normalized' | 'raw_result';
+  storage_key: string;
+  bytes: string;
+  checksum_sha256: string;
+  content_type: string;
+  duration_seconds: string | null;
+  sample_rate: number | null;
+  channels: number | null;
+  codec: string | null;
+  probe_ok: boolean | null;
+  probe_error: string | null;
+  created_at: Date;
+}
+
+export interface InsertMediaInput {
+  readonly tenantId: string;
+  readonly clientId: string;
+  readonly meetingId: string;
+  readonly role: 'original' | 'normalized' | 'raw_result';
+  readonly storageKey: string;
+  readonly bytes: number;
+  readonly checksumSha256: string;
+  readonly contentType: string;
+  readonly durationSeconds?: number | null;
+  readonly sampleRate?: number | null;
+  readonly channels?: number | null;
+  readonly codec?: string | null;
+  readonly probeOk?: boolean | null;
+  readonly probeError?: string | null;
+}
+
+/**
+ * Inserta un medio. Si la clave ya existe devuelve la fila que había: es la
+ * idempotencia de `upload-complete` y de `result/complete` reenviados, apoyada
+ * en `meeting_media_key_unique UNIQUE (storage_key)` — una garantía de la base,
+ * no un `SELECT` previo que otra transacción podría invalidar entre la lectura
+ * y la escritura.
+ */
+export async function insertMedia(
+  input: InsertMediaInput,
+  executor?: Queryable,
+): Promise<{ media: MeetingMediaRow; created: boolean }> {
+  const inserted = await q(executor).query<MeetingMediaRow>(
+    `INSERT INTO meeting_media
+       (tenant_id, client_id, meeting_id, role, storage_key, bytes, checksum_sha256,
+        content_type, duration_seconds, sample_rate, channels, codec, probe_ok, probe_error)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     ON CONFLICT (storage_key) DO NOTHING
+     RETURNING *`,
+    [
+      input.tenantId,
+      input.clientId,
+      input.meetingId,
+      input.role,
+      input.storageKey,
+      input.bytes,
+      input.checksumSha256,
+      input.contentType,
+      input.durationSeconds ?? null,
+      input.sampleRate ?? null,
+      input.channels ?? null,
+      input.codec ?? null,
+      input.probeOk ?? null,
+      input.probeError ?? null,
+    ],
+  );
+  if (inserted.rows.length === 1) return { media: inserted.rows[0], created: true };
+
+  const existing = await q(executor).query<MeetingMediaRow>(
+    `SELECT * FROM meeting_media WHERE storage_key = $1`,
+    [input.storageKey],
+  );
+  if (existing.rows.length !== 1) throw new Error('insertMedia: conflicto sin fila');
+  return { media: existing.rows[0], created: false };
+}
+
+export async function findMediaByKey(
+  storageKey: string,
+  executor?: Queryable,
+): Promise<MeetingMediaRow | null> {
+  const result = await q(executor).query<MeetingMediaRow>(
+    `SELECT * FROM meeting_media WHERE storage_key = $1 AND deleted_at IS NULL`,
+    [storageKey],
+  );
+  return result.rows[0] ?? null;
+}
+
+export async function findLiveOriginal(
+  meetingId: string,
+  executor?: Queryable,
+): Promise<MeetingMediaRow | null> {
+  const result = await q(executor).query<MeetingMediaRow>(
+    `SELECT * FROM meeting_media
+      WHERE meeting_id = $1 AND role = 'original' AND deleted_at IS NULL`,
+    [meetingId],
+  );
+  return result.rows[0] ?? null;
+}

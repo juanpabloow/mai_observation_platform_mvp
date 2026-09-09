@@ -723,11 +723,17 @@ BEGIN;
      SET status = 'queued',
          lease_token_hash = NULL, lease_expires_at = NULL,
          leased_credential_id = NULL, leased_credential_label = NULL,
-         attempts = attempts + 1
+         next_attempt_at = now()
    WHERE leased_credential_id = $1
      AND status IN ('leased', 'uploading_result');
 COMMIT;
 ```
+
+**`attempts` no se incrementa aquí.** Lo cuenta el `claim`, que hace
+`attempts = attempts + 1` al tomar la fila. Sumarlo también en el requeue
+gastaría DOS intentos por un solo lease perdido, y un job con `max_attempts = 3`
+moriría tras dos caídas de worker en vez de tres. El barrido automático
+(`requeueExpiredLeases`) tampoco lo toca, por la misma razón.
 
 El borrado físico no participa en la operación normal. Si algún día hace falta,
 antes hay que comprobar que nadie la referencia — y `RESTRICT` es exactamente esa

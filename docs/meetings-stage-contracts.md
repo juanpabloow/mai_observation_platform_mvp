@@ -40,12 +40,12 @@ puede pisar el del actual.
 |---|---|
 | **Entrada** | `meeting_media` role=`original`, `deleted_at IS NULL`. Signed GET con Range. |
 | **Salida** | Audio normalizado: WAV PCM s16le, 16 kHz, mono. |
-| **`schema_version`** | No aplica: la salida es audio, no un payload estructurado. Su "forma" son `sample_rate`/`channels`/`codec`, que se persisten como columnas. |
+| **`schema_version`** | **1**, pero describe el *envoltorio* (`kind='normalized_media'`), no un payload: la salida es audio. Su forma real son `sample_rate`/`channels`/`codec`, que se persisten como columnas de `meeting_media`. |
 | **Transición** | job `queued → leased → uploading_result → succeeded`. `meetings.media_state` no cambia: sigue `ready` (describe el original). |
-| **Persistencia de mai** | Tras verificar el objeto: `INSERT meeting_media` role=`normalized` con `bytes`, `checksum_sha256`, `content_type`, `duration_seconds`, `sample_rate`, `channels`, `codec`, `probe_ok`. |
+| **Persistencia de mai** | Tras verificar el objeto: marca el artefacto `ingested` **e** `INSERT meeting_media` role=`normalized` con `bytes`, `checksum_sha256`, `content_type`, `duration_seconds`, `sample_rate`, `channels`, `codec`, `probe_ok`. Es la única etapa cuyo artefacto se ingiere en cuanto se verifica; los otros dos esperan (§5). |
 | **Siguiente job** | `transcribe`, en la misma transacción. Condición exacta: la fila `meeting_media` role=`normalized` de ESTE run existe y `probe_ok = true`. |
 | **Fallo parcial** | No existe. O hay audio normalizado utilizable o no hay. `probe_ok=false` ⇒ `probe_error` obligatorio (CHECK) y el job va a `failed`; el run termina `outcome='failed'`, `meetings.transcript_state='failed'`. |
-| **Idempotencia** | La clave es determinista. `meeting_media_key_unique UNIQUE (storage_key)` hace que un segundo `result/complete` del mismo intento no cree una segunda fila; mai lo trata como éxito y no reintenta la inserción. |
+| **Idempotencia** | `ru_attempt_key UNIQUE (job_id, attempt, kind)` igual que las otras dos etapas, más `meeting_media_key_unique UNIQUE (storage_key)`: un segundo `result/complete` del mismo intento no crea una segunda fila y se responde éxito. |
 
 **Por qué se sube el audio normalizado en vez de pasarlo en memoria.**
 `meetings.transcribe` es una autorización de pool, no afinidad de ejecución: dos
@@ -74,7 +74,7 @@ reunión. El insumo tiene que estar en un sitio que los dos alcancen.
 | | |
 |---|---|
 | **Entrada** | `meeting_media` role=`normalized` de este run, **y** el artefacto de transcripción `verified` de este run (para alinear turnos con segmentos). Dos signed GET. |
-| **Salida** | NDJSON + gzip: una línea de cabecera y una línea por turno de hablante. `schema_version=1`. |
+| **Salida** | NDJSON + gzip: una línea de cabecera y una línea por turno de hablante. `kind='diarization'`, `schema_version=1`. |
 | **`schema_version`** | **1** (ver §4). |
 | **Transición** | job `queued → leased → uploading_result → succeeded`. `meetings.diarization_state`: `pending → running` al reclamar. |
 | **Persistencia de mai** | Verifica el artefacto, y **entonces sí ingiere todo el pipeline de transcripción en una transacción** (ver §5). |
@@ -194,6 +194,10 @@ Casi nada. Tres cosas se resolvieron sin tocar el esquema:
 - **La idempotencia de la ingestión** la da `tv_run_key UNIQUE (run_id)`, que ya
   existe.
 
-**Pero hay un bloqueo real, y es el motivo por el que esta fase se detiene aquí:
-`meeting_result_uploads.kind` no tiene un valor para el artefacto de
-diarización.** Ver `docs/meetings-schema-blockers.md`.
+**Un cambio sí hizo falta**, y está aplicado con autorización:
+`meeting_result_uploads.kind` no tenía valor para el artefacto de diarización.
+El `CHECK` de M-4 pasa a
+`('normalized_media','transcript','diarization','analysis','raw')`, con lo que
+las tres etapas suben por el mismo camino y con el mismo registro de
+idempotencia. El razonamiento completo —incluidas las tres alternativas que no
+servían— está en `docs/meetings-schema-blockers.md`.

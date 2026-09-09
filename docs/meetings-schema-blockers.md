@@ -1,7 +1,11 @@
 # Bloqueo de esquema detectado en la Fase 0
 
-Un solo bloqueo real, y una asimetría que recomiendo resolver con él. No he
-tocado M-1..M-4.
+**Estado: RESUELTO.** Se autorizó ampliar el `CHECK` dentro de M-4 con
+`'diarization'` y `'normalized_media'`. Este documento se conserva porque
+explica por qué el vocabulario es ese y no otro, que es lo que hará falta la
+próxima vez que alguien quiera añadir un valor.
+
+Un solo bloqueo real, y una asimetría que se resolvió con él.
 
 ---
 
@@ -42,35 +46,27 @@ Las tres salidas sin cambiar el esquema, y por qué ninguna sirve:
    mientras el transcript va por el fuerte: dos mecanismos para la misma
    operación, que es lo que la propia M-4 argumenta en contra.
 
-**Lo que propongo.** Ampliar el vocabulario:
+**Lo aplicado.** Ampliar el vocabulario:
 
 ```sql
 kind IN ('transcript','diarization','analysis','raw','normalized_media')
 ```
 
-`normalized_media` es la asimetría A-1 de más abajo; si se decide no resolverla,
-el mínimo es añadir `'diarization'`.
+`normalized_media` resuelve además la asimetría A-1 de más abajo.
 
-**Cómo aplicarlo.** M-1..M-4 no se han aplicado a ninguna base compartida —sólo
-a contenedores desechables— y sólo `1783400000000_meetings-module` llegó a la
-copia local. Así que hay dos caminos y la elección es tuya:
-
-- **Editar el CHECK dentro de M-4.** Deja una sola migración coherente, sin una
-  M-5 que altere un CHECK creado tres migraciones antes. Es lo que haría si el
-  esquema no estuviera desplegado en ningún sitio, que es el caso.
-- **Una M-5 aditiva** que haga `DROP CONSTRAINT` / `ADD CONSTRAINT`. Preserva la
-  regla de «las migraciones ya escritas no se editan», al coste de que el
-  historial cuente una decisión que nunca estuvo en producción.
-
-Recomiendo el primero, precisamente porque nada depende todavía de M-4.
+**Cómo se aplicó.** Editando el `CHECK` dentro de M-4, no con una M-5. M-1..M-4
+no se habían aplicado a ninguna base compartida —sólo a contenedores
+desechables—, así que no había nada que preservar: una M-5 que altera un CHECK
+creado tres migraciones antes contaría en el historial una decisión que nunca
+llegó a existir en ningún sitio.
 
 ---
 
 ## A-1 · El artefacto de `normalize` no tiene sitio en el ciclo de subida
 
-**No es un bloqueo**: se puede implementar sin cambiar nada. Lo reporto porque
-la implementación queda asimétrica y prefiero que la asimetría sea una decisión
-tuya y no un residuo mío.
+**Resuelto junto con B-1.** No era un bloqueo —se podía implementar sin cambiar
+nada— pero la implementación quedaba asimétrica, y con `'normalized_media'` en
+el vocabulario las tres etapas usan el mismo camino.
 
 `normalize` produce audio, y su destino natural es `meeting_media`
 role=`normalized`, que ya existe. Pero esa tabla tiene `bytes`,
