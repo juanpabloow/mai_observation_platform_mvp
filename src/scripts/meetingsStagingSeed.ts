@@ -31,10 +31,19 @@ import {
  *   · primera ejecución → crea todo e imprime el token UNA vez;
  *   · el pool o la credencial ya existen → **se detiene** con un mensaje que
  *     dice qué hacer. No inventa, no recupera, no reimprime;
- *   · `--rotate-token` → emite una credencial NUEVA apuntando a la anterior con
- *     `rotated_from_id` y **revoca la anterior en la misma transacción**. Ése es
- *     el ciclo que el esquema ya modela; el script lo usa en vez de inventar
- *     otro.
+ *   · `--rotate-token` → depende de cuántas credenciales VIVAS tenga el pool:
+ *
+ *       **0** — nada que revocar. Emite una nueva con `rotated_from_id = NULL`.
+ *              Es el caso de «revoqué a mano y necesito otra».
+ *       **1** — la rotación normal: emite, enlaza por `rotated_from_id` y
+ *              revoca la anterior **en la misma transacción**. Ése es el ciclo
+ *              que el esquema ya modela; el script lo usa en vez de inventar
+ *              otro.
+ *      **>1** — **aborta.** Rotar «la más reciente» dejaría las demás vivas y
+ *              sin avisar: el pool acabaría con MÁS credenciales activas que
+ *              antes, y quien tenga una de las viejas seguiría entrando.
+ *              Revocarlas todas tampoco: puede haber un worker corriendo con
+ *              cualquiera de ellas, y cuál sobra no lo decide un script.
  *
  * Un script que reimprimiera el token tendría que guardarlo; uno que lo
  * regenerara en silencio dejaría al worker en producción con una credencial
@@ -330,13 +339,42 @@ async function seed(args: Args): Promise<SeedResult> {
     let rotatedFrom: string | null = null;
 
     if (args.rotateToken) {
-      const previous = await executor.query<{ id: string }>(
-        `SELECT id FROM worker_credentials
+      // ── 0, 1 y >1 credenciales vivas son TRES casos distintos ───────────
+      //
+      //   0 → no hay nada que revocar. Se emite una nueva con
+      //       `rotated_from_id = NULL`. Es el caso de «revoqué a mano y ahora
+      //       necesito otra», y es legítimo.
+      //   1 → la rotación normal: se emite, se enlaza y se revoca la anterior
+      //       en esta misma transacción.
+      //  >1 → SE ABORTA. Rotar «la más reciente» dejaría las otras VIVAS y sin
+      //       avisar, que es lo contrario de lo que uno cree que hace al
+      //       rotar: el pool acabaría con más credenciales activas que antes,
+      //       y quien las tenga seguiría entrando. Revocar todas por
+      //       iniciativa propia tampoco vale: puede haber un worker corriendo
+      //       con una de ellas y no me toca decidir cuál sobra.
+      const live = await executor.query<{ id: string; token_prefix: string; created_at: Date }>(
+        `SELECT id, token_prefix, created_at FROM worker_credentials
           WHERE pool_id = $1 AND revoked_at IS NULL
-          ORDER BY created_at DESC LIMIT 1`,
+          ORDER BY created_at DESC`,
         [poolId],
       );
-      rotatedFrom = previous.rows[0]?.id ?? null;
+      if (live.rows.length > 1) {
+        throw new StagingGuardError(
+          `El pool '${args.poolSlug}' tiene ${live.rows.length} credenciales VIVAS:\n` +
+            live.rows
+              .map(
+                (row) =>
+                  `  · ${row.token_prefix}  (${row.id}, emitida ${row.created_at.toISOString()})`,
+              )
+              .join('\n') +
+            `\nNo se rota. Rotar la más reciente dejaría las demás activas sin avisar, y el ` +
+            `pool acabaría con más credenciales vivas que antes. Revócalas tú, dejando como ` +
+            `mucho una, y vuelve a intentarlo: cuál sobra no lo puedo decidir yo — puede ` +
+            `haber un worker corriendo con cualquiera de ellas.\n` +
+            `No se ha emitido ni revocado nada.`,
+        );
+      }
+      rotatedFrom = live.rows[0]?.id ?? null;
     }
 
     const credential = await executor.query<{ id: string }>(

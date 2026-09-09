@@ -6,11 +6,24 @@
 #  DOS BLOQUES, Y LA SEPARACIÓN ES EL PUNTO
 # ══════════════════════════════════════════════════════════════════════════
 #
-#  BLOQUE A · smoke de enrutado — NO MUTANTE
-#      Corre siempre. Ninguna de sus llamadas escribe en la base ni reclama
-#      trabajo, y cada una lleva escrito por qué.
+#  BLOQUE A · enrutado — SIN CAMBIOS DE DOMINIO
+#      Corre siempre. No crea reuniones, no reclama jobs y no cambia ningún
+#      estado del pipeline.
 #
-#  BLOQUE B · sesión — MUTANTE
+#      Lo que SÍ escribe, y hay que decirlo: `authenticateWorkerToken` dispara
+#      `touchLastUsed()`, un `UPDATE worker_credentials SET last_used_at =
+#      now()` best-effort. Así que las DOS llamadas autenticadas de A.2 tocan
+#      esa columna. Es telemetría de la credencial —cuándo se usó por última
+#      vez— y no se desactiva ni se rodea con un modo de autenticación especial:
+#      un camino de autenticación distinto al de producción haría que este smoke
+#      dejara de probar el camino real, que es su único motivo de existir.
+#
+#      La versión anterior de esta cabecera decía «NO MUTANTE». Era falso, y
+#      falso en la dirección peligrosa: una afirmación de seguridad que no se
+#      cumple es peor que no hacerla, porque alguien la lee y decide en
+#      consecuencia.
+#
+#  BLOQUE B · sesión — MUTANTE DE DOMINIO
 #      CREA REUNIONES. Exige `W3_ALLOW_WRITES=1` y registra los `meetingId`
 #      creados para que puedas comprobar que la limpieza los retira.
 #
@@ -36,12 +49,18 @@
 # worker de verdad, y con seguimiento hasta su estado terminal. Ahí sí hay quien
 # lo lleve a `succeeded`.
 #
-# ── Secretos ──────────────────────────────────────────────────────────────
+# ── Secretos y destino ────────────────────────────────────────────────────
 #
 # El token y la cookie se leen del entorno y NUNCA se imprimen. Lo que sale es
 # el código HTTP y el `error.code`, que es un literal del servidor. Los cuerpos
 # se escriben en un directorio temporal con permisos 0700 que se borra al salir,
 # incluso si el script muere.
+#
+# Y antes del PRIMER curl se valida `MAI_BASE_URL`: este script manda un token
+# de worker y, en el bloque B, una cookie de sesión. Mandarlos al host
+# equivocado, o por http, los entrega. Así que el destino se declara aparte
+# (`W3_EXPECTED_MAI_HOST`) y se compara, igual que la base de datos en
+# `stagingGuard`.
 set -uo pipefail
 
 # ── Puerta de entorno, la misma que los scripts de TypeScript ─────────────
@@ -50,9 +69,80 @@ if [[ "${MEETINGS_ENV_KIND:-}" != "staging" ]]; then
   echo "  la declaración explícita es lo que evita apuntarlos a producción por error." >&2
   exit 2
 fi
-for var in MAI_BASE_URL W3_CLIENT_ID; do
+for var in MAI_BASE_URL W3_CLIENT_ID W3_EXPECTED_MAI_HOST; do
   if [[ -z "${!var:-}" ]]; then echo "✗ Falta $var" >&2; exit 2; fi
 done
+
+# ── El destino, ANTES del primer curl ─────────────────────────────────────
+#
+# Cuatro comprobaciones, todas sobre `MAI_BASE_URL` y ninguna sobre la red:
+#
+#   · hostname == W3_EXPECTED_MAI_HOST — declarar el destino aparte es lo que
+#     convierte «pegué la URL equivocada» en un error en vez de en una fuga;
+#   · https salvo en localhost — el token viaja en cada petición, y por http lo
+#     ve cualquiera en el camino. Es la misma regla que el worker aplica en
+#     `app/pull/settings.py`, y por la misma razón;
+#   · sin usuario ni contraseña embebidos — `https://u:p@host/` acabaría en el
+#     historial del shell, en los logs del proceso y en cualquier captura;
+#   · esquema http(s), no `file:` ni nada raro.
+#
+# Si algo falla, el mensaje nombra el problema y el hostname, NUNCA la URL
+# completa: si lleva credenciales embebidas, imprimirla sería la fuga que esta
+# comprobación existe para impedir.
+url_check() {
+  python3 - "$1" "$2" <<'PY'
+import sys
+from urllib.parse import urlsplit
+
+raw, expected = sys.argv[1], sys.argv[2]
+try:
+    parts = urlsplit(raw)
+except ValueError as error:
+    print(f"MAI_BASE_URL no se puede parsear ({type(error).__name__})")
+    raise SystemExit(1)
+
+if parts.scheme not in {"http", "https"}:
+    print(f"MAI_BASE_URL tiene esquema '{parts.scheme or '(ninguno)'}'; se espera http o https")
+    raise SystemExit(1)
+
+# `username`/`password` son None si no hay userinfo. No se imprimen jamás.
+if parts.username or parts.password:
+    print(
+        "MAI_BASE_URL lleva usuario o contraseña embebidos. Quítalos: acabarían en el "
+        "historial del shell y en los logs. (No se imprime la URL.)"
+    )
+    raise SystemExit(1)
+
+host = (parts.hostname or "").lower()
+if not host:
+    print("MAI_BASE_URL no tiene host")
+    raise SystemExit(1)
+
+local = host in {"localhost", "127.0.0.1", "::1"}
+if parts.scheme != "https" and not local:
+    print(
+        f"MAI_BASE_URL es http contra '{host}'. El token de worker viaja en cada "
+        f"peticion: fuera de localhost tiene que ser https."
+    )
+    raise SystemExit(1)
+
+if host != expected.strip().lower():
+    print(
+        f"El host de MAI_BASE_URL no es el declarado.\n"
+        f"    W3_EXPECTED_MAI_HOST: {expected.strip().lower()}\n"
+        f"    MAI_BASE_URL apunta a: {host}\n"
+        f"    No se ha enviado ninguna peticion."
+    )
+    raise SystemExit(1)
+
+print(host)
+PY
+}
+
+if ! MAI_HOST="$(url_check "$MAI_BASE_URL" "$W3_EXPECTED_MAI_HOST")"; then
+  echo "✗ $MAI_HOST" >&2
+  exit 2
+fi
 
 BASE="${MAI_BASE_URL%/}"
 ALLOW_WRITES="${W3_ALLOW_WRITES:-0}"
@@ -111,14 +201,18 @@ except Exception:
 
 echo ""
 echo "══════════════════════════════════════════════════════════════════════"
-echo " BLOQUE A · smoke de enrutado — NO MUTANTE"
-echo " $BASE"
+echo " BLOQUE A · enrutado — SIN CAMBIOS DE DOMINIO"
+echo " host: $MAI_HOST (validado: https o local, sin userinfo, host declarado)"
+echo " no crea reuniones, no reclama jobs, no cambia estados del pipeline"
+echo " las llamadas AUTENTICADAS de A.2 sí actualizan worker_credentials.last_used_at"
 echo "══════════════════════════════════════════════════════════════════════"
 
 # ── A.1 · las SEIS rutas de máquina, SIN cabecera → 401, nunca 307 ───────
 #
-# No mutan: `authenticateWorker` es lo PRIMERO de cada handler y falla antes de
-# que se lea el cuerpo o se toque el servicio.
+# No escriben NADA, ni telemetría: `authenticateWorker` es lo primero de cada
+# handler y falla antes de que se lea el cuerpo o se toque el servicio. Y sin
+# token no hay credencial que identificar, así que `touchLastUsed` tampoco
+# corre — eso sólo pasa cuando la autenticación tiene ÉXITO (A.2).
 echo ""
 echo "── A.1 · rutas de máquina sin token: deben LLEGAR al handler ──────────"
 JOB='00000000-0000-0000-0000-000000000000'
@@ -143,12 +237,23 @@ done
 # ── A.2 · el token autentica y su ámbito se respeta, sin reclamar nada ───
 #
 # `requeueExpiredLeases` comprueba `scope === 'internal'` Y la capacidad, y
-# lanza `notFound()` ANTES de cualquier lectura o escritura. Así que un 404 aquí
-# prueba tres cosas de una vez —el token autentica, el middleware dejó pasar, y
-# el ámbito de una credencial de tenant no alcanza el mantenimiento global— y no
-# toca ni una fila.
+# lanza `notFound()` ANTES de cualquier lectura o escritura del dominio. Así que
+# un 404 aquí prueba tres cosas de una vez: el token autentica, el middleware
+# dejó pasar, y el ámbito de una credencial de tenant no alcanza el
+# mantenimiento global.
+#
+# LO QUE SÍ ESCRIBE. Autenticar con éxito dispara `touchLastUsed()`:
+#
+#     UPDATE worker_credentials SET last_used_at = now() WHERE id = $1
+#
+# best-effort, envuelto en try/catch, y deliberado — es cómo se sabe cuándo se
+# usó por última vez una credencial. Las dos llamadas de este apartado la tocan.
+# No es un cambio de dominio: no crea reuniones, no reclama jobs, no mueve
+# ningún estado del pipeline. Y no se desactiva: un modo de autenticación
+# especial para el smoke haría que el smoke dejara de probar el camino real.
 echo ""
 echo "── A.2 · el token, sin reclamar trabajo ───────────────────────────────"
+echo "     (autenticar con éxito actualiza worker_credentials.last_used_at)"
 if [[ -z "${MAI_WORKER_TOKEN:-}" ]]; then
   skip "autenticación y ámbito del token" "sin MAI_WORKER_TOKEN"
 else
@@ -215,15 +320,36 @@ fi
 
 echo ""
 echo "══════════════════════════════════════════════════════════════════════"
-echo " BLOQUE B · sesión — MUTANTE: CREA REUNIONES"
+echo " BLOQUE B · sesión — MUTANTE DE DOMINIO: CREA REUNIONES"
 echo "══════════════════════════════════════════════════════════════════════"
 
-if [[ "$ALLOW_WRITES" != "1" ]]; then
+# Las TRES condiciones, comprobadas juntas y aquí.
+#
+# Dos de ellas ya han cortado arriba si fallaban —la puerta de entorno y la
+# validación del host— así que llegar hasta aquí las implica. Se reafirman de
+# todos modos: este bloque es el único que escribe en el dominio, y su
+# precondición no debe depender de que nadie mueva un `exit` de las primeras
+# treinta líneas. Es la comprobación que quiero que siga estando cuando alguien
+# refactorice la cabecera.
+MUTATING_OK=1
+MUTATING_WHY=()
+[[ "${MEETINGS_ENV_KIND:-}" == "staging" ]] || { MUTATING_OK=0; MUTATING_WHY+=("MEETINGS_ENV_KIND != staging"); }
+[[ "${MAI_HOST:-}" == "$(echo "${W3_EXPECTED_MAI_HOST:-}" | tr '[:upper:]' '[:lower:]' | tr -d ' ')" ]]   || { MUTATING_OK=0; MUTATING_WHY+=("el host no es el declarado"); }
+[[ "$ALLOW_WRITES" == "1" ]] || { MUTATING_OK=0; MUTATING_WHY+=("falta W3_ALLOW_WRITES=1"); }
+
+if [[ "$MUTATING_OK" != "1" ]]; then
   echo ""
   echo "  OMITIDO. Este bloque crea reuniones de verdad en la base de staging."
-  echo "  Para ejecutarlo hace falta autorizarlo explícitamente:"
+  echo "  Le falta:"
+  for why in "${MUTATING_WHY[@]}"; do echo "    · $why"; done
   echo ""
-  echo "      W3_ALLOW_WRITES=1 MAI_SESSION_COOKIE='…' npm run w3:http"
+  echo "  Las tres condiciones son simultáneas:"
+  echo "      MEETINGS_ENV_KIND=staging"
+  echo "      W3_EXPECTED_MAI_HOST == el host de MAI_BASE_URL"
+  echo "      W3_ALLOW_WRITES=1"
+  echo ""
+  echo "      MEETINGS_ENV_KIND=staging W3_EXPECTED_MAI_HOST=… MAI_BASE_URL=… \\"
+  echo "        W3_ALLOW_WRITES=1 MAI_SESSION_COOKIE='…' npm run w3:http"
   echo ""
   echo "  Las reuniones creadas se listan al terminar y las retira w3:cleanup."
   SKIP=$((SKIP+3))

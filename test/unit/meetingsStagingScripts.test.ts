@@ -404,10 +404,10 @@ test('el script HTTP NO hace un claim con token válido', () => {
   }
 });
 
-test('el script HTTP separa el bloque no mutante del mutante', () => {
+test('el script HTTP separa el bloque sin cambios de dominio del mutante', () => {
   const source = read('test/e2e/w3HttpChecks.sh');
-  const a = source.indexOf('BLOQUE A · smoke de enrutado — NO MUTANTE');
-  const b = source.indexOf('BLOQUE B · sesión — MUTANTE');
+  const a = source.indexOf('BLOQUE A · enrutado — SIN CAMBIOS DE DOMINIO');
+  const b = source.indexOf('BLOQUE B · sesión — MUTANTE DE DOMINIO');
   assert.ok(a > 0, 'debe existir el bloque A');
   assert.ok(b > a, 'el bloque B va después del A');
   // La creación de reuniones vive DESPUÉS de la separación.
@@ -418,8 +418,8 @@ test('el script HTTP separa el bloque no mutante del mutante', () => {
 test('el script HTTP exige W3_ALLOW_WRITES para crear reuniones', () => {
   const source = read('test/e2e/w3HttpChecks.sh');
   assert.match(source, /W3_ALLOW_WRITES/);
-  // Y el bloque mutante está detrás del corte.
-  const gate = source.indexOf('if [[ "$ALLOW_WRITES" != "1" ]]');
+  // Y el bloque mutante está detrás del corte de las tres condiciones.
+  const gate = source.indexOf('if [[ "$MUTATING_OK" != "1" ]]');
   const create = source.indexOf('crear reunión con sesión');
   assert.ok(gate > 0 && create > gate, 'la creación va detrás de la autorización');
 });
@@ -449,6 +449,80 @@ test('el script HTTP no afirma que no escribe en la base', () => {
     !/NO escribe en la base/.test(source) || /era FALSO/.test(source),
     'sólo puede aparecer describiendo el defecto corregido',
   );
+});
+
+test('el bloque A NO se llama «no mutante»: touchLastUsed escribe', () => {
+  const source = read('test/e2e/w3HttpChecks.sh');
+  // `authenticateWorkerToken` dispara `UPDATE worker_credentials SET
+  // last_used_at = now()`, así que «NO MUTANTE» era literalmente falso — y
+  // falso en la dirección peligrosa: una afirmación de seguridad que no se
+  // cumple es peor que no hacerla.
+  const header = source.slice(0, source.indexOf('set -uo pipefail'));
+  assert.ok(
+    !/BLOQUE A[^\n]*NO MUTANTE/.test(header),
+    'el bloque A no puede anunciarse como NO MUTANTE',
+  );
+  assert.match(header, /BLOQUE A[^\n]*SIN CAMBIOS DE DOMINIO/);
+  // Y la telemetría se documenta con su nombre y su sentencia.
+  assert.match(header, /touchLastUsed/);
+  assert.match(header, /last_used_at/);
+  assert.match(header, /no crea reuniones|No crea reuniones/);
+});
+
+test('y la telemetría NO se desactiva ni se rodea', () => {
+  const source = read('test/e2e/w3HttpChecks.sh');
+  // Un camino de autenticación distinto al de producción haría que el smoke
+  // dejara de probar el camino real, que es su único motivo de existir.
+  assert.ok(!/last_used_at\s*=/.test(source.replace(/#.*/g, '')), 'no debe escribir la columna');
+  assert.ok(!/touchLastUsed\s*\(/.test(source.replace(/#.*/g, '')), 'no debe invocarla ni evitarla');
+  // Y `authenticateWorkerToken` sigue disparándola: si alguien la quitara del
+  // repositorio, este comentario del script quedaría obsoleto.
+  assert.match(
+    read('src/db/repositories/meetings/credentials.ts'),
+    /void touchLastUsed\(matched\.id\)/,
+    'la telemetría debe seguir en el camino real de autenticación',
+  );
+});
+
+// ── El destino del token: MAI_BASE_URL, antes del primer curl ──────────────
+
+test('el script HTTP exige W3_EXPECTED_MAI_HOST', () => {
+  const source = read('test/e2e/w3HttpChecks.sh');
+  assert.match(source, /W3_EXPECTED_MAI_HOST/);
+  // Y va en la lista de obligatorias, no como opcional.
+  assert.match(source, /for var in MAI_BASE_URL W3_CLIENT_ID W3_EXPECTED_MAI_HOST/);
+});
+
+test('la validación de MAI_BASE_URL corre ANTES del primer curl', () => {
+  const source = read('test/e2e/w3HttpChecks.sh');
+  const validation = source.indexOf('if ! MAI_HOST="$(url_check');
+  const firstCurl = source.indexOf('curl -sS');
+  assert.ok(validation > 0, 'debe existir la validación');
+  assert.ok(firstCurl > validation, 'ningún curl antes de validar el destino');
+});
+
+test('la validación cubre host, https, userinfo y esquema', () => {
+  const source = read('test/e2e/w3HttpChecks.sh');
+  const check = source.slice(source.indexOf('url_check()'), source.indexOf('BASE="${MAI_BASE_URL%/}"'));
+  assert.match(check, /parts\.username or parts\.password/, 'userinfo');
+  assert.match(check, /scheme not in \{"http", "https"\}/, 'esquema');
+  assert.match(check, /scheme != "https" and not local/, 'https salvo local');
+  assert.match(check, /host != expected/, 'host declarado');
+  // Y NUNCA imprime la URL completa: sólo el host y el problema.
+  assert.ok(!/print\(f?"[^"]*\{raw\}/.test(check), 'no debe interpolar la URL cruda');
+  assert.ok(!check.includes('{parts.netloc}'), 'netloc lleva el userinfo dentro');
+});
+
+test('el bloque mutante exige las TRES condiciones juntas', () => {
+  const source = read('test/e2e/w3HttpChecks.sh');
+  const gate = source.slice(source.indexOf('MUTATING_OK=1'), source.indexOf('crear reunión con sesión'));
+  assert.match(gate, /MEETINGS_ENV_KIND.*staging/, 'entorno');
+  assert.match(gate, /W3_EXPECTED_MAI_HOST/, 'host declarado');
+  assert.match(gate, /W3_ALLOW_WRITES/, 'autorización de escritura');
+  // Reafirmadas aquí aunque dos ya hayan cortado arriba: la precondición del
+  // único bloque que escribe en el dominio no debe depender de que nadie mueva
+  // un `exit` de las primeras treinta líneas.
+  assert.match(gate, /if \[\[ "\$MUTATING_OK" != "1" \]\]/);
 });
 
 test('el script HTTP no sigue redirecciones', () => {

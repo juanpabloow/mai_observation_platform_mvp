@@ -259,6 +259,138 @@ test('--rotate-token SÍ rota cuando el contrato coincide', async () => {
   assert.equal(credentials.rows[0].rotated, '1');
 });
 
+// ── Cuántas credenciales vivas: 0, 1 y >1 son tres casos ───────────────────
+
+/** Siembra el pool de W-3 y devuelve tenant, slug y argumentos base. */
+async function seedPool(email: string): Promise<{
+  tenant: string;
+  slug: string;
+  poolId: string;
+  args: string[];
+}> {
+  const slug = `w3-${randomUUID().slice(0, 8)}`;
+  const args = [
+    '--tenant-name', `W3 ${randomUUID().slice(0, 6)}`,
+    '--client-name', 'C',
+    '--user-email', email,
+    '--pool-slug', slug,
+  ];
+  const first = run(SEED, args, guardEnv());
+  assert.equal(first.status, 0, first.stderr);
+  const tenant = /tenant\s+([0-9a-f-]{36})/.exec(first.stderr)?.[1];
+  assert.ok(tenant, `no se pudo leer el tenant: ${first.stderr}`);
+  tenants.push(tenant);
+  const pool = await query<{ id: string }>(`SELECT id FROM worker_pools WHERE slug = $1`, [slug]);
+  return { tenant, slug, poolId: pool.rows[0].id, args };
+}
+
+async function liveCount(poolId: string): Promise<number> {
+  const result = await query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM worker_credentials
+      WHERE pool_id = $1 AND revoked_at IS NULL`,
+    [poolId],
+  );
+  return Number(result.rows[0].n);
+}
+
+test('con UNA credencial viva, --rotate-token rota (el caso normal)', async () => {
+  const { poolId, args } = await seedPool(await seedUser());
+  assert.equal(await liveCount(poolId), 1);
+
+  const rotated = run(SEED, [...args, '--rotate-token'], guardEnv());
+  assert.equal(rotated.status, 0, rotated.stderr);
+  assert.match(rotated.stderr, /rotada\s+desde/);
+  assert.equal(await liveCount(poolId), 1, 'sigue habiendo exactamente una viva');
+  const total = await query<{ n: string; rotated: string }>(
+    `SELECT count(*)::text AS n, count(*) FILTER (WHERE rotated_from_id IS NOT NULL)::text AS rotated
+       FROM worker_credentials WHERE pool_id = $1`,
+    [poolId],
+  );
+  assert.equal(total.rows[0].n, '2');
+  assert.equal(total.rows[0].rotated, '1');
+});
+
+test('con CERO vivas, --rotate-token emite sin enlazar a nada', async () => {
+  // El caso «revoqué a mano y necesito otra». Es legítimo: no hay nada que
+  // revocar, así que la nueva no apunta a ninguna anterior.
+  const { poolId, args } = await seedPool(await seedUser());
+  await query(
+    `UPDATE worker_credentials
+        SET revoked_at = now(), revoked_actor = 'system',
+            revoked_actor_label = 'prueba', revoked_reason = 'a mano'
+      WHERE pool_id = $1 AND revoked_at IS NULL`,
+    [poolId],
+  );
+  assert.equal(await liveCount(poolId), 0);
+
+  const rotated = run(SEED, [...args, '--rotate-token'], guardEnv());
+  assert.equal(rotated.status, 0, rotated.stderr);
+  assert.match(rotated.stdout, /^mtk_/, 'emite un token nuevo');
+  assert.doesNotMatch(rotated.stderr, /rotada\s+desde/, 'no hay anterior a la que enlazar');
+  assert.equal(await liveCount(poolId), 1);
+  const linked = await query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM worker_credentials
+      WHERE pool_id = $1 AND rotated_from_id IS NOT NULL`,
+    [poolId],
+  );
+  assert.equal(linked.rows[0].n, '0', 'rotated_from_id queda NULL');
+});
+
+test('con MÁS DE UNA viva, --rotate-token ABORTA sin emitir ni revocar', async () => {
+  // Rotar «la más reciente» dejaría las demás VIVAS y sin avisar: el pool
+  // acabaría con más credenciales activas que antes, y quien tenga una de las
+  // viejas seguiría entrando. Revocarlas todas tampoco vale: puede haber un
+  // worker corriendo con cualquiera de ellas.
+  const { poolId, args } = await seedPool(await seedUser());
+
+  // Una segunda credencial viva, como la dejaría un `INSERT` a mano o una
+  // emisión por otra vía.
+  const extra = await query<{ id: string }>(
+    `INSERT INTO worker_credentials (pool_id, label, token_hash, token_prefix)
+     VALUES ($1, 'segunda', $2, $3) RETURNING id`,
+    [poolId, 'e'.repeat(64), 'mtk_dos0'],
+  );
+  assert.equal(await liveCount(poolId), 2);
+
+  const before = await query<{ ids: string[] }>(
+    `SELECT array_agg(id ORDER BY id)::text[] AS ids FROM worker_credentials WHERE pool_id = $1`,
+    [poolId],
+  );
+
+  const rotated = run(SEED, [...args, '--rotate-token'], guardEnv());
+  assert.equal(rotated.status, 2, `debía abortar: ${rotated.stderr}`);
+  assert.match(rotated.stderr, /2 credenciales VIVAS/);
+  assert.match(rotated.stderr, /No se rota/);
+  assert.match(rotated.stderr, /No se ha emitido ni revocado nada/);
+  // Y nombra las dos, por prefijo, para que se pueda decidir cuál sobra.
+  assert.match(rotated.stderr, /mtk_dos0/);
+  assert.equal(rotated.stdout, '', 'no debe imprimir un token');
+
+  // Nada cambió: ni una nueva, ni una revocada.
+  assert.equal(await liveCount(poolId), 2, 'las dos siguen vivas');
+  const after = await query<{ ids: string[] }>(
+    `SELECT array_agg(id ORDER BY id)::text[] AS ids FROM worker_credentials WHERE pool_id = $1`,
+    [poolId],
+  );
+  assert.deepEqual(after.rows[0].ids, before.rows[0].ids, 'el conjunto de credenciales es el mismo');
+  void extra;
+});
+
+test('y sin --rotate-token, más de una viva se reporta en el conteo', async () => {
+  // El mensaje de «el pool ya existe» dice cuántas vivas hay: es la pista de
+  // que hay algo que revisar antes de rotar.
+  const { poolId, args } = await seedPool(await seedUser());
+  await query(
+    `INSERT INTO worker_credentials (pool_id, label, token_hash, token_prefix)
+     VALUES ($1, 'segunda', $2, $3)`,
+    [poolId, 'f'.repeat(64), 'mtk_dos1'],
+  );
+  const again = run(SEED, args, guardEnv());
+  assert.equal(again.status, 2);
+  assert.match(again.stderr, /ya existe con 2 credencial\(es\) viva\(s\)/);
+  assert.equal(again.stdout, '');
+});
+
 // ── El preflight del rollback ───────────────────────────────────────────────
 
 test('el preflight del rollback aprueba cuando las cinco son la cabeza', () => {
