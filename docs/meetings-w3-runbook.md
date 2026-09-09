@@ -523,14 +523,30 @@ SELECT status, attempts, leased_credential_label,
 **Pass:** `leased` · `attempts=1` · `con_token=true` · `lease_vivo=true` ·
 `leased_credential_label` = `pool/prefijo`.
 
-Heartbeat, durante una etapa larga:
+Heartbeat, durante una etapa larga. **El latido no escribe evento**: renueva el
+lease y toca la fila del job, así que ahí es donde se observa.
+
 ```sql
-SELECT kind, count(*), max(created_at) FROM meeting_job_events
- WHERE meeting_id = :m GROUP BY kind ORDER BY 3;
+SELECT last_heartbeat_at, last_progress_at, progress_pct, lease_expires_at,
+       extract(epoch FROM (now() - last_heartbeat_at)) AS edad_latido
+  FROM meeting_processing_jobs WHERE meeting_id = :m AND status IN ('leased','uploading_result');
 ```
-**Pass:** `lease_expires_at` **avanza** entre dos consultas separadas ~40 s.
+**Pass:** `lease_expires_at` y `last_heartbeat_at` **avanzan** entre dos
+consultas separadas ~40 s, y `edad_latido` se mantiene por debajo de
+`MEETINGS_PULL_HEARTBEAT_SECONDS` × 2.
 **Fail:** el lease caduca durante la transcripción → sube
 `MEETINGS_LEASE_SECONDS` o baja `MEETINGS_PULL_HEARTBEAT_SECONDS`.
+
+Los eventos, por separado. La columna de tiempo es **`at`**, no `created_at`, y
+los ocho tipos admitidos son `claimed`, `state_changed`, `progress`, `retried`,
+`lease_expired`, `cancelled`, `failed` y `result_ingested` — **`heartbeat` no
+existe**, así que buscarlo aquí daría cero y parecería que el latido no funciona.
+
+```sql
+SELECT kind, count(*), max(at) FROM meeting_job_events
+ WHERE meeting_id = :m GROUP BY kind ORDER BY 3;
+```
+**Pass:** aparece `claimed`, y `progress` si el worker mandó `progressPct`.
 
 ### Pasos 5–6 · normalize y el sondeo real
 
@@ -575,21 +591,30 @@ SELECT requested_options FROM meeting_processing_runs WHERE id = :r;
 ### Paso 9 · ingesta
 
 ```sql
-SELECT v.id, v.whisper_model, v.duration_seconds, v.segment_count,
-       v.schema_version, v.diarization_state,
+-- El estado de diarización vive en `meetings`, NO en la versión: la versión
+-- guarda `diarization_backend`, que dice QUÉ diarizó, no cómo acabó.
+SELECT v.id, v.whisper_model, v.diarization_backend, v.language,
+       v.duration_seconds, v.segment_count, v.schema_version,
+       m.transcript_state, m.diarization_state,
        m.active_transcript_id = v.id AS es_la_activa
   FROM meeting_transcript_versions v JOIN meetings m ON m.id = v.meeting_id
  WHERE v.meeting_id = :m;
 
-SELECT count(*) AS segmentos FROM meeting_transcript_segments WHERE transcript_id = :v;
-SELECT speaker_label, speaker_id, talk_share
+-- La tabla es `meeting_segments`.
+SELECT count(*) AS segmentos FROM meeting_segments WHERE transcript_id = :v;
+
+-- La columna es `talk_share_pct`, y es un PORCENTAJE: `numeric(5,2)` con
+-- CHECK 0..100.
+SELECT speaker_label, speaker_id, talk_share_pct
   FROM meeting_transcript_speakers WHERE transcript_id = :v ORDER BY speaker_label;
+
 SELECT display_name, contact_id FROM meeting_speakers WHERE meeting_id = :m;
 ```
-**Pass:** **una sola** versión (se escribe una vez, es inmutable);
-`segmentos = segment_count`; **≥ 2** filas en `meeting_transcript_speakers` con
-`talk_share` sumando ≈ 1; `es_la_activa = true`;
-`meetings.transcript_state='ready'` y `diarization_state='ready'`.
+**Pass:** **una sola** versión (se escribe una vez, es inmutable, y
+`tv_run_key UNIQUE (run_id)` lo garantiza); `segmentos = segment_count`;
+**≥ 2** filas en `meeting_transcript_speakers` con `talk_share_pct` sumando
+**≈ 100**; `es_la_activa = true`; `diarization_backend='wespeaker'`;
+`meetings.transcript_state='ready'` y `meetings.diarization_state='ready'`.
 **Fail:** dos versiones para el mismo run → la ingesta no fue idempotente.
 
 ### Reintento idempotente (provocado)
@@ -617,7 +642,7 @@ curl -s -X POST -H "authorization: Bearer $MAI_WORKER_TOKEN" \
 
 ```sql
 SELECT status, attempts, max_attempts, failure_code, failure_detail,
-       next_attempt_at > now() AS con_backoff
+       next_attempt_at, next_attempt_at > now() AS con_backoff
   FROM meeting_processing_jobs WHERE id = :job;
 SELECT transcript_state, warnings FROM meetings WHERE id = :m2;
 ```
@@ -926,7 +951,7 @@ Todo lo siguiente, o W-3 no está superado:
 4. los tres artefactos tienen `observed_checksum_sha256 = declared_…` y estado
    `ingested`/`verified`;
 5. **una sola** versión de transcript, activa, con `segmentos = segment_count` y
-   **≥ 2** hablantes con `talk_share` sumando ≈ 1;
+   **≥ 2** hablantes con `talk_share_pct` sumando ≈ **100**;
 6. el heartbeat renovó el lease durante la etapa larga;
 7. un `result/complete` repetido idéntico devuelve `200` sin cambiar nada, y uno
    distinto `409 terminal_conflict`;
