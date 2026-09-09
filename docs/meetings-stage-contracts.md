@@ -267,12 +267,41 @@ los recuentos globales.
 
 ### Idempotencia terminal
 
+Los campos que se comparan son los **datos semánticos del resultado**, y sólo
+esos:
+
+| operación | se compara | NO se compara |
+|---|---|---|
+| `fail` | `failureCode`, `failureDetail` normalizado | — |
+| `result/complete` | `bytes`, `checksumSha256` | `leaseToken` |
+| `result/complete` de `normalize` | además `probe.durationSeconds`, `probe.sampleRate`, `probe.channels`, `probe.codec` | `leaseToken` |
+
+El `leaseToken` queda fuera a propósito: es una prueba de posesión, no un dato
+del resultado, y compararlo convertiría en conflicto un reenvío tras una
+renovación de lease legítima. Sobre un job terminal, además, no hay nada contra
+lo que compararlo — `jobs_lease_invariants` exige que `lease_token_hash` sea
+NULL en cuanto el job cierra. Lo que autoriza el reenvío es la **credencial** y
+el **intento**: otra credencial recibe 404 y otro intento recibe `attempt_stale`,
+las dos cosas antes de mirar el payload.
+
+Los valores autoritativos del sondeo no viven en la fila de la subida: se leen
+del medio derivado que esa subida produjo (`meeting_media`, buscado por
+`run_id` + `role` + `storage_key`, no por «el vivo del run», que un reintento
+posterior pudo sustituir). `duration_seconds` es `numeric(12,3)`, así que el
+valor entrante se cuantiza con la misma función tanto al escribirlo como al
+compararlo: si el redondeo ocurriera sólo en la base, un worker que reenvía
+`3600.4567` chocaría contra el `3600.457` guardado y mai inventaría un conflicto
+a partir de su propio redondeo.
+
 | situación | respuesta |
 |---|---|
-| `complete` repetido, mismo checksum y tamaño | 200 con el resultado previo |
+| `complete` repetido, todos los campos iguales | 200 con el resultado previo, **sin escribir nada** |
 | `complete` repetido, checksum o tamaño distintos | 409 `terminal_conflict` |
-| `fail` repetido, mismo código | 200 con el resultado previo |
+| `complete` de `normalize` repetido, cualquier campo del sondeo distinto | 409 `terminal_conflict` |
+| `complete` de `normalize` repetido **sin** el sondeo que constaba (o con uno que no constaba) | 409 `terminal_conflict` |
+| `fail` repetido, mismo código y mismo detalle | 200 con el resultado previo |
 | `fail` repetido, código distinto | 409 `terminal_conflict` |
+| `fail` repetido, mismo código y detalle distinto (incluido nulo↔texto) | 409 `terminal_conflict` |
 | `fail` sobre un job `succeeded` | 409 `terminal_conflict` |
 | `complete` sobre un job `cancelled` / `abandoned` | 409 `invalid_transition` |
 

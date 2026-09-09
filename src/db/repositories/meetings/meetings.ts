@@ -320,6 +320,32 @@ export async function findLiveDerived(
 }
 
 /**
+ * El medio derivado que produjo UNA subida concreta, viva o ya superada.
+ *
+ * `findLiveDerived` responde «¿cuál es el insumo actual de este run?», que es
+ * lo que necesita la etapa siguiente. Esto responde otra pregunta: «¿qué se
+ * registró exactamente cuando se cerró esta subida?». La distinción importa
+ * para la idempotencia terminal — se compara contra lo que quedó escrito para
+ * ESE artefacto, no contra lo que hoy sea el vivo, que un reintento posterior
+ * pudo haber sustituido.
+ */
+export async function findDerivedByStorageKey(
+  runId: string,
+  role: 'normalized' | 'raw_result',
+  storageKey: string,
+  executor?: Queryable,
+): Promise<MeetingMediaRow | null> {
+  const result = await q(executor).query<MeetingMediaRow>(
+    `SELECT * FROM meeting_media
+      WHERE run_id = $1 AND role = $2 AND storage_key = $3
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [runId, role, storageKey],
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
  * Retira el derivado vivo anterior de un (run, rol) antes de insertar el nuevo.
  *
  * Un reintento de `normalize` que vuelve a subir produce una versión nueva del

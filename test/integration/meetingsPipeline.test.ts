@@ -16,6 +16,7 @@ import {
 } from '../../src/db/repositories/meetings/credentials.js';
 import * as jobsRepo from '../../src/db/repositories/meetings/jobs.js';
 import * as artifactsRepo from '../../src/db/repositories/meetings/artifacts.js';
+import * as meetingsRepo from '../../src/db/repositories/meetings/meetings.js';
 import {
   cancelMeeting,
   claim,
@@ -1734,6 +1735,262 @@ test('reenviar fail con OTRO código se rechaza sin reescribir la causa', async 
   );
   const job = await jobsRepo.getJobById(claimed.jobId);
   assert.equal(job?.failure_code, 'audio_unreadable');
+});
+
+test('reenviar fail con el MISMO código y detalle es idempotente; otro detalle es conflicto', async () => {
+  const world = await makeWorld();
+  const { meetingId } = await seedMeetingWithMedia(world);
+  await query(`UPDATE meeting_processing_jobs SET max_attempts = 1 WHERE meeting_id = $1`, [meetingId]);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  const proof = { jobId: claimed.jobId, attempt: claimed.attempt, leaseToken: claimed.leaseToken };
+
+  await fail(
+    world.identity,
+    { ...proof, failureCode: 'audio_unreadable', failureDetail: 'ffprobe: moov atom not found' },
+    world.deps,
+  );
+
+  // Positivo: mismo código Y mismo detalle → el resultado previo.
+  const again = await fail(
+    world.identity,
+    { ...proof, failureCode: 'audio_unreadable', failureDetail: 'ffprobe: moov atom not found' },
+    world.deps,
+  );
+  assert.equal(again.status, 'failed');
+  assert.equal(again.requeued, false);
+
+  // Negativo: mismo código, OTRO detalle. El detalle es lo que alguien lee
+  // para diagnosticar; aceptar la segunda versión en silencio dejaría un
+  // diagnóstico que nadie escribió a propósito.
+  await expectApiError(
+    () =>
+      fail(
+        world.identity,
+        { ...proof, failureCode: 'audio_unreadable', failureDetail: 'otra causa' },
+        world.deps,
+      ),
+    'terminal_conflict',
+    'fail con otro detalle',
+  );
+
+  // Negativo: el detalle DESAPARECE. Nulo contra texto también es diferencia.
+  await expectApiError(
+    () => fail(world.identity, { ...proof, failureCode: 'audio_unreadable' }, world.deps),
+    'terminal_conflict',
+    'fail sin el detalle que ya constaba',
+  );
+
+  const job = await jobsRepo.getJobById(claimed.jobId);
+  assert.equal(job?.failure_code, 'audio_unreadable');
+  assert.equal(job?.failure_detail, 'ffprobe: moov atom not found', 'el terminal no se reescribió');
+});
+
+test('un fail sin detalle sigue siendo idempotente, y añadir uno es conflicto', async () => {
+  const world = await makeWorld();
+  const { meetingId } = await seedMeetingWithMedia(world);
+  await query(`UPDATE meeting_processing_jobs SET max_attempts = 1 WHERE meeting_id = $1`, [meetingId]);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  const proof = { jobId: claimed.jobId, attempt: claimed.attempt, leaseToken: claimed.leaseToken };
+
+  await fail(world.identity, { ...proof, failureCode: 'gpu_oom' }, world.deps);
+  // La simetría del caso anterior: null contra null coincide.
+  const again = await fail(world.identity, { ...proof, failureCode: 'gpu_oom' }, world.deps);
+  assert.equal(again.status, 'failed');
+  // Y también coincide si el reenvío manda null explícito en vez de omitirlo.
+  const withNull = await fail(
+    world.identity,
+    { ...proof, failureCode: 'gpu_oom', failureDetail: null },
+    world.deps,
+  );
+  assert.equal(withNull.status, 'failed');
+
+  await expectApiError(
+    () =>
+      fail(world.identity, { ...proof, failureCode: 'gpu_oom', failureDetail: 'algo' }, world.deps),
+    'terminal_conflict',
+    'fail que añade un detalle a un terminal sin detalle',
+  );
+  const job = await jobsRepo.getJobById(claimed.jobId);
+  assert.equal(job?.failure_detail, null);
+});
+
+const PROBE = { durationSeconds: 3600.4567, sampleRate: 16000, channels: 1, codec: 'pcm_s16le' };
+
+test('reenviar complete de normalize con el MISMO sondeo es idempotente', async () => {
+  const world = await makeWorld();
+  const { runId } = await seedMeetingWithMedia(world);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  const first = await runStage(world, claimed, NORMALIZED, PROBE);
+
+  const again = await resultComplete(
+    world.identity,
+    {
+      jobId: claimed.jobId,
+      attempt: claimed.attempt,
+      leaseToken: claimed.leaseToken,
+      bytes: NORMALIZED.length,
+      checksumSha256: sha(NORMALIZED),
+      probe: PROBE,
+    },
+    world.deps,
+  );
+  assert.equal(again.status, 'succeeded');
+  assert.equal(again.nextJob?.stage, first.nextJob?.stage);
+  assert.equal(again.nextJob?.id, first.nextJob?.id, 'no se creó otro job');
+
+  // El sondeo se compara contra lo PERSISTIDO, y 'duration_seconds' es
+  // numeric(12,3): 3600.4567 se guardó como 3600.457. Un reenvío que repite el
+  // valor original tiene que coincidir igual, o mai estaría inventando un
+  // conflicto a partir de su propio redondeo.
+  const media = await meetingsRepo.findLiveDerived(runId, 'normalized');
+  assert.equal(Number(media?.duration_seconds), 3600.457);
+  assert.equal(media?.sample_rate, 16000);
+  assert.equal(media?.channels, 1);
+  assert.equal(media?.codec, 'pcm_s16le');
+
+  // Y el valor ya cuantizado también coincide: es el mismo número.
+  const quantized = await resultComplete(
+    world.identity,
+    {
+      jobId: claimed.jobId,
+      attempt: claimed.attempt,
+      leaseToken: claimed.leaseToken,
+      bytes: NORMALIZED.length,
+      checksumSha256: sha(NORMALIZED),
+      probe: { ...PROBE, durationSeconds: 3600.457 },
+    },
+    world.deps,
+  );
+  assert.equal(quantized.status, 'succeeded');
+});
+
+test('reenviar complete de normalize con OTRO sondeo es conflicto, campo a campo', async () => {
+  const world = await makeWorld();
+  const { runId } = await seedMeetingWithMedia(world);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  await runStage(world, claimed, NORMALIZED, PROBE);
+
+  const base = {
+    jobId: claimed.jobId,
+    attempt: claimed.attempt,
+    leaseToken: claimed.leaseToken,
+    bytes: NORMALIZED.length,
+    checksumSha256: sha(NORMALIZED),
+  };
+
+  // Un caso negativo POR CAMPO. Comprobarlos de uno en uno es lo que demuestra
+  // que se comparan los cuatro: con una sola aserción sobre el objeto
+  // completo, tres campos podrían no compararse nunca y la prueba pasaría.
+  const variants: Array<[string, typeof PROBE]> = [
+    ['durationSeconds', { ...PROBE, durationSeconds: 3599 }],
+    ['sampleRate', { ...PROBE, sampleRate: 48000 }],
+    ['channels', { ...PROBE, channels: 2 }],
+    ['codec', { ...PROBE, codec: 'aac' }],
+  ];
+  for (const [field, probe] of variants) {
+    await expectApiError(
+      () => resultComplete(world.identity, { ...base, probe }, world.deps),
+      'terminal_conflict',
+      `complete con otro ${field}`,
+    );
+  }
+
+  // Y el sondeo que DESAPARECE: omitirlo no es «no opino», es afirmar que no
+  // se midió nada.
+  await expectApiError(
+    () => resultComplete(world.identity, base, world.deps),
+    'terminal_conflict',
+    'complete sin el sondeo que ya constaba',
+  );
+
+  // Nada de esto tocó lo persistido.
+  const media = await meetingsRepo.findLiveDerived(runId, 'normalized');
+  assert.equal(Number(media?.duration_seconds), 3600.457);
+  assert.equal(media?.sample_rate, 16000);
+  assert.equal(media?.channels, 1);
+  assert.equal(media?.codec, 'pcm_s16le');
+  const job = await jobsRepo.getJobById(claimed.jobId);
+  assert.equal(job?.status, 'succeeded');
+  const jobs = await jobsRepo.listJobsForMeeting(claimed.meetingId);
+  assert.equal(jobs.filter((entry) => entry.stage === 'transcribe').length, 1);
+});
+
+test('un complete de normalize SIN sondeo es idempotente consigo mismo', async () => {
+  const world = await makeWorld();
+  await seedMeetingWithMedia(world);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  // 'runStage' sin probe: los cuatro campos quedan nulos.
+  await runStage(world, claimed, NORMALIZED);
+  const base = {
+    jobId: claimed.jobId,
+    attempt: claimed.attempt,
+    leaseToken: claimed.leaseToken,
+    bytes: NORMALIZED.length,
+    checksumSha256: sha(NORMALIZED),
+  };
+  assert.equal((await resultComplete(world.identity, base, world.deps)).status, 'succeeded');
+  // Y mandar el sondeo ahora es una diferencia, en la dirección contraria.
+  await expectApiError(
+    () => resultComplete(world.identity, { ...base, probe: PROBE }, world.deps),
+    'terminal_conflict',
+    'complete que añade un sondeo a un terminal sin sondeo',
+  );
+});
+
+test('el leaseToken NO entra en la comparación de idempotencia', async () => {
+  const world = await makeWorld();
+  await seedMeetingWithMedia(world);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  await runStage(world, claimed, NORMALIZED, PROBE);
+
+  const body = {
+    jobId: claimed.jobId,
+    attempt: claimed.attempt,
+    leaseToken: claimed.leaseToken,
+    bytes: NORMALIZED.length,
+    checksumSha256: sha(NORMALIZED),
+    probe: PROBE,
+  };
+  assert.equal((await resultComplete(world.identity, body, world.deps)).status, 'succeeded');
+
+  // El token es una prueba de POSESIÓN, no un dato del resultado, así que no
+  // entra en la comparación: si entrara, un reenvío tras una renovación de
+  // lease legítima saldría como conflicto.
+  //
+  // Y sobre un terminal no hay nada contra lo que compararlo:
+  // 'jobs_lease_invariants' exige que 'lease_token_hash' sea NULL en cuanto el
+  // job cierra. Así que un token distinto pasa igual — lo que autoriza el
+  // reenvío es la CREDENCIAL y el intento, que sí se conservan.
+  const job = await jobsRepo.getJobById(claimed.jobId);
+  assert.equal(job?.status, 'succeeded');
+  assert.equal(job?.lease_token_hash, null, 'el terminal ya no guarda el token');
+  const otherToken = await resultComplete(
+    world.identity,
+    { ...body, leaseToken: 'mlt_otro_token_con_longitud_suficiente' },
+    world.deps,
+  );
+  assert.equal(otherToken.status, 'succeeded');
+
+  // Lo que NO pasa es otra credencial, aunque el payload sea idéntico: el
+  // reenvío es del mismo worker o no es un reenvío.
+  await expectApiError(
+    () => resultComplete(world.foreignIdentity, body, world.deps),
+    'not_found',
+    'complete de un terminal con una credencial ajena',
+  );
+  // Ni un intento distinto: eso lo rechaza 'authorizeLease' antes de comparar
+  // nada del payload.
+  await expectApiError(
+    () => resultComplete(world.identity, { ...body, attempt: claimed.attempt + 1 }, world.deps),
+    'attempt_stale',
+    'complete de un terminal con otro intento',
+  );
 });
 
 test('un complete sobre un job cancelado se rechaza', async () => {

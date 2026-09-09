@@ -685,6 +685,8 @@ export async function fail(
       allowTerminalIdempotent: true,
     });
 
+    const detail = normalizeFailureDetail(request.failureDetail);
+
     // Reenvío sobre un job ya terminal. Dos casos, y NO se tratan igual:
     if (job.status === 'failed' || job.status === 'succeeded') {
       if (job.status === 'succeeded') {
@@ -695,25 +697,31 @@ export async function fail(
           'El job ya terminó con éxito; no se puede declarar fallido.',
         );
       }
-      if (job.failure_code !== null && job.failure_code !== code) {
-        // Mismo intento, otro código: alguien está reescribiendo la causa del
-        // fallo. Se devuelve el que hay y se dice que no coincide, en vez de
-        // pisarlo — el failure_code es lo que alguien va a leer para entender
-        // qué pasó.
+      // Mismo intento, otro código o otro detalle: alguien está reescribiendo
+      // la causa del fallo. Se devuelve la que hay y se dice que no coincide,
+      // en vez de pisarla — 'failure_code' y 'failure_detail' son lo que
+      // alguien va a leer para entender qué pasó, y aceptar la segunda versión
+      // en silencio dejaría un diagnóstico que nadie escribió a propósito.
+      //
+      // 'jobs_failure_coherent' garantiza que un job 'failed' tiene código, así
+      // que la comparación no necesita tolerar NULL en él. El detalle SÍ puede
+      // ser nulo, y nulo-contra-texto también es una diferencia.
+      if (job.failure_code !== code) {
         throw new MeetingsApiError(
           'terminal_conflict',
           `El job ya falló con '${job.failure_code}'; no se puede reescribir a otro código.`,
         );
       }
+      if ((job.failure_detail ?? null) !== detail) {
+        throw new MeetingsApiError(
+          'terminal_conflict',
+          'El job ya falló con otro detalle; no se puede reescribir.',
+        );
+      }
       return { status: job.status, requeued: false, attempts: job.attempts };
     }
 
-    const outcome = await jobsRepo.markFailed(
-      job.id,
-      code,
-      typeof request.failureDetail === 'string' ? request.failureDetail.slice(0, 2000) : null,
-      executor,
-    );
+    const outcome = await jobsRepo.markFailed(job.id, code, detail, executor);
     if (!outcome) throw new MeetingsApiError('invalid_transition', 'El job ya no admite fallo.');
 
     await jobsRepo.appendJobEvent(
@@ -737,6 +745,18 @@ export async function fail(
 
     return { status: outcome.job.status, requeued: outcome.requeued, attempts: outcome.job.attempts };
   });
+}
+
+/**
+ * El detalle del fallo TAL COMO SE PERSISTE.
+ *
+ * La escritura y la comparación de idempotencia pasan las dos por aquí, y eso
+ * es el punto: si el recorte viviera sólo en la escritura, un reenvío con un
+ * detalle de 2500 caracteres se compararía contra los 2000 guardados y saldría
+ * como conflicto por una diferencia que mai misma introdujo.
+ */
+function normalizeFailureDetail(detail: string | null | undefined): string | null {
+  return typeof detail === 'string' ? detail.slice(0, 2000) : null;
 }
 
 /**
@@ -930,7 +950,7 @@ export async function resultComplete(
   // afirmación sobre qué se subió, y aceptarla en silencio dejaría la base
   // diciendo una cosa y el cliente creyendo otra.
   if (job.status === 'succeeded') {
-    assertTerminalPayloadMatches(upload, request);
+    await assertTerminalPayloadMatches(job, upload, request, kind);
     const meeting = await meetingsRepo.getMeetingById(job.meeting_id);
     return {
       status: 'succeeded',
@@ -1018,7 +1038,7 @@ export async function resultComplete(
       // vuelve a comparar el payload: la coincidencia se comprueba donde se
       // decide, no una sola vez fuera de la transacción.
       const current = await artifactsRepo.findUpload(locked.id, locked.attempts, kind, executor);
-      if (current) assertTerminalPayloadMatches(current, request);
+      if (current) await assertTerminalPayloadMatches(locked, current, request, kind, executor);
       const meeting = await meetingsRepo.getMeetingById(locked.meeting_id, executor);
       return {
         status: 'succeeded' as const,
@@ -1069,7 +1089,14 @@ export async function resultComplete(
           bytes: request.bytes,
           checksumSha256: request.checksumSha256.toLowerCase(),
           contentType: upload.content_type,
-          durationSeconds: request.probe?.durationSeconds ?? null,
+          // Cuantizado ANTES de escribir, con la misma función que usa la
+          // comparación de idempotencia. Dejar que PostgreSQL redondee al
+          // insertar daría el mismo resultado casi siempre, pero no en los
+          // empates: 'numeric' redondea el decimal exacto que recibe y
+          // JavaScript redondea el doble más cercano, y en 1.0005 no coinciden.
+          // Cuantizando en un solo sitio, lo guardado y lo comparado son el
+          // mismo número por construcción.
+          durationSeconds: quantizeDuration(request.probe?.durationSeconds),
           sampleRate: request.probe?.sampleRate ?? null,
           channels: request.probe?.channels ?? null,
           codec: request.probe?.codec ?? null,
@@ -1143,16 +1170,46 @@ export async function resultComplete(
 /**
  * ¿El payload de este `complete` es el MISMO que ya se registró?
  *
- * Se compara contra lo OBSERVADO cuando existe —lo que mai midió del objeto— y
- * contra lo declarado si no. Un reenvío legítimo repite los mismos valores; uno
- * con otro checksum está afirmando que subió otra cosa, y sobre un job cerrado
- * eso no se puede aceptar: el artefacto ya se ingirió y la versión de transcript
- * ya existe.
+ * Se comparan los DATOS SEMÁNTICOS del resultado: checksum, tamaño y —para
+ * `normalize`— el sondeo. Deliberadamente NO se compara nada de autenticación:
+ * el `leaseToken` es una prueba de posesión, no un dato del resultado, y
+ * exigirlo igual convertiría en conflicto un reenvío tras una renovación de
+ * lease perfectamente legítima. El `attempt` sí se compara, pero antes y en
+ * otro sitio: `authorizeLease` es quien rechaza el resultado de un intento que
+ * ya no es el actual.
+ *
+ * Checksum y tamaño se comparan contra lo OBSERVADO cuando existe —lo que mai
+ * midió del objeto— y contra lo declarado si no.
+ *
+ * ── El sondeo, y por qué se lee de `meeting_media` ──────────────────────────
+ *
+ * `durationSeconds`, `sampleRate`, `channels` y `codec` no viven en la fila de
+ * la subida: se persisten en el medio derivado que la subida produjo. Ese es el
+ * valor AUTORITATIVO —lo que quedó escrito— así que la comparación lo relee de
+ * ahí en vez de confiar en el payload de la petición anterior, que nadie
+ * guardó.
+ *
+ * Se lee por `storage_key` y no con `findLiveDerived` a propósito: hay que
+ * comparar contra el medio de ESTA subida, no contra el que hoy sea el vivo del
+ * run — que un reintento posterior pudo haber sustituido.
+ *
+ * `duration_seconds` es `numeric(12,3)`, así que el valor entrante se cuantiza
+ * igual antes de comparar. Sin eso, un worker que reenvía exactamente
+ * `3600.4567` chocaría contra el `3600.457` que PostgreSQL redondeó al
+ * escribirlo: un conflicto inventado por mai.
+ *
+ * Un reenvío legítimo repite los mismos valores; uno con otro checksum o otro
+ * sondeo está afirmando algo distinto sobre lo que subió, y sobre un job
+ * cerrado eso no se puede aceptar: el artefacto ya se ingirió y la versión de
+ * transcript ya existe.
  */
-function assertTerminalPayloadMatches(
+async function assertTerminalPayloadMatches(
+  job: jobsRepo.JobRow,
   upload: artifactsRepo.ResultUploadRow,
   request: ResultCompleteRequest,
-): void {
+  kind: ArtifactKind,
+  executor?: Queryable,
+): Promise<void> {
   const recordedChecksum = upload.observed_checksum_sha256 ?? upload.declared_checksum_sha256;
   const recordedBytes = upload.observed_bytes ?? upload.declared_bytes;
   if (
@@ -1170,6 +1227,60 @@ function assertTerminalPayloadMatches(
       'El job ya se completó con otro tamaño; el resultado no se puede reescribir.',
     );
   }
+
+  // Sólo `normalize` manda sondeo: es la única etapa que produce audio.
+  if (kind !== 'normalized_media') return;
+
+  const media = await meetingsRepo.findDerivedByStorageKey(
+    job.run_id,
+    'normalized',
+    upload.storage_key,
+    executor,
+  );
+  if (!media) {
+    // Un job `succeeded` de `normalize` cuya subida no tiene medio derivado es
+    // una incoherencia interna, no una entrada inválida del worker: la
+    // inserción del medio y el `markSucceeded` ocurren en la MISMA
+    // transacción. Se dice, en vez de dejar pasar el reenvío sin comparar el
+    // sondeo — que sería aceptar en silencio lo que no se puede verificar.
+    throw new MeetingsApiError(
+      'internal',
+      'El job normalizado no tiene medio derivado registrado para esa subida.',
+    );
+  }
+
+  const stored = {
+    durationSeconds: media.duration_seconds === null ? null : Number(media.duration_seconds),
+    sampleRate: media.sample_rate,
+    channels: media.channels,
+    codec: media.codec,
+  };
+  const incoming = {
+    durationSeconds: quantizeDuration(request.probe?.durationSeconds),
+    sampleRate: request.probe?.sampleRate ?? null,
+    channels: request.probe?.channels ?? null,
+    codec: request.probe?.codec ?? null,
+  };
+
+  for (const field of ['durationSeconds', 'sampleRate', 'channels', 'codec'] as const) {
+    if (stored[field] !== incoming[field]) {
+      throw new MeetingsApiError(
+        'terminal_conflict',
+        `El job ya se completó con otro sondeo (${field}); el resultado no se puede reescribir.`,
+      );
+    }
+  }
+}
+
+/**
+ * `numeric(12,3)`: tres decimales, redondeo al más cercano.
+ *
+ * Se aplica al valor entrante ANTES de escribirlo y antes de compararlo, así
+ * que lo que se compara es siempre lo que la base habría guardado.
+ */
+function quantizeDuration(value: number | null | undefined): number | null {
+  if (value === null || value === undefined) return null;
+  return Math.round(value * 1000) / 1000;
 }
 
 async function findNextJob(
