@@ -26,6 +26,18 @@ import { getSessionCookie } from "better-auth/cookies";
 // cookieless and self-protected (site-slug scoping + rate limiting).
 // /forgot-password and /reset-password are the account-recovery pages: their
 // whole audience is logged-out users, so they must never bounce to /login.
+//
+// /api/meetings/v1/jobs and /api/meetings/v1/maintenance are the WORKER API:
+// cookieless Bearer-token requests from the GPU worker, same shape as
+// /api/handoff and /api/crm. Without them here the worker got a 307 to /login
+// instead of JSON on all six machine routes, and no test saw it — the route
+// tests import and invoke the handler, so they never traverse middleware.
+//
+// Deliberately NOT the whole /api/meetings subtree: the five session routes
+// under /api/meetings/v1/meetings/** must keep bouncing to /login without a
+// cookie, exactly as they do today. Their real gate is resolveAppScope at the
+// data layer; the middleware bounce is the UX half, and dropping it would be a
+// silent widening nobody asked for.
 const PUBLIC_PREFIXES = [
   "/login",
   "/signup",
@@ -40,6 +52,8 @@ const PUBLIC_PREFIXES = [
   "/api/crm",
   "/api/booking",
   "/book",
+  "/api/meetings/v1/jobs",
+  "/api/meetings/v1/maintenance",
 ];
 
 export function middleware(request: NextRequest): NextResponse {
