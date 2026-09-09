@@ -201,3 +201,67 @@ El `CHECK` de M-4 pasa a
 las tres etapas suben por el mismo camino y con el mismo registro de
 idempotencia. El razonamiento completo —incluidas las tres alternativas que no
 servían— está en `docs/meetings-schema-blockers.md`.
+
+---
+
+## 8 · Invariantes añadidas en la pasada de hardening
+
+### Procedencia del medio: relacional, no deducida
+
+| rol | `run_id` | vivos por run |
+|---|---|---|
+| `original` | **NULL obligatorio** | uno por reunión (`meeting_media_one_live_original_idx`) |
+| `normalized`, `raw_result` | **obligatorio** | **uno** por (run, rol) (`meeting_media_one_live_derived_idx`) |
+
+`meeting_media_run_scoped` impone las dos direcciones, y la FK compuesta incluye
+`meeting_id`: el run tiene que ser de esa reunión.
+
+Un reintento que vuelve a subir **reemplaza**: el derivado anterior pasa a
+`deleted_at` en la misma transacción. El histórico se conserva y deja de estar
+vivo — y «vivo» significa algo porque el índice único parcial lo hace cumplir.
+
+La consulta del insumo de una etapa es `WHERE run_id = $1 AND role = $2`. **No**
+se derivan claves ni se recorren intentos: una clave de objeto es una cadena
+opaca, y usarla como índice significa que cambiar su esquema rompe la lectura de
+datos ya escritos.
+
+### Capacidades: reclamables y no reclamables
+
+| capacidad | reclamable | límite de concurrencia |
+|---|---|---|
+| `meetings.transcribe` | sí | obligatorio |
+| `meetings.analyze` | sí | obligatorio |
+| `meetings.maintenance` | **no** | **no aplica** |
+
+`meetings_pool_coherent` exige la biyección sólo dentro de las reclamables, y
+«al menos un límite» sólo si el pool declara alguna. Un pool sólo de
+mantenimiento es válido con `limits` vacío.
+
+`/maintenance/requeue-expired` exige `meetings.maintenance`. Una credencial de
+proceso —incluso del mismo tenant— recibe el mismo 404 que un recurso
+inexistente, y no obtiene los recuentos globales.
+
+### Idempotencia terminal
+
+| situación | respuesta |
+|---|---|
+| `complete` repetido, mismo checksum y tamaño | 200 con el resultado previo |
+| `complete` repetido, checksum o tamaño distintos | 409 `terminal_conflict` |
+| `fail` repetido, mismo código | 200 con el resultado previo |
+| `fail` repetido, código distinto | 409 `terminal_conflict` |
+| `fail` sobre un job `succeeded` | 409 `terminal_conflict` |
+| `complete` sobre un job `cancelled` / `abandoned` | 409 `invalid_transition` |
+
+La última fila es deliberadamente otro código: un job cancelado no es un terminal
+cuyo resultado se esté reafirmando, es un job que dejó de estar en el pipeline.
+Un worker que recibe `terminal_conflict` tiene un bug; uno que recibe
+`invalid_transition` perdió una carrera con una cancelación, que es normal.
+
+En ningún caso se modifica el estado terminal ya escrito.
+
+### Entitlement del módulo
+
+Las rutas con sesión exigen, en este orden: forma del `clientId`, sesión que
+alcance el cliente, cliente existente y no-por-defecto, y `meetings` habilitado
+en `client_modules`. Las cuatro fallan con el **mismo 404**, igual que el resto
+de los módulos.
