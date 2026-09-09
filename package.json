@@ -15,6 +15,7 @@
     "start:worker": "node dist/index.js",
     "meetings:preflight": "tsx src/scripts/meetingsPreflight.ts",
     "test:migrations:meetings": "bash test/migrations/meetings/run.sh",
+    "test:e2e:meetings": "node --import tsx --import ./test/integration/env.ts test/e2e/runCrossProcess.ts",
     "migrate": "node-pg-migrate --envPath .env --tsx",
     "migrate:prod": "node-pg-migrate --tsx",
     "derive:backfill": "tsx src/scripts/deriveBackfill.ts",
