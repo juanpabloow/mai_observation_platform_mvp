@@ -1343,13 +1343,29 @@ export async function ingestAfterDiarizationFailure(
 // ── Barrido y cancelación ──────────────────────────────────────────────────
 
 /**
- * Barrido global de leases caducados. **Exige `meetings.maintenance`.**
+ * Barrido global de leases caducados. **Exige `scope === 'internal'` Y
+ * `meetings.maintenance`, las dos cosas a la vez.**
  *
  * Es una operación de instalación, no de tenant: recorre todos los jobs
  * colgados de todos los clientes y devuelve sus recuentos. Una credencial de
  * proceso atada a un tenant no debe poder ejecutarla —reencolaría trabajo
  * ajeno— ni leer su resultado, que es información operativa agregada de toda la
  * instalación.
+ *
+ * ── Por qué la capacidad no basta ───────────────────────────────────────────
+ *
+ * La capacidad dice qué se autorizó; el ámbito dice sobre qué. Comprobar sólo
+ * la capacidad hacía que el aislamiento dependiera de que ningún pool
+ * `single_tenant` la tuviera nunca — es decir, de que la configuración fuera
+ * correcta. `pools_scope_allows_capabilities` lo impide en la base, pero esta
+ * función recibe una `WorkerIdentity`, y una identidad se puede construir en
+ * memoria: un llamador interno futuro, una prueba, un adaptador. Si la única
+ * defensa viviera en el CHECK, cualquier camino que no pase por
+ * `worker_pools` la saltaría.
+ *
+ * Así que se exigen las dos, y cada una cubre lo que la otra no ve: el CHECK
+ * cubre las credenciales emitidas, esta comprobación cubre las identidades
+ * construidas.
  *
  * La comprobación va aquí y no sólo en la ruta: así cualquier llamador futuro
  * (un cron, un script) hereda la restricción en vez de tener que recordarla.
@@ -1359,9 +1375,11 @@ export async function requeueExpiredLeases(identity: WorkerIdentity): Promise<{
   abandoned: number;
   jobs: readonly jobsRepo.RequeuedJob[];
 }> {
-  if (!identity.capabilities.includes('meetings.maintenance')) {
-    // El MISMO 404 que un recurso inexistente: que una credencial descubra que
-    // el endpoint existe pero no le corresponde ya es información.
+  if (identity.scope !== 'internal' || !identity.capabilities.includes('meetings.maintenance')) {
+    // El MISMO 404 que un recurso inexistente, y el mismo para los dos fallos:
+    // que una credencial descubra que el endpoint existe pero no le
+    // corresponde ya es información, y distinguir «te falta el ámbito» de «te
+    // falta la capacidad» le diría cuál de las dos piezas conseguir.
     throw notFound();
   }
   const jobs = await jobsRepo.requeueExpiredLeases();

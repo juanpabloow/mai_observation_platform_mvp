@@ -93,6 +93,29 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       SELECT cap IN ('meetings.transcribe', 'meetings.analyze');
     $$ LANGUAGE sql IMMUTABLE STRICT;
 
+    -- CAPACIDADES EXCLUSIVAMENTE INTERNAS: las que no pueden pertenecer a un
+    -- pool atado a un tenant, cualquiera que sea su configuración.
+    --
+    -- Que 'meetings.maintenance' no sea reclamable evita que se le pida un
+    -- límite de concurrencia, pero NO evita lo que de verdad importa: que
+    -- alguien cree un pool 'single_tenant' y le añada la capacidad. Esa
+    -- credencial pasaría la comprobación de capacidad del servicio y
+    -- reencolaría los leases caducados de TODOS los tenants, además de leer sus
+    -- conteos agregados. Es decir: el aislamiento dependería de que la
+    -- configuración sea correcta, y una garantía que depende de la
+    -- configuración no es una garantía.
+    --
+    -- Por eso el vocabulario distingue las dos cosas por separado. Reclamable
+    -- responde a '¿tiene etapa y concurrencia?'; interna responde a '¿puede
+    -- pertenecer a un pool de un tenant?'. Hoy 'meetings.maintenance' es no
+    -- reclamable E interna, pero no son la misma pregunta: una capacidad futura
+    -- de sólo lectura global sería interna y no reclamable, y una de análisis
+    -- por tenant sería reclamable y no interna.
+    CREATE FUNCTION meetings_internal_only_capability(cap text)
+    RETURNS boolean AS $$
+      SELECT cap IN ('meetings.maintenance');
+    $$ LANGUAGE sql IMMUTABLE STRICT;
+
     -- Un CHECK no admite subconsultas; encapsularlas en una función IMMUTABLE
     -- sí, y es el mecanismo estándar para esto.
     CREATE FUNCTION meetings_known_capabilities(caps text[])
@@ -566,6 +589,7 @@ export async function down(pgm: MigrationBuilder): Promise<void> {
     DROP TABLE IF EXISTS meetings;
 
     DROP FUNCTION IF EXISTS meetings_known_capabilities(text[]);
+    DROP FUNCTION IF EXISTS meetings_internal_only_capability(text);
     DROP FUNCTION IF EXISTS meetings_claimable_capability(text);
     DROP FUNCTION IF EXISTS meetings_known_capability(text);
     DROP FUNCTION IF EXISTS meetings_stage_capability(text);

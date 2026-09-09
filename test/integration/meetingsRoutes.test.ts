@@ -126,11 +126,19 @@ async function seed(): Promise<Ctx> {
     '{meetings.transcribe}',
     '{"schema_version":1,"limits":{"meetings.transcribe":1}}',
   );
-  const maintPool = await mkPool(
-    tenantId,
-    '{meetings.maintenance}',
-    '{"schema_version":1,"limits":{}}',
-  );
+  // El pool de mantenimiento es INTERNO, no de tenant: la base ya no admite
+  // 'meetings.maintenance' en un pool 'single_tenant'
+  // (`pools_scope_allows_capabilities`). Ser interno implica además no tener
+  // tenant y dejar rastro de quién lo autorizó.
+  const maintPool = await query<{ id: string }>(
+    `INSERT INTO worker_pools
+       (slug, environment, scope, capabilities, concurrency,
+        internal_authorized_actor_label, internal_authorized_at)
+     VALUES ($1, 'development', 'internal', '{meetings.maintenance}',
+             '{"schema_version":1,"limits":{}}'::jsonb, 'suite <suite@example.test>', now())
+     RETURNING id`,
+    [`r-int-${randomUUID().slice(0, 8)}`],
+  ).then((row) => row.rows[0].id);
   const foreignPool = await mkPool(
     foreignTenantId,
     '{meetings.transcribe}',

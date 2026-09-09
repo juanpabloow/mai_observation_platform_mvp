@@ -125,14 +125,21 @@ async function makeWorld(options?: { leaseSeconds?: number }): Promise<World> {
   // Un pool SÓLO de mantenimiento: sin capacidades reclamables, así que su
   // 'concurrency' no lleva límites — que es lo que la coherencia permite ahora
   // que 'meetings.maintenance' no es reclamable.
+  //
+  // Y su scope es 'internal', no 'single_tenant': la base ya no admite lo
+  // segundo (`pools_scope_allows_capabilities`). Ser interno obliga además a
+  // dejar rastro de quién lo autorizó y a no tener tenant, que es justo lo que
+  // hace de este pool algo distinto de una credencial de trabajo.
   const maintenancePool = await query<{ id: string }>(
     `INSERT INTO worker_pools
-       (slug, environment, scope, tenant_id, capabilities, concurrency)
-     VALUES ($1, 'development', 'single_tenant', $2,
+       (slug, environment, scope, capabilities, concurrency,
+        internal_authorized_actor_label, internal_authorized_at)
+     VALUES ($1, 'development', 'internal',
              '{meetings.maintenance}',
-             '{"schema_version":1,"limits":{}}'::jsonb)
+             '{"schema_version":1,"limits":{}}'::jsonb,
+             'suite <suite@example.test>', now())
      RETURNING id`,
-    [`maint-${tenantId.slice(0, 8)}`, tenantId],
+    [`maint-${tenantId.slice(0, 8)}`],
   );
 
   const credential = await mkCredential(poolId, 'lan-gpu');
@@ -1318,6 +1325,103 @@ test('la credencial de mantenimiento NO puede reclamar trabajo', async () => {
   // Mientras el pool de proceso sí ve el trabajo, así que la ausencia no es
   // «no hay nada».
   assert.ok(await claim(world.identity, {}, world.deps));
+});
+
+test('el barrido exige ÁMBITO interno Y capacidad, las dos cosas', async () => {
+  const world = await makeWorld();
+
+  // La garantía tiene dos niveles y aquí se prueba el del SERVICIO. El de la
+  // base —que un pool 'single_tenant' no puede declarar la capacidad— vive en
+  // 'pools_scope_allows_capabilities' y se prueba justo debajo y en la suite de
+  // esquema. Se prueban por separado porque cubren caminos distintos: el CHECK
+  // cubre las credenciales emitidas, esto cubre las identidades construidas en
+  // memoria, que es lo que hará cualquier llamador interno futuro.
+  const withScope = (
+    identity: WorkerIdentity,
+    scope: 'internal' | 'single_tenant',
+    capabilities: readonly WorkerIdentity['capabilities'][number][],
+  ): WorkerIdentity => ({ ...identity, scope, capabilities });
+
+  // 1 · Ámbito de tenant CON la capacidad. La base no dejaría emitirla, así que
+  //     la identidad se fabrica: es exactamente el caso que el CHECK no puede
+  //     ver.
+  await expectApiError(
+    () =>
+      requeueExpiredLeases(
+        withScope(world.maintenanceIdentity, 'single_tenant', ['meetings.maintenance']),
+      ),
+    'not_found',
+    'identidad de tenant con la capacidad puesta a mano',
+  );
+
+  // 2 · Ámbito interno SIN la capacidad. Ser interno no autoriza nada por sí
+  //     solo: el scope dice sobre qué, la capacidad dice qué.
+  await expectApiError(
+    () =>
+      requeueExpiredLeases(withScope(world.identity, 'internal', ['meetings.transcribe'])),
+    'not_found',
+    'identidad interna sin la capacidad',
+  );
+
+  // 3 · Interno y sin ninguna capacidad.
+  await expectApiError(
+    () => requeueExpiredLeases(withScope(world.identity, 'internal', [])),
+    'not_found',
+    'identidad interna sin capacidades',
+  );
+
+  // 4 · Sólo interno + capacidad ejecuta el barrido. Y es la credencial REAL,
+  //     no una construida: el camino completo desde el token.
+  assert.equal(world.maintenanceIdentity.scope, 'internal');
+  assert.deepEqual(world.maintenanceIdentity.capabilities, ['meetings.maintenance']);
+  const sweep = await requeueExpiredLeases(world.maintenanceIdentity);
+  assert.ok(Number.isInteger(sweep.requeued) && Number.isInteger(sweep.abandoned));
+});
+
+test('la base no admite un pool de tenant con la capacidad de mantenimiento', async () => {
+  const world = await makeWorld();
+
+  // El nivel de esquema. Sin esto, el aislamiento dependería de que nadie
+  // escribiera esta fila — y esta fila no falla al usarse: la credencial se
+  // emite y autentica igual.
+  await assert.rejects(
+    () =>
+      query(
+        `INSERT INTO worker_pools (slug, environment, scope, tenant_id, capabilities, concurrency)
+         VALUES ($1, 'development', 'single_tenant', $2, '{meetings.maintenance}',
+                 '{"schema_version":1,"limits":{}}'::jsonb)`,
+        [`maint-tenant-${randomUUID().slice(0, 8)}`, world.tenantId],
+      ),
+    /pools_scope_allows_capabilities/,
+    'un pool single_tenant no puede declarar meetings.maintenance',
+  );
+
+  // Tampoco acompañada de una reclamable perfectamente coherente: no es un
+  // problema de coherencia con 'concurrency', es de ámbito.
+  await assert.rejects(
+    () =>
+      query(
+        `INSERT INTO worker_pools (slug, environment, scope, tenant_id, capabilities, concurrency)
+         VALUES ($1, 'development', 'single_tenant', $2,
+                 '{meetings.transcribe,meetings.maintenance}',
+                 '{"schema_version":1,"limits":{"meetings.transcribe":1}}'::jsonb)`,
+        [`maint-mixto-${randomUUID().slice(0, 8)}`, world.tenantId],
+      ),
+    /pools_scope_allows_capabilities/,
+    'ni mezclada con una capacidad reclamable',
+  );
+
+  // Ni por UPDATE sobre el pool de trabajo que ya existe.
+  await assert.rejects(
+    () =>
+      query(
+        `UPDATE worker_pools SET capabilities = '{meetings.transcribe,meetings.maintenance}'
+          WHERE id = (SELECT pool_id FROM worker_credentials WHERE id = $1)`,
+        [world.credentialId],
+      ),
+    /pools_scope_allows_capabilities/,
+    'ni adquirirla por UPDATE',
+  );
 });
 
 test('un pool sólo de mantenimiento es válido con limits vacío', async () => {

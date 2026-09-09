@@ -156,6 +156,33 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
              );
     $$ LANGUAGE sql IMMUTABLE;
 
+    -- COHERENCIA ENTRE 'scope' Y 'capabilities'.
+    --
+    -- Una capacidad interna no puede vivir en un pool atado a un tenant. El
+    -- servicio también lo exige, y la duplicación es deliberada: son garantías
+    -- de distinto alcance.
+    --
+    --   · El servicio protege la LLAMADA. Si mañana aparece otro llamador —un
+    --     cron, un script de operaciones, una segunda API— hereda la
+    --     comprobación porque vive en la operación, no en la ruta.
+    --   · La base protege el DATO. Sin esto, la única cosa que separa a un
+    --     worker de un tenant del mantenimiento global es que nadie escriba la
+    --     fila equivocada; y una fila equivocada aquí no falla, funciona: la
+    --     credencial se emite, autentica, y el día que el servicio cambie de
+    --     forma tiene la capacidad puesta.
+    --
+    -- Con las dos, para que una credencial de tenant ejecute el barrido tienen
+    -- que fallar a la vez un CHECK de PostgreSQL y una comprobación del
+    -- servicio. Con una sola, basta una configuración descuidada.
+    CREATE FUNCTION meetings_scope_allows_capabilities(pool_scope text, caps text[])
+    RETURNS boolean AS $$
+      SELECT pool_scope = 'internal'
+          OR NOT EXISTS (
+               SELECT 1 FROM unnest(caps) AS c
+                WHERE meetings_internal_only_capability(c)
+             );
+    $$ LANGUAGE sql IMMUTABLE;
+
     -- ═══════════════════════════════════════════════════════════════════════
     -- 1. worker_pools
     -- ═══════════════════════════════════════════════════════════════════════
@@ -246,7 +273,13 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       CONSTRAINT pools_capabilities_known CHECK (meetings_known_capabilities(capabilities)),
       CONSTRAINT pools_concurrency_valid CHECK (meetings_valid_concurrency(concurrency)),
       -- Y las dos tienen que decir lo mismo.
-      CONSTRAINT pools_coherent CHECK (meetings_pool_coherent(capabilities, concurrency))
+      CONSTRAINT pools_coherent CHECK (meetings_pool_coherent(capabilities, concurrency)),
+
+      -- Un pool 'single_tenant' NO PUEDE declarar una capacidad interna. El
+      -- mantenimiento global reencola trabajo de toda la instalación: darlo a
+      -- una credencial atada a un tenant le daría alcance sobre los demás.
+      CONSTRAINT pools_scope_allows_capabilities
+        CHECK (meetings_scope_allows_capabilities(scope, capabilities))
     );
 
     CREATE INDEX pools_caps_idx ON worker_pools USING gin (capabilities);
@@ -410,6 +443,7 @@ export async function down(pgm: MigrationBuilder): Promise<void> {
 
     -- El vocabulario de capacidades es de MEET-1 y su 'down' lo borra: aquí
     -- sólo se retira lo que aquí se creó.
+    DROP FUNCTION IF EXISTS meetings_scope_allows_capabilities(text, text[]);
     DROP FUNCTION IF EXISTS meetings_pool_coherent(text[], jsonb);
     DROP FUNCTION IF EXISTS meetings_valid_concurrency(jsonb);
   `);

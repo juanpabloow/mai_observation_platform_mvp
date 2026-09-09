@@ -43,6 +43,27 @@ SELECT t($q$concurrency no es objeto$q$, $q$INSERT INTO worker_pools (slug,envir
 SELECT a($q$y la función estructural también lo rechaza$q$, $q$NOT meetings_valid_concurrency($sv$[]$sv$::jsonb)$q$);
 SELECT a($q$el DEFAULT de la tabla es coherente consigo mismo$q$, $q$meetings_pool_coherent(ARRAY['meetings.transcribe'],'{"schema_version":1,"limits":{"meetings.transcribe":1}}'::jsonb)$q$);
 \echo ''
+\echo '════════ #8b · scope ↔ capabilities: el mantenimiento es interno ════════'
+-- La capacidad de mantenimiento reencola los leases caducados de TODA la
+-- instalación. Un pool atado a un tenant no puede declararla: si pudiera, el
+-- aislamiento entre tenants dependería de que nadie escribiera esta fila.
+SELECT a($q$la función marca 'meetings.maintenance' como interna$q$, $q$meetings_internal_only_capability('meetings.maintenance')$q$);
+SELECT a($q$y NO marca 'meetings.transcribe'$q$, $q$NOT meetings_internal_only_capability('meetings.transcribe')$q$);
+SELECT a($q$ni 'meetings.analyze'$q$, $q$NOT meetings_internal_only_capability('meetings.analyze')$q$);
+SELECT a($q$un scope de tenant no admite una capacidad interna$q$, $q$NOT meetings_scope_allows_capabilities('single_tenant', ARRAY['meetings.maintenance'])$q$);
+SELECT a($q$ni mezclada con una reclamable$q$, $q$NOT meetings_scope_allows_capabilities('single_tenant', ARRAY['meetings.transcribe','meetings.maintenance'])$q$);
+SELECT a($q$un scope interno sí$q$, $q$meetings_scope_allows_capabilities('internal', ARRAY['meetings.maintenance'])$q$);
+SELECT a($q$y un pool de tenant sin capacidades internas es válido$q$, $q$meetings_scope_allows_capabilities('single_tenant', ARRAY['meetings.transcribe'])$q$);
+SELECT t($q$LA BASE RECHAZA single_tenant + meetings.maintenance$q$, $q$INSERT INTO worker_pools (slug,environment,scope,tenant_id,capabilities,concurrency) VALUES ('m1','development','single_tenant','11111111-1111-1111-1111-111111111111','{meetings.maintenance}','{"schema_version":1,"limits":{}}'::jsonb)$q$, $q$pools_scope_allows_capabilities$q$);
+SELECT t($q$y también cuando va acompañada de una reclamable coherente$q$, $q$INSERT INTO worker_pools (slug,environment,scope,tenant_id,capabilities,concurrency) VALUES ('m2','development','single_tenant','11111111-1111-1111-1111-111111111111','{meetings.transcribe,meetings.maintenance}','{"schema_version":1,"limits":{"meetings.transcribe":1}}'::jsonb)$q$, $q$pools_scope_allows_capabilities$q$);
+SELECT t($q$control · un pool INTERNO sí puede tenerla$q$, $q$INSERT INTO worker_pools (id,slug,environment,scope,capabilities,concurrency,internal_authorized_actor_label,internal_authorized_at) VALUES ('0be10003-0000-0000-0000-000000000000','m3','development','internal','{meetings.maintenance}','{"schema_version":1,"limits":{}}'::jsonb,'ops <ops@e.test>',now())$q$, $q$ok$q$);
+SELECT t($q$y un pool de tenant no puede ADQUIRIRLA por UPDATE$q$, $q$UPDATE worker_pools SET capabilities='{meetings.transcribe,meetings.maintenance}' WHERE id='0be10001-0000-0000-0000-000000000000'$q$, $q$pools_scope_allows_capabilities$q$);
+-- Y al revés: un pool interno de mantenimiento no puede degradarse a tenant
+-- conservando la capacidad. Si sólo se comprobara al insertar, bastaría un
+-- UPDATE del scope para acabar con exactamente la fila prohibida.
+SELECT t($q$ni un pool interno de mantenimiento degradarse a tenant$q$, $q$UPDATE worker_pools SET scope='single_tenant', tenant_id='11111111-1111-1111-1111-111111111111' WHERE id='0be10003-0000-0000-0000-000000000000'$q$, $q$violates check constraint$q$);
+
+\echo ''
 \echo '════════ #5 · revocación siempre atribuida ════════'
 SELECT t($q$control · credencial viva$q$, $q$INSERT INTO worker_credentials (id,pool_id,label,token_hash,token_prefix) VALUES ('0c7e0001-0000-0000-0000-000000000000','0be10001-0000-0000-0000-000000000000','lan-gpu','aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa','mtk_1234')$q$, $q$ok$q$);
 SELECT t($q$credencial viva con campos de revocación rellenos$q$, $q$INSERT INTO worker_credentials (pool_id,label,token_hash,token_prefix,revoked_reason) VALUES ('0be10001-0000-0000-0000-000000000000','x','bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb','mtk_9999','porque')$q$, $q$credentials_not_revoked_clean$q$);

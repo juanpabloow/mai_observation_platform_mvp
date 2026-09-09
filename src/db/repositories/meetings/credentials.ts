@@ -33,10 +33,11 @@ export type WorkerCapability =
    * instalación. No es una capacidad reclamable —no tiene etapa ni
    * concurrencia— y por eso está separada en el vocabulario de M-1.
    *
-   * Ninguna credencial de proceso la tiene por defecto. Una credencial de un
-   * pool atado a un tenant NO puede reencolar jobs ajenos ni leer conteos
-   * globales, y eso no es una comprobación en la ruta: es que su lista de
-   * capacidades no la contiene.
+   * Ninguna credencial de proceso la tiene por defecto, y una credencial de un
+   * pool atado a un tenant NO PUEDE TENERLA: `pools_scope_allows_capabilities`
+   * lo impide en la base. Sobre eso, `requeueExpiredLeases` exige además
+   * `scope === 'internal'`, porque una `WorkerIdentity` se puede construir en
+   * memoria sin pasar por `worker_pools`.
    */
   | 'meetings.maintenance';
 

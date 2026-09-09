@@ -227,19 +227,43 @@ datos ya escritos.
 
 ### Capacidades: reclamables y no reclamables
 
-| capacidad | reclamable | límite de concurrencia |
-|---|---|---|
-| `meetings.transcribe` | sí | obligatorio |
-| `meetings.analyze` | sí | obligatorio |
-| `meetings.maintenance` | **no** | **no aplica** |
+| capacidad | reclamable | límite de concurrencia | sólo interna |
+|---|---|---|---|
+| `meetings.transcribe` | sí | obligatorio | no |
+| `meetings.analyze` | sí | obligatorio | no |
+| `meetings.maintenance` | **no** | **no aplica** | **sí** |
+
+Reclamable y «sólo interna» son preguntas distintas, aunque hoy `maintenance`
+sea la única que responde igual a las dos. Reclamable responde a *¿tiene etapa y
+concurrencia?* (`meetings_claimable_capability`); sólo-interna responde a
+*¿puede pertenecer a un pool atado a un tenant?*
+(`meetings_internal_only_capability`).
 
 `meetings_pool_coherent` exige la biyección sólo dentro de las reclamables, y
 «al menos un límite» sólo si el pool declara alguna. Un pool sólo de
 mantenimiento es válido con `limits` vacío.
 
-`/maintenance/requeue-expired` exige `meetings.maintenance`. Una credencial de
-proceso —incluso del mismo tenant— recibe el mismo 404 que un recurso
-inexistente, y no obtiene los recuentos globales.
+#### El barrido global exige ámbito Y capacidad
+
+`/maintenance/requeue-expired` sólo lo ejecuta una identidad con
+`scope = 'internal'` **y** `meetings.maintenance`. Las dos, a la vez, y la
+garantía existe en dos niveles porque cubren caminos distintos:
+
+| nivel | qué impide | qué NO ve |
+|---|---|---|
+| `pools_scope_allows_capabilities` (CHECK en `worker_pools`) | que se emita la capacidad en un pool `single_tenant`, tanto al insertar como al hacer UPDATE del scope o de las capacidades | una `WorkerIdentity` construida en memoria, que no pasa por la tabla |
+| `requeueExpiredLeases` (servicio) | que cualquier llamador ejecute el barrido sin las dos cosas | nada sobre lo que ya está escrito en la base |
+
+Con sólo el CHECK, el aislamiento dependería de que ningún camino fabricara una
+identidad —y eso es justo lo que hará un cron o un adaptador interno. Con sólo
+la comprobación del servicio, dependería de que nadie escribiera la fila
+equivocada, y esa fila no falla al usarse: la credencial se emite, autentica y
+espera.
+
+Una credencial de proceso —incluso del mismo tenant— recibe el mismo 404 que un
+recurso inexistente, y el mismo tanto si le falta el ámbito como si le falta la
+capacidad: distinguirlos le diría cuál de las dos piezas conseguir. Y no obtiene
+los recuentos globales.
 
 ### Idempotencia terminal
 
