@@ -29,6 +29,12 @@ export type MeetingsErrorCode =
   | 'lease_expired'
   | 'attempt_stale'
   | 'invalid_transition'
+  /**
+   * Un `complete` o un `fail` repetido con datos DISTINTOS de los que ya se
+   * registraron. No es `invalid_transition`: la transición ya ocurrió y fue
+   * legítima; lo que no se acepta es reescribir su resultado.
+   */
+  | 'terminal_conflict'
   | 'no_work'
   // Verificación de artefactos
   | 'object_missing'
@@ -59,6 +65,7 @@ export const ERROR_STATUS: Record<MeetingsErrorCode, number> = {
   lease_expired: 409,
   attempt_stale: 409,
   invalid_transition: 409,
+  terminal_conflict: 409,
   no_work: 204,
   object_missing: 422,
   size_mismatch: 422,

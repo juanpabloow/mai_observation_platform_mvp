@@ -195,6 +195,7 @@ export interface MeetingMediaRow {
   tenant_id: string;
   client_id: string;
   meeting_id: string;
+  run_id: string | null;
   role: 'original' | 'normalized' | 'raw_result';
   storage_key: string;
   bytes: string;
@@ -213,6 +214,8 @@ export interface InsertMediaInput {
   readonly tenantId: string;
   readonly clientId: string;
   readonly meetingId: string;
+  /** Obligatorio para todo lo que no sea 'original' (lo exige un CHECK). */
+  readonly runId?: string | null;
   readonly role: 'original' | 'normalized' | 'raw_result';
   readonly storageKey: string;
   readonly bytes: number;
@@ -239,15 +242,16 @@ export async function insertMedia(
 ): Promise<{ media: MeetingMediaRow; created: boolean }> {
   const inserted = await q(executor).query<MeetingMediaRow>(
     `INSERT INTO meeting_media
-       (tenant_id, client_id, meeting_id, role, storage_key, bytes, checksum_sha256,
+       (tenant_id, client_id, meeting_id, run_id, role, storage_key, bytes, checksum_sha256,
         content_type, duration_seconds, sample_rate, channels, codec, probe_ok, probe_error)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
      ON CONFLICT (storage_key) DO NOTHING
      RETURNING *`,
     [
       input.tenantId,
       input.clientId,
       input.meetingId,
+      input.runId ?? null,
       input.role,
       input.storageKey,
       input.bytes,
@@ -292,4 +296,48 @@ export async function findLiveOriginal(
     [meetingId],
   );
   return result.rows[0] ?? null;
+}
+
+/**
+ * El medio derivado VIVO de un run, por rol. Una consulta por `run_id`, no una
+ * reconstrucción de claves de objeto.
+ *
+ * `meeting_media_one_live_derived_idx` garantiza que hay como máximo uno, así
+ * que esto devuelve una fila o ninguna — no «la más reciente de varias», que
+ * sería una decisión escondida en un ORDER BY.
+ */
+export async function findLiveDerived(
+  runId: string,
+  role: 'normalized' | 'raw_result',
+  executor?: Queryable,
+): Promise<MeetingMediaRow | null> {
+  const result = await q(executor).query<MeetingMediaRow>(
+    `SELECT * FROM meeting_media
+      WHERE run_id = $1 AND role = $2 AND deleted_at IS NULL`,
+    [runId, role],
+  );
+  return result.rows[0] ?? null;
+}
+
+/**
+ * Retira el derivado vivo anterior de un (run, rol) antes de insertar el nuevo.
+ *
+ * Un reintento de `normalize` que vuelve a subir produce una versión nueva del
+ * mismo insumo, no un segundo insumo. Se marca `deleted_at` en vez de borrar la
+ * fila: el histórico sigue ahí para diagnosticar, simplemente deja de estar
+ * VIVO — y el índice único parcial es lo que hace que «vivo» signifique algo.
+ */
+export async function supersedeLiveDerived(
+  runId: string,
+  role: 'normalized' | 'raw_result',
+  keepStorageKey: string,
+  executor?: Queryable,
+): Promise<number> {
+  const result = await q(executor).query(
+    `UPDATE meeting_media
+        SET deleted_at = now()
+      WHERE run_id = $1 AND role = $2 AND deleted_at IS NULL AND storage_key <> $3`,
+    [runId, role, keepStorageKey],
+  );
+  return result.rowCount ?? 0;
 }

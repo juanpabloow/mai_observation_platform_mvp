@@ -1,7 +1,10 @@
 import { withTransaction } from '../db/client.js';
 import type { Queryable } from '../db/repositories/meetings/types.js';
 import type { ArtifactKind, JobStage } from '../db/repositories/meetings/types.js';
-import type { WorkerIdentity } from '../db/repositories/meetings/credentials.js';
+import {
+  isClaimableCapability,
+  type WorkerIdentity,
+} from '../db/repositories/meetings/credentials.js';
 import * as meetingsRepo from '../db/repositories/meetings/meetings.js';
 import * as jobsRepo from '../db/repositories/meetings/jobs.js';
 import * as artifactsRepo from '../db/repositories/meetings/artifacts.js';
@@ -388,7 +391,12 @@ export async function claim(
   const { store, leaseSeconds, rateLimiter } = deps(d);
   enforceRate(rateLimiter, identity.credentialId, 'claim');
 
-  let capabilities = [...identity.capabilities];
+  // Sólo las reclamables: `meetings.maintenance` no corresponde a ninguna
+  // etapa, así que incluirla en el filtro del claim no cambiaría nada — pero
+  // dejarla fuera aquí deja explícito que no es trabajo de reunión.
+  let capabilities = identity.capabilities.filter((capability) =>
+    isClaimableCapability(capability),
+  );
   if (request.capabilities && request.capabilities.length > 0) {
     const asked = new Set(request.capabilities);
     capabilities = capabilities.filter((capability) => asked.has(capability));
@@ -473,21 +481,34 @@ export async function claim(
 }
 
 /**
- * Los insumos de cada etapa, con su URL firmada. Las claves se DERIVAN, no se
- * leen de la petición ni se buscan por texto: derivarlas es lo que garantiza que
- * el insumo es el de este run y no el de otro (ver los contratos de etapa §7).
+ * Los insumos de cada etapa, con su URL firmada.
+ *
+ * Las claves se LEEN de la fila que las produjo, y el insumo se localiza por
+ * `run_id`. La revisión anterior derivaba la clave y recorría los intentos hacia
+ * atrás preguntando al almacenamiento; eso convertía una cadena opaca en un
+ * índice, y cambiar el esquema de claves habría roto la lectura de datos ya
+ * escritos.
  */
 async function buildInputs(
   job: jobsRepo.JobRow,
   store: PrivateObjectStore,
 ): Promise<ClaimedInput[]> {
-  const scope = { tenantId: job.tenant_id, clientId: job.client_id, meetingId: job.meeting_id };
   const inputs: ClaimedInput[] = [];
 
-  const addMedia = async (key: string, role: string): Promise<void> => {
-    const media = await meetingsRepo.findMediaByKey(key);
+  const addMedia = async (media: meetingsRepo.MeetingMediaRow | null, role: string): Promise<void> => {
     if (!media) return;
-    const signed = await store.signGet({ key, forRangeReads: true });
+    // Cinturón: la clave se guardó al insertar, pero firmar un GET sobre una
+    // clave que no es de esta reunión sería una fuga entre clientes.
+    if (
+      !keyBelongsToMeeting(media.storage_key, {
+        tenantId: job.tenant_id,
+        clientId: job.client_id,
+        meetingId: job.meeting_id,
+      })
+    ) {
+      return;
+    }
+    const signed = await store.signGet({ key: media.storage_key, forRangeReads: true });
     inputs.push({
       role,
       url: signed.url,
@@ -499,48 +520,33 @@ async function buildInputs(
   };
 
   if (job.stage === 'normalize') {
-    await addMedia(originalMediaKey(scope), 'original');
+    await addMedia(await meetingsRepo.findLiveOriginal(job.meeting_id), 'original');
     return inputs;
   }
 
-  // transcribe y diarize consumen el audio normalizado de ESTE run. El intento
-  // que lo produjo no es necesariamente el mismo que el del job actual, así que
-  // se busca la fila de meeting_media cuya clave está bajo el prefijo del run.
-  const normalizedJob = (await jobsRepo.listJobsForMeeting(job.meeting_id)).find(
-    (candidate) => candidate.run_id === job.run_id && candidate.stage === 'normalize',
-  );
-  if (normalizedJob) {
-    for (let attempt = normalizedJob.attempts; attempt >= 1; attempt -= 1) {
-      const key = artifactKey({ ...scope, runId: job.run_id, attempt, role: 'normalized' });
-      const media = await meetingsRepo.findMediaByKey(key);
-      if (media) {
-        await addMedia(key, 'normalized');
-        break;
-      }
-    }
-  }
+  // transcribe y diarize consumen el audio normalizado de ESTE run. Una
+  // consulta por run_id: `meeting_media.run_id` existe precisamente para que
+  // esto no sea un recorrido de intentos derivando claves de objeto.
+  await addMedia(await meetingsRepo.findLiveDerived(job.run_id, 'normalized'), 'normalized');
 
   if (job.stage === 'diarize') {
-    const transcribeJob = (await jobsRepo.listJobsForMeeting(job.meeting_id)).find(
-      (candidate) => candidate.run_id === job.run_id && candidate.stage === 'transcribe',
+    const transcriptUpload = (await artifactsRepo.findVerifiedForRun(job.run_id)).find(
+      (upload) => upload.kind === 'transcript',
     );
-    if (transcribeJob) {
-      const upload = await artifactsRepo.findUpload(
-        transcribeJob.id,
-        transcribeJob.attempts,
-        'transcript',
-      );
-      if (upload && (upload.state === 'verified' || upload.state === 'ingested')) {
-        const signed = await store.signGet({ key: upload.storage_key, forRangeReads: true });
-        inputs.push({
-          role: 'transcript',
-          url: signed.url,
-          expiresAt: signed.expiresAt.toISOString(),
-          bytes: upload.observed_bytes === null ? null : Number(upload.observed_bytes),
-          checksumSha256: upload.observed_checksum_sha256,
-          supportsRange: store.capabilities.range,
-        });
-      }
+    if (transcriptUpload) {
+      const signed = await store.signGet({
+        key: transcriptUpload.storage_key,
+        forRangeReads: true,
+      });
+      inputs.push({
+        role: 'transcript',
+        url: signed.url,
+        expiresAt: signed.expiresAt.toISOString(),
+        bytes:
+          transcriptUpload.observed_bytes === null ? null : Number(transcriptUpload.observed_bytes),
+        checksumSha256: transcriptUpload.observed_checksum_sha256,
+        supportsRange: store.capabilities.range,
+      });
     }
   }
 
@@ -679,8 +685,26 @@ export async function fail(
       allowTerminalIdempotent: true,
     });
 
-    // Reenvío de un fail ya aplicado: se responde el mismo resultado.
+    // Reenvío sobre un job ya terminal. Dos casos, y NO se tratan igual:
     if (job.status === 'failed' || job.status === 'succeeded') {
+      if (job.status === 'succeeded') {
+        // Fallar algo que ya salió bien nunca es un reenvío: es un worker que
+        // perdió el hilo. No se acepta ni se ignora en silencio.
+        throw new MeetingsApiError(
+          'terminal_conflict',
+          'El job ya terminó con éxito; no se puede declarar fallido.',
+        );
+      }
+      if (job.failure_code !== null && job.failure_code !== code) {
+        // Mismo intento, otro código: alguien está reescribiendo la causa del
+        // fallo. Se devuelve el que hay y se dice que no coincide, en vez de
+        // pisarlo — el failure_code es lo que alguien va a leer para entender
+        // qué pasó.
+        throw new MeetingsApiError(
+          'terminal_conflict',
+          `El job ya falló con '${job.failure_code}'; no se puede reescribir a otro código.`,
+        );
+      }
       return { status: job.status, requeued: false, attempts: job.attempts };
     }
 
@@ -900,8 +924,13 @@ export async function resultComplete(
     throw new MeetingsApiError('internal', 'La clave del artefacto no pertenece a la reunión.');
   }
 
-  // Reenvío después de haber cerrado: se responde lo mismo sin volver a verificar.
+  // Reenvío después de haber cerrado. El resultado anterior se devuelve tal
+  // cual, pero SÓLO si el payload coincide: un `complete` con otro checksum o
+  // otro tamaño sobre un job ya cerrado no es un reintento, es una segunda
+  // afirmación sobre qué se subió, y aceptarla en silencio dejaría la base
+  // diciendo una cosa y el cliente creyendo otra.
   if (job.status === 'succeeded') {
+    assertTerminalPayloadMatches(upload, request);
     const meeting = await meetingsRepo.getMeetingById(job.meeting_id);
     return {
       status: 'succeeded',
@@ -910,6 +939,11 @@ export async function resultComplete(
       transcriptId: meeting?.active_transcript_id ?? null,
     };
   }
+  // 'cancelled', 'abandoned' y 'failed' NO llegan hasta aquí: `authorizeLease`
+  // ya los rechaza con `invalid_transition`, y ése es el código correcto — un
+  // job cancelado no es un terminal cuyo resultado se esté reafirmando, es un
+  // job que dejó de existir para el pipeline. Una rama aquí para «manejarlos»
+  // sería código inalcanzable que afirma cubrir un caso que no ve.
 
   if (upload.state !== 'ingested' && upload.state !== 'verified') {
     const confirmation = await store.confirm({
@@ -980,6 +1014,11 @@ export async function resultComplete(
       allowTerminalIdempotent: true,
     });
     if (locked.status === 'succeeded') {
+      // Otra petición idéntica ganó la carrera entre el preflight y esto. Se
+      // vuelve a comparar el payload: la coincidencia se comprueba donde se
+      // decide, no una sola vez fuera de la transacción.
+      const current = await artifactsRepo.findUpload(locked.id, locked.attempts, kind, executor);
+      if (current) assertTerminalPayloadMatches(current, request);
       const meeting = await meetingsRepo.getMeetingById(locked.meeting_id, executor);
       return {
         status: 'succeeded' as const,
@@ -1010,11 +1049,21 @@ export async function resultComplete(
     let transcriptId: string | null = null;
 
     if (kind === 'normalized_media') {
+      // Un reintento que vuelve a subir produce una versión NUEVA del mismo
+      // insumo: la anterior deja de estar viva en la misma transacción, que es
+      // lo que `meeting_media_one_live_derived_idx` exige.
+      await meetingsRepo.supersedeLiveDerived(
+        locked.run_id,
+        'normalized',
+        upload.storage_key,
+        executor,
+      );
       await meetingsRepo.insertMedia(
         {
           tenantId: locked.tenant_id,
           clientId: locked.client_id,
           meetingId: locked.meeting_id,
+          runId: locked.run_id,
           role: 'normalized',
           storageKey: upload.storage_key,
           bytes: request.bytes,
@@ -1089,6 +1138,38 @@ export async function resultComplete(
 
     return { status: 'succeeded' as const, nextJob, ingested, transcriptId };
   });
+}
+
+/**
+ * ¿El payload de este `complete` es el MISMO que ya se registró?
+ *
+ * Se compara contra lo OBSERVADO cuando existe —lo que mai midió del objeto— y
+ * contra lo declarado si no. Un reenvío legítimo repite los mismos valores; uno
+ * con otro checksum está afirmando que subió otra cosa, y sobre un job cerrado
+ * eso no se puede aceptar: el artefacto ya se ingirió y la versión de transcript
+ * ya existe.
+ */
+function assertTerminalPayloadMatches(
+  upload: artifactsRepo.ResultUploadRow,
+  request: ResultCompleteRequest,
+): void {
+  const recordedChecksum = upload.observed_checksum_sha256 ?? upload.declared_checksum_sha256;
+  const recordedBytes = upload.observed_bytes ?? upload.declared_bytes;
+  if (
+    recordedChecksum !== null &&
+    recordedChecksum.toLowerCase() !== request.checksumSha256.toLowerCase()
+  ) {
+    throw new MeetingsApiError(
+      'terminal_conflict',
+      'El job ya se completó con otro checksum; el resultado no se puede reescribir.',
+    );
+  }
+  if (recordedBytes !== null && Number(recordedBytes) !== request.bytes) {
+    throw new MeetingsApiError(
+      'terminal_conflict',
+      'El job ya se completó con otro tamaño; el resultado no se puede reescribir.',
+    );
+  }
 }
 
 async function findNextJob(
@@ -1261,11 +1342,28 @@ export async function ingestAfterDiarizationFailure(
 
 // ── Barrido y cancelación ──────────────────────────────────────────────────
 
-export async function requeueExpiredLeases(): Promise<{
+/**
+ * Barrido global de leases caducados. **Exige `meetings.maintenance`.**
+ *
+ * Es una operación de instalación, no de tenant: recorre todos los jobs
+ * colgados de todos los clientes y devuelve sus recuentos. Una credencial de
+ * proceso atada a un tenant no debe poder ejecutarla —reencolaría trabajo
+ * ajeno— ni leer su resultado, que es información operativa agregada de toda la
+ * instalación.
+ *
+ * La comprobación va aquí y no sólo en la ruta: así cualquier llamador futuro
+ * (un cron, un script) hereda la restricción en vez de tener que recordarla.
+ */
+export async function requeueExpiredLeases(identity: WorkerIdentity): Promise<{
   requeued: number;
   abandoned: number;
   jobs: readonly jobsRepo.RequeuedJob[];
 }> {
+  if (!identity.capabilities.includes('meetings.maintenance')) {
+    // El MISMO 404 que un recurso inexistente: que una credencial descubra que
+    // el endpoint existe pero no le corresponde ya es información.
+    throw notFound();
+  }
   const jobs = await jobsRepo.requeueExpiredLeases();
   for (const job of jobs) {
     const full = await jobsRepo.getJobById(job.id);

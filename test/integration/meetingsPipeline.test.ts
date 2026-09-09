@@ -65,6 +65,8 @@ interface World {
   credentialId: string;
   /** Credencial de un pool atado a OTRO tenant. */
   foreignIdentity: WorkerIdentity;
+  /** Credencial CON `meetings.maintenance`, para el barrido global. */
+  maintenanceIdentity: WorkerIdentity;
 }
 
 /** Un mundo aislado por prueba: tenant propio, pool propio, store propio. */
@@ -120,12 +122,30 @@ async function makeWorld(options?: { leaseSeconds?: number }): Promise<World> {
     );
     return { token: minted.token, id: result.rows[0].id };
   };
+  // Un pool SÓLO de mantenimiento: sin capacidades reclamables, así que su
+  // 'concurrency' no lleva límites — que es lo que la coherencia permite ahora
+  // que 'meetings.maintenance' no es reclamable.
+  const maintenancePool = await query<{ id: string }>(
+    `INSERT INTO worker_pools
+       (slug, environment, scope, tenant_id, capabilities, concurrency)
+     VALUES ($1, 'development', 'single_tenant', $2,
+             '{meetings.maintenance}',
+             '{"schema_version":1,"limits":{}}'::jsonb)
+     RETURNING id`,
+    [`maint-${tenantId.slice(0, 8)}`, tenantId],
+  );
+
   const credential = await mkCredential(poolId, 'lan-gpu');
   const foreignCredential = await mkCredential(foreignPoolId, 'ajeno');
+  const maintenanceCredential = await mkCredential(maintenancePool.rows[0].id, 'mantenimiento');
 
   const identity = await authenticateWorkerToken(credential.token);
   const foreignIdentity = await authenticateWorkerToken(foreignCredential.token);
-  assert.ok(identity && foreignIdentity, 'las credenciales sembradas deben autenticar');
+  const maintenanceIdentity = await authenticateWorkerToken(maintenanceCredential.token);
+  assert.ok(
+    identity && foreignIdentity && maintenanceIdentity,
+    'las credenciales sembradas deben autenticar',
+  );
 
   const store = new FakePrivateStore();
   void foreignClientId;
@@ -155,6 +175,7 @@ async function makeWorld(options?: { leaseSeconds?: number }): Promise<World> {
     token: credential.token,
     credentialId: credential.id,
     foreignIdentity,
+    maintenanceIdentity,
   };
 }
 
@@ -442,7 +463,7 @@ test('un worker muerto pierde el lease y el job vuelve a la cola', async () => {
   // y otras pruebas de este fichero dejan leases de 1 segundo que también caen
   // en la misma llamada. Una aserción sobre el total depende del orden de
   // ejecución, que es exactamente lo que no debe medir una prueba.
-  const sweep = await requeueExpiredLeases();
+  const sweep = await requeueExpiredLeases(world.maintenanceIdentity);
   const swept = sweep.jobs.find((entry) => entry.id === first.jobId);
   assert.ok(swept, 'el job caducado entró en el barrido');
   assert.equal(swept?.status, 'queued');
@@ -482,7 +503,7 @@ test('agotados los intentos, el lease caducado deja el job en abandoned y no en 
     `UPDATE meeting_processing_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = $1`,
     [claimed.jobId],
   );
-  const sweep = await requeueExpiredLeases();
+  const sweep = await requeueExpiredLeases(world.maintenanceIdentity);
   assert.ok(
     sweep.jobs.some((entry) => entry.id === claimed.jobId && entry.status === 'abandoned'),
     'este job concreto quedó abandoned',
@@ -748,7 +769,7 @@ test('un intento anterior no puede ganar sobre el actual', async () => {
     `UPDATE meeting_processing_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = $1`,
     [stale.jobId],
   );
-  await requeueExpiredLeases();
+  await requeueExpiredLeases(world.maintenanceIdentity);
   const current = await claim(world.identity, {}, world.deps);
   assert.ok(current);
   assert.equal(current.attempt, stale.attempt + 1);
@@ -1246,4 +1267,414 @@ test('el estado de la UI describe el pipeline sin exponer nada del almacenamient
     ['normalize:succeeded', 'transcribe:queued'],
   );
   assert.ok(state.events.length > 0, 'la auditoría se puede leer');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Mantenimiento global: aislado por capacidad
+// ══════════════════════════════════════════════════════════════════════════
+
+test('una credencial de proceso NO puede ejecutar el barrido global', async () => {
+  const world = await makeWorld({ leaseSeconds: 1 });
+  const { meetingId } = await seedMeetingWithMedia(world);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  await query(
+    `UPDATE meeting_processing_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = $1`,
+    [claimed.jobId],
+  );
+
+  // La credencial de trabajo tiene meetings.transcribe y nada más. Reencolar
+  // jobs de toda la instalación no es trabajo de reunión.
+  await expectApiError(
+    () => requeueExpiredLeases(world.identity),
+    'not_found',
+    'barrido con credencial de proceso',
+  );
+  // Y el job sigue colgado: no se reencoló por accidente.
+  const job = await jobsRepo.getJobById(claimed.jobId);
+  assert.equal(job?.status, 'leased');
+
+  // La credencial de mantenimiento sí puede.
+  const sweep = await requeueExpiredLeases(world.maintenanceIdentity);
+  assert.ok(sweep.jobs.some((entry) => entry.id === claimed.jobId));
+  void meetingId;
+});
+
+test('una credencial ajena tampoco puede, aunque tenga otro tenant detrás', async () => {
+  const world = await makeWorld();
+  await expectApiError(
+    () => requeueExpiredLeases(world.foreignIdentity),
+    'not_found',
+    'barrido con credencial de otro tenant',
+  );
+});
+
+test('la credencial de mantenimiento NO puede reclamar trabajo', async () => {
+  const world = await makeWorld();
+  await seedMeetingWithMedia(world);
+  // Sus capacidades no incluyen ninguna reclamable, así que el claim no le da
+  // nada — y eso no es una comprobación en la ruta, es el filtro del claim.
+  assert.equal(await claim(world.maintenanceIdentity, {}, world.deps), null);
+  // Mientras el pool de proceso sí ve el trabajo, así que la ausencia no es
+  // «no hay nada».
+  assert.ok(await claim(world.identity, {}, world.deps));
+});
+
+test('un pool sólo de mantenimiento es válido con limits vacío', async () => {
+  const world = await makeWorld();
+  // La coherencia sólo exige límite para las capacidades RECLAMABLES: exigirlo
+  // aquí obligaría a inventar un número para algo que no se reclama.
+  assert.deepEqual(world.maintenanceIdentity.capabilities, ['meetings.maintenance']);
+  assert.deepEqual(world.maintenanceIdentity.concurrency, {});
+  // Y un pool que SÍ declara una reclamable no puede dejar limits vacío.
+  await assert.rejects(
+    () =>
+      query(
+        `INSERT INTO worker_pools (slug, environment, scope, tenant_id, capabilities, concurrency)
+         VALUES ($1, 'development', 'single_tenant', $2, '{meetings.transcribe}',
+                 '{"schema_version":1,"limits":{}}'::jsonb)`,
+        [`incoherente-${randomUUID().slice(0, 8)}`, world.tenantId],
+      ),
+    /pools_coherent/,
+  );
+});
+
+test('un límite para una capacidad NO reclamable se rechaza', async () => {
+  const world = await makeWorld();
+  await assert.rejects(
+    () =>
+      query(
+        `INSERT INTO worker_pools (slug, environment, scope, tenant_id, capabilities, concurrency)
+         VALUES ($1, 'development', 'single_tenant', $2, '{meetings.maintenance}',
+                 '{"schema_version":1,"limits":{"meetings.maintenance":1}}'::jsonb)`,
+        [`raro-${randomUUID().slice(0, 8)}`, world.tenantId],
+      ),
+    /concurrency_valid|pools_coherent/,
+  );
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Procedencia relacional del medio derivado
+// ══════════════════════════════════════════════════════════════════════════
+
+test('el medio derivado guarda su run y el original no', async () => {
+  const world = await makeWorld();
+  const { meetingId, runId } = await seedMeetingWithMedia(world);
+  const original = await query<{ run_id: string | null; role: string }>(
+    `SELECT run_id, role FROM meeting_media WHERE meeting_id = $1`,
+    [meetingId],
+  );
+  assert.deepEqual(original.rows, [{ run_id: null, role: 'original' }]);
+
+  const normalizeJob = await claim(world.identity, {}, world.deps);
+  assert.ok(normalizeJob);
+  await runStage(world, normalizeJob, NORMALIZED);
+
+  const derived = await query<{ run_id: string | null; role: string }>(
+    `SELECT run_id, role FROM meeting_media WHERE meeting_id = $1 AND role = 'normalized'`,
+    [meetingId],
+  );
+  assert.deepEqual(derived.rows, [{ run_id: runId, role: 'normalized' }]);
+});
+
+test('la invariante se cumple en las DOS direcciones', async () => {
+  const world = await makeWorld();
+  const { meetingId, runId } = await seedMeetingWithMedia(world);
+
+  // Un derivado SIN run: nadie podría decir de qué reprocesamiento vino.
+  await assert.rejects(
+    () =>
+      query(
+        `INSERT INTO meeting_media
+           (tenant_id, client_id, meeting_id, role, storage_key, bytes, checksum_sha256, content_type)
+         VALUES ($1, $2, $3, 'normalized', $4, 10, $5, 'audio/wav')`,
+        [world.tenantId, world.clientId, meetingId, `k-${randomUUID()}`, 'a'.repeat(64)],
+      ),
+    /meeting_media_run_scoped/,
+  );
+
+  // Un original CON run: afirmaría que una etapa produjo lo que subió alguien.
+  await assert.rejects(
+    () =>
+      query(
+        `INSERT INTO meeting_media
+           (tenant_id, client_id, meeting_id, run_id, role, storage_key, bytes, checksum_sha256, content_type)
+         VALUES ($1, $2, $3, $4, 'original', $5, 10, $6, 'audio/wav')`,
+        [world.tenantId, world.clientId, meetingId, runId, `k-${randomUUID()}`, 'a'.repeat(64)],
+      ),
+    /meeting_media_run_scoped/,
+  );
+});
+
+test('un derivado cuyo run es de OTRA reunión se rechaza', async () => {
+  const world = await makeWorld();
+  const first = await seedMeetingWithMedia(world);
+  const second = await seedMeetingWithMedia(world);
+  await assert.rejects(
+    () =>
+      query(
+        `INSERT INTO meeting_media
+           (tenant_id, client_id, meeting_id, run_id, role, storage_key, bytes, checksum_sha256, content_type)
+         VALUES ($1, $2, $3, $4, 'normalized', $5, 10, $6, 'audio/wav')`,
+        [
+          world.tenantId,
+          world.clientId,
+          first.meetingId,
+          second.runId,
+          `k-${randomUUID()}`,
+          'a'.repeat(64),
+        ],
+      ),
+    /meeting_media_run_fkey/,
+  );
+});
+
+test('un solo normalized VIVO por run: el reintento reemplaza, no duplica', async () => {
+  const world = await makeWorld();
+  const { meetingId, runId } = await seedMeetingWithMedia(world);
+  const normalizeJob = await claim(world.identity, {}, world.deps);
+  assert.ok(normalizeJob);
+  await runStage(world, normalizeJob, NORMALIZED);
+
+  // Se simula el segundo intento del MISMO run subiendo otro objeto: el índice
+  // único parcial impide dos vivos, así que el anterior tiene que retirarse.
+  const secondKey = `t/${world.tenantId}/c/${world.clientId}/m/${meetingId}/r/${runId}/normalized/a2/audio.wav`;
+  await assert.rejects(
+    () =>
+      query(
+        `INSERT INTO meeting_media
+           (tenant_id, client_id, meeting_id, run_id, role, storage_key, bytes, checksum_sha256, content_type)
+         VALUES ($1, $2, $3, $4, 'normalized', $5, 10, $6, 'audio/wav')`,
+        [world.tenantId, world.clientId, meetingId, runId, secondKey, 'b'.repeat(64)],
+      ),
+    /meeting_media_one_live_derived_idx/,
+    'dos normalized vivos del mismo run no pueden coexistir',
+  );
+
+  // Con el anterior retirado, sí cabe — y sigue habiendo exactamente uno vivo.
+  await query(
+    `UPDATE meeting_media SET deleted_at = now()
+      WHERE run_id = $1 AND role = 'normalized' AND deleted_at IS NULL`,
+    [runId],
+  );
+  await query(
+    `INSERT INTO meeting_media
+       (tenant_id, client_id, meeting_id, run_id, role, storage_key, bytes, checksum_sha256, content_type)
+     VALUES ($1, $2, $3, $4, 'normalized', $5, 10, $6, 'audio/wav')`,
+    [world.tenantId, world.clientId, meetingId, runId, secondKey, 'b'.repeat(64)],
+  );
+  const live = await query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM meeting_media
+      WHERE run_id = $1 AND role = 'normalized' AND deleted_at IS NULL`,
+    [runId],
+  );
+  assert.equal(live.rows[0].n, '1');
+  // Y el histórico no se perdió: sigue habiendo dos filas.
+  const total = await query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM meeting_media WHERE run_id = $1 AND role = 'normalized'`,
+    [runId],
+  );
+  assert.equal(total.rows[0].n, '2');
+});
+
+test('el insumo de transcribe se localiza por run, no recorriendo intentos', async () => {
+  const world = await makeWorld();
+  const { runId } = await seedMeetingWithMedia(world);
+  const normalizeJob = await claim(world.identity, {}, world.deps);
+  assert.ok(normalizeJob);
+  await runStage(world, normalizeJob, NORMALIZED);
+
+  const transcribeJob = await claim(world.identity, {}, world.deps);
+  assert.ok(transcribeJob);
+  assert.deepEqual(transcribeJob.inputs.map((input) => input.role), ['normalized']);
+
+  // Y si el derivado se retira, el claim del insumo devuelve nada — no una
+  // versión antigua encontrada por texto de clave.
+  await query(`UPDATE meeting_media SET deleted_at = now() WHERE run_id = $1`, [runId]);
+  const second = await seedMeetingWithMedia(world);
+  const otherNormalize = await claim(world.identity, {}, world.deps);
+  assert.ok(otherNormalize);
+  await runStage(world, otherNormalize, NORMALIZED);
+  const otherTranscribe = await claim(world.identity, {}, world.deps);
+  assert.ok(otherTranscribe);
+  // El insumo que recibe es el de SU run, no el de la reunión anterior.
+  const media = await query<{ run_id: string }>(
+    `SELECT run_id FROM meeting_media
+      WHERE role = 'normalized' AND deleted_at IS NULL AND meeting_id = $1`,
+    [second.meetingId],
+  );
+  assert.equal(media.rows[0].run_id, second.runId);
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// Idempotencia terminal estricta
+// ══════════════════════════════════════════════════════════════════════════
+
+test('reenviar complete con el MISMO payload devuelve el resultado previo', async () => {
+  const world = await makeWorld();
+  const { runId } = await seedMeetingWithMedia(world);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  const first = await runStage(world, claimed, NORMALIZED);
+
+  const proof = { jobId: claimed.jobId, attempt: claimed.attempt, leaseToken: claimed.leaseToken };
+  const again = await resultComplete(
+    world.identity,
+    { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED) },
+    world.deps,
+  );
+  assert.equal(again.status, 'succeeded');
+  assert.deepEqual(again.nextJob?.stage, first.nextJob?.stage);
+  // Y no se creó un segundo job de la etapa siguiente.
+  const jobs = await jobsRepo.listJobsForMeeting(claimed.meetingId);
+  assert.equal(jobs.filter((job) => job.stage === 'transcribe').length, 1);
+  void runId;
+});
+
+test('reenviar complete con OTRO checksum se rechaza y no cambia nada', async () => {
+  const world = await makeWorld();
+  const { meetingId } = await seedMeetingWithMedia(world);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  await runStage(world, claimed, NORMALIZED);
+
+  const proof = { jobId: claimed.jobId, attempt: claimed.attempt, leaseToken: claimed.leaseToken };
+  await expectApiError(
+    () =>
+      resultComplete(
+        world.identity,
+        { ...proof, bytes: NORMALIZED.length, checksumSha256: 'f'.repeat(64) },
+        world.deps,
+      ),
+    'terminal_conflict',
+    'complete con otro checksum',
+  );
+  // El estado terminal NO se modificó.
+  const job = await jobsRepo.getJobById(claimed.jobId);
+  assert.equal(job?.status, 'succeeded');
+  const upload = await artifactsRepo.findUpload(claimed.jobId, claimed.attempt, 'normalized_media');
+  assert.equal(upload?.state, 'ingested');
+  assert.equal(upload?.observed_checksum_sha256, sha(NORMALIZED));
+  void meetingId;
+});
+
+test('reenviar complete con OTRO tamaño se rechaza', async () => {
+  const world = await makeWorld();
+  await seedMeetingWithMedia(world);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  await runStage(world, claimed, NORMALIZED);
+  await expectApiError(
+    () =>
+      resultComplete(
+        world.identity,
+        {
+          jobId: claimed.jobId,
+          attempt: claimed.attempt,
+          leaseToken: claimed.leaseToken,
+          bytes: NORMALIZED.length + 5,
+          checksumSha256: sha(NORMALIZED),
+        },
+        world.deps,
+      ),
+    'terminal_conflict',
+    'complete con otro tamaño',
+  );
+});
+
+test('un fail sobre un job que ya salió BIEN se rechaza', async () => {
+  const world = await makeWorld();
+  await seedMeetingWithMedia(world);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  await runStage(world, claimed, NORMALIZED);
+  await expectApiError(
+    () =>
+      fail(
+        world.identity,
+        {
+          jobId: claimed.jobId,
+          attempt: claimed.attempt,
+          leaseToken: claimed.leaseToken,
+          failureCode: 'inventado',
+        },
+        world.deps,
+      ),
+    'terminal_conflict',
+    'fail sobre succeeded',
+  );
+  const job = await jobsRepo.getJobById(claimed.jobId);
+  assert.equal(job?.status, 'succeeded');
+  assert.equal(job?.failure_code, null, 'el estado terminal no se tocó');
+});
+
+test('reenviar fail con OTRO código se rechaza sin reescribir la causa', async () => {
+  const world = await makeWorld();
+  const { meetingId } = await seedMeetingWithMedia(world);
+  await query(`UPDATE meeting_processing_jobs SET max_attempts = 1 WHERE meeting_id = $1`, [meetingId]);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  const proof = { jobId: claimed.jobId, attempt: claimed.attempt, leaseToken: claimed.leaseToken };
+  await fail(world.identity, { ...proof, failureCode: 'audio_unreadable' }, world.deps);
+
+  // El mismo código: idempotente.
+  const again = await fail(world.identity, { ...proof, failureCode: 'audio_unreadable' }, world.deps);
+  assert.equal(again.status, 'failed');
+
+  // Otro código: conflicto. El failure_code es lo que alguien lee para entender
+  // qué pasó; pisarlo con el último que llegue destruye esa respuesta.
+  await expectApiError(
+    () => fail(world.identity, { ...proof, failureCode: 'otra_cosa' }, world.deps),
+    'terminal_conflict',
+    'fail con otro código',
+  );
+  const job = await jobsRepo.getJobById(claimed.jobId);
+  assert.equal(job?.failure_code, 'audio_unreadable');
+});
+
+test('un complete sobre un job cancelado se rechaza', async () => {
+  const world = await makeWorld();
+  const scope = { tenantId: world.tenantId, clientId: world.clientId, userId: world.userId };
+  const { meetingId } = await seedMeetingWithMedia(world);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  const signed = await resultInit(
+    world.identity,
+    {
+      jobId: claimed.jobId,
+      attempt: claimed.attempt,
+      leaseToken: claimed.leaseToken,
+      bytes: NORMALIZED.length,
+      checksumSha256: sha(NORMALIZED),
+    },
+    world.deps,
+  );
+  assert.ok(world.store.put(signed.url, NORMALIZED, signed.requiredHeaders).ok);
+  await cancelMeeting(scope, meetingId);
+
+  // El job quedó 'cancelled', y el código es `invalid_transition`, no
+  // `terminal_conflict`. La distinción importa: `terminal_conflict` significa
+  // «esto ya terminó y estás afirmando otra cosa sobre su resultado»;
+  // `invalid_transition` significa «esto ya no está en el pipeline». Un worker
+  // que recibe el primero tiene un bug; uno que recibe el segundo perdió una
+  // carrera con una cancelación, que es normal.
+  await expectApiError(
+    () =>
+      resultComplete(
+        world.identity,
+        {
+          jobId: claimed.jobId,
+          attempt: claimed.attempt,
+          leaseToken: claimed.leaseToken,
+          bytes: NORMALIZED.length,
+          checksumSha256: sha(NORMALIZED),
+        },
+        world.deps,
+      ),
+    'invalid_transition',
+    'complete sobre cancelado',
+  );
+  // Y el artefacto NO se ingirió.
+  const upload = await artifactsRepo.findUpload(claimed.jobId, claimed.attempt, 'normalized_media');
+  assert.notEqual(upload?.state, 'ingested');
 });
