@@ -106,7 +106,7 @@ en transcribir y un intento del job.
 | `requirements/base.txt` | todo menos torch/torchaudio, con las cuatro que faltaban. Cada cota justificada por código, no por memoria |
 | `requirements/torch.txt` | la **pareja** torch+torchaudio, **sin versión ni índice**: la rueda depende del driver, y ese dato está en tu máquina |
 | `requirements/lock.txt` | vacío a propósito hasta W-3, para congelar el `pip freeze` de lo que realmente funcione |
-| `scripts/inspect_gpu.sh` | lee driver y CUDA soportado y sugiere el índice **más conservador** que admite. Imprime la entrada de la decisión; no decide |
+| `scripts/inspect_gpu.sh` | **inventaría** driver, GPU, CUDA soportado y lo instalado. No elige la rueda: la matriz oficial vigente y el preflight son la autoridad |
 | `app/pull/preflight.py` | comprueba todo **antes del primer claim** y sale con **código 2** si falta algo |
 
 No hay ninguna rueda inventada en el repositorio.
@@ -199,6 +199,44 @@ Opcionales de la app que W-3 no necesita: `GOOGLE_CLIENT_ID`,
 `GOOGLE_CLIENT_SECRET` (si entras con email+contraseña), `RESEND_API_KEY`,
 `RESEND_FROM_NAME`, `INVITE_FROM_EMAIL`.
 
+### Los scripts de W-3 (donde tú los ejecutes)
+
+No son variables del servicio: son de la **sesión de shell** en la que corres
+`w3:seed`, `w3:verify`, `w3:cleanup`, `w3:rollback-check` o `w3:http`.
+
+| nombre | propósito |
+|---|---|
+| `MEETINGS_ENV_KIND` | debe valer `staging`. Sin ella ninguno arranca |
+| `MEETINGS_EXPECTED_DB_HOST` | el host que **afirmas** esperar. Se compara con `DATABASE_URL` antes de conectar |
+| `MEETINGS_EXPECTED_DB_NAME` | el nombre de base que afirmas esperar. Se compara antes de conectar **y** contra `current_database()` después |
+| `DATABASE_URL` | la conexión. Nunca se imprime |
+
+**Por qué tres y no una.** `MEETINGS_ENV_KIND=staging` dice qué *crees*, no a
+dónde apunta `DATABASE_URL`. Las dos se ponen a mano en la misma línea, y
+`MEETINGS_ENV_KIND=staging` con la `DATABASE_URL` de producción pegada del
+portapapeles está a una tecla de distancia. Con la segunda afirmación, para que
+un script destructivo arranque contra producción hay que equivocarse en **tres
+variables de forma coherente**.
+
+Y `current_database()` se comprueba **después** de conectar porque una
+`DATABASE_URL` puede llevar el nombre en la query, resolverse por un
+`search_path` raro, o pasar por un pooler que redirige. Comparar la cadena y
+preguntar al servidor son dos cosas distintas; la que vale es la segunda. El
+host **no** se puede verificar tras conectar —`inet_server_addr()` es nulo por
+socket unix y con un pooler devuelve el del pooler— y eso se dice en vez de
+fingir que se comprueba.
+
+Sólo para `w3:http`:
+
+| nombre | propósito |
+|---|---|
+| `MAI_BASE_URL` | origen del mai de staging |
+| `W3_CLIENT_ID` | uuid del cliente sembrado (no es secreto) |
+| `MAI_WORKER_TOKEN` | opcional. Con él se prueba que el token autentica y que su ámbito no alcanza el mantenimiento. **No se usa para reclamar** |
+| `MAI_SESSION_COOKIE` | opcional. Tu cookie de navegador, para el bloque de sesión |
+| `W3_ALLOW_WRITES` | **obligatoria para el bloque mutante.** Sin `=1`, el bloque que crea reuniones se omite |
+| `W3_MEETING_ID` | opcional, para el chequeo de caché |
+
 ### S4 · worker pull (PC Linux)
 
 Obligatorias:
@@ -273,13 +311,23 @@ gigas.
 bash scripts/inspect_gpu.sh
 ```
 
-Imprime nombre de GPU, driver, memoria, capacidad de cómputo y el CUDA máximo
-que el driver admite, y sugiere el índice **más conservador** que sirve. Ejecuta
-el comando que sugiera — la pareja `torch torchaudio` del **mismo** índice:
+**Inventaría** nombre de GPU, driver, memoria, capacidad de cómputo, el CUDA
+máximo que el driver admite y lo que ya haya en el venv. **No elige la rueda**:
+una tabla driver→CUDA escrita en el repositorio envejece en silencio y se lee
+como autoridad, así que la decisión se toma en la PC Linux con la matriz oficial
+y vigente:
+
+<https://pytorch.org/get-started/locally/>
+
+Con esos datos, instala la pareja del **mismo** índice y en el mismo comando:
 
 ```bash
-pip install torch torchaudio --index-url https://download.pytorch.org/whl/<el-que-diga>
+pip install torch torchaudio --index-url https://download.pytorch.org/whl/<el-de-la-matriz>
 ```
+
+La autoridad sobre si la elección fue correcta **no es ninguna tabla, es el
+preflight** (§3.4): comprueba la pareja tocando su extensión nativa y CUDA de
+verdad, y sale con código 2 sin reclamar ningún job si algo no cuadra.
 
 Luego el resto:
 
@@ -790,19 +838,46 @@ NODE_ENV=production npm run start:web        # = next start
 
 ### 7.2 · Middleware: las dos mitades, por separado
 
-**Está en un script:**
+**Está en un script, con DOS bloques separados:**
 
 ```bash
+# BLOQUE A · smoke de enrutado, NO MUTANTE. Corre siempre.
 MEETINGS_ENV_KIND=staging MAI_BASE_URL=… MAI_WORKER_TOKEN=… \
-  W3_CLIENT_ID=<uuid> [MAI_SESSION_COOKIE=… W3_MEETING_ID=<uuid>] \
+  W3_CLIENT_ID=<uuid> npm run w3:http
+
+# BLOQUE B · sesión, MUTANTE: crea reuniones. Hay que autorizarlo.
+MEETINGS_ENV_KIND=staging MAI_BASE_URL=… MAI_WORKER_TOKEN=… \
+  W3_CLIENT_ID=<uuid> MAI_SESSION_COOKIE='…' W3_ALLOW_WRITES=1 \
   npm run w3:http
 ```
 
-Cubre 7.2, 7.3 y 7.4 de una vez, y **sin `-L`**: seguir la redirección
-convertiría el 307 del middleware en el 200 de `/login`, y el fallo de B-1 se
-habría visto como un éxito raro. El token y la cookie se leen del entorno y
-nunca se imprimen; lo que sale es el código HTTP y el `error.code`, que es un
-literal del servidor.
+**El bloque A no escribe nada y no reclama trabajo.** Cada llamada lleva escrito
+por qué: las seis rutas de máquina sin token fallan en `authenticateWorker`,
+que es lo primero de cada handler; la negativa de `maintenance` con token
+(404) se decide antes de cualquier lectura; y la única llamada a `/claim` con
+token manda un cuerpo inválido, así que `readValidated` la corta antes de
+`claim()`.
+
+**El bloque B crea reuniones**, exige `W3_ALLOW_WRITES=1`, lista los
+`meetingId` creados al terminar y recuerda que `w3:cleanup` los retira.
+
+> **Lo que este script hacía y estaba mal.** La primera versión afirmaba «no
+> escribe en la base» y hacía **un `claim` con token válido**. Un claim válido
+> no es una consulta: es `FOR UPDATE SKIP LOCKED` + `UPDATE`, le pone un lease
+> de cinco minutos al job y consume un intento — y como el script no manda
+> latidos, el job se quedaba colgado con `attempts` gastado. Con el worker
+> corriendo, le robaba trabajo. Ese claim **se eliminó**, no se protegió: el
+> claim real se prueba en el §5, sobre el job sembrado, por el worker de verdad,
+> y con seguimiento hasta su estado terminal.
+
+Sin `-L` en ningún `curl`: seguir la redirección convertiría el 307 del
+middleware en el 200 de `/login`, y el fallo de B-1 se habría visto como un
+éxito raro. El token y la cookie se leen del entorno y nunca se imprimen; lo que
+sale es el código HTTP y el `error.code`, que es un literal del servidor. Los
+cuerpos van a un `mktemp -d` con permisos 0700 que un `trap` borra en cualquier
+salida, incluso si el script muere — los `/tmp/w3*` fijos de antes eran
+predecibles y compartidos, y ahí se escriben cuerpos que pueden llevar URLs
+firmadas.
 
 Los `curl` equivalentes, para mirar a mano:
 
@@ -814,9 +889,11 @@ curl -s -o /dev/null -w 'claim sin token: %{http_code}\n' \
   -X POST "$BASE/api/meetings/v1/jobs/claim" \
   -H 'content-type: application/json' -d '{}'
 
-# (b) ruta de MÁQUINA con token → 200 con trabajo, o 204 si no hay
-curl -s -o /dev/null -w 'claim con token: %{http_code}\n' \
-  -X POST "$BASE/api/meetings/v1/jobs/claim" \
+# (b) el token autentica y su ámbito NO alcanza el mantenimiento global.
+#     404 prueba las dos cosas SIN reclamar trabajo. Un claim con token válido
+#     aquí robaría un job y lo dejaría colgado sin latidos.
+curl -s -o /dev/null -w 'maintenance con token de tenant: %{http_code}\n' \
+  -X POST "$BASE/api/meetings/v1/maintenance/requeue-expired" \
   -H "authorization: Bearer $MAI_WORKER_TOKEN" \
   -H 'content-type: application/json' -d '{}'
 
@@ -826,7 +903,9 @@ curl -s -o /dev/null -w 'meetings sin cookie: %{http_code} -> %{redirect_url}\n'
   -H 'content-type: application/json' -d '{}'
 ```
 
-**Pass:** (a) `401` · (b) `200`/`204` · (c) `307` hacia `/login`.
+**Pass:** (a) `401` · (b) `404` · (c) `307` hacia `/login`. Un `401` en (b)
+significa que el token no autentica; un `200`, que la credencial tiene alcance
+global y hay que revocarla y parar.
 **Fail:** si (a) da `307`, B-1 no está arreglado. Si (c) da `400`, el arreglo se
 pasó de alcance y expuso las rutas de sesión.
 
@@ -884,7 +963,44 @@ curl -s -X POST "$BASE/api/meetings/v1/meetings" -H "cookie: $COOKIE" \
 |---|---|
 | el worker no autentica o reencola de más | `systemctl --user stop mai-meetings-pull` y revocar la credencial (8.2) |
 | mai arranca mal por almacenamiento | corregir la variable en Railway y redeploy; el arranque ya falla solo si el bucket privado no está separado |
-| el esquema hay que retirarlo | `npx node-pg-migrate --tsx down 5` sobre **S2** — retira M-4, M-3, M-2, M-1 y la aditiva del módulo. Las guardas **abortan** si quedan filas: por eso 8.2 va primero |
+| el esquema hay que retirarlo | **primero** `npm run w3:rollback-check`, y sólo si aprueba, `npx node-pg-migrate --tsx down 5` sobre **S2**. Las guardas **abortan** si quedan filas: por eso 8.2 va primero |
+
+#### `down 5` no significa «revierte las de Reuniones»
+
+Significa **«revierte las cinco últimas, sean las que sean»**. Si entre la
+aplicación y el rollback aparece otra migración —otra rama, otro agente, un
+backfill— `down 5` revierte **ésa** y sólo cuatro de Reuniones, dejando la
+quinta aplicada y el esquema en un estado que nadie diseñó. Y lo haría sin
+quejarse.
+
+Así que antes hay una puerta:
+
+```bash
+MEETINGS_ENV_KIND=staging MEETINGS_EXPECTED_DB_HOST=… MEETINGS_EXPECTED_DB_NAME=… \
+  DATABASE_URL=… npm run w3:rollback-check
+```
+
+Comprueba que la **cabeza** de `pgmigrations` sean exactamente estas cinco, en
+este orden (de la más antigua a la más reciente):
+
+```
+1783400000000_meetings-module
+1783500000000_meetings-core
+1783600000000_meetings-transcript
+1783700000000_meetings-worker-pools
+1783800000000_meetings-result-uploads
+```
+
+**Pass:** imprime `Las cinco de Reuniones son la cabeza, en orden` y el comando
+de rollback. Sólo entonces se puede revertir por conteo.
+
+**Fail:** sale con 1, nombra la migración que apareció encima y las de Reuniones
+que se cayeron de la cabeza, y dice explícitamente que **no** ejecutes `down 5`.
+En ese caso hay que revertir por nombre, de arriba abajo, comprobando cada paso.
+
+Es sólo lectura: no revierte nada, dice cuándo es seguro revertir. Probado
+contra la base desechable en los tres casos — cabeza correcta, migración
+intrusa encima, y las cinco en orden distinto.
 
 Las cuatro guardas del `down` están probadas (4/4 en la suite de esquema): con
 datos presentes bloquean, y revierten en cuanto la tabla se vacía. El `down` no
@@ -1093,7 +1209,7 @@ que la versión lo dice.
 | **Whisper y wespeaker reales nunca han corrido en este pipeline** | el cruzado usa etapas instantáneas | pasos 7–8. Riesgo principal: el lease caduca en un audio largo → ajustar `MEETINGS_LEASE_SECONDS` |
 | **el arreglo de B-1 amplía la superficie pública del middleware** | dos prefijos dejan de rebotar a `/login` | 9 pruebas en `web/tests/meetings-middleware.test.ts` + §7.2 (c) en vivo. Cada una de las seis llama `authenticateWorker`, y eso también tiene prueba |
 | **`requirements/lock.txt` está vacío** | fijar versiones sin haberlas ejecutado sería una suposición con formato de certeza | se llena con el `pip freeze` de la PC Linux en cuanto el preflight salga verde (§3.4). Hasta entonces, la instalación no es bit-a-bit reproducible y hay que decirlo |
-| **el mapeo driver→CUDA de `inspect_gpu.sh` es una tabla escrita a mano** | los umbrales (525, 450) vienen de la tabla de NVIDIA, no de tu máquina | el script sugiere, no decide, y el preflight comprueba el resultado. Si la sugerencia es mala, `torch.cuda.is_available()` lo dice antes de reclamar nada |
+| **la rueda de torch se elige a mano en la PC Linux** | `inspect_gpu.sh` inventaría pero no decide, y `requirements/torch.txt` no fija nada: cualquier tabla driver→CUDA en el repositorio envejecería en silencio | el preflight es la validación definitiva: comprueba la pareja tocando su extensión y CUDA de verdad, y sale con código 2 antes de reclamar ningún job |
 | **`jobs_claimable_idx` no incluye `tenant_id` ni `requires`** | decisión anterior, no corregida | con un solo tenant y una GPU no se nota; anotado para cuando haya volumen |
 | **9 errores de `eslint` preexistentes en `web/`** | ficheros que nunca toqué | no bloquean el build |
 | **el audio de la prueba es real** | contiene voces de personas | limpieza §8.3, y bucket dedicado que se borra entero |
