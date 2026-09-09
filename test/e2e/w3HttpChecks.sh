@@ -2,27 +2,46 @@
 #
 # §7 del runbook de W-3: middleware, sesión y caché contra un mai REAL.
 #
-#   MEETINGS_ENV_KIND=staging \
-#   MAI_BASE_URL=https://… \
-#   MAI_WORKER_TOKEN=… \
-#   MAI_SESSION_COOKIE='better-auth.session_token=…' \
-#   W3_CLIENT_ID=<uuid> [W3_MEETING_ID=<uuid>] \
-#     bash test/e2e/w3HttpChecks.sh
+# ══════════════════════════════════════════════════════════════════════════
+#  DOS BLOQUES, Y LA SEPARACIÓN ES EL PUNTO
+# ══════════════════════════════════════════════════════════════════════════
 #
-# Es lo único que cubre el enrutado, el middleware y la caché de Next: las 26
-# pruebas de Route Handler IMPORTAN el handler, así que nada de eso participa en
-# ellas. Fue exactamente el hueco por el que se colaron las seis rutas de
-# máquina rebotando a /login (B-1).
+#  BLOQUE A · smoke de enrutado — NO MUTANTE
+#      Corre siempre. Ninguna de sus llamadas escribe en la base ni reclama
+#      trabajo, y cada una lleva escrito por qué.
 #
-# ── Sobre secretos ─────────────────────────────────────────────────────────
+#  BLOQUE B · sesión — MUTANTE
+#      CREA REUNIONES. Exige `W3_ALLOW_WRITES=1` y registra los `meetingId`
+#      creados para que puedas comprobar que la limpieza los retira.
 #
-# El token y la cookie se leen del entorno y NUNCA se imprimen. Lo que se
-# imprime es el código HTTP y, cuando hace falta, el campo `error.code` del
-# cuerpo — que es un literal del servidor. Las URLs firmadas no se piden aquí;
-# si alguna llegara en un cuerpo, no se vuelca.
+# ── Qué decía este script y era FALSO ─────────────────────────────────────
 #
-# Este script NO escribe en la base y NO sube objetos. Los pasos que crean cosas
-# van por el seed (§4) y por el recorrido (§5).
+# La versión anterior afirmaba «Este script NO escribe en la base y NO sube
+# objetos». Las dos mitades eran falsas:
+#
+#   · creaba reuniones por `POST /meetings` (dos, contando la de idempotencia);
+#   · hacía un `claim` CON TOKEN VÁLIDO. Un claim válido no es una consulta: es
+#     `FOR UPDATE SKIP LOCKED` + `UPDATE`. Le quita el job a la cola, le pone un
+#     lease de cinco minutos y consume un intento. Y como este script no
+#     manda latidos ni cierra nada, el job se quedaba colgado hasta que el
+#     lease caducara — con `attempts` ya gastado. Si el worker estaba corriendo,
+#     este smoke le robaba trabajo.
+#
+# El claim con token válido **ya no está aquí**. Se elimina, no se protege: lo
+# que probaba —que el middleware llega al handler— lo prueban las seis llamadas
+# SIN token del bloque A, y que el token autentica y su ámbito se respeta lo
+# prueba la negativa de `maintenance` (404), que no reclama nada.
+#
+# El claim real se prueba **en el recorrido §5**, sobre el job sembrado, por el
+# worker de verdad, y con seguimiento hasta su estado terminal. Ahí sí hay quien
+# lo lleve a `succeeded`.
+#
+# ── Secretos ──────────────────────────────────────────────────────────────
+#
+# El token y la cookie se leen del entorno y NUNCA se imprimen. Lo que sale es
+# el código HTTP y el `error.code`, que es un literal del servidor. Los cuerpos
+# se escriben en un directorio temporal con permisos 0700 que se borra al salir,
+# incluso si el script muere.
 set -uo pipefail
 
 # ── Puerta de entorno, la misma que los scripts de TypeScript ─────────────
@@ -36,34 +55,72 @@ for var in MAI_BASE_URL W3_CLIENT_ID; do
 done
 
 BASE="${MAI_BASE_URL%/}"
+ALLOW_WRITES="${W3_ALLOW_WRITES:-0}"
 PASS=0; FAIL=0; SKIP=0
+CREATED_MEETINGS=()
+
+# ── Temporales: mktemp -d, 0700, y trap que limpia en cualquier salida ────
+#
+# Los ficheros fijos /tmp/w3* de la versión anterior eran predecibles y
+# compartidos: cualquier usuario del host podía leerlos o adelantarse a
+# crearlos, y quedaban ahí después. Ahí se escriben CUERPOS DE RESPUESTA, que
+# en este endpoint incluyen URLs firmadas.
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/w3http.XXXXXXXX")" || { echo "✗ mktemp falló" >&2; exit 1; }
+chmod 700 "$WORK"
+cleanup() {
+  local code=$?
+  rm -rf "$WORK"
+  if (( ${#CREATED_MEETINGS[@]} > 0 )); then
+    echo ""
+    echo "── REUNIONES CREADAS por este script ──────────────────────────────────"
+    for id in "${CREATED_MEETINGS[@]}"; do echo "  $id"; done
+    echo "  Las retira 'npm run w3:cleanup -- --tenant-id <uuid> --execute …' (§8.2)."
+    echo "  Sus objetos de R2 NO: bórralos por el prefijo t/<tenant>/ (§8.3)."
+  fi
+  exit $code
+}
+trap cleanup EXIT INT TERM
+
+BODY="$WORK/body"
 
 ok()   { PASS=$((PASS+1)); printf '  ✓ %-58s %s\n' "$1" "${2:-}"; }
 bad()  { FAIL=$((FAIL+1)); printf '  ✗ %-58s %s\n' "$1" "${2:-}"; }
 skip() { SKIP=$((SKIP+1)); printf '  · %-58s %s\n' "$1" "${2:-}"; }
 
-# Código HTTP y cuerpo, SIN seguir redirecciones: seguirlas convertiría el 307
-# del middleware en el 200 de /login y el fallo se vería como un éxito raro.
-# Devuelve "<code>|<location>|<body>".
+# Código HTTP y `location`, SIN seguir redirecciones: seguirlas convertiría el
+# 307 del middleware en el 200 de /login y el fallo se vería como un éxito raro.
 probe() {
   local method="$1" path="$2"; shift 2
-  curl -sS --max-time 30 -o /tmp/w3body -w '%{http_code}|%{redirect_url}' \
+  curl -sS --max-time 30 -o "$BODY" -w '%{http_code}|%{redirect_url}' \
     -X "$method" "$BASE$path" "$@" 2>/dev/null || echo "000|"
 }
 body_code() { python3 -c "
 import json,sys
 try:
-    print(json.load(open('/tmp/w3body')).get('error',{}).get('code',''))
+    print(json.load(open(sys.argv[1])).get('error',{}).get('code',''))
 except Exception:
     print('')
-" 2>/dev/null; }
+" "$BODY" 2>/dev/null; }
+body_field() { python3 -c "
+import json,sys
+try:
+    print(json.load(open(sys.argv[1])).get(sys.argv[2],''))
+except Exception:
+    print('')
+" "$BODY" "$1" 2>/dev/null; }
 
-echo
-echo "§7 · mai en modo producción — $BASE"
-echo
+echo ""
+echo "══════════════════════════════════════════════════════════════════════"
+echo " BLOQUE A · smoke de enrutado — NO MUTANTE"
+echo " $BASE"
+echo "══════════════════════════════════════════════════════════════════════"
 
-# ── 7.2 (a) · las SEIS rutas de máquina, sin cabecera → 401, nunca 307 ────
-echo "── 7.2a · rutas de máquina sin token: deben LLEGAR al handler ──────────"
+# ── A.1 · las SEIS rutas de máquina, SIN cabecera → 401, nunca 307 ───────
+#
+# No mutan: `authenticateWorker` es lo PRIMERO de cada handler y falla antes de
+# que se lea el cuerpo o se toque el servicio.
+echo ""
+echo "── A.1 · rutas de máquina sin token: deben LLEGAR al handler ──────────"
 JOB='00000000-0000-0000-0000-000000000000'
 for path in \
   "/api/meetings/v1/jobs/claim" \
@@ -75,7 +132,7 @@ for path in \
 do
   IFS='|' read -r code location _ <<<"$(probe POST "$path" -H 'content-type: application/json' -d '{}')"
   if [[ "$code" == "401" && "$(body_code)" == "unauthorized" ]]; then
-    ok "${path##*/v1} → 401 unauthorized" ""
+    ok "${path##*/v1} → 401 unauthorized"
   elif [[ "$code" == "307" || "$code" == "302" ]]; then
     bad "${path##*/v1}" "HTTP $code → $location · B-1 SIN ARREGLAR: el worker recibiría HTML"
   else
@@ -83,44 +140,58 @@ do
   fi
 done
 
-# ── 7.2 (b) · con token válido → 200 o 204, nunca 307 ────────────────────
-echo
-echo "── 7.2b · claim con token: el camino real del worker ──────────────────"
+# ── A.2 · el token autentica y su ámbito se respeta, sin reclamar nada ───
+#
+# `requeueExpiredLeases` comprueba `scope === 'internal'` Y la capacidad, y
+# lanza `notFound()` ANTES de cualquier lectura o escritura. Así que un 404 aquí
+# prueba tres cosas de una vez —el token autentica, el middleware dejó pasar, y
+# el ámbito de una credencial de tenant no alcanza el mantenimiento global— y no
+# toca ni una fila.
+echo ""
+echo "── A.2 · el token, sin reclamar trabajo ───────────────────────────────"
 if [[ -z "${MAI_WORKER_TOKEN:-}" ]]; then
-  skip "claim con token" "sin MAI_WORKER_TOKEN"
+  skip "autenticación y ámbito del token" "sin MAI_WORKER_TOKEN"
 else
-  IFS='|' read -r code location _ <<<"$(probe POST /api/meetings/v1/jobs/claim \
+  IFS='|' read -r code location _ <<<"$(probe POST /api/meetings/v1/maintenance/requeue-expired \
     -H "authorization: Bearer $MAI_WORKER_TOKEN" -H 'content-type: application/json' -d '{}')"
   case "$code" in
-    200) ok "claim → 200 con trabajo" "";;
-    204) ok "claim → 204 sin trabajo (cola vacía)" "";;
-    307|302) bad "claim con token" "HTTP $code → $location · B-1 sin arreglar";;
-    *) bad "claim con token" "HTTP $code · error.code=$(body_code)";;
+    404)
+      ok "maintenance con credencial de tenant → 404" "autentica, y su ámbito no alcanza"
+      ;;
+    401)
+      bad "maintenance con credencial de tenant" \
+          "HTTP 401 · el token NO autentica: revisa MAI_WORKER_TOKEN o si está revocado"
+      ;;
+    200)
+      bad "maintenance con credencial de tenant" \
+          "HTTP 200 · LA CREDENCIAL TIENE ALCANCE GLOBAL. Revócala y para."
+      ;;
+    307|302)
+      bad "maintenance con credencial de tenant" "HTTP $code → $location · B-1 sin arreglar"
+      ;;
+    *)
+      bad "maintenance con credencial de tenant" "HTTP $code · error.code=$(body_code)"
+      ;;
   esac
 
-  # La negativa del §4.3: una credencial single_tenant NO puede barrer.
-  IFS='|' read -r code _ _ <<<"$(probe POST /api/meetings/v1/maintenance/requeue-expired \
-    -H "authorization: Bearer $MAI_WORKER_TOKEN" -H 'content-type: application/json' -d '{}')"
-  if [[ "$code" == "404" ]]; then
-    ok "mantenimiento con credencial de tenant → 404" ""
-  else
-    bad "mantenimiento con credencial de tenant" "HTTP $code · DEBE ser 404; revoca la credencial"
-  fi
-
-  # Un cuerpo con campos de más se rechaza en el borde.
+  # Un cuerpo con campos de más: 400 en el borde. `readValidated` corre DESPUÉS
+  # de autenticar y ANTES de `claim()`, así que esto no reclama nada — es la
+  # única llamada a /claim con token en todo el script, y no llega al servicio.
   IFS='|' read -r code _ _ <<<"$(probe POST /api/meetings/v1/jobs/claim \
     -H "authorization: Bearer $MAI_WORKER_TOKEN" -H 'content-type: application/json' \
     -d '{"tenantId":"11111111-1111-1111-1111-111111111111"}')"
   if [[ "$code" == "400" && "$(body_code)" == "invalid_request" ]]; then
-    ok "claim con tenantId de más → 400 invalid_request" "el ámbito nunca se lee del cuerpo"
+    ok "claim con tenantId de más → 400" "rechazado antes de llegar a claim()"
   else
     bad "claim con tenantId de más" "HTTP $code $(body_code)"
   fi
 fi
 
-# ── 7.2 (c) · las CINCO de sesión, sin cookie → 307 al login ─────────────
-echo
-echo "── 7.2c · rutas de sesión sin cookie: deben SEGUIR rebotando ──────────"
+# ── A.3 · las CINCO de sesión, sin cookie → 307 al login ─────────────────
+#
+# El middleware corta antes del handler, así que tampoco mutan.
+echo ""
+echo "── A.3 · rutas de sesión sin cookie: deben SEGUIR rebotando ───────────"
 MEET='00000000-0000-0000-0000-000000000000'
 for path in \
   "/api/meetings/v1/meetings" \
@@ -130,99 +201,115 @@ for path in \
 do
   IFS='|' read -r code location _ <<<"$(probe POST "$path" -H 'content-type: application/json' -d '{}')"
   if [[ "$code" == "307" || "$code" == "302" ]] && [[ "$location" == *"/login"* ]]; then
-    ok "${path##*/v1} → $code /login" ""
+    ok "${path##*/v1} → $code /login"
   else
     bad "${path##*/v1}" "HTTP $code → ${location:-sin location} · el arreglo de B-1 se pasó de alcance"
   fi
 done
 IFS='|' read -r code location _ <<<"$(probe GET "/api/meetings/v1/meetings/$MEET?clientId=$W3_CLIENT_ID")"
 if [[ "$code" == "307" || "$code" == "302" ]] && [[ "$location" == *"/login"* ]]; then
-  ok "GET de estado sin cookie → $code /login" ""
+  ok "GET de estado sin cookie → $code /login"
 else
   bad "GET de estado sin cookie" "HTTP $code → ${location:-sin location}"
 fi
 
-# ── 7.4 · sesión real ────────────────────────────────────────────────────
-echo
-echo "── 7.4 · con cookie de sesión real ────────────────────────────────────"
-if [[ -z "${MAI_SESSION_COOKIE:-}" ]]; then
-  skip "rutas de sesión con cookie" "sin MAI_SESSION_COOKIE (extráela de tu navegador)"
-  skip "validación estricta con sesión" ""
+echo ""
+echo "══════════════════════════════════════════════════════════════════════"
+echo " BLOQUE B · sesión — MUTANTE: CREA REUNIONES"
+echo "══════════════════════════════════════════════════════════════════════"
+
+if [[ "$ALLOW_WRITES" != "1" ]]; then
+  echo ""
+  echo "  OMITIDO. Este bloque crea reuniones de verdad en la base de staging."
+  echo "  Para ejecutarlo hace falta autorizarlo explícitamente:"
+  echo ""
+  echo "      W3_ALLOW_WRITES=1 MAI_SESSION_COOKIE='…' npm run w3:http"
+  echo ""
+  echo "  Las reuniones creadas se listan al terminar y las retira w3:cleanup."
+  SKIP=$((SKIP+3))
+elif [[ -z "${MAI_SESSION_COOKIE:-}" ]]; then
+  echo ""
+  skip "rutas de sesión con cookie" "W3_ALLOW_WRITES=1 pero falta MAI_SESSION_COOKIE"
+  SKIP=$((SKIP+2))
 else
+  echo ""
+  echo "── B.1 · crear reunión por la ruta real ───────────────────────────────"
   KEY="w3-$(date +%s)-$RANDOM"
   IFS='|' read -r code _ _ <<<"$(probe POST /api/meetings/v1/meetings \
     -H "cookie: $MAI_SESSION_COOKIE" -H 'content-type: application/json' \
     -d "{\"clientId\":\"$W3_CLIENT_ID\",\"title\":\"W-3 sesión\",\"idempotencyKey\":\"$KEY\"}")"
   if [[ "$code" == "200" ]]; then
-    NEW_MEETING="$(python3 -c "import json;print(json.load(open('/tmp/w3body')).get('meetingId',''))" 2>/dev/null)"
+    NEW_MEETING="$(body_field meetingId)"
+    [[ -n "$NEW_MEETING" ]] && CREATED_MEETINGS+=("$NEW_MEETING")
     ok "crear reunión con sesión → 200" "meetingId=${NEW_MEETING:0:8}…"
 
-    # Idempotencia por la ruta real: la misma clave no crea otra.
+    # Idempotencia por la ruta real: la misma clave NO crea otra. Esta segunda
+    # llamada es mutante en intención y no en efecto — que no cree nada es
+    # exactamente lo que se comprueba.
     IFS='|' read -r code2 _ _ <<<"$(probe POST /api/meetings/v1/meetings \
       -H "cookie: $MAI_SESSION_COOKIE" -H 'content-type: application/json' \
       -d "{\"clientId\":\"$W3_CLIENT_ID\",\"title\":\"otro título\",\"idempotencyKey\":\"$KEY\"}")"
-    SAME="$(python3 -c "import json;print(json.load(open('/tmp/w3body')).get('meetingId',''))" 2>/dev/null)"
+    SAME="$(body_field meetingId)"
     if [[ "$code2" == "200" && "$SAME" == "$NEW_MEETING" ]]; then
-      ok "misma idempotencyKey → la MISMA reunión" ""
+      ok "misma idempotencyKey → la MISMA reunión" "no se creó una segunda"
     else
-      bad "misma idempotencyKey" "HTTP $code2, id distinto"
+      [[ -n "$SAME" && "$SAME" != "$NEW_MEETING" ]] && CREATED_MEETINGS+=("$SAME")
+      bad "misma idempotencyKey" "HTTP $code2, id distinto: $SAME"
     fi
   else
     bad "crear reunión con sesión" "HTTP $code · error.code=$(body_code)"
   fi
 
-  # Validación estricta por HTTP real: el ámbito no se lee del cuerpo.
+  echo ""
+  echo "── B.2 · validación estricta con sesión (no crea nada) ────────────────"
+  # Estas dos se rechazan en el borde, así que no crean reuniones. Van en el
+  # bloque B porque necesitan la cookie, no porque muten.
   IFS='|' read -r code _ _ <<<"$(probe POST /api/meetings/v1/meetings \
     -H "cookie: $MAI_SESSION_COOKIE" -H 'content-type: application/json' \
     -d "{\"clientId\":\"$W3_CLIENT_ID\",\"title\":\"x\",\"idempotencyKey\":\"k-$RANDOM\",\"tenantId\":\"11111111-1111-1111-1111-111111111111\"}")"
   if [[ "$code" == "400" && "$(body_code)" == "invalid_request" ]]; then
-    ok "tenantId de más → 400 invalid_request" ""
+    ok "tenantId de más → 400 invalid_request" "el ámbito nunca se lee del cuerpo"
   else
     bad "tenantId de más" "HTTP $code $(body_code)"
   fi
 
-  # Un clientId que no es uuid: 404, y ANTES de tocar la sesión.
   IFS='|' read -r code _ _ <<<"$(probe POST /api/meetings/v1/meetings \
     -H "cookie: $MAI_SESSION_COOKIE" -H 'content-type: application/json' \
     -d '{"clientId":"no-soy-un-uuid","title":"x","idempotencyKey":"k"}')"
   if [[ "$code" == "400" ]]; then
-    ok "clientId no-uuid → 400 en el borde" ""
+    ok "clientId no-uuid → 400 en el borde"
   else
     bad "clientId no-uuid" "HTTP $code (se esperaba 400)"
   fi
 fi
 
-# ── 7.3 · caché de rutas, en vivo ────────────────────────────────────────
-echo
-echo "── 7.3 · la caché de rutas de Next ────────────────────────────────────"
+# ── B.3 · caché de rutas, en vivo (sólo lecturas) ────────────────────────
+echo ""
+echo "── B.3 · la caché de rutas de Next ────────────────────────────────────"
 if [[ -z "${MAI_SESSION_COOKIE:-}" || -z "${W3_MEETING_ID:-}" ]]; then
   skip "caché del GET de estado" "hacen falta MAI_SESSION_COOKIE y W3_MEETING_ID"
 else
   GET_PATH="/api/meetings/v1/meetings/$W3_MEETING_ID?clientId=$W3_CLIENT_ID"
-  curl -sS --max-time 30 -D /tmp/w3h1 -o /tmp/w3a.json \
+  curl -sS --max-time 30 -D "$WORK/h1" -o "$WORK/a.json" \
     -H "cookie: $MAI_SESSION_COOKIE" "$BASE$GET_PATH" >/dev/null 2>&1
   sleep 1
-  curl -sS --max-time 30 -D /tmp/w3h2 -o /tmp/w3b.json \
+  curl -sS --max-time 30 -D "$WORK/h2" -o "$WORK/b.json" \
     -H "cookie: $MAI_SESSION_COOKIE" "$BASE$GET_PATH" >/dev/null 2>&1
-  if grep -qi 'x-nextjs-cache: *HIT' /tmp/w3h1 /tmp/w3h2; then
+  if grep -qi 'x-nextjs-cache: *HIT' "$WORK/h1" "$WORK/h2" 2>/dev/null; then
     bad "el GET de estado no está cacheado" "x-nextjs-cache: HIT · añade force-dynamic"
   else
     ok "el GET de estado no está cacheado" "ningún x-nextjs-cache: HIT"
   fi
-  # El build ya clasifica las once rutas como ƒ (Dynamic); esto lo confirma en
-  # vivo. Si los dos cuerpos son idénticos NO es un fallo por sí solo —puede que
-  # nada haya cambiado entre las dos lecturas— así que sólo se informa.
-  if cmp -s /tmp/w3a.json /tmp/w3b.json; then
-    printf '  · %-58s %s\n' "cuerpos idénticos" "provoca un avance de etapa y repite para distinguir"
-    SKIP=$((SKIP+1))
+  # Cuerpos idénticos NO es un fallo por sí solo: puede que nada haya cambiado
+  # entre las dos lecturas. Sólo se informa.
+  if cmp -s "$WORK/a.json" "$WORK/b.json"; then
+    skip "cuerpos idénticos" "provoca un avance de etapa y repite para distinguir"
   else
-    ok "el cuerpo refleja el estado nuevo" ""
+    ok "el cuerpo refleja el estado nuevo"
   fi
 fi
 
-rm -f /tmp/w3body /tmp/w3a.json /tmp/w3b.json /tmp/w3h1 /tmp/w3h2
-
-echo
+echo ""
 if [[ "$FAIL" == "0" ]]; then
   echo "§7 VERDE — $PASS pasan, $SKIP omitidas"
   exit 0
