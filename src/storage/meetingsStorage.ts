@@ -78,6 +78,41 @@ export function assertSeparateFromPublicBucket(
   return problems;
 }
 
+/**
+ * El fake es un SINGLETON del proceso.
+ *
+ * No es una optimización: un almacenamiento en memoria que se recrea en cada
+ * petición pierde los objetos entre el `PUT` y el `complete` que lo verifica, y
+ * entonces no simula nada — todo `confirm` respondería `object_missing`. Con el
+ * singleton, el modo `fake` sirve para lo que existe: la validación local
+ * end-to-end y las pruebas de las rutas, donde varias peticiones del mismo
+ * proceso tienen que ver los mismos objetos.
+ *
+ * Mismo patrón que el pool de PostgreSQL y el limitador de tasa, y por la misma
+ * razón: sobrevivir a las re-evaluaciones de módulo del dev server de Next.
+ */
+const globalForFakeStore = globalThis as unknown as { __maiMeetingsFakeStore?: FakePrivateStore };
+
+function fakeStoreSingleton(options: {
+  putTtlSeconds: number;
+  getTtlSeconds: number;
+  clock?: () => Date;
+}): FakePrivateStore {
+  return (
+    globalForFakeStore.__maiMeetingsFakeStore ??
+    (globalForFakeStore.__maiMeetingsFakeStore = new FakePrivateStore(options))
+  );
+}
+
+/**
+ * El fake del proceso, para que una prueba o el arnés local puedan inspeccionar
+ * lo que se subió. Devuelve null si nunca se resolvió el driver `fake` — no lo
+ * crea: llamar a esto no debe activar un almacenamiento en memoria por error.
+ */
+export function getFakeStore(): FakePrivateStore | null {
+  return globalForFakeStore.__maiMeetingsFakeStore ?? null;
+}
+
 export function resolveMeetingsStorage(
   env: Readonly<Record<string, string | undefined>>,
   options?: { s3Client?: S3Client; clock?: () => Date },
@@ -96,7 +131,7 @@ export function resolveMeetingsStorage(
       return { store: null, driver: null, problems, putTtlSeconds, getTtlSeconds };
     }
     return {
-      store: new FakePrivateStore({ putTtlSeconds, getTtlSeconds, clock: options?.clock }),
+      store: fakeStoreSingleton({ putTtlSeconds, getTtlSeconds, clock: options?.clock }),
       driver: 'fake',
       problems: [],
       putTtlSeconds,
