@@ -438,9 +438,14 @@ test('un worker muerto pierde el lease y el job vuelve a la cola', async () => {
     `UPDATE meeting_processing_jobs SET lease_expires_at = now() - interval '1 second' WHERE id = $1`,
     [first.jobId],
   );
+  // Se afirma sobre ESTE job, no sobre el recuento global: el barrido es global
+  // y otras pruebas de este fichero dejan leases de 1 segundo que también caen
+  // en la misma llamada. Una aserción sobre el total depende del orden de
+  // ejecución, que es exactamente lo que no debe medir una prueba.
   const sweep = await requeueExpiredLeases();
-  assert.equal(sweep.requeued, 1);
-  assert.equal(sweep.abandoned, 0);
+  const swept = sweep.jobs.find((entry) => entry.id === first.jobId);
+  assert.ok(swept, 'el job caducado entró en el barrido');
+  assert.equal(swept?.status, 'queued');
 
   // Y ahora otro (o el mismo) worker lo recoge, con el intento SIGUIENTE.
   const second = await claim(world.identity, { workerLabel: 'el-que-recoge' }, world.deps);
@@ -478,7 +483,10 @@ test('agotados los intentos, el lease caducado deja el job en abandoned y no en 
     [claimed.jobId],
   );
   const sweep = await requeueExpiredLeases();
-  assert.equal(sweep.abandoned, 1);
+  assert.ok(
+    sweep.jobs.some((entry) => entry.id === claimed.jobId && entry.status === 'abandoned'),
+    'este job concreto quedó abandoned',
+  );
   const job = await jobsRepo.getJobById(claimed.jobId);
   // 'abandoned' y no 'failed': "nadie volvió a decir nada" es un problema
   // distinto de "se intentó y no salió", y distinguirlos permite alertar sobre
