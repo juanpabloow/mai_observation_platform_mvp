@@ -4,7 +4,10 @@ import { createHash, randomUUID } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { query } from '../../src/db/client.js';
 import { cleanupTenant, closeDb } from './fixtures.js';
-import { mintWorkerToken } from '../../src/db/repositories/meetings/credentials.js';
+import {
+  authenticateWorkerToken,
+  mintWorkerToken,
+} from '../../src/db/repositories/meetings/credentials.js';
 import * as jobsRepo from '../../src/db/repositories/meetings/jobs.js';
 import { FakePrivateStore } from '../../src/storage/fakePrivateStore.js';
 import {
@@ -591,12 +594,13 @@ test('reenviar result/complete por el handler es idempotente; con otro checksum 
   assert.equal(((await readBody(conflicting)).error as { code: string }).code, 'terminal_conflict');
 });
 
-test('el barrido global exige meetings.maintenance, también por el handler', async () => {
+test('el barrido global exige ámbito interno Y capacidad, también por el handler', async () => {
   await installDeps();
   const ctx = await seed();
   const { POST } = await import('../../web/app/api/meetings/v1/maintenance/requeue-expired/route.js');
 
-  // Una credencial de proceso: el MISMO 404 que un recurso inexistente.
+  // Una credencial NORMAL de worker —ámbito de tenant, sólo transcribe— recibe
+  // el MISMO 404 que un recurso inexistente.
   const denied = await POST(post('/api/meetings/v1/maintenance/requeue-expired', {}, ctx.token));
   assert.equal(denied.status, 404);
   assert.equal(((await readBody(denied)).error as { code: string }).code, 'not_found');
@@ -606,8 +610,18 @@ test('el barrido global exige meetings.maintenance, también por el handler', as
     post('/api/meetings/v1/maintenance/requeue-expired', {}, ctx.foreignToken),
   );
   assert.equal(foreign.status, 404);
+  assert.equal(((await readBody(foreign)).error as { code: string }).code, 'not_found');
 
-  // La de mantenimiento sí, y sólo ella ve los recuentos globales.
+  // La credencial de mantenimiento es INTERNA: se comprueba antes de afirmar
+  // que el éxito viene de ahí, porque el ámbito es la mitad del requisito y una
+  // credencial de tenant con la capacidad ya no se puede ni emitir.
+  const identity = await authenticateWorkerToken(ctx.maintenanceToken);
+  assert.ok(identity);
+  assert.equal(identity.scope, 'internal');
+  assert.deepEqual(identity.capabilities, ['meetings.maintenance']);
+  assert.equal(identity.tenantId, null, 'un pool interno no está atado a ningún tenant');
+
+  // Y sólo ella ve los recuentos globales.
   const allowed = await POST(
     post('/api/meetings/v1/maintenance/requeue-expired', {}, ctx.maintenanceToken),
   );
@@ -615,6 +629,15 @@ test('el barrido global exige meetings.maintenance, también por el handler', as
   const body = await readBody(allowed);
   assert.equal(typeof body.requeued, 'number');
   assert.equal(typeof body.abandoned, 'number');
+
+  // Un cuerpo con campos de más se rechaza en el borde, no se ignora: el
+  // barrido no toma parámetros, y aceptar 'tenantId' en silencio dejaría a
+  // alguien creyendo que acotó el alcance.
+  const withBody = await POST(
+    post('/api/meetings/v1/maintenance/requeue-expired', { tenantId: ctx.tenantId }, ctx.maintenanceToken),
+  );
+  assert.equal(withBody.status, 400);
+  assert.equal(((await readBody(withBody)).error as { code: string }).code, 'invalid_request');
 });
 
 test('las rutas con sesión validan ANTES de resolver el ámbito', async () => {

@@ -103,7 +103,12 @@ export class MaiTestServer {
       }
 
       if (path === '/api/meetings/v1/maintenance/requeue-expired') {
-        const result = await requeueExpiredLeases();
+        // La IDENTIDAD AUTENTICADA, igual que el handler real. Antes se llamaba
+        // sin argumentos, así que este arnés ejecutaba el barrido global con
+        // cualquier credencial que autenticara — es decir, no probaba la única
+        // cosa que este endpoint tiene que garantizar, y la habría seguido
+        // pasando por buena después de que el servicio dejara de permitirlo.
+        const result = await requeueExpiredLeases(identity);
         send(200, { requeued: result.requeued, abandoned: result.abandoned });
         return;
       }

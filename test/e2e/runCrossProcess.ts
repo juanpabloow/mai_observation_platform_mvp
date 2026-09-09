@@ -344,6 +344,48 @@ async function main(): Promise<number> {
     );
     await query(`DELETE FROM tenants WHERE id = $1`, [foreignTenant]);
 
+    // 14b · el barrido global sólo lo ejecuta una identidad interna
+    //
+    // El arnés llamaba antes a `requeueExpiredLeases()` sin identidad, así que
+    // este endpoint se servía a cualquiera que autenticara y la prueba no medía
+    // nada. Ahora pasa la identidad autenticada, igual que el handler real.
+    const maintPool = await query<{ id: string }>(
+      `INSERT INTO worker_pools
+         (slug, environment, scope, capabilities, concurrency,
+          internal_authorized_actor_label, internal_authorized_at)
+       VALUES ($1, 'development', 'internal', '{meetings.maintenance}',
+               '{"schema_version":1,"limits":{}}'::jsonb, 'e2e <e2e@example.test>', now())
+       RETURNING id`,
+      [`e2e-int-${tenantId.slice(0, 8)}`],
+    );
+    const maintToken = mintWorkerToken();
+    await query(
+      `INSERT INTO worker_credentials (pool_id, label, token_hash, token_prefix)
+       VALUES ($1, 'mantenimiento', $2, $3)`,
+      [maintPool.rows[0].id, maintToken.tokenHash, maintToken.tokenPrefix],
+    );
+    const tenantSweep = await post('/api/meetings/v1/maintenance/requeue-expired', minted.token, {});
+    const internalSweep = await post(
+      '/api/meetings/v1/maintenance/requeue-expired',
+      maintToken.token,
+      {},
+    );
+    const tenantSweepBody = (await tenantSweep.json()) as { error?: { code?: string } };
+    const internalSweepBody = (await internalSweep.json()) as {
+      requeued?: number;
+      abandoned?: number;
+    };
+    check(
+      14.5,
+      'el barrido global: credencial de tenant 404, credencial interna 200',
+      tenantSweep.status === 404 &&
+        tenantSweepBody.error?.code === 'not_found' &&
+        internalSweep.status === 200 &&
+        typeof internalSweepBody.requeued === 'number' &&
+        typeof internalSweepBody.abandoned === 'number',
+      `tenant=${tenantSweep.status} ${JSON.stringify(tenantSweepBody)} interna=${internalSweep.status} ${JSON.stringify(internalSweepBody)}`,
+    );
+
     // 15 · las rutas HTTP históricas del worker siguen funcionando
     const legacy = await runPython(pythonExecutable, [
       '-c',
@@ -355,6 +397,10 @@ async function main(): Promise<number> {
     check(15, 'las rutas HTTP históricas siguen registradas', legacyOk, legacy.output.trim());
 
     await query(`DELETE FROM tenants WHERE id = $1`, [tenantId]);
+    // El pool interno no cuelga de ningún tenant, así que el DELETE de arriba
+    // no lo arrastra. Se retira aquí para que el arnés pueda correr dos veces
+    // sobre la misma base sin dejar filas detrás.
+    await query(`DELETE FROM worker_pools WHERE id = $1`, [maintPool.rows[0].id]);
   } finally {
     await mai.close();
     await store.close();
