@@ -192,7 +192,7 @@ export async function uploadInit(
     clientId: scope.clientId,
     meetingId: meeting.id,
   });
-  const signed = store.signPut({
+  const signed = await store.signPut({
     key,
     contentType: check.contentType,
     contentLength: request.bytes,
@@ -487,7 +487,7 @@ async function buildInputs(
   const addMedia = async (key: string, role: string): Promise<void> => {
     const media = await meetingsRepo.findMediaByKey(key);
     if (!media) return;
-    const signed = store.signGet({ key, forRangeReads: true });
+    const signed = await store.signGet({ key, forRangeReads: true });
     inputs.push({
       role,
       url: signed.url,
@@ -531,7 +531,7 @@ async function buildInputs(
         'transcript',
       );
       if (upload && (upload.state === 'verified' || upload.state === 'ingested')) {
-        const signed = store.signGet({ key: upload.storage_key, forRangeReads: true });
+        const signed = await store.signGet({ key: upload.storage_key, forRangeReads: true });
         inputs.push({
           role: 'transcript',
           url: signed.url,
@@ -802,7 +802,7 @@ export async function resultInit(
   const contentType = ROLE_CONTENT_TYPE[role];
   const contentEncoding = ROLE_CONTENT_ENCODING[role];
 
-  const signed = store.signPut({
+  const signed = await store.signPut({
     key,
     contentType,
     contentLength: request.bytes,

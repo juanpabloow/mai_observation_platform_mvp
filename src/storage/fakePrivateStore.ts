@@ -107,7 +107,7 @@ export class FakePrivateStore implements PrivateObjectStore {
     return { grant, expired: this.now().getTime() > grant.expiresAt.getTime() };
   }
 
-  signPut(input: SignPutInput): SignedUrl {
+  async signPut(input: SignPutInput): Promise<SignedUrl> {
     const headers: Record<string, string> = {
       'content-type': input.contentType,
       'content-length': String(input.contentLength),
@@ -117,7 +117,7 @@ export class FakePrivateStore implements PrivateObjectStore {
     return this.grant('PUT', input.key, input.expiresInSeconds ?? this.putTtlSeconds, headers);
   }
 
-  signGet(input: SignGetInput): SignedUrl {
+  async signGet(input: SignGetInput): Promise<SignedUrl> {
     return this.grant('GET', input.key, input.expiresInSeconds ?? this.getTtlSeconds);
   }
 

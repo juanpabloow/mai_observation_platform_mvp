@@ -182,7 +182,7 @@ export class HttpObjectStore implements PrivateObjectStore {
     };
   }
 
-  signPut(input: SignPutInput): SignedUrl {
+  async signPut(input: SignPutInput): Promise<SignedUrl> {
     const headers: Record<string, string> = {
       'content-type': input.contentType,
       'content-length': String(input.contentLength),
@@ -194,7 +194,7 @@ export class HttpObjectStore implements PrivateObjectStore {
     return this.grant('PUT', input.key, headers, input.expiresInSeconds);
   }
 
-  signGet(input: SignGetInput): SignedUrl {
+  async signGet(input: SignGetInput): Promise<SignedUrl> {
     return this.grant('GET', input.key, {}, input.expiresInSeconds);
   }
 

@@ -1,5 +1,6 @@
 import { FakePrivateStore } from './fakePrivateStore.js';
 import { S3PrivateStore } from './s3PrivateStore.js';
+import type { S3Client } from '@aws-sdk/client-s3';
 import { StorageUnavailableError, type PrivateObjectStore } from './privateObjectStore.js';
 
 /**
@@ -79,7 +80,7 @@ export function assertSeparateFromPublicBucket(
 
 export function resolveMeetingsStorage(
   env: Readonly<Record<string, string | undefined>>,
-  options?: { fetchImpl?: S3Options['fetchImpl']; clock?: () => Date },
+  options?: { s3Client?: S3Client; clock?: () => Date },
 ): MeetingsStorageResolution {
   const putTtlSeconds = positiveInt(env.MEETINGS_STORAGE_PUT_TTL_SECONDS, DEFAULT_PUT_TTL);
   const getTtlSeconds = positiveInt(env.MEETINGS_STORAGE_GET_TTL_SECONDS, DEFAULT_GET_TTL);
@@ -138,7 +139,7 @@ export function resolveMeetingsStorage(
         // R2 y MinIO usan bucket en la ruta. Se puede desactivar para un S3 real.
         forcePathStyle: (env.MEETINGS_STORAGE_FORCE_PATH_STYLE ?? 'true').trim().toLowerCase() !== 'false',
       },
-      { fetchImpl: options?.fetchImpl, clock: options?.clock },
+      options?.s3Client ? { client: options.s3Client } : undefined,
     );
     return { store, driver: 's3', problems: [], putTtlSeconds, getTtlSeconds };
   } catch (cause) {
@@ -154,10 +155,6 @@ export function resolveMeetingsStorage(
       getTtlSeconds,
     };
   }
-}
-
-interface S3Options {
-  fetchImpl?: (url: string, init?: RequestInit) => Promise<Response>;
 }
 
 /**

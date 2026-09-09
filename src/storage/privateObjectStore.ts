@@ -135,8 +135,13 @@ export interface PrivateObjectStore {
   readonly driver: string;
   readonly capabilities: StoreCapabilities;
 
-  signPut(input: SignPutInput): SignedUrl;
-  signGet(input: SignGetInput): SignedUrl;
+  /**
+   * Firmar es ASÍNCRONO. El presigner oficial lo es, y forzar una API síncrona
+   * aquí obligaría a mantener criptografía propia — que es justo lo que se
+   * eliminó.
+   */
+  signPut(input: SignPutInput): Promise<SignedUrl>;
+  signGet(input: SignGetInput): Promise<SignedUrl>;
 
   head(key: string): Promise<ObjectStat | null>;
   /**

@@ -1,5 +1,13 @@
 import { createHash } from 'node:crypto';
-import { presign, type SigV4Credentials } from './sigv4.js';
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  HeadObjectCommand,
+  PutObjectCommand,
+  S3Client,
+  type S3ClientConfig,
+} from '@aws-sdk/client-s3';
+import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
   base64ToHex,
   hexToBase64,
@@ -16,32 +24,39 @@ import {
 } from './privateObjectStore.js';
 
 /**
- * Adaptador S3-compatible, pensado para Cloudflare R2.
+ * Adaptador S3-compatible sobre el SDK oficial de AWS, configurado para
+ * Cloudflare R2.
  *
- * ── Por qué `fetch` y no `@aws-sdk/client-s3` ───────────────────────────────
+ * ── Por qué el SDK y no una implementación propia de SigV4 ─────────────────
  *
- * Lo único que este adaptador hace por red es HEAD, GET y DELETE de un objeto.
- * Son tres peticiones firmadas por query string, es decir, tres URLs que
- * `presign()` ya sabe construir y que cualquier cliente HTTP puede pedir. El
- * SDK aportaría reintentos y paginación —que aquí no hacen falta— a cambio de
- * traer su árbol de dependencias al lado worker del repositorio, que hoy
- * depende de cuatro paquetes.
+ * La revisión anterior firmaba a mano con `node:crypto` y se validaba contra el
+ * vector canónico de AWS. Ese vector prueba UN camino: un GET, sin cabeceras
+ * firmadas más allá de `host`, sin token de sesión, con una ruta sin caracteres
+ * especiales. No dice nada de la codificación de una clave con espacios o
+ * paréntesis, del orden canónico cuando hay varias cabeceras firmadas, ni de
+ * `X-Amz-Security-Token`. Mantener criptografía propia con esa cobertura es
+ * cambiar un riesgo conocido —una dependencia más— por uno que sólo aparece en
+ * producción, como un 403 que nadie sabe explicar.
  *
- * `fetch` se inyecta. No por purismo: es lo que permite probar el adaptador
- * —incluidas las respuestas raras de un almacenamiento real: 404, 206, un
- * content-length que no cuadra, un checksum ausente— sin red y sin emulador.
+ * El SDK ya está en el árbol (`web/` lo usa para el bucket público de logos), así
+ * que el coste real es el paquete de presignado.
  *
- * ── R2 frente a S3 ──────────────────────────────────────────────────────────
+ * ── R2 frente a S3 ─────────────────────────────────────────────────────────
  *
- * R2 firma con `region: 'auto'` y expone el bucket en la ruta
- * (`https://<cuenta>.r2.cloudflarestorage.com/<bucket>/<clave>`). Se soportan
- * las dos formas —ruta y subdominio— porque MinIO, que es el emulador
- * desechable de la validación local, usa ruta, y un S3 real usa subdominio.
+ * R2 quiere `region: 'auto'` y expone el bucket en la ruta
+ * (`https://<cuenta>.r2.cloudflarestorage.com/<bucket>/<clave>`), así que
+ * `forcePathStyle` es el defecto. Se soporta también el estilo subdominio para
+ * un S3 real y para MinIO, que es el emulador desechable de la validación local.
  *
- * R2 **sí** soporta `x-amz-checksum-sha256` en el PUT y lo devuelve en el HEAD
- * cuando se pide `x-amz-checksum-mode: ENABLED`. Cuando el almacenamiento no lo
- * devuelve, `confirm()` responde `checksumVerified: false` en vez de dar por
- * bueno lo que no comprobó.
+ * ── Lo que va DENTRO de la firma ───────────────────────────────────────────
+ *
+ * `signPut` firma `ContentType`, `ContentLength` y, cuando se da,
+ * `ChecksumSHA256`. Eso es lo que hace que los límites no dependan de que el
+ * cliente coopere: si manda otro tipo, otro tamaño u otros bytes, el
+ * almacenamiento rechaza la petición porque la firma no cuadra. El SDK traduce
+ * esos campos a las cabeceras que el cliente debe reenviar, y
+ * `signableHeaders` le dice explícitamente cuáles firmar — sin eso, el
+ * presigner firmaría sólo `host` y el resto serían sugerencias.
  */
 
 export interface S3PrivateStoreConfig {
@@ -49,7 +64,12 @@ export interface S3PrivateStoreConfig {
   readonly endpoint: string;
   readonly bucket: string;
   readonly region: string;
-  readonly credentials: SigV4Credentials;
+  readonly credentials: {
+    readonly accessKeyId: string;
+    readonly secretAccessKey: string;
+    /** Sólo para credenciales temporales (STS). R2 no las usa. */
+    readonly sessionToken?: string;
+  };
   readonly putTtlSeconds: number;
   readonly getTtlSeconds: number;
   /**
@@ -59,83 +79,130 @@ export interface S3PrivateStoreConfig {
   readonly forcePathStyle: boolean;
 }
 
-export type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;
-
-/** Reloj inyectable: sin él, ninguna firma sería reproducible en una prueba. */
-export type Clock = () => Date;
+/** S3 no acepta URLs prefirmadas de más de 7 días. */
+export const MAX_PRESIGN_SECONDS = 604_800;
 
 export class S3PrivateStore implements PrivateObjectStore {
   readonly driver = 's3';
   readonly capabilities: StoreCapabilities = { range: true, checksumOnHead: true };
 
   private readonly config: S3PrivateStoreConfig;
-  private readonly fetchImpl: FetchLike;
-  private readonly now: Clock;
-  private readonly host: string;
-  private readonly basePath: string;
+  private readonly client: S3Client;
 
-  constructor(config: S3PrivateStoreConfig, options?: { fetchImpl?: FetchLike; clock?: Clock }) {
+  constructor(config: S3PrivateStoreConfig, options?: { client?: S3Client }) {
     this.config = config;
-    this.fetchImpl = options?.fetchImpl ?? ((url, init) => fetch(url, init));
-    this.now = options?.clock ?? (() => new Date());
 
     const parsed = new URL(config.endpoint);
-    if (parsed.protocol !== 'https:' && parsed.hostname !== 'localhost' && parsed.hostname !== '127.0.0.1') {
+    if (
+      parsed.protocol !== 'https:' &&
+      parsed.hostname !== 'localhost' &&
+      parsed.hostname !== '127.0.0.1'
+    ) {
       // http sólo se tolera contra un emulador local. En cualquier otro sitio
       // sería una URL firmada viajando en claro.
       throw new StorageUnavailableError(
         `El endpoint de almacenamiento privado debe ser https (recibido ${parsed.protocol}//${parsed.hostname})`,
       );
     }
-    this.host = config.forcePathStyle ? parsed.host : `${config.bucket}.${parsed.host}`;
-    this.basePath = config.forcePathStyle ? `/${config.bucket}` : '';
+
+    const clientConfig: S3ClientConfig = {
+      region: config.region,
+      endpoint: config.endpoint,
+      forcePathStyle: config.forcePathStyle,
+      // CRÍTICO para el presignado. Por defecto el SDK calcula un checksum él
+      // mismo y añade `x-amz-checksum-crc32`, PISANDO el SHA-256 que le pasamos
+      // — al prefirmar no hay cuerpo del que calcular nada, así que lo que
+      // acababa firmado era un crc32 vacío y nuestro checksum desaparecía.
+      //
+      // 'WHEN_REQUIRED' le dice que no invente: usa el que se le da, y sólo si
+      // se le da. Lo destapó la prueba que exige ver `x-amz-checksum-sha256`
+      // dentro de `X-Amz-SignedHeaders`.
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      credentials: {
+        accessKeyId: config.credentials.accessKeyId,
+        secretAccessKey: config.credentials.secretAccessKey,
+        ...(config.credentials.sessionToken
+          ? { sessionToken: config.credentials.sessionToken }
+          : {}),
+      },
+    };
+    // El cliente se puede inyectar para las pruebas: `client.send` se sustituye
+    // por un doble y así se prueban las respuestas que rompen cosas (404, un 200
+    // a un Range, un checksum ausente) sin red y sin emulador.
+    this.client = options?.client ?? new S3Client(clientConfig);
   }
 
-  private objectPath(key: string): string {
+  private assertTtl(seconds: number): number {
+    if (!Number.isInteger(seconds) || seconds < 1) {
+      throw new Error('expiresInSeconds debe ser un entero >= 1');
+    }
+    if (seconds > MAX_PRESIGN_SECONDS) {
+      throw new Error(
+        `expiresInSeconds ${seconds} excede el máximo de S3 (${MAX_PRESIGN_SECONDS})`,
+      );
+    }
+    return seconds;
+  }
+
+  private assertKey(key: string): string {
     if (key.startsWith('/')) throw new Error('la clave no debe empezar por /');
-    return `${this.basePath}/${key}`;
-  }
-
-  private sign(
-    method: string,
-    key: string,
-    expiresInSeconds: number,
-    signedHeaders?: Record<string, string>,
-    queryParams?: Record<string, string>,
-  ): SignedUrl {
-    const result = presign({
-      credentials: this.config.credentials,
-      region: this.config.region,
-      service: 's3',
-      method,
-      host: this.host,
-      path: this.objectPath(key),
-      expiresInSeconds,
-      signedAt: this.now(),
-      signedHeaders,
-      queryParams,
-    });
-    return { url: result.url, requiredHeaders: result.requiredHeaders, expiresAt: result.expiresAt };
+    if (key.length === 0) throw new Error('la clave no puede estar vacía');
+    return key;
   }
 
   /**
-   * URL de subida. El tipo, el tamaño y (si se da) el checksum van DENTRO de la
-   * firma: el almacenamiento rechaza una subida que no los respete, así que los
-   * límites no dependen de que el cliente coopere.
+   * `getSignedUrl` es asíncrono en el SDK, así que estos dos métodos devuelven
+   * una promesa. La interfaz los declara así por eso: un firmado síncrono
+   * obligaría a mantener la criptografía propia.
    */
-  signPut(input: SignPutInput): SignedUrl {
+  async signPut(input: SignPutInput): Promise<SignedUrl> {
     if (!Number.isInteger(input.contentLength) || input.contentLength <= 0) {
       throw new Error('signPut: contentLength debe ser un entero positivo');
     }
-    const headers: Record<string, string> = {
+    const ttl = this.assertTtl(input.expiresInSeconds ?? this.config.putTtlSeconds);
+
+    const requiredHeaders: Record<string, string> = {
       'content-type': input.contentType,
       'content-length': String(input.contentLength),
     };
-    if (input.contentEncoding) headers['content-encoding'] = input.contentEncoding;
+    if (input.contentEncoding) requiredHeaders['content-encoding'] = input.contentEncoding;
     if (input.checksumSha256Hex) {
-      headers['x-amz-checksum-sha256'] = hexToBase64(input.checksumSha256Hex);
+      requiredHeaders['x-amz-checksum-sha256'] = hexToBase64(input.checksumSha256Hex);
     }
-    return this.sign('PUT', input.key, input.expiresInSeconds ?? this.config.putTtlSeconds, headers);
+
+    const command = new PutObjectCommand({
+      Bucket: this.config.bucket,
+      Key: this.assertKey(input.key),
+      ContentType: input.contentType,
+      ContentLength: input.contentLength,
+      ...(input.contentEncoding ? { ContentEncoding: input.contentEncoding } : {}),
+      ...(input.checksumSha256Hex
+        ? { ChecksumSHA256: hexToBase64(input.checksumSha256Hex) }
+        : {}),
+    });
+
+    const signedAt = new Date();
+    const url = await getSignedUrl(this.client, command, {
+      expiresIn: ttl,
+      // Sin esto el presigner firma sólo `host` y las demás cabeceras pasarían a
+      // ser sugerencias que el cliente puede ignorar — que es exactamente lo
+      // contrario de lo que este método existe para garantizar.
+      signableHeaders: new Set(Object.keys(requiredHeaders)),
+      // SigV4 mueve por defecto las cabeceras `x-amz-*` a la query string. Ahí
+      // también van firmadas, pero entonces el cliente NO debe mandar la
+      // cabecera y `requiredHeaders` estaría mintiendo. Se mantiene como
+      // cabecera para que lo que decimos que hay que enviar sea lo que hay que
+      // enviar.
+      ...(input.checksumSha256Hex
+        ? { unhoistableHeaders: new Set(['x-amz-checksum-sha256']) }
+        : {}),
+    });
+
+    return {
+      url,
+      requiredHeaders,
+      expiresAt: new Date(signedAt.getTime() + ttl * 1000),
+    };
   }
 
   /**
@@ -144,51 +211,78 @@ export class S3PrivateStore implements PrivateObjectStore {
    * cualquier rango. Es lo que permite al worker reintentar una descarga
    * interrumpida sin pedir otra URL.
    */
-  signGet(input: SignGetInput): SignedUrl {
-    return this.sign('GET', input.key, input.expiresInSeconds ?? this.config.getTtlSeconds);
+  async signGet(input: SignGetInput): Promise<SignedUrl> {
+    const ttl = this.assertTtl(input.expiresInSeconds ?? this.config.getTtlSeconds);
+    const signedAt = new Date();
+    const url = await getSignedUrl(
+      this.client,
+      new GetObjectCommand({ Bucket: this.config.bucket, Key: this.assertKey(input.key) }),
+      { expiresIn: ttl },
+    );
+    return {
+      url,
+      requiredHeaders: {},
+      expiresAt: new Date(signedAt.getTime() + ttl * 1000),
+    };
   }
 
   async head(key: string): Promise<ObjectStat | null> {
-    const signed = this.sign('HEAD', key, 60);
-    let response: Response;
     try {
-      response = await this.fetchImpl(signed.url, {
-        method: 'HEAD',
-        headers: { 'x-amz-checksum-mode': 'ENABLED' },
-      });
+      const response = await this.client.send(
+        new HeadObjectCommand({
+          Bucket: this.config.bucket,
+          Key: this.assertKey(key),
+          // S3 no devuelve el checksum si no se pide explícitamente.
+          ChecksumMode: 'ENABLED',
+        }),
+      );
+      const checksum = response.ChecksumSHA256 ? base64ToHex(response.ChecksumSHA256) : null;
+      return {
+        key,
+        bytes: typeof response.ContentLength === 'number' ? response.ContentLength : -1,
+        contentType: response.ContentType ?? null,
+        contentEncoding: response.ContentEncoding ?? null,
+        checksumSha256Hex: checksum,
+        lastModified: response.LastModified ?? null,
+      };
     } catch (cause) {
-      throw new StorageUnavailableError(`HEAD falló: ${(cause as Error).message}`);
+      if (isNotFound(cause)) return null;
+      throw new StorageUnavailableError(`HEAD falló: ${describeError(cause)}`);
     }
-    if (response.status === 404) return null;
-    if (!response.ok) {
-      throw new StorageUnavailableError(`HEAD devolvió ${response.status}`);
-    }
-    return statFromHeaders(key, response);
   }
 
   async getBytes(key: string, range?: ByteRange): Promise<Buffer> {
-    const signed = this.signGet({ key, expiresInSeconds: 300 });
-    const headers: Record<string, string> = {};
-    if (range) {
-      headers.range = range.end === undefined
-        ? `bytes=${range.start}-`
-        : `bytes=${range.start}-${range.end}`;
-    }
-    let response: Response;
     try {
-      response = await this.fetchImpl(signed.url, { method: 'GET', headers });
-    } catch (cause) {
-      throw new StorageUnavailableError(`GET falló: ${(cause as Error).message}`);
-    }
-    // 206 es la respuesta correcta a un Range; 200 significa que el
-    // almacenamiento lo ignoró y mandó todo, y eso hay que notarlo.
-    if (range && response.status === 200) {
-      throw new StorageUnavailableError(
-        'El almacenamiento ignoró la cabecera Range y devolvió el objeto completo',
+      const response = await this.client.send(
+        new GetObjectCommand({
+          Bucket: this.config.bucket,
+          Key: this.assertKey(key),
+          ...(range
+            ? {
+                Range:
+                  range.end === undefined
+                    ? `bytes=${range.start}-`
+                    : `bytes=${range.start}-${range.end}`,
+              }
+            : {}),
+        }),
       );
+      // Un 200 a un Range significa que el almacenamiento lo ignoró y mandó
+      // todo. Hay que notarlo: leer 4 bytes y recibir 300 MB no es «casi
+      // correcto». El SDK expone el estado en $metadata.
+      if (range && response.$metadata?.httpStatusCode === 200) {
+        throw new StorageUnavailableError(
+          'El almacenamiento ignoró la cabecera Range y devolvió el objeto completo',
+        );
+      }
+      const body = response.Body;
+      if (!body) throw new StorageUnavailableError('GET devolvió un cuerpo vacío');
+      const bytes = await collectStream(body);
+      return bytes;
+    } catch (cause) {
+      if (cause instanceof StorageUnavailableError) throw cause;
+      throw new StorageUnavailableError(`GET falló: ${describeError(cause)}`);
     }
-    if (!response.ok) throw new StorageUnavailableError(`GET devolvió ${response.status}`);
-    return Buffer.from(await response.arrayBuffer());
   }
 
   /**
@@ -201,40 +295,56 @@ export class S3PrivateStore implements PrivateObjectStore {
     try {
       stat = await this.head(input.key);
     } catch (cause) {
-      return {
-        ok: false,
-        code: 'storage_unavailable',
-        detail: (cause as Error).message,
-        stat: null,
-      };
+      return { ok: false, code: 'storage_unavailable', detail: describeError(cause), stat: null };
     }
     return evaluateConfirm(input, stat);
   }
 
   async delete(key: string): Promise<void> {
-    const signed = this.sign('DELETE', key, 60);
-    const response = await this.fetchImpl(signed.url, { method: 'DELETE' });
-    // 204 es lo normal; 404 significa que ya no estaba, que es el estado
-    // deseado. Cualquier otra cosa sí es un fallo.
-    if (!response.ok && response.status !== 404) {
-      throw new StorageUnavailableError(`DELETE devolvió ${response.status}`);
+    try {
+      await this.client.send(
+        new DeleteObjectCommand({ Bucket: this.config.bucket, Key: this.assertKey(key) }),
+      );
+    } catch (cause) {
+      // Un 404 significa que ya no estaba, que es el estado deseado.
+      if (isNotFound(cause)) return;
+      throw new StorageUnavailableError(`DELETE falló: ${describeError(cause)}`);
     }
   }
 }
 
-function statFromHeaders(key: string, response: Response): ObjectStat {
-  const length = response.headers.get('content-length');
-  const checksumB64 = response.headers.get('x-amz-checksum-sha256');
-  const lastModified = response.headers.get('last-modified');
-  const parsedDate = lastModified ? new Date(lastModified) : null;
-  return {
-    key,
-    bytes: length === null ? -1 : Number(length),
-    contentType: response.headers.get('content-type'),
-    contentEncoding: response.headers.get('content-encoding'),
-    checksumSha256Hex: checksumB64 ? base64ToHex(checksumB64) : null,
-    lastModified: parsedDate && !Number.isNaN(parsedDate.getTime()) ? parsedDate : null,
+/** El SDK modela «no existe» de varias formas según la operación. */
+function isNotFound(cause: unknown): boolean {
+  const error = cause as { name?: string; $metadata?: { httpStatusCode?: number } };
+  return (
+    error?.$metadata?.httpStatusCode === 404 ||
+    error?.name === 'NotFound' ||
+    error?.name === 'NoSuchKey'
+  );
+}
+
+function describeError(cause: unknown): string {
+  const error = cause as { name?: string; message?: string; $metadata?: { httpStatusCode?: number } };
+  const status = error?.$metadata?.httpStatusCode;
+  return `${error?.name ?? 'Error'}${status ? ` (HTTP ${status})` : ''}: ${error?.message ?? String(cause)}`;
+}
+
+/** Junta el cuerpo del SDK, que puede ser varias cosas según el runtime. */
+async function collectStream(body: unknown): Promise<Buffer> {
+  const candidate = body as {
+    transformToByteArray?: () => Promise<Uint8Array>;
+    [Symbol.asyncIterator]?: () => AsyncIterator<Uint8Array>;
   };
+  if (typeof candidate.transformToByteArray === 'function') {
+    return Buffer.from(await candidate.transformToByteArray());
+  }
+  if (typeof candidate[Symbol.asyncIterator] === 'function') {
+    const chunks: Buffer[] = [];
+    for await (const chunk of body as AsyncIterable<Uint8Array>) chunks.push(Buffer.from(chunk));
+    return Buffer.concat(chunks);
+  }
+  if (Buffer.isBuffer(body)) return body;
+  throw new StorageUnavailableError('el cuerpo de la respuesta no se pudo leer');
 }
 
 /**
