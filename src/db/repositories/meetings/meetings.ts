@@ -205,8 +205,8 @@ export interface MeetingMediaRow {
   sample_rate: number | null;
   channels: number | null;
   codec: string | null;
+  /** `true` = medido; NULL = nadie lo midió (el original). `false` es imposible. */
   probe_ok: boolean | null;
-  probe_error: string | null;
   created_at: Date;
 }
 
@@ -226,7 +226,6 @@ export interface InsertMediaInput {
   readonly channels?: number | null;
   readonly codec?: string | null;
   readonly probeOk?: boolean | null;
-  readonly probeError?: string | null;
 }
 
 /**
@@ -243,8 +242,8 @@ export async function insertMedia(
   const inserted = await q(executor).query<MeetingMediaRow>(
     `INSERT INTO meeting_media
        (tenant_id, client_id, meeting_id, run_id, role, storage_key, bytes, checksum_sha256,
-        content_type, duration_seconds, sample_rate, channels, codec, probe_ok, probe_error)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
+        content_type, duration_seconds, sample_rate, channels, codec, probe_ok)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
      ON CONFLICT (storage_key) DO NOTHING
      RETURNING *`,
     [
@@ -262,7 +261,6 @@ export async function insertMedia(
       input.channels ?? null,
       input.codec ?? null,
       input.probeOk ?? null,
-      input.probeError ?? null,
     ],
   );
   if (inserted.rows.length === 1) return { media: inserted.rows[0], created: true };

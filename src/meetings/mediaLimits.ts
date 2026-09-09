@@ -11,9 +11,11 @@
  * Así que este módulo hace lo que un portero puede hacer: rechazar lo que
  * claramente no procede, temprano y barato, antes de firmar una URL y antes de
  * gastar un slot de GPU. **El único juez de si hay audio dentro es `ffprobe` en
- * el worker**, y por eso `probe_ok`/`probe_error` son columnas de
- * `meeting_media` y no un detalle de implementación: el veredicto real se
- * persiste.
+ * el worker**, y su veredicto se persiste en dos sitios distintos según cuál
+ * sea: si el sondeo sale bien, en las columnas de medición de `meeting_media`
+ * (`sample_rate`, `channels`, `codec`, `probe_ok = true`); si falla, en
+ * `meeting_processing_jobs.failure_code` / `failure_detail`, porque entonces no
+ * hay medio que registrar. No existe una fila de medio con el sondeo fallido.
  *
  * El orden importa. Un `.mp3` renombrado a `.wav` pasa por aquí y muere en
  * ffprobe; un `.exe` renombrado a `.wav` también. Lo que esta capa evita es que

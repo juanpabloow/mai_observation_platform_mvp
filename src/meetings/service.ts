@@ -20,6 +20,7 @@ import {
   originalMediaKey,
 } from './storageKeys.js';
 import { checkMedia, type MediaLimits } from './mediaLimits.js';
+import { assertProbeMatchesStage, type MediaProbe } from './normalizedAudio.js';
 import {
   ArtifactError,
   alignSegments,
@@ -890,13 +891,12 @@ export async function resultInit(
 export interface ResultCompleteRequest extends LeaseProof {
   readonly bytes: number;
   readonly checksumSha256: string;
-  /** Sólo para `normalize`: lo que ffprobe midió del audio normalizado. */
-  readonly probe?: {
-    readonly durationSeconds?: number | null;
-    readonly sampleRate?: number | null;
-    readonly channels?: number | null;
-    readonly codec?: string | null;
-  };
+  /**
+   * Lo que ffprobe midió del audio normalizado. **Obligatorio para
+   * `normalize`, prohibido para el resto** — lo decide
+   * `assertProbeMatchesStage`, que es quien ve la etapa.
+   */
+  readonly probe?: MediaProbe | null;
 }
 
 export interface ResultCompleteResponse {
@@ -929,6 +929,20 @@ export async function resultComplete(
   if (!/^[0-9a-f]{64}$/i.test(request.checksumSha256)) {
     throw invalidRequest('checksumSha256 debe ser un SHA-256 en hexadecimal.');
   }
+
+  // ANTES de leer la subida, de confirmar el objeto y de abrir la transacción.
+  // Es deliberado que vaya aquí y no dentro: si el sondeo se comprobara más
+  // tarde, un `normalize` sin sondeo ya habría dejado un `markVerified`
+  // escrito, y uno con el formato equivocado habría marcado el job
+  // `succeeded`, insertado un `meeting_media` con `probe_ok = true` que nadie
+  // midió y encolado `transcribe` sobre él.
+  //
+  // Va también antes de la comparación de idempotencia terminal, y por la misma
+  // razón que el checksum: una petición inválida es inválida sea el job nuevo o
+  // reenviado. Un reenvío sin `probe` sobre un `normalize` ya cerrado recibe
+  // 400, no 200 — porque no es el mismo payload, y desde luego no es un payload
+  // que mai deba volver a aceptar.
+  assertProbeMatchesStage(job.stage, request.probe);
 
   const upload = await artifactsRepo.findUpload(job.id, job.attempts, kind);
   if (!upload) {

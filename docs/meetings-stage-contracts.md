@@ -39,12 +39,13 @@ puede pisar el del actual.
 | | |
 |---|---|
 | **Entrada** | `meeting_media` role=`original`, `deleted_at IS NULL`. Signed GET con Range. |
-| **Salida** | Audio normalizado: WAV PCM s16le, 16 kHz, mono. |
+| **Salida** | Audio normalizado: WAV PCM s16le, 16 kHz, mono. Los valores exactos viven en `src/meetings/normalizedAudio.ts` (`NORMALIZED_AUDIO`) y en `app/pull/stages.py` del worker (`TARGET_*`); son dos repositorios, así que la discrepancia se detecta en `result/complete`, no se previene. |
 | **`schema_version`** | **1**, pero describe el *envoltorio* (`kind='normalized_media'`), no un payload: la salida es audio. Su forma real son `sample_rate`/`channels`/`codec`, que se persisten como columnas de `meeting_media`. |
 | **Transición** | job `queued → leased → uploading_result → succeeded`. `meetings.media_state` no cambia: sigue `ready` (describe el original). |
-| **Persistencia de mai** | Tras verificar el objeto: marca el artefacto `ingested` **e** `INSERT meeting_media` role=`normalized` con `bytes`, `checksum_sha256`, `content_type`, `duration_seconds`, `sample_rate`, `channels`, `codec`, `probe_ok`. Es la única etapa cuyo artefacto se ingiere en cuanto se verifica; los otros dos esperan (§5). |
-| **Siguiente job** | `transcribe`, en la misma transacción. Condición exacta: la fila `meeting_media` role=`normalized` de ESTE run existe y `probe_ok = true`. |
-| **Fallo parcial** | No existe. O hay audio normalizado utilizable o no hay. `probe_ok=false` ⇒ `probe_error` obligatorio (CHECK) y el job va a `failed`; el run termina `outcome='failed'`, `meetings.transcript_state='failed'`. |
+| **Sondeo** | **Obligatorio.** `result/complete` de `normalize` exige `probe` con `sampleRate`, `channels` y `codec`, y los tres tienen que valer exactamente `16000` / `1` / `pcm_s16le`. `durationSeconds` puede ser nulo u omitirse: ffprobe no siempre informa duración. Enviar `probe` en `transcribe` o `diarize` se **rechaza** (400) en vez de ignorarse. |
+| **Persistencia de mai** | Tras verificar el objeto: marca el artefacto `ingested` **e** `INSERT meeting_media` role=`normalized` con `bytes`, `checksum_sha256`, `content_type`, `duration_seconds`, `sample_rate`, `channels`, `codec`, `probe_ok = true`. Es la única etapa cuyo artefacto se ingiere en cuanto se verifica; los otros dos esperan (§5). |
+| **Siguiente job** | `transcribe`, en la misma transacción. Condición exacta: la fila `meeting_media` role=`normalized` de ESTE run existe — y por `meeting_media_normalized_probed` esa fila lleva siempre `probe_ok = true` y el sondeo completo, así que «existe» y «está sondeada» son la misma condición. |
+| **Fallo parcial** | No existe. O hay audio normalizado utilizable o no hay. Si el sondeo falta, está incompleto o no corresponde al formato pactado, `result/complete` **no cierra nada**: no marca el job `succeeded`, no inserta medio y no encola `transcribe`. Devuelve 400 (`invalid_request`) si el problema es la petición, o 422 (`media_rejected`) si el problema es el audio que describe. |
 | **Idempotencia** | `ru_attempt_key UNIQUE (job_id, attempt, kind)` igual que las otras dos etapas, más `meeting_media_key_unique UNIQUE (storage_key)`: un segundo `result/complete` del mismo intento no crea una segunda fila y se responde éxito. |
 
 **Por qué se sube el audio normalizado en vez de pasarlo en memoria.**
@@ -311,6 +312,59 @@ Un worker que recibe `terminal_conflict` tiene un bug; uno que recibe
 `invalid_transition` perdió una carrera con una cancelación, que es normal.
 
 En ningún caso se modifica el estado terminal ya escrito.
+
+### El sondeo de `normalize`: una sola semántica
+
+Había una contradicción entre el diseño y el código, y las dos mitades estaban
+mal a la vez:
+
+- el esquema tenía `probe_error` y un CHECK que decía «`probe_ok = false` exige
+  `probe_error`», describiendo un flujo que **ningún camino del servicio
+  escribe**;
+- y `result/complete` aceptaba cerrar `normalize` **sin** `probe`, persistiendo
+  el medio con `probe_ok = true` y encolando `transcribe` — es decir, mai
+  afirmaba haber comprobado el formato de un audio que nadie midió.
+
+Peor: había una prueba que convertía ese segundo comportamiento en contrato.
+
+La semántica autoritativa, ahora única:
+
+| situación | dónde queda registrada |
+|---|---|
+| sondeo correcto | fila `meeting_media` role=`normalized` con las mediciones y `probe_ok = true` |
+| sondeo fallido en el worker | `meeting_processing_jobs.failure_code` / `failure_detail` vía `fail`, **antes** de subir nada |
+| sondeo ausente, incompleto o con el formato equivocado | nada se escribe: 400 `invalid_request` o 422 `media_rejected` |
+
+**No existe una fila de medio con el sondeo fallido**, así que `probe_ok = false`
+es imposible (`meeting_media_probe_never_failed`) y `probe_error` se retiró de la
+migración —que no se ha aplicado en ningún entorno compartido— por no tener
+escritor legítimo. Una columna sin escritor parece un sitio donde buscar
+diagnósticos, y quien lo busque no encontrará nunca nada.
+
+Las tres capas y qué garantiza cada una:
+
+| capa | qué exige |
+|---|---|
+| `ResultCompleteBody` (zod) | si `probe` viene, está **completo**: `sampleRate`, `channels` y `codec` obligatorios. `durationSeconds` puede faltar |
+| `assertProbeMatchesStage` | `normalize` **exige** `probe`; `transcribe`/`diarize` lo **prohíben**; y los valores son los de `NORMALIZED_AUDIO` |
+| `meeting_media_normalized_probed` (CHECK) | una fila role=`normalized` lleva siempre `probe_ok = true` y el sondeo completo |
+
+Los números pactados viven en `src/meetings/normalizedAudio.ts` y no en el
+esquema: son de pipeline, y fijarlos en un CHECK obligaría a migrar la base para
+cambiar un argumento de ffmpeg. La base exige que el sondeo esté **completo**; el
+servicio, que diga **lo correcto**.
+
+Por qué la validación va antes de la comparación de idempotencia terminal: una
+petición inválida lo es tanto si el job es nuevo como si es un reenvío. Un
+`complete` sin `probe` sobre un `normalize` ya cerrado recibe 400, no 200 — no es
+el mismo payload, y no es un payload que mai deba volver a aceptar.
+
+Consecuencia sobre las pruebas de `terminal_conflict`: de los cuatro campos del
+sondeo, sólo `durationSeconds` puede llegar a esa comparación. Los otros tres los
+detiene antes el formato pactado, con `media_rejected`, que es más específico. La
+comparación de los tres sigue en el código y no es inalcanzable: si el pacto
+cambia, un reenvío con los valores nuevos pasa el formato y choca con la fila
+escrita bajo el pacto viejo.
 
 ### Entitlement del módulo
 

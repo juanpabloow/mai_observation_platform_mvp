@@ -10,6 +10,7 @@ import {
   resultComplete,
   resultInit,
   type MeetingsServiceDeps,
+  type ResultCompleteRequest,
 } from '../../src/meetings/service.js';
 
 /**
@@ -144,21 +145,19 @@ export class MaiTestServer {
             }, this.deps));
             return;
           case 'result/complete': {
-            const probe = (body.probe ?? null) as Record<string, unknown> | null;
+            // El sondeo se reenvía TAL CUAL. La versión anterior lo
+            // reconstruía campo a campo con `typeof x === 'number' ? x : null`,
+            // y eso convertía un campo ausente en un `null` — es decir, un
+            // sondeo incompleto (400 en la ruta real) se volvía un sondeo
+            // completo con valores equivocados (422). Un arnés que normaliza la
+            // entrada mide su propia normalización, no el contrato.
             send(200, await resultComplete(identity, {
               ...proof,
               bytes: Number(body.bytes),
               checksumSha256: String(body.checksumSha256 ?? ''),
-              ...(probe
-                ? {
-                    probe: {
-                      durationSeconds: typeof probe.durationSeconds === 'number' ? probe.durationSeconds : null,
-                      sampleRate: typeof probe.sampleRate === 'number' ? probe.sampleRate : null,
-                      channels: typeof probe.channels === 'number' ? probe.channels : null,
-                      codec: typeof probe.codec === 'string' ? probe.codec : null,
-                    },
-                  }
-                : {}),
+              ...(body.probe === undefined
+                ? {}
+                : { probe: body.probe as ResultCompleteRequest['probe'] }),
             }, this.deps));
             return;
           }

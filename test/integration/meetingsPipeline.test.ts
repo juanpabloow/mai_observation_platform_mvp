@@ -18,6 +18,10 @@ import * as jobsRepo from '../../src/db/repositories/meetings/jobs.js';
 import * as artifactsRepo from '../../src/db/repositories/meetings/artifacts.js';
 import * as meetingsRepo from '../../src/db/repositories/meetings/meetings.js';
 import {
+  NORMALIZED_AUDIO,
+  type MediaProbe,
+} from '../../src/meetings/normalizedAudio.js';
+import {
   cancelMeeting,
   claim,
   createMeeting,
@@ -187,6 +191,14 @@ async function makeWorld(options?: { leaseSeconds?: number }): Promise<World> {
   };
 }
 
+/** El sondeo que el formato pactado exige. Cualquier otro se rechaza. */
+const VALID_PROBE: MediaProbe = {
+  durationSeconds: 12.5,
+  sampleRate: NORMALIZED_AUDIO.sampleRate,
+  channels: NORMALIZED_AUDIO.channels,
+  codec: NORMALIZED_AUDIO.codec,
+};
+
 const AUDIO = Buffer.from('RIFF....WAVEfmt fake audio bytes para la prueba');
 const NORMALIZED = Buffer.from('RIFF....WAVE 16k mono normalizado');
 
@@ -245,9 +257,18 @@ async function runStage(
   world: World,
   claimed: ClaimedJob,
   artifact: Buffer,
-  probe?: { durationSeconds: number; sampleRate: number; channels: number; codec: string },
+  probe?: MediaProbe,
 ): Promise<Awaited<ReturnType<typeof resultComplete>>> {
   const checksum = sha(artifact);
+  // El sondeo lo decide la ETAPA, no quien llama: `normalize` lo exige y las
+  // otras dos lo prohíben. Antes este helper lo dejaba pasar tal cual, y por
+  // eso todas las pruebas que cerraban `normalize` sin sondeo funcionaban — el
+  // helper reproducía el hueco del servicio.
+  const effectiveProbe = claimed.stage === 'normalize' ? (probe ?? VALID_PROBE) : undefined;
+  assert.ok(
+    claimed.stage === 'normalize' || probe === undefined,
+    `runStage: la etapa '${claimed.stage}' no admite sondeo`,
+  );
   const signed = await resultInit(
     world.identity,
     {
@@ -269,7 +290,7 @@ async function runStage(
       leaseToken: claimed.leaseToken,
       bytes: artifact.length,
       checksumSha256: checksum,
-      ...(probe ? { probe } : {}),
+      ...(effectiveProbe ? { probe: effectiveProbe } : {}),
     },
     world.deps,
   );
@@ -793,6 +814,7 @@ test('un intento anterior no puede ganar sobre el actual', async () => {
           leaseToken: stale.leaseToken,
           bytes: NORMALIZED.length,
           checksumSha256: sha(NORMALIZED),
+          probe: VALID_PROBE,
         },
         world.deps,
       ),
@@ -840,7 +862,7 @@ test('un checksum que no cuadra rechaza el artefacto y no cierra la etapa', asyn
     () =>
       resultComplete(
         world.identity,
-        { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED) },
+        { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED), probe: VALID_PROBE },
         world.deps,
       ),
     'checksum_mismatch',
@@ -872,7 +894,7 @@ test('un tamaño que no cuadra se rechaza como size_mismatch', async () => {
     () =>
       resultComplete(
         world.identity,
-        { ...proof, bytes: NORMALIZED.length + 10, checksumSha256: sha(NORMALIZED) },
+        { ...proof, bytes: NORMALIZED.length + 10, checksumSha256: sha(NORMALIZED), probe: VALID_PROBE },
         world.deps,
       ),
     'size_mismatch',
@@ -896,7 +918,7 @@ test('un complete sin objeto subido se rechaza como object_missing', async () =>
     () =>
       resultComplete(
         world.identity,
-        { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED) },
+        { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED), probe: VALID_PROBE },
         world.deps,
       ),
     'object_missing',
@@ -1491,8 +1513,8 @@ test('la invariante se cumple en las DOS direcciones', async () => {
     () =>
       query(
         `INSERT INTO meeting_media
-           (tenant_id, client_id, meeting_id, role, storage_key, bytes, checksum_sha256, content_type)
-         VALUES ($1, $2, $3, 'normalized', $4, 10, $5, 'audio/wav')`,
+           (tenant_id, client_id, meeting_id, role, storage_key, bytes, checksum_sha256, content_type, sample_rate, channels, codec, probe_ok)
+         VALUES ($1, $2, $3, 'normalized', $4, 10, $5, 'audio/wav', 16000, 1, 'pcm_s16le', true)`,
         [world.tenantId, world.clientId, meetingId, `k-${randomUUID()}`, 'a'.repeat(64)],
       ),
     /meeting_media_run_scoped/,
@@ -1519,8 +1541,8 @@ test('un derivado cuyo run es de OTRA reunión se rechaza', async () => {
     () =>
       query(
         `INSERT INTO meeting_media
-           (tenant_id, client_id, meeting_id, run_id, role, storage_key, bytes, checksum_sha256, content_type)
-         VALUES ($1, $2, $3, $4, 'normalized', $5, 10, $6, 'audio/wav')`,
+           (tenant_id, client_id, meeting_id, run_id, role, storage_key, bytes, checksum_sha256, content_type, sample_rate, channels, codec, probe_ok)
+         VALUES ($1, $2, $3, $4, 'normalized', $5, 10, $6, 'audio/wav', 16000, 1, 'pcm_s16le', true)`,
         [
           world.tenantId,
           world.clientId,
@@ -1548,8 +1570,8 @@ test('un solo normalized VIVO por run: el reintento reemplaza, no duplica', asyn
     () =>
       query(
         `INSERT INTO meeting_media
-           (tenant_id, client_id, meeting_id, run_id, role, storage_key, bytes, checksum_sha256, content_type)
-         VALUES ($1, $2, $3, $4, 'normalized', $5, 10, $6, 'audio/wav')`,
+           (tenant_id, client_id, meeting_id, run_id, role, storage_key, bytes, checksum_sha256, content_type, sample_rate, channels, codec, probe_ok)
+         VALUES ($1, $2, $3, $4, 'normalized', $5, 10, $6, 'audio/wav', 16000, 1, 'pcm_s16le', true)`,
         [world.tenantId, world.clientId, meetingId, runId, secondKey, 'b'.repeat(64)],
       ),
     /meeting_media_one_live_derived_idx/,
@@ -1564,8 +1586,8 @@ test('un solo normalized VIVO por run: el reintento reemplaza, no duplica', asyn
   );
   await query(
     `INSERT INTO meeting_media
-       (tenant_id, client_id, meeting_id, run_id, role, storage_key, bytes, checksum_sha256, content_type)
-     VALUES ($1, $2, $3, $4, 'normalized', $5, 10, $6, 'audio/wav')`,
+       (tenant_id, client_id, meeting_id, run_id, role, storage_key, bytes, checksum_sha256, content_type, sample_rate, channels, codec, probe_ok)
+     VALUES ($1, $2, $3, $4, 'normalized', $5, 10, $6, 'audio/wav', 16000, 1, 'pcm_s16le', true)`,
     [world.tenantId, world.clientId, meetingId, runId, secondKey, 'b'.repeat(64)],
   );
   const live = await query<{ n: string }>(
@@ -1625,7 +1647,7 @@ test('reenviar complete con el MISMO payload devuelve el resultado previo', asyn
   const proof = { jobId: claimed.jobId, attempt: claimed.attempt, leaseToken: claimed.leaseToken };
   const again = await resultComplete(
     world.identity,
-    { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED) },
+    { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED), probe: VALID_PROBE },
     world.deps,
   );
   assert.equal(again.status, 'succeeded');
@@ -1648,7 +1670,7 @@ test('reenviar complete con OTRO checksum se rechaza y no cambia nada', async ()
     () =>
       resultComplete(
         world.identity,
-        { ...proof, bytes: NORMALIZED.length, checksumSha256: 'f'.repeat(64) },
+        { ...proof, bytes: NORMALIZED.length, checksumSha256: 'f'.repeat(64), probe: VALID_PROBE },
         world.deps,
       ),
     'terminal_conflict',
@@ -1679,6 +1701,7 @@ test('reenviar complete con OTRO tamaño se rechaza', async () => {
           leaseToken: claimed.leaseToken,
           bytes: NORMALIZED.length + 5,
           checksumSha256: sha(NORMALIZED),
+          probe: VALID_PROBE,
         },
         world.deps,
       ),
@@ -1867,7 +1890,7 @@ test('reenviar complete de normalize con el MISMO sondeo es idempotente', async 
   assert.equal(quantized.status, 'succeeded');
 });
 
-test('reenviar complete de normalize con OTRO sondeo es conflicto, campo a campo', async () => {
+test('el sondeo del formato: sólo durationSeconds llega a terminal_conflict', async () => {
   const world = await makeWorld();
   const { runId } = await seedMeetingWithMedia(world);
   const claimed = await claim(world.identity, {}, world.deps);
@@ -1882,64 +1905,251 @@ test('reenviar complete de normalize con OTRO sondeo es conflicto, campo a campo
     checksumSha256: sha(NORMALIZED),
   };
 
-  // Un caso negativo POR CAMPO. Comprobarlos de uno en uno es lo que demuestra
-  // que se comparan los cuatro: con una sola aserción sobre el objeto
-  // completo, tres campos podrían no compararse nunca y la prueba pasaría.
-  const variants: Array<[string, typeof PROBE]> = [
-    ['durationSeconds', { ...PROBE, durationSeconds: 3599 }],
+  // 'durationSeconds' es el ÚNICO campo del sondeo que varía legítimamente
+  // entre audios, así que es el único que puede llegar a la comparación
+  // terminal. Distinto valor sobre un job cerrado: conflicto.
+  await expectApiError(
+    () => resultComplete(world.identity, { ...base, probe: { ...PROBE, durationSeconds: 3599 } }, world.deps),
+    'terminal_conflict',
+    'complete con otra duración',
+  );
+  // Y nulo contra un valor que constaba también es diferencia.
+  await expectApiError(
+    () =>
+      resultComplete(
+        world.identity,
+        { ...base, probe: { ...PROBE, durationSeconds: null } },
+        world.deps,
+      ),
+    'terminal_conflict',
+    'complete que borra la duración que constaba',
+  );
+
+  // Los otros tres NO llegan ahí: el formato pactado los detiene antes, con
+  // 'media_rejected', que es más específico. Antes esta prueba los esperaba
+  // como 'terminal_conflict' y pasaba porque no había puerta de formato.
+  for (const [field, probe] of [
     ['sampleRate', { ...PROBE, sampleRate: 48000 }],
     ['channels', { ...PROBE, channels: 2 }],
     ['codec', { ...PROBE, codec: 'aac' }],
-  ];
-  for (const [field, probe] of variants) {
+  ] as Array<[string, MediaProbe]>) {
     await expectApiError(
       () => resultComplete(world.identity, { ...base, probe }, world.deps),
-      'terminal_conflict',
+      'media_rejected',
       `complete con otro ${field}`,
     );
   }
 
-  // Y el sondeo que DESAPARECE: omitirlo no es «no opino», es afirmar que no
-  // se midió nada.
-  await expectApiError(
-    () => resultComplete(world.identity, base, world.deps),
-    'terminal_conflict',
-    'complete sin el sondeo que ya constaba',
-  );
-
-  // Nada de esto tocó lo persistido.
+  // La comparación de los tres sigue en el código y no es inalcanzable: si el
+  // formato pactado cambiara, un reenvío con los valores NUEVOS pasaría la
+  // puerta y chocaría con la fila escrita bajo el pacto viejo. Aquí se
+  // comprueba lo que sí se puede provocar hoy.
   const media = await meetingsRepo.findLiveDerived(runId, 'normalized');
   assert.equal(Number(media?.duration_seconds), 3600.457);
-  assert.equal(media?.sample_rate, 16000);
-  assert.equal(media?.channels, 1);
-  assert.equal(media?.codec, 'pcm_s16le');
+  assert.equal(media?.sample_rate, NORMALIZED_AUDIO.sampleRate);
+  assert.equal(media?.channels, NORMALIZED_AUDIO.channels);
+  assert.equal(media?.codec, NORMALIZED_AUDIO.codec);
+  assert.equal(media?.probe_ok, true);
   const job = await jobsRepo.getJobById(claimed.jobId);
   assert.equal(job?.status, 'succeeded');
   const jobs = await jobsRepo.listJobsForMeeting(claimed.meetingId);
   assert.equal(jobs.filter((entry) => entry.stage === 'transcribe').length, 1);
 });
 
-test('un complete de normalize SIN sondeo es idempotente consigo mismo', async () => {
+// ── El sondeo es OBLIGATORIO para normalize ────────────────────────────────
+//
+// Aquí vivía 'un complete de normalize SIN sondeo es idempotente consigo
+// mismo', que convertía en contrato el hueco: `probe` era opcional, mai
+// persistía el medio con `probe_ok = true` sin haber medido nada y encolaba
+// `transcribe` sobre él. Lo sustituyen estas pruebas negativas.
+
+test('normalize SIN sondeo no cierra nada', async () => {
   const world = await makeWorld();
-  await seedMeetingWithMedia(world);
+  const { runId } = await seedMeetingWithMedia(world);
   const claimed = await claim(world.identity, {}, world.deps);
   assert.ok(claimed);
-  // 'runStage' sin probe: los cuatro campos quedan nulos.
-  await runStage(world, claimed, NORMALIZED);
-  const base = {
-    jobId: claimed.jobId,
-    attempt: claimed.attempt,
-    leaseToken: claimed.leaseToken,
-    bytes: NORMALIZED.length,
-    checksumSha256: sha(NORMALIZED),
-  };
-  assert.equal((await resultComplete(world.identity, base, world.deps)).status, 'succeeded');
-  // Y mandar el sondeo ahora es una diferencia, en la dirección contraria.
-  await expectApiError(
-    () => resultComplete(world.identity, { ...base, probe: PROBE }, world.deps),
-    'terminal_conflict',
-    'complete que añade un sondeo a un terminal sin sondeo',
+  const proof = { jobId: claimed.jobId, attempt: claimed.attempt, leaseToken: claimed.leaseToken };
+  const signed = await resultInit(
+    world.identity,
+    { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED) },
+    world.deps,
   );
+  assert.ok(world.store.put(signed.url, NORMALIZED, signed.requiredHeaders).ok);
+
+  await expectApiError(
+    () =>
+      resultComplete(
+        world.identity,
+        { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED) },
+        world.deps,
+      ),
+    'invalid_request',
+    'normalize sin sondeo',
+  );
+
+  // Las tres cosas que NO deben haber pasado.
+  const job = await jobsRepo.getJobById(claimed.jobId);
+  assert.notEqual(job?.status, 'succeeded', 'el job no se marca succeeded');
+  assert.equal(
+    await meetingsRepo.findLiveDerived(runId, 'normalized'),
+    null,
+    'no se inserta meeting_media',
+  );
+  const jobs = await jobsRepo.listJobsForMeeting(claimed.meetingId);
+  assert.equal(jobs.filter((entry) => entry.stage === 'transcribe').length, 0, 'no se encola transcribe');
+
+  // Y tampoco se escribió nada en la subida: la comprobación va antes de
+  // `store.confirm`, así que ni siquiera hay un `verified`.
+  const upload = await artifactsRepo.findUpload(claimed.jobId, claimed.attempt, 'normalized_media');
+  assert.equal(upload?.state, 'uploaded');
+  assert.equal(upload?.verified_at, null);
+
+  // Con el sondeo, el mismo intento cierra: el rechazo no dejó el job en un
+  // estado del que no se pueda salir.
+  const ok = await resultComplete(
+    world.identity,
+    { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED), probe: VALID_PROBE },
+    world.deps,
+  );
+  assert.equal(ok.status, 'succeeded');
+  assert.equal(ok.nextJob?.stage, 'transcribe');
+});
+
+test('normalize con un sondeo PARCIAL no cierra nada', async () => {
+  const world = await makeWorld();
+  const { runId } = await seedMeetingWithMedia(world);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  const proof = { jobId: claimed.jobId, attempt: claimed.attempt, leaseToken: claimed.leaseToken };
+  const signed = await resultInit(
+    world.identity,
+    { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED) },
+    world.deps,
+  );
+  assert.ok(world.store.put(signed.url, NORMALIZED, signed.requiredHeaders).ok);
+
+  // Un sondeo a medias es una afirmación sobre lo que no se miró. En el borde
+  // lo rechaza el esquema del cuerpo; el servicio, que recibe el tipo ya
+  // estrecho, lo ve como formato incompleto.
+  //
+  // El cast es deliberado: se está probando lo que llega por el cable, no lo
+  // que el tipo permite. `parseBody` es la primera puerta y se prueba aparte;
+  // esto comprueba que el servicio no confía en que alguien la haya cruzado.
+  for (const partial of [
+    { channels: 1, codec: 'pcm_s16le' },
+    { sampleRate: 16000, codec: 'pcm_s16le' },
+    { sampleRate: 16000, channels: 1 },
+    {},
+  ]) {
+    await expectApiError(
+      () =>
+        resultComplete(
+          world.identity,
+          {
+            ...proof,
+            bytes: NORMALIZED.length,
+            checksumSha256: sha(NORMALIZED),
+            probe: partial as unknown as MediaProbe,
+          },
+          world.deps,
+        ),
+      'media_rejected',
+      `sondeo parcial ${JSON.stringify(partial)}`,
+    );
+  }
+
+  const job = await jobsRepo.getJobById(claimed.jobId);
+  assert.notEqual(job?.status, 'succeeded');
+  assert.equal(await meetingsRepo.findLiveDerived(runId, 'normalized'), null);
+  const jobs = await jobsRepo.listJobsForMeeting(claimed.meetingId);
+  assert.equal(jobs.filter((entry) => entry.stage === 'transcribe').length, 0);
+});
+
+test('normalize con el FORMATO equivocado no cierra nada', async () => {
+  const world = await makeWorld();
+  const { runId } = await seedMeetingWithMedia(world);
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  const proof = { jobId: claimed.jobId, attempt: claimed.attempt, leaseToken: claimed.leaseToken };
+  const signed = await resultInit(
+    world.identity,
+    { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED) },
+    world.deps,
+  );
+  assert.ok(world.store.put(signed.url, NORMALIZED, signed.requiredHeaders).ok);
+
+  // Un ffmpeg mal configurado produce 48 kHz estéreo AAC. Antes el pipeline
+  // seguía adelante y el fallo aparecía como una transcripción rara, lejos del
+  // sitio donde se podía diagnosticar.
+  const wrong: MediaProbe[] = [
+    { ...VALID_PROBE, sampleRate: 48_000 },
+    { ...VALID_PROBE, channels: 2 },
+    { ...VALID_PROBE, codec: 'aac' },
+    { durationSeconds: 12.5, sampleRate: 48_000, channels: 2, codec: 'aac' },
+  ];
+  for (const probe of wrong) {
+    await expectApiError(
+      () =>
+        resultComplete(
+          world.identity,
+          { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED), probe },
+          world.deps,
+        ),
+      'media_rejected',
+      `formato equivocado ${JSON.stringify(probe)}`,
+    );
+  }
+
+  const job = await jobsRepo.getJobById(claimed.jobId);
+  assert.notEqual(job?.status, 'succeeded');
+  assert.equal(await meetingsRepo.findLiveDerived(runId, 'normalized'), null);
+  const jobs = await jobsRepo.listJobsForMeeting(claimed.meetingId);
+  assert.equal(jobs.filter((entry) => entry.stage === 'transcribe').length, 0);
+});
+
+test('el sondeo se RECHAZA en transcribe y en diarize, no se ignora', async () => {
+  const world = await makeWorld();
+  await seedMeetingWithMedia(world);
+  const normalizeJob = await claim(world.identity, {}, world.deps);
+  assert.ok(normalizeJob);
+  await runStage(world, normalizeJob, NORMALIZED);
+
+  for (const stage of ['transcribe', 'diarize'] as const) {
+    const job = await claim(world.identity, {}, world.deps);
+    assert.ok(job);
+    assert.equal(job.stage, stage);
+    const artifact = stage === 'transcribe' ? transcriptArtifact() : diarizationArtifact();
+    const proof = { jobId: job.jobId, attempt: job.attempt, leaseToken: job.leaseToken };
+    const signed = await resultInit(
+      world.identity,
+      { ...proof, bytes: artifact.length, checksumSha256: sha(artifact) },
+      world.deps,
+    );
+    assert.ok(world.store.put(signed.url, artifact, signed.requiredHeaders).ok);
+
+    // Aceptar y luego ignorar es lo peor de las dos opciones: el worker cree
+    // que mai registró un sondeo y mai no registró nada.
+    await expectApiError(
+      () =>
+        resultComplete(
+          world.identity,
+          { ...proof, bytes: artifact.length, checksumSha256: sha(artifact), probe: VALID_PROBE },
+          world.deps,
+        ),
+      'invalid_request',
+      `sondeo en ${stage}`,
+    );
+    const stillOpen = await jobsRepo.getJobById(job.jobId);
+    assert.notEqual(stillOpen?.status, 'succeeded', `${stage} no se cerró`);
+
+    // Y sin el sondeo, la misma etapa cierra.
+    const ok = await resultComplete(
+      world.identity,
+      { ...proof, bytes: artifact.length, checksumSha256: sha(artifact) },
+      world.deps,
+    );
+    assert.equal(ok.status, 'succeeded');
+  }
 });
 
 test('el leaseToken NO entra en la comparación de idempotencia', async () => {
@@ -2029,6 +2239,7 @@ test('un complete sobre un job cancelado se rechaza', async () => {
           leaseToken: claimed.leaseToken,
           bytes: NORMALIZED.length,
           checksumSha256: sha(NORMALIZED),
+          probe: VALID_PROBE,
         },
         world.deps,
       ),

@@ -9,6 +9,7 @@ import {
   mintWorkerToken,
 } from '../../src/db/repositories/meetings/credentials.js';
 import * as jobsRepo from '../../src/db/repositories/meetings/jobs.js';
+import * as meetingsRepo from '../../src/db/repositories/meetings/meetings.js';
 import { FakePrivateStore } from '../../src/storage/fakePrivateStore.js';
 import {
   createMeeting,
@@ -53,6 +54,23 @@ after(async () => {
 const NORMALIZED = Buffer.from('RIFF....WAVE normalizado por la prueba de rutas');
 const AUDIO = Buffer.from('RIFF....WAVE original de la prueba de rutas');
 const sha = (bytes: Buffer): string => createHash('sha256').update(bytes).digest('hex');
+
+/** Un NDJSON de transcripción bien formado, para llegar a cerrar `transcribe`. */
+function transcriptArtifact(segments = 2): Buffer {
+  const lines = [
+    JSON.stringify({
+      schema: 'meetings.transcript',
+      schema_version: 1,
+      duration_seconds: 30,
+      model: 'medium',
+      segment_count: segments,
+    }),
+  ];
+  for (let i = 0; i < segments; i += 1) {
+    lines.push(JSON.stringify({ i, start: i * 10, end: i * 10 + 9, text: `S${i}`, confidence: 0.9 }));
+  }
+  return gzipSync(Buffer.from(`${lines.join('\n')}\n`));
+}
 
 /**
  * Los handlers resuelven sus dependencias por su cuenta, leyendo el entorno.
@@ -547,6 +565,9 @@ test('un job de otro tenant sale como 404, no 403', async () => {
   assert.equal(((await readBody(response)).error as { code: string }).code, 'not_found');
 });
 
+/** El sondeo que el formato pactado exige al cerrar `normalize`. */
+const PROBE = { durationSeconds: 30, sampleRate: 16000, channels: 1, codec: 'pcm_s16le' } as const;
+
 test('reenviar result/complete por el handler es idempotente; con otro checksum es 409', async () => {
   await installDeps();
   const ctx = await seed();
@@ -557,11 +578,15 @@ test('reenviar result/complete por el handler es idempotente; con otro checksum 
 
   const claimed = await readBody(await claimRoute.POST(post('/api/meetings/v1/jobs/claim', {}, ctx.token)));
   const proof = { attempt: claimed.attempt, leaseToken: claimed.leaseToken };
-  const payload = { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED) };
+  const initPayload = { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED) };
+  // `init` no lleva sondeo y `complete` de `normalize` lo exige: son dos
+  // cuerpos distintos, y compartir el objeto era lo que dejaba pasar el cierre
+  // sin sondeo.
+  const payload = { ...initPayload, probe: PROBE };
 
   const signed = await readBody(
     await initRoute.POST(
-      post(`/api/meetings/v1/jobs/${jobId}/result/init`, payload, ctx.token),
+      post(`/api/meetings/v1/jobs/${jobId}/result/init`, initPayload, ctx.token),
       params({ jobId }),
     ),
   );
@@ -585,13 +610,255 @@ test('reenviar result/complete por el handler es idempotente; con otro checksum 
   const conflicting = await completeRoute.POST(
     post(
       `/api/meetings/v1/jobs/${jobId}/result/complete`,
-      { ...proof, bytes: NORMALIZED.length, checksumSha256: 'e'.repeat(64) },
+      { ...proof, bytes: NORMALIZED.length, checksumSha256: 'e'.repeat(64), probe: PROBE },
       ctx.token,
     ),
     params({ jobId }),
   );
   assert.equal(conflicting.status, 409);
   assert.equal(((await readBody(conflicting)).error as { code: string }).code, 'terminal_conflict');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// El contrato del sondeo de `normalize`, por los handlers reales
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Deja un `normalize` reclamado y su artefacto ya subido, listo para el
+ * `result/complete` que cada prueba quiera probar.
+ */
+async function normalizeReadyToComplete(ctx: Ctx): Promise<{
+  jobId: string;
+  proof: { attempt: number; leaseToken: string };
+  complete: (body: unknown) => Promise<Response>;
+}> {
+  const { jobId } = await seedMeeting(ctx);
+  const claimRoute = await import('../../web/app/api/meetings/v1/jobs/claim/route.js');
+  const initRoute = await import('../../web/app/api/meetings/v1/jobs/[jobId]/result/init/route.js');
+  const completeRoute = await import(
+    '../../web/app/api/meetings/v1/jobs/[jobId]/result/complete/route.js'
+  );
+  const claimed = await readBody(await claimRoute.POST(post('/api/meetings/v1/jobs/claim', {}, ctx.token)));
+  assert.equal(claimed.stage, 'normalize');
+  const proof = { attempt: claimed.attempt as number, leaseToken: claimed.leaseToken as string };
+  const signed = await readBody(
+    await initRoute.POST(
+      post(
+        `/api/meetings/v1/jobs/${jobId}/result/init`,
+        { ...proof, bytes: NORMALIZED.length, checksumSha256: sha(NORMALIZED) },
+        ctx.token,
+      ),
+      params({ jobId }),
+    ),
+  );
+  assert.ok(store.put(signed.url as string, NORMALIZED, signed.requiredHeaders as Record<string, string>).ok);
+  return {
+    jobId,
+    proof,
+    complete: (body: unknown) =>
+      completeRoute.POST(
+        post(`/api/meetings/v1/jobs/${jobId}/result/complete`, body, ctx.token),
+        params({ jobId }),
+      ),
+  };
+}
+
+test('normalize sin sondeo: el handler responde 400 y no cierra la etapa', async () => {
+  await installDeps();
+  const ctx = await seed();
+  const { jobId, proof, complete } = await normalizeReadyToComplete(ctx);
+
+  const response = await complete({
+    ...proof,
+    bytes: NORMALIZED.length,
+    checksumSha256: sha(NORMALIZED),
+  });
+  assert.equal(response.status, 400);
+  const body = await readBody(response);
+  assert.equal((body.error as { code: string }).code, 'invalid_request');
+  assert.match((body.error as { message: string }).message, /probe/);
+
+  const job = await jobsRepo.getJobById(jobId);
+  assert.notEqual(job?.status, 'succeeded');
+  const jobs = await jobsRepo.listJobsForMeeting(job!.meeting_id);
+  assert.equal(jobs.filter((entry) => entry.stage === 'transcribe').length, 0);
+});
+
+test('normalize con sondeo PARCIAL: 400 del esquema, con el campo nombrado', async () => {
+  await installDeps();
+  const ctx = await seed();
+  const { jobId, proof, complete } = await normalizeReadyToComplete(ctx);
+
+  // Cada campo del formato, ausente por turnos. El esquema del cuerpo es la
+  // primera puerta y nombra el campo — un mensaje que dice 'sampleRate' es lo
+  // que permite al worker corregir sin adivinar.
+  for (const [missing, partial] of [
+    ['sampleRate', { channels: 1, codec: 'pcm_s16le' }],
+    ['channels', { sampleRate: 16000, codec: 'pcm_s16le' }],
+    ['codec', { sampleRate: 16000, channels: 1 }],
+  ] as Array<[string, Record<string, unknown>]>) {
+    const response = await complete({
+      ...proof,
+      bytes: NORMALIZED.length,
+      checksumSha256: sha(NORMALIZED),
+      probe: partial,
+    });
+    assert.equal(response.status, 400, `falta ${missing}`);
+    const body = await readBody(response);
+    assert.equal((body.error as { code: string }).code, 'invalid_request');
+    assert.match((body.error as { message: string }).message, new RegExp(missing));
+  }
+
+  // 'durationSeconds' es la única concesión: ffprobe no siempre la informa.
+  const withoutDuration = await complete({
+    ...proof,
+    bytes: NORMALIZED.length,
+    checksumSha256: sha(NORMALIZED),
+    probe: { sampleRate: 16000, channels: 1, codec: 'pcm_s16le' },
+  });
+  assert.equal(withoutDuration.status, 200);
+  const job = await jobsRepo.getJobById(jobId);
+  assert.equal(job?.status, 'succeeded');
+  const media = await meetingsRepo.findLiveDerived(job!.run_id, 'normalized');
+  assert.equal(media?.duration_seconds, null, 'la duración se guarda nula, no inventada');
+  assert.equal(media?.probe_ok, true);
+});
+
+test('normalize con el formato equivocado: 422 media_rejected y nada escrito', async () => {
+  await installDeps();
+  const ctx = await seed();
+  const { jobId, proof, complete } = await normalizeReadyToComplete(ctx);
+
+  for (const probe of [
+    { ...PROBE, sampleRate: 44100 },
+    { ...PROBE, channels: 2 },
+    { ...PROBE, codec: 'aac' },
+  ]) {
+    const response = await complete({
+      ...proof,
+      bytes: NORMALIZED.length,
+      checksumSha256: sha(NORMALIZED),
+      probe,
+    });
+    assert.equal(response.status, 422, JSON.stringify(probe));
+    assert.equal(((await readBody(response)).error as { code: string }).code, 'media_rejected');
+  }
+
+  const job = await jobsRepo.getJobById(jobId);
+  assert.notEqual(job?.status, 'succeeded');
+  assert.equal(await meetingsRepo.findLiveDerived(job!.run_id, 'normalized'), null);
+  const jobs = await jobsRepo.listJobsForMeeting(job!.meeting_id);
+  assert.equal(jobs.filter((entry) => entry.stage === 'transcribe').length, 0);
+});
+
+test('normalize válido: 200, medio con probe_ok y transcribe encolado', async () => {
+  await installDeps();
+  const ctx = await seed();
+  const { jobId, proof, complete } = await normalizeReadyToComplete(ctx);
+
+  const body = {
+    ...proof,
+    bytes: NORMALIZED.length,
+    checksumSha256: sha(NORMALIZED),
+    probe: PROBE,
+  };
+  const response = await complete(body);
+  assert.equal(response.status, 200);
+  const completed = await readBody(response);
+  assert.equal(completed.status, 'succeeded');
+  assert.equal((completed.nextJob as { stage: string }).stage, 'transcribe');
+
+  const job = await jobsRepo.getJobById(jobId);
+  const media = await meetingsRepo.findLiveDerived(job!.run_id, 'normalized');
+  assert.equal(media?.probe_ok, true);
+  assert.equal(Number(media?.duration_seconds), PROBE.durationSeconds);
+  assert.equal(media?.sample_rate, PROBE.sampleRate);
+  assert.equal(media?.channels, PROBE.channels);
+  assert.equal(media?.codec, PROBE.codec);
+
+  // Reenvío IDÉNTICO: 200 con el resultado previo, y sin un segundo transcribe.
+  const again = await complete(body);
+  assert.equal(again.status, 200);
+  assert.equal((await readBody(again)).status, 'succeeded');
+  const jobs = await jobsRepo.listJobsForMeeting(job!.meeting_id);
+  assert.equal(jobs.filter((entry) => entry.stage === 'transcribe').length, 1);
+
+  // Reenvío con otra DURACIÓN: 409. Es el único campo del sondeo que llega a la
+  // comparación terminal; los otros tres los detiene antes el formato pactado.
+  const conflicting = await complete({ ...body, probe: { ...PROBE, durationSeconds: 31 } });
+  assert.equal(conflicting.status, 409);
+  assert.equal(((await readBody(conflicting)).error as { code: string }).code, 'terminal_conflict');
+
+  // Y el estado terminal siguió intacto.
+  const after = await meetingsRepo.findLiveDerived(job!.run_id, 'normalized');
+  assert.equal(Number(after?.duration_seconds), PROBE.durationSeconds);
+});
+
+test('el sondeo en transcribe: 400 por el handler, no se ignora', async () => {
+  await installDeps();
+  const ctx = await seed();
+  const { jobId, proof, complete } = await normalizeReadyToComplete(ctx);
+  assert.equal(
+    (
+      await complete({
+        ...proof,
+        bytes: NORMALIZED.length,
+        checksumSha256: sha(NORMALIZED),
+        probe: PROBE,
+      })
+    ).status,
+    200,
+  );
+
+  const claimRoute = await import('../../web/app/api/meetings/v1/jobs/claim/route.js');
+  const initRoute = await import('../../web/app/api/meetings/v1/jobs/[jobId]/result/init/route.js');
+  const completeRoute = await import(
+    '../../web/app/api/meetings/v1/jobs/[jobId]/result/complete/route.js'
+  );
+  const transcribe = await readBody(
+    await claimRoute.POST(post('/api/meetings/v1/jobs/claim', {}, ctx.token)),
+  );
+  assert.equal(transcribe.stage, 'transcribe');
+  const transcribeId = transcribe.jobId as string;
+  const artifact = transcriptArtifact();
+  const tProof = { attempt: transcribe.attempt, leaseToken: transcribe.leaseToken };
+  const signed = await readBody(
+    await initRoute.POST(
+      post(
+        `/api/meetings/v1/jobs/${transcribeId}/result/init`,
+        { ...tProof, bytes: artifact.length, checksumSha256: sha(artifact) },
+        ctx.token,
+      ),
+      params({ jobId: transcribeId }),
+    ),
+  );
+  assert.ok(store.put(signed.url as string, artifact, signed.requiredHeaders as Record<string, string>).ok);
+
+  const withProbe = await completeRoute.POST(
+    post(
+      `/api/meetings/v1/jobs/${transcribeId}/result/complete`,
+      { ...tProof, bytes: artifact.length, checksumSha256: sha(artifact), probe: PROBE },
+      ctx.token,
+    ),
+    params({ jobId: transcribeId }),
+  );
+  assert.equal(withProbe.status, 400);
+  const body = await readBody(withProbe);
+  assert.equal((body.error as { code: string }).code, 'invalid_request');
+  assert.match((body.error as { message: string }).message, /probe/);
+  assert.notEqual((await jobsRepo.getJobById(transcribeId))?.status, 'succeeded');
+
+  // Sin el sondeo, la misma etapa cierra por el mismo handler.
+  const withoutProbe = await completeRoute.POST(
+    post(
+      `/api/meetings/v1/jobs/${transcribeId}/result/complete`,
+      { ...tProof, bytes: artifact.length, checksumSha256: sha(artifact) },
+      ctx.token,
+    ),
+    params({ jobId: transcribeId }),
+  );
+  assert.equal(withoutProbe.status, 200);
+  void jobId;
 });
 
 test('el barrido global exige ámbito interno Y capacidad, también por el handler', async () => {
@@ -709,10 +976,15 @@ test('un artefacto NDJSON malformado sale como 422 artifact_malformed', async ()
     NORMALIZED,
     normalizeSigned.requiredHeaders as Record<string, string>,
   );
-  await completeRoute.POST(
-    post(`/api/meetings/v1/jobs/${jobId}/result/complete`, normalizePayload, ctx.token),
+  const normalizeClosed = await completeRoute.POST(
+    post(
+      `/api/meetings/v1/jobs/${jobId}/result/complete`,
+      { ...normalizePayload, probe: PROBE },
+      ctx.token,
+    ),
     params({ jobId }),
   );
+  assert.equal(normalizeClosed.status, 200, 'normalize tiene que cerrar para llegar a transcribe');
 
   // transcribe con un NDJSON cuya cabecera declara más segmentos de los que hay.
   const transcribe = await readBody(await claimRoute.POST(post('/api/meetings/v1/jobs/claim', {}, ctx.token)));

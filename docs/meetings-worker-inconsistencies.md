@@ -81,9 +81,15 @@ en `main.py` porque **no puede estarlo**.
 
 **Corrección.** Escribir `audio_probe.py`: probe con ffprobe —duración, canales,
 sample rate, códec— y pasa a ser el único validador del worker. El diseño ya lo
-necesita: `meeting_media` guarda esos campos y `probe_ok`/`probe_error` son la
-diferencia entre "medios inválidos" y "transcripción fallida" en las máquinas de
-estado.
+necesita: `meeting_media` guarda esos campos.
+
+> **Actualización (pasada de hardening, T-2/T-3).** Este párrafo decía antes que
+> `probe_ok`/`probe_error` eran «la diferencia entre medios inválidos y
+> transcripción fallida». `probe_error` ya no existe: un sondeo fallido no
+> produce fila de medio, produce un job fallido con `failure_code` /
+> `failure_detail`. La distinción sigue existiendo, pero está entre TABLAS
+> —`meeting_media` cuando hay medio, `meeting_processing_jobs` cuando no— no
+> entre dos columnas de la misma fila.
 
 **No** se resuelve borrando el import: `experimental.py` se conserva intacto, y
 escribir el módulo que le falta lo hace importable otra vez sin decidir todavía

@@ -134,16 +134,40 @@ export const ResultInitBody = z
   })
   .strict();
 
-/** Lo que `ffprobe` midió del audio normalizado. Sólo lo manda `normalize`. */
+/**
+ * Lo que `ffprobe` midió del audio normalizado. Sólo lo manda `normalize`.
+ *
+ * Los tres campos del FORMATO son obligatorios. Antes eran `nullish()`, y esa
+ * laxitud dejaba pasar un sondeo a medias —`{ codec: 'pcm_s16le' }`— que mai
+ * persistía como si hubiera medido el audio entero. Un sondeo parcial no es un
+ * sondeo: es una afirmación sobre lo que no se miró.
+ *
+ * `durationSeconds` sí puede faltar, y es la única concesión: ffprobe no
+ * siempre informa duración —un WAV truncado, un contenedor sin cabecera— y
+ * rechazar por eso descartaría audio perfectamente transcribible. Omitirlo y
+ * mandar `null` significan lo mismo.
+ *
+ * Los VALORES pactados (16 kHz, mono, pcm_s16le) NO se comprueban aquí: son de
+ * pipeline, no de forma, y viven en `src/meetings/normalizedAudio.ts`. Aquí se
+ * exige que el sondeo esté completo; allí, que diga lo correcto. Un sondeo
+ * completo con los números equivocados es una petición válida sobre un medio
+ * inválido, y merece 422, no 400.
+ */
 const probe = z
   .object({
     durationSeconds: z.number().min(0).max(24 * 3600).nullish(),
-    sampleRate: z.number().int().positive().max(768_000).nullish(),
-    channels: z.number().int().positive().max(64).nullish(),
-    codec: nonEmpty(60).nullish(),
+    sampleRate: z.number().int().positive().max(768_000),
+    channels: z.number().int().positive().max(64),
+    codec: nonEmpty(60),
   })
   .strict();
 
+/**
+ * `probe` sigue siendo OPCIONAL en el esquema, y tiene que serlo: si es
+ * obligatorio depende de la ETAPA del job, y la etapa no está en el cuerpo —
+ * sale del job, que el cuerpo no puede elegir. La regla condicional vive en
+ * `assertProbeMatchesStage`, que sí conoce las dos cosas.
+ */
 export const ResultCompleteBody = z
   .object({
     ...leaseProof,

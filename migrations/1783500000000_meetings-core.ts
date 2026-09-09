@@ -235,12 +235,32 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       content_type text NOT NULL,
 
       -- Sondeo REAL de ffprobe, no lo que declaró el cliente.
+      --
+      -- Son nullables porque el ORIGINAL no se sondea: lo sube una persona y
+      -- mai no lo mide. Para un 'normalized' son obligatorios, y eso lo exige
+      -- 'meeting_media_normalized_probed' más abajo.
       duration_seconds numeric(12,3) CHECK (duration_seconds IS NULL OR duration_seconds >= 0),
       sample_rate integer CHECK (sample_rate IS NULL OR sample_rate > 0),
       channels smallint CHECK (channels IS NULL OR channels > 0),
       codec text,
+
+      -- true  → estas mediciones vienen de un sondeo que salió bien.
+      -- NULL  → nadie sondeó esta fila (el original).
+      -- false → IMPOSIBLE, ver 'meeting_media_probe_never_failed'.
       probe_ok boolean,
-      probe_error text,
+      -- 'probe_error' NO EXISTE, y su ausencia es la decisión.
+      --
+      -- La versión anterior tenía la columna y un CHECK que decía «probe_ok =
+      -- false exige probe_error», lo que describía un flujo que no existe:
+      -- ningún camino del servicio escribe una fila de medio con el sondeo
+      -- fallido. Cuando ffprobe falla, el worker lo reporta con 'fail' ANTES de
+      -- subir nada, y lo que queda es 'meeting_processing_jobs.failure_code' y
+      -- 'failure_detail' — el job muerto, no un medio inservible.
+      --
+      -- Una columna sin escritor legítimo no es inocua: parece un sitio donde
+      -- buscar diagnósticos, y quien lo busque no encontrará nunca nada. Peor,
+      -- invita a alguien a empezar a escribirla y a tener entonces DOS sitios
+      -- donde vive la causa de un fallo de sondeo.
 
       -- Retención (D-2/D-12). NULL = conservar. El interruptor maestro está en
       -- client_modules.settings y por ahora está apagado, así que nada calcula
@@ -261,9 +281,44 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       ),
       CONSTRAINT meeting_media_key_unique UNIQUE (storage_key),
       CONSTRAINT meeting_media_scope_key UNIQUE (id, tenant_id, client_id),
-      -- Un probe que falló tiene que explicar por qué.
-      CONSTRAINT meeting_media_probe_coherent CHECK (
-        probe_ok IS NULL OR probe_ok = true OR probe_error IS NOT NULL
+
+      -- UNA SOLA SEMÁNTICA para el sondeo, y es ésta: si hay fila de medio, el
+      -- sondeo salió bien. Un sondeo fallido no produce medio; produce un job
+      -- fallido.
+      --
+      -- 'IS NOT FALSE' dice exactamente eso —true o NULL, nunca false— y lo
+      -- dice sin depender de cómo se comporte una comparación con NULL. Que la
+      -- constraint de al lado se escapara por ahí es razón suficiente para que
+      -- las dos usen el idioma seguro.
+      CONSTRAINT meeting_media_probe_never_failed CHECK (probe_ok IS NOT FALSE),
+
+      -- Y un medio NORMALIZADO lleva siempre el sondeo completo. Es la mitad
+      -- estructural del contrato de 'normalize': la etapa existe para dejar el
+      -- audio en un formato conocido, así que una fila que no dice en qué
+      -- formato quedó no sirve para lo único que la etapa siguiente necesita.
+      --
+      -- 'duration_seconds' queda FUERA a propósito: ffprobe no siempre informa
+      -- duración —un WAV truncado, un contenedor sin cabecera— y exigirla
+      -- descartaría audio perfectamente transcribible.
+      --
+      -- Los VALORES pactados (16 kHz, mono, pcm_s16le) NO están aquí: son de
+      -- pipeline y viven en 'src/meetings/normalizedAudio.ts'. Fijarlos en un
+      -- CHECK obligaría a migrar el esquema para cambiar un argumento de
+      -- ffmpeg. La base exige que el sondeo esté COMPLETO; el servicio, que
+      -- diga lo correcto.
+      --
+      -- 'IS TRUE' y no '= true': con 'probe_ok' a NULL, '= true' vale NULL, la
+      -- disyuncción entera vale NULL y PostgreSQL da por bueno un CHECK que no
+      -- es FALSE. Una fila 'normalized' con las mediciones puestas y
+      -- 'probe_ok' sin poner entraba tranquilamente. Lo destapó la suite de
+      -- esquema, no la lectura de la expresión.
+      CONSTRAINT meeting_media_normalized_probed CHECK (
+        role <> 'normalized' OR (
+          probe_ok IS TRUE
+          AND sample_rate IS NOT NULL
+          AND channels IS NOT NULL
+          AND codec IS NOT NULL
+        )
       )
     );
 

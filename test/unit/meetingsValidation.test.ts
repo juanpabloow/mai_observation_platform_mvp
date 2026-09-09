@@ -92,7 +92,10 @@ test('no hay coerción: "1" no es 1, "true" no es true', () => {
       leaseToken: TOKEN,
       bytes: 1,
       checksumSha256: SHA,
-      probe: { channels: '1' },
+      // El sondeo COMPLETO con un solo campo mal tipado: `parseBody` reporta
+      // la primera incidencia, así que dejarlo incompleto haría que el mensaje
+      // nombrara el campo ausente y la prueba no diría nada sobre la coerción.
+      probe: { sampleRate: 16000, channels: '1', codec: 'pcm_s16le' },
     }),
     /channels/,
   );
@@ -253,7 +256,67 @@ test('el campo se nombra con su path completo cuando está anidado', () => {
     leaseToken: TOKEN,
     bytes: 1,
     checksumSha256: SHA,
-    probe: { sampleRate: -1 },
+    probe: { sampleRate: -1, channels: 1, codec: 'pcm_s16le' },
   });
   assert.match(error, /probe\.sampleRate/);
+});
+
+// ── El sondeo, cuando viene, viene COMPLETO ─────────────────────────────────
+
+const COMPLETE_PROBE = { sampleRate: 16000, channels: 1, codec: 'pcm_s16le' };
+const withProbe = (probe: unknown): unknown => ({
+  attempt: 1,
+  leaseToken: TOKEN,
+  bytes: 1,
+  checksumSha256: SHA,
+  probe,
+});
+
+test('un sondeo a medias se rechaza y nombra el campo que falta', () => {
+  // Antes los tres eran `nullish()`, así que `{ codec: 'pcm_s16le' }` pasaba y
+  // mai lo persistía como si hubiera medido el audio entero. Un sondeo parcial
+  // es una afirmación sobre lo que no se miró.
+  for (const field of ['sampleRate', 'channels', 'codec'] as const) {
+    const partial: Record<string, unknown> = { ...COMPLETE_PROBE };
+    delete partial[field];
+    assert.match(bad(ResultCompleteBody, withProbe(partial)), new RegExp(`probe\\.${field}`));
+  }
+  assert.match(bad(ResultCompleteBody, withProbe({})), /probe\./);
+});
+
+test('los tres campos del formato tampoco admiten null', () => {
+  for (const field of ['sampleRate', 'channels', 'codec'] as const) {
+    assert.match(
+      bad(ResultCompleteBody, withProbe({ ...COMPLETE_PROBE, [field]: null })),
+      new RegExp(`probe\\.${field}`),
+    );
+  }
+});
+
+test('durationSeconds sí puede faltar o ser null, y sólo ella', () => {
+  const omitted = parseBody(ResultCompleteBody, withProbe(COMPLETE_PROBE));
+  assert.ok(omitted.ok, omitted.ok ? '' : omitted.error);
+  const explicitNull = parseBody(
+    ResultCompleteBody,
+    withProbe({ ...COMPLETE_PROBE, durationSeconds: null }),
+  );
+  assert.ok(explicitNull.ok, explicitNull.ok ? '' : explicitNull.error);
+});
+
+test('el sondeo sigue admitiendo campos desconocidos, y los rechaza', () => {
+  assert.match(
+    bad(ResultCompleteBody, withProbe({ ...COMPLETE_PROBE, bitrate: 256000 })),
+    /bitrate/,
+  );
+});
+
+test('los VALORES pactados no se comprueban aquí: eso es del servicio', () => {
+  // 44.1 kHz estéreo AAC es un sondeo perfectamente BIEN FORMADO. Que no sea el
+  // formato pactado lo decide `assertProbeMatchesStage`, y por eso sale 422 y
+  // no 400: la petición es válida, el medio no.
+  const result = parseBody(
+    ResultCompleteBody,
+    withProbe({ durationSeconds: 10, sampleRate: 44100, channels: 2, codec: 'aac' }),
+  );
+  assert.ok(result.ok, result.ok ? '' : result.error);
 });
