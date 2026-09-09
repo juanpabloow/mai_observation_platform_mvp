@@ -22,13 +22,25 @@ SELECT t($q$capacidad desconocida$q$, $q$INSERT INTO worker_pools (slug,environm
 SELECT t($q$concurrency sin schema_version$q$, $q$INSERT INTO worker_pools (slug,environment,scope,tenant_id,capabilities,concurrency) VALUES ('k7','development','single_tenant','11111111-1111-1111-1111-111111111111','{meetings.transcribe}','{"limits":{"meetings.transcribe":1}}'::jsonb)$q$, $q$pools_concurrency_valid$q$);
 SELECT t($q$schema_version desconocida$q$, $q$INSERT INTO worker_pools (slug,environment,scope,tenant_id,capabilities,concurrency) VALUES ('k8','development','single_tenant','11111111-1111-1111-1111-111111111111','{meetings.transcribe}','{"schema_version":2,"limits":{"meetings.transcribe":1}}'::jsonb)$q$, $q$pools_concurrency_valid$q$);
 SELECT t($q$limits vacío$q$, $q$INSERT INTO worker_pools (slug,environment,scope,tenant_id,capabilities,concurrency) VALUES ('k9','development','single_tenant','11111111-1111-1111-1111-111111111111','{meetings.transcribe}','{"schema_version":1,"limits":{}}'::jsonb)$q$, $q$violates check constraint$q$);
-SELECT a($q$limits vacío rechazado también por la función de concurrency$q$, $q$NOT meetings_valid_concurrency($sv${"schema_version":1,"limits":{}}$sv$::jsonb)$q$);
+-- La estructura de un 'limits' vacío es VÁLIDA: la regla «al menos un límite»
+-- vive en meetings_pool_coherent, que es la única que ve también las
+-- capacidades. Un pool sólo de mantenimiento no declara ninguna reclamable y
+-- por tanto no tiene nada que limitar; exigirlo en la función estructural
+-- obligaba a inventar un número.
+SELECT a($q$limits vacío es estructuralmente válido$q$, $q$meetings_valid_concurrency($sv${"schema_version":1,"limits":{}}$sv$::jsonb)$q$);
+SELECT a($q$pero incoherente si el pool declara una capacidad reclamable$q$, $q$NOT meetings_pool_coherent(ARRAY['meetings.transcribe'], $sv${"schema_version":1,"limits":{}}$sv$::jsonb)$q$);
+SELECT a($q$y coherente si sólo declara mantenimiento$q$, $q$meetings_pool_coherent(ARRAY['meetings.maintenance'], $sv${"schema_version":1,"limits":{}}$sv$::jsonb)$q$);
+SELECT a($q$un límite para una capacidad NO reclamable es inválido$q$, $q$NOT meetings_valid_concurrency($sv${"schema_version":1,"limits":{"meetings.maintenance":1}}$sv$::jsonb)$q$);
 SELECT t($q$límite 0$q$, $q$INSERT INTO worker_pools (slug,environment,scope,tenant_id,capabilities,concurrency) VALUES ('ka','development','single_tenant','11111111-1111-1111-1111-111111111111','{meetings.transcribe}','{"schema_version":1,"limits":{"meetings.transcribe":0}}'::jsonb)$q$, $q$pools_concurrency_valid$q$);
 SELECT t($q$límite 65$q$, $q$INSERT INTO worker_pools (slug,environment,scope,tenant_id,capabilities,concurrency) VALUES ('kb','development','single_tenant','11111111-1111-1111-1111-111111111111','{meetings.transcribe}','{"schema_version":1,"limits":{"meetings.transcribe":65}}'::jsonb)$q$, $q$pools_concurrency_valid$q$);
 SELECT t($q$límite no entero$q$, $q$INSERT INTO worker_pools (slug,environment,scope,tenant_id,capabilities,concurrency) VALUES ('kc','development','single_tenant','11111111-1111-1111-1111-111111111111','{meetings.transcribe}','{"schema_version":1,"limits":{"meetings.transcribe":1.5}}'::jsonb)$q$, $q$pools_concurrency_valid$q$);
 SELECT t($q$límite como texto$q$, $q$INSERT INTO worker_pools (slug,environment,scope,tenant_id,capabilities,concurrency) VALUES ('kd','development','single_tenant','11111111-1111-1111-1111-111111111111','{meetings.transcribe}','{"schema_version":1,"limits":{"meetings.transcribe":"1"}}'::jsonb)$q$, $q$pools_concurrency_valid$q$);
 SELECT t($q$clave desconocida de primer nivel$q$, $q$INSERT INTO worker_pools (slug,environment,scope,tenant_id,capabilities,concurrency) VALUES ('ke','development','single_tenant','11111111-1111-1111-1111-111111111111','{meetings.transcribe}','{"schema_version":1,"limits":{"meetings.transcribe":1},"extra":true}'::jsonb)$q$, $q$pools_concurrency_valid$q$);
-SELECT t($q$concurrency no es objeto$q$, $q$INSERT INTO worker_pools (slug,environment,scope,tenant_id,capabilities,concurrency) VALUES ('kf','development','single_tenant','11111111-1111-1111-1111-111111111111','{meetings.transcribe}','[]'::jsonb)$q$, $q$pools_concurrency_valid$q$);
+-- Un array como concurrency lo rechazan LAS DOS constraints (la estructural
+-- porque no es objeto, la de coherencia porque no encuentra límites). Se afirma
+-- que se rechaza, no cuál gana la carrera.
+SELECT t($q$concurrency no es objeto$q$, $q$INSERT INTO worker_pools (slug,environment,scope,tenant_id,capabilities,concurrency) VALUES ('kf','development','single_tenant','11111111-1111-1111-1111-111111111111','{meetings.transcribe}','[]'::jsonb)$q$, $q$violates check constraint$q$);
+SELECT a($q$y la función estructural también lo rechaza$q$, $q$NOT meetings_valid_concurrency($sv$[]$sv$::jsonb)$q$);
 SELECT a($q$el DEFAULT de la tabla es coherente consigo mismo$q$, $q$meetings_pool_coherent(ARRAY['meetings.transcribe'],'{"schema_version":1,"limits":{"meetings.transcribe":1}}'::jsonb)$q$);
 \echo ''
 \echo '════════ #5 · revocación siempre atribuida ════════'

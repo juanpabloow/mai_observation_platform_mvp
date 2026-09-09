@@ -25,7 +25,20 @@ import { query } from '../../client.js';
  * `revoked_at`, la fila ya no está ahí para olvidarla.
  */
 
-export type WorkerCapability = 'meetings.transcribe' | 'meetings.analyze';
+export type WorkerCapability =
+  | 'meetings.transcribe'
+  | 'meetings.analyze'
+  /**
+   * Mantenimiento global: reencolar los leases caducados de TODA la
+   * instalación. No es una capacidad reclamable —no tiene etapa ni
+   * concurrencia— y por eso está separada en el vocabulario de M-1.
+   *
+   * Ninguna credencial de proceso la tiene por defecto. Una credencial de un
+   * pool atado a un tenant NO puede reencolar jobs ajenos ni leer conteos
+   * globales, y eso no es una comprobación en la ruta: es que su lista de
+   * capacidades no la contiene.
+   */
+  | 'meetings.maintenance';
 
 export interface WorkerIdentity {
   readonly credentialId: string;
@@ -124,6 +137,15 @@ export async function authenticateWorkerToken(rawToken: string): Promise<WorkerI
 }
 
 function isWorkerCapability(value: string): value is WorkerCapability {
+  return (
+    value === 'meetings.transcribe' ||
+    value === 'meetings.analyze' ||
+    value === 'meetings.maintenance'
+  );
+}
+
+/** Las que corresponden a una etapa. Espeja `meetings_claimable_capability`. */
+export function isClaimableCapability(value: string): boolean {
   return value === 'meetings.transcribe' || value === 'meetings.analyze';
 }
 

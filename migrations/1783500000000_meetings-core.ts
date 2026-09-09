@@ -71,6 +71,25 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
 
     CREATE FUNCTION meetings_known_capability(cap text)
     RETURNS boolean AS $$
+      SELECT cap IN ('meetings.transcribe', 'meetings.analyze', 'meetings.maintenance');
+    $$ LANGUAGE sql IMMUTABLE STRICT;
+
+    -- CAPACIDADES RECLAMABLES: las que corresponden a una etapa y por tanto
+    -- pueden aparecer en 'meeting_processing_jobs.requires'.
+    --
+    -- 'meetings.maintenance' NO es una de ellas, y la distinción no es
+    -- cosmética. El mantenimiento —reencolar los leases caducados de TODA la
+    -- instalación— no es trabajo de una reunión: no tiene etapa, no consume GPU
+    -- y no admite un límite de concurrencia porque no hay nada que paralelizar.
+    -- Sin separarlas, 'meetings_pool_coherent' exigiría un
+    -- 'limits.meetings.maintenance' cuyo valor no significaría nada y habría que
+    -- inventar.
+    --
+    -- Que exista como CAPACIDAD y no como bandera es lo que permite dársela a
+    -- una credencial y negársela a otra: una credencial de un pool atado a un
+    -- solo tenant no puede reencolar jobs ajenos ni leer conteos globales.
+    CREATE FUNCTION meetings_claimable_capability(cap text)
+    RETURNS boolean AS $$
       SELECT cap IN ('meetings.transcribe', 'meetings.analyze');
     $$ LANGUAGE sql IMMUTABLE STRICT;
 
@@ -173,6 +192,17 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       client_id uuid NOT NULL,
       meeting_id uuid NOT NULL,
 
+      -- EL RUN QUE PRODUJO ESTE MEDIO. NULL sólo para el original.
+      --
+      -- El original lo sube una persona antes de que exista ningún run, así que
+      -- no puede tener uno. Todo lo demás lo produce una etapa, y saber cuál fue
+      -- el run es lo que permite responder «¿cuál es el audio normalizado de este
+      -- reprocesamiento?» con una consulta en vez de reconstruirlo del texto de
+      -- 'storage_key' — que era lo que hacía la revisión anterior, recorriendo
+      -- los intentos hacia atrás y derivando claves. Una clave de objeto es una
+      -- cadena opaca; usarla como índice significa que cambiar el esquema de
+      -- claves rompe la lectura de datos ya escritos.
+      run_id uuid,
       role text NOT NULL CHECK (role IN ('original','normalized','raw_result')),
       storage_key text NOT NULL,
       bytes bigint NOT NULL CHECK (bytes >= 0),
@@ -199,6 +229,13 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
 
       CONSTRAINT meeting_media_meeting_fkey FOREIGN KEY (meeting_id, tenant_id, client_id)
         REFERENCES meetings (id, tenant_id, client_id) ON DELETE CASCADE,
+      -- LA INVARIANTE, en sus dos direcciones: derivado ⇒ run obligatorio;
+      -- original ⇒ sin run. Un derivado sin run es un artefacto del que nadie
+      -- puede decir de qué reprocesamiento vino; un original CON run afirmaría
+      -- que una etapa produjo el audio que subió una persona.
+      CONSTRAINT meeting_media_run_scoped CHECK (
+        CASE role WHEN 'original' THEN run_id IS NULL ELSE run_id IS NOT NULL END
+      ),
       CONSTRAINT meeting_media_key_unique UNIQUE (storage_key),
       CONSTRAINT meeting_media_scope_key UNIQUE (id, tenant_id, client_id),
       -- Un probe que falló tiene que explicar por qué.
@@ -212,6 +249,24 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
     CREATE UNIQUE INDEX meeting_media_one_live_original_idx
       ON meeting_media (meeting_id)
       WHERE role = 'original' AND deleted_at IS NULL;
+
+    -- UN SOLO medio derivado VIVO por (run, rol).
+    --
+    -- Un run reprocesa una vez; si su etapa 'normalize' reintenta y vuelve a
+    -- subir, lo que hay es una versión nueva del mismo insumo, no dos insumos.
+    -- Sin este índice, 'transcribe' tendría que elegir entre dos filas y la
+    -- elección viviría en el código; con él, «el audio normalizado de este run»
+    -- tiene una respuesta o ninguna.
+    --
+    -- El intento anterior se marca 'deleted_at' en la misma transacción, así que
+    -- el histórico no se pierde: deja de estar VIVO.
+    CREATE UNIQUE INDEX meeting_media_one_live_derived_idx
+      ON meeting_media (run_id, role)
+      WHERE role <> 'original' AND deleted_at IS NULL;
+
+    -- La consulta del claim: el insumo de una etapa, por run y rol.
+    CREATE INDEX meeting_media_run_idx ON meeting_media (run_id, role)
+      WHERE run_id IS NOT NULL AND deleted_at IS NULL;
     CREATE INDEX meeting_media_meeting_idx ON meeting_media (meeting_id, role);
     -- El barrido de retención: sólo lo que tiene fecha y no está borrado.
     CREATE INDEX meeting_media_sweep_idx ON meeting_media (delete_after)
@@ -260,6 +315,22 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       WHERE finished_at IS NULL;
 
     CREATE INDEX runs_meeting_idx ON meeting_processing_runs (meeting_id, run_number DESC);
+
+    -- LA FK DEL MEDIO DERIVADO SOBRE SU RUN.
+    --
+    -- Va aquí y no dentro de 'meeting_media' por orden de creación: esa tabla se
+    -- declara antes que 'meeting_processing_runs', así que la referencia no
+    -- existiría todavía. Es el mismo patrón que MEET-3 usa para la FK de la
+    -- credencial sobre el job.
+    --
+    -- La clave compuesta incluye meeting_id: el run tiene que ser de ESTA
+    -- reunión, igual que en jobs y en transcripts. CASCADE porque borrar un run
+    -- borra sus artefactos derivados — el original, que no tiene run, sobrevive.
+    ALTER TABLE meeting_media
+      ADD CONSTRAINT meeting_media_run_fkey
+      FOREIGN KEY (run_id, meeting_id, tenant_id, client_id)
+      REFERENCES meeting_processing_runs (id, meeting_id, tenant_id, client_id)
+      ON DELETE CASCADE;
 
     -- ═══════════════════════════════════════════════════════════════════════
     -- 4. meeting_processing_jobs — LA COLA
@@ -483,13 +554,19 @@ export async function down(pgm: MigrationBuilder): Promise<void> {
       END IF;
     END $$;
 
+    -- ORDEN: de lo que referencia a lo referenciado. 'meeting_media' va ANTES
+    -- de 'meeting_processing_runs' porque su columna 'run_id' lo referencia; con
+    -- el orden anterior el DROP de runs fallaba por la FK y la reversión se
+    -- quedaba a medias. Lo destapó el paso del arnés que revierte con la base
+    -- vacía.
     DROP TABLE IF EXISTS meeting_job_events;
     DROP TABLE IF EXISTS meeting_processing_jobs;
-    DROP TABLE IF EXISTS meeting_processing_runs;
     DROP TABLE IF EXISTS meeting_media;
+    DROP TABLE IF EXISTS meeting_processing_runs;
     DROP TABLE IF EXISTS meetings;
 
     DROP FUNCTION IF EXISTS meetings_known_capabilities(text[]);
+    DROP FUNCTION IF EXISTS meetings_claimable_capability(text);
     DROP FUNCTION IF EXISTS meetings_known_capability(text);
     DROP FUNCTION IF EXISTS meetings_stage_capability(text);
   `);

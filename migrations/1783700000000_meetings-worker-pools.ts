@@ -83,12 +83,17 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
         -- limits obligatorio y objeto
         AND cfg ? 'limits'
         AND jsonb_typeof(cfg->'limits') = 'object'
-        -- al menos un límite: un pool sin límites no puede reclamar nada
-        AND EXISTS (SELECT 1 FROM jsonb_object_keys(cfg->'limits') k)
-        -- toda clave es una capacidad conocida
+        -- 'limits' PUEDE estar vacío. La regla «al menos un límite» vive en
+        -- 'meetings_pool_coherent', que es la única que ve TAMBIÉN las
+        -- capacidades: un pool sólo de mantenimiento no declara ninguna
+        -- capacidad reclamable y por tanto no tiene nada que limitar.
+        -- Exigirlo aquí obligaba a inventar un límite para una capacidad que no
+        -- se reclama.
+        -- toda clave es una capacidad RECLAMABLE (una no reclamable no tiene
+        -- concurrencia que limitar)
         AND NOT EXISTS (
           SELECT 1 FROM jsonb_object_keys(cfg->'limits') k
-           WHERE NOT meetings_known_capability(k)
+           WHERE NOT meetings_claimable_capability(k)
         )
         -- todo valor es entero positivo y acotado
         AND NOT EXISTS (
@@ -122,20 +127,32 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
     -- toda capacidad declarada tiene límite. Y exige al menos una: un pool sin
     -- capacidades efectivas no puede reclamar nada, y un pool que no puede
     -- reclamar nada es un registro que engaña a quien lo lee.
+    -- Sólo las capacidades RECLAMABLES necesitan límite de concurrencia.
+    -- 'meetings.maintenance' no corresponde a ninguna etapa: no hay trabajo que
+    -- paralelizar, así que exigirle un límite obligaría a inventar un número
+    -- que no significa nada. La coherencia se comprueba sobre el subconjunto
+    -- reclamable, y la biyección sigue siendo estricta dentro de él.
     CREATE FUNCTION meetings_pool_coherent(caps text[], cfg jsonb)
     RETURNS boolean AS $$
       SELECT caps IS NOT NULL
          AND cfg IS NOT NULL
          AND cardinality(caps) >= 1
-         -- toda clave de limits está declarada en capabilities
+         -- si el pool declara ALGUNA capacidad reclamable, 'limits' no puede
+         -- estar vacío: un pool que anuncia que transcribe y no acota su
+         -- concurrencia o no reclama nunca o reclama sin tope
+         AND (
+               NOT EXISTS (SELECT 1 FROM unnest(caps) AS c WHERE meetings_claimable_capability(c))
+               OR EXISTS (SELECT 1 FROM jsonb_object_keys(cfg->'limits') AS k)
+             )
+         -- toda clave de limits es una capacidad RECLAMABLE y está declarada
          AND NOT EXISTS (
                SELECT 1 FROM jsonb_object_keys(cfg->'limits') AS k
-                WHERE NOT (k = ANY (caps))
+                WHERE NOT (k = ANY (caps)) OR NOT meetings_claimable_capability(k)
              )
-         -- toda capacidad declarada tiene un límite
+         -- toda capacidad RECLAMABLE declarada tiene un límite
          AND NOT EXISTS (
                SELECT 1 FROM unnest(caps) AS c
-                WHERE NOT (cfg->'limits' ? c)
+                WHERE meetings_claimable_capability(c) AND NOT (cfg->'limits' ? c)
              );
     $$ LANGUAGE sql IMMUTABLE;
 
