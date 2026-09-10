@@ -670,6 +670,13 @@ def main(argv: Optional[List[str]] = None) -> int:
         raise SystemExit(f"No existe el audio: {args.audio}")
     audio = os.path.abspath(args.audio)
     out_dir = os.path.abspath(args.out)
+    # `load_worker` hace `chdir` a la raíz del worker —su config resuelve rutas
+    # relativas contra ella—, así que TODA ruta de la línea de comandos se absolutiza
+    # ANTES. Con `--reference` relativa esto reventaba después de las dos
+    # ejecuciones, tirando el trabajo ya hecho por una ruta.
+    reference_path = os.path.abspath(args.reference) if args.reference else None
+    if reference_path and not os.path.isfile(reference_path):
+        raise SystemExit(f"No existe la referencia: {reference_path}")
     os.makedirs(out_dir, exist_ok=True)
 
     probe = probe_wav(audio)
@@ -754,8 +761,8 @@ def main(argv: Optional[List[str]] = None) -> int:
           f"({len(raw_diff)} si se comparan los nombres crudos)")
 
     scores: Dict[str, Dict[str, Any]] = {}
-    if args.reference:
-        with open(args.reference, encoding="utf-8") as handle:
+    if reference_path:
+        with open(reference_path, encoding="utf-8") as handle:
             reference_rows = parse_reference(handle.read())
         for tag in tags:
             score = score_against_reference(
