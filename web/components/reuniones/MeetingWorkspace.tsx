@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Chip, EmptyState, GHOST_ACTION_CLS, PRIMARY_SM_CLS } from "@/components/ui/primitives";
 import { AudioPlayer, type AudioState, type SpeakerTurn } from "@/components/reuniones/AudioPlayer";
 import { Avatar, ProgressBar, ShareMeter, StampLink, statusFace } from "@/components/reuniones/MeetingBits";
@@ -462,7 +462,7 @@ function PanelToggle({ name, open, onToggle }: { name: string; open: boolean; on
 
 /* ── The four views ───────────────────────────────────────────────────────── */
 
-function Transcript({
+export function Transcript({
   meeting,
   focusedAt,
   onSeek,
@@ -471,33 +471,55 @@ function Transcript({
   focusedAt: number | null;
   onSeek: (s: number) => void;
 }) {
-  // BLOQUES DE INTERVENCIÓN, no filas. Una cabecera por segmento —avatar, nombre,
-  // marca y «Identificar» cada dos o tres segundos— convertía la conversación en un
-  // log. La agrupación es de PRESENTACIÓN: los segmentos de dentro son los originales,
-  // con su índice y sus tiempos, y siguen siendo el objetivo de la reproducción, del
-  // resaltado y de las citas. Ver transcriptBlocks.ts para las tres razones de corte.
+  // BLOQUES DE INTERVENCIÓN con PÁRRAFOS dentro. Ver transcriptBlocks.ts: el bloque
+  // trae la cabecera, el párrafo trae texto corrido y los segmentos van EN LÍNEA.
   const blocks = useMemo(() => groupTranscript(meeting.transcript), [meeting.transcript]);
+  const scroller = useRef<HTMLDivElement | null>(null);
+
+  /*
+    EL SALTO DEJA LA CABECERA VISIBLE. Antes nadie desplazaba nada: `jumpTo` cambiaba
+    de pestaña y marcaba el segmento, y el lector tenía que buscarlo — y cuando caía
+    arriba, el borde del scroller le cortaba la cabecera por la mitad (justo lo que se
+    veía en la captura).
+
+    Se desplaza el BLOQUE, no el segmento: lo que hay que poder leer es de quién es la
+    intervención y desde cuándo. `scroll-mt-6` en el <article> le da el aire que
+    `block: "start"` no da por sí solo, y `scrollIntoView` respeta ese margen.
+  */
+  useEffect(() => {
+    if (focusedAt === null) return;
+    const root = scroller.current;
+    if (!root) return;
+    const target = root.querySelector<HTMLElement>(`[data-block-focused="true"]`);
+    target?.scrollIntoView({ block: "start", behavior: "smooth" });
+  }, [focusedAt]);
 
   return (
-    <div className="flex flex-col gap-1.5 py-3 pb-6">
+    // gap-7 entre intervenciones: la separación tiene que leerse como un cambio de
+    // turno, no como un renglón más. Antes era gap-1.5, del tiempo en que cada
+    // segmento era una fila.
+    <div ref={scroller} className="flex flex-col gap-7 py-4 pb-10">
       {blocks.map((block) => {
-        // El bloque se resalta si el salto cayó en CUALQUIERA de sus segmentos, y
-        // dentro se resalta el segmento exacto: así se ve el contexto y el punto.
         const jumpedInside = block.segments.some((s) => focusedAt === s.at);
         const citedInside = block.segments.some((s) => s.cited);
         return (
           <article
             key={block.key}
-            className={`group flex gap-3.5 rounded-xl px-3.5 py-3 transition-colors ${
-              // A jumped-to block is a REFERENCE, so it tints accent-blue, not
-              // the amber the sheet used — amber here read as "something is wrong".
-              jumpedInside ? "bg-accent/8 ring-1 ring-accent/25" : citedInside ? "bg-subtle" : ""
+            data-block-focused={jumpedInside ? "true" : undefined}
+            className={`group scroll-mt-6 rounded-xl transition-colors ${
+              // A jumped-to block is a REFERENCE, so it tints accent-blue, not the
+              // amber the sheet used — amber here read as "something is wrong".
+              jumpedInside
+                ? "bg-accent/8 px-3.5 py-3 ring-1 ring-accent/25"
+                : citedInside
+                  ? "bg-subtle px-3.5 py-3"
+                  : "px-3.5 py-0"
             }`}
           >
-            <Avatar person={{ initials: block.initials, name: block.speaker }} size={28} />
-            <div className="flex min-w-0 flex-1 flex-col gap-1">
-              {/* UNA cabecera por intervención. La marca es la del primer segmento del
-                  bloque; cada línea de dentro conserva la suya como objetivo de salto. */}
+            {/* UNA cabecera por intervención, y nunca repetida por longitud: un
+                párrafo nuevo no es una intervención nueva. */}
+            <header className="mb-1.5 flex items-center gap-2.5">
+              <Avatar person={{ initials: block.initials, name: block.speaker }} size={28} />
               <h3 className="flex flex-wrap items-center gap-2">
                 <span className="text-[0.8125rem] font-semibold">{block.speaker}</span>
                 <StampLink at={block.at} onSeek={onSeek}>{block.stamp}</StampLink>
@@ -508,39 +530,63 @@ function Transcript({
                 ) : null}
                 {jumpedInside ? <Chip tone="muted">Desde la evidencia</Chip> : citedInside ? <Chip tone="muted">Citado por Copilot</Chip> : null}
               </h3>
-              {/* Los segmentos, cada uno con su índice y su tiempo. Se pintan como
-                  párrafos de una misma intervención, no como filas independientes. */}
-              <div className="flex flex-col gap-1">
-                {block.segments.map((segment) => {
-                  const jumped = focusedAt === segment.at;
-                  return (
-                    <p
-                      key={segment.index}
-                      data-segment-index={segment.index}
-                      data-segment-at={segment.at}
-                      className={`max-w-[96ch] text-[0.875rem] leading-relaxed text-foreground/90 ${
-                        // El segmento exacto al que se saltó, DENTRO del bloque ya teñido.
-                        jumped ? "rounded-md bg-accent/10 px-1.5 -mx-1.5" : ""
-                      }`}
-                    >
-                      {segment.text}
-                    </p>
-                  );
-                })}
-              </div>
+              <button
+                type="button"
+                onClick={() => onSeek(block.at)}
+                aria-label={`Escuchar desde ${block.stamp}`}
+                className="u-focus ml-auto shrink-0 rounded-md p-1 text-faint opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+              >
+                <svg viewBox="0 0 16 16" className="size-3" fill="currentColor" aria-hidden>
+                  <path d="M4 2.6l8 5.4-8 5.4z" />
+                </svg>
+              </button>
+            </header>
+
+            {/* LOS PÁRRAFOS. `pl-[2.375rem]` los alinea con el nombre, bajo el avatar.
+                `60ch` MEDIDO, no elegido de memoria: en el navegador este cuerpo da
+                6.82 px por carácter real y 8.67 px por «0», así que 60ch ≈ 520 px ≈ 76
+                caracteres por línea — dentro del 65–80 que se pide. 72ch parecía
+                correcto y medía ~91 en pantalla ancha, porque `ch` es el ancho del
+                cero, más grande que la media de las minúsculas. Interlineado 1.6. */}
+            <div className="flex flex-col gap-3 pl-[2.375rem]">
+              {block.paragraphs.map((paragraph) => (
+                <p
+                  key={paragraph.key}
+                  className="max-w-[60ch] text-[0.875rem] leading-[1.6] text-foreground/90"
+                >
+                  {/*
+                    Cada segmento sigue siendo un elemento propio —con su índice y su
+                    tiempo— pero EN LÍNEA: el texto fluye y se ajusta al ancho en vez
+                    de romperse una vez por segmento de Whisper.
+
+                    Un <span> y no un <button>: el segmento es un atajo de ratón sobre
+                    el párrafo, y doscientos botones en un transcript serían doscientas
+                    paradas de tabulador. El control con teclado y etiqueta es la marca
+                    de tiempo de la cabecera, como en el resto de este fichero.
+                  */}
+                  {paragraph.segments.map((segment, position) => {
+                    const jumped = focusedAt === segment.at;
+                    return (
+                      <span
+                        key={segment.index}
+                        data-segment-index={segment.index}
+                        data-segment-at={segment.at}
+                        title={`Escuchar desde ${segment.stamp}`}
+                        onClick={() => onSeek(segment.at)}
+                        className={`cursor-pointer transition-colors hover:text-foreground ${
+                          // El segmento exacto al que se saltó, resaltado DENTRO del
+                          // párrafo: se ve el punto sin perder el contexto.
+                          jumped ? "rounded bg-accent/20 text-foreground" : ""
+                        }`}
+                      >
+                        {segment.text}
+                        {position < paragraph.segments.length - 1 ? " " : ""}
+                      </span>
+                    );
+                  })}
+                </p>
+              ))}
             </div>
-            {/* The whole block is a seek target, but the STAMP is the labelled
-                control — a click anywhere is a convenience on top of it. */}
-            <button
-              type="button"
-              onClick={() => onSeek(block.at)}
-              aria-label={`Escuchar desde ${block.stamp}`}
-              className="u-focus ml-auto self-start rounded-md p-1 text-faint opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
-            >
-              <svg viewBox="0 0 16 16" className="size-3" fill="currentColor" aria-hidden>
-                <path d="M4 2.6l8 5.4-8 5.4z" />
-              </svg>
-            </button>
           </article>
         );
       })}

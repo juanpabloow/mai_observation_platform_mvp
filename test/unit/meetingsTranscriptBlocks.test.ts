@@ -1,8 +1,10 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import {
-  MAX_BLOCK_SEC,
-  PAUSE_BREAK_SEC,
+  INTERVENTION_PAUSE_SEC,
+  PARAGRAPH_MAX_CHARS,
+  PARAGRAPH_PAUSE_SEC,
+  PARAGRAPH_TARGET_CHARS,
   groupTranscript,
 } from '../../web/lib/transcriptBlocks.js';
 import type { TranscriptSegment } from '../../web/lib/meetingsData.js';
@@ -47,6 +49,7 @@ test('segmentos consecutivos del mismo hablante caen en UN bloque con una cabece
   const blocks = groupTranscript(segments);
   assert.equal(blocks.length, 1, 'una intervención, no tres filas');
   assert.equal(blocks[0].segments.length, 3);
+  assert.equal(blocks[0].paragraphs.length, 1, 'y UN párrafo: el texto fluye, no un renglón por segmento');
   assert.equal(blocks[0].at, 0, 'el bloque empieza donde el primer segmento');
   assert.equal(blocks[0].endsAt, 9.5, 'y acaba donde el último');
   assert.equal(blocks[0].startedBy, 'first');
@@ -67,32 +70,80 @@ test('una pausa significativa corta, aunque siga hablando el mismo', () => {
   const blocks = groupTranscript([
     seg(0, 4, 'SPEAKER_00'),
     // Justo por debajo del umbral: sigue siendo la misma intervención.
-    seg(4 + PAUSE_BREAK_SEC - 0.1, 20, 'SPEAKER_00'),
+    seg(4 + INTERVENTION_PAUSE_SEC - 0.1, 20, 'SPEAKER_00'),
   ]);
   assert.equal(blocks.length, 1, 'una respiración no es una intervención nueva');
 
   const cortado = groupTranscript([
     seg(0, 4, 'SPEAKER_00'),
-    seg(4 + PAUSE_BREAK_SEC, 20, 'SPEAKER_00'),
+    seg(4 + INTERVENTION_PAUSE_SEC, 20, 'SPEAKER_00'),
   ]);
   assert.equal(cortado.length, 2);
   assert.equal(cortado[1].startedBy, 'pause');
   assert.equal(cortado[1].speakerLabel, 'SPEAKER_00', 'el hablante no cambia por partir');
 });
 
-test('un bloque demasiado largo se parte para poder leerlo, sin cambiar de hablante', () => {
+test('una intervención larga NO repite cabecera: se parte en párrafos', async () => {
+  // El tope de 90 s abría una cabecera nueva, o sea repetía «Hablante 2 · Identificar»
+  // porque alguien llevaba 91 segundos hablando. Eso no informa de nada: es la misma
+  // intervención. Ahora abre PÁRRAFO.
   const segments: TranscriptSegment[] = [];
-  for (let i = 0; i < 40; i += 1) segments.push(seg(i * 5, i * 5 + 5, 'SPEAKER_00'));
-  const blocks = groupTranscript(segments);
-  assert.ok(blocks.length > 1, 'un monólogo de 200 s no cabe en un solo bloque');
-  for (const block of blocks) {
-    assert.equal(block.speakerLabel, 'SPEAKER_00', 'todos los trozos son del mismo');
-    assert.ok(
-      block.endsAt - block.at <= MAX_BLOCK_SEC + 5,
-      `bloque de ${block.endsAt - block.at}s excede el tope`,
-    );
+  for (let i = 0; i < 40; i += 1) {
+    // Frases que terminan en punto, para que el corte caiga en la puntuación que ya
+    // está en el texto y no a media frase.
+    segments.push(seg(i * 5, i * 5 + 5, 'SPEAKER_00', `Frase número ${i} con su cierre.`));
   }
-  assert.deepEqual(blocks.slice(1).map((b) => b.startedBy), Array(blocks.length - 1).fill('length'));
+  const blocks = groupTranscript(segments);
+  assert.equal(blocks.length, 1, 'UNA intervención de 200 s, una sola cabecera');
+  assert.ok(blocks[0].paragraphs.length > 1, 'partida en varios párrafos');
+  assert.deepEqual(
+    blocks[0].paragraphs.flatMap((p) => p.segments.map((s) => s.index)),
+    segments.map((s) => s.index),
+    'los párrafos cubren la intervención entera, en orden',
+  );
+  // Y cada corte cayó tras un cierre de frase, no a media frase.
+  for (const paragraph of blocks[0].paragraphs.slice(1)) {
+    assert.equal(paragraph.startedBy, 'sentence', `corte por ${paragraph.startedBy}`);
+  }
+});
+
+test('el párrafo corta en la PUNTUACIÓN existente, no en un número exacto de caracteres', () => {
+  // Un dictado sin puntuación hasta pasado el objetivo: no debe cortarse en el
+  // objetivo, porque ahí no hay final de frase.
+  const sinPunto: TranscriptSegment[] = [];
+  for (let i = 0; i < 8; i += 1) sinPunto.push(seg(i * 3, i * 3 + 3, 'SPEAKER_00', 'y entonces seguimos hablando sin parar ni cerrar la frase'));
+  const total = sinPunto.reduce((n, s) => n + s.text.length + 1, 0);
+  assert.ok(total > PARAGRAPH_TARGET_CHARS, 'el caso tiene sentido: pasa del objetivo');
+  assert.ok(total < PARAGRAPH_MAX_CHARS, 'pero no llega al tope duro');
+  const blocks = groupTranscript(sinPunto);
+  assert.equal(blocks[0].paragraphs.length, 1, 'sin punto donde cortar, no se corta');
+});
+
+test('el tope duro corta aunque no haya puntuación: un muro es peor que un corte', () => {
+  const sinPunto: TranscriptSegment[] = [];
+  for (let i = 0; i < 40; i += 1) sinPunto.push(seg(i * 3, i * 3 + 3, 'SPEAKER_00', 'y entonces seguimos hablando sin parar ni cerrar la frase'));
+  const blocks = groupTranscript(sinPunto);
+  assert.ok(blocks[0].paragraphs.length > 1, 'se corta igual');
+  assert.ok(
+    blocks[0].paragraphs.some((p) => p.startedBy === 'length'),
+    'y consta que fue por el tope, no por puntuación',
+  );
+});
+
+test('una pausa media abre párrafo; una pausa larga abre intervención', () => {
+  const mediaPausa = groupTranscript([
+    seg(0, 4, 'SPEAKER_00', 'Primera parte.'),
+    seg(4 + PARAGRAPH_PAUSE_SEC, 20, 'SPEAKER_00', 'Segunda parte.'),
+  ]);
+  assert.equal(mediaPausa.length, 1, 'sigue siendo la misma intervención');
+  assert.equal(mediaPausa[0].paragraphs.length, 2, 'pero en dos párrafos');
+  assert.equal(mediaPausa[0].paragraphs[1].startedBy, 'pause');
+
+  const pausaLarga = groupTranscript([
+    seg(0, 4, 'SPEAKER_00', 'Primera parte.'),
+    seg(4 + INTERVENTION_PAUSE_SEC, 20, 'SPEAKER_00', 'Segunda parte.'),
+  ]);
+  assert.equal(pausaLarga.length, 2, 'esta sí es otra intervención');
 });
 
 test('LO QUE NO PUEDE PASAR: dos hablantes sin resolver no se juntan por compartir nombre', () => {
@@ -129,6 +180,13 @@ test('la agrupación NO pierde ni reordena ningún segmento, y conserva índices
   ];
   const blocks = groupTranscript(segments);
   const aplanados = blocks.flatMap((b) => b.segments);
+  // Y aplanando por PÁRRAFOS sale exactamente lo mismo: los dos niveles cubren el
+  // transcript entero, sin duplicar ni perder un segmento.
+  assert.deepEqual(
+    blocks.flatMap((b) => b.paragraphs.flatMap((p) => p.segments.map((s) => s.index))),
+    aplanados.map((s) => s.index),
+    'párrafos y bloques cubren lo mismo',
+  );
 
   assert.equal(aplanados.length, segments.length, 'ni uno de más ni uno de menos');
   assert.deepEqual(
@@ -156,6 +214,11 @@ test('sin segmentos no hay bloques, y uno solo da un bloque', () => {
 
 test('los umbrales son parámetros, no números escondidos en el render', () => {
   const segments = [seg(0, 4, 'SPEAKER_00'), seg(10, 14, 'SPEAKER_00')];
-  assert.equal(groupTranscript(segments, { pauseBreakSec: 30 }).length, 1, 'umbral alto: un bloque');
-  assert.equal(groupTranscript(segments, { pauseBreakSec: 2 }).length, 2, 'umbral bajo: dos');
+  assert.equal(groupTranscript(segments, { interventionPauseSec: 30 }).length, 1, 'umbral alto: un bloque');
+  assert.equal(groupTranscript(segments, { interventionPauseSec: 2 }).length, 2, 'umbral bajo: dos');
+  // Y el de párrafo, por separado.
+  const uno = groupTranscript(segments, { interventionPauseSec: 30, paragraphPauseSec: 30 });
+  assert.equal(uno[0].paragraphs.length, 1, 'sin corte de párrafo');
+  const dos = groupTranscript(segments, { interventionPauseSec: 30, paragraphPauseSec: 1 });
+  assert.equal(dos[0].paragraphs.length, 2, 'con corte de párrafo');
 });
