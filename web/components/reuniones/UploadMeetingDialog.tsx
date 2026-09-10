@@ -2,7 +2,6 @@
 
 import { useEffect, useId, useRef, useState } from "react";
 import { CONTROL_CLS, TOOLBAR_PRIMARY_CLS } from "@/components/ui/primitives";
-import { ProgressBar } from "@/components/reuniones/MeetingBits";
 
 /**
  * "Subir reunión" — a real centred MODAL, not a side panel.
@@ -26,14 +25,11 @@ import { ProgressBar } from "@/components/reuniones/MeetingBits";
  */
 
 const PHASES = [
-  { key: "upload", label: "Subida del archivo", hint: "En curso · 62 % · queda ~1 min" },
+  { key: "upload", label: "Subida del archivo", hint: "El audio se guarda en almacenamiento privado" },
   { key: "transcribe", label: "Transcripción", hint: "Convierte el audio en texto con timestamps" },
   { key: "diarize", label: "Separación de participantes", hint: "Detecta quién habla en cada momento" },
-  { key: "analyze", label: "Análisis: resumen y tareas", hint: "Cada conclusión queda ligada a su cita" },
+  { key: "analyze", label: "Análisis: resumen y tareas", hint: "Todavía no disponible" },
 ] as const;
-
-/** The demo file the design sheet shows mid-upload. */
-const UPLOAD_PERCENT = 62;
 
 export function UploadMeetingButton() {
   const [open, setOpen] = useState(false);
@@ -119,89 +115,28 @@ export function UploadMeetingButton() {
               </span>
               <p className="text-[0.8125rem] text-foreground">Arrastra el audio o video aquí</p>
               <p className="text-[0.71875rem] text-muted">MP3, M4A, WAV, MP4 · hasta 4 GB</p>
-              <button type="button" className={`${CONTROL_CLS} mt-1.5 h-8 text-[0.8125rem]`}>
+              {/* Deshabilitado, no decorativo: un botón que abre un selector
+                  para luego no subir nada es peor que uno que se declara
+                  inactivo. */}
+              <button type="button" disabled className={`${CONTROL_CLS} mt-1.5 h-8 text-[0.8125rem]`}>
                 Seleccionar archivo
               </button>
             </div>
 
-            {/* The file in flight. Accent bar = bytes moving. */}
-            <div className="flex flex-col gap-2 rounded-xl border border-line px-3 py-3">
-              <div className="flex items-center gap-2.5">
-                <span aria-hidden className="inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-chip text-muted">
-                  <svg viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round">
-                    <path d="M2 8h1.6M5.2 5v6M8 3v10M10.8 6v4M13.6 8H14" />
-                  </svg>
-                </span>
-                <span className="flex min-w-0 flex-1 flex-col gap-px">
-                  <span className="truncate text-[0.8125rem] font-medium">renovacion-delta.wav</span>
-                  <span className="text-[0.71875rem] text-muted u-mono">121 MB · WAV 48 kHz · 1,2 MB/s</span>
-                </span>
-                <span className="shrink-0 text-[0.75rem] text-muted u-mono">{UPLOAD_PERCENT} %</span>
-                <button
-                  type="button"
-                  aria-label="Quitar el archivo"
-                  className="u-focus shrink-0 rounded p-0.5 text-faint transition-colors hover:text-foreground"
-                >
-                  <svg viewBox="0 0 16 16" className="size-3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden>
-                    <path d="M4 4l8 8M12 4l-8 8" />
-                  </svg>
-                </button>
-              </div>
-              <ProgressBar kind="upload" value={UPLOAD_PERCENT} label="Progreso de la subida" />
-            </div>
-
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[0.75rem] text-muted">Nombre de la reunión</span>
-              <input
-                defaultValue="Renovación anual — Delta Foods"
-                className="u-focus rounded-xl border border-line-strong bg-surface px-3 py-2 text-[0.8125rem] text-foreground outline-none"
-              />
-            </label>
-
-            <fieldset className="flex flex-col gap-2">
-              <legend className="mb-1 text-[0.75rem] text-muted">Asociaciones</legend>
-              <div className="flex flex-wrap gap-1.5">
-                <span className="inline-flex items-center gap-1.5 rounded-lg border border-line-soft bg-subtle py-1 pl-1 pr-2 text-[0.78125rem]">
-                  <span aria-hidden className="inline-flex size-5 items-center justify-center rounded-full bg-gradient-to-br from-[#2E9C7F] to-[#1F7A4D] text-[0.5rem] font-semibold text-white u-mono">
-                    JC
-                  </span>
-                  Julián Cifuentes
-                  <button type="button" aria-label="Quitar a Julián Cifuentes" className="u-focus rounded text-faint hover:text-foreground">
-                    <svg viewBox="0 0 16 16" className="size-2.5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" aria-hidden>
-                      <path d="M4 4l8 8M12 4l-8 8" />
-                    </svg>
-                  </button>
-                </span>
-                <button
-                  type="button"
-                  className="u-focus inline-flex items-center gap-1 rounded-lg border border-dashed border-line-strong px-2.5 py-1 text-[0.78125rem] text-muted transition-colors hover:border-faint hover:text-foreground"
-                >
-                  + Contacto
-                </button>
-              </div>
-              <button type="button" className="u-focus flex items-center gap-2 rounded-xl border border-line px-3 py-2 text-left transition-colors hover:border-faint">
-                <svg viewBox="0 0 16 16" className="size-3.5 shrink-0 text-faint" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden>
-                  <rect x="2" y="3" width="12" height="9" />
-                  <path d="M5 12v2" />
-                </svg>
-                <span className="flex-1 text-[0.78125rem]">Conversación de Inbox</span>
-                <span className="text-[0.75rem] text-muted">Ninguna ▾</span>
-              </button>
-              <button type="button" className="u-focus flex items-center gap-2 rounded-xl border border-line px-3 py-2 text-left transition-colors hover:border-faint">
-                <svg viewBox="0 0 16 16" className="size-3.5 shrink-0 text-faint" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden>
-                  <rect x="2.5" y="3.5" width="11" height="10" />
-                  <path d="M2.5 6.6h11" />
-                </svg>
-                <span className="flex-1 text-[0.78125rem]">Cita de Agenda</span>
-                <span className="text-[0.75rem] text-foreground">1 sep, 09:45 ▾</span>
-              </button>
-            </fieldset>
-
+            {/* NADA de fichero en vuelo, nombre, contacto ni cita.
+                Aquí había una subida ficticia al 62 % de `renovacion-delta.wav`
+                con un contacto y una cita inventados: era la maqueta del diseño
+                y se veía como una subida de verdad en curso. La subida desde el
+                navegador no está implementada, así que el diálogo dice qué hace
+                el procesamiento y por dónde entra hoy el audio, y no finge un
+                estado que nadie provocó. */}
             <div className="flex flex-col gap-2.5">
               <span className="text-[0.75rem] text-muted">Fases del procesamiento</span>
               <ol className="flex flex-col gap-2.5">
-                {PHASES.map((p, i) => {
-                  const running = i === 0;
+                {PHASES.map((p) => {
+                  // Ninguna está en curso: no hay subida. El anillo giratorio
+                  // sobre una fase parada era parte de la ficción.
+                  const running = false;
                   return (
                     <li key={p.key} className="flex items-start gap-2.5">
                       <span
@@ -225,8 +160,10 @@ export function UploadMeetingButton() {
                 <circle cx="8" cy="8" r="5.8" />
                 <path d="M8 5.4h.01M8 7.6v3" />
               </svg>
-              {/* The spec's rule 13: this is a window, never a "panel". */}
-              Puedes cerrar esta ventana y seguir trabajando. El procesamiento continúa y te avisamos cuando la reunión esté lista.
+              {/* La regla 13 del diseño: esto es una ventana, nunca un «panel». */}
+              La subida desde el navegador todavía no está disponible. Hoy el audio entra por la
+              API de Reuniones y lo procesa el worker; cuando termine, la reunión aparece en este
+              listado con su transcripción y sus hablantes.
             </p>
           </div>
 
@@ -236,7 +173,7 @@ export function UploadMeetingButton() {
             </button>
             <span className="ml-auto flex items-center gap-2.5">
               <span id={`${titleId}-hint`} className="text-[0.71875rem] text-muted">
-                Se habilita cuando termine la subida ({UPLOAD_PERCENT} %)
+                Subida desde el navegador no disponible todavía
               </span>
               <button type="button" disabled aria-describedby={`${titleId}-hint`} className={`${TOOLBAR_PRIMARY_CLS} h-9`}>
                 Procesar reunión
