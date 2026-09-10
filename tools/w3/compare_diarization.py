@@ -2,10 +2,12 @@
 """Compara diarización automática frente a un número fijo de hablantes, aislada.
 
     # 1 · CPU, siempre seguro (no compite por la GPU con el servicio)
-    python3 tools/w3/compare_diarization.py --audio /tmp/audio.wav --device cpu --out /tmp/w3cmp
+    python3 tools/w3/compare_diarization.py --audio /tmp/audio.wav --device cpu \
+        --num-speakers 2 --reference tools/w3/reference-cc00c4cf.tsv --out /tmp/w3cmp
 
     # 2 · GPU, sólo con la GPU demostrablemente libre (ver --allow-busy-gpu)
-    python3 tools/w3/compare_diarization.py --audio /tmp/audio.wav --device cuda --out /tmp/w3cmp
+    python3 tools/w3/compare_diarization.py --audio /tmp/audio.wav --device cuda \
+        --num-speakers 2 --reference tools/w3/reference-cc00c4cf.tsv --out /tmp/w3cmp
 
 QUÉ ES Y QUÉ NO ES
 ------------------
@@ -24,6 +26,27 @@ LO QUE SE FIJA, Y POR QUÉ
   sería inventar una tercera fuente de verdad que se desincroniza en cuanto alguien
   cambie el `.env`.
 * Lo ÚNICO que varía entre las dos ejecuciones es `num_speakers`. Eso es la prueba.
+* `--num-speakers` vale DOS por defecto. La primera versión de esto comparaba contra
+  tres, que no es la hipótesis del caso: la grabación tiene dos voces.
+
+LAS ETIQUETAS SE EMPAREJAN ANTES DE COMPARAR
+--------------------------------------------
+`SPEAKER_00` de una ejecución no es el `SPEAKER_00` de la otra: son índices de cluster
+y el orden en que salen no significa nada. Comparar los nombres tal cual hace que una
+PERMUTACIÓN PURA —la misma segmentación con los nombres cambiados— se reporte como
+desacuerdo en todos los instantes, que es exactamente la conclusión contraria a la
+correcta. `match_labels` resuelve la asignación de SOLAPE MÁXIMO (exacta, por DP sobre
+máscara de bits, no voraz) y traduce las etiquetas de la segunda ejecución al espacio
+de nombres de la primera. `test_compare_diarization.py` lo exige: permutar los nombres
+tiene que dar CERO desacuerdos.
+
+QUÉ DICE Y QUÉ NO DICE LA COMPARACIÓN ENTRE DOS EJECUCIONES
+-----------------------------------------------------------
+Dos ejecuciones que se parecen no son dos ejecuciones correctas: pueden equivocarse
+igual. Comparar `auto` con `ns2` dice si fijar el número de hablantes CAMBIA algo, y
+por tanto si el problema está en la elección de `k` o más arriba, en cómo se trocea el
+audio antes de agrupar. Quién acierta lo dice `--reference`, y sólo dentro del tramo
+anotado.
 
 CPU Y GPU NO SE MEZCLAN
 -----------------------
@@ -103,18 +126,285 @@ def label_timeline(
 
 
 def disagreements(
-    a: List[Dict[str, Any]], b: List[Dict[str, Any]], duration: float, step: float = 1.0
+    a: List[Dict[str, Any]],
+    b: List[Dict[str, Any]],
+    duration: float,
+    step: float = 1.0,
+    match: bool = True,
 ) -> List[Tuple[float, Optional[str], Optional[str]]]:
     """
-    Segundos donde las dos ejecuciones NO coinciden.
+    Segundos donde las dos ejecuciones NO coinciden, con las etiquetas EMPAREJADAS.
 
-    Las etiquetas de dos ejecuciones no son comparables por su nombre —`SPEAKER_00` de
-    una no es el de la otra—, así que esto no dice «cuál acierta»: dice DÓNDE difieren,
-    que es la lista de instantes que hay que escuchar. El juicio es del oído.
+    `SPEAKER_00` de una ejecución no es el de la otra: son índices de cluster. Sin
+    emparejar, dos ejecuciones idénticas salvo por una permutación de nombres se
+    reportan como desacuerdo en todos los instantes, que se lee como «no se parecen
+    en nada» cuando son exactamente la misma segmentación. Por eso `match=True` es el
+    valor por defecto: primero se traducen los nombres de `b` al espacio de `a` por
+    solape máximo, y sólo entonces se compara.
+
+    Emparejadas las etiquetas, lo que queda SÍ es desacuerdo real: la frontera de un
+    turno se movió, o un tramo cambió de hablante. Sigue sin decir cuál acierta —para
+    eso está la referencia a oído—, pero ya no señala instantes que no lo son.
+
+    `match=False` deja la comparación cruda por nombre. Está para poder mostrar la
+    diferencia entre las dos lecturas, no para usarla como medida.
     """
+    if match:
+        b = relabel(b, match_labels(a, b))
     ta = dict(label_timeline(a, duration, step))
     tb = dict(label_timeline(b, duration, step))
     return [(t, ta[t], tb.get(t)) for t in sorted(ta) if ta[t] != tb.get(t)]
+
+
+# ── Emparejar etiquetas antes de comparar ──────────────────────────────────────
+
+
+def overlap_matrix(
+    a: List[Dict[str, Any]], b: List[Dict[str, Any]]
+) -> Tuple[List[str], List[str], List[List[float]]]:
+    """Segundos de solape temporal entre cada etiqueta de `a` y cada una de `b`."""
+    labels_a = sorted({str(t.get("speaker")) for t in a})
+    labels_b = sorted({str(t.get("speaker")) for t in b})
+    index_a = {label: i for i, label in enumerate(labels_a)}
+    index_b = {label: j for j, label in enumerate(labels_b)}
+    grid = [[0.0] * len(labels_b) for _ in labels_a]
+    for ta in a:
+        sa, ea = float(ta.get("start", 0.0)), float(ta.get("end", 0.0))
+        if ea <= sa:
+            continue
+        i = index_a[str(ta.get("speaker"))]
+        for tb in b:
+            sb, eb = float(tb.get("start", 0.0)), float(tb.get("end", 0.0))
+            shared = min(ea, eb) - max(sa, sb)
+            if shared > 0:
+                grid[i][index_b[str(tb.get("speaker"))]] += shared
+    return labels_a, labels_b, grid
+
+
+def _best_assignment(grid: List[List[float]], n_rows: int, n_cols: int) -> List[int]:
+    """
+    Asignación de solape máximo, exacta, por DP sobre máscara de bits.
+
+    No es una heurística voraz: emparejar por «el mejor de cada fila» puede dar dos
+    filas a la misma columna y decidirse por el orden de recorrido, que es justo la
+    clase de arbitrariedad que haría que el informe cambiara sin que cambien los
+    datos. Con `n <= 10` hablantes esto son ~10 · 2^10 pasos.
+
+    Devuelve, por fila, la columna asignada, o -1 si esa fila se queda sin par.
+    """
+    if n_rows == 0 or n_cols == 0:
+        return [-1] * n_rows
+    NEG = float("-inf")
+    # best[row][mask] = mejor solape total asignando las filas >= row con las
+    # columnas todavía libres en `mask`.
+    size = 1 << n_cols
+    best = [[NEG] * size for _ in range(n_rows + 1)]
+    take = [[-2] * size for _ in range(n_rows + 1)]
+    for mask in range(size):
+        best[n_rows][mask] = 0.0
+    for row in range(n_rows - 1, -1, -1):
+        for mask in range(size):
+            # Dejar esta fila sin par siempre es legal: las dos ejecuciones pueden
+            # tener distinto número de etiquetas y forzar un par sería inventarlo.
+            unpaired = best[row + 1][mask]
+            top, chosen = NEG, -1
+            for col in range(n_cols):
+                bit = 1 << col
+                if not mask & bit:
+                    continue
+                value = grid[row][col] + best[row + 1][mask ^ bit]
+                if value > top:
+                    top, chosen = value, col
+            # Los empates se rompen SIEMPRE igual, y hacia el mismo lado: entre dos
+            # asignaciones de idéntico solape gana emparejar (`unpaired > top` es
+            # estricto) y, dentro de una fila, la columna de índice menor (`value >
+            # top` también lo es). No es que una sea más correcta; es que sin una
+            # regla fija el informe cambiaría sin que cambien los datos. El par de
+            # solape CERO lo descarta después `match_labels`.
+            if chosen == -1 or unpaired > top:
+                top, chosen = unpaired, -1
+            best[row][mask], take[row][mask] = top, chosen
+    assignment = [-1] * n_rows
+    mask = size - 1
+    for row in range(n_rows):
+        col = take[row][mask]
+        assignment[row] = col
+        if col >= 0:
+            mask ^= 1 << col
+    return assignment
+
+
+def match_labels(
+    a: List[Dict[str, Any]], b: List[Dict[str, Any]]
+) -> Dict[str, str]:
+    """
+    Traduce las etiquetas de `b` al espacio de nombres de `a`, por solape máximo.
+
+    `SPEAKER_00` de una ejecución no es el `SPEAKER_00` de la otra: son índices de
+    cluster, y el orden en que salen no significa nada. Comparar los nombres tal cual
+    hace que una PERMUTACIÓN PURA —la misma segmentación con los nombres cambiados—
+    se lea como desacuerdo total, que es la conclusión contraria a la correcta.
+
+    Las etiquetas de `b` que no encuentran par (porque `b` tiene más hablantes) se
+    conservan con un sufijo, para que se vean como lo que son: algo que sólo existe
+    en una de las dos ejecuciones, no un desacuerdo con un hablante concreto.
+    """
+    labels_a, labels_b, grid = overlap_matrix(a, b)
+    if not labels_b:
+        return {}
+    # La DP asigna filas→columnas; aquí interesa columna(b)→fila(a), así que se
+    # traspone y se resuelve en esa orientación.
+    transposed = [[grid[i][j] for i in range(len(labels_a))] for j in range(len(labels_b))]
+    assignment = _best_assignment(transposed, len(labels_b), len(labels_a))
+    mapping: Dict[str, str] = {}
+    for j, label_b in enumerate(labels_b):
+        i = assignment[j]
+        # Un par con solape cero no es un par: son dos etiquetas que nunca coinciden
+        # en el tiempo, y renombrar una como la otra fabricaría un acuerdo falso.
+        if i >= 0 and transposed[j][i] > 0:
+            mapping[label_b] = labels_a[i]
+        else:
+            mapping[label_b] = f"{label_b}~sin-par"
+    return mapping
+
+
+def relabel(turns: List[Dict[str, Any]], mapping: Dict[str, str]) -> List[Dict[str, Any]]:
+    """Aplica un emparejado. No toca los tiempos: sólo el nombre."""
+    return [
+        {**turn, "speaker": mapping.get(str(turn.get("speaker")), str(turn.get("speaker")))}
+        for turn in turns
+    ]
+
+
+# ── Referencia manual del oído ─────────────────────────────────────────────────
+
+
+def parse_reference(text: str) -> List[Dict[str, Any]]:
+    """
+    Lee la anotación a oído: `inicio  fin  nombre` por línea, `#` comenta.
+
+    Los tiempos se admiten en segundos (`5`, `5.5`) o como `mm:ss`. Los nombres son
+    los de quien escuchó —«Mujer», «Hombre»—, y NO se presuponen equivalentes a
+    ningún `SPEAKER_NN`: para eso está `match_labels`.
+    """
+    out: List[Dict[str, Any]] = []
+    for position, raw in enumerate(text.splitlines(), start=1):
+        line = raw.split("#", 1)[0].strip()
+        if not line:
+            continue
+        parts = line.replace(",", " ").replace("\t", " ").split()
+        if len(parts) < 3:
+            raise SystemExit(f"Referencia, línea {position}: hacen falta inicio, fin y nombre — {raw!r}")
+        start, end = _seconds(parts[0], position), _seconds(parts[1], position)
+        if end <= start:
+            raise SystemExit(f"Referencia, línea {position}: el fin no es posterior al inicio — {raw!r}")
+        out.append({"start": start, "end": end, "speaker": " ".join(parts[2:])})
+    if not out:
+        raise SystemExit("La referencia no tiene ningún intervalo.")
+    return sorted(out, key=lambda row: row["start"])
+
+
+def _seconds(token: str, position: int) -> float:
+    try:
+        if ":" in token:
+            minutes, seconds = token.split(":", 1)
+            return float(minutes) * 60.0 + float(seconds)
+        return float(token)
+    except ValueError:
+        raise SystemExit(f"Referencia, línea {position}: {token!r} no es un tiempo") from None
+
+
+def score_against_reference(
+    turns: List[Dict[str, Any]], reference: List[Dict[str, Any]], step: float = 0.1
+) -> Dict[str, Any]:
+    """
+    Cuánto acierta una ejecución contra la referencia, DENTRO del tramo anotado.
+
+    Se emparejan primero las etiquetas con la referencia (mismo motivo de siempre) y
+    después se mide por muestreo fino. El alcance es el tramo anotado y sólo ése: el
+    resto del audio no está anotado y extrapolar ahí sería inventar.
+
+    `missed_as_silence` separa los dos modos de fallo, que piden arreglos distintos:
+    la VAD no oyó nada (silencio) frente a oyó y atribuyó a quien no era.
+    """
+    mapping = match_labels(reference, turns)
+    mapped = relabel(turns, mapping)
+    window_start = min(row["start"] for row in reference)
+    window_end = max(row["end"] for row in reference)
+
+    total = hits = silence = wrong = 0
+    per_speaker: Dict[str, Dict[str, int]] = {}
+    t = window_start
+    while t < window_end:
+        truth = label_at(reference, t)
+        if truth is not None:
+            got = label_at(mapped, t)
+            bucket = per_speaker.setdefault(truth, {"total": 0, "hit": 0, "silence": 0, "wrong": 0})
+            total += 1
+            bucket["total"] += 1
+            if got == truth:
+                hits += 1
+                bucket["hit"] += 1
+            elif got is None:
+                silence += 1
+                bucket["silence"] += 1
+            else:
+                wrong += 1
+                bucket["wrong"] += 1
+        t = round(t + step, 6)
+
+    pct = lambda part: round(100.0 * part / total, 1) if total else 0.0  # noqa: E731
+    return {
+        "mapping": mapping,
+        "window": [round(window_start, 2), round(window_end, 2)],
+        "sampled_points": total,
+        "accuracy_pct": pct(hits),
+        "missed_as_silence_pct": pct(silence),
+        "attributed_to_other_pct": pct(wrong),
+        "per_reference_speaker": {
+            name: {
+                "seconds_annotated": round(counts["total"] * step, 2),
+                "accuracy_pct": round(100.0 * counts["hit"] / counts["total"], 1) if counts["total"] else 0.0,
+                "missed_as_silence_pct": round(100.0 * counts["silence"] / counts["total"], 1) if counts["total"] else 0.0,
+                "attributed_to_other_pct": round(100.0 * counts["wrong"] / counts["total"], 1) if counts["total"] else 0.0,
+            }
+            for name, counts in sorted(per_speaker.items())
+        },
+    }
+
+
+def reference_intervals_report(
+    turns: List[Dict[str, Any]], reference: List[Dict[str, Any]], step: float = 0.1
+) -> List[Dict[str, Any]]:
+    """
+    Intervalo a intervalo: qué puso la ejecución donde la referencia dice quién habla.
+
+    Las intervenciones cortas son las que se pierden primero y las que no se ven en un
+    porcentaje global, así que se listan una a una.
+    """
+    mapping = match_labels(reference, turns)
+    mapped = relabel(turns, mapping)
+    rows: List[Dict[str, Any]] = []
+    for row in reference:
+        counts: Dict[str, int] = {}
+        total = 0
+        t = row["start"]
+        while t < row["end"]:
+            got = label_at(mapped, t)
+            counts[got if got is not None else "—silencio—"] = counts.get(got if got is not None else "—silencio—", 0) + 1
+            total += 1
+            t = round(t + step, 6)
+        dominant = max(counts.items(), key=lambda kv: (kv[1], kv[0]))[0] if counts else "—silencio—"
+        rows.append({
+            "start": round(row["start"], 2),
+            "end": round(row["end"], 2),
+            "seconds": round(row["end"] - row["start"], 2),
+            "reference": row["speaker"],
+            "dominant": dominant,
+            "correct_pct": round(100.0 * counts.get(row["speaker"], 0) / total, 1) if total else 0.0,
+            "breakdown": {k: round(v * step, 2) for k, v in sorted(counts.items())},
+        })
+    return rows
 
 
 def render_summary(
@@ -124,6 +414,8 @@ def render_summary(
     runs: Dict[str, Dict[str, Any]],
     diff: List[Tuple[float, Optional[str], Optional[str]]],
     warnings: List[str],
+    mapping: Optional[Dict[str, str]] = None,
+    reference: Optional[Dict[str, Dict[str, Any]]] = None,
 ) -> str:
     lines = [
         f"# Diarización · auto vs fijo — device={device}",
@@ -149,15 +441,33 @@ def render_summary(
     for tag, summary in runs.items():
         lines.append(f"**{tag}** · reparto: `{json.dumps(summary['share_pct_per_speaker'])}`")
     lines.append("")
-    lines.append(f"## Instantes en desacuerdo: {len(diff)}")
+
+    if mapping is not None:
+        lines.append("## Emparejado de etiquetas")
+        lines.append("")
+        lines.append(
+            "`SPEAKER_00` de una ejecución no es el de la otra. Las del run fijo se "
+            "traducen al espacio de nombres del automático por SOLAPE MÁXIMO, y sólo "
+            "después se comparan; si no, una permutación pura de nombres se reportaría "
+            "como desacuerdo en todos los instantes."
+        )
+        lines.append("")
+        lines.append("| fijo | → automático |")
+        lines.append("|---|---|")
+        for source, target in sorted(mapping.items()):
+            lines.append(f"| `{source}` | `{target}` |")
+        lines.append("")
+
+    lines.append(f"## Instantes en desacuerdo (ya emparejados): {len(diff)}")
     lines.append("")
     lines.append(
-        "Las etiquetas de dos ejecuciones no son comparables por nombre, así que esto "
-        "NO dice cuál acierta: dice qué segundos hay que escuchar."
+        "Emparejadas las etiquetas, esto SÍ es desacuerdo real: la frontera de un turno "
+        "se movió o un tramo cambió de hablante. Sigue sin decir cuál acierta — eso lo "
+        "dice la referencia a oído, no la comparación entre dos ejecuciones."
     )
     lines.append("")
     if diff:
-        lines.append("| s | auto | fijo |")
+        lines.append("| s | auto | fijo (emparejado) |")
         lines.append("|---|---|---|")
         for t, left, right in diff[:60]:
             lines.append(f"| {t} | {left or '—'} | {right or '—'} |")
@@ -166,6 +476,46 @@ def render_summary(
     else:
         lines.append("Ninguno: las dos ejecuciones cubren el audio igual.")
     lines.append("")
+
+    if reference:
+        lines.append("## Contra la referencia a oído")
+        lines.append("")
+        lines.append(
+            "Los nombres de la referencia son de quien escuchó y NO se presuponen "
+            "equivalentes a ningún `SPEAKER_NN`: se emparejan igual, por solape. El "
+            "alcance es el tramo anotado y sólo ése."
+        )
+        lines.append("")
+        for tag, score in reference.items():
+            window = score["window"]
+            lines.append(
+                f"**{tag}** · tramo {window[0]}–{window[1]} s · acierto "
+                f"**{score['accuracy_pct']} %** · perdido como silencio "
+                f"{score['missed_as_silence_pct']} % · atribuido a otro "
+                f"{score['attributed_to_other_pct']} %"
+            )
+            lines.append("")
+            lines.append(f"  · emparejado: `{json.dumps(score['mapping'], ensure_ascii=False)}`")
+            lines.append("")
+            lines.append("  | voz de referencia | anotado (s) | acierto | silencio | a otro |")
+            lines.append("  |---|---|---|---|---|")
+            for name, row in score["per_reference_speaker"].items():
+                lines.append(
+                    f"  | {name} | {row['seconds_annotated']} | {row['accuracy_pct']} % "
+                    f"| {row['missed_as_silence_pct']} % | {row['attributed_to_other_pct']} % |"
+                )
+            lines.append("")
+            intervals = score.get("intervals") or []
+            if intervals:
+                lines.append("  | intervalo | s | referencia | dominante | acierto |")
+                lines.append("  |---|---|---|---|---|")
+                for row in intervals:
+                    lines.append(
+                        f"  | {row['start']}–{row['end']} | {row['seconds']} | {row['reference']} "
+                        f"| {row['dominant']} | {row['correct_pct']} % |"
+                    )
+                lines.append("")
+
     return "\n".join(lines)
 
 
@@ -288,7 +638,24 @@ def main(argv: Optional[List[str]] = None) -> int:
     parser.add_argument("--audio", required=True, help="WAV normalizado (16 kHz mono)")
     parser.add_argument("--device", choices=("cpu", "cuda"), default="cpu")
     parser.add_argument("--out", required=True, help="Directorio de salida")
-    parser.add_argument("--num-speakers", type=int, default=3)
+    parser.add_argument(
+        "--num-speakers",
+        type=int,
+        default=2,
+        help="El número que se fija en la segunda ejecución. Para este caso son DOS: "
+             "la comparación publicada al principio iba contra tres, que no es la "
+             "hipótesis que hay sobre la mesa.",
+    )
+    parser.add_argument(
+        "--reference",
+        help="Anotación a oído (`inicio fin nombre` por línea, mm:ss o segundos). "
+             "Cotejar contra ella es lo único que dice cuál acierta.",
+    )
+    parser.add_argument(
+        "--reference-step", type=float, default=0.1,
+        help="Paso del muestreo contra la referencia, en s. Fino a propósito: las "
+             "intervenciones de un segundo no se ven con paso de 1 s.",
+    )
     parser.add_argument("--worker-root", default=DEFAULT_WORKER_ROOT)
     parser.add_argument("--unit", default="vanegas-w3-worker.service")
     parser.add_argument("--step", type=float, default=1.0, help="Paso del muestreo, en s")
@@ -376,13 +743,37 @@ def main(argv: Optional[List[str]] = None) -> int:
 
     tags = list(runs)
     duration = float(probe["duration_seconds"])
-    diff = disagreements(
-        raw[tags[0]].get("speaker_turns") or [],
-        raw[tags[1]].get("speaker_turns") or [],
-        duration,
-        args.step,
+    turns_a = raw[tags[0]].get("speaker_turns") or []
+    turns_b = raw[tags[1]].get("speaker_turns") or []
+
+    mapping = match_labels(turns_a, turns_b)
+    diff = disagreements(turns_a, turns_b, duration, args.step)
+    raw_diff = disagreements(turns_a, turns_b, duration, args.step, match=False)
+    print(f"emparejado fijo→auto: {json.dumps(mapping)}")
+    print(f"desacuerdo: {len(diff)} instantes emparejados "
+          f"({len(raw_diff)} si se comparan los nombres crudos)")
+
+    scores: Dict[str, Dict[str, Any]] = {}
+    if args.reference:
+        with open(args.reference, encoding="utf-8") as handle:
+            reference_rows = parse_reference(handle.read())
+        for tag in tags:
+            score = score_against_reference(
+                raw[tag].get("speaker_turns") or [], reference_rows, args.reference_step
+            )
+            score["intervals"] = reference_intervals_report(
+                raw[tag].get("speaker_turns") or [], reference_rows, args.reference_step
+            )
+            scores[tag] = score
+            print(f"contra la referencia · {tag}: acierto {score['accuracy_pct']} % "
+                  f"(silencio {score['missed_as_silence_pct']} %, "
+                  f"a otro {score['attributed_to_other_pct']} %)")
+        with open(os.path.join(out_dir, f"reference_{args.device}.json"), "w", encoding="utf-8") as handle:
+            json.dump({"reference": reference_rows, "scores": scores}, handle, indent=2, ensure_ascii=False)
+
+    report = render_summary(
+        args.device, audio, params, runs, diff, warnings, mapping, scores or None
     )
-    report = render_summary(args.device, audio, params, runs, diff, warnings)
     report_path = os.path.join(out_dir, f"summary_{args.device}.md")
     with open(report_path, "w", encoding="utf-8") as handle:
         handle.write(report)
