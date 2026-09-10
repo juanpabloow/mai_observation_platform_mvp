@@ -97,10 +97,28 @@ Eso deja `pyannote_full` fuera conservando el resto (palabras, v2, speakerCount,
 linkage `complete` arreglada). Es la mitigación que hay que intentar ANTES de revertir
 código, porque casi todo lo que puede salir mal en la GPU es el backend.
 
-Para revertir el worker entero:
+#### Desplegar el código del worker: quitar antes el worktree
+
+El commit vive en la rama `w3/palabras-v2-pyannote`, y esa rama **ya está abierta** en
+el worktree `/home/santiagov/w3-commit`. Git impide tener la misma rama en dos
+worktrees, así que un `git checkout w3/palabras-v2-pyannote` en el árbol del servicio
+**fallará** — y hacerlo con `--force` sería saltarse una protección que existe justo
+para evitar dos copias divergentes de la misma rama.
+
+La salida limpia es soltar el worktree primero, que es una operación normal y no pierde
+el commit:
+
+    cd /home/santiagov/services/mai-w3-worker
+    git -C /home/santiagov/w3-commit status --porcelain   # tiene que estar limpio
+    git worktree remove /home/santiagov/w3-commit         # sin --force
+    git worktree prune
+    cd transcript-worker && git checkout w3/palabras-v2-pyannote
+    systemctl --user restart vanegas-w3-worker.service
+
+**Vuelta atrás del código**, con las dos ramas intactas y sin reescribir historia:
 
     cd /home/santiagov/services/mai-w3-worker/transcript-worker
-    git checkout -- .            # el arbol esta limpio: no hay nada propio que perder
+    git checkout w2/worker-pull-clean      # vuelve a 2452aba
     systemctl --user restart vanegas-w3-worker.service
 
 El worker viejo vuelve a emitir v1, que el mai nuevo sigue leyendo. **Esta vuelta atrás
