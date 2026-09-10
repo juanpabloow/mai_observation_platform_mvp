@@ -264,8 +264,11 @@ export function transcriptOf(
     const resolved = segment.speakerLabel ? names.get(segment.speakerLabel) : undefined;
     const name = resolved?.name ?? "Sin asignar";
     return {
+      index: segment.index,
       at: segment.startSec,
+      endsAt: segment.endSec,
       stamp: stamp(segment.startSec),
+      speakerLabel: segment.speakerLabel,
       speaker: name,
       initials: resolved ? initialsOf(name) : "—",
       text: segment.text,

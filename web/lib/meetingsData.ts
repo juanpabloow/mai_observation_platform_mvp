@@ -77,10 +77,25 @@ export interface MeetingListItem {
 }
 
 export interface TranscriptSegment {
+  /**
+   * El identificador ESTABLE del segmento dentro de su versión de transcript — el
+   * `index` del artefacto, no una posición del array. Es lo que apunta una cita, así
+   * que sobrevive a cualquier agrupación de presentación (ver transcriptBlocks.ts).
+   */
+  index: number;
   /** Seconds from the start — what the player seeks to. */
   at: number;
+  /** Fin del segmento. Hace falta para medir la PAUSA entre dos consecutivos, que es
+   *  una de las razones por las que un bloque de intervención se corta. */
+  endsAt: number;
   /** mm:ss label, as the spec prints it. */
   stamp: string;
+  /**
+   * La etiqueta de diarización cruda (`SPEAKER_00`…), no el nombre mostrado. Se agrupa
+   * por ESTO: dos hablantes sin resolver comparten el nombre «Sin asignar», y agrupar
+   * por nombre los juntaría en una intervención que nunca existió.
+   */
+  speakerLabel: string | null;
   speaker: string;
   initials: string;
   text: string;

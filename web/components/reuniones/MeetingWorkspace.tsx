@@ -6,6 +6,7 @@ import { Chip, EmptyState, GHOST_ACTION_CLS, PRIMARY_SM_CLS } from "@/components
 import { AudioPlayer, type AudioState, type SpeakerTurn } from "@/components/reuniones/AudioPlayer";
 import { Avatar, ProgressBar, ShareMeter, StampLink, statusFace } from "@/components/reuniones/MeetingBits";
 import type { EvidenceItem, MeetingDetail } from "@/lib/meetingsData";
+import { groupTranscript } from "@/lib/transcriptBlocks";
 import {
   composeSummary,
   FINDING_KIND,
@@ -470,39 +471,70 @@ function Transcript({
   focusedAt: number | null;
   onSeek: (s: number) => void;
 }) {
+  // BLOQUES DE INTERVENCIÓN, no filas. Una cabecera por segmento —avatar, nombre,
+  // marca y «Identificar» cada dos o tres segundos— convertía la conversación en un
+  // log. La agrupación es de PRESENTACIÓN: los segmentos de dentro son los originales,
+  // con su índice y sus tiempos, y siguen siendo el objetivo de la reproducción, del
+  // resaltado y de las citas. Ver transcriptBlocks.ts para las tres razones de corte.
+  const blocks = useMemo(() => groupTranscript(meeting.transcript), [meeting.transcript]);
+
   return (
-    <div className="flex flex-col gap-0.5 py-3 pb-6">
-      {meeting.transcript.map((s) => {
-        const jumped = focusedAt === s.at;
+    <div className="flex flex-col gap-1.5 py-3 pb-6">
+      {blocks.map((block) => {
+        // El bloque se resalta si el salto cayó en CUALQUIERA de sus segmentos, y
+        // dentro se resalta el segmento exacto: así se ve el contexto y el punto.
+        const jumpedInside = block.segments.some((s) => focusedAt === s.at);
+        const citedInside = block.segments.some((s) => s.cited);
         return (
           <article
-            key={s.at}
+            key={block.key}
             className={`group flex gap-3.5 rounded-xl px-3.5 py-3 transition-colors ${
-              // A jumped-to segment is a REFERENCE, so it tints accent-blue, not
+              // A jumped-to block is a REFERENCE, so it tints accent-blue, not
               // the amber the sheet used — amber here read as "something is wrong".
-              jumped ? "bg-accent/8 ring-1 ring-accent/25" : s.cited ? "bg-subtle" : ""
+              jumpedInside ? "bg-accent/8 ring-1 ring-accent/25" : citedInside ? "bg-subtle" : ""
             }`}
           >
-            <Avatar person={{ initials: s.initials, name: s.speaker }} size={28} />
-            <div className="flex min-w-0 flex-col gap-1">
+            <Avatar person={{ initials: block.initials, name: block.speaker }} size={28} />
+            <div className="flex min-w-0 flex-1 flex-col gap-1">
+              {/* UNA cabecera por intervención. La marca es la del primer segmento del
+                  bloque; cada línea de dentro conserva la suya como objetivo de salto. */}
               <h3 className="flex flex-wrap items-center gap-2">
-                <span className="text-[0.8125rem] font-semibold">{s.speaker}</span>
-                <StampLink at={s.at} onSeek={onSeek}>{s.stamp}</StampLink>
-                {s.unidentified ? (
+                <span className="text-[0.8125rem] font-semibold">{block.speaker}</span>
+                <StampLink at={block.at} onSeek={onSeek}>{block.stamp}</StampLink>
+                {block.unidentified ? (
                   <button type="button" className="u-focus rounded text-[0.6875rem] text-accent underline decoration-accent/40">
                     Identificar
                   </button>
                 ) : null}
-                {jumped ? <Chip tone="muted">Desde la evidencia</Chip> : s.cited ? <Chip tone="muted">Citado por Copilot</Chip> : null}
+                {jumpedInside ? <Chip tone="muted">Desde la evidencia</Chip> : citedInside ? <Chip tone="muted">Citado por Copilot</Chip> : null}
               </h3>
-              <p className="max-w-[96ch] text-[0.875rem] leading-relaxed text-foreground/90">{s.text}</p>
+              {/* Los segmentos, cada uno con su índice y su tiempo. Se pintan como
+                  párrafos de una misma intervención, no como filas independientes. */}
+              <div className="flex flex-col gap-1">
+                {block.segments.map((segment) => {
+                  const jumped = focusedAt === segment.at;
+                  return (
+                    <p
+                      key={segment.index}
+                      data-segment-index={segment.index}
+                      data-segment-at={segment.at}
+                      className={`max-w-[96ch] text-[0.875rem] leading-relaxed text-foreground/90 ${
+                        // El segmento exacto al que se saltó, DENTRO del bloque ya teñido.
+                        jumped ? "rounded-md bg-accent/10 px-1.5 -mx-1.5" : ""
+                      }`}
+                    >
+                      {segment.text}
+                    </p>
+                  );
+                })}
+              </div>
             </div>
-            {/* The whole segment is a seek target, but the STAMP is the labelled
+            {/* The whole block is a seek target, but the STAMP is the labelled
                 control — a click anywhere is a convenience on top of it. */}
             <button
               type="button"
-              onClick={() => onSeek(s.at)}
-              aria-label={`Escuchar desde ${s.stamp}`}
+              onClick={() => onSeek(block.at)}
+              aria-label={`Escuchar desde ${block.stamp}`}
               className="u-focus ml-auto self-start rounded-md p-1 text-faint opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
             >
               <svg viewBox="0 0 16 16" className="size-3" fill="currentColor" aria-hidden>
