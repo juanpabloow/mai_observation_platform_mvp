@@ -1,0 +1,56 @@
+{
+  "fases": [
+    {
+      "fase": "transcribe",
+      "s": 14.4,
+      "device": "cuda",
+      "compute": "int8_float16",
+      "segmentos": 15,
+      "con_palabras": 15,
+      "libre_al_acabar": 1708,
+      "pico_proceso": 1486
+    },
+    {
+      "fase": "diarize",
+      "s": 11.5,
+      "backend": "pyannote_full",
+      "turnos": 47,
+      "whisper_cargado_antes": true,
+      "whisper_cargado_despues": false,
+      "libre_al_acabar": 996,
+      "pico_proceso": 1750
+    }
+  ],
+  "aviso_suelo": false,
+  "historico_antes": {
+    "http": "200",
+    "vram": {
+      "1619": 960
+    }
+  },
+  "libre_antes": 2746,
+  "config_efectiva": {
+    "worker_root": "/home/santiagov/w3-commit/transcript-worker",
+    "model": "medium",
+    "device": "cuda",
+    "compute_type": "int8_float16",
+    "diarization_backend": "pyannote_full",
+    "diarization_fallback": "wespeaker"
+  },
+  "resultado": "PASA",
+  "backend": "pyannote_full",
+  "memoria": {
+    "pico_proceso_mib": 1750,
+    "pico_tarjeta_mib": 2720,
+    "libre_minimo_mib": 996,
+    "suelo_mib": 250
+  },
+  "segundos_total": 26.8,
+  "historico_despues": {
+    "http": "200",
+    "vram": {
+      "1619": 960,
+      "24335": 1750
+    }
+  }
+}

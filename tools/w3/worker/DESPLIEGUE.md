@@ -38,8 +38,28 @@ Son distintos, así que **esa prueba no valida esta configuración**. Lo que sí
 es un razonamiento, no una medida, y en esta tarjeta el razonamiento ya ha fallado dos
 veces.
 
-**Antes de dar por buena la configuración hay que repetir la ventana con `.env.w3`
-cargado.** Sale gratis: el despliegue del worker ya exige pararlo y reiniciarlo.
+**RESUELTO.** Se repitió la ventana con la configuración real, sobre el commit
+`c2614b2` que es lo que se va a desplegar, y verificando los valores EFECTIVOS antes de
+medir nada — cargar `.env.w3` no basta, porque ese fichero todavía dice `wespeaker`, así
+que el backend se sobreescribe en la prueba y el guion aborta si lo efectivo no es lo
+que se pretende validar.
+
+| | `float16` (ventana 1) | **`int8_float16` (config real)** |
+|---|---|---|
+| transcribe | 38,2 s | **14,4 s** |
+| diarize | 12,0 s | 11,5 s |
+| pico del proceso | 2286 MiB | **1750 MiB** |
+| pico de la tarjeta | 3256 | **2720** de 3717 |
+| libre mínimo | 460 MiB | **996 MiB** |
+| backend | pyannote_full | **pyannote_full** |
+
+La configuración real es **mejor** en las dos dimensiones que preocupaban: 2,65× más
+rápida transcribiendo y 536 MiB menos de pico, con el margen casi duplicado.
+
+Y explica de paso una discrepancia que arrastraba sin resolver: la transcripción
+aislada que hice con `float16` daba **14** segmentos y la de producción **15**. Con
+`int8_float16` salen 15. Whisper no es idéntico entre tipos de cómputo, y el que
+importa es el que corre.
 
 ## El orden, y por qué es ese
 

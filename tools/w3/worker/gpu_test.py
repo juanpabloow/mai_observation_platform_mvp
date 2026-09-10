@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import argparse, json, os, subprocess, sys, threading, time
 
-WORK = "/home/santiagov/w3-work/transcript-worker"
+WORK = "/home/santiagov/w3-work/transcript-worker"  # se puede cambiar con --worker-root
 AUDIO = "/home/santiagov/w3-diag/cc00c4cf-normalized.wav"
 FLOOR_MIB = 250          # por debajo de esto se declara riesgo de OOM
 NEED_FOR_PYANNOTE = 1800 # medido: ~1670 de pico + margen
@@ -44,6 +44,11 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", required=True)
     ap.add_argument("--deadline-s", type=float, default=240.0)
+    ap.add_argument("--worker-root", default=WORK)
+    ap.add_argument("--expect-compute", default=None,
+                    help="Aborta si el compute_type EFECTIVO no es este.")
+    ap.add_argument("--expect-backend", default=None,
+                    help="Aborta si el backend EFECTIVO no es este.")
     args = ap.parse_args()
 
     report: dict = {"fases": [], "aviso_suelo": False}
@@ -80,9 +85,43 @@ def main() -> int:
         json.dump(report, open(args.out, "w"), indent=2, ensure_ascii=False)
         return 2
 
+    # ── Fase 0 bis · los valores EFECTIVOS, verificados antes de medir nada ──
+    #
+    # Cargar `.env.w3` no basta: ese fichero todavia dice `wespeaker`, asi que una
+    # prueba que solo lo cargue mediria el backend viejo y se presentaria como
+    # validacion del nuevo. Aqui se LEE lo que de verdad resolvio el proceso y se
+    # aborta si no es lo que se pretende validar.
+    root = args.worker_root
+    sys.path.insert(0, root)
+    os.chdir(root)
+    from app.config import settings
+    from app.services.whisper_service import resolve_compute_type, resolve_device
+
+    dev = resolve_device(settings.whisper_device)
+    efectivo = {
+        "worker_root": root,
+        "model": settings.whisper_model,
+        "device": dev,
+        "compute_type": resolve_compute_type(dev),
+        "diarization_backend": settings.diarization_backend,
+        "diarization_fallback": settings.diarization_fallback_backend,
+    }
+    report["config_efectiva"] = efectivo
+    print(f"[0b] EFECTIVO -> model={efectivo['model']} device={efectivo['device']} "
+          f"compute={efectivo['compute_type']} backend={efectivo['diarization_backend']} "
+          f"fallback={efectivo['diarization_fallback']}")
+    fallos = []
+    if args.expect_compute and efectivo["compute_type"] != args.expect_compute:
+        fallos.append(f"compute_type es {efectivo['compute_type']}, se esperaba {args.expect_compute}")
+    if args.expect_backend and efectivo["diarization_backend"] != args.expect_backend:
+        fallos.append(f"backend es {efectivo['diarization_backend']}, se esperaba {args.expect_backend}")
+    if fallos:
+        report["resultado"] = "abortada: " + " · ".join(fallos)
+        print(f"[!] {report['resultado']}")
+        json.dump(report, open(args.out, "w"), indent=2, ensure_ascii=False)
+        return 2
+
     threading.Thread(target=sampler, daemon=True).start()
-    sys.path.insert(0, WORK)
-    os.chdir(WORK)
 
     try:
         # ── Fase 1 · whisper en GPU, con palabras ─────────────────────────────
