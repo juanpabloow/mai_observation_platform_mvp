@@ -1,8 +1,8 @@
 import { strict as assert } from 'node:assert';
 import { after, test } from 'node:test';
 import { createHash, randomUUID } from 'node:crypto';
-import { gzipSync } from 'node:zlib';
-import { query } from '../../src/db/client.js';
+import { gunzipSync, gzipSync } from 'node:zlib';
+import { query, withTransaction } from '../../src/db/client.js';
 import { cleanupTenant, closeDb } from './fixtures.js';
 import { FakePrivateStore } from '../../src/storage/fakePrivateStore.js';
 import { DEFAULT_MEDIA_LIMITS } from '../../src/meetings/mediaLimits.js';
@@ -15,6 +15,12 @@ import {
   type WorkerIdentity,
 } from '../../src/db/repositories/meetings/credentials.js';
 import * as jobsRepo from '../../src/db/repositories/meetings/jobs.js';
+import * as transcriptsRepo from '../../src/db/repositories/meetings/transcripts.js';
+import {
+  alignSegments,
+  parseDiarizationArtifact,
+  parseTranscriptArtifact,
+} from '../../src/meetings/artifacts.js';
 import * as artifactsRepo from '../../src/db/repositories/meetings/artifacts.js';
 import * as meetingsRepo from '../../src/db/repositories/meetings/meetings.js';
 import {
@@ -297,7 +303,10 @@ async function runStage(
 }
 
 /** Crea la reunión y sube el audio original: los pasos 1–3 del plan. */
-async function seedMeetingWithMedia(world: World): Promise<{ meetingId: string; runId: string; jobId: string }> {
+async function seedMeetingWithMedia(
+  world: World,
+  options: { speakerCount?: number | null } = {},
+): Promise<{ meetingId: string; runId: string; jobId: string }> {
   const scope = { tenantId: world.tenantId, clientId: world.clientId, userId: world.userId };
   const created = await createMeeting(scope, {
     title: 'Kickoff',
@@ -319,7 +328,11 @@ async function seedMeetingWithMedia(world: World): Promise<{ meetingId: string; 
   const complete = await uploadComplete(
     scope,
     created.meetingId,
-    { bytes: AUDIO.length, checksumSha256: sha(AUDIO) },
+    {
+      bytes: AUDIO.length,
+      checksumSha256: sha(AUDIO),
+      ...(options.speakerCount === undefined ? {} : { speakerCount: options.speakerCount }),
+    },
     world.deps,
   );
   return { meetingId: created.meetingId, runId: complete.runId, jobId: complete.firstJob.id };
@@ -2249,4 +2262,340 @@ test('un complete sobre un job cancelado se rechaza', async () => {
   // Y el artefacto NO se ingirió.
   const upload = await artifactsRepo.findUpload(claimed.jobId, claimed.attempt, 'normalized_media');
   assert.notEqual(upload?.state, 'ingested');
+});
+
+
+// ══════════════════════════════════════════════════════════════════════════
+// «¿Cuántas personas hablan?» — que la opción LLEGUE, contra la base de verdad
+//
+// Lo que se afirma aquí es la mitad de mai de la cadena: que el número elegido al
+// subir queda escrito en `requested_options` del run y que el `claim` lo entrega.
+// NO se afirma que el worker lo use — eso es código Python en otra máquina y se
+// verifica allí, no aquí.
+// ══════════════════════════════════════════════════════════════════════════
+
+test('el número de hablantes se persiste en el run y llega en el claim de TODAS las etapas', async () => {
+  const world = await makeWorld();
+  const { meetingId, runId } = await seedMeetingWithMedia(world, { speakerCount: 2 });
+
+  // 1 · escrito en la base, en el run, y sólo eso.
+  const stored = await query<{ requested_options: Record<string, unknown> }>(
+    'SELECT requested_options FROM meeting_processing_runs WHERE id = $1',
+    [runId],
+  );
+  assert.deepEqual(stored.rows[0].requested_options, { speakerCount: 2 });
+
+  // 2 · el claim lo entrega. Las opciones son del RUN, así que las tres etapas las
+  // ven — y la que importa es diarize, que es la única que las va a usar.
+  const normalize = await claim(world.identity, {}, world.deps);
+  assert.ok(normalize);
+  assert.equal(normalize.options.speakerCount, 2, 'normalize también las ve');
+
+  await runStage(world, normalize, NORMALIZED, {
+    durationSeconds: 30,
+    sampleRate: 16000,
+    channels: 1,
+    codec: 'pcm_s16le',
+  });
+  const transcribe = await claim(world.identity, {}, world.deps);
+  assert.ok(transcribe);
+  assert.equal(transcribe.stage, 'transcribe');
+  assert.equal(transcribe.options.speakerCount, 2);
+
+  await runStage(world, transcribe, transcriptArtifact(3));
+  const diarize = await claim(world.identity, {}, world.deps);
+  assert.ok(diarize);
+  assert.equal(diarize.stage, 'diarize', 'la etapa que lo necesita');
+  assert.equal(
+    diarize.options.speakerCount,
+    2,
+    'el número llega al claim de diarize: es lo que el worker tiene que leer',
+  );
+  assert.equal(diarize.meetingId, meetingId);
+});
+
+test('automático no escribe la clave, y el claim la entrega ausente', async () => {
+  const world = await makeWorld();
+  const { runId } = await seedMeetingWithMedia(world, { speakerCount: null });
+
+  const stored = await query<{ requested_options: Record<string, unknown> }>(
+    'SELECT requested_options FROM meeting_processing_runs WHERE id = $1',
+    [runId],
+  );
+  assert.deepEqual(stored.rows[0].requested_options, {}, 'automático no deja rastro');
+
+  const claimed = await claim(world.identity, {}, world.deps);
+  assert.ok(claimed);
+  assert.equal(
+    'speakerCount' in claimed.options,
+    false,
+    'ausente, no null: es lo que el worker ya interpreta como automático',
+  );
+});
+
+test('no elegir nada es indistinguible de elegir automático', async () => {
+  const world = await makeWorld();
+  const sinElegir = await seedMeetingWithMedia(world);
+  const automatico = await seedMeetingWithMedia(world, { speakerCount: null });
+
+  const rows = await query<{ id: string; requested_options: Record<string, unknown> }>(
+    'SELECT id, requested_options FROM meeting_processing_runs WHERE id = ANY($1)',
+    [[sinElegir.runId, automatico.runId]],
+  );
+  assert.equal(rows.rows.length, 2);
+  for (const row of rows.rows) assert.deepEqual(row.requested_options, {});
+});
+
+test('un número se conserva intacto tras un requeue: la opción es del run, no del intento', async () => {
+  const world = await makeWorld({ leaseSeconds: 1 });
+  const { meetingId } = await seedMeetingWithMedia(world, { speakerCount: 5 });
+
+  const first = await claim(world.identity, {}, world.deps);
+  assert.ok(first);
+  assert.equal(first.options.speakerCount, 5);
+
+  await new Promise((resolve) => setTimeout(resolve, 1_200));
+  const sweep = await requeueExpiredLeases(world.maintenanceIdentity);
+  assert.ok(sweep.requeued >= 1, 'el lease caducó y el job volvió a la cola');
+  const second = await claim(world.identity, {}, world.deps);
+  assert.ok(second);
+  assert.equal(second.meetingId, meetingId);
+  assert.equal(second.attempt, 2, 'es el segundo intento');
+  assert.equal(second.options.speakerCount, 5, 'y sigue viendo el número elegido');
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// El transcript v2 con tiempos por palabra, ingerido de verdad
+//
+// La prueba unitaria comprueba `alignSegments`. Esta comprueba que el resultado
+// LLEGA A LA BASE: los bloques partidos, sus etiquetas, sus marcas de solape, los
+// índices densos y `segment_count` cuadrando con las filas.
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Un transcript v2 de dos segmentos. El primero contiene A y B —es el caso de la
+ * reunión real, donde whisper mete pregunta y respuesta en el mismo trozo—, y el
+ * segundo lleva una palabra suelta de A dentro del turno de B.
+ */
+function transcriptArtifactV2(): Buffer {
+  const lines = [
+    JSON.stringify({
+      schema: 'meetings.transcript',
+      schema_version: 2,
+      language: 'es',
+      duration_seconds: 30,
+      model: 'medium',
+      device: 'cuda',
+      compute_type: 'float16',
+      segment_count: 2,
+    }),
+    JSON.stringify({
+      i: 0,
+      start: 0,
+      end: 9,
+      text: '¿Qué te gustaría almorzar? No sé, podríamos pollo',
+      words: [
+        { start: 0.0, end: 1.0, word: '¿Qué' },
+        { start: 1.0, end: 2.0, word: ' te' },
+        { start: 2.0, end: 3.0, word: ' gustaría' },
+        { start: 3.0, end: 4.0, word: ' almorzar?' },
+        { start: 5.0, end: 6.0, word: ' No' },
+        { start: 6.0, end: 7.0, word: ' sé,' },
+        { start: 7.0, end: 8.0, word: ' podríamos' },
+        { start: 8.0, end: 9.0, word: ' pollo' },
+      ],
+    }),
+    JSON.stringify({
+      i: 1,
+      start: 10,
+      end: 19,
+      text: 'Entonces pedimos sushi vale y lo confirmo ahora',
+      words: [
+        { start: 10.0, end: 11.0, word: 'Entonces' },
+        { start: 11.0, end: 12.0, word: ' pedimos' },
+        { start: 12.0, end: 13.0, word: ' sushi' },
+        { start: 13.0, end: 13.4, word: ' vale' },
+        { start: 14.0, end: 15.0, word: ' y' },
+        { start: 15.0, end: 16.0, word: ' lo' },
+        { start: 16.0, end: 17.0, word: ' confirmo' },
+      ],
+    }),
+  ];
+  return gzipSync(Buffer.from(`${lines.join('\n')}\n`));
+}
+
+/** Turnos que reparten el segmento 0 en dos voces y meten un «vale» ajeno en el 1. */
+function diarizationArtifactForV2(): Buffer {
+  const turns = [
+    { start: 0, end: 4.5, speaker: 'SPEAKER_00' },
+    { start: 4.8, end: 9.5, speaker: 'SPEAKER_01' },
+    { start: 9.8, end: 13.0, speaker: 'SPEAKER_01' },
+    { start: 13.0, end: 13.5, speaker: 'SPEAKER_00' },
+    { start: 13.6, end: 19.5, speaker: 'SPEAKER_01' },
+  ];
+  const lines = [
+    JSON.stringify({
+      schema: 'meetings.diarization',
+      schema_version: 1,
+      backend: 'pyannote_full',
+      speaker_count: 2,
+      turn_count: turns.length,
+    }),
+    ...turns.map((turn) => JSON.stringify(turn)),
+  ];
+  return gzipSync(Buffer.from(`${lines.join('\n')}\n`));
+}
+
+test('un transcript v2 se ingiere partido por palabra, con los bloques y las marcas en la base', async () => {
+  const world = await makeWorld();
+  const scope = { tenantId: world.tenantId, clientId: world.clientId, userId: world.userId };
+  const { meetingId, runId } = await seedMeetingWithMedia(world, { speakerCount: 2 });
+
+  const normalize = await claim(world.identity, {}, world.deps);
+  assert.ok(normalize);
+  await runStage(world, normalize, NORMALIZED, {
+    durationSeconds: 30,
+    sampleRate: 16000,
+    channels: 1,
+    codec: 'pcm_s16le',
+  });
+
+  const transcribe = await claim(world.identity, {}, world.deps);
+  assert.ok(transcribe);
+  await runStage(world, transcribe, transcriptArtifactV2());
+
+  const diarize = await claim(world.identity, {}, world.deps);
+  assert.ok(diarize);
+  const done = await runStage(world, diarize, diarizationArtifactForV2());
+  assert.equal(done.ingested, true);
+
+  const segments = await query<{
+    segment_index: number;
+    start_sec: string;
+    end_sec: string;
+    speaker_label: string | null;
+    text: string;
+    overlap: boolean;
+  }>(
+    `SELECT segment_index, start_sec, end_sec, speaker_label, text, overlap
+       FROM meeting_segments WHERE transcript_id = $1 ORDER BY segment_index`,
+    [done.transcriptId],
+  );
+
+  // El segmento 0 se partió en dos; el 1 absorbió el «vale» y quedó en uno.
+  assert.equal(segments.rows.length, 3, 'dos segmentos de whisper dan tres bloques');
+  assert.deepEqual(
+    segments.rows.map((row) => row.speaker_label),
+    ['SPEAKER_00', 'SPEAKER_01', 'SPEAKER_01'],
+  );
+  assert.deepEqual(
+    segments.rows.map((row) => row.text),
+    [
+      '¿Qué te gustaría almorzar?',
+      'No sé, podríamos pollo',
+      // El segmento 1 NO se partió: el «vale» se absorbió y quedó un solo tramo, así
+      // que se emite el segmento ORIGINAL — con «ahora» incluido, que ni siquiera
+      // tenía entrada en `words`. El texto no se reconstruye desde las palabras
+      // cuando no hace falta partir, y así no se pierde lo que ellas no cubren.
+      'Entonces pedimos sushi vale y lo confirmo ahora',
+    ],
+  );
+  assert.deepEqual(
+    segments.rows.map((row) => [Number(row.start_sec), Number(row.end_sec)]),
+    [
+      [0, 4],
+      [5, 9],
+      // Los tiempos ORIGINALES del segmento, porque no se partió.
+      [10, 19],
+    ],
+    'partido, los tiempos son los de las palabras; sin partir, los del segmento — nunca interpolados',
+  );
+
+  // La marca de solape: sólo el bloque que absorbió palabras de la otra voz.
+  assert.deepEqual(
+    segments.rows.map((row) => row.overlap),
+    [false, false, true],
+    'el bloque que se comió el «vale» declara que contiene dos voces',
+  );
+  assert.ok(segments.rows[2].text.includes('vale'), 'y no perdió la palabra');
+
+  // Índices densos y `segment_count` cuadrando con lo que hay.
+  assert.deepEqual(segments.rows.map((row) => row.segment_index), [0, 1, 2]);
+  const state = await getMeetingState(scope, meetingId);
+  assert.equal(state.activeTranscript?.segmentCount, 3, 'segment_count sale de las filas reales');
+  assert.equal(state.activeTranscript?.diarizationBackend, 'pyannote_full');
+
+  const version = await query<{ schema_version: number }>(
+    `SELECT schema_version FROM meeting_transcript_versions WHERE id = $1`,
+    [done.transcriptId],
+  );
+  assert.equal(version.rows[0].schema_version, 2, 'la versión del artefacto queda registrada');
+
+  const run = await query<{ outcome: string }>(
+    `SELECT outcome FROM meeting_processing_runs WHERE id = $1`,
+    [runId],
+  );
+  assert.equal(run.rows[0].outcome, 'succeeded');
+});
+
+test('reingerir los mismos bloques partidos converge en vez de duplicar', async () => {
+  // Partir añade filas y renumera índices, así que la idempotencia hay que volver a
+  // demostrarla: el UNIQUE es (transcript_id, segment_index) y una segunda escritura
+  // de los MISMOS bloques tiene que dar exactamente las mismas filas.
+  const world = await makeWorld();
+  const { meetingId, runId } = await seedMeetingWithMedia(world, { speakerCount: 2 });
+
+  const transcript = parseTranscriptArtifact(gunzipSync(transcriptArtifactV2()));
+  const diarization = parseDiarizationArtifact(gunzipSync(diarizationArtifactForV2()));
+  const alignment = alignSegments(transcript.segments, diarization.turns);
+  assert.equal(alignment.segments.length, 3, 'tres bloques de dos segmentos');
+
+  const input = {
+    tenantId: world.tenantId,
+    clientId: world.clientId,
+    meetingId,
+    runId,
+    whisperModel: transcript.header.model,
+    diarizationBackend: diarization.header.backend,
+    language: transcript.header.language,
+    durationSeconds: transcript.header.durationSeconds,
+    schemaVersion: transcript.header.schemaVersion,
+    metrics: {},
+    segments: alignment.segments,
+    talkSharePct: alignment.talkSharePct,
+  };
+
+  // Debe ir en transacción: la propia función lo documenta, porque un fallo a mitad
+  // dejaría una versión con la mitad de sus segmentos y `segment_count` mintiendo.
+  const first = await withTransaction((client) =>
+    transcriptsRepo.ingestTranscriptVersion(input, client as unknown as Parameters<typeof transcriptsRepo.ingestTranscriptVersion>[1]),
+  );
+  assert.equal(first.created, true);
+
+  const snapshot = async (): Promise<string> => {
+    const rows = await query<{
+      segment_index: number;
+      speaker_label: string | null;
+      text: string;
+      overlap: boolean;
+    }>(
+      `SELECT segment_index, speaker_label, text, overlap FROM meeting_segments
+         WHERE transcript_id = $1 ORDER BY segment_index`,
+      [first.version.id],
+    );
+    return JSON.stringify(rows.rows);
+  };
+  const before = await snapshot();
+
+  const second = await withTransaction((client) =>
+    transcriptsRepo.ingestTranscriptVersion(input, client as unknown as Parameters<typeof transcriptsRepo.ingestTranscriptVersion>[1]),
+  );
+  assert.equal(second.version.id, first.version.id, 'tv_run_key: una versión por run');
+  assert.equal(await snapshot(), before, 'la segunda escritura no duplica ni reordena');
+
+  const count = await query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM meeting_segments WHERE transcript_id = $1`,
+    [first.version.id],
+  );
+  assert.equal(count.rows[0].n, '3', 'siguen siendo tres filas, no seis');
 });

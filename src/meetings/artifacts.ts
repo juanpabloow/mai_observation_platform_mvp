@@ -372,20 +372,45 @@ function overlapSeconds(a: { startSec: number; endSec: number }, b: { startSec: 
 }
 
 /**
- * Mínimo de palabras para que un tramo abra segmento propio.
+ * Mínimo de palabras para que un tramo abra bloque propio DENTRO de un segmento.
  *
- * Sin guarda, la fluctuación del diarizador convierte una frase en picadillo: medido
- * sobre la reunión de prueba, partir por palabra sin más daba 35 bloques de los cuales
- * 12 eran de una o dos palabras («y no», «quiero.»), y eso NO se puede leer. Con tres,
- * los mismos datos dan 23 bloques, ninguno de una o dos palabras, y la atribución no
- * empeora: el hablante minoritario se mantiene en 91,4 % de acierto con 0 % de sus
- * palabras dadas al otro.
+ * ── Qué hace exactamente, y qué NO ─────────────────────────────────────────
  *
- * NO hay suelo de duración acompañando a esto, y no es un olvido. Se probó, y era
- * CONTRAPRODUCENTE: un mínimo de 0,6 s absorbía las réplicas cortas y correctas del
- * hablante minoritario, que bajaba de 91,4 % a 84,3 % y pasaba a tener un 8,6 % de sus
- * palabras atribuidas al otro. Tres palabras pueden durar medio segundo y ser una
- * intervención perfectamente real.
+ * La guarda sólo actúa cuando un segmento de whisper contiene un cambio de hablante
+ * INTERNO. Un tramo de menos de tres palabras no abre bloque: se absorbe en el vecino
+ * con más palabras. Su texto NO se pierde nunca — se queda dentro del bloque vecino,
+ * entero.
+ *
+ * Y no toca nada más. Si whisper puso «Claro.» en su PROPIO segmento —lo habitual,
+ * porque trocea por pausas y una interjección suele venir rodeada de silencio—, ese
+ * segmento no tiene cambio interno, la guarda no interviene, y la interjección
+ * conserva su bloque y su etiqueta por mayor solape. Ése es el caso que estamos
+ * intentando recuperar, y la guarda no lo alcanza.
+ *
+ * ── El límite, dicho claro ─────────────────────────────────────────────────
+ *
+ * Desde los tiempos NO se puede distinguir un «claro» real de dos palabras de
+ * fluctuación del diarizador: se ven igual. Así que la guarda elige, y elige
+ * legibilidad — pero no en silencio: cuando absorbe el tramo de OTRO hablante, el
+ * bloque resultante se marca `overlap`, que es exactamente lo que significa («aquí hay
+ * dos voces y la etiqueta única es una simplificación»). La información no se pierde,
+ * cambia de sitio.
+ *
+ * ── Por qué tres, y no uno ─────────────────────────────────────────────────
+ *
+ * Medido sobre la reunión de prueba: sin guarda salían 35 bloques, 12 de ellos de una
+ * o dos palabras («y no», «quiero.»), y eso no se puede leer. Con tres salen 23,
+ * ninguno corto, y la atribución NO empeora — el acierto global sube de 88,2 % a
+ * 88,9 % y el hablante minoritario se queda en 91,4 % con 0 % de sus palabras dadas al
+ * otro. En esa grabación, los 12 tramos que la guarda absorbió eran fluctuación, no
+ * intervenciones: si hubieran sido reales, el acierto habría bajado.
+ *
+ * ── Por qué NO hay suelo de duración ───────────────────────────────────────
+ *
+ * Se probó y era CONTRAPRODUCENTE: 0,6 s bajaba al hablante minoritario de 91,4 % a
+ * 84,3 % y le metía un 8,6 % de atribución cruzada, porque tres palabras pueden durar
+ * medio segundo y ser una intervención perfectamente real. La guarda cuenta palabras y
+ * sólo palabras.
  */
 export const MIN_WORDS_PER_SPLIT = 3;
 
@@ -416,23 +441,54 @@ function rankLabels(
  * ORIGINALES. Esa distinción importa: un segmento que no se parte no debe cambiar de
  * `startSec`/`endSec` sólo porque su primera palabra empiece 40 ms más tarde.
  */
+interface SplitPart {
+  readonly label: string | null;
+  readonly startSec: number;
+  readonly endSec: number;
+  readonly text: string;
+  /**
+   * Este bloque absorbió palabras que creemos de otra voz. Va POR BLOQUE y no por
+   * segmento: si un segmento se parte en tres y sólo uno absorbió, marcar los tres
+   * diría que hay dos voces donde no las hay.
+   */
+  readonly mergedForeign?: boolean;
+}
+
+interface SplitResult {
+  /**
+   * `null` significa «no hay nada que partir»: el llamador emite el segmento entero
+   * con su texto y sus tiempos ORIGINALES. No es lo mismo que una sola parte.
+   */
+  readonly parts: SplitPart[] | null;
+  /**
+   * Se absorbió el tramo de otro hablante por no llegar a la guarda. Sólo se usa
+   * cuando `parts` es `null` —la absorción colapsó el segmento entero en un bloque—;
+   * con varios bloques, cada uno lleva su propia marca.
+   */
+  readonly mergedForeign: boolean;
+}
+
 function splitByWords(
   segment: TranscriptSegment,
   turns: readonly DiarizationTurn[],
-): { label: string | null; startSec: number; endSec: number; text: string }[] | null {
+): SplitResult {
   const words = segment.words;
-  if (!words || words.length === 0) return null;
+  // Sin palabras no se parte NADA, y no se interpola nada: un artefacto v1 no trae
+  // tiempos por palabra, y fabricarlos repartiendo el segmento sería inventar la
+  // frontera que este cambio existe para no inventar.
+  if (!words || words.length === 0) return { parts: null, mergedForeign: false };
 
-  type Run = { label: string | null; words: TranscriptWord[] };
+  type Run = { label: string | null; words: TranscriptWord[]; mergedForeign: boolean };
   const runs: Run[] = [];
   for (const word of words) {
     const { label } = rankLabels(turns, word);
     const last = runs[runs.length - 1];
     if (last && last.label === label) last.words.push(word);
-    else runs.push({ label, words: [word] });
+    else runs.push({ label, words: [word], mergedForeign: false });
   }
-  if (runs.length <= 1) return null;
+  if (runs.length <= 1) return { parts: null, mergedForeign: false };
 
+  let mergedForeign = false;
   // Un tramo que no llega a la guarda no abre bloque: se absorbe en el vecino con MÁS
   // palabras, y se repite hasta que no quede ninguno corto. Absorber hacia el vecino
   // mayor —y no siempre hacia atrás— evita que una ráfaga de tramos cortos se acumule
@@ -446,6 +502,17 @@ function splitByWords(
       previous === null ? next : next === null ? previous
       : previous.words.length >= next.words.length ? previous : next;
     if (target === null) break;
+    // Absorber el tramo de OTRO hablante deja un bloque con dos voces dentro. Que la
+    // etiqueta sea la del mayoritario es una simplificación deliberada, y `overlap` es
+    // lo que dice que lo es. Absorber un tramo del MISMO hablante (puede pasar tras
+    // una fusión previa) no cuenta: ahí no hay dos voces.
+    if (target.label !== runs[index].label) {
+      target.mergedForeign = true;
+      mergedForeign = true;
+    }
+    // La marca del absorbido viaja con él: si ya arrastraba palabras ajenas, el
+    // destino las hereda.
+    if (runs[index].mergedForeign) target.mergedForeign = true;
     target.words = [...target.words, ...runs[index].words].sort((a, b) => a.startSec - b.startSec);
     runs.splice(index, 1);
     // Absorber puede dejar dos tramos vecinos con la MISMA etiqueta; se funden para
@@ -453,17 +520,24 @@ function splitByWords(
     for (let i = runs.length - 1; i > 0; i -= 1) {
       if (runs[i].label !== runs[i - 1].label) continue;
       runs[i - 1].words = [...runs[i - 1].words, ...runs[i].words].sort((a, b) => a.startSec - b.startSec);
+      if (runs[i].mergedForeign) runs[i - 1].mergedForeign = true;
       runs.splice(i, 1);
     }
   }
-  if (runs.length <= 1) return null;
+  // Si la absorción lo dejó en un solo tramo, se emite el segmento entero —con sus
+  // tiempos originales— pero arrastrando `mergedForeign`: hubo dos voces aquí.
+  if (runs.length <= 1) return { parts: null, mergedForeign };
 
-  return runs.map((run) => ({
-    label: run.label,
-    startSec: run.words[0].startSec,
-    endSec: run.words[run.words.length - 1].endSec,
-    text: run.words.map((word) => word.text).join('').trim(),
-  }));
+  return {
+    parts: runs.map((run) => ({
+      label: run.label,
+      startSec: run.words[0].startSec,
+      endSec: run.words[run.words.length - 1].endSec,
+      text: run.words.map((word) => word.text).join('').trim(),
+      mergedForeign: run.mergedForeign,
+    })),
+    mergedForeign,
+  };
 }
 
 /**
@@ -502,10 +576,7 @@ export function alignSegments(
   const aligned: AlignedSegment[] = [];
   const spokenSeconds = new Map<string, number>();
 
-  const emit = (
-    source: TranscriptSegment,
-    part: { label: string | null; startSec: number; endSec: number; text: string },
-  ): void => {
+  const emit = (source: TranscriptSegment, part: SplitPart, mergedForeign: boolean): void => {
     const { label, best, runnerUp } = rankLabels(turns, part);
     const duration = Math.max(part.endSec - part.startSec, 1e-9);
     aligned.push({
@@ -515,26 +586,30 @@ export function alignSegments(
       endSec: part.endSec,
       text: part.text,
       speakerLabel: label,
-      overlap: label !== null && runnerUp / duration >= OVERLAP_THRESHOLD,
+      // `mergedForeign` marca solape SIN pasar por el umbral del 25 %: no es una
+      // estimación de cuánto solapan dos turnos, es que SABEMOS que este bloque
+      // contiene palabras que atribuimos a otra voz. Una interjección de 0,4 s en un
+      // bloque de 3,4 s no llega al 25 % y aun así son dos personas.
+      overlap:
+        mergedForeign || (label !== null && runnerUp / duration >= OVERLAP_THRESHOLD),
     });
     if (label !== null) spokenSeconds.set(label, (spokenSeconds.get(label) ?? 0) + best);
   };
 
   for (const segment of segments) {
-    const parts = splitByWords(segment, turns);
+    const { parts, mergedForeign } = splitByWords(segment, turns);
     if (parts === null) {
-      // Sin partir: se conservan los tiempos ORIGINALES del segmento.
+      // Sin partir: se conservan el texto y los tiempos ORIGINALES del segmento.
       // Un segmento sin ningún turno solapado queda sin etiqueta en vez de heredar
       // la del vecino, porque inventar una atribución es peor que no tenerla.
-      emit(segment, {
-        label: null,
-        startSec: segment.startSec,
-        endSec: segment.endSec,
-        text: segment.text,
-      });
+      emit(
+        segment,
+        { label: null, startSec: segment.startSec, endSec: segment.endSec, text: segment.text },
+        mergedForeign,
+      );
       continue;
     }
-    for (const part of parts) emit(segment, part);
+    for (const part of parts) emit(segment, part, part.mergedForeign === true);
   }
 
   // El reparto se calcula sobre los TURNOS, no sobre los segmentos alineados:
