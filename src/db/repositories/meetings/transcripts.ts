@@ -197,6 +197,47 @@ export async function countSegments(transcriptId: string, executor?: Queryable):
   return Number(result.rows[0].n);
 }
 
+export interface TranscriptSegmentRow {
+  id: string;
+  segment_index: number;
+  start_sec: string;
+  end_sec: string;
+  speaker_label: string | null;
+  text: string;
+  overlap: boolean;
+  confidence: string | null;
+}
+
+/**
+ * Los segmentos de una versión, en orden de lectura.
+ *
+ * Existía `countSegments` y no existía esto, así que hasta W-3 el texto de una
+ * transcripción no se podía leer: la API devolvía `segmentCount` y ninguna
+ * forma de obtener las frases. Es lo único que faltaba en la capa de datos para
+ * que la pantalla de Reuniones tenga algo que mostrar.
+ *
+ * `numeric` sale como string por el driver y se convierte en la capa de arriba,
+ * a propósito: convertir aquí perdería precisión en silencio para duraciones
+ * largas, y el que mapea a la UI ya sabe qué precisión necesita.
+ *
+ * ORDER BY segment_index, no por `start_sec`: el índice es el orden que declaró
+ * el artefacto, y dos segmentos pueden empezar en el mismo instante cuando dos
+ * personas hablan encima.
+ */
+export async function listSegments(
+  transcriptId: string,
+  executor?: Queryable,
+): Promise<TranscriptSegmentRow[]> {
+  const result = await q(executor).query<TranscriptSegmentRow>(
+    `SELECT id, segment_index, start_sec, end_sec, speaker_label, text, overlap, confidence
+       FROM meeting_segments
+      WHERE transcript_id = $1
+      ORDER BY segment_index`,
+    [transcriptId],
+  );
+  return result.rows;
+}
+
 export async function listTranscriptSpeakers(
   transcriptId: string,
   executor?: Queryable,

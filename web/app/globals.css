@@ -926,9 +926,58 @@ body {
 /* A row carrying something genuinely OVERDUE: a pink wash plus a 3px brand-red
    left bar. Distinct from .u-row-overdue above, which is the inbox's amber
    "needs a human" state — attention-worthy, but not late. */
+   left bar.
+   `.u-row-overdue` (an amber wash + a 2px amber rule) used to sit here for the
+   contacts list's late-task rows. It is gone: painting a row's GROUND is what
+   selection and hover already mean in these tables, so a tinted row read as
+   "hovered" or "open" rather than as a fact about the contact. That state is a
+   chip on the name now — see ContactsTable. */
 .u-row-danger {
   background-color: color-mix(in srgb, var(--brand) 6%, transparent);
   box-shadow: inset 3px 0 0 0 var(--brand-rule);
+}
+
+/*
+ * ── Reuniones · resumen adaptable ────────────────────────────────────────────
+ * The highlights strip has 2 to 4 cells chosen PER MEETING, so its column count
+ * is data, not a class. Tailwind cannot express a dynamic `grid-cols-N`, and an
+ * inline style cannot carry a media query — so the component sets --cols and
+ * this rule consumes it above the mobile breakpoint. Below it the strip is a
+ * vertical list, which is what the spec asks for on a phone.
+ */
+.u-highlights {
+  display: grid;
+  grid-template-columns: 1fr;
+}
+@media (min-width: 40rem) {
+  .u-highlights {
+    grid-template-columns: repeat(var(--cols, 3), minmax(0, 1fr));
+  }
+}
+
+/* A jumped-to finding or next step flashes once, so "the blocker" in the
+   highlights strip visibly lands somewhere. Ring + fill, never colour alone,
+   and it removes itself — a permanent marker would compete with selection. */
+.u-flash {
+  animation: u-flash 1.4s ease-out;
+  border-radius: 0.5rem;
+}
+@keyframes u-flash {
+  0%,
+  35% {
+    background-color: color-mix(in srgb, var(--accent) 12%, transparent);
+    box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  100% {
+    background-color: transparent;
+    box-shadow: 0 0 0 2px transparent;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .u-flash {
+    animation: none;
+    background-color: color-mix(in srgb, var(--accent) 12%, transparent);
+  }
 }
 
 /*

@@ -327,6 +327,29 @@ export async function findLiveDerived(
  * ESE artefacto, no contra lo que hoy sea el vivo, que un reintento posterior
  * pudo haber sustituido.
  */
+/**
+ * El normalizado vivo más reciente de una reunión, sin importar el run.
+ *
+ * Sólo es el plan B de `findLiveDerived(runId, 'normalized')`: se usa cuando la
+ * reunión no tiene versión de transcript activa —todavía no hay texto— y aun
+ * así hay audio convertido que se puede reproducir. Con una versión activa se
+ * prefiere SIEMPRE el del run de esa versión, porque es el fichero sobre el que
+ * se midieron los tiempos de sus segmentos.
+ */
+export async function findLatestLiveNormalized(
+  meetingId: string,
+  executor?: Queryable,
+): Promise<MeetingMediaRow | null> {
+  const result = await q(executor).query<MeetingMediaRow>(
+    `SELECT * FROM meeting_media
+      WHERE meeting_id = $1 AND role = 'normalized' AND deleted_at IS NULL
+      ORDER BY created_at DESC
+      LIMIT 1`,
+    [meetingId],
+  );
+  return result.rows[0] ?? null;
+}
+
 export async function findDerivedByStorageKey(
   runId: string,
   role: 'normalized' | 'raw_result',
@@ -364,4 +387,160 @@ export async function supersedeLiveDerived(
     [runId, role, keepStorageKey],
   );
   return result.rowCount ?? 0;
+}
+
+// ── La lectura del listado, para la UI ─────────────────────────────────────
+
+export interface MeetingListRow {
+  id: string;
+  title: string;
+  source_kind: string;
+  started_at: Date | null;
+  created_at: Date;
+  updated_at: Date;
+  media_state: MeetingMediaState;
+  transcript_state: TranscriptState;
+  diarization_state: DiarizationState;
+  analysis_state: string;
+  cancelled_at: Date | null;
+  warnings: unknown[];
+  /** Del medio original: lo que el usuario subió. NULL si aún no hay. */
+  original_bytes: string | null;
+  /** Del normalizado del run de la versión activa, que es lo que se reproduce. */
+  duration_seconds: string | null;
+  segment_count: number | null;
+  language: string | null;
+  active_transcript_id: string | null;
+  /** Hablantes de la versión activa. 0 mientras no haya diarización. */
+  speaker_count: number;
+  /** Los mismos, con etiqueta, nombre y cuota. `[]` si no hay. */
+  speakers: unknown;
+  /** El progreso de la etapa en curso, para la fila del listado. */
+  running_stage: string | null;
+  running_progress_pct: number | null;
+  failure_code: string | null;
+}
+
+/**
+ * El listado de reuniones de UN cliente.
+ *
+ * Una sola consulta con laterales, no N+1: el listado muestra duración,
+ * segmentos, hablantes y la etapa en curso de cada fila, y resolver eso con una
+ * consulta por reunión convierte una pantalla en una tormenta de round-trips
+ * contra una base que está al otro lado de internet.
+ *
+ * El filtro por `tenant_id` Y `client_id` va en el WHERE, no en la capa de
+ * arriba: es la frontera de aislamiento del módulo y tiene que estar donde no se
+ * pueda olvidar.
+ *
+ * Orden: `started_at` cuando existe y `created_at` si no —el mismo criterio que
+ * `meetings_list_idx`—, porque una reunión importada puede tener fecha de
+ * celebración anterior a su subida.
+ */
+/**
+ * El SELECT, una sola vez. La lista y el detalle comparten exactamente las
+ * mismas columnas derivadas; duplicar el SQL garantizaría que algún día la fila
+ * del detalle diga una cosa y la del listado otra sobre la misma reunión.
+ */
+const LIST_SELECT = `
+  SELECT m.id, m.title, m.source_kind, m.started_at, m.created_at, m.updated_at,
+         m.media_state, m.transcript_state, m.diarization_state, m.analysis_state,
+         m.cancelled_at, m.warnings, m.active_transcript_id,
+         orig.bytes::text                       AS original_bytes,
+         tv.duration_seconds::text              AS duration_seconds,
+         tv.segment_count                       AS segment_count,
+         tv.language                            AS language,
+         COALESCE(sp.n, 0)::int                 AS speaker_count,
+         COALESCE(sp.people, '[]'::jsonb)       AS speakers,
+         run.stage                              AS running_stage,
+         run.progress_pct                       AS running_progress_pct,
+         fail.failure_code                      AS failure_code
+    FROM meetings m
+    LEFT JOIN LATERAL (
+      SELECT bytes FROM meeting_media
+       WHERE meeting_id = m.id AND role = 'original' AND deleted_at IS NULL
+       LIMIT 1
+    ) orig ON true
+    LEFT JOIN meeting_transcript_versions tv ON tv.id = m.active_transcript_id
+    -- Los hablantes de la fila, agregados en la MISMA consulta. El listado
+    -- muestra avatares con la cuota de cada uno, y resolverlo con una consulta
+    -- por reunión sería el N+1 que estos laterales existen para evitar.
+    LEFT JOIN LATERAL (
+      SELECT count(*) AS n,
+             jsonb_agg(jsonb_build_object(
+               'label', ts.speaker_label,
+               'speakerId', ts.speaker_id,
+               'displayName', s.display_name,
+               'talkSharePct', ts.talk_share_pct
+             ) ORDER BY ts.speaker_label) AS people
+        FROM meeting_transcript_speakers ts
+        LEFT JOIN meeting_speakers s ON s.id = ts.speaker_id
+       WHERE ts.transcript_id = m.active_transcript_id
+    ) sp ON true
+    -- La etapa EN CURSO: la que tiene el lease o está en cola. Con varias, la
+    -- más avanzada del pipeline, que es la que el usuario espera leer.
+    LEFT JOIN LATERAL (
+      SELECT stage, progress_pct FROM meeting_processing_jobs
+       WHERE meeting_id = m.id AND status IN ('queued', 'leased', 'uploading_result')
+       ORDER BY CASE stage WHEN 'normalize' THEN 1 WHEN 'transcribe' THEN 2 ELSE 3 END DESC
+       LIMIT 1
+    ) run ON true
+    -- Y el último fallo terminal, para la fila «requiere atención».
+    LEFT JOIN LATERAL (
+      SELECT failure_code FROM meeting_processing_jobs
+       WHERE meeting_id = m.id AND status = 'failed' AND failure_code IS NOT NULL
+       ORDER BY updated_at DESC
+       LIMIT 1
+    ) fail ON true
+`;
+
+/**
+ * El listado de reuniones de UN cliente.
+ *
+ * Una sola consulta con laterales, no N+1: el listado muestra duración,
+ * segmentos, hablantes y la etapa en curso de cada fila, y resolver eso con una
+ * consulta por reunión convierte una pantalla en una tormenta de round-trips
+ * contra una base que está al otro lado de internet.
+ *
+ * El filtro por `tenant_id` Y `client_id` va en el WHERE, no en la capa de
+ * arriba: es la frontera de aislamiento del módulo y tiene que estar donde no se
+ * pueda olvidar.
+ *
+ * Orden: `started_at` cuando existe y `created_at` si no —el mismo criterio que
+ * `meetings_list_idx`—, porque una reunión importada puede tener fecha de
+ * celebración anterior a su subida.
+ */
+export async function listMeetingsForClient(
+  tenantId: string,
+  clientId: string,
+  executor?: Queryable,
+): Promise<MeetingListRow[]> {
+  const result = await q(executor).query<MeetingListRow>(
+    `${LIST_SELECT}
+      WHERE m.tenant_id = $1 AND m.client_id = $2
+      ORDER BY COALESCE(m.started_at, m.created_at) DESC, m.created_at DESC`,
+    [tenantId, clientId],
+  );
+  return result.rows;
+}
+
+/**
+ * La misma fila, para UNA reunión y acotada por su ámbito.
+ *
+ * Los tres identificadores van en el WHERE. Leer por `id` y comparar el tenant
+ * después dejaría una ventana en la que la fila de otro cliente ya se cargó, y
+ * el criterio de este módulo es que un uuid ajeno sea indistinguible de uno
+ * inexistente.
+ */
+export async function getMeetingListRowScoped(
+  meetingId: string,
+  tenantId: string,
+  clientId: string,
+  executor?: Queryable,
+): Promise<MeetingListRow | null> {
+  const result = await q(executor).query<MeetingListRow>(
+    `${LIST_SELECT} WHERE m.id = $1 AND m.tenant_id = $2 AND m.client_id = $3`,
+    [meetingId, tenantId, clientId],
+  );
+  return result.rows[0] ?? null;
 }

@@ -52,6 +52,15 @@ const Icon = {
       <path d="M5.5 19a6.5 6.5 0 0 1 13 0" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   ),
+  /* Reuniones. A microphone rather than a waveform: the rail names the PLACE
+     ("recorded meetings"), and a waveform there would collide with the one the
+     player uses to mean audio POSITION. */
+  meetings: (
+    <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
+      <rect x="9.25" y="2.75" width="5.5" height="11" rx="2.75" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M5.5 11a6.5 6.5 0 0 0 13 0M12 17.5V21" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  ),
   agenda: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
       <rect x="4" y="5" width="16" height="15" rx="2" stroke="currentColor" strokeWidth="1.6" />
@@ -500,6 +509,19 @@ export function AppSidebar({
         icon: Icon.inbox,
         active: pathname.startsWith(c("/inbox")),
         countEndpoint: `/api/inbox/${clientId}/pending-count`,
+      });
+    }
+    // Reuniones sits in WORKSPACE beside Inbox (both are places where work
+    // ARRIVES), and only when the `meetings` module is enabled — a rail item
+    // whose route 404s is worse than an absent one. No count endpoint: there is
+    // no meetings storage yet, so a badge would be inventing a number.
+    if (moduleKeys.includes("meetings")) {
+      workspace.push({
+        key: "meetings",
+        label: "Reuniones",
+        href: c("/reuniones"),
+        icon: Icon.meetings,
+        active: pathname.startsWith(c("/reuniones")),
       });
     }
     // TODO(nav): the target design's CRM group also lists "Tasks" and "Sites", and

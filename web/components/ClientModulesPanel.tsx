@@ -31,6 +31,10 @@ const MODULE_COPY: Record<string, { name: string; description: string }> = {
     name: "Inbox",
     description: "Unified conversations and human handoff.",
   },
+  meetings: {
+    name: "Reuniones",
+    description: "Meeting recordings, transcripts, summaries, reports, and cited evidence.",
+  },
 };
 
 export function ClientModulesPanel({
