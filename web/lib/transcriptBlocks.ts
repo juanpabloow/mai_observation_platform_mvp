@@ -282,3 +282,44 @@ export function targetScrollTop(input: {
   const alto = Math.max(input.segmentBottom - input.segmentTop, 0);
   return clamp(input.segmentTop - Math.max((input.viewHeight - alto) / 2, 0));
 }
+
+/**
+ * EL SEGMENTO QUE SUENA en el segundo `t`.
+ *
+ * Devuelve su índice en el array, o null si ninguno lo cubre — un silencio entre
+ * segmentos no hereda el anterior, por la misma razón que una etiqueta ausente no se
+ * hereda: sería inventar.
+ *
+ * Los segmentos vienen ordenados por tiempo, así que se busca por BISECCIÓN. Con un
+ * transcript de media hora son cientos de segmentos y esto corre en cada segundo de
+ * reproducción; un recorrido lineal ahí es trabajo tirado cuatro veces por segundo.
+ */
+export function segmentIndexAtTime(
+  segments: readonly TranscriptSegment[],
+  t: number,
+): number | null {
+  let low = 0;
+  let high = segments.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const segment = segments[mid];
+    if (t < segment.at) high = mid - 1;
+    else if (t >= segment.endsAt) low = mid + 1;
+    else return mid;
+  }
+  return null;
+}
+
+/**
+ * ¿SUSPENDER EL SEGUIMIENTO por este evento de scroll?
+ *
+ * Se decide por VENTANA DE TIEMPO y no con una bandera de «el próximo evento es mío»,
+ * y eso salió de que la bandera falla de verdad: los eventos de scroll se despachan de
+ * forma asíncrona, así que un desplazamiento manual podía llegar antes que el evento
+ * del automático, consumir la marca y hacerse pasar por propio — el seguimiento no se
+ * suspendía nunca. Y un desplazamiento suave emite MUCHOS eventos con posiciones
+ * intermedias, que una bandera de un solo uso tampoco cubre.
+ */
+export function shouldSuspendFollow(now: number, suppressUntil: number): boolean {
+  return now >= suppressUntil;
+}

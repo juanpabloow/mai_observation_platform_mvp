@@ -72,3 +72,19 @@ test('client id is URL-decoded', () => {
   const parsed = parseClientSurface('/clients/a%20b/team');
   assert.deepEqual(parsed, { clientId: 'a b', label: 'Usuarios y accesos' });
 });
+
+test('reuniones es una superficie de cliente, y también la ficha de una reunión', () => {
+  // Sin esto el selector de la cabecera decía «Elige un cliente» dentro de una reunión
+  // que ya pertenece a uno: parseClientSurface devolvía null y no había cliente que
+  // mostrar. Es presentación: el clientId sale de la URL que el servidor ya validó.
+  assert.deepEqual(parseClientSurface('/clients/c1/reuniones'), { clientId: 'c1', label: 'Reuniones' });
+  assert.deepEqual(
+    parseClientSurface('/clients/c1/reuniones/cc00c4cf-a69f-46a3-acf7-f22e90fed109'),
+    { clientId: 'c1', label: 'Reuniones' },
+    'la ficha de una reunión sigue siendo del mismo cliente',
+  );
+  // El id se decodifica, como en el resto de patrones.
+  assert.deepEqual(parseClientSurface('/clients/a%20b/reuniones'), { clientId: 'a b', label: 'Reuniones' });
+  // Y no se cuela nada por prefijo textual.
+  assert.equal(parseClientSurface('/clients/c1/reunionesomething'), null);
+});

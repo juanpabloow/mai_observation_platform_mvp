@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { createRoot } from "react-dom/client";
+import { AudioPlayer } from "../components/reuniones/AudioPlayer";
 import { Transcript } from "../components/reuniones/MeetingWorkspace";
 import type { MeetingDetail, TranscriptSegment } from "../lib/meetingsData";
 
@@ -66,7 +67,7 @@ const LARGO = [
 ];
 
 const largo: TranscriptSegment[] = LARGO.map((text, n) =>
-  seg(572 + n * 4, 572 + n * 4 + 3.6, "SPEAKER_01", text, "Hablante 2"),
+  seg(4 + n * 4, 4 + n * 4 + 3.6, "SPEAKER_01", text, "Hablante 2"),
 );
 
 /** Turnos cortos: tres voces alternando, el caso opuesto. */
@@ -80,7 +81,7 @@ const TURNOS: Array<[string, string, string]> = [
 ];
 
 const turnos: TranscriptSegment[] = TURNOS.map(([label, name, text], n) =>
-  seg(700 + n * 5, 700 + n * 5 + 4, label, text, name),
+  seg(92 + n * 5, 92 + n * 5 + 4, label, text, name),
 );
 
 const SEGMENTS = [...largo, ...turnos];
@@ -88,15 +89,25 @@ const ULTIMO_DEL_LARGO = largo[largo.length - 1];
 const PRIMERO_DEL_LARGO = largo[0];
 const MEDIO_DEL_LARGO = largo[8];
 
+/** Las cuatro pestañas del área real, para poder cambiarlas y ver si el audio sigue. */
+const TABS = ["transcript", "resumen", "reportes", "evidencia"] as const;
+
 function Harness() {
   const [focusedAt, setFocusedAt] = useState<number | null>(null);
   const [seeks, setSeeks] = useState<number[]>([]);
+  // El MISMO reparto que MeetingWorkspace: la preferencia y el playhead viven aquí,
+  // fuera de la vista, para que sobrevivan al cambio de pestaña.
+  const [tab, setTab] = useState<(typeof TABS)[number]>("transcript");
+  const [follow, setFollow] = useState(false);
+  const [playhead, setPlayhead] = useState(0);
+  const [at, setAt] = useState(0);
 
   // El "reproductor": registra a qué segundo se le pidió saltar. Es lo que hay que
   // poder comprobar de un clic — que llega el tiempo del SEGMENTO, no el del bloque.
   const onSeek = (s: number) => {
     setSeeks((prev) => [...prev, s]);
     setFocusedAt(s);
+    setAt(s);
   };
 
   const meeting = { transcript: SEGMENTS } as unknown as MeetingDetail;
@@ -115,12 +126,52 @@ function Harness() {
           último seek: {ultimo === undefined ? "—" : `${ultimo}s`} · total {seeks.length}
         </span>
       </div>
+      {/* Las pestañas, con el MISMO patrón que el área real: el contenido cambia y el
+          reproductor NO se desmonta. */}
+      <div className="flex items-center gap-1 text-[0.8125rem]">
+        {TABS.map((t) => (
+          <button key={t} type="button" data-test={`tab-${t}`} onClick={() => setTab(t)}
+            className={`rounded-md px-2 py-1 ${tab === t ? "bg-ink text-ink-fg" : "border border-line-strong"}`}>
+            {t}
+          </button>
+        ))}
+        <span data-test="follow-readout" className="u-mono ml-2 text-faint">
+          follow: {String(follow)} · playhead: {playhead.toFixed(1)}s · tab: {tab}
+        </span>
+      </div>
+
       {/* El scroller: el mismo contrato que la tarjeta real (min-h-0 + overflow-y-auto),
           con altura fija para que haya algo que desplazar. */}
-      <div data-test="scroller" className="h-[560px] min-h-0 overflow-y-auto rounded-xl border border-line bg-surface">
+      <div data-test="scroller" className="h-[420px] min-h-0 overflow-y-auto rounded-xl border border-line bg-surface">
         <div className="mx-auto w-full max-w-[68.75rem] px-6">
-          <Transcript meeting={meeting} focusedAt={focusedAt} onSeek={onSeek} />
+          {tab === "transcript" ? (
+            <Transcript
+              meeting={meeting}
+              focusedAt={focusedAt}
+              onSeek={onSeek}
+              follow={follow}
+              playhead={playhead}
+              onFollowChange={setFollow}
+            />
+          ) : (
+            <p data-test="otra-pestaña" className="p-6 text-sm text-muted">Contenido de «{tab}»</p>
+          )}
         </div>
+      </div>
+
+      {/* UNA sola instancia, fuera del conmutador de pestañas — igual que en el área
+          real después del arreglo. Sólo cambian sus props. */}
+      <div data-test="player">
+        <AudioPlayer
+          meetingId="harness"
+          durationSeconds={130}
+          src="/w3-tone.wav"
+          startAt={at}
+          speakers={[]}
+          onTimeChange={setPlayhead}
+          density={tab === "transcript" ? "dock" : "compact"}
+          variant={tab === "transcript" ? "waveform" : "bar"}
+        />
       </div>
     </div>
   );

@@ -97,6 +97,18 @@ export function AudioPlayer({
   note,
   /** La ruta que firma el GET del audio. `null` = no hay nada que reproducir. */
   src = null,
+  /**
+   * El segundo en curso, hacia arriba. Se avisa SÓLO al cambiar de segundo entero:
+   * `timeupdate` dispara unas cuatro veces por segundo y repintar el área de trabajo a
+   * ese ritmo se nota. El que sigue el audio necesita resolución de segundo, no de
+   * fotograma.
+   *
+   * NO se realimenta como `startAt`: `startAt` es para saltos EXPLÍCITOS. Devolver el
+   * tiempo por esa misma vía crearía un lazo —el elemento manda 12,3 s, el padre baja
+   * 12 s, el efecto 3 ve 0,3 de diferencia y a punto de pasar el umbral de 0,35 empieza
+   * a dar saltos.
+   */
+  onTimeChange,
 }: {
   meetingId: string;
   durationSeconds: number;
@@ -114,6 +126,7 @@ export function AudioPlayer({
   variant?: "waveform" | "bar";
   className?: string;
   note?: string;
+  onTimeChange?: (seconds: number) => void;
 }) {
   const dock = density === "dock";
   const bar = variant === "bar";
@@ -264,7 +277,15 @@ export function AudioPlayer({
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || src === null) return;
-    const onTime = () => setAt(audio.currentTime);
+    let lastWhole = -1;
+    const onTime = () => {
+      setAt(audio.currentTime);
+      const whole = Math.floor(audio.currentTime);
+      if (whole !== lastWhole) {
+        lastWhole = whole;
+        onTimeChange?.(audio.currentTime);
+      }
+    };
     const onWaiting = () => setMediaState("buffering");
     const onPlaying = () => setMediaState("playing");
     const onCanPlay = () => setMediaState("ready");
@@ -290,7 +311,7 @@ export function AudioPlayer({
       audio.removeEventListener("ended", onEnded);
       audio.removeEventListener("error", onError);
     };
-  }, [src]);
+  }, [src, onTimeChange]);
 
   // Close the speed menu on Escape or an outside click — a menu that only closes
   // by picking is a trap for keyboard users.
@@ -457,7 +478,24 @@ export function AudioPlayer({
       {effectiveState === "error" ? (
         <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-[0.6875rem] text-brand">
           No se pudo reproducir
-          <button type="button" className="u-focus rounded-md border border-brand/35 px-2 py-0.5 hover:bg-brand-soft">
+          {/* ESTE BOTÓN NO HACÍA NADA: `type="button"` y ningún `onClick`. Un control
+              que dice «Reintentar» y no reintenta es peor que su ausencia, porque
+              consume el intento del usuario. Su función sí estaba definida por su
+              propia etiqueta, así que se conecta: `load()` vuelve a pedir la URL
+              firmada —que pudo caducar, y es la causa más probable de llegar aquí— y
+              se limpia el estado de error para que el control vuelva a ser pulsable. */}
+          <button
+            type="button"
+            onClick={() => {
+              const audio = audioRef.current;
+              if (!audio) return;
+              setMediaState("loading");
+              audio.load();
+            }}
+            aria-label="Reintentar la carga del audio"
+            title="Vuelve a pedir el audio · la URL firmada pudo caducar"
+            className="u-focus rounded-md border border-brand/35 px-2 py-0.5 hover:bg-brand-soft"
+          >
             Reintentar
           </button>
         </span>

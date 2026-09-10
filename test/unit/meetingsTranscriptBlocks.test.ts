@@ -6,6 +6,8 @@ import {
   PARAGRAPH_PAUSE_SEC,
   PARAGRAPH_TARGET_CHARS,
   groupTranscript,
+  segmentIndexAtTime,
+  shouldSuspendFollow,
   targetScrollTop,
 } from '../../web/lib/transcriptBlocks.js';
 import type { TranscriptSegment } from '../../web/lib/meetingsData.js';
@@ -274,4 +276,46 @@ test('un segmento MÁS ALTO que el visor se ancla a su inicio, no a un centro im
     segmentTop: 1100, segmentBottom: 1600, marginTop: 24,
   });
   assert.equal(top, 1100, 'su inicio visible es lo mejor disponible');
+});
+
+// ── Qué segmento suena, para el seguimiento del audio ─────────────────────────
+
+test('segmentIndexAtTime encuentra el segmento que cubre el segundo', () => {
+  const segs = [
+    seg(0, 4, 'SPEAKER_00', 'uno'),
+    seg(4, 8, 'SPEAKER_00', 'dos'),
+    seg(10, 14, 'SPEAKER_01', 'tres'),
+  ];
+  assert.equal(segmentIndexAtTime(segs, 0), 0, 'el borde inicial pertenece al segmento');
+  assert.equal(segmentIndexAtTime(segs, 3.9), 0);
+  assert.equal(segmentIndexAtTime(segs, 4), 1, 'el borde final NO: pertenece al siguiente');
+  assert.equal(segmentIndexAtTime(segs, 12), 2);
+  assert.equal(segmentIndexAtTime(segs, 9), null, 'un silencio no hereda el segmento anterior');
+  assert.equal(segmentIndexAtTime(segs, 99), null, 'después del final, ninguno');
+  assert.equal(segmentIndexAtTime([], 1), null, 'sin segmentos, ninguno');
+});
+
+test('segmentIndexAtTime es bisección: acierta en un transcript largo', () => {
+  // 900 segmentos de 2 s = media hora. Se comprueba CADA uno en su punto medio, que
+  // es lo que descubre un off-by-one en la bisección.
+  const segs: TranscriptSegment[] = [];
+  for (let i = 0; i < 900; i += 1) segs.push(seg(i * 2, i * 2 + 2, 'SPEAKER_00', `s${i}`));
+  for (let i = 0; i < 900; i += 1) {
+    assert.equal(segmentIndexAtTime(segs, i * 2 + 1), i, `medio del segmento ${i}`);
+    assert.equal(segmentIndexAtTime(segs, i * 2), i, `inicio del segmento ${i}`);
+  }
+});
+
+test('la supresión del scroll propio es por VENTANA, no por un evento', () => {
+  const ahora = 1_000_000;
+  // Dentro de la ventana: es el desplazamiento del propio seguimiento.
+  assert.equal(shouldSuspendFollow(ahora, ahora + 400), false, 'no se suspende a sí mismo');
+  // Una ventana cubre VARIOS eventos, que es lo que emite un scroll suave.
+  assert.equal(shouldSuspendFollow(ahora + 100, ahora + 400), false, 'el segundo evento tampoco');
+  assert.equal(shouldSuspendFollow(ahora + 399, ahora + 400), false, 'ni el último de la animación');
+  // Fuera de la ventana: fue una persona.
+  assert.equal(shouldSuspendFollow(ahora + 400, ahora + 400), true, 'justo al expirar, sí');
+  assert.equal(shouldSuspendFollow(ahora + 5_000, ahora + 400), true, 'y mucho después, sí');
+  // Sin ventana abierta (valor inicial), cualquier scroll es humano.
+  assert.equal(shouldSuspendFollow(ahora, 0), true, 'sin desplazamiento propio en curso');
 });

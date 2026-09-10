@@ -6,7 +6,12 @@ import { Chip, EmptyState, GHOST_ACTION_CLS, PRIMARY_SM_CLS } from "@/components
 import { AudioPlayer, type AudioState, type SpeakerTurn } from "@/components/reuniones/AudioPlayer";
 import { Avatar, ProgressBar, ShareMeter, StampLink, statusFace } from "@/components/reuniones/MeetingBits";
 import type { EvidenceItem, MeetingDetail } from "@/lib/meetingsData";
-import { groupTranscript, targetScrollTop } from "@/lib/transcriptBlocks";
+import {
+  groupTranscript,
+  segmentIndexAtTime,
+  shouldSuspendFollow,
+  targetScrollTop,
+} from "@/lib/transcriptBlocks";
 import {
   composeSummary,
   FINDING_KIND,
@@ -114,6 +119,17 @@ export function MeetingWorkspace({
   const [at, setAt] = useState(0);
   /** The segment a jump landed on — highlighted for orientation, not as a warning. */
   const [focusedAt, setFocusedAt] = useState<number | null>(null);
+  /*
+    SEGUIMIENTO DEL AUDIO. El estado vive AQUÍ y no dentro de Transcript porque la
+    preferencia tiene que sobrevivir al cambio de pestaña: si viviera en la vista, mirar
+    Resumen la borraría. Y por eso mismo seguir el audio NO fuerza volver a Transcript —
+    se sigue lo que suena cuando estás mirando el texto, y se calla cuando no.
+
+    `playhead` es el segundo en curso que reporta el reproductor. NO se pasa como
+    `startAt`: eso es para saltos explícitos, y realimentarlo haría un lazo.
+  */
+  const [follow, setFollow] = useState(false);
+  const [playhead, setPlayhead] = useState(0);
 
   const speakers: SpeakerTurn[] = useMemo(() => {
     const total = meeting.durationSeconds || 1;
@@ -163,20 +179,6 @@ export function MeetingWorkspace({
         {/* The header player: play · plain progress · time · speed. Same
             component, `variant="bar"` — a 160-bar waveform in a header is
             decoration, and this screen is about text. */}
-        {tab !== "transcript" ? (
-          <div className="order-3 w-full min-w-0 border-t border-line-row pt-2 lg:order-none lg:ml-auto lg:w-[19rem] lg:border-0 lg:pt-0">
-            <AudioPlayer
-              meetingId={meeting.id}
-              durationSeconds={meeting.durationSeconds}
-              startAt={at}
-              state={audioState}
-              src={audioSrc}
-              speakers={speakers}
-              density="compact"
-              variant="bar"
-            />
-          </div>
-        ) : null}
 
         <span className={`flex shrink-0 items-center gap-1.5 ${tab !== "transcript" ? "" : "ml-auto"}`}>
           <button type="button" className={GHOST_ACTION_CLS}>
@@ -348,7 +350,14 @@ export function MeetingWorkspace({
                 }
               >
                 {tab === "transcript" ? (
-                  <Transcript meeting={meeting} focusedAt={focusedAt} onSeek={jumpTo} />
+                  <Transcript
+                    meeting={meeting}
+                    focusedAt={focusedAt}
+                    onSeek={jumpTo}
+                    follow={follow}
+                    playhead={playhead}
+                    onFollowChange={setFollow}
+                  />
                 ) : tab === "resumen" ? (
                   <Summary meeting={meeting} onSeek={jumpTo} />
                 ) : (
@@ -364,16 +373,32 @@ export function MeetingWorkspace({
               indexes. On Resumen, Reportes and Evidencia the same audio is
               reachable from the compact bar in the header, and the space goes
               to the content instead. */}
-          {tab === "transcript" ? (
-            <AudioPlayer
-              meetingId={meeting.id}
-              durationSeconds={meeting.durationSeconds}
-              startAt={at}
-              state={audioState}
-              src={audioSrc}
-              speakers={speakers}
-            />
-          ) : null}
+          {/*
+            UNA SOLA INSTANCIA, SIEMPRE MONTADA. Había DOS `<AudioPlayer>`
+            mutuamente excluyentes: una compacta en la cabecera para las pestañas
+            que no son Transcript, y la completa aquí abajo para Transcript. Cambiar
+            de pestaña desmontaba un `<audio>` y creaba otro, así que la
+            reproducción se cortaba y la posición y la velocidad se perdían — que es
+            exactamente lo que se reportó.
+
+            Ahora vive en un único sitio del árbol y sólo cambian sus PROPS: en las
+            demás pestañas se pinta como barra compacta, que era el motivo real de
+            la variante ("una onda de 160 barras en una cabecera es decoración").
+            Un cambio de props no remonta nada, así que el elemento de audio —y con
+            él la reproducción, el segundo en curso y la velocidad— sobrevive.
+          */}
+          <AudioPlayer
+            meetingId={meeting.id}
+            durationSeconds={meeting.durationSeconds}
+            startAt={at}
+            state={audioState}
+            src={audioSrc}
+            speakers={speakers}
+            onTimeChange={setPlayhead}
+            density={tab === "transcript" ? "dock" : "compact"}
+            variant={tab === "transcript" ? "waveform" : "bar"}
+            className={tab === "transcript" ? "" : "border-t border-line-row"}
+          />
         </section>
 
         {copilot ? <CopilotPanel meeting={meeting} onClose={() => setCopilot(false)} onSeek={jumpTo} /> : null}
@@ -485,15 +510,93 @@ export function Transcript({
   meeting,
   focusedAt,
   onSeek,
+  follow = false,
+  playhead = 0,
+  onFollowChange,
 }: {
   meeting: MeetingDetail;
   focusedAt: number | null;
   onSeek: (s: number) => void;
+  /** Seguir lo que suena. La preferencia la guarda el área de trabajo, no esta vista. */
+  follow?: boolean;
+  /** El segundo en curso del reproductor. */
+  playhead?: number;
+  onFollowChange?: (on: boolean) => void;
 }) {
   // BLOQUES DE INTERVENCIÓN con PÁRRAFOS dentro. Ver transcriptBlocks.ts: el bloque
   // trae la cabecera, el párrafo trae texto corrido y los segmentos van EN LÍNEA.
   const blocks = useMemo(() => groupTranscript(meeting.transcript), [meeting.transcript]);
   const content = useRef<HTMLDivElement | null>(null);
+
+  /*
+    QUÉ SEGMENTO SUENA. Sólo se recalcula cuando cambia el SEGUNDO, no en cada
+    `timeupdate`, y `segmentIndexAtTime` bisecta: con media hora de audio son cientos
+    de segmentos y esto corre mientras se reproduce.
+  */
+  const playingIndex = useMemo(
+    () => (follow ? segmentIndexAtTime(meeting.transcript, playhead) : null),
+    [follow, playhead, meeting.transcript],
+  );
+  const playingAt = playingIndex === null ? null : meeting.transcript[playingIndex].at;
+
+  /*
+    UN DESPLAZAMIENTO MÍO NO ES UN DESPLAZAMIENTO TUYO. Al seguir el audio el componente
+    desplaza solo, y ese scroll dispara el mismo evento que la rueda del ratón. Sin
+    distinguirlos, el seguimiento se suspendería a sí mismo en el primer segundo.
+
+    Se suprime POR TIEMPO y no con una bandera de «el próximo evento es mío». Probé la
+    bandera y falla de verdad: los eventos de scroll se despachan de forma asíncrona, así
+    que un desplazamiento manual llegaba antes que el evento del automático, consumía la
+    marca y se tomaba por propio — el seguimiento no se suspendía. Y con `behavior:
+    "smooth"` un solo salto emite MUCHOS eventos con posiciones intermedias, que una
+    bandera de un solo uso no puede cubrir. Una ventana de tiempo cubre los dos casos.
+  */
+  const suppressScrollUntil = useRef(0);
+  useEffect(() => {
+    const root = content.current;
+    if (!root) return;
+    const viewport = scrollParentOf(root);
+    if (!viewport) return;
+    const onScroll = () => {
+      if (!shouldSuspendFollow(Date.now(), suppressScrollUntil.current)) return;
+      // Desplazamiento humano: se suspende el seguimiento y aparece «Volver al audio».
+      onFollowChange?.(false);
+    };
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+    return () => viewport.removeEventListener("scroll", onScroll);
+  }, [onFollowChange]);
+
+  /*
+    SEGUIR SIN DAR SALTOS. Se desplaza sólo cuando el segmento que suena NO está
+    visible; mientras se lee dentro de la pantalla, nada se mueve. Sin esa condición el
+    transcript se recentraría cada segundo y sería ilegible.
+  */
+  useEffect(() => {
+    if (!follow || playingIndex === null) return;
+    const root = content.current;
+    if (!root) return;
+    const el = root.querySelector<HTMLElement>(`[data-segment-index="${meeting.transcript[playingIndex].index}"]`);
+    const viewport = scrollParentOf(root);
+    if (!el || !viewport) return;
+    const view = viewport.getBoundingClientRect();
+    const rect = el.getBoundingClientRect();
+    // Un margen para no ir pegado al borde: si el segmento está en la última franja,
+    // se recoloca antes de que desaparezca.
+    const margin = Math.min(72, view.height * 0.15);
+    if (rect.top >= view.top + margin && rect.bottom <= view.bottom - margin) return;
+    // 400 ms cubre de sobra un desplazamiento instantáneo y sus eventos.
+    suppressScrollUntil.current = Date.now() + 400;
+    const origin = view.top - viewport.scrollTop;
+    viewport.scrollTo({
+      top: Math.max(0, Math.min(rect.top - origin - view.height / 3, viewport.scrollHeight - viewport.clientHeight)),
+      // INSTANTÁNEO, y a diferencia del salto no es por comodidad de prueba: esto
+      // ocurre una y otra vez mientras se reproduce, y una animación de 300 ms que
+      // arranca cada vez que un segmento sale de pantalla se acumula y marea. Un
+      // empujón seco se nota menos. El salto explícito sí va suave: es una acción
+      // puntual del usuario y ahí la animación explica de dónde a dónde se fue.
+      behavior: "auto",
+    });
+  }, [follow, playingIndex, meeting.transcript]);
 
   /*
     EL SALTO DEJA LA CABECERA VISIBLE. Antes nadie desplazaba nada: `jumpTo` cambiaba
@@ -517,13 +620,20 @@ export function Transcript({
     if (!viewport || !segment) {
       // Sin contenedor propio scrollea el documento, y sin segmento sólo hay cabecera
       // que mostrar: en los dos casos basta lo que el navegador ya sabe hacer.
-      block.scrollIntoView({ block: "start", behavior: "smooth" });
+      block.scrollIntoView({
+        block: "start",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      });
       return;
     }
 
     // UN solo desplazamiento, a una posición calculada. Ver targetScrollTop: desplazar
     // a la cabecera y corregir después dependía de un requestAnimationFrame que en una
     // pestaña que no se pinta no llega nunca.
+    // Un salto suave emite eventos durante toda la animación: se suprimen, o clicar un
+    // segmento apagaría el seguimiento — y clicar un segmento TAMBIÉN mueve el audio
+    // hasta ahí, así que seguir el audio sigue siendo coherente después.
+    suppressScrollUntil.current = Date.now() + 900;
     const viewRect = viewport.getBoundingClientRect();
     const origin = viewRect.top - viewport.scrollTop;
     const segRect = segment.getBoundingClientRect();
@@ -536,7 +646,9 @@ export function Transcript({
         segmentBottom: segRect.bottom - origin,
         marginTop: parseFloat(getComputedStyle(block).scrollMarginTop) || 0,
       }),
-      behavior: "smooth",
+      // Respetar `prefers-reduced-motion` no es decoración: para quien lo pide, una
+      // animación de desplazamiento puede provocar mareo.
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
     });
   }, [focusedAt]);
 
@@ -544,14 +656,59 @@ export function Transcript({
     // gap-7 entre intervenciones: la separación tiene que leerse como un cambio de
     // turno, no como un renglón más. Antes era gap-1.5, del tiempo en que cada
     // segmento era una fila.
-    <div ref={content} className="flex flex-col gap-7 py-4 pb-10">
+    <>
+      {/*
+        LA BARRA DEL SEGUIMIENTO. Pegada arriba del transcript, porque el estado
+        «estoy siguiendo el audio» hay que poder verlo y cambiarlo en cualquier punto
+        del texto, no sólo al principio.
+
+        Dos controles y no uno: «Seguir audio» es la preferencia, y «Volver al audio»
+        aparece cuando el seguimiento está apagado PERO hay una posición a la que
+        volver. Son acciones distintas — activar el modo y recuperar el sitio — y con
+        un solo botón la segunda quedaba escondida detrás de la primera.
+      */}
+      <div className="sticky top-0 z-10 -mx-3.5 flex items-center gap-2 bg-surface/95 px-3.5 py-2 backdrop-blur">
+        <button
+          type="button"
+          onClick={() => onFollowChange?.(!follow)}
+          aria-pressed={follow}
+          aria-label={follow ? "Dejar de seguir el audio" : "Seguir el audio"}
+          title={
+            follow
+              ? "Siguiendo el audio · el texto se desplaza con lo que suena"
+              : "Resalta y sigue el segmento que está sonando"
+          }
+          className={`u-focus inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[0.75rem] font-medium transition-colors ${
+            follow
+              ? "bg-ink text-ink-fg hover:bg-ink-hover"
+              : "border border-line-strong text-muted hover:text-foreground"
+          }`}
+        >
+          <span aria-hidden className={`size-1.5 rounded-full ${follow ? "bg-ink-fg" : "bg-line-strong"}`} />
+          Seguir audio
+        </button>
+        {!follow && playhead > 0 ? (
+          <button
+            type="button"
+            onClick={() => onFollowChange?.(true)}
+            title="Vuelve al segmento que está sonando y retoma el seguimiento"
+            className="u-focus inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[0.75rem] text-accent transition-colors hover:bg-accent/10"
+          >
+            Volver al audio
+          </button>
+        ) : null}
+      </div>
+
+      <div ref={content} className="flex flex-col gap-7 py-4 pb-10">
       {blocks.map((block) => {
         const jumpedInside = block.segments.some((s) => focusedAt === s.at);
+        const playingInside = playingAt !== null && block.segments.some((s) => s.at === playingAt);
         const citedInside = block.segments.some((s) => s.cited);
         return (
           <article
             key={block.key}
             data-block-focused={jumpedInside ? "true" : undefined}
+            data-block-playing={playingInside ? "true" : undefined}
             className={`group scroll-mt-6 rounded-xl transition-colors ${
               // A jumped-to block is a REFERENCE, so it tints accent-blue, not the
               // amber the sheet used — amber here read as "something is wrong".
@@ -588,17 +745,23 @@ export function Transcript({
               </button>
             </header>
 
-            {/* LOS PÁRRAFOS. `pl-[2.375rem]` los alinea con el nombre, bajo el avatar.
-                `60ch` MEDIDO, no elegido de memoria: en el navegador este cuerpo da
-                6.82 px por carácter real y 8.67 px por «0», así que 60ch ≈ 520 px ≈ 76
-                caracteres por línea — dentro del 65–80 que se pide. 72ch parecía
-                correcto y medía ~91 en pantalla ancha, porque `ch` es el ancho del
-                cero, más grande que la media de las minúsculas. Interlineado 1.6. */}
-            <div className="flex flex-col gap-3 pl-[2.375rem]">
+            {/*
+              LOS PÁRRAFOS OCUPAN EL BLOQUE. Antes llevaban `max-w-[60ch]`, medido para
+              dar 65–80 caracteres por línea; con el bloque teñido de una cita eso
+              dejaba media caja vacía a la derecha, y el recuadro pasaba a leerse como
+              un error de maquetación. El ancho lo pone ahora el contenedor de lectura
+              del área (`max-w-[68.75rem]` en modo enfoque), que es un tope razonable
+              sin dejar hueco muerto dentro del bloque.
+
+              La sangría que los alinea con el nombre desaparece en móvil: 38 px de
+              hueco a la izquierda en una pantalla de 375 es ancho de lectura tirado.
+              Interlineado 1.6 en los dos casos.
+            */}
+            <div className="flex flex-col gap-3 pl-0 sm:pl-[2.375rem]">
               {block.paragraphs.map((paragraph) => (
                 <p
                   key={paragraph.key}
-                  className="max-w-[60ch] text-[0.875rem] leading-[1.6] text-foreground/90"
+                  className="text-[0.875rem] leading-[1.6] text-foreground/90"
                 >
                   {/*
                     Cada segmento sigue siendo un elemento propio —con su índice y su
@@ -623,6 +786,7 @@ export function Transcript({
                   */}
                   {paragraph.segments.map((segment, position) => {
                     const jumped = focusedAt === segment.at;
+                    const sounding = playingAt !== null && segment.at === playingAt;
                     return (
                       <Fragment key={segment.index}>
                       <span
@@ -641,9 +805,16 @@ export function Transcript({
                           onSeek(segment.at);
                         }}
                         className={`u-focus cursor-pointer rounded transition-colors hover:text-foreground ${
-                          // El segmento exacto al que se saltó, resaltado DENTRO del
-                          // párrafo: se ve el punto sin perder el contexto.
-                          jumped ? "bg-accent/20 text-foreground" : ""
+                          // El segmento al que se saltó y el que SUENA son dos cosas
+                          // distintas y se pintan distinto: el salto es una referencia
+                          // (azul de acento), lo que suena es el presente (tinte de
+                          // marca, más tenue, porque se mueve solo cada pocos segundos
+                          // y a plena intensidad parpadearía por toda la página).
+                          jumped
+                            ? "bg-accent/20 text-foreground"
+                            : sounding
+                              ? "bg-brand-soft text-foreground"
+                              : ""
                         }`}
                       >
                         {segment.text}
@@ -662,7 +833,8 @@ export function Transcript({
           </article>
         );
       })}
-    </div>
+      </div>
+    </>
   );
 }
 
