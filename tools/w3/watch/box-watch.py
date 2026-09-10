@@ -38,6 +38,7 @@ IP de LAN mientras desde fuera no se llega, el problema no está en el servidor.
 from __future__ import annotations
 
 import argparse
+import errno
 import json
 import os
 import socket
@@ -82,17 +83,43 @@ def ping_ms(host: str, timeout_s: int = 1) -> float | None:
     return round((time.monotonic() - started) * 1000, 1)
 
 
-def tcp_ms(host: str, port: int, timeout_s: float = 3.0, expect_banner: bool = False) -> float | None:
-    """Conecta, opcionalmente lee el saludo, y cierra. No autentica NADA."""
+# El MOTIVO del fallo, no solo el fallo. Lo aprendimos por las malas: el primer corte
+# devolvio `Connection reset by peer`, no un tiempo de espera agotado, y eso cambia el
+# diagnostico — un reset significa que la conexion ESTABA establecida y algo en el
+# camino perdio su estado, mientras un timeout es compatible con un extremo caido.
+# Registrar solo exito/fallo borraba justamente esa distincion.
+_ERRNO_NAMES = {
+    errno.ECONNREFUSED: "rechazada",
+    errno.ECONNRESET: "reset",
+    errno.ETIMEDOUT: "timeout",
+    errno.EHOSTUNREACH: "host-inalcanzable",
+    errno.ENETUNREACH: "red-inalcanzable",
+    errno.ENETDOWN: "red-caida",
+    errno.EPIPE: "tuberia-rota",
+}
+
+
+def _fail(cause: OSError) -> str:
+    if isinstance(cause, socket.timeout):
+        return "timeout"
+    return _ERRNO_NAMES.get(cause.errno, f"errno-{cause.errno}")
+
+
+def tcp_ms(host: str, port: int, timeout_s: float = 3.0, expect_banner: bool = False):
+    """
+    Conecta, opcionalmente lee el saludo, y cierra. No autentica NADA.
+
+    Devuelve milisegundos si funciona; si no, el MOTIVO como texto.
+    """
     started = time.monotonic()
     try:
         with socket.create_connection((host, port), timeout=timeout_s) as sock:
             if expect_banner:
                 sock.settimeout(timeout_s)
                 if not sock.recv(64):
-                    return None
-    except OSError:
-        return None
+                    return "sin-saludo"
+    except OSError as cause:
+        return _fail(cause)
     return round((time.monotonic() - started) * 1000, 1)
 
 

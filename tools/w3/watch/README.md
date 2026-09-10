@@ -49,6 +49,23 @@ Ninguna de esas filas estaba distinguible con lo que había. Las paradas de hoy 
 atribuyeron primero a la carga y después a la alimentación, y **ninguna de las dos
 cosas está demostrada**: el apagado fue forzado desde fuera, a ciegas, tras perder SSH.
 
+## El motivo del fallo, no solo el fallo
+
+`ssh_*_ms` y `lan_ssh_ms`/`ts_ssh_ms` devuelven milisegundos cuando funcionan y, cuando
+no, **por qué**: `rechazada`, `reset`, `timeout`, `host-inalcanzable`,
+`red-inalcanzable`, `red-caida`. La distinción no es cosmética.
+
+El primer corte de hoy devolvió `Connection reset by peer`, no un tiempo de espera
+agotado. Un **reset** significa que la conexión estaba ESTABLECIDA y algo perdió su
+estado — el NAT o la tabla de conexiones de un equipo intermedio, o la ruta de
+Tailscale cambiando bajo los pies de la sesión. Un **timeout** es compatible con un
+extremo caído. Registrar solo «funciona / no funciona» borraba justamente esa
+distinción, y es la que separa «el servidor se fue» de «el camino se rompió».
+
+Eso también explica el fichero con bytes nulos que apareció tras el primer corte: fue
+una transferencia interrumpida a media escritura, no bloques sin volcar por un corte de
+corriente. Un motivo menos atribuido a la alimentación.
+
 ## Lo que las sondas ya midieron, y que conviene vigilar
 
 * **RTT del servidor CABLEADO a su puerta de enlace: 4,6–99 ms, media 15, jitter 26.**
