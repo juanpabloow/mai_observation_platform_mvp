@@ -239,3 +239,46 @@ export function groupTranscript(
   flush();
   return blocks;
 }
+
+/**
+ * A QUÉ ALTURA DEJAR EL SCROLL al navegar a un segmento.
+ *
+ * Se calcula el destino y se hace UN desplazamiento, en vez de desplazar a la cabecera
+ * y luego corregir. La primera versión hacía las dos cosas y medía la corrección dentro
+ * de un `requestAnimationFrame` — y en el arnés interactivo se vio que ese callback
+ * PUEDE NO EJECUTARSE NUNCA: un navegador no pinta las pestañas que no ve, así que rAF
+ * no se dispara y la corrección no llegaba. Un salto que sólo funciona si la pestaña
+ * está en primer plano no es un salto que funcione.
+ *
+ * La regla, en orden:
+ *   1 · se prefiere ver la CABECERA (menos su margen de scroll): dice de quién es la
+ *       intervención y desde cuándo;
+ *   2 · pero si desde ahí el segmento buscado queda fuera de pantalla, se CENTRA el
+ *       segmento: la cabecera es contexto, el segmento es a lo que se navegó.
+ *
+ * Todo en coordenadas del contenido del contenedor que hace scroll, y acotado a
+ * [0, maxScroll] para no pedir posiciones que no existen.
+ */
+export function targetScrollTop(input: {
+  /** Alto visible del contenedor. */
+  readonly viewHeight: number;
+  readonly maxScroll: number;
+  /** Posición de la cabecera del bloque dentro del contenido. */
+  readonly blockTop: number;
+  readonly segmentTop: number;
+  readonly segmentBottom: number;
+  /** El `scroll-margin-top` del bloque: el aire que se le deja arriba. */
+  readonly marginTop: number;
+}): number {
+  const clamp = (value: number): number => Math.max(0, Math.min(value, Math.max(input.maxScroll, 0)));
+  const conCabecera = clamp(input.blockTop - input.marginTop);
+
+  // ¿Cabe el segmento con la cabecera arriba? Se compara contra el BORDE INFERIOR del
+  // visor en esa posición.
+  const cabe =
+    input.segmentTop >= conCabecera && input.segmentBottom <= conCabecera + input.viewHeight;
+  if (cabe) return conCabecera;
+
+  const alto = Math.max(input.segmentBottom - input.segmentTop, 0);
+  return clamp(input.segmentTop - Math.max((input.viewHeight - alto) / 2, 0));
+}

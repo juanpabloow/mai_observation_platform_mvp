@@ -6,6 +6,7 @@ import {
   PARAGRAPH_PAUSE_SEC,
   PARAGRAPH_TARGET_CHARS,
   groupTranscript,
+  targetScrollTop,
 } from '../../web/lib/transcriptBlocks.js';
 import type { TranscriptSegment } from '../../web/lib/meetingsData.js';
 
@@ -221,4 +222,56 @@ test('los umbrales son parámetros, no números escondidos en el render', () => 
   assert.equal(uno[0].paragraphs.length, 1, 'sin corte de párrafo');
   const dos = groupTranscript(segments, { interventionPauseSec: 30, paragraphPauseSec: 1 });
   assert.equal(dos[0].paragraphs.length, 2, 'con corte de párrafo');
+});
+
+// ── El destino del desplazamiento, como aritmética pura ───────────────────────
+
+test('el scroll prefiere la CABECERA cuando el segmento cabe desde ahí', () => {
+  // Bloque a 1000, su segmento a 1100-1140, visor de 560: con la cabecera arriba
+  // (1000 - 24 de margen = 976) el segmento queda a 124-164 del borde. Cabe.
+  const top = targetScrollTop({
+    viewHeight: 560, maxScroll: 5000, blockTop: 1000,
+    segmentTop: 1100, segmentBottom: 1140, marginTop: 24,
+  });
+  assert.equal(top, 976, 'la cabecera, con su margen de scroll');
+});
+
+test('cuando el segmento NO cabe desde la cabecera, gana el SEGMENTO', () => {
+  // El caso real: un segmento al final de una intervención larga. Con la cabecera
+  // arriba (976) el segmento estaría a 1000 px del borde, cuatro pantallas más abajo.
+  const top = targetScrollTop({
+    viewHeight: 560, maxScroll: 5000, blockTop: 1000,
+    segmentTop: 1976, segmentBottom: 2016, marginTop: 24,
+  });
+  assert.notEqual(top, 976, 'no se queda en la cabecera');
+  // Centrado: 1976 - (560-40)/2 = 1716.
+  assert.equal(top, 1716);
+  // Y desde ahí el segmento SÍ está dentro del visor.
+  assert.ok(1976 >= top && 2016 <= top + 560, 'el objetivo queda visible');
+});
+
+test('el destino nunca sale del rango de scroll posible', () => {
+  assert.equal(
+    targetScrollTop({ viewHeight: 560, maxScroll: 100, blockTop: 5000, segmentTop: 5000, segmentBottom: 5040, marginTop: 24 }),
+    100,
+    'no se pide más scroll del que hay',
+  );
+  assert.equal(
+    targetScrollTop({ viewHeight: 560, maxScroll: 5000, blockTop: 10, segmentTop: 10, segmentBottom: 50, marginTop: 24 }),
+    0,
+    'ni negativo: un bloque casi arriba no empuja por encima del inicio',
+  );
+  assert.equal(
+    targetScrollTop({ viewHeight: 560, maxScroll: 0, blockTop: 0, segmentTop: 0, segmentBottom: 40, marginTop: 24 }),
+    0,
+    'sin nada que desplazar, cero',
+  );
+});
+
+test('un segmento MÁS ALTO que el visor se ancla a su inicio, no a un centro imposible', () => {
+  const top = targetScrollTop({
+    viewHeight: 200, maxScroll: 5000, blockTop: 1000,
+    segmentTop: 1100, segmentBottom: 1600, marginTop: 24,
+  });
+  assert.equal(top, 1100, 'su inicio visible es lo mejor disponible');
 });

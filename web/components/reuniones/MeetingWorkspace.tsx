@@ -1,12 +1,12 @@
 "use client";
 
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { Chip, EmptyState, GHOST_ACTION_CLS, PRIMARY_SM_CLS } from "@/components/ui/primitives";
 import { AudioPlayer, type AudioState, type SpeakerTurn } from "@/components/reuniones/AudioPlayer";
 import { Avatar, ProgressBar, ShareMeter, StampLink, statusFace } from "@/components/reuniones/MeetingBits";
 import type { EvidenceItem, MeetingDetail } from "@/lib/meetingsData";
-import { groupTranscript } from "@/lib/transcriptBlocks";
+import { groupTranscript, targetScrollTop } from "@/lib/transcriptBlocks";
 import {
   composeSummary,
   FINDING_KIND,
@@ -462,6 +462,25 @@ function PanelToggle({ name, open, onToggle }: { name: string; open: boolean; on
 
 /* ── The four views ───────────────────────────────────────────────────────── */
 
+/**
+ * El ancestro que de verdad hace scroll. `scrollIntoView` ya lo encuentra solo, pero
+ * para MEDIR si algo está visible hay que saber contra qué caja comparar, y la del
+ * contenedor de contenido no sirve: es más alta que la ventana.
+ *
+ * Devuelve null si no hay ninguno, y entonces el que scrollea es el documento.
+ */
+function scrollParentOf(el: HTMLElement): HTMLElement | null {
+  let node: HTMLElement | null = el.parentElement;
+  while (node) {
+    const overflow = getComputedStyle(node).overflowY;
+    if ((overflow === "auto" || overflow === "scroll") && node.scrollHeight > node.clientHeight) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return null;
+}
+
 export function Transcript({
   meeting,
   focusedAt,
@@ -474,7 +493,7 @@ export function Transcript({
   // BLOQUES DE INTERVENCIÓN con PÁRRAFOS dentro. Ver transcriptBlocks.ts: el bloque
   // trae la cabecera, el párrafo trae texto corrido y los segmentos van EN LÍNEA.
   const blocks = useMemo(() => groupTranscript(meeting.transcript), [meeting.transcript]);
-  const scroller = useRef<HTMLDivElement | null>(null);
+  const content = useRef<HTMLDivElement | null>(null);
 
   /*
     EL SALTO DEJA LA CABECERA VISIBLE. Antes nadie desplazaba nada: `jumpTo` cambiaba
@@ -488,17 +507,44 @@ export function Transcript({
   */
   useEffect(() => {
     if (focusedAt === null) return;
-    const root = scroller.current;
+    const root = content.current;
     if (!root) return;
-    const target = root.querySelector<HTMLElement>(`[data-block-focused="true"]`);
-    target?.scrollIntoView({ block: "start", behavior: "smooth" });
+    const block = root.querySelector<HTMLElement>(`[data-block-focused="true"]`);
+    const segment = root.querySelector<HTMLElement>(`[data-segment-focused="true"]`);
+    if (!block) return;
+
+    const viewport = scrollParentOf(root);
+    if (!viewport || !segment) {
+      // Sin contenedor propio scrollea el documento, y sin segmento sólo hay cabecera
+      // que mostrar: en los dos casos basta lo que el navegador ya sabe hacer.
+      block.scrollIntoView({ block: "start", behavior: "smooth" });
+      return;
+    }
+
+    // UN solo desplazamiento, a una posición calculada. Ver targetScrollTop: desplazar
+    // a la cabecera y corregir después dependía de un requestAnimationFrame que en una
+    // pestaña que no se pinta no llega nunca.
+    const viewRect = viewport.getBoundingClientRect();
+    const origin = viewRect.top - viewport.scrollTop;
+    const segRect = segment.getBoundingClientRect();
+    viewport.scrollTo({
+      top: targetScrollTop({
+        viewHeight: viewport.clientHeight,
+        maxScroll: viewport.scrollHeight - viewport.clientHeight,
+        blockTop: block.getBoundingClientRect().top - origin,
+        segmentTop: segRect.top - origin,
+        segmentBottom: segRect.bottom - origin,
+        marginTop: parseFloat(getComputedStyle(block).scrollMarginTop) || 0,
+      }),
+      behavior: "smooth",
+    });
   }, [focusedAt]);
 
   return (
     // gap-7 entre intervenciones: la separación tiene que leerse como un cambio de
     // turno, no como un renglón más. Antes era gap-1.5, del tiempo en que cada
     // segmento era una fila.
-    <div ref={scroller} className="flex flex-col gap-7 py-4 pb-10">
+    <div ref={content} className="flex flex-col gap-7 py-4 pb-10">
       {blocks.map((block) => {
         const jumpedInside = block.segments.some((s) => focusedAt === s.at);
         const citedInside = block.segments.some((s) => s.cited);
@@ -559,29 +605,55 @@ export function Transcript({
                     tiempo— pero EN LÍNEA: el texto fluye y se ajusta al ancho en vez
                     de romperse una vez por segmento de Whisper.
 
-                    Un <span> y no un <button>: el segmento es un atajo de ratón sobre
-                    el párrafo, y doscientos botones en un transcript serían doscientas
-                    paradas de tabulador. El control con teclado y etiqueta es la marca
-                    de tiempo de la cabecera, como en el resto de este fichero.
+                    Es un <span> CON SEMÁNTICA DE BOTÓN, y las dos mitades de esa frase
+                    son deliberadas.
+
+                    Semántica de botón porque clicar un segmento salta a SU tiempo: con
+                    un span mudo esa acción sólo existiría para el ratón, y quien navega
+                    con teclado llegaría al principio de la intervención y a ningún
+                    punto dentro de ella. `role="button"` + `tabIndex` + Enter/Espacio es
+                    lo que hace que la acción exista de verdad.
+
+                    Y un span, no un <button>, porque un botón NO fluye en línea de
+                    forma fiable: medido en el navegador, `<button class="inline">`
+                    computaba `inline-block` —gana el valor del agente de usuario— y el
+                    párrafo se desarmaba, con cada segmento envuelto a una palabra por
+                    línea. Un span es inline por naturaleza y no depende de ganar una
+                    batalla de cascada.
                   */}
                   {paragraph.segments.map((segment, position) => {
                     const jumped = focusedAt === segment.at;
                     return (
+                      <Fragment key={segment.index}>
                       <span
-                        key={segment.index}
+                        role="button"
+                        tabIndex={0}
                         data-segment-index={segment.index}
                         data-segment-at={segment.at}
+                        data-segment-focused={jumped ? "true" : undefined}
+                        aria-label={`Escuchar desde ${segment.stamp}`}
                         title={`Escuchar desde ${segment.stamp}`}
                         onClick={() => onSeek(segment.at)}
-                        className={`cursor-pointer transition-colors hover:text-foreground ${
+                        onKeyDown={(event) => {
+                          // Lo que `role="button"` promete y un span no trae puesto.
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          event.preventDefault(); // el Espacio, si no, desplaza la página
+                          onSeek(segment.at);
+                        }}
+                        className={`u-focus cursor-pointer rounded transition-colors hover:text-foreground ${
                           // El segmento exacto al que se saltó, resaltado DENTRO del
                           // párrafo: se ve el punto sin perder el contexto.
-                          jumped ? "rounded bg-accent/20 text-foreground" : ""
+                          jumped ? "bg-accent/20 text-foreground" : ""
                         }`}
                       >
                         {segment.text}
-                        {position < paragraph.segments.length - 1 ? " " : ""}
                       </span>
+                      {/* El espacio va FUERA: dentro, el fondo del resaltado se
+                          extendería hasta la palabra siguiente. Y tiene que estar: dos
+                          elementos adyacentes en JSX no dejan hueco y el texto saldría
+                          pegado. */}
+                      {position < paragraph.segments.length - 1 ? " " : ""}
+                      </Fragment>
                     );
                   })}
                 </p>
@@ -868,6 +940,18 @@ function PhasePending({
   );
 }
 
+/**
+ * El estado VACÍO y el resumen, separados en dos componentes.
+ *
+ * Estaban en una sola función: un `return <PhasePending/>` temprano y, DESPUÉS, un
+ * `useState`. Eso rompe las reglas de los hooks —eslint lo marcaba como error— y no es
+ * teórico: en cuanto una reunión pase de «sin análisis» a «con análisis» sin
+ * desmontarse, React encuentra un hook que antes no existía y el orden se descoloca.
+ *
+ * El arreglo es estructural y no mueve nada de conducta: `Summary` decide, `SummaryBody`
+ * tiene los hooks. El texto del estado vacío, la condición que lo dispara (contenido, no
+ * estado) y todo lo demás quedan idénticos.
+ */
 function Summary({ meeting, onSeek }: { meeting: MeetingDetail; onSeek: (s: number) => void }) {
   const s = meeting.summary;
   // Ni narrativa, ni hallazgos, ni siguientes pasos: no hay análisis. Se
@@ -891,6 +975,11 @@ function Summary({ meeting, onSeek }: { meeting: MeetingDetail; onSeek: (s: numb
       />
     );
   }
+  return <SummaryBody meeting={meeting} onSeek={onSeek} />;
+}
+
+function SummaryBody({ meeting, onSeek }: { meeting: MeetingDetail; onSeek: (s: number) => void }) {
+  const s = meeting.summary;
   const c = composeSummary(s);
   const [showAllLead, setShowAllLead] = useState(false);
   const shownLead = showAllLead ? c.lead : c.lead.slice(0, LEAD_LIMIT);
@@ -1073,7 +1162,6 @@ function Summary({ meeting, onSeek }: { meeting: MeetingDetail; onSeek: (s: numb
     </div>
   );
 }
-
 /**
  * Próximos pasos (was "Tareas y compromisos", which asserted that every meeting
  * produces tasks — an interview produces a decision about a candidate, not a
