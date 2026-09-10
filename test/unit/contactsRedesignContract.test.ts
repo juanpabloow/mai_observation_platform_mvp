@@ -588,17 +588,24 @@ test('contacts: a number without a name shows the phone, in mono so it reads as 
   assert.ok(src.includes('named ? "" : "u-mono"'), 'an unnamed contact renders its id in mono');
 });
 
-test('contacts: an overdue row is marked by SHAPE + color, not color alone', () => {
+test('contacts: a late task is a CHIP on the name — it never paints the row', () => {
   const src = read(CONTACTS_TABLE);
-  // It moved from `.u-row-danger` (a red wash + 3px red bar) to `.u-row-overdue` (amber),
-  // because red is no longer available for it: the redesign spends red on the active nav
-  // item, `Agendar cita`, and the "a human is handling this" marker. "Late" is exactly
-  // what --warn is for, and the amber still carries a LEFT RULE, so the state is a shape
-  // as well as a colour.
-  assert.ok(src.includes('u-row-overdue'), 'the row carries the overdue treatment');
-  const css = read('app/globals.css');
-  assert.ok(/\.u-row-overdue[^}]*box-shadow:\s*inset 2px 0 0 0 var\(--warn-rule\)/s.test(css), 'a left rule, not colour alone');
-  assert.ok(/\.u-row-overdue[^}]*background-color:\s*var\(--warn-soft\)/s.test(css), 'and an amber wash');
+  // Comments stripped for the "is gone" half: the file's own note NAMES the class it
+  // dropped, to explain why, and prose must not satisfy or break a "does not contain".
+  const code = stripComments(src);
+  // The treatment went `.u-row-danger` (red wash + 3px red bar) → `.u-row-overdue`
+  // (amber wash + 2px amber rule) → a chip. Both washes had the same defect: a row's
+  // GROUND already means something in this table — `bg-chip` is selection, `bg-subtle`
+  // is hover — so a third tinted state read as "you are hovering this" or "this one is
+  // open" instead of as a fact about the person. A chip carries its own TEXT and count,
+  // which survives greyscale outright rather than depending on colour plus a rule.
+  assert.equal(code.includes('u-row-overdue'), false, 'the row itself stays neutral');
+  assert.equal(read('app/globals.css').includes('.u-row-overdue {'), false, 'and the rule is gone, not just unused');
+  assert.ok(src.includes('c.overdue_task_count'), 'the overdue count still reaches the row');
+  assert.ok(/vencida/.test(src), 'and says so in words');
+  assert.ok(/tone="warn"/.test(src), 'in the amber the system reserves for "late"');
+  // Selection stays the ONE thing that changes a row's ground, hover the one grey.
+  assert.ok(src.includes('selected ? "bg-chip" : "hover:bg-subtle"'), 'selection is the ground change; hover is the grey');
 });
 
 test('contacts: loading / empty / error states exist and the empty state can clear filters', () => {
