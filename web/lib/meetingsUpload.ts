@@ -20,7 +20,9 @@ import { sha256HexOfBlob } from "./sha256";
  *
  * ── Reintentar no duplica reuniones ────────────────────────────────────────
  *
- * `idempotencyKey = upload:{sha256}:{bytes}` sale del contenido del fichero, y
+ * `idempotencyKey = upload:{sha256}:{bytes}:{attemptId}` combina el CONTENIDO con el
+ * INTENTO: el contenido para que un reintento no duplique, el intento para que pedir
+ * «Nueva reunión» otra vez con el mismo audio sí cree otra reunión. Sale del fichero, y
  * `meetings_idem_key UNIQUE (tenant_id, client_id, idempotency_key)` con el
  * `ON CONFLICT DO NOTHING` de `createMeeting` hace que la segunda llamada
  * devuelva LA MISMA reunión con `created: false`.
@@ -53,6 +55,9 @@ export interface UploadState {
   readonly meetingId: string | null;
   /** true cuando la reunión ya existía con este mismo contenido. */
   readonly reused: boolean;
+  /** El `mediaState` que el servidor reportó al reutilizar — decide QUÉ se le dice al
+   *  usuario (ver reusedMessage). Null mientras no haya habido reutilización. */
+  readonly reusedMediaState: string | null;
   /** La etapa del pipeline mientras `stage === "processing"`. */
   readonly pipelineStage: string | null;
   readonly message: string | null;
@@ -69,6 +74,7 @@ export const IDLE: UploadState = {
   percent: null,
   meetingId: null,
   reused: false,
+  reusedMediaState: null,
   pipelineStage: null,
   message: null,
   code: null,
@@ -166,8 +172,54 @@ export function titleFromFilename(filename: string): string {
   return stem.trim() === "" ? base : stem.trim();
 }
 
-export function idempotencyKeyFor(checksumSha256: string, bytes: number): string {
-  return `upload:${checksumSha256}:${bytes}`;
+export function idempotencyKeyFor(checksumSha256: string, bytes: number, attemptId: string): string {
+  return `upload:${checksumSha256}:${bytes}:${attemptId}`;
+}
+
+/**
+ * El identificador de UN INTENTO de subida — lo que convierte «Nueva reunión» en una
+ * acción con efecto propio.
+ *
+ * La clave de idempotencia salía SÓLO del contenido (`upload:{sha}:{bytes}`), y la
+ * restricción del lado servidor es `UNIQUE (tenant_id, client_id, idempotency_key)`
+ * sin predicado ni ventana. O sea: un audio podía existir en UNA reunión por cliente y
+ * para siempre. Consecuencia real, vista en staging: un intento anterior que se quedó
+ * a medias dejó una reunión vacía, y la siguiente subida del mismo fichero se enganchó
+ * a ella —con su título viejo, descartando el que el usuario acababa de escribir— en
+ * vez de crear la reunión que pidió.
+ *
+ * Con el intento dentro de la clave las dos propiedades conviven, que es lo que se
+ * pedía y antes era imposible a la vez:
+ *
+ *   · cada apertura del diálogo acuña un intento nuevo → mismo audio, reunión nueva;
+ *   · reintentar DENTRO del intento conserva la clave → misma reunión, sin duplicar.
+ *
+ * Vive en el diálogo (no en sessionStorage) porque el caso que cubre es el que el
+ * código ya nombraba: se corta la red a mitad del PUT y se pulsa reintentar. Si se
+ * recarga la página, el intento se pierde y la siguiente subida crea su propia
+ * reunión — que es exactamente lo que hay que hacer cuando no se puede saber si el
+ * usuario quería continuar o empezar de nuevo.
+ */
+export function newAttemptId(): string {
+  const c: Crypto | undefined = typeof crypto === "undefined" ? undefined : crypto;
+  if (c && typeof c.randomUUID === "function") return c.randomUUID();
+  // Contexto no seguro o navegador viejo: basta con que no colisione entre intentos
+  // del mismo usuario, no es un secreto.
+  return `a${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Lo que se le dice al usuario cuando el servidor respondió `created: false`.
+ *
+ * Había UN texto para los dos casos, y afirmaba «esta grabación ya estaba subida».
+ * Cuando la reunión reutilizada estaba VACÍA —el caso que se dio— eso era
+ * simplemente falso, y mandaba a buscar un audio que no existía. Ahora el mensaje
+ * depende del estado que el servidor acaba de reportar.
+ */
+export function reusedMessage(mediaState: string | null): string {
+  return mediaState === "ready"
+    ? "Esta subida ya se había completado antes, así que se abre la reunión existente en vez de duplicar el audio."
+    : "Se recuperó tu intento anterior con este mismo fichero: continúa en la misma reunión, sin crear un duplicado.";
 }
 
 // ── Las dependencias inyectables ───────────────────────────────────────────
@@ -293,6 +345,12 @@ export interface UploadInput {
   /** Sólo para pruebas: acorta el sondeo. */
   readonly pollMs?: number;
   readonly now?: () => number;
+  /**
+   * El intento al que pertenece esta subida (ver newAttemptId). OBLIGATORIO: si fuera
+   * opcional, un llamador que lo olvidara volvería silenciosamente al comportamiento
+   * viejo —una reunión por audio y para siempre— y eso es justo el fallo que se corrige.
+   */
+  readonly attemptId: string;
 }
 
 interface CreateResponse {
@@ -374,12 +432,16 @@ export async function uploadMeeting(input: UploadInput): Promise<UploadState> {
       {
         clientId,
         title: input.title,
-        idempotencyKey: idempotencyKeyFor(checksumSha256, file.size),
+        idempotencyKey: idempotencyKeyFor(checksumSha256, file.size, input.attemptId),
         sourceKind: "file",
       },
       signal,
     );
-    emit({ meetingId: created.meetingId, reused: !created.created });
+    emit({
+      meetingId: created.meetingId,
+      reused: !created.created,
+      reusedMediaState: created.created ? null : created.mediaState,
+    });
 
     // Ya tiene su audio: no hay nada que subir y volver a firmar daría
     // `invalid_transition`. Se salta al sondeo, que es lo que el usuario quiere.

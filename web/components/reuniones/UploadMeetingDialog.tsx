@@ -10,6 +10,8 @@ import {
   UploadError,
   acceptAttribute,
   describeLimits,
+  newAttemptId,
+  reusedMessage,
   titleFromFilename,
   uploadMeeting,
   type UploadState,
@@ -149,6 +151,14 @@ export function UploadMeetingButton({
   const closeRef = useRef<HTMLButtonElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
+  /**
+   * EL INTENTO. Se acuña al ABRIR el diálogo y al pulsar «subir otra», y va dentro de
+   * la clave de idempotencia. Es lo que separa las dos cosas que antes chocaban:
+   * reintentar (mismo intento → misma reunión) y pedir otra reunión con el mismo audio
+   * (intento nuevo → reunión nueva). Un ref y no estado: cambiarlo no debe repintar,
+   * y `start` necesita leer el valor vigente, no el de la última renderización.
+   */
+  const attemptRef = useRef<string>(newAttemptId());
   const titleId = useId();
   const router = useRouter();
 
@@ -162,6 +172,8 @@ export function UploadMeetingButton({
     const el = dialogRef.current;
     if (!el) return;
     if (open && !el.open) {
+      // Cada apertura es una acción explícita del usuario: intento nuevo.
+      attemptRef.current = newAttemptId();
       el.showModal();
       closeRef.current?.focus();
     } else if (!open && el.open) {
@@ -182,6 +194,8 @@ export function UploadMeetingButton({
   }, [router, state.meetingId]);
 
   const reset = () => {
+    // «Subir otra» es tan explícito como abrir el diálogo, así que también acuña.
+    attemptRef.current = newAttemptId();
     setFile(null);
     setTitle("");
     setState(IDLE);
@@ -205,6 +219,7 @@ export function UploadMeetingButton({
         clientId,
         limits,
         title: title.trim() === "" ? titleFromFilename(file.name) : title.trim(),
+        attemptId: attemptRef.current,
         onState: setState,
         signal: controller.signal,
       });
@@ -427,8 +442,7 @@ export function UploadMeetingButton({
                   <circle cx="8" cy="8" r="5.8" />
                   <path d="M8 5.4h.01M8 7.6v3" />
                 </svg>
-                Esta grabación ya estaba subida, así que se reutiliza la reunión existente en vez de
-                duplicar el audio. Si era lo que querías, ábrela; si no, cambia de fichero.
+                {reusedMessage(state.reusedMediaState)}
               </p>
             ) : (
               <p className="flex items-start gap-2 rounded-xl bg-subtle px-3 py-2.5 text-[0.75rem] leading-relaxed text-muted">

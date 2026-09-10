@@ -1,4 +1,5 @@
 import { strict as assert } from 'node:assert';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { DEFAULT_MEDIA_LIMITS } from '../../src/meetings/mediaLimits.js';
 import {
@@ -7,6 +8,8 @@ import {
   describeLimits,
   humanMessage,
   idempotencyKeyFor,
+  newAttemptId,
+  reusedMessage,
   titleFromFilename,
   uploadMeeting,
   type PutFn,
@@ -52,6 +55,7 @@ interface HarnessOptions {
 function harness(options: HarnessOptions = {}) {
   const calls: Call[] = [];
   const states: UploadState[] = [];
+  const attempt = newAttemptId();
   let pollIndex = 0;
   let putAttempts = 0;
   const meetings = new Map<string, string>();
@@ -75,7 +79,9 @@ function harness(options: HarnessOptions = {}) {
       // created:false, como hace `ON CONFLICT DO NOTHING` + relectura.
       const key = String(body?.idempotencyKey);
       const existed = meetings.has(key);
-      if (!existed) meetings.set(key, MEETING);
+      // Un id DISTINTO por clave, como el servidor real: con un id fijo, una prueba de
+      // «dos claves → dos reuniones» pasaba o fallaba por el doble, no por el código.
+      if (!existed) meetings.set(key, meetings.size === 0 ? MEETING : `${MEETING.slice(0, -2)}${(meetings.size + 10).toString(16)}`);
       return json({
         meetingId: meetings.get(key),
         created: options.created ?? !existed,
@@ -118,9 +124,15 @@ function harness(options: HarnessOptions = {}) {
     states,
     get putAttempts() { return putAttempts; },
     get meetingsCreated() { return meetings.size; },
-    run: (file: File, title = 'Reunión') =>
+    /**
+     * Un harness = una apertura del diálogo, así que comparte `attemptId` entre
+     * llamadas: dos `run` seguidos son un REINTENTO. Para modelar «el usuario abre
+     * Nueva reunión otra vez» se pasa un intento distinto explícitamente.
+     */
+    attempt,
+    run: (file: File, title = 'Reunión', attemptId: string = attempt) =>
       uploadMeeting({
-        file, clientId: CLIENT, title, limits: LIMITS,
+        file, clientId: CLIENT, title, limits: LIMITS, attemptId,
         onState: (s) => states.push(s), fetchImpl, put, pollMs: 0,
       }),
   };
@@ -203,19 +215,96 @@ test('reintentar tras un fallo de red reutiliza la MISMA reunión', async () => 
   assert.equal(creaciones[0].body?.idempotencyKey, creaciones[1].body?.idempotencyKey, '…con la misma clave');
 });
 
-test('la clave de idempotencia sale del contenido, no del nombre ni del reloj', async () => {
+test('la clave de idempotencia sale del contenido y del INTENTO, no del nombre ni del reloj', async () => {
   const a = fakeFile('uno.m4a', 4096, 'audio/mp4');
   const b = fakeFile('otro-nombre.m4a', 4096, 'audio/mp4');
+  const attempt = newAttemptId();
   const h1 = harness();
   const h2 = harness();
-  await h1.run(a);
-  await h2.run(b);
+  await h1.run(a, 'Reunión', attempt);
+  await h2.run(b, 'Reunión', attempt);
   const k1 = h1.calls[0].body?.idempotencyKey;
   const k2 = h2.calls[0].body?.idempotencyKey;
-  // Mismo contenido y mismo tamaño con otro nombre → misma clave: el nombre no
-  // identifica una grabación.
+  // Mismo contenido, mismo tamaño y MISMO INTENTO con otro nombre → misma clave: ni el
+  // nombre ni el reloj identifican una grabación.
   assert.equal(k1, k2);
-  assert.match(String(k1), /^upload:[0-9a-f]{64}:4096$/);
+  assert.match(String(k1), /^upload:[0-9a-f]{64}:4096:[A-Za-z0-9-]+$/);
+});
+
+// ── Los tres comportamientos que se pidieron, uno por prueba ──────────────
+//
+// Antes eran incompatibles por construcción: la clave salía SÓLO del contenido y la
+// restricción del servidor es UNIQUE(tenant, client, idempotency_key) sin ventana, así
+// que un audio vivía en UNA reunión por cliente para siempre. En staging eso enganchó
+// una subida a una reunión VACÍA de una prueba anterior, con su título viejo.
+
+test('cada «Nueva reunión» crea una reunión independiente, aunque el audio sea idéntico', async () => {
+  const file = fakeFile('misma-grabacion.m4a', 4096, 'audio/mp4');
+  // UN servidor (un harness = una base) y DOS aperturas del diálogo. Mismo fichero,
+  // byte a byte, con el título que el usuario escribe en cada una.
+  const h = harness();
+  const a = await h.run(file, 'Reunión A', newAttemptId());
+  const b = await h.run(file, 'Reunión B', newAttemptId());
+
+  assert.equal(a.stage, 'ready');
+  assert.equal(b.stage, 'ready');
+  const claves = h.calls.filter((c) => c.url.endsWith('/v1/meetings')).map((c) => c.body?.idempotencyKey);
+  assert.notEqual(claves[0], claves[1], 'intentos distintos → claves distintas');
+  assert.equal(a.reused, false, 'la primera no reutiliza nada');
+  assert.equal(b.reused, false, 'y la segunda TAMPOCO: es una reunión nueva, no un duplicado');
+  assert.notEqual(a.meetingId, b.meetingId, 'dos reuniones, no una');
+  assert.equal(h.meetingsCreated, 2, 'dos filas en la base');
+  // Y el título de cada una es el que se escribió: al reutilizar se descartaba.
+  const titulos = h.calls.filter((c) => c.url.endsWith('/v1/meetings')).map((c) => c.body?.title);
+  assert.deepEqual(titulos, ['Reunión A', 'Reunión B']);
+});
+
+test('reintentar una subida interrumpida conserva la reunión y no duplica', async () => {
+  // Un solo harness = una sola apertura = un solo intento.
+  const h = harness({ putFailures: 1 });
+  const file = fakeFile('se-corto-la-red.m4a', 4096, 'audio/mp4');
+
+  await assert.rejects(() => h.run(file), (e: UploadError) => e.code === 'network');
+  const final = await h.run(file);
+
+  assert.equal(final.stage, 'ready');
+  assert.equal(h.meetingsCreated, 1, 'UNA reunión para el intento entero');
+  const claves = h.calls.filter((c) => c.url.endsWith('/v1/meetings')).map((c) => c.body?.idempotencyKey);
+  assert.equal(claves.length, 2);
+  assert.equal(claves[0], claves[1], 'la misma clave, porque es el mismo intento');
+});
+
+test('recuperar una subida anterior se comunica, y el mensaje NO afirma lo que no sabe', async () => {
+  // Reunión reutilizada que aún NO tiene audio: es un intento a medias. El texto viejo
+  // decía «esta grabación ya estaba subida» —falso, y mandaba a buscar un audio que no
+  // existía—, así que ahora el mensaje depende del estado que reporta el servidor.
+  const aMedias = harness({ created: false, mediaStateOnCreate: 'pending' });
+  const reanudada = await aMedias.run(fakeFile('a.m4a', 2048, 'audio/mp4'));
+  assert.equal(reanudada.reused, true);
+  assert.equal(reanudada.reusedMediaState, 'pending');
+  assert.match(reusedMessage(reanudada.reusedMediaState), /recuperó tu intento anterior/);
+  assert.doesNotMatch(reusedMessage(reanudada.reusedMediaState), /ya estaba subida|ya se había completado/);
+
+  // Reunión reutilizada que YA tiene su audio: eso sí está completo.
+  const completa = harness({ created: false, mediaStateOnCreate: 'ready' });
+  const yaEstaba = await completa.run(fakeFile('b.m4a', 2048, 'audio/mp4'));
+  assert.equal(yaEstaba.reusedMediaState, 'ready');
+  assert.match(reusedMessage(yaEstaba.reusedMediaState), /ya se había completado/);
+
+  // Y sin reutilización no se afirma nada.
+  const nueva = harness();
+  const recien = await nueva.run(fakeFile('c.m4a', 2048, 'audio/mp4'));
+  assert.equal(recien.reused, false);
+  assert.equal(recien.reusedMediaState, null, 'nada que comunicar');
+});
+
+test('el intento es obligatorio en la entrada: nadie vuelve al comportamiento viejo por olvido', () => {
+  // La comprobación es de TIPOS, y se afirma sobre el fuente para que quitar el campo
+  // requerido rompa esta prueba y no sólo el editor de alguien.
+  const src = readFileSync(new URL('../../web/lib/meetingsUpload.ts', import.meta.url), 'utf8');
+  assert.match(src, /readonly attemptId: string;/, 'attemptId no es opcional');
+  assert.doesNotMatch(src, /attemptId\?: string/, 'y no tiene variante opcional');
+  assert.match(src, /upload:\$\{checksumSha256\}:\$\{bytes\}:\$\{attemptId\}/, 'la clave lo incluye');
 });
 
 test('ficheros distintos dan claves distintas', async () => {
@@ -384,9 +473,11 @@ test('el título por defecto es el nombre sin extensión', () => {
 });
 
 test('idempotencyKeyFor es estable y cabe en los 200 caracteres del contrato', () => {
-  const key = idempotencyKeyFor('a'.repeat(64), 2 * 1024 * 1024 * 1024);
-  assert.equal(key, `upload:${'a'.repeat(64)}:2147483648`);
-  assert.ok(key.length <= 200);
+  const attempt = newAttemptId();
+  const key = idempotencyKeyFor('a'.repeat(64), 2 * 1024 * 1024 * 1024, attempt);
+  assert.equal(key, `upload:${'a'.repeat(64)}:2147483648:${attempt}`);
+  // 7 + 64 + 1 + 10 + 1 + 36 = 119 con un UUID. El contrato son 200.
+  assert.ok(key.length <= 200, `la clave mide ${key.length}`);
 });
 
 test('un código desconocido se muestra con su detalle, no como «error»', () => {
