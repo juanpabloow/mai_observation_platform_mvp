@@ -1,8 +1,10 @@
 "use client";
 
+import Link from "next/link";
+
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { GHOST_ACTION_CLS, OUTLINE_CLS, SEARCH_SHELL_CLS } from "@/components/ui/primitives";
+import { OUTLINE_CLS, SEARCH_SHELL_CLS } from "@/components/ui/primitives";
 import { OPTIONAL_COLUMNS, type ContactColumnKey } from "@/lib/contactColumns";
 
 /**
@@ -82,12 +84,16 @@ export function ContactsSearch({ compact = false }: { compact?: boolean } = {}) 
         e.preventDefault();
         apply({ q: draft.trim() });
       }}
-      // The SHARED shell (§2.1). Sizing is local: it NEVER drops below 240px (min-w-[15rem])
-      // so the field can't compress to just its icon, grows to fill the slack (flex-1), and
-      // caps at 420px — 240px flat when the detail panel is open (image 18). When the row
-      // can't fit search + controls + primary, the header card wraps to a second band rather
-      // than squeezing the search.
-      className={`${SEARCH_SHELL_CLS} min-w-[15rem] flex-1 ${compact ? "max-w-[240px]" : "max-w-[420px]"}`}
+      // The SHARED shell (§2.1). Sizing is local: it NEVER drops below 240px
+      // (min-w-[15rem]) so the field can't compress to just its icon, and it now
+      // takes ALL the slack in the row.
+      //
+      // The 420px cap is gone. It existed when the header held six controls and the
+      // search had to leave room for them; with the actions folded into `···` there
+      // are three, and capping the field just left a band of empty card between the
+      // input and `Filtrar`. Search is this screen's primary verb — it should be the
+      // widest thing in the row.
+      className={`${SEARCH_SHELL_CLS} min-w-[15rem] flex-1 ${compact ? "max-w-[240px]" : ""}`}
     >
       <SearchIcon />
       <input
@@ -135,6 +141,7 @@ function Menu({
   active = false,
   align = "right",
   width = "w-56",
+  iconOnly = false,
   children,
 }: {
   label: string;
@@ -143,6 +150,9 @@ function Menu({
   active?: boolean;
   align?: "left" | "right";
   width?: string;
+  /** `···` form: the icon alone, with `label` as the accessible name. Used by
+   *  the overflow menu, where a visible label would defeat the point. */
+  iconOnly?: boolean;
   children: (close: () => void) => React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
@@ -171,11 +181,19 @@ function Menu({
         onClick={() => setOpen((o) => !o)}
         aria-haspopup="menu"
         aria-expanded={open}
-        className={`${OUTLINE_CLS} ${active ? "border-ink text-foreground" : ""}`}
+        aria-label={iconOnly ? label : undefined}
+        title={iconOnly ? label : undefined}
+        className={
+          iconOnly
+            ? `inline-flex size-[var(--control-h)] shrink-0 items-center justify-center rounded-lg border text-muted transition-colors hover:text-foreground ${
+                open || active ? "border-faint text-foreground" : "border-line-strong"
+              }`
+            : `${OUTLINE_CLS} ${active ? "border-ink text-foreground" : ""}`
+        }
       >
         {icon}
-        {label}
-        <Chevron />
+        {iconOnly ? null : label}
+        {iconOnly ? null : <Chevron />}
       </button>
       {open ? (
         <div
@@ -297,109 +315,173 @@ export function ContactsFilterMenu({ owners }: { owners: { userId: string; label
   );
 }
 
-/**
- * `Orden` — the design's "Orden: última visita".
- *
- * The list is ordered by `last_contact_at DESC` in SQL and that is the only order the
- * repository supports today, so this control offers exactly that one option and says so.
- * It exists in the redesign, so it exists here; wiring a second sort is a repository
- * change (the keyset cursor is built on that column pair), not a UI one, and shipping a
- * dropdown whose other entries silently did nothing would be worse than shipping one
- * honest entry.
- */
-export function ContactsSortMenu() {
+/* ═══════════════════════════════════════════════════════════════════════════
+   THE OVERFLOW MENU — `···`
+
+   The control band used to lay out six controls in a row: Filtrar, Orden,
+   Columnas, Exportar, Campos del negocio and the primary. Past four the row
+   stops being a hierarchy and becomes a wall, and on a laptop with the detail
+   panel open it wrapped to a second line — which moved the primary and made
+   the header's height depend on the viewport.
+
+   What stays visible is what an operator uses every session: the SEARCH, the
+   FILTER, and the PRIMARY. Everything else is one click away in here.
+
+   Two-level, in ONE popover: the root lists the actions, and Columnas / Orden
+   swap the panel's contents rather than opening a nested menu — a submenu that
+   opens sideways off a 224px popover has nowhere to go on a narrow window.
+
+   "Importar contactos" IS in the menu, because the header's shape is part of the
+   spec — but it is INERT and says so. Import is a feature (file upload, column
+   mapping, dedup against the C-2 identity spine), not a restyle, and there is no
+   route behind it yet. `aria-disabled` + the "Pronto" tag is the honest form:
+   the slot is reserved and visible, and nobody clicks into a dead end. Enabling
+   it later is one line — swap the <span> for a <Link href={importHref}>.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+function ItemIcon({ d }: { d: string }) {
   return (
-    <Menu label="Orden: última interacción" width="w-64">
-      {() => (
-        <>
-          <MenuOption label="Última interacción (más reciente)" selected onSelect={() => {}} />
-          <p className="px-3 pb-2 pt-1 text-[0.6875rem] leading-4 text-faint">
-            Otros órdenes necesitan un cambio en el listado del servidor — el cursor de
-            paginación se construye sobre esta columna.
-          </p>
-        </>
-      )}
-    </Menu>
+    <svg viewBox="0 0 16 16" className="size-3.5 shrink-0 text-faint" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {d.split("|").map((seg) => (
+        <path key={seg} d={seg} />
+      ))}
+    </svg>
   );
 }
 
-/**
- * `Columnas` — toggles the OPTIONAL columns.
- *
- * The design's table is seven fixed columns and has no such control. It survives because
- * those six optional columns were real function (a shop that works by stage, or watches
- * consent), and a visual rework should not quietly delete capability. The DEFAULT view is
- * the artboard exactly; these append after `Dueño` only when asked for.
- *
- * Purely presentational by construction: it writes `?cols=` and nothing else, so it can
- * never change which rows or values the table shows — which is also why it does NOT drop
- * paging (`keepPaging`), unlike every other control in this file.
- */
-export function ContactsColumnsMenu({ visibleColumns }: { visibleColumns: ContactColumnKey[] }) {
-  const { apply } = useApply();
-  const visible = visibleColumns;
-  const toggle = (key: ContactColumnKey) => {
-    const next = visible.includes(key) ? visible.filter((k) => k !== key) : [...visible, key];
+const ITEM_CLS =
+  "flex min-h-9 w-full items-center gap-2.5 px-3 text-left text-sm text-foreground no-underline transition-colors hover:bg-subtle";
+
+export function ContactsOverflowMenu({
+  clientId,
+  visibleColumns,
+  fieldsHref,
+}: {
+  clientId: string;
+  visibleColumns: ContactColumnKey[];
+  /** Omitted for a member — they cannot manage the business's fields. */
+  fieldsHref?: string;
+}) {
+  const { searchParams, apply } = useApply();
+  const [view, setView] = useState<"root" | "columns" | "sort">("root");
+
+  const toggleColumn = (key: ContactColumnKey) => {
+    const next = visibleColumns.includes(key) ? visibleColumns.filter((k) => k !== key) : [...visibleColumns, key];
     apply({ cols: next.join(",") }, { keepPaging: true });
   };
 
-  return (
-    <Menu label="Columnas" active={visible.length > 0} width="w-56">
-      {() => (
-        <>
-          <MenuLabel>Columnas opcionales</MenuLabel>
-          {OPTIONAL_COLUMNS.map((c) => (
-            <label
-              key={c.key}
-              className="flex min-h-9 cursor-pointer items-center gap-2.5 px-3 text-sm text-foreground transition-colors hover:bg-subtle"
-            >
-              <input
-                type="checkbox"
-                checked={visible.includes(c.key)}
-                onChange={() => toggle(c.key)}
-                className="size-3.5 accent-[var(--ink)]"
-              />
-              {c.label}
-            </label>
-          ))}
-        </>
-      )}
-    </Menu>
-  );
-}
+  // The export URL describes the FILTERED SET, not the current page.
+  const exportParams = new URLSearchParams(searchParams.toString());
+  for (const k of [...PAGING_PARAMS, "c", "edit", "cols"]) exportParams.delete(k);
+  const exportQs = exportParams.toString();
 
-/**
- * `Exportar` — the current filtered view as CSV.
- *
- * A link, not a fetch: it points at the export route with the SAME query string the list
- * is showing, so what downloads is what is on screen (filters, search and all) and the
- * browser owns the download. Nothing is held in memory here.
- */
-export function ContactsExportLink({ clientId, compact = false }: { clientId: string; compact?: boolean }) {
-  const { searchParams } = useApply();
-  const p = new URLSearchParams(searchParams.toString());
-  // Paging and panel state are about the VIEW, not the result set — an export is the
-  // whole filtered set, not page 3 of it.
-  for (const k of [...PAGING_PARAMS, "c", "edit", "cols"]) p.delete(k);
-  const qs = p.toString();
-  return (
-    <a
-      href={`/api/crm/v1/contacts/export/${clientId}${qs ? `?${qs}` : ""}`}
-      // Compact (detail panel open, image 18): the download arrow ALONE, so the toolbar
-      // stays on one line; the label returns at full width.
-      className={
-        compact
-          ? "inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-faint transition-colors hover:bg-subtle hover:text-foreground"
-          : GHOST_ACTION_CLS
-      }
-      aria-label={compact ? "Exportar" : undefined}
-      title={compact ? "Exportar" : undefined}
-      // A same-origin download; `download` lets the route's filename win.
-      download
+  const Back = ({ title }: { title: string }) => (
+    <button
+      type="button"
+      onClick={() => setView("root")}
+      className="flex min-h-9 w-full items-center gap-2 border-b border-line-row px-3 text-left text-[0.71875rem] font-semibold text-muted transition-colors hover:text-foreground"
     >
-      <ExportIcon />
-      {compact ? null : "Exportar"}
-    </a>
+      <svg viewBox="0 0 16 16" className="size-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        <path d="M9.5 3.5 5 8l4.5 4.5" />
+      </svg>
+      {title}
+    </button>
+  );
+
+  return (
+    <Menu
+      label="Más acciones"
+      iconOnly
+      width="w-64"
+      active={visibleColumns.length > 0}
+      icon={
+        <svg viewBox="0 0 16 16" className="size-4" fill="currentColor" aria-hidden>
+          <circle cx="3" cy="8" r="1.35" />
+          <circle cx="8" cy="8" r="1.35" />
+          <circle cx="13" cy="8" r="1.35" />
+        </svg>
+      }
+    >
+      {(close) => {
+        if (view === "columns") {
+          return (
+            <>
+              <Back title="Columnas" />
+              {OPTIONAL_COLUMNS.map((c) => (
+                <label key={c.key} className="flex min-h-9 cursor-pointer items-center gap-2.5 px-3 text-sm transition-colors hover:bg-subtle">
+                  <input
+                    type="checkbox"
+                    checked={visibleColumns.includes(c.key)}
+                    onChange={() => toggleColumn(c.key)}
+                    className="size-3.5 rounded border-line-strong"
+                  />
+                  <span className="flex-1">{c.label}</span>
+                </label>
+              ))}
+            </>
+          );
+        }
+        if (view === "sort") {
+          return (
+            <>
+              <Back title="Ordenar por" />
+              <MenuOption label="Última interacción (más reciente)" selected onSelect={() => {}} />
+              <p className="px-3 pb-2 pt-1 text-[0.6875rem] leading-4 text-faint">
+                Otros órdenes necesitan un cambio en el listado del servidor — el cursor de paginación se construye sobre esta columna.
+              </p>
+            </>
+          );
+        }
+        return (
+          <>
+            <button type="button" onClick={() => setView("columns")} className={ITEM_CLS}>
+              <ItemIcon d="M2.8 3.2h10.4v9.6H2.8V3.2Z|M6.6 3.2v9.6|M10.4 3.2v9.6" />
+              <span className="flex-1">Columnas</span>
+              {visibleColumns.length > 0 ? <span className="u-mono text-[0.65625rem] text-faint">{visibleColumns.length}</span> : null}
+            </button>
+            <button type="button" onClick={() => setView("sort")} className={ITEM_CLS}>
+              <ItemIcon d="M4.4 3.4v9.2|M2.6 10.8l1.8 1.8 1.8-1.8|M11.6 12.6V3.4|M9.8 5.2l1.8-1.8 1.8 1.8" />
+              <span className="flex-1">Orden: última interacción</span>
+            </button>
+
+            <div className="my-1 border-t border-line-row" />
+
+            <span
+              role="menuitem"
+              aria-disabled="true"
+              title="La importación necesita subida de archivo y mapeo de columnas; todavía no está disponible."
+              className={`${ITEM_CLS} cursor-not-allowed text-muted hover:bg-transparent`}
+            >
+              <ItemIcon d="M8 9.6V2.8|M5.4 5.4 8 2.8l2.6 2.6|M3.2 12.4h9.6" />
+              <span className="flex-1">Importar contactos</span>
+              <span className="shrink-0 rounded border border-line-strong px-1 text-[0.625rem] uppercase tracking-wide text-faint">
+                Pronto
+              </span>
+            </span>
+
+            <a
+              href={`/api/crm/v1/contacts/export/${clientId}${exportQs ? `?${exportQs}` : ""}`}
+              download
+              onClick={close}
+              className={ITEM_CLS}
+            >
+              <ItemIcon d="M8 2.8v6.8|M5.4 7l2.6 2.6L10.6 7|M3.2 12.4h9.6" />
+              <span className="flex-1">Exportar CSV</span>
+            </a>
+
+            {fieldsHref ? (
+              <>
+                <div className="my-1 border-t border-line-row" />
+                <Link href={fieldsHref} onClick={close} className={ITEM_CLS}>
+                  <ItemIcon d="M2.8 2.8h4.6v4.6H2.8V2.8Z|M8.6 2.8h4.6v4.6H8.6V2.8Z|M2.8 8.6h4.6v4.6H2.8V8.6Z|M8.6 8.6h4.6v4.6H8.6V8.6Z" />
+                  <span className="flex-1">Campos del negocio</span>
+                </Link>
+              </>
+            ) : null}
+          </>
+        );
+      }}
+    </Menu>
   );
 }
 
@@ -420,20 +502,6 @@ function FilterIcon() {
         stroke="currentColor"
         strokeWidth="1.4"
         strokeLinecap="round"
-      />
-    </svg>
-  );
-}
-
-function ExportIcon() {
-  return (
-    <svg viewBox="0 0 16 16" aria-hidden className="size-3.5 shrink-0" fill="none">
-      <path
-        d="M8 2.5V10.5M8 10.5 5.4 7.8M8 10.5l2.6-2.7M2.5 10v2.5a1 1 0 0 0 1 1h9a1 1 0 0 0 1-1V10"
-        stroke="currentColor"
-        strokeWidth="1.4"
-        strokeLinecap="round"
-        strokeLinejoin="round"
       />
     </svg>
   );

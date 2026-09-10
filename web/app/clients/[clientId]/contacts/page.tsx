@@ -12,16 +12,10 @@ import {
 import { listOpenCandidates } from "@worker/db/repositories/contactIdentities.js";
 import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
 import { DuplicateCandidates } from "@/components/contacts/DuplicateCandidates";
-import {
-  ContactsColumnsMenu,
-  ContactsExportLink,
-  ContactsFilterMenu,
-  ContactsSearch,
-  ContactsSortMenu,
-} from "@/components/contacts/ContactsToolbar";
+import { ContactsFilterMenu, ContactsOverflowMenu, ContactsSearch } from "@/components/contacts/ContactsToolbar";
 import { ContactsTable } from "@/components/contacts/ContactsTable";
 import { parseColumns } from "@/lib/contactColumns";
-import { EmptyState, GHOST_ACTION_CLS, Pagination } from "@/components/ui/primitives";
+import { EmptyState, Pagination } from "@/components/ui/primitives";
 import { PAGE_SIZE } from "@/lib/contactColumns";
 import { PageShell } from "@/components/ui/PageShell";
 import { PageHeading } from "@/components/ui/PageTitle";
@@ -200,19 +194,19 @@ export default async function ClientContactsPage({
         <div className="flex flex-wrap items-center gap-2.5 px-3 py-2.5">
           <PageHeading title="Contactos" count={summary.total} />
           <ContactsSearch />
-          {/* Filtrar / Orden / Columnas / Exportar / Campos + the primary all live in the
-              header card's own row — the search section — filling the space beside the search
-              (design image 25), instead of a separate row on the table. */}
-          <span className="ml-auto flex flex-wrap items-center justify-end gap-1.5">
+          {/* ONE ROW, ACTIONS FOLDED (design 27a). Only Buscar, Filtrar and the
+              primary stay visible; Columnas, Orden, Exportar and Campos del
+              negocio live in `···`. Six controls in a row stopped being a
+              hierarchy and became a wall, and with the detail panel open the row
+              wrapped — which moved the primary and made the header's height
+              depend on the viewport. */}
+          <span className="ml-auto flex shrink-0 items-center gap-1.5">
             <ContactsFilterMenu owners={ownerOptions} />
-            <ContactsSortMenu />
-            <ContactsColumnsMenu visibleColumns={visibleColumns} />
-            <ContactsExportLink clientId={client.id} />
-            {isFullAccess ? (
-              <Link href={`${base}/fields`} className={`${GHOST_ACTION_CLS} hidden lg:flex`}>
-                Campos del negocio
-              </Link>
-            ) : null}
+            <ContactsOverflowMenu
+              clientId={client.id}
+              visibleColumns={visibleColumns}
+              fieldsHref={isFullAccess ? `${base}/fields` : undefined}
+            />
             <NewContactButton
               clientId={client.id}
               owners={assignableOwners}
@@ -226,9 +220,15 @@ export default async function ClientContactsPage({
       {/* Table + detail panel: siblings on one row, each keeping its own four corners. */}
       <div className="flex min-h-0 flex-1 gap-3">
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-      {/* THE TABLE CARD: just the table and the pager now — the controls moved up into the
-          header card (design image 25). */}
-      <PageShell clip={false}>
+      {/* THE TABLE CARD: just the table and the pager now — the controls moved up into
+          the header card, and the rest into `···`.
+
+          CLIPS (the PageShell default). It used to opt out, which is why its corners
+          read as square next to the header card's rounded ones: a full-bleed table
+          with a sticky head paints straight over the radius unless the card clips.
+          Opting out was only ever needed for a card hosting a popover, and this one
+          no longer has any — the row menu is a Link, not a dropdown. */}
+      <PageShell>
         {contacts.length === 0 ? (
           <div className="p-4">
             <EmptyState

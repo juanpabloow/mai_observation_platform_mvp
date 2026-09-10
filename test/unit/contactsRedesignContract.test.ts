@@ -298,7 +298,13 @@ test('contacts: the controls are ONE row each, and share one height', () => {
   // search never drops below 240px (min-w-[15rem]), so it can't compress to just its icon
   // (the reported ~917px-content bug).
   assert.ok(/<div className="flex flex-wrap items-center gap-2.5 px-3 py-2.5">/.test(page), 'the header card is one wrapping band');
-  assert.ok(toolbar.includes('min-w-[15rem] flex-1') && toolbar.includes('max-w-[420px]'), 'the search is 240–420px, never narrower');
+  // The 420px cap is GONE. It existed while the header held six controls; with the
+  // actions folded into `···` the search takes all the slack, because it is the
+  // screen's primary verb. The floor is what still matters.
+  assert.ok(toolbar.includes('min-w-[15rem] flex-1'), 'the search never drops below 240px and takes the slack');
+  assert.ok(!/max-w-\[420px\]/.test(toolbar), 'and it is no longer capped at 420px');
+  // The COMPACT form (detail panel open) keeps its cap, or the row cannot fit.
+  assert.ok(toolbar.includes('compact ? "max-w-[240px]" : ""'), 'only the compact form is capped');
 });
 
 test('contacts: "Nuevo contacto" is LIVE, and creation goes through the identity chokepoint', () => {
@@ -309,14 +315,33 @@ test('contacts: "Nuevo contacto" is LIVE, and creation goes through the identity
   assert.ok(src.includes('<NewContactButton'), 'the button occupies its designed slot');
   assert.ok(!src.includes('aria-disabled="true"'), 'it is no longer inert');
   assert.ok(!src.includes('TODO(crm)'), 'and the TODO that tracked this is gone');
-  // IMPORT is still deliberately absent. The artboard draws it, but it is a FEATURE
-  // (file upload, column mapping, dedup against the identity spine), not a restyle, and
-  // a button that opens nothing is worse than one that is not there.
+  // IMPORT is still deliberately absent. The artboard draws it (and so does the
+  // later `···` sketch), but it is a FEATURE (file upload, column mapping, dedup
+  // against the identity spine), not a restyle, and a button that opens nothing is
+  // worse than one that is not there.
+  const toolbarSrc = read(TOOLBAR);
   assert.ok(!src.includes('Import contacts'), 'import stays out entirely');
   assert.ok(!/>\s*Importar\s*</.test(src), 'and it is absent under its Spanish label too');
-  // EXPORT is the one that shipped, and it exports the FILTERED view rather than
-  // "everything", which is the classic export bug.
-  assert.ok(src.includes('<ContactsExportLink'), 'export is offered');
+  // The `···` menu DOES reserve the slot (the header's shape is part of the spec),
+  // but it must never be a live control while there is no import behind it.
+  assert.ok(/>\s*Importar contactos\s*</.test(toolbarSrc), 'the overflow menu reserves the slot');
+  assert.ok(
+    /aria-disabled="true"[\s\S]{0,400}Importar contactos/.test(toolbarSrc),
+    'and it is inert — aria-disabled, never a link',
+  );
+  assert.ok(
+    !/<(a|Link)[^>]*>[\s\S]{0,200}Importar contactos/.test(toolbarSrc),
+    'nothing navigates from it',
+  );
+  // EXPORT is the one that shipped. It now lives inside `···` (the header folded to
+  // one row), and it still exports the FILTERED view rather than "everything", which
+  // is the classic export bug.
+  assert.ok(src.includes('<ContactsOverflowMenu'), 'the overflow menu is rendered');
+  assert.ok(toolbarSrc.includes('Exportar CSV'), 'export is offered inside it');
+  assert.ok(
+    toolbarSrc.includes("for (const k of [...PAGING_PARAMS, \"c\", \"edit\", \"cols\"]) exportParams.delete(k)"),
+    'and the export URL still describes the filtered SET, not the current page',
+  );
 
   // The real guarantee, checked at the source: the create action resolves through the
   // spine and never issues its own INSERT.
@@ -518,11 +543,15 @@ test('contacts: Enter runs the search (a real form submit)', () => {
 
 test('contacts: Columns is presentational — it writes ?cols= and touches nothing else', () => {
   const toolbar = read(TOOLBAR);
-  // It now lives in the STATS row (it belongs to the table, not to the search), as
-  // its own exported component driving the same URL param.
-  assert.ok(toolbar.includes('export function ContactsColumnsMenu'), 'Columns is its own control');
+  // It now lives INSIDE the `···` overflow menu: the header folded to one row, so
+  // only Buscar, Filtrar and the primary stayed visible. The URL contract is
+  // unchanged — that is the part that matters.
+  assert.ok(toolbar.includes('export function ContactsOverflowMenu'), 'the overflow menu is the control that hosts Columns');
   assert.ok(toolbar.includes('apply({ cols: next.join(",") }, { keepPaging: true })'), 'Columns only writes ?cols=');
-  assert.ok(read(CONTACTS_PAGE).includes('<ContactsColumnsMenu visibleColumns={visibleColumns} />'), 'rendered in the stats row');
+  assert.ok(
+    read(CONTACTS_PAGE).includes('visibleColumns={visibleColumns}'),
+    'and the page still hands it the parsed columns',
+  );
   const page = read(CONTACTS_PAGE);
   // `cols` must never be forwarded into a query — it is parsed for rendering only.
   assert.ok(page.includes('const visibleColumns = parseColumns(cols)'), 'cols is parsed for rendering');
@@ -892,10 +921,11 @@ test('both panels are THREE zones — fixed header, one scrolling body, fixed fo
   // edge (square top-right corner against a round top-left) and pushed the panel a
   // gutter below the shell's top. As siblings in one row they share a top and a bottom.
   assert.ok(/<div className="flex min-h-0 flex-1 gap-3">/.test(page), 'the shell and the panel share a row');
-  // The table card now opts out of clipping, because the facet row beside it hosts the
-  // Filtrar / Orden / Columnas popovers and a card's overflow-hidden cuts an
-  // absolutely-positioned menu off at its edge.
-  assert.ok(page.indexOf('<PageShell clip={false}>') > page.indexOf('flex min-h-0 flex-1 gap-3'), 'the shell is inside that row');
+  // The table card CLIPS again (the PageShell default). Its opt-out existed because
+  // the facet row beside it hosted the Filtrar / Orden / Columnas popovers; those
+  // now live in the header card, so the table card holds no dropdown and the
+  // clipping is what keeps its radius from being squared off by the sticky head.
+  assert.ok(page.indexOf('<PageShell>') > page.indexOf('flex min-h-0 flex-1 gap-3'), 'the shell is inside that row');
   assert.ok(page.indexOf('<ContactSidePanel') > page.indexOf('</PageShell>'), 'and the panel is its sibling, not its child');
   assert.equal(/xl:block/.test(page), false, 'the panel column is never a block');
   // The panel must not GROW on the row axis: `flex-1` there swallowed its own width and
@@ -1407,11 +1437,15 @@ test('a card that hosts a dropdown does not clip it away', () => {
   // Without this the menu was cut off a few px below the button and looked like it
   // never opened.
   const page = read(CONTACTS_PAGE);
-  // BOTH cards opt out now: the title card so the search field's focus ring is not
-  // clipped, and the TABLE card because the facet row beside it hosts the Filtrar /
-  // Orden / Columnas popovers.
+  // ONLY the title card opts out now — it is the one that hosts the popovers
+  // (Filtrar and `···`) and the search field's focus ring.
   assert.ok(page.includes('<PageShell grow={false} clip={false}>'), 'the title card opts out');
-  assert.ok(page.includes('<PageShell clip={false}>'), 'and so does the table card, which holds the menus');
+  // The TABLE card must CLIP: it holds a full-bleed table with a sticky head, which
+  // paints straight over the 12px radius unless the card clips, and its corners then
+  // read as square beside the header card's rounded ones. It hosts no dropdown (the
+  // row menu is a Link), so there is nothing for the clip to cut off.
+  assert.ok(!/<PageShell clip=\{false\}>/.test(page), 'the table card no longer opts out');
+  assert.ok(/\n      <PageShell>\n/.test(page), 'it takes the clipping default, so its radius survives the table');
   const toolbarSrc = read('components/contacts/ContactsToolbar.tsx');
   // The three menus (Filtrar / Orden / Columnas) share ONE popover, so the positioning is
   // interpolated (`right-0` or `left-0`) rather than a fixed literal. What must hold is
