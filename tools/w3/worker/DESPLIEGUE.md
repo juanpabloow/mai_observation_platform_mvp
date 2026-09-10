@@ -5,11 +5,47 @@
 (`/home/santiagov/services/mai-w3-worker/transcript-worker`) está en `2452aba`, con
 `git status` limpio, y el servicio no se ha tocado.
 
+## ⚠ Dos cosas que descubrí al preparar el despliegue, y que cambian el plan
+
+### 1 · Cambiar el `default` de `config.py` NO cambia el backend
+
+`.env.w3` del servicio contiene **`DIARIZATION_BACKEND=wespeaker`**, explícito. Las
+variables de entorno ganan al `default` del modelo de settings, así que el cambio en
+`config.py` es, por sí solo, **inocuo**: el servicio seguiría corriendo wespeaker y
+nadie se enteraría de que el despliegue no hizo nada.
+
+El paso 3 tiene por tanto DOS partes, y la del fichero es la que manda:
+
+    # copia de seguridad ANTES de tocarlo
+    cp ~/services/mai-w3-worker/transcript-worker/.env.w3{,.bak-AAAAMMDD}
+    # y cambiar la linea
+    DIARIZATION_BACKEND=pyannote_full
+
+Que el `default` del código coincida sigue siendo lo correcto —es lo que se aplica si
+alguien despliega sin ese fichero—, pero no es lo que decide aquí.
+
+La contrapartida es buena: **la vuelta atrás del backend es editar una línea y
+reiniciar**, sin tocar código.
+
+### 2 · La prueba de GPU NO validó el `compute_type` del servicio
+
+La ventana del 10 de septiembre corrió con **`float16`**, porque la copia aislada no
+tiene `.env.w3`. El servicio usa **`WHISPER_COMPUTE_TYPE=int8_float16`**.
+
+Son distintos, así que **esa prueba no valida esta configuración**. Lo que sí midió
+—`pyannote_full` sin caída a la reserva, pico de 2286 MiB, 460 MiB libres— vale para
+`float16`. Cabe esperar que `int8_float16` consuma MENOS (cuantiza los pesos), pero eso
+es un razonamiento, no una medida, y en esta tarjeta el razonamiento ya ha fallado dos
+veces.
+
+**Antes de dar por buena la configuración hay que repetir la ventana con `.env.w3`
+cargado.** Sale gratis: el despliegue del worker ya exige pararlo y reiniciarlo.
+
 ## El orden, y por qué es ese
 
     1. migración        1784000000000_meetings-speaker-uncertain
     2. mai (web/API)    07aa488 y anteriores
-    3. worker           w3-worker.patch  +  DIARIZATION_BACKEND
+    3. worker           w3-worker.patch  +  .env.w3: DIARIZATION_BACKEND=pyannote_full
 
 **1 antes que 2** porque el código nuevo de mai escribe `speaker_uncertain` en cada
 segmento. La migración es aditiva (`ADD COLUMN … NOT NULL DEFAULT false`), así que el
