@@ -1,0 +1,465 @@
+diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/mai-w3-worker/transcript-worker/app/config.py /home/santiagov/w3-work/transcript-worker/app/config.py
+--- /home/santiagov/services/mai-w3-worker/transcript-worker/app/config.py	2026-09-09 17:21:08.055475823 -0500
++++ /home/santiagov/w3-work/transcript-worker/app/config.py	2026-09-10 18:15:51.763243529 -0500
+@@ -154,7 +154,16 @@
+ 
+     # ── Diarización ───────────────────────────────────────────────────────
+     diarization_enabled: bool = True
+-    diarization_backend: DiarizationBackend = "wespeaker"
++    # pyannote_full por defecto: su segmentacion neuronal corta donde cambia la voz,
++    # no donde baja la energia, y es el unico de los dos que detecto las TRES
++    # intervenciones anotadas a oido de la reunion de prueba —incluida una de un
++    # segundo— sin atribuir NADA del hablante minoritario al mayoritario.
++    #
++    # Requisito de la tarjeta de 4 GB: NO puede coexistir con whisper en VRAM. Las
++    # etapas se sueltan el modelo mutuamente (`whisper_service.unload()` y
++    # `diarization_service.release_models()`); sin eso, esto se queda sin memoria y
++    # cae a la reserva en cada reunion.
++    diarization_backend: DiarizationBackend = "pyannote_full"
+     diarization_fallback_backend: DiarizationBackend = "wespeaker"
+     diarization_min_speakers: int = Field(default=1, ge=1)
+     diarization_max_speakers: int = Field(default=10, ge=1)
+diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/mai-w3-worker/transcript-worker/app/pull/artifacts.py /home/santiagov/w3-work/transcript-worker/app/pull/artifacts.py
+--- /home/santiagov/services/mai-w3-worker/transcript-worker/app/pull/artifacts.py	2026-09-09 17:21:08.056252860 -0500
++++ /home/santiagov/w3-work/transcript-worker/app/pull/artifacts.py	2026-09-10 18:15:51.763116919 -0500
+@@ -30,6 +30,12 @@
+ TRANSCRIPT_SCHEMA = "meetings.transcript"
+ DIARIZATION_SCHEMA = "meetings.diarization"
+ SCHEMA_VERSION = 1
++# El transcript pasa a 2 porque sus lineas pueden llevar `words`. La diarizacion se
++# queda en 1: su formato no ha cambiado. Estaban compartiendo una constante, y con eso
++# subir uno habria subido el otro — y mai habria rechazado el artefacto de turnos por
++# la cabecera.
++TRANSCRIPT_SCHEMA_VERSION = 2
++DIARIZATION_SCHEMA_VERSION = 1
+ 
+ 
+ @dataclass(frozen=True)
+@@ -71,6 +77,47 @@
+     return os.path.getsize(path), _hash_file(path)
+ 
+ 
++def _clean_words(
++    raw: Any, seg_start: float, seg_end: float
++) -> list[dict[str, Any]]:
++    """
++    Las palabras de un segmento, listas para que mai las acepte.
++
++    mai valida que cada palabra este DENTRO de su segmento y en orden, y rechaza el
++    artefacto entero si no — asi que se recortan aqui en vez de descubrirlo al final
++    del pipeline, con la GPU ya gastada.
++
++    NO se inventa ninguna: un segmento sin palabras sale sin la clave, y mai lo trata
++    como v1. Y no se descarta ninguna con texto: mai solo parte un segmento cuando sus
++    palabras se corresponden UNA A UNA con los tokens del texto, asi que tirar una
++    palabra por tener tiempos ilegibles costaria la particion entera de ese segmento.
++    Por eso una palabra con tiempos malos hereda el final de la anterior en vez de
++    desaparecer: conserva la correspondencia, y su duracion nula es visible.
++    """
++    if not isinstance(raw, list) or not raw:
++        return []
++    out: list[dict[str, Any]] = []
++    cursor = seg_start
++    for item in raw:
++        if not isinstance(item, Mapping):
++            continue
++        text = str(item.get("word", ""))
++        if text == "":
++            continue
++        try:
++            w_start = float(item.get("start"))
++            w_end = float(item.get("end"))
++        except (TypeError, ValueError):
++            # Sin tiempos utiles: se ancla al cursor con duracion cero. Se conserva
++            # para no romper la correspondencia uno a uno con el texto.
++            w_start = w_end = cursor
++        w_start = min(max(w_start, cursor), seg_end)
++        w_end = min(max(w_end, w_start), seg_end)
++        out.append({"start": round(w_start, 3), "end": round(w_end, 3), "word": text})
++        cursor = w_end
++    return out
++
++
+ def write_transcript_artifact(
+     path: str,
+     *,
+@@ -90,7 +137,7 @@
+     """
+     header = {
+         "schema": TRANSCRIPT_SCHEMA,
+-        "schema_version": SCHEMA_VERSION,
++        "schema_version": TRANSCRIPT_SCHEMA_VERSION,
+         "language": language,
+         "duration_seconds": round(float(duration_seconds), 3),
+         "model": model,
+@@ -113,6 +160,10 @@
+         confidence = segment.get("confidence")
+         if isinstance(confidence, (int, float)):
+             row["confidence"] = max(0.0, min(1.0, round(float(confidence), 4)))
++
++        words = _clean_words(segment.get("words"), start, end)
++        if words:
++            row["words"] = words
+         rows.append(row)
+ 
+     size, count = _write_ndjson_gz(path, rows)
+@@ -144,7 +195,7 @@
+ 
+     header = {
+         "schema": DIARIZATION_SCHEMA,
+-        "schema_version": SCHEMA_VERSION,
++        "schema_version": DIARIZATION_SCHEMA_VERSION,
+         "backend": backend,
+         "speaker_count": len({turn["speaker"] for turn in normalized}),
+         "turn_count": len(normalized),
+diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/mai-w3-worker/transcript-worker/app/pull/runner.py /home/santiagov/w3-work/transcript-worker/app/pull/runner.py
+--- /home/santiagov/services/mai-w3-worker/transcript-worker/app/pull/runner.py	2026-09-09 17:21:08.056252860 -0500
++++ /home/santiagov/w3-work/transcript-worker/app/pull/runner.py	2026-09-10 18:15:51.762985119 -0500
+@@ -54,6 +54,40 @@
+ 
+ logger = logging.getLogger(__name__)
+ 
++# Lo que mai admite en `speakerCount`, y lo que el diarizador puede honrar.
++SPEAKER_COUNT_MIN = 1
++SPEAKER_COUNT_MAX = 10
++
++
++def _requested_speaker_count(job: ClaimedJob) -> Optional[int]:
++    """
++    Cuantas personas dijo quien subio la reunion que hablan, si lo dijo.
++
++    Sale de `options`, que mai rellena con `requested_options` del run. La AUSENCIA de
++    la clave es automatico, que es el comportamiento de siempre: asi un run anterior a
++    que la opcion existiera y uno donde se eligio «Automatico» hacen lo mismo, sin dos
++    caminos que mantener. Por eso mai omite la clave en vez de escribir `null`.
++
++    Se valida aqui aunque mai ya valide en su 400: este proceso no controla quien le
++    habla, y un valor absurdo tiene que ignorarse con un aviso — no reventar el job ni
++    llegar hasta sklearn.
++    """
++    raw = (job.options or {}).get("speakerCount")
++    if raw is None:
++        return None
++    if isinstance(raw, bool):  # bool es int en Python; `True` no es «un hablante»
++        logger.warning("speakerCount booleano (%r): se diariza en automatico", raw)
++        return None
++    try:
++        value = int(raw)
++    except (TypeError, ValueError):
++        logger.warning("speakerCount no numerico (%r): se diariza en automatico", raw)
++        return None
++    if not SPEAKER_COUNT_MIN <= value <= SPEAKER_COUNT_MAX:
++        logger.warning("speakerCount fuera de rango (%r): se diariza en automatico", raw)
++        return None
++    return value
++
+ 
+ class Cancelled(Exception):
+     """La reunión se canceló mientras se trabajaba. No es un fallo del job."""
+@@ -346,7 +380,11 @@
+     def _do_diarize(self, job: ClaimedJob, workspace: JobWorkspace, monitor: HeartbeatMonitor) -> None:
+         audio = self._download_input(job, workspace, "normalized", "normalized.wav")
+         monitor.check()
+-        outcome = run_diarize(audio, file_id=job.meeting_id)
++        outcome = run_diarize(
++            audio,
++            file_id=job.meeting_id,
++            num_speakers=_requested_speaker_count(job),
++        )
+         monitor.check()
+         artifact = write_diarization_artifact(
+             workspace.file("turns.ndjson.gz"),
+diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/mai-w3-worker/transcript-worker/app/pull/stages.py /home/santiagov/w3-work/transcript-worker/app/pull/stages.py
+--- /home/santiagov/services/mai-w3-worker/transcript-worker/app/pull/stages.py	2026-09-09 21:04:44.628853812 -0500
++++ /home/santiagov/w3-work/transcript-worker/app/pull/stages.py	2026-09-10 18:15:51.762760332 -0500
+@@ -167,10 +167,21 @@
+     para que lo que se persiste sea un hecho y no una intención, y aquí se
+     aprovecha — el artefacto lleva el modelo con el que se transcribió de verdad.
+     """
++    from app.services.diarization_service import release_models
+     from app.services.whisper_service import WhisperLoadError, whisper_service
+ 
++    # En una tarjeta de 4 GB whisper y pyannote no caben a la vez (1160 + 1670 contra
++    # 2757 disponibles). Se sueltan los de diarizacion ANTES de cargar whisper; son
++    # jobs distintos, asi que nunca hace falta que coexistan.
++    release_models()
++
+     try:
+-        result = whisper_service.transcribe(audio_path)
++        # `word_timestamps=True`: mai los necesita para atribuir hablante DENTRO de un
++        # segmento. Sin ellos, un segmento de whisper que contiene a dos personas se
++        # atribuye entero a una — medido en una reunion real, la pregunta de una voz
++        # quedaba a nombre de quien respondia. El servicio ya lo soportaba; no se le
++        # estaba pidiendo.
++        result = whisper_service.transcribe(audio_path, word_timestamps=True)
+     except WhisperLoadError as error:
+         # Distinto de un fallo de transcripción: el modelo no se pudo cargar, y
+         # eso normalmente se arregla en la máquina, no reintentando el job.
+@@ -194,7 +205,11 @@
+     backend: str
+ 
+ 
+-def run_diarize(audio_path: str, file_id: str) -> DiarizeOutcome:
++def run_diarize(
++    audio_path: str,
++    file_id: str,
++    num_speakers: Optional[int] = None,
++) -> DiarizeOutcome:
+     """
+     Llama al servicio de diarización existente.
+ 
+@@ -206,7 +221,11 @@
+     """
+     from app import config as cfg
+     from app.services.diarization_service import diarize
+-    from app.services.whisper_service import resolve_device
++    from app.services.whisper_service import resolve_device, whisper_service
++
++    # Simetrico a lo de `run_transcribe`: se suelta whisper antes de cargar pyannote.
++    # Sin esto, pyannote se queda sin VRAM y cae al backend de reserva EN SILENCIO.
++    whisper_service.unload()
+ 
+     try:
+         result = diarize(
+@@ -214,13 +233,27 @@
+             device=resolve_device(cfg.WHISPER_DEVICE),
+             min_speakers=cfg.DIARIZATION_MIN_SPEAKERS,
+             max_speakers=cfg.DIARIZATION_MAX_SPEAKERS,
++            num_speakers=num_speakers,
+             file_id=file_id,
+         )
+     except Exception as error:  # noqa: BLE001
+         raise StageError("diarize_failed", str(error)) from None
+ 
+     turns = result.get("speaker_turns") or result.get("turns") or []
+-    backend = str(result.get("backend") or cfg.DIARIZATION_BACKEND)
++    # CORRECCION: esto leia `result.get("backend")`, y `diarize()` NUNCA devuelve esa
++    # clave — devuelve `_backend_used`. Asi que el `or` caia SIEMPRE en el backend
++    # CONFIGURADO, que es justo lo que el docstring dice evitar.
++    #
++    # No es teorico: probando pyannote_full en la GTX 1650 SUPER con el worker en
++    # marcha, se quedo sin VRAM, cayo a wespeaker y devolvio `_backend_used="wespeaker"`.
++    # Con el codigo anterior mai habria guardado `diarization_backend='pyannote_full'`
++    # sobre un resultado de wespeaker: peor que el fallo, porque lo oculta.
++    backend = str(result.get("_backend_used") or result.get("backend") or cfg.DIARIZATION_BACKEND)
++    if result.get("_backend_fallback"):
++        logger.warning(
++            "[diarize] El backend primario fallo y corrio %r. Motivo: %s",
++            backend, result.get("_backend_error"),
++        )
+     if backend not in {"wespeaker", "pyannote_full"}:
+         # mai sólo admite esos dos en `diarization_backend`; mandar otro haría
+         # que rechazara el artefacto entero por la cabecera.
+diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/mai-w3-worker/transcript-worker/app/services/diarization_service.py /home/santiagov/w3-work/transcript-worker/app/services/diarization_service.py
+--- /home/santiagov/services/mai-w3-worker/transcript-worker/app/services/diarization_service.py	2026-09-09 17:21:08.057636712 -0500
++++ /home/santiagov/w3-work/transcript-worker/app/services/diarization_service.py	2026-09-10 18:14:37.364174574 -0500
+@@ -36,6 +36,30 @@
+ SINGLE_SPEAKER_SIM_THRESHOLD = 0.75
+ SILHOUETTE_SPLIT_THRESHOLD   = 0.10
+ 
++# ── La linkage del agrupamiento ───────────────────────────────────────────────
++#
++# Era "average", y eso NO agrupaba por persona: agrupaba por «típico contra atípico».
++# Medido sobre una reunión real de 119,6 s con dos voces claramente distintas, k=2
++# partía los 26 segmentos en 23 (98,26 s, las DOS personas juntas) contra 3 (1,90 s,
++# de 0,42 · 0,42 · 1,06 s). El reparto 98,1 / 1,9 que llegó a la base no eran dos
++# hablantes: eran los segmentos largos contra los tres más cortos.
++#
++# La causa es conocida de la linkage por media: las embeddings de los segmentos muy
++# cortos son casi ortogonales a todo —uno de 0,42 s puntuaba 0,005 contra el centroide
++# de una voz y 0,190 contra la otra—, así que la media las aísla ANTES de separar a
++# las personas. Y no se arregla descartando los cortos: con umbral de 0,8 s y de 1,0 s
++# el hablante minoritario seguía en 0,0 % de acierto.
++#
++# "complete" mide por el peor caso dentro del cluster, así que exige que un cluster
++# sea COMPACTO y no admite un cajón de sastre. Sobre las mismas embeddings, el
++# hablante minoritario pasó de 0,0 % a 61,4 % de acierto.
++#
++# Esto es el backend de RESERVA: el primario es pyannote_full. Que la reserva
++# estuviera rota significaba que un fallo del primario no degradaba, sino que
++# devolvía basura.
++CLUSTER_LINKAGE = "complete"
++CLUSTER_METRIC  = "cosine"
++
+ # ── Module-level model caches ─────────────────────────────────────────────────
+ 
+ _wespeaker_model  = None
+@@ -200,7 +224,7 @@
+     best_score = -2.0
+ 
+     for k in range(max(2, lo), hi + 1):
+-        clust  = AgglomerativeClustering(n_clusters=k, metric="cosine", linkage="average")
++        clust  = AgglomerativeClustering(n_clusters=k, metric=CLUSTER_METRIC, linkage=CLUSTER_LINKAGE)
+         labels = clust.fit_predict(normed)
+         try:
+             score = float(silhouette_score(normed, labels, metric="cosine"))
+@@ -225,6 +249,11 @@
+         "k_scores":                 {str(k): v for k, v in sorted(k_scores.items())},
+         "silhouette_threshold":     SILHOUETTE_SPLIT_THRESHOLD,
+         "similarity_threshold":     SINGLE_SPEAKER_SIM_THRESHOLD,
++        # La linkage queda ESCRITA en el resultado: si mañana cambia, hay que poder
++        # saber con cuál se produjo un artefacto ya guardado sin adivinarlo por la
++        # fecha del commit.
++        "linkage":                  CLUSTER_LINKAGE,
++        "metric":                   CLUSTER_METRIC,
+     }
+     if k1_reason:
+         diagnostics["k1_reason"] = k1_reason
+@@ -232,7 +261,7 @@
+     if best_k == 1:
+         return np.zeros(n, dtype=int), diagnostics
+ 
+-    clust = AgglomerativeClustering(n_clusters=best_k, metric="cosine", linkage="average")
++    clust = AgglomerativeClustering(n_clusters=best_k, metric=CLUSTER_METRIC, linkage=CLUSTER_LINKAGE)
+     return clust.fit_predict(normed).astype(int), diagnostics
+ 
+ 
+@@ -305,10 +334,13 @@
+         normed = emb_arr / norms
+         clust  = AgglomerativeClustering(
+             n_clusters=min(num_speakers, len(emb_arr)),
+-            metric="cosine", linkage="average",
++            metric=CLUSTER_METRIC, linkage=CLUSTER_LINKAGE,
+         )
+         labels       = clust.fit_predict(normed).astype(int)
+-        cluster_diag: Dict[str, Any] = {"selected_k": num_speakers, "forced": True}
++        cluster_diag: Dict[str, Any] = {
++            "selected_k": num_speakers, "forced": True,
++            "linkage": CLUSTER_LINKAGE, "metric": CLUSTER_METRIC,
++        }
+     else:
+         labels, cluster_diag = cluster_embeddings(emb_arr, min_speakers, max_speakers)
+ 
+@@ -471,6 +503,37 @@
+ #  DISPATCHER
+ # ══════════════════════════════════════════════════════════════════════════════
+ 
++def release_models() -> bool:
++    """
++    Suelta los modelos de diarización de la VRAM. Devuelve True si había alguno.
++
++    Simétrico a `whisper_service.unload()`, y por el mismo motivo: en una tarjeta de
++    4 GB whisper y pyannote no caben a la vez, y `transcribe` y `diarize` son jobs
++    distintos, así que nunca hace falta que coexistan.
++
++    Aquí sí importa `torch.cuda.empty_cache()`: pyannote y wespeaker usan el asignador
++    de torch, al contrario que CTranslate2.
++    """
++    global _wespeaker_model, _wespeaker_device, _pyannote_pipeline, _pyannote_pipeline_device
++    had = _wespeaker_model is not None or _pyannote_pipeline is not None
++    _wespeaker_model = None
++    _wespeaker_device = None
++    _pyannote_pipeline = None
++    _pyannote_pipeline_device = None
++    if not had:
++        return False
++    try:
++        import gc
++        import torch
++        gc.collect()
++        if torch.cuda.is_available():
++            torch.cuda.empty_cache()
++        logger.info("[diarize] Modelos liberados de la VRAM.")
++    except Exception as exc:  # noqa: BLE001 — liberar es best-effort, nunca tumba el job
++        logger.warning("[diarize] No se pudo vaciar la caché de CUDA: %s", exc)
++    return True
++
++
+ def _empty_result(t_start: float, audio_duration: float) -> Dict[str, Any]:
+     return {
+         "speaker_turns":           [],
+diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/mai-w3-worker/transcript-worker/app/services/whisper_service.py /home/santiagov/w3-work/transcript-worker/app/services/whisper_service.py
+--- /home/santiagov/services/mai-w3-worker/transcript-worker/app/services/whisper_service.py	2026-09-09 17:21:08.057636712 -0500
++++ /home/santiagov/w3-work/transcript-worker/app/services/whisper_service.py	2026-09-10 18:14:37.363869215 -0500
+@@ -194,6 +194,56 @@
+         tumbar el proceso."""
+         self._ensure_model()
+ 
++    def unload(self) -> bool:
++        """
++        Suelta el modelo y devuelve la VRAM. Idempotente: si no había nada cargado,
++        no hace nada y devuelve False.
++
++        ── Por qué existe ────────────────────────────────────────────────────
++
++        En la GTX 1650 SUPER no caben whisper y pyannote a la vez. Medido: de los
++        3717 MiB utilizables, el servicio histórico de la máquina ocupa 960 fijos,
++        whisper `medium` residente 1160 y pyannote 1670. Los dos juntos son 2830
++        contra 2757 disponibles — se pasa por ~73 MiB, y el resultado es un OOM que
++        cae al backend de reserva sin que nadie se entere.
++
++        `transcribe` y `diarize` son jobs distintos, así que nunca hace falta que
++        coexistan: cada etapa suelta el modelo de la otra antes de cargar el suyo. El
++        coste es recargar, y se paga una vez por job.
++
++        ── Cómo se libera de verdad ──────────────────────────────────────────
++
++        `WhisperModel` es un envoltorio de CTranslate2, que NO usa el asignador de
++        torch: su memoria la libera su propio destructor en C++. Así que lo que
++        importa es soltar la última referencia y forzar la recolección; llamar a
++        `torch.cuda.empty_cache()` no devolvería esta memoria. Se llama igualmente
++        porque en el mismo proceso vive pyannote, que sí usa torch, y ahí sí sirve.
++
++        Se toma el MISMO lock que `_ensure_model`: sin él, un hilo podría estar
++        cargando mientras otro descarga, y acabaríamos con un modelo huérfano
++        ocupando VRAM que ya nadie puede liberar.
++        """
++        with self._lock:
++            if self._model is None:
++                return False
++            logger.info("Liberando el modelo Whisper de la memoria…")
++            self._model = None
++            # `_load_error` se limpia: el estado anterior era «cargado», no «falló».
++            self._load_error = None
++
++        import gc
++
++        gc.collect()
++        try:
++            import torch  # noqa: PLC0415 — diferido, como el resto
++
++            if torch.cuda.is_available():
++                torch.cuda.empty_cache()
++        except Exception as exc:  # noqa: BLE001 — liberar es best-effort
++            logger.warning("No se pudo vaciar la caché de CUDA: %s", exc)
++        logger.info("Modelo Whisper liberado.")
++        return True
++
+     def _ensure_model(self) -> "WhisperModel":
+         if self._model is not None:
+             return self._model
+Only in /home/santiagov/w3-work/transcript-worker: .pytest_cache
+diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/mai-w3-worker/transcript-worker/tests/test_pull_client.py /home/santiagov/w3-work/transcript-worker/tests/test_pull_client.py
+--- /home/santiagov/services/mai-w3-worker/transcript-worker/tests/test_pull_client.py	2026-09-09 17:21:08.058637079 -0500
++++ /home/santiagov/w3-work/transcript-worker/tests/test_pull_client.py	2026-09-10 18:16:44.748972419 -0500
+@@ -362,13 +362,16 @@
+     lines = gzip.open(path, "rt", encoding="utf-8").read().strip().split("\n")
+     header = json.loads(lines[0])
+     assert header["schema"] == "meetings.transcript"
+-    assert header["schema_version"] == 1
++    assert header["schema_version"] == 2, "el transcript lleva `words` desde la v2"
+     assert header["segment_count"] == 2
+     assert header["model"] == "medium"
+     rows = [json.loads(line) for line in lines[1:]]
+     assert [row["i"] for row in rows] == [0, 1]
+     assert rows[0]["text"] == "uno", "el texto se recorta"
+     assert "confidence" not in rows[1], "ausente si no la hay, no null"
++    # Sin palabras, la clave NO aparece. Mai distingue ausente de vacía: ausente es
++    # «este segmento no las trae» y lo lleva por el camino de v1.
++    assert all("words" not in row for row in rows)
+ 
+ 
+ def test_un_end_anterior_al_start_se_corrige_antes_de_subir(tmp_path):
+diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/mai-w3-worker/transcript-worker/tests/test_pull_runner.py /home/santiagov/w3-work/transcript-worker/tests/test_pull_runner.py
+--- /home/santiagov/services/mai-w3-worker/transcript-worker/tests/test_pull_runner.py	2026-09-09 21:04:44.629853834 -0500
++++ /home/santiagov/w3-work/transcript-worker/tests/test_pull_runner.py	2026-09-10 18:16:44.749168701 -0500
+@@ -183,7 +183,7 @@
+     monkeypatch.setattr(
+         runner_module,
+         "run_diarize",
+-        lambda audio, file_id: runner_module.__dict__["_FakeDiarize"](),
++        lambda audio, file_id, num_speakers=None: runner_module.__dict__["_FakeDiarize"](),
+     )
+ 
+     class _FakeTranscribe:
+Only in /home/santiagov/w3-work/transcript-worker/tests: test_w3_contracts.py
