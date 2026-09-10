@@ -152,19 +152,109 @@ def tailscale_peer() -> dict:
     return {"err": "sin CLI de tailscale"}
 
 
+# Tope defensivo por linea. Nada de lo que se registra deberia acercarse; si una
+# lectura devuelve algo enorme e inesperado, se escribe una nota en vez del contenido.
+MAX_LINE_BYTES = 4096
+
+
+def daemonize() -> None:
+    """
+    Doble bifurcacion + `setsid`: la sonda queda con PPID 1 y sin terminal de control.
+
+    Hace falta porque `nohup ... &` NO basta. Comprobado: el proceso sobrevivio al
+    SIGHUP pero se lo llevo el shell que lo lanzo al cerrarse el grupo de procesos, y
+    la sonda murio a los dos minutos. Como el proximo corte de red va a cerrar
+    justamente la sesion que la lanzo, desacoplarse de verdad no es un detalle: es el
+    requisito para que la sonda esté ahí cuando ocurra.
+
+    `macOS` no trae `setsid(1)`, asi que se hace aqui y sirve para los dos lados.
+    """
+    if os.fork() > 0:
+        os._exit(0)
+    os.setsid()
+    if os.fork() > 0:
+        os._exit(0)
+    devnull = os.open(os.devnull, os.O_RDWR)
+    for fd in (0, 1, 2):
+        try:
+            os.dup2(devnull, fd)
+        except OSError:
+            pass
+    if devnull > 2:
+        os.close(devnull)
+
+
+def open_log(path: str):
+    """
+    Abre el registro y lo deja en 0600 SIEMPRE, tambien si ya existia.
+
+    No se registran secretos: de Tailscale solo se extraen nombre, estado, ruta y
+    relevo, nunca el JSON completo (que lleva claves publicas y datos del nodo). Aun
+    asi el fichero queda a 0600, porque una traza de red revela topologia.
+    """
+    handle = open(path, "a", encoding="utf-8")
+    try:
+        os.chmod(path, 0o600)
+    except OSError:
+        pass
+    return handle
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", required=True)
     parser.add_argument("--every", type=float, default=10.0)
     parser.add_argument("--ts-every", type=int, default=3)
     parser.add_argument("--samples", type=int, default=0)
+    parser.add_argument(
+        "--max-hours", type=float, default=24.0,
+        help="Parada automatica. La sonda no se queda corriendo indefinidamente.",
+    )
+    parser.add_argument(
+        "--max-mb", type=float, default=8.0,
+        help="Tope del registro. Al llegar, rota a .1; nunca ocupa mas del doble.",
+    )
+    parser.add_argument(
+        "--daemon", action="store_true",
+        help="Desacoplarse del shell que la lanza. Imprescindible para dejarla corriendo.",
+    )
+    parser.add_argument("--pidfile", help="Donde escribir el PID, desde el propio proceso.")
     args = parser.parse_args(argv)
 
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
+    if args.daemon:
+        daemonize()
+    if args.pidfile:
+        # Lo escribe EL PROCESO, no quien lo lanza: capturarlo desde fuera con `ps` ya
+        # dio dos veces el PID equivocado (el intermedio de la bifurcacion).
+        with open(args.pidfile, "w", encoding="utf-8") as handle:
+            handle.write(f"{os.getpid()}\n")
+        try:
+            os.chmod(args.pidfile, 0o600)
+        except OSError:
+            pass
+
     count = 0
-    with open(args.out, "a", encoding="utf-8") as handle:
+    started_mono = time.monotonic()
+    deadline = started_mono + args.max_hours * 3600.0
+    state = {"handle": open_log(args.out)}
+
+    if True:
         def emit(row: dict) -> None:
-            handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+            line = json.dumps(row, ensure_ascii=False)
+            if len(line) > MAX_LINE_BYTES:
+                line = json.dumps({"t": row.get("t"), "evento": "linea-descartada",
+                                   "bytes": len(line)}, ensure_ascii=False)
+            handle = state["handle"]
+            if handle.tell() >= args.max_mb * 1024 * 1024:
+                handle.close()
+                os.replace(args.out, args.out + ".1")
+                try:
+                    os.chmod(args.out + ".1", 0o600)
+                except OSError:
+                    pass
+                handle = state["handle"] = open_log(args.out)
+            handle.write(line + "\n")
             handle.flush()
             os.fsync(handle.fileno())
 
@@ -173,24 +263,34 @@ def main(argv: list[str] | None = None) -> int:
               "every_s": args.every, "pid": os.getpid()})
 
         scheduled = time.monotonic()
-        while args.samples == 0 or count < args.samples:
+        while (args.samples == 0 or count < args.samples) and time.monotonic() < deadline:
             drift = max(0.0, (time.monotonic() - scheduled) * 1000.0)
-            row = {
-                "t": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                "drift_ms": round(drift, 1),
-                # LAN, sin Tailscale de por medio
-                "gw_ms": ping_ms("192.168.1.1"),
-                "lan_ping_ms": ping_ms(LAN_IP),
-                "lan_ssh_ms": tcp_ms(LAN_IP),
-                # Tailscale
-                "ts_ping_ms": ping_ms(TS_IP),
-                "ts_ssh_ms": tcp_ms(TS_IP),
-                # el tramo inalámbrico
-                "wifi": wifi_state(),
-                "tunel": tunnel_state(),
-            }
-            if count % args.ts_every == 0:
-                row["ts"] = tailscale_peer()
+            # Una muestra que falle NO puede tumbar 24 horas de sonda: se anota el
+            # fallo y se sigue.
+            try:
+                row = {
+                    "t": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "drift_ms": round(drift, 1),
+                    # LAN, sin Tailscale de por medio
+                    "gw_ms": ping_ms("192.168.1.1"),
+                    "lan_ping_ms": ping_ms(LAN_IP),
+                    "lan_ssh_ms": tcp_ms(LAN_IP),
+                    # Tailscale
+                    "ts_ping_ms": ping_ms(TS_IP),
+                    "ts_ssh_ms": tcp_ms(TS_IP),
+                    # el tramo inalámbrico
+                    "wifi": wifi_state(),
+                    "tunel": tunnel_state(),
+                }
+                if count % args.ts_every == 0:
+                    row["ts"] = tailscale_peer()
+            except Exception as cause:  # noqa: BLE001
+                row = {
+                    "t": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                    "evento": "error-muestra",
+                    "tipo": type(cause).__name__,
+                    "drift_ms": round(drift, 1),
+                }
             emit(row)
             count += 1
             scheduled += args.every
@@ -199,6 +299,11 @@ def main(argv: list[str] | None = None) -> int:
                 time.sleep(sleep_for)
             else:
                 scheduled = time.monotonic()
+
+        emit({"t": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "evento": "fin",
+              "muestras": count, "horas": round((time.monotonic() - started_mono) / 3600, 3),
+              "motivo": "limite de tiempo" if time.monotonic() >= deadline else "limite de muestras"})
+        state["handle"].close()
     return 0
 
 

@@ -4,13 +4,42 @@ Dos sondas, una en cada lado. **No reproducen ninguna carga**: nada de torch, ni
 ni audio. No cambian configuración, no tocan servicios ni controladores, y no escriben
 fuera de su `--out`.
 
-    # en el servidor (Linux)
-    ssh santiagov@192.168.1.15 'cd ~/w3-diag/watch && nohup python3 box-watch.py \
-        --out ~/w3-diag/watch/box.ndjson > /dev/null 2>&1 & echo lanzada'
+    # en el servidor (Linux), desde el Mac por LAN
+    ssh santiagov@192.168.1.15 'cd ~/w3-diag/watch && python3 box-watch.py \
+        --out ~/w3-diag/watch/box.ndjson --pidfile ~/w3-diag/watch/box.pid \
+        --daemon --every 10 --max-hours 24 --max-mb 8'
 
     # en el Mac
-    nohup python3 tools/w3/watch/mac-watch.py --out ~/w3-diag-mac.ndjson \
-        > /dev/null 2>&1 & echo lanzada
+    python3 tools/w3/watch/mac-watch.py \
+        --out ~/w3-diag-mac/mac.ndjson --pidfile ~/w3-diag-mac/mac.pid \
+        --daemon --every 10 --max-hours 24 --max-mb 8
+
+## Garantías de la sonda
+
+* **Se para sola** a las `--max-hours` (24 por omisión) y escribe una línea `fin` con
+  el motivo. No se queda corriendo indefinidamente.
+* **`--daemon` de verdad**: doble bifurcación y `setsid`, así que queda con PPID 1.
+  Hizo falta: `nohup ... &` sobrevive al SIGHUP pero se lo lleva el shell que lo lanzó
+  al cerrarse el grupo de procesos —comprobado, murió a los dos minutos—, y el próximo
+  corte va a cerrar justamente la sesión que la lanzó.
+* **El PID lo escribe el propio proceso** en `--pidfile`. Capturarlo desde fuera con
+  `ps` dio dos veces el PID equivocado, el intermedio de la bifurcación.
+* **Registros a 0600**, siempre, también si el fichero ya existía.
+* **Tope de tamaño** `--max-mb` (8 por omisión): al llegar rota a `.1`, así que nunca
+  ocupa más del doble. A 10 s son unos 2,5 MB al día, o sea que no debería llegar.
+* **Todas las consultas tienen tiempo máximo** — ICMP, TCP y el CLI de Tailscale—, así
+  que una conexión colgada no bloquea la sonda.
+* **Una muestra que falle no la tumba**: se anota `error-muestra` y sigue.
+* **No registra secretos.** De Tailscale se extraen sólo nombre, estado, ruta y relevo;
+  nunca el JSON completo, que lleva claves públicas y datos del nodo.
+
+## Cómo se paran
+
+    # servidor
+    ssh santiagov@192.168.1.15 'kill $(cat ~/w3-diag/watch/box.pid)'
+
+    # Mac
+    kill $(cat ~/w3-diag-mac/mac.pid)
 
 Coste por muestra (cada 10 s): un paquete ICMP por destino, una conexión TCP por
 destino, cuatro lecturas de `/proc` y `/sys`, y una llamada al CLI de Tailscale cada
