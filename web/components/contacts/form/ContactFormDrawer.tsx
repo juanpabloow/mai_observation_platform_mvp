@@ -1,9 +1,10 @@
 "use client";
 
-import type { ReactNode } from "react";
-import { useTrappedPanel } from "@/components/ui/Overlay";
+import { useEffect, type ReactNode } from "react";
+import { useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
 import {
   CONTACT_PANEL_FRAME,
+  CONTACT_PANEL_REGION,
   CONTACT_PANEL_WIDTH,
   ContactPanelShell,
   PANEL_CLOSE_CLS,
@@ -22,6 +23,18 @@ import {
  * LAYOUT. Header and footer are fixed; only the middle scrolls. The footer holds the
  * save actions, and a form long enough to scroll (this one is) must never put its
  * primary action below the fold — the reference pins it for the same reason.
+ *
+ * TWO PLACEMENTS, ONE BOX. Both draw the identical frame; they differ only in what they
+ * are anchored to, because the two forms answer to different things:
+ *
+ *   "region" — EDITING. Absolute inside the page's panel region, i.e. exactly on top of
+ *              the ficha it replaces: same top, same bottom, same right edge, same
+ *              width. Pressing "Editar" must not move the frame.
+ *   "lane"   — CREATING. The ficha's OWN geometry: an in-flow column from xl up (so the
+ *              header card and the table narrow to make room, instead of being covered)
+ *              and a fixed right-hand sheet below it. There is no ficha underneath to
+ *              line up with — a new contact is not a version of an existing one — so
+ *              the panel takes the lane itself rather than floating over the page.
  */
 export function ContactFormDrawer({
   title,
@@ -33,6 +46,7 @@ export function ContactFormDrawer({
   footer,
   children,
   labelledBy = "contact-form-title",
+  placement = "region",
 }: {
   title: string;
   subtitle?: string;
@@ -48,9 +62,105 @@ export function ContactFormDrawer({
   footer: ReactNode;
   children: ReactNode;
   labelledBy?: string;
+  /** Where the box is anchored — see the note above. Defaults to the editor's geometry. */
+  placement?: "region" | "lane";
 }) {
-  const panelRef = useTrappedPanel({ active: true, onClose });
+  const lane = placement === "lane";
+  // The SAME breakpoint the ficha beside-s at (see ContactSidePanel): a lane panel is a
+  // column from xl up and an overlay below it. A region panel always covers something,
+  // so it is always modal.
+  const overlaying = useIsOverlayWidth(1279.98);
+  const modal = lane ? overlaying : true;
+  const panelRef = useTrappedPanel({ active: modal, onClose });
 
+  // Escape closes at EVERY width. The focus trap owns that key while it is engaged, so
+  // this only covers the case the trap is deliberately off: a lane panel at xl+, in flow
+  // beside the list, where trapping focus would make the rest of the screen unreachable
+  // by keyboard for no reason.
+  useEffect(() => {
+    if (modal) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [modal, onClose]);
+
+  const shell = (
+    <ContactPanelShell
+      headerToneStyle={headerToneStyle}
+      banner={banner}
+      footer={footer}
+      header={
+        <div className="flex items-start gap-3">
+          {titleBlock ? (
+            <div id={labelledBy} className="min-w-0 flex-1">
+              {titleBlock}
+            </div>
+          ) : (
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <h2 id={labelledBy} className="truncate text-base font-semibold tracking-tight text-foreground">
+                {title}
+              </h2>
+              {subtitle ? <p className="text-xs leading-4 text-muted">{subtitle}</p> : null}
+            </div>
+          )}
+          {titleBlock ? null : (
+            <button type="button" onClick={onClose} aria-label="Cerrar" className={PANEL_CLOSE_CLS}>
+              <PanelCloseIcon />
+            </button>
+          )}
+        </div>
+      }
+    >
+      {children}
+    </ContactPanelShell>
+  );
+
+  // ── LANE: the ficha's geometry ────────────────────────────────────────────────
+  // An in-flow column from xl up, so the header card and the table NARROW to make room
+  // instead of being covered; a fixed right-hand sheet below xl, where there is no room
+  // to narrow into. Byte-for-byte the wrapper ContactSidePanel uses, which is the point:
+  // the ficha and `Nuevo contacto` occupy the same lane, at the same width, with the same
+  // top and bottom edges — one of them is simply a form.
+  if (lane) {
+    return (
+      <>
+        {/* The catcher only exists while the panel COVERS the list. Beside it there is
+            nothing to click through to, and a full-window layer would swallow every
+            click on the table it is sitting next to. */}
+        <button
+          type="button"
+          aria-label="Cerrar"
+          onClick={onClose}
+          className="fixed inset-0 z-40 cursor-default xl:hidden"
+        />
+        {/* `xl:contents` makes this wrapper vanish from xl up, so the region below drops
+            straight into the page's panel lane and the column is in flow. */}
+        <div className="fixed inset-y-0 right-0 z-50 flex xl:contents">
+          <div
+            className={`flex max-w-[90vw] shrink-0 self-stretch ${CONTACT_PANEL_REGION}`}
+            style={{ width: CONTACT_PANEL_WIDTH }}
+          >
+            <aside
+              ref={panelRef as React.RefObject<HTMLElement>}
+              role="dialog"
+              // Only a MODAL when it covers something. Announcing aria-modal beside the
+              // list would tell a screen reader the rest of the page is unavailable while
+              // it plainly is.
+              aria-modal={modal || undefined}
+              aria-labelledby={labelledBy}
+              className={`u-panel-in min-h-0 flex-1 ${CONTACT_PANEL_FRAME}`}
+            >
+              {shell}
+            </aside>
+          </div>
+        </div>
+      </>
+    );
+  }
+
+  // ── REGION: exactly on top of the ficha it replaces ──────────────────────────
   return (
     <>
       {/* A TRANSPARENT catcher, not a scrim. The dark overlay is gone by design: the
@@ -72,34 +182,7 @@ export function ContactFormDrawer({
         style={{ width: `min(${CONTACT_PANEL_WIDTH}, 100%)` }}
         className={`u-panel-in absolute inset-y-0 right-0 z-50 ${CONTACT_PANEL_FRAME}`}
       >
-        <ContactPanelShell
-          headerToneStyle={headerToneStyle}
-          banner={banner}
-          footer={footer}
-          header={
-            <div className="flex items-start gap-3">
-              {titleBlock ? (
-                <div id={labelledBy} className="min-w-0 flex-1">
-                  {titleBlock}
-                </div>
-              ) : (
-                <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                  <h2 id={labelledBy} className="truncate text-base font-semibold tracking-tight text-foreground">
-                    {title}
-                  </h2>
-                  {subtitle ? <p className="text-xs leading-4 text-muted">{subtitle}</p> : null}
-                </div>
-              )}
-              {titleBlock ? null : (
-                <button type="button" onClick={onClose} aria-label="Cerrar" className={PANEL_CLOSE_CLS}>
-                  <PanelCloseIcon />
-                </button>
-              )}
-            </div>
-          }
-        >
-          {children}
-        </ContactPanelShell>
+        {shell}
       </aside>
     </>
   );

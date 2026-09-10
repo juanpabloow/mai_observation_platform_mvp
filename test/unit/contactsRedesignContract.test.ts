@@ -635,6 +635,14 @@ test('record + drawer: ONE component declares the sections, their order and thei
 
   assert.ok(read('components/contacts/ContactProperties.tsx').includes('mode="read"'), 'the record reads it');
   assert.ok(read('components/contacts/form/ContactEditForm.tsx').includes('mode="edit"'), 'the drawer edits it');
+  // CREATING is the third mode, not a fourth product. `Nuevo contacto` used to declare
+  // its own five sections in shouting caps (`IDENTIDAD`, `COMUNICACIÓN`) with its own
+  // optional divider, so the one surface where a contact is BORN looked unlike every
+  // surface that shows it afterwards.
+  const create = read('components/contacts/form/ContactCreateForm.tsx');
+  assert.ok(create.includes('mode="edit"'), 'and the create drawer renders the same set');
+  assert.equal(/<FormSection/.test(create), false, 'it declares no sections of its own');
+  assert.equal(/title="[A-ZÁÉÍÓÚÑ]{2,}"/.test(create), false, 'and no shouting-caps headings');
 });
 
 test('record: the left column is READ-ONLY — there is one place a contact is written', () => {
@@ -917,16 +925,41 @@ test('both panels are THREE zones — fixed header, one scrolling body, fixed fo
   assert.ok(panel.includes('scrollResetKey={tab}'), 'switching tabs returns the body to the top');
   // Its wrapper must be a flex column, or the aside sizes to content again.
   const page = read(CONTACTS_PAGE);
-  // TWO SIBLING CARDS. The panel inside the shell cut the title band short of the right
-  // edge (square top-right corner against a round top-left) and pushed the panel a
-  // gutter below the shell's top. As siblings in one row they share a top and a bottom.
-  assert.ok(/<div className="flex min-h-0 flex-1 gap-3">/.test(page), 'the shell and the panel share a row');
+  // TWO TOP-LEVEL COLUMNS. The ficha is a sibling of the LIST COLUMN (duplicates +
+  // header card + table card), not of the table alone: nested inside the table's row it
+  // started a header's height below the top of the page and lost the ~100px the notes
+  // composer needs. `main` is therefore the row, and the list stacks inside one column.
+  assert.ok(/<main className="flex min-h-0 w-full flex-1 gap-3">/.test(page), 'main IS the row: list column + ficha');
+  assert.ok(/<div className="flex min-h-0 min-w-0 flex-1 flex-col gap-\[var\(--content-pad\)\]">/.test(page),
+    'the list column stacks the header card over the table card');
   // The table card CLIPS again (the PageShell default). Its opt-out existed because
   // the facet row beside it hosted the Filtrar / Orden / Columnas popovers; those
   // now live in the header card, so the table card holds no dropdown and the
   // clipping is what keeps its radius from being squared off by the sticky head.
-  assert.ok(page.indexOf('<PageShell>') > page.indexOf('flex min-h-0 flex-1 gap-3'), 'the shell is inside that row');
-  assert.ok(page.indexOf('<ContactSidePanel') > page.indexOf('</PageShell>'), 'and the panel is its sibling, not its child');
+  assert.ok(page.indexOf('<PageShell>') > page.indexOf('flex min-h-0 min-w-0 flex-1 flex-col'), 'the table card is inside that column');
+  // ONE LANE, ONE OCCUPANT. The right column is shared: the ficha holds it while a row is
+  // selected, `Nuevo contacto` takes it over while the form is open. Both are the same box
+  // at the same width, so both NARROW the list — the create drawer used to be mounted from
+  // the header card's button and, with no positioned ancestor up that subtree, floated over
+  // the header and the table instead.
+  const lane = page.indexOf('<ContactsPanelLane');
+  assert.ok(lane > 0, 'the lane owns the right column');
+  assert.ok(lane < page.indexOf('flex min-h-0 min-w-0 flex-1 flex-col'), 'and wraps the list column');
+  assert.ok(page.indexOf('<ContactSidePanel') < page.indexOf('<PageShell>'), 'the ficha is handed to the lane, never nested in the table card');
+  const laneSrc = read('components/contacts/ContactsPanelLane.tsx');
+  assert.ok(laneSrc.includes('<ContactCreateForm'), 'and the create drawer is the lane\'s other occupant');
+  assert.ok(laneSrc.includes('placement="lane"'), 'in the ficha\'s geometry, not floating over the page');
+  assert.equal(
+    read('components/contacts/form/NewContactButton.tsx').includes('ContactCreateForm'),
+    false,
+    'the header button only ASKS for the drawer — mounting it there is what made it float',
+  );
+  // The two geometries are the SAME wrapper, or "same lane" is a claim the code does not keep.
+  const drawer = read('components/contacts/form/ContactFormDrawer.tsx');
+  for (const shape of ['fixed inset-y-0 right-0 z-50 flex xl:contents', 'shrink-0 self-stretch']) {
+    assert.ok(drawer.includes(shape), `the lane placement reuses the ficha's wrapper: ${shape}`);
+    assert.ok(read('components/contacts/ContactSidePanel.tsx').includes(shape), `and the ficha still defines it: ${shape}`);
+  }
   assert.equal(/xl:block/.test(page), false, 'the panel column is never a block');
   // The panel must not GROW on the row axis: `flex-1` there swallowed its own width and
   // took half the screen from the table.

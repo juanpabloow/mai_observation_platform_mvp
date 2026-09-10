@@ -23,6 +23,7 @@ import { loadContactEditPayload, loadContactPanel } from "@/lib/contactPanel";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { ContactSidePanel } from "@/components/contacts/ContactSidePanel";
+import { ContactsPanelLane } from "@/components/contacts/ContactsPanelLane";
 import { listFieldDefinitions } from "@worker/db/repositories/clientFieldDefinitions.js";
 import { NewContactButton } from "@/components/contacts/form/NewContactButton";
 
@@ -182,14 +183,58 @@ export default async function ClientContactsPage({
     .map((m) => ({ userId: m.user_id, label: m.name ?? m.email }));
 
   return (
-    // The GUTTER comes from the shell's scroll container (see app/layout.tsx), so
-    // this page only owns the rhythm BETWEEN its own blocks.
-    <main className="flex min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]">
+    // THE GUTTER comes from the shell's scroll container (see app/layout.tsx), so this
+    // page only owns the rhythm BETWEEN its own blocks.
+    //
+    // TWO COLUMNS AT THE TOP LEVEL — list on the left, ficha on the right — and the
+    // ficha is a sibling of the HEADER, not of the table. It used to live inside the
+    // table's row, so it started below the header card and lost ~100px of the page it
+    // needed most: the notes composer and the notes themselves fell off the bottom on a
+    // laptop. Now the panel spans the full content height (its wrapper is self-stretch)
+    // and the header + table collapse into the remaining width, which is also why the
+    // search bar no longer has to share its row with the panel's 380px.
+    <main className="flex min-h-0 w-full flex-1 gap-3">
+      {/* THE LANE owns the right column and decides who is in it — the ficha while a row
+          is selected, `Nuevo contacto` while the form is open. Both are the same box at
+          the same width, so both narrow the list instead of covering it. */}
+      <ContactsPanelLane
+        create={{
+          clientId: client.id,
+          owners: assignableOwners,
+          fieldDefs: formFieldDefs.map((d) => ({ id: d.id, key: d.key, label: d.label, type: d.type, options: d.options })),
+          defaultOwnerId: assignableOwners.some((o) => o.userId === scope.userId) ? scope.userId : null,
+          canManageTagCatalog: isFullAccess,
+        }}
+        ficha={
+          panel && panelId ? (
+            /* Sibling of the list column, so it stretches over the header's height too.
+               flex-col (not block) inside: as a block child it sized to its own content,
+               which is why every tab left the panel a different height and the page
+               jumped on each switch. */
+            <ContactSidePanel
+              key={panelId}
+              clientId={client.id}
+              contactId={panelId}
+              data={panel}
+              viewerUserId={scope.userId}
+              viewerIsFullAccess={isFullAccess}
+              schedulingEnabled={schedulingEnabled}
+              openEdit={edit === "1"}
+              closeHref={hrefWith({ c: undefined, edit: undefined })}
+              recordHref={`${base}/${panelId}${fromQS}`}
+              edit={panelEdit}
+            />
+          ) : null
+        }
+      >
+      {/* THE LIST COLUMN: everything that describes the whole book — the duplicate
+          callout, the header card, the table card — stacked with the page's own rhythm. */}
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-[var(--content-pad)]">
       {isFullAccess ? <DuplicateCandidates clientId={client.id} candidates={candidates} /> : null}
 
       {/* HEADER CARD (design image 23, the Equipo layout): the title + count, a WIDE
-          search, and the primary — its own card, SEPARATE from the table. It spans the full
-          width above the table+panel row, so the search stays wide even with the panel open. */}
+          search, and the primary — its own card, SEPARATE from the table. It spans the
+          LIST COLUMN's width, so it narrows with the table when the ficha is open. */}
       <PageShell grow={false} clip={false}>
         <div className="flex flex-wrap items-center gap-2.5 px-3 py-2.5">
           <PageHeading title="Contactos" count={summary.total} />
@@ -207,19 +252,13 @@ export default async function ClientContactsPage({
               visibleColumns={visibleColumns}
               fieldsHref={isFullAccess ? `${base}/fields` : undefined}
             />
-            <NewContactButton
-              clientId={client.id}
-              owners={assignableOwners}
-              fieldDefs={formFieldDefs.map((d) => ({ id: d.id, key: d.key, label: d.label, type: d.type, options: d.options }))}
-              defaultOwnerId={assignableOwners.some((o) => o.userId === scope.userId) ? scope.userId : null}
-            />
+            {/* Just the button: it asks the LANE to open the drawer (see ContactsPanelLane).
+                Mounting the form from in here is what used to make it float over the page. */}
+            <NewContactButton />
           </span>
         </div>
       </PageShell>
 
-      {/* Table + detail panel: siblings on one row, each keeping its own four corners. */}
-      <div className="flex min-h-0 flex-1 gap-3">
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
       {/* THE TABLE CARD: just the table and the pager now — the controls moved up into
           the header card, and the rest into `···`.
 
@@ -281,25 +320,7 @@ export default async function ClientContactsPage({
       </PageShell>
       </div>
 
-        {panel && panelId ? (
-          // flex-col (not block) so the panel can stretch to the row's height: as a
-          // block child it sized to its own content, which is why every tab left the
-          // panel a different height and the page jumped on each switch.
-          <ContactSidePanel
-            key={panelId}
-            clientId={client.id}
-            contactId={panelId}
-            data={panel}
-            viewerUserId={scope.userId}
-            viewerIsFullAccess={isFullAccess}
-            schedulingEnabled={schedulingEnabled}
-            openEdit={edit === "1"}
-            closeHref={hrefWith({ c: undefined, edit: undefined })}
-            recordHref={`${base}/${panelId}${fromQS}`}
-            edit={panelEdit}
-          />
-        ) : null}
-      </div>
+      </ContactsPanelLane>
     </main>
   );
 }
