@@ -8,15 +8,20 @@ import {
   assertNoSecrets,
   parseArgs,
   requireStagingEnvironment,
+  requireUuid,
 } from './stagingGuard.js';
 
 /**
  * Siembra el tenant, el cliente, el módulo y la credencial de worker para W-3.
  *
+ *   # en el tenant que la sesión del usuario YA resuelve (lo normal)
  *   MEETINGS_ENV_KIND=staging DATABASE_URL=… \
  *     npx tsx src/scripts/meetingsStagingSeed.ts \
- *       --tenant-name "W3" --client-name "Cliente W3" \
+ *       --tenant-id <uuid> --client-name "Cliente W3" \
  *       --user-email persona@ejemplo.test --pool-slug w3-gpu --environment staging
+ *
+ *   # creando un tenant nuevo: SÓLO si el usuario no tiene ninguna membresía
+ *   … --tenant-name "W3" --client-name "Cliente W3" …
  *
  * ── El contrato de idempotencia, y por qué NO reimprime el token ────────────
  *
@@ -63,7 +68,18 @@ import {
  */
 
 interface Args {
-  readonly tenantName: string;
+  /**
+   * El tenant DONDE sembrar, por identidad y no por nombre.
+   *
+   * Es lo que faltaba, y su ausencia produjo un tenant inalcanzable:
+   * `getAccessScope` resuelve el tenant de la sesión con
+   * `ORDER BY created_at ASC LIMIT 1` sobre `tenant_members`, así que el
+   * primero que un usuario tiene GANA PARA SIEMPRE. Sembrar un tenant nuevo
+   * para alguien que ya tenía membresía crea datos que la sesión nunca podrá
+   * alcanzar, y el síntoma es un 404 en `resolveAppScope` que no dice por qué.
+   */
+  readonly tenantId: string | null;
+  readonly tenantName: string | null;
   readonly clientName: string;
   readonly userEmail: string;
   readonly poolSlug: string;
@@ -104,8 +120,22 @@ function readArgs(argv: readonly string[]): Args {
     // mensaje que dice qué corregir.
     throw new StagingGuardError('--pool-slug debe casar con ^[a-z0-9][a-z0-9-]{1,62}$.');
   }
+  // Exactamente uno de los dos: la identidad o el nombre.
+  const tenantIdRaw = (values['tenant-id'] ?? '').trim();
+  const tenantNameRaw = (values['tenant-name'] ?? '').trim();
+  if (tenantIdRaw !== '' && tenantNameRaw !== '') {
+    throw new StagingGuardError(
+      '--tenant-id y --tenant-name son ambiguos juntos. El id identifica; el ' +
+        'nombre sólo sirve para crear uno nuevo. Usa uno.',
+    );
+  }
+  if (tenantIdRaw === '' && tenantNameRaw === '') {
+    throw new StagingGuardError('Falta --tenant-id o --tenant-name.');
+  }
+
   return {
-    tenantName: required('tenant-name'),
+    tenantId: tenantIdRaw === '' ? null : requireUuid(tenantIdRaw, '--tenant-id'),
+    tenantName: tenantNameRaw === '' ? null : tenantNameRaw,
     clientName: required('client-name'),
     userEmail,
     poolSlug,
@@ -208,20 +238,138 @@ async function seed(args: Args): Promise<SeedResult> {
       );
     }
 
-    // ── Tenant y cliente: reusables por nombre ────────────────────────────
-    const tenantRow = await executor.query<{ id: string }>(
-      `SELECT id FROM tenants WHERE name = $1`,
-      [args.tenantName],
+    // ── El tenant: por identidad, y comprobando que la SESIÓN lo alcanza ──
+    //
+    // `getAccessScope` resuelve el tenant de la sesión así:
+    //
+    //     SELECT tenant_id, role, member_client_id FROM tenant_members
+    //      WHERE user_id = $1 ORDER BY created_at ASC LIMIT 1
+    //
+    // Una sola fila, la MÁS ANTIGUA. Así que un usuario con dos membresías
+    // tiene un tenant inalcanzable, y sembrar ahí produce datos correctos que
+    // la API responde con 404 sin decir por qué. Es lo que pasó: el registro
+    // creó un workspace a las 21:03 y el seed un tenant 'W3' a las 21:12, y
+    // ganó el primero.
+    //
+    // Ver docs/meetings-w3-product-defects.md · D-1.
+    const memberships = await executor.query<{
+      tenant_id: string;
+      tenant_name: string;
+      role: string;
+      member_client_id: string | null;
+      created_at: Date;
+    }>(
+      `SELECT tm.tenant_id, t.name AS tenant_name, tm.role, tm.member_client_id, tm.created_at
+         FROM tenant_members tm JOIN tenants t ON t.id = tm.tenant_id
+        WHERE tm.user_id = $1
+        ORDER BY tm.created_at ASC`,
+      [user.id],
     );
-    const reusedTenant = tenantRow.rows.length > 0;
-    const tenantId =
-      tenantRow.rows[0]?.id ??
-      (
-        await executor.query<{ id: string }>(
-          `INSERT INTO tenants (name) VALUES ($1) RETURNING id`,
-          [args.tenantName],
-        )
-      ).rows[0].id;
+    const efectiva = memberships.rows[0] ?? null;
+
+    let tenantId: string;
+    let reusedTenant: boolean;
+
+    if (args.tenantId !== null) {
+      // Identidad explícita. Se comprueban TRES cosas, y las tres importan.
+      const tenant = await executor.query<{ name: string }>(
+        `SELECT name FROM tenants WHERE id = $1`,
+        [args.tenantId],
+      );
+      if (tenant.rows.length === 0) {
+        throw new StagingGuardError(`El tenant ${args.tenantId} no existe.`);
+      }
+      const propia = memberships.rows.find((row) => row.tenant_id === args.tenantId);
+      if (!propia) {
+        throw new StagingGuardError(
+          `El usuario no tiene membresía en el tenant ${args.tenantId} ('${tenant.rows[0].name}').\n` +
+            `  Sembrar ahí crearía datos que su sesión no puede alcanzar.\n` +
+            `  Membresías que sí tiene:\n` +
+            (memberships.rows.length === 0
+              ? '    (ninguna)\n'
+              : memberships.rows
+                  .map((r) => `    ${r.tenant_id}  '${r.tenant_name}'  rol=${r.role}\n`)
+                  .join('')) +
+            `  Este script NO crea membresías en un tenant existente: eso es un cambio ` +
+            `de permisos y no le corresponde.`,
+        );
+      }
+      // La membresía tiene que ser VÁLIDA con el mismo criterio que `buildScope`
+      // de web/lib/access.ts: un rol desconocido, o un 'member' sin cliente, no
+      // producen ámbito y la sesión rebota a /login?error=forbidden.
+      if (!['owner', 'admin', 'member'].includes(propia.role)) {
+        throw new StagingGuardError(
+          `La membresía tiene rol '${propia.role}', que buildScope no admite: la ` +
+            `sesión no produciría ámbito.`,
+        );
+      }
+      if (propia.role === 'member' && !propia.member_client_id) {
+        throw new StagingGuardError(
+          `La membresía es 'member' sin member_client_id: buildScope falla cerrado.`,
+        );
+      }
+      if (propia.role === 'member' && propia.member_client_id) {
+        throw new StagingGuardError(
+          `La membresía es 'member', restringida al cliente ${propia.member_client_id}. ` +
+            `El cliente de W-3 es otro, así que canAccessClient lo rechazaría. Hace ` +
+            `falta owner o admin.`,
+        );
+      }
+      // Y la comprobación que evita repetir el fallo de hoy: que ESTE tenant sea
+      // el que la sesión resuelve de verdad.
+      if (efectiva && efectiva.tenant_id !== args.tenantId) {
+        throw new StagingGuardError(
+          `El tenant ${args.tenantId} NO es el que la sesión resuelve.\n` +
+            `  getAccessScope toma la membresía más antigua, y la más antigua es:\n` +
+            `    ${efectiva.tenant_id}  '${efectiva.tenant_name}'  (${efectiva.created_at.toISOString()})\n` +
+            `  Sembrar en ${args.tenantId} daría 404 en resolveAppScope, igual que antes.\n` +
+            `  Usa --tenant-id ${efectiva.tenant_id}.\n` +
+            `  (Que la aplicación no sepa cambiar de tenant es el defecto D-1; ver\n` +
+            `   docs/meetings-w3-product-defects.md. No se arregla desde aquí.)`,
+        );
+      }
+      tenantId = args.tenantId;
+      reusedTenant = true;
+    } else {
+      // Sin identidad explícita. El nombre se resuelve PRIMERO: si apunta al
+      // tenant que la sesión ya usa, no se está creando nada nuevo y no hay
+      // nada que impedir — es el caso de relanzar el seed o de rotar.
+      const porNombre = await executor.query<{ id: string }>(
+        `SELECT id FROM tenants WHERE name = $1`,
+        [args.tenantName],
+      );
+      const apuntaAlEfectivo =
+        porNombre.rows.length > 0 && efectiva !== null && porNombre.rows[0].id === efectiva.tenant_id;
+
+      // Se aborta sólo si hay membresía Y el nombre NO es el tenant efectivo:
+      // ahí sí se crearía —o se reutilizaría— uno que la sesión no alcanza.
+      if (efectiva && !apuntaAlEfectivo) {
+        throw new StagingGuardError(
+          `El usuario ya tiene ${memberships.rows.length} membresía(s), y '${args.tenantName}' ` +
+            `${porNombre.rows.length > 0 ? 'es otro tenant' : 'sería un tenant NUEVO'} ` +
+            `al que su sesión no podría llegar.\n` +
+            `  getAccessScope toma la más antigua, que es la que manda:\n` +
+            `    ${efectiva.tenant_id}  '${efectiva.tenant_name}'  rol=${efectiva.role}\n` +
+            (memberships.rows.length > 1
+              ? `  Las otras ${memberships.rows.length - 1} son inalcanzables por la sesión (defecto D-1).\n`
+              : '') +
+            `  Siembra ahí:\n` +
+            `    --tenant-id ${efectiva.tenant_id}\n` +
+            `  No se ha escrito nada.`,
+        );
+      }
+      // Usuario sin membresía (crea), o nombre que apunta al tenant efectivo
+      // (reutiliza).
+      reusedTenant = porNombre.rows.length > 0;
+      tenantId =
+        porNombre.rows[0]?.id ??
+        (
+          await executor.query<{ id: string }>(
+            `INSERT INTO tenants (name) VALUES ($1) RETURNING id`,
+            [args.tenantName],
+          )
+        ).rows[0].id;
+    }
 
     // `is_default = false` obligatorio: `resolveAppScope` rechaza el cliente por
     // defecto del tenant, así que sembrar uno por defecto daría 404 en todas las
@@ -251,6 +399,10 @@ async function seed(args: Args): Promise<SeedResult> {
     // `tenant_members_role_client_check` exige `member_client_id` sólo para el
     // rol 'member', y un owner alcanza todos los clientes del tenant — que es
     // lo que hace falta para probar la UI y las rutas de sesión.
+    // Con `--tenant-id` la membresía ya existe y se validó arriba, así que el
+    // `ON CONFLICT DO NOTHING` no hace nada — y eso es lo correcto: crear
+    // membresías en un tenant ajeno sería un cambio de permisos.
+    // Sólo escribe en el camino del tenant recién creado.
     await executor.query(
       `INSERT INTO tenant_members (tenant_id, user_id, role)
        VALUES ($1, $2, 'owner')
@@ -449,7 +601,8 @@ async function main(): Promise<number> {
     const result = await seed(args);
     say('');
     say('── sembrado ────────────────────────────────────────────────');
-    say(`tenant   ${result.tenantId}${result.reusedTenant ? '  (reutilizado)' : '  (nuevo)'}`);
+    say(`tenant   ${result.tenantId}${result.reusedTenant ? '  (reutilizado)' : '  (NUEVO)'}`);
+    say(`         la sesión del usuario resuelve a este tenant ✓`);
     say(`client   ${result.clientId}${result.reusedClient ? '  (reutilizado)' : '  (nuevo)'}`);
     say(`pool     ${result.poolId}  ${args.poolSlug} / ${args.environment}`);
     say(`         scope=single_tenant  capabilities={meetings.transcribe}`);

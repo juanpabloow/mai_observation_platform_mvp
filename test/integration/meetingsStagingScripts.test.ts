@@ -188,42 +188,57 @@ for (const scenario of BROKEN_POOLS) {
 }
 
 test('--rotate-token aborta si el pool es de OTRO tenant', async () => {
-  const email = await seedUser();
+  // `pools_slug_env_key UNIQUE (slug, environment)` hace que un slug exista una
+  // sola vez por entorno en TODA la instalación. Así que para llegar a la guarda
+  // del pool hay que sembrar en el tenant correcto —el que la sesión resuelve—
+  // con un slug que ya existe colgado de OTRO tenant.
+  //
+  // La guarda del tenant salta antes que la del pool, y ese orden es el
+  // correcto: sin tenant alcanzable no hay nada que rotar.
+  const { email, tenantId } = await seedUserWithTenant(`W3 mío ${randomUUID().slice(0, 6)}`);
   const slug = `w3-${randomUUID().slice(0, 8)}`;
-  const firstArgs = [
-    '--tenant-name', `W3 ${randomUUID().slice(0, 6)}`,
-    '--client-name', 'C',
-    '--user-email', email,
-    '--pool-slug', slug,
-  ];
-  const first = run(SEED, firstArgs, guardEnv());
-  assert.equal(first.status, 0, first.stderr);
-  const tenant = /tenant\s+([0-9a-f-]{36})/.exec(first.stderr)?.[1];
-  assert.ok(tenant);
-  tenants.push(tenant);
 
-  // El mismo slug, otro nombre de tenant: el pool existe y pertenece a otro.
-  const otherName = `W3 otro ${randomUUID().slice(0, 6)}`;
-  const rotated = run(
+  // Un pool ajeno con ESE slug, colgado de otro tenant.
+  const ajeno = await query<{ id: string }>(
+    `INSERT INTO tenants (name) VALUES ($1) RETURNING id`,
+    [`W3 ajeno ${randomUUID().slice(0, 6)}`],
+  );
+  tenants.push(ajeno.rows[0].id);
+  await query(
+    `INSERT INTO worker_pools (slug, environment, scope, tenant_id, capabilities, concurrency)
+     VALUES ($1, 'staging', 'single_tenant', $2, '{meetings.transcribe}',
+             '{"schema_version":1,"limits":{"meetings.transcribe":1}}'::jsonb)`,
+    [slug, ajeno.rows[0].id],
+  );
+
+  const r = run(
     SEED,
     [
-      '--tenant-name', otherName,
-      '--client-name', 'C',
+      '--tenant-id', tenantId,
+      '--client-name', 'Cliente W3',
       '--user-email', email,
       '--pool-slug', slug,
       '--rotate-token',
     ],
     guardEnv(),
   );
-  assert.equal(rotated.status, 2, rotated.stderr);
-  assert.match(rotated.stderr, /pertenece al tenant/);
-  assert.match(rotated.stderr, /alcance sobre datos ajenos/);
-  assert.equal(rotated.stdout, '');
-  // El tenant nuevo no se quedó a medias: la transacción entera se deshizo.
-  const orphan = await query<{ n: string }>(`SELECT count(*)::text AS n FROM tenants WHERE name = $1`, [
-    otherName,
-  ]);
-  assert.equal(orphan.rows[0].n, '0', 'la transacción abortada no debe dejar tenant');
+  assert.equal(r.status, 2, `debía abortar: ${r.stderr}`);
+  assert.match(r.stderr, /pertenece al tenant/);
+  assert.match(r.stderr, /alcance sobre datos ajenos/);
+  assert.equal(r.stdout, '', 'no debe imprimir un token');
+
+  // Y no tocó el pool ajeno ni sembró en el tenant propio.
+  const cred = await query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM worker_credentials wc
+       JOIN worker_pools wp ON wp.id = wc.pool_id WHERE wp.slug = $1`,
+    [slug],
+  );
+  assert.equal(cred.rows[0].n, '0', 'no debe emitir credencial en el pool ajeno');
+  const propio = await query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM clients WHERE tenant_id = $1`,
+    [tenantId],
+  );
+  assert.equal(propio.rows[0].n, '0', 'la transacción abortada no deja cliente');
 });
 
 test('--rotate-token SÍ rota cuando el contrato coincide', async () => {
@@ -257,6 +272,167 @@ test('--rotate-token SÍ rota cuando el contrato coincide', async () => {
   assert.equal(credentials.rows[0].n, '2');
   assert.equal(credentials.rows[0].live, '1');
   assert.equal(credentials.rows[0].rotated, '1');
+});
+
+// ── El tenant donde sembrar: sin, con una, y con varias membresías ─────────
+//
+// El defecto D-1 (docs/meetings-w3-product-defects.md): `getAccessScope` resuelve
+// el tenant con `ORDER BY created_at ASC LIMIT 1`, así que el primero que un
+// usuario tiene gana para siempre. Sembrar un tenant nuevo para alguien que ya
+// tenía membresía produce datos correctos e inalcanzables, y el síntoma es un
+// 404 sin diagnóstico. Pasó de verdad en el paso 10.1 de W-3.
+
+/** Un usuario y una membresía `owner` en un tenant nuevo. Devuelve los dos ids. */
+async function seedUserWithTenant(
+  nombre: string,
+): Promise<{ email: string; userId: string; tenantId: string }> {
+  const email = await seedUser();
+  const user = await query<{ id: string }>(`SELECT id FROM "user" WHERE email = $1`, [email]);
+  const t = await query<{ id: string }>(
+    `INSERT INTO tenants (name) VALUES ($1) RETURNING id`,
+    [nombre],
+  );
+  await query(`INSERT INTO tenant_members (tenant_id, user_id, role) VALUES ($1, $2, 'owner')`, [
+    t.rows[0].id,
+    user.rows[0].id,
+  ]);
+  tenants.push(t.rows[0].id);
+  return { email, userId: user.rows[0].id, tenantId: t.rows[0].id };
+}
+
+function seedArgs(email: string, extra: readonly string[]): string[] {
+  return [
+    '--client-name', 'Cliente W3',
+    '--user-email', email,
+    '--pool-slug', `w3-${randomUUID().slice(0, 8)}`,
+    ...extra,
+  ];
+}
+
+test('usuario SIN membresía: --tenant-name crea el tenant (camino original)', async () => {
+  const email = await seedUser();
+  const nombre = `W3 sin ${randomUUID().slice(0, 6)}`;
+  const r = run(SEED, seedArgs(email, ['--tenant-name', nombre]), guardEnv());
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /\(NUEVO\)/);
+  assert.match(r.stdout, /^mtk_/);
+  const t = await query<{ id: string }>(`SELECT id FROM tenants WHERE name = $1`, [nombre]);
+  assert.equal(t.rows.length, 1);
+  tenants.push(t.rows[0].id);
+  // Y le creó la membresía, porque el tenant es suyo y nuevo.
+  const m = await query<{ role: string }>(
+    `SELECT role FROM tenant_members WHERE tenant_id = $1`,
+    [t.rows[0].id],
+  );
+  assert.deepEqual(m.rows.map((x) => x.role), ['owner']);
+});
+
+test('usuario CON UNA membresía y sin --tenant-id: ABORTA', async () => {
+  // Éste es el fallo de W-3, convertido en prueba. Sin --tenant-id el script
+  // habría creado un segundo tenant inalcanzable.
+  const { email, tenantId } = await seedUserWithTenant(`W3 propio ${randomUUID().slice(0, 6)}`);
+  const nombre = `W3 otro ${randomUUID().slice(0, 6)}`;
+  const r = run(SEED, seedArgs(email, ['--tenant-name', nombre]), guardEnv());
+  assert.equal(r.status, 2, `debía abortar: ${r.stderr}`);
+  assert.match(r.stderr, /ya tiene 1 membresía/);
+  assert.match(r.stderr, /sería un tenant NUEVO al que su sesión no podría llegar/);
+  assert.match(r.stderr, new RegExp(`--tenant-id ${tenantId}`));
+  assert.match(r.stderr, /No se ha escrito nada/);
+  assert.equal(r.stdout, '', 'no debe imprimir token');
+  // Y no lo creó.
+  const t = await query<{ n: string }>(`SELECT count(*)::text AS n FROM tenants WHERE name = $1`, [nombre]);
+  assert.equal(t.rows[0].n, '0');
+});
+
+test('usuario CON UNA membresía y --tenant-id correcto: siembra ahí', async () => {
+  const { email, tenantId } = await seedUserWithTenant(`W3 uno ${randomUUID().slice(0, 6)}`);
+  const r = run(SEED, seedArgs(email, ['--tenant-id', tenantId]), guardEnv());
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, new RegExp(`tenant\\s+${tenantId}\\s+\\(reutilizado\\)`));
+  assert.match(r.stderr, /la sesión del usuario resuelve a este tenant/);
+  assert.match(r.stdout, /^mtk_/);
+  // Cliente, módulo y pool en ESE tenant, y ninguno nuevo.
+  const c = await query<{ n: string }>(`SELECT count(*)::text AS n FROM clients WHERE tenant_id = $1`, [tenantId]);
+  assert.equal(c.rows[0].n, '1');
+  const m = await query<{ enabled: boolean }>(
+    `SELECT enabled FROM client_modules WHERE tenant_id = $1 AND module_key = 'meetings'`, [tenantId]);
+  assert.equal(m.rows[0]?.enabled, true);
+  const p = await query<{ n: string }>(`SELECT count(*)::text AS n FROM worker_pools WHERE tenant_id = $1`, [tenantId]);
+  assert.equal(p.rows[0].n, '1');
+  // Y NO añadió membresías: la que había sigue siendo la única.
+  const tm = await query<{ n: string }>(`SELECT count(*)::text AS n FROM tenant_members WHERE tenant_id = $1`, [tenantId]);
+  assert.equal(tm.rows[0].n, '1');
+});
+
+test('usuario con VARIAS membresías: sólo la MÁS ANTIGUA se acepta', async () => {
+  // La reproducción exacta de D-1: dos tenants, y la sesión sólo alcanza el
+  // primero. El script tiene que negarse a sembrar en el segundo.
+  const { email, userId, tenantId: viejo } = await seedUserWithTenant(
+    `W3 viejo ${randomUUID().slice(0, 6)}`,
+  );
+  const nuevo = await query<{ id: string }>(
+    `INSERT INTO tenants (name) VALUES ($1) RETURNING id`,
+    [`W3 nuevo ${randomUUID().slice(0, 6)}`],
+  );
+  tenants.push(nuevo.rows[0].id);
+  // La segunda membresía, explícitamente MÁS RECIENTE.
+  await query(
+    `INSERT INTO tenant_members (tenant_id, user_id, role, created_at)
+     VALUES ($1, $2, 'owner', now() + interval '1 minute')`,
+    [nuevo.rows[0].id, userId],
+  );
+
+  // a) el tenant MÁS RECIENTE se rechaza, aunque tenga membresía válida
+  const malo = run(SEED, seedArgs(email, ['--tenant-id', nuevo.rows[0].id]), guardEnv());
+  assert.equal(malo.status, 2, `debía abortar: ${malo.stderr}`);
+  assert.match(malo.stderr, /NO es el que la sesión resuelve/);
+  assert.match(malo.stderr, /getAccessScope toma la membresía más antigua/);
+  assert.match(malo.stderr, new RegExp(`--tenant-id ${viejo}`));
+  assert.match(malo.stderr, /D-1/);
+  assert.equal(malo.stdout, '');
+  const enMalo = await query<{ n: string }>(
+    `SELECT count(*)::text AS n FROM clients WHERE tenant_id = $1`, [nuevo.rows[0].id]);
+  assert.equal(enMalo.rows[0].n, '0', 'no debe sembrar en el inalcanzable');
+
+  // b) el MÁS ANTIGUO sí
+  const bueno = run(SEED, seedArgs(email, ['--tenant-id', viejo]), guardEnv());
+  assert.equal(bueno.status, 0, bueno.stderr);
+  assert.match(bueno.stdout, /^mtk_/);
+});
+
+test('--tenant-id de un tenant SIN membresía del usuario: ABORTA', async () => {
+  const email = await seedUser();
+  const ajeno = await query<{ id: string }>(
+    `INSERT INTO tenants (name) VALUES ($1) RETURNING id`,
+    [`W3 ajeno ${randomUUID().slice(0, 6)}`],
+  );
+  tenants.push(ajeno.rows[0].id);
+  const r = run(SEED, seedArgs(email, ['--tenant-id', ajeno.rows[0].id]), guardEnv());
+  assert.equal(r.status, 2, r.stderr);
+  assert.match(r.stderr, /no tiene membresía en el tenant/);
+  assert.match(r.stderr, /NO crea membresías en un tenant existente/);
+  assert.equal(r.stdout, '');
+});
+
+test('--tenant-id de un tenant inexistente: ABORTA', async () => {
+  const email = await seedUser();
+  const r = run(SEED, seedArgs(email, ['--tenant-id', randomUUID()]), guardEnv());
+  assert.equal(r.status, 2, r.stderr);
+  assert.match(r.stderr, /no existe/);
+});
+
+test('--tenant-id y --tenant-name juntos son ambiguos: ABORTA', async () => {
+  const email = await seedUser();
+  const r = run(SEED, seedArgs(email, ['--tenant-id', randomUUID(), '--tenant-name', 'X']), guardEnv());
+  assert.equal(r.status, 2, r.stderr);
+  assert.match(r.stderr, /ambiguos juntos/);
+});
+
+test('sin ninguno de los dos: ABORTA', async () => {
+  const email = await seedUser();
+  const r = run(SEED, seedArgs(email, []), guardEnv());
+  assert.equal(r.status, 2, r.stderr);
+  assert.match(r.stderr, /Falta --tenant-id o --tenant-name/);
 });
 
 // ── Cuántas credenciales vivas: 0, 1 y >1 son tres casos ───────────────────
