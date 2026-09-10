@@ -43,7 +43,8 @@
     "w3:verify": "tsx src/scripts/meetingsStagingVerify.ts",
     "w3:cleanup": "tsx src/scripts/meetingsStagingCleanup.ts",
     "w3:http": "bash test/e2e/w3HttpChecks.sh",
-    "w3:rollback-check": "tsx src/scripts/meetingsRollbackPreflight.ts"
+    "w3:rollback-check": "tsx src/scripts/meetingsRollbackPreflight.ts",
+    "w3:reprocess": "tsx src/scripts/meetingsStagingReprocess.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1128.0",

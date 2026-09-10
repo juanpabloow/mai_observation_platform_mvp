@@ -999,6 +999,59 @@ curl -s -X POST "$BASE/api/meetings/v1/meetings" -H "cookie: $COOKIE" \
 
 ---
 
+## 7 bis · Si una etapa falla: reprocesar sin volver a subir el audio
+
+Esto no estaba previsto y hizo falta: el primer `normalize` real murió con un
+bug del worker (`AttributeError` en `stages.py`, arreglado en `933218e`) y dejó
+el job `failed` con `attempts=3/3`. Un job agotado **no** se recupera:
+
+* `POST /maintenance/requeue-expired` no lo alcanza — su `WHERE` es
+  `status IN ('leased','uploading_result') AND lease_expires_at < now()`, y
+  existe para workers que se caen, no para intentos agotados.
+* Tocar `attempts` o `status` por SQL borraría el registro del fallo y dejaría
+  el run cerrado con un job suyo en cola, contradiciéndose.
+* Volver a subir el audio es innecesario: el `original` tiene `run_id NULL`
+  porque pertenece a la REUNIÓN, y `service.buildInputs` resuelve el insumo de
+  `normalize` con `findLiveOriginal(job.meeting_id)` —por reunión, no por run—,
+  así que el job del run nuevo firma un GET sobre el mismo objeto de R2.
+
+El mecanismo es un **run de reproceso**, que el esquema previó desde M-1
+(`trigger CHECK IN ('initial','reprocess','import','backfill')`).
+
+```bash
+# 1 · el plan, sin escribir (es el defecto)
+MEETINGS_ENV_KIND=staging \
+MEETINGS_EXPECTED_DB_HOST=<host> MEETINGS_EXPECTED_DB_NAME=mai_w3_staging \
+DATABASE_URL="$(cat ~/.w3-staging-database-url)" \
+  npm run w3:reprocess -- --tenant-id <uuid> --client-id <uuid> --meeting-id <uuid>
+
+# 2 · ejecutarlo
+… --tenant-id <uuid> --client-id <uuid> --meeting-id <uuid> --execute
+```
+
+**Pass del dry-run:** anuncia `run nuevo nº<n+1>, trigger='reprocess'`, el job
+`normalize · queued · attempts=0 · requires={meetings.transcribe}`, la
+transición `failed → pending`, y la clave, bytes y sha256 del original que
+reutiliza. No escribe nada.
+
+**Pass del `--execute`:** las tres comprobaciones posteriores en verde
+—exactamente un run activo, un solo `normalize` en el run nuevo, y el job nuevo
+reclamable— y la línea `jobs fallidos que siguen intactos: <n>`.
+
+**Se niega**, con código de salida 2 y un código estable en el mensaje, si la
+reunión está cancelada (`meeting_cancelled`), los medios no están listos
+(`media_not_ready`), no hay original vivo (`original_missing`), ya hay un run
+abierto (`run_active`) o los tres uuids no cuadran (`meeting_not_found`).
+
+Lo que **no** hace, y es el punto: no toca el job fallido. Se queda `failed`
+con sus `attempts` para siempre, porque es el registro de lo que pasó.
+
+> **Ojo con el orden.** En cuanto el job existe, el worker lo reclama en su
+> siguiente sondeo. Ten el worker apagado hasta que quieras observar la pasada,
+> y comprueba antes que la PC Linux tiene el commit del arreglo.
+
+---
+
 ## 8 · Rollback y limpieza
 
 ### 8.1 · Rollback si W-3 falla

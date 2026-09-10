@@ -29,6 +29,7 @@
 #   40  detector de la CLASE de defecto "SET NULL exigido por un CHECK"
 #   50  semilla para las guardas del down
 #   60  cada consulta del runbook de W-3 contra el esquema real
+#   70  la transición del reproceso: run nuevo + job nuevo sin tocar el fallido
 #
 set -euo pipefail
 
@@ -95,7 +96,7 @@ echo "═══ suites ═══"
 for f in "$HERE"/00-harness.sql "$HERE"/10-integrity.sql "$HERE"/20-pools-lease.sql \
          "$HERE"/25-credential-lifecycle.sql "$HERE"/30-setnull-sweep.sql \
          "$HERE"/35-result-upload-states.sql "$HERE"/40-setnull-class.sql \
-         "$HERE"/60-runbook-sql.sql; do
+         "$HERE"/60-runbook-sql.sql "$HERE"/70-reprocess-transition.sql; do
   psql_ -q -f - < "$f" 2>&1 \
     | sed -e 's/^psql:[^ ]* NOTICE:  //' -e 's/^psql:<stdin>:[0-9]*: NOTICE:  //' \
     | grep -E 'PASS|FAIL|════|ERROR' || true

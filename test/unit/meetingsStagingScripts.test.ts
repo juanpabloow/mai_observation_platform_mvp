@@ -252,23 +252,37 @@ test('meetingsStagingVerify no contiene ninguna escritura', () => {
   assert.ok(!source.includes('withTransaction'), 'no necesita transacción: no escribe');
 });
 
-test('los tres scripts exigen la puerta de staging', () => {
-  for (const script of [
-    'src/scripts/meetingsStagingSeed.ts',
-    'src/scripts/meetingsStagingVerify.ts',
-    'src/scripts/meetingsStagingCleanup.ts',
-  ]) {
+/**
+ * La lista es la lista: cada script nuevo de W-3 entra aquí. Antes decía «los
+ * tres» y enumeraba tres; al añadir `meetingsStagingReprocess` la prueba
+ * seguía verde sin haberlo mirado nunca, que es la forma más silenciosa de
+ * perder una garantía.
+ */
+const W3_SCRIPTS = [
+  'src/scripts/meetingsStagingSeed.ts',
+  'src/scripts/meetingsStagingVerify.ts',
+  'src/scripts/meetingsStagingCleanup.ts',
+  'src/scripts/meetingsStagingReprocess.ts',
+  'src/scripts/meetingsRollbackPreflight.ts',
+];
+
+test('la lista de scripts de W-3 está completa', () => {
+  const declared = [...read('package.json').matchAll(/"w3:[a-z-]+": "tsx (src\/scripts\/[A-Za-z]+\.ts)"/g)]
+    .map((match) => match[1]);
+  for (const script of declared) {
+    assert.ok(W3_SCRIPTS.includes(script), `${script} está en package.json y no en W3_SCRIPTS`);
+  }
+});
+
+test('todos los scripts de W-3 exigen la puerta de staging', () => {
+  for (const script of W3_SCRIPTS) {
     assert.match(read(script), /requireStagingEnvironment\(\)/, `${script} debe exigir la puerta`);
   }
   assert.match(read('test/e2e/w3HttpChecks.sh'), /MEETINGS_ENV_KIND/, 'el script HTTP también');
 });
 
 test('ningún script imprime DATABASE_URL', () => {
-  for (const script of [
-    'src/scripts/meetingsStagingSeed.ts',
-    'src/scripts/meetingsStagingVerify.ts',
-    'src/scripts/meetingsStagingCleanup.ts',
-  ]) {
+  for (const script of W3_SCRIPTS) {
     const source = read(script);
     // Ni interpolada ni leída para imprimir: la única vía permitida es
     // `describeDatabase`, que devuelve host y nombre.
@@ -749,4 +763,73 @@ test('el seed sólo admite --environment staging', () => {
     assert.match(result.stderr, /sólo admite 'staging'/, `'${environment}'`);
     assert.equal(result.stdout, '', 'no debe imprimir token');
   }
+});
+
+// ── El reproceso: lo que su código NO puede contener ────────────────────────
+
+test('el reproceso nunca escribe attempts ni status de un job existente', () => {
+  const source = read('src/scripts/meetingsStagingReprocess.ts');
+  // El punto entero del mecanismo. Un `UPDATE ... SET attempts` o `SET status`
+  // sobre `meeting_processing_jobs` borraría el registro del fallo, que es la
+  // única prueba de que ocurrió.
+  assert.ok(
+    !/UPDATE\s+meeting_processing_(jobs|runs)/i.test(source),
+    'ningún UPDATE sobre jobs ni sobre runs',
+  );
+  // Se busca la ASIGNACIÓN, no la mención: `attempts = 0` aparece en la
+  // consulta de verificación posterior, donde es una comparación de lectura.
+  // El primer intento de esta prueba buscaba la subcadena y fallaba por eso.
+  assert.ok(
+    !/\bSET\b[^;'`]*\b(attempts|status|failure_code|max_attempts)\s*=/i.test(source),
+    'ninguna cláusula SET toca attempts, status, failure_code ni max_attempts',
+  );
+  // Y tampoco por la puerta de atrás del repositorio.
+  for (const forbidden of ['markFailed', 'markSucceeded', 'requeueExpiredLeases', 'finishRun']) {
+    assert.ok(!source.includes(forbidden), `no debe llamar a ${forbidden}`);
+  }
+  // Ni borrar nada: un reproceso añade.
+  for (const verb of ['DELETE FROM', 'TRUNCATE']) {
+    assert.ok(!source.includes(verb), `no debe contener '${verb}'`);
+  }
+});
+
+test('el reproceso escribe siempre dentro de una transacción', () => {
+  const source = read('src/scripts/meetingsStagingReprocess.ts');
+  assert.match(source, /withTransaction\(/, 'la escritura va en transacción');
+  // Y la comprobación que sólo el servidor puede responder, dentro de ella.
+  const tx = source.slice(source.indexOf('withTransaction('));
+  assert.match(tx, /assertConnectedDatabase\(executor\)/);
+  // `applyReprocess` recibe el executor: si abriera su propia conexión, sus
+  // escrituras quedarían fuera de la transacción del que la llama.
+  assert.match(source, /export async function applyReprocess\([\s\S]*?executor: Queryable,\n\): Promise/);
+});
+
+test('el reproceso es dry-run por defecto', () => {
+  const source = read('src/scripts/meetingsStagingReprocess.ts');
+  assert.match(source, /execute = flags\.has\('execute'\)/);
+  assert.match(source, /if \(!execute\) \{/, 'la rama sin escribir es la primera');
+  assert.match(source, /--dry-run y --execute son incompatibles/);
+});
+
+test('el reproceso exige los tres uuids de identidad', () => {
+  const source = read('src/scripts/meetingsStagingReprocess.ts');
+  for (const flag of ['--tenant-id', '--client-id', '--meeting-id']) {
+    assert.ok(
+      source.includes(`requireUuid(values['${flag.slice(2)}'], '${flag}')`),
+      `${flag} debe validarse como uuid`,
+    );
+  }
+  // Y la reunión se lee acotada por los tres, no sólo por su id: leerla sólo
+  // por `id` y comparar después dejaría una ventana en la que el script ya
+  // tocó una fila de otro tenant.
+  assert.match(source, /WHERE id = \$1 AND tenant_id = \$2 AND client_id = \$3/);
+});
+
+test('el reproceso conserva los avisos: concatena, no reemplaza', () => {
+  const source = read('src/scripts/meetingsStagingReprocess.ts');
+  // La única vía de escritura de `warnings` es `appendWarnings`, que en el
+  // repositorio se traduce a `warnings || …::jsonb`.
+  assert.match(source, /appendWarnings:/);
+  assert.ok(!/warnings\s*=/.test(source), 'no debe asignar warnings directamente');
+  assert.match(source, /hasWarningForRun\(plan\.warnings, run\.run_number\)/);
 });
