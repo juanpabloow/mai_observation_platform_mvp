@@ -35,7 +35,7 @@ TS_IP = "100.103.187.118"
 LAN_IP = "192.168.1.15"
 
 
-def run(cmd: list[str], timeout: float = 5.0) -> str:
+def run(cmd: list[str], timeout: float = 3.0) -> str:
     try:
         done = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, check=False)
         return done.stdout.strip()
@@ -44,8 +44,16 @@ def run(cmd: list[str], timeout: float = 5.0) -> str:
 
 
 def ping_ms(host: str, timeout_ms: int = 1500) -> float | None:
-    """UN paquete. `-W` en macOS va en milisegundos, no en segundos como en Linux."""
-    out = run(["ping", "-n", "-c", "1", "-W", str(timeout_ms), host], timeout=timeout_ms / 1000 + 2)
+    """
+    UN paquete. `-W` en macOS va en milisegundos, no en segundos como en Linux.
+
+    `-t 2` es imprescindible y no es redundante: sin el, `ping -c 1` de macOS espera
+    hasta 10 s a que llegue la respuesta aunque `-W` sea menor. Medido: con la LAN
+    caida la cadencia de la sonda se degradaba de 10 s a 74 s de media y hasta 2113 s
+    — o sea que perdia resolucion JUSTO cuando pasa lo que hay que medir.
+    """
+    out = run(["ping", "-n", "-c", "1", "-t", "2", "-W", str(timeout_ms), host],
+              timeout=timeout_ms / 1000 + 2)
     for token in out.split():
         if token.startswith("time="):
             try:
@@ -263,14 +271,29 @@ def main(argv: list[str] | None = None) -> int:
               "every_s": args.every, "pid": os.getpid()})
 
         scheduled = time.monotonic()
+        last_wall = None
+        last_mono = None
         while (args.samples == 0 or count < args.samples) and time.monotonic() < deadline:
-            drift = max(0.0, (time.monotonic() - scheduled) * 1000.0)
+            now_wall, now_mono = time.time(), time.monotonic()
+            drift = max(0.0, (now_mono - scheduled) * 1000.0)
+            # De TIC A TIC, no el hueco ocioso entre muestras: se toman al ENTRAR en la
+            # iteracion. Medido de la otra forma daba 0,0 cuando la muestra tardaba mas
+            # que el intervalo, que es justo el caso interesante.
+            wall_gap = None if last_wall is None else round(now_wall - last_wall, 2)
+            mono_gap = None if last_mono is None else round(now_mono - last_mono, 2)
+            last_wall, last_mono = now_wall, now_mono
             # Una muestra que falle NO puede tumbar 24 horas de sonda: se anota el
             # fallo y se sigue.
             try:
                 row = {
                     "t": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
                     "drift_ms": round(drift, 1),
+                    # Los mismos dos que la sonda del servidor, y por el mismo motivo:
+                    # sin ellos, un hueco en el registro del Mac no distingue «la sonda
+                    # tardo» de «el portatil se durmio», y esa diferencia cambia por
+                    # completo como se lee una desconexion.
+                    "wall_gap_s": wall_gap,
+                    "mono_gap_s": mono_gap,
                     # LAN, sin Tailscale de por medio
                     "gw_ms": ping_ms("192.168.1.1"),
                     "lan_ping_ms": ping_ms(LAN_IP),
@@ -290,6 +313,8 @@ def main(argv: list[str] | None = None) -> int:
                     "evento": "error-muestra",
                     "tipo": type(cause).__name__,
                     "drift_ms": round(drift, 1),
+                    "wall_gap_s": wall_gap,
+                    "mono_gap_s": mono_gap,
                 }
             emit(row)
             count += 1
