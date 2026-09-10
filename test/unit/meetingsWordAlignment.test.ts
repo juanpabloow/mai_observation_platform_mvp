@@ -4,6 +4,7 @@ import { gzipSync } from 'node:zlib';
 import {
   FIRM_COVERAGE,
   MIN_WORDS_FOR_FIRM_SPEAKER,
+  UNPLACEABLE_MIN_SEC,
   alignSegments,
   parseTranscriptArtifact,
 } from '../../src/meetings/artifacts.js';
@@ -210,14 +211,27 @@ test('una atribución que descansa en una esquirla de solape se marca tentativa'
 
 test('un bloque puede tener DOS VOCES y una atribución firme a la vez', () => {
   // La prueba de que los dos campos son independientes y no uno disfrazado del otro.
-  const segments = [segment(0, 0, 10, 'texto de un segmento sin palabras')];
+  //
+  // Habla simultánea: A cubre el segmento ENTERO y B habla encima entre 2 y 8. Con
+  // palabras, cada una cae dentro de A, así que la atribución es firme — y aun así
+  // son dos voces a la vez, y `overlap` lo dice.
+  const words = [
+    word(0, 1, 'uno'), word(2, 3, ' dos'), word(4, 5, ' tres'),
+    word(6, 7, ' cuatro'), word(8, 9, ' cinco'),
+  ];
+  const segments = [segment(0, 0, 10, 'uno dos tres cuatro cinco', words)];
   const turns = [turn(0, 10, 'A'), turn(2, 8, 'B')];
 
   const { segments: out } = alignSegments(segments, turns);
 
+  assert.equal(out.length, 1, 'ninguna palabra cambia de hablante: no se parte');
   assert.equal(out[0].speakerLabel, 'A', 'A cubre más');
   assert.equal(out[0].overlap, true, 'y B cubre bastante para que sean dos voces');
-  assert.equal(out[0].speakerUncertain, false, 'pero la atribución no es dudosa: A cubre el bloque entero');
+  assert.equal(
+    out[0].speakerUncertain,
+    false,
+    'pero la atribución no es dudosa: A cubre el bloque entero y las palabras son suyas',
+  );
 });
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -443,3 +457,55 @@ test('una schema_version que no conocemos se sigue rechazando', () => {
   );
 });
 
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  LA VÍA DE COMPATIBILIDAD DECLARA LO QUE NO PUDO SITUAR
+//
+//  Cuando el worker abandona las palabras de un segmento —porque una traía un tiempo
+//  ilegible y fabricarle uno sería inventar—, ese segmento llega como v1. Callarse no
+//  es lo mismo que no saber: si los turnos dicen que ahí dentro habla alguien más, la
+//  etiqueta única es tentativa y hay que decirlo.
+// ══════════════════════════════════════════════════════════════════════════════
+
+test('un segmento SIN palabras que contiene dos voces se marca tentativo', () => {
+  const segments = [segment(0, 0, 10, 'una frase que dicen dos personas')];
+  const turns = [turn(0, 6, 'A'), turn(6, 10, 'B')];
+
+  const { segments: out } = alignSegments(segments, turns);
+
+  assert.equal(out.length, 1, 'no se parte: no hay con qué situar la frontera');
+  assert.equal(out[0].text, 'una frase que dicen dos personas', 'el texto, íntegro');
+  assert.deepEqual([out[0].startSec, out[0].endSec], [0, 10], 'y los tiempos del segmento');
+  assert.equal(out[0].speakerLabel, 'A', 'se atribuye al mayoritario');
+  assert.equal(out[0].speakerUncertain, true, 'y se declara que es tentativo');
+});
+
+test('un segmento SIN palabras con una sola voz NO se marca', () => {
+  // Es el caso normal de un artefacto v1: marcarlo todo sería no marcar nada.
+  const segments = [segment(0, 0, 10, 'una frase de una sola persona')];
+  const { segments: out } = alignSegments(segments, [turn(0, 10, 'A')]);
+  assert.equal(out[0].speakerUncertain, false);
+});
+
+test('un turno ajeno que sólo roza el borde no cuenta como cambio sin situar', () => {
+  assert.equal(UNPLACEABLE_MIN_SEC, 0.2);
+  const segments = [segment(0, 0, 10, 'texto')];
+  // B cubre 0,1 s del final: ruido de frontera, no habla contenida en el bloque.
+  const { segments: out } = alignSegments(segments, [turn(0, 9.9, 'A'), turn(9.9, 10.5, 'B')]);
+  assert.equal(out[0].speakerUncertain, false, 'por debajo del umbral no se marca');
+
+  // Con 0,3 s ya es habla que el bloque contiene y atribuye a otro.
+  const { segments: out2 } = alignSegments(
+    [segment(0, 0, 10, 'texto')],
+    [turn(0, 9.7, 'A'), turn(9.7, 10.5, 'B')],
+  );
+  assert.equal(out2[0].speakerUncertain, true);
+});
+
+test('un transcript v1 entero sigue sin marcarse cuando cada segmento es de una voz', () => {
+  // La compatibilidad no se degrada: lo que ya se leía bien se sigue leyendo igual.
+  const segments = [segment(0, 0, 5, 'primero'), segment(1, 5, 10, 'segundo')];
+  const { segments: out } = alignSegments(segments, [turn(0, 5, 'A'), turn(5, 10, 'B')]);
+  assert.deepEqual(out.map((s) => s.speakerUncertain), [false, false]);
+  assert.deepEqual(out.map((s) => s.speakerLabel), ['A', 'B']);
+});

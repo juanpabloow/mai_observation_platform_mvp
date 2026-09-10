@@ -411,6 +411,16 @@ export const MIN_WORDS_FOR_FIRM_SPEAKER = 3;
  */
 export const FIRM_COVERAGE = 0.6;
 
+/**
+ * Cuánto tiene que cubrir un segundo hablante dentro de un segmento para que
+ * consideremos que ahí HAY un cambio que no supimos situar.
+ *
+ * 0,2 s es del orden de la palabra más corta. Por debajo, un turno que asoma en el
+ * borde de un segmento es ruido de frontera y marcarlo como duda sería marcar casi
+ * todo. Por encima, es habla que el bloque contiene y atribuye a otro.
+ */
+export const UNPLACEABLE_MIN_SEC = 0.2;
+
 /** El turno con más solape en un intervalo, y cuánto cubre el segundo. */
 function rankLabels(
   turns: readonly DiarizationTurn[],
@@ -427,6 +437,15 @@ function rankLabels(
   // dos resultados distintos.
   const ranked = [...byLabel.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
   return { label: ranked[0][0], best: ranked[0][1], runnerUp: ranked[1]?.[1] ?? 0 };
+}
+
+/** ¿Habla alguien más ahí dentro, aparte de quien se lleva la etiqueta? */
+function hasInternalSpeakerChange(
+  span: { startSec: number; endSec: number },
+  turns: readonly DiarizationTurn[],
+): boolean {
+  const { label, runnerUp } = rankLabels(turns, span);
+  return label !== null && runnerUp >= UNPLACEABLE_MIN_SEC;
 }
 
 interface TextToken {
@@ -494,7 +513,15 @@ function splitByWords(
   const words = segment.words;
   // Sin palabras no se parte NADA, y no se interpola nada: un artefacto v1 no trae
   // tiempos por palabra, y fabricarlos repartiendo el segmento sería inventar.
-  if (!words || words.length === 0) return { parts: null, unplaceableChange: false };
+  //
+  // Pero callarse no es lo mismo que no saber. Si los TURNOS dicen que dentro de este
+  // segmento habla alguien más, hay un cambio que no supimos situar, y la etiqueta
+  // única es una atribución tentativa — da igual que la causa sea un artefacto v1 o
+  // que el worker abandonara las palabras de este segmento por traer un tiempo
+  // ilegible. Las dos son la misma situación y se declaran igual.
+  if (!words || words.length === 0) {
+    return { parts: null, unplaceableChange: hasInternalSpeakerChange(segment, turns) };
+  }
 
   const labels = words.map((word) => rankLabels(turns, word).label);
   const changes = labels.some((label, i) => i > 0 && label !== labels[i - 1]);

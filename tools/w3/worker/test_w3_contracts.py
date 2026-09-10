@@ -251,18 +251,51 @@ def test_las_palabras_salen_en_orden_no_decreciente(tmp_path):
     assert all(tiempos[i][0] >= tiempos[i - 1][1] - 1e-9 for i in range(1, len(tiempos)))
 
 
-def test_una_palabra_con_tiempos_ilegibles_NO_desaparece(tmp_path):
+@pytest.mark.parametrize("mala", [
+    {"start": None, "end": None, "word": "b"},      # tiempos ausentes
+    {"start": "x", "end": "y", "word": "b"},        # ilegibles
+    {"start": 2.0, "end": 1.0, "word": "b"},        # `end` antes que `start`
+    {"start": float("nan"), "end": 1.5, "word": "b"},  # no finito
+    {"start": 1.0, "end": 1.5, "word": ""},         # sin texto
+    "esto no es un objeto",
+])
+def test_una_palabra_invalida_abandona_las_palabras_de_ESE_segmento(tmp_path, mala):
     """
-    Descartarla romperia la correspondencia uno a uno con los tokens del texto, y mai
-    entonces NO parte ese segmento. Se conserva con duracion cero.
+    NO se le fabrica un tiempo. Antes heredaba el final de la anterior con duracion
+    cero, y eso es inventar una marca que nadie midio — exactamente lo que este
+    contrato existe para no hacer.
+
+    Se abandona la via por palabra SOLO para este segmento: sale sin `words`, mai lo
+    trata como v1, y el TEXTO viaja intacto.
     """
     _, rows = escribir(tmp_path, [{
         "start": 0.0, "end": 3.0, "text": "a b c",
         "words": [{"start": 0.0, "end": 1.0, "word": "a"},
-                  {"start": None, "end": None, "word": "b"},
+                  mala,
                   {"start": 2.0, "end": 3.0, "word": "c"}],
     }])
-    assert [w["word"] for w in rows[0]["words"]] == ["a", "b", "c"]
+    assert "words" not in rows[0], "sin palabras: la via de compatibilidad"
+    assert rows[0]["text"] == "a b c", "el texto NO se pierde"
+    assert (rows[0]["start"], rows[0]["end"]) == (0.0, 3.0), "ni los tiempos del segmento"
+
+
+def test_abandonar_un_segmento_no_arrastra_a_los_demas(tmp_path):
+    """La decision es POR SEGMENTO: uno malo no tira las palabras de los buenos."""
+    _, rows = escribir(tmp_path, [
+        {"start": 0.0, "end": 2.0, "text": "uno dos",
+         "words": [{"start": 0.0, "end": 1.0, "word": "uno"},
+                   {"start": 1.0, "end": 2.0, "word": " dos"}]},
+        {"start": 2.0, "end": 4.0, "text": "tres cuatro",
+         "words": [{"start": 2.0, "end": 3.0, "word": "tres"},
+                   {"start": None, "end": None, "word": " cuatro"}]},
+        {"start": 4.0, "end": 6.0, "text": "cinco seis",
+         "words": [{"start": 4.0, "end": 5.0, "word": "cinco"},
+                   {"start": 5.0, "end": 6.0, "word": " seis"}]},
+    ])
+    assert "words" in rows[0]
+    assert "words" not in rows[1], "solo el segmento con la palabra invalida"
+    assert "words" in rows[2]
+    assert [r["text"] for r in rows] == ["uno dos", "tres cuatro", "cinco seis"]
 
 
 def test_sin_palabras_no_aparece_la_clave(tmp_path):

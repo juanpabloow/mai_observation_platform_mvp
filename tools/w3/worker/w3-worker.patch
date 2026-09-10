@@ -21,8 +21,15 @@ diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/ma
      diarization_max_speakers: int = Field(default=10, ge=1)
 diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/mai-w3-worker/transcript-worker/app/pull/artifacts.py /home/santiagov/w3-work/transcript-worker/app/pull/artifacts.py
 --- /home/santiagov/services/mai-w3-worker/transcript-worker/app/pull/artifacts.py	2026-09-09 17:21:08.056252860 -0500
-+++ /home/santiagov/w3-work/transcript-worker/app/pull/artifacts.py	2026-09-10 18:15:51.763116919 -0500
-@@ -30,6 +30,12 @@
++++ /home/santiagov/w3-work/transcript-worker/app/pull/artifacts.py	2026-09-10 18:29:30.525242391 -0500
+@@ -24,12 +24,19 @@
+ import gzip
+ import hashlib
+ import json
++import math
+ from dataclasses import dataclass
+ from typing import Any, Iterable, Mapping, Optional
+ 
  TRANSCRIPT_SCHEMA = "meetings.transcript"
  DIARIZATION_SCHEMA = "meetings.diarization"
  SCHEMA_VERSION = 1
@@ -35,7 +42,7 @@ diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/ma
  
  
  @dataclass(frozen=True)
-@@ -71,6 +77,47 @@
+@@ -71,6 +78,58 @@
      return os.path.getsize(path), _hash_file(path)
  
  
@@ -43,18 +50,29 @@ diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/ma
 +    raw: Any, seg_start: float, seg_end: float
 +) -> list[dict[str, Any]]:
 +    """
-+    Las palabras de un segmento, listas para que mai las acepte.
++    Las palabras de un segmento, o NINGUNA.
 +
-+    mai valida que cada palabra este DENTRO de su segmento y en orden, y rechaza el
-+    artefacto entero si no — asi que se recortan aqui en vez de descubrirlo al final
-+    del pipeline, con la GPU ya gastada.
++    Devuelve la lista completa o una lista vacia. No hay termino medio, y esa es toda
++    la decision: mai solo parte un segmento cuando sus `words` se corresponden UNA A
++    UNA con los tokens de su texto, asi que una lista incompleta no sirve de nada —
++    mai la descartaria igual— y una lista con un tiempo inventado es peor, porque si
++    cuela y coloca una frontera donde nadie midio.
 +
-+    NO se inventa ninguna: un segmento sin palabras sale sin la clave, y mai lo trata
-+    como v1. Y no se descarta ninguna con texto: mai solo parte un segmento cuando sus
-+    palabras se corresponden UNA A UNA con los tokens del texto, asi que tirar una
-+    palabra por tener tiempos ilegibles costaria la particion entera de ese segmento.
-+    Por eso una palabra con tiempos malos hereda el final de la anterior en vez de
-+    desaparecer: conserva la correspondencia, y su duracion nula es visible.
++    Que se hace con cada problema:
++
++      · fuera de los limites del segmento -> SE RECORTA. Acotar a un limite conocido
++        no es inventar, y mai rechaza el artefacto entero si una palabra se sale.
++      · desordenada respecto de la anterior -> se acota al cursor, por lo mismo.
++      · tiempos ausentes, ilegibles, no finitos, o `end` anterior a `start`
++        -> SE ABANDONA la via por palabra para ESTE segmento.
++      · texto vacio o entrada que no es un objeto -> idem: sin correspondencia uno a
++        uno no hay particion posible.
++
++    Abandonar significa que el segmento sale SIN la clave `words`, o sea por la via de
++    compatibilidad: mai lo trata como v1, emite un bloque con su texto y sus tiempos
++    ORIGINALES intactos, y —si los turnos dicen que ahi dentro cambia el hablante—
++    marca la atribucion como tentativa. Se pierde la precision, no el texto, y la
++    perdida queda declarada en vez de disimulada con un tiempo fabricado.
 +    """
 +    if not isinstance(raw, list) or not raw:
 +        return []
@@ -62,17 +80,17 @@ diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/ma
 +    cursor = seg_start
 +    for item in raw:
 +        if not isinstance(item, Mapping):
-+            continue
++            return []
 +        text = str(item.get("word", ""))
 +        if text == "":
-+            continue
++            return []
 +        try:
 +            w_start = float(item.get("start"))
 +            w_end = float(item.get("end"))
 +        except (TypeError, ValueError):
-+            # Sin tiempos utiles: se ancla al cursor con duracion cero. Se conserva
-+            # para no romper la correspondencia uno a uno con el texto.
-+            w_start = w_end = cursor
++            return []
++        if not (math.isfinite(w_start) and math.isfinite(w_end)) or w_end < w_start:
++            return []
 +        w_start = min(max(w_start, cursor), seg_end)
 +        w_end = min(max(w_end, w_start), seg_end)
 +        out.append({"start": round(w_start, 3), "end": round(w_end, 3), "word": text})
@@ -83,7 +101,7 @@ diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/ma
  def write_transcript_artifact(
      path: str,
      *,
-@@ -90,7 +137,7 @@
+@@ -90,7 +149,7 @@
      """
      header = {
          "schema": TRANSCRIPT_SCHEMA,
@@ -92,7 +110,7 @@ diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/ma
          "language": language,
          "duration_seconds": round(float(duration_seconds), 3),
          "model": model,
-@@ -113,6 +160,10 @@
+@@ -113,6 +172,10 @@
          confidence = segment.get("confidence")
          if isinstance(confidence, (int, float)):
              row["confidence"] = max(0.0, min(1.0, round(float(confidence), 4)))
@@ -103,7 +121,7 @@ diff -ru '--exclude=__pycache__' '--exclude=.env.w3' /home/santiagov/services/ma
          rows.append(row)
  
      size, count = _write_ndjson_gz(path, rows)
-@@ -144,7 +195,7 @@
+@@ -144,7 +207,7 @@
  
      header = {
          "schema": DIARIZATION_SCHEMA,
