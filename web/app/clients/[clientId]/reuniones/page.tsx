@@ -10,6 +10,7 @@ import { MeetingsSearch } from "@/components/reuniones/MeetingsSearch";
 import { ActiveRangeChip, MeetingsFilterMenu, MeetingsSortMenu } from "@/components/reuniones/MeetingsToolbar";
 import { RANGE_KEYS, SORT_KEYS, type RangeKey, type SortKey } from "@/lib/meetingsFilters";
 import { headlineOf, listMeetings, type MeetingFacet } from "@/lib/meetingsData";
+import { parseMediaLimits } from "@worker/meetings/mediaLimits.js";
 
 const FACETS = new Set<MeetingFacet>(["all", "done", "processing", "attention"]);
 const PAGE_SIZE = 9;
@@ -63,6 +64,11 @@ export default async function ClientMeetingsPage({
     { facet, search, sort },
   );
   const headline = headlineOf(all);
+  // Los límites EFECTIVOS, no los por defecto: `MEETINGS_MAX_MEDIA_BYTES` y
+  // compañía pueden apretarlos en Railway, y el portero del navegador tiene que
+  // rechazar lo mismo que rechazaría el servidor. Se leen aquí porque
+  // `process.env` sólo existe en el servidor.
+  const { limits } = parseMediaLimits(process.env);
   const requestedPage = Math.max(1, Math.trunc(Number(pageRaw)) || 1);
   const pageCount = Math.max(1, Math.ceil(all.length / PAGE_SIZE));
   const page = Math.min(requestedPage, pageCount);
@@ -97,7 +103,7 @@ export default async function ClientMeetingsPage({
           <PageHeading title="Reuniones" count={headline.total} />
           <MeetingsSearch />
           <span className="ml-auto flex shrink-0 items-center gap-1.5">
-            <UploadMeetingButton />
+            <UploadMeetingButton clientId={client.id} limits={limits} basePath={base} />
           </span>
         </div>
       </PageShell>

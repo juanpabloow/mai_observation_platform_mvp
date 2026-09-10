@@ -135,8 +135,13 @@ export function statusOf(row: UiMeetingRow): MeetingStatus {
   if (row.runningStage === null && row.failureCode !== null && row.transcriptState === "failed") {
     return { kind: "failed", reason: reasonFor(row.failureCode) };
   }
-  if (row.runningStage === "normalize") return { kind: "uploading", percent: pct };
-  if (row.runningStage === "transcribe") return { kind: "transcribing", percent: pct };
+  // `normalize` NO es «Subiendo»: los bytes ya están en R2 y lo que corre es la
+  // conversión a 16 kHz mono, que es el primer paso de producir el transcript.
+  // Mapearlo a «Subiendo» hacía que una reunión ya subida mostrara «Subiendo ·
+  // 0 %» indefinidamente, que se lee como una subida atascada.
+  if (row.runningStage === "normalize" || row.runningStage === "transcribe") {
+    return { kind: "transcribing", percent: pct };
+  }
   if (row.runningStage === "diarize") return { kind: "diarizing", percent: pct };
   if (row.analysisState === "running") return { kind: "analyzing", percent: pct };
 

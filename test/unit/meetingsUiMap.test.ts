@@ -89,8 +89,10 @@ test('lista pero sin hablantes tiene su propio estado, no un fallo', () => {
 });
 
 test('la etapa en curso se nombra, no se agrupa en «procesando»', () => {
+  // `normalize` NO es «Subiendo»: los bytes ya están en R2. Mostrarlo así hacía
+  // que una reunión recién subida dijera «Subiendo · 0 %» sin moverse.
   assert.deepEqual(statusOf(row({ transcriptState: 'running', runningStage: 'normalize' })), {
-    kind: 'uploading',
+    kind: 'transcribing',
     percent: 0,
   });
   assert.deepEqual(
@@ -430,4 +432,22 @@ test('la cabecera cuenta las filas reales y no cuenta lo que no existe', () => {
   assert.equal(headline.attention, 1);
   assert.equal(headline.transcribedLabel, '2 min', 'sólo el audio con transcripción lista');
   assert.equal(headline.openTasks, null, 'no hay almacenamiento de tareas: null, no 0');
+});
+
+test('subiendo sólo cuando los bytes están en vuelo de verdad', () => {
+  // media_state 'uploading' = el PUT está en marcha. Es el ÚNICO caso en que la
+  // fila debe decir «Subiendo».
+  assert.equal(
+    statusOf(row({ mediaState: 'uploading', transcriptState: 'pending', runningStage: null })).kind,
+    'uploading',
+  );
+  assert.equal(
+    statusOf(row({ mediaState: 'pending', transcriptState: 'pending', runningStage: null })).kind,
+    'uploading',
+  );
+  // Con el audio ya confirmado y normalize en cola, es transcripción en curso.
+  assert.equal(
+    statusOf(row({ mediaState: 'ready', transcriptState: 'pending', runningStage: 'normalize' })).kind,
+    'transcribing',
+  );
 });

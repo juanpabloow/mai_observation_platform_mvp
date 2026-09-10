@@ -101,6 +101,7 @@ export function MeetingWorkspace({
   // La pestaña inicial. Antes: Resumen en cuanto la reunión estaba lista. Pero
   // sin etapa de análisis ese Resumen está vacío, y abrir en una pestaña vacía
   // esconde lo único que sí hay. Se abre en Resumen sólo si tiene contenido.
+  const hasTranscript = meeting.transcript.length > 0;
   const hasSummary =
     meeting.summary.executive.trim() !== "" ||
     meeting.summary.findings.length > 0 ||
@@ -259,7 +260,9 @@ export function MeetingWorkspace({
                     {face.label} · {face.progress.value} %
                   </span>
                   <span className="text-[0.75rem] text-warn/90">
-                    Transcripción y participantes ya terminados. Puedes leer, buscar y citar el transcript mientras tanto.
+                    {hasTranscript
+                      ? "La transcripción ya está disponible: puedes leerla, buscarla y citarla mientras el resto avanza."
+                      : "El transcript aparecerá aquí en cuanto la etapa termine."}
                   </span>
                   <ProgressBar
                     kind={face.progress.kind}
@@ -270,13 +273,34 @@ export function MeetingWorkspace({
                 </div>
                 <Chip tone="success">Te avisaremos al terminar</Chip>
               </div>
+              {/* La lista se DERIVA del estado. Estaba escrita para un solo
+                  escenario —«el análisis corre, todo lo anterior está hecho»— y
+                  con vistos verdes fijos: una reunión recién subida mostraba
+                  «Transcripción completa» y «0 participantes separados» en verde
+                  sin tener ni una frase. Ahora cada línea dice lo que hay. */}
               <ol className="flex flex-wrap items-center gap-4 border-t border-warn/20 pt-2">
-                <PhaseDone>Transcripción completa</PhaseDone>
-                <PhaseDone>{meeting.participants.length} participantes separados</PhaseDone>
-                <li className="flex items-center gap-2 text-[0.78125rem] text-warn">
-                  <span aria-hidden className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-warn/30 border-t-warn" />
-                  Análisis (resumen y tareas)
-                </li>
+                <PhaseItem
+                  state={
+                    hasTranscript ? "done" : meeting.status.kind === "transcribing" ? "running" : "pending"
+                  }
+                >
+                  {hasTranscript ? "Transcripción completa" : "Transcripción"}
+                </PhaseItem>
+                <PhaseItem
+                  state={
+                    meeting.participants.length > 0
+                      ? "done"
+                      : meeting.status.kind === "diarizing"
+                        ? "running"
+                        : "pending"
+                  }
+                >
+                  {meeting.participants.length > 0
+                    ? `${meeting.participants.length} participantes separados`
+                    : "Separación de participantes"}
+                </PhaseItem>
+                {/* El análisis no tiene etapa ni almacenamiento: nunca «corre». */}
+                <PhaseItem state="unavailable">Análisis: todavía no disponible</PhaseItem>
               </ol>
             </div>
           ) : null}
@@ -357,14 +381,41 @@ export function MeetingWorkspace({
   );
 }
 
-function PhaseDone({ children }: { children: React.ReactNode }) {
+/**
+ * Una línea de la lista de fases, con su estado REAL.
+ *
+ * Sustituye a `PhaseDone`, que sólo sabía pintar el visto verde: con un único
+ * estado posible, la lista afirmaba que todo lo anterior a la etapa en curso
+ * estaba hecho, y eso sólo era cierto en el escenario para el que se dibujó.
+ * «pendiente» y «no disponible» se distinguen a propósito: lo primero llegará,
+ * lo segundo no existe todavía.
+ */
+function PhaseItem({
+  state,
+  children,
+}: {
+  state: "done" | "running" | "pending" | "unavailable";
+  children: React.ReactNode;
+}) {
+  const tone =
+    state === "done"
+      ? "text-foreground"
+      : state === "running"
+        ? "text-warn"
+        : "text-warn/70";
   return (
-    <li className="flex items-center gap-2 text-[0.78125rem] text-foreground">
-      <span aria-hidden className="inline-flex size-3.5 shrink-0 items-center justify-center rounded-full bg-success text-white">
-        <svg viewBox="0 0 16 16" className="size-2" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
-          <path d="M3.4 8.4l3 3 6.2-6.6" />
-        </svg>
-      </span>
+    <li className={`flex items-center gap-2 text-[0.78125rem] ${tone}`}>
+      {state === "done" ? (
+        <span aria-hidden className="inline-flex size-3.5 shrink-0 items-center justify-center rounded-full bg-success text-white">
+          <svg viewBox="0 0 16 16" className="size-2" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3.4 8.4l3 3 6.2-6.6" />
+          </svg>
+        </span>
+      ) : state === "running" ? (
+        <span aria-hidden className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-warn/30 border-t-warn" />
+      ) : (
+        <span aria-hidden className="size-3.5 shrink-0 rounded-full border-2 border-warn/25" />
+      )}
       {children}
     </li>
   );

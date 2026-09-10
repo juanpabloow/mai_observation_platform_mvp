@@ -452,7 +452,7 @@ export function AudioPlayer({
       {note ? <span className="shrink-0 whitespace-nowrap text-[0.6875rem] text-warn">{note}</span> : null}
 
       {effectiveState === "unavailable" ? (
-        <span className="shrink-0 whitespace-nowrap text-[0.6875rem] text-muted">Audio no disponible · el transcript sigue completo</span>
+        <span className="shrink-0 whitespace-nowrap text-[0.6875rem] text-muted">Audio no disponible todavía</span>
       ) : null}
       {effectiveState === "error" ? (
         <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-[0.6875rem] text-brand">
