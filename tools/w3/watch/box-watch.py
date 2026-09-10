@@ -39,9 +39,11 @@ from __future__ import annotations
 
 import argparse
 import errno
+import fcntl
 import json
 import os
 import socket
+import struct
 import subprocess
 import sys
 import time
@@ -121,6 +123,50 @@ def tcp_ms(host: str, port: int, timeout_s: float = 3.0, expect_banner: bool = F
     except OSError as cause:
         return _fail(cause)
     return round((time.monotonic() - started) * 1000, 1)
+
+
+def tailscaled_started() -> int | None:
+    """
+    Momento de arranque de tailscaled, en tics desde el arranque del sistema.
+
+    Sin subprocesos: se lee de /proc. Si este numero CAMBIA entre dos muestras,
+    tailscaled se reinicio — y un reinicio del demonio reconfigura el tunel y resetea
+    las conexiones que iban por el. Los dos cortes de hoy dieron `Connection reset by
+    peer`, asi que distinguir «el demonio se reinicio» de «el camino se rompio» dejo de
+    ser un detalle.
+    """
+    try:
+        for entry in os.listdir("/proc"):
+            if not entry.isdigit():
+                continue
+            if read(f"/proc/{entry}/comm") != "tailscaled":
+                continue
+            fields = read(f"/proc/{entry}/stat").rsplit(") ", 1)
+            if len(fields) != 2:
+                return None
+            return int(fields[1].split()[19])
+    except OSError:
+        return None
+    return None
+
+
+def iface_addr(name: str) -> str | None:
+    """
+    Direccion IPv4 del interfaz, por ioctl. Tambien sin subprocesos.
+
+    Si `tailscale0` pierde o cambia su direccion, las conexiones que la usaban se
+    rompen aunque el proceso siga vivo. Es la otra mitad de la pregunta anterior.
+    """
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    try:
+        packed = fcntl.ioctl(
+            sock.fileno(), 0x8915, struct.pack("256s", name.encode()[:15])  # SIOCGIFADDR
+        )
+        return socket.inet_ntoa(packed[20:24])
+    except OSError:
+        return None
+    finally:
+        sock.close()
 
 
 def tailscale_state() -> dict:
@@ -204,6 +250,10 @@ def sample(
         # sshd, independiente de la ruta de fuera
         "ssh_local_ms": tcp_ms("127.0.0.1", 22, expect_banner=True),
         "ssh_lan_ms": tcp_ms(lan_ip, 22) if lan_ip else None,
+        # El tunel: si estos dos cambian, las conexiones que iban por el se rompen
+        # aunque nada mas falle. Es la lectura que faltaba para explicar un reset.
+        "ts_addr": iface_addr("tailscale0"),
+        "tsd_started": tailscaled_started(),
     }
     if with_tailscale:
         row["ts"] = tailscale_state()

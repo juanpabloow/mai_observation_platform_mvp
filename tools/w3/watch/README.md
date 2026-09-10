@@ -66,6 +66,26 @@ Eso también explica el fichero con bytes nulos que apareció tras el primer cor
 una transferencia interrumpida a media escritura, no bloques sin volcar por un corte de
 corriente. Un motivo menos atribuido a la alimentación.
 
+## Dos candidatos ya descartados con los registros existentes
+
+Los dos cortes de hoy dieron la MISMA firma: `Connection reset by peer`, no un tiempo
+de espera agotado. Un reset sobre una conexión establecida apunta a pérdida de estado,
+así que lo primero era mirar si alguno de los dos demonios de Tailscale se había
+reiniciado. **Ninguno lo hizo:**
+
+* Servidor: `tailscaled.service` arrancó exactamente tres veces hoy —09:46:40, 13:01:35
+  y 13:54:57—, que son los tres arranques del sistema. **Cero reinicios** durante los
+  cortes.
+* Mac: el demonio lleva en marcha desde el **9 de septiembre a las 17:39:47**, sin
+  interrupción.
+
+Así que el túnel estaba levantado en los dos extremos, el servidor estaba vivo, su
+enlace nunca cambió de estado — y aun así las conexiones establecidas se resetearon y
+el par pasó a «desconectado» desde el Mac. Lo que queda por distinguir es si el camino
+(Wi-Fi del Mac, router) dejó de pasar el UDP de WireGuard, o si algo perdió el estado
+de ese flujo. Las sondas registran `ts_addr` y `tsd_started` en los dos lados para que
+esto no haya que volver a deducirlo a posteriori.
+
 ## Lo que las sondas ya midieron, y que conviene vigilar
 
 * **RTT del servidor CABLEADO a su puerta de enlace: 4,6–99 ms, media 15, jitter 26.**

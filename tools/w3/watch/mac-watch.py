@@ -88,6 +88,27 @@ def tcp_ms(host: str, port: int = 22, timeout_s: float = 3.0):
     return round((time.monotonic() - started) * 1000, 1)
 
 
+def tunnel_state() -> dict:
+    """
+    Direccion del tunel de Tailscale y arranque de su demonio, en este lado.
+
+    Mismo motivo que en el servidor: un reinicio del demonio o un cambio de direccion
+    del tunel resetea las conexiones que lo usaban, y los dos cortes de hoy fueron
+    resets. Una sola llamada a `ifconfig` y una a `ps`.
+    """
+    addr = None
+    for line in run(["ifconfig"]).splitlines():
+        token = line.strip()
+        if token.startswith("inet 100."):
+            addr = token.split()[1]
+            break
+    started = ""
+    pid = run(["pgrep", "-n", "-f", "Tailscale.app|tailscaled"])
+    if pid.isdigit():
+        started = run(["ps", "-o", "lstart=", "-p", pid]).strip()
+    return {"addr": addr, "daemon_started": started}
+
+
 def wifi_state() -> dict:
     """Estado del único tramo inalámbrico de la cadena."""
     ifc = run(["ifconfig", "en0"])
@@ -166,6 +187,7 @@ def main(argv: list[str] | None = None) -> int:
                 "ts_ssh_ms": tcp_ms(TS_IP),
                 # el tramo inalámbrico
                 "wifi": wifi_state(),
+                "tunel": tunnel_state(),
             }
             if count % args.ts_every == 0:
                 row["ts"] = tailscale_peer()
