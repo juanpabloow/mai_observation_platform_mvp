@@ -217,6 +217,27 @@ export async function uploadInit(
 export interface UploadCompleteRequest {
   readonly bytes: number;
   readonly checksumSha256: string;
+  /**
+   * Cuántas personas hablan. `null` o ausente es AUTOMÁTICO — no es 1.
+   * Se guarda en `requested_options` del run, así que vale para ESTE run y no
+   * cambia el comportamiento de ninguna otra reunión.
+   */
+  readonly speakerCount?: number | null;
+}
+
+/**
+ * Las opciones del run a partir de lo que pidió quien sube la reunión.
+ *
+ * Automático NO se representa: se omite la clave. El worker ya trata la ausencia
+ * como automático, que es su comportamiento de siempre, así que un run creado antes
+ * de que esta opción existiera y uno creado eligiendo «Automático» se comportan
+ * igual — y eso es lo que se quiere, en vez de dos caminos que hay que mantener.
+ */
+export function buildRequestedOptions(
+  speakerCount: number | null | undefined,
+): Record<string, unknown> {
+  if (speakerCount === null || speakerCount === undefined) return {};
+  return { speakerCount };
 }
 
 export interface UploadCompleteResponse {
@@ -310,6 +331,11 @@ export async function uploadComplete(
           meetingId: meeting.id,
           trigger: 'initial',
           requestedByUserId: scope.userId ?? null,
+          // Sólo se escribe cuando hay un número. Un `speakerCount: null` en el
+          // JSON diría «alguien eligió automático» y «nadie eligió nada» con la
+          // misma forma, y el worker tiene que poder distinguirlo de un run
+          // antiguo que no conocía la opción.
+          requestedOptions: buildRequestedOptions(request.speakerCount),
         },
         executor,
       ));

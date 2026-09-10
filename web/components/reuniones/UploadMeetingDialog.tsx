@@ -131,6 +131,13 @@ function bytesLabel(bytes: number): string {
   return `${value >= 10 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
+/**
+ * Del 1 al 10, que es el `diarization_max_speakers` del worker. Ofrecer más sería
+ * ofrecer algo que el worker recortaría, y la base guardaría entonces una intención
+ * distinta de la que corrió.
+ */
+const SPEAKER_COUNT_CHOICES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10] as const;
+
 export function UploadMeetingButton({
   clientId,
   limits,
@@ -146,6 +153,11 @@ export function UploadMeetingButton({
   const [title, setTitle] = useState("");
   const [dragging, setDragging] = useState(false);
   const [state, setState] = useState<UploadState>(IDLE);
+  /**
+   * `null` es AUTOMÁTICO, y es el valor por defecto. No es 1: «no lo sé» y «habla
+   * una sola persona» son respuestas distintas, y sólo la segunda es una afirmación.
+   */
+  const [speakerCount, setSpeakerCount] = useState<number | null>(null);
   const dialogRef = useRef<HTMLDialogElement>(null);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -220,6 +232,7 @@ export function UploadMeetingButton({
         limits,
         title: title.trim() === "" ? titleFromFilename(file.name) : title.trim(),
         attemptId: attemptRef.current,
+        speakerCount,
         onState: setState,
         signal: controller.signal,
       });
@@ -381,6 +394,29 @@ export function UploadMeetingButton({
                 maxLength={500}
                 className="u-focus rounded-xl border border-line-strong bg-surface px-3 py-2 text-[0.8125rem] text-foreground outline-none disabled:text-muted"
               />
+            </label>
+
+            <label className="flex flex-col gap-1.5">
+              <span className="text-[0.75rem] text-muted">¿Cuántas personas hablan?</span>
+              <select
+                value={speakerCount === null ? "auto" : String(speakerCount)}
+                onChange={(e) =>
+                  setSpeakerCount(e.target.value === "auto" ? null : Number(e.target.value))
+                }
+                disabled={busy}
+                className="u-focus rounded-xl border border-line-strong bg-surface px-3 py-2 text-[0.8125rem] text-foreground outline-none disabled:text-muted"
+              >
+                <option value="auto">Automático</option>
+                {SPEAKER_COUNT_CHOICES.map((n) => (
+                  <option key={n} value={n}>
+                    {n === 1 ? "1 persona" : `${n} personas`}
+                  </option>
+                ))}
+              </select>
+              <span className="text-[0.6875rem] text-muted">
+                Déjalo en automático si no estás seguro. Decirlo ayuda cuando alguien
+                habla muy poco y el detector no llega a separarlo.
+              </span>
             </label>
 
             <div className="flex flex-col gap-2.5">

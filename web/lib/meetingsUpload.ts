@@ -337,6 +337,15 @@ export interface UploadInput {
   readonly file: File;
   readonly clientId: string;
   readonly title: string;
+  /**
+   * Cuántas personas hablan, si quien sube la reunión lo sabe. `null` es
+   * AUTOMÁTICO, que es lo que hay que mandar cuando no se sabe — y NO 1, que
+   * afirmaría que habla una sola persona.
+   *
+   * Viaja en `upload-complete` porque es ahí donde se crea el run, y se guarda en
+   * sus `requested_options`: vale para ESTA reunión y no toca a ninguna otra.
+   */
+  readonly speakerCount?: number | null;
   readonly limits: MediaLimits;
   readonly onState: (state: UploadState) => void;
   readonly signal?: AbortSignal;
@@ -484,7 +493,15 @@ export async function uploadMeeting(input: UploadInput): Promise<UploadState> {
     await postJson<{ mediaState: string }>(
       fetchImpl,
       `/api/meetings/v1/meetings/${created.meetingId}/upload-complete`,
-      { clientId, bytes: file.size, checksumSha256 },
+      {
+        clientId,
+        bytes: file.size,
+        checksumSha256,
+        // Se omite en automático en vez de mandar null: la ausencia es lo que el
+        // worker ya interpreta como «que lo decida él», y así un run con
+        // «Automático» es indistinguible de uno anterior a que la opción existiera.
+        ...(input.speakerCount == null ? {} : { speakerCount: input.speakerCount }),
+      },
       signal,
     );
 

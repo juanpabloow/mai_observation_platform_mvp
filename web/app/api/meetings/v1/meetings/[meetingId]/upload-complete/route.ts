@@ -20,7 +20,7 @@ export async function POST(
       await uploadComplete(
         scope,
         requireUuidParam(meetingId, 'meetingId'),
-        { bytes: body.bytes, checksumSha256: body.checksumSha256 },
+        { bytes: body.bytes, checksumSha256: body.checksumSha256, speakerCount: body.speakerCount ?? null },
         meetingsDeps(),
       ),
     );

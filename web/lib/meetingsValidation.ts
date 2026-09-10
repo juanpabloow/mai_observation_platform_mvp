@@ -76,8 +76,33 @@ export const UploadInitBody = z
   })
   .strict();
 
+/**
+ * Cuántas personas hablan, si quien sube la reunión lo sabe.
+ *
+ * `null` y ausente significan lo mismo: AUTOMÁTICO, que el diarizador lo decida. No
+ * es lo mismo que 1 — «no lo sé» y «habla una sola persona» son respuestas distintas
+ * y llevan al diarizador por caminos distintos.
+ *
+ * El tope es el mismo `diarization_max_speakers` del worker (10). Pedir más no lo
+ * mejoraría: el worker lo recortaría, y entonces la base guardaría una intención que
+ * no fue la que corrió.
+ */
+export const SPEAKER_COUNT_MIN = 1;
+export const SPEAKER_COUNT_MAX = 10;
+export const speakerCount = z
+  .number()
+  .int()
+  .min(SPEAKER_COUNT_MIN)
+  .max(SPEAKER_COUNT_MAX)
+  .nullish();
+
 export const UploadCompleteBody = z
-  .object({ clientId: uuid, bytes: byteCount, checksumSha256: sha256Hex })
+  .object({
+    clientId: uuid,
+    bytes: byteCount,
+    checksumSha256: sha256Hex,
+    speakerCount: speakerCount,
+  })
   .strict();
 
 export const ClientScopedBody = z.object({ clientId: uuid }).strict();
