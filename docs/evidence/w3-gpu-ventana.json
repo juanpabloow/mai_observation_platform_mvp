@@ -1,0 +1,48 @@
+{
+  "fases": [
+    {
+      "fase": "transcribe",
+      "s": 38.2,
+      "device": "cuda",
+      "compute": "float16",
+      "segmentos": 14,
+      "con_palabras": 14,
+      "libre_al_acabar": 780,
+      "pico_proceso": 2286
+    },
+    {
+      "fase": "diarize",
+      "s": 12.0,
+      "backend": "pyannote_full",
+      "turnos": 47,
+      "whisper_cargado_antes": true,
+      "whisper_cargado_despues": false,
+      "libre_al_acabar": 996,
+      "pico_proceso": 2286
+    }
+  ],
+  "aviso_suelo": false,
+  "historico_antes": {
+    "http": "200",
+    "vram": {
+      "1619": 960
+    }
+  },
+  "libre_antes": 2746,
+  "resultado": "PASA",
+  "backend": "pyannote_full",
+  "memoria": {
+    "pico_proceso_mib": 2286,
+    "pico_tarjeta_mib": 3256,
+    "libre_minimo_mib": 460,
+    "suelo_mib": 250
+  },
+  "segundos_total": 51.0,
+  "historico_despues": {
+    "http": "200",
+    "vram": {
+      "1619": 960,
+      "21448": 1750
+    }
+  }
+}
