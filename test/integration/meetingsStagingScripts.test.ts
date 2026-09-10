@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { after, test } from 'node:test';
 import { spawnSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { query } from '../../src/db/client.js';
 import { cleanupTenant, closeDb } from './fixtures.js';
@@ -17,7 +18,7 @@ import { cleanupTenant, closeDb } from './fixtures.js';
  *     rotar, y aborta sin emitir ni revocar si algo difiere;
  *   · `assertConnectedDatabase` rechaza una base que no es la declarada aunque
  *     la cadena de conexión diga que sí;
- *   · el preflight del rollback distingue «las cinco son la cabeza» de «alguien
+ *   · el preflight del rollback distingue «las de Reuniones son la cabeza» de «alguien
  *     puso una migración encima».
  */
 
@@ -569,46 +570,61 @@ test('y sin --rotate-token, más de una viva se reporta en el conteo', async () 
 
 // ── El preflight del rollback ───────────────────────────────────────────────
 
-test('el preflight del rollback aprueba cuando las cinco son la cabeza', () => {
+/**
+ * Cuántas migraciones de Reuniones hay. Se CUENTAN los ficheros en vez de escribir el
+ * número aquí: la lista creció una vez (`speaker_uncertain`) y esta prueba se cayó por
+ * tenerlo a mano, que es la misma clase de duplicación que el propio script existe
+ * para evitar. No se importa de `meetingsRollbackPreflight` porque ese módulo se
+ * autoejecuta al cargarse — es un CLI, no una biblioteca.
+ */
+const ROLLBACK_STACK_SIZE = readdirSync(
+  new URL('../../migrations/', import.meta.url),
+).filter((name) => name.includes('meetings') && name.endsWith('.ts')).length;
+
+test('el preflight del rollback aprueba cuando las de Reuniones son la cabeza', () => {
   const result = run(ROLLBACK, [], guardEnv());
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Las cinco de Reuniones son la cabeza, en orden/);
-  assert.match(result.stdout, /node-pg-migrate --tsx down 5/);
+  assert.match(result.stdout, /Las 6 de Reuniones son la cabeza, en orden/);
+  // El conteo del `down` sale de EXPECTED_STACK.length, no de un 5 escrito a mano:
+  // añadir una migración lo mueve solo, y ésa era la mitad del defecto original.
+  assert.match(result.stdout, /node-pg-migrate --tsx down 6/);
 });
 
 test('y ABORTA si alguien puso una migración encima', async () => {
-  // El defecto exacto del runbook anterior: `down 5` no significa «revierte las
-  // de Reuniones», significa «revierte las cinco últimas, sean las que sean».
-  // Con una migración ajena encima, revertiría ésa y sólo cuatro de Reuniones.
-  const intruder = '1783900000000_otra-cosa-de-otro-agente';
+  // El defecto exacto del runbook anterior: `down N` no significa «revierte las
+  // de Reuniones», significa «revierte las N últimas, sean las que sean». Con una
+  // migración ajena encima, revertiría ésa y una de Reuniones se quedaría aplicada.
+  const intruder = '1784100000000_otra-cosa-de-otro-agente';
   await query(`INSERT INTO pgmigrations (name, run_on) VALUES ($1, now())`, [intruder]);
   try {
     const result = run(ROLLBACK, [], guardEnv());
     assert.equal(result.status, 1, result.stdout);
-    assert.match(result.stderr, /NO son las cinco de Reuniones en orden/);
+    assert.match(result.stderr, /NO son las 6 de Reuniones en orden/);
     assert.match(result.stderr, new RegExp(intruder));
-    assert.match(result.stderr, /NO ejecutes 'node-pg-migrate down 5'/);
-    // Y dice cuál de las cinco se ha caído de la cabeza.
+    assert.match(result.stderr, /NO ejecutes 'node-pg-migrate down 6'/);
+    // Y dice cuál se ha caído de la cabeza.
     assert.match(result.stderr, /No están en la cabeza: 1783400000000_meetings-module/);
   } finally {
     await query(`DELETE FROM pgmigrations WHERE name = $1`, [intruder]);
   }
 });
 
-test('y ABORTA si las cinco están pero en otro orden', async () => {
+test('y ABORTA si están todas pero en otro orden', async () => {
   // Un `id` reordenado significa que se aplicaron en otra secuencia, y el `down`
   // por conteo las revertiría en un orden que sus guardas no esperan.
   const rows = await query<{ id: number; name: string }>(
     `SELECT id, name FROM pgmigrations WHERE name LIKE '%meetings%' ORDER BY id`,
   );
-  assert.equal(rows.rows.length, 5);
+  // Se lee de EXPECTED_STACK y no de un número escrito aquí: si la pila crece,
+  // esta prueba no tiene que enterarse.
+  assert.equal(rows.rows.length, ROLLBACK_STACK_SIZE);
   const [first, second] = rows.rows;
   await query(`UPDATE pgmigrations SET name = $1 WHERE id = $2`, [second.name, first.id]);
   await query(`UPDATE pgmigrations SET name = $1 WHERE id = $2`, [first.name, second.id]);
   try {
     const result = run(ROLLBACK, [], guardEnv());
     assert.equal(result.status, 1, result.stdout);
-    assert.match(result.stderr, /NO son las cinco de Reuniones en orden/);
+    assert.match(result.stderr, /NO son las 6 de Reuniones en orden/);
   } finally {
     await query(`UPDATE pgmigrations SET name = $1 WHERE id = $2`, [first.name, first.id]);
     await query(`UPDATE pgmigrations SET name = $1 WHERE id = $2`, [second.name, second.id]);

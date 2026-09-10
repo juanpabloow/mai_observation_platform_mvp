@@ -1,6 +1,6 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
 import {
   ENV_KIND_VAR,
@@ -548,31 +548,48 @@ test('el script HTTP no sigue redirecciones', () => {
 
 // ── El preflight del rollback ──────────────────────────────────────────────
 
-test('el preflight del rollback nombra las cinco migraciones esperadas', () => {
+/** Las migraciones de Reuniones que hay EN EL DIRECTORIO, en orden de aplicación. */
+function meetingsMigrationFiles(): string[] {
+  return readdirSync(new URL('migrations/', REPO))
+    .filter((name) => name.includes('meetings') && name.endsWith('.ts'))
+    .map((name) => name.replace(/\.ts$/, ''))
+    .sort();
+}
+
+test('la lista del preflight es EXACTAMENTE las migraciones de Reuniones del directorio', () => {
+  // Antes esto comprobaba una lista escrita a mano contra otra lista escrita a mano, y
+  // se cayó al añadir `speaker_uncertain` — sin haber detectado nada real. Lo que
+  // importa es que la lista del script case con el directorio: si le falta una, el
+  // `down` por conteo revierte de menos y deja el esquema a medias; si le sobra,
+  // revierte una ajena. Se compara con el directorio, que es la fuente.
   const source = read('src/scripts/meetingsRollbackPreflight.ts');
-  for (const name of [
-    '1783400000000_meetings-module',
-    '1783500000000_meetings-core',
-    '1783600000000_meetings-transcript',
-    '1783700000000_meetings-worker-pools',
-    '1783800000000_meetings-result-uploads',
-  ]) {
-    assert.ok(source.includes(name), `falta ${name}`);
-  }
+  const listed = [...source.matchAll(/'(\d{13}_meetings-[a-z-]+)'/g)].map((match) => match[1]);
+  const onDisk = meetingsMigrationFiles();
+
+  assert.deepEqual(listed, onDisk, 'la lista del preflight y el directorio tienen que coincidir');
+  assert.ok(onDisk.length >= 5, 'y no puede quedarse vacía por un regex que dejó de casar');
 });
 
-test('las cinco esperadas existen como ficheros de migración', () => {
-  // Una lista escrita a mano que no case con el directorio haría que el
-  // preflight abortara siempre, o peor, que aprobara un rollback equivocado.
+test('cada migración que nombra el preflight existe como fichero', () => {
   const source = read('src/scripts/meetingsRollbackPreflight.ts');
   const names = [...source.matchAll(/'(\d{13}_meetings-[a-z-]+)'/g)].map((match) => match[1]);
-  assert.equal(names.length, 5);
   for (const name of names) {
     assert.doesNotThrow(
       () => readFileSync(new URL(`migrations/${name}.ts`, REPO)),
       `migrations/${name}.ts no existe`,
     );
   }
+});
+
+test('el `down` del preflight se calcula, no se escribe a mano', () => {
+  // La otra mitad del defecto original: un 5 literal en el mensaje seguiría diciendo
+  // «down 5» después de añadir una sexta migración.
+  const source = read('src/scripts/meetingsRollbackPreflight.ts');
+  assert.ok(
+    /down \$\{EXPECTED_STACK\.length\}/.test(source),
+    'el comando impreso tiene que derivar del tamaño de la pila',
+  );
+  assert.ok(!/down \d+'/.test(source), 'y no llevar un número literal');
 });
 
 test('el preflight del rollback es sólo lectura', () => {

@@ -27,6 +27,16 @@ Nada de esta carpeta se ha ejecutado. Se versiona para que lo que acabe corriend
    - `run_transcribe` pide `word_timestamps=True`, y el artefacto de transcript sube a
      `schema_version` 2 con `words` recortadas al segmento. Un segmento sin palabras
      sale sin la clave: **no se inventa ningún tiempo**.
+
+     **Cuidado con descartar palabras.** mai sólo parte un segmento si sus `words`
+     se corresponden UNA A UNA con los tokens de su `text` —y además coinciden los
+     textos—, porque el texto de cada bloque se rebana del original y así no se puede
+     perder ni duplicar nada. El filtro de `02` descarta palabras vacías o con tiempos
+     ilegibles; cada descarte rompe esa correspondencia y hace que mai **no parta ese
+     segmento** (lo emite entero y marcado `speaker_uncertain`). Eso es correcto y
+     seguro, pero significa que un filtro demasiado agresivo cuesta atribución. Hay
+     que medir cuántos segmentos acaban sin partir por esta razón antes de dar el
+     recorrido por bueno.
    - `DIARIZATION_BACKEND` pasa a `pyannote_full`, con `wespeaker` de reserva.
 
 ## Lo que hay que comprobar DESPUÉS de aplicarlos, y que no está comprobado
@@ -40,3 +50,5 @@ Nada de esta carpeta se ha ejecutado. Se versiona para que lo que acabe corriend
   perdida de 00:15–00:16.
 - Un recorrido completo con `speakerCount` elegido, comprobando en los logs del worker
   que `[diarize] ... num_speakers=2` aparece de verdad.
+- Cuántos segmentos quedan sin partir porque `words` no se corresponde con el texto.
+  Si son muchos, el problema está en cómo el worker emite las palabras, no en mai.

@@ -102,13 +102,14 @@ export async function ingestTranscriptVersion(
     await executor.query(
       `INSERT INTO meeting_segments
          (tenant_id, client_id, transcript_id, segment_index, start_sec, end_sec,
-          speaker_label, text, overlap, confidence)
+          speaker_label, text, overlap, confidence, speaker_uncertain)
        SELECT $1, $2, $3, s.idx, s.start_sec, s.end_sec, s.speaker_label, s.text,
-              s.overlap, s.confidence
+              s.overlap, s.confidence, s.speaker_uncertain
          FROM unnest(
                 $4::int[], $5::numeric[], $6::numeric[], $7::text[], $8::text[],
-                $9::boolean[], $10::numeric[]
-              ) AS s(idx, start_sec, end_sec, speaker_label, text, overlap, confidence)`,
+                $9::boolean[], $10::numeric[], $11::boolean[]
+              ) AS s(idx, start_sec, end_sec, speaker_label, text, overlap, confidence,
+                     speaker_uncertain)`,
       [
         input.tenantId,
         input.clientId,
@@ -120,6 +121,7 @@ export async function ingestTranscriptVersion(
         input.segments.map((segment) => segment.text),
         input.segments.map((segment) => segment.overlap),
         input.segments.map((segment) => segment.confidence),
+        input.segments.map((segment) => segment.speakerUncertain),
       ],
     );
   }
@@ -206,6 +208,7 @@ export interface TranscriptSegmentRow {
   text: string;
   overlap: boolean;
   confidence: string | null;
+  speaker_uncertain: boolean;
 }
 
 /**
@@ -229,7 +232,8 @@ export async function listSegments(
   executor?: Queryable,
 ): Promise<TranscriptSegmentRow[]> {
   const result = await q(executor).query<TranscriptSegmentRow>(
-    `SELECT id, segment_index, start_sec, end_sec, speaker_label, text, overlap, confidence
+    `SELECT id, segment_index, start_sec, end_sec, speaker_label, text, overlap, confidence,
+            speaker_uncertain
        FROM meeting_segments
       WHERE transcript_id = $1
       ORDER BY segment_index`,

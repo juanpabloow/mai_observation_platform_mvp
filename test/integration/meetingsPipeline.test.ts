@@ -2476,8 +2476,9 @@ test('un transcript v2 se ingiere partido por palabra, con los bloques y las mar
     speaker_label: string | null;
     text: string;
     overlap: boolean;
+    speaker_uncertain: boolean;
   }>(
-    `SELECT segment_index, start_sec, end_sec, speaker_label, text, overlap
+    `SELECT segment_index, start_sec, end_sec, speaker_label, text, overlap, speaker_uncertain
        FROM meeting_segments WHERE transcript_id = $1 ORDER BY segment_index`,
     [done.transcriptId],
   );
@@ -2511,13 +2512,19 @@ test('un transcript v2 se ingiere partido por palabra, con los bloques y las mar
     'partido, los tiempos son los de las palabras; sin partir, los del segmento — nunca interpolados',
   );
 
-  // La marca de solape: sólo el bloque que absorbió palabras de la otra voz.
+  // Solapamiento e incertidumbre son campos DISTINTOS, y aquí se ve por qué.
   assert.deepEqual(
     segments.rows.map((row) => row.overlap),
+    [false, false, false],
+    'ninguno tiene dos voces simultáneas: el «vale» ajeno es el 5,6 % del bloque',
+  );
+  assert.deepEqual(
+    segments.rows.map((row) => row.speaker_uncertain),
     [false, false, true],
-    'el bloque que se comió el «vale» declara que contiene dos voces',
+    'el tercero sí es tentativo: hay un cambio de hablante que las palabras no permiten situar',
   );
   assert.ok(segments.rows[2].text.includes('vale'), 'y no perdió la palabra');
+  assert.ok(segments.rows[2].text.includes('ahora'), 'ni «ahora», que no tenía entrada en words');
 
   // Índices densos y `segment_count` cuadrando con lo que hay.
   assert.deepEqual(segments.rows.map((row) => row.segment_index), [0, 1, 2]);
@@ -2578,8 +2585,9 @@ test('reingerir los mismos bloques partidos converge en vez de duplicar', async 
       speaker_label: string | null;
       text: string;
       overlap: boolean;
+      speaker_uncertain: boolean;
     }>(
-      `SELECT segment_index, speaker_label, text, overlap FROM meeting_segments
+      `SELECT segment_index, speaker_label, text, overlap, speaker_uncertain FROM meeting_segments
          WHERE transcript_id = $1 ORDER BY segment_index`,
       [first.version.id],
     );

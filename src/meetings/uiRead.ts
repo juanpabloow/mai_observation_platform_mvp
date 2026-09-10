@@ -42,7 +42,14 @@ export interface UiSegment {
   readonly endSec: number;
   readonly speakerLabel: string | null;
   readonly text: string;
+  /** Dos voces a la vez en el tramo. Afirmación sobre el AUDIO. */
   readonly overlap: boolean;
+  /**
+   * La atribución de hablante es tentativa. Afirmación sobre NUESTRA CONFIANZA, y por
+   * eso separada de `overlap`: presentarlas juntas diría «aquí hablan dos» cuando lo
+   * que pasa es «aquí no sabemos quién habla».
+   */
+  readonly speakerUncertain: boolean;
   readonly confidence: number | null;
 }
 
@@ -175,6 +182,7 @@ export async function getMeetingForUi(
       speakerLabel: segment.speaker_label,
       text: segment.text,
       overlap: segment.overlap,
+      speakerUncertain: segment.speaker_uncertain,
       confidence: segment.confidence === null ? null : Number(segment.confidence),
     })),
     hasPlayableAudio: normalized !== null,

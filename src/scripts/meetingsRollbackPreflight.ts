@@ -7,7 +7,7 @@ import {
 } from './stagingGuard.js';
 
 /**
- * ¿Es seguro revertir las cinco migraciones de Reuniones **por conteo**?
+ * ¿Es seguro revertir las migraciones de Reuniones **por conteo**?
  *
  *   MEETINGS_ENV_KIND=staging MEETINGS_EXPECTED_DB_HOST=… \
  *   MEETINGS_EXPECTED_DB_NAME=… DATABASE_URL=… \
@@ -15,25 +15,37 @@ import {
  *
  * ── Por qué existe ─────────────────────────────────────────────────────────
  *
- * El runbook decía «`npx node-pg-migrate down 5`». `down 5` no significa
- * «revierte las de Reuniones»: significa **«revierte las cinco últimas, sean
- * las que sean»**. Si entre la aplicación y el rollback alguien añade una
- * migración —otro agente, otra rama, un backfill— `down 5` revierte esa y
- * cuatro de Reuniones, dejando la quinta aplicada y el esquema en un estado que
- * nadie diseñó. Y lo haría sin quejarse.
+ * El runbook decía «`npx node-pg-migrate down N`». `down N` no significa
+ * «revierte las de Reuniones»: significa **«revierte las N últimas, sean las
+ * que sean»**. Si entre la aplicación y el rollback alguien añade una
+ * migración —otro agente, otra rama, un backfill— `down N` revierte esa y N−1
+ * de Reuniones, dejando una aplicada y el esquema en un estado que nadie
+ * diseñó. Y lo haría sin quejarse.
  *
  * Así que antes del rollback se comprueba que la CABEZA de `pgmigrations` sea
- * exactamente las cinco esperadas, **en orden**. Si no lo es, este script sale
- * con error y dice qué apareció.
+ * exactamente las esperadas, **en orden**. Si no lo es, este script sale con
+ * error y dice qué apareció.
+ *
+ * ── Esto ya ha servido una vez ─────────────────────────────────────────────
+ *
+ * `1784000000000_meetings-speaker-uncertain` se añadió después de escribir esta
+ * lista, y el script la rechazó — que es exactamente su trabajo. La lección no es
+ * «relajar la comprobación»: es que añadir una migración de Reuniones OBLIGA a
+ * añadirla aquí, y si alguien no lo hace, el rollback se detiene en vez de
+ * inventar. Cuando esta lista crezca, `EXPECTED_STACK.length` mueve el `down`
+ * solo.
  *
  * Sólo lectura. No revierte nada: imprime el comando cuando —y sólo cuando— es
  * seguro ejecutarlo.
  */
 
 /**
- * Las cinco, de la más ANTIGUA a la más reciente. Es el orden en que se
- * aplicaron, así que la cabeza de `pgmigrations` tiene que ser esta lista al
- * revés.
+ * Todas, de la más ANTIGUA a la más reciente. Es el orden en que se aplicaron, así
+ * que la cabeza de `pgmigrations` tiene que ser esta lista al revés.
+ *
+ * AÑADIR UNA MIGRACIÓN DE REUNIONES EXIGE AÑADIRLA AQUÍ. No es burocracia: el
+ * `down` se calcula con la longitud de esta lista, y una lista corta revertiría de
+ * menos dejando el esquema a medias.
  */
 const EXPECTED_STACK = [
   '1783400000000_meetings-module',
@@ -41,6 +53,7 @@ const EXPECTED_STACK = [
   '1783600000000_meetings-transcript',
   '1783700000000_meetings-worker-pools',
   '1783800000000_meetings-result-uploads',
+  '1784000000000_meetings-speaker-uncertain',
 ] as const;
 
 interface MigrationRow {
@@ -90,12 +103,12 @@ async function main(): Promise<number> {
       const intruders = actual.filter((name) => !expected.includes(name as never));
       const missing = expected.filter((name) => !actual.includes(name));
       process.stderr.write(
-        `✗ La cabeza de pgmigrations NO son las cinco de Reuniones en orden.\n` +
+        `✗ La cabeza de pgmigrations NO son las ${EXPECTED_STACK.length} de Reuniones en orden.\n` +
           (intruders.length > 0
             ? `  Apareció encima: ${intruders.join(', ')}\n`
             : '') +
           (missing.length > 0 ? `  No están en la cabeza: ${missing.join(', ')}\n` : '') +
-          `\n  NO ejecutes 'node-pg-migrate down 5': revertiría la migración ajena y\n` +
+          `\n  NO ejecutes 'node-pg-migrate down ${EXPECTED_STACK.length}': revertiría la migración ajena y\n` +
           `  dejaría parte del esquema de Reuniones aplicado.\n` +
           `  Revierte por nombre, de arriba abajo, comprobando cada paso.\n`,
       );
@@ -104,7 +117,7 @@ async function main(): Promise<number> {
 
     const total = await query<{ n: string }>(`SELECT count(*)::text AS n FROM pgmigrations`);
     process.stdout.write(
-      `✓ Las cinco de Reuniones son la cabeza, en orden.\n` +
+      `✓ Las ${EXPECTED_STACK.length} de Reuniones son la cabeza, en orden.\n` +
         `  ${total.rows[0].n} migraciones aplicadas en total.\n\n` +
         `  Es seguro revertir por conteo:\n\n` +
         `    npx node-pg-migrate --tsx down ${EXPECTED_STACK.length}\n\n` +

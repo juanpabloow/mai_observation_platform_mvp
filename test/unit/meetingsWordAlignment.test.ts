@@ -2,7 +2,8 @@ import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { gzipSync } from 'node:zlib';
 import {
-  MIN_WORDS_PER_SPLIT,
+  FIRM_COVERAGE,
+  MIN_WORDS_FOR_FIRM_SPEAKER,
   alignSegments,
   parseTranscriptArtifact,
 } from '../../src/meetings/artifacts.js';
@@ -91,7 +92,8 @@ test('el texto se parte por TIEMPO de palabra, nunca por proporción de caracter
     word(3, 4, ' verdaderamente'), word(4, 5, ' extensa'), word(5, 6, ' innecesariamente'),
     word(9, 9.3, ' sí'), word(9.3, 9.6, ' no'), word(9.6, 10, ' ya'),
   ];
-  const segments = [segment(0, 0, 10, 'x', words)];
+  const texto = 'palabra larguísima interminable verdaderamente extensa innecesariamente sí no ya';
+  const segments = [segment(0, 0, 10, texto, words)];
   const turns = [turn(0, 6, 'A'), turn(9, 10, 'B')];
 
   const { segments: out } = alignSegments(segments, turns);
@@ -99,71 +101,243 @@ test('el texto se parte por TIEMPO de palabra, nunca por proporción de caracter
   assert.equal(out.length, 2);
   assert.equal(out[0].text.split(' ').length, 6, 'las seis primeras van juntas');
   assert.equal(out[1].text, 'sí no ya');
+  assert.ok(
+    out[0].text.length > out[1].text.length * 5,
+    'por caracteres la frontera habría caído por el medio; por tiempo cae al final',
+  );
 });
 
 // ── la guarda ─────────────────────────────────────────────────────────────────
 
-test('un tramo por debajo de la guarda no abre bloque: se absorbe', () => {
-  assert.equal(MIN_WORDS_PER_SPLIT, 3);
-  // «y no» son dos palabras del otro hablante en mitad de una frase — fluctuación del
-  // diarizador. Emitirlo partiría la frase en tres bloques ilegibles.
+test('un tramo corto de otro hablante SÍ abre bloque: la atribución no se sacrifica', () => {
+  assert.equal(MIN_WORDS_FOR_FIRM_SPEAKER, 3);
+  // «y no» son dos palabras que el diarizador da a otra voz en mitad de una frase.
+  // Puede ser una interjección real o fluctuación: desde los tiempos no se distingue.
+  // Lo que NO se hace es decidirlo cambiando quién dijo qué — se conserva la
+  // atribución y se marca como tentativa.
   const words = [
     word(0, 1, 'No,'), word(1, 2, ' pero'), word(2, 3, ' es'), word(3, 4, ' que'),
     word(4, 5, ' pollo'), word(5, 6, ' comí'), word(6, 7, ' el'), word(7, 8, ' lunes'),
     word(8, 8.2, ' y'), word(8.2, 8.4, ' no'),
-    word(8.4, 9, ' quiero'), word(9, 10, ' más.'),
+    word(8.4, 9, ' quiero'), word(9, 9.5, ' comer'), word(9.5, 10, ' más.'),
   ];
-  const texto = 'No, pero es que pollo comí el lunes y no quiero más.';
+  const texto = 'No, pero es que pollo comí el lunes y no quiero comer más.';
   const segments = [segment(0, 0, 10, texto, words)];
   const turns = [turn(0, 8, 'A'), turn(8, 8.4, 'B'), turn(8.4, 10, 'A')];
 
   const { segments: out } = alignSegments(segments, turns);
 
-  assert.equal(out.length, 1, 'no se parte por dos palabras sueltas');
-  assert.equal(out[0].speakerLabel, 'A');
-  // Al no partirse, se emite el segmento ORIGINAL: su texto tal cual vino, con su
-  // puntuación y sus espacios, y sus tiempos. No una reconstrucción desde las palabras.
-  assert.equal(out[0].text, texto, 'el texto original, no una reconstrucción');
-  assert.deepEqual([out[0].startSec, out[0].endSec], [0, 10], 'y los tiempos originales');
+  assert.equal(out.length, 3, 'tres bloques: la intervención corta conserva el suyo');
+  assert.deepEqual(out.map((s) => s.speakerLabel), ['A', 'B', 'A']);
+  assert.equal(out[1].text, 'y no', 'con su texto');
+  assert.deepEqual([out[1].startSec, out[1].endSec], [8, 8.4], 'y sus tiempos');
+  assert.equal(out[1].speakerUncertain, true, 'marcado como tentativo: dos palabras es poca evidencia');
+  assert.equal(out[1].overlap, false, 'pero NO como solapamiento: no hay dos voces a la vez');
+  assert.deepEqual(
+    out.map((s) => s.speakerUncertain),
+    [false, true, false],
+    'sólo el corto: los de ocho y tres palabras son firmes',
+  );
+  assert.equal(plano(out.map((s) => s.text).join(' ')), plano(texto), 'y el texto entero sigue ahí');
 });
 
-test('un tramo que SÍ llega a la guarda sí abre bloque, aunque dure poco', () => {
-  // Tres palabras en medio segundo son una intervención real. Un suelo de DURACIÓN se
-  // las tragaría, y por eso no hay suelo de duración.
+test('«Claro» de otra voz DENTRO de un segmento mixto conserva su hablante', () => {
+  // El caso que había que arreglar. Antes se absorbía en el vecino y «Claro» quedaba
+  // atribuido a quien no lo dijo. Ahora conserva su hablante y sus tiempos, y sólo se
+  // señala que la atribución es tentativa.
+  const words = [
+    word(0, 1, 'Entonces'), word(1, 2, ' pedimos'), word(2, 3, ' el'), word(3, 4, ' sushi'),
+    word(4.1, 4.5, ' Claro'),
+    word(4.6, 5.5, ' y'), word(5.5, 6.5, ' lo'), word(6.5, 7.5, ' pido'),
+  ];
+  const texto = 'Entonces pedimos el sushi Claro y lo pido';
+  const segments = [segment(0, 0, 7.5, texto, words)];
+  const turns = [turn(0, 4, 'A'), turn(4.1, 4.5, 'B'), turn(4.6, 7.5, 'A')];
+
+  const { segments: out } = alignSegments(segments, turns);
+
+  assert.equal(out.length, 3);
+  const claro = out.find((s) => s.text === 'Claro');
+  assert.ok(claro, '«Claro» tiene su propio bloque');
+  assert.equal(claro.speakerLabel, 'B', 'Y SU HABLANTE: es quien lo dijo');
+  assert.deepEqual([claro.startSec, claro.endSec], [4.1, 4.5], 'con sus tiempos, no los del vecino');
+  assert.equal(claro.speakerUncertain, true, 'tentativo por ser una palabra');
+  assert.equal(claro.overlap, false, 'la duda no se disfraza de solapamiento');
+  assert.deepEqual(out.map((s) => s.speakerLabel), ['A', 'B', 'A']);
+});
+
+test('una intervención de tres palabras es FIRME, aunque dure medio segundo', () => {
   const words = [
     word(0, 1, 'uno'), word(1, 2, ' dos'), word(2, 3, ' tres'), word(3, 4, ' cuatro'),
     word(4, 4.2, ' sí'), word(4.2, 4.4, ' claro'), word(4.4, 4.5, ' vale'),
     word(5, 6, ' seguimos'), word(6, 7, ' entonces'), word(7, 8, ' ahora'),
   ];
-  const segments = [segment(0, 0, 8, 'x', words)];
+  const texto = 'uno dos tres cuatro sí claro vale seguimos entonces ahora';
+  const segments = [segment(0, 0, 8, texto, words)];
   const turns = [turn(0, 4, 'A'), turn(4, 4.5, 'B'), turn(5, 8, 'A')];
 
   const { segments: out } = alignSegments(segments, turns);
 
   assert.equal(out.length, 3);
-  assert.deepEqual(out.map((s) => s.speakerLabel), ['A', 'B', 'A']);
   assert.equal(out[1].text, 'sí claro vale');
-  assert.equal(Math.round((out[1].endSec - out[1].startSec) * 10) / 10, 0.5, 'medio segundo, y cuenta');
+  assert.equal(out[1].speakerUncertain, false, 'tres palabras y cobertura plena: firme');
+  assert.equal(Math.round((out[1].endSec - out[1].startSec) * 10) / 10, 0.5);
 });
 
-test('al absorber, dos tramos vecinos con la misma etiqueta se funden en uno', () => {
-  // A(3) · B(1) · A(3) · C(3). La B suelta se absorbe y deja dos tramos «A» pegados,
-  // que NO deben salir como dos bloques con la misma cabecera.
+test('una atribución que descansa en una esquirla de solape se marca tentativa', () => {
+  // Aquí la duda no es de muestra, es temporal de verdad: el turno ganador cubre menos
+  // de FIRM_COVERAGE del bloque, así que la etiqueta se sostiene por poco.
+  assert.equal(FIRM_COVERAGE, 0.6);
   const words = [
-    word(0, 1, 'a'), word(1, 2, ' b'), word(2, 3, ' c'),
-    word(3, 3.2, ' x'),
-    word(4, 5, ' d'), word(5, 6, ' e'), word(6, 7, ' f'),
-    word(8, 9, ' g'), word(9, 10, ' h'), word(10, 11, ' i'),
+    word(0, 1, 'aaa'), word(1, 2, ' bbb'), word(2, 3, ' ccc'), word(3, 4, ' ddd'),
+    word(4, 5, ' eee'), word(5, 6, ' fff'), word(6, 7, ' ggg'),
   ];
-  const segments = [segment(0, 0, 11, 'a b c x d e f g h i', words)];
-  const turns = [turn(0, 3, 'A'), turn(3, 3.2, 'B'), turn(4, 7, 'A'), turn(8, 11, 'C')];
+  const texto = 'aaa bbb ccc ddd eee fff ggg';
+  const segments = [segment(0, 0, 7, texto, words)];
+  // «A» sólo tiene turno en 0–1,2 y 3,9–4,1: las palabras del medio caen en silencio y
+  // se quedan sin etiqueta, y el bloque de A cubre 0–4 con apenas 1,4 s de turno.
+  const turns = [turn(0, 1.2, 'A'), turn(3.9, 4.1, 'A'), turn(4.2, 7, 'B')];
 
   const { segments: out } = alignSegments(segments, turns);
 
-  assert.equal(out.length, 2, 'no quedan dos bloques «A» seguidos');
-  assert.deepEqual(out.map((s) => s.speakerLabel), ['A', 'C']);
-  assert.equal(out[0].text, 'a b c x d e f', 'la B absorbida no pierde su palabra');
-  assert.equal(out[1].text, 'g h i');
+  const bloqueA = out.find((s) => s.speakerLabel === 'A');
+  assert.ok(bloqueA);
+  assert.ok(
+    bloqueA.speakerUncertain,
+    'cobertura fina: el turno de A no cubre la mayoría del bloque que lleva su nombre',
+  );
+});
+
+test('un bloque puede tener DOS VOCES y una atribución firme a la vez', () => {
+  // La prueba de que los dos campos son independientes y no uno disfrazado del otro.
+  const segments = [segment(0, 0, 10, 'texto de un segmento sin palabras')];
+  const turns = [turn(0, 10, 'A'), turn(2, 8, 'B')];
+
+  const { segments: out } = alignSegments(segments, turns);
+
+  assert.equal(out[0].speakerLabel, 'A', 'A cubre más');
+  assert.equal(out[0].overlap, true, 'y B cubre bastante para que sean dos voces');
+  assert.equal(out[0].speakerUncertain, false, 'pero la atribución no es dudosa: A cubre el bloque entero');
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+//  NI SE PIERDE NI SE DUPLICA TEXTO
+//
+//  El texto de cada bloque se REBANA del original entre los desplazamientos de sus
+//  tokens, así que los bloques son rangos disjuntos que lo cubren entero. Cuando las
+//  palabras no se corresponden con el texto, no se parte — porque situar la frontera
+//  exigiría saber dónde va lo que las palabras no cubren.
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** Colapsa espacios, para comparar texto sin pelearse con los separadores. */
+const plano = (value: string): string => value.replace(/\s+/g, ' ').trim();
+
+test('la unión de los bloques es exactamente el texto original', () => {
+  const words = [
+    word(0, 1, '¿Qué'), word(1, 2, ' te'), word(2, 3, ' gustaría'), word(3, 4, ' almorzar?'),
+    word(5, 6, ' No'), word(6, 7, ' sé,'), word(7, 8, ' podríamos'), word(8, 9, ' pollo.'),
+  ];
+  const texto = '¿Qué te gustaría almorzar? No sé, podríamos pollo.';
+  const segments = [segment(0, 0, 9, texto, words)];
+  const turns = [turn(0, 4.5, 'A'), turn(4.8, 9, 'B')];
+
+  const { segments: out } = alignSegments(segments, turns);
+
+  assert.equal(out.length, 2);
+  assert.equal(plano(out.map((s) => s.text).join(' ')), plano(texto), 'ni una palabra de más ni de menos');
+  // Y la puntuación es la del original, no una reconstrucción.
+  assert.equal(out[0].text, '¿Qué te gustaría almorzar?');
+  assert.equal(out[1].text, 'No sé, podríamos pollo.');
+});
+
+test('si `words` está INCOMPLETA no se parte, y el texto sale íntegro', () => {
+  // Whisper puede omitir palabras. Aquí faltan las dos últimas del texto. Partir
+  // exigiría saber a qué lado del cambio de hablante van, y no se sabe: se emite un
+  // bloque con el texto ENTERO y se marca la atribución como tentativa.
+  const words = [
+    word(0, 1, 'Entonces'), word(1, 2, ' pedimos'), word(2, 3, ' sushi'),
+    word(4, 5, ' y'), word(5, 6, ' lo'),
+  ];
+  const texto = 'Entonces pedimos sushi y lo confirmo ahora';
+  const segments = [segment(0, 0, 8, texto, words)];
+  const turns = [turn(0, 3.5, 'A'), turn(3.8, 8, 'B')];
+
+  const { segments: out } = alignSegments(segments, turns);
+
+  assert.equal(out.length, 1, 'no se parte con una correspondencia que no cuadra');
+  assert.equal(out[0].text, texto, 'el texto ORIGINAL, íntegro: no se pierde «confirmo ahora»');
+  assert.deepEqual([out[0].startSec, out[0].endSec], [0, 8], 'y los tiempos del segmento');
+  assert.equal(
+    out[0].speakerUncertain,
+    true,
+    'había un cambio de hablante que no se pudo situar, y eso se declara',
+  );
+});
+
+test('si `words` no se corresponde con el texto aunque cuadre el número, tampoco se parte', () => {
+  // El número coincide y los textos no. Un mapeo posicional rebanaría por donde no
+  // toca, y saldría texto mezclado sin que nada lo delatara.
+  const words = [
+    word(0, 1, 'uno'), word(1, 2, ' dos'), word(2, 3, ' tres'), word(3, 4, ' cuatro'),
+  ];
+  const texto = 'alfa beta gamma delta';
+  const segments = [segment(0, 0, 4, texto, words)];
+  const turns = [turn(0, 2, 'A'), turn(2, 4, 'B')];
+
+  const { segments: out } = alignSegments(segments, turns);
+
+  assert.equal(out.length, 1);
+  assert.equal(out[0].text, texto, 'íntegro');
+  assert.equal(out[0].speakerUncertain, true);
+});
+
+test('el texto se conserva en un lote mixto, partiendo unos segmentos y no otros', () => {
+  const completo = 'uno dos tres cuatro cinco seis';
+  const incompleto = 'siete ocho nueve diez';
+  const segments = [
+    segment(0, 0, 6, completo, [
+      word(0, 1, 'uno'), word(1, 2, ' dos'), word(2, 3, ' tres'),
+      word(3, 4, ' cuatro'), word(4, 5, ' cinco'), word(5, 6, ' seis'),
+    ]),
+    // Sólo dos palabras para cuatro tokens: no se parte.
+    segment(1, 7, 11, incompleto, [word(7, 8, 'siete'), word(8, 9, ' ocho')]),
+    // Sin palabras: camino v1.
+    segment(2, 12, 15, 'once doce trece'),
+  ];
+  const turns = [turn(0, 3, 'A'), turn(3, 6, 'B'), turn(7, 9, 'A'), turn(9, 11, 'B'), turn(12, 15, 'A')];
+
+  const { segments: out } = alignSegments(segments, turns);
+
+  assert.equal(
+    plano(out.map((s) => s.text).join(' ')),
+    plano([completo, incompleto, 'once doce trece'].join(' ')),
+    'el texto de los tres segmentos, entero y en orden',
+  );
+  assert.deepEqual(out.map((s) => s.index), out.map((_, i) => i), 'índices densos');
+  assert.equal(out.filter((s) => s.speakerUncertain).length, 1, 'sólo el incompleto queda tentativo');
+});
+
+test('ningún bloque comparte texto con otro: los rangos son disjuntos', () => {
+  const texto = 'a b c d e f g h i j';
+  const words = texto.split(' ').map((t, i) => word(i, i + 1, i === 0 ? t : ` ${t}`));
+  const segments = [segment(0, 0, 10, texto, words)];
+  // Turnos alternos palabra a palabra: el peor caso para duplicar o perder.
+  const turns = Array.from({ length: 10 }, (_, i) => turn(i, i + 1, i % 2 === 0 ? 'A' : 'B'));
+
+  const { segments: out } = alignSegments(segments, turns);
+
+  assert.equal(out.length, 10, 'diez cambios, diez bloques: ninguno se absorbe');
+  assert.deepEqual(out.map((s) => s.text), texto.split(' '));
+  assert.equal(plano(out.map((s) => s.text).join(' ')), texto);
+  assert.equal(
+    out.every((s) => s.speakerUncertain),
+    true,
+    'todos de una palabra, así que todos tentativos — y todos con su hablante',
+  );
+  assert.deepEqual(
+    out.map((s) => s.speakerLabel),
+    ['A', 'B', 'A', 'B', 'A', 'B', 'A', 'B', 'A', 'B'],
+  );
 });
 
 // ── invariantes de la ingesta ─────────────────────────────────────────────────
@@ -269,214 +443,3 @@ test('una schema_version que no conocemos se sigue rechazando', () => {
   );
 });
 
-// ══════════════════════════════════════════════════════════════════════════════
-//  LA GUARDA NO SE COME LAS INTERJECCIONES REALES
-//
-//  Es la objeción importante: la guarda existe para quitar picadillo, y «sí», «no» o
-//  «claro» son exactamente lo que estamos intentando recuperar. Lo que sigue delimita
-//  hasta dónde llega la guarda y qué pasa cuando llega.
-// ══════════════════════════════════════════════════════════════════════════════
-
-test('una interjección en SU PROPIO segmento no la toca la guarda: sobrevive entera', () => {
-  // El caso habitual. Whisper trocea por pausas, y un «Claro.» viene rodeado de
-  // silencio, así que se lleva su propio segmento. Ese segmento no tiene cambio de
-  // hablante DENTRO, luego la guarda no interviene en absoluto.
-  const segments = [
-    segment(0, 0.0, 4.0, 'Entonces pedimos el sushi y ya está.', [
-      word(0.0, 1.0, 'Entonces'), word(1.0, 2.0, ' pedimos'), word(2.0, 3.0, ' el'), word(3.0, 4.0, ' sushi'),
-    ]),
-    segment(1, 4.3, 4.8, 'Claro.', [word(4.3, 4.8, 'Claro.')]),
-    segment(2, 5.2, 8.0, 'Vale, lo pido ahora mismo.', [
-      word(5.2, 6.0, 'Vale,'), word(6.0, 7.0, ' lo'), word(7.0, 8.0, ' pido'),
-    ]),
-  ];
-  const turns = [turn(0, 4.0, 'A'), turn(4.3, 4.8, 'B'), turn(5.2, 8.0, 'A')];
-
-  const { segments: out } = alignSegments(segments, turns);
-
-  assert.equal(out.length, 3, 'tres segmentos, tres bloques');
-  assert.deepEqual(out.map((s) => s.speakerLabel), ['A', 'B', 'A']);
-  assert.equal(out[1].text, 'Claro.', 'la interjección de UNA palabra conserva su bloque');
-  assert.deepEqual([out[1].startSec, out[1].endSec], [4.3, 4.8], 'y sus tiempos originales');
-  assert.equal(out[1].overlap, false, 'no hay nada mezclado en ella');
-});
-
-test('«sí», «no» y «claro» sueltos, cada uno en su segmento, sobreviven todos', () => {
-  const respuestas = ['Sí.', 'No.', 'Claro.'];
-  const segments: TranscriptSegment[] = [];
-  const turns: DiarizationTurn[] = [];
-  respuestas.forEach((texto, i) => {
-    const base = i * 4;
-    segments.push(segment(i * 2, base, base + 2, 'Y entonces qué hacemos aquí.', [
-      word(base, base + 0.7, 'Y'), word(base + 0.7, base + 1.4, ' entonces'), word(base + 1.4, base + 2, ' qué'),
-    ]));
-    segments.push(segment(i * 2 + 1, base + 2.3, base + 2.6, texto, [word(base + 2.3, base + 2.6, texto)]));
-    turns.push(turn(base, base + 2, 'A'), turn(base + 2.3, base + 2.6, 'B'));
-  });
-
-  const { segments: out } = alignSegments(segments, turns);
-
-  const cortas = out.filter((s) => respuestas.includes(s.text));
-  assert.equal(cortas.length, 3, 'las tres siguen ahí');
-  assert.deepEqual(cortas.map((s) => s.speakerLabel), ['B', 'B', 'B'], 'y con su hablante');
-});
-
-test('una interjección de una palabra DENTRO de un segmento mixto se absorbe, pero el bloque lo declara', () => {
-  // Aquí sí actúa la guarda, y es el caso que hay que mirar de frente: «claro» de otra
-  // voz en mitad de la frase de alguien. Se absorbe —una palabra no abre bloque— pero
-  // el bloque queda marcado `overlap`, que significa exactamente «aquí hay dos voces y
-  // la etiqueta única es una simplificación». El texto NO se pierde.
-  const words = [
-    word(0, 1, 'Entonces'), word(1, 2, ' pedimos'), word(2, 3, ' el'), word(3, 4, ' sushi'),
-    word(4.1, 4.5, ' claro'),
-    word(4.6, 5.5, ' y'), word(5.5, 6.5, ' lo'), word(6.5, 7.5, ' pido'),
-  ];
-  const segments = [segment(0, 0, 7.5, 'Entonces pedimos el sushi claro y lo pido', words)];
-  const turns = [turn(0, 4, 'A'), turn(4.1, 4.5, 'B'), turn(4.6, 7.5, 'A')];
-
-  const { segments: out } = alignSegments(segments, turns);
-
-  assert.equal(out.length, 1, 'no se parte por una palabra');
-  assert.equal(out[0].speakerLabel, 'A');
-  assert.ok(out[0].text.includes('claro'), 'la palabra sigue en el texto, no se descarta');
-  assert.equal(
-    out[0].overlap,
-    true,
-    'y el bloque declara que contiene otra voz — la guarda no borra en silencio',
-  );
-});
-
-test('la marca de solape de una absorción NO depende del umbral del 25 %', () => {
-  // 0,4 s de otra voz en un bloque de 20 s son el 2 %: muy por debajo de
-  // OVERLAP_THRESHOLD. Aun así son dos personas, y el bloque tiene que decirlo.
-  const words = [
-    ...Array.from({ length: 10 }, (_, i) => word(i, i + 1, i === 0 ? 'palabra' : ' palabra')),
-    word(10.1, 10.5, ' claro'),
-    ...Array.from({ length: 9 }, (_, i) => word(11 + i, 12 + i, ' palabra')),
-  ];
-  const segments = [segment(0, 0, 20, 'texto largo', words)];
-  const turns = [turn(0, 10, 'A'), turn(10.1, 10.5, 'B'), turn(11, 20, 'A')];
-
-  const { segments: out } = alignSegments(segments, turns);
-
-  assert.equal(out.length, 1);
-  const proporcion = 0.4 / 20;
-  assert.ok(proporcion < 0.25, 'la interjección está muy por debajo del umbral');
-  assert.equal(out[0].overlap, true, 'y aun así el bloque queda marcado');
-});
-
-test('sólo se marca solape cuando lo absorbido era de OTRA voz', () => {
-  // Un tramo corto del MISMO hablante (pasa tras una fusión) no introduce una segunda
-  // voz, así que marcarlo sería decir que hay dos personas donde hay una.
-  const words = [
-    word(0, 1, 'a'), word(1, 2, ' b'), word(2, 3, ' c'), word(3, 4, ' d'),
-    word(5, 6, ' e'), word(6, 7, ' f'), word(7, 8, ' g'),
-  ];
-  const segments = [segment(0, 0, 8, 'a b c d e f g', words)];
-  const turns = [turn(0, 8, 'A')];
-
-  const { segments: out } = alignSegments(segments, turns);
-
-  assert.equal(out.length, 1);
-  assert.equal(out[0].overlap, false, 'una sola voz, sin marca');
-});
-
-test('si un segmento se parte en varios, la marca va SÓLO en el bloque que absorbió', () => {
-  const words = [
-    // Bloque de A, limpio.
-    word(0, 1, 'uno'), word(1, 2, ' dos'), word(2, 3, ' tres'),
-    // Bloque de B que absorbe una palabra de C.
-    word(4, 5, ' cuatro'), word(5, 6, ' cinco'), word(6, 7, ' seis'),
-    word(7.1, 7.4, ' ya'),
-    word(7.5, 8.5, ' siete'),
-  ];
-  const segments = [segment(0, 0, 8.5, 'x', words)];
-  const turns = [turn(0, 3, 'A'), turn(4, 7, 'B'), turn(7.1, 7.4, 'C'), turn(7.5, 8.5, 'B')];
-
-  const { segments: out } = alignSegments(segments, turns);
-
-  assert.equal(out.length, 2);
-  assert.deepEqual(out.map((s) => s.speakerLabel), ['A', 'B']);
-  assert.equal(out[0].overlap, false, 'el bloque limpio no se marca');
-  assert.equal(out[1].overlap, true, 'el que absorbió, sí');
-});
-
-// ══════════════════════════════════════════════════════════════════════════════
-//  ARTEFACTOS ANTIGUOS: SIGUEN FUNCIONANDO, Y NO SE INVENTAN TIEMPOS
-// ══════════════════════════════════════════════════════════════════════════════
-
-test('un transcript v1 completo se alinea igual que antes de que esto existiera', () => {
-  const segments = [
-    segment(0, 0, 5, 'primero'),
-    segment(1, 5, 10, 'segundo'),
-    segment(2, 10, 15, 'tercero'),
-  ];
-  const turns = [turn(0, 5, 'A'), turn(5, 10, 'B'), turn(10, 15, 'A')];
-
-  const { segments: out, talkSharePct } = alignSegments(segments, turns);
-
-  assert.equal(out.length, 3, 'ni un bloque más ni uno menos');
-  assert.deepEqual(out.map((s) => s.speakerLabel), ['A', 'B', 'A']);
-  assert.deepEqual(out.map((s) => [s.startSec, s.endSec]), [[0, 5], [5, 10], [10, 15]]);
-  assert.deepEqual(out.map((s) => s.text), ['primero', 'segundo', 'tercero']);
-  assert.deepEqual(out.map((s) => s.overlap), [false, false, false]);
-  assert.deepEqual(talkSharePct, { A: 66.67, B: 33.33 });
-});
-
-test('sin palabras no se interpola NADA, ni cuando el segmento contiene dos voces', () => {
-  // Este segmento tiene dos hablantes dentro y no trae palabras. La tentación sería
-  // repartir el texto por proporción de tiempo o de caracteres. No se hace: se emite
-  // un bloque con la etiqueta mayoritaria y marcado como mezclado.
-  const segments = [segment(0, 0, 10, 'una frase de dos personas sin tiempos por palabra')];
-  const turns = [turn(0, 4, 'A'), turn(4, 10, 'B')];
-
-  const { segments: out } = alignSegments(segments, turns);
-
-  assert.equal(out.length, 1, 'no se fabrica un segundo bloque sin datos para situarlo');
-  assert.equal(out[0].text, 'una frase de dos personas sin tiempos por palabra', 'el texto, íntegro');
-  assert.deepEqual([out[0].startSec, out[0].endSec], [0, 10], 'los tiempos, los del segmento');
-  assert.equal(out[0].overlap, true, 'y se declara mezclado por el umbral, como siempre');
-});
-
-test('un artefacto MIXTO —unos segmentos con palabras y otros sin ellas— se maneja segmento a segmento', () => {
-  // Puede pasar de verdad: whisper omite `words` en un segmento sin palabras
-  // reconocibles. Cada segmento se trata con lo que tiene, no se degrada el lote entero.
-  const segments = [
-    segment(0, 0, 6, 'con palabras aquí dentro', [
-      word(0, 1, 'con'), word(1, 2, ' palabras'), word(2, 3, ' aquí'),
-      word(3.5, 4.2, ' aquí'), word(4.2, 5, ' dentro'), word(5, 6, ' vale'),
-    ]),
-    segment(1, 6.5, 12, 'sin palabras ninguna'),
-  ];
-  const turns = [turn(0, 3, 'A'), turn(3.5, 6, 'B'), turn(6.5, 12, 'A')];
-
-  const { segments: out } = alignSegments(segments, turns);
-
-  assert.equal(out.length, 3, 'el primero se parte en dos; el segundo no se toca');
-  assert.deepEqual(out.map((s) => s.speakerLabel), ['A', 'B', 'A']);
-  assert.deepEqual([out[2].startSec, out[2].endSec], [6.5, 12], 'el de v1 conserva sus tiempos');
-  assert.equal(out[2].text, 'sin palabras ninguna');
-  assert.deepEqual(out.map((s) => s.index), [0, 1, 2], 'y los índices siguen densos');
-});
-
-test('un `words` vacío se trata como ausente, no como «no hay palabras»', () => {
-  const parsed = parseTranscriptArtifact(Buffer.from([
-    JSON.stringify(head(2, 1)),
-    JSON.stringify({ i: 0, start: 0, end: 2, text: 'hola', words: [] }),
-  ].join('\n'), 'utf8'));
-  assert.equal(parsed.segments[0].words, undefined);
-
-  const { segments: out } = alignSegments(parsed.segments, [turn(0, 1, 'A'), turn(1, 2, 'B')]);
-  assert.equal(out.length, 1, 'cae al camino de v1 en vez de partir con datos que no hay');
-  assert.deepEqual([out[0].startSec, out[0].endSec], [0, 2]);
-});
-
-test('un segmento sin partir conserva sus tiempos aunque sus palabras empiecen más tarde', () => {
-  // Whisper puede dar un segmento 0–5 cuya primera palabra empieza en 0,4. Si no se
-  // parte, el bloque es el segmento: 0–5. Tomar el tiempo de la palabra movería la
-  // frontera de una cita sin que nadie lo hubiera pedido.
-  const segments = [segment(0, 0, 5, 'texto', [word(0.4, 1, 'texto'), word(1, 2, ' más'), word(2, 3, ' aún')])];
-  const { segments: out } = alignSegments(segments, [turn(0, 5, 'A')]);
-  assert.deepEqual([out[0].startSec, out[0].endSec], [0, 5], 'los del segmento, no los de la palabra');
-  assert.equal(out[0].text, 'texto', 'y el texto original');
-});
