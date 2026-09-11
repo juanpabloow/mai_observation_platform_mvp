@@ -381,3 +381,87 @@ test('otro cliente no ve ni puede generar el resumen de esta reunión', async ()
     await cleanupTenant(otro.tenantId);
   }
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+//  Muerte del proceso a mitad de la llamada
+// ══════════════════════════════════════════════════════════════════════════
+//
+// El caso que NO cubre el `catch`: un SIGKILL, un contenedor reciclado, un
+// despliegue. No se ejecuta ningún `finally`, así que la fila se queda en
+// `pending` con un dueño que ya no existe. La pregunta que hay que contestar
+// con una prueba y no con un comentario es si esa reunión queda bloqueada
+// para siempre.
+//
+// Se simula matando la petición de verdad —la promesa del proveedor nunca
+// resuelve y se abandona— en vez de lanzando un error, que sí dispararía el
+// `catch`. La fila queda exactamente como la dejaría una muerte real.
+
+test('si el proceso muere a mitad, la reserva NO queda bloqueada para siempre', async () => {
+  const w = await sembrar();
+  try {
+    let llamadas = 0;
+
+    // El «proceso muerto»: llama y jamás vuelve. No se espera.
+    const fetchColgado = (async () => {
+      llamadas += 1;
+      await new Promise(() => {}); // nunca resuelve
+      return respuestaOk();
+    }) as unknown as typeof fetch;
+
+    void generateAnalysis(w.scope, w.meetingId, { apiKey: 'k', fetchImpl: fetchColgado }).catch(() => {});
+    // Esperar a que la reserva esté escrita, no a un plazo arbitrario.
+    for (let i = 0; i < 100 && llamadas === 0; i += 1) await new Promise((r) => setTimeout(r, 10));
+    assert.equal(llamadas, 1, 'el dueño llegó a llamar al proveedor');
+
+    const antes = await query<{ status: string; reserved_by: string | null }>(
+      `SELECT status, reserved_by FROM meeting_analyses WHERE meeting_id=$1`, [w.meetingId],
+    );
+    assert.equal(antes.rows[0].status, 'pending', 'la fila se queda pending, como tras una muerte real');
+    const dueñoMuerto = antes.rows[0].reserved_by;
+
+    // ── Dentro del plazo: nadie más paga ──────────────────────────────────
+    let llamadas2 = 0;
+    const f2 = (async () => { llamadas2 += 1; return respuestaOk(); }) as unknown as typeof fetch;
+    const enPlazo = await generateAnalysis(w.scope, w.meetingId, { apiKey: 'k', fetchImpl: f2 });
+    assert.equal(llamadas2, 0, 'mientras la reserva vive, una segunda petición NO llama');
+    assert.equal(enPlazo.state, 'generating');
+    assert.equal(enPlazo.reused, true);
+
+    // ── Pasado el plazo: se puede retomar ─────────────────────────────────
+    //
+    // Se envejece `reserved_at` en la base en vez de esperar diez minutos. Lo
+    // que se prueba es la condición SQL de caducidad, que es donde vive la
+    // decisión; dormir el reloj real no probaría nada distinto.
+    await query(
+      `UPDATE meeting_analyses
+          SET reserved_at = now() - ($2 || ' milliseconds')::interval
+        WHERE meeting_id = $1`,
+      [w.meetingId, String(analysesRepo.RESERVA_CADUCA_MS + 60_000)],
+    );
+
+    const retoma = await generateAnalysis(w.scope, w.meetingId, { apiKey: 'k', fetchImpl: f2 });
+    assert.equal(llamadas2, 1, 'pasado el plazo sí se retoma, y exactamente una vez');
+    assert.equal(retoma.state, 'ready');
+    assert.equal(retoma.reused, false);
+
+    const despues = await query<{ status: string; reserved_by: string | null; n: string }>(
+      `SELECT status, reserved_by, count(*) OVER ()::text n
+         FROM meeting_analyses WHERE meeting_id=$1`, [w.meetingId],
+    );
+    assert.equal(despues.rows.length, 1, 'sigue habiendo UNA fila: se retomó, no se duplicó');
+    assert.equal(despues.rows[0].status, 'ready');
+    assert.notEqual(despues.rows[0].reserved_by, dueñoMuerto, 'el dueño es el nuevo, no el muerto');
+
+    // Y el que murió no puede volver de entre los muertos a pisar el resultado:
+    // `complete` exige seguir siendo el dueño.
+    const zombi = await analysesRepo.complete({
+      id: (await query<{ id: string }>(`SELECT id FROM meeting_analyses WHERE meeting_id=$1`, [w.meetingId])).rows[0].id,
+      reservedBy: dueñoMuerto!,
+      payload: { executive: 'resultado del proceso muerto' },
+      modelReturned: null, inputTokens: 0, outputTokens: 0, costUsd: null, durationMs: null,
+    });
+    assert.equal(zombi, null, 'el dueño caducado ya no puede escribir');
+  } finally {
+    await cleanupTenant(w.tenantId);
+  }
+});
