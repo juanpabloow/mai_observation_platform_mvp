@@ -4,12 +4,15 @@ import {
   type ByteRange,
   type ConfirmInput,
   type ConfirmResult,
+  type DeleteManyResult,
   type ObjectStat,
+  type PrefixPage,
   type PrivateObjectStore,
   type SignGetInput,
   type SignPutInput,
   type SignedUrl,
   type StoreCapabilities,
+  DELETE_BATCH_MAX,
 } from './privateObjectStore.js';
 
 /**
@@ -33,8 +36,14 @@ import {
  *     que usa el adaptador real. Si cada uno decidiera por su cuenta, aprobar
  *     contra el fake no diría nada sobre producción.
  *
- * Lo que NO imita: multipart, versionado, listados, consistencia eventual.
- * Ninguno se usa.
+ *   · **Los listados se pueden truncar**. `listPrefix` pagina de verdad, con
+ *     cursor, para que el bucle de borrado se ejercite con más objetos de los
+ *     que caben en una página en vez de dar siempre una sola vuelta.
+ *
+ * Lo que NO imita: multipart ni versionado. Tampoco consistencia eventual —y
+ * eso no es una simplificación: R2 es fuertemente consistente en escritura,
+ * borrado y listado, así que una lista vacía justo después de borrar refleja el
+ * estado real, no una ventana de gracia.
  */
 
 interface StoredObject {
@@ -62,10 +71,12 @@ export class FakePrivateStore implements PrivateObjectStore {
 
   private readonly objects = new Map<string, StoredObject>();
   private readonly grants = new Map<string, SignedGrant>();
-  private readonly putTtlSeconds: number;
+  readonly putTtlSeconds: number;
   private readonly getTtlSeconds: number;
   private now: () => Date;
   private counter = 0;
+  private pageSize = DELETE_BATCH_MAX;
+  private failDeleteOf = new Set<string>();
 
   constructor(options?: { putTtlSeconds?: number; getTtlSeconds?: number; clock?: () => Date }) {
     this.putTtlSeconds = options?.putTtlSeconds ?? 900;
@@ -221,6 +232,45 @@ export class FakePrivateStore implements PrivateObjectStore {
 
   async delete(key: string): Promise<void> {
     this.objects.delete(key);
+  }
+
+  /**
+   * Pagina como el real. El tamaño de página se puede bajar en las pruebas
+   * (`pageSize`) para forzar varias vueltas sin sembrar mil objetos.
+   */
+  async listPrefix(prefix: string, cursor?: string): Promise<PrefixPage> {
+    if (prefix.length === 0) throw new Error('listPrefix: el prefijo no puede estar vacío');
+    const todas = [...this.objects.keys()].filter((k) => k.startsWith(prefix)).sort();
+    const desde = cursor ? todas.findIndex((k) => k > cursor) : 0;
+    if (desde < 0) return { keys: [], cursor: null };
+    const pagina = todas.slice(desde, desde + this.pageSize);
+    const hayMas = desde + pagina.length < todas.length;
+    return { keys: pagina, cursor: hayMas ? pagina[pagina.length - 1] : null };
+  }
+
+  async deleteMany(keys: readonly string[]): Promise<DeleteManyResult> {
+    if (keys.length > DELETE_BATCH_MAX) {
+      throw new Error(`deleteMany: máximo ${DELETE_BATCH_MAX} claves por lote`);
+    }
+    let deleted = 0;
+    const failed: string[] = [];
+    for (const k of keys) {
+      if (this.failDeleteOf.has(k)) { failed.push(k); continue; }
+      this.objects.delete(k);
+      deleted += 1;
+    }
+    return { deleted, failed };
+  }
+
+  /** Para probar el camino de fallo: estas claves se resisten a morir. */
+  failDeletesFor(keys: readonly string[]): void {
+    this.failDeleteOf = new Set(keys);
+  }
+
+  /** Tamaño de página del listado, para ejercitar la paginación. */
+  setPageSize(n: number): void {
+    if (!Number.isInteger(n) || n < 1) throw new Error('pageSize debe ser un entero >= 1');
+    this.pageSize = n;
   }
 
   // ── Ayudas para pruebas ───────────────────────────────────────────────────

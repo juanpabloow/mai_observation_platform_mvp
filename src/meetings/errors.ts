@@ -20,6 +20,18 @@ export type MeetingsErrorCode =
   // Ámbito
   | 'not_found'
   | 'module_disabled'
+  /**
+   * El llamador SÍ puede ver este recurso, pero no ejecutar esta operación
+   * sobre él.
+   *
+   * Es la única excepción a la regla de que todo lo denegado se parezca a un
+   * 404, y tiene motivo: quien recibe esto ya tiene acceso al cliente y ve la
+   * reunión en pantalla. Devolverle «no existe» sobre algo que está mirando no
+   * oculta nada —ya sabe que existe— y convierte una restricción de permisos en
+   * un bug aparente. Lo que sigue siendo indistinguible es el caso de OTRO
+   * tenant, que no llega hasta aquí: `resolveAppScope` ya devolvió 404.
+   */
+  | 'forbidden'
   // Entrada
   | 'invalid_request'
   | 'media_rejected'
@@ -63,6 +75,7 @@ export const ERROR_STATUS: Record<MeetingsErrorCode, number> = {
   unauthorized: 401,
   not_found: 404,
   module_disabled: 403,
+  forbidden: 403,
   invalid_request: 400,
   media_rejected: 422,
   unsupported_schema_version: 422,

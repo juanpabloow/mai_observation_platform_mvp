@@ -55,6 +55,23 @@ the worker. That's harmless and expected.
   API keys, worker decrypts them). Never rotate it on one service without the other,
   or ingestion breaks.
 
+- **El servicio `worker` necesita las variables `MEETINGS_STORAGE_*`.** Hasta
+  ahora sólo las usaba `web`. Desde que el worker ejecuta el barrido que
+  termina las eliminaciones (`startMeetingsMaintenance`), sin ellas se
+  abstiene y lo registra como `storage_not_configured` — a propósito: borrar
+  la fila sin haber vaciado el prefijo dejaría el audio huérfano en R2 y sin
+  nada que lo mencione, que es el único fallo irreversible de la operación.
+  Las reuniones se quedarían en `deleting` indefinidamente, visibles y
+  reintentables, hasta que se configure.
+
+  Variables: `MEETINGS_STORAGE_ENDPOINT`, `MEETINGS_STORAGE_BUCKET`,
+  `MEETINGS_STORAGE_ACCESS_KEY_ID`, `MEETINGS_STORAGE_SECRET_ACCESS_KEY`
+  (y opcionalmente `MEETINGS_STORAGE_REGION`). Las mismas que ya tiene `web`.
+
+- **Cadencia del barrido de eliminaciones:** `MEETINGS_PURGE_INTERVAL_SECONDS`
+  (por defecto 300, cinco minutos) y `MEETINGS_PURGE_BATCH` (por defecto 10
+  reuniones por pasada). No hace falta tocarlas.
+
 **Future improvements** (not yet implemented; tracked in `scaling-todo.md`):
 
 - Automate migrations as a Railway pre-deploy / release command, so schema changes
@@ -198,3 +215,60 @@ Authorized redirect URI:
 `npm run dev` (worker, tsx watch) and `npm run web` (Next dev) still work exactly
 as before, loading the repo-root `.env`. The production scripts (`build:worker`,
 `start:worker`, `build:web`, `start:web`, `migrate:prod`) are additive.
+
+## Reuniones · servicio de mantenimiento y vuelta atrás de la eliminación
+
+### El servicio
+
+Un tercer servicio Node, **aparte** del `web` y del `worker` de la ingesta:
+`railway.maintenance.json` → `npm run start:maintenance` → `node
+dist/maintenanceMain.js`. Arranca **sólo** el barrido que termina las
+eliminaciones: ni la ingesta de n8n, ni un servidor HTTP, ni puerto abierto.
+Una réplica, `restartPolicyType: ON_FAILURE`.
+
+No es el worker GPU de Linux (`vanegas-w3-worker.service`), que vive fuera de
+Railway y no se toca.
+
+**Variables** (por referencia del proyecto, nunca pegadas a mano):
+
+- `DATABASE_URL` — **la misma referencia efectiva que usa el servicio `web`**.
+  La referencia por defecto de un proyecto de Railway apunta a la base
+  `railway`, no a `mai_w3_staging`. Este proceso borra filas y objetos, así que
+  apuntarlo mal es el accidente que hay que impedir.
+- `MEETINGS_MAINTENANCE_EXPECTED_DB` — la base que se AFIRMA esperar
+  (`mai_w3_staging` en staging). Al arrancar, el proceso pregunta a PostgreSQL
+  `current_database()` y **aborta** si no coincide. Sin la variable no aborta,
+  pero avisa: acoplar el binario a un nombre de entorno obligaría a cambiar
+  código para desplegarlo en otro.
+- `MEETINGS_STORAGE_ENDPOINT`, `MEETINGS_STORAGE_BUCKET`,
+  `MEETINGS_STORAGE_ACCESS_KEY_ID`, `MEETINGS_STORAGE_SECRET_ACCESS_KEY` — las
+  mismas del `web`. Sin ellas el barrido se abstiene y lo registra; no borra
+  filas, porque quitar la fila sin haber vaciado el prefijo deja el audio
+  huérfano en R2 y es el único fallo irreversible de la operación.
+- Opcionales: `MEETINGS_PURGE_INTERVAL_SECONDS` (300),
+  `MEETINGS_PURGE_BATCH` (10).
+- **NO** `OPENAI_API_KEY`: este proceso no llega al módulo de análisis.
+
+Registra por reunión `meetingId`, `outcome`, `found`, `deleted`, `remaining`,
+`batches` y `ms`. Nunca claves de R2, URLs firmadas, títulos ni contenido.
+
+### Vuelta atrás
+
+En este orden, y **nunca con force-push**:
+
+1. **Detener el servicio de mantenimiento** en Railway. Mientras corra puede
+   completar una eliminación a medias, y el paso siguiente cambia el código que
+   la ejecuta.
+2. **`git revert` del commit de integración** y publicarlo por fast-forward.
+   Volver al SHA anterior con `--force` borraría del remoto commits ya
+   desplegados; un revert deja la historia intacta y es igual de efectivo.
+3. **Confirmar que no hay eliminaciones activas**:
+   `SELECT count(*) FROM meetings WHERE deletion_state <> 'live'` debe ser 0.
+   Si no lo es, hay reuniones a medio eliminar: terminarlas antes de seguir.
+4. **Sólo entonces** considerar `npx node-pg-migrate down 1`.
+
+Sobre ese último paso: la migración es **puramente aditiva** —diez columnas,
+dos constraints y un índice; cero `DROP` en `up()`— así que dejarla aplicada no
+rompe el código anterior. **Es preferible dejarla** a bajarla con procesos
+pendientes: bajarla con una reunión en `deletion_state <> 'live'` destruiría el
+estado que hace falta para terminarla, y ahí sí quedaría audio huérfano.

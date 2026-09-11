@@ -1,5 +1,6 @@
 import { q, type Queryable } from './types.js';
 import type { DiarizationState, MeetingMediaState, TranscriptState } from './types.js';
+import type { DeletionState } from './deletion.js';
 
 /**
  * Reuniones y sus medios.
@@ -30,6 +31,10 @@ export interface MeetingRow {
   idempotency_key: string;
   retention_policy: Record<string, unknown>;
   cancelled_at: Date | null;
+  /** 'live' | 'deleting' | 'delete_failed'. Ver migración 1784200000000. */
+  deletion_state: DeletionState;
+  deletion_not_before: Date | null;
+  original_put_expires_at: Date | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -405,6 +410,7 @@ export interface MeetingListRow {
   diarization_state: DiarizationState;
   analysis_state: string;
   cancelled_at: Date | null;
+  deletion_state: DeletionState;
   warnings: unknown[];
   /** Del medio original: lo que el usuario subió. NULL si aún no hay. */
   original_bytes: string | null;
@@ -447,7 +453,7 @@ export interface MeetingListRow {
 const LIST_SELECT = `
   SELECT m.id, m.title, m.source_kind, m.started_at, m.created_at, m.updated_at,
          m.media_state, m.transcript_state, m.diarization_state, m.analysis_state,
-         m.cancelled_at, m.warnings, m.active_transcript_id,
+         m.cancelled_at, m.deletion_state, m.warnings, m.active_transcript_id,
          orig.bytes::text                       AS original_bytes,
          tv.duration_seconds::text              AS duration_seconds,
          tv.segment_count                       AS segment_count,

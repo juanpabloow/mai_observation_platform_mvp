@@ -8,6 +8,7 @@ import { type AudioState, type FollowState, type SpeakerTurn } from "@/component
 import { AudioDock, DOCK_GAP_CLS } from "@/components/reuniones/AudioDock";
 import { READING_MEASURE_CLS } from "@/lib/meetingsLayout";
 import { Avatar, ProgressBar, ShareMeter, StampLink, statusFace } from "@/components/reuniones/MeetingBits";
+import { MeetingActionsMenu } from "@/components/reuniones/MeetingDeletion";
 import type { EvidenceItem, MeetingDetail } from "@/lib/meetingsData";
 import {
   deriveFollowState,
@@ -280,17 +281,11 @@ export function MeetingWorkspace({
               Compartir
             </button>
           </span>
-          <button
-            type="button"
-            aria-label="Más acciones de la reunión"
-            className="u-focus inline-flex size-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-subtle hover:text-foreground"
-          >
-            <svg viewBox="0 0 16 16" className="size-3.5" fill="currentColor" aria-hidden>
-              <circle cx="3" cy="8" r="1.3" />
-              <circle cx="8" cy="8" r="1.3" />
-              <circle cx="13" cy="8" r="1.3" />
-            </svg>
-          </button>
+          {/* El botón de tres puntos DEJA DE SER INERTE: el menú real llega con
+              la eliminación. Lo demás de esta cabecera —`ml-auto`
+              incondicional, el envoltorio responsive— es del ajuste visual ya
+              desplegado y se conserva tal cual. */}
+          <MeetingActionsMenu meeting={meeting} />
         </span>
       </section>
 

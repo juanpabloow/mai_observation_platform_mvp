@@ -226,6 +226,16 @@ export async function claimNextJob(
         AND attempts < max_attempts
         AND requires <@ $1::text[]
         AND ($2::uuid IS NULL OR tenant_id = $2::uuid)
+        -- Nada de una reunión marcada para eliminación. Arrendar aquí daría al
+        -- worker un job que acabará pidiendo firmar una subida, y esa URL
+        -- podría recrear un objeto después de vaciar el prefijo. Se filtra al
+        -- ELEGIR y no al entregar: un job que no se puede ejecutar no debe
+        -- quedarse bloqueando la cabeza de la cola.
+        AND EXISTS (
+          SELECT 1 FROM meetings m
+           WHERE m.id = meeting_processing_jobs.meeting_id
+             AND m.deletion_state = 'live'
+        )
       ORDER BY priority ASC, next_attempt_at ASC, created_at ASC
       FOR UPDATE SKIP LOCKED
       LIMIT 1`,

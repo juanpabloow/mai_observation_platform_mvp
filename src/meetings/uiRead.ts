@@ -67,6 +67,13 @@ export interface UiMeetingRow {
   readonly diarizationState: string;
   readonly analysisState: string;
   readonly cancelledAt: string | null;
+  /**
+   * 'live' | 'deleting' | 'delete_failed'. Va en la lectura de la UI porque el
+   * listado tiene que poder decir «Eliminando» en vez de seguir ofreciendo
+   * acciones sobre algo que está desapareciendo — y porque un
+   * `delete_failed` que no se ve no se puede reintentar.
+   */
+  readonly deletionState: 'live' | 'deleting' | 'delete_failed';
   readonly warnings: readonly unknown[];
   readonly originalBytes: number | null;
   readonly durationSeconds: number | null;
@@ -122,6 +129,7 @@ function toRow(row: meetingsRepo.MeetingListRow): UiMeetingRow {
     diarizationState: row.diarization_state,
     analysisState: row.analysis_state,
     cancelledAt: row.cancelled_at?.toISOString() ?? null,
+    deletionState: row.deletion_state ?? 'live',
     warnings: Array.isArray(row.warnings) ? row.warnings : [],
     originalBytes: num(row.original_bytes),
     durationSeconds: num(row.duration_seconds),

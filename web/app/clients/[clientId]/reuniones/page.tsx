@@ -5,6 +5,7 @@ import { PageShell } from "@/components/ui/PageShell";
 import { PageHeading } from "@/components/ui/PageTitle";
 import { EmptyState, FacetPills, Pagination } from "@/components/ui/primitives";
 import { MeetingsTable } from "@/components/reuniones/MeetingsTable";
+import { MeetingDeletionProvider } from "@/components/reuniones/MeetingDeletion";
 import { UploadMeetingButton } from "@/components/reuniones/UploadMeetingDialog";
 import { MeetingsSearch } from "@/components/reuniones/MeetingsSearch";
 import { ActiveRangeChip, MeetingsFilterMenu, MeetingsSortMenu } from "@/components/reuniones/MeetingsToolbar";
@@ -74,6 +75,9 @@ export default async function ClientMeetingsPage({
   const page = Math.min(requestedPage, pageCount);
   const meetings = all.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
 
+  // Sólo owner/admin eliminan definitivamente. Se decide en el SERVIDOR y se
+  // baja como dato: ocultar el botón es cortesía, la ruta lo vuelve a exigir.
+  const puedeEliminar = scope.role === "owner" || scope.role === "admin";
   const base = `/clients/${client.id}/reuniones`;
   const hrefWith = (patch: Record<string, string | undefined>): string => {
     const p = new URLSearchParams();
@@ -181,7 +185,11 @@ export default async function ClientMeetingsPage({
         ) : (
           <>
             <div className="min-h-0 flex-1 overflow-auto">
-              <MeetingsTable meetings={meetings} detailedIds={meetings.map((m) => m.id)} hrefFor={(id) => `${base}/${id}`} sort={sort} />
+              {/* El proveedor envuelve la tabla entera: el menú de cada fila
+                  abre EL MISMO diálogo, que se renderiza una sola vez aquí. */}
+              <MeetingDeletionProvider clientId={client.id} canDelete={puedeEliminar}>
+                <MeetingsTable meetings={meetings} detailedIds={meetings.map((m) => m.id)} hrefFor={(id) => `${base}/${id}`} sort={sort} />
+              </MeetingDeletionProvider>
             </div>
             <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-line-row px-4 py-2.5">
               <span className="text-[0.71875rem] text-faint">

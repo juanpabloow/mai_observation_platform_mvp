@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { MeetingWorkspace } from "@/components/reuniones/MeetingWorkspace";
+import { MeetingDeletionProvider } from "@/components/reuniones/MeetingDeletion";
 import { getMeeting, getMeetingAudioAvailability } from "@/lib/meetingsData";
 import type { AudioState } from "@/components/reuniones/AudioPlayer";
 
@@ -48,6 +49,11 @@ export default async function MeetingPage({
         : "ready";
 
   return (
+    // El mismo proveedor que el listado, con el mismo diálogo dentro.
+    <MeetingDeletionProvider
+      clientId={client.id}
+      canDelete={scope.role === "owner" || scope.role === "admin"}
+    >
     <MeetingWorkspace
       meeting={meeting}
       clientId={client.id}
@@ -58,5 +64,6 @@ export default async function MeetingPage({
       // caduca contando desde ese momento y no desde que se pintó la página.
       audioSrc={playable ? `/api/meetings/v1/meetings/${meetingId}/media?clientId=${client.id}` : null}
     />
+    </MeetingDeletionProvider>
   );
 }

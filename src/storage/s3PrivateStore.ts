@@ -1,7 +1,9 @@
 import { createHash } from 'node:crypto';
 import {
   DeleteObjectCommand,
+  DeleteObjectsCommand,
   GetObjectCommand,
+  ListObjectsV2Command,
   HeadObjectCommand,
   PutObjectCommand,
   S3Client,
@@ -11,8 +13,11 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import {
   base64ToHex,
   hexToBase64,
+  DELETE_BATCH_MAX,
   StorageUnavailableError,
   type ByteRange,
+  type DeleteManyResult,
+  type PrefixPage,
   type ConfirmInput,
   type ConfirmResult,
   type ObjectStat,
@@ -85,6 +90,7 @@ export const MAX_PRESIGN_SECONDS = 604_800;
 export class S3PrivateStore implements PrivateObjectStore {
   readonly driver = 's3';
   readonly capabilities: StoreCapabilities = { range: true, checksumOnHead: true };
+  get putTtlSeconds(): number { return this.config.putTtlSeconds; }
 
   private readonly config: S3PrivateStoreConfig;
   private readonly client: S3Client;
@@ -309,6 +315,60 @@ export class S3PrivateStore implements PrivateObjectStore {
       // Un 404 significa que ya no estaba, que es el estado deseado.
       if (isNotFound(cause)) return;
       throw new StorageUnavailableError(`DELETE falló: ${describeError(cause)}`);
+    }
+  }
+
+  /**
+   * Una página de `ListObjectsV2`. El cursor es el `NextContinuationToken` tal
+   * cual: opaco, se devuelve sin interpretarlo.
+   *
+   * El prefijo NO se valida contra la forma de las claves de Reuniones: este
+   * módulo no sabe nada de reuniones. Lo único que se exige es que no esté
+   * vacío, porque un prefijo vacío lista el bucket entero y quien lo pidió
+   * casi seguro no quería eso.
+   */
+  async listPrefix(prefix: string, cursor?: string): Promise<PrefixPage> {
+    if (prefix.length === 0) throw new Error('listPrefix: el prefijo no puede estar vacío');
+    try {
+      const out = await this.client.send(
+        new ListObjectsV2Command({
+          Bucket: this.config.bucket,
+          Prefix: prefix,
+          MaxKeys: DELETE_BATCH_MAX,
+          ...(cursor ? { ContinuationToken: cursor } : {}),
+        }),
+      );
+      return {
+        keys: (out.Contents ?? []).map((o) => o.Key).filter((k): k is string => typeof k === 'string'),
+        // `IsTruncated` false sin token es el final; el token sin truncado no
+        // debería pasar, pero si pasa se sigue paginando, que es lo seguro.
+        cursor: out.NextContinuationToken ?? null,
+      };
+    } catch (cause) {
+      throw new StorageUnavailableError(`LIST falló: ${describeError(cause)}`);
+    }
+  }
+
+  async deleteMany(keys: readonly string[]): Promise<DeleteManyResult> {
+    if (keys.length === 0) return { deleted: 0, failed: [] };
+    if (keys.length > DELETE_BATCH_MAX) {
+      throw new Error(`deleteMany: máximo ${DELETE_BATCH_MAX} claves por lote`);
+    }
+    try {
+      const out = await this.client.send(
+        new DeleteObjectsCommand({
+          Bucket: this.config.bucket,
+          Delete: { Objects: keys.map((k) => ({ Key: this.assertKey(k) })), Quiet: true },
+        }),
+      );
+      // Con `Quiet: true` sólo vuelven los errores. Una clave que no existía no
+      // es un error: el estado deseado ya se cumplía.
+      const failed = (out.Errors ?? [])
+        .map((e) => e.Key)
+        .filter((k): k is string => typeof k === 'string');
+      return { deleted: keys.length - failed.length, failed };
+    } catch (cause) {
+      throw new StorageUnavailableError(`DELETE por lotes falló: ${describeError(cause)}`);
     }
   }
 }

@@ -130,10 +130,35 @@ export class StorageUnavailableError extends Error {
   }
 }
 
+/** Una página de un listado por prefijo. `cursor: null` = no hay más. */
+export interface PrefixPage {
+  readonly keys: readonly string[];
+  readonly cursor: string | null;
+}
+
+/** Lo que sobrevivió a un borrado por lotes. */
+export interface DeleteManyResult {
+  readonly deleted: number;
+  /** Las que el almacenamiento rechazó. Vacío = se fueron todas. */
+  readonly failed: readonly string[];
+}
+
+/** Tope del `DeleteObjects` de S3 y de R2. No es una elección nuestra. */
+export const DELETE_BATCH_MAX = 1000;
+
 export interface PrivateObjectStore {
   /** 's3' | 'fake'. Sólo para logs y diagnóstico; nunca para decidir lógica. */
   readonly driver: string;
   readonly capabilities: StoreCapabilities;
+  /**
+   * El TTL con el que este store firma un PUT cuando nadie pide otro.
+   *
+   * Se expone porque la eliminación necesita saber hasta cuándo puede seguir
+   * viva una URL de escritura. Para las emitidas desde que se registra el
+   * vencimiento real se usa ése; este número sólo cubre las filas anteriores a
+   * esa columna, y es la duración que usa el propio código, no una estimación.
+   */
+  readonly putTtlSeconds: number;
 
   /**
    * Firmar es ASÍNCRONO. El presigner oficial lo es, y forzar una API síncrona
@@ -155,6 +180,23 @@ export interface PrivateObjectStore {
   confirm(input: ConfirmInput): Promise<ConfirmResult>;
 
   delete(key: string): Promise<void>;
+
+  /**
+   * Lista las claves bajo un prefijo, paginando. Existe para la eliminación:
+   * borrar una reunión es vaciar su prefijo, y el conjunto de objetos que hay
+   * ahí NO es el conjunto de claves que menciona la base — un intento fallido a
+   * medias deja objetos que ninguna fila nombra, y ésos son justamente los que
+   * hay que barrer.
+   */
+  listPrefix(prefix: string, cursor?: string): Promise<PrefixPage>;
+
+  /**
+   * Borra hasta `DELETE_BATCH_MAX` claves de una vez. Devuelve las que
+   * fallaron en vez de lanzar: un lote parcialmente borrado es información
+   * útil —hay que reintentar sólo el resto— y convertirlo en excepción la
+   * pierde.
+   */
+  deleteMany(keys: readonly string[]): Promise<DeleteManyResult>;
 }
 
 /** hex → base64, que es como S3 quiere el checksum en la cabecera. */

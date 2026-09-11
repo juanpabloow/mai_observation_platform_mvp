@@ -74,6 +74,12 @@ export interface MeetingListItem {
   tasks: number | null;
   reports: number | null;
   updated: string;
+  /**
+   * Si esta reunión está desapareciendo. El listado la sigue mostrando en vez
+   * de esconderla: un `delete_failed` invisible es un `delete_failed` que nadie
+   * reintenta.
+   */
+  deletionState: "live" | "deleting" | "delete_failed";
 }
 
 export interface TranscriptSegment {

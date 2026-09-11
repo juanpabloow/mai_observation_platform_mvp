@@ -356,6 +356,7 @@ export function toListItem(row: UiMeetingRow, now?: Date): MeetingListItem {
     tasks: null,
     reports: null,
     updated: relativeLabel(row.updatedAt, now),
+    deletionState: row.deletionState,
   };
 }
 

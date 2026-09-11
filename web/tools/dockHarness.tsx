@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { MeetingWorkspace } from "../components/reuniones/MeetingWorkspace";
+import { MeetingDeletionProvider } from "../components/reuniones/MeetingDeletion";
 import type { MeetingDetail, TranscriptSegment } from "../lib/meetingsData";
 
 /**
@@ -120,6 +121,7 @@ const meeting = {
   },
   analysis: null,
   isTestFixture: true,
+  deletionState: "live",
 } as unknown as MeetingDetail;
 
 function App() {
@@ -132,6 +134,7 @@ function App() {
     <div className="flex h-screen" key={key}>
       <aside className="hidden w-[17rem] shrink-0 border-r border-line bg-surface sm:block" aria-hidden />
       <div className="flex min-w-0 flex-1 flex-col p-3">
+      <MeetingDeletionProvider clientId="22222222-2222-4222-8222-222222222222" canDelete>
       <MeetingWorkspace
           meeting={m}
           clientId="22222222-2222-4222-8222-222222222222"
@@ -140,6 +143,7 @@ function App() {
           // Un WAV de verdad, servido junto al HTML. Suena.
           audioSrc="./tono.wav"
         />
+      </MeetingDeletionProvider>
       </div>
     </div>
   );

@@ -2,7 +2,7 @@ import 'server-only';
 import { MeetingsApiError } from '@worker/meetings/errors.js';
 import { isClientModuleEnabled } from '@worker/db/repositories/clientModules.js';
 import { getClientById } from '@worker/db/repositories/clients.js';
-import { getAccessScope, canAccessClient } from './access';
+import { getAccessScope, canAccessClient, type Role } from './access';
 
 /**
  * El ámbito de un llamador CON SESIÓN, con el entitlement del módulo.
@@ -18,6 +18,12 @@ export interface AppScopeResolution {
   readonly clientId: string;
   readonly userId: string | null;
   readonly userLabel: string | null;
+  /**
+   * El rol de la sesión en este tenant. La mayoría de las operaciones no lo
+   * miran —ver el cliente ya es autorización suficiente—, pero eliminar
+   * definitivamente sí: destruir el audio original no tiene vuelta atrás.
+   */
+  readonly role: Role;
 }
 
 /**
@@ -66,5 +72,6 @@ export async function resolveAppScope(clientId: string): Promise<AppScopeResolut
     // trae. No el correo — no está en el scope y buscarlo sólo para un log
     // añadiría una consulta a cada operación.
     userLabel: scope.userId,
+    role: scope.role,
   };
 }

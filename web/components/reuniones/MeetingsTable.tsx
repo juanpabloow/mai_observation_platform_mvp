@@ -1,6 +1,7 @@
 import Link from "next/link";
 import { ENTITY_ROW_CLS, TABLE_HEADER_CLS } from "@/components/ui/primitives";
 import { AvatarStack, SourceLine, StatusCell } from "@/components/reuniones/MeetingBits";
+import { MeetingActionsMenu } from "@/components/reuniones/MeetingDeletion";
 import type { MeetingListItem } from "@/lib/meetingsData";
 
 /**
@@ -129,17 +130,10 @@ export function MeetingsTable({
               {m.updated}
             </span>
             <span role="cell" className="relative z-10 flex justify-end">
-              <button
-                type="button"
-                aria-label={`Más acciones para ${m.title}`}
-                className="u-focus inline-flex size-7 items-center justify-center rounded-md text-muted transition-colors hover:bg-subtle hover:text-foreground"
-              >
-                <svg viewBox="0 0 16 16" className="size-3.5" fill="currentColor" aria-hidden>
-                  <circle cx="3" cy="8" r="1.3" />
-                  <circle cx="8" cy="8" r="1.3" />
-                  <circle cx="13" cy="8" r="1.3" />
-                </svg>
-              </button>
+              {/* EL MISMO menú y EL MISMO diálogo que la ficha: el proveedor de
+                  arriba guarda la reunión pendiente y renderiza una sola
+                  instancia del diálogo para toda la pantalla. */}
+              <MeetingActionsMenu meeting={m} size={7} />
             </span>
           </div>
         );

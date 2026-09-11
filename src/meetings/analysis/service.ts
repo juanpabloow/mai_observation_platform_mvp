@@ -172,6 +172,12 @@ export async function generateAnalysis(
   deps: AnalyzeDeps = {},
 ): Promise<GenerateResult> {
   const meeting = await requireMeeting(scope, meetingId);
+  // Una reunión en eliminación no genera resúmenes nuevos. No escribe en R2,
+  // pero sí crea una fila y cuesta dinero: pagarle a un proveedor por resumir
+  // algo que está a punto de desaparecer no tiene defensa.
+  if (meeting.deletion_state !== 'live') {
+    throw new MeetingsApiError('invalid_transition', 'Esta reunión está en proceso de eliminación.');
+  }
   // La generación queda ATADA a la transcripción leída aquí. Si cambia después,
   // el resultado se conserva pero no se activa.
   const activoAlEmpezar = meeting.active_transcript_id;

@@ -6,6 +6,7 @@ import {
   type WorkerIdentity,
 } from '../db/repositories/meetings/credentials.js';
 import * as meetingsRepo from '../db/repositories/meetings/meetings.js';
+import * as deletionRepo from '../db/repositories/meetings/deletion.js';
 import * as jobsRepo from '../db/repositories/meetings/jobs.js';
 import * as artifactsRepo from '../db/repositories/meetings/artifacts.js';
 import * as transcriptsRepo from '../db/repositories/meetings/transcripts.js';
@@ -76,6 +77,22 @@ function deps(partial: MeetingsServiceDeps): Required<Omit<MeetingsServiceDeps, 
     rateLimiter: partial.rateLimiter ?? meetingsRateLimiter,
     now: partial.now ?? (() => new Date()),
   };
+}
+
+/**
+ * Ninguna escritura nueva sobre una reunión marcada para eliminación.
+ *
+ * Se comprueba en los CUATRO caminos que pueden crear un objeto o una fila:
+ * `upload-init`, `upload-complete`, `result/init` y `result/complete`. Los dos
+ * primeros ya tienen la fila a mano; estos dos llegan por lease, así que la
+ * leen. Una consulta más por subida de artefacto es barata al lado de un audio
+ * que reaparece en un bucket después de que alguien lo mandó borrar.
+ */
+async function assertMeetingWritable(meetingId: string, executor?: Queryable): Promise<void> {
+  const meeting = await meetingsRepo.getMeetingById(meetingId, executor);
+  if (meeting && meeting.deletion_state !== 'live') {
+    throw new MeetingsApiError('invalid_transition', 'Esta reunión está en proceso de eliminación.');
+  }
 }
 
 function enforceRate(
@@ -173,6 +190,12 @@ export async function uploadInit(
   const { store, limits } = deps(d);
   const meeting = await meetingsRepo.getMeetingScoped(meetingId, scope.tenantId, scope.clientId);
   if (!meeting) throw notFound();
+  // Antes que nada: una reunión marcada para eliminación no emite URLs de
+  // escritura. Firmar aquí crearía una URL que sobreviviría al vaciado del
+  // prefijo y podría recrear el audio después de borrarlo.
+  if (meeting.deletion_state !== 'live') {
+    throw new MeetingsApiError('invalid_transition', 'Esta reunión está en proceso de eliminación.');
+  }
   if (meeting.cancelled_at !== null) {
     throw new MeetingsApiError('invalid_transition', 'La reunión está cancelada.');
   }
@@ -203,6 +226,10 @@ export async function uploadInit(
     ...(request.checksumSha256 ? { checksumSha256Hex: request.checksumSha256.toLowerCase() } : {}),
   });
 
+  // El vencimiento REAL de esta URL, no una duración deducida. Sin esto, la
+  // eliminación no tendría forma de saber hasta cuándo puede seguir viva una
+  // subida ya firmada, y `result/init` sí lo guardaba mientras que ésta no.
+  await deletionRepo.setOriginalPutExpiry(meeting.id, signed.expiresAt);
   await meetingsRepo.setMediaState(meeting.id, 'uploading');
 
   return {
@@ -263,6 +290,9 @@ export async function uploadComplete(
   const { store } = deps(d);
   const meeting = await meetingsRepo.getMeetingScoped(meetingId, scope.tenantId, scope.clientId);
   if (!meeting) throw notFound();
+  if (meeting.deletion_state !== 'live') {
+    throw new MeetingsApiError('invalid_transition', 'Esta reunión está en proceso de eliminación.');
+  }
   if (meeting.cancelled_at !== null) {
     throw new MeetingsApiError('invalid_transition', 'La reunión está cancelada.');
   }
@@ -847,6 +877,7 @@ export async function resultInit(
   enforceRate(rateLimiter, identity.credentialId, 'result');
 
   const { job } = await authorizeLease(identity, request);
+  await assertMeetingWritable(job.meeting_id);
   const kind = STAGE_ARTIFACT[job.stage];
   if (kind === 'analysis') {
     throw new MeetingsApiError('invalid_transition', 'La etapa analyze no está habilitada todavía.');
@@ -951,6 +982,7 @@ export async function resultComplete(
     allowTerminalIdempotent: true,
   });
   const job = preflight.job;
+  await assertMeetingWritable(job.meeting_id);
   const kind = STAGE_ARTIFACT[job.stage];
   if (!/^[0-9a-f]{64}$/i.test(request.checksumSha256)) {
     throw invalidRequest('checksumSha256 debe ser un SHA-256 en hexadecimal.');
