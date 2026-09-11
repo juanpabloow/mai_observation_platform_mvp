@@ -44,6 +44,19 @@ import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react"
 
 export type AudioState = "ready" | "playing" | "loading" | "buffering" | "unavailable" | "error";
 
+/**
+ * El seguimiento de la transcripción, como CUATRO estados y no un booleano.
+ *
+ * `suspended` es el que no cabía en un booleano y es el que importa: el usuario
+ * desplazó el texto a mano mientras el audio seguía sonando. No es «apagado»
+ * —hay un sitio al que volver— ni «encendido» —no se está desplazando—. Con dos
+ * valores había que inferirlo de `follow === false && playhead > 0`, que es la
+ * clase de condición que se desincroniza.
+ *
+ * `unavailable` = no estamos en Transcript, así que no hay texto que seguir.
+ */
+export type FollowState = "off" | "on" | "suspended" | "unavailable";
+
 /** Speaker turns as fractions of the whole, for the hover tooltip. */
 export interface SpeakerTurn {
   from: number;
@@ -90,8 +103,22 @@ export function AudioPlayer({
   startAt = 0,
   state = "ready",
   speakers = [],
+  /**
+   * `expanded` = onda, tiempos, velocidad y seguimiento. `compact` = cápsula:
+   * play/pausa, tiempo y el botón de expandir, nada más.
+   *
+   * Es una PROP y no dos componentes a propósito: cambiar de modo sólo cambia
+   * qué controles se pintan, y el `<audio>` —que va fuera de esa rama— conserva
+   * su identidad. Dos componentes distintos lo desmontarían, y compactar
+   * pararía la reproducción.
+   */
   density = "dock",
   variant = "waveform",
+  mode = "expanded",
+  followState = "unavailable",
+  onFollowToggle,
+  onFollowResume,
+  onToggleMode,
   className = "",
   /** Buffering shows a hint beside the time ("Buffering · 2 s"). */
   note,
@@ -124,13 +151,21 @@ export function AudioPlayer({
    * be the loudest object on a page that is about text.
    */
   variant?: "waveform" | "bar";
+  mode?: "expanded" | "compact";
+  followState?: FollowState;
+  onFollowToggle?: () => void;
+  onFollowResume?: () => void;
+  onToggleMode?: () => void;
   className?: string;
   note?: string;
   onTimeChange?: (seconds: number) => void;
 }) {
-  const dock = density === "dock";
-  const bar = variant === "bar";
-  const bars = dock ? 160 : 56;
+  const compacto = mode === "compact";
+  const dock = !compacto && density === "dock";
+  const bar = !compacto && variant === "bar";
+  // En el dock flotante la onda ya no ocupa el ancho de la pantalla, así que
+  // 160 barras quedarían de menos de un píxel. 96 es lo que se distingue.
+  const bars = dock ? 96 : 56;
   const heights = useMemo(() => envelope(meetingId, bars), [meetingId, bars]);
   const [at, setAt] = useState(Math.min(startAt, durationSeconds));
   const [playing, setPlaying] = useState(state === "playing");
@@ -341,11 +376,92 @@ export function AudioPlayer({
         ? `--:-- / ${fmt(durationSeconds)}`
         : `${fmt(at)} / ${fmt(durationSeconds)}`;
 
+  /**
+   * DOS RAMAS, UN SOLO `<audio>`.
+   *
+   * El elemento se renderiza FUERA del condicional de modo y siempre en la
+   * misma posición (segundo hijo del contenedor), así que React lo reconcilia
+   * como el mismo nodo al cambiar de modo. Si viviera dentro de una de las
+   * ramas, compactar lo desmontaría y la reproducción se cortaría — que es
+   * exactamente el fallo que este cambio viene a arreglar, y sería absurdo
+   * reintroducirlo por la puerta de al lado.
+   */
+  const elementoAudio =
+    src !== null ? (
+      // `preload="none"` para que la URL firmada se pida al reproducir y no al
+      // pintar. `crossOrigin` NO se pone: la ruta es del mismo origen y firma
+      // una redirección, y declararlo forzaría un preflight CORS contra R2 que
+      // el bucket privado no tiene configurado.
+      <audio ref={audioRef} src={src} preload="none" className="hidden" aria-hidden />
+    ) : null;
+
+  const controlesCompactos = (
+    <>
+        <span className="flex items-center gap-2">
+          {effectiveState === "loading" || effectiveState === "buffering" ? (
+            <span
+              role="img"
+              aria-label={effectiveState === "loading" ? "Cargando el audio" : "Buffering"}
+              className="size-7 shrink-0 animate-spin rounded-full border-2 border-line border-t-muted"
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={() => setPlaying((p) => !p)}
+              disabled={!seekable}
+              aria-label={playing ? "Pausar" : "Reproducir"}
+              className={`u-focus inline-flex size-7 shrink-0 items-center justify-center rounded-full transition-colors ${
+                seekable ? "bg-ink text-ink-fg hover:bg-ink-hover" : "border border-line bg-chip text-muted"
+              }`}
+            >
+              {playing ? (
+                <svg viewBox="0 0 16 16" className="size-3" fill="currentColor" aria-hidden>
+                  <rect x="3.4" y="2.6" width="3.4" height="10.8" rx="1" />
+                  <rect x="9.2" y="2.6" width="3.4" height="10.8" rx="1" />
+                </svg>
+              ) : (
+                <svg viewBox="0 0 16 16" className="size-3" fill="currentColor" aria-hidden>
+                  <path d="M4 2.6l8 5.4-8 5.4z" />
+                </svg>
+              )}
+            </button>
+          )}
+          {/* Posición y duración, y NADA de onda: en una cápsula de 44px de alto
+              una onda de 96 barras es un adorno ilegible. */}
+          <span className="whitespace-nowrap text-[0.8125rem] text-foreground u-mono">
+            {effectiveState === "unavailable" || effectiveState === "error" ? "—" : fmt(at)}
+          </span>
+          <span aria-hidden className="text-faint">/</span>
+          <span className="whitespace-nowrap text-[0.8125rem] text-muted u-mono">{fmt(durationSeconds)}</span>
+          {onToggleMode ? (
+            <button
+              type="button"
+              onClick={onToggleMode}
+              aria-label="Expandir el reproductor"
+              title="Expandir el reproductor"
+              className="u-focus ml-0.5 inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-subtle hover:text-foreground"
+            >
+              <svg viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden>
+                <path d="M6 10L2.5 13.5M2.5 10.5v3h3M10 6l3.5-3.5M13.5 5.5v-3h-3" />
+              </svg>
+            </button>
+          ) : null}
+        </span>
+    </>
+  );
+
   return (
+    // UN solo contenedor y SIEMPRE dos hijos: los controles del modo vigente y
+    // el elemento de audio. Así `elementoAudio` está siempre en el índice 1 del
+    // array de hijos, y React lo reconcilia como el mismo nodo al cambiar de
+    // modo. Con un `return` temprano por rama caía en otro índice y se
+    // remontaba, que es el fallo que hay que evitar.
     <div
-      className={`flex shrink-0 items-center gap-2.5 ${
-        dock
-          ? "h-[4.375rem] gap-3 border-t border-line bg-surface px-4"
+      className={`flex shrink-0 flex-wrap items-center gap-2.5 ${
+        compacto
+          ? "gap-2"
+          : dock
+          ? "gap-3 px-1 py-0.5"
           : bar
             ? // In a header the player carries NO chrome of its own: a bordered
               // pill inside a bordered card is a second frame around a utility.
@@ -353,6 +469,8 @@ export function AudioPlayer({
             : "h-11 rounded-xl border border-line-soft bg-subtle px-2.5"
       } ${className}`}
     >
+      {compacto ? controlesCompactos : (
+      <>
       {/* PLAY / PAUSE — left, as the spec fixes it. Loading and buffering replace
           it with a spinner so the control never lies about being pressable. */}
       {effectiveState === "loading" || effectiveState === "buffering" ? (
@@ -457,7 +575,7 @@ export function AudioPlayer({
         {hover && seekable && !bar ? (
           <span
             aria-hidden
-            className={`pointer-events-none absolute z-10 -translate-x-1/2 whitespace-nowrap rounded-md bg-ink px-1.5 py-0.5 text-[0.625rem] text-ink-fg u-mono ${
+            className={`pointer-events-none absolute z-10 -translate-x-1/2 whitespace-nowrap rounded-md bg-ink px-1.5 py-0.5 text-[0.75rem] text-ink-fg u-mono ${
               dock ? "bottom-[calc(100%+0.5rem)]" : "top-[calc(100%+0.5rem)]"
             }`}
             style={{ left: `${hover.pct}%` }}
@@ -467,16 +585,19 @@ export function AudioPlayer({
         ) : null}
       </div>
 
-      {/* Time, right — current and total, tabular so it does not jitter. */}
-      <span className="shrink-0 whitespace-nowrap text-[0.71875rem] text-muted u-mono">{timeLabel}</span>
+      {/* Time, right — current and total, tabular so it does not jitter.
+          13 px y no 11,5: es el dato que se lee mientras suena el audio. */}
+      <span className={`shrink-0 whitespace-nowrap u-mono ${dock ? "text-[0.8125rem] text-foreground" : "text-[0.75rem] text-muted"}`}>
+        {timeLabel}
+      </span>
 
-      {note ? <span className="shrink-0 whitespace-nowrap text-[0.6875rem] text-warn">{note}</span> : null}
+      {note ? <span className="shrink-0 whitespace-nowrap text-[0.75rem] text-warn">{note}</span> : null}
 
       {effectiveState === "unavailable" ? (
-        <span className="shrink-0 whitespace-nowrap text-[0.6875rem] text-muted">Audio no disponible todavía</span>
+        <span className="shrink-0 whitespace-nowrap text-[0.75rem] text-muted">Audio no disponible todavía</span>
       ) : null}
       {effectiveState === "error" ? (
-        <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-[0.6875rem] text-brand">
+        <span className="flex shrink-0 items-center gap-2 whitespace-nowrap text-[0.75rem] text-brand">
           No se pudo reproducir
           {/* ESTE BOTÓN NO HACÍA NADA: `type="button"` y ningún `onClick`. Un control
               que dice «Reintentar» y no reintenta es peor que su ausencia, porque
@@ -510,7 +631,7 @@ export function AudioPlayer({
             aria-haspopup="menu"
             aria-expanded={speedOpen}
             aria-label={`Velocidad de reproducción, ${speed}×`}
-            className={`u-focus rounded-md border px-1.5 py-0.5 text-[0.65625rem] transition-colors u-mono ${
+            className={`u-focus rounded-md border px-2 py-1 text-[0.75rem] transition-colors u-mono ${
               speedOpen ? "border-ink bg-ink text-ink-fg" : "border-line bg-surface text-muted hover:bg-subtle"
             }`}
           >
@@ -532,7 +653,7 @@ export function AudioPlayer({
                     setSpeed(s);
                     setSpeedOpen(false);
                   }}
-                  className={`u-focus rounded px-2 py-1 text-left text-[0.6875rem] u-mono ${
+                  className={`u-focus rounded px-2 py-1 text-left text-[0.75rem] u-mono ${
                     s === speed ? "bg-chip font-semibold text-foreground" : "text-muted hover:bg-subtle"
                   }`}
                 >
@@ -544,21 +665,74 @@ export function AudioPlayer({
         </span>
       ) : null}
 
-      {/* El elemento. Oculto y sin `controls`: los nativos serían un segundo
-          reproductor con otra apariencia dentro del que el diseño define.
-          `preload="none"` para que la URL firmada se pida al reproducir y no al
-          pintar. `crossOrigin` NO se pone: la ruta es del mismo origen y firma
-          una redirección, y declararlo forzaría un preflight CORS contra R2 que
-          el bucket privado no tiene configurado. */}
-      {src !== null ? (
-        <audio
-          ref={audioRef}
-          src={src}
-          preload="none"
-          className="hidden"
-          aria-hidden
-        />
+      {/*
+        SEGUIR TRANSCRIPCIÓN. Antes era una barra pegada arriba del transcript,
+        separada del reproductor que la gobierna. Vive aquí porque es una
+        preferencia SOBRE LA REPRODUCCIÓN: lo que hace es que el texto siga al
+        audio, y tenerla a dos regiones de distancia del play obligaba a
+        explicarla con un título.
+
+        Tres estados visibles y no dos. «Volver a seguir» aparece sólo cuando el
+        seguimiento está suspendido —el usuario desplazó el texto a mano— porque
+        entonces hay un sitio concreto al que volver; activar el modo y recuperar
+        el sitio son acciones distintas.
+      */}
+      {followState !== "unavailable" ? (
+        <span className="flex shrink-0 items-center gap-1.5">
+          <button
+            type="button"
+            onClick={onFollowToggle}
+            aria-pressed={followState === "on"}
+            aria-label={
+              followState === "on" ? "Dejar de seguir la transcripción" : "Seguir la transcripción"
+            }
+            title={
+              followState === "on"
+                ? "Siguiendo la transcripción · el texto se desplaza con lo que suena"
+                : "Resalta y desplaza el bloque que está sonando"
+            }
+            className={`u-focus inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[0.75rem] font-medium transition-colors ${
+              followState === "on"
+                ? "bg-ink text-ink-fg hover:bg-ink-hover"
+                : "border border-line-strong text-muted hover:text-foreground"
+            }`}
+          >
+            <span
+              aria-hidden
+              className={`size-1.5 rounded-full ${followState === "on" ? "bg-ink-fg" : "bg-line-strong"}`}
+            />
+            Seguir transcripción
+          </button>
+          {followState === "suspended" ? (
+            <button
+              type="button"
+              onClick={onFollowResume}
+              aria-label="Volver a seguir la transcripción desde el punto que suena"
+              title="Vuelve al bloque que está sonando y retoma el seguimiento"
+              className="u-focus inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[0.75rem] text-accent transition-colors hover:bg-accent/10"
+            >
+              Volver a seguir
+            </button>
+          ) : null}
+        </span>
       ) : null}
+
+      {onToggleMode ? (
+        <button
+          type="button"
+          onClick={onToggleMode}
+          aria-label="Compactar el reproductor"
+          title="Compactar el reproductor"
+          className="u-focus inline-flex size-7 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-subtle hover:text-foreground"
+        >
+          <svg viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden>
+            <path d="M2.5 6h3v-3M13.5 10h-3v3M6 2.5v3h-3M10 13.5v-3h3" />
+          </svg>
+        </button>
+      ) : null}
+      </>
+      )}
+      {elementoAudio}
     </div>
   );
 }

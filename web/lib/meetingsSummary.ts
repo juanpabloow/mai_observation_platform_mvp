@@ -283,3 +283,57 @@ export function composeSummary(s: MeetingSummary): SummaryComposition {
 
   return { lead, attention, glance: s.highlights, isEmpty };
 }
+
+
+/* ── Valores ausentes que llegan como TEXTO ───────────────────────────────── */
+
+/**
+ * Un campo opcional que el modelo rellenó con la PALABRA «null».
+ *
+ * No es una hipótesis: en los dos análisis reales de staging, `nextSteps[0]`
+ * llegó con `owner: "null"` —la cadena, no el valor— y de ahí salieron un
+ * responsable llamado «null» y unas iniciales «N», la primera letra de esa
+ * palabra. Con salida estructurada estricta el proveedor cumple el ESQUEMA, y
+ * un `string | null` se satisface igual con la cadena "null"; el esquema no
+ * puede distinguirlas.
+ *
+ * Se normaliza al PINTAR y no sólo al guardar, por dos razones: las filas ya
+ * escritas siguen teniendo ese valor dentro, y la pantalla es el último sitio
+ * donde el defecto se puede parar antes de que un lector se crea que alguien se
+ * llama así.
+ *
+ * La lista es deliberadamente corta y de marcadores técnicos. No incluye
+ * palabras que una persona pueda decir de verdad: «nadie» o «pendiente» son
+ * respuestas legítimas, y convertirlas en «sin responsable» sería perder
+ * información real para arreglar un defecto ajeno.
+ */
+const MARCADORES_VACIOS = new Set([
+  "null",
+  "nulo",
+  "undefined",
+  "none",
+  "n/a",
+  "na",
+  "nil",
+  "-",
+  "--",
+  "—",
+  "?",
+]);
+
+/**
+ * El texto si dice algo, o `null` si está vacío o es un marcador técnico.
+ * Nunca inventa un valor: devolver `null` es lo que deja a la vista escribir
+ * «Sin responsable», que es una afirmación sobre la reunión y no sobre el dato.
+ */
+export function textoODefecto(valor: string | null | undefined): string | null {
+  const limpio = (valor ?? "").trim();
+  if (limpio === "") return null;
+  return MARCADORES_VACIOS.has(limpio.toLowerCase()) ? null : limpio;
+}
+
+/** Igual, para una fecha con su urgencia: si la etiqueta no dice nada, no hay fecha. */
+export function fechaODefecto(due: StepDue | null | undefined): StepDue | null {
+  if (!due) return null;
+  return textoODefecto(due.label) === null ? null : due;
+}

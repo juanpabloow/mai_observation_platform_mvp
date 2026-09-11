@@ -151,7 +151,7 @@ function Harness() {
               onSeek={onSeek}
               follow={follow}
               playhead={playhead}
-              onFollowChange={setFollow}
+              onSuspend={() => setFollow(false)}
             />
           ) : (
             <p data-test="otra-pestaña" className="p-6 text-sm text-muted">Contenido de «{tab}»</p>

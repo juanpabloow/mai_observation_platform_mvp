@@ -323,3 +323,59 @@ export function segmentIndexAtTime(
 export function shouldSuspendFollow(now: number, suppressUntil: number): boolean {
   return now >= suppressUntil;
 }
+
+/* ── El seguimiento de la transcripción, como lógica pura ──────────────────
+ *
+ * Vive aquí y no dentro del componente porque son tres reglas con casos de
+ * borde, y un `useState` no se puede probar sin un navegador. En el navegador,
+ * además, los eventos de scroll se despachan en el ciclo de pintado: una
+ * pestaña que no se pinta no los emite, así que una prueba que dependa de ellos
+ * pasa o falla según si alguien está mirando.
+ */
+
+/** `on` sólo cuando la preferencia está puesta Y nadie ha desplazado a mano. */
+export function deriveFollowState(input: {
+  readonly inTranscript: boolean;
+  readonly followPref: boolean;
+  readonly suspended: boolean;
+}): "off" | "on" | "suspended" | "unavailable" {
+  // Fuera de Transcript no hay texto que seguir: el control no se pinta en vez
+  // de quedarse visible sin efecto.
+  if (!input.inTranscript) return "unavailable";
+  // La suspensión sólo EXISTE si el seguimiento estaba pedido. Si el usuario lo
+  // apagó a propósito, su desplazamiento es navegación normal y ofrecerle
+  // «Volver a seguir» sería inventar un estado que él no creó.
+  if (!input.followPref) return "off";
+  return input.suspended ? "suspended" : "on";
+}
+
+/**
+ * Lo que hace el botón: alterna lo que SE VE, no un estado interno.
+ *
+ * La píldora aparece pulsada sólo en `on`. En `off` y en `suspended` se ve sin
+ * pulsar, así que pulsarla enciende el seguimiento — que es lo que cualquiera
+ * espera de un control que no está pulsado. Desde `on`, apaga.
+ *
+ * Eso hace que en `suspended` la píldora y «Volver a seguir» lleven al mismo
+ * sitio. No es un descuido: «Volver a seguir» es explícito y aparece justo
+ * cuando hace falta, y la píldora sigue siendo un interruptor coherente. Una
+ * píldora que en `suspended` apagara algo que ya no se ve encendido sería la
+ * alternativa, y es peor.
+ *
+ * La suspensión se limpia siempre: es transitoria, no una preferencia.
+ */
+export function nextFollowPref(input: {
+  readonly followPref: boolean;
+  readonly suspended: boolean;
+}): boolean {
+  return !(input.followPref && !input.suspended);
+}
+
+/** Un desplazamiento humano sólo suspende lo que se estaba siguiendo. */
+export function suspendsFollow(input: {
+  readonly followPref: boolean;
+  readonly now: number;
+  readonly suppressUntil: number;
+}): boolean {
+  return input.followPref && shouldSuspendFollow(input.now, input.suppressUntil);
+}

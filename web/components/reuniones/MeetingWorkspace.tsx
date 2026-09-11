@@ -1,16 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Chip, EmptyState, GHOST_ACTION_CLS, PRIMARY_SM_CLS } from "@/components/ui/primitives";
-import { AudioPlayer, type AudioState, type SpeakerTurn } from "@/components/reuniones/AudioPlayer";
+import { type AudioState, type FollowState, type SpeakerTurn } from "@/components/reuniones/AudioPlayer";
+import { AudioDock, DOCK_GAP_CLS } from "@/components/reuniones/AudioDock";
 import { Avatar, ProgressBar, ShareMeter, StampLink, statusFace } from "@/components/reuniones/MeetingBits";
 import type { EvidenceItem, MeetingDetail } from "@/lib/meetingsData";
 import {
+  deriveFollowState,
   groupTranscript,
+  nextFollowPref,
   segmentIndexAtTime,
-  shouldSuspendFollow,
+  suspendsFollow,
   targetScrollTop,
 } from "@/lib/transcriptBlocks";
 import {
@@ -19,6 +22,8 @@ import {
   LEAD_LIMIT,
   pendingStepCount,
   SOURCE_LABEL,
+  fechaODefecto,
+  textoODefecto,
   type Finding,
   type FindingKind,
   type FindingSource,
@@ -132,8 +137,52 @@ export function MeetingWorkspace({
     `playhead` es el segundo en curso que reporta el reproductor. NO se pasa como
     `startAt`: eso es para saltos explícitos, y realimentarlo haría un lazo.
   */
-  const [follow, setFollow] = useState(false);
+  /*
+    DOS VARIABLES Y NO UNA. `followPref` es lo que el usuario QUIERE; `suspended`
+    es que desplazó el texto a mano y de momento no se le mueve nada.
+
+    Con un solo booleano, suspender era apagar, así que volver a Transcript
+    perdía la preferencia y «Volver a seguir» había que deducirlo de
+    `!follow && playhead > 0` — una condición que también es cierta cuando el
+    usuario apagó el seguimiento a propósito, y entonces el botón aparecía sin
+    que nadie lo hubiera suspendido.
+  */
+  const [followPref, setFollowPref] = useState(false);
+  const [suspended, setSuspended] = useState(false);
   const [playhead, setPlayhead] = useState(0);
+  // Siguiendo DE VERDAD: lo que la vista usa para resaltar y desplazar.
+  const following = followPref && !suspended;
+  // Sólo se suspende lo que se estaba siguiendo. Con el seguimiento apagado el
+  // scroll del usuario es su navegación normal y no hay estado que cambiar.
+  // La vista ya comprueba que se estuviera siguiendo (ver `suspendsFollow`), así
+  // que aquí sólo se anota el hecho.
+  const suspender = useCallback(() => setSuspended(true), []);
+  /*
+    EL CONTROL, con tres estados. `unavailable` fuera de Transcript: no hay texto
+    que seguir, así que el botón no se pinta en vez de quedarse ahí sin efecto.
+  */
+  // Las tres reglas son puras y están probadas en lib/transcriptBlocks.ts: aquí
+  // sólo se conectan al estado.
+  const followState: FollowState = deriveFollowState({
+    inTranscript: tab === "transcript",
+    followPref,
+    suspended,
+  });
+  const alternarSeguimiento = useCallback(() => {
+    // Alterna lo que se ve: desde «suspended» la píldora está sin pulsar, así
+    // que pulsarla reanuda. Ver nextFollowPref.
+    setFollowPref((antes) => nextFollowPref({ followPref: antes, suspended: suspendedRef.current }));
+    setSuspended(false);
+  }, []);
+  const reanudarSeguimiento = useCallback(() => {
+    setFollowPref(true);
+    setSuspended(false);
+  }, []);
+  // Los valores vigentes para los callbacks estables de arriba: sin esto habría
+  // que ponerlos en sus dependencias, y entonces `onSuspend` cambiaría de
+  // identidad en cada render y el efecto del scroll se resuscribiría sin parar.
+  const suspendedRef = useRef(suspended);
+  suspendedRef.current = suspended;
 
   const speakers: SpeakerTurn[] = useMemo(() => {
     const total = meeting.durationSeconds || 1;
@@ -345,22 +394,22 @@ export function MeetingWorkspace({
                   width with a modest gutter, so a panel spans the card instead of
                   floating in the middle of it. */}
               <div
-                className={
+                className={`${DOCK_GAP_CLS} ${
                   tab === "transcript"
                     ? `mx-auto w-full px-6 sm:px-8 ${focusMode ? "max-w-[68.75rem]" : "max-w-none"}`
                     : tab === "resumen"
                       ? "w-full px-3 sm:px-4"
                       : "mx-auto w-full max-w-[78rem] px-6 sm:px-8"
-                }
+                }`}
               >
                 {tab === "transcript" ? (
                   <Transcript
                     meeting={meeting}
                     focusedAt={focusedAt}
                     onSeek={jumpTo}
-                    follow={follow}
+                    follow={following}
                     playhead={playhead}
-                    onFollowChange={setFollow}
+                    onSuspend={suspender}
                   />
                 ) : tab === "resumen" ? (
                   <Summary meeting={meeting} clientId={clientId} onSeek={jumpTo} />
@@ -371,42 +420,30 @@ export function MeetingWorkspace({
             </div>
           )}
 
-          {/* THE WAVEFORM DOCK LIVES ONLY IN TRANSCRIPT. It is 70px of the
-              loudest object on the screen, and it earns that only where the
-              shape of the audio is what you navigate by — beside the text it
-              indexes. On Resumen, Reportes and Evidencia the same audio is
-              reachable from the compact bar in the header, and the space goes
-              to the content instead. */}
-          {/*
-            UNA SOLA INSTANCIA, SIEMPRE MONTADA. Había DOS `<AudioPlayer>`
-            mutuamente excluyentes: una compacta en la cabecera para las pestañas
-            que no son Transcript, y la completa aquí abajo para Transcript. Cambiar
-            de pestaña desmontaba un `<audio>` y creaba otro, así que la
-            reproducción se cortaba y la posición y la velocidad se perdían — que es
-            exactamente lo que se reportó.
-
-            Ahora vive en un único sitio del árbol y sólo cambian sus PROPS: en las
-            demás pestañas se pinta como barra compacta, que era el motivo real de
-            la variante ("una onda de 160 barras en una cabecera es decoración").
-            Un cambio de props no remonta nada, así que el elemento de audio —y con
-            él la reproducción, el segundo en curso y la velocidad— sobrevive.
-          */}
-          <AudioPlayer
-            meetingId={meeting.id}
-            durationSeconds={meeting.durationSeconds}
-            startAt={at}
-            state={audioState}
-            src={audioSrc}
-            speakers={speakers}
-            onTimeChange={setPlayhead}
-            density={tab === "transcript" ? "dock" : "compact"}
-            variant={tab === "transcript" ? "waveform" : "bar"}
-            className={tab === "transcript" ? "" : "border-t border-line-row"}
-          />
         </section>
 
         {copilot ? <CopilotPanel meeting={meeting} onClose={() => setCopilot(false)} onSeek={jumpTo} /> : null}
       </div>
+
+      {/*
+        EL DOCK, HERMANO DEL ÁREA DE TRABAJO Y NO HIJO DE ELLA.
+        Está fuera del `<section>` de las pestañas, así que cambiar de pestaña no
+        lo reconcilia: React sólo rehace lo que cambió de sitio en el árbol, y
+        esto no se mueve. De ahí que la reproducción, el segundo en curso y la
+        velocidad sobrevivan a los cuatro cambios de pestaña.
+      */}
+      <AudioDock
+        meetingId={meeting.id}
+        durationSeconds={meeting.durationSeconds}
+        startAt={at}
+        state={audioState}
+        src={audioSrc}
+        speakers={speakers}
+        onTimeChange={setPlayhead}
+        followState={followState}
+        onFollowToggle={alternarSeguimiento}
+        onFollowResume={reanudarSeguimiento}
+      />
     </div>
   );
 }
@@ -516,16 +553,18 @@ export function Transcript({
   onSeek,
   follow = false,
   playhead = 0,
-  onFollowChange,
+  onSuspend,
 }: {
   meeting: MeetingDetail;
   focusedAt: number | null;
   onSeek: (s: number) => void;
   /** Seguir lo que suena. La preferencia la guarda el área de trabajo, no esta vista. */
+  /** Siguiendo de verdad. El control vive en el dock, no en esta vista. */
   follow?: boolean;
   /** El segundo en curso del reproductor. */
   playhead?: number;
-  onFollowChange?: (on: boolean) => void;
+  /** El usuario desplazó el texto a mano: se suspende, no se apaga. */
+  onSuspend?: () => void;
 }) {
   // BLOQUES DE INTERVENCIÓN con PÁRRAFOS dentro. Ver transcriptBlocks.ts: el bloque
   // trae la cabecera, el párrafo trae texto corrido y los segmentos van EN LÍNEA.
@@ -556,19 +595,28 @@ export function Transcript({
     bandera de un solo uso no puede cubrir. Una ventana de tiempo cubre los dos casos.
   */
   const suppressScrollUntil = useRef(0);
+  // El valor vigente de `follow` para el listener, que se suscribe una vez.
+  const followRef = useRef(follow);
+  followRef.current = follow;
   useEffect(() => {
     const root = content.current;
     if (!root) return;
     const viewport = scrollParentOf(root);
     if (!viewport) return;
     const onScroll = () => {
-      if (!shouldSuspendFollow(Date.now(), suppressScrollUntil.current)) return;
-      // Desplazamiento humano: se suspende el seguimiento y aparece «Volver al audio».
-      onFollowChange?.(false);
+      // `suspendsFollow` reúne las DOS condiciones —que se estuviera siguiendo y
+      // que el desplazamiento no sea el propio— en una función pura y probada.
+      // Estaban repartidas entre esta vista y el área de trabajo, y ese reparto
+      // fue justo el hueco por el que se colaba «Volver a seguir» con el
+      // seguimiento apagado.
+      if (!suspendsFollow({ followPref: followRef.current, now: Date.now(), suppressUntil: suppressScrollUntil.current })) return;
+      // Desplazamiento humano: se SUSPENDE —no se apaga— y el dock ofrece
+      // «Volver a seguir». El audio sigue sonando.
+      onSuspend?.();
     };
     viewport.addEventListener("scroll", onScroll, { passive: true });
     return () => viewport.removeEventListener("scroll", onScroll);
-  }, [onFollowChange]);
+  }, [onSuspend]);
 
   /*
     SEGUIR SIN DAR SALTOS. Se desplaza sólo cuando el segmento que suena NO está
@@ -662,48 +710,19 @@ export function Transcript({
     // segmento era una fila.
     <>
       {/*
-        LA BARRA DEL SEGUIMIENTO. Pegada arriba del transcript, porque el estado
-        «estoy siguiendo el audio» hay que poder verlo y cambiarlo en cualquier punto
-        del texto, no sólo al principio.
+        LA BARRA DEL SEGUIMIENTO YA NO ESTÁ AQUÍ.
 
-        Dos controles y no uno: «Seguir audio» es la preferencia, y «Volver al audio»
-        aparece cuando el seguimiento está apagado PERO hay una posición a la que
-        volver. Son acciones distintas — activar el modo y recuperar el sitio — y con
-        un solo botón la segunda quedaba escondida detrás de la primera.
+        Era una franja pegada arriba del texto con «Seguir audio» y «Volver al
+        audio». Se veía aislada porque lo estaba: gobierna la reproducción y
+        vivía a dos regiones de distancia del reproductor. Ahora los dos
+        controles son parte del dock expandido y se llaman «Seguir
+        transcripción» y «Volver a seguir» — lo que sigue es el texto, no el
+        audio, que va solo.
+
+        Esta vista conserva lo que sí le corresponde: resaltar el bloque que
+        suena, desplazarse a él y detectar que el usuario desplazó a mano.
       */}
-      <div className="sticky top-0 z-10 -mx-3.5 flex items-center gap-2 bg-surface/95 px-3.5 py-2 backdrop-blur">
-        <button
-          type="button"
-          onClick={() => onFollowChange?.(!follow)}
-          aria-pressed={follow}
-          aria-label={follow ? "Dejar de seguir el audio" : "Seguir el audio"}
-          title={
-            follow
-              ? "Siguiendo el audio · el texto se desplaza con lo que suena"
-              : "Resalta y sigue el segmento que está sonando"
-          }
-          className={`u-focus inline-flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1 text-[0.75rem] font-medium transition-colors ${
-            follow
-              ? "bg-ink text-ink-fg hover:bg-ink-hover"
-              : "border border-line-strong text-muted hover:text-foreground"
-          }`}
-        >
-          <span aria-hidden className={`size-1.5 rounded-full ${follow ? "bg-ink-fg" : "bg-line-strong"}`} />
-          Seguir audio
-        </button>
-        {!follow && playhead > 0 ? (
-          <button
-            type="button"
-            onClick={() => onFollowChange?.(true)}
-            title="Vuelve al segmento que está sonando y retoma el seguimiento"
-            className="u-focus inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[0.75rem] text-accent transition-colors hover:bg-accent/10"
-          >
-            Volver al audio
-          </button>
-        ) : null}
-      </div>
-
-      <div ref={content} className="flex flex-col gap-7 py-4 pb-10">
+      <div ref={content} className={`flex flex-col gap-7 py-4 ${DOCK_GAP_CLS}`}>
       {blocks.map((block) => {
         const jumpedInside = block.segments.some((s) => focusedAt === s.at);
         const playingInside = playingAt !== null && block.segments.some((s) => s.at === playingAt);
@@ -1462,11 +1481,29 @@ function NextSteps({ steps, pending, onSeek }: { steps: NextStep[]; pending: num
       title="Próximos pasos"
       count={steps.length}
       actions={
-        // The CTA states the REAL number it would create — not a constant.
+        /*
+          DESHABILITADO Y DICHO, no activo y mentiroso.
+
+          No hay integración de tareas: este botón no tenía `onClick` y nunca lo
+          tuvo. Un control primario que parece pulsable y no hace nada consume el
+          intento del usuario y le deja creyendo que las tareas se crearon. Se
+          queda visible —el trabajo está previsto y la columna de estado ya lo
+          menciona— pero inerte y etiquetado «Próximamente», que es la única
+          afirmación verdadera que se puede hacer hoy.
+        */
         pending > 0 ? (
-          <button type="button" className={PRIMARY_SM_CLS} title="Pide confirmación antes de crear las tareas">
-            Crear tareas pendientes ({pending})
-          </button>
+          <span className="inline-flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled
+              aria-disabled="true"
+              title="La creación de tareas todavía no está implementada"
+              className="inline-flex min-h-7 cursor-not-allowed items-center rounded-lg border border-line bg-chip px-2.5 text-[0.75rem] text-muted"
+            >
+              Crear tareas pendientes ({pending})
+            </button>
+            <Chip tone="muted">Próximamente</Chip>
+          </span>
         ) : null
       }
     >
@@ -1486,7 +1523,12 @@ function NextSteps({ steps, pending, onSeek }: { steps: NextStep[]; pending: num
             <span role="columnheader">Evidencia</span>
             <span role="columnheader">Estado</span>
           </div>
-          {steps.map((t) => (
+          {steps.map((t) => {
+            // El responsable y la fecha se normalizan aquí: un `owner: "null"`
+            // guardado no debe llegar a la pantalla como un nombre.
+            const owner = textoODefecto(t.owner);
+            const due = fechaODefecto(t.due);
+            return (
             <div
               role="row"
               key={t.id}
@@ -1501,21 +1543,23 @@ function NextSteps({ steps, pending, onSeek }: { steps: NextStep[]; pending: num
                 {t.text}
               </span>
               <span role="cell" className="flex min-w-0 items-center gap-1.5 text-[0.78125rem] text-muted">
-                {t.ownerInitials ? (
-                  <Avatar person={{ initials: t.ownerInitials, name: t.owner ?? "" }} size={18} />
+                {/* Las iniciales se pintan sólo si hay responsable DE VERDAD: con
+                    `owner: "null"` la inicial calculada era una «N». */}
+                {owner && t.ownerInitials ? (
+                  <Avatar person={{ initials: t.ownerInitials, name: owner }} size={18} />
                 ) : (
                   <span aria-hidden className="text-faint">
                     —
                   </span>
                 )}
-                <span className="truncate">{t.owner ?? "Sin responsable"}</span>
+                <span className="truncate">{owner ?? "Sin responsable"}</span>
               </span>
-              <span role="cell" className={`text-[0.78125rem] ${dueClass(t.due)}`}>
+              <span role="cell" className={`text-[0.78125rem] ${dueClass(due)}`}>
                 {/* "Vencida" is stated, never implied by colour alone. */}
-                {t.due ? (
+                {due ? (
                   <>
-                    {t.due.label}
-                    {t.due.state === "overdue" ? <span className="ml-1 text-[0.65625rem] uppercase">vencida</span> : null}
+                    {due.label}
+                    {due.state === "overdue" ? <span className="ml-1 text-[0.65625rem] uppercase">vencida</span> : null}
                   </>
                 ) : (
                   "Sin fecha"
@@ -1544,16 +1588,16 @@ function NextSteps({ steps, pending, onSeek }: { steps: NextStep[]; pending: num
                     Sin permiso
                   </Chip>
                 ) : (
-                  <button
-                    type="button"
-                    className="u-focus rounded-md border border-line-strong px-2 py-0.5 text-[0.6875rem] transition-colors hover:border-faint"
-                  >
-                    Crear tarea
-                  </button>
+                  // Mismo caso que el botón de la cabecera: sin integración, no
+                  // se ofrece como acción. Se dice lo que hay.
+                  <Chip tone="muted" title="La creación de tareas todavía no está implementada">
+                    Próximamente
+                  </Chip>
                 )}
               </span>
             </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </Panel>
@@ -1615,7 +1659,7 @@ function Reports({ meeting, onSeek }: { meeting: MeetingDetail; onSeek: (s: numb
   return (
     <div className="flex min-h-0 flex-1">
       {/* ── THE CATALOGUE ── */}
-      <div className="flex w-[20.5rem] shrink-0 flex-col overflow-y-auto border-r border-line">
+      <div className={`flex w-[20.5rem] shrink-0 flex-col overflow-y-auto border-r border-line ${DOCK_GAP_CLS}`}>
         <SectionHead count={meeting.reportList.length}>Generados</SectionHead>
         <ul>
           {meeting.reportList.map((r) => {
@@ -1738,7 +1782,7 @@ function Reports({ meeting, onSeek }: { meeting: MeetingDetail; onSeek: (s: numb
             </span>
           </div>
 
-          <div className="min-h-0 flex-1 overflow-y-auto">
+          <div className={`min-h-0 flex-1 overflow-y-auto ${DOCK_GAP_CLS}`}>
             {doc.state === "failed" ? (
               <div className="p-6">
                 <EmptyState title="No pudimos generar este reporte." hint="El transcript sigue disponible: puedes leerlo, buscarlo y citarlo." />
