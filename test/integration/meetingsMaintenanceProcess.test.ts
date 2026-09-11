@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { after, before, test } from 'node:test';
 import { spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { closeDb } from './fixtures.js';
@@ -79,12 +79,32 @@ interface Ejecucion {
   readonly code: number | null;
   readonly signal: NodeJS.Signals | null;
   readonly out: string;
+  /**
+   * true = el proceso murió SIN que nadie le mandara una señal.
+   *
+   * Es el campo que faltaba, y su ausencia dejó pasar el defecto: la prueba
+   * esperaba el log de arranque, mandaba SIGTERM y comprobaba `code === 0`.
+   * El proceso ya había salido solo con 0 —el temporizador iba con `.unref()`
+   * y nada retenía el bucle de eventos—, así que la aserción se cumplía
+   * exactamente igual. Sin separar las dos cosas, «vive y se apaga limpio» y
+   * «no vive» son indistinguibles.
+   */
+  readonly salioSolo: boolean;
+  /** Si seguía vivo cuando se comprobó la permanencia. */
+  readonly vivoAlComprobar: boolean | null;
 }
 
-/** Arranca el artefacto, espera `espera` en la salida, y lo termina. */
+/**
+ * Arranca el artefacto y, si se le pide, comprueba que SIGUE VIVO antes de
+ * mandarle la señal.
+ *
+ * `permanenciaMs` es lo que convierte esto en una prueba de vida: se espera a
+ * los logs de arranque, se deja pasar ese tiempo y se mira si el proceso está
+ * ahí. Sólo entonces se manda SIGTERM.
+ */
 async function ejecutar(
   env: NodeJS.ProcessEnv,
-  opciones: { esperar?: RegExp; timeoutMs?: number } = {},
+  opciones: { esperar?: RegExp; permanenciaMs?: number; timeoutMs?: number } = {},
 ): Promise<Ejecucion> {
   // `cwd` en el directorio limpio: ver la nota de arriba sobre dotenv.
   const hijo = spawn(process.execPath, [ARTEFACTO], { env, cwd: limpio });
@@ -92,20 +112,38 @@ async function ejecutar(
   hijo.stdout.on('data', (d) => { out += String(d); });
   hijo.stderr.on('data', (d) => { out += String(d); });
 
+  let senalEnviada = false;
+  let vivoAlComprobar: boolean | null = null;
+
   return await new Promise<Ejecucion>((resolve) => {
-    const limite = setTimeout(() => { hijo.kill('SIGKILL'); }, opciones.timeoutMs ?? 25_000);
+    const limite = setTimeout(() => { hijo.kill('SIGKILL'); }, opciones.timeoutMs ?? 40_000);
     let cerrado = false;
     const acabar = (code: number | null, signal: NodeJS.Signals | null): void => {
       if (cerrado) return;
       cerrado = true;
       clearTimeout(limite);
       clearInterval(vigila);
-      resolve({ code, signal, out });
+      resolve({ code, signal, out, salioSolo: !senalEnviada, vivoAlComprobar });
     };
-    // Si se espera una línea, en cuanto aparezca se pide un apagado limpio.
+
+    const pedirApagado = (): void => {
+      senalEnviada = true;
+      hijo.kill('SIGTERM');
+    };
+
     const vigila = setInterval(() => {
-      if (opciones.esperar && opciones.esperar.test(out)) hijo.kill('SIGTERM');
+      if (senalEnviada || !opciones.esperar || !opciones.esperar.test(out)) return;
+      clearInterval(vigila);
+      if (opciones.permanenciaMs === undefined) { pedirApagado(); return; }
+      // Los tres logs ya están. Se deja pasar el intervalo y se comprueba si el
+      // proceso sobrevivió por su cuenta. Si murió, `exit` ya resolvió con
+      // `salioSolo: true` y aquí no hay nada que matar.
+      setTimeout(() => {
+        vivoAlComprobar = hijo.exitCode === null && hijo.signalCode === null;
+        if (vivoAlComprobar) pedirApagado();
+      }, opciones.permanenciaMs);
     }, 100);
+
     hijo.on('exit', acabar);
   });
 }
@@ -114,6 +152,7 @@ async function ejecutar(
 
 test('arranca con SÓLO las seis variables, sin pedir ENCRYPTION_KEY', async () => {
   const r = await ejecutar(entornoMinimo(), { esperar: /barrido de eliminación en marcha/ });
+  assert.equal(r.salioSolo, false, 'el proceso no debe terminar por su cuenta');
 
   // Lo que reportó Railway, palabra por palabra, no debe aparecer.
   assert.doesNotMatch(r.out, /ENCRYPTION_KEY/, 'no pide la clave de cifrado');
@@ -216,4 +255,112 @@ test('las seis obligatorias son exactamente las que el servicio declara', () => 
   ]);
   assert.ok(FOREIGN_VARS.includes('ENCRYPTION_KEY'));
   assert.ok(FOREIGN_VARS.includes('OPENAI_API_KEY'));
+});
+
+// ─────────────── La vida del proceso, que es lo que faltaba ───────────────
+
+test('SIGUE VIVO tras los tres logs de arranque, y muere limpio con SIGTERM', async () => {
+  /*
+    Éste es el defecto que se colaba. El temporizador del barrido lleva
+    `.unref()`, así que tras resolverse `main()` no quedaba nada reteniendo el
+    bucle de eventos: Node salía con código 0 y Railway marcaba el despliegue
+    `Completed` justo después de escribir «barrido de eliminación en marcha».
+    El servicio nunca llegaba al primer ciclo de cinco minutos.
+
+    La prueba anterior no podía verlo: esperaba el log, mandaba SIGTERM y
+    comprobaba `code === 0`. El proceso ya había salido solo con 0 y la
+    aserción se cumplía igual. De ahí `salioSolo` y `vivoAlComprobar`.
+  */
+  const r = await ejecutar(entornoMinimo(), {
+    esperar: /barrido de eliminación en marcha/,
+    /*
+      14 s, y el número importa: por encima del `idleTimeoutMillis` de `pg`,
+      que por defecto son 10 000 ms.
+
+      Con 4 s la prueba pasaba incluso quitando el pestillo, y lo comprobé
+      quitándolo. El motivo es que el pool de PostgreSQL mantiene vivo el bucle
+      de eventos mientras conserva un socket abierto: la guarda de arranque hace
+      una consulta, el cliente queda ocioso, y hasta que `pg` lo cierra a los
+      10 s el proceso parece sano sin que nada lo retenga de verdad. Por debajo
+      de ese umbral, «vive» y «todavía no ha muerto» son indistinguibles.
+    */
+    permanenciaMs: 14_000,
+    timeoutMs: 60_000,
+  });
+
+  // Los TRES logs de arranque, en orden.
+  const iArranca = r.out.indexOf('arrancando el servicio de mantenimiento');
+  const iBase = r.out.indexOf('base verificada contra lo declarado');
+  const iReloj = r.out.indexOf('barrido de eliminación en marcha');
+  assert.ok(iArranca >= 0, 'log 1: arranque');
+  assert.ok(iBase > iArranca, 'log 2: base verificada, después del arranque');
+  assert.ok(iReloj > iBase, 'log 3: reloj en marcha, después de la verificación');
+
+  // LA ASERCIÓN QUE IMPORTA.
+  assert.equal(r.vivoAlComprobar, true, 'seguía vivo 4 s después de arrancar');
+  assert.equal(r.salioSolo, false, 'no terminó por su cuenta: lo terminó el SIGTERM');
+
+  // Y el apagado fue limpio, en orden y con código 0.
+  const iApaga = r.out.indexOf('apagando el mantenimiento');
+  const iPool = r.out.indexOf('postgres pool closed');
+  const iFin = r.out.indexOf('apagado completo');
+  assert.ok(iApaga > iReloj, 'el apagado empieza tras la señal');
+  assert.ok(iPool > iApaga, 'se cierra el pool de PostgreSQL');
+  assert.ok(iFin > iPool, 'y se anuncia el final después');
+  assert.equal(r.code, 0, 'salida 0 ante SIGTERM');
+  assert.equal(r.signal, null, 'terminó por su cuenta tras la señal, no lo mató el kernel');
+});
+
+test('SIGINT también apaga limpio y sale 0', async () => {
+  const hijo = spawn(process.execPath, [ARTEFACTO], { env: entornoMinimo(), cwd: limpio });
+  let out = '';
+  hijo.stdout.on('data', (d) => { out += String(d); });
+  hijo.stderr.on('data', (d) => { out += String(d); });
+  const fin = new Promise<{ code: number | null; señalado: boolean }>((resolve) => {
+    let señalado = false;
+    const t = setInterval(() => {
+      if (!/barrido de eliminación en marcha/.test(out)) return;
+      clearInterval(t);
+      // Mismo umbral que la prueba de SIGTERM, y por el mismo motivo: el pool
+      // de `pg` sostiene el proceso durante sus primeros 10 s de ocio.
+      setTimeout(() => {
+        señalado = hijo.exitCode === null;
+        if (señalado) hijo.kill('SIGINT');
+      }, 14_000);
+    }, 100);
+    hijo.on('exit', (code) => { clearInterval(t); resolve({ code, señalado }); });
+    setTimeout(() => hijo.kill('SIGKILL'), 60_000);
+  });
+  const r = await fin;
+  assert.equal(r.señalado, true, 'seguía vivo cuando se mandó SIGINT');
+  assert.match(out, /"signal":"SIGINT"/);
+  assert.match(out, /apagado completo/);
+  assert.equal(r.code, 0);
+});
+
+test('un fallo fatal sale con código distinto de 0', async () => {
+  // La otra mitad del requisito: apagado limpio = 0, fallo = no 0. Se provoca
+  // con la guarda de base, que es un fallo fatal real y no un simulacro.
+  const env = entornoMinimo();
+  env.MEETINGS_MAINTENANCE_EXPECTED_DB = 'base_que_no_es';
+  const r = await ejecutar(env, { timeoutMs: 25_000 });
+  assert.notEqual(r.code, 0, 'un fallo fatal no puede salir con 0');
+  assert.equal(r.code, 1);
+  assert.doesNotMatch(r.out, /barrido de eliminación en marcha/);
+});
+
+test('el pestillo es del entrypoint: el planificador conserva su `.unref()`', () => {
+  // Se arregla en el entrypoint y no quitando el `unref` del planificador,
+  // porque ése es reutilizable: quien lo hospede decide si debe mantenerlo
+  // vivo. Un servicio exclusivo no debe depender de esa decisión ajena.
+  const plan = readFileSync(`${raiz}src/meetings/maintenance.ts`, 'utf8');
+  assert.match(plan, /unref\?\.\(\)/, 'el planificador sigue sin retener el proceso');
+  const main = readFileSync(`${raiz}src/maintenanceMain.ts`, 'utf8');
+  assert.match(main, /const pestillo = setInterval/, 'la vida la sostiene el entrypoint');
+  assert.match(main, /clearInterval\(pestillo\)/, 'y la suelta al apagar');
+  // Sin puerto, sigue siendo cierto.
+  assert.doesNotMatch(
+    main.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''),
+    /\blisten\(|createServer|express/i,
+  );
 });

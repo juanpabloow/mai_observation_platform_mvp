@@ -44,6 +44,25 @@ const { startMeetingsMaintenance, stopMeetingsMaintenance } = await import('./me
  * coexisten. Un entrypoint por trabajo es lo que hace que «reiniciar el
  * mantenimiento» no signifique «reiniciar la ingesta».
  *
+ * ── QUÉ MANTIENE VIVO ESTE PROCESO ────────────────────────────────────────
+ *
+ * El temporizador del barrido lleva `.unref()`, para no impedir que un proceso
+ * que lo hospeda termine cuando quiera. En el bucle de ingesta eso da igual,
+ * porque ahí hay otro temporizador con referencia que sostiene el bucle de
+ * eventos. Aquí NO había ninguno: tras resolverse `main()` no quedaba nada
+ * pendiente, Node salía con código 0 y Railway marcaba el despliegue como
+ * `Completed` justo después de escribir «barrido de eliminación en marcha».
+ * El servicio nunca llegaba al primer ciclo.
+ *
+ * Así que la vida del proceso la sostiene ESTE entrypoint, explícitamente, con
+ * un temporizador con referencia que no hace nada más que existir. Se cancela
+ * en el apagado, y por eso `process.exit()` no es lo que termina el proceso
+ * tras un SIGTERM: es que ya no queda nada que lo retenga.
+ *
+ * Se resuelve aquí y no quitando el `.unref()` del planificador porque ése es
+ * reutilizable: quien lo hospede decide si quiere que lo mantenga vivo, y un
+ * servicio exclusivo no debe depender de esa decisión ajena.
+ *
  * ── Sin puerto ────────────────────────────────────────────────────────────
  *
  * No escucha nada. Un servicio que sólo tiene un `setInterval` no necesita
@@ -87,11 +106,25 @@ async function main(): Promise<void> {
 
   startMeetingsMaintenance();
 
+  /*
+    EL PESTILLO. Un temporizador CON referencia, que es lo que mantiene vivo el
+    bucle de eventos. No hace nada: no registra, no consulta, no abre nada. Su
+    única función es que Node no considere que ya no hay trabajo pendiente.
+
+    Un minuto es un compromiso sin consecuencias: el temporizador no hace nada
+    al disparar, así que el periodo sólo decide cada cuánto Node se despierta
+    para nada. Más corto sería ruido; más largo, indistinguible.
+  */
+  const pestillo = setInterval(() => {}, 60_000);
+
   let cerrando = false;
   const apagar = async (signal: NodeJS.Signals): Promise<void> => {
     if (cerrando) return;
     cerrando = true;
     logger.info({ signal }, 'meetings: apagando el mantenimiento');
+    // Se suelta el pestillo primero: a partir de aquí lo único que retiene el
+    // proceso es el trabajo que queda por cerrar.
+    clearInterval(pestillo);
     try {
       // Se espera la pasada en vuelo: cortarla a mitad podría dejar un prefijo
       // vaciado con la fila todavía puesta. Eso es recuperable —el siguiente
