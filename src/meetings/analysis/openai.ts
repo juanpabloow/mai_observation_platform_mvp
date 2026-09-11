@@ -1,4 +1,4 @@
-import { ANALYSIS_PROMPT_VERSION, RawAnalysis, analysisJsonSchema } from './contract.js';
+import { ANALYSIS_PROMPT_VERSION, RawAnalysis, analysisJsonSchema, normalizeRawAnalysis } from './contract.js';
 import { SYSTEM_PROMPT, type RenderedTranscript, userMessage } from './prompt.js';
 
 /**
@@ -240,7 +240,10 @@ export async function analyze(
         durationMs, attempt: intento + 1,
       });
       return {
-        raw: parsed.data,
+        // NORMALIZADO aquí, justo tras validar y antes de que nadie lo use ni lo
+        // persista. El esquema garantiza la FORMA; no puede distinguir el valor
+        // `null` de la palabra «null», porque las dos satisfacen `string|null`.
+        raw: normalizeRawAnalysis(parsed.data),
         model,
         modelReturned,
         promptVersion: ANALYSIS_PROMPT_VERSION,

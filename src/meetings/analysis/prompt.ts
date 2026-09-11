@@ -30,6 +30,12 @@ QUÉ NO PUEDES INVENTAR, EN NINGÚN CASO:
 - Fechas. Si no se dijo cuándo, "dueText" es null. No conviertas "pronto" en una fecha.
 - Nombres de personas. No los infieras.
 
+AUSENCIA = EL VALOR JSON null, NUNCA UNA PALABRA:
+- Para lo desconocido o ausente usa el valor JSON null, sin comillas: "owner": null
+- NO escribas nunca las cadenas "null", "undefined", "none" ni "n/a".
+- "owner": "null" está MAL. "owner": null está bien.
+Un campo con la palabra dentro se muestra como si alguien se llamara así.
+
 DECISIÓN FRENTE A PROPUESTA — es la distinción que más importa:
 - "decision" o "agreement": se acordó de verdad, y se nota en el texto ("entonces lo hacemos así", "de acuerdo").
 - "idea", "recommendation" o "question": alguien lo planteó, sugirió o preguntó, y quedó abierto.

@@ -25,7 +25,13 @@ import { z } from 'zod';
  */
 
 /** Sube cuando cambian las instrucciones o el esquema. Va guardado con el resultado. */
-export const ANALYSIS_PROMPT_VERSION = 1;
+/**
+ * 2 — se añadió la regla de que la ausencia es el valor JSON `null` y nunca la
+ * palabra. El número existe justamente para esto: los dos análisis que ya hay
+ * guardados se generaron con la versión 1 y con `owner: "null"` dentro, y sin
+ * este contador no habría forma de distinguirlos de los nuevos.
+ */
+export const ANALYSIS_PROMPT_VERSION = 2;
 
 /** Tipos que afirman que algo se ACORDÓ, frente a los que sólo lo plantean. */
 export const DECIDED_KINDS = ['decision', 'agreement'] as const;
@@ -144,5 +150,58 @@ export function analysisJsonSchema(): Record<string, unknown> {
       absences: { type: 'array', maxItems: 5, items: { type: 'string', maxLength: 200 } },
       caveat: nullableString(400),
     },
+  };
+}
+
+/* ── Marcadores técnicos que llegan como TEXTO ────────────────────────────── */
+
+/**
+ * Ausencias escritas con palabras en lugar del valor JSON `null`.
+ *
+ * No es una precaución teórica: los dos análisis que ya hay en staging tienen
+ * `owner: "null"` —la cadena— y de ahí salieron un responsable llamado «null» y
+ * unas iniciales «N». Con salida estructurada estricta el proveedor cumple el
+ * ESQUEMA, y un `string | null` se satisface igual con la palabra; el esquema no
+ * puede distinguirlas, así que la distinción hay que hacerla aquí.
+ *
+ * El prompt ya lo prohíbe explícitamente (ver SYSTEM_PROMPT). Esto es la red:
+ * una instrucción es una petición, no una garantía.
+ *
+ * La lista es CORTA y sólo de marcadores técnicos. No incluye palabras que una
+ * persona pueda decir de verdad: «nadie», «pendiente» o «sin definir» son
+ * respuestas legítimas de una reunión, y convertirlas en ausencia sería perder
+ * información real para arreglar un defecto del proveedor.
+ */
+const MARCADORES = new Set(['null', 'nulo', 'undefined', 'none', 'n/a', 'na', 'nil']);
+
+/** El texto si dice algo; `null` si está vacío o es un marcador técnico. */
+export function normalizeNullable(valor: string | null): string | null {
+  if (valor === null) return null;
+  // Se recorta antes de comparar: llegó `" null "` con espacios en una de las
+  // filas, y un `trim` posterior no habría servido de nada.
+  const limpio = valor.trim();
+  if (limpio === '') return null;
+  return MARCADORES.has(limpio.toLowerCase()) ? null : limpio;
+}
+
+/**
+ * Normaliza los campos NULLABLE de un análisis ya validado, antes de
+ * construirlo y persistirlo.
+ *
+ * Sólo toca campos que el esquema declara `nullable`: `owner`, `dueText`,
+ * `detail` y `caveat`. No toca `title`, `text`, `label` ni `executive` —ésos son
+ * obligatorios, y si el modelo escribiera «null» ahí el problema no es el
+ * marcador sino que no analizó nada, y eso lo detecta `esUtil`.
+ */
+export function normalizeRawAnalysis(raw: RawAnalysis): RawAnalysis {
+  return {
+    ...raw,
+    findings: raw.findings.map((f) => ({ ...f, detail: normalizeNullable(f.detail) })),
+    nextSteps: raw.nextSteps.map((p) => ({
+      ...p,
+      owner: normalizeNullable(p.owner),
+      dueText: normalizeNullable(p.dueText),
+    })),
+    caveat: normalizeNullable(raw.caveat),
   };
 }
