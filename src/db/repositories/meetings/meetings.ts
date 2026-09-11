@@ -446,6 +446,28 @@ export interface MeetingListRow {
  * celebración anterior a su subida.
  */
 /**
+ * Las lecturas de la PANTALLA sólo ven reuniones vivas.
+ *
+ * En cuanto la ruta de eliminación contesta 202, la reunión está marcada y va a
+ * desaparecer: el barrido periódico vaciará su prefijo y borrará la fila. Entre
+ * esos dos momentos puede pasar un rato —las URLs de escritura ya firmadas
+ * tienen que vencer antes— y durante ese rato la reunión no debe verse.
+ *
+ * El filtro va en el SQL y no en la capa de arriba por lo mismo que el filtro
+ * por tenant: porque una lectura nueva que se añada mañana lo heredaría, y una
+ * comprobación en el componente no. Y hace más que ordenar el listado —
+ * `getMeetingListRowScoped` es también de donde salen `hasPlayableAudio` y
+ * `signMeetingAudio`, así que una reunión marcada deja de poder firmar una URL
+ * de su audio.
+ *
+ * CONSECUENCIA, dicha en voz alta: un `delete_failed` tampoco se ve, así que no
+ * hay forma de reintentarlo desde la interfaz. La recuperación queda en manos
+ * del barrido, que reintenta hasta `MAX_PURGE_ATTEMPTS`; agotado el tope, la
+ * fila se queda en `delete_failed` y hace falta una intervención de operación.
+ */
+const SOLO_VIVAS = `m.deletion_state = 'live'`;
+
+/**
  * El SELECT, una sola vez. La lista y el detalle comparten exactamente las
  * mismas columnas derivadas; duplicar el SQL garantizaría que algún día la fila
  * del detalle diga una cosa y la del listado otra sobre la misma reunión.
@@ -525,7 +547,7 @@ export async function listMeetingsForClient(
 ): Promise<MeetingListRow[]> {
   const result = await q(executor).query<MeetingListRow>(
     `${LIST_SELECT}
-      WHERE m.tenant_id = $1 AND m.client_id = $2
+      WHERE m.tenant_id = $1 AND m.client_id = $2 AND ${SOLO_VIVAS}
       ORDER BY COALESCE(m.started_at, m.created_at) DESC, m.created_at DESC`,
     [tenantId, clientId],
   );
@@ -547,7 +569,7 @@ export async function getMeetingListRowScoped(
   executor?: Queryable,
 ): Promise<MeetingListRow | null> {
   const result = await q(executor).query<MeetingListRow>(
-    `${LIST_SELECT} WHERE m.id = $1 AND m.tenant_id = $2 AND m.client_id = $3`,
+    `${LIST_SELECT} WHERE m.id = $1 AND m.tenant_id = $2 AND m.client_id = $3 AND ${SOLO_VIVAS}`,
     [meetingId, tenantId, clientId],
   );
   return result.rows[0] ?? null;

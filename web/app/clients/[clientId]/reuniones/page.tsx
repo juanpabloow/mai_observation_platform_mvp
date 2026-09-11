@@ -187,8 +187,8 @@ export default async function ClientMeetingsPage({
             <div className="min-h-0 flex-1 overflow-auto">
               {/* El proveedor envuelve la tabla entera: el menú de cada fila
                   abre EL MISMO diálogo, que se renderiza una sola vez aquí. */}
-              <MeetingDeletionProvider clientId={client.id} canDelete={puedeEliminar}>
-                <MeetingsTable meetings={meetings} detailedIds={meetings.map((m) => m.id)} hrefFor={(id) => `${base}/${id}`} sort={sort} />
+              <MeetingDeletionProvider clientId={client.id} canDelete={puedeEliminar} surface="list">
+                <MeetingsTable meetings={meetings} detailedIds={meetings.map((m) => m.id)} basePath={base} sort={sort} />
               </MeetingDeletionProvider>
             </div>
             <div className="flex shrink-0 flex-wrap items-center gap-3 border-t border-line-row px-4 py-2.5">

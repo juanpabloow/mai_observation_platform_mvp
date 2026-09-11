@@ -1,7 +1,15 @@
 "use client";
 
-import { createContext, useCallback, useContext, useEffect, useRef, useState } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  errorDeRed,
+  HANDOFF_KEY,
+  leerRespuesta,
+  trasAceptar,
+  TOAST_ELIMINADA,
+  type DeletionSurface,
+} from "@/lib/meetingsDeletionFlow";
 
 /**
  * «Eliminar reunión», desde la ficha y desde cada fila del listado.
@@ -37,6 +45,11 @@ interface DeletionContext {
   readonly pedirEliminar: (meeting: DeletableMeeting) => void;
   /** La reunión pendiente de confirmación, o null. */
   readonly pendiente: DeletableMeeting | null;
+  /**
+   * true en cuanto el servidor aceptó la eliminación de esa reunión, sin
+   * esperar a que R2 quede vacío. El listado la usa para retirar la fila.
+   */
+  readonly estaRetirada: (meetingId: string) => boolean;
 }
 
 const Ctx = createContext<DeletionContext | null>(null);
@@ -51,26 +64,123 @@ export function useMeetingDeletion(): DeletionContext {
 export function MeetingDeletionProvider({
   clientId,
   canDelete,
+  surface = "list",
   children,
 }: {
   clientId: string;
   canDelete: boolean;
+  /**
+   * Dónde está montado. Lo único que cambia es qué pasa DESPUÉS del 202: el
+   * listado retira la fila; la ficha se va al listado, porque lo que se acaba
+   * de eliminar es justo lo que se estaba mirando.
+   */
+  surface?: DeletionSurface;
   children: React.ReactNode;
 }) {
   const [pendiente, setPendiente] = useState<DeletableMeeting | null>(null);
+  const [retiradas, setRetiradas] = useState<readonly string[]>([]);
+  const [aviso, setAviso] = useState<string | null>(null);
   const pedirEliminar = useCallback((m: DeletableMeeting) => setPendiente(m), []);
 
+  // El relevo desde la ficha. La redirección desmontó el proveedor de allí, así
+  // que el aviso lo pinta el que acaba de montarse aquí, y se consume una sola
+  // vez: una recarga posterior no vuelve a anunciar un borrado antiguo.
+  useEffect(() => {
+    let pendienteDeAviso: string | null = null;
+    try {
+      pendienteDeAviso = window.sessionStorage.getItem(HANDOFF_KEY);
+      if (pendienteDeAviso !== null) window.sessionStorage.removeItem(HANDOFF_KEY);
+    } catch {
+      // Almacenamiento bloqueado (modo privado, política del navegador). Se
+      // pierde un aviso; no se pierde la eliminación.
+      return;
+    }
+    // El relevo es estado del NAVEGADOR, no de React. Leerlo en el
+    // inicializador del `useState` haría que el primer render del cliente
+    // difiriera del HTML del servidor; esto corre una vez por montaje y se
+    // consume, así que no hay cascada que evitar.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (pendienteDeAviso !== null) setAviso(TOAST_ELIMINADA);
+  }, []);
+
+  const retirar = useCallback((meetingId: string) => {
+    setRetiradas((previas) => (previas.includes(meetingId) ? previas : [...previas, meetingId]));
+  }, []);
+
+  const estaRetirada = useCallback(
+    (meetingId: string) => retiradas.includes(meetingId),
+    [retiradas],
+  );
+
+  const valor = useMemo(
+    () => ({ clientId, canDelete, pedirEliminar, pendiente, estaRetirada }),
+    [clientId, canDelete, pedirEliminar, pendiente, estaRetirada],
+  );
+
   return (
-    <Ctx.Provider value={{ clientId, canDelete, pedirEliminar, pendiente }}>
+    <Ctx.Provider value={valor}>
       {children}
       {pendiente ? (
         <DeleteMeetingDialog
           meeting={pendiente}
           clientId={clientId}
+          surface={surface}
           onClose={() => setPendiente(null)}
+          onAceptada={(meetingId) => {
+            const plan = trasAceptar(surface, clientId);
+            if (plan.retirarDelListado) retirar(meetingId);
+            if (plan.redirigirA === null) setAviso(plan.toast);
+          }}
         />
       ) : null}
+      <Aviso texto={aviso} onCerrar={() => setAviso(null)} />
     </Ctx.Provider>
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════════════
+//  El aviso
+// ══════════════════════════════════════════════════════════════════════════
+
+/**
+ * «Reunión eliminada», abajo a la derecha.
+ *
+ * `role="status"` con `aria-live="polite"`, no `alert`: es una confirmación de
+ * algo que el usuario acaba de pedir, no una interrupción. Se va solo a los
+ * seis segundos y también a mano, porque un aviso que tapa una esquina y no se
+ * puede cerrar es un estorbo.
+ */
+function Aviso({ texto, onCerrar }: { texto: string | null; onCerrar: () => void }) {
+  useEffect(() => {
+    if (texto === null) return;
+    const t = setTimeout(onCerrar, 6000);
+    return () => clearTimeout(t);
+  }, [texto, onCerrar]);
+
+  // Siempre montado: una región viva que aparece a la vez que su texto no
+  // siempre se anuncia, porque el lector de pantalla no la estaba observando.
+  return (
+    <div
+      role="status"
+      aria-live="polite"
+      className="pointer-events-none fixed bottom-4 right-4 z-[60] flex justify-end"
+    >
+      {texto !== null ? (
+        <div className="pointer-events-auto flex max-w-sm items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 shadow-[var(--shadow-float)]">
+          <span className="text-[0.8125rem] text-foreground">{texto}</span>
+          <button
+            type="button"
+            onClick={onCerrar}
+            aria-label="Cerrar el aviso"
+            className="u-focus -mr-1 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-subtle hover:text-foreground"
+          >
+            <svg viewBox="0 0 16 16" className="size-3" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden>
+              <path d="M4 4l8 8M12 4l-8 8" />
+            </svg>
+          </button>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -81,11 +191,16 @@ export function MeetingDeletionProvider({
 export function DeleteMeetingDialog({
   meeting,
   clientId,
+  surface = "list",
   onClose,
+  onAceptada,
 }: {
   meeting: DeletableMeeting;
   clientId: string;
+  surface?: DeletionSurface;
   onClose: () => void;
+  /** Sólo se llama con un 2xx en la mano. */
+  onAceptada?: (meetingId: string) => void;
 }) {
   const router = useRouter();
   const [enVuelo, setEnVuelo] = useState(false);
@@ -116,22 +231,48 @@ export function DeleteMeetingDialog({
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ clientId }),
       });
-      if (!res.ok) {
-        const cuerpo = (await res.json().catch(() => null)) as { message?: string } | null;
-        setError(
-          res.status === 403
-            ? "No tienes permisos para eliminar esta reunión."
-            : (cuerpo?.message ?? "No se pudo eliminar la reunión."),
-        );
+      const cuerpo = res.ok
+        ? null
+        : ((await res.json().catch(() => null)) as { message?: string } | null);
+      const resultado = leerRespuesta(res.status, cuerpo?.message ?? null);
+
+      // NO ACEPTADA. El diálogo se queda abierto con su reunión intacta, el
+      // botón vuelve a estar disponible y nadie ha retirado ninguna fila: si
+      // esto ocultara la reunión, la siguiente recarga la traería de vuelta y
+      // el usuario creería que «se deshizo».
+      if (!resultado.aceptada) {
+        setError(resultado.error);
         setEnVuelo(false);
         return;
       }
+
+      // ACEPTADA (202). A partir de aquí no se espera nada: ni el vaciado de
+      // R2, ni el barrido, ni una segunda consulta. La reunión ya no está viva
+      // en la base, así que las lecturas de la pantalla tampoco la devuelven.
+      const plan = trasAceptar(surface, clientId);
       onClose();
-      // La limpieza del almacenamiento termina después; lo que ya es cierto es
-      // que la reunión quedó marcada, y eso es lo que la pantalla debe reflejar.
+      onAceptada?.(meeting.id);
+
+      if (plan.redirigirA !== null) {
+        // El aviso tiene que sobrevivir a la navegación: lo pinta el proveedor
+        // del listado en cuanto monte.
+        try {
+          window.sessionStorage.setItem(HANDOFF_KEY, plan.toast);
+        } catch {
+          // Sin almacenamiento no hay aviso, pero sí redirección.
+        }
+        // `replace` y no `push`: la ficha de una reunión eliminada es un 404, y
+        // dejarla en el historial convierte el botón «atrás» en un error.
+        router.replace(plan.redirigirA);
+        return;
+      }
+
+      // En el listado la fila ya se fue del estado visual. El refresco es para
+      // que los recuentos, las facetas y la paginación del servidor se pongan
+      // al día; la pantalla no depende de que llegue.
       router.refresh();
     } catch {
-      setError("No se pudo contactar con el servidor.");
+      setError(errorDeRed().error);
       setEnVuelo(false);
     }
   };

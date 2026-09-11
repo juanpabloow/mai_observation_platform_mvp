@@ -75,9 +75,13 @@ export interface MeetingListItem {
   reports: number | null;
   updated: string;
   /**
-   * Si esta reunión está desapareciendo. El listado la sigue mostrando en vez
-   * de esconderla: un `delete_failed` invisible es un `delete_failed` que nadie
-   * reintenta.
+   * Si esta reunión está desapareciendo.
+   *
+   * En la práctica hoy siempre es `'live'`: las lecturas de la pantalla filtran
+   * por `deletion_state = 'live'`, para que una reunión que el usuario acaba de
+   * eliminar no reaparezca al recargar. El campo se conserva porque es el
+   * camino del dato hasta la fila, y porque el componente ya sabe pintar los
+   * tres estados si algún día se decide volver a mostrarlos.
    */
   deletionState: "live" | "deleting" | "delete_failed";
 }

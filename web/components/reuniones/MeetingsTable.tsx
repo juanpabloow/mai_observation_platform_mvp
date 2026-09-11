@@ -1,7 +1,9 @@
+"use client";
+
 import Link from "next/link";
 import { ENTITY_ROW_CLS, TABLE_HEADER_CLS } from "@/components/ui/primitives";
 import { AvatarStack, SourceLine, StatusCell } from "@/components/reuniones/MeetingBits";
-import { MeetingActionsMenu } from "@/components/reuniones/MeetingDeletion";
+import { MeetingActionsMenu, useMeetingDeletion } from "@/components/reuniones/MeetingDeletion";
 import type { MeetingListItem } from "@/lib/meetingsData";
 
 /**
@@ -24,16 +26,30 @@ const TEMPLATE =
 export function MeetingsTable({
   meetings,
   detailedIds,
-  hrefFor,
+  basePath,
   sort = "recent",
 }: {
   meetings: MeetingListItem[];
   /** Ids that have a detail screen — only those rows link. */
   detailedIds: readonly string[];
-  hrefFor: (id: string) => string;
+  /**
+   * `/clients/{id}/reuniones`. Una cadena y no la función `hrefFor` que había
+   * antes: esto es un componente de cliente —tiene que serlo para poder
+   * retirar una fila sin recargar— y una función no cruza esa frontera.
+   */
+  basePath: string;
   /** Which column the list is ordered by, so the head can say so. */
   sort?: "recent" | "oldest" | "longest";
 }) {
+  const hrefFor = (id: string): string => `${basePath}/${id}`;
+  // Las reuniones cuya eliminación el servidor YA aceptó se van de la tabla en
+  // el mismo gesto, sin esperar a que se vacíe el almacenamiento. No es una
+  // apuesta: con un 202 en la mano la reunión dejó de estar viva, y las
+  // lecturas de la pantalla sólo devuelven las vivas — así que el refresco que
+  // viene detrás tampoco la trae.
+  const { estaRetirada } = useMeetingDeletion();
+  const visibles = meetings.filter((m) => !estaRetirada(m.id));
+
   // The arrow marks the SORTED column and its direction — the sort control names
   // it in words too, so this is a reinforcement, not the only signal.
   const sortIndicator =
@@ -77,7 +93,7 @@ export function MeetingsTable({
         </span>
       </div>
 
-      {meetings.map((m) => {
+      {visibles.map((m) => {
         const linked = detailedIds.includes(m.id);
         return (
           <div

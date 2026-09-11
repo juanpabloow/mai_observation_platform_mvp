@@ -128,16 +128,22 @@ test('la respuesta es 202: reservar no es haber terminado', () => {
   assert.match(sinComentarios(read(RUTA)), /status: 202/);
 });
 
-// ─────────────────── Los estados intermedios se ven ──────────────────────
+// ─────────────────── El estado sigue llegando a la fila ──────────────────
 
-test('«Eliminando» y «Reintentar eliminación» son estados visibles, no invisibles', () => {
+test('el estado de eliminación llega hasta la fila, aunque hoy siempre sea «live»', () => {
   const src = read(DELETION);
-  assert.match(src, /Eliminando…/);
+  assert.match(src, /Eliminando…/, 'mientras la petición está en vuelo');
   assert.match(src, /Reintentar eliminación/);
   assert.match(src, /deletionState === "deleting"/);
   assert.match(src, /deletionState === "delete_failed"/);
-  // Un delete_failed escondido es un delete_failed que nadie reintenta, así
-  // que el dato tiene que llegar hasta la fila del listado.
+  // El DATO viaja hasta la fila y el componente sabe pintar los tres estados.
+  //
+  // Que hoy no se vean ninguno de los dos intermedios no es un descuido: las
+  // lecturas de la pantalla filtran `deletion_state = 'live'` para que una
+  // reunión ya eliminada no reaparezca al recargar, y eso oculta también un
+  // `delete_failed`. Lo que se conserva aquí es la CAPACIDAD — si algún día se
+  // decide volver a mostrarlos, el camino del dato ya está hecho y el texto ya
+  // existe. Quitarlo obligaría a rehacerlo mal y con prisa.
   const data = readFileSync(fileURLToPath(new URL('../../web/lib/meetingsData.ts', import.meta.url)), 'utf8');
   assert.match(data, /deletionState: "live" \| "deleting" \| "delete_failed"/);
 });

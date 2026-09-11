@@ -42,3 +42,6 @@ next-env.d.ts
 tools/.next-link-stub.jsx
 # Igual que el anterior: lo escribe buildDockHarness.mjs en cada empaquetado.
 tools/.next-nav-stub.jsx
+# Y éste lo escribe buildDeletionHarness.mjs: el mismo stub, pero anotando a
+# dónde se pidió navegar, que es lo que la ficha tiene que demostrar.
+tools/.next-nav-del-stub.jsx

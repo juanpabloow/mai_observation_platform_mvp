@@ -53,6 +53,10 @@ export default async function MeetingPage({
     <MeetingDeletionProvider
       clientId={client.id}
       canDelete={scope.role === "owner" || scope.role === "admin"}
+      // `detail`: aquí no hay fila que retirar, así que al aceptar el 202 se
+      // vuelve al listado. Quedarse dejaría la pantalla mirando una reunión que
+      // ya no existe, y el primer refresco la convertiría en un 404.
+      surface="detail"
     >
     <MeetingWorkspace
       meeting={meeting}

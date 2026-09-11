@@ -21,7 +21,7 @@ import {
   type DeletionScope,
 } from '../../src/meetings/deletion.js';
 import { runPurgeCycle } from '../../src/meetings/maintenance.js';
-import { listMeetingsForUi } from '../../src/meetings/uiRead.js';
+import { getMeetingForUi, listMeetingsForUi } from '../../src/meetings/uiRead.js';
 import {
   claim,
   createMeeting,
@@ -682,8 +682,13 @@ test('recorrido completo: pedir, cerrar el navegador, y que el proceso periódic
   // promesa en vuelo que esté esperando. Lo único vivo es lo escrito en la
   // base.
   const enCurso = await listMeetingsForUi({ tenantId: w.tenantId, clientId: w.clientId });
-  const marcada = enCurso.find((m) => m.id === meetingId);
-  assert.equal(marcada?.deletionState, 'deleting', 'el listado la muestra como «Eliminando»');
+  assert.equal(
+    enCurso.some((m) => m.id === meetingId), false,
+    'el listado ya no la devuelve: una recarga no la trae de vuelta',
+  );
+  // Y la ficha tampoco. Es lo que hace que retirar la fila al instante no sea
+  // optimismo: el servidor dice lo mismo si se le vuelve a preguntar.
+  assert.equal(await getMeetingForUi({ tenantId: w.tenantId, clientId: w.clientId }, meetingId), null);
 
   // Una pasada ANTES del vencimiento no toca nada. Esto es la mitad del
   // valor de la prueba: el proceso periódico corre cada pocos minutos y va a
@@ -736,7 +741,7 @@ test('recorrido completo: pedir, cerrar el navegador, y que el proceso periódic
   assert.equal(await contarObjetos(w, meetingId), 0);
 });
 
-test('el barrido automático se rinde tras el tope y la deja visible y reintentable', async () => {
+test('el barrido automático se rinde tras el tope y la deja recuperable, no visible', async () => {
   const w = await makeWorld();
   const { meetingId } = await conAudio(w);
   w.store.failDeletesFor([`${prefijoDe(w, meetingId)}original/source`]);
@@ -764,13 +769,17 @@ test('el barrido automático se rinde tras el tope y la deja visible y reintenta
     'el automático se rindió: ni siquiera gastó otro intento',
   );
 
-  // Pero sigue VISIBLE en el listado y con su estado, que es lo que hace que
-  // alguien pueda mirarla.
+  // La fila SIGUE EN LA BASE con su estado —es lo que hace que el fallo sea
+  // recuperable en vez de un objeto huérfano sin dueño—, pero NO se ve en la
+  // pantalla: la interfaz sólo lee reuniones vivas, así que para el usuario
+  // esta reunión ya desapareció cuando pidió eliminarla.
   const listado = await listMeetingsForUi({ tenantId: w.tenantId, clientId: w.clientId });
-  assert.equal(listado.find((m) => m.id === meetingId)?.deletionState, 'delete_failed');
+  assert.equal(listado.some((m) => m.id === meetingId), false, 'la pantalla no la devuelve');
+  assert.equal((await filaDe(meetingId))?.deletion_state, 'delete_failed', 'pero la fila está ahí');
 
-  // Y el reintento HUMANO —el mismo botón, la misma operación— devuelve el
-  // presupuesto de intentos automáticos.
+  // Y la operación de reintento sigue existiendo y devuelve el presupuesto de
+  // intentos automáticos. Ya NO hay botón que la invoque —la reunión no se ve—,
+  // así que esto es lo que ejecutaría una intervención de operación.
   w.store.failDeletesFor([]);
   const reintento = await requestMeetingDeletion(w.admin, meetingId, w.deps);
   assert.equal(reintento.state, 'deleting');
