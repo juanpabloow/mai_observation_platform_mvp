@@ -1,7 +1,33 @@
-import { closePool } from './db/client.js';
-import { logger } from './logger.js';
-import { assertMaintenanceDatabase, MaintenanceGuardError } from './meetings/maintenanceGuard.js';
-import { startMeetingsMaintenance, stopMeetingsMaintenance } from './meetings/maintenance.js';
+import {
+  loadMaintenanceConfig,
+  MaintenanceConfigError,
+  type MaintenanceConfig,
+} from './meetings/maintenanceConfig.js';
+
+/*
+  La configuración se valida ANTES de importar cualquier cosa que toque la base
+  o el registro. Con `await import` dinámico, un entorno incompleto falla con el
+  mensaje de este servicio en vez de con el de otro módulo.
+
+  El `catch` va aquí y no en `main()`: esto corre en la carga del módulo, cuando
+  el logger todavía no existe —importarlo antes volvería a arrastrar la
+  configuración de la aplicación—, así que el mensaje sale por `console.error`.
+  Es la única línea de este proceso que no pasa por pino, y es a propósito.
+*/
+function cargar(): MaintenanceConfig {
+  try {
+    return loadMaintenanceConfig();
+  } catch (err) {
+    console.error(err instanceof MaintenanceConfigError ? err.message : String(err));
+    process.exit(1);
+  }
+}
+const cfg = cargar();
+
+const { closePool } = await import('./db/client.js');
+const { logger } = await import('./logger.js');
+const { assertMaintenanceDatabase, MaintenanceGuardError } = await import('./meetings/maintenanceGuard.js');
+const { startMeetingsMaintenance, stopMeetingsMaintenance } = await import('./meetings/maintenance.js');
 
 /**
  * ENTRYPOINT EXCLUSIVO del servicio de mantenimiento de Reuniones.
@@ -25,6 +51,14 @@ import { startMeetingsMaintenance, stopMeetingsMaintenance } from './meetings/ma
  * superficie sin función. La ruta HTTP de mantenimiento sigue existiendo en el
  * servicio web para operación manual, y ejecuta la misma función.
  *
+ * ── Su configuración es SUYA ──────────────────────────────────────────────
+ *
+ * `loadMaintenanceConfig` exige seis variables y ninguna más. No pasa por
+ * `config.ts`, que valida la configuración de la aplicación entera y mataba
+ * este proceso por no tener `ENCRYPTION_KEY` — una clave que no usa y que no
+ * debe tener. Se valida antes de importar la base y el registro, para que un
+ * entorno incompleto falle con el mensaje de este servicio.
+ *
  * ── La guarda va ANTES del primer ciclo ───────────────────────────────────
  *
  * Se le pregunta a PostgreSQL a qué base está conectado y se aborta si no es la
@@ -33,7 +67,14 @@ import { startMeetingsMaintenance, stopMeetingsMaintenance } from './meetings/ma
  */
 
 async function main(): Promise<void> {
-  logger.info('meetings: arrancando el servicio de mantenimiento');
+  logger.info(
+    {
+      // Sólo NOMBRES y números. Ninguna variable con valor sensible.
+      intervalSeconds: cfg.MEETINGS_PURGE_INTERVAL_SECONDS ?? 'defecto',
+      batch: cfg.MEETINGS_PURGE_BATCH ?? 'defecto',
+    },
+    'meetings: arrancando el servicio de mantenimiento',
+  );
 
   const guard = await assertMaintenanceDatabase();
   // SÓLO el nombre de la base. Ni host, ni usuario, ni URL.

@@ -37,10 +37,15 @@ test('la base por defecto de Railway NO cuela', () => {
   assert.doesNotMatch(e.message, /postgres:\/\/|@|:\d{4}/);
 });
 
-test('sin declaración se AVISA y se sigue: no se acopla a un entorno', () => {
-  // Acoplar el binario a «staging» obligaría a cambiar código para desplegarlo
-  // en producción. Y abortar sin la variable dejaría el servicio muerto en
-  // cualquier entorno nuevo, que es peor que no comprobarlo.
+test('la FUNCIÓN sin declaración avisa y sigue; el SERVICIO la exige', () => {
+  /*
+    Dos niveles, y conviene no confundirlos. `checkDatabaseName` es reutilizable
+    y no impone la variable: acoplar la función a un entorno la haría inútil
+    fuera de él. Lo que la EXIGE es la configuración del servicio
+    (`maintenanceConfig.ts`), porque este proceso borra y arrancar sin declarar
+    el destino es el accidente a impedir. La prueba de proceso lo comprueba
+    ejecutando el artefacto sin ella.
+  */
   for (const sin of [undefined, '', '   ']) {
     const r = checkDatabaseName('otra_base', sin);
     assert.equal(r.verified, false);

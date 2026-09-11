@@ -236,15 +236,25 @@ Railway y no se toca.
   `railway`, no a `mai_w3_staging`. Este proceso borra filas y objetos, así que
   apuntarlo mal es el accidente que hay que impedir.
 - `MEETINGS_MAINTENANCE_EXPECTED_DB` — la base que se AFIRMA esperar
-  (`mai_w3_staging` en staging). Al arrancar, el proceso pregunta a PostgreSQL
-  `current_database()` y **aborta** si no coincide. Sin la variable no aborta,
-  pero avisa: acoplar el binario a un nombre de entorno obligaría a cambiar
-  código para desplegarlo en otro.
+  (`mai_w3_staging` en staging). **Obligatoria en este servicio**: es un
+  proceso que borra, y arrancar sin declarar el destino es el accidente que la
+  guarda existe para impedir. Al arrancar pregunta a PostgreSQL
+  `current_database()` y aborta si no coincide, o si la base está en
+  recuperación. El valor no se acopla al código: se declara aquí, así que el
+  mismo binario sirve para otro entorno cambiando la variable.
 - `MEETINGS_STORAGE_ENDPOINT`, `MEETINGS_STORAGE_BUCKET`,
   `MEETINGS_STORAGE_ACCESS_KEY_ID`, `MEETINGS_STORAGE_SECRET_ACCESS_KEY` — las
-  mismas del `web`. Sin ellas el barrido se abstiene y lo registra; no borra
-  filas, porque quitar la fila sin haber vaciado el prefijo deja el audio
+  mismas del `web`. **Obligatorias**: el proceso aborta al arrancar si falta
+  cualquiera, en vez de parecer sano y avisar cinco minutos después. Y si la
+  configuración se rompiera en caliente, el ciclo se abstiene y lo registra sin
+  borrar filas — quitar la fila sin haber vaciado el prefijo deja el audio
   huérfano en R2 y es el único fallo irreversible de la operación.
+
+**Lo que este servicio NO debe tener**: `ENCRYPTION_KEY`, `OPENAI_API_KEY`,
+nada de Better Auth, nada de n8n, nada del servidor web. Su configuración la
+valida `src/meetings/maintenanceConfig.ts` —seis variables y dos opcionales—,
+no `src/config.ts`, que valida la aplicación entera. Pedirle una clave de
+cifrado a un proceso que sólo vacía prefijos sería darle un secreto que no usa.
 - Opcionales: `MEETINGS_PURGE_INTERVAL_SECONDS` (300),
   `MEETINGS_PURGE_BATCH` (10).
 - **NO** `OPENAI_API_KEY`: este proceso no llega al módulo de análisis.
