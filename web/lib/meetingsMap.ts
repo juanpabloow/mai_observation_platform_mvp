@@ -366,7 +366,14 @@ export interface StoredAnalysis {
   readonly outdated: boolean;
   readonly model: string;
   readonly createdAt: string;
-  /** `null` = no conocemos el precio de ese modelo. No es cero. */
+  /**
+   * Coste ESTIMADO en dólares a partir de la tabla local de tarifas. NO es el
+   * importe facturado: la tabla puede quedarse atrás, y los tokens de entrada
+   * CACHEADOS —que el proveedor factura más baratos— se cuentan aquí a tarifa
+   * completa, así que la estimación sobreestima antes que quedarse corta.
+   *
+   * `null` = no conocemos la tarifa de ese modelo. No es cero.
+   */
   readonly costUsd: number | null;
 }
 

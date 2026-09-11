@@ -48,15 +48,40 @@ export class AnalysisError extends Error {
 }
 
 /**
- * Precio por millón de tokens. SE DEBE CONFIRMAR contra la página de precios del
- * proveedor antes de fiarse del número: una tabla escrita en el código envejece
- * y nadie se entera hasta que la factura no cuadra. Por eso el coste estimado se
- * enseña ANTES de llamar, y el real se guarda después.
+ * Precio por millón de tokens, verificado contra la documentación de OpenAI el
+ * 11 de septiembre de 2026. Una tabla escrita en el código envejece y nadie se
+ * entera hasta que la factura no cuadra, así que el importe que sale de aquí se
+ * llama SIEMPRE «coste estimado» y nunca «coste facturado».
  */
 export const PRICING: Record<string, { inPerM: number; outPerM: number }> = {
   'gpt-4o-mini': { inPerM: 0.15, outPerM: 0.60 },
   'gpt-4o': { inPerM: 2.50, outPerM: 10.00 },
 };
+
+/**
+ * Identificadores fechados que facturan a la tarifa de su alias.
+ *
+ * OpenAI resuelve `gpt-4o-mini` a `gpt-4o-mini-2024-07-18` y devuelve el
+ * fechado en la respuesta. El coste se calculaba con ESE identificador, que no
+ * está en `PRICING`, así que TODA llamada real guardaba `cost_usd = NULL`. Los
+ * dos análisis que ya hay en staging lo demuestran: 1549+126 y 16157+415 tokens
+ * registrados, y coste nulo en los dos.
+ *
+ * Una equivalencia CERRADA y no `startsWith`. Con prefijos, un
+ * `gpt-4o-mini-turbo-2027` inventado o con otra tarifa heredaría este precio en
+ * silencio y el importe estimado mentiría sin que nada saltara. Un modelo que no
+ * esté en esta tabla debe seguir dando `null` — «no disponible», que es
+ * verdadero, en vez de un número que no lo es.
+ */
+export const MODEL_ALIAS: Record<string, string> = {
+  'gpt-4o-mini': 'gpt-4o-mini',
+  'gpt-4o-mini-2024-07-18': 'gpt-4o-mini',
+};
+
+/** El modelo con tarifa conocida que corresponde a este identificador, o null. */
+export function pricingKeyFor(model: string): string | null {
+  return MODEL_ALIAS[model] ?? (PRICING[model] ? model : null);
+}
 
 /** El económico, y suficiente para esto: extraer y clasificar, no redactar prosa. */
 export const DEFAULT_MODEL = 'gpt-4o-mini';
@@ -65,14 +90,23 @@ export const DEFAULT_MODEL = 'gpt-4o-mini';
 export const MAX_OUTPUT_TOKENS = 2000;
 
 /**
- * Coste ESTIMADO, o `null` si no conocemos el precio del modelo.
+ * Coste ESTIMADO, o `null` si no conocemos la tarifa de ese modelo.
  *
  * Nunca 0 para un modelo desconocido: un cero se lee como «gratis» y se suma sin
  * ruido a un total que entonces miente. `null` obliga a decir «no disponible».
+ *
+ * ── Lo que esta cuenta NO hace ─────────────────────────────────────────────
+ *
+ * No distingue los tokens de entrada CACHEADOS, que OpenAI factura más baratos.
+ * Todos los de entrada se cobran aquí a la tarifa normal, así que la estimación
+ * es CONSERVADORA: puede salir por encima de lo facturado, nunca por debajo.
+ * Soportarlo de verdad exigiría leer `usage.prompt_tokens_details` y guardarlo
+ * en una columna nueva — es decir, una migración —, y no toca ahora.
  */
 export function costUsd(model: string, inputTokens: number, outputTokens: number): number | null {
-  const p = PRICING[model];
-  if (!p) return null;
+  const clave = pricingKeyFor(model);
+  if (clave === null) return null;
+  const p = PRICING[clave];
   return (inputTokens / 1e6) * p.inPerM + (outputTokens / 1e6) * p.outPerM;
 }
 
@@ -119,7 +153,10 @@ export interface AnalyzeResult {
   readonly promptVersion: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
-  /** ESTIMADO a partir de la tabla local. `null` si el modelo no está en ella. */
+  /**
+   * Coste ESTIMADO a partir de la tabla local de tarifas, NO el importe
+   * facturado por el proveedor. `null` si la tarifa de ese modelo no se conoce.
+   */
   readonly costUsd: number | null;
   readonly durationMs: number;
 }
@@ -231,9 +268,12 @@ export async function analyze(
       const inputTokens = datos.usage?.prompt_tokens ?? 0;
       const outputTokens = datos.usage?.completion_tokens ?? 0;
       const durationMs = Date.now() - empezó;
-      // El precio se calcula con el modelo que el proveedor dice haber usado, no
-      // con el alias que pedimos: es el que factura.
+      // `model_returned` se conserva EXACTO para auditoría: es lo que dijo el
+      // proveedor y sirve para detectar que sustituyó el modelo.
       const modelReturned = typeof datos.model === 'string' ? datos.model : null;
+      // Para la TARIFA se resuelve por equivalencia cerrada. El identificador
+      // fechado es el que factura, pero no es una clave de `PRICING`: usarlo tal
+      // cual era lo que dejaba `cost_usd` en NULL en todas las llamadas reales.
       const coste = costUsd(modelReturned ?? model, inputTokens, outputTokens);
       deps.onUsage?.({
         model, modelReturned, inputTokens, outputTokens, costUsd: coste,

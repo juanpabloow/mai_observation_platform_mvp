@@ -176,7 +176,11 @@ export interface MeetingDetail extends MeetingListItem {
     readonly outdated: boolean;
     readonly model: string;
     readonly createdAt: string;
-    /** ESTIMADO, y `null` si el modelo no está en la tabla de precios. */
+    /**
+     * Coste ESTIMADO, nunca el importe facturado. Los tokens de entrada
+     * cacheados se cuentan a tarifa completa, así que sobreestima antes que
+     * quedarse corto. `null` = tarifa desconocida, no cero.
+     */
     readonly costUsd: number | null;
   } | null;
   /**

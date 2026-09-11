@@ -39,7 +39,11 @@ export interface AnalysisView {
   readonly createdAt: string;
   readonly inputTokens: number;
   readonly outputTokens: number;
-  /** ESTIMADO. `null` cuando no conocemos el precio del modelo. */
+  /**
+   * Coste ESTIMADO, nunca el importe facturado. Ver `costUsd` en
+   * analysis/openai.ts: tabla local de tarifas y tokens cacheados a tarifa
+   * completa. `null` = tarifa desconocida, no cero.
+   */
   readonly costUsd: number | null;
   readonly costEstimated: true;
   /**
