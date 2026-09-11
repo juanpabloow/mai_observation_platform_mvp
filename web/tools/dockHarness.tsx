@@ -126,7 +126,12 @@ function App() {
   const [key] = useState(0);
   const m = useMemo(() => meeting, []);
   return (
-    <div className="flex h-screen flex-col p-3" key={key}>
+    // CON BARRA LATERAL. Sin ella el panel está centrado en la ventana y el
+    // desalineamiento del dock no se puede ver: era exactamente el caso que
+    // fallaba en staging, donde el centro de la ventana no es el del panel.
+    <div className="flex h-screen" key={key}>
+      <aside className="hidden w-[17rem] shrink-0 border-r border-line bg-surface sm:block" aria-hidden />
+      <div className="flex min-w-0 flex-1 flex-col p-3">
       <MeetingWorkspace
           meeting={m}
           clientId="22222222-2222-4222-8222-222222222222"
@@ -135,6 +140,7 @@ function App() {
           // Un WAV de verdad, servido junto al HTML. Suena.
           audioSrc="./tono.wav"
         />
+      </div>
     </div>
   );
 }

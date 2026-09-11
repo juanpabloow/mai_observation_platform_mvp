@@ -6,6 +6,7 @@ import { useRouter } from "next/navigation";
 import { Chip, EmptyState, GHOST_ACTION_CLS, PRIMARY_SM_CLS } from "@/components/ui/primitives";
 import { type AudioState, type FollowState, type SpeakerTurn } from "@/components/reuniones/AudioPlayer";
 import { AudioDock, DOCK_GAP_CLS } from "@/components/reuniones/AudioDock";
+import { READING_MEASURE_CLS } from "@/lib/meetingsLayout";
 import { Avatar, ProgressBar, ShareMeter, StampLink, statusFace } from "@/components/reuniones/MeetingBits";
 import type { EvidenceItem, MeetingDetail } from "@/lib/meetingsData";
 import {
@@ -158,6 +159,13 @@ export function MeetingWorkspace({
   // que aquí sólo se anota el hecho.
   const suspender = useCallback(() => setSuspended(true), []);
   /*
+    El panel se guarda en ESTADO y no sólo en una ref: el dock necesita
+    reaccionar cuando el nodo aparece, y una ref mutada no provoca render. Con
+    `useState` la primera medición ocurre en cuanto el panel existe.
+  */
+  const [panelEl, setPanelEl] = useState<HTMLElement | null>(null);
+  const panel = useCallback((el: HTMLElement | null) => setPanelEl(el), []);
+  /*
     EL CONTROL, con tres estados. `unavailable` fuera de Transcript: no hay texto
     que seguir, así que el botón no se pinta en vez de quedarse ahí sin efecto.
   */
@@ -207,13 +215,16 @@ export function MeetingWorkspace({
       {/* ── HEADER CARD: identity, state and the meeting-level actions. Fixed
              height and fixed slots across every tab, so nothing shifts when the
              view changes. ── */}
-      <section className="flex shrink-0 flex-wrap items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2.5 shadow-[var(--shadow-card)]">
+      <section className="flex shrink-0 items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2.5 shadow-[var(--shadow-card)]">
         <Link href={backHref} aria-label="Volver a Reuniones" className="u-focus inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-subtle hover:text-foreground">
           <svg viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
             <path d="M9.6 3.6 5.2 8l4.4 4.4" />
           </svg>
         </Link>
-        <div className="flex min-w-0 flex-col gap-0.5">
+        {/* EL BLOQUE IZQUIERDO: título, metadatos y estado. `min-w-0 flex-1`
+            para que ceda espacio truncando el título en vez de empujar las
+            acciones fuera de sitio. */}
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <h1 className="truncate text-[1.0625rem] font-semibold tracking-[-0.02em]">{meeting.title}</h1>
           <p className="flex flex-wrap items-center gap-2 text-[0.75rem] text-muted">
             <span>{meeting.when}</span>
@@ -229,17 +240,46 @@ export function MeetingWorkspace({
             ) : null}
           </p>
         </div>
-        {/* The header player: play · plain progress · time · speed. Same
-            component, `variant="bar"` — a 160-bar waveform in a header is
-            decoration, and this screen is about text. */}
+        {/*
+          LAS ACCIONES, UN GRUPO Y SIEMPRE A LA DERECHA.
 
-        <span className={`flex shrink-0 items-center gap-1.5 ${tab !== "transcript" ? "" : "ml-auto"}`}>
-          <button type="button" className={GHOST_ACTION_CLS}>
-            Exportar
-          </button>
-          <button type="button" className={GHOST_ACTION_CLS}>
-            Compartir
-          </button>
+          `ml-auto` estaba condicionado a `tab === "transcript"`, así que en
+          Resumen, Reportes y Evidencia el grupo se pegaba al bloque izquierdo y
+          «saltaba» al cambiar de pestaña. Era un resto de cuando la cabecera
+          llevaba el reproductor compacto y ése era quien empujaba: al mover el
+          reproductor al dock, la condición quedó sin sentido y con efecto.
+
+          Ahora `ml-auto` es incondicional y `shrink-0` impide que el grupo se
+          comprima. La separación entre los tres controles es del `gap`, así que
+          no depende de la pestaña ni del ancho.
+        */}
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {/*
+            EN ESTRECHO SE RETIRAN LAS SECUNDARIAS.
+
+            Con los tres controles visibles a 375 px el título se comprimía a
+            «Reunió…» y los metadatos se apilaban en cinco líneas: las acciones
+            no chocaban con el título, se lo comían. `hidden sm:inline-flex` las
+            reserva para cuando hay sitio.
+
+            No se mueven a un menú porque hoy no hacen nada: ninguno de los dos
+            tiene `onClick`, así que un desplegable con dos entradas inertes
+            sería el mismo hueco con un clic más. Cuando se implementen, ahí es
+            donde deben ir.
+          */}
+          {/* La visibilidad va en un ENVOLTORIO y no en los botones:
+              `GHOST_ACTION_CLS` ya trae `inline-flex`, y dos utilidades de
+              `display` en la misma clase las resuelve el orden del CSS
+              generado, no el del atributo — es decir, a veces gana la que no
+              quieres. */}
+          <span className="hidden items-center gap-1.5 sm:flex">
+            <button type="button" className={GHOST_ACTION_CLS}>
+              Exportar
+            </button>
+            <button type="button" className={GHOST_ACTION_CLS}>
+              Compartir
+            </button>
+          </span>
           <button
             type="button"
             aria-label="Más acciones de la reunión"
@@ -258,7 +298,12 @@ export function MeetingWorkspace({
       <div className="flex min-h-0 flex-1 gap-[var(--content-pad)]">
         {inspector ? <InspectorPanel meeting={meeting} onClose={() => setInspector(false)} /> : null}
 
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]">
+        <section
+          // EL ANCLA DEL DOCK. Se mide este panel y no el contenedor de la
+          // pestaña: el panel mide lo mismo en las cuatro, y el contenido no.
+          ref={panel}
+          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]"
+        >
           {/* Tab bar — one fixed-height band. The panel toggles live at its right
               end, labelled, with aria-pressed carrying the state. */}
           <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-line-row px-2.5 py-2">
@@ -380,6 +425,11 @@ export function MeetingWorkspace({
               // RESUMEN is a board of BOXES, so its scroller shows the canvas and
               // the panels read as objects on it. The other tabs are ONE surface
               // (a document, a list) and stay white.
+              // `scrollbar-gutter: stable` reserva el canal de la barra aunque
+              // no haga falta. Sin eso, pasar de una pestaña que desborda a una
+              // que no cambia el ancho útil unos 15 px, y con él se movían la
+              // columna de lectura y —al medirse contra el panel— el dock.
+              style={{ scrollbarGutter: "stable" }}
               className={`min-h-0 flex-1 overflow-y-auto ${tab === "resumen" ? "bg-background" : ""}`}
             >
               {/* ONE container contract for every reading view: centred, capped,
@@ -396,7 +446,10 @@ export function MeetingWorkspace({
               <div
                 className={`${DOCK_GAP_CLS} ${
                   tab === "transcript"
-                    ? `mx-auto w-full px-6 sm:px-8 ${focusMode ? "max-w-[68.75rem]" : "max-w-none"}`
+                    // La medida sale del token compartido: el dock calcula la
+                    // suya del mismo número, y una prueba comprueba que no se
+                    // pueden separar. Ver lib/meetingsLayout.ts.
+                    ? `mx-auto w-full px-6 sm:px-8 ${focusMode ? READING_MEASURE_CLS : "max-w-none"}`
                     : tab === "resumen"
                       ? "w-full px-3 sm:px-4"
                       : "mx-auto w-full max-w-[78rem] px-6 sm:px-8"
@@ -443,6 +496,8 @@ export function MeetingWorkspace({
         followState={followState}
         onFollowToggle={alternarSeguimiento}
         onFollowResume={reanudarSeguimiento}
+        anchor={panelEl}
+        focusMode={focusMode}
       />
     </div>
   );

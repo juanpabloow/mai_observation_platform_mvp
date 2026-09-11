@@ -112,10 +112,16 @@ test('el `<audio>` vive FUERA de la rama de modo, o compactar lo remontaría', (
 test('el dock es fijo, flotante, acotado y por encima del contenido', () => {
   const src = leer(DOCK);
   assert.match(src, /\bfixed\b/, 'position: fixed');
-  assert.match(src, /inset-x-0 bottom-0/, 'anclado abajo');
-  assert.match(src, /justify-center/, 'centrado horizontalmente');
-  assert.match(src, /pb-3 sm:px-4 sm:pb-4|px-3 pb-3/, 'separado de los bordes');
-  assert.match(src, /max-w-\[54rem\]/, 'ancho máximo, no el 100 %');
+  // El ancho y la posición ya NO son clases: se miden contra el panel para
+  // compartir los límites de la columna del transcript. `max-w-[54rem]` era
+  // precisamente lo que no coincidía con los 1100 px del texto. La aritmética
+  // está probada en meetingsLayout.test.ts; aquí sólo se comprueba que el dock
+  // la usa y que no ha vuelto a declarar un ancho propio.
+  assert.match(src, /dockBounds\(/, 'el ancho lo da la medición');
+  assert.doesNotMatch(src, /max-w-\[/, 'ninguna clase de ancho propia');
+  assert.match(src, /inset-x-0 bottom-0/, 'los bordes de la ventana como respaldo antes de medir');
+  assert.match(src, /justify-center/, 'expandido, centrado en el panel');
+  assert.match(src, /justify-end/, 'compacto, a la derecha del panel');
   assert.match(src, /rounded-xl/);
   assert.match(src, /border border-line/);
   assert.match(src, /bg-surface/, 'fondo sólido');

@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import { dockBounds, scrollbarGutterPx, type DockBounds } from "@/lib/meetingsLayout";
 import { AudioPlayer, type AudioState, type FollowState, type SpeakerTurn } from "@/components/reuniones/AudioPlayer";
 
 /**
@@ -62,6 +63,8 @@ export function AudioDock({
   followState,
   onFollowToggle,
   onFollowResume,
+  anchor,
+  focusMode,
 }: {
   meetingId: string;
   durationSeconds: number;
@@ -73,6 +76,14 @@ export function AudioDock({
   followState: FollowState;
   onFollowToggle: () => void;
   onFollowResume: () => void;
+  /**
+   * El panel de trabajo, que es el ancla. Se pasa el elemento y no unas
+   * medidas: así el dock se reajusta solo cuando cambia —abrir un panel
+   * lateral, redimensionar la ventana— sin que nadie tenga que avisarle.
+   */
+  anchor: HTMLElement | null;
+  /** Sin paneles laterales el transcript respeta la medida de lectura. */
+  focusMode: boolean;
 }) {
   // Arranca en `expanded` en las dos pasadas (servidor y primera del cliente) y
   // se corrige tras montar: leer `localStorage` durante el render daría una
@@ -94,22 +105,77 @@ export function AudioDock({
 
   const compacto = modo === "compact";
 
+  /*
+    LA MEDICIÓN. `ResizeObserver` sobre el panel cubre lo que un `resize` de
+    ventana no ve: abrir el Inspector o el Copilot cambia el ancho del panel sin
+    que la ventana cambie de tamaño. El scroll no hace falta observarlo — el
+    panel no se mueve al desplazar, que es justo lo que se arregló antes.
+  */
+  const [bounds, setBounds] = useState<DockBounds | null>(null);
+  useEffect(() => {
+    if (!anchor) return;
+    const medir = (): void => {
+      const r = anchor.getBoundingClientRect();
+      // La CAJA DE CONTENIDO del panel, no su rectángulo exterior:
+      // `getBoundingClientRect` incluye el borde de 1 px, y la columna de
+      // lectura vive dentro de él. Sin esto el dock salía 1 px más ancho por
+      // cada lado — poco, pero visible en el borde de una tarjeta.
+      setBounds(
+        dockBounds({
+          panel: {
+            left: r.left + anchor.clientLeft,
+            width: anchor.clientWidth,
+            bottom: r.top + anchor.clientTop + anchor.clientHeight,
+          },
+          viewportHeight: window.innerHeight,
+          viewportWidth: window.innerWidth,
+          focusMode,
+          scrollbarGutter: scrollbarGutterPx(),
+        }),
+      );
+    };
+    medir();
+    const ro = new ResizeObserver(medir);
+    ro.observe(anchor);
+    window.addEventListener("resize", medir);
+    return () => {
+      ro.disconnect();
+      window.removeEventListener("resize", medir);
+    };
+  }, [anchor, focusMode]);
+
+  /*
+    La capa se posiciona con los límites MEDIDOS del panel. Hasta que la primera
+    medición llega —una sola pasada tras montar— se cae a los bordes de la
+    ventana, que es lo que se pintaba antes: así el servidor puede renderizar
+    algo sensato y no hay salto visible.
+  */
+  const capa: React.CSSProperties = bounds
+    ? { left: bounds.left, width: bounds.width, bottom: bounds.bottom }
+    : {};
+
   return (
     <div
       // `pointer-events-none` en la capa y `auto` en la cápsula: la franja
-      // invisible que centra el dock no debe robar clics al contenido que hay
+      // invisible que enmarca el dock no debe robar clics al contenido que hay
       // debajo, que es justo lo que pasa con un contenedor fijo a todo el ancho.
-      className="pointer-events-none fixed inset-x-0 bottom-0 z-40 flex justify-center px-3 pb-3 sm:px-4 sm:pb-4"
+      style={capa}
+      className={`pointer-events-none fixed z-40 flex ${
+        bounds ? "" : "inset-x-0 bottom-0 px-3 pb-3 sm:px-4 sm:pb-4"
+      } ${compacto ? "justify-end" : "justify-center"}`}
     >
       <div
         role="group"
         aria-label="Reproductor de la reunión"
         className={`pointer-events-auto flex items-center rounded-xl border border-line bg-surface shadow-[var(--shadow-float)] ${
           compacto
-            ? // Cápsula: a la derecha en escritorio, centrada y estrecha en móvil.
-              "ml-auto gap-2 px-2.5 py-2"
-            : // Expandido: casi todo el ancho en móvil, con tope en escritorio.
-              "w-full max-w-[54rem] flex-wrap gap-2.5 px-3 py-2.5"
+            ? // Cápsula: a la derecha del panel. No necesita el ancho de la
+              // columna, y ocuparlo la haría parecer un contenedor vacío.
+              "gap-2 px-2.5 py-2"
+            : // Expandido: EXACTAMENTE el ancho de la capa, que es el de la
+              // columna del transcript. Sin `max-w` propio, que es lo que hacía
+              // que los dos anchos pudieran divergir.
+              "w-full flex-wrap gap-2.5 px-3 py-2.5"
         }`}
       >
         <AudioPlayer
