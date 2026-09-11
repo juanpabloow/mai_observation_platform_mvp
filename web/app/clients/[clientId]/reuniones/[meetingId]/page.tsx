@@ -50,6 +50,7 @@ export default async function MeetingPage({
   return (
     <MeetingWorkspace
       meeting={meeting}
+      clientId={client.id}
       backHref={`/clients/${clientId}/reuniones`}
       audioState={audioState}
       // La URL firmada NO se resuelve en el servidor y se manda al cliente: se

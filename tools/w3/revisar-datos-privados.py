@@ -52,6 +52,11 @@ PATRONES = [
     ("privado · dirección MAC", re.compile(r"\b([0-9a-f]{2}:){5}[0-9a-f]{2}\b", re.I)),
     # Vocabulario de la grabación de prueba que ya se filtró una vez. Ampliar si
     # aparece otro caso real: es una lista de lo conocido, no una detección general.
+    #
+    # Este fichero se detecta A SÍ MISMO en esta categoría, y no es un fallo: un
+    # detector tiene que contener los términos que busca. Palabras sueltas en una
+    # expresión regular no son una conversación. Si alguien la ve en el informe,
+    # que sepa que es ésta y no pierda el tiempo.
     ("contenido · grabación real",
      re.compile(r"(?i)\b(almorzar|sushi|camarones|aguacate|zanahoria|cumpleaños)\b")),
 ]

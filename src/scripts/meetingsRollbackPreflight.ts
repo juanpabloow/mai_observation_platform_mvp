@@ -54,6 +54,7 @@ const EXPECTED_STACK = [
   '1783700000000_meetings-worker-pools',
   '1783800000000_meetings-result-uploads',
   '1784000000000_meetings-speaker-uncertain',
+  '1784100000000_meetings-analysis',
 ] as const;
 
 interface MigrationRow {

@@ -584,10 +584,10 @@ const ROLLBACK_STACK_SIZE = readdirSync(
 test('el preflight del rollback aprueba cuando las de Reuniones son la cabeza', () => {
   const result = run(ROLLBACK, [], guardEnv());
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /Las 6 de Reuniones son la cabeza, en orden/);
+  assert.match(result.stdout, new RegExp(`Las ${ROLLBACK_STACK_SIZE} de Reuniones son la cabeza, en orden`));
   // El conteo del `down` sale de EXPECTED_STACK.length, no de un 5 escrito a mano:
   // añadir una migración lo mueve solo, y ésa era la mitad del defecto original.
-  assert.match(result.stdout, /node-pg-migrate --tsx down 6/);
+  assert.match(result.stdout, new RegExp(`node-pg-migrate --tsx down ${ROLLBACK_STACK_SIZE}`));
 });
 
 test('y ABORTA si alguien puso una migración encima', async () => {
@@ -599,9 +599,9 @@ test('y ABORTA si alguien puso una migración encima', async () => {
   try {
     const result = run(ROLLBACK, [], guardEnv());
     assert.equal(result.status, 1, result.stdout);
-    assert.match(result.stderr, /NO son las 6 de Reuniones en orden/);
+    assert.match(result.stderr, new RegExp(`NO son las ${ROLLBACK_STACK_SIZE} de Reuniones en orden`));
     assert.match(result.stderr, new RegExp(intruder));
-    assert.match(result.stderr, /NO ejecutes 'node-pg-migrate down 6'/);
+    assert.match(result.stderr, new RegExp(`NO ejecutes 'node-pg-migrate down ${ROLLBACK_STACK_SIZE}'`));
     // Y dice cuál se ha caído de la cabeza.
     assert.match(result.stderr, /No están en la cabeza: 1783400000000_meetings-module/);
   } finally {
@@ -624,7 +624,7 @@ test('y ABORTA si están todas pero en otro orden', async () => {
   try {
     const result = run(ROLLBACK, [], guardEnv());
     assert.equal(result.status, 1, result.stdout);
-    assert.match(result.stderr, /NO son las 6 de Reuniones en orden/);
+    assert.match(result.stderr, new RegExp(`NO son las ${ROLLBACK_STACK_SIZE} de Reuniones en orden`));
   } finally {
     await query(`UPDATE pgmigrations SET name = $1 WHERE id = $2`, [first.name, first.id]);
     await query(`UPDATE pgmigrations SET name = $1 WHERE id = $2`, [second.name, second.id]);

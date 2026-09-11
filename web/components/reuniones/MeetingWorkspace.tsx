@@ -2,6 +2,7 @@
 
 import Link from "next/link";
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Chip, EmptyState, GHOST_ACTION_CLS, PRIMARY_SM_CLS } from "@/components/ui/primitives";
 import { AudioPlayer, type AudioState, type SpeakerTurn } from "@/components/reuniones/AudioPlayer";
 import { Avatar, ProgressBar, ShareMeter, StampLink, statusFace } from "@/components/reuniones/MeetingBits";
@@ -85,6 +86,7 @@ const KIND_TONE: Record<FindingKind, "neutral" | "brand" | "warn" | "muted"> = {
 
 export function MeetingWorkspace({
   meeting,
+  clientId,
   backHref,
   /** Derived by the page from the meeting's own state — see the detail route. */
   audioState = "ready",
@@ -96,6 +98,8 @@ export function MeetingWorkspace({
   audioSrc = null,
 }: {
   meeting: MeetingDetail;
+  /** El cliente del ámbito, que la ruta del resumen exige en la query. */
+  clientId: string;
   /** Absolute href back to the listing, built by the server page. */
   backHref: string;
   audioState?: AudioState;
@@ -359,7 +363,7 @@ export function MeetingWorkspace({
                     onFollowChange={setFollow}
                   />
                 ) : tab === "resumen" ? (
-                  <Summary meeting={meeting} onSeek={jumpTo} />
+                  <Summary meeting={meeting} clientId={clientId} onSeek={jumpTo} />
                 ) : (
                   <Evidence meeting={meeting} onSeek={jumpTo} />
                 )}
@@ -1124,7 +1128,88 @@ function PhasePending({
  * tiene los hooks. El texto del estado vacío, la condición que lo dispara (contenido, no
  * estado) y todo lo demás quedan idénticos.
  */
-function Summary({ meeting, onSeek }: { meeting: MeetingDetail; onSeek: (s: number) => void }) {
+/**
+ * El botón de generar, y lo único que hace falta para no gastar dos veces desde
+ * aquí: `pending` deshabilita, y la guarda del `ref` corta el segundo clic aunque
+ * React todavía no haya repintado. La defensa REAL está en el servidor —un
+ * resumen por versión de transcripción— pero no conviene apoyarse sólo en ella:
+ * la llamada ya habría salido.
+ */
+function GenerateSummary({
+  meetingId,
+  clientId,
+  label,
+}: {
+  meetingId: string;
+  clientId: string;
+  label: string;
+}) {
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const enVuelo = useRef(false);
+
+  const generar = async () => {
+    if (enVuelo.current) return;
+    enVuelo.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      const r = await fetch(
+        `/api/meetings/v1/meetings/${meetingId}/analyze?clientId=${clientId}`,
+        { method: "POST" },
+      );
+      if (!r.ok) {
+        const cuerpo = (await r.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(cuerpo?.message ?? `No se pudo generar el resumen (HTTP ${r.status}).`);
+      }
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo generar el resumen.");
+    } finally {
+      enVuelo.current = false;
+      setPending(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-start gap-2">
+      <button
+        type="button"
+        onClick={generar}
+        disabled={pending}
+        aria-busy={pending}
+        className="u-focus inline-flex items-center gap-2 rounded-xl border border-line-strong bg-surface px-3.5 py-2 text-[0.8125rem] font-medium text-foreground transition-colors hover:bg-subtle disabled:cursor-not-allowed disabled:text-muted"
+      >
+        {pending ? "Generando…" : label}
+      </button>
+      {error ? <p className="text-[0.78125rem] text-danger">{error}</p> : null}
+    </div>
+  );
+}
+
+/** El resumen se hizo sobre un texto que ya no es el vigente. Se dice, no se esconde. */
+function OutdatedNotice({ meetingId, clientId }: { meetingId: string; clientId: string }) {
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-line-strong bg-subtle px-3.5 py-3">
+      <p className="text-[0.8125rem] text-foreground">
+        Este resumen se generó con una versión anterior de la transcripción. La reunión se
+        reprocesó después, así que sus citas pueden no corresponder con el texto actual.
+      </p>
+      <GenerateSummary meetingId={meetingId} clientId={clientId} label="Regenerar con la versión actual" />
+    </div>
+  );
+}
+
+function Summary({
+  meeting,
+  clientId,
+  onSeek,
+}: {
+  meeting: MeetingDetail;
+  clientId: string;
+  onSeek: (s: number) => void;
+}) {
   const s = meeting.summary;
   // Ni narrativa, ni hallazgos, ni siguientes pasos: no hay análisis. Se
   // comprueba el CONTENIDO y no un estado, porque una reunión puede tener el
@@ -1136,18 +1221,36 @@ function Summary({ meeting, onSeek }: { meeting: MeetingDetail; onSeek: (s: numb
     s.findings.length === 0 &&
     s.nextSteps.length === 0;
   if (nothing) {
+    const conTexto = meeting.transcript.length > 0;
     return (
-      <PhasePending
-        title="Todavía no hay resumen"
-        body={
-          "El análisis de la reunión —resumen ejecutivo, temas, decisiones y siguientes pasos— " +
-          "es una fase posterior del módulo y aún no está disponible. La transcripción y los " +
-          "hablantes de esta reunión sí están completos y se pueden leer."
-        }
-      />
+      <div className="flex flex-col gap-4 py-4">
+        <PhasePending
+          title="Todavía no hay resumen"
+          body={
+            conTexto
+              ? "Se genera a partir de la transcripción, y cita el segmento del que sale cada " +
+                "afirmación. No inventa acuerdos, responsables ni fechas: lo que no se dijo, no aparece."
+              : "Todavía no hay transcripción que resumir."
+          }
+        />
+        {conTexto ? (
+          <div className="px-1">
+            <GenerateSummary meetingId={meeting.id} clientId={clientId} label="Generar resumen" />
+          </div>
+        ) : null}
+      </div>
     );
   }
-  return <SummaryBody meeting={meeting} onSeek={onSeek} />;
+  return (
+    <div className="flex flex-col gap-3">
+      {meeting.analysis?.outdated ? (
+        <div className="pt-4">
+          <OutdatedNotice meetingId={meeting.id} clientId={clientId} />
+        </div>
+      ) : null}
+      <SummaryBody meeting={meeting} onSeek={onSeek} />
+    </div>
+  );
 }
 
 function SummaryBody({ meeting, onSeek }: { meeting: MeetingDetail; onSeek: (s: number) => void }) {

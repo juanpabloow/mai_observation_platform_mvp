@@ -20,6 +20,8 @@ export interface MeetingRow {
   started_at: Date | null;
   language_hint: string | null;
   active_transcript_id: string | null;
+  /** MEET-5: el resumen activo. La columna existe desde MEET-1. */
+  active_analysis_id: string | null;
   media_state: MeetingMediaState;
   transcript_state: TranscriptState;
   diarization_state: DiarizationState;

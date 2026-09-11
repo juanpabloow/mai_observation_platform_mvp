@@ -359,7 +359,21 @@ export function toListItem(row: UiMeetingRow, now?: Date): MeetingListItem {
   };
 }
 
-export function toDetail(detail: UiMeetingDetail, now?: Date): MeetingDetail {
+/** Lo que el servicio de análisis devuelve, sin acoplar este módulo a su import. */
+export interface StoredAnalysis {
+  readonly id: string;
+  readonly summary: unknown;
+  readonly outdated: boolean;
+  readonly model: string;
+  readonly createdAt: string;
+  readonly costUsd: number;
+}
+
+export function toDetail(
+  detail: UiMeetingDetail,
+  now?: Date,
+  analysis?: StoredAnalysis | null,
+): MeetingDetail {
   const participants = participantsOf(detail.speakers);
   const durationSeconds = detail.durationSeconds ?? 0;
   return {
@@ -377,7 +391,19 @@ export function toDetail(detail: UiMeetingDetail, now?: Date): MeetingDetail {
     // Sin taxonomía ni etiquetado todavía. Vacío, no inventado.
     tags: [],
     transcript: transcriptOf(detail.segments, detail.speakers),
-    summary: EMPTY_SUMMARY,
+    // El resumen VALIDADO que se guardó, o vacío. No se compone aquí nada: las
+    // referencias ya se comprobaron contra los segmentos al generarlo, y volver
+    // a tocarlas aquí sería una segunda fuente de verdad.
+    summary: analysis ? (analysis.summary as unknown as MeetingSummary) : EMPTY_SUMMARY,
+    analysis: analysis
+      ? {
+          id: analysis.id,
+          outdated: analysis.outdated,
+          model: analysis.model,
+          createdAt: analysis.createdAt,
+          costUsd: analysis.costUsd,
+        }
+      : null,
     reportList: [],
     evidence: [],
   };

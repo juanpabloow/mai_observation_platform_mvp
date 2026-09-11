@@ -168,6 +168,17 @@ export interface MeetingDetail extends MeetingListItem {
    */
   summary: MeetingSummary;
   /**
+   * Metadatos del resumen: de qué versión de transcripción salió y si esa versión
+   * sigue siendo la activa. `null` cuando la reunión aún no tiene resumen.
+   */
+  analysis: {
+    readonly id: string;
+    readonly outdated: boolean;
+    readonly model: string;
+    readonly createdAt: string;
+    readonly costUsd: number;
+  } | null;
+  /**
    * TRUE for the layout-validation scenarios at the bottom of this file, whose
    * content is invented to exercise a composition. Never true for content that
    * came from the approved design sheet, and it must stay false for anything
@@ -324,7 +335,13 @@ export async function getMeeting(
   const { toDetail } = await import("./meetingsMap");
 
   const detail = await getMeetingForUi(scope, meetingId);
-  return detail === null ? null : toDetail(detail, new Date());
+  if (detail === null) return null;
+
+  // El resumen se lee aparte: es opcional, y una reunión sin él tiene que
+  // pintarse igual de bien que antes de que esto existiera.
+  const { getAnalysis } = await import("@worker/meetings/analysis/service.js");
+  const analysis = await getAnalysis(scope, meetingId).catch(() => null);
+  return toDetail(detail, new Date(), analysis);
 }
 
 /**
