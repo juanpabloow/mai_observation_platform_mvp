@@ -176,7 +176,8 @@ export interface MeetingDetail extends MeetingListItem {
     readonly outdated: boolean;
     readonly model: string;
     readonly createdAt: string;
-    readonly costUsd: number;
+    /** ESTIMADO, y `null` si el modelo no está en la tabla de precios. */
+    readonly costUsd: number | null;
   } | null;
   /**
    * TRUE for the layout-validation scenarios at the bottom of this file, whose

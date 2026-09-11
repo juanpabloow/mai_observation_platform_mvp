@@ -42,6 +42,11 @@ export type MeetingsErrorCode =
   | 'checksum_mismatch'
   | 'content_type_mismatch'
   | 'artifact_malformed'
+  // Análisis (resumen con un proveedor externo)
+  /** Falta la clave del proveedor en este entorno. No es culpa de quien llama. */
+  | 'analysis_not_configured'
+  /** El proveedor falló, rechazó o devolvió algo que no cumple el contrato. */
+  | 'analysis_failed'
   // Infraestructura
   | 'storage_unavailable'
   | 'storage_not_configured'
@@ -72,6 +77,9 @@ export const ERROR_STATUS: Record<MeetingsErrorCode, number> = {
   checksum_mismatch: 422,
   content_type_mismatch: 422,
   artifact_malformed: 422,
+  analysis_not_configured: 503,
+  // 502: el fallo es de un servicio de arriba, no de la petición.
+  analysis_failed: 502,
   storage_unavailable: 503,
   storage_not_configured: 503,
   rate_limited: 429,

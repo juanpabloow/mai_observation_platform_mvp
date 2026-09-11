@@ -212,9 +212,21 @@ test('el coste se estima antes de llamar, y sale en dólares', () => {
 });
 
 test('el cálculo del coste usa la tabla de precios', () => {
-  assert.equal(Number(costUsd('gpt-4o-mini', 1_000_000, 0).toFixed(4)), 0.15);
-  assert.equal(Number(costUsd('gpt-4o-mini', 0, 1_000_000).toFixed(4)), 0.60);
-  assert.equal(costUsd('modelo-que-no-conocemos', 1e6, 1e6), 0, 'sin precio, no se inventa');
+  assert.equal(Number(costUsd('gpt-4o-mini', 1_000_000, 0)!.toFixed(4)), 0.15);
+  assert.equal(Number(costUsd('gpt-4o-mini', 0, 1_000_000)!.toFixed(4)), 0.60);
+});
+
+test('un modelo sin precio conocido da NULL, nunca cero', () => {
+  // Un cero se lee como «gratis» y se suma sin ruido a un total que miente.
+  assert.equal(costUsd('modelo-que-no-conocemos', 1e6, 1e6), null);
+  const e = estimateCost(renderTranscript(SEGMENTOS, HABLANTES), 'modelo-que-no-conocemos');
+  assert.equal(e.minUsd, null);
+  assert.equal(e.maxUsd, null);
+});
+
+test('el coste siempre se presenta como ESTIMACIÓN', () => {
+  const e = estimateCost(renderTranscript(SEGMENTOS, HABLANTES));
+  assert.equal(e.estimated, true, 'nunca es el importe facturado');
 });
 
 // ── el proveedor, sin red ────────────────────────────────────────────────────
@@ -241,15 +253,49 @@ test('sin clave no se llama a nadie', async () => {
 test('la clave viaja en la cabecera y NUNCA en el cuerpo', async () => {
   let visto: { headers: Record<string, string>; body: string } | null = null;
   await analyze(renderTranscript(SEGMENTOS, HABLANTES), {
-    apiKey: 'sk-secreto-de-prueba',
+    apiKey: 'k-test',
     fetchImpl: async (_u, init) => {
       visto = { headers: (init?.headers ?? {}) as Record<string, string>, body: String(init?.body ?? '') };
       return respuesta(OK_BODY);
     },
   });
   assert.ok(visto);
-  assert.equal(visto!.headers.authorization, 'Bearer sk-secreto-de-prueba');
-  assert.ok(!visto!.body.includes('sk-secreto'), 'la clave no aparece en el cuerpo');
+  assert.equal(visto!.headers.authorization, 'Bearer k-test');
+  assert.ok(!visto!.body.includes('k-test'), 'la clave no aparece en el cuerpo');
+});
+
+test('se manda store:false en TODAS las llamadas', async () => {
+  // El endpoint es Chat Completions, donde no almacenar ya es el valor por
+  // omisión — pero «por omisión» es del proveedor y puede cambiar, y la
+  // organización puede tenerlo configurado de otra forma. Se escribe.
+  const cuerpos: Record<string, unknown>[] = [];
+  const fetchImpl = async (_u: unknown, init?: RequestInit) => {
+    cuerpos.push(JSON.parse(String(init?.body)));
+    return cuerpos.length === 1 ? respuesta({ error: 'x' }, 503) : respuesta(OK_BODY);
+  };
+  await analyze(renderTranscript(SEGMENTOS, HABLANTES), { apiKey: 'k', fetchImpl: fetchImpl as typeof fetch });
+  assert.equal(cuerpos.length, 2, 'la primera falló y se reintentó');
+  for (const c of cuerpos) assert.equal(c.store, false, 'también en el reintento');
+});
+
+test('el endpoint es Chat Completions, y se comprueba', async () => {
+  let url = '';
+  await analyze(renderTranscript(SEGMENTOS, HABLANTES), {
+    apiKey: 'k',
+    fetchImpl: (async (u: unknown) => { url = String(u); return respuesta(OK_BODY); }) as typeof fetch,
+  });
+  assert.equal(url, 'https://api.openai.com/v1/chat/completions');
+});
+
+test('se guarda el modelo que el proveedor DIJO haber usado', async () => {
+  // Un alias como `gpt-4o-mini` se resuelve a una versión concreta, y es ésa la
+  // que factura. Se guardan las dos.
+  const r = await analyze(renderTranscript(SEGMENTOS, HABLANTES), {
+    apiKey: 'k', model: 'gpt-4o-mini',
+    fetchImpl: async () => respuesta({ ...OK_BODY, model: 'gpt-4o-mini-2024-07-18' }),
+  });
+  assert.equal(r.model, 'gpt-4o-mini', 'el pedido');
+  assert.equal(r.modelReturned, 'gpt-4o-mini-2024-07-18', 'el devuelto');
 });
 
 test('se pide salida estructurada estricta y se acota la salida', async () => {
@@ -281,6 +327,17 @@ test('una respuesta que no cumple el esquema se rechaza, y el error no lleva con
   );
 });
 
+test('no hay SDK: el único reintento es el nuestro', async () => {
+  // El SDK de OpenAI reintenta 2 veces por su cuenta, así que «un reintento» con
+  // él serían tres llamadas. Aquí se usa `fetch` directamente y el número es
+  // exactamente el configurado.
+  let n = 0;
+  await assert.rejects(() => analyze(renderTranscript(SEGMENTOS, HABLANTES), {
+    apiKey: 'k', retries: 0, fetchImpl: async () => { n += 1; return respuesta({}, 503); },
+  }));
+  assert.equal(n, 1, 'con retries=0, una llamada y ninguna más');
+});
+
 test('un 400 NO se reintenta; un 503 sí, una sola vez', async () => {
   let n = 0;
   await assert.rejects(() => analyze(renderTranscript(SEGMENTOS, HABLANTES), {
@@ -305,6 +362,12 @@ test('se reporta el consumo, y sólo el consumo', async () => {
   assert.equal(r.promptVersion, ANALYSIS_PROMPT_VERSION);
   assert.equal(usos.length, 1);
   const claves = Object.keys(usos[0]).sort();
-  assert.deepEqual(claves, ['attempt', 'costUsd', 'durationMs', 'inputTokens', 'model', 'outputTokens']);
-  assert.ok(!claves.some((k) => /text|content|prompt|transcript/i.test(k)), 'nada de contenido');
+  assert.deepEqual(claves, [
+    'attempt', 'costUsd', 'durationMs', 'inputTokens', 'model', 'modelReturned', 'outputTokens',
+  ]);
+  assert.ok(!claves.some((k) => /text|content|prompt|transcript|message/i.test(k)), 'nada de contenido');
+  // Y los valores tampoco: son números, un modelo y un contador.
+  for (const [k, v] of Object.entries(usos[0])) {
+    if (typeof v === 'string') assert.ok(v.length < 60, `${k} no puede llevar texto largo`);
+  }
 });

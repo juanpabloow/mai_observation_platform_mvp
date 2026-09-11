@@ -5,6 +5,23 @@ import { SYSTEM_PROMPT, type RenderedTranscript, userMessage } from './prompt.js
  * El proveedor. Server-only, con límites, y sin registrar una sola palabra del
  * contenido.
  *
+ * ── Qué endpoint, exactamente ──────────────────────────────────────────────
+ *
+ *   POST https://api.openai.com/v1/chat/completions
+ *
+ * Es Chat Completions, NO la Responses API. Se manda `store: false` de todos
+ * modos: en Chat Completions el valor por omisión ya es no almacenar, pero
+ * «por omisión» es una propiedad del proveedor que puede cambiar y que la
+ * organización puede tener configurada de otra forma. Escribirlo es barato y
+ * convierte una suposición en una instrucción.
+ *
+ * ── Reintentos: uno, y es el único ─────────────────────────────────────────
+ *
+ * No se usa el SDK de OpenAI —no está instalado— sino `fetch` directamente. Eso
+ * importa: el SDK reintenta 2 veces por su cuenta además de lo que haga quien
+ * lo llame, así que «un reintento» con el SDK serían tres llamadas. Con `fetch`
+ * el número es exactamente el que dice `retries`.
+ *
  * ── La clave ───────────────────────────────────────────────────────────────
  *
  * `OPENAI_API_KEY` se lee del entorno del proceso y no sale de él. No se escribe
@@ -47,9 +64,15 @@ export const DEFAULT_MODEL = 'gpt-4o-mini';
 /** Tope de salida. El esquema ya acota las listas; esto acota el gasto. */
 export const MAX_OUTPUT_TOKENS = 2000;
 
-export function costUsd(model: string, inputTokens: number, outputTokens: number): number {
+/**
+ * Coste ESTIMADO, o `null` si no conocemos el precio del modelo.
+ *
+ * Nunca 0 para un modelo desconocido: un cero se lee como «gratis» y se suma sin
+ * ruido a un total que entonces miente. `null` obliga a decir «no disponible».
+ */
+export function costUsd(model: string, inputTokens: number, outputTokens: number): number | null {
   const p = PRICING[model];
-  if (!p) return 0;
+  if (!p) return null;
   return (inputTokens / 1e6) * p.inPerM + (outputTokens / 1e6) * p.outPerM;
 }
 
@@ -66,8 +89,11 @@ export interface EstimatedCost {
   readonly model: string;
   readonly inputTokens: number;
   readonly maxOutputTokens: number;
-  readonly minUsd: number;
-  readonly maxUsd: number;
+  /** `null` cuando el modelo no está en la tabla de precios. */
+  readonly minUsd: number | null;
+  readonly maxUsd: number | null;
+  /** Siempre true: es una estimación, nunca el importe facturado. */
+  readonly estimated: true;
 }
 
 export function estimateCost(rendered: RenderedTranscript, model = DEFAULT_MODEL): EstimatedCost {
@@ -76,19 +102,25 @@ export function estimateCost(rendered: RenderedTranscript, model = DEFAULT_MODEL
     model,
     inputTokens,
     maxOutputTokens: MAX_OUTPUT_TOKENS,
-    // El mínimo supone una salida corta; el máximo, que se agota el tope.
+    // El mínimo supone una salida corta; el máximo, que se agota el tope. Los dos
+    // son aproximados: el recuento de tokens real lo da el proveedor al responder.
     minUsd: costUsd(model, inputTokens, 200),
     maxUsd: costUsd(model, inputTokens, MAX_OUTPUT_TOKENS),
+    estimated: true,
   };
 }
 
 export interface AnalyzeResult {
   readonly raw: RawAnalysis;
+  /** El que se pidió. */
   readonly model: string;
+  /** El que el proveedor dice haber usado: un alias se resuelve a una versión. */
+  readonly modelReturned: string | null;
   readonly promptVersion: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
-  readonly costUsd: number;
+  /** ESTIMADO a partir de la tabla local. `null` si el modelo no está en ella. */
+  readonly costUsd: number | null;
   readonly durationMs: number;
 }
 
@@ -99,7 +131,16 @@ export interface AnalyzeDeps {
   readonly timeoutMs?: number;
   /** Reintentos ADICIONALES. 1 por omisión, y sólo ante fallos transitorios. */
   readonly retries?: number;
-  readonly onUsage?: (u: { model: string; inputTokens: number; outputTokens: number; costUsd: number; durationMs: number; attempt: number }) => void;
+  /** Sólo identificadores y números. Jamás contenido. */
+  readonly onUsage?: (u: {
+    model: string;
+    modelReturned: string | null;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number | null;
+    durationMs: number;
+    attempt: number;
+  }) => void;
 }
 
 const TRANSITORIOS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
@@ -131,6 +172,10 @@ export async function analyze(
       json_schema: { name: 'meeting_analysis', strict: true, schema: analysisJsonSchema() },
     },
     max_completion_tokens: MAX_OUTPUT_TOKENS,
+    // No conservar la conversación del lado del proveedor. La transcripción es
+    // material privado de un tercero; se envía para obtener el resumen y no para
+    // que quede almacenada.
+    store: false,
     // Determinista en lo posible: dos resúmenes del mismo texto no deberían
     // diferir por azar, porque entonces «se actualizó» y «cambió el modelo» se
     // vuelven indistinguibles.
@@ -159,6 +204,7 @@ export async function analyze(
         throw err;
       }
       const datos = (await respuesta.json()) as {
+        model?: string;
         choices?: { message?: { content?: string; refusal?: string } }[];
         usage?: { prompt_tokens?: number; completion_tokens?: number };
       };
@@ -185,11 +231,18 @@ export async function analyze(
       const inputTokens = datos.usage?.prompt_tokens ?? 0;
       const outputTokens = datos.usage?.completion_tokens ?? 0;
       const durationMs = Date.now() - empezó;
-      const coste = costUsd(model, inputTokens, outputTokens);
-      deps.onUsage?.({ model, inputTokens, outputTokens, costUsd: coste, durationMs, attempt: intento + 1 });
+      // El precio se calcula con el modelo que el proveedor dice haber usado, no
+      // con el alias que pedimos: es el que factura.
+      const modelReturned = typeof datos.model === 'string' ? datos.model : null;
+      const coste = costUsd(modelReturned ?? model, inputTokens, outputTokens);
+      deps.onUsage?.({
+        model, modelReturned, inputTokens, outputTokens, costUsd: coste,
+        durationMs, attempt: intento + 1,
+      });
       return {
         raw: parsed.data,
         model,
+        modelReturned,
         promptVersion: ANALYSIS_PROMPT_VERSION,
         inputTokens,
         outputTokens,

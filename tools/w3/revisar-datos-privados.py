@@ -22,6 +22,7 @@ Esto tampoco lo resuelve del todo. Es una red de seguridad con agujeros conocido
   · no sabe distinguir un marcador de una dirección real, y por eso lo correcto es
     no escribir direcciones, no añadirlas a una lista de excepciones.
   · no mira los mensajes de commit, ni los binarios, ni lo ya publicado.
+  · se salta su propio fichero, que contiene por fuerza lo que busca.
 
 La revisión sigue siendo humana. Esto sólo evita repetir los errores ya cometidos.
 """
@@ -40,9 +41,13 @@ PATRONES = [
                 r"|github_pat_[A-Za-z0-9_]{20,}|AKIA[0-9A-Z]{12,}|xox[baprs]-[A-Za-z0-9-]{10,})")),
     ("credencial · clave privada",
      re.compile(r"BEGIN (RSA |OPENSSH |EC |DSA |PGP )?PRIVATE KEY")),
+    # Sólo ASIGNACIONES LITERALES. Antes marcaba también expresiones como
+    # `const apiKey = deps.apiKey ?? process.env.OPENAI_API_KEY`, que es
+    # exactamente lo que hay que hacer — y un aviso que salta en el código
+    # correcto es un aviso que se aprende a ignorar.
     ("credencial · asignación sospechosa",
      re.compile(r"(?i)\b(password|passwd|secret|api[_-]?key|access[_-]?key|auth[_-]?token"
-                r"|client[_-]?secret)\s*[=:]\s*[\"']?[^\s\"'{}$,)\]<]{8,}")),
+                r"|client[_-]?secret)\s*[=:]\s*[\"'][^\"'\n]{8,}[\"']")),
     ("credencial · cabecera Bearer", re.compile(r"(?i)authorization\s*:\s*bearer\s+\S{10,}")),
     ("privado · IP de LAN o Tailscale",
      re.compile(r"\b(10\.\d{1,3}\.\d{1,3}\.\d{1,3}|192\.168\.\d{1,3}\.\d{1,3}"
@@ -77,6 +82,11 @@ def main(argv: list[str]) -> int:
         print(f"No pude leer el diff de {rango}: {cause}", file=sys.stderr)
         return 2
 
+    # Este fichero contiene, por fuerza, los términos que busca. Saltárselo no es
+    # silenciar un hallazgo: es que un detector no puede filtrar por ser un
+    # detector. Cualquier otro fichero sí se revisa.
+    PROPIO = "tools/w3/revisar-datos-privados.py"
+
     fichero = None
     hits: dict[str, dict[str, int]] = collections.defaultdict(lambda: collections.defaultdict(int))
     for linea in diff.splitlines():
@@ -84,6 +94,8 @@ def main(argv: list[str]) -> int:
             fichero = linea[6:]
             continue
         if not linea.startswith("+") or linea.startswith("+++"):
+            continue
+        if fichero == PROPIO:
             continue
         for nombre, patron in PATRONES:
             # Se cuenta y se localiza; NUNCA se imprime el valor, que es justo lo que

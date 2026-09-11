@@ -62,15 +62,21 @@ export async function POST(
     const result = await generateAnalysis(scope, requireUuidParam(meetingId, 'meetingId'), {
       // El consumo se registra; el contenido, nunca.
       onUsage: (u) =>
+        // Identificadores y números. Ni prompt, ni transcripción, ni respuesta.
         console.info(
-          '[meetings.analysis] modelo=%s in=%d out=%d usd=%s ms=%d intento=%d',
-          u.model, u.inputTokens, u.outputTokens, u.costUsd.toFixed(6), u.durationMs, u.attempt,
+          '[meetings.analysis] pedido=%s devuelto=%s in=%d out=%d usd=%s ms=%d intento=%d',
+          u.model, u.modelReturned ?? '—', u.inputTokens, u.outputTokens,
+          u.costUsd === null ? 'n/d' : u.costUsd.toFixed(6), u.durationMs, u.attempt,
         ),
     });
     return Response.json(
       {
+        // `generating` = otra petición tiene la reserva. No se ha llamado al
+        // proveedor por segunda vez.
+        state: result.state,
         analysis: result.view,
         reused: result.reused,
+        supersededDuringGeneration: result.supersededDuringGeneration,
         droppedRefs: result.droppedRefs,
         decided: result.decided,
         proposed: result.proposed,

@@ -366,7 +366,8 @@ export interface StoredAnalysis {
   readonly outdated: boolean;
   readonly model: string;
   readonly createdAt: string;
-  readonly costUsd: number;
+  /** `null` = no conocemos el precio de ese modelo. No es cero. */
+  readonly costUsd: number | null;
 }
 
 export function toDetail(
