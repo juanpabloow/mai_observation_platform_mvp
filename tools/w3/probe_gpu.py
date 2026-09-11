@@ -4,12 +4,13 @@ Proceso AISLADO. No reclama jobs, no toca la base, R2 ni la cola. El servicio W3
 histórico (uvicorn:8001) siguen corriendo: este es un TERCER proceso que usa la VRAM
 libre, y por eso lo primero que hace es comprobar que hay margen y abortar si no.
 """
-import json, os, subprocess, sys, threading, time
-sys.path.insert(0, "/home/santiagov/services/mai-w3-worker/transcript-worker")
-sys.path.insert(0, "/home/santiagov/w3-diag")
-os.chdir("/home/santiagov/services/mai-w3-worker/transcript-worker")
+import json
+import os, subprocess, sys, threading, time
+sys.path.insert(0, f"{WORKER}")
+sys.path.insert(0, f"{DIAG}")
+os.chdir(f"{WORKER}")
 
-AUDIO = "/home/santiagov/w3-diag/cc00c4cf-normalized.wav"
+AUDIO = f"{DIAG}/cc00c4cf-normalized.wav"
 MIN_FREE_MIB = 900
 
 def smi(query, extra=()):
@@ -38,6 +39,12 @@ def sampler():
 threading.Thread(target=sampler, daemon=True).start()
 
 import torch
+
+# Las rutas NO se escriben aquí: describen máquinas concretas y este repositorio es
+# público. Se derivan de $HOME y se pueden redirigir por entorno.
+HOME = os.path.expanduser("~")
+DIAG = os.environ.get("W3_DIAG", f"{HOME}/w3-diag")
+WORKER = os.environ.get("W3_WORKER", f"{HOME}/services/mai-w3-worker/transcript-worker")
 torch.cuda.init(); torch.zeros(1, device="cuda")
 time.sleep(1.0)
 ctx = peak["self"]
@@ -45,7 +52,7 @@ print(f"contexto CUDA de este proceso: ~{ctx} MiB (lo paga una vez, y el worker 
 
 from app.services.diarization_service import diarize
 from compare_diarization import parse_reference, score_against_reference, reference_intervals_report
-REF = parse_reference(open("/home/santiagov/w3-diag/reference-cc00c4cf.tsv", encoding="utf-8").read())
+REF = parse_reference(open(f"{DIAG}/reference-cc00c4cf.tsv", encoding="utf-8").read())
 
 results = {}
 for tag, ns in (("auto", None), ("ns2", 2)):
@@ -83,4 +90,4 @@ print(f"  pico total de la tarjeta: {peak['total']} MiB de 4096")
 print(f"  mínimo libre durante la prueba: {peak['free_min']} MiB")
 print(f"  coste marginal de pyannote sobre un proceso que ya tiene contexto: ~{peak['self']-ctx} MiB")
 json.dump({"peak": peak, "ctx_mib": ctx, "runs": results},
-          open("/home/santiagov/w3-diag/out-cpu/gpu_pyannote.json", "w"), indent=2, ensure_ascii=False)
+          open(f"{DIAG}/out-cpu/gpu_pyannote.json", "w"), indent=2, ensure_ascii=False)

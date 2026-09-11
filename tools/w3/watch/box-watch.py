@@ -334,7 +334,7 @@ def main(argv: list[str] | None = None) -> int:
     if iface:
         try:
             probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            probe.connect((gw or "192.168.1.1", 9))
+            probe.connect((gw or "192.0.2.1", 9))
             lan_ip = probe.getsockname()[0]
             probe.close()
         except OSError:

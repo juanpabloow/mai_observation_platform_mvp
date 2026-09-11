@@ -2,13 +2,20 @@
 
 Reutiliza la transcripción nueva ya guardada: no vuelve a transcribir.
 """
-import json, sys
-sys.path.insert(0, "/home/santiagov/w3-diag")
+import json
+import os, sys
+
+# Las rutas NO se escriben aquí: describen máquinas concretas y este repositorio es
+# público. Se derivan de $HOME y se pueden redirigir por entorno.
+HOME = os.path.expanduser("~")
+DIAG = os.environ.get("W3_DIAG", f"{HOME}/w3-diag")
+WORKER = os.environ.get("W3_WORKER", f"{HOME}/services/mai-w3-worker/transcript-worker")
+sys.path.insert(0, f"{DIAG}")
 from compare_diarization import parse_reference, score_against_reference
 
-REF = parse_reference(open("/home/santiagov/w3-diag/reference-cc00c4cf.tsv", encoding="utf-8").read())
-pya = json.load(open("/home/santiagov/w3-diag/out-cpu/pyannote_auto.json"))["result"]["speaker_turns"]
-segs = json.load(open("/home/santiagov/w3-diag/out-cpu/transcript_nuevo.json"))["segments"]
+REF = parse_reference(open(f"{DIAG}/reference-cc00c4cf.tsv", encoding="utf-8").read())
+pya = json.load(open(f"{DIAG}/out-cpu/pyannote_auto.json"))["result"]["speaker_turns"]
+segs = json.load(open(f"{DIAG}/out-cpu/transcript_nuevo.json"))["segments"]
 
 def lab(a, b):
     best, who = 0.0, None

@@ -19,7 +19,7 @@ sleep 5
 echo "VRAM libre tras parar el worker: $(nvidia-smi --query-gpu=memory.free --format=csv,noheader)"
 nvidia-smi --query-compute-apps=pid,used_memory --format=csv,noheader
 
-cd /home/santiagov/w3-diag
+cd $HOME/w3-diag
 HF_HUB_OFFLINE=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
-  /home/santiagov/miniconda3/envs/mai-w3/bin/python probe_gpu.py 2>&1 \
+  $HOME/miniconda3/envs/mai-w3/bin/python probe_gpu.py 2>&1 \
   | grep -viE "^warning|deprecat|std\(\)|libtorch|TensorFloat|does not|^\s*$" | head -60

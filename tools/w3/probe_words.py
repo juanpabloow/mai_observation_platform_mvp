@@ -4,21 +4,28 @@ La pregunta es si se puede atribuir bien sin romper la legibilidad. No se parte 
 por proporción de caracteres: se usan los tiempos por palabra que whisper ya produce.
 Transcripción NUEVA y aislada; no es la almacenada ni se ingiere.
 """
-import json, os, sys, time
-sys.path.insert(0, "/home/santiagov/services/mai-w3-worker/transcript-worker")
-sys.path.insert(0, "/home/santiagov/w3-diag")
-os.chdir("/home/santiagov/services/mai-w3-worker/transcript-worker")
+import json
+import os, sys, time
+
+# Las rutas NO se escriben aquí: describen máquinas concretas y este repositorio es
+# público. Se derivan de $HOME y se pueden redirigir por entorno.
+HOME = os.path.expanduser("~")
+DIAG = os.environ.get("W3_DIAG", f"{HOME}/w3-diag")
+WORKER = os.environ.get("W3_WORKER", f"{HOME}/services/mai-w3-worker/transcript-worker")
+sys.path.insert(0, f"{WORKER}")
+sys.path.insert(0, f"{DIAG}")
+os.chdir(f"{WORKER}")
 from compare_diarization import parse_reference, score_against_reference
 
-REF = parse_reference(open("/home/santiagov/w3-diag/reference-cc00c4cf.tsv", encoding="utf-8").read())
-pya = json.load(open("/home/santiagov/w3-diag/out-cpu/pyannote_auto.json"))["result"]["speaker_turns"]
+REF = parse_reference(open(f"{DIAG}/reference-cc00c4cf.tsv", encoding="utf-8").read())
+pya = json.load(open(f"{DIAG}/out-cpu/pyannote_auto.json"))["result"]["speaker_turns"]
 
 from app.services.whisper_service import whisper_service
-tr = whisper_service.transcribe("/home/santiagov/w3-diag/cc00c4cf-normalized.wav", word_timestamps=True)
+tr = whisper_service.transcribe(f"{DIAG}/cc00c4cf-normalized.wav", word_timestamps=True)
 segs = tr["segments"]
 print(f"[TRANSCRIPCIÓN NUEVA, aislada] {len(segs)} segmentos")
 json.dump({"nota": "NUEVA Y AISLADA, no es la almacenada", "segments": segs},
-          open("/home/santiagov/w3-diag/out-cpu/transcript_nuevo.json", "w"), indent=2, ensure_ascii=False)
+          open(f"{DIAG}/out-cpu/transcript_nuevo.json", "w"), indent=2, ensure_ascii=False)
 
 def lab(a, b, turns):
     best, who = 0.0, None
@@ -73,4 +80,4 @@ dist = {}
 for x in bloques_pal: dist[len(x["text"].split())] = dist.get(len(x["text"].split()), 0) + 1
 print(f"\nbloques de 1-2 palabras (riesgo de picadillo): {sum(v for k,v in dist.items() if k<=2)} de {len(bloques_pal)}")
 json.dump({"nota": "derivado de la transcripción NUEVA", "por_segmento": bloques_seg, "por_palabra": bloques_pal},
-          open("/home/santiagov/w3-diag/out-cpu/bloques.json", "w"), indent=2, ensure_ascii=False)
+          open(f"{DIAG}/out-cpu/bloques.json", "w"), indent=2, ensure_ascii=False)

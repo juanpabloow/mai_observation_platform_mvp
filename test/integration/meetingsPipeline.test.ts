@@ -2393,27 +2393,27 @@ function transcriptArtifactV2(): Buffer {
       i: 0,
       start: 0,
       end: 9,
-      text: '¿Qué te gustaría almorzar? No sé, podríamos pollo',
+      text: '¿Qué módulo revisamos primero? No sé, podríamos índices',
       words: [
         { start: 0.0, end: 1.0, word: '¿Qué' },
-        { start: 1.0, end: 2.0, word: ' te' },
-        { start: 2.0, end: 3.0, word: ' gustaría' },
-        { start: 3.0, end: 4.0, word: ' almorzar?' },
+        { start: 1.0, end: 2.0, word: ' módulo' },
+        { start: 2.0, end: 3.0, word: ' revisamos' },
+        { start: 3.0, end: 4.0, word: ' primero?' },
         { start: 5.0, end: 6.0, word: ' No' },
         { start: 6.0, end: 7.0, word: ' sé,' },
         { start: 7.0, end: 8.0, word: ' podríamos' },
-        { start: 8.0, end: 9.0, word: ' pollo' },
+        { start: 8.0, end: 9.0, word: ' índices' },
       ],
     }),
     JSON.stringify({
       i: 1,
       start: 10,
       end: 19,
-      text: 'Entonces pedimos sushi vale y lo confirmo ahora',
+      text: 'Entonces cerramos tickets vale y lo confirmo ahora',
       words: [
         { start: 10.0, end: 11.0, word: 'Entonces' },
-        { start: 11.0, end: 12.0, word: ' pedimos' },
-        { start: 12.0, end: 13.0, word: ' sushi' },
+        { start: 11.0, end: 12.0, word: ' cerramos' },
+        { start: 12.0, end: 13.0, word: ' tickets' },
         { start: 13.0, end: 13.4, word: ' vale' },
         { start: 14.0, end: 15.0, word: ' y' },
         { start: 15.0, end: 16.0, word: ' lo' },
@@ -2492,13 +2492,13 @@ test('un transcript v2 se ingiere partido por palabra, con los bloques y las mar
   assert.deepEqual(
     segments.rows.map((row) => row.text),
     [
-      '¿Qué te gustaría almorzar?',
-      'No sé, podríamos pollo',
+      '¿Qué módulo revisamos primero?',
+      'No sé, podríamos índices',
       // El segmento 1 NO se partió: el «vale» se absorbió y quedó un solo tramo, así
       // que se emite el segmento ORIGINAL — con «ahora» incluido, que ni siquiera
       // tenía entrada en `words`. El texto no se reconstruye desde las palabras
       // cuando no hace falta partir, y así no se pierde lo que ellas no cubren.
-      'Entonces pedimos sushi vale y lo confirmo ahora',
+      'Entonces cerramos tickets vale y lo confirmo ahora',
     ],
   );
   assert.deepEqual(

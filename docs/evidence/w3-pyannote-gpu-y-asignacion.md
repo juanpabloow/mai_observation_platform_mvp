@@ -54,9 +54,11 @@ Estructuralmente, la legibilidad no estaba en riesgo.
 Transcripción **nueva y aislada** (misma configuración: `medium`/`cuda`/`float16`; 14
 segmentos, no los 15 almacenados — whisper no es bit-determinista entre ejecuciones).
 
-El segmento 0 va de **0,96 a 10,72 s** y contiene a las dos personas:
+El segmento 0 va de **0,96 a 10,72 s** y contiene a las dos personas: una pregunta de
+la Mujer que ocupa hasta 3,94 s, y la respuesta del Hombre desde 5,02 s.
 
-> «Bueno, ¿y qué te gustaría almorzar? **No sé. Podríamos comer pollo.**»
+> *La transcripción literal se ha retirado de este documento: es una conversación
+> privada real. Lo que se mide abajo no depende de las palabras concretas.*
 
 Por mayor solape, pyannote se lo da a `SPEAKER_01` (3,81 s contra 2,73 s). O sea: **la
 pregunta de la Mujer queda atribuida al Hombre.** Mejorar los turnos hizo que el bloque
@@ -68,8 +70,8 @@ el sistema *sabe* que están mezclados y aun así escribe una sola etiqueta.
 Whisper **ya produce tiempos por palabra** (`word_timestamps=True`); hoy el worker no
 los pide. No se parte texto por proporción de caracteres: se usan esos tiempos reales.
 
-    0.96- 3.94  SPEAKER_00  Bueno, ¿y qué te gustaría almorzar?
-    5.02-10.72  SPEAKER_01  No sé. Podríamos comer pollo.
+    0.96- 3.94  SPEAKER_00  «…»   ← pregunta, 6 palabras
+    5.02-10.72  SPEAKER_01  «…»   ← respuesta, 5 palabras
 
 Barrido de la guarda mínima, para no acabar en picadillo:
 

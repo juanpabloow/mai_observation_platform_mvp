@@ -1,8 +1,8 @@
 # Orden de despliegue y vuelta atrás · palabras, v2, speakerCount y backend
 
 **Nada de esto se ha desplegado.** Los cambios del worker viven en una copia aislada
-(`/home/santiagov/w3-work/transcript-worker`); el árbol del servicio
-(`/home/santiagov/services/mai-w3-worker/transcript-worker`) está en `2452aba`, con
+(`~/w3-work/transcript-worker`); el árbol del servicio
+(`~/services/mai-w3-worker/transcript-worker`) está en `2452aba`, con
 `git status` limpio, y el servicio no se ha tocado.
 
 ## ⚠ Dos cosas que descubrí al preparar el despliegue, y que cambian el plan
@@ -100,7 +100,7 @@ código, porque casi todo lo que puede salir mal en la GPU es el backend.
 #### Desplegar el código del worker: quitar antes el worktree
 
 El commit vive en la rama `w3/palabras-v2-pyannote`, y esa rama **ya está abierta** en
-el worktree `/home/santiagov/w3-commit`. Git impide tener la misma rama en dos
+el worktree `~/w3-commit`. Git impide tener la misma rama en dos
 worktrees, así que un `git checkout w3/palabras-v2-pyannote` en el árbol del servicio
 **fallará** — y hacerlo con `--force` sería saltarse una protección que existe justo
 para evitar dos copias divergentes de la misma rama.
@@ -108,16 +108,16 @@ para evitar dos copias divergentes de la misma rama.
 La salida limpia es soltar el worktree primero, que es una operación normal y no pierde
 el commit:
 
-    cd /home/santiagov/services/mai-w3-worker
-    git -C /home/santiagov/w3-commit status --porcelain   # tiene que estar limpio
-    git worktree remove /home/santiagov/w3-commit         # sin --force
+    cd ~/services/mai-w3-worker
+    git -C ~/w3-commit status --porcelain   # tiene que estar limpio
+    git worktree remove ~/w3-commit         # sin --force
     git worktree prune
     cd transcript-worker && git checkout w3/palabras-v2-pyannote
     systemctl --user restart vanegas-w3-worker.service
 
 **Vuelta atrás del código**, con las dos ramas intactas y sin reescribir historia:
 
-    cd /home/santiagov/services/mai-w3-worker/transcript-worker
+    cd ~/services/mai-w3-worker/transcript-worker
     git checkout w2/worker-pull-clean      # vuelve a 2452aba
     systemctl --user restart vanegas-w3-worker.service
 

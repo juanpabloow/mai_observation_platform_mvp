@@ -38,7 +38,7 @@ function segment(
 // ── v1: nada cambia ───────────────────────────────────────────────────────────
 
 test('sin palabras (v1) el segmento no se parte y conserva sus tiempos', () => {
-  const segments = [segment(0, 0.96, 10.72, 'Bueno, ¿y qué te gustaría almorzar? No sé.')];
+  const segments = [segment(0, 0.96, 10.72, 'Vale, ¿y qué módulo revisamos primero? No sé.')];
   const turns = [turn(0.96, 4.0, 'SPEAKER_00'), turn(5.0, 10.72, 'SPEAKER_01')];
 
   const { segments: out } = alignSegments(segments, turns);
@@ -65,22 +65,22 @@ test('el segmento que contiene a dos personas se parte en frontera de palabra', 
   // voz y la respuesta de la otra, y por mayor solape el bloque entero se iba a quien
   // decía la SEGUNDA mitad.
   const words = [
-    word(0.96, 1.52, 'Bueno,'), word(1.8, 2.02, ' ¿y'), word(2.02, 2.12, ' qué'),
-    word(2.12, 2.4, ' te'), word(2.4, 3.02, ' gustaría'), word(3.02, 3.94, ' almorzar?'),
+    word(0.96, 1.52, 'Vale,'), word(1.8, 2.02, ' ¿y'), word(2.02, 2.12, ' qué'),
+    word(2.12, 2.4, ' módulo'), word(2.4, 3.02, ' revisamos'), word(3.02, 3.94, ' primero?'),
     word(5.02, 5.46, ' No'), word(5.46, 6.3, ' sé.'), word(7.9, 8.46, ' Podríamos'),
-    word(8.46, 9.14, ' comer'), word(9.14, 10.72, ' pollo.'),
+    word(8.46, 9.14, ' mirar'), word(9.14, 10.72, ' índices.'),
   ];
-  const segments = [segment(0, 0.96, 10.72, 'Bueno, ¿y qué te gustaría almorzar? No sé. Podríamos comer pollo.', words)];
+  const segments = [segment(0, 0.96, 10.72, 'Vale, ¿y qué módulo revisamos primero? No sé. Podríamos mirar índices.', words)];
   const turns = [turn(0.96, 3.94, 'SPEAKER_00'), turn(5.02, 10.72, 'SPEAKER_01')];
 
   const { segments: out } = alignSegments(segments, turns);
 
   assert.equal(out.length, 2, 'dos voces, dos bloques');
   assert.equal(out[0].speakerLabel, 'SPEAKER_00');
-  assert.equal(out[0].text, 'Bueno, ¿y qué te gustaría almorzar?');
+  assert.equal(out[0].text, 'Vale, ¿y qué módulo revisamos primero?');
   assert.deepEqual([out[0].startSec, out[0].endSec], [0.96, 3.94], 'tiempos de las palabras, no inventados');
   assert.equal(out[1].speakerLabel, 'SPEAKER_01');
-  assert.equal(out[1].text, 'No sé. Podríamos comer pollo.');
+  assert.equal(out[1].text, 'No sé. Podríamos mirar índices.');
   assert.deepEqual([out[1].startSec, out[1].endSec], [5.02, 10.72]);
 });
 
@@ -118,11 +118,11 @@ test('un tramo corto de otro hablante SÍ abre bloque: la atribución no se sacr
   // atribución y se marca como tentativa.
   const words = [
     word(0, 1, 'No,'), word(1, 2, ' pero'), word(2, 3, ' es'), word(3, 4, ' que'),
-    word(4, 5, ' pollo'), word(5, 6, ' comí'), word(6, 7, ' el'), word(7, 8, ' lunes'),
+    word(4, 5, ' eso'), word(5, 6, ' ya'), word(6, 7, ' lo'), word(7, 8, ' probamos'),
     word(8, 8.2, ' y'), word(8.2, 8.4, ' no'),
-    word(8.4, 9, ' quiero'), word(9, 9.5, ' comer'), word(9.5, 10, ' más.'),
+    word(8.4, 9, ' quiero'), word(9, 9.5, ' repetirlo'), word(9.5, 10, ' ahora.'),
   ];
-  const texto = 'No, pero es que pollo comí el lunes y no quiero comer más.';
+  const texto = 'No, pero es que eso ya lo probamos y no quiero repetirlo ahora.';
   const segments = [segment(0, 0, 10, texto, words)];
   const turns = [turn(0, 8, 'A'), turn(8, 8.4, 'B'), turn(8.4, 10, 'A')];
 
@@ -147,11 +147,11 @@ test('«Claro» de otra voz DENTRO de un segmento mixto conserva su hablante', (
   // atribuido a quien no lo dijo. Ahora conserva su hablante y sus tiempos, y sólo se
   // señala que la atribución es tentativa.
   const words = [
-    word(0, 1, 'Entonces'), word(1, 2, ' pedimos'), word(2, 3, ' el'), word(3, 4, ' sushi'),
+    word(0, 1, 'Entonces'), word(1, 2, ' cerramos'), word(2, 3, ' el'), word(3, 4, ' ticket'),
     word(4.1, 4.5, ' Claro'),
-    word(4.6, 5.5, ' y'), word(5.5, 6.5, ' lo'), word(6.5, 7.5, ' pido'),
+    word(4.6, 5.5, ' y'), word(5.5, 6.5, ' lo'), word(6.5, 7.5, ' anoto'),
   ];
-  const texto = 'Entonces pedimos el sushi Claro y lo pido';
+  const texto = 'Entonces cerramos el ticket Claro y lo anoto';
   const segments = [segment(0, 0, 7.5, texto, words)];
   const turns = [turn(0, 4, 'A'), turn(4.1, 4.5, 'B'), turn(4.6, 7.5, 'A')];
 
@@ -248,10 +248,10 @@ const plano = (value: string): string => value.replace(/\s+/g, ' ').trim();
 
 test('la unión de los bloques es exactamente el texto original', () => {
   const words = [
-    word(0, 1, '¿Qué'), word(1, 2, ' te'), word(2, 3, ' gustaría'), word(3, 4, ' almorzar?'),
-    word(5, 6, ' No'), word(6, 7, ' sé,'), word(7, 8, ' podríamos'), word(8, 9, ' pollo.'),
+    word(0, 1, '¿Qué'), word(1, 2, ' módulo'), word(2, 3, ' revisamos'), word(3, 4, ' primero?'),
+    word(5, 6, ' No'), word(6, 7, ' sé,'), word(7, 8, ' podríamos'), word(8, 9, ' índices.'),
   ];
-  const texto = '¿Qué te gustaría almorzar? No sé, podríamos pollo.';
+  const texto = '¿Qué módulo revisamos primero? No sé, podríamos índices.';
   const segments = [segment(0, 0, 9, texto, words)];
   const turns = [turn(0, 4.5, 'A'), turn(4.8, 9, 'B')];
 
@@ -260,8 +260,8 @@ test('la unión de los bloques es exactamente el texto original', () => {
   assert.equal(out.length, 2);
   assert.equal(plano(out.map((s) => s.text).join(' ')), plano(texto), 'ni una palabra de más ni de menos');
   // Y la puntuación es la del original, no una reconstrucción.
-  assert.equal(out[0].text, '¿Qué te gustaría almorzar?');
-  assert.equal(out[1].text, 'No sé, podríamos pollo.');
+  assert.equal(out[0].text, '¿Qué módulo revisamos primero?');
+  assert.equal(out[1].text, 'No sé, podríamos índices.');
 });
 
 test('si `words` está INCOMPLETA no se parte, y el texto sale íntegro', () => {
@@ -269,10 +269,10 @@ test('si `words` está INCOMPLETA no se parte, y el texto sale íntegro', () => 
   // exigiría saber a qué lado del cambio de hablante van, y no se sabe: se emite un
   // bloque con el texto ENTERO y se marca la atribución como tentativa.
   const words = [
-    word(0, 1, 'Entonces'), word(1, 2, ' pedimos'), word(2, 3, ' sushi'),
+    word(0, 1, 'Entonces'), word(1, 2, ' cerramos'), word(2, 3, ' tickets'),
     word(4, 5, ' y'), word(5, 6, ' lo'),
   ];
-  const texto = 'Entonces pedimos sushi y lo confirmo ahora';
+  const texto = 'Entonces cerramos tickets y lo confirmo ahora';
   const segments = [segment(0, 0, 8, texto, words)];
   const turns = [turn(0, 3.5, 'A'), turn(3.8, 8, 'B')];
 

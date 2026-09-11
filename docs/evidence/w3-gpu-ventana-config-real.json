@@ -30,7 +30,7 @@
   },
   "libre_antes": 2746,
   "config_efectiva": {
-    "worker_root": "/home/santiagov/w3-commit/transcript-worker",
+    "worker_root": "<copia del worker en la máquina de la GPU>",
     "model": "medium",
     "device": "cuda",
     "compute_type": "int8_float16",

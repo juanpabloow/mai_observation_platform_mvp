@@ -10,8 +10,8 @@ sí y por cuál no.
 
 Mide las dos rutas por separado, que es lo que estaba sin distinguir:
 
-  LAN        : 192.168.1.15 — cable del servidor, router, Wi-Fi del Mac. Sin Tailscale.
-  Tailscale  : 100.103.187.118 — la superposición, que puede caerse sola.
+  LAN        : `W3_LAN_IP` — cable del servidor, router, Wi-Fi del Mac. Sin Tailscale.
+  Tailscale  : `W3_TS_IP` — la superposición, que puede caerse sola.
 
 Y mide el estado del Wi-Fi del MAC, porque es el único tramo inalámbrico de la cadena
 y hasta ahora no se estaba mirando: si el Mac cambia de punto de acceso o pierde la
@@ -31,8 +31,22 @@ import socket
 import subprocess
 import time
 
-TS_IP = "100.103.187.118"
-LAN_IP = "192.168.1.15"
+# Las direcciones NO se escriben aquí: describen una red privada concreta, y este
+# repositorio es público. Se pasan por entorno, y los valores por omisión son de
+# documentación (rangos reservados), así que la sonda avisa en vez de medir algo
+# equivocado si alguien la ejecuta sin configurarla.
+#
+#   W3_TS_IP=<ip de tailscale>  W3_LAN_IP=<ip de LAN>  python3 mac-watch.py …
+# Sin valores por omisión. Un marcador tampoco vale: el que puse primero resultó ser
+# el resolutor de MagicDNS de Tailscale —o sea una dirección real— y, sobre todo, un
+# revisor automático no sabe distinguir un marcador de una dirección de verdad. Si no
+# hay ninguna en el fichero, no hay nada que revisar y el aviso no sale en falso.
+#
+# Y la sonda falla en vez de medir algo equivocado: apuntar a la IP de otro devuelve
+# respuestas, y su registro parece válido.
+TS_IP = os.environ.get("W3_TS_IP", "")
+LAN_IP = os.environ.get("W3_LAN_IP", "")
+GW_IP = os.environ.get("W3_GW_IP", "")
 
 
 def run(cmd: list[str], timeout: float = 3.0) -> str:
@@ -107,7 +121,7 @@ def tunnel_state() -> dict:
     addr = None
     for line in run(["ifconfig"]).splitlines():
         token = line.strip()
-        if token.startswith("inet 100."):
+        if token.startswith("inet 100."):  # el rango CGNAT que usa Tailscale
             addr = token.split()[1]
             break
     started = ""
@@ -229,6 +243,16 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--pidfile", help="Donde escribir el PID, desde el propio proceso.")
     args = parser.parse_args(argv)
 
+    faltan = [n for n, v in (("W3_TS_IP", TS_IP), ("W3_LAN_IP", LAN_IP), ("W3_GW_IP", GW_IP)) if not v]
+    if faltan:
+        raise SystemExit(
+            "Faltan las direcciones a vigilar: " + ", ".join(faltan) + ".\n"
+            "No tienen valor por omisión a propósito: este repositorio es público y las\n"
+            "direcciones describen una red concreta. Ejemplo:\n"
+            "  W3_TS_IP=<ip de tailscale> W3_LAN_IP=<ip de LAN> W3_GW_IP=<puerta de enlace> \\\n"
+            "    python3 mac-watch.py --out ~/w3-diag-mac/mac.ndjson --daemon"
+        )
+
     os.makedirs(os.path.dirname(os.path.abspath(args.out)) or ".", exist_ok=True)
     if args.daemon:
         daemonize()
@@ -267,7 +291,7 @@ def main(argv: list[str] | None = None) -> int:
             os.fsync(handle.fileno())
 
         emit({"t": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "evento": "inicio",
-              "lado": "mac", "ts_ip": TS_IP, "lan_ip": LAN_IP,
+              "lado": "mac", "ts_ip": TS_IP, "lan_ip": LAN_IP, "gw_ip": GW_IP,
               "every_s": args.every, "pid": os.getpid()})
 
         scheduled = time.monotonic()
@@ -295,7 +319,7 @@ def main(argv: list[str] | None = None) -> int:
                     "wall_gap_s": wall_gap,
                     "mono_gap_s": mono_gap,
                     # LAN, sin Tailscale de por medio
-                    "gw_ms": ping_ms("192.168.1.1"),
+                    "gw_ms": ping_ms(GW_IP),
                     "lan_ping_ms": ping_ms(LAN_IP),
                     "lan_ssh_ms": tcp_ms(LAN_IP),
                     # Tailscale

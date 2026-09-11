@@ -1,10 +1,15 @@
-# Parches del worker · PENDIENTES DE APLICAR
+# Cambios del worker
+
+> El diff plano (`w3-worker.patch`) se retiró: el cambio vive ahora como commit
+> `c2614b2` en la rama `w3/palabras-v2-pyannote` del repositorio del worker, que es
+> una fuente mejor —revisable, revertible— y no arrastraba rutas de máquinas
+> concretas.
 
 Nada de esta carpeta se ha ejecutado. Se versiona para que lo que acabe corriendo en
 `ml-server` sea exactamente lo revisado, y no algo teclado a mano sobre un servidor.
 
-    ssh santiagov@100.103.187.118
-    cd /home/santiagov/services/mai-w3-worker/transcript-worker
+    ssh $W3_SSH        # usuario@host, fuera del repositorio
+    cd ~/services/mai-w3-worker/transcript-worker
     git status --porcelain          # tiene que estar limpio antes
     python3 tools/w3/worker/01_diarization_service.py
     python3 tools/w3/worker/02_stages_runner_config.py

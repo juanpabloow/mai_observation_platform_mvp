@@ -1,15 +1,21 @@
 # Diagnóstico ligero de acceso · LAN vs Tailscale vs sistema
 
+> **Este repositorio es público.** Las direcciones concretas de la red no se escriben
+> aquí: van por entorno (`W3_TS_IP`, `W3_LAN_IP`, `W3_GW_IP`, `W3_SSH`) y los valores
+> por omisión son rangos de documentación. Tampoco se versionan audios ni
+> transcripciones reales — ver `.gitignore`.
+
 Dos sondas, una en cada lado. **No reproducen ninguna carga**: nada de torch, ni GPU,
 ni audio. No cambian configuración, no tocan servicios ni controladores, y no escriben
 fuera de su `--out`.
 
     # en el servidor (Linux), desde el Mac por LAN
-    ssh santiagov@192.168.1.15 'cd ~/w3-diag/watch && python3 box-watch.py \
+    ssh $W3_SSH   # usuario@ip-de-lan, fuera del repositorio 'cd ~/w3-diag/watch && python3 box-watch.py \
         --out ~/w3-diag/watch/box.ndjson --pidfile ~/w3-diag/watch/box.pid \
         --daemon --every 10 --max-hours 24 --max-mb 8'
 
-    # en el Mac
+    # en el Mac — las direcciones son OBLIGATORIAS, no tienen valor por omisión
+    W3_TS_IP=<ip-de-tailscale> W3_LAN_IP=<ip-de-lan> W3_GW_IP=<puerta-de-enlace> \
     python3 tools/w3/watch/mac-watch.py \
         --out ~/w3-diag-mac/mac.ndjson --pidfile ~/w3-diag-mac/mac.pid \
         --daemon --every 10 --max-hours 24 --max-mb 8
@@ -36,7 +42,7 @@ fuera de su `--out`.
 ## Cómo se paran
 
     # servidor
-    ssh santiagov@192.168.1.15 'kill $(cat ~/w3-diag/watch/box.pid)'
+    ssh $W3_SSH   # usuario@ip-de-lan, fuera del repositorio 'kill $(cat ~/w3-diag/watch/box.pid)'
 
     # Mac
     kill $(cat ~/w3-diag-mac/mac.pid)
@@ -56,7 +62,7 @@ línea del fichero es el último instante demostrable de vida**.
 
 ## La vía de rescate, ya verificada
 
-`ssh santiagov@192.168.1.15` funciona y **no pasa por Tailscale**. `sshd` escucha en
+`ssh $W3_SSH   # usuario@ip-de-lan, fuera del repositorio` funciona y **no pasa por Tailscale**. `sshd` escucha en
 `0.0.0.0:22` y el Mac está en la misma subred. Cuando se vuelva a perder el acceso, lo
 primero es probar esa IP: distingue en un segundo entre «Tailscale» y «todo lo demás»,
 sin esperar a leer ningún registro.
@@ -127,13 +133,13 @@ esto no haya que volver a deducirlo a posteriori.
   cada 10 s: si se degrada ANTES de la próxima pérdida de acceso, eso sí sería una
   señal; si se mantiene igual mientras el acceso se cae, queda descartado.
 
-* **Tailscale va por ruta DIRECTA** (`192.168.1.15:41641`), no por relé. Consecuencia:
+* **Tailscale va por ruta DIRECTA** (`<ip-de-lan>:41641`), no por relé. Consecuencia:
   un fallo de LAN o de Wi-Fi tumba las dos rutas a la vez, y Tailscale sólo sobrevive
   si consigue caer a un relé DERP — que sale por la misma Wi-Fi. Eso encaja con el
   `netcheck` y el relé nuevo que `tailscaled` registró a las 12:36:29, y es la razón
   por la que «se cayó Tailscale» y «se cayó la red» no se podían separar hasta ahora.
 
-* **El Mac es el único tramo inalámbrico** de la cadena (`en0`, Wi-Fi, 192.168.1.25);
+* **El Mac es el único tramo inalámbrico** de la cadena (`en0`, Wi-Fi, <ip-del-mac>);
   el servidor va por cable. No se estaba mirando. `mac-watch.py` registra el estado de
   la asociación y la IP para poder descartarlo o señalarlo.
 

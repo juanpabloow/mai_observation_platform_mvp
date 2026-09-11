@@ -1,13 +1,20 @@
 """`pyannote_full`, el otro backend ya admitido, contra la misma referencia. Aislado."""
-import json, os, sys, time
-sys.path.insert(0, "/home/santiagov/services/mai-w3-worker/transcript-worker")
-sys.path.insert(0, "/home/santiagov/w3-diag")
-os.chdir("/home/santiagov/services/mai-w3-worker/transcript-worker")
+import json
+import os, sys, time
+
+# Las rutas NO se escriben aquí: describen máquinas concretas y este repositorio es
+# público. Se derivan de $HOME y se pueden redirigir por entorno.
+HOME = os.path.expanduser("~")
+DIAG = os.environ.get("W3_DIAG", f"{HOME}/w3-diag")
+WORKER = os.environ.get("W3_WORKER", f"{HOME}/services/mai-w3-worker/transcript-worker")
+sys.path.insert(0, f"{WORKER}")
+sys.path.insert(0, f"{DIAG}")
+os.chdir(f"{WORKER}")
 from app.services.diarization_service import diarize
 from compare_diarization import parse_reference, score_against_reference, reference_intervals_report
 
-REF = parse_reference(open("/home/santiagov/w3-diag/reference-cc00c4cf.tsv", encoding="utf-8").read())
-AUDIO = "/home/santiagov/w3-diag/cc00c4cf-normalized.wav"
+REF = parse_reference(open(f"{DIAG}/reference-cc00c4cf.tsv", encoding="utf-8").read())
+AUDIO = f"{DIAG}/cc00c4cf-normalized.wav"
 
 for tag, ns in (("auto", None), ("ns2", 2)):
     t0 = time.time()
@@ -28,7 +35,7 @@ for tag, ns in (("auto", None), ("ns2", 2)):
     print("    intervalo      s  referencia  dominante        acierto")
     for x in reference_intervals_report(turns, REF, 0.1):
         print(f"    {x['start']:5.1f}-{x['end']:5.1f} {x['seconds']:5.1f}  {x['reference']:10s}  {x['dominant']:15s}  {x['correct_pct']:5.1f} %")
-    with open(f"/home/santiagov/w3-diag/out-cpu/pyannote_{tag}.json", "w") as h:
+    with open(f"{DIAG}/out-cpu/pyannote_{tag}.json", "w") as h:
         json.dump({"num_speakers": ns, "result": r, "score": sc}, h, indent=2, ensure_ascii=False)
     if tag == "auto":
         print("\n    turnos (primeros 60 s):")

@@ -3,7 +3,7 @@
 # El servicio historico (uvicorn:8001) no se toca en ningun momento.
 set -u
 UNIT=vanegas-w3-worker.service
-E=/home/santiagov/miniconda3/envs/mai-w3
+E=$HOME/miniconda3/envs/mai-w3
 
 restore() {
   echo "=== [trap] devolviendo $UNIT ==="
@@ -26,9 +26,9 @@ echo "  procesos en GPU: $(nvidia-smi --query-compute-apps=pid,used_memory --for
 
 echo
 echo "=== LA prueba (limite duro de 240 s) ==="
-cd /home/santiagov/w3-work
+cd $HOME/w3-work
 HF_HUB_OFFLINE=1 PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True \
 LD_LIBRARY_PATH="$E/cuda12-runtime/nvidia/cublas/lib:$E/cuda12-runtime/nvidia/cudnn/lib" \
-timeout 240 "$E/bin/python" gpu_test.py --out /home/santiagov/w3-work/gpu_result.json --deadline-s 200 2>&1 \
+timeout 240 "$E/bin/python" gpu_test.py --out $HOME/w3-work/gpu_result.json --deadline-s 200 2>&1 \
   | grep -viE "^warning|deprecat|std\(\)|libtorch|TensorFloat|^\s*$|It can be re-enabled|torch.backends|See https|warnings.warn"
 echo "  codigo de salida de la prueba: ${PIPESTATUS[0]}"

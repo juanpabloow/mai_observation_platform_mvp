@@ -31,3 +31,26 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# ── Datos reales de reuniones: NUNCA en Git ─────────────────────────────────
+#
+# Se publicaron sin querer fragmentos literales de una conversación privada en un
+# repositorio PÚBLICO, usados como fixtures y como evidencia. Las pruebas van con
+# texto sintético; el material real se queda fuera del control de versiones.
+#
+# Si hace falta un caso real para depurar, vive en la máquina donde se procesa
+# (p. ej. ~/w3-diag) y NO se copia aquí.
+*.wav
+*.m4a
+*.mp3
+*.ogg
+*.webm
+*.flac
+*.ndjson
+*.ndjson.gz
+# Volcados de transcripción, turnos y alineación
+**/transcript_nuevo.json
+**/align_comparison.json
+**/bloques.json
+**/out-cpu/
+**/w3-diag/

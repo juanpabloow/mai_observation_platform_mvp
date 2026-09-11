@@ -75,7 +75,12 @@ import time
 import wave
 from typing import Any, Dict, List, Optional, Tuple
 
-DEFAULT_WORKER_ROOT = "/home/santiagov/services/mai-w3-worker/transcript-worker"
+# Las rutas NO se escriben aquí: describen máquinas concretas y este repositorio es
+# público. Se derivan de $HOME y se pueden redirigir por entorno.
+HOME = os.path.expanduser("~")
+WORKER = os.environ.get("W3_WORKER", f"{HOME}/services/mai-w3-worker/transcript-worker")
+
+DEFAULT_WORKER_ROOT = WORKER
 BACKEND = "wespeaker"
 
 # ── Partes puras: se prueban sin worker, sin torch y sin GPU ────────────────────

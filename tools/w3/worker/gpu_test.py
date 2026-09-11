@@ -13,8 +13,14 @@ from __future__ import annotations
 
 import argparse, json, os, subprocess, sys, threading, time
 
-WORK = "/home/santiagov/w3-work/transcript-worker"  # se puede cambiar con --worker-root
-AUDIO = "/home/santiagov/w3-diag/cc00c4cf-normalized.wav"
+# Las rutas NO se escriben aquí: describen máquinas concretas y este repositorio es
+# público. Se derivan de $HOME y se pueden redirigir por entorno.
+HOME = os.path.expanduser("~")
+DIAG = os.environ.get("W3_DIAG", f"{HOME}/w3-diag")
+WORKER = os.environ.get("W3_WORKER", f"{HOME}/services/mai-w3-worker/transcript-worker")
+
+WORK = f"{HOME}/w3-work/transcript-worker"  # se puede cambiar con --worker-root
+AUDIO = f"{DIAG}/cc00c4cf-normalized.wav"
 FLOOR_MIB = 250          # por debajo de esto se declara riesgo de OOM
 NEED_FOR_PYANNOTE = 1800 # medido: ~1670 de pico + margen
 

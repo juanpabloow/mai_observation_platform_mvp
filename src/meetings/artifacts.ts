@@ -568,11 +568,15 @@ function splitByWords(
  * ── Por qué una etiqueta por segmento NO basta ──────────────────────────────
  *
  * Whisper trocea por audio, no por turno: un segmento suyo puede contener a dos
- * personas. Medido en la reunión de prueba, el segmento `0,96–10,72` contenía
- * «Bueno, ¿y qué te gustaría almorzar?» de una voz y «No sé. Podríamos comer pollo.»
- * de la otra, y por mayor solape el bloque ENTERO se atribuía a quien decía la
- * segunda mitad. Mejorar la diarización no lo arregla: sólo cambia cuál de las dos
- * mitades queda mal atribuida.
+ * personas. Medido en una grabación de prueba, un segmento de 0,96 a 10,72 s llevaba
+ * una pregunta de una voz y su respuesta de la otra, y por mayor solape el bloque
+ * ENTERO se atribuía a quien decía la segunda mitad. Ilustrado con texto sintético:
+ *
+ *     0,96– 3,94  A   «Vale, ¿y qué módulo revisamos primero?»
+ *     5,02–10,72  B   «No sé. Podríamos mirar índices.»
+ *
+ * Mejorar la diarización no lo arregla: sólo cambia cuál de las dos mitades queda
+ * mal atribuida.
  *
  * Con `words` (schema v2) el segmento se parte en frontera de palabra y cada tramo
  * lleva su hablante. Sin ellas (v1) el comportamiento es el de siempre, intacto.

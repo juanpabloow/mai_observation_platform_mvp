@@ -1,16 +1,23 @@
 """Qué reparto y qué turnos daría cada arreglo candidato. Aislado, sin tocar nada."""
-import json, os, sys
-sys.path.insert(0, "/home/santiagov/services/mai-w3-worker/transcript-worker")
-sys.path.insert(0, "/home/santiagov/w3-diag")
-os.chdir("/home/santiagov/services/mai-w3-worker/transcript-worker")
+import json
+import os, sys
+sys.path.insert(0, f"{WORKER}")
+sys.path.insert(0, f"{DIAG}")
+os.chdir(f"{WORKER}")
 import numpy as np, torchaudio
 from app.services.diarization_service import energy_vad, extract_embedding
 from compare_diarization import parse_reference, score_against_reference, reference_intervals_report
 from sklearn.cluster import AgglomerativeClustering
 from sklearn.metrics import silhouette_score
 
-REF = parse_reference(open("/home/santiagov/w3-diag/reference-cc00c4cf.tsv", encoding="utf-8").read())
-wav, sr = torchaudio.load("/home/santiagov/w3-diag/cc00c4cf-normalized.wav")
+# Las rutas NO se escriben aquí: describen máquinas concretas y este repositorio es
+# público. Se derivan de $HOME y se pueden redirigir por entorno.
+HOME = os.path.expanduser("~")
+DIAG = os.environ.get("W3_DIAG", f"{HOME}/w3-diag")
+WORKER = os.environ.get("W3_WORKER", f"{HOME}/services/mai-w3-worker/transcript-worker")
+
+REF = parse_reference(open(f"{DIAG}/reference-cc00c4cf.tsv", encoding="utf-8").read())
+wav, sr = torchaudio.load(f"{DIAG}/cc00c4cf-normalized.wav")
 x = wav.squeeze(0).numpy()
 segs = energy_vad(x, sr)
 embs, valid = [], []

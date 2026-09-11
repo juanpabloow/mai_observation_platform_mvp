@@ -8,15 +8,22 @@ Reimplementa `alignSegments` de src/meetings/artifacts.ts al pie de la letra —
 solape, empate por orden alfabético, OVERLAP_THRESHOLD 0,25, reparto sobre los TURNOS—
 para poder comparar las dos diarizaciones contra el mismo texto.
 """
-import json, os, sys, time
-sys.path.insert(0, "/home/santiagov/services/mai-w3-worker/transcript-worker")
-sys.path.insert(0, "/home/santiagov/w3-diag")
-os.chdir("/home/santiagov/services/mai-w3-worker/transcript-worker")
+import json
+import os, sys, time
+
+# Las rutas NO se escriben aquí: describen máquinas concretas y este repositorio es
+# público. Se derivan de $HOME y se pueden redirigir por entorno.
+HOME = os.path.expanduser("~")
+DIAG = os.environ.get("W3_DIAG", f"{HOME}/w3-diag")
+WORKER = os.environ.get("W3_WORKER", f"{HOME}/services/mai-w3-worker/transcript-worker")
+sys.path.insert(0, f"{WORKER}")
+sys.path.insert(0, f"{DIAG}")
+os.chdir(f"{WORKER}")
 from compare_diarization import parse_reference, label_at
 
 OVERLAP_THRESHOLD = 0.25
-AUDIO = "/home/santiagov/w3-diag/cc00c4cf-normalized.wav"
-REF = parse_reference(open("/home/santiagov/w3-diag/reference-cc00c4cf.tsv", encoding="utf-8").read())
+AUDIO = f"{DIAG}/cc00c4cf-normalized.wav"
+REF = parse_reference(open(f"{DIAG}/reference-cc00c4cf.tsv", encoding="utf-8").read())
 
 def align(segments, turns):
     """Puerto fiel de alignSegments (artifacts.ts)."""
@@ -58,8 +65,8 @@ segments = [{"index": i, "start": float(s["start"]), "end": float(s["end"]),
             for i, s in enumerate(segs_raw)]
 
 # ── 2 · las dos diarizaciones ─────────────────────────────────────────────────
-wes = json.load(open("/home/santiagov/w3-diag/out-cpu/diar_cpu_auto.json"))["result"]["speaker_turns"]
-pya = json.load(open("/home/santiagov/w3-diag/out-cpu/pyannote_auto.json"))["result"]["speaker_turns"]
+wes = json.load(open(f"{DIAG}/out-cpu/diar_cpu_auto.json"))["result"]["speaker_turns"]
+pya = json.load(open(f"{DIAG}/out-cpu/pyannote_auto.json"))["result"]["speaker_turns"]
 print(f"\nturnos: wespeaker={len(wes)}  pyannote={len(pya)}")
 print(f"reparto sobre turnos: wespeaker={talk_share(wes)}  pyannote={talk_share(pya)}")
 
@@ -112,4 +119,4 @@ json.dump({"nota": "TRANSCRIPCIÓN NUEVA Y AISLADA, no es la almacenada ni se in
            "segments": [{k: v for k, v in s.items() if k != "words"} for s in segments],
            "align_wespeaker": [{k: v for k, v in x.items() if k != "words"} for x in A],
            "align_pyannote": [{k: v for k, v in x.items() if k != "words"} for x in B]},
-          open("/home/santiagov/w3-diag/out-cpu/align_comparison.json", "w"), indent=2, ensure_ascii=False)
+          open(f"{DIAG}/out-cpu/align_comparison.json", "w"), indent=2, ensure_ascii=False)
