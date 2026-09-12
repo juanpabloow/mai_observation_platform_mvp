@@ -40,6 +40,7 @@ function plantillasIniciales(): TemplateView[] {
     version: 1,
     isBuiltin: true,
     modified: false,
+    editedByUser: false,
     updatedAt: "2026-09-11T10:00:00.000Z",
   }));
 }
@@ -181,7 +182,9 @@ function instalarFetch() {
       const id = url.split("/report-templates/")[1].split("/")[0];
       const base = plantillasIniciales().find((b) => b.id === id)!;
       plantillasVivas = plantillasVivas.map((t) =>
-        t.id === id ? { ...t, version: t.version + 1, modified: false, instructions: base.instructions } : t,
+        t.id === id
+          ? { ...t, version: t.version + 1, modified: false, editedByUser: false, instructions: base.instructions }
+          : t,
       );
       avisar();
       return new Response(JSON.stringify({ template: {} }), { status: 200 });
@@ -190,7 +193,7 @@ function instalarFetch() {
       const id = url.split("/report-templates/")[1];
       plantillasVivas = plantillasVivas.map((t) =>
         t.id === id
-          ? { ...t, version: t.version + 1, modified: true, instructions: String(cuerpo.instructions) }
+          ? { ...t, version: t.version + 1, modified: true, editedByUser: true, instructions: String(cuerpo.instructions) }
           : t,
       );
       avisar();

@@ -105,8 +105,18 @@ export interface TemplateView {
   readonly version: number;
   /** true = tiene predeterminado en código, así que se puede restaurar. */
   readonly isBuiltin: boolean;
-  /** true = las instrucciones ya no son las del predeterminado. */
+  /** true = las instrucciones difieren del predeterminado del código. */
   readonly modified: boolean;
+  /**
+   * true = la diferencia la escribió ALGUIEN; false = la plantilla sigue en su
+   * versión 1 y lo que cambió fue el predeterminado del código.
+   *
+   * La distinción importa porque los dos casos se arreglan con el mismo botón y
+   * significan lo contrario: en el primero restaurar DESCARTA trabajo de una
+   * persona; en el segundo sólo adopta una mejora. Se deduce de la versión, sin
+   * una consulta más: nadie ha editado una plantilla que sigue en la v1.
+   */
+  readonly editedByUser: boolean;
   readonly updatedAt: string;
 }
 
@@ -124,6 +134,8 @@ function vistaPlantilla(row: templatesRepo.TemplateRow): TemplateView {
     // decir si esto está modificado. Sin `trim` sería «modificado» por un salto
     // de línea de más al guardar.
     modified: builtin !== null && builtin.instructions.trim() !== row.instructions.trim(),
+    editedByUser:
+      row.version > 1 && builtin !== null && builtin.instructions.trim() !== row.instructions.trim(),
     updatedAt: row.updated_at.toISOString(),
   };
 }

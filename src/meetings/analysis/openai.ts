@@ -136,12 +136,55 @@ export function costUsd(model: string, inputTokens: number, outputTokens: number
 }
 
 /**
- * Estimación de tokens sin llamar a nadie: ~4 caracteres por token en español.
- * Es aproximada a propósito — sirve para decidir si una llamada es cara, no para
- * facturar. El número real viene en la respuesta y es el que se guarda.
+ * Caracteres por token. **2.8**, y es deliberadamente BAJO.
+ *
+ * ── De dónde sale el número ────────────────────────────────────────────────
+ *
+ * Medido contra las cuatro llamadas reales de staging del 12 de septiembre de
+ * 2026, comparando los caracteres de la petición COMPLETA con los
+ * `prompt_tokens` que devolvió el proveedor:
+ *
+ *     petición          caracteres   tokens reales   car/token
+ *     acta-general           15 846           5 244       3.022
+ *     decisiones              15 661          5 186       3.020
+ *     informe-ejecutivo       15 705          5 198       3.021
+ *     riesgos                 15 733          5 207       3.022
+ *
+ * La constante anterior era 4, heredada de la regla de oro del inglés. En
+ * español —con sus palabras más largas y sus acentos, que el tokenizador parte—
+ * la densidad real es de 3.02, así que la estimación salía un 25 % por debajo.
+ *
+ * Se usa 2.8 y no 3.02 porque una estimación que se queda corta es la que hace
+ * daño: se enseña como techo antes de gastar, y un techo que se supera no es un
+ * techo. Con 2.8 el caso medido estima 5 659 frente a 5 244 reales — un 8 % de
+ * margen. Errar por arriba sólo cuesta parecer más caro de lo que se es.
+ */
+export const CHARS_PER_TOKEN = 2.8;
+
+/**
+ * Estimación de tokens sin llamar a nadie. Aproximada a propósito: sirve para
+ * decidir si una llamada es cara, no para facturar. El número real viene en la
+ * respuesta y es el que se guarda.
  */
 export function estimateTokens(text: string): number {
-  return Math.ceil(text.length / 4);
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+
+/**
+ * Los tokens de entrada de una petición completa.
+ *
+ * Las tres partes que el proveedor cobra como entrada: el mensaje de sistema,
+ * el de usuario y el esquema de la salida estructurada. Se suman los
+ * CARACTERES y se divide una sola vez, en vez de estimar cada parte y sumar
+ * redondeos: tres `Math.ceil` añaden hasta dos tokens de ruido y, peor, hacen
+ * que el resultado dependa de cómo se troceó el texto.
+ */
+export function estimateRequestTokens(
+  systemPrompt: string,
+  userMessage: string,
+  jsonSchema: Record<string, unknown>,
+): number {
+  return estimateTokens(systemPrompt + userMessage + JSON.stringify(jsonSchema));
 }
 
 export interface EstimatedCost {
@@ -161,11 +204,19 @@ export interface EstimatedCost {
  * distinto tamaño y cobrar por las del otro sería mentir por comodidad.
  */
 export function estimateTaskCost(
-  task: Pick<AnalysisTask<unknown>, 'systemPrompt' | 'userMessage'>,
+  task: Pick<AnalysisTask<unknown>, 'systemPrompt' | 'userMessage' | 'jsonSchema'>,
   rendered: RenderedTranscript,
   model = DEFAULT_MODEL,
 ): EstimatedCost {
-  const inputTokens = estimateTokens(task.systemPrompt) + estimateTokens(task.userMessage(rendered));
+  // LA PETICIÓN COMPLETA: instrucciones internas, mensaje de usuario —que ya
+  // lleva dentro las instrucciones de la plantilla y la transcripción— y el
+  // ESQUEMA. El esquema viaja en `response_format` y el proveedor lo factura
+  // como entrada; dejarlo fuera quitaba unos 900 caracteres de la cuenta.
+  const inputTokens = estimateRequestTokens(
+    task.systemPrompt,
+    task.userMessage(rendered),
+    task.jsonSchema,
+  );
   return {
     model,
     inputTokens,
@@ -177,7 +228,11 @@ export function estimateTaskCost(
 }
 
 export function estimateCost(rendered: RenderedTranscript, model = DEFAULT_MODEL): EstimatedCost {
-  const inputTokens = estimateTokens(SYSTEM_PROMPT) + estimateTokens(userMessage(rendered));
+  const inputTokens = estimateRequestTokens(
+    SYSTEM_PROMPT,
+    userMessage(rendered),
+    analysisJsonSchema(),
+  );
   return {
     model,
     inputTokens,

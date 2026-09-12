@@ -306,9 +306,15 @@ function TemplateRow({
                 cuando no. El número solo no dice si se ha usado. */}
             <span className="shrink-0 text-[0.6875rem] text-faint u-mono">v{t.version}</span>
             {yaGenerado ? <Chip tone="success">generada</Chip> : null}
-            {/* «Modificada» se compara contra el predeterminado del CÓDIGO, que es
-                el único que puede decirlo. */}
-            {t.modified ? <Chip tone="muted">Modificada</Chip> : null}
+            {/* Las dos diferencias contra el predeterminado NO son la misma cosa
+                y no se pueden llamar igual: «Modificada» es trabajo de una
+                persona que restaurar DESCARTARÍA; «Predeterminado nuevo» es una
+                mejora del código que restaurar ADOPTA. */}
+            {t.editedByUser ? (
+              <Chip tone="muted">Modificada</Chip>
+            ) : t.modified ? (
+              <Chip tone="neutral">Predeterminado nuevo</Chip>
+            ) : null}
           </span>
           <span className="text-[0.71875rem] leading-relaxed text-muted">{t.description}</span>
         </div>

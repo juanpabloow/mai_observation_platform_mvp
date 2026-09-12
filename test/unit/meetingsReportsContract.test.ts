@@ -21,6 +21,14 @@ import {
   personOf,
 } from '../../src/meetings/analysis/reports/build.js';
 import { BUILTIN_TEMPLATES, builtinBySlug } from '../../src/meetings/analysis/reports/templates.js';
+import {
+  CHARS_PER_TOKEN,
+  DEFAULT_MODEL,
+  MAX_OUTPUT_TOKENS,
+  costUsd,
+  estimateRequestTokens,
+  estimateTokens,
+} from '../../src/meetings/analysis/openai.js';
 import type { SourceSegment, SourceSpeaker } from '../../src/meetings/analysis/build.js';
 
 /**
@@ -337,4 +345,171 @@ test('RawReport rechaza campos desconocidos y tiempos', () => {
     false,
     'un campo de más no pasa: el esquema es estricto',
   );
+});
+
+// ─────────────── La estimación de tokens, anclada a lo medido ────────────
+
+/**
+ * Las cuatro llamadas REALES de staging del 12 de septiembre de 2026.
+ *
+ * Se guardan los TAMAÑOS, no el texto: la transcripción es material privado y
+ * no entra en el repositorio. `chars` es la suma de los caracteres de la
+ * petición completa —sistema + usuario + esquema— y `tokens` es el
+ * `prompt_tokens` que devolvió el proveedor.
+ *
+ * Con esto la prueba puede comprobar la propiedad que importa —la estimación
+ * nunca por debajo del consumo real— sin depender de datos de nadie.
+ */
+const MEDIDO = [
+  { caso: 'acta-general', chars: 15_846, tokens: 5_244 },
+  { caso: 'decisiones-compromisos', chars: 15_661, tokens: 5_186 },
+  { caso: 'informe-ejecutivo', chars: 15_705, tokens: 5_198 },
+  { caso: 'riesgos-oportunidades', chars: 15_733, tokens: 5_207 },
+] as const;
+
+test('la estimación NUNCA queda por debajo del consumo real medido', () => {
+  for (const m of MEDIDO) {
+    const estimado = estimateTokens('x'.repeat(m.chars));
+    assert.ok(
+      estimado >= m.tokens,
+      `${m.caso}: estimó ${estimado} y el real fue ${m.tokens} — un techo que se supera no es un techo`,
+    );
+  }
+});
+
+test('la constante es más densa que la densidad observada, con margen', () => {
+  // La densidad real medida fue de 3.020 a 3.022 caracteres por token.
+  const observadaMinima = Math.min(...MEDIDO.map((m) => m.chars / m.tokens));
+  assert.ok(observadaMinima > 3.0 && observadaMinima < 3.1, 'la medición sigue siendo la de la nota');
+  assert.ok(
+    CHARS_PER_TOKEN < observadaMinima,
+    'con una constante MAYOR que la densidad real, la estimación se queda corta',
+  );
+  // Y el margen no es simbólico: al menos un 5 % por encima del real.
+  for (const m of MEDIDO) {
+    const margen = estimateTokens('x'.repeat(m.chars)) / m.tokens - 1;
+    assert.ok(margen >= 0.05, `${m.caso}: margen de sólo ${(margen * 100).toFixed(1)} %`);
+  }
+});
+
+test('la constante vieja (4 caracteres por token) habría fallado', () => {
+  // Es la regresión concreta: 4 es la regla de oro del inglés, y en español
+  // dejaba la estimación un 25 % por debajo. Sin esta prueba, volver a 4 no
+  // rompería nada visible hasta que alguien mirara una factura.
+  for (const m of MEDIDO) {
+    assert.ok(Math.ceil(m.chars / 4) < m.tokens, `${m.caso}: con 4 no se detectaría`);
+  }
+});
+
+test('la estimación cuenta el ESQUEMA, no sólo los dos mensajes', () => {
+  const esquema = reportJsonSchema(['Ana Ruiz']);
+  const conEsquema = estimateRequestTokens('sistema', 'usuario', esquema);
+  const sinEsquema = estimateTokens('sistema' + 'usuario');
+  assert.ok(
+    conEsquema > sinEsquema,
+    'el esquema viaja en response_format y el proveedor lo factura como entrada',
+  );
+  // Y la cuenta es de CARACTERES sumados, con un solo redondeo: tres `ceil`
+  // añaden ruido y hacen que el total dependa de cómo se troceó el texto.
+  assert.equal(
+    conEsquema,
+    estimateTokens('sistema' + 'usuario' + JSON.stringify(esquema)),
+  );
+});
+
+test('el techo estimado de un reporte sigue cubriendo el coste real observado', () => {
+  // El caso verificado: 5244 de entrada y 158 de salida costaron $0.000881.
+  // El techo se calcula con la entrada ESTIMADA y el tope de salida, así que
+  // tiene que quedar por encima de eso con holgura.
+  const entradaEstimada = estimateTokens('x'.repeat(15_846));
+  const techo = costUsd(DEFAULT_MODEL, entradaEstimada, MAX_OUTPUT_TOKENS);
+  const real = costUsd(DEFAULT_MODEL, 5_244, 158);
+  assert.ok(techo !== null && real !== null);
+  assert.ok(techo > real, 'el techo tiene que estar por encima del coste real');
+  // Y el techo con la entrada real nunca supera el techo con la estimada.
+  const techoConEntradaReal = costUsd(DEFAULT_MODEL, 5_244, MAX_OUTPUT_TOKENS)!;
+  assert.ok(techo >= techoConEntradaReal, 'la entrada estimada no puede quedarse corta');
+});
+
+// ────────── Las instrucciones piden hechos CITABLES, no prosa ────────────
+
+/**
+ * El defecto que esto fija, medido en staging el 12 de septiembre de 2026:
+ * «Acta general» devolvió UNA sección de prosa de 344 caracteres, sin un solo
+ * punto de lista y sin ninguna cita, en vez de las cuatro secciones que pedía.
+ * «Informe ejecutivo» mandó sus tres citas de sección al segmento 0.
+ *
+ * Nada se descartó —el `caveat` salió nulo, así que las guardas no rechazaron
+ * nada—: el problema era la puntería de las instrucciones. Y la palanca está
+ * en el esquema: un ELEMENTO lleva cita y un cuerpo de sección no, así que
+ * pedir «hechos como puntos» es pedir hechos comprobables.
+ */
+const CON_ITEMS_CITADOS = ['acta-general', 'informe-ejecutivo', 'riesgos-oportunidades'] as const;
+
+test('las tres plantillas revisadas exigen los hechos como PUNTOS, no en prosa', () => {
+  for (const slug of CON_ITEMS_CITADOS) {
+    const t = builtinBySlug(slug)!;
+    assert.match(t.instructions, /PUNTO DE LISTA|PUNTOS? DE LISTA/i, `${slug} lo pide`);
+    assert.match(t.instructions, /cita/i, `${slug} nombra la cita`);
+    // Y dice explícitamente que el texto corrido NO es el sitio de un hecho.
+    assert.match(
+      t.instructions,
+      /no dentro del texto|nunca sólo en el texto|Nunca en el texto|no debe contener/i,
+      `${slug} excluye la prosa`,
+    );
+  }
+});
+
+test('«Acta general» pide sus cuatro secciones con nombre exacto', () => {
+  const t = builtinBySlug('acta-general')!;
+  for (const seccion of ['Temas tratados', 'Decisiones', 'Compromisos', 'Próximos pasos']) {
+    assert.match(t.instructions, new RegExp(`"${seccion}"`), `falta «${seccion}»`);
+  }
+  assert.match(t.instructions, /cuatro secciones/i);
+  assert.match(t.instructions, /nombres exactos/i);
+});
+
+test('las tres dicen qué hacer con una sección SIN evidencia: vaciarla y avisar', () => {
+  for (const slug of CON_ITEMS_CITADOS) {
+    const t = builtinBySlug(slug)!;
+    assert.match(t.instructions, /d[ée]jala vac[íi]a|est[áa] vac[íi]a/i, `${slug}: vaciarla`);
+    assert.match(t.instructions, /caveat/, `${slug}: y decirlo en el caveat`);
+  }
+});
+
+test('ninguna instrucción invita a inventar, y todas lo prohíben en su terreno', () => {
+  const acta = builtinBySlug('acta-general')!.instructions;
+  assert.match(acta, /No la rellenes/i);
+  assert.match(acta, /ni conviertas una discusión abierta en una decisión/i);
+
+  const riesgos = builtinBySlug('riesgos-oportunidades')!.instructions;
+  assert.match(riesgos, /SÓLO LO QUE SE DIJO/);
+  assert.match(riesgos, /si nadie lo mencionó, no existe/i);
+
+  const ejec = builtinBySlug('informe-ejecutivo')!.instructions;
+  // El defecto concreto que tuvo: las tres citas al segmento 0.
+  assert.match(ejec, /momento distinto y concreto/i);
+  assert.match(ejec, /No mandes todos los puntos al mismo sitio/i);
+});
+
+test('el propósito deja de ser el sitio de los hechos', () => {
+  // Era la otra mitad del defecto: la prosa del propósito llevaba afirmaciones
+  // que nadie podía comprobar.
+  for (const slug of CON_ITEMS_CITADOS) {
+    const t = builtinBySlug(slug)!;
+    assert.match(
+      t.instructions,
+      /hechos concretos no van aquí|Sin hechos concretos|sin hechos concretos/i,
+      `${slug}: el propósito no lleva hechos`,
+    );
+  }
+});
+
+test('«Decisiones y compromisos» NO se tocó', () => {
+  // No estaba en el alcance del ajuste: fue la única que se comportó bien —
+  // devolvió cero secciones y un caveat honesto porque la reunión no cerró
+  // nada, que es exactamente lo que sus instrucciones le mandan.
+  const t = builtinBySlug('decisiones-compromisos')!;
+  assert.match(t.instructions, /^Quiero únicamente dos secciones, sin narrativa alrededor:/);
+  assert.match(t.instructions, /Si la reunión no cerró nada, dilo en el caveat/);
 });

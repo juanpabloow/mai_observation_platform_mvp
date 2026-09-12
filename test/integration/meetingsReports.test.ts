@@ -924,3 +924,39 @@ test('una reunión marcada para eliminación no genera reportes nuevos', async (
     await cleanupTenant(w.tenantId);
   }
 });
+
+test('una plantilla en v1 con el predeterminado movido NO se marca como modificada', async () => {
+  const w = await sembrar();
+  try {
+    const t = await actaGeneral(w);
+    // Recién sembrada: coincide con el código, así que ninguna de las dos.
+    assert.equal(t.modified, false);
+    assert.equal(t.editedByUser, false);
+
+    // Se simula lo que pasa cuando el predeterminado del CÓDIGO cambia y la
+    // fila se queda con el texto viejo: sigue en v1, así que la diferencia no
+    // la escribió nadie.
+    await query(
+      `UPDATE meeting_report_templates SET instructions = 'texto viejo del predeterminado'
+        WHERE id = $1`,
+      [t.id],
+    );
+    const [tras] = (await listTemplates(w.admin)).filter((x) => x.id === t.id);
+    assert.equal(tras.version, 1, 'nadie la editó: sigue en la v1');
+    assert.equal(tras.modified, true, 'pero difiere del predeterminado');
+    assert.equal(
+      tras.editedByUser, false,
+      'y restaurar sólo ADOPTA la mejora; no descarta trabajo de nadie',
+    );
+
+    // En cambio, una edición de verdad sube la versión y sí es de una persona.
+    const editada = await editTemplate(w.admin, {
+      templateId: t.id, instructions: 'Lo que yo quiero.', expectedVersion: 1,
+    });
+    assert.equal(editada.version, 2);
+    assert.equal(editada.modified, true);
+    assert.equal(editada.editedByUser, true, 'restaurar aquí DESCARTA su texto');
+  } finally {
+    await cleanupTenant(w.tenantId);
+  }
+});

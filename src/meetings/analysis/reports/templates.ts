@@ -37,16 +37,22 @@ export const BUILTIN_TEMPLATES: readonly BuiltinTemplate[] = [
     name: 'Acta general',
     description:
       'El acta completa de la reunión: propósito, temas tratados, decisiones, compromisos y próximos pasos.',
-    instructions: `Redacta el acta completa de la reunión, con estas secciones y en este orden:
+    instructions: `Redacta el acta completa de la reunión con estas cuatro secciones, en este orden y con estos nombres exactos:
 
 1. "Temas tratados" — los asuntos que se abordaron, en el orden en que se trataron.
-2. "Decisiones" — sólo lo que quedó cerrado. Si no se cerró nada, deja la sección vacía.
+2. "Decisiones" — sólo lo que quedó cerrado.
 3. "Compromisos" — lo que alguien asumió hacer, con su responsable y su fecha cuando consten.
 4. "Próximos pasos" — lo que queda pendiente sin que nadie lo haya asumido todavía.
 
-En el propósito, explica en dos o tres frases para qué se reunieron.
+LO MÁS IMPORTANTE: cada hecho concreto va como un PUNTO DE LISTA de su sección, nunca sólo en el texto corrido. Un punto de lista lleva su cita al momento del audio; un párrafo no. Si escribes "se acordó migrar el índice" dentro del texto de la sección en lugar de como punto, ese acuerdo queda en el acta sin poder comprobarse, y un acta que no se puede comprobar no sirve para reclamar nada.
 
-Prefiero un acta corta y exacta a una larga con relleno. Si una sección no tiene contenido, déjala vacía en lugar de completarla.`,
+Así que:
+- Usa el texto de la sección sólo para enlazar o dar contexto, y que no contenga ningún hecho que no esté también como punto.
+- En el propósito, explica en dos o tres frases para qué se reunieron. Los hechos concretos no van aquí: van en sus secciones, como puntos.
+
+SECCIONES SIN CONTENIDO: si una sección no tiene nada, déjala vacía. No la rellenes con algo parecido ni conviertas una discusión abierta en una decisión. Si te parece relevante que esté vacía —por ejemplo, que no se cerrara ninguna decisión— dilo en el caveat.
+
+Prefiero un acta corta y exacta a una larga con relleno.`,
   },
   {
     slug: 'decisiones-compromisos',
@@ -69,15 +75,19 @@ No incluyas temas tratados ni contexto: si algo no es una decisión ni un compro
       'Una lectura breve para quien no asistió: qué pasó, qué se decidió y qué hace falta.',
     instructions: `Escribe para alguien que no estuvo en la reunión y tiene dos minutos.
 
-En el propósito, cuenta en tres o cuatro frases qué pasó y en qué quedó.
+En el propósito, cuenta en tres o cuatro frases qué pasó y en qué quedó. Sin hechos concretos: los hechos van en las secciones, como puntos.
 
-Después, estas secciones:
+Después, estas tres secciones:
 
-1. "Lo que se decidió" — las decisiones, en una línea cada una.
+1. "Lo que se decidió" — las decisiones que quedaron cerradas.
 2. "Lo que queda abierto" — lo que no se resolvió y hace falta resolver.
 3. "Qué se necesita" — lo que se pidió o hace falta para avanzar, si se dijo algo al respecto.
 
-Sin jerga y sin adjetivos de valoración. Que se entienda leyendo sólo el propósito.`,
+CADA AFIRMACIÓN COMPROBABLE VA COMO UN PUNTO DE LISTA de su sección, y no dentro del texto. El punto lleva su cita al audio; el párrafo no. Quien lea esto no estuvo en la reunión, así que necesita poder ir al minuto exacto y oírlo — si el hecho está en prosa, no puede.
+
+Cada punto debe ir a un momento distinto y concreto de la reunión. No mandes todos los puntos al mismo sitio.
+
+Si una sección no tiene contenido, déjala vacía y, si hace falta, explícalo en el caveat. Sin jerga y sin adjetivos de valoración.`,
   },
   {
     slug: 'riesgos-oportunidades',
@@ -89,9 +99,11 @@ Sin jerga y sin adjetivos de valoración. Que se entienda leyendo sólo el prop�
 1. "Riesgos" — lo que se mencionó que puede salir mal: problemas, bloqueos, dependencias de terceros, plazos apretados, objeciones.
 2. "Oportunidades" — lo que se mencionó que puede salir bien: posibilidades que alguien planteó, aperturas, mejoras propuestas.
 
-En el propósito, una o dos frases de contexto.
+CADA RIESGO Y CADA OPORTUNIDAD VA COMO UN PUNTO DE LISTA, con su cita al momento en que se dijo. Nunca en el texto de la sección: un riesgo que no se puede ir a escuchar es una opinión, no un hallazgo. El texto de la sección, si lo usas, es sólo para dar contexto y no debe contener ninguno.
 
-Importante: sólo lo que se DIJO en la reunión. No añadas riesgos que tú consideres probables ni oportunidades que se te ocurran a ti; si nadie lo mencionó, no existe para este informe.`,
+En el propósito, una o dos frases de contexto, sin hechos concretos.
+
+SÓLO LO QUE SE DIJO. No añadas riesgos que te parezcan probables ni oportunidades que se te ocurran a ti: si nadie lo mencionó, no existe para este informe. Y si una de las dos secciones está vacía porque no se habló de eso, déjala vacía y dilo en el caveat — es un resultado correcto y más útil que rellenarla.`,
   },
 ];
 
