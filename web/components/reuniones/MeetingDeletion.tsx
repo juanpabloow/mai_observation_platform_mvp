@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { MeetingToast } from "@/components/reuniones/MeetingToast";
 import {
   errorDeRed,
   HANDOFF_KEY,
@@ -133,54 +134,8 @@ export function MeetingDeletionProvider({
           }}
         />
       ) : null}
-      <Aviso texto={aviso} onCerrar={() => setAviso(null)} />
+      <MeetingToast texto={aviso} onCerrar={() => setAviso(null)} />
     </Ctx.Provider>
-  );
-}
-
-// ══════════════════════════════════════════════════════════════════════════
-//  El aviso
-// ══════════════════════════════════════════════════════════════════════════
-
-/**
- * «Reunión eliminada», abajo a la derecha.
- *
- * `role="status"` con `aria-live="polite"`, no `alert`: es una confirmación de
- * algo que el usuario acaba de pedir, no una interrupción. Se va solo a los
- * seis segundos y también a mano, porque un aviso que tapa una esquina y no se
- * puede cerrar es un estorbo.
- */
-function Aviso({ texto, onCerrar }: { texto: string | null; onCerrar: () => void }) {
-  useEffect(() => {
-    if (texto === null) return;
-    const t = setTimeout(onCerrar, 6000);
-    return () => clearTimeout(t);
-  }, [texto, onCerrar]);
-
-  // Siempre montado: una región viva que aparece a la vez que su texto no
-  // siempre se anuncia, porque el lector de pantalla no la estaba observando.
-  return (
-    <div
-      role="status"
-      aria-live="polite"
-      className="pointer-events-none fixed bottom-4 right-4 z-[60] flex justify-end"
-    >
-      {texto !== null ? (
-        <div className="pointer-events-auto flex max-w-sm items-center gap-2 rounded-lg border border-line bg-surface px-3 py-2 shadow-[var(--shadow-float)]">
-          <span className="text-[0.8125rem] text-foreground">{texto}</span>
-          <button
-            type="button"
-            onClick={onCerrar}
-            aria-label="Cerrar el aviso"
-            className="u-focus -mr-1 inline-flex size-6 shrink-0 items-center justify-center rounded-md text-muted transition-colors hover:bg-subtle hover:text-foreground"
-          >
-            <svg viewBox="0 0 16 16" className="size-3" fill="none" stroke="currentColor" strokeWidth="1.75" aria-hidden>
-              <path d="M4 4l8 8M12 4l-8 8" />
-            </svg>
-          </button>
-        </div>
-      ) : null}
-    </div>
   );
 }
 

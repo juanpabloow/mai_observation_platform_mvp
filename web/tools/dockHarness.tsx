@@ -141,6 +141,7 @@ function App() {
           // Reportes muestra su estado vacío, que es lo correcto aquí: lo que
           // hay que poder ver es que el reproductor no se mueve al cambiar de
           // pestaña, y para eso la pestaña sólo tiene que renderizar.
+          clientName="Cliente de prueba"
           templates={[]}
           reports={[]}
           canEditTemplates={false}

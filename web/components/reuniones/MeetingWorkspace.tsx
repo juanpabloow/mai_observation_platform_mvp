@@ -7,6 +7,8 @@ import { Chip, EmptyState, GHOST_ACTION_CLS } from "@/components/ui/primitives";
 import { type AudioState, type FollowState, type SpeakerTurn } from "@/components/reuniones/AudioPlayer";
 import { AudioDock, DOCK_GAP_CLS } from "@/components/reuniones/AudioDock";
 import { ReportsTab } from "@/components/reuniones/ReportsTab";
+import { MeetingToast, useMeetingToast } from "@/components/reuniones/MeetingToast";
+import { TranscriptActionsRow, useTranscriptExport } from "@/components/reuniones/TranscriptActions";
 import { READING_MEASURE_CLS } from "@/lib/meetingsLayout";
 import { Avatar, ProgressBar, ShareMeter, StampLink, statusFace } from "@/components/reuniones/MeetingBits";
 import { MeetingActionsMenu } from "@/components/reuniones/MeetingDeletion";
@@ -95,6 +97,7 @@ const KIND_TONE: Record<FindingKind, "neutral" | "brand" | "warn" | "muted"> = {
 export function MeetingWorkspace({
   meeting,
   clientId,
+  clientName,
   templates,
   reports,
   canEditTemplates,
@@ -111,6 +114,11 @@ export function MeetingWorkspace({
   meeting: MeetingDetail;
   /** El cliente del ámbito, que la ruta del resumen exige en la query. */
   clientId: string;
+  /**
+   * El NOMBRE del cliente, para la cabecera del transcript exportado. Baja del
+   * servidor, que es quien lo tiene verificado; `MeetingDetail` no lo trae.
+   */
+  clientName: string | null;
   /** Las cuatro plantillas de reporte del cliente, resueltas en el servidor. */
   templates: readonly TemplateView[];
   /**
@@ -223,6 +231,21 @@ export function MeetingWorkspace({
     setTab("transcript");
   };
 
+  /*
+    EL AVISO Y LAS ACCIONES DEL TRANSCRIPT.
+
+    El aviso se monta AQUÍ y no en la pestaña: la pestaña se desmonta al cambiar
+    de vista, y un aviso que desaparece porque el usuario cambió de pestaña deja
+    sin confirmar una acción que sí ocurrió. Es el mismo componente que usa
+    «Eliminar reunión», no una copia.
+
+    Las acciones se resuelven una vez y las consumen los DOS sitios que las
+    ofrecen —el «Exportar» de la cabecera y la fila de la pestaña—, así que no
+    hay forma de que produzcan documentos distintos.
+  */
+  const aviso = useMeetingToast();
+  const transcriptActions = useTranscriptExport(meeting, clientName, aviso.avisar);
+
   const focusMode = !inspector && !copilot;
 
   return (
@@ -288,7 +311,24 @@ export function MeetingWorkspace({
               generado, no el del atributo — es decir, a veces gana la que no
               quieres. */}
           <span className="hidden items-center gap-1.5 sm:flex">
-            <button type="button" className={GHOST_ACTION_CLS}>
+            {/* «Exportar» descarga el transcript en TXT. Era inerte; ahora hace
+                lo que dice, con el MISMO documento que copia la pestaña.
+                No se mueve de sitio ni cambia de aspecto: la geometría de esta
+                cabecera es la que se estabilizó y sigue igual.
+
+                «Compartir» sigue inerte a propósito: está fuera de alcance. */}
+            <button
+              type="button"
+              onClick={transcriptActions.descargar}
+              disabled={!transcriptActions.disponible || transcriptActions.enVuelo}
+              aria-busy={transcriptActions.enVuelo}
+              title={
+                transcriptActions.disponible
+                  ? "Descargar el transcript completo en TXT"
+                  : "Todavía no hay transcript que exportar"
+              }
+              className={GHOST_ACTION_CLS}
+            >
               Exportar
             </button>
             <button type="button" className={GHOST_ACTION_CLS}>
@@ -491,14 +531,21 @@ export function MeetingWorkspace({
                   }`}
                 >
                   {tab === "transcript" ? (
-                    <Transcript
-                      meeting={meeting}
-                      focusedAt={focusedAt}
-                      onSeek={jumpTo}
-                      follow={following}
-                      playhead={playhead}
-                      onSuspend={suspender}
-                    />
+                    <>
+                      {/* Discreta, a la derecha y alineada con la columna del texto,
+                          porque son acciones SOBRE el texto. */}
+                      <div className="pt-4">
+                        <TranscriptActionsRow acciones={transcriptActions} hayTranscript={hasTranscript} />
+                      </div>
+                      <Transcript
+                        meeting={meeting}
+                        focusedAt={focusedAt}
+                        onSeek={jumpTo}
+                        follow={following}
+                        playhead={playhead}
+                        onSuspend={suspender}
+                      />
+                    </>
                   ) : tab === "resumen" ? (
                     <Summary meeting={meeting} clientId={clientId} onSeek={jumpTo} />
                   ) : (
@@ -513,6 +560,11 @@ export function MeetingWorkspace({
 
         {copilot ? <CopilotPanel meeting={meeting} onClose={() => setCopilot(false)} onSeek={jumpTo} /> : null}
       </div>
+
+      {/* EL AVISO, fuera de las pestañas. Montado aquí sobrevive a un cambio
+          de vista: un aviso que desaparece porque el usuario cambió de
+          pestaña deja sin confirmar una acción que sí ocurrió. */}
+      <MeetingToast texto={aviso.texto} onCerrar={aviso.cerrar} />
 
       {/*
         EL DOCK, HERMANO DEL ÁREA DE TRABAJO Y NO HIJO DE ELLA.

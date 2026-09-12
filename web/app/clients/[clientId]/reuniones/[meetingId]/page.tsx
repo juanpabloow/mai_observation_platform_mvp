@@ -79,6 +79,9 @@ export default async function MeetingPage({
     <MeetingWorkspace
       meeting={meeting}
       clientId={client.id}
+      // El nombre va a la cabecera del transcript exportado. Sale del cliente
+      // que el gate ya verificó, no de la URL.
+      clientName={client.name ?? null}
       templates={templates}
       reports={reports}
       // Editar y restaurar plantillas es de owner/admin. Se decide en el
