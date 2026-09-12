@@ -465,13 +465,12 @@ function ReportDocument({ report: r, onSeek }: { report: ReportView; onSeek: (s:
         <span className="text-[0.8125rem] font-medium text-foreground">{r.templateName}</span>
         <span className="text-[0.6875rem] text-faint u-mono">v{r.templateVersion}</span>
         {r.outdated ? <Chip tone="warn">Generado con otra versión del transcript</Chip> : null}
+        {/* SIN COSTE. Se sigue guardando —`cost_usd`, `input_tokens` y
+            `output_tokens` en `meeting_analyses`, que es lo que permite sumar el
+            gasto cuando haga falta— pero no se pinta: a quien lee un acta no le
+            aporta nada y convierte un documento de trabajo en una factura. */}
         <span className="ml-auto text-[0.71875rem] text-muted">
           {fecha(r.createdAt)} · {r.model}
-          {" · "}
-          {/* «Coste estimado», nunca «coste». Los tokens de entrada cacheados se
-              cuentan a tarifa completa, así que sobreestima antes que quedarse
-              corto; `null` es «no disponible», no cero. */}
-          {r.costUsd === null ? "coste estimado no disponible" : `coste estimado $${r.costUsd.toFixed(4)}`}
         </span>
       </div>
 

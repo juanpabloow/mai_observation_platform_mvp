@@ -134,13 +134,33 @@ test('el caveat se pinta cuando existe, en su propio bloque', () => {
   assert.match(src, /Advertencia/);
 });
 
-test('el coste se llama «coste estimado» y el desconocido no se pinta como cero', () => {
-  const src = leer(REPORTS);
-  assert.match(src, /coste estimado/);
-  assert.match(src, /r\.costUsd === null \? "coste estimado no disponible"/);
-  assert.doesNotMatch(sinComentarios(src), /costUsd \?\? 0/, 'un cero se leería como gratis');
+test('el coste NO se pinta en la interfaz, pero sí se guarda', () => {
+  // Decisión de producto: el gasto se registra —`cost_usd`, `input_tokens` y
+  // `output_tokens` en `meeting_analyses`— y no se muestra. A quien lee un acta
+  // no le aporta nada, y un importe en la cabecera convierte un documento de
+  // trabajo en una factura.
+  const src = sinComentarios(leer(REPORTS));
+  assert.doesNotMatch(src, /costUsd/, 'la vista no lee el coste');
+  assert.doesNotMatch(src, /coste/i, 'ni lo nombra');
+  assert.doesNotMatch(src, /toFixed\(4\)/);
+
+  // Pero el camino del dato sigue entero: columna, vista del servidor y tipo.
+  const servicio = leer(SERVICIO);
+  assert.match(servicio, /readonly costUsd: number \| null/);
+  assert.match(servicio, /costUsd: row\.cost_usd === null \? null : Number\(row\.cost_usd\)/);
+  const repo = leer('src/db/repositories/meetings/analyses.ts');
+  assert.match(repo, /cost_usd/, 'y se persiste');
 });
 
+test('el documento se alinea a la IZQUIERDA con medida, no centrado', () => {
+  const src = sinComentarios(leer(REPORTS));
+  // Ocupa el ancho del panel hasta una medida legible y arranca en el borde
+  // izquierdo. Centrarlo dejaría dos calles simétricas y haría flotar un
+  // documento, que se lee desde un margen.
+  assert.match(src, /<article className="flex max-w-\[58rem\]/);
+  assert.doesNotMatch(src, /<article[^>]*mx-auto/, 'sin centrar');
+  assert.doesNotMatch(src, /items-center[^"]*"[\s>]*\n?\s*<article/);
+});
 // ───────────── El prompt interno no sale por ninguna parte ──────────────
 
 test('ni la interfaz ni las rutas exponen el system prompt ni el esquema', () => {
