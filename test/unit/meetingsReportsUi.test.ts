@@ -65,13 +65,20 @@ test('el panel izquierdo tiene un conmutador entre generados y plantillas', () =
   assert.match(src, /setLista\("generados"\)/);
 });
 
-test('el panel izquierdo se lee como panel PROPIO, no como columna del documento', () => {
+test('son DOS tarjetas independientes, las dos blancas, con hueco entre ellas', () => {
   const src = sinComentarios(leer(REPORTS));
-  // Fondo tintado a la izquierda, superficie blanca en el documento, y una
-  // hairline entre los dos.
-  assert.match(src, /bg-subtle lg:max-h-none lg:w-\[22rem\] lg:border-b-0 lg:border-r/);
-  // La fila abierta se levanta a la superficie: es lo que la ata al documento.
-  assert.match(src, /r\.id === abierto \? "bg-surface"/);
+  // Cada panel es su propia `section` con borde, sombra y fondo de superficie.
+  // Un tinte a la izquierda se probó y no era lo pedido: las dos van blancas y
+  // la separación la da el hueco, no el color.
+  const tarjetas = [...src.matchAll(
+    /<section className=[^>]*rounded-xl border border-line bg-surface shadow-\[var\(--shadow-card\)\]/g,
+  )];
+  assert.equal(tarjetas.length, 2, 'el catálogo y el documento');
+  assert.doesNotMatch(src, /bg-subtle lg:max-h-none/, 'el panel izquierdo no va tintado');
+  // El hueco es el mismo de la rejilla que separa la barra de pestañas.
+  assert.match(src, /flex min-h-0 flex-1 flex-col gap-\[var\(--content-pad\)\] lg:flex-row/);
+  // Y la fila abierta se marca con el tinte, que ahora contrasta con el blanco.
+  assert.match(src, /r\.id === abierto \? "bg-subtle"/);
 });
 
 test('hay historial de reportes y se puede abrir uno anterior', () => {
@@ -91,16 +98,30 @@ test('la barra de pestañas es una tarjeta independiente del contenido', () => {
   // contenido y no dentro de ella.
   assert.match(ws, /<nav className="[^"]*rounded-xl border border-line bg-surface[^"]*shadow-\[var\(--shadow-card\)\]"/);
   assert.match(ws, /<\/nav>/);
-  // El ANCLA DEL DOCK sigue siendo la tarjeta de contenido, que conserva su
-  // borde: el cálculo descuenta esa caja, y un ancla sin borde lo ensancharía.
+  // EL ANCLA DEL DOCK es la REGIÓN de contenido: un envoltorio sin estilo que
+  // contiene una tarjeta en las vistas de lectura y dos en Reportes. Tiene que
+  // ser la región y no una tarjeta, porque mide lo mismo en las cuatro
+  // pestañas — que es lo que impide que el reproductor salte al cambiar.
   const iNav = ws.indexOf('<nav className=');
-  const iSection = ws.indexOf('ref={panel}');
-  assert.ok(iSection > iNav, 'el ancla va DESPUÉS de la barra, no la envuelve');
+  const iRegion = ws.indexOf('ref={panel}');
+  assert.ok(iRegion > iNav, 'el ancla va DESPUÉS de la barra, no la envuelve');
   assert.match(
-    ws.slice(iSection, iSection + 260),
-    /rounded-xl border border-line bg-surface/,
-    'y sigue teniendo borde',
+    ws.slice(iRegion, iRegion + 120),
+    /className="flex min-h-0 min-w-0 flex-1 flex-col"/,
+    'la región no lleva borde ni fondo propios',
   );
+  // Y el borde de las tarjetas se descuenta con una constante declarada, no
+  // midiendo `clientLeft` de un elemento que ya no tiene borde.
+  // Sin comentarios: la nota que EXPLICA el cambio nombra `clientLeft`, y una
+  // aserción que la cuenta como código prohíbe documentar por qué se dejó de
+  // usar.
+  const dock = sinComentarios(leer('web/components/reuniones/AudioDock.tsx'));
+  assert.match(dock, /left: r\.left \+ PANEL_BORDER_PX/);
+  assert.match(dock, /width: r\.width - 2 \* PANEL_BORDER_PX/);
+  assert.match(dock, /bottom: r\.bottom - PANEL_BORDER_PX/);
+  assert.doesNotMatch(dock, /clientLeft|clientWidth/, 'ya no se mide la caja de contenido');
+  const layout = leer('web/lib/meetingsLayout.ts');
+  assert.match(layout, /export const PANEL_BORDER_PX = 1/);
 });
 
 test('la fila de plantilla deja UNA acción visible y el resto en su menú', () => {

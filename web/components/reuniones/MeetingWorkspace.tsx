@@ -363,69 +363,14 @@ export function MeetingWorkspace({
             </span>
           </nav>
 
-          <section
-            ref={panel}
-            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]"
-          >
-
-          {/* While the analysis runs, ONE banner carries the whole story: the
-              stage, the percentage, its bar and the phase checklist. The sheet
-              told it three times (banner + checklist + a sentence in the tab
-              bar), which is how a reader stops believing any of them. */}
-          {!analysisReady && face.progress ? (
-            <div className="m-2.5 flex shrink-0 flex-col gap-2 rounded-xl border border-warn/30 bg-warn-soft px-3 py-2.5">
-              <div className="flex flex-wrap items-center gap-3">
-                <span aria-hidden className="size-4 shrink-0 animate-spin rounded-full border-2 border-warn/30 border-t-warn" />
-                <div className="flex min-w-0 flex-1 flex-col gap-1">
-                  <span className="text-[0.8125rem] font-semibold text-warn">
-                    {face.label} · {face.progress.value} %
-                  </span>
-                  <span className="text-[0.75rem] text-warn/90">
-                    {hasTranscript
-                      ? "La transcripción ya está disponible: puedes leerla, buscarla y citarla mientras el resto avanza."
-                      : "El transcript aparecerá aquí en cuanto la etapa termine."}
-                  </span>
-                  <ProgressBar
-                    kind={face.progress.kind}
-                    value={face.progress.value}
-                    label="Progreso del procesamiento"
-                    className="mt-0.5 max-w-[20rem]"
-                  />
-                </div>
-                <Chip tone="success">Te avisaremos al terminar</Chip>
-              </div>
-              {/* La lista se DERIVA del estado. Estaba escrita para un solo
-                  escenario —«el análisis corre, todo lo anterior está hecho»— y
-                  con vistos verdes fijos: una reunión recién subida mostraba
-                  «Transcripción completa» y «0 participantes separados» en verde
-                  sin tener ni una frase. Ahora cada línea dice lo que hay. */}
-              <ol className="flex flex-wrap items-center gap-4 border-t border-warn/20 pt-2">
-                <PhaseItem
-                  state={
-                    hasTranscript ? "done" : meeting.status.kind === "transcribing" ? "running" : "pending"
-                  }
-                >
-                  {hasTranscript ? "Transcripción completa" : "Transcripción"}
-                </PhaseItem>
-                <PhaseItem
-                  state={
-                    meeting.participants.length > 0
-                      ? "done"
-                      : meeting.status.kind === "diarizing"
-                        ? "running"
-                        : "pending"
-                  }
-                >
-                  {meeting.participants.length > 0
-                    ? `${meeting.participants.length} participantes separados`
-                    : "Separación de participantes"}
-                </PhaseItem>
-                {/* El análisis no tiene etapa ni almacenamiento: nunca «corre». */}
-                <PhaseItem state="unavailable">Análisis: todavía no disponible</PhaseItem>
-              </ol>
-            </div>
-          ) : null}
-
+          {/* LA REGIÓN DE CONTENIDO. Un envoltorio SIN estilo: las vistas de
+              lectura ponen dentro una tarjeta, y Reportes pone dos
+              independientes. Es el ANCLA DEL DOCK, y por eso tiene que ser esta
+              región y no las tarjetas — mide lo mismo en las cuatro pestañas,
+              que es la propiedad que hace que el reproductor no salte al
+              cambiar de vista. El borde de las tarjetas se descuenta con
+              `PANEL_BORDER_PX`. */}
+          <div ref={panel} className="flex min-h-0 min-w-0 flex-1 flex-col">
           {/* THE CONTENT REGION. Two kinds of view live here and they need
               different geometry:
 
@@ -452,59 +397,118 @@ export function MeetingWorkspace({
               onSeek={jumpTo}
             />
           ) : (
-            <div
-              // RESUMEN is a board of BOXES, so its scroller shows the canvas and
-              // the panels read as objects on it. The other tabs are ONE surface
-              // (a document, a list) and stay white.
-              // `scrollbar-gutter: stable` reserva el canal de la barra aunque
-              // no haga falta. Sin eso, pasar de una pestaña que desborda a una
-              // que no cambia el ancho útil unos 15 px, y con él se movían la
-              // columna de lectura y —al medirse contra el panel— el dock.
-              style={{ scrollbarGutter: "stable" }}
-              className={`min-h-0 flex-1 overflow-y-auto ${tab === "resumen" ? "bg-background" : ""}`}
-            >
-              {/* ONE container contract for every reading view: centred, capped,
-                  and with the SAME lateral padding. Resumen used to inherit a
-                  bare `px-4`, so its content sat almost against the card's left
-                  edge while the transcript beside it had 32px — which is what
-                  made the screen look unbalanced. The transcript keeps a
-                  narrower measure (the spec's focus column) because it is
-                  continuous prose; the others get the wider one. */}
-              {/* ONE container contract. The transcript keeps a narrow reading
-                  measure (continuous prose); the panel-based views take the full
-                  width with a modest gutter, so a panel spans the card instead of
-                  floating in the middle of it. */}
-              <div
-                className={`${DOCK_GAP_CLS} ${
-                  tab === "transcript"
-                    // La medida sale del token compartido: el dock calcula la
-                    // suya del mismo número, y una prueba comprueba que no se
-                    // pueden separar. Ver lib/meetingsLayout.ts.
-                    ? `mx-auto w-full px-6 sm:px-8 ${focusMode ? READING_MEASURE_CLS : "max-w-none"}`
-                    : tab === "resumen"
-                      ? "w-full px-3 sm:px-4"
-                      : "mx-auto w-full max-w-[78rem] px-6 sm:px-8"
-                }`}
-              >
-                {tab === "transcript" ? (
-                  <Transcript
-                    meeting={meeting}
-                    focusedAt={focusedAt}
-                    onSeek={jumpTo}
-                    follow={following}
-                    playhead={playhead}
-                    onSuspend={suspender}
-                  />
-                ) : tab === "resumen" ? (
-                  <Summary meeting={meeting} clientId={clientId} onSeek={jumpTo} />
-                ) : (
-                  <Evidence meeting={meeting} onSeek={jumpTo} />
-                )}
+            <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]">
+            {/* While the analysis runs, ONE banner carries the whole story: the
+                stage, the percentage, its bar and the phase checklist. The sheet
+                told it three times (banner + checklist + a sentence in the tab
+                bar), which is how a reader stops believing any of them. */}
+            {!analysisReady && face.progress ? (
+              <div className="m-2.5 flex shrink-0 flex-col gap-2 rounded-xl border border-warn/30 bg-warn-soft px-3 py-2.5">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span aria-hidden className="size-4 shrink-0 animate-spin rounded-full border-2 border-warn/30 border-t-warn" />
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <span className="text-[0.8125rem] font-semibold text-warn">
+                      {face.label} · {face.progress.value} %
+                    </span>
+                    <span className="text-[0.75rem] text-warn/90">
+                      {hasTranscript
+                        ? "La transcripción ya está disponible: puedes leerla, buscarla y citarla mientras el resto avanza."
+                        : "El transcript aparecerá aquí en cuanto la etapa termine."}
+                    </span>
+                    <ProgressBar
+                      kind={face.progress.kind}
+                      value={face.progress.value}
+                      label="Progreso del procesamiento"
+                      className="mt-0.5 max-w-[20rem]"
+                    />
+                  </div>
+                  <Chip tone="success">Te avisaremos al terminar</Chip>
+                </div>
+                {/* La lista se DERIVA del estado. Estaba escrita para un solo
+                    escenario —«el análisis corre, todo lo anterior está hecho»— y
+                    con vistos verdes fijos: una reunión recién subida mostraba
+                    «Transcripción completa» y «0 participantes separados» en verde
+                    sin tener ni una frase. Ahora cada línea dice lo que hay. */}
+                <ol className="flex flex-wrap items-center gap-4 border-t border-warn/20 pt-2">
+                  <PhaseItem
+                    state={
+                      hasTranscript ? "done" : meeting.status.kind === "transcribing" ? "running" : "pending"
+                    }
+                  >
+                    {hasTranscript ? "Transcripción completa" : "Transcripción"}
+                  </PhaseItem>
+                  <PhaseItem
+                    state={
+                      meeting.participants.length > 0
+                        ? "done"
+                        : meeting.status.kind === "diarizing"
+                          ? "running"
+                          : "pending"
+                    }
+                  >
+                    {meeting.participants.length > 0
+                      ? `${meeting.participants.length} participantes separados`
+                      : "Separación de participantes"}
+                  </PhaseItem>
+                  {/* El análisis no tiene etapa ni almacenamiento: nunca «corre». */}
+                  <PhaseItem state="unavailable">Análisis: todavía no disponible</PhaseItem>
+                </ol>
               </div>
-            </div>
-          )}
+            ) : null}
 
-          </section>
+              <div
+                // RESUMEN is a board of BOXES, so its scroller shows the canvas and
+                // the panels read as objects on it. The other tabs are ONE surface
+                // (a document, a list) and stay white.
+                // `scrollbar-gutter: stable` reserva el canal de la barra aunque
+                // no haga falta. Sin eso, pasar de una pestaña que desborda a una
+                // que no cambia el ancho útil unos 15 px, y con él se movían la
+                // columna de lectura y —al medirse contra el panel— el dock.
+                style={{ scrollbarGutter: "stable" }}
+                className={`min-h-0 flex-1 overflow-y-auto ${tab === "resumen" ? "bg-background" : ""}`}
+              >
+                {/* ONE container contract for every reading view: centred, capped,
+                    and with the SAME lateral padding. Resumen used to inherit a
+                    bare `px-4`, so its content sat almost against the card's left
+                    edge while the transcript beside it had 32px — which is what
+                    made the screen look unbalanced. The transcript keeps a
+                    narrower measure (the spec's focus column) because it is
+                    continuous prose; the others get the wider one. */}
+                {/* ONE container contract. The transcript keeps a narrow reading
+                    measure (continuous prose); the panel-based views take the full
+                    width with a modest gutter, so a panel spans the card instead of
+                    floating in the middle of it. */}
+                <div
+                  className={`${DOCK_GAP_CLS} ${
+                    tab === "transcript"
+                      // La medida sale del token compartido: el dock calcula la
+                      // suya del mismo número, y una prueba comprueba que no se
+                      // pueden separar. Ver lib/meetingsLayout.ts.
+                      ? `mx-auto w-full px-6 sm:px-8 ${focusMode ? READING_MEASURE_CLS : "max-w-none"}`
+                      : tab === "resumen"
+                        ? "w-full px-3 sm:px-4"
+                        : "mx-auto w-full max-w-[78rem] px-6 sm:px-8"
+                  }`}
+                >
+                  {tab === "transcript" ? (
+                    <Transcript
+                      meeting={meeting}
+                      focusedAt={focusedAt}
+                      onSeek={jumpTo}
+                      follow={following}
+                      playhead={playhead}
+                      onSuspend={suspender}
+                    />
+                  ) : tab === "resumen" ? (
+                    <Summary meeting={meeting} clientId={clientId} onSeek={jumpTo} />
+                  ) : (
+                    <Evidence meeting={meeting} onSeek={jumpTo} />
+                  )}
+                </div>
+              </div>
+            </section>
+          )}
+          </div>
         </div>
 
         {copilot ? <CopilotPanel meeting={meeting} onClose={() => setCopilot(false)} onSeek={jumpTo} /> : null}

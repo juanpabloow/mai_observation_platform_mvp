@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { dockBounds, scrollbarGutterPx, type DockBounds } from "@/lib/meetingsLayout";
+import { PANEL_BORDER_PX, dockBounds, scrollbarGutterPx, type DockBounds } from "@/lib/meetingsLayout";
 import { AudioPlayer, type AudioState, type FollowState, type SpeakerTurn } from "@/components/reuniones/AudioPlayer";
 
 /**
@@ -116,16 +116,21 @@ export function AudioDock({
     if (!anchor) return;
     const medir = (): void => {
       const r = anchor.getBoundingClientRect();
-      // La CAJA DE CONTENIDO del panel, no su rectángulo exterior:
-      // `getBoundingClientRect` incluye el borde de 1 px, y la columna de
-      // lectura vive dentro de él. Sin esto el dock salía 1 px más ancho por
-      // cada lado — poco, pero visible en el borde de una tarjeta.
+      // DESCONTANDO EL BORDE DE LA TARJETA. La columna de lectura vive dentro de
+      // una tarjeta con borde de 1 px; sin descontarlo el dock sale 1 px más
+      // ancho por cada lado, y se nota justo en el canto.
+      //
+      // Antes se leía la caja de contenido del propio elemento
+      // (`clientLeft`/`clientWidth`). Ya no sirve: el ancla es la REGIÓN de
+      // contenido, que en Reportes contiene dos tarjetas independientes y por
+      // tanto no tiene borde propio. El inset se declara en `meetingsLayout`,
+      // junto a la medida de lectura.
       setBounds(
         dockBounds({
           panel: {
-            left: r.left + anchor.clientLeft,
-            width: anchor.clientWidth,
-            bottom: r.top + anchor.clientTop + anchor.clientHeight,
+            left: r.left + PANEL_BORDER_PX,
+            width: r.width - 2 * PANEL_BORDER_PX,
+            bottom: r.bottom - PANEL_BORDER_PX,
           },
           viewportHeight: window.innerHeight,
           viewportWidth: window.innerWidth,

@@ -118,3 +118,21 @@ export function scrollbarGutterPx(doc: Document = document): number {
   sonda.remove();
   return cache;
 }
+
+/**
+ * El borde de las tarjetas de la región de contenido, en píxeles.
+ *
+ * El dock se alinea con la columna de lectura, y esa columna vive DENTRO de una
+ * tarjeta con `border border-line`. Así que hay que descontar ese borde del
+ * rectángulo de la región: sin ello el dock sale 1 px más ancho por cada lado —
+ * poco, pero visible justo en el canto de la tarjeta.
+ *
+ * Antes se obtenía midiendo la propia tarjeta (`clientLeft` / `clientWidth`, la
+ * caja de contenido). Dejó de servir cuando Reportes pasó a ser DOS tarjetas
+ * independientes: el ancla tiene que ser una sola región, idéntica en las
+ * cuatro pestañas, y una región que contiene tarjetas no tiene el borde de
+ * ellas. Se declara aquí, junto a la medida de lectura, porque es la misma
+ * clase de constante: geometría compartida por dos consumidores que no pueden
+ * medirse el uno al otro.
+ */
+export const PANEL_BORDER_PX = 1;

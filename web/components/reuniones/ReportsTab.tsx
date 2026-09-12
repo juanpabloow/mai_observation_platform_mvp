@@ -114,27 +114,26 @@ export function ReportsTab({
   );
 
   return (
-    /* APILADO EN ESTRECHO, PARTIDO EN ANCHO.
-       Un partido fijo de 22rem + resto deja el documento en 48 px a 375 px de
-       ancho y saca la página a scroll horizontal — medido en el arnés. Debajo de
-       `lg` el catálogo va arriba, con su propio alto acotado, y el documento
-       debajo; los dos siguen siendo scrollers independientes, así que ninguno
-       arrastra al otro y el hueco del dock sigue reservado en los dos. */
-    <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-      {/* ── EL PANEL IZQUIERDO ──────────────────────────────────────────────
-             Se lee como un panel PROPIO, no como una columna del documento: va
-             sobre el fondo tintado y el documento sobre la superficie blanca,
-             con una hairline entre los dos. Es la misma jerarquía que enseña la
-             maqueta, y sale más barata que dos tarjetas — el dock mide la
-             tarjeta de contenido para descontar su borde, y partirla en dos
-             dejaría su ancla sin borde. */}
-      <div className={`flex max-h-[45vh] w-full shrink-0 flex-col overflow-y-auto border-b border-line bg-subtle lg:max-h-none lg:w-[22rem] lg:border-b-0 lg:border-r ${DOCK_GAP_CLS}`}>
+    /* DOS TARJETAS INDEPENDIENTES, no una partida por una hairline. Cada una
+       con su borde, su sombra y su fondo blanco, y entre las dos el hueco de la
+       rejilla — la misma separación que hay entre la barra de pestañas y el
+       contenido.
+
+       APILADO EN ESTRECHO, PARTIDO EN ANCHO. Un partido fijo de 22rem + resto
+       deja el documento en 48 px a 375 px de ancho y saca la página a scroll
+       horizontal — medido en el arnés. Debajo de `lg` el catálogo va arriba,
+       con su propio alto acotado, y el documento debajo; los dos siguen siendo
+       scrollers independientes, así que ninguno arrastra al otro y el hueco del
+       dock sigue reservado en los dos. */
+    <div className="flex min-h-0 flex-1 flex-col gap-[var(--content-pad)] lg:flex-row">
+      {/* ── EL PANEL IZQUIERDO, su propia tarjeta ─────────────────────────── */}
+      <section className={`flex max-h-[45vh] w-full shrink-0 flex-col overflow-y-auto rounded-xl border border-line bg-surface shadow-[var(--shadow-card)] lg:max-h-none lg:w-[22rem] ${DOCK_GAP_CLS}`}>
         {/* EL CONMUTADOR. Dos listas distintas —lo ya generado y las plantillas
             con las que generar— comparten el mismo sitio en vez de apilarse una
             debajo de la otra: apiladas, con cuatro plantillas y varios reportes,
             había que desplazarse para ver si algo existía. */}
-        <div className="sticky top-0 z-10 shrink-0 border-b border-line-row bg-subtle p-2">
-          <div role="tablist" aria-label="Reportes o plantillas" className="flex rounded-lg border border-line bg-surface p-0.5">
+        <div className="sticky top-0 z-10 shrink-0 border-b border-line-row bg-surface p-2">
+          <div role="tablist" aria-label="Reportes o plantillas" className="flex rounded-lg border border-line bg-subtle p-0.5">
             {(
               [
                 ["generados", "Generados", listos.length],
@@ -150,7 +149,7 @@ export function ReportsTab({
                   aria-selected={activo}
                   onClick={() => setLista(clave)}
                   className={`u-focus inline-flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1 text-[0.8125rem] transition-colors ${
-                    activo ? "bg-subtle font-semibold text-foreground" : "text-muted hover:text-foreground"
+                    activo ? "bg-surface font-semibold text-foreground shadow-[var(--shadow-card)]" : "text-muted hover:text-foreground"
                   }`}
                 >
                   {rotulo}
@@ -206,7 +205,7 @@ export function ReportsTab({
                     onClick={() => setAbierto(r.id)}
                     aria-current={r.id === abierto}
                     className={`flex flex-col gap-0.5 border-b border-line-row px-4 py-2.5 text-left transition-colors ${
-                      r.id === abierto ? "bg-surface" : "hover:bg-surface/60"
+                      r.id === abierto ? "bg-subtle" : "hover:bg-subtle/60"
                     }`}
                   >
                     <span className="flex items-center gap-1.5">
@@ -226,10 +225,10 @@ export function ReportsTab({
                   </button>
                 );
               })}
-      </div>
+      </section>
 
-      {/* ── EL DOCUMENTO ────────────────────────────────────────────────── */}
-      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {/* ── EL DOCUMENTO, su propia tarjeta ──────────────────────────────── */}
+      <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]">
         {fase.kind === "generating" ? (
           <div className="p-6">
             <EmptyState
@@ -253,7 +252,7 @@ export function ReportsTab({
         ) : (
           <ReportDocument report={reporte} onSeek={onSeek} />
         )}
-      </div>
+      </section>
     </div>
   );
 }
@@ -529,7 +528,7 @@ function TemplateMenu({
         aria-haspopup="menu"
         aria-expanded={abierto}
         aria-label={`Más acciones de la plantilla ${t.name}`}
-        className="u-focus inline-flex size-8 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface hover:text-foreground"
+        className="u-focus inline-flex size-8 items-center justify-center rounded-md text-muted transition-colors hover:bg-subtle hover:text-foreground"
       >
         <svg viewBox="0 0 16 16" className="size-3.5" fill="currentColor" aria-hidden>
           <circle cx="3" cy="8" r="1.3" />
