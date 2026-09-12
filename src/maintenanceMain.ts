@@ -133,16 +133,35 @@ async function main(): Promise<void> {
       await closePool();
     } catch (err) {
       logger.error({ err }, 'meetings: error al apagar');
+      process.exitCode = 1;
     } finally {
       logger.info('meetings: apagado completo');
-      process.exit(0);
+      /*
+        NO se llama a `process.exit()`.
+
+        Cuando stdout es una TUBERÍA —un contenedor, o un proceso hijo— las
+        escrituras de Node son asíncronas, y `process.exit()` descarta lo que
+        quede en el búfer. Es decir: llamarlo aquí puede tirar a la basura las
+        dos líneas que acabamos de escribir, que son precisamente la constancia
+        de que el apagado fue limpio. En una TTY no se nota, porque ahí la
+        escritura es síncrona; en Railway no hay TTY.
+
+        No hace falta: el pestillo ya está suelto, la pasada en vuelo terminó y
+        el pool está cerrado, así que no queda nada que retenga el bucle de
+        eventos y Node sale por su cuenta con 0 — vaciando stdout antes.
+
+        El vigilante de abajo es el cinturón: si algo que no hemos previsto
+        siguiera reteniendo el proceso, a los cinco segundos se fuerza la
+        salida. Va `unref` para no ser él quien lo mantenga vivo.
+      */
+      setTimeout(() => process.exit(process.exitCode ?? 0), 5_000).unref();
     }
   };
   process.on('SIGINT', () => void apagar('SIGINT'));
   process.on('SIGTERM', () => void apagar('SIGTERM'));
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
   if (err instanceof MaintenanceGuardError) {
     // El mensaje de la guarda es la información útil y no lleva secretos: se
     // registra tal cual, sin el stack, que aquí no aporta nada.
@@ -150,5 +169,12 @@ main().catch((err) => {
   } else {
     logger.error({ err }, 'meetings: el mantenimiento no pudo arrancar');
   }
-  process.exit(1);
+  // `exitCode` en vez de `exit()`, por lo mismo que en el apagado: aquí la
+  // línea que se perdería es justo la que dice POR QUÉ no arrancó.
+  process.exitCode = 1;
+  // La guarda abre el pool para preguntar `current_database()`. Cerrarlo es lo
+  // que deja el bucle sin nada pendiente y permite terminar de inmediato; sin
+  // esto habría que esperar los 10 s de `idleTimeoutMillis` de `pg`.
+  await closePool().catch(() => {});
+  setTimeout(() => process.exit(1), 5_000).unref();
 });

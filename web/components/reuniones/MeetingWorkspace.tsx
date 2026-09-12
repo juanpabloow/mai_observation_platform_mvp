@@ -307,15 +307,19 @@ export function MeetingWorkspace({
       <div className="flex min-h-0 flex-1 gap-[var(--content-pad)]">
         {inspector ? <InspectorPanel meeting={meeting} onClose={() => setInspector(false)} /> : null}
 
-        <section
-          // EL ANCLA DEL DOCK. Se mide este panel y no el contenedor de la
-          // pestaña: el panel mide lo mismo en las cuatro, y el contenido no.
-          ref={panel}
-          className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]"
-        >
-          {/* Tab bar — one fixed-height band. The panel toggles live at its right
-              end, labelled, with aria-pressed carrying the state. */}
-          <div className="flex shrink-0 flex-wrap items-center gap-1 border-b border-line-row px-2.5 py-2">
+        {/* LA COLUMNA: barra de pestañas y contenido son tarjetas HERMANAS.
+            Estaban en una sola, con la barra pegada al contenido por una
+            hairline. Separarlas es lo que hace que la navegación se lea como lo
+            que es —un mando, no una cabecera del documento— y deja el contenido
+            empezando en su propio borde.
+
+            El ANCLA DEL DOCK sigue siendo la tarjeta de CONTENIDO, no esta
+            columna: el dock mide su caja de contenido para descontar el borde
+            de 1 px, y una columna sin borde lo dejaría 1 px más ancho por lado.
+            Su izquierda, su ancho y su base no cambian al sacar la barra; sólo
+            cambia su borde superior, que el cálculo no usa. */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-[var(--content-pad)]">
+          <nav className="flex shrink-0 flex-wrap items-center gap-1 rounded-xl border border-line bg-surface px-2.5 py-2 shadow-[var(--shadow-card)]">
             <div role="tablist" aria-label="Vistas de la reunión" className="flex min-w-0 flex-wrap items-center gap-1">
               {TABS.map((t) => {
                 const locked = !analysisReady && t.key !== "transcript";
@@ -357,7 +361,12 @@ export function MeetingWorkspace({
               <PanelToggle name="Inspector" open={inspector} onToggle={() => setInspector((v) => !v)} />
               <PanelToggle name="Copilot" open={copilot} onToggle={() => setCopilot((v) => !v)} />
             </span>
-          </div>
+          </nav>
+
+          <section
+            ref={panel}
+            className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]"
+          >
 
           {/* While the analysis runs, ONE banner carries the whole story: the
               stage, the percentage, its bar and the phase checklist. The sheet
@@ -495,7 +504,8 @@ export function MeetingWorkspace({
             </div>
           )}
 
-        </section>
+          </section>
+        </div>
 
         {copilot ? <CopilotPanel meeting={meeting} onClose={() => setCopilot(false)} onSeek={jumpTo} /> : null}
       </div>

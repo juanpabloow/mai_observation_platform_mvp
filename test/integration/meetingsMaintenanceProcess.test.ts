@@ -144,7 +144,13 @@ async function ejecutar(
       }, opciones.permanenciaMs);
     }, 100);
 
-    hijo.on('exit', acabar);
+    // `close` y no `exit`: `exit` avisa cuando el proceso terminó, pero la
+    // ÚLTIMA porción de su stdout puede llegar al padre después, porque es una
+    // tubería con su propio búfer. Resolviendo en `exit` las aserciones sobre
+    // el log del apagado ganan o pierden según cómo el sistema planifique ese
+    // instante — que es exactamente la intermitencia que se vio. `close` espera
+    // a que se cierren los flujos, así que `out` ya está completo.
+    hijo.on('close', acabar);
   });
 }
 
@@ -324,11 +330,16 @@ test('SIGINT también apaga limpio y sale 0', async () => {
       // Mismo umbral que la prueba de SIGTERM, y por el mismo motivo: el pool
       // de `pg` sostiene el proceso durante sus primeros 10 s de ocio.
       setTimeout(() => {
-        señalado = hijo.exitCode === null;
+        // Las DOS condiciones, como en la prueba de SIGTERM: `exitCode` sigue
+        // en null también justo después de morir por una señal, y entonces lo
+        // que está puesto es `signalCode`.
+        señalado = hijo.exitCode === null && hijo.signalCode === null;
         if (señalado) hijo.kill('SIGINT');
       }, 14_000);
     }, 100);
-    hijo.on('exit', (code) => { clearInterval(t); resolve({ code, señalado }); });
+    // `close`, por lo mismo que el helper: el log del apagado es lo que se
+    // afirma, y con `exit` puede no haber llegado todavía.
+    hijo.on('close', (code) => { clearInterval(t); resolve({ code, señalado }); });
     setTimeout(() => hijo.kill('SIGKILL'), 60_000);
   });
   const r = await fin;
@@ -363,4 +374,58 @@ test('el pestillo es del entrypoint: el planificador conserva su `.unref()`', ()
     main.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, ''),
     /\blisten\(|createServer|express/i,
   );
+});
+
+test('el apagado NO llama a process.exit: si lo hiciera, perdería su propio log', () => {
+  /*
+    El defecto que esto fija: `process.exit(0)` en el `finally` del apagado.
+
+    Cuando stdout es una TUBERÍA —un contenedor de Railway, o un proceso hijo
+    como el que arrancan las pruebas de arriba— las escrituras de Node son
+    asíncronas, y `process.exit()` descarta lo que quede en el búfer. Es decir,
+    tiraba a la basura las dos líneas que acababa de escribir: justamente la
+    constancia de que el apagado fue limpio. En una TTY no se ve, porque ahí la
+    escritura es síncrona.
+
+    Se medía: antes de arreglarlo, dos de cada cuatro ejecuciones de este
+    fichero fallaban en la prueba de SIGINT porque la línea no llegaba.
+
+    No hace falta llamarlo: con el pestillo suelto, la pasada terminada y el
+    pool cerrado no queda nada que retenga el bucle, así que Node sale con 0 y
+    vacía stdout antes de hacerlo.
+  */
+  const main = readFileSync(`${raiz}src/maintenanceMain.ts`, 'utf8');
+  const codigo = main.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '');
+
+  // El código de salida se DECLARA; no se fuerza la salida.
+  assert.match(codigo, /process\.exitCode = 1/, 'el fallo se marca con exitCode');
+
+  // Los DOS vigilantes: el del apagado y el del arranque fallido. Van con
+  // `unref`, así que no mantienen el proceso vivo y sólo actúan si algo
+  // imprevisto lo retuvo más de cinco segundos.
+  const vigilantes = [...codigo.matchAll(/setTimeout\(\(\) => process\.exit\([^;]*?\), 5_000\)\.unref\(\)/g)];
+  assert.equal(vigilantes.length, 2, 'el del apagado y el del arranque fallido');
+
+  // La ÚNICA salida inmediata que queda es el abort de configuración, que
+  // ocurre antes de que exista el logger y escribe con `console.error`: ahí no
+  // hay nada que se pueda perder porque no hay nada pendiente todavía, y la
+  // función no puede devolver un valor.
+  let sinVigilantes = codigo;
+  for (const v of vigilantes) sinVigilantes = sinVigilantes.replace(v[0], '');
+  const inmediatos = [...sinVigilantes.matchAll(/process\.exit\(/g)];
+  assert.equal(inmediatos.length, 1, 'sólo el abort de configuración');
+  const cargar = sinVigilantes.slice(
+    sinVigilantes.indexOf('function cargar()'),
+    sinVigilantes.indexOf('const cfg ='),
+  );
+  assert.match(cargar, /process\.exit\(1\)/, 'y está dentro de `cargar`');
+
+  // Lo que importa: ni el apagado ni el arranque fallido salen a la fuerza.
+  const apagado = sinVigilantes.slice(
+    sinVigilantes.indexOf('const apagar ='),
+    sinVigilantes.indexOf("process.on('SIGINT'"),
+  );
+  assert.doesNotMatch(apagado, /process\.exit\(/, 'el apagado se deja terminar');
+  const arranqueFallido = sinVigilantes.slice(sinVigilantes.indexOf('main().catch('));
+  assert.doesNotMatch(arranqueFallido, /process\.exit\(/, 'y el arranque fallido también');
 });

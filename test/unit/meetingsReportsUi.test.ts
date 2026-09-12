@@ -51,15 +51,83 @@ test('los cuatro estados existen: vacío, generando, listo y error con reintento
   assert.match(src, /role="alert"/, 'el error se anuncia');
 });
 
-test('hay historial de reportes y se puede abrir uno anterior', () => {
+test('el panel izquierdo tiene un conmutador entre generados y plantillas', () => {
   const src = sinComentarios(leer(REPORTS));
-  assert.match(src, /Reportes generados/);
-  assert.match(src, /setAbierto\(r\.id\)/, 'un clic abre el reporte de esa fila');
-  assert.match(src, /aria-current=\{r\.id === abierto\}/);
-  // Y los de otra versión de transcripción se marcan, en vez de esconderse.
-  assert.match(src, /Otra versión|otra versión del transcript/);
+  // Dos listas distintas comparten el mismo sitio, con su recuento cada una.
+  assert.match(src, /role="tablist" aria-label="Reportes o plantillas"/);
+  assert.match(src, /\["generados", "Generados", listos\.length\]/);
+  assert.match(src, /\["plantillas", "Plantillas", templates\.length\]/);
+  assert.match(src, /aria-selected=\{activo\}/);
+  // Y arranca en la lista que tiene algo: abrir en una vacía esconde lo único
+  // que se puede hacer.
+  assert.match(src, /listos\.length > 0 \? "generados" : "plantillas"/);
+  // Tras generar, salta a «Generados», que es donde está lo que pidió.
+  assert.match(src, /setLista\("generados"\)/);
 });
 
+test('el panel izquierdo se lee como panel PROPIO, no como columna del documento', () => {
+  const src = sinComentarios(leer(REPORTS));
+  // Fondo tintado a la izquierda, superficie blanca en el documento, y una
+  // hairline entre los dos.
+  assert.match(src, /bg-subtle lg:max-h-none lg:w-\[22rem\] lg:border-b-0 lg:border-r/);
+  // La fila abierta se levanta a la superficie: es lo que la ata al documento.
+  assert.match(src, /r\.id === abierto \? "bg-surface"/);
+});
+
+test('hay historial de reportes y se puede abrir uno anterior', () => {
+  const src = sinComentarios(leer(REPORTS));
+  assert.match(src, /Última versión de cada reporte/);
+  assert.match(src, /setAbierto\(r\.id\)/, 'un clic abre el reporte de esa fila');
+  assert.match(src, /aria-current=\{r\.id === abierto\}/);
+  // Los de otra versión de transcripción se marcan, en vez de esconderse.
+  assert.match(src, /Otra versión/);
+  // Y un reporte sin citas válidas lo DICE, en vez de poner un cero.
+  assert.match(src, /sin citas verificadas/);
+});
+
+test('la barra de pestañas es una tarjeta independiente del contenido', () => {
+  const ws = sinComentarios(leer(WORKSPACE));
+  // `nav` propio, con borde y sombra de tarjeta, hermano de la tarjeta de
+  // contenido y no dentro de ella.
+  assert.match(ws, /<nav className="[^"]*rounded-xl border border-line bg-surface[^"]*shadow-\[var\(--shadow-card\)\]"/);
+  assert.match(ws, /<\/nav>/);
+  // El ANCLA DEL DOCK sigue siendo la tarjeta de contenido, que conserva su
+  // borde: el cálculo descuenta esa caja, y un ancla sin borde lo ensancharía.
+  const iNav = ws.indexOf('<nav className=');
+  const iSection = ws.indexOf('ref={panel}');
+  assert.ok(iSection > iNav, 'el ancla va DESPUÉS de la barra, no la envuelve');
+  assert.match(
+    ws.slice(iSection, iSection + 260),
+    /rounded-xl border border-line bg-surface/,
+    'y sigue teniendo borde',
+  );
+});
+
+test('la fila de plantilla deja UNA acción visible y el resto en su menú', () => {
+  const src = sinComentarios(leer(REPORTS));
+  assert.match(src, /yaGenerado \? "Regenerar" : "Generar"/, 'la acción de cada día');
+  assert.match(src, /<TemplateMenu/);
+  // Editar y restaurar viven dentro del menú, con rol de menuitem.
+  const i = src.indexOf('function TemplateMenu');
+  const menu = src.slice(i);
+  assert.match(menu, /role="menu"/);
+  assert.equal((menu.match(/role="menuitem"/g) ?? []).length, 2, 'editar y restaurar');
+  assert.match(menu, /Editar instrucciones/);
+  assert.match(menu, /Restaurar predeterminado/);
+  // Y restaurar sigue inhabilitado cuando no hay nada que restaurar.
+  assert.match(menu, /!t\.modified \|\| !t\.isBuiltin/);
+});
+
+test('el pie dice cuántas citas sostienen el documento, y nada más', () => {
+  const src = sinComentarios(leer(REPORTS));
+  assert.match(src, /Se apoya en/);
+  assert.match(src, /Ninguna cita de este reporte resistió la comprobación/);
+  // Sin controles de guardado: el contenido generado no se edita a mano.
+  assert.doesNotMatch(src, /Descartar/);
+  assert.doesNotMatch(src, /cambios sin guardar/);
+  // Y sin enlace a Evidencia, que hoy es una pestaña vacía.
+  assert.doesNotMatch(src, /Ver evidencia/);
+});
 test('NO hay editor manual del contenido generado ni exportación', () => {
   const src = sinComentarios(leer(REPORTS));
   // El mobiliario del fixture prometía esto y no existía. No debe volver.

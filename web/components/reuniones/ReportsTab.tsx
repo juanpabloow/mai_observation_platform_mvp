@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { Chip, EmptyState, PRIMARY_SM_CLS } from "@/components/ui/primitives";
 import { StampLink } from "@/components/reuniones/MeetingBits";
@@ -65,6 +65,15 @@ export function ReportsTab({
   const [abierto, setAbierto] = useState<string | null>(listos[0]?.id ?? null);
   const [fase, setFase] = useState<Fase>({ kind: "idle" });
   const [editando, setEditando] = useState<string | null>(null);
+  /**
+   * Qué lista enseña el panel izquierdo.
+   *
+   * Arranca en «Generados» cuando ya hay algo que leer y en «Plantillas» cuando
+   * no: abrir en una lista vacía esconde lo único que se puede hacer.
+   */
+  const [lista, setLista] = useState<"generados" | "plantillas">(
+    listos.length > 0 ? "generados" : "plantillas",
+  );
 
   const reporte = listos.find((r) => r.id === abierto) ?? null;
 
@@ -92,6 +101,9 @@ export function ReportsTab({
         // El id llega en la respuesta, así que el reporte nuevo queda abierto sin
         // esperar a que el refresco del servidor vuelva con la lista.
         if (cuerpo?.report?.id) setAbierto(cuerpo.report.id);
+        // El panel salta a «Generados»: lo que el usuario acaba de pedir está
+        // ahí, y dejarlo en «Plantillas» le obligaría a buscarlo.
+        setLista("generados");
         setFase({ kind: "idle" });
         router.refresh();
       } catch {
@@ -109,63 +121,111 @@ export function ReportsTab({
        debajo; los dos siguen siendo scrollers independientes, así que ninguno
        arrastra al otro y el hueco del dock sigue reservado en los dos. */
     <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
-      {/* ── EL CATÁLOGO ─────────────────────────────────────────────────── */}
-      <div className={`flex max-h-[45vh] w-full shrink-0 flex-col overflow-y-auto border-b border-line lg:max-h-none lg:w-[22rem] lg:border-b-0 lg:border-r ${DOCK_GAP_CLS}`}>
-        <h3 className="u-th flex items-center gap-1.5 border-b border-line-row px-4 py-2">
-          Plantillas
-          <span className="text-faint u-mono">{templates.length}</span>
-        </h3>
-        {templates.map((t) => (
-          <TemplateRow
-            key={t.id}
-            template={t}
-            clientId={clientId}
-            canEdit={canEditTemplates}
-            hasTranscript={hasTranscript}
-            generating={fase.kind === "generating" && fase.templateId === t.id}
-            busy={fase.kind === "generating"}
-            error={fase.kind === "error" && fase.templateId === t.id ? fase.message : null}
-            editing={editando === t.id}
-            onEdit={() => setEditando(t.id)}
-            onCloseEdit={() => setEditando(null)}
-            onGenerate={() => generar(t.id)}
-            onSaved={() => {
-              setEditando(null);
-              router.refresh();
-            }}
-          />
-        ))}
+      {/* ── EL PANEL IZQUIERDO ──────────────────────────────────────────────
+             Se lee como un panel PROPIO, no como una columna del documento: va
+             sobre el fondo tintado y el documento sobre la superficie blanca,
+             con una hairline entre los dos. Es la misma jerarquía que enseña la
+             maqueta, y sale más barata que dos tarjetas — el dock mide la
+             tarjeta de contenido para descontar su borde, y partirla en dos
+             dejaría su ancla sin borde. */}
+      <div className={`flex max-h-[45vh] w-full shrink-0 flex-col overflow-y-auto border-b border-line bg-subtle lg:max-h-none lg:w-[22rem] lg:border-b-0 lg:border-r ${DOCK_GAP_CLS}`}>
+        {/* EL CONMUTADOR. Dos listas distintas —lo ya generado y las plantillas
+            con las que generar— comparten el mismo sitio en vez de apilarse una
+            debajo de la otra: apiladas, con cuatro plantillas y varios reportes,
+            había que desplazarse para ver si algo existía. */}
+        <div className="sticky top-0 z-10 shrink-0 border-b border-line-row bg-subtle p-2">
+          <div role="tablist" aria-label="Reportes o plantillas" className="flex rounded-lg border border-line bg-surface p-0.5">
+            {(
+              [
+                ["generados", "Generados", listos.length],
+                ["plantillas", "Plantillas", templates.length],
+              ] as const
+            ).map(([clave, rotulo, cuenta]) => {
+              const activo = lista === clave;
+              return (
+                <button
+                  key={clave}
+                  type="button"
+                  role="tab"
+                  aria-selected={activo}
+                  onClick={() => setLista(clave)}
+                  className={`u-focus inline-flex flex-1 items-center justify-center gap-1.5 rounded-md px-2 py-1 text-[0.8125rem] transition-colors ${
+                    activo ? "bg-subtle font-semibold text-foreground" : "text-muted hover:text-foreground"
+                  }`}
+                >
+                  {rotulo}
+                  <span className={`u-mono text-[0.65625rem] ${activo ? "text-muted" : "text-faint"}`}>{cuenta}</span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
 
-        <h3 className="u-th flex items-center gap-1.5 border-b border-t border-line-row px-4 py-2">
-          Reportes generados
-          <span className="text-faint u-mono">{listos.length}</span>
-        </h3>
-        {listos.length === 0 ? (
-          <p className="px-4 py-3 text-[0.78125rem] text-muted">
-            Todavía ninguno. Genera uno con cualquier plantilla.
-          </p>
-        ) : (
-          listos.map((r) => (
-            <button
-              key={r.id}
-              type="button"
-              onClick={() => setAbierto(r.id)}
-              aria-current={r.id === abierto}
-              className={`flex flex-col gap-0.5 border-b border-line-row px-4 py-2.5 text-left transition-colors hover:bg-subtle ${
-                r.id === abierto ? "bg-subtle" : ""
-              }`}
-            >
-              <span className="flex items-center gap-1.5">
-                <span className="truncate text-[0.8125rem] font-medium text-foreground">{r.templateName}</span>
-                <span className="shrink-0 text-[0.6875rem] text-faint u-mono">v{r.templateVersion}</span>
-                {r.outdated ? <Chip tone="warn">Otra versión</Chip> : null}
-              </span>
-              <span className="text-[0.71875rem] text-muted">
-                {fecha(r.createdAt)} · {citasDe(r)} citas
-              </span>
-            </button>
-          ))
-        )}
+        {/* El rótulo dice QUÉ es la lista, que con un conmutador de dos
+            posiciones no es evidente: «Generados» podría ser todo el historial,
+            y es la última versión de cada uno. */}
+        <p className="u-th shrink-0 px-4 pb-1.5 pt-2.5">
+          {lista === "generados" ? "Última versión de cada reporte" : "Plantillas del cliente"}
+        </p>
+
+        {lista === "plantillas"
+          ? templates.map((t) => (
+              <TemplateRow
+                key={t.id}
+                template={t}
+                clientId={clientId}
+                canEdit={canEditTemplates}
+                hasTranscript={hasTranscript}
+                yaGenerado={listos.some((r) => r.templateId === t.id)}
+                generating={fase.kind === "generating" && fase.templateId === t.id}
+                busy={fase.kind === "generating"}
+                error={fase.kind === "error" && fase.templateId === t.id ? fase.message : null}
+                editing={editando === t.id}
+                onEdit={() => setEditando(t.id)}
+                onCloseEdit={() => setEditando(null)}
+                onGenerate={() => generar(t.id)}
+                onSaved={() => {
+                  setEditando(null);
+                  router.refresh();
+                }}
+              />
+            ))
+          : listos.length === 0
+            ? (
+              <p className="px-4 py-3 text-[0.78125rem] text-muted">
+                Todavía ninguno. Ve a <span className="font-medium text-foreground">Plantillas</span> y
+                genera uno.
+              </p>
+            )
+            : listos.map((r) => {
+                const citas = citasDe(r);
+                return (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => setAbierto(r.id)}
+                    aria-current={r.id === abierto}
+                    className={`flex flex-col gap-0.5 border-b border-line-row px-4 py-2.5 text-left transition-colors ${
+                      r.id === abierto ? "bg-surface" : "hover:bg-surface/60"
+                    }`}
+                  >
+                    <span className="flex items-center gap-1.5">
+                      <span className="truncate text-[0.8125rem] font-medium text-foreground">{r.templateName}</span>
+                      <span className="shrink-0 text-[0.6875rem] text-faint u-mono">v{r.templateVersion}</span>
+                      <span className="ml-auto shrink-0">
+                        {r.outdated ? <Chip tone="warn">Otra versión</Chip> : <Chip tone="success">Generado</Chip>}
+                      </span>
+                    </span>
+                    <span className="text-[0.71875rem] text-muted">
+                      {/* «Sin citas verificadas» y no «0 citas»: un reporte sin
+                          ninguna cita que resistiera la comprobación es un
+                          reporte del que no se puede tirar, y eso hay que
+                          decirlo con palabras. */}
+                      {fecha(r.createdAt)} · {citas === 0 ? "sin citas verificadas" : `${citas} citas`}
+                    </span>
+                  </button>
+                );
+              })}
       </div>
 
       {/* ── EL DOCUMENTO ────────────────────────────────────────────────── */}
@@ -207,6 +267,7 @@ function TemplateRow({
   clientId,
   canEdit,
   hasTranscript,
+  yaGenerado,
   generating,
   busy,
   error,
@@ -220,6 +281,8 @@ function TemplateRow({
   clientId: string;
   canEdit: boolean;
   hasTranscript: boolean;
+  /** Ya hay un reporte de esta plantilla, así que la acción es «Regenerar». */
+  yaGenerado: boolean;
   generating: boolean;
   busy: boolean;
   error: string | null;
@@ -231,17 +294,47 @@ function TemplateRow({
 }) {
   return (
     <div className="flex flex-col gap-2 border-b border-line-row px-4 py-3">
+      {/* UNA ACCIÓN VISIBLE Y EL RESTO EN EL MENÚ. Tres botones por fila —
+          generar, editar, restaurar— en una columna de 22rem se envolvían a dos
+          líneas y hacían que las cuatro plantillas ocuparan la pantalla entera.
+          Generar es lo que se hace a diario; editar y restaurar, de vez en
+          cuando. */}
       <div className="flex items-start gap-2">
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="flex items-center gap-1.5">
+          <span className="flex flex-wrap items-center gap-1.5">
             <span className="truncate text-[0.8125rem] font-medium text-foreground">{t.name}</span>
+            {/* «vN generada» cuando ya existe un reporte de ella; sólo «vN»
+                cuando no. El número solo no dice si se ha usado. */}
             <span className="shrink-0 text-[0.6875rem] text-faint u-mono">v{t.version}</span>
+            {yaGenerado ? <Chip tone="success">generada</Chip> : null}
             {/* «Modificada» se compara contra el predeterminado del CÓDIGO, que es
                 el único que puede decirlo. */}
             {t.modified ? <Chip tone="muted">Modificada</Chip> : null}
           </span>
           <span className="text-[0.71875rem] leading-relaxed text-muted">{t.description}</span>
         </div>
+        {editing ? null : (
+          <span className="flex shrink-0 items-center gap-1">
+            <button
+              type="button"
+              onClick={onGenerate}
+              disabled={busy || !hasTranscript}
+              aria-busy={generating}
+              title={hasTranscript ? undefined : "La reunión todavía no tiene transcripción"}
+              className="u-focus inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md border border-line-strong bg-surface px-2.5 text-xs font-medium text-foreground transition-colors hover:bg-subtle disabled:cursor-not-allowed disabled:text-muted"
+            >
+              {generating ? "Generando…" : yaGenerado ? "Regenerar" : "Generar"}
+            </button>
+            {canEdit ? (
+              <TemplateMenu
+                template={t}
+                clientId={clientId}
+                onEdit={onEdit}
+                onDone={onSaved}
+              />
+            ) : null}
+          </span>
+        )}
       </div>
 
       {editing ? (
@@ -251,34 +344,7 @@ function TemplateRow({
           onCancel={onCloseEdit}
           onSaved={onSaved}
         />
-      ) : (
-        <div className="flex flex-wrap items-center gap-1.5">
-          <button
-            type="button"
-            onClick={onGenerate}
-            disabled={busy || !hasTranscript}
-            aria-busy={generating}
-            title={hasTranscript ? undefined : "La reunión todavía no tiene transcripción"}
-            className={PRIMARY_SM_CLS}
-          >
-            {generating ? "Generando…" : "Generar"}
-          </button>
-          {canEdit ? (
-            <>
-              <button
-                type="button"
-                onClick={onEdit}
-                className="u-focus inline-flex h-8 items-center rounded-md border border-line px-2.5 text-xs text-foreground transition-colors hover:bg-subtle"
-              >
-                Editar instrucciones
-              </button>
-              {t.isBuiltin ? (
-                <RestoreButton template={t} clientId={clientId} onDone={onSaved} />
-              ) : null}
-            </>
-          ) : null}
-        </div>
-      )}
+      ) : null}
 
       {error ? (
         <p role="alert" className="text-[0.78125rem] text-danger">
@@ -389,17 +455,47 @@ function InstructionsEditor({
   );
 }
 
-function RestoreButton({
+/**
+ * El menú de la plantilla: editar sus instrucciones y volver al predeterminado.
+ *
+ * Las dos son de owner/admin y las dos son poco frecuentes. Fuera del menú
+ * ocupaban dos botones por fila; dentro, la fila cabe en una línea y la acción
+ * de cada día —generar— queda sola y legible.
+ *
+ * Mismo comportamiento que los otros menús de la pantalla: clic fuera y Escape
+ * cierran.
+ */
+function TemplateMenu({
   template: t,
   clientId,
+  onEdit,
   onDone,
 }: {
   template: TemplateView;
   clientId: string;
+  onEdit: () => void;
   onDone: () => void;
 }) {
+  const [abierto, setAbierto] = useState(false);
   const [enVuelo, setEnVuelo] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const ref = useRef<HTMLSpanElement>(null);
+
+  useEffect(() => {
+    if (!abierto) return;
+    const fuera = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setAbierto(false);
+    };
+    const tecla = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setAbierto(false);
+    };
+    document.addEventListener("mousedown", fuera);
+    document.addEventListener("keydown", tecla);
+    return () => {
+      document.removeEventListener("mousedown", fuera);
+      document.removeEventListener("keydown", tecla);
+    };
+  }, [abierto]);
 
   const restaurar = async () => {
     if (enVuelo) return;
@@ -417,6 +513,7 @@ function RestoreButton({
         setEnVuelo(false);
         return;
       }
+      setAbierto(false);
       onDone();
     } catch {
       setError("No se pudo contactar con el servidor.");
@@ -425,24 +522,57 @@ function RestoreButton({
   };
 
   return (
-    <>
+    <span ref={ref} className="relative">
       <button
         type="button"
-        onClick={restaurar}
-        // Sin cambios respecto al predeterminado no hay nada que restaurar, y un
-        // botón que crea una versión idéntica sólo ensucia el historial.
-        disabled={enVuelo || !t.modified}
-        title={t.modified ? undefined : "Ya está en su versión predeterminada"}
-        className="u-focus inline-flex h-8 items-center rounded-md border border-line px-2.5 text-xs text-muted transition-colors hover:bg-subtle hover:text-foreground disabled:opacity-40"
+        onClick={() => setAbierto((o) => !o)}
+        aria-haspopup="menu"
+        aria-expanded={abierto}
+        aria-label={`Más acciones de la plantilla ${t.name}`}
+        className="u-focus inline-flex size-8 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface hover:text-foreground"
       >
-        {enVuelo ? "Restaurando…" : "Restaurar predeterminado"}
+        <svg viewBox="0 0 16 16" className="size-3.5" fill="currentColor" aria-hidden>
+          <circle cx="3" cy="8" r="1.3" />
+          <circle cx="8" cy="8" r="1.3" />
+          <circle cx="13" cy="8" r="1.3" />
+        </svg>
       </button>
-      {error ? (
-        <p role="alert" className="basis-full text-[0.78125rem] text-danger">
-          {error}
-        </p>
+      {abierto ? (
+        <div
+          role="menu"
+          className="absolute right-0 top-[calc(100%+0.25rem)] z-30 w-56 overflow-hidden rounded-lg border border-line bg-surface py-1 shadow-[var(--shadow-float)]"
+        >
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              setAbierto(false);
+              onEdit();
+            }}
+            className="flex min-h-9 w-full items-center px-3 text-left text-sm text-foreground transition-colors hover:bg-subtle"
+          >
+            Editar instrucciones
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={restaurar}
+            // Sin cambios respecto al predeterminado no hay nada que restaurar,
+            // y crear una versión idéntica sólo ensucia el historial.
+            disabled={enVuelo || !t.modified || !t.isBuiltin}
+            title={t.modified ? undefined : "Ya está en su versión predeterminada"}
+            className="flex min-h-9 w-full items-center px-3 text-left text-sm text-foreground transition-colors hover:bg-subtle disabled:cursor-default disabled:text-faint disabled:hover:bg-transparent"
+          >
+            {enVuelo ? "Restaurando…" : "Restaurar predeterminado"}
+          </button>
+          {error ? (
+            <p role="alert" className="px-3 py-1.5 text-[0.71875rem] text-danger">
+              {error}
+            </p>
+          ) : null}
+        </div>
       ) : null}
-    </>
+    </span>
   );
 }
 
@@ -452,6 +582,7 @@ function RestoreButton({
 
 function ReportDocument({ report: r, onSeek }: { report: ReportView; onSeek: (s: number) => void }) {
   const doc = r.report;
+  const citas = citasDe(r);
   if (doc === null) {
     return (
       <div className="p-6">
@@ -519,6 +650,23 @@ function ReportDocument({ report: r, onSeek }: { report: ReportView; onSeek: (s:
             </section>
           ) : null}
         </article>
+      </div>
+
+      {/* EL PIE: cuántas citas sostienen el documento.
+          No lleva «Guardar» ni «Descartar» —el contenido generado no se edita a
+          mano— ni enlace a Evidencia, que hoy es una pestaña vacía: un enlace a
+          una pantalla sin nada es peor que no tenerlo. */}
+      <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-line-row px-5 py-2.5">
+        <span className="text-[0.78125rem] text-muted">
+          {citas === 0 ? (
+            <>Ninguna cita de este reporte resistió la comprobación contra el transcript.</>
+          ) : (
+            <>
+              Se apoya en <span className="font-medium text-foreground u-mono">{citas}</span>{" "}
+              {citas === 1 ? "cita" : "citas"} del transcript
+            </>
+          )}
+        </span>
       </div>
     </>
   );
