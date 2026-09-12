@@ -3,13 +3,14 @@
 import Link from "next/link";
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Chip, EmptyState, GHOST_ACTION_CLS, PRIMARY_SM_CLS } from "@/components/ui/primitives";
+import { Chip, EmptyState, GHOST_ACTION_CLS } from "@/components/ui/primitives";
 import { type AudioState, type FollowState, type SpeakerTurn } from "@/components/reuniones/AudioPlayer";
 import { AudioDock, DOCK_GAP_CLS } from "@/components/reuniones/AudioDock";
+import { ReportsTab } from "@/components/reuniones/ReportsTab";
 import { READING_MEASURE_CLS } from "@/lib/meetingsLayout";
 import { Avatar, ProgressBar, ShareMeter, StampLink, statusFace } from "@/components/reuniones/MeetingBits";
 import { MeetingActionsMenu } from "@/components/reuniones/MeetingDeletion";
-import type { EvidenceItem, MeetingDetail } from "@/lib/meetingsData";
+import type { EvidenceItem, MeetingDetail, ReportView, TemplateView } from "@/lib/meetingsData";
 import {
   deriveFollowState,
   groupTranscript,
@@ -94,6 +95,9 @@ const KIND_TONE: Record<FindingKind, "neutral" | "brand" | "warn" | "muted"> = {
 export function MeetingWorkspace({
   meeting,
   clientId,
+  templates,
+  reports,
+  canEditTemplates,
   backHref,
   /** Derived by the page from the meeting's own state — see the detail route. */
   audioState = "ready",
@@ -107,6 +111,16 @@ export function MeetingWorkspace({
   meeting: MeetingDetail;
   /** El cliente del ámbito, que la ruta del resumen exige en la query. */
   clientId: string;
+  /** Las cuatro plantillas de reporte del cliente, resueltas en el servidor. */
+  templates: readonly TemplateView[];
+  /**
+   * Los reportes ya generados, del más nuevo al más viejo. Bajan como PROP y no
+   * se piden desde el navegador: es lo que hace que recargar muestre el reporte
+   * guardado en vez de volver a generarlo.
+   */
+  reports: readonly ReportView[];
+  /** owner/admin. El servidor lo vuelve a exigir en la ruta. */
+  canEditTemplates: boolean;
   /** Absolute href back to the listing, built by the server page. */
   backHref: string;
   audioState?: AudioState;
@@ -307,7 +321,9 @@ export function MeetingWorkspace({
                 const locked = !analysisReady && t.key !== "transcript";
                 const selected = tab === t.key;
                 const count =
-                  t.key === "reportes" ? meeting.reportList.length || null : t.key === "evidencia" ? meeting.evidence.length || null : null;
+                  t.key === "reportes"
+                    ? reports.filter((r) => r.status === "ready").length || null
+                    : t.key === "evidencia" ? meeting.evidence.length || null : null;
                 return (
                   <button
                     key={t.key}
@@ -414,7 +430,18 @@ export function MeetingWorkspace({
               to the bottom, each scrolling on its own. It manages its own height
               and must not inherit a reading column. */}
           {tab === "reportes" ? (
-            <Reports meeting={meeting} onSeek={jumpTo} />
+            <ReportsTab
+              meetingId={meeting.id}
+              clientId={clientId}
+              templates={templates}
+              reports={reports}
+              canEditTemplates={canEditTemplates}
+              hasTranscript={hasTranscript}
+              // EL MISMO `jumpTo` que el resumen y la evidencia: mueve el
+              // playhead del dock que ya existe y cambia a Transcript. No se
+              // crea un segundo `<audio>`.
+              onSeek={jumpTo}
+            />
           ) : (
             <div
               // RESUMEN is a board of BOXES, so its scroller shows the canvas and
@@ -1655,265 +1682,14 @@ function NextSteps({ steps, pending, onSeek }: { steps: NextStep[]; pending: num
 }
 
 /**
- * Reportes: the catalogue on the left, the editable document on the right, and
- * the save actions always visible at the bottom.
+ * La pestaña Reportes vive en `ReportsTab.tsx`.
  *
- * ONE SURFACE, SPLIT BY A HAIRLINE — not two cards inside a card. The list and
- * the document used to each carry their own rounded border inside the view's
- * border, which is three nested frames around one piece of content and reads as
- * clutter at any density. Now the view is a single plane divided by a vertical
- * rule, and the rows are full-bleed with their own dividers, the way the
- * Contacts table treats a list.
- *
- * The row's numbers live in its META LINE ("… · hace 1 h · 6 citas") rather than
- * in a right-aligned column of their own: a two-column row for one small count
- * spent horizontal space and put the number far from the name it describes.
+ * Lo que había aquí era el mobiliario del diseño: un catálogo de reportes
+ * inventados y un pie con «2 cambios sin guardar», «Descartar» y «Guardar».
+ * Se ha ido entero. No es que sobrara espacio — es que prometía una edición
+ * manual del documento que no existe, y un botón Guardar que no guarda nada es
+ * peor que no tener botón.
  */
-/** The catalogue's section headings: the list's own column labels. */
-function SectionHead({ children, count }: { children: React.ReactNode; count?: number }) {
-  return (
-    <h3 className="u-th flex items-center gap-1.5 border-b border-line-row px-4 py-2">
-      {children}
-      {count !== undefined ? <span className="text-faint u-mono">{count}</span> : null}
-    </h3>
-  );
-}
-
-function Reports({ meeting, onSeek }: { meeting: MeetingDetail; onSeek: (s: number) => void }) {
-  const [selected, setSelected] = useState(meeting.reportList[0]?.id ?? null);
-  if (meeting.reportList.length === 0) {
-    return (
-      <PhasePending
-        title="Todavía no hay informes"
-        body={
-          "Los informes se generan a partir del análisis de la reunión, que es una fase " +
-          "posterior del módulo. Cuando exista, los documentos generados aparecerán aquí con " +
-          "sus citas al audio."
-        }
-      />
-    );
-  }
-  const doc = meeting.reportList.find((r) => r.id === selected) ?? null;
-
-  const stateChip = (state: MeetingDetail["reportList"][number]["state"]) =>
-    state === "edited" ? (
-      <Chip tone="muted">Editado</Chip>
-    ) : state === "generated" ? (
-      <Chip tone="success">Generado</Chip>
-    ) : state === "generating" ? (
-      <Chip tone="warn">Generando</Chip>
-    ) : (
-      <Chip tone="brand">Falló</Chip>
-    );
-
-  return (
-    <div className="flex min-h-0 flex-1">
-      {/* ── THE CATALOGUE ── */}
-      <div className={`flex w-[20.5rem] shrink-0 flex-col overflow-y-auto border-r border-line ${DOCK_GAP_CLS}`}>
-        <SectionHead count={meeting.reportList.length}>Generados</SectionHead>
-        <ul>
-          {meeting.reportList.map((r) => {
-            const active = selected === r.id;
-            return (
-              <li key={r.id} className="relative border-b border-line-soft">
-                <div
-                  className={`flex items-start gap-2 px-4 py-2.5 transition-colors ${active ? "bg-chip" : "hover:bg-subtle"}`}
-                >
-                  <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <button
-                      type="button"
-                      onClick={() => setSelected(r.id)}
-                      aria-current={active ? "true" : undefined}
-                      className="u-focus truncate text-left text-[0.8125rem] font-medium text-foreground after:absolute after:inset-0 after:content-['']"
-                    >
-                      {r.name}
-                    </button>
-                    {/* Meta and counts on ONE line — the count describes the
-                        report, so it belongs beside its own words. */}
-                    <span className="truncate text-[0.71875rem] text-muted">
-                      {r.meta}
-                      {r.citations !== null ? (
-                        <>
-                          <span aria-hidden className="text-faintest">
-                            {" · "}
-                          </span>
-                          <span className="u-mono">{r.citations} citas</span>
-                        </>
-                      ) : null}
-                    </span>
-                    {r.state === "failed" ? (
-                      <button
-                        type="button"
-                        className="u-focus relative z-10 w-fit rounded text-[0.71875rem] text-brand underline decoration-brand/40 hover:decoration-brand"
-                      >
-                        Reintentar
-                      </button>
-                    ) : null}
-                  </span>
-                  <span className="relative z-10 flex shrink-0 items-center gap-1.5">
-                    {stateChip(r.state)}
-                    <button
-                      type="button"
-                      aria-label={`Más acciones para ${r.name}`}
-                      className="u-focus inline-flex size-6 items-center justify-center rounded-md text-muted transition-colors hover:bg-surface hover:text-foreground"
-                    >
-                      <svg viewBox="0 0 16 16" className="size-3.5" fill="currentColor" aria-hidden>
-                        <circle cx="3" cy="8" r="1.3" />
-                        <circle cx="8" cy="8" r="1.3" />
-                        <circle cx="13" cy="8" r="1.3" />
-                      </svg>
-                    </button>
-                  </span>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
-
-        {/* "Disponibles para generar", not "No generados": the section is an
-            OFFER, and naming it by what is missing reads as a list of failures. */}
-        <SectionHead>Disponibles para generar</SectionHead>
-        <ul>
-          {["Decisiones", "Riesgos y bloqueos", "Minuta"].map((name) => (
-            <li key={name} className="flex items-center gap-2 border-b border-line-soft px-4 py-2.5">
-              <span className="min-w-0 flex-1 truncate text-[0.8125rem] text-foreground">{name}</span>
-              {/* A LINK, not an outlined button: these are secondary offers, and
-                  three outlined buttons in a column read as the screen's main
-                  actions when the real primary is "Generar reporte" above. */}
-              <button type="button" className="u-focus shrink-0 rounded text-[0.78125rem] text-accent hover:underline">
-                Generar
-              </button>
-            </li>
-          ))}
-          <li className="flex items-center gap-2 border-b border-line-soft px-4 py-2.5">
-            <span className="flex min-w-0 flex-1 flex-col">
-              <span className="truncate text-[0.8125rem] text-foreground">Prompt personalizado</span>
-              <span className="truncate text-[0.71875rem] text-muted">Escribe qué quieres extraer de la reunión</span>
-            </span>
-            <button
-              type="button"
-              className="u-focus shrink-0 rounded-md border border-line-strong px-2.5 py-1 text-[0.78125rem] text-muted transition-colors hover:border-faint hover:text-foreground"
-            >
-              Escribir
-            </button>
-          </li>
-        </ul>
-      </div>
-
-      {/* ── THE DOCUMENT ── */}
-      {doc ? (
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col">
-          <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line-row px-5 py-2.5">
-            <span className="flex min-w-0 flex-col">
-              <span className="truncate text-[0.875rem] font-semibold">{doc.name}</span>
-              <span className="truncate text-[0.71875rem] text-muted">{doc.meta}</span>
-            </span>
-            <span className="ml-auto flex shrink-0 items-center gap-1.5">
-              {["Regenerar", "Copiar", "Exportar"].map((a) => (
-                <button
-                  key={a}
-                  type="button"
-                  className="u-focus rounded-lg border border-line-strong px-2.5 py-1.5 text-[0.78125rem] text-muted transition-colors hover:border-faint hover:text-foreground"
-                >
-                  {a}
-                </button>
-              ))}
-              <button
-                type="button"
-                aria-label="Más acciones del reporte"
-                className="u-focus inline-flex size-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-subtle hover:text-foreground"
-              >
-                <svg viewBox="0 0 16 16" className="size-3.5" fill="currentColor" aria-hidden>
-                  <circle cx="3" cy="8" r="1.3" />
-                  <circle cx="8" cy="8" r="1.3" />
-                  <circle cx="13" cy="8" r="1.3" />
-                </svg>
-              </button>
-            </span>
-          </div>
-
-          <div className={`min-h-0 flex-1 overflow-y-auto ${DOCK_GAP_CLS}`}>
-            {doc.state === "failed" ? (
-              <div className="p-6">
-                <EmptyState title="No pudimos generar este reporte." hint="El transcript sigue disponible: puedes leerlo, buscarlo y citarlo." />
-              </div>
-            ) : doc.state === "generating" || !doc.doc ? (
-              <div className="p-6">
-                <EmptyState title="Generando el reporte…" hint={doc.meta} />
-              </div>
-            ) : (
-              /* LEFT-ALIGNED, with a measure. Centring the article in a pane this
-                 wide left two big symmetric gutters and made the document float;
-                 a document reads from a left edge.
-
-                 RENDERED FROM DATA. This used to be the kickoff's text written
-                 straight into the JSX, so every meeting's report showed that one
-                 meeting's content. */
-              <article className="flex max-w-[58rem] flex-col gap-5 px-9 py-7">
-                <header className="flex flex-col gap-1.5 border-b border-line-soft pb-4">
-                  <h3 className="text-[1.375rem] font-semibold tracking-[-0.02em]">{doc.doc.title}</h3>
-                  <p className="text-[0.8125rem] text-muted">{doc.doc.subtitle}</p>
-                </header>
-                {doc.doc.sections.map((sec) => (
-                  <section key={sec.heading} className="flex flex-col gap-1.5">
-                    <h4 className="text-[0.875rem] font-semibold">{sec.heading}</h4>
-                    {sec.body ? <p className="text-[0.9375rem] leading-[1.8] text-foreground/90">{sec.body}</p> : null}
-                    {sec.steps ? (
-                      <ol className="flex flex-col gap-2 text-[0.9375rem] leading-[1.8] text-foreground/90">
-                        {sec.steps.map((st, i) => (
-                          <li key={st.text} className="flex gap-3">
-                            <span aria-hidden className="shrink-0 text-muted u-mono">
-                              {i + 1}.
-                            </span>
-                            <span>
-                              {st.text}
-                              {st.stamp && st.at !== undefined ? (
-                                <>
-                                  {" "}
-                                  <StampLink at={st.at} onSeek={onSeek} boxed>
-                                    {st.stamp}
-                                  </StampLink>
-                                </>
-                              ) : null}
-                              .
-                            </span>
-                          </li>
-                        ))}
-                      </ol>
-                    ) : null}
-                  </section>
-                ))}
-              </article>
-            )}
-          </div>
-
-          {/* Save actions stay VISIBLE — the spec's rule 2. */}
-          <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-line-row px-5 py-2.5">
-            <span className="text-[0.78125rem] text-muted">
-              Este reporte se apoya en <span className="font-medium text-foreground u-mono">{doc.citations ?? 0}</span> citas del transcript
-            </span>
-            <button type="button" className="u-focus rounded text-[0.78125rem] text-accent underline decoration-accent/40 hover:decoration-accent">
-              Ver evidencia
-            </button>
-            <span className="ml-auto flex items-center gap-2">
-              <span className="text-[0.78125rem] text-warn">2 cambios sin guardar</span>
-              <button
-                type="button"
-                className="u-focus rounded-lg border border-line-strong px-3 py-1.5 text-[0.78125rem] text-muted transition-colors hover:border-faint hover:text-foreground"
-              >
-                Descartar
-              </button>
-              <button type="button" className={PRIMARY_SM_CLS}>
-                Guardar
-              </button>
-            </span>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 /**
  * Evidencia: a FLAT surface with dividers, grouped by theme. No nested cards —
  * the spec is explicit that this is the Contacts-table treatment, not a wall of

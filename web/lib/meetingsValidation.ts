@@ -248,3 +248,34 @@ function describeIssue(issue: z.core.$ZodIssue): string {
       return "valor inválido";
   }
 }
+
+/* ── Reportes con plantilla ─────────────────────────────────────────────── */
+
+/**
+ * Generar un reporte: el cliente y la plantilla, y nada más.
+ *
+ * Lo que NO hay aquí, y no debe haber: instrucciones. El texto que se usa es el
+ * de la plantilla GUARDADA, leído en el servidor. Si el navegador pudiera
+ * mandarlo, el snapshot dejaría de ser auditable —cualquiera podría generar con
+ * unas instrucciones que nunca estuvieron en ninguna versión— y el digest de
+ * entradas dejaría de identificar nada.
+ */
+export const GenerateReportBody = z.object({ clientId: uuid, templateId: uuid }).strict();
+
+/**
+ * Editar una plantilla. `expectedVersion` es obligatorio: es el testigo que
+ * impide perder la edición de otra persona, y hacerlo opcional convertiría la
+ * protección en algo que se olvida.
+ */
+export const EditTemplateBody = z
+  .object({
+    clientId: uuid,
+    instructions: z.string().min(1).max(6000),
+    expectedVersion: z.number().int().min(1),
+  })
+  .strict();
+
+/** Restaurar el predeterminado. Mismo testigo, sin texto. */
+export const RestoreTemplateBody = z
+  .object({ clientId: uuid, expectedVersion: z.number().int().min(1) })
+  .strict();

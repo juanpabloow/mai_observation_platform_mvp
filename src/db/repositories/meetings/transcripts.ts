@@ -261,3 +261,32 @@ export async function listTranscriptSpeakers(
   );
   return result.rows;
 }
+
+/**
+ * Los participantes REALES de una reunión: los `meeting_speakers` con nombre.
+ *
+ * Por REUNIÓN y no por versión de transcripción, que es la diferencia que
+ * importa aquí: un participante identificado a mano sobrevive a reprocesar, así
+ * que puede tener nombre sin estar mapeado en la versión activa. Para la lista
+ * cerrada de responsables permitidos hay que contarlo igual — si Ana está
+ * identificada en la reunión, «Ana» es un responsable legítimo aunque el
+ * diarizador de esta versión no le haya asignado ningún tramo.
+ *
+ * Acotado por tenant y cliente aunque `meeting_id` ya sea único, por lo mismo
+ * que el resto del módulo.
+ */
+export async function listMeetingParticipants(
+  meetingId: string,
+  tenantId: string,
+  clientId: string,
+  executor?: Queryable,
+): Promise<Array<{ id: string; display_name: string }>> {
+  const result = await q(executor).query<{ id: string; display_name: string }>(
+    `SELECT id, display_name FROM meeting_speakers
+      WHERE meeting_id = $1 AND tenant_id = $2 AND client_id = $3
+        AND display_name IS NOT NULL AND btrim(display_name) <> ''
+      ORDER BY created_at ASC, id ASC`,
+    [meetingId, tenantId, clientId],
+  );
+  return result.rows;
+}

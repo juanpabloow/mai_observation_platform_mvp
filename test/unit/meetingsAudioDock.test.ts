@@ -86,6 +86,7 @@ const sinComentarios = (src: string): string =>
 const DOCK = 'components/reuniones/AudioDock.tsx';
 const PLAYER = 'components/reuniones/AudioPlayer.tsx';
 const WORKSPACE = 'components/reuniones/MeetingWorkspace.tsx';
+const REPORTS = 'components/reuniones/ReportsTab.tsx';
 
 test('existe UN solo `<audio>` en todo el módulo, y un solo reproductor', () => {
   const todos = ['AudioDock.tsx', 'AudioPlayer.tsx', 'MeetingWorkspace.tsx', 'MeetingBits.tsx']
@@ -169,10 +170,17 @@ test('el control se llama «Seguir transcripción» y ya no está en el transcri
 
 test('los contenedores desplazables reservan el hueco del dock', () => {
   assert.match(leer(DOCK), /DOCK_GAP_CLS = "pb-28 sm:pb-24"/);
+  // Transcript y las vistas de lectura en el workspace; el catálogo y el
+  // documento en la pestaña Reportes, que salió a su propio fichero cuando
+  // dejó de ser un fixture. La invariante es la misma —el dock está fuera del
+  // flujo, así que el hueco lo reserva QUIEN SCROLLEA— y lo que cambió es
+  // dónde viven los contenedores, por lo que se cuentan en los dos.
   const ws = sinComentarios(leer(WORKSPACE));
-  // Transcript, las vistas de lectura y los dos paneles de Reportes.
-  assert.ok((ws.match(/DOCK_GAP_CLS/g) ?? []).length >= 4,
-    'el dock está fuera del flujo: el hueco lo reserva quien scrollea');
+  const rep = sinComentarios(leer(REPORTS));
+  assert.ok((ws.match(/DOCK_GAP_CLS/g) ?? []).length >= 2,
+    'las vistas de lectura del workspace reservan el hueco');
+  assert.ok((rep.match(/DOCK_GAP_CLS/g) ?? []).length >= 2,
+    'el catálogo y el documento de Reportes reservan el hueco');
 });
 
 test('todos los controles del dock tienen aria-label y foco visible', () => {

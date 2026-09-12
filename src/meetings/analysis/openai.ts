@@ -2,6 +2,31 @@ import { ANALYSIS_PROMPT_VERSION, RawAnalysis, analysisJsonSchema, normalizeRawA
 import { SYSTEM_PROMPT, type RenderedTranscript, userMessage } from './prompt.js';
 
 /**
+ * ── Una llamada, dos artefactos ────────────────────────────────────────────
+ *
+ * El resumen y el acta comparten TODO lo que importa de esta llamada: el
+ * endpoint, `store: false`, la salida estructurada estricta, el reintento
+ * único, el timeout, la tabla de tarifas y la regla de no registrar contenido.
+ * Lo único que cambia es el prompt, el esquema y el tipo que sale.
+ *
+ * Eso es una `AnalysisTask`. No es una abstracción por si acaso: sin ella, el
+ * acta habría que implementarla copiando este fichero, y la copia es donde un
+ * día se queda sin el `store: false`.
+ */
+export interface AnalysisTask<T> {
+  /** El `name` del `json_schema`. Identifica la tarea ante el proveedor. */
+  readonly name: string;
+  readonly systemPrompt: string;
+  readonly jsonSchema: Record<string, unknown>;
+  readonly userMessage: (rendered: RenderedTranscript) => string;
+  /** Valida la respuesta ya parseada. Devuelve los CAMPOS que fallan, no sus valores. */
+  readonly parse: (json: unknown) => { readonly ok: true; readonly value: T } | { readonly ok: false; readonly fields: string };
+  /** Última pasada antes de que nadie lo use: el `"null"` textual y compañía. */
+  readonly normalize: (value: T) => T;
+  readonly promptVersion: number;
+}
+
+/**
  * El proveedor. Server-only, con límites, y sin registrar una sola palabra del
  * contenido.
  *
@@ -130,6 +155,27 @@ export interface EstimatedCost {
   readonly estimated: true;
 }
 
+/**
+ * Estima el coste de UNA tarea. El prompt cuenta, así que la tarea es un
+ * parámetro y no una constante: el acta y el resumen tienen instrucciones de
+ * distinto tamaño y cobrar por las del otro sería mentir por comodidad.
+ */
+export function estimateTaskCost(
+  task: Pick<AnalysisTask<unknown>, 'systemPrompt' | 'userMessage'>,
+  rendered: RenderedTranscript,
+  model = DEFAULT_MODEL,
+): EstimatedCost {
+  const inputTokens = estimateTokens(task.systemPrompt) + estimateTokens(task.userMessage(rendered));
+  return {
+    model,
+    inputTokens,
+    maxOutputTokens: MAX_OUTPUT_TOKENS,
+    minUsd: costUsd(model, inputTokens, 200),
+    maxUsd: costUsd(model, inputTokens, MAX_OUTPUT_TOKENS),
+    estimated: true,
+  };
+}
+
 export function estimateCost(rendered: RenderedTranscript, model = DEFAULT_MODEL): EstimatedCost {
   const inputTokens = estimateTokens(SYSTEM_PROMPT) + estimateTokens(userMessage(rendered));
   return {
@@ -144,8 +190,8 @@ export function estimateCost(rendered: RenderedTranscript, model = DEFAULT_MODEL
   };
 }
 
-export interface AnalyzeResult {
-  readonly raw: RawAnalysis;
+export interface TaskResult<T> {
+  readonly raw: T;
   /** El que se pidió. */
   readonly model: string;
   /** El que el proveedor dice haber usado: un alias se resuelve a una versión. */
@@ -160,6 +206,9 @@ export interface AnalyzeResult {
   readonly costUsd: number | null;
   readonly durationMs: number;
 }
+
+/** El resultado del resumen. Es `TaskResult` con el tipo del resumen dentro. */
+export type AnalyzeResult = TaskResult<RawAnalysis>;
 
 export interface AnalyzeDeps {
   readonly apiKey?: string;
@@ -182,10 +231,15 @@ export interface AnalyzeDeps {
 
 const TRANSITORIOS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
 
-export async function analyze(
+/**
+ * Ejecuta una tarea contra el proveedor. Es el cuerpo que antes tenía
+ * `analyze`, con el prompt, el esquema y el validador como parámetros.
+ */
+export async function runTask<T>(
+  task: AnalysisTask<T>,
   rendered: RenderedTranscript,
   deps: AnalyzeDeps = {},
-): Promise<AnalyzeResult> {
+): Promise<TaskResult<T>> {
   const apiKey = deps.apiKey ?? process.env.OPENAI_API_KEY ?? '';
   if (!apiKey.trim()) {
     throw new AnalysisError('no_key', 'Falta OPENAI_API_KEY en el entorno del servidor.');
@@ -199,14 +253,14 @@ export async function analyze(
     model,
     // La transcripción va en su propio mensaje, separada de las instrucciones.
     messages: [
-      { role: 'system', content: SYSTEM_PROMPT },
-      { role: 'user', content: userMessage(rendered) },
+      { role: 'system', content: task.systemPrompt },
+      { role: 'user', content: task.userMessage(rendered) },
     ],
     // Salida estructurada e impuesta por el proveedor, no «pídele que devuelva
     // JSON y cruza los dedos». Aun así se vuelve a validar al recibirla.
     response_format: {
       type: 'json_schema',
-      json_schema: { name: 'meeting_analysis', strict: true, schema: analysisJsonSchema() },
+      json_schema: { name: task.name, strict: true, schema: task.jsonSchema },
     },
     max_completion_tokens: MAX_OUTPUT_TOKENS,
     // No conservar la conversación del lado del proveedor. La transcripción es
@@ -259,11 +313,10 @@ export async function analyze(
       } catch {
         throw new AnalysisError('malformed', 'La respuesta no era JSON válido.');
       }
-      const parsed = RawAnalysis.safeParse(json);
-      if (!parsed.success) {
+      const parsed = task.parse(json);
+      if (!parsed.ok) {
         // Se nombran los CAMPOS que fallan, nunca sus valores.
-        const campos = parsed.error.issues.map((i) => i.path.join('.')).slice(0, 6).join(', ');
-        throw new AnalysisError('malformed', `La respuesta no cumple el esquema (${campos}).`);
+        throw new AnalysisError('malformed', `La respuesta no cumple el esquema (${parsed.fields}).`);
       }
       const inputTokens = datos.usage?.prompt_tokens ?? 0;
       const outputTokens = datos.usage?.completion_tokens ?? 0;
@@ -283,10 +336,10 @@ export async function analyze(
         // NORMALIZADO aquí, justo tras validar y antes de que nadie lo use ni lo
         // persista. El esquema garantiza la FORMA; no puede distinguir el valor
         // `null` de la palabra «null», porque las dos satisfacen `string|null`.
-        raw: normalizeRawAnalysis(parsed.data),
+        raw: task.normalize(parsed.value),
         model,
         modelReturned,
-        promptVersion: ANALYSIS_PROMPT_VERSION,
+        promptVersion: task.promptVersion,
         inputTokens,
         outputTokens,
         costUsd: coste,
@@ -312,4 +365,37 @@ export async function analyze(
     }
   }
   throw ultimo ?? new AnalysisError('http', 'No se pudo completar la llamada.');
+}
+
+/**
+ * El resumen, como tarea.
+ *
+ * `analyze()` sigue existiendo con la misma firma y el mismo comportamiento: lo
+ * único que ha cambiado es que ahora su cuerpo es `runTask` y sus
+ * particularidades están aquí, declaradas. Ese envoltorio no es cortesía con las
+ * pruebas — es que el resumen ya está en producción y este refactor no debe
+ * poder alterarlo.
+ */
+export const ANALYSIS_TASK: AnalysisTask<RawAnalysis> = {
+  name: 'meeting_analysis',
+  systemPrompt: SYSTEM_PROMPT,
+  jsonSchema: analysisJsonSchema(),
+  userMessage,
+  parse: (json) => {
+    const parsed = RawAnalysis.safeParse(json);
+    if (parsed.success) return { ok: true, value: parsed.data };
+    return {
+      ok: false,
+      fields: parsed.error.issues.map((i) => i.path.join('.')).slice(0, 6).join(', '),
+    };
+  },
+  normalize: normalizeRawAnalysis,
+  promptVersion: ANALYSIS_PROMPT_VERSION,
+};
+
+export async function analyze(
+  rendered: RenderedTranscript,
+  deps: AnalyzeDeps = {},
+): Promise<AnalyzeResult> {
+  return runTask(ANALYSIS_TASK, rendered, deps);
 }

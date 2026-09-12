@@ -374,3 +374,37 @@ export async function getMeetingAudioAvailability(
   const { hasPlayableAudio } = await import("@worker/meetings/uiRead.js");
   return hasPlayableAudio(scope, meetingId);
 }
+
+/* ── Reportes con plantilla ─────────────────────────────────────────────── */
+
+export type { TemplateView, ReportView } from "@worker/meetings/analysis/reports/service.js";
+export type {
+  ResolvedReport,
+  ResolvedSection,
+  ResolvedItem,
+  ResolvedCitation,
+} from "@worker/meetings/analysis/reports/build.js";
+
+/**
+ * El catálogo de plantillas del cliente, para pintar la pestaña Reportes.
+ *
+ * Materializa las cuatro predeterminadas si faltan, así que la primera visita
+ * de un cliente nuevo ya las ve. Es una LECTURA que escribe, y es idempotente:
+ * el UNIQUE por `(tenant, cliente, slug)` hace inofensivas dos pestañas a la
+ * vez. Nunca llama a OpenAI ni cuesta nada.
+ */
+export async function listReportTemplates(scope: MeetingsScope) {
+  const { listTemplates } = await import("@worker/meetings/analysis/reports/service.js");
+  return listTemplates(scope);
+}
+
+/**
+ * El historial de reportes de una reunión, del más nuevo al más viejo.
+ *
+ * Se resuelve en el SERVIDOR y baja como prop, que es lo que hace que recargar
+ * la pantalla muestre el reporte guardado en vez de volver a generarlo.
+ */
+export async function listMeetingReports(scope: MeetingsScope, meetingId: string) {
+  const { listReports } = await import("@worker/meetings/analysis/reports/service.js");
+  return listReports(scope, meetingId);
+}

@@ -45,3 +45,4 @@ tools/.next-nav-stub.jsx
 # Y éste lo escribe buildDeletionHarness.mjs: el mismo stub, pero anotando a
 # dónde se pidió navegar, que es lo que la ficha tiene que demostrar.
 tools/.next-nav-del-stub.jsx
+tools/.next-nav-rep-stub.jsx

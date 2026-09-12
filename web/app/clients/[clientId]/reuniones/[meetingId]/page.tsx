@@ -3,7 +3,12 @@ import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { MeetingWorkspace } from "@/components/reuniones/MeetingWorkspace";
 import { MeetingDeletionProvider } from "@/components/reuniones/MeetingDeletion";
-import { getMeeting, getMeetingAudioAvailability } from "@/lib/meetingsData";
+import {
+  getMeeting,
+  getMeetingAudioAvailability,
+  listMeetingReports,
+  listReportTemplates,
+} from "@/lib/meetingsData";
 import type { AudioState } from "@/components/reuniones/AudioPlayer";
 
 /**
@@ -41,6 +46,19 @@ export default async function MeetingPage({
     { tenantId: scope.tenantId, clientId: client.id },
     meetingId,
   );
+
+  // Las plantillas y los reportes se resuelven AQUÍ, en el servidor, y bajan
+  // como props. Es lo que hace que recargar la pantalla muestre el reporte
+  // guardado en lugar de volver a generarlo — y que la pestaña Reportes no
+  // tenga que pedir nada al montarse.
+  //
+  // `listReportTemplates` materializa las cuatro predeterminadas si faltan. Es
+  // una lectura que escribe, y es idempotente por el UNIQUE de `(tenant,
+  // cliente, slug)`; nunca llama a OpenAI ni cuesta nada.
+  const [templates, reports] = await Promise.all([
+    listReportTemplates({ tenantId: scope.tenantId, clientId: client.id }),
+    listMeetingReports({ tenantId: scope.tenantId, clientId: client.id }, meetingId),
+  ]);
   const audioState: AudioState =
     meeting.status.kind === "failed" || !playable
       ? "unavailable"
@@ -61,6 +79,12 @@ export default async function MeetingPage({
     <MeetingWorkspace
       meeting={meeting}
       clientId={client.id}
+      templates={templates}
+      reports={reports}
+      // Editar y restaurar plantillas es de owner/admin. Se decide en el
+      // SERVIDOR y baja como dato: ocultar los botones es cortesía, la ruta lo
+      // vuelve a exigir.
+      canEditTemplates={scope.role === "owner" || scope.role === "admin"}
       backHref={`/clients/${clientId}/reuniones`}
       audioState={audioState}
       // La URL firmada NO se resuelve en el servidor y se manda al cliente: se

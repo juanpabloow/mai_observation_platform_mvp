@@ -137,6 +137,13 @@ function App() {
       <MeetingDeletionProvider clientId="22222222-2222-4222-8222-222222222222" canDelete>
       <MeetingWorkspace
           meeting={m}
+          // El arnés existe para el DOCK. Sin plantillas ni reportes, la pestaña
+          // Reportes muestra su estado vacío, que es lo correcto aquí: lo que
+          // hay que poder ver es que el reproductor no se mueve al cambiar de
+          // pestaña, y para eso la pestaña sólo tiene que renderizar.
+          templates={[]}
+          reports={[]}
+          canEditTemplates={false}
           clientId="22222222-2222-4222-8222-222222222222"
           backHref="#"
           audioState="ready"

@@ -68,7 +68,7 @@ export async function getAnalysis(scope: AppScope, meetingId: string): Promise<A
   // Se busca por la transcripción ACTIVA. Si el resumen viejo es de otra versión,
   // esta consulta no lo encuentra y la pantalla queda sin resumen, que es
   // correcto: ese resumen habla de otro texto.
-  const fila = await analysesRepo.findByTranscript(activo, scope.tenantId, scope.clientId);
+  const fila = await analysesRepo.findByTranscript(activo, 'summary', scope.tenantId, scope.clientId);
   if (fila) {
     const v = vista(fila, activo);
     if (v) return v;
@@ -129,7 +129,7 @@ export async function previewCost(scope: AppScope, meetingId: string): Promise<E
   const meeting = await requireMeeting(scope, meetingId);
   const activo = meeting.active_transcript_id;
   if (!activo) throw new MeetingsApiError('invalid_transition', 'La reunión todavía no tiene transcripción.');
-  const existente = await analysesRepo.findByTranscript(activo, scope.tenantId, scope.clientId);
+  const existente = await analysesRepo.findByTranscript(activo, 'summary', scope.tenantId, scope.clientId);
   const { segments, speakers } = await fuente(activo);
   const rendered = renderTranscript(segments, speakers);
   return {
@@ -284,7 +284,9 @@ export async function generateAnalysis(
   });
   if (!fila) {
     // Otra petición se apropió de la reserva por caducidad mientras llamábamos.
-    const actual = await analysesRepo.findByTranscript(activoAlEmpezar, scope.tenantId, scope.clientId);
+    const actual = await analysesRepo.findByTranscript(
+      activoAlEmpezar, 'summary', scope.tenantId, scope.clientId,
+    );
     const v = actual ? vista(actual, activoAlEmpezar) : null;
     return {
       state: v ? 'ready' : 'generating',
