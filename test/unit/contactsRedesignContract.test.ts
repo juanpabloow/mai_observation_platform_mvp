@@ -298,7 +298,13 @@ test('contacts: the controls are ONE row each, and share one height', () => {
   // search never drops below 240px (min-w-[15rem]), so it can't compress to just its icon
   // (the reported ~917px-content bug).
   assert.ok(/<div className="flex flex-wrap items-center gap-2.5 px-3 py-2.5">/.test(page), 'the header card is one wrapping band');
-  assert.ok(toolbar.includes('min-w-[15rem] flex-1') && toolbar.includes('max-w-[420px]'), 'the search is 240–420px, never narrower');
+  // The 420px cap is GONE. It existed while the header held six controls; with the
+  // actions folded into `···` the search takes all the slack, because it is the
+  // screen's primary verb. The floor is what still matters.
+  assert.ok(toolbar.includes('min-w-[15rem] flex-1'), 'the search never drops below 240px and takes the slack');
+  assert.ok(!/max-w-\[420px\]/.test(toolbar), 'and it is no longer capped at 420px');
+  // The COMPACT form (detail panel open) keeps its cap, or the row cannot fit.
+  assert.ok(toolbar.includes('compact ? "max-w-[240px]" : ""'), 'only the compact form is capped');
 });
 
 test('contacts: "Nuevo contacto" is LIVE, and creation goes through the identity chokepoint', () => {
@@ -309,14 +315,33 @@ test('contacts: "Nuevo contacto" is LIVE, and creation goes through the identity
   assert.ok(src.includes('<NewContactButton'), 'the button occupies its designed slot');
   assert.ok(!src.includes('aria-disabled="true"'), 'it is no longer inert');
   assert.ok(!src.includes('TODO(crm)'), 'and the TODO that tracked this is gone');
-  // IMPORT is still deliberately absent. The artboard draws it, but it is a FEATURE
-  // (file upload, column mapping, dedup against the identity spine), not a restyle, and
-  // a button that opens nothing is worse than one that is not there.
+  // IMPORT is still deliberately absent. The artboard draws it (and so does the
+  // later `···` sketch), but it is a FEATURE (file upload, column mapping, dedup
+  // against the identity spine), not a restyle, and a button that opens nothing is
+  // worse than one that is not there.
+  const toolbarSrc = read(TOOLBAR);
   assert.ok(!src.includes('Import contacts'), 'import stays out entirely');
   assert.ok(!/>\s*Importar\s*</.test(src), 'and it is absent under its Spanish label too');
-  // EXPORT is the one that shipped, and it exports the FILTERED view rather than
-  // "everything", which is the classic export bug.
-  assert.ok(src.includes('<ContactsExportLink'), 'export is offered');
+  // The `···` menu DOES reserve the slot (the header's shape is part of the spec),
+  // but it must never be a live control while there is no import behind it.
+  assert.ok(/>\s*Importar contactos\s*</.test(toolbarSrc), 'the overflow menu reserves the slot');
+  assert.ok(
+    /aria-disabled="true"[\s\S]{0,400}Importar contactos/.test(toolbarSrc),
+    'and it is inert — aria-disabled, never a link',
+  );
+  assert.ok(
+    !/<(a|Link)[^>]*>[\s\S]{0,200}Importar contactos/.test(toolbarSrc),
+    'nothing navigates from it',
+  );
+  // EXPORT is the one that shipped. It now lives inside `···` (the header folded to
+  // one row), and it still exports the FILTERED view rather than "everything", which
+  // is the classic export bug.
+  assert.ok(src.includes('<ContactsOverflowMenu'), 'the overflow menu is rendered');
+  assert.ok(toolbarSrc.includes('Exportar CSV'), 'export is offered inside it');
+  assert.ok(
+    toolbarSrc.includes("for (const k of [...PAGING_PARAMS, \"c\", \"edit\", \"cols\"]) exportParams.delete(k)"),
+    'and the export URL still describes the filtered SET, not the current page',
+  );
 
   // The real guarantee, checked at the source: the create action resolves through the
   // spine and never issues its own INSERT.
@@ -518,11 +543,15 @@ test('contacts: Enter runs the search (a real form submit)', () => {
 
 test('contacts: Columns is presentational — it writes ?cols= and touches nothing else', () => {
   const toolbar = read(TOOLBAR);
-  // It now lives in the STATS row (it belongs to the table, not to the search), as
-  // its own exported component driving the same URL param.
-  assert.ok(toolbar.includes('export function ContactsColumnsMenu'), 'Columns is its own control');
+  // It now lives INSIDE the `···` overflow menu: the header folded to one row, so
+  // only Buscar, Filtrar and the primary stayed visible. The URL contract is
+  // unchanged — that is the part that matters.
+  assert.ok(toolbar.includes('export function ContactsOverflowMenu'), 'the overflow menu is the control that hosts Columns');
   assert.ok(toolbar.includes('apply({ cols: next.join(",") }, { keepPaging: true })'), 'Columns only writes ?cols=');
-  assert.ok(read(CONTACTS_PAGE).includes('<ContactsColumnsMenu visibleColumns={visibleColumns} />'), 'rendered in the stats row');
+  assert.ok(
+    read(CONTACTS_PAGE).includes('visibleColumns={visibleColumns}'),
+    'and the page still hands it the parsed columns',
+  );
   const page = read(CONTACTS_PAGE);
   // `cols` must never be forwarded into a query — it is parsed for rendering only.
   assert.ok(page.includes('const visibleColumns = parseColumns(cols)'), 'cols is parsed for rendering');
@@ -559,17 +588,24 @@ test('contacts: a number without a name shows the phone, in mono so it reads as 
   assert.ok(src.includes('named ? "" : "u-mono"'), 'an unnamed contact renders its id in mono');
 });
 
-test('contacts: an overdue row is marked by SHAPE + color, not color alone', () => {
+test('contacts: a late task is a CHIP on the name — it never paints the row', () => {
   const src = read(CONTACTS_TABLE);
-  // It moved from `.u-row-danger` (a red wash + 3px red bar) to `.u-row-overdue` (amber),
-  // because red is no longer available for it: the redesign spends red on the active nav
-  // item, `Agendar cita`, and the "a human is handling this" marker. "Late" is exactly
-  // what --warn is for, and the amber still carries a LEFT RULE, so the state is a shape
-  // as well as a colour.
-  assert.ok(src.includes('u-row-overdue'), 'the row carries the overdue treatment');
-  const css = read('app/globals.css');
-  assert.ok(/\.u-row-overdue[^}]*box-shadow:\s*inset 2px 0 0 0 var\(--warn-rule\)/s.test(css), 'a left rule, not colour alone');
-  assert.ok(/\.u-row-overdue[^}]*background-color:\s*var\(--warn-soft\)/s.test(css), 'and an amber wash');
+  // Comments stripped for the "is gone" half: the file's own note NAMES the class it
+  // dropped, to explain why, and prose must not satisfy or break a "does not contain".
+  const code = stripComments(src);
+  // The treatment went `.u-row-danger` (red wash + 3px red bar) → `.u-row-overdue`
+  // (amber wash + 2px amber rule) → a chip. Both washes had the same defect: a row's
+  // GROUND already means something in this table — `bg-chip` is selection, `bg-subtle`
+  // is hover — so a third tinted state read as "you are hovering this" or "this one is
+  // open" instead of as a fact about the person. A chip carries its own TEXT and count,
+  // which survives greyscale outright rather than depending on colour plus a rule.
+  assert.equal(code.includes('u-row-overdue'), false, 'the row itself stays neutral');
+  assert.equal(read('app/globals.css').includes('.u-row-overdue {'), false, 'and the rule is gone, not just unused');
+  assert.ok(src.includes('c.overdue_task_count'), 'the overdue count still reaches the row');
+  assert.ok(/vencida/.test(src), 'and says so in words');
+  assert.ok(/tone="warn"/.test(src), 'in the amber the system reserves for "late"');
+  // Selection stays the ONE thing that changes a row's ground, hover the one grey.
+  assert.ok(src.includes('selected ? "bg-chip" : "hover:bg-subtle"'), 'selection is the ground change; hover is the grey');
 });
 
 test('contacts: loading / empty / error states exist and the empty state can clear filters', () => {
@@ -606,6 +642,14 @@ test('record + drawer: ONE component declares the sections, their order and thei
 
   assert.ok(read('components/contacts/ContactProperties.tsx').includes('mode="read"'), 'the record reads it');
   assert.ok(read('components/contacts/form/ContactEditForm.tsx').includes('mode="edit"'), 'the drawer edits it');
+  // CREATING is the third mode, not a fourth product. `Nuevo contacto` used to declare
+  // its own five sections in shouting caps (`IDENTIDAD`, `COMUNICACIÓN`) with its own
+  // optional divider, so the one surface where a contact is BORN looked unlike every
+  // surface that shows it afterwards.
+  const create = read('components/contacts/form/ContactCreateForm.tsx');
+  assert.ok(create.includes('mode="edit"'), 'and the create drawer renders the same set');
+  assert.equal(/<FormSection/.test(create), false, 'it declares no sections of its own');
+  assert.equal(/title="[A-ZÁÉÍÓÚÑ]{2,}"/.test(create), false, 'and no shouting-caps headings');
 });
 
 test('record: the left column is READ-ONLY — there is one place a contact is written', () => {
@@ -888,15 +932,41 @@ test('both panels are THREE zones — fixed header, one scrolling body, fixed fo
   assert.ok(panel.includes('scrollResetKey={tab}'), 'switching tabs returns the body to the top');
   // Its wrapper must be a flex column, or the aside sizes to content again.
   const page = read(CONTACTS_PAGE);
-  // TWO SIBLING CARDS. The panel inside the shell cut the title band short of the right
-  // edge (square top-right corner against a round top-left) and pushed the panel a
-  // gutter below the shell's top. As siblings in one row they share a top and a bottom.
-  assert.ok(/<div className="flex min-h-0 flex-1 gap-3">/.test(page), 'the shell and the panel share a row');
-  // The table card now opts out of clipping, because the facet row beside it hosts the
-  // Filtrar / Orden / Columnas popovers and a card's overflow-hidden cuts an
-  // absolutely-positioned menu off at its edge.
-  assert.ok(page.indexOf('<PageShell clip={false}>') > page.indexOf('flex min-h-0 flex-1 gap-3'), 'the shell is inside that row');
-  assert.ok(page.indexOf('<ContactSidePanel') > page.indexOf('</PageShell>'), 'and the panel is its sibling, not its child');
+  // TWO TOP-LEVEL COLUMNS. The ficha is a sibling of the LIST COLUMN (duplicates +
+  // header card + table card), not of the table alone: nested inside the table's row it
+  // started a header's height below the top of the page and lost the ~100px the notes
+  // composer needs. `main` is therefore the row, and the list stacks inside one column.
+  assert.ok(/<main className="flex min-h-0 w-full flex-1 gap-3">/.test(page), 'main IS the row: list column + ficha');
+  assert.ok(/<div className="flex min-h-0 min-w-0 flex-1 flex-col gap-\[var\(--content-pad\)\]">/.test(page),
+    'the list column stacks the header card over the table card');
+  // The table card CLIPS again (the PageShell default). Its opt-out existed because
+  // the facet row beside it hosted the Filtrar / Orden / Columnas popovers; those
+  // now live in the header card, so the table card holds no dropdown and the
+  // clipping is what keeps its radius from being squared off by the sticky head.
+  assert.ok(page.indexOf('<PageShell>') > page.indexOf('flex min-h-0 min-w-0 flex-1 flex-col'), 'the table card is inside that column');
+  // ONE LANE, ONE OCCUPANT. The right column is shared: the ficha holds it while a row is
+  // selected, `Nuevo contacto` takes it over while the form is open. Both are the same box
+  // at the same width, so both NARROW the list — the create drawer used to be mounted from
+  // the header card's button and, with no positioned ancestor up that subtree, floated over
+  // the header and the table instead.
+  const lane = page.indexOf('<ContactsPanelLane');
+  assert.ok(lane > 0, 'the lane owns the right column');
+  assert.ok(lane < page.indexOf('flex min-h-0 min-w-0 flex-1 flex-col'), 'and wraps the list column');
+  assert.ok(page.indexOf('<ContactSidePanel') < page.indexOf('<PageShell>'), 'the ficha is handed to the lane, never nested in the table card');
+  const laneSrc = read('components/contacts/ContactsPanelLane.tsx');
+  assert.ok(laneSrc.includes('<ContactCreateForm'), 'and the create drawer is the lane\'s other occupant');
+  assert.ok(laneSrc.includes('placement="lane"'), 'in the ficha\'s geometry, not floating over the page');
+  assert.equal(
+    read('components/contacts/form/NewContactButton.tsx').includes('ContactCreateForm'),
+    false,
+    'the header button only ASKS for the drawer — mounting it there is what made it float',
+  );
+  // The two geometries are the SAME wrapper, or "same lane" is a claim the code does not keep.
+  const drawer = read('components/contacts/form/ContactFormDrawer.tsx');
+  for (const shape of ['fixed inset-y-0 right-0 z-50 flex xl:contents', 'shrink-0 self-stretch']) {
+    assert.ok(drawer.includes(shape), `the lane placement reuses the ficha's wrapper: ${shape}`);
+    assert.ok(read('components/contacts/ContactSidePanel.tsx').includes(shape), `and the ficha still defines it: ${shape}`);
+  }
   assert.equal(/xl:block/.test(page), false, 'the panel column is never a block');
   // The panel must not GROW on the row axis: `flex-1` there swallowed its own width and
   // took half the screen from the table.
@@ -1407,11 +1477,15 @@ test('a card that hosts a dropdown does not clip it away', () => {
   // Without this the menu was cut off a few px below the button and looked like it
   // never opened.
   const page = read(CONTACTS_PAGE);
-  // BOTH cards opt out now: the title card so the search field's focus ring is not
-  // clipped, and the TABLE card because the facet row beside it hosts the Filtrar /
-  // Orden / Columnas popovers.
+  // ONLY the title card opts out now — it is the one that hosts the popovers
+  // (Filtrar and `···`) and the search field's focus ring.
   assert.ok(page.includes('<PageShell grow={false} clip={false}>'), 'the title card opts out');
-  assert.ok(page.includes('<PageShell clip={false}>'), 'and so does the table card, which holds the menus');
+  // The TABLE card must CLIP: it holds a full-bleed table with a sticky head, which
+  // paints straight over the 12px radius unless the card clips, and its corners then
+  // read as square beside the header card's rounded ones. It hosts no dropdown (the
+  // row menu is a Link), so there is nothing for the clip to cut off.
+  assert.ok(!/<PageShell clip=\{false\}>/.test(page), 'the table card no longer opts out');
+  assert.ok(/\n      <PageShell>\n/.test(page), 'it takes the clipping default, so its radius survives the table');
   const toolbarSrc = read('components/contacts/ContactsToolbar.tsx');
   // The three menus (Filtrar / Orden / Columnas) share ONE popover, so the positioning is
   // interpolated (`right-0` or `left-0`) rather than a fixed literal. What must hold is

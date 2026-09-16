@@ -52,13 +52,19 @@ test('the roster is three sibling cards in a row, not a drawer over a reserved l
   // The lane trick: the roster's right edge and the panel's left edge were two
   // independent numbers that had to be kept in step by hand.
   assert.ok(!src.includes('lg:pr-[452px]'), 'no hand-reserved drawer lane');
-  // The SAME strings Contacts uses, gap included — a 16px gap here against Contacts'
+  // The SAME grammar Contacts uses, GAP INCLUDED — a 16px gap here against Contacts'
   // 12px is exactly the kind of near-miss that reads as two screens.
+  //
+  // Matched by SHAPE, not by identical strings: Contacts has since hoisted its row up to
+  // <main> so the ficha spans the header's height too, and its list column separates
+  // CARDS (--content-pad) where the roster's separates a header from a table. The two
+  // properties worth pinning survive that — a row at gap-3, and a `min-w-0 flex-1`
+  // column beside the panel so a wide table cannot push the panel off screen.
   const contacts = stripComments(read(CONTACTS));
-  for (const shape of ['flex min-h-0 flex-1 gap-3', 'flex min-h-0 min-w-0 flex-1 flex-col gap-3']) {
-    assert.ok(src.includes(shape), `roster: ${shape}`);
-    assert.ok(contacts.includes(shape), `contacts still defines the shape this copied: ${shape}`);
-  }
+  assert.ok(src.includes('flex min-h-0 flex-1 gap-3'), 'roster: the row');
+  assert.ok(/className="flex min-h-0 (w-full )?flex-1 gap-3"/.test(contacts), 'contacts: the same row, same gap');
+  assert.ok(src.includes('flex min-h-0 min-w-0 flex-1 flex-col gap-3'), 'roster: the list column');
+  assert.ok(/className="flex min-h-0 min-w-0 flex-1 flex-col gap-/.test(contacts), 'contacts: the same list column');
 });
 
 test('the detail panel is ONE element with two geometries, sized from a token', () => {
