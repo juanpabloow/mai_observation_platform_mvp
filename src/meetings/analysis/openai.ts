@@ -1,0 +1,456 @@
+import { ANALYSIS_PROMPT_VERSION, RawAnalysis, analysisJsonSchema, normalizeRawAnalysis } from './contract.js';
+import { SYSTEM_PROMPT, type RenderedTranscript, userMessage } from './prompt.js';
+
+/**
+ * ── Una llamada, dos artefactos ────────────────────────────────────────────
+ *
+ * El resumen y el acta comparten TODO lo que importa de esta llamada: el
+ * endpoint, `store: false`, la salida estructurada estricta, el reintento
+ * único, el timeout, la tabla de tarifas y la regla de no registrar contenido.
+ * Lo único que cambia es el prompt, el esquema y el tipo que sale.
+ *
+ * Eso es una `AnalysisTask`. No es una abstracción por si acaso: sin ella, el
+ * acta habría que implementarla copiando este fichero, y la copia es donde un
+ * día se queda sin el `store: false`.
+ */
+export interface AnalysisTask<T> {
+  /** El `name` del `json_schema`. Identifica la tarea ante el proveedor. */
+  readonly name: string;
+  readonly systemPrompt: string;
+  readonly jsonSchema: Record<string, unknown>;
+  readonly userMessage: (rendered: RenderedTranscript) => string;
+  /** Valida la respuesta ya parseada. Devuelve los CAMPOS que fallan, no sus valores. */
+  readonly parse: (json: unknown) => { readonly ok: true; readonly value: T } | { readonly ok: false; readonly fields: string };
+  /** Última pasada antes de que nadie lo use: el `"null"` textual y compañía. */
+  readonly normalize: (value: T) => T;
+  readonly promptVersion: number;
+}
+
+/**
+ * El proveedor. Server-only, con límites, y sin registrar una sola palabra del
+ * contenido.
+ *
+ * ── Qué endpoint, exactamente ──────────────────────────────────────────────
+ *
+ *   POST https://api.openai.com/v1/chat/completions
+ *
+ * Es Chat Completions, NO la Responses API. Se manda `store: false` de todos
+ * modos: en Chat Completions el valor por omisión ya es no almacenar, pero
+ * «por omisión» es una propiedad del proveedor que puede cambiar y que la
+ * organización puede tener configurada de otra forma. Escribirlo es barato y
+ * convierte una suposición en una instrucción.
+ *
+ * ── Reintentos: uno, y es el único ─────────────────────────────────────────
+ *
+ * No se usa el SDK de OpenAI —no está instalado— sino `fetch` directamente. Eso
+ * importa: el SDK reintenta 2 veces por su cuenta además de lo que haga quien
+ * lo llame, así que «un reintento» con el SDK serían tres llamadas. Con `fetch`
+ * el número es exactamente el que dice `retries`.
+ *
+ * ── La clave ───────────────────────────────────────────────────────────────
+ *
+ * `OPENAI_API_KEY` se lee del entorno del proceso y no sale de él. No se escribe
+ * en ningún log, ni en el mensaje de ningún error —los errores reportan estado
+ * HTTP y tipo, nunca cabeceras—, y este módulo no se importa nunca desde el
+ * navegador: vive bajo `src/`, que sólo se ejecuta en el servidor.
+ *
+ * ── Qué se registra ────────────────────────────────────────────────────────
+ *
+ * Tokens, coste, duración y modelo. NUNCA el prompt, la transcripción ni la
+ * respuesta. El contenido privado ya vive en la base; repetirlo en un log lo
+ * pondría en un sitio con otra retención y otros permisos.
+ */
+
+export class AnalysisError extends Error {
+  readonly code: 'no_key' | 'http' | 'timeout' | 'malformed' | 'refused';
+  readonly status?: number;
+  constructor(code: AnalysisError['code'], message: string, status?: number) {
+    super(message);
+    this.name = 'AnalysisError';
+    this.code = code;
+    this.status = status;
+  }
+}
+
+/**
+ * Precio por millón de tokens, verificado contra la documentación de OpenAI el
+ * 11 de septiembre de 2026. Una tabla escrita en el código envejece y nadie se
+ * entera hasta que la factura no cuadra, así que el importe que sale de aquí se
+ * llama SIEMPRE «coste estimado» y nunca «coste facturado».
+ */
+export const PRICING: Record<string, { inPerM: number; outPerM: number }> = {
+  'gpt-4o-mini': { inPerM: 0.15, outPerM: 0.60 },
+  'gpt-4o': { inPerM: 2.50, outPerM: 10.00 },
+};
+
+/**
+ * Identificadores fechados que facturan a la tarifa de su alias.
+ *
+ * OpenAI resuelve `gpt-4o-mini` a `gpt-4o-mini-2024-07-18` y devuelve el
+ * fechado en la respuesta. El coste se calculaba con ESE identificador, que no
+ * está en `PRICING`, así que TODA llamada real guardaba `cost_usd = NULL`. Los
+ * dos análisis que ya hay en staging lo demuestran: 1549+126 y 16157+415 tokens
+ * registrados, y coste nulo en los dos.
+ *
+ * Una equivalencia CERRADA y no `startsWith`. Con prefijos, un
+ * `gpt-4o-mini-turbo-2027` inventado o con otra tarifa heredaría este precio en
+ * silencio y el importe estimado mentiría sin que nada saltara. Un modelo que no
+ * esté en esta tabla debe seguir dando `null` — «no disponible», que es
+ * verdadero, en vez de un número que no lo es.
+ */
+export const MODEL_ALIAS: Record<string, string> = {
+  'gpt-4o-mini': 'gpt-4o-mini',
+  'gpt-4o-mini-2024-07-18': 'gpt-4o-mini',
+};
+
+/** El modelo con tarifa conocida que corresponde a este identificador, o null. */
+export function pricingKeyFor(model: string): string | null {
+  return MODEL_ALIAS[model] ?? (PRICING[model] ? model : null);
+}
+
+/** El económico, y suficiente para esto: extraer y clasificar, no redactar prosa. */
+export const DEFAULT_MODEL = 'gpt-4o-mini';
+
+/** Tope de salida. El esquema ya acota las listas; esto acota el gasto. */
+export const MAX_OUTPUT_TOKENS = 2000;
+
+/**
+ * Coste ESTIMADO, o `null` si no conocemos la tarifa de ese modelo.
+ *
+ * Nunca 0 para un modelo desconocido: un cero se lee como «gratis» y se suma sin
+ * ruido a un total que entonces miente. `null` obliga a decir «no disponible».
+ *
+ * ── Lo que esta cuenta NO hace ─────────────────────────────────────────────
+ *
+ * No distingue los tokens de entrada CACHEADOS, que OpenAI factura más baratos.
+ * Todos los de entrada se cobran aquí a la tarifa normal, así que la estimación
+ * es CONSERVADORA: puede salir por encima de lo facturado, nunca por debajo.
+ * Soportarlo de verdad exigiría leer `usage.prompt_tokens_details` y guardarlo
+ * en una columna nueva — es decir, una migración —, y no toca ahora.
+ */
+export function costUsd(model: string, inputTokens: number, outputTokens: number): number | null {
+  const clave = pricingKeyFor(model);
+  if (clave === null) return null;
+  const p = PRICING[clave];
+  return (inputTokens / 1e6) * p.inPerM + (outputTokens / 1e6) * p.outPerM;
+}
+
+/**
+ * Caracteres por token. **2.8**, y es deliberadamente BAJO.
+ *
+ * ── De dónde sale el número ────────────────────────────────────────────────
+ *
+ * Medido contra las cuatro llamadas reales de staging del 12 de septiembre de
+ * 2026, comparando los caracteres de la petición COMPLETA con los
+ * `prompt_tokens` que devolvió el proveedor:
+ *
+ *     petición          caracteres   tokens reales   car/token
+ *     acta-general           15 846           5 244       3.022
+ *     decisiones              15 661          5 186       3.020
+ *     informe-ejecutivo       15 705          5 198       3.021
+ *     riesgos                 15 733          5 207       3.022
+ *
+ * La constante anterior era 4, heredada de la regla de oro del inglés. En
+ * español —con sus palabras más largas y sus acentos, que el tokenizador parte—
+ * la densidad real es de 3.02, así que la estimación salía un 25 % por debajo.
+ *
+ * Se usa 2.8 y no 3.02 porque una estimación que se queda corta es la que hace
+ * daño: se enseña como techo antes de gastar, y un techo que se supera no es un
+ * techo. Con 2.8 el caso medido estima 5 659 frente a 5 244 reales — un 8 % de
+ * margen. Errar por arriba sólo cuesta parecer más caro de lo que se es.
+ */
+export const CHARS_PER_TOKEN = 2.8;
+
+/**
+ * Estimación de tokens sin llamar a nadie. Aproximada a propósito: sirve para
+ * decidir si una llamada es cara, no para facturar. El número real viene en la
+ * respuesta y es el que se guarda.
+ */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / CHARS_PER_TOKEN);
+}
+
+/**
+ * Los tokens de entrada de una petición completa.
+ *
+ * Las tres partes que el proveedor cobra como entrada: el mensaje de sistema,
+ * el de usuario y el esquema de la salida estructurada. Se suman los
+ * CARACTERES y se divide una sola vez, en vez de estimar cada parte y sumar
+ * redondeos: tres `Math.ceil` añaden hasta dos tokens de ruido y, peor, hacen
+ * que el resultado dependa de cómo se troceó el texto.
+ */
+export function estimateRequestTokens(
+  systemPrompt: string,
+  userMessage: string,
+  jsonSchema: Record<string, unknown>,
+): number {
+  return estimateTokens(systemPrompt + userMessage + JSON.stringify(jsonSchema));
+}
+
+export interface EstimatedCost {
+  readonly model: string;
+  readonly inputTokens: number;
+  readonly maxOutputTokens: number;
+  /** `null` cuando el modelo no está en la tabla de precios. */
+  readonly minUsd: number | null;
+  readonly maxUsd: number | null;
+  /** Siempre true: es una estimación, nunca el importe facturado. */
+  readonly estimated: true;
+}
+
+/**
+ * Estima el coste de UNA tarea. El prompt cuenta, así que la tarea es un
+ * parámetro y no una constante: el acta y el resumen tienen instrucciones de
+ * distinto tamaño y cobrar por las del otro sería mentir por comodidad.
+ */
+export function estimateTaskCost(
+  task: Pick<AnalysisTask<unknown>, 'systemPrompt' | 'userMessage' | 'jsonSchema'>,
+  rendered: RenderedTranscript,
+  model = DEFAULT_MODEL,
+): EstimatedCost {
+  // LA PETICIÓN COMPLETA: instrucciones internas, mensaje de usuario —que ya
+  // lleva dentro las instrucciones de la plantilla y la transcripción— y el
+  // ESQUEMA. El esquema viaja en `response_format` y el proveedor lo factura
+  // como entrada; dejarlo fuera quitaba unos 900 caracteres de la cuenta.
+  const inputTokens = estimateRequestTokens(
+    task.systemPrompt,
+    task.userMessage(rendered),
+    task.jsonSchema,
+  );
+  return {
+    model,
+    inputTokens,
+    maxOutputTokens: MAX_OUTPUT_TOKENS,
+    minUsd: costUsd(model, inputTokens, 200),
+    maxUsd: costUsd(model, inputTokens, MAX_OUTPUT_TOKENS),
+    estimated: true,
+  };
+}
+
+export function estimateCost(rendered: RenderedTranscript, model = DEFAULT_MODEL): EstimatedCost {
+  const inputTokens = estimateRequestTokens(
+    SYSTEM_PROMPT,
+    userMessage(rendered),
+    analysisJsonSchema(),
+  );
+  return {
+    model,
+    inputTokens,
+    maxOutputTokens: MAX_OUTPUT_TOKENS,
+    // El mínimo supone una salida corta; el máximo, que se agota el tope. Los dos
+    // son aproximados: el recuento de tokens real lo da el proveedor al responder.
+    minUsd: costUsd(model, inputTokens, 200),
+    maxUsd: costUsd(model, inputTokens, MAX_OUTPUT_TOKENS),
+    estimated: true,
+  };
+}
+
+export interface TaskResult<T> {
+  readonly raw: T;
+  /** El que se pidió. */
+  readonly model: string;
+  /** El que el proveedor dice haber usado: un alias se resuelve a una versión. */
+  readonly modelReturned: string | null;
+  readonly promptVersion: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  /**
+   * Coste ESTIMADO a partir de la tabla local de tarifas, NO el importe
+   * facturado por el proveedor. `null` si la tarifa de ese modelo no se conoce.
+   */
+  readonly costUsd: number | null;
+  readonly durationMs: number;
+}
+
+/** El resultado del resumen. Es `TaskResult` con el tipo del resumen dentro. */
+export type AnalyzeResult = TaskResult<RawAnalysis>;
+
+export interface AnalyzeDeps {
+  readonly apiKey?: string;
+  readonly model?: string;
+  readonly fetchImpl?: typeof fetch;
+  readonly timeoutMs?: number;
+  /** Reintentos ADICIONALES. 1 por omisión, y sólo ante fallos transitorios. */
+  readonly retries?: number;
+  /** Sólo identificadores y números. Jamás contenido. */
+  readonly onUsage?: (u: {
+    model: string;
+    modelReturned: string | null;
+    inputTokens: number;
+    outputTokens: number;
+    costUsd: number | null;
+    durationMs: number;
+    attempt: number;
+  }) => void;
+}
+
+const TRANSITORIOS = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
+
+/**
+ * Ejecuta una tarea contra el proveedor. Es el cuerpo que antes tenía
+ * `analyze`, con el prompt, el esquema y el validador como parámetros.
+ */
+export async function runTask<T>(
+  task: AnalysisTask<T>,
+  rendered: RenderedTranscript,
+  deps: AnalyzeDeps = {},
+): Promise<TaskResult<T>> {
+  const apiKey = deps.apiKey ?? process.env.OPENAI_API_KEY ?? '';
+  if (!apiKey.trim()) {
+    throw new AnalysisError('no_key', 'Falta OPENAI_API_KEY en el entorno del servidor.');
+  }
+  const model = deps.model ?? process.env.MEETINGS_ANALYSIS_MODEL ?? DEFAULT_MODEL;
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const timeoutMs = deps.timeoutMs ?? 60_000;
+  const maxRetries = deps.retries ?? 1;
+
+  const body = {
+    model,
+    // La transcripción va en su propio mensaje, separada de las instrucciones.
+    messages: [
+      { role: 'system', content: task.systemPrompt },
+      { role: 'user', content: task.userMessage(rendered) },
+    ],
+    // Salida estructurada e impuesta por el proveedor, no «pídele que devuelva
+    // JSON y cruza los dedos». Aun así se vuelve a validar al recibirla.
+    response_format: {
+      type: 'json_schema',
+      json_schema: { name: task.name, strict: true, schema: task.jsonSchema },
+    },
+    max_completion_tokens: MAX_OUTPUT_TOKENS,
+    // No conservar la conversación del lado del proveedor. La transcripción es
+    // material privado de un tercero; se envía para obtener el resumen y no para
+    // que quede almacenada.
+    store: false,
+    // Determinista en lo posible: dos resúmenes del mismo texto no deberían
+    // diferir por azar, porque entonces «se actualizó» y «cambió el modelo» se
+    // vuelven indistinguibles.
+    temperature: 0,
+  };
+
+  let ultimo: AnalysisError | null = null;
+  for (let intento = 0; intento <= maxRetries; intento += 1) {
+    const empezó = Date.now();
+    const control = new AbortController();
+    const reloj = setTimeout(() => control.abort(), timeoutMs);
+    try {
+      const respuesta = await fetchImpl('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${apiKey}` },
+        body: JSON.stringify(body),
+        signal: control.signal,
+      });
+      if (!respuesta.ok) {
+        // El cuerpo del error NO se propaga tal cual: puede repetir el prompt.
+        const err = new AnalysisError('http', `El proveedor respondió ${respuesta.status}.`, respuesta.status);
+        if (TRANSITORIOS.has(respuesta.status) && intento < maxRetries) {
+          ultimo = err;
+          continue;
+        }
+        throw err;
+      }
+      const datos = (await respuesta.json()) as {
+        model?: string;
+        choices?: { message?: { content?: string; refusal?: string } }[];
+        usage?: { prompt_tokens?: number; completion_tokens?: number };
+      };
+      const mensaje = datos.choices?.[0]?.message;
+      if (mensaje?.refusal) {
+        throw new AnalysisError('refused', 'El modelo rechazó la petición.');
+      }
+      const contenido = mensaje?.content;
+      if (typeof contenido !== 'string' || contenido.trim() === '') {
+        throw new AnalysisError('malformed', 'El proveedor devolvió una respuesta vacía.');
+      }
+      let json: unknown;
+      try {
+        json = JSON.parse(contenido);
+      } catch {
+        throw new AnalysisError('malformed', 'La respuesta no era JSON válido.');
+      }
+      const parsed = task.parse(json);
+      if (!parsed.ok) {
+        // Se nombran los CAMPOS que fallan, nunca sus valores.
+        throw new AnalysisError('malformed', `La respuesta no cumple el esquema (${parsed.fields}).`);
+      }
+      const inputTokens = datos.usage?.prompt_tokens ?? 0;
+      const outputTokens = datos.usage?.completion_tokens ?? 0;
+      const durationMs = Date.now() - empezó;
+      // `model_returned` se conserva EXACTO para auditoría: es lo que dijo el
+      // proveedor y sirve para detectar que sustituyó el modelo.
+      const modelReturned = typeof datos.model === 'string' ? datos.model : null;
+      // Para la TARIFA se resuelve por equivalencia cerrada. El identificador
+      // fechado es el que factura, pero no es una clave de `PRICING`: usarlo tal
+      // cual era lo que dejaba `cost_usd` en NULL en todas las llamadas reales.
+      const coste = costUsd(modelReturned ?? model, inputTokens, outputTokens);
+      deps.onUsage?.({
+        model, modelReturned, inputTokens, outputTokens, costUsd: coste,
+        durationMs, attempt: intento + 1,
+      });
+      return {
+        // NORMALIZADO aquí, justo tras validar y antes de que nadie lo use ni lo
+        // persista. El esquema garantiza la FORMA; no puede distinguir el valor
+        // `null` de la palabra «null», porque las dos satisfacen `string|null`.
+        raw: task.normalize(parsed.value),
+        model,
+        modelReturned,
+        promptVersion: task.promptVersion,
+        inputTokens,
+        outputTokens,
+        costUsd: coste,
+        durationMs,
+      };
+    } catch (causa) {
+      if (causa instanceof AnalysisError) {
+        if (causa.code === 'http' && intento < maxRetries && TRANSITORIOS.has(causa.status ?? 0)) {
+          ultimo = causa;
+          continue;
+        }
+        throw causa;
+      }
+      const abortado = (causa as { name?: string })?.name === 'AbortError';
+      const err = new AnalysisError(abortado ? 'timeout' : 'http', abortado ? `Sin respuesta en ${timeoutMs} ms.` : 'Fallo de red hablando con el proveedor.');
+      if (intento < maxRetries) {
+        ultimo = err;
+        continue;
+      }
+      throw err;
+    } finally {
+      clearTimeout(reloj);
+    }
+  }
+  throw ultimo ?? new AnalysisError('http', 'No se pudo completar la llamada.');
+}
+
+/**
+ * El resumen, como tarea.
+ *
+ * `analyze()` sigue existiendo con la misma firma y el mismo comportamiento: lo
+ * único que ha cambiado es que ahora su cuerpo es `runTask` y sus
+ * particularidades están aquí, declaradas. Ese envoltorio no es cortesía con las
+ * pruebas — es que el resumen ya está en producción y este refactor no debe
+ * poder alterarlo.
+ */
+export const ANALYSIS_TASK: AnalysisTask<RawAnalysis> = {
+  name: 'meeting_analysis',
+  systemPrompt: SYSTEM_PROMPT,
+  jsonSchema: analysisJsonSchema(),
+  userMessage,
+  parse: (json) => {
+    const parsed = RawAnalysis.safeParse(json);
+    if (parsed.success) return { ok: true, value: parsed.data };
+    return {
+      ok: false,
+      fields: parsed.error.issues.map((i) => i.path.join('.')).slice(0, 6).join(', '),
+    };
+  },
+  normalize: normalizeRawAnalysis,
+  promptVersion: ANALYSIS_PROMPT_VERSION,
+};
+
+export async function analyze(
+  rendered: RenderedTranscript,
+  deps: AnalyzeDeps = {},
+): Promise<AnalyzeResult> {
+  return runTask(ANALYSIS_TASK, rendered, deps);
+}

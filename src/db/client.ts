@@ -1,5 +1,5 @@
 import { Pool, type PoolClient, type QueryResult, type QueryResultRow } from 'pg';
-import { config } from '../config.js';
+import { runtimeEnv } from '../runtimeEnv.js';
 import { logger } from '../logger.js';
 
 /**
@@ -17,7 +17,7 @@ const globalForPool = globalThis as unknown as { __obsWorkerPool?: Pool };
 
 function createPool(): Pool {
   const created = new Pool({
-    connectionString: config.DATABASE_URL,
+    connectionString: runtimeEnv.DATABASE_URL,
     application_name: 'obs-worker',
   });
   // Surface errors from idle clients (e.g. the DB dropping a connection) instead

@@ -19,8 +19,13 @@
     // the alias. Without it, testing a pure web/lib helper would mean duplicating the
     // worker function it wraps — and a second copy of normalizeE164 that drifts from
     // the spine's is precisely the bug the shared import prevents.
+    // Y el alias '@/*' de web, por la misma razón: las pruebas de las rutas de
+    // Next importan los handlers reales, y esos handlers usan '@/lib/...'. Sin
+    // esto sólo se podría probar la capa de servicio, y la que faltaba cubrir
+    // era justamente el adaptador HTTP.
     "paths": {
-      "@worker/*": ["./src/*"]
+      "@worker/*": ["./src/*"],
+      "@/*": ["./web/*"]
     }
   },
   "include": ["src/**/*"],

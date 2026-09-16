@@ -1,0 +1,2107 @@
+"use client";
+
+import Link from "next/link";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import { Chip, EmptyState, GHOST_ACTION_CLS } from "@/components/ui/primitives";
+import { type AudioState, type FollowState, type SpeakerTurn } from "@/components/reuniones/AudioPlayer";
+import { AudioDock, DOCK_GAP_CLS } from "@/components/reuniones/AudioDock";
+import { ReportsTab } from "@/components/reuniones/ReportsTab";
+import { MeetingToast, useMeetingToast } from "@/components/reuniones/MeetingToast";
+import { TranscriptActionsRow, useTranscriptExport } from "@/components/reuniones/TranscriptActions";
+import { READING_MEASURE_CLS } from "@/lib/meetingsLayout";
+import { Avatar, ProgressBar, ShareMeter, StampLink, statusFace } from "@/components/reuniones/MeetingBits";
+import { MeetingActionsMenu } from "@/components/reuniones/MeetingDeletion";
+import type { EvidenceItem, MeetingDetail, ReportView, TemplateView } from "@/lib/meetingsData";
+import {
+  deriveFollowState,
+  groupTranscript,
+  nextFollowPref,
+  segmentIndexAtTime,
+  suspendsFollow,
+  targetScrollTop,
+} from "@/lib/transcriptBlocks";
+import {
+  composeSummary,
+  FINDING_KIND,
+  LEAD_LIMIT,
+  pendingStepCount,
+  SOURCE_LABEL,
+  fechaODefecto,
+  textoODefecto,
+  type Finding,
+  type FindingKind,
+  type FindingSource,
+  type Highlight,
+  type HighlightTarget,
+  type NextStep,
+} from "@/lib/meetingsSummary";
+
+/**
+ * The meeting workspace: header, the four views, the two optional panels and the
+ * docked player.
+ *
+ * WHY ONE CLIENT COMPONENT. The tab, the two panels and the playhead are ONE
+ * piece of state — clicking an evidence chip has to switch to the transcript AND
+ * move the audio AND highlight a segment. Splitting that across a server page
+ * with three islands would mean lifting the same state into a context anyway,
+ * for no rendering benefit: the content is already in memory (it arrives as a
+ * prop) so nothing here needs the server.
+ *
+ * LAYOUT CONTRACT (the spec's rules 6–8):
+ *   - Inspector and Copilot open from clearly LABELLED toggles, never from a
+ *     permanent side rail or decorative tabs;
+ *   - with both closed the transcript goes into FOCUS MODE — a 1100px reading
+ *     column, centred;
+ *   - only the transcript scrolls; the header, the tab bar, both panels and the
+ *     player stay put;
+ *   - the player is docked at the BOTTOM of the transcript, and the scroller
+ *     carries bottom padding so the last line is never hidden behind it.
+ */
+
+type Tab = "resumen" | "transcript" | "reportes" | "evidencia";
+
+const TABS: { key: Tab; label: string }[] = [
+  { key: "resumen", label: "Resumen" },
+  { key: "transcript", label: "Transcript" },
+  { key: "reportes", label: "Reportes" },
+  { key: "evidencia", label: "Evidencia" },
+];
+
+/**
+ * Tones for the SHARED finding taxonomy (lib/meetingsSummary.ts), used by both
+ * the evidence tab and the summary's groups so a "Riesgo" looks the same in
+ * both places.
+ *
+ * `risk` and `problem` are the only reds — they are the only kinds that mean
+ * something is wrong. `dependency` and `objection` are amber (a pending
+ * condition), and everything else is neutral: a decision or an idea is not a
+ * status and should not be dressed as one. The design sheet spent violet on
+ * "Dependencia", which is outside the product's palette entirely.
+ */
+const KIND_TONE: Record<FindingKind, "neutral" | "brand" | "warn" | "muted"> = {
+  decision: "neutral",
+  agreement: "muted",
+  conclusion: "muted",
+  risk: "brand",
+  problem: "brand",
+  dependency: "warn",
+  objection: "warn",
+  need: "neutral",
+  question: "neutral",
+  idea: "neutral",
+  feedback: "neutral",
+  recommendation: "neutral",
+};
+
+export function MeetingWorkspace({
+  meeting,
+  clientId,
+  clientName,
+  templates,
+  reports,
+  canEditTemplates,
+  backHref,
+  /** Derived by the page from the meeting's own state — see the detail route. */
+  audioState = "ready",
+  /**
+   * La ruta de sesión que firma el GET del audio, o `null` si no hay nada que
+   * reproducir. No es la URL firmada: se pide al reproducir, para que la
+   * caducidad cuente desde entonces y no desde que se pintó la página.
+   */
+  audioSrc = null,
+}: {
+  meeting: MeetingDetail;
+  /** El cliente del ámbito, que la ruta del resumen exige en la query. */
+  clientId: string;
+  /**
+   * El NOMBRE del cliente, para la cabecera del transcript exportado. Baja del
+   * servidor, que es quien lo tiene verificado; `MeetingDetail` no lo trae.
+   */
+  clientName: string | null;
+  /** Las cuatro plantillas de reporte del cliente, resueltas en el servidor. */
+  templates: readonly TemplateView[];
+  /**
+   * Los reportes ya generados, del más nuevo al más viejo. Bajan como PROP y no
+   * se piden desde el navegador: es lo que hace que recargar muestre el reporte
+   * guardado en vez de volver a generarlo.
+   */
+  reports: readonly ReportView[];
+  /** owner/admin. El servidor lo vuelve a exigir en la ruta. */
+  canEditTemplates: boolean;
+  /** Absolute href back to the listing, built by the server page. */
+  backHref: string;
+  audioState?: AudioState;
+  audioSrc?: string | null;
+}) {
+  const face = statusFace(meeting.status);
+  const analysisReady = meeting.status.kind === "done" || meeting.status.kind === "done-no-speakers";
+
+  // La pestaña inicial. Antes: Resumen en cuanto la reunión estaba lista. Pero
+  // sin etapa de análisis ese Resumen está vacío, y abrir en una pestaña vacía
+  // esconde lo único que sí hay. Se abre en Resumen sólo si tiene contenido.
+  const hasTranscript = meeting.transcript.length > 0;
+  const hasSummary =
+    meeting.summary.executive.trim() !== "" ||
+    meeting.summary.findings.length > 0 ||
+    meeting.summary.nextSteps.length > 0 ||
+    meeting.summary.highlights.length > 0;
+  const [tab, setTab] = useState<Tab>(analysisReady && hasSummary ? "resumen" : "transcript");
+  const [inspector, setInspector] = useState(false);
+  const [copilot, setCopilot] = useState(false);
+  const [at, setAt] = useState(0);
+  /** The segment a jump landed on — highlighted for orientation, not as a warning. */
+  const [focusedAt, setFocusedAt] = useState<number | null>(null);
+  /*
+    SEGUIMIENTO DEL AUDIO. El estado vive AQUÍ y no dentro de Transcript porque la
+    preferencia tiene que sobrevivir al cambio de pestaña: si viviera en la vista, mirar
+    Resumen la borraría. Y por eso mismo seguir el audio NO fuerza volver a Transcript —
+    se sigue lo que suena cuando estás mirando el texto, y se calla cuando no.
+
+    `playhead` es el segundo en curso que reporta el reproductor. NO se pasa como
+    `startAt`: eso es para saltos explícitos, y realimentarlo haría un lazo.
+  */
+  /*
+    DOS VARIABLES Y NO UNA. `followPref` es lo que el usuario QUIERE; `suspended`
+    es que desplazó el texto a mano y de momento no se le mueve nada.
+
+    Con un solo booleano, suspender era apagar, así que volver a Transcript
+    perdía la preferencia y «Volver a seguir» había que deducirlo de
+    `!follow && playhead > 0` — una condición que también es cierta cuando el
+    usuario apagó el seguimiento a propósito, y entonces el botón aparecía sin
+    que nadie lo hubiera suspendido.
+  */
+  const [followPref, setFollowPref] = useState(false);
+  const [suspended, setSuspended] = useState(false);
+  const [playhead, setPlayhead] = useState(0);
+  // Siguiendo DE VERDAD: lo que la vista usa para resaltar y desplazar.
+  const following = followPref && !suspended;
+  // Sólo se suspende lo que se estaba siguiendo. Con el seguimiento apagado el
+  // scroll del usuario es su navegación normal y no hay estado que cambiar.
+  // La vista ya comprueba que se estuviera siguiendo (ver `suspendsFollow`), así
+  // que aquí sólo se anota el hecho.
+  const suspender = useCallback(() => setSuspended(true), []);
+  /*
+    El panel se guarda en ESTADO y no sólo en una ref: el dock necesita
+    reaccionar cuando el nodo aparece, y una ref mutada no provoca render. Con
+    `useState` la primera medición ocurre en cuanto el panel existe.
+  */
+  const [panelEl, setPanelEl] = useState<HTMLElement | null>(null);
+  const panel = useCallback((el: HTMLElement | null) => setPanelEl(el), []);
+  /*
+    EL CONTROL, con tres estados. `unavailable` fuera de Transcript: no hay texto
+    que seguir, así que el botón no se pinta en vez de quedarse ahí sin efecto.
+  */
+  // Las tres reglas son puras y están probadas en lib/transcriptBlocks.ts: aquí
+  // sólo se conectan al estado.
+  const followState: FollowState = deriveFollowState({
+    inTranscript: tab === "transcript",
+    followPref,
+    suspended,
+  });
+  const alternarSeguimiento = useCallback(() => {
+    // Alterna lo que se ve: desde «suspended» la píldora está sin pulsar, así
+    // que pulsarla reanuda. Ver nextFollowPref.
+    setFollowPref((antes) => nextFollowPref({ followPref: antes, suspended: suspendedRef.current }));
+    setSuspended(false);
+  }, []);
+  const reanudarSeguimiento = useCallback(() => {
+    setFollowPref(true);
+    setSuspended(false);
+  }, []);
+  // Los valores vigentes para los callbacks estables de arriba: sin esto habría
+  // que ponerlos en sus dependencias, y entonces `onSuspend` cambiaría de
+  // identidad en cada render y el efecto del scroll se resuscribiría sin parar.
+  const suspendedRef = useRef(suspended);
+  suspendedRef.current = suspended;
+
+  const speakers: SpeakerTurn[] = useMemo(() => {
+    const total = meeting.durationSeconds || 1;
+    return meeting.transcript.map((s, i) => ({
+      from: s.at / total,
+      to: (meeting.transcript[i + 1]?.at ?? total) / total,
+      name: s.speaker,
+    }));
+  }, [meeting.transcript, meeting.durationSeconds]);
+
+  /** Jump to a moment: move the audio, show the transcript, mark the segment. */
+  const jumpTo = (seconds: number) => {
+    setAt(seconds);
+    setFocusedAt(seconds);
+    setTab("transcript");
+  };
+
+  /*
+    EL AVISO Y LAS ACCIONES DEL TRANSCRIPT.
+
+    El aviso se monta AQUÍ y no en la pestaña: la pestaña se desmonta al cambiar
+    de vista, y un aviso que desaparece porque el usuario cambió de pestaña deja
+    sin confirmar una acción que sí ocurrió. Es el mismo componente que usa
+    «Eliminar reunión», no una copia.
+
+    Las acciones se resuelven una vez y las consumen los DOS sitios que las
+    ofrecen —el «Exportar» de la cabecera y la fila de la pestaña—, así que no
+    hay forma de que produzcan documentos distintos.
+  */
+  const aviso = useMeetingToast();
+  const transcriptActions = useTranscriptExport(meeting, clientName, aviso.avisar);
+
+  const focusMode = !inspector && !copilot;
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col gap-[var(--content-pad)]">
+      {/* ── HEADER CARD: identity, state and the meeting-level actions. Fixed
+             height and fixed slots across every tab, so nothing shifts when the
+             view changes. ── */}
+      <section className="flex shrink-0 items-center gap-3 rounded-xl border border-line bg-surface px-3 py-2.5 shadow-[var(--shadow-card)]">
+        <Link href={backHref} aria-label="Volver a Reuniones" className="u-focus inline-flex size-7 shrink-0 items-center justify-center rounded-lg text-muted transition-colors hover:bg-subtle hover:text-foreground">
+          <svg viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M9.6 3.6 5.2 8l4.4 4.4" />
+          </svg>
+        </Link>
+        {/* EL BLOQUE IZQUIERDO: título, metadatos y estado. `min-w-0 flex-1`
+            para que ceda espacio truncando el título en vez de empujar las
+            acciones fuera de sitio. */}
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <h1 className="truncate text-[1.0625rem] font-semibold tracking-[-0.02em]">{meeting.title}</h1>
+          <p className="flex flex-wrap items-center gap-2 text-[0.75rem] text-muted">
+            <span>{meeting.when}</span>
+            <span aria-hidden className="text-faintest">·</span>
+            <span className="u-mono">{meeting.duration}</span>
+            <span aria-hidden className="text-faintest">·</span>
+            <span>{meeting.participants.length} participantes</span>
+            <Chip tone={face.tone}>{face.label}</Chip>
+            {meeting.isTestFixture ? (
+              <Chip tone="muted" title="Contenido inventado para validar el layout. No es una reunión real.">
+                Fixture de prueba
+              </Chip>
+            ) : null}
+          </p>
+        </div>
+        {/*
+          LAS ACCIONES, UN GRUPO Y SIEMPRE A LA DERECHA.
+
+          `ml-auto` estaba condicionado a `tab === "transcript"`, así que en
+          Resumen, Reportes y Evidencia el grupo se pegaba al bloque izquierdo y
+          «saltaba» al cambiar de pestaña. Era un resto de cuando la cabecera
+          llevaba el reproductor compacto y ése era quien empujaba: al mover el
+          reproductor al dock, la condición quedó sin sentido y con efecto.
+
+          Ahora `ml-auto` es incondicional y `shrink-0` impide que el grupo se
+          comprima. La separación entre los tres controles es del `gap`, así que
+          no depende de la pestaña ni del ancho.
+        */}
+        <span className="ml-auto flex shrink-0 items-center gap-1.5">
+          {/*
+            EN ESTRECHO SE RETIRAN LAS SECUNDARIAS.
+
+            Con los tres controles visibles a 375 px el título se comprimía a
+            «Reunió…» y los metadatos se apilaban en cinco líneas: las acciones
+            no chocaban con el título, se lo comían. `hidden sm:inline-flex` las
+            reserva para cuando hay sitio.
+
+            No se mueven a un menú porque hoy no hacen nada: ninguno de los dos
+            tiene `onClick`, así que un desplegable con dos entradas inertes
+            sería el mismo hueco con un clic más. Cuando se implementen, ahí es
+            donde deben ir.
+          */}
+          {/* La visibilidad va en un ENVOLTORIO y no en los botones:
+              `GHOST_ACTION_CLS` ya trae `inline-flex`, y dos utilidades de
+              `display` en la misma clase las resuelve el orden del CSS
+              generado, no el del atributo — es decir, a veces gana la que no
+              quieres. */}
+          <span className="hidden items-center gap-1.5 sm:flex">
+            {/* «Exportar» descarga el transcript en TXT. Era inerte; ahora hace
+                lo que dice, con el MISMO documento que copia la pestaña.
+                No se mueve de sitio ni cambia de aspecto: la geometría de esta
+                cabecera es la que se estabilizó y sigue igual.
+
+                «Compartir» sigue inerte a propósito: está fuera de alcance. */}
+            <button
+              type="button"
+              onClick={transcriptActions.descargar}
+              disabled={!transcriptActions.disponible || transcriptActions.enVuelo}
+              aria-busy={transcriptActions.enVuelo}
+              title={
+                transcriptActions.disponible
+                  ? "Descargar el transcript completo en TXT"
+                  : "Todavía no hay transcript que exportar"
+              }
+              className={GHOST_ACTION_CLS}
+            >
+              Exportar
+            </button>
+            <button type="button" className={GHOST_ACTION_CLS}>
+              Compartir
+            </button>
+          </span>
+          {/* El botón de tres puntos DEJA DE SER INERTE: el menú real llega con
+              la eliminación. Lo demás de esta cabecera —`ml-auto`
+              incondicional, el envoltorio responsive— es del ajuste visual ya
+              desplegado y se conserva tal cual. */}
+          <MeetingActionsMenu meeting={meeting} />
+        </span>
+      </section>
+
+      {/* ── THE WORK AREA: [Inspector] [view + player] [Copilot] ── */}
+      <div className="flex min-h-0 flex-1 gap-[var(--content-pad)]">
+        {inspector ? <InspectorPanel meeting={meeting} onClose={() => setInspector(false)} /> : null}
+
+        {/* LA COLUMNA: barra de pestañas y contenido son tarjetas HERMANAS.
+            Estaban en una sola, con la barra pegada al contenido por una
+            hairline. Separarlas es lo que hace que la navegación se lea como lo
+            que es —un mando, no una cabecera del documento— y deja el contenido
+            empezando en su propio borde.
+
+            El ANCLA DEL DOCK sigue siendo la tarjeta de CONTENIDO, no esta
+            columna: el dock mide su caja de contenido para descontar el borde
+            de 1 px, y una columna sin borde lo dejaría 1 px más ancho por lado.
+            Su izquierda, su ancho y su base no cambian al sacar la barra; sólo
+            cambia su borde superior, que el cálculo no usa. */}
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-[var(--content-pad)]">
+          <nav className="flex shrink-0 flex-wrap items-center gap-1 rounded-xl border border-line bg-surface px-2.5 py-2 shadow-[var(--shadow-card)]">
+            <div role="tablist" aria-label="Vistas de la reunión" className="flex min-w-0 flex-wrap items-center gap-1">
+              {TABS.map((t) => {
+                const locked = !analysisReady && t.key !== "transcript";
+                const selected = tab === t.key;
+                const count =
+                  t.key === "reportes"
+                    ? reports.filter((r) => r.status === "ready").length || null
+                    : t.key === "evidencia" ? meeting.evidence.length || null : null;
+                return (
+                  <button
+                    key={t.key}
+                    type="button"
+                    role="tab"
+                    aria-selected={selected}
+                    aria-disabled={locked || undefined}
+                    disabled={locked}
+                    tabIndex={selected ? 0 : -1}
+                    onClick={() => setTab(t.key)}
+                    title={locked ? "Se habilita cuando el análisis termine" : undefined}
+                    className={`u-focus inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-3 py-1.5 text-sm transition-colors ${
+                      selected
+                        ? "bg-ink font-semibold text-ink-fg"
+                        : locked
+                          ? "cursor-not-allowed text-faint"
+                          : "text-muted hover:bg-subtle hover:text-foreground"
+                    }`}
+                  >
+                    {t.label}
+                    {/* Locked tabs say WHY in words, never by colour alone. */}
+                    {locked ? <span className="text-[0.65625rem] text-warn">· en proceso</span> : null}
+                    {count !== null && !locked ? (
+                      <span className={`u-mono text-[0.65625rem] ${selected ? "opacity-70" : "text-faint"}`}>{count}</span>
+                    ) : null}
+                  </button>
+                );
+              })}
+            </div>
+            <span className="ml-auto flex shrink-0 items-center gap-1.5">
+              <PanelToggle name="Inspector" open={inspector} onToggle={() => setInspector((v) => !v)} />
+              <PanelToggle name="Copilot" open={copilot} onToggle={() => setCopilot((v) => !v)} />
+            </span>
+          </nav>
+
+          {/* LA REGIÓN DE CONTENIDO. Un envoltorio SIN estilo: las vistas de
+              lectura ponen dentro una tarjeta, y Reportes pone dos
+              independientes. Es el ANCLA DEL DOCK, y por eso tiene que ser esta
+              región y no las tarjetas — mide lo mismo en las cuatro pestañas,
+              que es la propiedad que hace que el reproductor no salte al
+              cambiar de vista. El borde de las tarjetas se descuenta con
+              `PANEL_BORDER_PX`. */}
+          <div ref={panel} className="flex min-h-0 min-w-0 flex-1 flex-col">
+          {/* THE CONTENT REGION. Two kinds of view live here and they need
+              different geometry:
+
+              READING views (transcript, resumen, evidencia) scroll in ONE
+              scroller, and the transcript alone takes the spec's focus measure —
+              a 1100px column, centred — because it is the only one that is
+              continuous prose. Applying that measure to every tab is what left
+              Reportes with 250px of dead canvas on each side.
+
+              Reportes is a WORKSPACE: a list beside a document, both stretching
+              to the bottom, each scrolling on its own. It manages its own height
+              and must not inherit a reading column. */}
+          {tab === "reportes" ? (
+            <ReportsTab
+              meetingId={meeting.id}
+              clientId={clientId}
+              templates={templates}
+              reports={reports}
+              canEditTemplates={canEditTemplates}
+              hasTranscript={hasTranscript}
+              // EL MISMO `jumpTo` que el resumen y la evidencia: mueve el
+              // playhead del dock que ya existe y cambia a Transcript. No se
+              // crea un segundo `<audio>`.
+              onSeek={jumpTo}
+            />
+          ) : (
+            <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]">
+            {/* While the analysis runs, ONE banner carries the whole story: the
+                stage, the percentage, its bar and the phase checklist. The sheet
+                told it three times (banner + checklist + a sentence in the tab
+                bar), which is how a reader stops believing any of them. */}
+            {!analysisReady && face.progress ? (
+              <div className="m-2.5 flex shrink-0 flex-col gap-2 rounded-xl border border-warn/30 bg-warn-soft px-3 py-2.5">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span aria-hidden className="size-4 shrink-0 animate-spin rounded-full border-2 border-warn/30 border-t-warn" />
+                  <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <span className="text-[0.8125rem] font-semibold text-warn">
+                      {face.label} · {face.progress.value} %
+                    </span>
+                    <span className="text-[0.75rem] text-warn/90">
+                      {hasTranscript
+                        ? "La transcripción ya está disponible: puedes leerla, buscarla y citarla mientras el resto avanza."
+                        : "El transcript aparecerá aquí en cuanto la etapa termine."}
+                    </span>
+                    <ProgressBar
+                      kind={face.progress.kind}
+                      value={face.progress.value}
+                      label="Progreso del procesamiento"
+                      className="mt-0.5 max-w-[20rem]"
+                    />
+                  </div>
+                  <Chip tone="success">Te avisaremos al terminar</Chip>
+                </div>
+                {/* La lista se DERIVA del estado. Estaba escrita para un solo
+                    escenario —«el análisis corre, todo lo anterior está hecho»— y
+                    con vistos verdes fijos: una reunión recién subida mostraba
+                    «Transcripción completa» y «0 participantes separados» en verde
+                    sin tener ni una frase. Ahora cada línea dice lo que hay. */}
+                <ol className="flex flex-wrap items-center gap-4 border-t border-warn/20 pt-2">
+                  <PhaseItem
+                    state={
+                      hasTranscript ? "done" : meeting.status.kind === "transcribing" ? "running" : "pending"
+                    }
+                  >
+                    {hasTranscript ? "Transcripción completa" : "Transcripción"}
+                  </PhaseItem>
+                  <PhaseItem
+                    state={
+                      meeting.participants.length > 0
+                        ? "done"
+                        : meeting.status.kind === "diarizing"
+                          ? "running"
+                          : "pending"
+                    }
+                  >
+                    {meeting.participants.length > 0
+                      ? `${meeting.participants.length} participantes separados`
+                      : "Separación de participantes"}
+                  </PhaseItem>
+                  {/* El análisis no tiene etapa ni almacenamiento: nunca «corre». */}
+                  <PhaseItem state="unavailable">Análisis: todavía no disponible</PhaseItem>
+                </ol>
+              </div>
+            ) : null}
+
+              <div
+                // RESUMEN is a board of BOXES, so its scroller shows the canvas and
+                // the panels read as objects on it. The other tabs are ONE surface
+                // (a document, a list) and stay white.
+                // `scrollbar-gutter: stable` reserva el canal de la barra aunque
+                // no haga falta. Sin eso, pasar de una pestaña que desborda a una
+                // que no cambia el ancho útil unos 15 px, y con él se movían la
+                // columna de lectura y —al medirse contra el panel— el dock.
+                style={{ scrollbarGutter: "stable" }}
+                className={`min-h-0 flex-1 overflow-y-auto ${tab === "resumen" ? "bg-background" : ""}`}
+              >
+                {/* ONE container contract for every reading view: centred, capped,
+                    and with the SAME lateral padding. Resumen used to inherit a
+                    bare `px-4`, so its content sat almost against the card's left
+                    edge while the transcript beside it had 32px — which is what
+                    made the screen look unbalanced. The transcript keeps a
+                    narrower measure (the spec's focus column) because it is
+                    continuous prose; the others get the wider one. */}
+                {/* ONE container contract. The transcript keeps a narrow reading
+                    measure (continuous prose); the panel-based views take the full
+                    width with a modest gutter, so a panel spans the card instead of
+                    floating in the middle of it. */}
+                <div
+                  className={`${DOCK_GAP_CLS} ${
+                    tab === "transcript"
+                      // La medida sale del token compartido: el dock calcula la
+                      // suya del mismo número, y una prueba comprueba que no se
+                      // pueden separar. Ver lib/meetingsLayout.ts.
+                      ? `mx-auto w-full px-6 sm:px-8 ${focusMode ? READING_MEASURE_CLS : "max-w-none"}`
+                      : tab === "resumen"
+                        ? "w-full px-3 sm:px-4"
+                        : "mx-auto w-full max-w-[78rem] px-6 sm:px-8"
+                  }`}
+                >
+                  {tab === "transcript" ? (
+                    <>
+                      {/* Discreta, a la derecha y alineada con la columna del texto,
+                          porque son acciones SOBRE el texto. */}
+                      <div className="pt-4">
+                        <TranscriptActionsRow acciones={transcriptActions} hayTranscript={hasTranscript} />
+                      </div>
+                      <Transcript
+                        meeting={meeting}
+                        focusedAt={focusedAt}
+                        onSeek={jumpTo}
+                        follow={following}
+                        playhead={playhead}
+                        onSuspend={suspender}
+                      />
+                    </>
+                  ) : tab === "resumen" ? (
+                    <Summary meeting={meeting} clientId={clientId} onSeek={jumpTo} />
+                  ) : (
+                    <Evidence meeting={meeting} onSeek={jumpTo} />
+                  )}
+                </div>
+              </div>
+            </section>
+          )}
+          </div>
+        </div>
+
+        {copilot ? <CopilotPanel meeting={meeting} onClose={() => setCopilot(false)} onSeek={jumpTo} /> : null}
+      </div>
+
+      {/* EL AVISO, fuera de las pestañas. Montado aquí sobrevive a un cambio
+          de vista: un aviso que desaparece porque el usuario cambió de
+          pestaña deja sin confirmar una acción que sí ocurrió. */}
+      <MeetingToast texto={aviso.texto} onCerrar={aviso.cerrar} />
+
+      {/*
+        EL DOCK, HERMANO DEL ÁREA DE TRABAJO Y NO HIJO DE ELLA.
+        Está fuera del `<section>` de las pestañas, así que cambiar de pestaña no
+        lo reconcilia: React sólo rehace lo que cambió de sitio en el árbol, y
+        esto no se mueve. De ahí que la reproducción, el segundo en curso y la
+        velocidad sobrevivan a los cuatro cambios de pestaña.
+      */}
+      <AudioDock
+        meetingId={meeting.id}
+        durationSeconds={meeting.durationSeconds}
+        startAt={at}
+        state={audioState}
+        src={audioSrc}
+        speakers={speakers}
+        onTimeChange={setPlayhead}
+        followState={followState}
+        onFollowToggle={alternarSeguimiento}
+        onFollowResume={reanudarSeguimiento}
+        anchor={panelEl}
+        focusMode={focusMode}
+      />
+    </div>
+  );
+}
+
+/**
+ * Una línea de la lista de fases, con su estado REAL.
+ *
+ * Sustituye a `PhaseDone`, que sólo sabía pintar el visto verde: con un único
+ * estado posible, la lista afirmaba que todo lo anterior a la etapa en curso
+ * estaba hecho, y eso sólo era cierto en el escenario para el que se dibujó.
+ * «pendiente» y «no disponible» se distinguen a propósito: lo primero llegará,
+ * lo segundo no existe todavía.
+ */
+function PhaseItem({
+  state,
+  children,
+}: {
+  state: "done" | "running" | "pending" | "unavailable";
+  children: React.ReactNode;
+}) {
+  const tone =
+    state === "done"
+      ? "text-foreground"
+      : state === "running"
+        ? "text-warn"
+        : "text-warn/70";
+  return (
+    <li className={`flex items-center gap-2 text-[0.78125rem] ${tone}`}>
+      {state === "done" ? (
+        <span aria-hidden className="inline-flex size-3.5 shrink-0 items-center justify-center rounded-full bg-success text-white">
+          <svg viewBox="0 0 16 16" className="size-2" fill="none" stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M3.4 8.4l3 3 6.2-6.6" />
+          </svg>
+        </span>
+      ) : state === "running" ? (
+        <span aria-hidden className="size-3.5 shrink-0 animate-spin rounded-full border-2 border-warn/30 border-t-warn" />
+      ) : (
+        <span aria-hidden className="size-3.5 shrink-0 rounded-full border-2 border-warn/25" />
+      )}
+      {children}
+    </li>
+  );
+}
+
+/**
+ * The panel toggle. ONE component for both panels and both states, so Inspector
+ * and Copilot cannot drift into four different-looking buttons the way they did
+ * across the design sheet's frames.
+ *
+ * ICON-ONLY, because the tab bar is the view's densest row and two labelled
+ * toggles took 300px of it — enough to force the bar to wrap the moment a panel
+ * narrows the column. The state is carried by `aria-pressed`, by the accessible
+ * name ("Inspector · abierto") and by FILL vs OUTLINE — three signals, none of
+ * them colour alone.
+ */
+function PanelToggle({ name, open, onToggle }: { name: string; open: boolean; onToggle: () => void }) {
+  const label = `${name} · ${open ? "abierto" : "cerrado"}`;
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-pressed={open}
+      aria-label={label}
+      title={label}
+      className={`u-focus inline-flex size-8 shrink-0 items-center justify-center rounded-lg border transition-colors ${
+        open ? "border-ink bg-ink text-ink-fg" : "border-line-strong bg-surface text-muted hover:border-faint hover:text-foreground"
+      }`}
+    >
+      {name === "Inspector" ? (
+        <svg viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.4" aria-hidden>
+          <rect x="2.6" y="3.2" width="10.8" height="9.6" />
+          <path d="M6.4 3.2v9.6" />
+        </svg>
+      ) : (
+        <svg viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M8 2.4l1.3 3.1 3.1 1.3-3.1 1.3L8 11.2 6.7 8.1 3.6 6.8l3.1-1.3z" />
+        </svg>
+      )}
+    </button>
+  );
+}
+
+/* ── The four views ───────────────────────────────────────────────────────── */
+
+/**
+ * El ancestro que de verdad hace scroll. `scrollIntoView` ya lo encuentra solo, pero
+ * para MEDIR si algo está visible hay que saber contra qué caja comparar, y la del
+ * contenedor de contenido no sirve: es más alta que la ventana.
+ *
+ * Devuelve null si no hay ninguno, y entonces el que scrollea es el documento.
+ */
+function scrollParentOf(el: HTMLElement): HTMLElement | null {
+  let node: HTMLElement | null = el.parentElement;
+  while (node) {
+    const overflow = getComputedStyle(node).overflowY;
+    if ((overflow === "auto" || overflow === "scroll") && node.scrollHeight > node.clientHeight) {
+      return node;
+    }
+    node = node.parentElement;
+  }
+  return null;
+}
+
+export function Transcript({
+  meeting,
+  focusedAt,
+  onSeek,
+  follow = false,
+  playhead = 0,
+  onSuspend,
+}: {
+  meeting: MeetingDetail;
+  focusedAt: number | null;
+  onSeek: (s: number) => void;
+  /** Seguir lo que suena. La preferencia la guarda el área de trabajo, no esta vista. */
+  /** Siguiendo de verdad. El control vive en el dock, no en esta vista. */
+  follow?: boolean;
+  /** El segundo en curso del reproductor. */
+  playhead?: number;
+  /** El usuario desplazó el texto a mano: se suspende, no se apaga. */
+  onSuspend?: () => void;
+}) {
+  // BLOQUES DE INTERVENCIÓN con PÁRRAFOS dentro. Ver transcriptBlocks.ts: el bloque
+  // trae la cabecera, el párrafo trae texto corrido y los segmentos van EN LÍNEA.
+  const blocks = useMemo(() => groupTranscript(meeting.transcript), [meeting.transcript]);
+  const content = useRef<HTMLDivElement | null>(null);
+
+  /*
+    QUÉ SEGMENTO SUENA. Sólo se recalcula cuando cambia el SEGUNDO, no en cada
+    `timeupdate`, y `segmentIndexAtTime` bisecta: con media hora de audio son cientos
+    de segmentos y esto corre mientras se reproduce.
+  */
+  const playingIndex = useMemo(
+    () => (follow ? segmentIndexAtTime(meeting.transcript, playhead) : null),
+    [follow, playhead, meeting.transcript],
+  );
+  const playingAt = playingIndex === null ? null : meeting.transcript[playingIndex].at;
+
+  /*
+    UN DESPLAZAMIENTO MÍO NO ES UN DESPLAZAMIENTO TUYO. Al seguir el audio el componente
+    desplaza solo, y ese scroll dispara el mismo evento que la rueda del ratón. Sin
+    distinguirlos, el seguimiento se suspendería a sí mismo en el primer segundo.
+
+    Se suprime POR TIEMPO y no con una bandera de «el próximo evento es mío». Probé la
+    bandera y falla de verdad: los eventos de scroll se despachan de forma asíncrona, así
+    que un desplazamiento manual llegaba antes que el evento del automático, consumía la
+    marca y se tomaba por propio — el seguimiento no se suspendía. Y con `behavior:
+    "smooth"` un solo salto emite MUCHOS eventos con posiciones intermedias, que una
+    bandera de un solo uso no puede cubrir. Una ventana de tiempo cubre los dos casos.
+  */
+  const suppressScrollUntil = useRef(0);
+  // El valor vigente de `follow` para el listener, que se suscribe una vez.
+  const followRef = useRef(follow);
+  followRef.current = follow;
+  useEffect(() => {
+    const root = content.current;
+    if (!root) return;
+    const viewport = scrollParentOf(root);
+    if (!viewport) return;
+    const onScroll = () => {
+      // `suspendsFollow` reúne las DOS condiciones —que se estuviera siguiendo y
+      // que el desplazamiento no sea el propio— en una función pura y probada.
+      // Estaban repartidas entre esta vista y el área de trabajo, y ese reparto
+      // fue justo el hueco por el que se colaba «Volver a seguir» con el
+      // seguimiento apagado.
+      if (!suspendsFollow({ followPref: followRef.current, now: Date.now(), suppressUntil: suppressScrollUntil.current })) return;
+      // Desplazamiento humano: se SUSPENDE —no se apaga— y el dock ofrece
+      // «Volver a seguir». El audio sigue sonando.
+      onSuspend?.();
+    };
+    viewport.addEventListener("scroll", onScroll, { passive: true });
+    return () => viewport.removeEventListener("scroll", onScroll);
+  }, [onSuspend]);
+
+  /*
+    SEGUIR SIN DAR SALTOS. Se desplaza sólo cuando el segmento que suena NO está
+    visible; mientras se lee dentro de la pantalla, nada se mueve. Sin esa condición el
+    transcript se recentraría cada segundo y sería ilegible.
+  */
+  useEffect(() => {
+    if (!follow || playingIndex === null) return;
+    const root = content.current;
+    if (!root) return;
+    const el = root.querySelector<HTMLElement>(`[data-segment-index="${meeting.transcript[playingIndex].index}"]`);
+    const viewport = scrollParentOf(root);
+    if (!el || !viewport) return;
+    const view = viewport.getBoundingClientRect();
+    const rect = el.getBoundingClientRect();
+    // Un margen para no ir pegado al borde: si el segmento está en la última franja,
+    // se recoloca antes de que desaparezca.
+    const margin = Math.min(72, view.height * 0.15);
+    if (rect.top >= view.top + margin && rect.bottom <= view.bottom - margin) return;
+    // 400 ms cubre de sobra un desplazamiento instantáneo y sus eventos.
+    suppressScrollUntil.current = Date.now() + 400;
+    const origin = view.top - viewport.scrollTop;
+    viewport.scrollTo({
+      top: Math.max(0, Math.min(rect.top - origin - view.height / 3, viewport.scrollHeight - viewport.clientHeight)),
+      // INSTANTÁNEO, y a diferencia del salto no es por comodidad de prueba: esto
+      // ocurre una y otra vez mientras se reproduce, y una animación de 300 ms que
+      // arranca cada vez que un segmento sale de pantalla se acumula y marea. Un
+      // empujón seco se nota menos. El salto explícito sí va suave: es una acción
+      // puntual del usuario y ahí la animación explica de dónde a dónde se fue.
+      behavior: "auto",
+    });
+  }, [follow, playingIndex, meeting.transcript]);
+
+  /*
+    EL SALTO DEJA LA CABECERA VISIBLE. Antes nadie desplazaba nada: `jumpTo` cambiaba
+    de pestaña y marcaba el segmento, y el lector tenía que buscarlo — y cuando caía
+    arriba, el borde del scroller le cortaba la cabecera por la mitad (justo lo que se
+    veía en la captura).
+
+    Se desplaza el BLOQUE, no el segmento: lo que hay que poder leer es de quién es la
+    intervención y desde cuándo. `scroll-mt-6` en el <article> le da el aire que
+    `block: "start"` no da por sí solo, y `scrollIntoView` respeta ese margen.
+  */
+  useEffect(() => {
+    if (focusedAt === null) return;
+    const root = content.current;
+    if (!root) return;
+    const block = root.querySelector<HTMLElement>(`[data-block-focused="true"]`);
+    const segment = root.querySelector<HTMLElement>(`[data-segment-focused="true"]`);
+    if (!block) return;
+
+    const viewport = scrollParentOf(root);
+    if (!viewport || !segment) {
+      // Sin contenedor propio scrollea el documento, y sin segmento sólo hay cabecera
+      // que mostrar: en los dos casos basta lo que el navegador ya sabe hacer.
+      block.scrollIntoView({
+        block: "start",
+        behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+      });
+      return;
+    }
+
+    // UN solo desplazamiento, a una posición calculada. Ver targetScrollTop: desplazar
+    // a la cabecera y corregir después dependía de un requestAnimationFrame que en una
+    // pestaña que no se pinta no llega nunca.
+    // Un salto suave emite eventos durante toda la animación: se suprimen, o clicar un
+    // segmento apagaría el seguimiento — y clicar un segmento TAMBIÉN mueve el audio
+    // hasta ahí, así que seguir el audio sigue siendo coherente después.
+    suppressScrollUntil.current = Date.now() + 900;
+    const viewRect = viewport.getBoundingClientRect();
+    const origin = viewRect.top - viewport.scrollTop;
+    const segRect = segment.getBoundingClientRect();
+    viewport.scrollTo({
+      top: targetScrollTop({
+        viewHeight: viewport.clientHeight,
+        maxScroll: viewport.scrollHeight - viewport.clientHeight,
+        blockTop: block.getBoundingClientRect().top - origin,
+        segmentTop: segRect.top - origin,
+        segmentBottom: segRect.bottom - origin,
+        marginTop: parseFloat(getComputedStyle(block).scrollMarginTop) || 0,
+      }),
+      // Respetar `prefers-reduced-motion` no es decoración: para quien lo pide, una
+      // animación de desplazamiento puede provocar mareo.
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    });
+  }, [focusedAt]);
+
+  return (
+    // gap-7 entre intervenciones: la separación tiene que leerse como un cambio de
+    // turno, no como un renglón más. Antes era gap-1.5, del tiempo en que cada
+    // segmento era una fila.
+    <>
+      {/*
+        LA BARRA DEL SEGUIMIENTO YA NO ESTÁ AQUÍ.
+
+        Era una franja pegada arriba del texto con «Seguir audio» y «Volver al
+        audio». Se veía aislada porque lo estaba: gobierna la reproducción y
+        vivía a dos regiones de distancia del reproductor. Ahora los dos
+        controles son parte del dock expandido y se llaman «Seguir
+        transcripción» y «Volver a seguir» — lo que sigue es el texto, no el
+        audio, que va solo.
+
+        Esta vista conserva lo que sí le corresponde: resaltar el bloque que
+        suena, desplazarse a él y detectar que el usuario desplazó a mano.
+      */}
+      <div ref={content} className={`flex flex-col gap-7 py-4 ${DOCK_GAP_CLS}`}>
+      {blocks.map((block) => {
+        const jumpedInside = block.segments.some((s) => focusedAt === s.at);
+        const playingInside = playingAt !== null && block.segments.some((s) => s.at === playingAt);
+        const citedInside = block.segments.some((s) => s.cited);
+        return (
+          <article
+            key={block.key}
+            data-block-focused={jumpedInside ? "true" : undefined}
+            data-block-playing={playingInside ? "true" : undefined}
+            className={`group scroll-mt-6 rounded-xl transition-colors ${
+              // A jumped-to block is a REFERENCE, so it tints accent-blue, not the
+              // amber the sheet used — amber here read as "something is wrong".
+              jumpedInside
+                ? "bg-accent/8 px-3.5 py-3 ring-1 ring-accent/25"
+                : citedInside
+                  ? "bg-subtle px-3.5 py-3"
+                  : "px-3.5 py-0"
+            }`}
+          >
+            {/* UNA cabecera por intervención, y nunca repetida por longitud: un
+                párrafo nuevo no es una intervención nueva. */}
+            <header className="mb-1.5 flex items-center gap-2.5">
+              <Avatar person={{ initials: block.initials, name: block.speaker }} size={28} />
+              <h3 className="flex flex-wrap items-center gap-2">
+                <span className="text-[0.8125rem] font-semibold">{block.speaker}</span>
+                <StampLink at={block.at} onSeek={onSeek}>{block.stamp}</StampLink>
+                {block.unidentified ? (
+                  <button type="button" className="u-focus rounded text-[0.6875rem] text-accent underline decoration-accent/40">
+                    Identificar
+                  </button>
+                ) : null}
+                {jumpedInside ? <Chip tone="muted">Desde la evidencia</Chip> : citedInside ? <Chip tone="muted">Citado por Copilot</Chip> : null}
+              </h3>
+              <button
+                type="button"
+                onClick={() => onSeek(block.at)}
+                aria-label={`Escuchar desde ${block.stamp}`}
+                className="u-focus ml-auto shrink-0 rounded-md p-1 text-faint opacity-0 transition-opacity hover:text-foreground focus-visible:opacity-100 group-hover:opacity-100"
+              >
+                <svg viewBox="0 0 16 16" className="size-3" fill="currentColor" aria-hidden>
+                  <path d="M4 2.6l8 5.4-8 5.4z" />
+                </svg>
+              </button>
+            </header>
+
+            {/*
+              LOS PÁRRAFOS OCUPAN EL BLOQUE. Antes llevaban `max-w-[60ch]`, medido para
+              dar 65–80 caracteres por línea; con el bloque teñido de una cita eso
+              dejaba media caja vacía a la derecha, y el recuadro pasaba a leerse como
+              un error de maquetación. El ancho lo pone ahora el contenedor de lectura
+              del área (`max-w-[68.75rem]` en modo enfoque), que es un tope razonable
+              sin dejar hueco muerto dentro del bloque.
+
+              La sangría que los alinea con el nombre desaparece en móvil: 38 px de
+              hueco a la izquierda en una pantalla de 375 es ancho de lectura tirado.
+              Interlineado 1.6 en los dos casos.
+            */}
+            <div className="flex flex-col gap-3 pl-0 sm:pl-[2.375rem]">
+              {block.paragraphs.map((paragraph) => (
+                <p
+                  key={paragraph.key}
+                  className="text-[0.875rem] leading-[1.6] text-foreground/90"
+                >
+                  {/*
+                    Cada segmento sigue siendo un elemento propio —con su índice y su
+                    tiempo— pero EN LÍNEA: el texto fluye y se ajusta al ancho en vez
+                    de romperse una vez por segmento de Whisper.
+
+                    Es un <span> CON SEMÁNTICA DE BOTÓN, y las dos mitades de esa frase
+                    son deliberadas.
+
+                    Semántica de botón porque clicar un segmento salta a SU tiempo: con
+                    un span mudo esa acción sólo existiría para el ratón, y quien navega
+                    con teclado llegaría al principio de la intervención y a ningún
+                    punto dentro de ella. `role="button"` + `tabIndex` + Enter/Espacio es
+                    lo que hace que la acción exista de verdad.
+
+                    Y un span, no un <button>, porque un botón NO fluye en línea de
+                    forma fiable: medido en el navegador, `<button class="inline">`
+                    computaba `inline-block` —gana el valor del agente de usuario— y el
+                    párrafo se desarmaba, con cada segmento envuelto a una palabra por
+                    línea. Un span es inline por naturaleza y no depende de ganar una
+                    batalla de cascada.
+                  */}
+                  {paragraph.segments.map((segment, position) => {
+                    const jumped = focusedAt === segment.at;
+                    const sounding = playingAt !== null && segment.at === playingAt;
+                    return (
+                      <Fragment key={segment.index}>
+                      <span
+                        role="button"
+                        tabIndex={0}
+                        data-segment-index={segment.index}
+                        data-segment-at={segment.at}
+                        data-segment-focused={jumped ? "true" : undefined}
+                        aria-label={`Escuchar desde ${segment.stamp}`}
+                        title={`Escuchar desde ${segment.stamp}`}
+                        onClick={() => onSeek(segment.at)}
+                        onKeyDown={(event) => {
+                          // Lo que `role="button"` promete y un span no trae puesto.
+                          if (event.key !== "Enter" && event.key !== " ") return;
+                          event.preventDefault(); // el Espacio, si no, desplaza la página
+                          onSeek(segment.at);
+                        }}
+                        className={`u-focus cursor-pointer rounded transition-colors hover:text-foreground ${
+                          // El segmento al que se saltó y el que SUENA son dos cosas
+                          // distintas y se pintan distinto: el salto es una referencia
+                          // (azul de acento), lo que suena es el presente (tinte de
+                          // marca, más tenue, porque se mueve solo cada pocos segundos
+                          // y a plena intensidad parpadearía por toda la página).
+                          jumped
+                            ? "bg-accent/20 text-foreground"
+                            : sounding
+                              ? "bg-brand-soft text-foreground"
+                              : ""
+                        }`}
+                      >
+                        {segment.text}
+                      </span>
+                      {/* El espacio va FUERA: dentro, el fondo del resaltado se
+                          extendería hasta la palabra siguiente. Y tiene que estar: dos
+                          elementos adyacentes en JSX no dejan hueco y el texto saldría
+                          pegado. */}
+                      {position < paragraph.segments.length - 1 ? " " : ""}
+                      </Fragment>
+                    );
+                  })}
+                </p>
+              ))}
+            </div>
+          </article>
+        );
+      })}
+      </div>
+    </>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   RESUMEN — the adaptive view.
+
+   Every section below is CONDITIONAL and every layout decision is derived from
+   the data, so the same component serves a project kickoff, a sales call, an
+   interview, a support call and a meeting that produced almost nothing. There
+   is no branch anywhere on a meeting's name or subject.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+
+/**
+ * Icons per finding kind — the non-colour half of "what kind of thing is this".
+ *
+ * NORMALISED on purpose: one 16×16 box, one 1.5 stroke, round caps, and every
+ * path kept inside 2–14 so nothing touches the edge and gets clipped at
+ * `size-3.5`. They used to be drawn ad hoc, so the triangle bled past the box
+ * while the checkmark floated in the middle of it and the row of headings
+ * looked like four different icon sets.
+ */
+function FindingIcon({ kind }: { kind: FindingKind }) {
+  const p = (d: string) => (
+    <svg viewBox="0 0 16 16" className="size-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {d.split("|").map((seg) => (
+        <path key={seg} d={seg} />
+      ))}
+    </svg>
+  );
+  switch (kind) {
+    case "risk":
+      // Triángulo de advertencia, base en y=13, vértice en y=3.
+      return p("M8 3 2.4 13h11.2L8 3Z|M8 7.2v2.4|M8 11.4h.01");
+    case "dependency":
+      // Dos eslabones.
+      return p("M6.6 9.4 9.4 6.6|M9.1 4.9 10 4a2.4 2.4 0 0 1 3.4 3.4l-.9.9|M6.9 11.1l-.9.9A2.4 2.4 0 0 1 2.6 8.6l.9-.9");
+    case "problem":
+      return p("M8 2.6a5.4 5.4 0 1 1 0 10.8 5.4 5.4 0 0 1 0-10.8Z|M6.2 6.2l3.6 3.6|M9.8 6.2l-3.6 3.6");
+    case "question":
+      return p("M8 2.6a5.4 5.4 0 1 1 0 10.8 5.4 5.4 0 0 1 0-10.8Z|M6.4 6.3a1.7 1.7 0 1 1 2.3 1.6v.9|M8 11.2h.01");
+    case "objection":
+      // Bocadillo con signo: una objeción es algo que alguien dijo.
+      return p("M13.4 9.2A1.6 1.6 0 0 1 11.8 10.8H5.6L3 13.2V4.4a1.6 1.6 0 0 1 1.6-1.6h7.2a1.6 1.6 0 0 1 1.6 1.6v4.8Z|M8.2 5.2v2.1|M8.2 8.9h.01");
+    case "idea":
+      return p("M8 2.6a3.6 3.6 0 0 0-2.1 6.6v1.3h4.2V9.2A3.6 3.6 0 0 0 8 2.6Z|M6.7 12.8h2.6");
+    case "feedback":
+      return p("M8 2.8l1.6 3.2 3.6.5-2.6 2.5.6 3.5L8 10.8l-3.2 1.7.6-3.5L2.8 6.5l3.6-.5L8 2.8Z");
+    case "recommendation":
+      return p("M3.2 8.4l3 3 6.6-6.8");
+    case "agreement":
+      // Dos manos / acuerdo mutuo: un acuerdo no es una decisión unilateral.
+      return p("M2.6 8.6l2.6-2.6 2.8 2.8|M13.4 7.4l-2.6 2.6L8 7.2|M5.2 6h5.6");
+    case "conclusion":
+      return p("M4 2.8h8v10.4l-4-2.4-4 2.4V2.8Z");
+    case "decision":
+    default:
+      return p("M8 2.6a5.4 5.4 0 1 1 0 10.8 5.4 5.4 0 0 1 0-10.8Z|M5.7 8.1l1.7 1.7 3-3.4");
+  }
+}
+
+/**
+ * THE panel — the unit the Resumen view is built from.
+ *
+ * Every block on this screen is one of these: executive summary, themes, the
+ * narrative, attention, at-a-glance and next steps. They used to be a mix —
+ * two sections floating loose on the surface and four in bordered cards — which
+ * read as if the loose ones were still loading. One shape, one padding.
+ *
+ * They sit on the CANVAS (the scroller goes grey for this tab), which is what
+ * makes them read as boxes rather than as regions of one page. They span the
+ * full width — the gutter is 12–16px, not a reading measure — so the grey shows
+ * BETWEEN boxes, never as a wide margin down either side.
+ */
+function Panel({
+  title,
+  count,
+  actions,
+  children,
+  className = "",
+  bleed = false,
+}: {
+  title?: string;
+  count?: number;
+  actions?: React.ReactNode;
+  children: React.ReactNode;
+  className?: string;
+  /** Children run edge to edge (a list with its own dividers). */
+  bleed?: boolean;
+}) {
+  return (
+    <section className={`flex min-w-0 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)] ${className}`}>
+      {title ? (
+        <div className="flex items-center gap-2 px-4 pb-2.5 pt-3.5">
+          <h2 className="min-w-0 truncate text-[0.8125rem] font-semibold">{title}</h2>
+          {count !== undefined ? <span className="shrink-0 text-[0.6875rem] text-faint u-mono">{count}</span> : null}
+          {actions ? <span className="ml-auto flex shrink-0 items-center gap-2">{actions}</span> : null}
+        </div>
+      ) : null}
+      <div className={bleed ? "min-w-0" : "min-w-0 px-4 pb-4"}>{children}</div>
+    </section>
+  );
+}
+
+/** Corroboration chip: where a finding is backed up. */
+function SourceChip({ source }: { source: FindingSource }) {
+  const icon =
+    source === "email"
+      ? "M2.6 4.6h10.8v6.8H2.6V4.6Z|M2.6 4.6 8 8.6l5.4-4"
+      : source === "task"
+        ? "M3.4 8.2l2.4 2.4 6.8-6.8|M3.4 12.6h9.2"
+        : source === "contact"
+          ? "M8 3.2a2.4 2.4 0 1 1 0 4.8 2.4 2.4 0 0 1 0-4.8Z|M3.6 13a4.4 4.4 0 0 1 8.8 0"
+          : source === "appointment"
+            ? "M3 4.4h10v8.4H3V4.4Z|M3 7.2h10|M5.8 2.8v1.6|M10.2 2.8v1.6"
+            : source === "document"
+              ? "M4.2 2.8h5l2.6 2.6v7.8H4.2V2.8Z|M6.2 8h3.6|M6.2 10.4h3.6"
+              : "M2.8 8h1.4|M5.6 5.4v5.2|M8 3.6v8.8|M10.4 6v4|M13.2 8h.01";
+  return (
+    <span className="inline-flex shrink-0 items-center gap-1 rounded-md border border-line-soft bg-subtle px-1.5 py-0.5 text-[0.65625rem] text-muted">
+      <svg viewBox="0 0 16 16" className="size-2.5" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+        {icon.split("|").map((d) => (
+          <path key={d} d={d} />
+        ))}
+      </svg>
+      {SOURCE_LABEL[source]}
+    </span>
+  );
+}
+
+/**
+ * ONE narrative finding in the lead column: rank number, kind, headline,
+ * context, corroboration, attribution and its contextual actions.
+ *
+ * The RANK NUMBER is load-bearing, not decoration: it is what tells a reader
+ * that this list is ordered by importance rather than by category, which is the
+ * whole point of the editorial layout.
+ */
+function LeadFinding({ finding: f, rank, onSeek }: { finding: Finding; rank: number; onSeek: (s: number) => void }) {
+  const sources: FindingSource[] = f.sources?.length ? f.sources : ["transcript"];
+  return (
+    <article id={`finding-${f.id}`} className="flex scroll-mt-6 gap-3 py-4 first:pt-0 last:pb-0">
+      <span
+        aria-hidden
+        className="mt-0.5 inline-flex size-5 shrink-0 items-center justify-center rounded-md border border-line-soft bg-subtle text-[0.65625rem] font-semibold text-muted u-mono"
+      >
+        {rank}
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+          <h3 className="text-[0.9375rem] font-semibold leading-snug tracking-[-0.01em]">{f.title}</h3>
+          <span className="shrink-0 text-[0.6875rem] text-faint">{FINDING_KIND[f.kind].singular}</span>
+        </div>
+        {f.detail ? <p className="text-[0.875rem] leading-[1.65] text-foreground/85">{f.detail}</p> : null}
+
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 pt-0.5">
+          {sources.map((src) => (
+            <SourceChip key={src} source={src} />
+          ))}
+          {/* Confidence, only when the analysis is unsure enough to matter. */}
+          {f.confidence !== undefined ? (
+            <span className="inline-flex items-center gap-1.5 text-[0.65625rem] text-muted" title="Confianza del análisis en esta atribución">
+              <span aria-hidden className="relative block h-1 w-10 overflow-hidden rounded-full bg-chip">
+                <span className="absolute inset-y-0 left-0 rounded-full bg-faint" style={{ width: `${f.confidence}%` }} />
+              </span>
+              <span className="u-mono">{f.confidence}%</span>
+            </span>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => onSeek(f.at)}
+            className="u-focus inline-flex items-center gap-1.5 rounded text-[0.6875rem] text-muted transition-colors hover:text-foreground"
+          >
+            <Avatar person={{ initials: f.initials, name: f.by }} size={15} />
+            <span className="truncate">{f.by}</span>
+            <span className="u-mono">{f.stamp}</span>
+          </button>
+
+          {f.actions?.length ? (
+            <span className="ml-auto flex shrink-0 items-center gap-1.5">
+              {f.actions.map((a, i) => (
+                <button
+                  key={a.label}
+                  type="button"
+                  onClick={i === 0 ? () => onSeek(f.at) : undefined}
+                  className={
+                    a.primary || i === 0
+                      ? "u-focus rounded-lg border border-line-strong px-2.5 py-1 text-[0.71875rem] text-foreground transition-colors hover:border-faint"
+                      : "u-focus rounded px-1 text-[0.71875rem] text-muted transition-colors hover:text-foreground"
+                  }
+                >
+                  {a.label}
+                </button>
+              ))}
+            </span>
+          ) : null}
+        </div>
+      </div>
+    </article>
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   RESUMEN — editorial layout.
+
+     ┌──────────────────────────────┬────────────────────┐
+     │ Lo más importante            │ Requiere atención  │
+     │  ranked narrative findings   ├────────────────────┤
+     │                              │ En una mirada      │
+     └──────────────────────────────┴────────────────────┘
+     ┌───────────────────────────────────────────────────┐
+     │ Próximos pasos (full width)                       │
+     └───────────────────────────────────────────────────┘
+
+   The left column is NOT named after a category: it holds whatever the most
+   relevant items were, each carrying its own kind label. The right column
+   holds ONLY exceptions, and disappears when there are none — in which case
+   the narrative takes the full width instead of leaving a hole.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/** Chip tone per highlight tone. Red is only ever `danger`. */
+const HIGHLIGHT_TONE: Record<NonNullable<Highlight["tone"]>, "neutral" | "muted" | "warn" | "brand" | "success"> = {
+  neutral: "muted",
+  info: "neutral",
+  warn: "warn",
+  danger: "brand",
+  success: "success",
+};
+
+/**
+ * El estado vacío de una fase que todavía no existe.
+ *
+ * Tres pestañas —Resumen, Reportes y Evidencia— dependen del análisis, y el
+ * análisis no tiene etapa ni almacenamiento: `analysis_state` es `pending` para
+ * toda reunión. La alternativa era dejar los fixtures del diseño, y eso habría
+ * puesto seis reuniones inventadas y las citas de un kickoff que no existió al
+ * lado de una transcripción real. Un hueco honesto se lee como un hueco; un
+ * dato inventado se lee como un dato.
+ *
+ * Se dice QUÉ falta y QUÉ sí hay, porque «vacío» sin más deja al usuario sin
+ * saber si la reunión se procesó mal o si la función no ha llegado.
+ */
+function PhasePending({
+  title,
+  body,
+  onGoToTranscript,
+}: {
+  title: string;
+  body: string;
+  onGoToTranscript?: () => void;
+}) {
+  return (
+    <div className="flex min-h-[18rem] flex-col items-center justify-center gap-3 px-6 py-12 text-center">
+      <span
+        aria-hidden
+        className="inline-flex size-10 items-center justify-center rounded-full border border-line bg-subtle text-muted"
+      >
+        <svg viewBox="0 0 24 24" className="size-5" fill="none">
+          <circle cx="12" cy="12" r="8.25" stroke="currentColor" strokeWidth="1.6" />
+          <path d="M12 8v4l2.5 1.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+        </svg>
+      </span>
+      <p className="text-sm font-semibold text-foreground">{title}</p>
+      <p className="max-w-[34rem] text-[0.8125rem] leading-relaxed text-muted">{body}</p>
+      {onGoToTranscript ? (
+        <button
+          type="button"
+          onClick={onGoToTranscript}
+          className="u-focus mt-1 rounded-lg border border-line px-3 py-1.5 text-[0.8125rem] font-medium text-foreground hover:bg-subtle"
+        >
+          Ver la transcripción
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+/**
+ * El estado VACÍO y el resumen, separados en dos componentes.
+ *
+ * Estaban en una sola función: un `return <PhasePending/>` temprano y, DESPUÉS, un
+ * `useState`. Eso rompe las reglas de los hooks —eslint lo marcaba como error— y no es
+ * teórico: en cuanto una reunión pase de «sin análisis» a «con análisis» sin
+ * desmontarse, React encuentra un hook que antes no existía y el orden se descoloca.
+ *
+ * El arreglo es estructural y no mueve nada de conducta: `Summary` decide, `SummaryBody`
+ * tiene los hooks. El texto del estado vacío, la condición que lo dispara (contenido, no
+ * estado) y todo lo demás quedan idénticos.
+ */
+/**
+ * El botón de generar, y lo único que hace falta para no gastar dos veces desde
+ * aquí: `pending` deshabilita, y la guarda del `ref` corta el segundo clic aunque
+ * React todavía no haya repintado. La defensa REAL está en el servidor —un
+ * resumen por versión de transcripción— pero no conviene apoyarse sólo en ella:
+ * la llamada ya habría salido.
+ */
+function GenerateSummary({
+  meetingId,
+  clientId,
+  label,
+}: {
+  meetingId: string;
+  clientId: string;
+  label: string;
+}) {
+  const router = useRouter();
+  const [pending, setPending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const enVuelo = useRef(false);
+
+  const generar = async () => {
+    if (enVuelo.current) return;
+    enVuelo.current = true;
+    setPending(true);
+    setError(null);
+    try {
+      const r = await fetch(
+        `/api/meetings/v1/meetings/${meetingId}/analyze?clientId=${clientId}`,
+        { method: "POST" },
+      );
+      if (!r.ok) {
+        const cuerpo = (await r.json().catch(() => null)) as { message?: string } | null;
+        throw new Error(cuerpo?.message ?? `No se pudo generar el resumen (HTTP ${r.status}).`);
+      }
+      router.refresh();
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "No se pudo generar el resumen.");
+    } finally {
+      enVuelo.current = false;
+      setPending(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col items-start gap-2">
+      <button
+        type="button"
+        onClick={generar}
+        disabled={pending}
+        aria-busy={pending}
+        className="u-focus inline-flex items-center gap-2 rounded-xl border border-line-strong bg-surface px-3.5 py-2 text-[0.8125rem] font-medium text-foreground transition-colors hover:bg-subtle disabled:cursor-not-allowed disabled:text-muted"
+      >
+        {pending ? "Generando…" : label}
+      </button>
+      {error ? <p className="text-[0.78125rem] text-danger">{error}</p> : null}
+    </div>
+  );
+}
+
+/** El resumen se hizo sobre un texto que ya no es el vigente. Se dice, no se esconde. */
+function OutdatedNotice({ meetingId, clientId }: { meetingId: string; clientId: string }) {
+  return (
+    <div className="flex flex-col gap-2 rounded-xl border border-line-strong bg-subtle px-3.5 py-3">
+      <p className="text-[0.8125rem] text-foreground">
+        Este resumen se generó con una versión anterior de la transcripción. La reunión se
+        reprocesó después, así que sus citas pueden no corresponder con el texto actual.
+      </p>
+      <GenerateSummary meetingId={meetingId} clientId={clientId} label="Regenerar con la versión actual" />
+    </div>
+  );
+}
+
+function Summary({
+  meeting,
+  clientId,
+  onSeek,
+}: {
+  meeting: MeetingDetail;
+  clientId: string;
+  onSeek: (s: number) => void;
+}) {
+  const s = meeting.summary;
+  // Ni narrativa, ni hallazgos, ni siguientes pasos: no hay análisis. Se
+  // comprueba el CONTENIDO y no un estado, porque una reunión puede tener el
+  // análisis "ready" y no haber encontrado nada que decir.
+  const nothing =
+    s.executive.trim() === "" &&
+    s.highlights.length === 0 &&
+    s.themes.length === 0 &&
+    s.findings.length === 0 &&
+    s.nextSteps.length === 0;
+  if (nothing) {
+    const conTexto = meeting.transcript.length > 0;
+    return (
+      <div className="flex flex-col gap-4 py-4">
+        <PhasePending
+          title="Todavía no hay resumen"
+          body={
+            conTexto
+              ? "Se genera a partir de la transcripción, y cita el segmento del que sale cada " +
+                "afirmación. No inventa acuerdos, responsables ni fechas: lo que no se dijo, no aparece."
+              : "Todavía no hay transcripción que resumir."
+          }
+        />
+        {conTexto ? (
+          <div className="px-1">
+            <GenerateSummary meetingId={meeting.id} clientId={clientId} label="Generar resumen" />
+          </div>
+        ) : null}
+      </div>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-3">
+      {meeting.analysis?.outdated ? (
+        <div className="pt-4">
+          <OutdatedNotice meetingId={meeting.id} clientId={clientId} />
+        </div>
+      ) : null}
+      <SummaryBody meeting={meeting} onSeek={onSeek} />
+    </div>
+  );
+}
+
+function SummaryBody({ meeting, onSeek }: { meeting: MeetingDetail; onSeek: (s: number) => void }) {
+  const s = meeting.summary;
+  const c = composeSummary(s);
+  const [showAllLead, setShowAllLead] = useState(false);
+  const shownLead = showAllLead ? c.lead : c.lead.slice(0, LEAD_LIMIT);
+  const pending = pendingStepCount(s.nextSteps);
+
+  const jumpToTarget = (t: HighlightTarget) => {
+    if (t.kind === "transcript") return onSeek(t.at);
+    const el = document.getElementById(t.kind === "finding" ? `finding-${t.id}` : `step-${t.id}`);
+    el?.scrollIntoView({ block: "center", behavior: "smooth" });
+    el?.classList.add("u-flash");
+    window.setTimeout(() => el?.classList.remove("u-flash"), 1400);
+  };
+
+  if (c.isEmpty) {
+    return (
+      <div className="py-6">
+        <EmptyState
+          title="Esta reunión no produjo un resumen confiable."
+          hint="El transcript está completo y se puede leer, buscar y citar. No afirmamos conclusiones que no estén dichas en el audio."
+        />
+      </div>
+    );
+  }
+
+  // No exceptions and nothing to glance at → the narrative gets everything.
+  const hasSide = c.attention.length > 0 || c.glance.length > 0;
+
+  return (
+    <div className="flex flex-col gap-4 py-4 pb-8">
+      {s.executive ? (
+        <Panel title="Resumen ejecutivo">
+          <p className="text-[0.9375rem] leading-[1.7] text-balance text-foreground/90">{s.executive}</p>
+        </Panel>
+      ) : null}
+
+      {s.themes.length > 0 ? (
+        <Panel title="Temas principales" count={s.themes.length}>
+          <ul className="flex flex-wrap gap-1.5">
+            {s.themes.map((t) => (
+              <li key={t.label}>
+                <button
+                  type="button"
+                  onClick={() => onSeek(t.at)}
+                  title={`Ir a "${t.label}" en el transcript`}
+                  className="u-focus inline-flex max-w-full items-center gap-2 rounded-lg border border-line-soft bg-subtle px-2.5 py-1 text-[0.78125rem] transition-colors hover:border-line-strong hover:bg-surface"
+                >
+                  <span className="min-w-0 truncate">{t.label}</span>
+                  <span className="shrink-0 text-[0.6875rem] text-muted u-mono">{t.range}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </Panel>
+      ) : null}
+
+      {/* ── THE TWO COLUMNS ── */}
+      {/* TWO COLUMNS at their NATURAL heights.
+          Stretching the shorter column to close the gap was tried and dropped:
+          it only moved the emptiness inside a box, where it read as a panel that
+          failed to load. Columns ending a little apart is normal on a board;
+          what was wrong here was the CONTENT — three narrative items against two
+          tall side cards — not the grid. */}
+      <div className={hasSide ? "grid items-start gap-4 lg:grid-cols-[minmax(0,1fr)_20rem]" : ""}>
+        {shownLead.length > 0 || s.absences?.length ? (
+          <Panel title="Lo más importante de la reunión" count={c.lead.length || undefined}>
+            <div className="flex flex-col divide-y divide-line-soft">
+              {shownLead.map((f, i) => (
+                <LeadFinding key={f.id} finding={f} rank={i + 1} onSeek={onSeek} />
+              ))}
+            </div>
+            {c.lead.length > LEAD_LIMIT ? (
+              <button
+                type="button"
+                onClick={() => setShowAllLead((v) => !v)}
+                aria-expanded={showAllLead}
+                className="u-focus mt-3 w-fit rounded text-[0.78125rem] text-accent hover:underline"
+              >
+                {showAllLead ? "Ver menos" : `Ver todos (${c.lead.length})`}
+              </button>
+            ) : null}
+            {s.absences?.length ? (
+              <ul className="mt-3 flex flex-col gap-1 border-t border-line-soft pt-2.5">
+                {s.absences.map((a) => (
+                  <li key={a} className="text-[0.75rem] text-faint">
+                    {a}
+                  </li>
+                ))}
+              </ul>
+            ) : null}
+          </Panel>
+        ) : null}
+
+        {hasSide ? (
+          <div className="flex min-w-0 flex-col gap-4 lg:sticky lg:top-2">
+            {c.attention.length > 0 ? (
+              <Panel title="Requiere atención" count={c.attention.length} bleed>
+                <ul className="flex flex-col">
+                  {c.attention.map((a) => (
+                    <li key={a.id} className="border-t border-line-soft first:border-t-0">
+                      <button
+                        type="button"
+                        onClick={() => jumpToTarget(a.target)}
+                        className="u-focus group flex w-full items-start gap-2 px-4 py-2.5 text-left transition-colors hover:bg-subtle"
+                      >
+                        <span
+                          aria-hidden
+                          className={`mt-1.5 size-1.5 shrink-0 rounded-full ${
+                            a.tone === "danger" ? "bg-brand" : a.tone === "warn" ? "bg-warn" : "bg-faint"
+                          }`}
+                        />
+                        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+                          <span className="text-[0.8125rem] font-medium leading-snug">{a.title}</span>
+                          <span className="text-[0.71875rem] leading-snug text-muted">{a.note}</span>
+                        </span>
+                        <svg
+                          viewBox="0 0 16 16"
+                          className="mt-1 size-2.5 shrink-0 text-faint transition-transform group-hover:translate-x-0.5"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                          aria-hidden
+                        >
+                          <path d="M6 3.5 10.5 8 6 12.5" />
+                        </svg>
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              </Panel>
+            ) : null}
+
+            {c.glance.length > 0 ? (
+              <Panel title="En una mirada" bleed>
+                <dl className="flex flex-col">
+                  {c.glance.map((h) => {
+                    const linked = Boolean(h.target);
+                    const value = h.tone ? (
+                      <Chip tone={HIGHLIGHT_TONE[h.tone]}>{h.value}</Chip>
+                    ) : (
+                      <span
+                        className={`text-[0.8125rem] font-medium leading-snug ${
+                          linked ? "underline decoration-line-strong decoration-1 underline-offset-2 group-hover:decoration-foreground" : ""
+                        }`}
+                      >
+                        {h.value}
+                      </span>
+                    );
+                    const row = (
+                      <>
+                        <dt className="u-th shrink-0 pt-0.5">{h.label}</dt>
+                        <dd className="ml-auto flex min-w-0 justify-end text-right">{value}</dd>
+                      </>
+                    );
+                    return linked ? (
+                      <button
+                        key={h.label}
+                        type="button"
+                        onClick={() => jumpToTarget(h.target!)}
+                        className="u-focus group flex items-start gap-3 border-t border-line-soft px-4 py-2.5 text-left first:border-t-0 hover:bg-subtle"
+                      >
+                        {row}
+                      </button>
+                    ) : (
+                      <div key={h.label} className="flex items-start gap-3 border-t border-line-soft px-4 py-2.5 first:border-t-0">
+                        {row}
+                      </div>
+                    );
+                  })}
+                </dl>
+              </Panel>
+            ) : null}
+          </div>
+        ) : null}
+      </div>
+
+      {/* ── FULL-WIDTH TABLE ── */}
+      {s.nextSteps.length > 0 ? <NextSteps steps={s.nextSteps} pending={pending} onSeek={onSeek} /> : null}
+    </div>
+  );
+}
+/**
+ * Próximos pasos (was "Tareas y compromisos", which asserted that every meeting
+ * produces tasks — an interview produces a decision about a candidate, not a
+ * ticket). Full width, below the two columns: it is the operational table, and
+ * a table squeezed into a 60 % column is where the dates start wrapping.
+ *
+ * Holds tasks with an owner and a date, commitments with neither, and things
+ * already created in the CRM, without pretending they are the same.
+ */
+function NextSteps({ steps, pending, onSeek }: { steps: NextStep[]; pending: number; onSeek: (s: number) => void }) {
+  const COLS = "20px minmax(200px,1fr) 156px 116px 96px 132px";
+  const dueClass = (d: NextStep["due"]) =>
+    !d || d.state === "none"
+      ? "text-faint"
+      : d.state === "overdue"
+        ? "font-medium text-brand"
+        : d.state === "soon"
+          ? "text-warn"
+          : "text-muted";
+
+  return (
+    <Panel
+      title="Próximos pasos"
+      count={steps.length}
+      actions={
+        /*
+          DESHABILITADO Y DICHO, no activo y mentiroso.
+
+          No hay integración de tareas: este botón no tenía `onClick` y nunca lo
+          tuvo. Un control primario que parece pulsable y no hace nada consume el
+          intento del usuario y le deja creyendo que las tareas se crearon. Se
+          queda visible —el trabajo está previsto y la columna de estado ya lo
+          menciona— pero inerte y etiquetado «Próximamente», que es la única
+          afirmación verdadera que se puede hacer hoy.
+        */
+        pending > 0 ? (
+          <span className="inline-flex items-center gap-1.5">
+            <button
+              type="button"
+              disabled
+              aria-disabled="true"
+              title="La creación de tareas todavía no está implementada"
+              className="inline-flex min-h-7 cursor-not-allowed items-center rounded-lg border border-line bg-chip px-2.5 text-[0.75rem] text-muted"
+            >
+              Crear tareas pendientes ({pending})
+            </button>
+            <Chip tone="muted">Próximamente</Chip>
+          </span>
+        ) : null
+      }
+    >
+      <div role="table" aria-label="Próximos pasos de la reunión" className="overflow-x-auto">
+        <div className="min-w-[820px]">
+          <div
+            role="row"
+            className="grid h-8 items-center gap-2.5 border-b border-line-row px-1 text-[0.6875rem] font-semibold text-muted"
+            style={{ gridTemplateColumns: COLS }}
+          >
+            <span role="columnheader">
+              <span className="sr-only">Seleccionar</span>
+            </span>
+            <span role="columnheader">Acción</span>
+            <span role="columnheader">Responsable</span>
+            <span role="columnheader">Fecha</span>
+            <span role="columnheader">Evidencia</span>
+            <span role="columnheader">Estado</span>
+          </div>
+          {steps.map((t) => {
+            // El responsable y la fecha se normalizan aquí: un `owner: "null"`
+            // guardado no debe llegar a la pantalla como un nombre.
+            const owner = textoODefecto(t.owner);
+            const due = fechaODefecto(t.due);
+            return (
+            <div
+              role="row"
+              key={t.id}
+              id={`step-${t.id}`}
+              className="grid min-h-12 scroll-mt-6 items-center gap-2.5 border-b border-line-soft px-1 last:border-b-0"
+              style={{ gridTemplateColumns: COLS }}
+            >
+              <span role="cell">
+                <input type="checkbox" aria-label={`Seleccionar: ${t.text}`} className="u-focus size-3.5 rounded border-line-strong" />
+              </span>
+              <span role="cell" className="text-[0.8125rem]">
+                {t.text}
+              </span>
+              <span role="cell" className="flex min-w-0 items-center gap-1.5 text-[0.78125rem] text-muted">
+                {/* Las iniciales se pintan sólo si hay responsable DE VERDAD: con
+                    `owner: "null"` la inicial calculada era una «N». */}
+                {owner && t.ownerInitials ? (
+                  <Avatar person={{ initials: t.ownerInitials, name: owner }} size={18} />
+                ) : (
+                  <span aria-hidden className="text-faint">
+                    —
+                  </span>
+                )}
+                <span className="truncate">{owner ?? "Sin responsable"}</span>
+              </span>
+              <span role="cell" className={`text-[0.78125rem] ${dueClass(due)}`}>
+                {/* "Vencida" is stated, never implied by colour alone. */}
+                {due ? (
+                  <>
+                    {due.label}
+                    {due.state === "overdue" ? <span className="ml-1 text-[0.65625rem] uppercase">vencida</span> : null}
+                  </>
+                ) : (
+                  "Sin fecha"
+                )}
+              </span>
+              <span role="cell">
+                <button
+                  type="button"
+                  onClick={() => onSeek(t.evidence.at)}
+                  title={`Ir al minuto ${t.evidence.stamp} del transcript`}
+                  className="u-focus rounded-md border border-line-soft px-1.5 py-0.5 text-[0.65625rem] text-muted u-mono transition-colors hover:border-faint hover:text-foreground"
+                >
+                  {t.evidence.initials} {t.evidence.stamp}
+                </button>
+              </span>
+              <span role="cell" className="flex items-center gap-1.5">
+                {t.state === "created" ? (
+                  <>
+                    <Chip tone="success">Creada</Chip>
+                    <button type="button" className="u-focus rounded text-[0.6875rem] text-accent underline decoration-accent/40">
+                      Ver tarea
+                    </button>
+                  </>
+                ) : t.state === "blocked" ? (
+                  <Chip tone="muted" title="Tu rol no permite crear tareas en el CRM">
+                    Sin permiso
+                  </Chip>
+                ) : (
+                  // Mismo caso que el botón de la cabecera: sin integración, no
+                  // se ofrece como acción. Se dice lo que hay.
+                  <Chip tone="muted" title="La creación de tareas todavía no está implementada">
+                    Próximamente
+                  </Chip>
+                )}
+              </span>
+            </div>
+            );
+          })}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+/**
+ * La pestaña Reportes vive en `ReportsTab.tsx`.
+ *
+ * Lo que había aquí era el mobiliario del diseño: un catálogo de reportes
+ * inventados y un pie con «2 cambios sin guardar», «Descartar» y «Guardar».
+ * Se ha ido entero. No es que sobrara espacio — es que prometía una edición
+ * manual del documento que no existe, y un botón Guardar que no guarda nada es
+ * peor que no tener botón.
+ */
+/**
+ * Evidencia: a FLAT surface with dividers, grouped by theme. No nested cards —
+ * the spec is explicit that this is the Contacts-table treatment, not a wall of
+ * boxes.
+ */
+function Evidence({ meeting, onSeek }: { meeting: MeetingDetail; onSeek: (s: number) => void }) {
+  const [kind, setKind] = useState<"all" | EvidenceItem["kind"]>("all");
+  if (meeting.evidence.length === 0) {
+    return (
+      <PhasePending
+        title="Todavía no hay evidencia citada"
+        body={
+          "La evidencia son las frases del audio que el análisis selecciona y agrupa por tema. " +
+          "Depende de la misma fase que el resumen. Mientras tanto, la transcripción completa " +
+          "está disponible y cada segmento se puede escuchar desde su marca de tiempo."
+        }
+      />
+    );
+  }
+  const items = meeting.evidence.filter((e) => kind === "all" || e.kind === kind);
+  const counts = (k: EvidenceItem["kind"]) => meeting.evidence.filter((e) => e.kind === k).length;
+
+  // Group by theme, preserving the order the quotes arrive in.
+  const groups: { theme: string; items: EvidenceItem[] }[] = [];
+  for (const it of items) {
+    const last = groups[groups.length - 1];
+    if (last && last.theme === it.theme) last.items.push(it);
+    else groups.push({ theme: it.theme, items: [it] });
+  }
+
+  // The filter pills are DERIVED from the kinds this meeting actually produced,
+  // in the order they first appear. Fixed pills meant a support call showed
+  // "Compromisos 0" and had nowhere to put its "Problema".
+  const presentKinds = [...new Set(meeting.evidence.map((e) => e.kind))];
+  // "No agregues filtros cuando haya pocos elementos": one kind, or a handful of
+  // quotes, is faster to read than to filter.
+  const showFilters = presentKinds.length > 1 && meeting.evidence.length > 3;
+
+  return (
+    <div className="flex flex-col py-3 pb-6">
+      {showFilters ? (
+        <div role="group" aria-label="Filtros de evidencia" className="mb-1 flex flex-wrap items-center gap-1.5 pb-2">
+          {[{ key: "all" as const, label: "Todas", n: meeting.evidence.length }, ...presentKinds.map((k) => ({ key: k, label: FINDING_KIND[k].label, n: counts(k) }))].map(
+            (f) => (
+              <button
+                key={f.key}
+                type="button"
+                onClick={() => setKind(f.key)}
+                aria-pressed={kind === f.key}
+                className={`u-focus inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[0.78125rem] transition-colors ${
+                  kind === f.key ? "bg-ink font-semibold text-ink-fg" : "text-muted hover:bg-subtle hover:text-foreground"
+                }`}
+              >
+                {f.label}
+                <span className={`u-mono text-[0.65625rem] ${kind === f.key ? "opacity-70" : "text-faint"}`}>{f.n}</span>
+              </button>
+            ),
+          )}
+        </div>
+      ) : null}
+
+      {items.length === 0 ? (
+        <EmptyState
+          title={meeting.evidence.length === 0 ? "Todavía no hay citas registradas." : "Ninguna cita de este tipo."}
+          hint={
+            meeting.evidence.length === 0
+              ? "La evidencia se llena cuando el análisis liga una conclusión a un momento del audio."
+              : "Cambia el filtro para ver el resto de la evidencia."
+          }
+        />
+      ) : (
+        groups.map((g) => (
+          <section key={g.theme}>
+            <h3 className="u-th border-y border-line-row bg-subtle px-3.5 py-1.5">
+              {g.theme} · {g.items.length} {g.items.length === 1 ? "cita" : "citas"}
+            </h3>
+            <ul>
+              {g.items.map((e) => (
+                <li key={e.at} className="flex gap-3 border-b border-line-soft px-3.5 py-3 last:border-b-0">
+                  <Avatar person={{ initials: e.initials, name: e.speaker }} size={26} />
+                  <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+                    <h4 className="flex flex-wrap items-center gap-2">
+                      <span className="text-[0.8125rem] font-semibold">{e.speaker}</span>
+                      <span className="text-[0.71875rem] text-muted">{e.role}</span>
+                      <span className="inline-flex items-center gap-1.5">
+                        <span className={e.kind === "risk" || e.kind === "problem" ? "text-brand" : e.kind === "dependency" || e.kind === "objection" ? "text-warn" : "text-muted"}>
+                          <FindingIcon kind={e.kind} />
+                        </span>
+                        <Chip tone={KIND_TONE[e.kind]}>{FINDING_KIND[e.kind].singular}</Chip>
+                      </span>
+                      <span className="ml-auto text-[0.6875rem] text-muted u-mono">{e.stamp}</span>
+                    </h4>
+                    <blockquote className="max-w-[92ch] text-[0.84375rem] leading-relaxed text-foreground/90">«{e.quote}»</blockquote>
+                    {/* Actions and provenance stay in ONE group, left-aligned. In
+                        the sheet the "Usada en…" note was pushed 1200px away by
+                        margin-left:auto, so nothing tied it to its own row. */}
+                    <div className="flex flex-wrap items-center gap-3">
+                      <button
+                        type="button"
+                        onClick={() => onSeek(e.at)}
+                        className="u-focus rounded text-[0.71875rem] text-accent underline decoration-accent/40"
+                      >
+                        Abrir en el transcript
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onSeek(e.at)}
+                        className="u-focus inline-flex items-center gap-1.5 rounded text-[0.71875rem] text-muted hover:text-foreground"
+                      >
+                        <svg viewBox="0 0 16 16" className="size-2.5" fill="currentColor" aria-hidden>
+                          <path d="M4 2.6l8 5.4-8 5.4z" />
+                        </svg>
+                        Escuchar desde {e.stamp}
+                      </button>
+                      {e.producedTask ? (
+                        <span className="inline-flex items-center gap-1.5 text-[0.71875rem] text-success">
+                          <span aria-hidden className="size-1.5 rounded-full bg-success" />
+                          Generó una tarea en el CRM
+                        </span>
+                      ) : (
+                        <span className="text-[0.71875rem] text-faint">{e.usedIn ? `Usada en ${e.usedIn}` : "Todavía no se usa en ningún reporte"}</span>
+                      )}
+                    </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </section>
+        ))
+      )}
+    </div>
+  );
+}
+
+/* ── The two optional panels ──────────────────────────────────────────────── */
+
+function InspectorPanel({ meeting, onClose }: { meeting: MeetingDetail; onClose: () => void }) {
+  return (
+    <aside
+      aria-label="Inspector de la reunión"
+      className="flex w-[16.5rem] shrink-0 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]"
+    >
+      <div className="flex shrink-0 items-center gap-2 border-b border-line-row px-3 py-2.5">
+        <h2 className="text-[0.8125rem] font-semibold">Inspector</h2>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Cerrar el Inspector"
+          className="u-focus ml-auto inline-flex size-6 items-center justify-center rounded-md text-muted transition-colors hover:bg-subtle hover:text-foreground"
+        >
+          <svg viewBox="0 0 16 16" className="size-3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden>
+            <path d="M4 4l8 8M12 4l-8 8" />
+          </svg>
+        </button>
+      </div>
+      <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-3 py-3">
+        <section className="flex flex-col gap-2.5">
+          <h3 className="u-th">Participantes</h3>
+          {meeting.participants.map((p) => (
+            <div key={p.initials} className="flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <Avatar person={p} size={24} />
+                <span className="flex min-w-0 flex-1 flex-col">
+                  <span className="flex items-baseline gap-1.5">
+                    <span className="min-w-0 truncate text-[0.78125rem] font-medium">{p.name}</span>
+                    {p.share !== null ? <span className="shrink-0 text-[0.6875rem] text-muted u-mono">{p.share} %</span> : null}
+                  </span>
+                  <span className="truncate text-[0.6875rem] text-faint">{p.role ?? "Sin identificar · asociar contacto"}</span>
+                </span>
+              </div>
+              {p.share !== null ? <ShareMeter value={p.share} name={p.name} /> : null}
+            </div>
+          ))}
+        </section>
+
+        <section className="flex flex-col gap-2 border-t border-line-soft pt-3">
+          <h3 className="u-th">Procesamiento</h3>
+          {/* What the analysis deliberately DID NOT assert. This used to be a
+              full block in the summary body, sitting under Decisiones as if it
+              were a finding — it is metadata about the analysis, so it belongs
+              beside the rest of it. */}
+          {meeting.summary.caveat ? (
+            <p className="flex items-start gap-1.5 rounded-lg bg-subtle px-2 py-1.5 text-[0.6875rem] leading-relaxed text-muted">
+              <svg viewBox="0 0 16 16" className="mt-px size-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" aria-hidden>
+                <path d="M8 2.6a5.4 5.4 0 1 1 0 10.8 5.4 5.4 0 0 1 0-10.8Z" />
+                <path d="M8 5.6h.01M8 7.6v3" />
+              </svg>
+              {meeting.summary.caveat}
+            </p>
+          ) : null}
+          <dl className="flex flex-col gap-1.5 text-[0.75rem]">
+            {[
+              ["Idioma", meeting.language],
+              ["Confianza media", meeting.confidence],
+              ["Segmentos", String(meeting.segments)],
+              ["Archivo", meeting.fileSize],
+            ].map(([k, v]) => (
+              <div key={k} className="flex items-baseline gap-2">
+                <dt className="text-muted">{k}</dt>
+                <dd className="ml-auto text-foreground u-mono">{v}</dd>
+              </div>
+            ))}
+          </dl>
+        </section>
+
+        {meeting.tags.length > 0 ? (
+          <section className="flex flex-col gap-2 border-t border-line-soft pt-3">
+            <h3 className="u-th">Etiquetas</h3>
+            <ul className="flex flex-wrap gap-1.5">
+              {meeting.tags.map((t) => (
+                <li key={t}>
+                  <Chip tone="neutral">{t}</Chip>
+                </li>
+              ))}
+              <li>
+                <button
+                  type="button"
+                  aria-label="Añadir etiqueta"
+                  className="u-focus inline-flex items-center rounded-full border border-dashed border-line-strong px-2 py-[0.1rem] text-[0.6875rem] text-muted hover:border-faint"
+                >
+                  +
+                </button>
+              </li>
+            </ul>
+          </section>
+        ) : null}
+      </div>
+    </aside>
+  );
+}
+
+function CopilotPanel({
+  meeting,
+  onClose,
+  onSeek,
+}: {
+  meeting: MeetingDetail;
+  onClose: () => void;
+  onSeek: (s: number) => void;
+}) {
+  const cited = meeting.evidence.slice(0, 2);
+  return (
+    <aside
+      aria-label="Copilot de la reunión"
+      className="flex w-[20rem] shrink-0 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]"
+    >
+      <div className="flex shrink-0 items-center gap-2 border-b border-line-row px-3 py-2.5">
+        <svg viewBox="0 0 16 16" className="size-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+          <path d="M8 2.4l1.3 3.1 3.1 1.3-3.1 1.3L8 11.2 6.7 8.1 3.6 6.8l3.1-1.3z" />
+        </svg>
+        <h2 className="text-[0.8125rem] font-semibold">Copilot</h2>
+        <span className="ml-auto flex items-center gap-1.5">
+          <button type="button" className="u-focus rounded text-[0.6875rem] text-muted hover:text-foreground">
+            Nuevo hilo
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Cerrar Copilot"
+            className="u-focus inline-flex size-6 items-center justify-center rounded-md text-muted transition-colors hover:bg-subtle hover:text-foreground"
+          >
+            <svg viewBox="0 0 16 16" className="size-3" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden>
+              <path d="M4 4l8 8M12 4l-8 8" />
+            </svg>
+          </button>
+        </span>
+      </div>
+
+      <div className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-3 py-3">
+        <p className="self-end rounded-2xl rounded-br-md bg-chip px-3 py-2 text-[0.78125rem]">
+          ¿Qué acordaron sobre el presupuesto y quién queda responsable?
+        </p>
+        <div className="flex flex-col gap-2">
+          <p className="text-[0.8125rem] leading-relaxed">
+            Acordaron intentar que la fase uno se apruebe como gasto operativo para evitar el comité de presupuesto, que solo sesiona el primer
+            martes del mes.
+          </p>
+          <ul className="flex flex-col gap-1 text-[0.78125rem] text-foreground/90">
+            <li className="flex gap-2">
+              <span aria-hidden className="text-faint">—</span> Julián lleva la aprobación interna sin pasar por comité.
+            </li>
+            <li className="flex gap-2">
+              <span aria-hidden className="text-faint">—</span> Laura entrega el desglose de horas el jueves.
+            </li>
+            <li className="flex gap-2">
+              <span aria-hidden className="text-faint">—</span> María envía hoy la lista de campos del mapeo.
+            </li>
+          </ul>
+        </div>
+
+        <h3 className="u-th">Evidencia · {cited.length} citas</h3>
+        {cited.map((e) => (
+          <div key={e.at} className="flex flex-col gap-1.5 rounded-xl border border-line-soft bg-subtle px-2.5 py-2">
+            <span className="flex items-center gap-1.5">
+              <Avatar person={{ initials: e.initials, name: e.speaker }} size={18} />
+              <span className="min-w-0 truncate text-[0.71875rem] font-medium">{e.speaker}</span>
+              <span className="ml-auto text-[0.65625rem] text-muted u-mono">{e.stamp}</span>
+            </span>
+            <blockquote className="text-[0.75rem] leading-relaxed text-foreground/90">«{e.quote.slice(0, 120)}…»</blockquote>
+            <span className="flex items-center gap-2.5">
+              <button type="button" onClick={() => onSeek(e.at)} className="u-focus rounded text-[0.6875rem] text-accent underline decoration-accent/40">
+                Ir al transcript
+              </button>
+              <button type="button" onClick={() => onSeek(e.at)} className="u-focus inline-flex items-center gap-1 rounded text-[0.6875rem] text-muted hover:text-foreground">
+                <svg viewBox="0 0 16 16" className="size-2" fill="currentColor" aria-hidden>
+                  <path d="M4 2.6l8 5.4-8 5.4z" />
+                </svg>
+                Escuchar
+              </button>
+            </span>
+          </div>
+        ))}
+
+        {/* The refusal is the feature: it says what it could NOT find, in amber
+            (a caution), never as a confident answer. */}
+        <p className="flex items-start gap-2 rounded-xl border border-warn/30 bg-warn-soft px-2.5 py-2 text-[0.75rem] leading-relaxed text-warn">
+          <svg viewBox="0 0 16 16" className="mt-0.5 size-3.5 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" aria-hidden>
+            <circle cx="8" cy="8" r="5.8" />
+            <path d="M8 5.2v3.4M8 11h.01" />
+          </svg>
+          No encontré en la reunión un monto ni una fecha de aprobación. No lo afirmo porque no está dicho en el audio.
+        </p>
+      </div>
+
+      <div className="flex shrink-0 flex-col gap-1.5 border-t border-line-row px-3 py-2.5">
+        <form
+          onSubmit={(e) => e.preventDefault()}
+          className="u-focus flex items-center gap-2 rounded-xl border border-line-strong px-2.5 py-1.5"
+        >
+          <input
+            placeholder="Pregúntale a esta reunión…"
+            aria-label="Pregúntale a esta reunión"
+            className="min-w-0 flex-1 bg-transparent text-[0.78125rem] outline-none placeholder:text-faint"
+          />
+          <button
+            type="submit"
+            aria-label="Enviar la pregunta"
+            className="u-focus inline-flex size-7 shrink-0 items-center justify-center rounded-lg bg-ink text-ink-fg hover:bg-ink-hover"
+          >
+            <svg viewBox="0 0 16 16" className="size-3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M8 12.6V3.4M4.4 7l3.6-3.6L11.6 7" />
+            </svg>
+          </button>
+        </form>
+        <p className="text-[0.6875rem] text-faint">Responde solo con lo dicho en esta reunión y cita el minuto.</p>
+      </div>
+    </aside>
+  );
+}

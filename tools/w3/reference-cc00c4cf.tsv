@@ -1,0 +1,21 @@
+# Referencia a oído · reunión cc00c4cf-a69f-46a3-acf7-f22e90fed109
+#
+# Anotación manual de Santiago sobre los PRIMEROS 57 SEGUNDOS de la grabación
+# corta (119,595 s en total). El resto del audio NO está anotado, y nada de lo
+# que se mida aquí se extrapola más allá de 00:57.
+#
+# Los tiempos son APROXIMADOS: son las marcas que se oyen, no fronteras exactas
+# al milisegundo. Por eso el cotejo se lee como «¿detecta esta intervención y a
+# quién se la atribuye?», no como una métrica de error de frontera.
+#
+# «Mujer» y «Hombre» son las etiquetas de quien escuchó. NO se presuponen
+# equivalentes a SPEAKER_00 ni a SPEAKER_01: el cotejo empareja por solape.
+#
+# inicio  fin     voz
+00:00     00:05   Mujer
+00:05     00:10   Hombre
+00:10     00:15   Mujer
+00:15     00:16   Hombre
+00:16     00:26   Mujer
+00:26     00:27   Hombre
+00:27     00:57   Mujer

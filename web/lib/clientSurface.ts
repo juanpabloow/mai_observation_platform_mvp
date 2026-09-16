@@ -23,6 +23,16 @@ const CLIENT_SURFACE_LABELS: ReadonlyArray<{ pattern: RegExp; label: string }> =
   { pattern: /^\/clients\/([^/]+)\/team(?:\/|$)/, label: "Usuarios y accesos" },
   { pattern: /^\/clients\/([^/]+)\/modules(?:\/|$)/, label: "Módulos" },
   { pattern: /^\/clients\/([^/]+)\/contacts(?:\/|$)/, label: "Contactos" },
+  // Reuniones, incluida la ficha de UNA reunión (…/reuniones/<meetingId>). Faltaba, y
+  // por eso el selector de cliente decía «Elige un cliente» dentro de una reunión que
+  // ya pertenece a uno: sin patrón que reconociera la ruta, `parseClientSurface`
+  // devolvía null y la cabecera se quedaba sin cliente que mostrar.
+  //
+  // Es PRESENTACIÓN y nada más: lee el clientId que ya está en la URL —el que el
+  // servidor validó al renderizar la página— y busca su nombre en la lista de clientes
+  // que la cabecera ya tiene, que es la de los que este usuario puede ver. No cambia
+  // la asociación de la reunión ni afloja ningún permiso.
+  { pattern: /^\/clients\/([^/]+)\/reuniones(?:\/|$)/, label: "Reuniones" },
   { pattern: /^\/clients\/([^/]+)\/scheduling\/agenda(?:\/|$)/, label: "Agenda" },
   { pattern: /^\/clients\/([^/]+)\/scheduling\/staff(?:\/|$)/, label: "Equipo" },
   { pattern: /^\/clients\/([^/]+)\/scheduling\/admin(?:\/|$)/, label: "Configuración de agenda" },

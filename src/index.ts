@@ -32,6 +32,10 @@ logger.info({ logLevel: config.LOG_LEVEL }, 'starting worker');
 logger.info({ config: redactedConfig }, 'loaded configuration');
 
 startWorker();
+// El barrido de eliminaciones de Reuniones NO va aquí: tiene su propio
+// entrypoint (`src/maintenanceMain.ts`) y su propio servicio. Este proceso es
+// el de la ingesta de n8n, y mezclarlos haría que reiniciar uno reiniciara el
+// otro.
 
 let shuttingDown = false;
 

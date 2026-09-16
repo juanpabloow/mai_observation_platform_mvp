@@ -124,12 +124,17 @@ export function ContactsTable({
             key={c.id}
             style={{ gridTemplateColumns: template }}
             className={`relative grid ${ENTITY_ROW_CLS} ${
-              // The SELECTED row is one step darker — no tint, no left rule. The design
-              // makes selection a change of GROUND rather than a coloured marker,
-              // because the panel that opens beside it is already the loud signal that
-              // something is selected; a red bar as well read as an alert.
+              // SELECTION IS THE ONLY THING THAT CHANGES A ROW'S GROUND — one step
+              // darker, no tint, no left rule. The panel that opens beside it is already
+              // the loud signal; a coloured bar as well read as an alert.
+              //
+              // An overdue task used to paint the row too (`.u-row-overdue`: an amber
+              // wash + a 2px amber rule). Two different meanings were competing for the
+              // same channel, and the wash lost: a tinted row with a left bar reads as
+              // "you are hovering this" or "this one is open", not as "this person has a
+              // late task". It moved to a chip on the name — see below.
               selected ? "bg-chip" : "hover:bg-subtle"
-            } ${overdue ? "u-row-overdue" : ""}`}
+            }`}
           >
             {/* ── Nombre: sphere + name over email ── */}
             <span role="cell" className="flex min-w-0 items-center gap-2.5">
@@ -152,6 +157,16 @@ export function ContactsTable({
                   {c.messaging_consent === "opted_out" ? (
                     <Chip tone="muted" title="Este contacto rechazó la mensajería">
                       no contactar
+                    </Chip>
+                  ) : null}
+                  {/* LATE TASKS, as a chip rather than as a wash over the whole row. It
+                      carries its own TEXT and its own count, so it survives greyscale
+                      outright instead of depending on a colour plus a rule — and it sits
+                      on the name, where the other fact about this person that changes
+                      what you do next already lives. */}
+                  {overdue ? (
+                    <Chip tone="warn" title={`${c.overdue_task_count} tarea(s) vencida(s) para este contacto`}>
+                      {c.overdue_task_count === 1 ? "1 vencida" : `${c.overdue_task_count} vencidas`}
                     </Chip>
                   ) : null}
                 </span>
