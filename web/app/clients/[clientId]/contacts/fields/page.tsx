@@ -5,6 +5,8 @@ import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { hasFullAccess } from "@/lib/access";
 import { listFieldDefinitions } from "@worker/db/repositories/clientFieldDefinitions.js";
 import { FieldDefinitions } from "@/components/contacts/FieldDefinitions";
+import { ModuleHeader } from "@/components/ui/ModuleHeader";
+import { OUTLINE_CLS } from "@/components/ui/primitives";
 
 /**
  * Custom-field DEFINITIONS for a client's contacts (C-2). Owner/admin only — a member
@@ -22,15 +24,20 @@ export default async function ContactFieldsPage({ params }: { params: Promise<{ 
 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 px-6 py-6">
-      <Link href={`/clients/${client.id}/contacts`} className="text-sm text-muted hover:text-foreground">
-        ← Contacts
-      </Link>
-      <div>
-        <h1 className="text-xl font-semibold tracking-tight">Custom fields</h1>
-        <p className="mt-0.5 text-sm text-muted">
+      <ModuleHeader
+        title="Custom fields"
+        count={defs.length}
+        center={
+          <p className="truncate text-sm text-muted">
           Extra fields on this client&rsquo;s contacts — the CRM analogue of workflow field mappings.
-        </p>
-      </div>
+          </p>
+        }
+        actions={
+          <Link href={`/clients/${client.id}/contacts`} className={OUTLINE_CLS}>
+            ← Contacts
+          </Link>
+        }
+      />
       <FieldDefinitions
         clientId={client.id}
         defs={defs.map((d) => ({ id: d.id, key: d.key, label: d.label, type: d.type, options: d.options, enabled: d.enabled, position: d.position }))}

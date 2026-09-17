@@ -403,6 +403,16 @@ export const SEARCH_SHELL_CLS =
   "u-focus flex h-[var(--control-h)] items-center gap-2 rounded-lg border-[1.5px] border-transparent bg-chip px-3 transition-colors hover:border-line-strong focus-within:border-line-strong";
 
 /**
+ * Search field used inside the compact operative-module header. Agenda established
+ * this smaller 34px rhythm; list screens use the same geometry so moving between
+ * Agenda, Contacts, Staff and Meetings does not make the header jump. Keep this
+ * separate from SEARCH_SHELL_CLS: Inbox owns a denser, internal queue search and must
+ * not inherit changes made to the page-level chrome.
+ */
+export const MODULE_SEARCH_CLS =
+  "u-focus flex h-[34px] items-center gap-2 rounded-[9px] border border-line bg-chip px-3 transition-colors hover:border-line-strong focus-within:border-line-strong";
+
+/**
  * The screen's PRIMARY action in the control band — control height, and the SAME radius
  * as the search and the facets it shares the row with.
  *

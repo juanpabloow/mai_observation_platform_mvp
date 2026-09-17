@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { avatarColor, avatarToneStyle, staffInitials as initials } from "@/lib/avatarColor";
-import { OVERLAY_SCRIM, useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
+import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
 import { ACT_PRIMARY } from "@/components/ui/panelChrome";
 import {
   addStaffCertificationAction,
@@ -15,14 +15,12 @@ import {
 import { PageShell } from "@/components/ui/PageShell";
 import {
   CONTROL_CLS,
-  ENTITY_ROW_CLS,
   MetricBox,
   MetricCell,
   PanelSection,
-  SEARCH_SHELL_CLS,
+  MODULE_SEARCH_CLS,
   SectionHeading,
   FacetPills,
-  TABLE_HEADER_CLS,
   TOOLBAR_PRIMARY_CLS,
 } from "@/components/ui/primitives";
 import {
@@ -154,7 +152,7 @@ function minutesBetween(start: string, end: string): number {
  * planning around, "23 min in" is the number that tells you whether to interrupt.
  * The roster row keeps "UNTIL 12:30", which is the number you scan a column for.
  */
-function presenceChip(key: StatusKey, appts: StaffAppointment[], now: Date, tz: string): string {
+function presenceChip(key: StatusKey, appts: StaffAppointment[], now: Date): string {
   if (key !== "with_client") return STATUS[key].label;
   const current = appts.find((a) => new Date(a.startAt) <= now && new Date(a.endAt) > now);
   if (!current) return STATUS[key].label;
@@ -168,13 +166,13 @@ function presenceChip(key: StatusKey, appts: StaffAppointment[], now: Date, tz: 
  * times per screen. The KEYS stay English because they are state, not copy — `statusFilter`
  * and the facet pills both key off them.
  */
-const STATUS: Record<StatusKey, { label: string; dot: string; text: string }> = {
-  with_client: { label: "Con cliente", dot: "bg-service-purple", text: "text-service-purple" },
-  available: { label: "Disponible", dot: "bg-success", text: "text-success" },
-  on_shift: { label: "En turno", dot: "bg-success/60", text: "text-muted" },
-  off_today: { label: "Sin turno hoy", dot: "bg-faintest", text: "text-faint" },
-  time_off: { label: "Ausente", dot: "bg-brand", text: "text-brand" },
-  no_chair: { label: "Sin silla", dot: "bg-faintest", text: "text-faint" },
+const STATUS: Record<StatusKey, { label: string; dot: string; text: string; chip: string }> = {
+  with_client: { label: "Con cliente", dot: "bg-service-purple", text: "text-service-purple", chip: "border-service-purple/20 bg-service-purple/8" },
+  available: { label: "Disponible", dot: "bg-success", text: "text-success", chip: "border-success/25 bg-success/8" },
+  on_shift: { label: "En turno", dot: "bg-success/60", text: "text-success", chip: "border-success/25 bg-success/8" },
+  off_today: { label: "Sin turno hoy", dot: "bg-faintest", text: "text-faint", chip: "border-line bg-chip" },
+  time_off: { label: "Ausente", dot: "bg-brand", text: "text-brand", chip: "border-brand/20 bg-brand-soft" },
+  no_chair: { label: "Sin silla", dot: "bg-faintest", text: "text-faint", chip: "border-line bg-chip" },
 };
 
 export interface StaffTabProps {
@@ -246,10 +244,10 @@ export function StaffTab(
     else if (off) {
       key = "time_off";
       const days = Math.max(1, Math.round((new Date(off.endsAt).getTime() - new Date(off.startsAt).getTime()) / 86_400_000));
-      suffix = ` · ${days} ${days === 1 ? "DAY" : "DAYS"}`;
+      suffix = ` · ${days} ${days === 1 ? "día" : "días"}`;
     } else if (inChair) {
       key = "with_client";
-      suffix = ` · UNTIL ${fmtTime(inChair.endAt, tz)}`;
+      suffix = ` · hasta ${fmtTime(inChair.endAt, tz)}`;
     } else if (!worksToday) key = "off_today";
     else if (appts.length > 0 || next) key = "available";
     else key = "on_shift";
@@ -258,7 +256,11 @@ export function StaffTab(
   };
 
   const filtered = props.members.filter((s) => {
-    if (search && !s.name.toLowerCase().includes(search.toLowerCase())) return false;
+    const serviceNames = props.services
+      .filter((service) => s.serviceIds.includes(service.id))
+      .map((service) => service.name);
+    const haystack = [s.name, s.title, s.siteName, ...serviceNames].filter(Boolean).join(" ").toLowerCase();
+    if (search && !haystack.includes(search.toLowerCase())) return false;
     if (serviceFilter && !s.serviceIds.includes(serviceFilter)) return false;
     if (statusFilter && describe(s).key !== statusFilter) return false;
     return true;
@@ -286,175 +288,104 @@ export function StaffTab(
   };
 
   return (
-    <>
-      {/* THREE CARDS ON THE CANVAS — header, roster, detail — as SIBLINGS in a row, the
-          same arrangement Contacts uses. The detail panel is a real column here, not a
-          drawer floating over a reserved `pr-[452px]` lane: the lane trick meant the
-          roster's right edge and the panel's left edge were set by two independent
-          numbers that had to be kept in step by hand. As siblings the gap is the
-          canvas showing through, and each card keeps its own four corners. */}
-      <div className="flex min-h-0 flex-1 gap-3">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-          <StaffHeaderCard
-            slots={header}
-            controls={
-              <>
-                {/* The SEARCH takes the title row's slack, capped at the artboard's 420px —
-                    the same shell and the same sizing as Contacts. */}
-                <div className={`${SEARCH_SHELL_CLS} min-w-[15rem] max-w-[420px] flex-1`}>
-                  <SearchIcon />
-                  <input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Buscar en el equipo"
-                    aria-label="Buscar en el equipo"
-                    className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
-                  />
-                </div>
-                {/* THE PRIMARY, far right. This screen is owner/admin only, so everyone who
-                    reaches it can manage the roster; there is no second permission check. */}
-                <button
-                  type="button"
-                  onClick={() => setCreating(true)}
-                  className={`ml-auto ${TOOLBAR_PRIMARY_CLS}`}
-                >
-                  + Agregar miembro
-                </button>
-              </>
-            }
-          />
-
-          {/* THE ROSTER CARD — PageShell, so its corners, hairline, fill and shadow are
-              the table card's on Contacts rather than a second hand-rolled set. The
-              scroll is INSIDE the card: it used to wrap the card, so the roster's own
-              bottom edge scrolled up out of view with the rows. */}
-          <PageShell clip={false}>
-            {/*
-              THE FILTER ROW, inside the list card and above the column header — exactly
-              where Contacts puts its facet pills (§2.2).
-
-              It used to live up in the header card as read-only counters beside a `Status ▾`
-              dropdown offering the same buckets. Two problems that fixed: the header card
-              was three bands deep, and the number was a statistic you read before opening a
-              menu to act on it. Now the number IS the filter, and it sits beside the rows it
-              filters.
-
-              Counts are over the WHOLE roster, never the filtered view, so clicking a pill
-              cannot change the numbers beside it.
-            */}
-            <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line-row px-3.5 py-2.5">
-              <FacetPills
-                label="Filtrar el equipo por presencia"
-                items={[
-                  { key: "all", label: "Todos", count: props.members.length, active: statusFilter === "" },
-                  { key: "with_client", label: "Con cliente", count: counts.withClient, active: statusFilter === "with_client" },
-                  { key: "available", label: "Disponibles", count: counts.available, active: statusFilter === "available" },
-                  { key: "off_today", label: "Sin turno", count: counts.off, active: statusFilter === "off_today" },
-                ]}
-                // CLIENT-side mode: the roster is fully loaded, so a URL would be a lie
-                // about what changed. Contacts filters server-side and its pills are links.
-                onPick={(key: string) => setStatusFilter(key === "all" ? "" : key)}
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
+      <StaffHeaderCard
+        slots={header}
+        center={
+            <div className={`${MODULE_SEARCH_CLS} w-full min-w-0`}>
+              <SearchIcon />
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Buscar por nombre, servicio o sede…"
+                aria-label="Buscar en el equipo"
+                className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-faint"
               />
-              <span className="ml-auto flex shrink-0 items-center gap-1.5">
-                <Facet
-                  label="Servicio"
-                  value={serviceFilter}
-                  onChange={setServiceFilter}
-                  options={[{ value: "", label: "Servicio" }, ...props.services.filter((s) => s.active).map((s) => ({ value: s.id, label: s.name }))]}
-                />
-                <Facet
-                  label="Sede"
-                  value={props.currentSiteId ?? ""}
-                  onChange={(v) => router.push(`?site=${v}`)}
-                  options={props.sites.map((s) => ({ value: s.id, label: s.name }))}
-                />
-              </span>
             </div>
+        }
+        actions={
+            <button type="button" onClick={() => setCreating(true)} className={TOOLBAR_PRIMARY_CLS}>
+              + Nuevo miembro
+            </button>
+        }
+      />
 
-            {/* The column header sits on the SAME white as the rows: the roster is
-                already its own card on grey, so a tinted strip inside it was a second
-                surface doing nothing the hairline below does not. */}
-            <div className={`flex shrink-0 bg-surface ${TABLE_HEADER_CLS}`}>
-              <span className="w-[30px] shrink-0" />
-              <span className="min-w-0 flex-1">Miembro</span>
-              <span className="hidden w-[190px] shrink-0 lg:block">Presencia</span>
-              <span className="hidden w-[104px] shrink-0 sm:block">Hoy</span>
-              <span className="hidden w-[146px] shrink-0 lg:block">Siguiente</span>
-              <span className="w-5 shrink-0" />
-            </div>
+      <PageShell clip={false}>
+        <div className="flex shrink-0 flex-col gap-2 border-b border-line-row px-3 py-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:px-4">
+          <div className="min-w-0 overflow-x-auto pb-0.5 sm:pb-0">
+            <FacetPills
+              label="Filtrar el equipo por presencia"
+              items={[
+                { key: "all", label: "Todos", count: props.members.length, active: statusFilter === "" },
+                { key: "with_client", label: "Con cliente", count: counts.withClient, active: statusFilter === "with_client" },
+                { key: "available", label: "En turno", count: counts.available, active: statusFilter === "available" },
+                { key: "off_today", label: "Fuera", count: counts.off, active: statusFilter === "off_today" },
+              ]}
+              onPick={(key: string) => setStatusFilter(key === "all" ? "" : key)}
+            />
+          </div>
+          <span className="flex w-full items-center gap-1.5 sm:ml-auto sm:w-auto sm:shrink-0">
+            <Facet
+              label="Servicio"
+              value={serviceFilter}
+              onChange={setServiceFilter}
+              options={[{ value: "", label: "Servicio" }, ...props.services.filter((s) => s.active).map((s) => ({ value: s.id, label: s.name }))]}
+            />
+            <Facet
+              label="Sede"
+              value={props.currentSiteId ?? ""}
+              onChange={(v) => router.push(`?site=${v}`)}
+              options={props.sites.map((s) => ({ value: s.id, label: s.name }))}
+            />
+          </span>
+        </div>
 
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              {/* A card per barber gave every one of them the same visual weight and
-                  wasted a screen on six; a row per person puts presence, load and
-                  what's next on one scannable line. */}
-              {filtered.map((s) => {
-                const d = describe(s);
+        <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
+          {filtered.length > 0 ? (
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+              {filtered.map((member) => {
+                const d = describe(member);
                 return (
-                  <StaffRow
-                    key={s.id}
-                    member={s}
+                  <StaffCard
+                    key={member.id}
+                    member={member}
                     status={d.key}
                     suffix={d.suffix}
                     appts={d.appts}
                     next={d.next}
                     tz={tz}
-                    href={hrefFor(s.id)}
-                    selected={s.id === props.selectedId}
+                    services={props.services}
+                    href={hrefFor(member.id)}
+                    selected={member.id === props.selectedId}
                   />
                 );
               })}
-
-              {filtered.length === 0 ? (
-                <p className="px-4 py-10 text-center text-sm text-faint">Ningún miembro coincide con estos filtros.</p>
-              ) : null}
-
-              {/* The dashed row keeps its place at the end of the list — it is the
-                  "next empty row" of the roster, not a second primary action. */}
-              <button
-                type="button"
-                onClick={() => setCreating(true)}
-                className="m-3 flex h-[52px] w-[calc(100%-1.5rem)] items-center justify-center gap-2 rounded-table border border-dashed border-line-strong text-sm text-muted transition-colors hover:border-faint hover:text-foreground"
-              >
-                + Agregar miembro
-              </button>
             </div>
-          </PageShell>
-        </div>
+          ) : (
+            <div className="flex min-h-[14rem] items-center justify-center px-4 text-center">
+              <div>
+                <p className="text-sm font-medium text-foreground">No encontramos miembros</p>
+                <p className="mt-1 text-xs text-faint">Cambia la búsqueda o limpia los filtros.</p>
+              </div>
+            </div>
+          )}
 
-        {/* THE DETAIL COLUMN — a third sibling card, in flow, so the roster shrinks to
-            make room instead of hiding under an overlay.
-            ONE instance, two geometries. From `lg` up the wrapper is a plain flex child
-            of the row and the panel is a column beside the roster; below it, the SAME
-            element goes `fixed` and covers the content, because there is no room for a
-            third column on a laptop. Rendering it twice (once per geometry) would give
-            the reader two independent copies of the hours and profile drafts, and two
-            focus traps. Its width is a token read through a class, not an inline style,
-            so it can be breakpoint-scoped at all. */}
-        {selected || creating ? (
-          <>
-            {/* SCRIM — overlay mode only, and only for the READ-ONLY panel: the editor
-                brings its own catcher (it must intercept a click on a roster row so a
-                stray click cannot navigate away from unsaved edits). A Link and not a
-                button, because closing the panel is a navigation: the selection lives in
-                the URL. */}
-            {selected && !creating ? (
-              <Link
-                href={hrefFor(null)}
-                scroll={false}
-                aria-label="Close staff details"
-                className={`${OVERLAY_SCRIM} lg:hidden`}
-              />
-            ) : null}
-            {/* THE PANEL REGION. `lg:relative` — in flow as a column, AND the positioning
-                context the editor anchors to. That is the whole reason the editor can land
-                exactly on the box the read-only panel occupied: same top, same bottom,
-                same right edge, same width, contents swapping. `lg:static` would put the
-                editor's `absolute` against the page instead. */}
-            <div className="pointer-events-none fixed inset-0 z-50 flex items-stretch justify-end lg:pointer-events-auto lg:relative lg:inset-auto lg:z-auto lg:min-h-0 lg:w-[var(--staff-panel-w)] lg:shrink-0 lg:self-stretch">
-              {selected ? (
+          <button
+            type="button"
+            onClick={() => setCreating(true)}
+            className="mt-3 flex min-h-[54px] w-full items-center justify-center gap-2 rounded-xl border border-dashed border-line-strong text-sm text-muted transition-colors hover:border-faint hover:bg-chip hover:text-foreground"
+          >
+            + Agregar miembro
+          </button>
+        </div>
+      </PageShell>
+
+      {selected ? (
+        <>
+          <Link href={hrefFor(null)} scroll={false} aria-label="Cerrar perfil" className={OVERLAY_SCRIM} />
+          <div className="pointer-events-none fixed inset-0 z-50 flex items-stretch justify-end sm:p-3 sm:pl-16">
+            <div className="pointer-events-auto h-full w-full sm:w-[var(--staff-panel-w)]">
               <StaffDetail
-                // Keyed: selecting another barber must reset the hours and profile
-                // drafts, not carry one person's unsaved edits onto the next.
                 key={selected.id}
                 member={selected}
                 status={describe(selected)}
@@ -468,49 +399,41 @@ export function StaffTab(
                 onSaved={() => router.refresh()}
                 initialTab={props.detailTab}
               />
-              ) : null}
-              {/* THE EDITOR, absolutely over the panel it replaces. Both live in the same
-                  region, so pressing Edit swaps the contents without moving the frame.
-                  When CREATING there is no barber selected and the region holds only this
-                  — the roster still shrinks to make its lane, exactly as it would for a
-                  selection. */}
-              {/* CREATE only. There is no edit drawer any more — a barber who exists is
-                  changed in the tabs of their own panel. This one exists because a barber
-                  who does NOT exist has no panel to be edited in. */}
-              {creating ? (
-                <StaffCreateDrawer
-                  clientId={props.clientId}
-                  siteId={props.currentSiteId}
-                  services={props.services}
-                  sites={props.sites}
-                  onClose={() => setCreating(false)}
-                  onSaved={() => {
-                    setCreating(false);
-                    router.refresh();
-                  }}
-                />
-              ) : null}
             </div>
-          </>
-        ) : null}
-      </div>
-    </>
+          </div>
+        </>
+      ) : null}
+
+      {creating ? (
+        <StaffCreateDrawer
+          clientId={props.clientId}
+          siteId={props.currentSiteId}
+          services={props.services}
+          sites={props.sites}
+          onClose={() => setCreating(false)}
+          onSaved={() => {
+            setCreating(false);
+            router.refresh();
+          }}
+        />
+      ) : null}
+    </div>
   );
 }
 
 /**
- * One barber, one row. The four columns answer the four questions a manager actually
- * asks the roster: who, are they free, how loaded are they today, and what's next.
- * The narrow columns collapse below `lg` — the name and presence survive, which is
- * the pair that still works on a phone.
+ * The reference's roster card, backed only by real scheduling data. Desktop shows
+ * three columns, tablet two, and phone one; opening the profile no longer reserves a
+ * permanent side lane and therefore never squeezes these cards.
  */
-function StaffRow({
+function StaffCard({
   member,
   status,
   suffix,
   appts,
   next,
   tz,
+  services,
   href,
   selected,
 }: {
@@ -520,62 +443,79 @@ function StaffRow({
   appts: StaffAppointment[];
   next?: StaffAppointment;
   tz: string;
+  services: StaffServiceOpt[];
   href: string;
   selected: boolean;
 }) {
   const s = STATUS[status];
-  const attention = status === "time_off" && appts.length > 0;
+  const offered = services.filter((service) => member.serviceIds.includes(service.id));
+  const bookedMinutes = appts.reduce(
+    (total, appt) => total + Math.max(0, Math.round((new Date(appt.endAt).getTime() - new Date(appt.startAt).getTime()) / 60_000)),
+    0,
+  );
+  const bookedLabel = bookedMinutes === 0 ? "0 h" : `${Math.round((bookedMinutes / 60) * 10) / 10} h`;
   return (
-    <Link
-      href={href}
-      scroll={false}
-      aria-current={selected ? "true" : undefined}
-      className={`flex shrink-0 ${ENTITY_ROW_CLS} ${selected ? "bg-chip" : "hover:bg-subtle"}`}
-    >
-      <span
-        aria-hidden
-        className={`u-mono flex size-[30px] shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${avatarColor(member.name)}`}
-      >
-        {initials(member.name)}
-      </span>
+    <article className={`flex min-h-[188px] flex-col overflow-hidden rounded-xl border bg-surface transition-colors sm:min-h-[218px] xl:min-h-[238px] ${selected ? "border-foreground" : "border-line hover:border-line-strong"}`}>
+      <div className="flex flex-1 flex-col gap-2.5 p-3.5 sm:gap-3 sm:p-4">
+        <div className="flex items-start gap-3">
+          <span
+            aria-hidden
+            style={avatarToneStyle(member.name) as React.CSSProperties}
+            className="u-staff-avatar u-mono flex size-11 shrink-0 items-center justify-center rounded-xl border text-sm font-semibold"
+          >
+            {initials(member.name)}
+          </span>
+          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span className="truncate text-[0.9375rem] font-semibold tracking-[-0.015em] text-foreground">{member.name}</span>
+            <span className="truncate text-xs text-muted">{member.title ?? (member.takesBookings ? "Profesional" : "Recepción")}</span>
+          </span>
+          <span className="u-mono shrink-0 text-[0.6875rem] text-faint">{appts.length} hoy</span>
+        </div>
 
-      <span className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-[13.5px] font-semibold tracking-[-0.01em] text-foreground">{member.name}</span>
-        {/* The ROLE, now that there is a column for it. The site name is not repeated
-            on every row — one site is the common case, and the filter above names it. */}
-        <span className="truncate text-[11px] text-muted">{member.title ?? member.siteName}</span>
-      </span>
+        <div className="flex items-center gap-2 text-xs text-muted">
+          <IconBusiness />
+          <span className="truncate">{member.siteName}</span>
+          {next ? <span className="ml-auto shrink-0 text-faint">Sigue {fmtTime(next.startAt, tz)}</span> : null}
+        </div>
 
-      <span className={`u-mono hidden w-[190px] shrink-0 items-center gap-1.5 whitespace-nowrap text-[9.5px] font-medium uppercase tracking-[0.07em] lg:flex ${s.text}`}>
-        <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${s.dot}`} />
-        {s.label}
-        {suffix}
-      </span>
+        <div className="grid grid-cols-[minmax(0,1.25fr)_minmax(7rem,0.75fr)] gap-3">
+          <div className="min-w-0">
+            <p className="u-th mb-1.5">Servicios</p>
+            <div className="flex flex-wrap gap-1.5">
+              {offered.slice(0, 3).map((service) => (
+                <span key={service.id} className="inline-flex h-6 max-w-full items-center truncate rounded-md border border-line px-2 text-[0.6875rem] text-muted">
+                  {service.name}
+                </span>
+              ))}
+              {offered.length > 3 ? <span className="px-1 py-1 text-[0.6875rem] text-faint">+{offered.length - 3}</span> : null}
+              {offered.length === 0 ? <span className="text-xs text-faint">Sin servicios asignados</span> : null}
+            </div>
+          </div>
+          <div>
+            <p className="u-th mb-1.5">Hoy</p>
+            <div className="flex flex-wrap gap-1.5">
+              <span className="inline-flex h-6 items-center rounded-md border border-line px-2 text-[0.6875rem] text-muted">
+                Citas: <strong className="u-mono ml-1 font-medium text-foreground">{status === "no_chair" ? "—" : appts.length}</strong>
+              </span>
+              <span className="inline-flex h-6 items-center rounded-md border border-line px-2 text-[0.6875rem] text-muted">
+                Horas: <strong className="u-mono ml-1 font-medium text-foreground">{status === "no_chair" ? "—" : bookedLabel}</strong>
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
 
-      <span className="u-mono hidden w-[104px] shrink-0 whitespace-nowrap text-[11.5px] text-foreground sm:block">
-        {status === "no_chair" ? "Sin silla" : `${appts.length} hoy`}
-      </span>
-
-      <span
-        className={`hidden w-[146px] shrink-0 truncate text-[12.5px] lg:block ${
-          attention ? "font-medium text-brand" : "text-muted"
-        }`}
-      >
-        {status === "no_chair"
-          ? "atiende inbox y walk-ins"
-          : attention
-            ? `${appts.length} por reasignar`
-            : status === "off_today"
-              ? "día de descanso"
-              : next
-                ? `${status === "with_client" ? "luego" : "sigue"} ${fmtTime(next.startAt, tz)}`
-                : "sin nada agendado"}
-      </span>
-
-      <span aria-hidden className="w-5 shrink-0 text-center text-xs text-faintest">
-        &middot;&middot;&middot;
-      </span>
-    </Link>
+      <div className="flex min-h-12 items-center gap-2 border-t border-line-row bg-card px-3.5 py-2 sm:px-4 sm:py-2.5">
+        <span className={`inline-flex h-6 min-w-0 items-center gap-1.5 rounded-md border px-2 text-[0.6875rem] font-medium ${s.chip} ${s.text}`}>
+          <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${s.dot}`} />
+          <span className="truncate">{s.label}</span>
+        </span>
+        <span className="min-w-0 flex-1 truncate text-[0.6875rem] text-faint">{suffix.replace(/^ · /, "") || (member.startDate ? seniority(member.startDate) : "Perfil operativo")}</span>
+        <Link href={href} scroll={false} className="inline-flex h-9 shrink-0 items-center rounded-lg bg-foreground px-3.5 text-xs font-medium text-surface transition hover:bg-foreground/90 sm:h-8 sm:px-3">
+          Ver perfil
+        </Link>
+      </div>
+    </article>
   );
 }
 
@@ -621,11 +561,8 @@ function StaffDetail({
   const [profile, setProfile] = useState<ProfileDraft>(() => profileFromMember(member));
   const [saving, startSave] = useTransition();
   const [saveError, setSaveError] = useState<string | null>(null);
-  // Overlay mode only: trapping focus in a panel the reader can see BESIDE the roster
-  // would make the rest of the screen unreachable by keyboard for no reason.
   const router = useRouter();
-  const overlaying = useIsOverlayWidth();
-  const panelRef = useTrappedPanel({ active: overlaying, onClose: () => router.push(closeHref, { scroll: false }) });
+  const panelRef = useTrappedPanel({ active: true, onClose: () => router.push(closeHref, { scroll: false }) });
   const dirtyDays = countDirtyDays(draft, member.workingHours);
   const dirtyFields = dirtyProfileFields(profile, member);
   const changes = dirtyDays + dirtyFields.length;
@@ -686,8 +623,8 @@ function StaffDetail({
     <aside
       ref={panelRef as React.RefObject<HTMLElement>}
       aria-label="Staff details"
-      aria-modal={overlaying || undefined}
-      role={overlaying ? "dialog" : undefined}
+      aria-modal="true"
+      role="dialog"
       tabIndex={-1}
       // No drop shadow: in this system elevation is SURFACE CONTRAST, not a blur (see
       // the house rules in components/ui/primitives.tsx). The panel already reads as
@@ -702,7 +639,7 @@ function StaffDetail({
       // which is why it read as a different KIND of object next to the two cards it
       // shares a row with. Its WIDTH comes from the wrapper (see --staff-panel-w), which
       // is what lets one element be a column here and a full-bleed overlay below `lg`.
-      className="pointer-events-auto flex h-full w-full max-w-full min-h-0 flex-col overflow-hidden bg-surface lg:rounded-xl lg:border lg:border-line lg:shadow-[var(--shadow-card)]"
+      className="pointer-events-auto flex h-full min-h-0 w-full max-w-full flex-col overflow-hidden bg-surface sm:rounded-xl sm:border sm:border-line sm:shadow-[var(--shadow-card)]"
     >
       {/* HEADER — the contact panel's header, applied to a barber: a faint wash in this
           person's OWN colour, two lines (name + presence chip, then the role/seniority
@@ -736,7 +673,7 @@ function StaffDetail({
               <span
                 className={`u-mono inline-flex items-center rounded-full border border-line-strong bg-chip px-2 py-[0.1rem] text-[0.625rem] font-medium uppercase leading-4 tracking-wider ${s.text}`}
               >
-                {presenceChip(status.key, status.appts, now, tz)}
+                {presenceChip(status.key, status.appts, now)}
               </span>
             </div>
             {/* ONE meta line. No chair: there is no chair column and deliberately never
@@ -778,7 +715,8 @@ function StaffDetail({
           scrolling body. The strip used to live inside the scroll container, so scrolling
           the Hours grid carried the tabs off the top of the panel and the reader lost the
           control that got them there. */}
-      <div className="flex shrink-0 items-center gap-3.5 border-b border-line px-4" role="tablist">
+      <div className="flex shrink-0 items-center gap-3.5 overflow-x-auto border-b border-line px-3 sm:px-4" role="tablist">
+        <div className="flex min-w-max items-center gap-3.5">
           {DETAIL_TABS.map((t) => (
             <button
               key={t}
@@ -803,6 +741,7 @@ function StaffDetail({
               ) : null}
             </button>
           ))}
+        </div>
       </div>
 
       {/* THE only scrolling zone. Its `key` sends it back to the top on a tab change:
@@ -1379,7 +1318,7 @@ function StaffDetail({
                 else onSaved();
               });
             }}
-            className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md bg-brand px-3 text-xs font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-50"
+            className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md bg-ink px-3 text-xs font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50"
           >
             {saving ? "Saving…" : "Save changes"}
           </button>
@@ -1749,7 +1688,7 @@ function CertificationForm({
             setIssuedOn("");
             setExpiresOn("");
           }}
-          className="inline-flex h-7 items-center rounded-md bg-brand px-2.5 text-xs font-medium text-white disabled:opacity-50"
+          className="inline-flex h-7 items-center rounded-md bg-ink px-2.5 text-xs font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50"
         >
           Add
         </button>

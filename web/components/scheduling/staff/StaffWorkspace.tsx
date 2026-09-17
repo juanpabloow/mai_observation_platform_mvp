@@ -36,7 +36,7 @@ export function StaffWorkspace({
   // NO COUNT, NO SCOPE LINE. The roster's number is the "Todos N" facet pill in the list
   // card, one row down and clickable; the client is named by the breadcrumb, which is the
   // app's answer to "whose data am I looking at" on every screen.
-  const slots: StaffHeaderSlots = { title: "Equipo" };
+  const slots: StaffHeaderSlots = { title: "Staff" };
 
   return (
     <main className="flex min-h-0 w-full flex-1 flex-col">

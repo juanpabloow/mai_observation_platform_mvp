@@ -339,15 +339,37 @@ function todaysBoard(ctx: Ctx): Booking[] {
   ];
 }
 
-/** A few cards on the neighbouring days so the WEEK view isn't a single column. */
+/**
+ * A genuinely populated CURRENT WEEK, not just decorative neighbouring cards.
+ *
+ * Today already has the dense 15-card board above, so this adds one appointment per
+ * barber on every other open day of the Monday→Sunday week. Past appointments are
+ * completed; future appointments mix confirmed and scheduled. The site's intentionally
+ * closed weekday stays empty so the week view can still exercise its closed treatment.
+ */
 function weekSpread(ctx: Ctx): Booking[] {
   const c = ctx.contacts;
-  return [
-    { staff: 'daniela', service: 'highlights', from: '10:00', status: 'completed', contact: c.mia, day: -2 },
-    { staff: 'federico', service: 'classicCut', from: '11:00', status: 'completed', contact: c.john, day: -1 },
-    { staff: 'paola', service: 'beardSculpt', from: '15:00', status: 'confirmed', contact: c.omar, day: 1 },
-    { staff: 'daniela', service: 'keratin', from: '12:00', status: 'scheduled', contact: c.savannah, day: 2 },
-  ];
+  const todayIndex = WEEKDAYS.indexOf(ctx.today.weekday);
+  const closedWeekday: Weekday = ctx.today.weekday === 'sun' ? 'mon' : 'sun';
+  const openWeek = (['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'] as Weekday[]).filter(
+    (weekday) => weekday !== ctx.today.weekday && weekday !== closedWeekday,
+  );
+  const contacts = [c.mia, c.john, c.omar, c.savannah, c.emma, c.liam, c.sofia, c.zara];
+
+  return openWeek.flatMap((weekday, dayIndex) => {
+    const offset = WEEKDAYS.indexOf(weekday) - todayIndex;
+    const past = offset < 0;
+    const status = (slot: number): Booking['status'] =>
+      past ? 'completed' : slot % 2 === 0 ? 'confirmed' : 'scheduled';
+    const contact = (slot: number) => contacts[(dayIndex * 4 + slot) % contacts.length];
+
+    return [
+      { staff: 'daniela', service: 'classicCut', from: '09:00', status: status(0), contact: contact(0), day: offset },
+      { staff: 'federico', service: 'highlights', from: '10:30', status: status(1), contact: contact(1), day: offset },
+      { staff: 'paola', service: 'beardSculpt', from: '13:30', status: status(2), contact: contact(2), day: offset },
+      { staff: 'marco', service: 'cutBeard', from: '16:00', status: status(3), contact: contact(3), day: offset },
+    ];
+  });
 }
 
 async function main(): Promise<void> {

@@ -5,6 +5,7 @@ import { requireTenant } from "./requireAuth";
 import {
   getMembershipForUser,
   type MembershipScopeRow,
+  type SchedulingAccess,
 } from "@worker/db/repositories/tenantMembers.js";
 
 /**
@@ -32,6 +33,10 @@ export interface AccessScope {
   role: Role;
   /** null = all clients (owner/admin); otherwise the single client a member sees. */
   memberClientId: string | null;
+  /** Optional scheduling profile for a client-scoped member. */
+  schedulingAccess: SchedulingAccess | null;
+  schedulingSiteId: string | null;
+  schedulingStaffId: string | null;
 }
 
 /** owner/admin — full data access, no per-client restriction. */
@@ -45,7 +50,34 @@ export function hasFullAccess(scope: AccessScope): boolean {
  * here owner/admin see any of THEIR clients, a member only their one client.
  */
 export function canAccessClient(scope: AccessScope, clientId: string): boolean {
+  // Scheduling profiles are intentionally narrower than a normal client member.
+  // Their one permitted surface is admitted explicitly by the scheduling module
+  // gate; treating them as a general client member here would expose workflows,
+  // inbox, CRM and analytics by typing those URLs directly.
+  if (scope.schedulingAccess) return false;
   return scope.memberClientId === null || scope.memberClientId === clientId;
+}
+
+/** A staff login is read-only and sees one staff resource at one site. */
+export function isSchedulingStaff(scope: AccessScope): boolean {
+  return scope.role === "member" && scope.schedulingAccess === "staff";
+}
+
+/** Reception and legacy members may operate an agenda; staff logins may not. */
+export function canOperateScheduling(scope: AccessScope): boolean {
+  return hasFullAccess(scope) || scope.schedulingAccess !== "staff";
+}
+
+/** Site predicate for scheduling pages and every scheduling Server Action. */
+export function canAccessSchedulingSite(scope: AccessScope, siteId: string): boolean {
+  if (hasFullAccess(scope)) return true;
+  return scope.schedulingAccess === null || scope.schedulingSiteId === siteId;
+}
+
+/** Staff predicate for appointment reads. Reception/legacy/full access see all. */
+export function canAccessSchedulingStaff(scope: AccessScope, staffId: string): boolean {
+  if (!isSchedulingStaff(scope)) return true;
+  return scope.schedulingStaffId === staffId;
 }
 
 /**
@@ -57,6 +89,9 @@ export function canAccessClient(scope: AccessScope, clientId: string): boolean {
  * owner/admin → the Hub.
  */
 export function memberLandingHref(scope: AccessScope): string {
+  if (scope.memberClientId && scope.schedulingAccess) {
+    return `/clients/${scope.memberClientId}/scheduling/agenda`;
+  }
   return scope.memberClientId
     ? `/clients/${scope.memberClientId}/workflows/all/analytics`
     : "/";
@@ -75,9 +110,31 @@ function buildScope(userId: string, membership: MembershipScopeRow | null): Scop
   // A 'member' with no client is a broken/forbidden state (the DB forbids it):
   // deny rather than treat a missing client as "see everything".
   if (role === "member" && !memberClientId) return { ok: false };
+
+  const schedulingAccess = role === "member" ? membership.scheduling_access : null;
+  const schedulingSiteId = role === "member" ? membership.scheduling_site_id : null;
+  const schedulingStaffId = role === "member" ? membership.scheduling_staff_id : null;
+  if (schedulingAccess !== null && schedulingAccess !== "staff" && schedulingAccess !== "reception") {
+    return { ok: false };
+  }
+  if (
+    (schedulingAccess === "staff" && (!schedulingSiteId || !schedulingStaffId)) ||
+    (schedulingAccess === "reception" && (!schedulingSiteId || schedulingStaffId !== null)) ||
+    (schedulingAccess === null && (schedulingSiteId !== null || schedulingStaffId !== null))
+  ) {
+    return { ok: false };
+  }
   return {
     ok: true,
-    scope: { tenantId: membership.tenant_id, userId, role, memberClientId },
+    scope: {
+      tenantId: membership.tenant_id,
+      userId,
+      role,
+      memberClientId,
+      schedulingAccess,
+      schedulingSiteId,
+      schedulingStaffId,
+    },
   };
 }
 

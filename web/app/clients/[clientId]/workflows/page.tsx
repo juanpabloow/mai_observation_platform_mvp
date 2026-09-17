@@ -5,6 +5,7 @@ import { getClientForTenant } from "@/lib/clientWorkflow";
 import { resolveWorkflowScope } from "@/lib/workflowScope";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { ClientWorkflowsList, type ClientWorkflowRow } from "@/components/ClientWorkflowsList";
+import { ModuleHeader } from "@/components/ui/ModuleHeader";
 
 /**
  * The client's workflow list at /clients/[clientId]/workflows — the "all-workflows"
@@ -49,12 +50,15 @@ export default async function ClientWorkflowsPage({
 
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-5 px-6 py-8">
-      <header>
-        <h1 className="text-xl font-semibold tracking-tight">Executions</h1>
-        <p className="mt-0.5 text-sm text-muted">
+      <ModuleHeader
+        title="Workflows"
+        count={workflows.length}
+        center={
+          <p className="truncate text-sm text-muted">
           Pick a workflow to see its executions and analytics, or use the header switcher.
-        </p>
-      </header>
+          </p>
+        }
+      />
       <ClientWorkflowsList clientId={client.id} workflows={workflows} />
     </main>
   );

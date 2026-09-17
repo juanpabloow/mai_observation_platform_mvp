@@ -4,11 +4,16 @@ import { notFound } from "next/navigation";
 import { requireFullAccessOrLand } from "@/lib/access";
 import { getClientForTenant } from "@/lib/clientWorkflow";
 import { listClientsForTenant } from "@worker/db/repositories/clients.js";
-import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
+import {
+  listMembersForTenant,
+  listSchedulingResourcesForClient,
+} from "@worker/db/repositories/tenantMembers.js";
 import { listInvitationsForTenant } from "@worker/db/repositories/invitations.js";
+import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 import { InviteForm } from "@/components/InviteForm";
 import { TeamMembers, type TeamMemberView } from "@/components/TeamMembers";
 import { TeamInvitations, type TeamInviteView } from "@/components/TeamInvitations";
+import { ModuleHeader } from "@/components/ui/ModuleHeader";
 
 function fmtDate(d: Date): string {
   return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
@@ -42,14 +47,23 @@ export default async function ClientTeamPage({
   if (!client) notFound();
   const clientLabel = client.is_default ? "Unassigned" : client.name;
 
-  const [clients, members, invites] = await Promise.all([
+  const [clients, members, invites, sites, staff] = await Promise.all([
     listClientsForTenant(scope.tenantId),
     listMembersForTenant(scope.tenantId),
     listInvitationsForTenant(scope.tenantId),
+    listSites(scope.tenantId, { clientId }),
+    listSchedulingResourcesForClient(scope.tenantId, clientId),
   ]);
 
   // All clients — for the per-row "move to another client" picker in TeamMembers.
   const clientOptions = clients.map((c) => ({ id: c.id, name: c.is_default ? "Unassigned" : c.name }));
+  const siteOptions = sites.map((site) => ({
+    id: site.id,
+    name: site.name,
+    staff: staff
+      .filter((person) => person.site_id === site.id)
+      .map((person) => ({ id: person.id, name: person.name })),
+  }));
 
   // THIS client's members.
   const memberViews: TeamMemberView[] = members
@@ -60,10 +74,16 @@ export default async function ClientTeamPage({
       role: "member",
       clientId: m.member_client_id,
       clientName: m.client_name,
+      schedulingAccess: m.scheduling_access,
+      schedulingSiteId: m.scheduling_site_id,
+      schedulingSiteName: m.scheduling_site_name,
+      schedulingStaffId: m.scheduling_staff_id,
+      schedulingStaffName: m.scheduling_staff_name,
       isYou: m.user_id === scope.userId,
     }));
 
   // THIS client's invitations.
+  // eslint-disable-next-line react-hooks/purity -- dynamic Server Component; connection() disables prerendering.
   const now = Date.now();
   const inviteViews: TeamInviteView[] = invites
     .filter((inv) => inv.role === "member" && inv.member_client_id === clientId)
@@ -72,6 +92,9 @@ export default async function ClientTeamPage({
       email: inv.email,
       role: inv.role,
       clientName: inv.client_name,
+      schedulingAccess: inv.scheduling_access,
+      schedulingSiteName: inv.scheduling_site_name,
+      schedulingStaffName: inv.scheduling_staff_name,
       status: inv.status,
       sentLabel: fmtDate(inv.created_at),
       expiryLabel: fmtDate(inv.expires_at),
@@ -81,24 +104,25 @@ export default async function ClientTeamPage({
 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-8 px-6 py-12">
-      <div className="space-y-1">
-        <Link
-          href={`/clients/${clientId}/workflows/all/analytics`}
-          className="text-sm text-muted transition-colors hover:text-foreground"
-        >
-          &larr; {clientLabel}
+      <ModuleHeader
+        title="Users & access"
+        status={clientLabel}
+        center={
+          <p className="truncate text-sm text-muted">
+            Invite users, assign roles and limit scheduling access.
+          </p>
+        }
+      />
+
+      <p className="text-sm text-muted">
+        Members of <span className="text-foreground">{clientLabel}</span> can see only this
+        client&rsquo;s data. Admins (full access) are managed at the Hub. Looking for barbers?
+        They live in{" "}
+        <Link href={`/clients/${clientId}/scheduling/staff`} className="text-accent hover:underline">
+          Scheduling &rarr; Staff
         </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">{clientLabel} &middot; Users &amp; access</h1>
-        <p className="text-sm text-muted">
-          Members of <span className="text-foreground">{clientLabel}</span> can see only this
-          client&rsquo;s data. Admins (full access) are managed at the Hub. Looking for barbers?
-          They live in{" "}
-          <Link href={`/clients/${clientId}/scheduling/staff`} className="text-accent hover:underline">
-            Scheduling &rarr; Staff
-          </Link>
-          .
-        </p>
-      </div>
+        .
+      </p>
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Members</h2>
@@ -107,13 +131,23 @@ export default async function ClientTeamPage({
             No members assigned to this client yet.
           </p>
         ) : (
-          <TeamMembers members={memberViews} clients={clientOptions} viewerRole={scope.role as "owner" | "admin"} />
+          <TeamMembers
+            members={memberViews}
+            clients={clientOptions}
+            sites={siteOptions}
+            viewerRole={scope.role as "owner" | "admin"}
+          />
         )}
       </section>
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Invite teammate</h2>
-        <InviteForm mode="member" clientId={clientId} clientName={clientLabel} />
+        <InviteForm
+          mode="member"
+          clientId={clientId}
+          clientName={clientLabel}
+          sites={siteOptions}
+        />
       </section>
 
       {inviteViews.length > 0 ? <TeamInvitations invites={inviteViews} /> : null}

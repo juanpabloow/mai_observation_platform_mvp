@@ -1,7 +1,13 @@
 import Link from "next/link";
+import { ModuleHeader } from "@/components/ui/ModuleHeader";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
-import { hasFullAccess } from "@/lib/access";
+import {
+  canAccessSchedulingSite,
+  canOperateScheduling,
+  hasFullAccess,
+  isSchedulingStaff,
+} from "@/lib/access";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 import { listStaff } from "@worker/db/repositories/scheduling/staff.js";
 import { listServicesForSite } from "@worker/db/repositories/scheduling/services.js";
@@ -42,11 +48,12 @@ export default async function ClientAgendaPage({
   const tenantId = scope.tenantId;
 
   // The CANONICAL validated client id — the only client filter used below.
-  const sites = await listSites(tenantId, { clientId: client.id });
+  const allSites = await listSites(tenantId, { clientId: client.id });
+  const sites = allSites.filter((candidate) => canAccessSchedulingSite(scope, candidate.id));
   if (sites.length === 0) {
     return (
       <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 py-20">
-        <h1 className="text-2xl font-semibold tracking-tight">Agenda</h1>
+        <ModuleHeader title="Agenda" />
         <div className="flex flex-col items-start gap-3 rounded-xl border border-dashed border-line-strong px-5 py-8">
           {hasFullAccess(scope) ? (
             <>
@@ -71,7 +78,7 @@ export default async function ClientAgendaPage({
   let openReschedule: string | null = null;
   let forcedSiteId: string | undefined;
   let forcedDate: string | undefined;
-  if (sp.reschedule && isUuid(sp.reschedule)) {
+  if (canOperateScheduling(scope) && sp.reschedule && isUuid(sp.reschedule)) {
     const appt = await getAppointmentById(tenantId, sp.reschedule);
     if (appt && appt.client_id === client.id && (appt.status === "scheduled" || appt.status === "confirmed")) {
       openReschedule = appt.id;
@@ -125,16 +132,19 @@ export default async function ClientAgendaPage({
     // staff only (AgendaView).
     listStaff(tenantId, { siteId: site.id, clientId: client.id, includeInactive: true }),
     listServicesForSite(tenantId, site.id),
-    listAppointments(tenantId, { siteId: site.id, from: rangeStart, to: rangeEnd, clientId: client.id }),
-    listAppointments(tenantId, { siteId: site.id, from: prevStart, to: prevEnd, clientId: client.id }),
-    isClientModuleEnabled(tenantId, client.id, "crm"),
-    isClientModuleEnabled(tenantId, client.id, "inbox"),
+    listAppointments(tenantId, { siteId: site.id, staffId: isSchedulingStaff(scope) ? (scope.schedulingStaffId ?? undefined) : undefined, from: rangeStart, to: rangeEnd, clientId: client.id }),
+    listAppointments(tenantId, { siteId: site.id, staffId: isSchedulingStaff(scope) ? (scope.schedulingStaffId ?? undefined) : undefined, from: prevStart, to: prevEnd, clientId: client.id }),
+    scope.schedulingAccess ? Promise.resolve(false) : isClientModuleEnabled(tenantId, client.id, "crm"),
+    scope.schedulingAccess ? Promise.resolve(false) : isClientModuleEnabled(tenantId, client.id, "inbox"),
   ]);
   // Lanes = every ACTIVE staff member + any INACTIVE one who still has an appointment in
   // this window. Deactivation is forward-looking: it stops new bookings, never hides the
   // history that already points at that resource.
   const apptStaffIds = new Set(appts.map((a) => a.staff_id));
-  const staff = allStaff.filter((s) => s.active || apptStaffIds.has(s.id));
+  const permittedStaff = allStaff.filter((s) => s.active || apptStaffIds.has(s.id));
+  const staff = isSchedulingStaff(scope)
+    ? permittedStaff.filter((s) => s.id === scope.schedulingStaffId)
+    : permittedStaff;
 
   /** The same four metrics the view shows, computed over an arbitrary window. */
   const summarise = (rows: typeof appts) => {
@@ -152,7 +162,7 @@ export default async function ClientAgendaPage({
   // contact (locked, not typed) so staff never retype identity already on the record.
   // Only when CRM is on and the contact really belongs to this client.
   let prefillBook: { contactId: string; contactName: string } | null = null;
-  if (sp.book && isUuid(sp.book) && crmEnabled) {
+  if (canOperateScheduling(scope) && sp.book && isUuid(sp.book) && crmEnabled) {
     const c = await getContactById(tenantId, sp.book, client.id);
     if (c) prefillBook = { contactId: c.id, contactName: c.name ?? c.channel_user_id };
   }
@@ -176,6 +186,7 @@ export default async function ClientAgendaPage({
       returnContactId={returnContactId}
       from={sp.from ?? null}
       canManage={hasFullAccess(scope)}
+      canOperate={canOperateScheduling(scope)}
       timezone={site.timezone}
       date={dateStr}
       dayStartIso={dayStart.toISOString()}
@@ -212,7 +223,7 @@ export default async function ClientAgendaPage({
         origin: a.origin,
         contact_id: a.contact_id,
         contact_name: a.contact_name,
-        primary_identity: a.primary_identity,
+        primary_identity: isSchedulingStaff(scope) ? null : a.primary_identity,
         source_conversation_id: a.source_conversation_id,
       }))}
     />

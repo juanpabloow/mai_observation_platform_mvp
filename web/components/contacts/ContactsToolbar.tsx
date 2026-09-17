@@ -4,7 +4,7 @@ import Link from "next/link";
 
 import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { OUTLINE_CLS, SEARCH_SHELL_CLS } from "@/components/ui/primitives";
+import { MODULE_SEARCH_CLS, OUTLINE_CLS } from "@/components/ui/primitives";
 import { OPTIONAL_COLUMNS, type ContactColumnKey } from "@/lib/contactColumns";
 
 /**
@@ -93,7 +93,7 @@ export function ContactsSearch({ compact = false }: { compact?: boolean } = {}) 
       // are three, and capping the field just left a band of empty card between the
       // input and `Filtrar`. Search is this screen's primary verb — it should be the
       // widest thing in the row.
-      className={`${SEARCH_SHELL_CLS} min-w-[15rem] flex-1 ${compact ? "max-w-[240px]" : ""}`}
+      className={`${MODULE_SEARCH_CLS} min-w-[15rem] flex-1 ${compact ? "max-w-[240px]" : ""}`}
     >
       <SearchIcon />
       <input
@@ -102,7 +102,7 @@ export function ContactsSearch({ compact = false }: { compact?: boolean } = {}) 
         onChange={(e) => setDraft(e.target.value)}
         placeholder={compact ? "Buscar contacto…" : "Buscar nombre, email o teléfono…"}
         aria-label="Buscar contactos"
-        className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
+        className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-faint"
       />
       {q ? (
         <button

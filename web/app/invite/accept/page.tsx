@@ -65,6 +65,9 @@ export default async function AcceptInvitePage({
       </Shell>
     );
   }
+  // This is a dynamic Server Component (`connection()` above), so the current
+  // wall clock is intentionally evaluated once per request to reject expired links.
+  // eslint-disable-next-line react-hooks/purity
   if (invite.status !== "pending" || invite.expires_at.getTime() <= Date.now()) {
     return (
       <Shell title="Invitation expired">
@@ -75,7 +78,13 @@ export default async function AcceptInvitePage({
 
   // Valid pending invite.
   const roleText =
-    invite.role === "member" ? `a member of ${invite.client_name ?? "a client"}` : "an admin";
+    invite.scheduling_access === "staff"
+      ? `staff (${invite.scheduling_staff_name ?? "assigned schedule"}) at ${invite.client_name ?? "a client"}`
+      : invite.scheduling_access === "reception"
+        ? `reception at ${invite.scheduling_site_name ?? invite.client_name ?? "a client"}`
+        : invite.role === "member"
+          ? `a member of ${invite.client_name ?? "a client"}`
+          : "an admin";
   const session = await getServerSession();
   const currentEmail = session?.user?.email ? normalizeEmail(session.user.email) : null;
 

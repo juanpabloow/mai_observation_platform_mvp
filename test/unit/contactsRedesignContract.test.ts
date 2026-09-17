@@ -121,7 +121,7 @@ test('shell: the four header strips all resolve to the SAME height token', () =>
   const strips = [
     ['components/HeaderBar.tsx', 'the app topbar'],
     ['components/AppSidebar.tsx', "the rail's brand block"],
-    ['components/ClientInboxWorkspace.tsx', 'the inbox queue header'],
+    ['components/ui/ModuleHeader.tsx', 'the shared module header'],
     ['components/CustomerDetailsPanel.tsx', 'the customer panel header'],
   ] as const;
   for (const [rel, what] of strips) {
@@ -129,17 +129,16 @@ test('shell: the four header strips all resolve to the SAME height token', () =>
   }
   // The thread header is min-height (its content can wrap) but shares the token.
   assert.ok(read('components/InboxThread.tsx').includes('min-h-[var(--topbar-height)]'), 'the thread header too');
-  // And every screen that has a TITLE BAND is titled by the one band, at one size.
-  // The Inbox keeps the FULL PageTitle band (title + scope + actions in one row).
-  assert.ok(read('components/ClientInboxWorkspace.tsx').includes('<PageTitle'), 'the inbox uses the shared page title');
-  // Contacts, Staff and the Agenda title through the SHARED PageHeading (the one 19px
-  // definition, extracted from PageTitle) rather than a hand-copied h1 — so the screen's
-  // name is the same size and weight as every other screen's. Their header row carries
-  // its own controls/actions beside the title, a shape the full PageTitle band cannot
-  // express, so they use the heading primitive on its own.
+  // The operative screens use one real header component; that component owns the shared
+  // heading and the title / flexible centre / actions geometry.
+  const moduleHeader = read('components/ui/ModuleHeader.tsx');
+  assert.ok(moduleHeader.includes('<PageHeading'), 'the module header owns the shared heading');
   const contactsPage = read('app/clients/[clientId]/contacts/page.tsx');
-  assert.ok(contactsPage.includes('<PageHeading'), 'contacts titles itself with the shared PageHeading');
-  assert.ok(read('components/scheduling/staff/StaffHeaderCard.tsx').includes('<PageHeading'), 'staff too');
+  assert.ok(contactsPage.includes('<ModuleHeader'), 'contacts uses the shared module header');
+  assert.ok(read('components/ClientInboxWorkspace.tsx').includes('<PageTitle'), 'inbox keeps its compact queue header');
+  assert.ok(!read('components/ClientInboxWorkspace.tsx').includes('<ModuleHeader'), 'inbox does not gain a second page-wide header');
+  assert.ok(read('components/scheduling/staff/StaffHeaderCard.tsx').includes('<ModuleHeader'), 'staff too');
+  assert.ok(read('app/clients/[clientId]/reuniones/page.tsx').includes('<ModuleHeader'), 'meetings too');
   assert.ok(read('components/scheduling/AgendaView.tsx').includes('<PageHeading title="Agenda"'), 'the agenda too');
   assert.ok(
     read('components/ui/PageTitle.tsx').includes('export function PageHeading('),
@@ -252,9 +251,10 @@ test('shell: the GUTTER is owned by the layout, not by each page', () => {
 
 test('contacts: ONE card holds the screen, with the table recessed inside it', () => {
   const src = read(CONTACTS_PAGE);
-  // THREE cards on the canvas: title+filters, table, panel. The first sizes to its
-  // content (grow={false}); only the table absorbs the leftover height.
-  assert.ok(/<PageShell grow=\{false\}( clip=\{false\})?>/.test(src), 'the title card sizes to its content');
+  // The shared module header is the content-sized title card; only the table absorbs
+  // the leftover height.
+  assert.ok(src.includes('<ModuleHeader'), 'the shared header supplies the title card');
+  assert.ok(read('components/ui/ModuleHeader.tsx').includes('<PageShell grow={false} clip={false}'), 'the title card sizes to its content');
   // The header card holds the title, the search and ALL the controls + the primary (image
   // 25). The facet-pill row was later dropped: stage/owner filtering lives in the Filtrar
   // menu now, so the header is one clean band rather than a title row over a pill row.
@@ -262,10 +262,10 @@ test('contacts: ONE card holds the screen, with the table recessed inside it', (
   assert.ok(!src.includes('<FacetPills'), 'the facet-pill row is gone — filtering is the Filtrar menu');
   assert.ok(src.includes('<ContactsFilterMenu owners={ownerOptions} />'), 'the filter control renders');
   assert.ok(
-    src.indexOf('<PageShell grow={false}') < src.indexOf('<ContactsSearch />'),
-    'and the title row is inside that first card, not floating above it',
+    src.indexOf('<ModuleHeader') < src.indexOf('<ContactsSearch />'),
+    'and the search is a slot of that header, not floating above it',
   );
-  assert.equal((src.match(/<PageShell/g) ?? []).length, 2, 'title and table are two separate cards');
+  assert.equal((src.match(/<PageShell/g) ?? []).length, 1, 'the page directly owns only the table card');
   // The table is its own card DIRECTLY on the canvas — no card-inside-a-card, which is
   // what the three-box layout replaced (a recessed grey ground inside a white shell).
   assert.equal(/bg-background p-3/.test(src), false, 'the table is not recessed inside another card');
@@ -287,17 +287,21 @@ test('contacts: the controls are ONE row each, and share one height', () => {
   // re-typed in the toolbar, which is what the assertion was protecting: three screens
   // used to draw three search boxes at three heights.
   const primitives = read('components/ui/primitives.tsx');
-  for (const cls of ['SEARCH_SHELL_CLS', 'TOOLBAR_PRIMARY_CLS', 'GHOST_ACTION_CLS']) {
+  for (const cls of ['TOOLBAR_PRIMARY_CLS', 'GHOST_ACTION_CLS']) {
     const decl = primitives.slice(primitives.indexOf(`export const ${cls} =`), primitives.indexOf(`export const ${cls} =`) + 400);
     assert.ok(decl.includes('h-[var(--control-h)]'), `${cls} is control height`);
   }
-  assert.ok(toolbar.includes('SEARCH_SHELL_CLS'), 'and the toolbar reads them rather than re-typing a box');
+  const moduleSearch = primitives.slice(primitives.indexOf('export const MODULE_SEARCH_CLS ='), primitives.indexOf('export const MODULE_SEARCH_CLS =') + 400);
+  assert.ok(moduleSearch.includes('h-[34px]') && moduleSearch.includes('rounded-[9px]'), 'module search matches Agenda geometry');
+  assert.ok(toolbar.includes('MODULE_SEARCH_CLS'), 'and the toolbar reads the module-header search rather than re-typing a box');
   const page = read(CONTACTS_PAGE);
   // The header card is one BAND — title, search, controls, primary — that wraps DELIBERATELY
   // (flex-wrap) to a second line when it can't fit, rather than squeezing the search. The
   // search never drops below 240px (min-w-[15rem]), so it can't compress to just its icon
   // (the reported ~917px-content bug).
-  assert.ok(/<div className="flex flex-wrap items-center gap-2.5 px-3 py-2.5">/.test(page), 'the header card is one wrapping band');
+  const moduleHeader = read('components/ui/ModuleHeader.tsx');
+  assert.ok(moduleHeader.includes('grid-cols-[minmax(0,1fr)_auto]'), 'the header keeps title and actions aligned');
+  assert.ok(moduleHeader.includes('md:grid-cols-[auto_minmax(15rem,1fr)_auto]'), 'desktop has title, flexible centre and actions');
   // The 420px cap is GONE. It existed while the header held six controls; with the
   // actions folded into `···` the search takes all the slack, because it is the
   // screen's primary verb. The floor is what still matters.
@@ -1479,7 +1483,8 @@ test('a card that hosts a dropdown does not clip it away', () => {
   const page = read(CONTACTS_PAGE);
   // ONLY the title card opts out now — it is the one that hosts the popovers
   // (Filtrar and `···`) and the search field's focus ring.
-  assert.ok(page.includes('<PageShell grow={false} clip={false}>'), 'the title card opts out');
+  assert.ok(page.includes('<ModuleHeader'), 'the page uses the shared title card');
+  assert.ok(read('components/ui/ModuleHeader.tsx').includes('<PageShell grow={false} clip={false}'), 'the shared title card opts out');
   // The TABLE card must CLIP: it holds a full-bleed table with a sticky head, which
   // paints straight over the 12px radius unless the card clips, and its corners then
   // read as square beside the header card's rounded ones. It hosts no dropdown (the
@@ -1496,8 +1501,8 @@ test('a card that hosts a dropdown does not clip it away', () => {
   assert.equal((toolbarSrc.match(/top-full z-50/g) ?? []).length, 1, 'and there is exactly one such popover');
   // A card that opts out must have nothing full-bleed to clip — the toolbar card's rows
   // are padded, so there is no radius to protect.
-  const card1 = page.slice(page.indexOf('clip={false}'), page.indexOf('CARD 2 —'));
-  assert.equal(/className="[^"]*\b(-mx-|w-screen)/.test(card1), false, 'and nothing in it bleeds to the edge');
+  const header = read('components/ui/ModuleHeader.tsx');
+  assert.equal(/className="[^"]*\b(-mx-|w-screen)/.test(header), false, 'and nothing in it bleeds to the edge');
 
   // Any OTHER card holding a top-full menu would need the same opt-out; assert there is
   // no second one silently clipped.
@@ -1527,20 +1532,23 @@ test('grammar: toolbar controls, search and list rows are consolidated across Co
   assert.ok(!outline.includes('rounded-md'), 'and not the chip radius it used to have');
   assert.ok(!outline.includes('text-xs'), 'nor the smaller text a toolbar control must not use');
 
-  // Contacts and Staff search through the SAME primitive, never narrower than 240px.
+  // Contacts and Staff search through the SAME compact module-header primitive. The shared header's desktop
+  // centre track owns the 240px floor, so individual modules cannot drift.
   const contactsToolbar = read('components/contacts/ContactsToolbar.tsx');
   const staff = read('components/scheduling/staff/StaffTab.tsx');
   for (const [src, who] of [[contactsToolbar, 'Contacts'], [staff, 'Staff']] as const) {
-    assert.ok(src.includes('SEARCH_SHELL_CLS'), `${who} search is the shared shell`);
-    assert.ok(src.includes('min-w-[15rem]'), `${who} search never drops below 240px`);
+    assert.ok(src.includes('MODULE_SEARCH_CLS'), `${who} search is the shared module-header shell`);
   }
+  assert.ok(declOf('MODULE_SEARCH_CLS').includes('h-[34px]'), 'module search matches Agenda at 34px');
+  assert.ok(read('components/ui/ModuleHeader.tsx').includes('minmax(15rem,1fr)'), 'the shared centre never drops below 240px on desktop');
 
-  // Both lists' rows + headers come from the shared geometry (56px row, 38px header).
+  // Contacts remains a dense table. Staff deliberately uses responsive profile cards
+  // (the Staff Team reference), so it shares the control grammar but not table rows.
   const contactsTable = read('components/contacts/ContactsTable.tsx');
-  for (const [src, who] of [[contactsTable, 'Contacts'], [staff, 'Staff']] as const) {
-    assert.ok(src.includes('ENTITY_ROW_CLS'), `${who} rows use the shared entity-row height`);
-    assert.ok(src.includes('TABLE_HEADER_CLS'), `${who} header uses the shared table-header height`);
-  }
+  assert.ok(contactsTable.includes('ENTITY_ROW_CLS'), 'Contacts rows use the shared entity-row height');
+  assert.ok(contactsTable.includes('TABLE_HEADER_CLS'), 'Contacts header uses the shared table-header height');
+  assert.ok(staff.includes('md:grid-cols-2 xl:grid-cols-3'), 'Staff is a responsive card grid instead');
+  assert.ok(staff.includes('function StaffCard('), 'Staff owns one card component');
   assert.ok(primitives.includes('h-[var(--entity-row-h)]'), 'the entity row is the 56px token');
   assert.ok(
     declOf('TABLE_HEADER_CLS').includes('h-[var(--control-h)]'),
@@ -1549,11 +1557,12 @@ test('grammar: toolbar controls, search and list rows are consolidated across Co
 
   // Titles are the ONE shared heading, never hand-styled per page.
   assert.ok(read('components/ui/PageTitle.tsx').includes('export function PageHeading('), 'PageHeading is the shared title');
-  assert.ok(read('app/clients/[clientId]/contacts/page.tsx').includes('<PageHeading'), 'Contacts titles through it');
-  assert.ok(read('components/scheduling/staff/StaffHeaderCard.tsx').includes('<PageHeading'), 'Staff titles through it');
+  assert.ok(read('components/ui/ModuleHeader.tsx').includes('<PageHeading'), 'the shared module header renders it');
+  assert.ok(read('app/clients/[clientId]/contacts/page.tsx').includes('<ModuleHeader'), 'Contacts titles through the shared header');
+  assert.ok(read('components/scheduling/staff/StaffHeaderCard.tsx').includes('<ModuleHeader'), 'Staff titles through the shared header');
 
   // The Staff surface is in Spanish, like the rest of the CRM.
-  for (const es of ['Servicio', 'Sede', 'Ningún miembro coincide']) {
+  for (const es of ['Servicio', 'Sede', 'No encontramos miembros']) {
     assert.ok(staff.includes(es), `Staff copy is Spanish: ${es}`);
   }
 });

@@ -2,7 +2,7 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { PageShell } from "@/components/ui/PageShell";
-import { PageHeading } from "@/components/ui/PageTitle";
+import { ModuleHeader } from "@/components/ui/ModuleHeader";
 import { EmptyState, FacetPills, Pagination } from "@/components/ui/primitives";
 import { MeetingsTable } from "@/components/reuniones/MeetingsTable";
 import { MeetingDeletionProvider } from "@/components/reuniones/MeetingDeletion";
@@ -102,15 +102,12 @@ export default async function ClientMeetingsPage({
     <main className="flex min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]">
       {/* HEADER CARD — title + count, the wide search, and the primary. Same band
           as Contacts, so the two list screens read as one system. */}
-      <PageShell grow={false} clip={false}>
-        <div className="flex flex-wrap items-center gap-2.5 px-3 py-2.5">
-          <PageHeading title="Reuniones" count={headline.total} />
-          <MeetingsSearch />
-          <span className="ml-auto flex shrink-0 items-center gap-1.5">
-            <UploadMeetingButton clientId={client.id} limits={limits} basePath={base} />
-          </span>
-        </div>
-      </PageShell>
+      <ModuleHeader
+        title="Reuniones"
+        count={headline.total}
+        center={<MeetingsSearch />}
+        actions={<UploadMeetingButton clientId={client.id} limits={limits} basePath={base} />}
+      />
 
       <PageShell clip={false}>
         {/* THE ONE CONTROL BAND. Left: the four buckets, with counts, plus the

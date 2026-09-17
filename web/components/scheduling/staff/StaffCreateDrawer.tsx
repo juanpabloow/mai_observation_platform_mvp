@@ -8,7 +8,6 @@ import {
   BTN_PRIMARY,
   BTN_SECONDARY,
   PANEL_CLOSE_CLS,
-  PANEL_EDGE_LG,
   PANEL_SURFACE,
   PanelBanner,
   PanelCloseIcon,
@@ -121,7 +120,7 @@ export function StaffCreateDrawer({
         type="button"
         aria-label="Close"
         onClick={onClose}
-        className="pointer-events-auto fixed inset-0 z-40 cursor-default bg-black/40 lg:bg-transparent"
+        className="pointer-events-auto fixed inset-0 z-40 cursor-default bg-black/40"
       />
       <aside
         ref={panelRef as React.RefObject<HTMLElement>}
@@ -133,7 +132,7 @@ export function StaffCreateDrawer({
         // FULL-BLEED below `lg` (no radius, no border — it is the whole screen there),
         // a card from `lg` up. pointer-events-auto because the region it renders into is
         // pointer-events-none while it spans the viewport.
-        className={`u-panel-in pointer-events-auto fixed inset-y-0 right-0 z-50 w-full max-w-full lg:absolute lg:inset-y-0 lg:right-0 ${PANEL_SURFACE} ${PANEL_EDGE_LG}`}
+        className={`u-panel-in pointer-events-auto fixed inset-y-0 right-0 z-50 w-full max-w-full sm:inset-y-3 sm:right-3 sm:w-[var(--staff-panel-w)] sm:rounded-xl sm:border sm:border-line sm:shadow-[var(--shadow-card)] ${PANEL_SURFACE}`}
       >
         {/* HEADER — the panel's header shape, minus the person: no tone wash and no avatar
             disc, because there is nobody yet to be the colour of. The quiet close and the

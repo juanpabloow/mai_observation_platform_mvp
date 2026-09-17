@@ -39,9 +39,15 @@ export default async function TeamSettingsPage() {
       role: m.role as MemberRole,
       clientId: m.member_client_id,
       clientName: m.client_name,
+      schedulingAccess: null,
+      schedulingSiteId: null,
+      schedulingSiteName: null,
+      schedulingStaffId: null,
+      schedulingStaffName: null,
       isYou: m.user_id === scope.userId,
     }));
 
+  // eslint-disable-next-line react-hooks/purity -- dynamic Server Component; connection() disables prerendering.
   const now = Date.now();
   const adminInvites: TeamInviteView[] = invites
     .filter((inv) => inv.role === "admin")
@@ -50,6 +56,9 @@ export default async function TeamSettingsPage() {
       email: inv.email,
       role: inv.role,
       clientName: inv.client_name,
+      schedulingAccess: null,
+      schedulingSiteName: null,
+      schedulingStaffName: null,
       status: inv.status,
       sentLabel: fmtDate(inv.created_at),
       expiryLabel: fmtDate(inv.expires_at),

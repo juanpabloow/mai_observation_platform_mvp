@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ANALYTICS_RANGE_DAYS } from "@worker/db/repositories/analytics.js";
+import { ModuleHeader } from "@/components/ui/ModuleHeader";
 
 /**
  * Analytics shell + range selector — the ONLY primitives that need a server import
@@ -40,13 +41,11 @@ export function AnalyticsShell({
 }) {
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-6 py-8">
-      <header className="flex flex-wrap items-end justify-between gap-3">
-        <div className="space-y-1">
-          <h1 className="text-2xl font-semibold tracking-tight sm:text-3xl">Analytics</h1>
-          <p className="text-sm text-muted">{scopeLabel}</p>
-        </div>
-        <RangeSelector basePath={rangeBasePath} current={rangeCurrent} extraQuery={rangeExtraQuery} />
-      </header>
+      <ModuleHeader
+        title="Analytics"
+        center={<p className="truncate text-sm text-muted">{scopeLabel}</p>}
+        actions={<RangeSelector basePath={rangeBasePath} current={rangeCurrent} extraQuery={rangeExtraQuery} />}
+      />
       {banner}
       {children}
     </main>

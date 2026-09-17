@@ -1,6 +1,5 @@
 import type { ReactNode } from "react";
-import { PageShell } from "@/components/ui/PageShell";
-import { PageHeading } from "@/components/ui/PageTitle";
+import { ModuleHeader } from "@/components/ui/ModuleHeader";
 
 /**
  * THE roster's header card — ONE LINE: the title, the search, the primary action.
@@ -30,7 +29,8 @@ export interface StaffHeaderSlots {
 
 export function StaffHeaderCard({
   slots,
-  controls,
+  center,
+  actions,
 }: {
   slots: StaffHeaderSlots;
   /**
@@ -38,16 +38,8 @@ export function StaffHeaderCard({
    * when there is nothing to list — the card is then the title alone, which is what keeps
    * the empty state from losing the screen's name.
    */
-  controls?: ReactNode;
+  center?: ReactNode;
+  actions?: ReactNode;
 }) {
-  return (
-    // grow={false}: this card sizes to its content and the roster below absorbs the
-    // leftover height — the same division of the region Contacts uses.
-    <PageShell grow={false}>
-      <div className="flex flex-wrap items-center gap-2.5 px-3 py-2">
-        <PageHeading title={slots.title} className="px-1.5" />
-        {controls}
-      </div>
-    </PageShell>
-  );
+  return <ModuleHeader title={slots.title} center={center} actions={actions} />;
 }
