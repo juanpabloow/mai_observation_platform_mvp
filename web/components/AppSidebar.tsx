@@ -597,7 +597,7 @@ export function AppSidebar({
         });
         scheduling.push({
           key: "scheduling-settings",
-          label: "Scheduling settings",
+          label: "Configuración de agenda",
           href: c("/scheduling/admin"),
           icon: Icon.schedulingAdmin,
           active: pathname.startsWith(c("/scheduling/admin")),

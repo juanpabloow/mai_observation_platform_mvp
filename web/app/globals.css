@@ -721,6 +721,22 @@ html[data-text-scale='large'] {
   --conversation-row-h: 66px;
 }
 
+/* Full-screen dialog scrim, centred over the MODULE canvas rather than over the
+   sidebar + canvas combined. On tablet/phone the sidebar is off-canvas, so the
+   ordinary viewport centre is already the module centre. */
+.u-module-modal {
+  position: fixed;
+  inset: 0;
+}
+@media (min-width: 1280px) {
+  body:has(aside[data-collapsed='false']) .u-module-modal {
+    left: var(--sidebar-width);
+  }
+  body:has(aside[data-collapsed='true']) .u-module-modal {
+    left: 64px;
+  }
+}
+
 body {
   background: var(--background);
   color: var(--foreground);
@@ -1048,6 +1064,11 @@ body {
   border-left-color: var(--appt-edge);
   --appt-title: var(--foreground);
   --appt-avatar-bg: rgba(255, 255, 255, 0.86);
+}
+.u-appt-swatch {
+  display: inline-block;
+  background-color: var(--appt-fill);
+  border: 1px solid var(--appt-edge);
 }
 .dark .u-appt-staff {
   --appt-avatar-bg: rgba(255, 255, 255, 0.1);

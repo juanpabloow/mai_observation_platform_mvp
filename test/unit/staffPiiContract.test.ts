@@ -122,7 +122,7 @@ test('the service form can set a category (so a bad classification is correctabl
   for (const v of ['color', 'grooming', 'cut', 'feature']) {
     assert.ok(new RegExp(`value: "${v}"`).test(src), `the form offers ${v}`);
   }
-  assert.ok(/value: "",\s*label: "Unclassified"/.test(src), 'clearing back to unclassified is offered');
+  assert.ok(/value: "",\s*label: "Sin categoría"/.test(src), 'clearing back to unclassified is offered');
   // Both the create and the edit path must send it.
   assert.equal(src.split('category: category === "" ? null : category').length - 1, 2, 'create AND edit send it');
 });

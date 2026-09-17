@@ -36,13 +36,14 @@ test('sidebar: the Hub (tenant level) has NO Scheduling admin', () => {
   assert.ok(hub.includes('label: "Workspace"'), 'the Hub keeps its Workspace section (Hub + Clients & Workflows)');
 });
 
-test('sidebar: Scheduling settings appears INSIDE a client, gated by module + role + non-default', () => {
+test('sidebar: Configuración de agenda appears INSIDE a client, gated by module + role + non-default', () => {
   const src = read('components/AppSidebar.tsx');
   const sched = slice(src, 'if (moduleKeys.includes("scheduling")) {', 'sections.push({ label: "Scheduling"');
   // Agenda always; Scheduling settings only for owner/admin on a non-default client.
   assert.ok(sched.includes('key: "agenda"'), 'Agenda is in the client Scheduling section');
   assert.ok(sched.includes('!isMember && clientId !== defaultClientId'), 'settings gated: owner/admin + non-default');
   assert.ok(sched.includes('key: "scheduling-settings"'), 'the settings item is present');
+  assert.ok(sched.includes('label: "Configuración de agenda"'), 'the user-facing name is clear and Spanish');
   assert.ok(sched.includes('c("/scheduling/admin")'), 'settings → the per-client canonical admin route');
 });
 
