@@ -73,6 +73,7 @@ export async function AppSidebarServer() {
       email={email}
       role={scope.role}
       clientLabel={clientLabel}
+      schedulingAccess={scope.schedulingAccess}
     />
   );
 }

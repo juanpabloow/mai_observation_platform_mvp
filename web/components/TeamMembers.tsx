@@ -6,6 +6,7 @@ import {
   changeMemberRoleAction,
   reassignMemberClientAction,
   removeMemberAction,
+  setMemberSchedulingAccessAction,
 } from "@/lib/memberActions";
 
 export type MemberRole = "owner" | "admin" | "member";
@@ -16,11 +17,21 @@ export interface TeamMemberView {
   role: MemberRole;
   clientId: string | null;
   clientName: string | null;
+  schedulingAccess: "staff" | "reception" | null;
+  schedulingSiteId: string | null;
+  schedulingSiteName: string | null;
+  schedulingStaffId: string | null;
+  schedulingStaffName: string | null;
   isYou: boolean;
 }
 export interface TeamClientOption {
   id: string;
   name: string;
+}
+export interface TeamSiteOption {
+  id: string;
+  name: string;
+  staff: Array<{ id: string; name: string }>;
 }
 
 const ROLE_BADGE: Record<MemberRole, string> = {
@@ -38,16 +49,18 @@ const ROLE_BADGE: Record<MemberRole, string> = {
 export function TeamMembers({
   members,
   clients,
+  sites = [],
   viewerRole,
 }: {
   members: TeamMemberView[];
   clients: TeamClientOption[];
+  sites?: TeamSiteOption[];
   viewerRole: "owner" | "admin";
 }) {
   return (
     <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line">
       {members.map((m) => (
-        <MemberRow key={m.userId} member={m} clients={clients} viewerRole={viewerRole} />
+        <MemberRow key={m.userId} member={m} clients={clients} sites={sites} viewerRole={viewerRole} />
       ))}
     </ul>
   );
@@ -56,10 +69,12 @@ export function TeamMembers({
 function MemberRow({
   member,
   clients,
+  sites,
   viewerRole,
 }: {
   member: TeamMemberView;
   clients: TeamClientOption[];
+  sites: TeamSiteOption[];
   viewerRole: "owner" | "admin";
 }) {
   const router = useRouter();
@@ -68,6 +83,20 @@ function MemberRow({
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [demoting, setDemoting] = useState(false);
   const [demoteClient, setDemoteClient] = useState(clients[0]?.id ?? "");
+  const [scheduleAccess, setScheduleAccess] = useState<"standard" | "staff" | "reception">(
+    member.schedulingAccess ?? "standard",
+  );
+  const [scheduleSiteId, setScheduleSiteId] = useState(member.schedulingSiteId ?? sites[0]?.id ?? "");
+  const initialSite = sites.find((site) => site.id === (member.schedulingSiteId ?? sites[0]?.id));
+  const [scheduleStaffId, setScheduleStaffId] = useState(
+    member.schedulingStaffId ?? initialSite?.staff[0]?.id ?? "",
+  );
+  const selectedScheduleSite = sites.find((site) => site.id === scheduleSiteId);
+
+  function changeScheduleSite(nextSiteId: string) {
+    setScheduleSiteId(nextSiteId);
+    setScheduleStaffId(sites.find((site) => site.id === nextSiteId)?.staff[0]?.id ?? "");
+  }
 
   const isOwnerViewer = viewerRole === "owner";
   // Capability (mirrors the server boundary): owner row immutable; admin rows
@@ -104,7 +133,13 @@ function MemberRow({
             {member.role}
           </span>
           {member.role === "member" ? (
-            <span className="truncate text-xs text-muted">· {member.clientName ?? "—"}</span>
+            <span className="truncate text-xs text-muted">
+              · {member.schedulingAccess === "staff"
+                ? `Staff · ${member.schedulingStaffName ?? "unassigned"}`
+                : member.schedulingAccess === "reception"
+                  ? `Reception · ${member.schedulingSiteName ?? "unassigned"}`
+                  : member.clientName ?? "—"}
+            </span>
           ) : null}
         </div>
 
@@ -230,6 +265,66 @@ function MemberRow({
           </div>
         ) : null}
       </div>
+
+      {manageable && member.role === "member" && member.clientId && sites.length > 0 ? (
+        <div className="flex flex-wrap items-end gap-2 rounded-lg bg-subtle px-3 py-2">
+          <label className="flex flex-col gap-1 text-xs text-muted">
+            Schedule access
+            <select
+              value={scheduleAccess}
+              disabled={busy}
+              onChange={(event) => setScheduleAccess(event.target.value as typeof scheduleAccess)}
+              className="rounded-md border border-line bg-card px-2 py-1.5 text-foreground"
+            >
+              <option value="standard">Standard member</option>
+              <option value="staff">Staff · own schedule</option>
+              <option value="reception">Reception · site agenda</option>
+            </select>
+          </label>
+          {scheduleAccess !== "standard" ? (
+            <label className="flex flex-col gap-1 text-xs text-muted">
+              Site
+              <select
+                value={scheduleSiteId}
+                disabled={busy}
+                onChange={(event) => changeScheduleSite(event.target.value)}
+                className="rounded-md border border-line bg-card px-2 py-1.5 text-foreground"
+              >
+                {sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
+              </select>
+            </label>
+          ) : null}
+          {scheduleAccess === "staff" ? (
+            <label className="flex flex-col gap-1 text-xs text-muted">
+              Staff profile
+              <select
+                value={scheduleStaffId}
+                disabled={busy}
+                onChange={(event) => setScheduleStaffId(event.target.value)}
+                className="rounded-md border border-line bg-card px-2 py-1.5 text-foreground"
+              >
+                {(selectedScheduleSite?.staff ?? []).map((staff) => (
+                  <option key={staff.id} value={staff.id}>{staff.name}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          <button
+            type="button"
+            disabled={busy || (scheduleAccess !== "standard" && !scheduleSiteId) || (scheduleAccess === "staff" && !scheduleStaffId)}
+            onClick={() => run(() => setMemberSchedulingAccessAction({
+              targetUserId: member.userId,
+              clientId: member.clientId as string,
+              access: scheduleAccess === "standard" ? null : scheduleAccess,
+              siteId: scheduleAccess === "standard" ? null : scheduleSiteId,
+              staffId: scheduleAccess === "staff" ? scheduleStaffId : null,
+            }))}
+            className="rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background disabled:opacity-50"
+          >
+            Save access
+          </button>
+        </div>
+      ) : null}
 
       {error ? <p className="text-xs text-danger">{error}</p> : null}
     </li>

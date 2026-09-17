@@ -18,7 +18,7 @@ import { parseColumns } from "@/lib/contactColumns";
 import { EmptyState, Pagination } from "@/components/ui/primitives";
 import { PAGE_SIZE } from "@/lib/contactColumns";
 import { PageShell } from "@/components/ui/PageShell";
-import { PageHeading } from "@/components/ui/PageTitle";
+import { ModuleHeader } from "@/components/ui/ModuleHeader";
 import { loadContactEditPayload, loadContactPanel } from "@/lib/contactPanel";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { isUuid } from "@/lib/clientModuleValidation";
@@ -235,29 +235,30 @@ export default async function ClientContactsPage({
       {/* HEADER CARD (design image 23, the Equipo layout): the title + count, a WIDE
           search, and the primary — its own card, SEPARATE from the table. It spans the
           LIST COLUMN's width, so it narrows with the table when the ficha is open. */}
-      <PageShell grow={false} clip={false}>
-        <div className="flex flex-wrap items-center gap-2.5 px-3 py-2.5">
-          <PageHeading title="Contactos" count={summary.total} />
-          <ContactsSearch />
+      <ModuleHeader
+        title="Contactos"
+        count={summary.total}
+        center={<ContactsSearch />}
+        actions={
+          <>
           {/* ONE ROW, ACTIONS FOLDED (design 27a). Only Buscar, Filtrar and the
               primary stay visible; Columnas, Orden, Exportar and Campos del
               negocio live in `···`. Six controls in a row stopped being a
               hierarchy and became a wall, and with the detail panel open the row
               wrapped — which moved the primary and made the header's height
               depend on the viewport. */}
-          <span className="ml-auto flex shrink-0 items-center gap-1.5">
-            <ContactsFilterMenu owners={ownerOptions} />
-            <ContactsOverflowMenu
-              clientId={client.id}
-              visibleColumns={visibleColumns}
-              fieldsHref={isFullAccess ? `${base}/fields` : undefined}
-            />
-            {/* Just the button: it asks the LANE to open the drawer (see ContactsPanelLane).
-                Mounting the form from in here is what used to make it float over the page. */}
-            <NewContactButton />
-          </span>
-        </div>
-      </PageShell>
+          <ContactsFilterMenu owners={ownerOptions} />
+          <ContactsOverflowMenu
+            clientId={client.id}
+            visibleColumns={visibleColumns}
+            fieldsHref={isFullAccess ? `${base}/fields` : undefined}
+          />
+          {/* Just the button: it asks the LANE to open the drawer (see ContactsPanelLane).
+              Mounting the form from in here is what used to make it float over the page. */}
+          <NewContactButton />
+          </>
+        }
+      />
 
       {/* THE TABLE CARD: just the table and the pager now — the controls moved up into
           the header card, and the rest into `···`.

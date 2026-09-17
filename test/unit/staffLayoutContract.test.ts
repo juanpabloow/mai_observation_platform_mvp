@@ -38,7 +38,8 @@ test('every roster card is a PageShell — no screen draws its own card twice', 
     assert.ok(!src.includes('rounded-2xl border border-line-strong'), `${rel}: no hand-rolled header card`);
     assert.ok(!src.includes('rounded-table border border-line-strong bg-surface'), `${rel}: no hand-rolled table card`);
   }
-  assert.ok(read(HEADER).includes('<PageShell grow={false}>'), 'the header card sizes to its content');
+  assert.ok(read(HEADER).includes('<ModuleHeader'), 'the roster delegates to the shared header');
+  assert.ok(read('web/components/ui/ModuleHeader.tsx').includes('<PageShell grow={false} clip={false}'), 'the header card sizes to its content');
   // The roster card GROWS (grow defaults to true) so the white surface continues under the
   // last row. It opts OUT of clipping because the filter row above the columns hosts the
   // Service / Site popovers, and a card's overflow-hidden cuts an absolutely-positioned
@@ -47,49 +48,28 @@ test('every roster card is a PageShell — no screen draws its own card twice', 
   assert.equal(/<PageShell grow=\{false\}[^>]*>\s*\{\/\* The column header/.test(read(TAB)), false, 'and is not pinned to its content');
 });
 
-test('the roster is three sibling cards in a row, not a drawer over a reserved lane', () => {
+test('the roster is a responsive card grid and never reserves a side lane', () => {
   const src = stripComments(read(TAB));
-  // The lane trick: the roster's right edge and the panel's left edge were two
-  // independent numbers that had to be kept in step by hand.
   assert.ok(!src.includes('lg:pr-[452px]'), 'no hand-reserved drawer lane');
-  // The SAME grammar Contacts uses, GAP INCLUDED — a 16px gap here against Contacts'
-  // 12px is exactly the kind of near-miss that reads as two screens.
-  //
-  // Matched by SHAPE, not by identical strings: Contacts has since hoisted its row up to
-  // <main> so the ficha spans the header's height too, and its list column separates
-  // CARDS (--content-pad) where the roster's separates a header from a table. The two
-  // properties worth pinning survive that — a row at gap-3, and a `min-w-0 flex-1`
-  // column beside the panel so a wide table cannot push the panel off screen.
-  const contacts = stripComments(read(CONTACTS));
-  assert.ok(src.includes('flex min-h-0 flex-1 gap-3'), 'roster: the row');
-  assert.ok(/className="flex min-h-0 (w-full )?flex-1 gap-3"/.test(contacts), 'contacts: the same row, same gap');
-  assert.ok(src.includes('flex min-h-0 min-w-0 flex-1 flex-col gap-3'), 'roster: the list column');
-  assert.ok(/className="flex min-h-0 min-w-0 flex-1 flex-col gap-/.test(contacts), 'contacts: the same list column');
+  assert.ok(src.includes('grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3'), 'phone 1, tablet 2, desktop 3');
+  assert.ok(src.includes('function StaffCard('), 'one real card component owns the layout');
+  assert.ok(src.includes('min-h-[238px]'), 'cards keep a stable scannable height');
 });
 
-test('the detail panel is ONE element with two geometries, sized from a token', () => {
+test('the detail panel is ONE responsive overlay and never squeezes the roster', () => {
   const src = stripComments(read(TAB));
-  // Rendering it once per geometry would give the reader two independent copies of the
-  // hours and profile drafts, and two focus traps.
   assert.equal(src.match(/<StaffDetail/g)?.length, 1, 'rendered exactly once');
-  // A column from `lg` up, a fixed overlay below it — one wrapper, breakpoint-scoped.
-  assert.ok(src.includes('fixed inset-0 z-50'), 'overlay geometry below lg');
-  // `lg:relative` and not `lg:static`: in flow as a column AND the positioning context
-  // the EDITOR anchors to, which is what lets the editor land on the exact same box.
-  assert.ok(src.includes('lg:relative'), 'and an in-flow column from lg up');
-  assert.equal(src.includes('lg:static'), false, 'not static — the editor needs a context to anchor to');
-  // The width must be a CLASS reading a token, not an inline style: an inline style
-  // cannot be breakpoint-scoped, which is the whole reason one element can do both.
-  assert.ok(src.includes('lg:w-[var(--staff-panel-w)]'), 'width comes from a token, in a class');
+  assert.ok(src.includes('pointer-events-none fixed inset-0 z-50'), 'always overlays the roster');
+  assert.ok(src.includes('sm:w-[var(--staff-panel-w)]'), 'phone is full width; larger screens use the token');
   assert.ok(read('web/app/globals.css').includes('--staff-panel-w:'), 'and the token is defined');
-  // The scrim is overlay-only: beside the roster there is nothing to recede.
-  assert.ok(/OVERLAY_SCRIM\}? lg:hidden/.test(src), 'the scrim only exists while overlaying');
+  assert.equal(src.includes('lg:relative'), false, 'never becomes an in-flow side column');
+  assert.ok(src.includes('className={OVERLAY_SCRIM}'), 'the background always recedes');
 });
 
 test("the detail panel's frame is PageShell's, class for class", () => {
   const src = read(TAB);
-  assert.ok(src.includes('lg:rounded-xl lg:border lg:border-line lg:shadow-[var(--shadow-card)]'), 'same card as its row');
-  assert.ok(!src.includes('lg:rounded-2xl'), 'not a second radius');
+  assert.ok(src.includes('sm:rounded-xl sm:border sm:border-line sm:shadow-[var(--shadow-card)]'), 'same card above phone width');
+  assert.ok(!src.includes('sm:rounded-2xl'), 'not a second radius');
   const shell = read('web/components/ui/PageShell.tsx');
   for (const cls of ['rounded-xl', 'border-line', 'shadow-[var(--shadow-card)]']) {
     assert.ok(shell.includes(cls), `PageShell still owns ${cls} — the panel is copying a live definition`);
@@ -98,12 +78,13 @@ test("the detail panel's frame is PageShell's, class for class", () => {
 
 test('the detail panel is three zones: fixed header, FIXED tabs, one scrolling body', () => {
   const src = stripComments(read(TAB));
-  // The strip used to sit inside the scroll container, so scrolling the Hours grid
-  // carried the tabs off the top of the panel.
+  // The strip stays outside the body scroll. On a phone it may scroll HORIZONTALLY,
+  // otherwise five tabs are clipped beyond the right edge and cannot be reached.
   assert.ok(
-    src.includes('flex shrink-0 items-center gap-3.5 border-b border-line px-4'),
-    'the tab strip does not scroll',
+    src.includes('flex shrink-0 items-center gap-3.5 overflow-x-auto border-b border-line'),
+    'the fixed tab strip remains reachable on a phone',
   );
+  assert.ok(src.includes('flex min-w-max items-center gap-3.5'), 'all five tabs keep their touch width');
   // Exactly ONE scrolling zone in the panel, and it resets on a tab change.
   assert.ok(src.includes('<div key={tab} className="min-h-0 flex-1 overflow-y-auto'), 'one body, reset per tab');
   assert.ok(!/overflow-y-auto[^"]*">\s*<div className="flex items-center gap-3.5 border-b/.test(src), 'tabs are not inside it');
@@ -144,8 +125,9 @@ test('the primary action sits in the control band, and the roster keeps its dash
   // status only. Staff had it on the title line.
   // The SHARED toolbar primary, at the far right — not a hand-rolled brand button at a
   // hard-coded height.
-  assert.ok(src.includes('${TOOLBAR_PRIMARY_CLS}'), 'primary action, far right of the controls');
-  assert.ok(src.includes('ml-auto'), 'pushed to the right');
+  assert.ok(src.includes('className={TOOLBAR_PRIMARY_CLS}'), 'primary action uses the shared black control');
+  assert.ok(src.includes('actions={'), 'primary action occupies the header action slot');
+  assert.ok(read('web/components/ui/ModuleHeader.tsx').includes('ml-auto flex shrink-0'), 'the shared action slot is pushed right');
   assert.ok(
     read('web/components/contacts/form/NewContactButton.tsx').includes('TOOLBAR_PRIMARY_CLS'),
     'and Contacts spends the same one',
@@ -153,7 +135,8 @@ test('the primary action sits in the control band, and the roster keeps its dash
   assert.ok(!stripComments(read(WORKSPACE)).includes('Agregar miembro'), 'the workspace no longer owns the button');
   // BOTH entry points survive — the dashed row is the "next empty row" of the list.
   // Spanish now, like the rest of the CRM surfaces.
-  assert.equal(src.match(/\+ Agregar miembro/g)?.length, 2, 'button and dashed row both kept');
+  assert.equal(src.match(/Nuevo miembro/g)?.length, 1, 'one compact toolbar primary');
+  assert.equal(src.match(/\+ Agregar miembro/g)?.length, 1, 'and one dashed add row');
   assert.equal(src.match(/setCreating\(true\)/g)?.length, 2, 'and both open the same dialog');
   // The counter-and-effect handshake the moved button replaced.
   assert.ok(!src.includes('openCreate'), 'no counter prop, and so no setState in an effect');
@@ -164,14 +147,13 @@ test('the roster still shows everything it showed before', () => {
   // SPANISH labels — the roster joined the rest of the CRM surfaces. The FACTS are what
   // this case protects: every column and every presence bucket still shown.
   for (const label of [
-    'Miembro',
-    'Presencia',
+    'Servicios',
     'Hoy',
-    'Siguiente',
-    'Buscar en el equipo',
+    'Ver perfil',
+    'Buscar por nombre, servicio o sede',
     'Con cliente',
-    'Disponibles',
-    'Sin turno',
+    'En turno',
+    'Fuera',
   ]) {
     assert.ok(src.includes(label), `${label} survived the re-layout`);
   }
@@ -200,8 +182,9 @@ test('the roster still shows everything it showed before', () => {
   assert.equal(/useState/.test(ws), false, 'because it holds no state');
   // The screen still names itself — as a real heading, since there is no active tab to
   // carry the name any more.
-  assert.ok(ws.includes('title: "Equipo"'), 'the screen keeps its title');
-  assert.ok(read(HEADER).includes('<PageHeading'), 'and it is the shared PageHeading (an h1), not a hand-styled span');
+  assert.ok(ws.includes('title: "Staff"'), 'the screen keeps its title');
+  assert.ok(read(HEADER).includes('<ModuleHeader'), 'and it uses the shared module header');
+  assert.ok(read('web/components/ui/ModuleHeader.tsx').includes('<PageHeading'), 'the shared header renders a real h1');
   assert.equal(/sr-only/.test(read(HEADER)), false, 'a visible one');
   // THE COUNT LEFT THE TITLE BAND, and the scope line with it — the title row is now one
   // clean line (name, search, primary) like Contacts'. Neither fact is lost: the number is
@@ -355,7 +338,7 @@ test('there is ONE write path per field: the panel\'s tabs, no Edit button', () 
   assert.ok(tab.includes('setStaffServiceAction(clientId, member.id, sv.id, !on)'), 'and it toggles the pairing');
 });
 
-test('the CREATE drawer is create-only, and opens in the panel\'s own box', () => {
+test('the CREATE drawer is create-only and responsive', () => {
   const src = stripComments(read(DRAWER));
   // No edit branch left anywhere — that is what makes the single write path true rather
   // than merely intended.
@@ -375,15 +358,12 @@ test('the CREATE drawer is create-only, and opens in the panel\'s own box', () =
   assert.equal(/fixed inset-0[^"]*items-start justify-center/.test(src), false, 'nothing centres on the viewport');
   assert.equal(src.includes('max-w-md'), false, 'no floating fixed-width card');
   assert.equal(src.includes('bg-popover'), false, 'and it is not a popover surface');
-  // It fills the panel REGION and takes its width from there, never its own.
-  assert.ok(src.includes('lg:absolute lg:inset-y-0 lg:right-0'), 'it fills the panel region from lg up');
-  assert.ok(src.includes('fixed inset-y-0 right-0'), 'and covers full-bleed below it');
-  assert.equal(/w-\[var\(--staff-panel-w\)\]/.test(src), false, 'the drawer sets no width of its own');
-  assert.ok(stripComments(read(TAB)).includes('lg:w-[var(--staff-panel-w)]'), 'the region owns the width');
-  assert.ok(stripComments(read(TAB)).includes('{selected || creating ?'), 'the region opens for a selection OR a create');
+  assert.ok(src.includes('fixed inset-y-0 right-0'), 'it is a real overlay');
+  assert.ok(src.includes('sm:w-[var(--staff-panel-w)]'), 'full phone width, token width on tablet/desktop');
+  assert.ok(stripComments(read(TAB)).includes('{creating ?'), 'create state opens it independently');
 
   // A FORM: transparent catcher where it has a lane, focus trap, pinned save bar.
-  assert.ok(src.includes('bg-black/40 lg:bg-transparent'), 'dark only while covering');
+  assert.ok(src.includes('bg-black/40'), 'the overlay has a dismissible scrim');
   assert.ok(src.includes('useTrappedPanel({ active: true'), 'a form always traps focus');
   assert.ok(src.includes('flex min-h-0 flex-1 flex-col overflow-y-auto bg-surface'), 'one scrolling body');
   assert.ok(src.includes('flex shrink-0 items-center gap-2 border-t border-line bg-surface'), 'a pinned save bar');
@@ -399,14 +379,17 @@ test('one control band vocabulary — the roster and Contacts share the pills', 
   // All three controls in the band take the SAME radius. The facets used to be
   // rounded-md while the search and the primary were rounded-lg, which is the kind of
   // one-step mismatch that reads as sloppiness rather than as a choice.
-  for (const cls of ['SEARCH_SHELL_CLS', 'TOOLBAR_PRIMARY_CLS', 'CONTROL_CLS']) {
+  for (const cls of ['TOOLBAR_PRIMARY_CLS', 'CONTROL_CLS']) {
     const decl = primitives.slice(primitives.indexOf(`export const ${cls} =`));
     assert.ok(/rounded-lg/.test(decl.slice(0, 400)), `${cls} is rounded-lg`);
     assert.ok(/h-\[var\(--control-h\)\]/.test(decl.slice(0, 400)), `${cls} is control height`);
   }
+  const moduleSearch = primitives.slice(primitives.indexOf('export const MODULE_SEARCH_CLS ='));
+  assert.ok(/rounded-\[9px\]/.test(moduleSearch.slice(0, 400)), 'module search matches Agenda radius');
+  assert.ok(/h-\[34px\]/.test(moduleSearch.slice(0, 400)), 'module search matches Agenda height');
   // And both screens read them from there rather than re-typing a box.
   for (const rel of [TAB, 'web/components/contacts/ContactsToolbar.tsx']) {
-    assert.ok(read(rel).includes('SEARCH_SHELL_CLS'), `${rel} uses the shared search shell`);
+    assert.ok(read(rel).includes('MODULE_SEARCH_CLS'), `${rel} uses the shared module-header search shell`);
   }
   assert.equal(/h-9 min-w-0 max-w-\[280px\][^"]*rounded-md/.test(read(TAB)), false, 'the roster no longer rolls its own');
 });

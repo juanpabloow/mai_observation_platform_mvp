@@ -42,8 +42,10 @@ export async function AppHeader() {
   // Narrow to the access scope: a member sees only their client + its workflows.
   const memberClientId = scope.memberClientId;
   const visibleClients = memberClientId ? clients.filter((c) => c.id === memberClientId) : clients;
-  const visibleWorkflows = memberClientId
-    ? workflows.filter((w) => w.client_id === memberClientId)
+  const visibleWorkflows = scope.schedulingAccess
+    ? []
+    : memberClientId
+      ? workflows.filter((w) => w.client_id === memberClientId)
     : workflows;
 
   const clientOptions: HeaderClient[] = visibleClients.map((c) => ({

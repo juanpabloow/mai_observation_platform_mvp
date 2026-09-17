@@ -7,8 +7,12 @@ import { releaseAgentConversations } from "@worker/db/repositories/handoff.js";
 import {
   getMemberInTenant,
   removeMemberFromTenant,
+  setMemberSchedulingAccess,
   setMembershipRole,
+  type SchedulingAccess,
 } from "@worker/db/repositories/tenantMembers.js";
+import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
+import { getStaffById } from "@worker/db/repositories/scheduling/staff.js";
 
 /**
  * ORPHAN RELEASE (H-2). After a member loses access to conversations they were
@@ -138,6 +142,71 @@ export async function reassignMemberClientAction(input: {
   if (oldClientId && oldClientId !== input.clientId) {
     await releaseOrphanedConversations(scope.tenantId, input.targetUserId, { clientId: oldClientId });
   }
+  revalidatePath("/settings/team");
+  return { ok: true };
+}
+
+/**
+ * Assign or remove the member's scheduling profile. This is an owner/admin-only
+ * mutation and every supplied id is resolved server-side before the DB's
+ * composite foreign keys enforce the same boundary again.
+ */
+export async function setMemberSchedulingAccessAction(input: {
+  targetUserId: string;
+  clientId: string;
+  access: SchedulingAccess | null;
+  siteId?: string | null;
+  staffId?: string | null;
+}): Promise<Result> {
+  const scope = await getAccessScope();
+  if (!hasFullAccess(scope)) return { ok: false, error: PERMISSION_DENIED };
+  if (input.access !== null && input.access !== "staff" && input.access !== "reception") {
+    return { ok: false, error: "Invalid scheduling access." };
+  }
+
+  const target = await getMemberInTenant(scope.tenantId, input.targetUserId);
+  if (!target) return { ok: false, error: "Member not found." };
+  if (target.role !== "member" || target.member_client_id !== input.clientId) {
+    return { ok: false, error: "Scheduling access can only be assigned to a member of this client." };
+  }
+
+  let siteId: string | null = null;
+  let staffId: string | null = null;
+  if (input.access) {
+    siteId = input.siteId ?? null;
+    if (!siteId) return { ok: false, error: "Choose a site." };
+    const site = await getSiteById(scope.tenantId, siteId);
+    if (!site || site.client_id !== input.clientId || !site.active) {
+      return { ok: false, error: "That site isn't active for this client." };
+    }
+    if (input.access === "staff") {
+      staffId = input.staffId ?? null;
+      if (!staffId) return { ok: false, error: "Choose the staff member for this login." };
+      const staff = await getStaffById(scope.tenantId, staffId);
+      if (!staff || staff.site_id !== siteId || !staff.active || !staff.takes_bookings) {
+        return { ok: false, error: "That staff member isn't bookable at the selected site." };
+      }
+    }
+  }
+
+  try {
+    const updated = await setMemberSchedulingAccess({
+      tenantId: scope.tenantId,
+      userId: input.targetUserId,
+      clientId: input.clientId,
+      access: input.access,
+      siteId,
+      staffId,
+    });
+    if (updated === 0) return { ok: false, error: "Member not found." };
+  } catch (error) {
+    if ((error as { code?: string }).code === "23505") {
+      return { ok: false, error: "That staff profile is already linked to another login." };
+    }
+    return { ok: false, error: "Could not update scheduling access." };
+  }
+
+  revalidatePath(`/clients/${input.clientId}/team`);
   revalidatePath("/settings/team");
   return { ok: true };
 }

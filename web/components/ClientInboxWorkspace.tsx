@@ -303,19 +303,13 @@ export function ClientInboxWorkspace({
         }`}
       >
         <div className="flex min-h-0 w-full flex-col overflow-hidden">
-        {/* The queue owns the screen's title. The Inbox is THREE panes, not one list,
-            so the title belongs to the column it names rather than to a band across
-            all three — but it renders through the SAME <PageTitle/> as Customers and
-            the Agenda, so the three screens agree on what a title looks like. */}
+        {/* Inbox is a three-pane workspace, so its compact title and search belong to
+            the queue they operate on rather than to a second page-wide card. */}
         <div className="flex flex-col border-b border-line">
           <div className="flex h-[var(--topbar-height)] shrink-0 items-center px-3">
             <PageTitle
               title="Inbox"
               context={
-                // Plain sentence case, per the design (§3.1) — a mono uppercase badge on
-                // the pane's own title read as a status chip rather than as a count. It
-                // still goes brand-red when it is non-zero, because "someone is waiting"
-                // is one of the three things red is for.
                 <span
                   className={`text-[0.6875rem] ${pending > 0 ? "font-medium text-brand" : "text-faint"}`}
                   title="Conversaciones esperando a una persona"
@@ -326,10 +320,6 @@ export function ClientInboxWorkspace({
             />
           </div>
           <div className="flex shrink-0 flex-col gap-1 px-3 pb-3">
-            {/* Search sits in a bordered shell with the glass inside it, so the icon
-                can't be mistaken for a control — it's the field's own affordance. */}
-            {/* The SHARED search shell — the queue and the two list screens are one
-                object (§3.1), so the treatment lives in primitives, not here. */}
             <div className={SEARCH_SHELL_CLS}>
               <SearchIcon />
               <input
@@ -340,10 +330,6 @@ export function ClientInboxWorkspace({
                 aria-label="Buscar conversaciones"
                 className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
               />
-              {/* No filter control here yet: this list has no facets to open (the only
-                  scope is the workflow, whose selector lives in the app header, W-2). The
-                  design's filter affordance is HIDDEN until real facets exist (channel /
-                  intent / assignee) rather than shown as a dead disabled button. */}
             </div>
             {/* No in-panel workflow selector (W-2): the header switcher is the single
                 workflow selector; this list follows the active scope. */}

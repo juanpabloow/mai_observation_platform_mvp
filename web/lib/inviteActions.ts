@@ -4,7 +4,12 @@ import { revalidatePath } from "next/cache";
 import { getServerSession } from "./session";
 import { requireFullAccessForAction } from "./access";
 import { getClientById } from "@worker/db/repositories/clients.js";
-import { getMembershipForUser } from "@worker/db/repositories/tenantMembers.js";
+import {
+  getMembershipForUser,
+  type SchedulingAccess,
+} from "@worker/db/repositories/tenantMembers.js";
+import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
+import { getStaffById } from "@worker/db/repositories/scheduling/staff.js";
 import {
   acceptInvitation,
   createOrReplacePendingInvitation,
@@ -28,7 +33,13 @@ function appBaseUrl(): string {
   return process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
 }
 
-function roleLabel(role: InvitationRole, clientName: string | null): string {
+function roleLabel(
+  role: InvitationRole,
+  clientName: string | null,
+  schedulingAccess: SchedulingAccess | null = null,
+): string {
+  if (schedulingAccess === "staff") return `staff at ${clientName ?? "a client"}`;
+  if (schedulingAccess === "reception") return `reception at ${clientName ?? "a client"}`;
   return role === "member" ? `a member of ${clientName ?? "a client"}` : "an admin";
 }
 
@@ -37,9 +48,10 @@ function inviteEmailHtml(params: {
   tenantName: string;
   role: InvitationRole;
   clientName: string | null;
+  schedulingAccess?: SchedulingAccess | null;
   acceptUrl: string;
 }): string {
-  const what = roleLabel(params.role, params.clientName);
+  const what = roleLabel(params.role, params.clientName, params.schedulingAccess ?? null);
   // Inline styles only (email clients strip <style>); plain, legible, no tracking.
   return `<!doctype html><html><body style="margin:0;background:#f5f5f4;padding:24px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c1917">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
@@ -79,6 +91,9 @@ export async function createInvitationAction(input: {
   email: string;
   role: InvitationRole;
   memberClientId?: string | null;
+  schedulingAccess?: SchedulingAccess | null;
+  schedulingSiteId?: string | null;
+  schedulingStaffId?: string | null;
 }): Promise<{ ok: boolean; error?: string; emailSent?: boolean; acceptUrl?: string }> {
   const scope = await requireFullAccessForAction(); // owner/admin only
 
@@ -96,6 +111,9 @@ export async function createInvitationAction(input: {
   // Role↔client rule + same-tenant client (also enforced by the DB).
   let memberClientId: string | null = null;
   let clientName: string | null = null;
+  let schedulingAccess: SchedulingAccess | null = null;
+  let schedulingSiteId: string | null = null;
+  let schedulingStaffId: string | null = null;
   if (input.role === "member") {
     const clientId = input.memberClientId ?? null;
     if (!clientId) return { ok: false, error: "A member invitation must include a client." };
@@ -103,6 +121,30 @@ export async function createInvitationAction(input: {
     if (!client) return { ok: false, error: "That client doesn't belong to your workspace." };
     memberClientId = clientId;
     clientName = client.is_default ? "Unassigned" : client.name;
+
+    const requestedAccess = input.schedulingAccess ?? null;
+    if (requestedAccess !== null && requestedAccess !== "staff" && requestedAccess !== "reception") {
+      return { ok: false, error: "Invalid scheduling access." };
+    }
+    if (requestedAccess) {
+      const siteId = input.schedulingSiteId ?? null;
+      if (!siteId) return { ok: false, error: "Choose a site for scheduling access." };
+      const site = await getSiteById(scope.tenantId, siteId);
+      if (!site || site.client_id !== clientId || !site.active) {
+        return { ok: false, error: "That site isn't active for the selected client." };
+      }
+      schedulingAccess = requestedAccess;
+      schedulingSiteId = siteId;
+      if (requestedAccess === "staff") {
+        const staffId = input.schedulingStaffId ?? null;
+        if (!staffId) return { ok: false, error: "Choose the staff member for this login." };
+        const staff = await getStaffById(scope.tenantId, staffId);
+        if (!staff || staff.site_id !== siteId || !staff.active || !staff.takes_bookings) {
+          return { ok: false, error: "That staff member isn't bookable at the selected site." };
+        }
+        schedulingStaffId = staffId;
+      }
+    }
   }
 
   const rawToken = generateInviteToken();
@@ -115,11 +157,17 @@ export async function createInvitationAction(input: {
       email,
       role: input.role,
       memberClientId,
+      schedulingAccess,
+      schedulingSiteId,
+      schedulingStaffId,
       tokenHash,
       invitedBy: scope.userId,
       expiresAt,
     });
-  } catch {
+  } catch (error) {
+    if ((error as { code?: string }).code === "23505" && schedulingStaffId) {
+      return { ok: false, error: "That staff profile is already assigned or has a pending invitation." };
+    }
     return { ok: false, error: "Could not create the invitation." };
   }
 
@@ -137,6 +185,7 @@ export async function createInvitationAction(input: {
       tenantName,
       role: input.role,
       clientName,
+      schedulingAccess,
       acceptUrl,
     }),
   });
@@ -204,8 +253,6 @@ export async function acceptInvitationAction(
       invitationId: invite.id,
       tenantId: invite.tenant_id,
       userId: session.user.id,
-      role: invite.role,
-      memberClientId: invite.member_client_id,
     });
   } catch {
     return { ok: false, error: "Could not accept the invitation. Please try again." };
@@ -216,7 +263,9 @@ export async function acceptInvitationAction(
 
   const redirectTo =
     invite.role === "member" && invite.member_client_id
-      ? `/clients/${invite.member_client_id}/workflows/all/analytics`
+      ? invite.scheduling_access
+        ? `/clients/${invite.member_client_id}/scheduling/agenda`
+        : `/clients/${invite.member_client_id}/workflows/all/analytics`
       : "/";
   return { ok: true, redirectTo };
 }

@@ -20,6 +20,7 @@ import {
   updateServiceAction,
   updateSiteAction,
 } from "@/lib/schedulingAdminActions";
+import { ModuleHeader } from "@/components/ui/ModuleHeader";
 
 type WeeklyHours = Record<string, Array<{ start: string; end: string }>>;
 
@@ -99,10 +100,11 @@ export function AdminPanel({
 
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-8 px-6 py-6">
-      <header className="space-y-1">
-        <h1 className="text-xl font-semibold tracking-tight">Scheduling settings</h1>
-        <p className="text-sm text-muted">Sites, services, staff, and blocked time for {clientName}.</p>
-      </header>
+      <ModuleHeader
+        title="Scheduling settings"
+        status={clientName}
+        center={<p className="truncate text-sm text-muted">Sites, services and blocked time.</p>}
+      />
       {error ? <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p> : null}
 
       <WhyNothingAvailable sites={sites} staff={staff} />

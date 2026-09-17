@@ -5,6 +5,7 @@ import { getClientForTenant } from "@/lib/clientWorkflow";
 import { resolveWorkflowScope } from "@/lib/workflowScope";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { ClientWorkflowsList, type ClientWorkflowRow } from "@/components/ClientWorkflowsList";
+import { ModuleHeader } from "@/components/ui/ModuleHeader";
 
 /**
  * The workflow SETTINGS picker at /clients/[clientId]/workflows/all/settings — the
@@ -47,12 +48,15 @@ export default async function WorkflowSettingsPickerPage({
 
   return (
     <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col gap-5 px-6 py-8">
-      <header>
-        <h1 className="text-xl font-semibold tracking-tight">Settings</h1>
-        <p className="mt-0.5 text-sm text-muted">
+      <ModuleHeader
+        title="Workflow settings"
+        count={workflows.length}
+        center={
+          <p className="truncate text-sm text-muted">
           Pick a workflow to configure its handoff webhook &amp; field mappings, or use the header switcher.
-        </p>
-      </header>
+          </p>
+        }
+      />
       <ClientWorkflowsList clientId={client.id} workflows={workflows} section="settings" />
     </main>
   );

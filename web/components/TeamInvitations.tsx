@@ -9,6 +9,9 @@ export interface TeamInviteView {
   email: string;
   role: "admin" | "member";
   clientName: string | null;
+  schedulingAccess: "staff" | "reception" | null;
+  schedulingSiteName: string | null;
+  schedulingStaffName: string | null;
   status: "pending" | "accepted" | "revoked" | "expired";
   sentLabel: string;
   expiryLabel: string;
@@ -25,6 +28,12 @@ const STATUS_BADGE: Record<string, string> = {
 };
 
 function roleLabel(inv: TeamInviteView): string {
+  if (inv.schedulingAccess === "staff") {
+    return `staff · ${inv.schedulingStaffName ?? "—"} · ${inv.schedulingSiteName ?? "—"}`;
+  }
+  if (inv.schedulingAccess === "reception") {
+    return `reception · ${inv.schedulingSiteName ?? "—"}`;
+  }
   return inv.role === "member" ? `member · ${inv.clientName ?? "—"}` : "admin";
 }
 

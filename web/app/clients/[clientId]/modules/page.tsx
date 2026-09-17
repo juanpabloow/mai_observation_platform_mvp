@@ -7,6 +7,8 @@ import { isUuid } from "@/lib/clientModuleValidation";
 import { listClientModules } from "@worker/db/repositories/clientModules.js";
 import { CLIENT_MODULE_KEYS } from "@worker/modules/registry.js";
 import { ClientModulesPanel, type ModuleState } from "@/components/ClientModulesPanel";
+import { ModuleHeader } from "@/components/ui/ModuleHeader";
+import { OUTLINE_CLS } from "@/components/ui/primitives";
 
 /**
  * Per-client Modules (CLIENT level, Phase 2: configuration only). Owner/admin
@@ -42,19 +44,17 @@ export default async function ClientModulesPage({
 
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-6 py-10">
-      <header className="space-y-1">
-        {/* Back to the client's own workspace (the "all workflows" aggregate —
-            valid even when the client has zero workflows: it renders an empty
-            state), not the tenant-wide /clients management view. */}
-        <Link
-          href={`/clients/${client.id}/workflows/all/analytics`}
-          className="text-sm text-neutral-500 transition-colors hover:text-foreground"
-        >
-          &larr; {client.name}
-        </Link>
-        <h1 className="text-2xl font-semibold tracking-tight">Client settings</h1>
-        <p className="text-sm text-muted">Identity and product capabilities for {client.name}.</p>
-      </header>
+      <ModuleHeader
+        title="Modules"
+        count={enabledCount}
+        status={client.name}
+        center={<p className="truncate text-sm text-muted">Identity and product capabilities for this client.</p>}
+        actions={
+          <Link href={`/clients/${client.id}/workflows/all/analytics`} className={OUTLINE_CLS}>
+            Open workspace
+          </Link>
+        }
+      />
 
       {/* Two columns on desktop (identity | capabilities); one column on mobile. */}
       <div className="grid grid-cols-1 gap-6 md:grid-cols-[minmax(0,18rem)_minmax(0,1fr)]">
@@ -88,12 +88,6 @@ export default async function ClientModulesPage({
                 ? "No modules enabled yet."
                 : `${enabledCount} module${enabledCount === 1 ? "" : "s"} enabled.`}
             </p>
-            <Link
-              href={`/clients/${client.id}/workflows/all/analytics`}
-              className="inline-flex w-fit items-center rounded-lg border border-black/10 px-3 py-1.5 text-sm text-muted transition-colors hover:bg-black/[0.04] hover:text-foreground dark:border-line-strong dark:hover:bg-subtle"
-            >
-              Open workspace
-            </Link>
           </section>
         </aside>
 

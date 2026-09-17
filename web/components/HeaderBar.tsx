@@ -272,7 +272,7 @@ export function HeaderBar({
           onClick={() => setMobileOpen(true)}
           aria-label="Open menu"
           title="Open menu"
-          className="inline-flex rounded-lg p-1.5 text-muted transition-colors hover:bg-black/[0.05] hover:text-foreground md:hidden dark:hover:bg-subtle"
+          className="inline-flex rounded-lg p-1.5 text-muted transition-colors hover:bg-black/[0.05] hover:text-foreground xl:hidden dark:hover:bg-subtle"
         >
           <MenuIcon />
         </button>
@@ -282,7 +282,7 @@ export function HeaderBar({
           onClick={toggleSidebar}
           aria-label="Toggle sidebar"
           title="Toggle sidebar"
-          className="hidden rounded-lg p-1.5 text-muted transition-colors hover:bg-black/[0.05] hover:text-foreground md:inline-flex dark:hover:bg-subtle"
+          className="hidden rounded-lg p-1.5 text-muted transition-colors hover:bg-black/[0.05] hover:text-foreground xl:inline-flex dark:hover:bg-subtle"
         >
           <PanelIcon />
         </button>

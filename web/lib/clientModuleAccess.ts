@@ -49,7 +49,11 @@ export async function resolveClientModuleForScope(
   moduleKey: ClientModuleKey,
 ): Promise<ClientModuleResolution> {
   if (!isUuid(clientId)) return { ok: false };
-  if (!canAccessClient(scope, clientId)) return { ok: false };
+  const schedulingProfileAccess =
+    moduleKey === "scheduling" &&
+    scope.schedulingAccess !== null &&
+    scope.memberClientId === clientId;
+  if (!canAccessClient(scope, clientId) && !schedulingProfileAccess) return { ok: false };
   const client = await getClientById({ tenantId: scope.tenantId, clientId });
   if (!client) return { ok: false };
   if (client.is_default) return { ok: false }; // Unassigned can't have modules

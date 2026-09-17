@@ -2,12 +2,12 @@
 
 import { useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
-import { SEARCH_SHELL_CLS } from "@/components/ui/primitives";
+import { MODULE_SEARCH_CLS } from "@/components/ui/primitives";
 
 /**
  * The Reuniones search field.
  *
- * Deliberately the SAME object as `ContactsSearch`: the shared `SEARCH_SHELL_CLS`
+ * Deliberately the SAME object as `ContactsSearch`: the shared `MODULE_SEARCH_CLS`
  * shell, a real `<form>` so Enter submits and it works before hydration, and a
  * pure URL-param writer so the server page stays the single source of truth.
  *
@@ -44,7 +44,7 @@ export function MeetingsSearch() {
         e.preventDefault();
         apply(draft.trim());
       }}
-      className={`${SEARCH_SHELL_CLS} min-w-[15rem] max-w-[420px] flex-1`}
+      className={`${MODULE_SEARCH_CLS} w-full min-w-0`}
     >
       <svg viewBox="0 0 16 16" className="size-3.5 shrink-0 text-faint" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
         <circle cx="7" cy="7" r="4.4" />
@@ -56,7 +56,7 @@ export function MeetingsSearch() {
         onChange={(e) => setDraft(e.target.value)}
         placeholder="Buscar por nombre, participante o contenido…"
         aria-label="Buscar reuniones"
-        className="min-w-0 flex-1 bg-transparent text-sm text-foreground outline-none placeholder:text-faint"
+        className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-faint"
       />
       {q ? (
         <button

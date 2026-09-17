@@ -3,6 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { isUuid } from "./clientModuleValidation";
+import { canAccessSchedulingSite, canOperateScheduling } from "./access";
+import { getAppointmentById } from "@worker/db/repositories/scheduling/appointments.js";
 import {
   createAppointment,
   rescheduleAppointment,
@@ -49,7 +51,22 @@ function messageFor(error: BookingError, fallback: string): string {
 /** Shared gate: resolve the scheduling module context or fail generically. */
 async function gate(clientId: string) {
   const resolved = await resolveClientModuleContext(clientId, "scheduling");
-  return resolved.ok ? resolved.context : null;
+  if (!resolved.ok || !canOperateScheduling(resolved.context.scope)) return null;
+  return resolved.context;
+}
+
+async function gateAppointment(clientId: string, appointmentId: string) {
+  const ctx = await gate(clientId);
+  if (!ctx) return null;
+  const appointment = await getAppointmentById(ctx.scope.tenantId, appointmentId);
+  if (
+    !appointment ||
+    appointment.client_id !== ctx.client.id ||
+    !canAccessSchedulingSite(ctx.scope, appointment.site_id)
+  ) {
+    return null;
+  }
+  return { ctx, appointment };
 }
 
 function agendaPath(clientId: string): string {
@@ -84,6 +101,9 @@ export async function createManualAppointmentAction(
   }
   const ctx = await gate(clientId);
   if (!ctx) return { ok: false, error: GENERIC_GATE };
+  if (!canAccessSchedulingSite(ctx.scope, input.siteId)) {
+    return { ok: false, error: GENERIC_GATE };
+  }
   const start = new Date(input.startAt);
   if (Number.isNaN(start.getTime())) return { ok: false, error: "Invalid start time." };
 
@@ -130,8 +150,9 @@ async function transition(
   reason?: string,
 ): Promise<ActionResult> {
   if (!isUuid(appointmentId)) return { ok: false, error: GENERIC_GATE };
-  const ctx = await gate(clientId);
-  if (!ctx) return { ok: false, error: GENERIC_GATE };
+  const gated = await gateAppointment(clientId, appointmentId);
+  if (!gated) return { ok: false, error: GENERIC_GATE };
+  const { ctx } = gated;
   const r = await transitionStatus(target, {
     tenantId: ctx.scope.tenantId,
     appointmentId,
@@ -168,8 +189,9 @@ export async function rescheduleAppointmentAction(
   staffId?: string | null,
 ): Promise<ActionResult> {
   if (!isUuid(appointmentId) || (staffId && !isUuid(staffId))) return { ok: false, error: GENERIC_GATE };
-  const ctx = await gate(clientId);
-  if (!ctx) return { ok: false, error: GENERIC_GATE };
+  const gated = await gateAppointment(clientId, appointmentId);
+  if (!gated) return { ok: false, error: GENERIC_GATE };
+  const { ctx } = gated;
   const start = new Date(startAt);
   if (Number.isNaN(start.getTime())) return { ok: false, error: "Invalid start time." };
   const r = await rescheduleAppointment({

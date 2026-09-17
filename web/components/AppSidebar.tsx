@@ -11,6 +11,7 @@ import { AccountMenu } from "@/components/AccountMenu";
 import { RAIL_ROW } from "@/components/railRow";
 
 const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password"];
+const SCHEDULING_SECTION = "Scheduling";
 
 /** The client id when inside a client (/clients/<id>/…); null at the tenant level. */
 function parseClientId(pathname: string): string | null {
@@ -249,6 +250,7 @@ interface Account {
   name: string | null;
   email: string;
   role: "owner" | "admin" | "member";
+  accessLabel: "staff" | "reception" | null;
   clientLabel: string | null;
   canSwitchClients: boolean;
 }
@@ -354,7 +356,7 @@ function RailBody({
               <span className="flex min-w-0 flex-col overflow-hidden">
                 <span className="truncate text-[0.8125rem] font-semibold leading-tight text-sidebar-fg">{label}</span>
                 <span className="u-mono truncate text-[0.625rem] uppercase leading-tight tracking-wide text-sidebar-section">
-                  {account.role}
+                  {account.accessLabel ?? account.role}
                 </span>
               </span>
               {/* The disclosure caret (design) — the footer opens the account menu. */}
@@ -417,6 +419,7 @@ export function AppSidebar({
   email,
   role,
   clientLabel,
+  schedulingAccess,
 }: {
   /** Display name for the account footer; falls back to the email when absent. */
   name: string | null;
@@ -430,6 +433,7 @@ export function AppSidebar({
   email: string;
   role: "owner" | "admin" | "member";
   clientLabel: string | null;
+  schedulingAccess: "staff" | "reception" | null;
 }) {
   const pathname = usePathname();
   const { collapsed, mobileOpen, setMobileOpen } = useSidebar();
@@ -454,11 +458,16 @@ export function AppSidebar({
   const isMember = memberClientId !== null;
   // Brand target: the Hub for owner/admin; a member has no Hub access, so their
   // brand links to their own client (mirrors the header's memberLandingHref).
-  const homeHref = memberClientId ? `/clients/${memberClientId}/workflows` : "/";
+  const homeHref = memberClientId
+    ? schedulingAccess
+      ? `/clients/${memberClientId}/scheduling/agenda`
+      : `/clients/${memberClientId}/workflows`
+    : "/";
   const account: Account = {
     name,
     email,
     role,
+    accessLabel: schedulingAccess,
     clientLabel,
     canSwitchClients: memberClientId === null,
   };
@@ -477,6 +486,18 @@ export function AppSidebar({
     // Analytics is a /workflows/<scope>/analytics route, so it lives UNDER /workflows; the
     // active split between the two rows keys off whether the current path is that surface.
     const onAnalytics = /\/workflows\/[^/]+\/analytics(?:\/|$)/.test(pathname);
+    if (isMember && schedulingAccess) {
+      const schedulingItems: NavItem[] = [
+        {
+          key: "agenda",
+          label: schedulingAccess === "staff" ? "My schedule" : "Agenda",
+          href: c("/scheduling/agenda"),
+          icon: Icon.agenda,
+          active: pathname.startsWith(c("/scheduling/agenda")),
+        },
+      ];
+      sections = [{ label: SCHEDULING_SECTION, items: schedulingItems }];
+    } else {
     // WORKSPACE — the top-level places. Hub was removed from the rail (per request); the
     // brand wordmark still links home. Workflows (the client's workflow CONTEXT), then
     // Analytics (the aggregate / per-workflow analytics surface), then Inbox. Both
@@ -597,10 +618,19 @@ export function AppSidebar({
       }
       sections.push({ label: "Administration", items: admin });
     }
+    }
   } else if (isMember) {
     const m = (p: string) => `/clients/${memberClientId}${p}`;
     const memberModules = enabledModules[memberClientId] ?? [];
-    const items: NavItem[] = [
+    const items: NavItem[] = schedulingAccess
+      ? [{
+          key: "agenda",
+          label: schedulingAccess === "staff" ? "My schedule" : "Agenda",
+          href: m("/scheduling/agenda"),
+          icon: Icon.agenda,
+          active: pathname.startsWith(m("/scheduling")),
+        }]
+      : [
       {
         key: "analytics",
         label: "Analytics",
@@ -609,10 +639,10 @@ export function AppSidebar({
         active: false,
       },
     ];
-    if (memberModules.includes("crm")) {
+    if (!schedulingAccess && memberModules.includes("crm")) {
       items.push({ key: "contacts", label: "Contacts", href: m("/contacts"), icon: Icon.contacts, active: pathname.startsWith(m("/contacts")) });
     }
-    if (memberModules.includes("scheduling")) {
+    if (!schedulingAccess && memberModules.includes("scheduling")) {
       items.push({ key: "agenda", label: "Agenda", href: m("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(m("/scheduling")) });
     }
     sections = [{ label: "Client", items }];
@@ -638,11 +668,12 @@ export function AppSidebar({
 
   return (
     <>
-      {/* DESKTOP rail — full (w-60) or collapsed icon-only (w-16). */}
+      {/* DESKTOP rail — full or collapsed icon-only. Tablet and phone use the
+          drawer so the operational surfaces keep their full working width. */}
       <aside
         data-collapsed={collapsed}
         style={collapsed ? undefined : { width: "var(--sidebar-width)" }}
-        className={`hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar-bg transition-[width] duration-200 md:flex ${
+        className={`hidden shrink-0 flex-col border-r border-sidebar-border bg-sidebar-bg transition-[width] duration-200 xl:flex ${
           collapsed ? "w-16" : ""
         }`}
       >
@@ -651,7 +682,7 @@ export function AppSidebar({
 
       {/* MOBILE drawer — off-canvas, over a backdrop. Always expanded content. */}
       {mobileOpen ? (
-        <div className="md:hidden">
+        <div className="xl:hidden">
           <button
             type="button"
             aria-label="Close menu"

@@ -2,13 +2,13 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useEffect, useMemo, useState, useTransition, type RefObject } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition, type RefObject } from "react";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { PageShell } from "@/components/ui/PageShell";
 import { PageHeading } from "@/components/ui/PageTitle";
-import { CONTROL_CLS, OUTLINE_CLS } from "@/components/ui/primitives";
+import { CONTROL_CLS, MODULE_SEARCH_CLS, OUTLINE_CLS } from "@/components/ui/primitives";
 import { OVERLAY_SCRIM, useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
-import { apptCategory, apptCategoryClass, type ApptCategory } from "@/lib/agendaCategory";
+import { apptCategory } from "@/lib/agendaCategory";
 import { priceLabelCOP } from "@/lib/money";
 import {
   cancelAppointmentAction,
@@ -58,6 +58,28 @@ interface Appt {
    *  canonical now. NULL for walk-ins / contacts with no phone or email. */
   primary_identity: string | null;
   source_conversation_id: string | null;
+}
+
+/**
+ * The reference calendar gives each PROFESSIONAL a quiet, persistent pastel —
+ * service and lifecycle state do not repaint the whole block. Keep the class
+ * names explicit (rather than building them dynamically) so CSS and production
+ * builds always see the complete palette. The roster assigns the palette in order:
+ * unlike a hash, that guarantees the first five visible professionals do not collide.
+ */
+const STAFF_APPT_TONES = [
+  "u-appt-staff-slate",
+  "u-appt-staff-lilac",
+  "u-appt-staff-sage",
+  "u-appt-staff-sand",
+  "u-appt-staff-blue",
+] as const;
+
+type StaffTone = (typeof STAFF_APPT_TONES)[number];
+
+function appointmentToneClass(appt: Appt, staffTones: ReadonlyMap<string, StaffTone>): string {
+  if (!appt.staff_name) return "u-appt-unassigned";
+  return `u-appt-staff ${staffTones.get(appt.staff_id) ?? STAFF_APPT_TONES[0]}`;
 }
 interface Slot { start_at: string; service_end_at: string; staff_id: string; available_staff_ids: string[] }
 /** When booking for an existing contact (C-4.1 deep-link), the modal locks the identity
@@ -216,6 +238,8 @@ export function AgendaView(props: {
   returnContactId: string | null;
   /** owner/admin — controls whether admin links (Add staff) render. */
   canManage: boolean;
+  /** Owner/admin/reception/legacy member. Staff schedule logins are read-only. */
+  canOperate: boolean;
   timezone: string;
   date: string;
   view: string;
@@ -258,6 +282,13 @@ export function AgendaView(props: {
   /** Client-side facets over the ALREADY loaded range. */
   const [statusFilter, setStatusFilter] = useState("");
   const [staffFilter, setStaffFilter] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [desktopLayout, setDesktopLayout] = useState<"rows" | "columns">("rows");
+  const searchRef = useRef<HTMLInputElement>(null);
+  const staffTones = useMemo(
+    () => new Map<string, StaffTone>(props.staff.map((staff, index) => [staff.id, STAFF_APPT_TONES[index % STAFF_APPT_TONES.length]])),
+    [props.staff],
+  );
 
   const navigate = (patch: { site?: string; date?: string; view?: string }) => {
     const params = new URLSearchParams();
@@ -282,6 +313,7 @@ export function AgendaView(props: {
    * open. NOTE: on the page body this does override the browser's select-all.
    */
   useEffect(() => {
+    if (!props.canOperate) return;
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "a") return;
       const el = e.target as HTMLElement | null;
@@ -292,7 +324,18 @@ export function AgendaView(props: {
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [modal]);
+  }, [modal, props.canOperate]);
+
+  useEffect(() => {
+    const onSearchKey = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "f") return;
+      event.preventDefault();
+      searchRef.current?.focus();
+      searchRef.current?.select();
+    };
+    document.addEventListener("keydown", onSearchKey);
+    return () => document.removeEventListener("keydown", onSearchKey);
+  }, []);
 
   // Escape closes the detail drawer. The OVERLAY variant (below xl) traps focus and
   // handles Escape itself in the capture phase (stopping it before it reaches here), so
@@ -318,13 +361,33 @@ export function AgendaView(props: {
 
   // ── Derived, all from the loaded range ──────────────────────────────────────
   const visible = useMemo(
-    () =>
-      props.appointments.filter(
-        (a) => (!statusFilter || a.status === statusFilter) && (!staffFilter || a.staff_id === staffFilter),
-      ),
-    [props.appointments, statusFilter, staffFilter],
+    () => {
+      const query = searchQuery.trim().toLocaleLowerCase("es");
+      return props.appointments.filter((a) => {
+        if (statusFilter && a.status !== statusFilter) return false;
+        if (staffFilter && a.staff_id !== staffFilter) return false;
+        if (!query) return true;
+        return [a.contact_name, a.primary_identity, a.service_name, a.staff_name, a.public_reference]
+          .filter((value): value is string => Boolean(value))
+          .some((value) => value.toLocaleLowerCase("es").includes(query));
+      });
+    },
+    [props.appointments, searchQuery, statusFilter, staffFilter],
   );
-
+  const mobileRows = useMemo(
+    () => [...visible].sort((a, b) => a.start_at.localeCompare(b.start_at)),
+    [visible],
+  );
+  const mobileDayKeys = useMemo(
+    () => Array.from(new Set(mobileRows.map((appt) => zonedParts(appt.start_at, tz).dayKey))),
+    [mobileRows, tz],
+  );
+  const nextMobileAppointment = useMemo(() => {
+    return mobileRows.find(
+      (appt) => appt.status !== "cancelled" && appt.status !== "completed",
+    ) ?? null;
+  }, [mobileRows]);
+  const mobileCompleted = mobileRows.filter((appt) => appt.status === "completed").length;
   const kpis = props.kpis;
   const prev = props.previousKpis;
   const rangeCaption = isWeek ? "Esta semana" : "Hoy";
@@ -483,7 +546,7 @@ export function AgendaView(props: {
     // card, separated by hairlines — not a row of independent boxes floating on the
     // canvas, which made the screen read as five unrelated widgets.
     <main className="flex min-h-0 flex-1 flex-col">
-      <PageShell>
+      <PageShell surface="canvas" className="gap-3">
       {/* ── PAGE TITLE ── the same band Customers renders, now carrying the screen's
              two ACTIONS on its right. The Agenda used to spend a whole row on a title
              with nothing but empty space beside it, and a SECOND row whose only real
@@ -494,33 +557,251 @@ export function AgendaView(props: {
           is ONE object (name it, steer it, read its numbers), and three rules across
           it chopped that into four slabs. The grid below still gets its own rule —
           that seam is real, it separates chrome from the canvas. */}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-[var(--panel-pad)] pt-3">
-        <PageHeading title="Agenda" />
-        <span className="text-xs text-muted">
-          {`${currentSite?.name ?? ""}${props.sites.length > 1 ? ` · ${props.sites.length} sedes` : " · 1 sede"}`}
-        </span>
-        <div className="ml-auto flex items-center gap-2">
-          <button type="button" onClick={() => setModal({ mode: "walkin" })} className={OUTLINE_CLS}>
-            Atención sin cita
-          </button>
-          {/* The one RED button in the app's control bands, by design — the action that
-              books a customer in. Same control height + 11px radius as its neighbour;
-              the red fill and its faint red lift are what set it apart, not a shape. */}
-          <button
-            type="button"
-            onClick={() => setModal({ mode: "new" })}
-            className="inline-flex h-[var(--control-h)] shrink-0 items-center gap-2 whitespace-nowrap rounded-lg bg-brand px-3.5 text-sm font-semibold text-white shadow-[var(--shadow-book)] transition-colors hover:brightness-110"
-          >
-            Agendar cita
-            <kbd className="u-mono rounded bg-white/20 px-1 text-[0.625rem] font-normal">&#8984;A</kbd>
-          </button>
+      <div className="rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]">
+        <div className="px-4 pb-3 pt-4 md:px-[var(--panel-pad)] md:pb-0 md:pt-3 xl:p-[14px]">
+          <div className="flex items-start justify-between gap-3 md:items-center xl:gap-[14px]">
+            <div className="min-w-0 shrink-0 md:flex md:items-center md:gap-2">
+              <p className="truncate text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-faint">
+                <span className="md:hidden">
+                  {props.canOperate ? currentSite?.name ?? "Agenda" : `Mi agenda · ${currentSite?.name ?? ""}`}
+                </span>
+              </p>
+              <div className="mt-0.5 [&_h1]:text-[1.55rem] [&_h1]:font-semibold [&_h1]:leading-tight [&_h1]:tracking-[-0.03em] md:mt-0 md:[&_h1]:text-[19px]">
+                <PageHeading title="Agenda" />
+              </div>
+              <span className="hidden text-xs text-muted md:inline xl:hidden">
+                {`${currentSite?.name ?? ""}${props.sites.length > 1 ? ` · ${props.sites.length} sedes` : " · 1 sede"}`}
+              </span>
+            </div>
+            <label className={`relative hidden min-w-[14rem] flex-1 xl:flex ${MODULE_SEARCH_CLS}`}>
+              <span className="sr-only">Buscar en la agenda</span>
+              <svg aria-hidden viewBox="0 0 24 24" fill="none" className="pointer-events-none size-4 shrink-0 text-faint">
+                <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.6" />
+                <path d="m16 16 4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+              </svg>
+              <input
+                ref={searchRef}
+                value={searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                placeholder="Buscar cliente, servicio o profesional…"
+                className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-faint"
+              />
+              <kbd className="u-mono pointer-events-none ml-auto shrink-0 rounded border border-line bg-surface px-1.5 py-0.5 text-[0.625rem] text-faint">
+                ⌘F
+              </kbd>
+            </label>
+            <button
+              type="button"
+              onClick={() => navigate({ date: zonedParts(new Date().toISOString(), tz).dayKey })}
+              className="inline-flex h-9 shrink-0 items-center rounded-lg border border-line-strong bg-surface px-3 text-xs font-semibold text-foreground md:hidden"
+            >
+              Hoy
+            </button>
+            {props.canOperate ? (
+              <div className="ml-auto hidden items-center gap-2 md:flex xl:hidden">
+                <button type="button" onClick={() => setModal({ mode: "walkin" })} className={OUTLINE_CLS}>
+                  Atención sin cita
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setModal({ mode: "new" })}
+                  className="inline-flex h-[var(--control-h)] shrink-0 items-center gap-2 whitespace-nowrap rounded-lg bg-ink px-3.5 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover"
+                >
+                  Agendar cita
+                  <kbd className="u-mono rounded bg-white/20 px-1 text-[0.625rem] font-normal">&#8984;A</kbd>
+                </button>
+              </div>
+            ) : null}
+            <div className="hidden shrink-0 items-center gap-2 xl:flex">
+              <div className="flex h-[34px] items-center gap-0.5 rounded-[9px] bg-chip p-[3px]">
+                <DesktopSeg active={!isWeek} onClick={() => navigate({ view: "day" })}>Día</DesktopSeg>
+                <DesktopSeg active={isWeek} onClick={() => navigate({ view: "week" })}>Semana</DesktopSeg>
+              </div>
+              <div className="flex h-[34px] items-center rounded-[9px] border border-line bg-surface p-0.5">
+                <DesktopStep label="Anterior" onClick={() => shiftDate(isWeek ? -7 : -1)} direction="left" />
+                <button
+                  type="button"
+                  onClick={() => navigate({ date: zonedParts(new Date().toISOString(), tz).dayKey })}
+                  className="h-7 min-w-[7.5rem] rounded-[7px] px-2 text-[12.5px] font-semibold tabular-nums text-foreground hover:bg-chip"
+                >
+                  {dateMain}{yearLabel ? <span className="ml-1 font-normal text-faint">{yearLabel}</span> : null}
+                </button>
+                <DesktopStep label="Siguiente" onClick={() => shiftDate(isWeek ? 7 : 1)} direction="right" />
+              </div>
+              <details className="group relative">
+                <summary
+                  aria-label="Filtrar agenda"
+                  title="Filtros de profesional y estado"
+                  className="relative flex size-[34px] cursor-pointer list-none items-center justify-center rounded-[9px] border border-line bg-surface text-muted transition hover:bg-chip hover:text-foreground [&::-webkit-details-marker]:hidden"
+                >
+                  <svg aria-hidden viewBox="0 0 16 16" className="size-[15px]" fill="none" stroke="currentColor" strokeWidth="1.5">
+                    <path d="M2.5 4.5h11M4.5 8h7M6.5 11.5h3" />
+                  </svg>
+                  <span className="u-mono absolute -right-1 -top-1 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-foreground px-1 text-[9px] font-semibold text-surface">
+                    {props.staff.filter((staff) => staff.active).length}
+                  </span>
+                </summary>
+                <div className="absolute right-0 top-10 z-40 w-64 rounded-xl border border-line bg-surface p-3 shadow-[var(--shadow-card)]">
+                  <label className="block text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-faint">
+                    Profesional
+                    <select
+                      value={staffFilter}
+                      onChange={(event) => setStaffFilter(event.target.value)}
+                      className="mt-1.5 h-9 w-full rounded-lg border border-line bg-surface px-2.5 text-sm normal-case tracking-normal text-foreground"
+                    >
+                      <option value="">Todo el equipo</option>
+                      {props.staff.map((staff) => <option key={staff.id} value={staff.id}>{staff.name}</option>)}
+                    </select>
+                  </label>
+                  <label className="mt-3 block text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-faint">
+                    Estado
+                    <select
+                      value={statusFilter}
+                      onChange={(event) => setStatusFilter(event.target.value)}
+                      className="mt-1.5 h-9 w-full rounded-lg border border-line bg-surface px-2.5 text-sm normal-case tracking-normal text-foreground"
+                    >
+                      <option value="">Todos los estados</option>
+                      {STATUSES.map((status) => <option key={status} value={status}>{STATUS_LABEL[status]}</option>)}
+                    </select>
+                  </label>
+                </div>
+              </details>
+              {props.canOperate ? (
+                <button
+                  type="button"
+                  onClick={() => setModal({ mode: "new" })}
+                  className="inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-[9px] bg-ink px-[14px] text-[13px] font-semibold text-ink-fg transition-colors hover:bg-ink-hover"
+                >
+                  <span aria-hidden className="text-[15px] font-normal">＋</span>
+                  Nueva cita
+                </button>
+              ) : null}
+            </div>
+          </div>
+
+          <div className="mt-4 grid grid-cols-[2.5rem_1fr_2.5rem] items-center rounded-xl bg-chip p-1 md:hidden">
+            <button
+              type="button"
+              aria-label="Día anterior"
+              onClick={() => shiftDate(isWeek ? -7 : -1)}
+              className="flex size-10 items-center justify-center rounded-lg text-xl text-muted active:bg-surface"
+            >
+              &lsaquo;
+            </button>
+            <div className="min-w-0 text-center">
+              <p className="truncate text-sm font-semibold capitalize text-foreground">{dateMain}</p>
+              {yearLabel ? <p className="u-mono text-[0.625rem] text-faint">{yearLabel}</p> : null}
+            </div>
+            <button
+              type="button"
+              aria-label="Día siguiente"
+              onClick={() => shiftDate(isWeek ? 7 : 1)}
+              className="flex size-10 items-center justify-center rounded-lg text-xl text-muted active:bg-surface"
+            >
+              &rsaquo;
+            </button>
+          </div>
+
+          <label className="relative mt-3 block md:hidden">
+            <span className="sr-only">Buscar en la agenda</span>
+            <svg aria-hidden viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint">
+              <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.6" />
+              <path d="m16 16 4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+            </svg>
+            <input
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              placeholder="Buscar cliente, servicio o profesional…"
+              className="h-10 w-full rounded-xl border border-line bg-chip pl-9 pr-3 text-sm text-foreground outline-none focus:border-line-strong focus:bg-chip"
+            />
+          </label>
+
+          <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-0.5 md:hidden">
+            <div className="flex h-8 shrink-0 items-center rounded-lg bg-chip p-0.5">
+              <Seg active={!isWeek} onClick={() => navigate({ view: "day" })}>Día</Seg>
+              <Seg active={isWeek} onClick={() => navigate({ view: "week" })}>Semana</Seg>
+            </div>
+            {props.canOperate ? (
+              <>
+                <label className="sr-only" htmlFor="mobile-agenda-status">Estado</label>
+                <select
+                  id="mobile-agenda-status"
+                  value={statusFilter}
+                  onChange={(event) => setStatusFilter(event.target.value)}
+                  className="h-8 min-w-[7.25rem] shrink-0 rounded-lg border border-line bg-surface px-2 text-xs text-foreground"
+                >
+                  <option value="">Todos los estados</option>
+                  {STATUSES.map((status) => <option key={status} value={status}>{STATUS_LABEL[status]}</option>)}
+                </select>
+                {props.staff.length > 1 ? (
+                  <>
+                    <label className="sr-only" htmlFor="mobile-agenda-staff">Profesional</label>
+                    <select
+                      id="mobile-agenda-staff"
+                      value={staffFilter}
+                      onChange={(event) => setStaffFilter(event.target.value)}
+                      className="h-8 min-w-[7.25rem] shrink-0 rounded-lg border border-line bg-surface px-2 text-xs text-foreground"
+                    >
+                      <option value="">Todo el equipo</option>
+                      {props.staff.map((staff) => <option key={staff.id} value={staff.id}>{staff.name}</option>)}
+                    </select>
+                  </>
+                ) : null}
+              </>
+            ) : null}
+          </div>
         </div>
+
+        <div className="flex min-h-11 items-center gap-3 border-t border-line bg-surface px-4 py-2 md:hidden">
+          <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
+            <strong className="u-mono text-xs font-semibold text-foreground">{mobileRows.length}</strong>
+            <span className="text-xs text-muted">{mobileRows.length === 1 ? "cita" : "citas"}</span>
+          </span>
+          <span aria-hidden className="h-4 w-px bg-line" />
+          <span className="min-w-0 flex-1 truncate text-xs text-muted">
+            {mobileCompleted} completadas
+          </span>
+          <span className="min-w-0 shrink truncate text-right text-xs text-muted">
+            <span className="text-faint">Próxima </span>
+            <strong className="u-mono font-semibold text-foreground">
+              {nextMobileAppointment ? fmtTime(nextMobileAppointment.start_at, tz) : "—"}
+            </strong>
+          </span>
+        </div>
+
+        {props.canOperate ? (
+          <div className="grid grid-cols-2 gap-2 border-t border-line px-4 py-3 md:hidden">
+            <button type="button" onClick={() => setModal({ mode: "walkin" })} className={OUTLINE_CLS}>
+              Sin cita
+            </button>
+            <button
+              type="button"
+              onClick={() => setModal({ mode: "new" })}
+              className="inline-flex h-[var(--control-h)] items-center justify-center rounded-lg bg-ink px-3 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover"
+            >
+              Agendar cita
+            </button>
+          </div>
+        ) : null}
       </div>
 
       {/* ── CONTROL BAR ── the tools that steer the calendar: where you are (date +
              steppers), what you see (Día/Semana), and the two facets. It wraps as one
              deliberate second band on intermediate widths rather than compressing. */}
-      <div className="flex flex-wrap items-center gap-2 px-[var(--panel-pad)] py-2.5">
+      <div className="hidden flex-wrap items-center gap-2 rounded-xl border border-line bg-surface px-[var(--panel-pad)] py-2.5 shadow-[var(--shadow-card)] md:flex xl:hidden">
+        <label className="relative order-first w-full lg:w-auto lg:min-w-[17rem] lg:flex-1">
+          <span className="sr-only">Buscar en la agenda</span>
+          <svg aria-hidden viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint">
+            <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.6" />
+            <path d="m16 16 4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+          </svg>
+          <input
+            value={searchQuery}
+            onChange={(event) => setSearchQuery(event.target.value)}
+            placeholder="Buscar cliente, servicio o profesional…"
+            className="h-[var(--control-h)] w-full rounded-lg border border-line bg-chip pl-9 pr-3 text-sm text-foreground outline-none focus:border-line-strong focus:bg-chip"
+          />
+        </label>
         <button
           type="button"
           onClick={() => navigate({ date: zonedParts(new Date().toISOString(), tz).dayKey })}
@@ -602,7 +883,7 @@ export function AgendaView(props: {
              2×2 and pushing the calendar — the page's real work — below the fold.
              Below that they fall back to 2×2. The vertical padding is deliberately
              tight for the same reason: give the grid the height. ── */}
-      <div className="grid grid-cols-2 gap-2 border-b border-line px-[var(--panel-pad)] pb-3 pt-1 lg:grid-cols-4">
+      <div className="hidden">
         <Kpi
           label="Total de citas"
           unit="%"
@@ -642,9 +923,186 @@ export function AgendaView(props: {
       </div>
 
       {/* ── CALENDAR GRID + DRAWER ── */}
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]">
         <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="min-h-0 flex-1 overflow-auto">
+          <div className="hidden h-10 shrink-0 items-center gap-3 border-b border-line px-3.5 md:flex">
+            <span className="u-mono text-xs font-semibold text-foreground">{visible.length}</span>
+            <span className="text-xs text-muted">{visible.length === 1 ? "cita" : "citas"}</span>
+            {!isWeek ? (
+              <div className="ml-2 flex min-w-0 items-center gap-3 overflow-hidden">
+                {shownStaff.slice(0, 6).map((staff) => (
+                  <span key={staff.id} className="inline-flex shrink-0 items-center gap-1.5 text-[0.6875rem] text-muted">
+                    <Initial name={staff.name} />
+                    <span className="max-w-24 truncate">{staff.name}</span>
+                  </span>
+                ))}
+              </div>
+            ) : null}
+            <span className="ml-auto text-[0.6875rem] text-faint">
+              {overlapIds.size > 0 ? `${overlapIds.size} citas con solapamiento` : "Sin solapamientos"}
+            </span>
+            {!isWeek ? (
+              <div className="hidden items-center rounded-lg border border-line p-0.5 xl:flex">
+                <button
+                  type="button"
+                  onClick={() => setDesktopLayout("rows")}
+                  aria-pressed={desktopLayout === "rows"}
+                  aria-label="Agrupar por hora"
+                  className={`flex size-7 items-center justify-center rounded-md ${desktopLayout === "rows" ? "bg-foreground text-surface" : "text-muted hover:bg-chip"}`}
+                >
+                  <RowsIcon />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setDesktopLayout("columns")}
+                  aria-pressed={desktopLayout === "columns"}
+                  aria-label="Una columna por profesional"
+                  className={`flex size-7 items-center justify-center rounded-md ${desktopLayout === "columns" ? "bg-foreground text-surface" : "text-muted hover:bg-chip"}`}
+                >
+                  <ColumnsIcon />
+                </button>
+              </div>
+            ) : null}
+          </div>
+          <div className="min-h-0 flex-1 overflow-y-auto bg-canvas px-3 pb-8 pt-3 md:hidden">
+            {mobileRows.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-line-strong bg-surface px-6 py-12 text-center">
+                <span aria-hidden className="mx-auto flex size-11 items-center justify-center rounded-xl bg-chip text-xl text-muted">✓</span>
+                <p className="mt-3 text-sm font-semibold text-foreground">No hay citas en esta vista</p>
+                <p className="mx-auto mt-1 max-w-[16rem] text-xs leading-relaxed text-muted">
+                  Cuando se agende una cita aparecerá aquí en orden cronológico.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {mobileDayKeys.map((dayKey) => {
+                  const [year, month, day] = dayKey.split("-").map(Number);
+                  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+                  const dayAppointments = mobileRows.filter((appt) => zonedParts(appt.start_at, tz).dayKey === dayKey);
+                  return (
+                    <section key={dayKey} className="overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]">
+                      <div className="flex items-center justify-between border-b border-line-row bg-card px-3 py-2.5">
+                        <div className="flex items-center gap-2">
+                          <span className="u-mono flex size-8 items-center justify-center rounded-lg border border-line bg-chip text-xs font-semibold text-foreground">
+                            {day}
+                          </span>
+                          <span>
+                            <h2 className="text-xs font-semibold uppercase tracking-[0.1em] text-foreground">
+                              {ES_WEEKDAYS_UPPER[weekday]}
+                            </h2>
+                            <span className="block text-[0.625rem] capitalize text-muted">{ES_MONTHS[month - 1]} {year}</span>
+                          </span>
+                        </div>
+                        <span className="u-mono rounded-md bg-chip px-2 py-1 text-[0.625rem] text-muted">
+                          {dayAppointments.length} {dayAppointments.length === 1 ? "cita" : "citas"}
+                        </span>
+                      </div>
+                      <div className="space-y-2 p-2.5">
+                        {dayAppointments.map((appt) => {
+                          const isNext = nextMobileAppointment?.id === appt.id;
+                          return (
+                            <MobileAppointmentCard
+                              key={appt.id}
+                              appt={appt}
+                              toneClass={appointmentToneClass(appt, staffTones)}
+                              timezone={tz}
+                              attention={overlapIds.has(appt.id)}
+                              next={isNext}
+                              showStaff={props.canOperate}
+                              onOpen={() => setSelectedId(appt.id)}
+                            />
+                          );
+                        })}
+                      </div>
+                    </section>
+                  );
+                })}
+                <div className="flex items-center justify-center gap-2 py-2 text-[0.6875rem] text-faint">
+                  <span className="size-1.5 rounded-full bg-success" />
+                  Actualización automática cada 20 segundos
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* TABLET — a touch-first board. It deliberately is neither the phone
+              timeline stretched wide nor the dense desktop hour grid squeezed into
+              an iPad. Cards keep a 44px+ target and use the same real appointment
+              data/detail drawer as both neighbouring layouts. */}
+          <div className="hidden min-h-0 flex-1 overflow-y-auto bg-canvas p-4 md:block xl:hidden">
+            {mobileRows.length === 0 ? (
+              <div className="flex min-h-[22rem] items-center justify-center rounded-2xl border border-dashed border-line-strong bg-surface">
+                <div className="max-w-xs text-center">
+                  <span aria-hidden className="mx-auto flex size-12 items-center justify-center rounded-xl bg-chip text-xl text-muted">✓</span>
+                  <p className="mt-3 text-sm font-semibold text-foreground">No hay citas en esta vista</p>
+                  <p className="mt-1 text-xs leading-relaxed text-muted">Cambia la fecha, el estado o el profesional para consultar otro turno.</p>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-5">
+                {mobileDayKeys.map((dayKey) => {
+                  const [year, month, day] = dayKey.split("-").map(Number);
+                  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
+                  const dayAppointments = mobileRows.filter((appt) => zonedParts(appt.start_at, tz).dayKey === dayKey);
+                  return (
+                    <section key={dayKey} className="overflow-hidden rounded-2xl border border-line bg-surface shadow-[0_1px_2px_rgba(18,21,27,0.04)]">
+                      <div className="flex items-center justify-between border-b border-line bg-canvas/50 px-4 py-3">
+                        <div className="flex items-center gap-3">
+                          <span className="u-mono flex size-10 items-center justify-center rounded-xl bg-foreground text-sm font-semibold text-surface">{day}</span>
+                          <span>
+                            <h2 className="text-sm font-semibold text-foreground">{ES_WEEKDAYS_UPPER[weekday]}</h2>
+                            <span className="text-xs capitalize text-muted">{ES_MONTHS[month - 1]} {year}</span>
+                          </span>
+                        </div>
+                        <span className="u-mono rounded-full bg-chip px-2.5 py-1 text-[0.6875rem] text-muted">
+                          {dayAppointments.length} {dayAppointments.length === 1 ? "cita" : "citas"}
+                        </span>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-2.5 p-3">
+                        {dayAppointments.map((appt) => {
+                          const isNext = nextMobileAppointment?.id === appt.id;
+                          return (
+                            <MobileAppointmentCard
+                              key={appt.id}
+                              appt={appt}
+                              toneClass={appointmentToneClass(appt, staffTones)}
+                              timezone={tz}
+                              attention={overlapIds.has(appt.id)}
+                              next={isNext}
+                              showStaff={props.canOperate}
+                              roomy
+                              onOpen={() => setSelectedId(appt.id)}
+                            />
+                          );
+                        })}
+                      </div>
+                    </section>
+                  );
+                })}
+                <div className="flex items-center justify-center gap-2 py-1 text-[0.6875rem] text-faint">
+                  <span className="size-1.5 rounded-full bg-success" />
+                  Actualización automática cada 20 segundos
+                </div>
+              </div>
+            )}
+          </div>
+
+          {!isWeek && desktopLayout === "rows" ? (
+            <DesktopHourRows
+              appointments={mobileRows}
+              staffTones={staffTones}
+              hours={hours}
+              timezone={tz}
+              overlapIds={overlapIds}
+              canOperate={props.canOperate}
+              onOpen={setSelectedId}
+              onBook={() => setModal({ mode: "new" })}
+            />
+          ) : null}
+
+          {isWeek || desktopLayout === "columns" ? (
+          <div className="hidden min-h-0 flex-1 overflow-auto xl:block">
             {/* min-w-full (NOT min-w-max) is what lets the lanes BREATHE: the row is
                 at least as wide as the viewport, the lanes divide it evenly, and
                 only their own min-width can push the row past it — at which point
@@ -765,6 +1223,7 @@ export function AgendaView(props: {
                           <ApptCard
                             key={a.id}
                             appt={a}
+                            toneClass={appointmentToneClass(a, staffTones)}
                             tz={tz}
                             top={offsetTop(startMin)}
                             height={Math.max(22, ((endMin - startMin) / 60) * HOUR_PX - 2)}
@@ -804,6 +1263,7 @@ export function AgendaView(props: {
               </div>
             </div>
           </div>
+          ) : null}
         </section>
 
         {selected ? (
@@ -814,6 +1274,7 @@ export function AgendaView(props: {
             contactsBase={props.contactsBase}
             inboxBase={props.inboxBase}
             fromQS={fromQS}
+            canOperate={props.canOperate}
             onClose={() => setSelectedId(null)}
             onReschedule={() => setModal({ mode: "reschedule", appt: selected })}
             onConfirm={() => run(() => confirmAppointmentAction(props.clientId, selected.id))}
@@ -825,7 +1286,7 @@ export function AgendaView(props: {
       </div>
       </PageShell>
 
-      {modal ? (
+      {modal && props.canOperate ? (
         <AppointmentModal
           {...props}
           modal={modal}
@@ -845,6 +1306,226 @@ export function AgendaView(props: {
 }
 
 // ── Small presentational pieces ───────────────────────────────────────────────
+
+function DesktopHourRows({
+  appointments,
+  staffTones,
+  hours,
+  timezone,
+  overlapIds,
+  canOperate,
+  onOpen,
+  onBook,
+}: {
+  appointments: Appt[];
+  staffTones: ReadonlyMap<string, StaffTone>;
+  hours: number[];
+  timezone: string;
+  overlapIds: Set<string>;
+  canOperate: boolean;
+  onOpen: (id: string) => void;
+  onBook: () => void;
+}) {
+  return (
+    <div className="hidden min-h-0 flex-1 overflow-y-auto bg-surface xl:block">
+      {hours.map((hour) => {
+        const inHour = appointments.filter((appt) => zonedParts(appt.start_at, timezone).h === hour);
+        return (
+          <div key={hour} className="grid min-h-[6.1rem] grid-cols-[minmax(0,1fr)_4.75rem] border-b border-line last:border-b-0">
+            <div className="min-w-0 p-2.5">
+              {inHour.length > 0 ? (
+                <div className="grid h-full grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] gap-2">
+                  {inHour.map((appt) => {
+                    const overlapping = overlapIds.has(appt.id);
+                    return (
+                      <button
+                        key={appt.id}
+                        type="button"
+                        onClick={() => onOpen(appt.id)}
+                        className={`u-appt ${appointmentToneClass(appt, staffTones)} group flex min-h-[4.9rem] min-w-0 items-stretch overflow-hidden rounded-lg text-left transition hover:-translate-y-px hover:shadow-sm ${
+                          appt.status === "cancelled" ? "opacity-75" : ""
+                        }`}
+                      >
+                        <span className="flex min-w-0 flex-1 flex-col justify-center px-3 py-2.5">
+                          <span className="flex items-center gap-2">
+                            <Initial name={appt.staff_name} on="card" />
+                            <span className="truncate text-sm font-semibold text-foreground">
+                              {appt.contact_name ?? "Atención sin cita"}
+                            </span>
+                            <span className="u-mono ml-auto shrink-0 text-[0.6875rem] tabular-nums text-muted">
+                              {fmtTime(appt.start_at, timezone)}
+                            </span>
+                          </span>
+                          <span className="u-appt-ink mt-1 truncate text-xs">
+                            {appt.service_name} · {appt.duration_min} min
+                          </span>
+                          <span className="mt-1 flex items-center gap-2">
+                            <span className="truncate text-[0.6875rem] text-muted">{appt.staff_name ?? "Sin profesional"}</span>
+                            <span className="ml-auto"><MobileStatus status={appt.status} attention={overlapping} /></span>
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : canOperate ? (
+                <button
+                  type="button"
+                  onClick={onBook}
+                  className="flex h-full min-h-[4.9rem] w-full items-center justify-center gap-2 rounded-lg border border-dashed border-line text-xs text-faint transition hover:border-line-strong hover:bg-canvas/50 hover:text-foreground"
+                >
+                  <span aria-hidden className="text-base">＋</span>
+                  Agendar en esta hora
+                </button>
+              ) : (
+                <div className="flex h-full min-h-[4.9rem] items-center px-3 text-xs text-faint">Sin citas en esta hora</div>
+              )}
+            </div>
+            <div className="u-mono flex items-start justify-center border-l border-line pt-3 text-[0.6875rem] tabular-nums text-faint">
+              {String(hour).padStart(2, "0")}:00
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function RowsIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
+    </svg>
+  );
+}
+
+function ColumnsIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M4 2.5v11M8 2.5v11M12 2.5v11" />
+    </svg>
+  );
+}
+
+/**
+ * Phone and tablet deliberately share the desktop appointment grammar: the same
+ * professional pastel, hairline, avatar, typography and lifecycle chip. Only the
+ * density changes. That keeps a barber oriented when moving between a front-desk
+ * tablet and their own phone instead of teaching them a second visual language.
+ */
+function MobileAppointmentCard({
+  appt,
+  toneClass,
+  timezone,
+  attention,
+  next,
+  showStaff,
+  roomy = false,
+  onOpen,
+}: {
+  appt: Appt;
+  toneClass: string;
+  timezone: string;
+  attention: boolean;
+  next: boolean;
+  showStaff: boolean;
+  roomy?: boolean;
+  onOpen: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      aria-current={next ? "step" : undefined}
+      className={`u-appt ${toneClass} relative flex w-full items-stretch overflow-hidden rounded-lg text-left transition active:scale-[0.995] ${
+        roomy ? "min-h-[6.75rem]" : "min-h-[5.75rem]"
+      } ${next ? "ring-2 ring-brand/20" : ""} ${appt.status === "cancelled" ? "opacity-65" : ""}`}
+    >
+      <span className={`u-mono flex w-[4.4rem] shrink-0 flex-col border-r border-current/10 px-3 ${roomy ? "py-3.5" : "py-3"}`}>
+        <strong className="text-sm font-semibold tabular-nums text-foreground">{fmtTime(appt.start_at, timezone)}</strong>
+        <span className="mt-0.5 text-[0.625rem] tabular-nums text-muted">{fmtTime(appt.service_end_at, timezone)}</span>
+        <span className="mt-auto text-[0.625rem] text-faint">{appt.duration_min} min</span>
+      </span>
+
+      <span className={`flex min-w-0 flex-1 flex-col ${roomy ? "px-3.5 py-3.5" : "px-3 py-3"}`}>
+        <span className="flex min-w-0 items-center gap-2">
+          <Initial name={appt.staff_name} on="card" />
+          <strong className="min-w-0 flex-1 truncate text-[0.875rem] font-semibold text-foreground">
+            {appt.contact_name ?? "Atención sin cita"}
+          </strong>
+          <span aria-hidden className="shrink-0 text-sm text-muted">›</span>
+        </span>
+        <span className="u-appt-ink mt-1 truncate text-xs">{appt.service_name}</span>
+        <span className="mt-auto flex min-w-0 items-center gap-2 pt-2">
+          {showStaff ? <span className="min-w-0 flex-1 truncate text-[0.6875rem] text-muted">{appt.staff_name ?? "Sin asignar"}</span> : <span className="flex-1" />}
+          <MobileStatus status={appt.status} attention={attention} />
+        </span>
+        {next ? (
+          <span className="mt-2 border-t border-current/10 pt-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.1em] text-brand">
+            Próxima cita
+          </span>
+        ) : null}
+      </span>
+    </button>
+  );
+}
+
+function MobileStatus({ status, attention }: { status: string; attention: boolean }) {
+  const label = attention ? "Revisar" : STATUS_LABEL[status] ?? status;
+  const tone = attention
+    ? "border-warn/30 bg-warn/10 text-warn"
+    : status === "completed"
+      ? "border-success/30 bg-success/10 text-success"
+      : status === "cancelled" || status === "no_show"
+        ? "border-danger/30 bg-danger/10 text-danger"
+        : status === "confirmed"
+          ? "border-success/25 bg-success/8 text-success"
+          : "border-line bg-surface/70 text-muted";
+
+  return (
+    <span className={`inline-flex h-6 shrink-0 items-center rounded-full border px-2 text-[0.625rem] font-semibold ${tone}`}>
+      {label}
+    </span>
+  );
+}
+
+function DesktopSeg({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={`flex h-7 items-center rounded-[7px] px-3 text-[12.5px] font-medium transition-colors ${
+        active ? "bg-foreground text-surface" : "text-muted hover:text-foreground"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function DesktopStep({
+  label,
+  onClick,
+  direction,
+}: {
+  label: string;
+  onClick: () => void;
+  direction: "left" | "right";
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={label}
+      className="flex size-7 items-center justify-center rounded-[7px] text-muted transition-colors hover:bg-chip hover:text-foreground"
+    >
+      <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
+        <path d={direction === "left" ? "M9.8 3.5 5.3 8l4.5 4.5" : "M6.2 3.5 10.7 8l-4.5 4.5"} />
+      </svg>
+    </button>
+  );
+}
 
 function IconBtn({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
   return (
@@ -883,7 +1564,7 @@ function Seg({
       title={title}
       className={`rounded-md px-3 py-1 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
         active
-          ? "border border-line bg-surface font-semibold text-brand"
+          ? "bg-foreground font-semibold text-surface"
           : "font-medium text-muted hover:text-foreground"
       }`}
     >
@@ -1038,15 +1719,14 @@ function Initial({ name, muted, on }: { name: string | null; muted?: boolean; on
 }
 
 /**
- * One appointment, painted by CATEGORY (see lib/agendaCategory.ts): a soft family
- * FILL, a 3px saturated LEFT RULE of the same family, and the service line in that
- * family's ink — a tinted block, not a white box with a stripe. State outranks
- * service: unconfirmed is the one outline card, an overlap/no-show goes red, a
- * cancelled one greys out and strikes through. Never colour alone — every state
- * also spells itself out in the meta line.
+ * One appointment, painted by PROFESSIONAL: each barber keeps a stable muted
+ * pastel across dates and layouts. State never repaints the whole card; it is
+ * written in the meta line (and in the larger layouts' status chip), so a no-show
+ * or conflict remains legible without turning the board into a field of red.
  */
 function ApptCard({
   appt,
+  toneClass,
   tz,
   top,
   height,
@@ -1055,6 +1735,7 @@ function ApptCard({
   onOpen,
 }: {
   appt: Appt;
+  toneClass: string;
   tz: string;
   top: number;
   height: number;
@@ -1064,7 +1745,7 @@ function ApptCard({
 }) {
   const unconfirmed = appt.status === "scheduled";
   const cancelled = appt.status === "cancelled";
-  const category: ApptCategory = apptCategory(appt, { attention: overlapping });
+  const category = apptCategory(appt, { attention: overlapping });
   const unassigned = category === "unassigned";
   /** Everything the card says about its STATE, in words — never colour alone. */
   const state =
@@ -1089,7 +1770,7 @@ function ApptCard({
       aria-label={`${fmtTime(appt.start_at, tz)} ${appt.contact_name ?? "Sin cita"} — ${appt.service_name}`}
       // leading-tight is load-bearing: at the default line-height the three lines
       // don't fit a short card and the service name gets cropped in half.
-      className={`u-appt ${apptCategoryClass(category)} absolute inset-x-1 overflow-hidden px-1.5 text-left leading-tight ${
+      className={`u-appt ${toneClass} absolute inset-x-1 overflow-hidden px-1.5 text-left leading-tight ${
         compact ? "py-0.5" : "py-1"
       } ${selected ? "ring-2 ring-service-purple" : ""}`}
       style={{ top, height }}
@@ -1137,6 +1818,7 @@ function ApptDrawer({
   contactsBase,
   inboxBase,
   fromQS,
+  canOperate,
   onClose,
   onReschedule,
   onConfirm,
@@ -1150,6 +1832,7 @@ function ApptDrawer({
   contactsBase: string | null;
   inboxBase: string | null;
   fromQS: string;
+  canOperate: boolean;
   onClose: () => void;
   onReschedule: () => void;
   onConfirm: () => void;
@@ -1207,7 +1890,7 @@ function ApptDrawer({
                 <span className="truncate">{appt.staff_name}</span>
               </>
             ) : null}
-            {live ? (
+            {live && canOperate ? (
               <button
                 type="button"
                 onClick={onReschedule}
@@ -1220,7 +1903,7 @@ function ApptDrawer({
           </p>
         </div>
 
-        {live ? (
+        {live && canOperate ? (
           <div className="mt-3 flex flex-wrap gap-1.5 border-t border-line pt-3">
             {appt.status === "scheduled" ? (
               <button
@@ -1274,7 +1957,7 @@ function ApptDrawer({
           {appt.contact_id && contactsBase ? (
             <Link
               href={`${contactsBase}/${appt.contact_id}${fromQS}`}
-              className="inline-flex h-9 items-center justify-center rounded-md bg-brand text-sm font-medium text-white transition-opacity hover:opacity-90"
+              className="inline-flex h-9 items-center justify-center rounded-md bg-ink text-sm font-medium text-ink-fg transition-colors hover:bg-ink-hover"
             >
               Abrir contacto &#8599;
             </Link>
@@ -1287,7 +1970,7 @@ function ApptDrawer({
               Ver conversación
             </Link>
           ) : null}
-          {live ? (
+          {live && canOperate ? (
             <button
               type="button"
               onClick={onCancel}
@@ -1571,7 +2254,7 @@ function AppointmentModal(props: {
             <button onClick={props.onClose} className="rounded-lg border border-line-strong px-3 py-1.5 text-sm hover:bg-subtle">
               Cancelar
             </button>
-            <button onClick={submit} disabled={pending || !slotStart} className="rounded-lg bg-accent px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50">
+            <button onClick={submit} disabled={pending || !slotStart} className="rounded-lg bg-ink px-3 py-1.5 text-sm font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50">
               {pending ? "Guardando…" : isReschedule ? "Reagendar" : "Agendar"}
             </button>
           </div>
