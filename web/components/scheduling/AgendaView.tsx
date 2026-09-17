@@ -158,11 +158,76 @@ function gmtLabel(tz: string): string {
   return name ?? tz;
 }
 const minutesOf = (p: { h: number; m: number }) => p.h * 60 + p.m;
+const clockMinutes = (clock: string) => {
+  const [hour, minute] = clock.split(":").map(Number);
+  return hour * 60 + minute;
+};
 /** YYYY-MM-DD arithmetic that never touches the local timezone. */
 function addDays(dateStr: string, days: number): string {
   const [y, m, d] = dateStr.split("-").map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d + days));
   return `${dt.getUTCFullYear()}-${String(dt.getUTCMonth() + 1).padStart(2, "0")}-${String(dt.getUTCDate()).padStart(2, "0")}`;
+}
+
+/** Local midnight for a YYYY-MM-DD in an IANA timezone, returned as a UTC ISO.
+ * Two passes cover DST boundaries without making this client component depend on
+ * the worker package. */
+function siteMidnightIso(dayKey: string, timeZone: string): string {
+  const [year, month, day] = dayKey.split("-").map(Number);
+  const naive = Date.UTC(year, month - 1, day, 0, 0, 0);
+  const offsetAt = (instant: number) => {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hourCycle: "h23",
+    }).formatToParts(new Date(instant));
+    const get = (type: string) => Number(parts.find((part) => part.type === type)?.value ?? 0);
+    return Date.UTC(get("year"), get("month") - 1, get("day"), get("hour"), get("minute"), get("second")) - instant;
+  };
+  const first = naive - offsetAt(naive);
+  return new Date(naive - offsetAt(first)).toISOString();
+}
+
+function shiftMonth(monthKey: string, delta: number): string {
+  const [year, month] = monthKey.split("-").map(Number);
+  const date = new Date(Date.UTC(year, month - 1 + delta, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+/** YYYY-MM-DD for an instant as seen at the scheduling site. Availability is
+ * returned as UTC instants, while every calendar bucket is a site-local day. */
+function siteDayKey(iso: string, timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date(iso));
+  const get = (type: string) => parts.find((part) => part.type === type)?.value ?? "";
+  return `${get("year")}-${get("month")}-${get("day")}`;
+}
+
+function todayAtSite(timeZone: string): string {
+  return siteDayKey(new Date().toISOString(), timeZone);
+}
+
+function calendarDays(monthKey: string): Array<{ key: string; day: number; inMonth: boolean }> {
+  const first = `${monthKey}-01`;
+  const [year, month] = monthKey.split("-").map(Number);
+  const sundayIndex = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
+  const mondayOffset = (sundayIndex + 6) % 7;
+  const start = addDays(first, -mondayOffset);
+  const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  const cellCount = Math.ceil((mondayOffset + daysInMonth) / 7) * 7;
+  return Array.from({ length: cellCount }, (_, index) => {
+    const key = addDays(start, index);
+    return { key, day: Number(key.slice(8, 10)), inMonth: key.startsWith(monthKey) };
+  });
 }
 
 // ── Opening hours. The weekday keys are the model's own ("sun".."sat", see
@@ -186,6 +251,82 @@ const opensOn = (h: WeeklyHours | undefined, wd: string) => (h?.[wd]?.length ?? 
 function staffWorksOn(staffHours: WeeklyHours | undefined, siteHours: WeeklyHours, wd: string): boolean {
   if (!hasAnyHours(siteHours)) return true;
   return opensOn(hasAnyHours(staffHours) ? staffHours : siteHours, wd);
+}
+
+interface WeekLane {
+  lane: number;
+  laneCount: number;
+}
+
+interface WeekOverflow {
+  key: string;
+  startAt: string;
+  appointments: Appt[];
+}
+
+interface WeekLayout {
+  lanes: Map<string, WeekLane>;
+  overflow: WeekOverflow[];
+}
+
+/**
+ * Split appointments that collide inside ONE day into horizontal lanes. The old
+ * weekly grid positioned every card at inset-x-1, so simultaneous bookings painted
+ * directly on top of each other. Connected overlap clusters share a lane count;
+ * appointments that merely touch (one ends exactly when the next starts) do not.
+ */
+function layoutWeekAppointments(appointments: Appt[]): WeekLayout {
+  const sorted = [...appointments].sort(
+    (a, b) => Date.parse(a.start_at) - Date.parse(b.start_at) || Date.parse(a.service_end_at) - Date.parse(b.service_end_at),
+  );
+  const lanes = new Map<string, WeekLane>();
+  const overflow: WeekOverflow[] = [];
+  let cluster: Appt[] = [];
+  let clusterEnd = Number.NEGATIVE_INFINITY;
+
+  const flush = () => {
+    if (cluster.length === 0) return;
+    const laneEnds: number[] = [];
+    const assignments: Array<{ appt: Appt; lane: number }> = [];
+    for (const appt of cluster) {
+      const start = Date.parse(appt.start_at);
+      const end = Date.parse(appt.service_end_at);
+      let lane = laneEnds.findIndex((laneEnd) => laneEnd <= start);
+      if (lane === -1) lane = laneEnds.length;
+      laneEnds[lane] = end;
+      assignments.push({ appt, lane });
+    }
+    const visibleLaneCount = Math.min(2, laneEnds.length);
+    const hiddenByStart = new Map<string, Appt[]>();
+    for (const assignment of assignments) {
+      if (assignment.lane < 2) {
+        lanes.set(assignment.appt.id, { lane: assignment.lane, laneCount: visibleLaneCount });
+        continue;
+      }
+      const hidden = hiddenByStart.get(assignment.appt.start_at) ?? [];
+      hidden.push(assignment.appt);
+      hiddenByStart.set(assignment.appt.start_at, hidden);
+    }
+    for (const [startAt, hidden] of hiddenByStart) {
+      overflow.push({
+        key: hidden.map((appt) => appt.id).join(":"),
+        startAt,
+        appointments: hidden,
+      });
+    }
+    cluster = [];
+    clusterEnd = Number.NEGATIVE_INFINITY;
+  };
+
+  for (const appt of sorted) {
+    const start = Date.parse(appt.start_at);
+    const end = Date.parse(appt.service_end_at);
+    if (cluster.length > 0 && start >= clusterEnd) flush();
+    cluster.push(appt);
+    clusterEnd = Math.max(clusterEnd, end);
+  }
+  flush();
+  return { lanes, overflow };
 }
 
 /**
@@ -279,11 +420,15 @@ export function AgendaView(props: {
   const [modal, setModal] = useState<ModalState | null>(initialModal);
   /** The appointment open in the side drawer (never a modal — the grid stays visible). */
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  /** Appointments intentionally collapsed behind a weekly "+N más" indicator. */
+  const [weekOverflow, setWeekOverflow] = useState<Appt[] | null>(null);
   /** Client-side facets over the ALREADY loaded range. */
   const [statusFilter, setStatusFilter] = useState("");
   const [staffFilter, setStaffFilter] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
-  const [desktopLayout, setDesktopLayout] = useState<"rows" | "columns">("rows");
+  // Day view opens in the staff-column layout: it is the fastest way for reception
+  // to see each professional's availability. The compact row list remains one click away.
+  const [desktopLayout, setDesktopLayout] = useState<"rows" | "columns">("columns");
   const searchRef = useRef<HTMLInputElement>(null);
   const staffTones = useMemo(
     () => new Map<string, StaffTone>(props.staff.map((staff, index) => [staff.id, STAFF_APPT_TONES[index % STAFF_APPT_TONES.length]])),
@@ -318,13 +463,13 @@ export function AgendaView(props: {
       if (!(e.metaKey || e.ctrlKey) || e.key.toLowerCase() !== "a") return;
       const el = e.target as HTMLElement | null;
       if (el?.closest("input, textarea, select, [contenteditable='true']")) return;
-      if (modal) return;
+      if (modal || weekOverflow) return;
       e.preventDefault();
       setModal({ mode: "new" });
     };
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, [modal, props.canOperate]);
+  }, [modal, props.canOperate, weekOverflow]);
 
   useEffect(() => {
     const onSearchKey = (event: KeyboardEvent) => {
@@ -482,6 +627,26 @@ export function AgendaView(props: {
 
   const inColumn = (a: Appt, colKey: string) =>
     isWeek ? zonedParts(a.start_at, tz).dayKey === colKey : a.staff_id === colKey;
+
+  let weeklyOccupancy: number | null = null;
+  if (isWeek && hasAnyHours(props.openingHours)) {
+    const capacityMinutes = shownStaff
+      .filter((staff) => staff.active)
+      .reduce((total, staff) => {
+        const schedule = hasAnyHours(staff.workingHours) ? staff.workingHours : props.openingHours;
+        return total + weekDays.reduce((dayTotal, dayKey) => {
+          const ranges = schedule[weekdayKeyOf(dayKey)] ?? [];
+          return dayTotal + ranges.reduce(
+            (rangeTotal, range) => rangeTotal + Math.max(0, clockMinutes(range.end) - clockMinutes(range.start)),
+            0,
+          );
+        }, 0);
+      }, 0);
+    const bookedMinutes = visible
+      .filter((appt) => appt.status !== "cancelled")
+      .reduce((total, appt) => total + appt.duration_min, 0);
+    if (capacityMinutes > 0) weeklyOccupancy = Math.min(100, Math.round((bookedMinutes / capacityMinutes) * 100));
+  }
 
   const selected = selectedId ? props.appointments.find((a) => a.id === selectedId) ?? null : null;
   /**
@@ -928,17 +1093,23 @@ export function AgendaView(props: {
           <div className="hidden h-10 shrink-0 items-center gap-3 border-b border-line px-3.5 md:flex">
             <span className="u-mono text-xs font-semibold text-foreground">{visible.length}</span>
             <span className="text-xs text-muted">{visible.length === 1 ? "cita" : "citas"}</span>
-            {!isWeek ? (
-              <div className="ml-2 flex min-w-0 items-center gap-3 overflow-hidden">
-                {shownStaff.slice(0, 6).map((staff) => (
-                  <span key={staff.id} className="inline-flex shrink-0 items-center gap-1.5 text-[0.6875rem] text-muted">
+            <div className="ml-2 flex min-w-0 items-center gap-3 overflow-hidden">
+              {shownStaff.slice(0, 6).map((staff) => (
+                <span key={staff.id} className="inline-flex shrink-0 items-center gap-1.5 text-[0.6875rem] text-muted">
+                  {isWeek ? (
+                    <span
+                      aria-hidden
+                      className={`u-appt-swatch ${staffTones.get(staff.id) ?? STAFF_APPT_TONES[0]} size-3 rounded-[3px]`}
+                    />
+                  ) : (
                     <Initial name={staff.name} />
-                    <span className="max-w-24 truncate">{staff.name}</span>
-                  </span>
-                ))}
-              </div>
-            ) : null}
+                  )}
+                  <span className="max-w-24 truncate">{staff.name}</span>
+                </span>
+              ))}
+            </div>
             <span className="ml-auto text-[0.6875rem] text-faint">
+              {isWeek && weeklyOccupancy !== null ? `Ocupación semanal ${weeklyOccupancy}% · ` : ""}
               {overlapIds.size > 0 ? `${overlapIds.size} citas con solapamiento` : "Sin solapamientos"}
             </span>
             {!isWeek ? (
@@ -1108,7 +1279,9 @@ export function AgendaView(props: {
                 only their own min-width can push the row past it — at which point
                 this scroller takes over horizontally. */}
             <div className="flex min-w-full">
-              {/* Hour rail */}
+              {/* DAY keeps the time rail at the left, beside the professional lanes.
+                  WEEK mirrors the reference and puts it on the right (below). */}
+              {!isWeek ? (
               <div className="sticky left-0 z-20 w-14 shrink-0 border-r border-line bg-surface">
                 <div className="flex h-12 items-end justify-center border-b border-line pb-1">
                   <span className="u-mono text-[0.625rem] text-faintest">{gmtLabel(tz)}</span>
@@ -1137,9 +1310,16 @@ export function AgendaView(props: {
                   ) : null}
                 </div>
               </div>
+              ) : null}
 
               {/* Columns */}
-              {columns.map((col) => (
+              {columns.map((col) => {
+                const columnAppointments = visible.filter((appt) => inColumn(appt, col.key));
+                const weekLayout = isWeek ? layoutWeekAppointments(columnAppointments) : null;
+                const renderedAppointments = weekLayout
+                  ? columnAppointments.filter((appt) => weekLayout.lanes.has(appt.id))
+                  : columnAppointments;
+                return (
                 <div
                   key={col.key}
                   // GROW to fill, but never past a comfortable reading width and
@@ -1154,33 +1334,43 @@ export function AgendaView(props: {
                   }`}
                 >
                   <div
-                    className={`sticky top-0 z-10 flex h-12 items-center gap-2 border-b border-line px-2 ${
-                      col.closed ? "bg-closed-bg" : "bg-surface"
-                    }`}
+                    className={`sticky top-0 z-10 flex h-12 items-center border-b border-line px-2 ${
+                      col.closed ? "bg-closed-bg" : col.isToday && isWeek ? "bg-chip/70" : "bg-surface"
+                    } ${isWeek ? "justify-center" : "gap-2"}`}
                   >
-                    {col.dayNum ? (
-                      // Today's date sits in a filled badge, as in the reference.
-                      <span
-                        className={`u-mono flex size-7 shrink-0 items-center justify-center rounded-md text-sm font-semibold ${
-                          col.isToday ? "bg-brand text-white" : col.closed ? "text-closed-fg" : "text-foreground"
-                        }`}
-                      >
-                        {col.dayNum}
-                      </span>
-                    ) : null}
-                    {col.initial ? <Initial name={col.initial} muted={col.closed} /> : null}
-                    <span className="flex min-w-0 flex-col leading-tight">
-                      <span
-                        className={`truncate text-xs font-semibold ${col.closed ? "text-closed-fg" : "text-foreground"}`}
-                      >
-                        {col.label}
-                      </span>
-                      {col.sub ? (
-                        <span className={`truncate text-[0.625rem] ${col.closed ? "text-closed-fg" : "text-faint"}`}>
-                          {col.sub}
+                    {isWeek && col.dayNum ? (
+                      <span className="flex min-w-0 flex-col items-center justify-center leading-none">
+                        <span className={`text-[0.6875rem] font-medium capitalize ${col.closed ? "text-closed-fg" : "text-muted"}`}>
+                          {col.label.toLocaleLowerCase("es")}
                         </span>
-                      ) : null}
-                    </span>
+                        <span
+                          className={`u-mono mt-0.5 flex h-5 min-w-5 items-center justify-center rounded-md px-1 text-sm font-semibold ${
+                            col.isToday ? "bg-foreground text-surface" : col.closed ? "text-closed-fg" : "text-foreground"
+                          }`}
+                        >
+                          {col.dayNum}
+                        </span>
+                        {col.sub ? (
+                          <span className={`mt-0.5 truncate text-[0.5625rem] ${col.closed ? "text-closed-fg" : "text-faint"}`}>
+                            {col.sub}
+                          </span>
+                        ) : null}
+                      </span>
+                    ) : (
+                      <>
+                        {col.initial ? <Initial name={col.initial} muted={col.closed} /> : null}
+                        <span className="flex min-w-0 flex-col leading-tight">
+                          <span className={`truncate text-xs font-semibold ${col.closed ? "text-closed-fg" : "text-foreground"}`}>
+                            {col.label}
+                          </span>
+                          {col.sub ? (
+                            <span className={`truncate text-[0.625rem] ${col.closed ? "text-closed-fg" : "text-faint"}`}>
+                              {col.sub}
+                            </span>
+                          ) : null}
+                        </span>
+                      </>
+                    )}
                     {col.inactive ? (
                       <span
                         title="Este profesional está inactivo — sus citas existentes siguen visibles aquí, pero no puede recibir nuevas reservas. Reactívalo en la configuración de Agenda."
@@ -1210,9 +1400,7 @@ export function AgendaView(props: {
                         style={{ top: offsetTop(minutesOf(nowParts)) }}
                       />
                     ) : null}
-                    {visible
-                      .filter((a) => inColumn(a, col.key))
-                      .map((a) => {
+                    {renderedAppointments.map((a) => {
                         // Clamp to the operating window so an out-of-hours booking
                         // still renders (at the edge) instead of drawing off-grid.
                         const lo = fromHour * 60;
@@ -1227,15 +1415,36 @@ export function AgendaView(props: {
                             tz={tz}
                             top={offsetTop(startMin)}
                             height={Math.max(22, ((endMin - startMin) / 60) * HOUR_PX - 2)}
+                            week={isWeek}
+                            weekLane={weekLayout?.lanes.get(a.id)}
                             overlapping={overlapIds.has(a.id)}
                             selected={a.id === selectedId}
                             onOpen={() => setSelectedId(a.id)}
                           />
                         );
                       })}
+                    {weekLayout?.overflow.map((group) => {
+                      const startMin = Math.min(
+                        Math.max(minutesOf(zonedParts(group.startAt, tz)), fromHour * 60),
+                        toHour * 60,
+                      );
+                      return (
+                        <button
+                          key={group.key}
+                          type="button"
+                          aria-label={`Ver ${group.appointments.length} cita${group.appointments.length === 1 ? "" : "s"} adicional${group.appointments.length === 1 ? "" : "es"} a las ${fmtTime(group.startAt, tz)}`}
+                          onClick={() => setWeekOverflow(group.appointments)}
+                          className="absolute right-1 z-20 inline-flex h-6 items-center rounded-full bg-foreground px-2 text-[0.625rem] font-semibold text-background shadow-sm transition hover:-translate-y-px hover:shadow-md"
+                          style={{ top: offsetTop(startMin) + 3 }}
+                        >
+                          +{group.appointments.length} más
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
-              ))}
+                );
+              })}
 
               {/* EMPTY TAIL. With one or two barbers the lanes hit their max-width
                   and leave slack; this carries the hour lines across it so the
@@ -1261,6 +1470,30 @@ export function AgendaView(props: {
                   ) : null}
                 </div>
               </div>
+
+              {isWeek ? (
+                <div className="sticky right-0 z-20 w-14 shrink-0 border-l border-line bg-surface">
+                  <div className="h-12 border-b border-line" />
+                  <div className="relative" style={{ height: bodyHeight }}>
+                    {hours.map((hour) => (
+                      <div key={hour} className="absolute left-2 -translate-y-1/2" style={{ top: offsetTop(hour * 60) }}>
+                        <span className="u-mono text-[0.625rem] text-faint">{`${String(hour).padStart(2, "0")}:00`}</span>
+                      </div>
+                    ))}
+                    {nowVisible ? (
+                      <div
+                        aria-hidden
+                        className="absolute left-0 -translate-x-full -translate-y-1/2 rounded-l bg-brand px-1.5 py-px"
+                        style={{ top: offsetTop(minutesOf(nowParts)) }}
+                      >
+                        <span className="u-mono text-[0.5625rem] font-semibold text-white">
+                          {String(nowParts.h).padStart(2, "0")}:{String(nowParts.m).padStart(2, "0")}
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              ) : null}
             </div>
           </div>
           ) : null}
@@ -1298,6 +1531,20 @@ export function AgendaView(props: {
             // appointment is visible in context; otherwise just refresh the agenda.
             if (props.returnContactId) router.push(`/clients/${props.clientId}/contacts/${props.returnContactId}`);
             else router.refresh();
+          }}
+        />
+      ) : null}
+
+      {weekOverflow ? (
+        <WeekOverflowDialog
+          appointments={weekOverflow}
+          timezone={tz}
+          staffTones={staffTones}
+          overlapIds={overlapIds}
+          onClose={() => setWeekOverflow(null)}
+          onSelect={(appointmentId) => {
+            setWeekOverflow(null);
+            setSelectedId(appointmentId);
           }}
         />
       ) : null}
@@ -1404,6 +1651,82 @@ function ColumnsIcon() {
     <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.5">
       <path d="M4 2.5v11M8 2.5v11M12 2.5v11" />
     </svg>
+  );
+}
+
+/**
+ * A weekly day never shrinks beyond two readable lanes. Extra simultaneous
+ * appointments live here: the "+N más" marker opens this compact chooser and a
+ * choice continues into the ordinary appointment drawer.
+ */
+function WeekOverflowDialog({
+  appointments,
+  timezone,
+  staffTones,
+  overlapIds,
+  onClose,
+  onSelect,
+}: {
+  appointments: Appt[];
+  timezone: string;
+  staffTones: ReadonlyMap<string, StaffTone>;
+  overlapIds: Set<string>;
+  onClose: () => void;
+  onSelect: (appointmentId: string) => void;
+}) {
+  const panelRef = useTrappedPanel({ active: true, onClose });
+  const start = appointments[0]?.start_at;
+  const title = start ? `Más citas a las ${fmtTime(start, timezone)}` : "Más citas";
+
+  return (
+    <>
+      <button type="button" aria-label="Cerrar lista de citas" className={OVERLAY_SCRIM} onClick={onClose} />
+      <section
+        ref={panelRef as RefObject<HTMLElement>}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="week-overflow-title"
+        tabIndex={-1}
+        className="fixed left-1/2 top-1/2 z-50 flex max-h-[min(32rem,80vh)] w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]"
+      >
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-4 py-3">
+          <div className="min-w-0">
+            <h2 id="week-overflow-title" className="truncate text-sm font-semibold text-foreground">{title}</h2>
+            <p className="mt-0.5 text-xs text-muted">
+              {appointments.length} cita{appointments.length === 1 ? "" : "s"} adicional{appointments.length === 1 ? "" : "es"}
+            </p>
+          </div>
+          <button type="button" onClick={onClose} aria-label="Cerrar" className="u-tap text-muted hover:text-foreground">
+            &#10005;
+          </button>
+        </header>
+        <div className="min-h-0 space-y-2 overflow-y-auto p-3">
+          {appointments.map((appt) => {
+            const overlapping = overlapIds.has(appt.id);
+            return (
+              <button
+                key={appt.id}
+                type="button"
+                onClick={() => onSelect(appt.id)}
+                className={`u-appt ${appointmentToneClass(appt, staffTones)} flex w-full min-w-0 items-center gap-3 rounded-lg px-3 py-2.5 text-left transition hover:-translate-y-px hover:shadow-sm`}
+              >
+                <Initial name={appt.staff_name} on="card" />
+                <span className="min-w-0 flex-1">
+                  <strong className="block truncate text-sm font-semibold text-foreground">{appt.service_name}</strong>
+                  <span className="block truncate text-xs text-muted">{appt.contact_name ?? "Atención sin cita"}</span>
+                </span>
+                <span className="shrink-0 text-right">
+                  <span className="u-mono block text-xs font-semibold text-foreground">{fmtTime(appt.start_at, timezone)}</span>
+                  <span className="block text-[0.625rem] text-muted">
+                    {overlapping ? "Revisar" : STATUS_LABEL[appt.status] ?? appt.status}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      </section>
+    </>
   );
 }
 
@@ -1730,6 +2053,8 @@ function ApptCard({
   tz,
   top,
   height,
+  week = false,
+  weekLane,
   overlapping,
   selected,
   onOpen,
@@ -1739,6 +2064,8 @@ function ApptCard({
   tz: string;
   top: number;
   height: number;
+  week?: boolean;
+  weekLane?: WeekLane;
   overlapping: boolean;
   selected: boolean;
   onOpen: () => void;
@@ -1763,43 +2090,74 @@ function ApptCard({
    *  larger, more legible type (time 10px / name 12px / service 11px): three of those
    *  lines only fit once the card is ~48px (≈50 min) tall. */
   const compact = height < 48;
+  const weekCompact = height < 44;
+  const lane = weekLane?.lane ?? 0;
+  const laneCount = weekLane?.laneCount ?? 1;
   return (
     <button
       type="button"
       onClick={onOpen}
-      aria-label={`${fmtTime(appt.start_at, tz)} ${appt.contact_name ?? "Sin cita"} — ${appt.service_name}`}
+      aria-label={`${fmtTime(appt.start_at, tz)} ${appt.contact_name ?? "Sin cita"} — ${appt.service_name} — ${STATUS_LABEL[appt.status] ?? appt.status}${overlapping ? " — solapamiento" : ""}`}
       // leading-tight is load-bearing: at the default line-height the three lines
       // don't fit a short card and the service name gets cropped in half.
-      className={`u-appt ${toneClass} absolute inset-x-1 overflow-hidden px-1.5 text-left leading-tight ${
+      className={`u-appt ${toneClass} absolute overflow-hidden px-1.5 text-left leading-tight ${
         compact ? "py-0.5" : "py-1"
       } ${selected ? "ring-2 ring-service-purple" : ""}`}
-      style={{ top, height }}
+      style={{
+        top,
+        height,
+        left: week ? `calc(${(lane / laneCount) * 100}% + 3px)` : "4px",
+        width: week ? `calc(${100 / laneCount}% - 6px)` : "calc(100% - 8px)",
+      }}
     >
-      <span className="flex items-start justify-between gap-1">
-        <span className="u-appt-ink u-mono truncate text-[10px]">
-          {fmtTime(appt.start_at, tz)} — {fmtTime(appt.service_end_at, tz)}
-          {compact ? state : ""}
+      {week ? (
+        <span className="flex h-full min-w-0 flex-col">
+          <strong className={`block truncate text-[11px] font-semibold ${cancelled ? "line-through" : ""}`}>
+            {appt.service_name}
+          </strong>
+          <span className="block truncate text-[10px] text-muted">{appt.contact_name ?? "Atención sin cita"}</span>
+          {!weekCompact ? (
+            <span className="mt-auto flex min-w-0 items-center gap-1 pt-0.5">
+              {unassigned ? (
+                <span aria-hidden className="flex size-4 shrink-0 items-center justify-center rounded-full bg-brand text-[9px] font-semibold text-white">?</span>
+              ) : (
+                <Initial name={appt.staff_name} on="card" />
+              )}
+              <span className="u-appt-ink u-mono min-w-0 truncate text-[9px]">
+                {fmtTime(appt.start_at, tz)}{state}
+              </span>
+            </span>
+          ) : null}
         </span>
-        {unassigned ? (
-          // Nobody is on this walk-in: a red "?" disc where the barber would be.
-          <span
-            aria-hidden
-            className="flex size-[1.125rem] shrink-0 items-center justify-center rounded-full bg-brand text-[0.625rem] font-semibold text-white"
-          >
-            ?
+      ) : (
+        <>
+          <span className="flex items-start justify-between gap-1">
+            <span className="u-appt-ink u-mono truncate text-[10px]">
+              {fmtTime(appt.start_at, tz)} — {fmtTime(appt.service_end_at, tz)}
+              {compact ? state : ""}
+            </span>
+            {unassigned ? (
+              // Nobody is on this walk-in: a red "?" disc where the barber would be.
+              <span
+                aria-hidden
+                className="flex size-[1.125rem] shrink-0 items-center justify-center rounded-full bg-brand text-[0.625rem] font-semibold text-white"
+              >
+                ?
+              </span>
+            ) : (
+              <Initial name={appt.staff_name} on="card" />
+            )}
           </span>
-        ) : (
-          <Initial name={appt.staff_name} on="card" />
-        )}
-      </span>
-      <span className={`block truncate text-[12px] font-semibold ${cancelled ? "line-through" : ""}`}>
-        {appt.contact_name ?? "Sin cita"}
-      </span>
-      {compact ? null : (
-        <span className="u-appt-ink block truncate text-[11px]">
-          {appt.service_name}
-          {state}
-        </span>
+          <span className={`block truncate text-[12px] font-semibold ${cancelled ? "line-through" : ""}`}>
+            {appt.contact_name ?? "Sin cita"}
+          </span>
+          {compact ? null : (
+            <span className="u-appt-ink block truncate text-[11px]">
+              {appt.service_name}
+              {state}
+            </span>
+          )}
+        </>
       )}
     </button>
   );
@@ -2015,6 +2373,8 @@ function ApptDrawer({
 function AppointmentModal(props: {
   clientId: string;
   timezone: string;
+  date: string;
+  sites: SiteOpt[];
   currentSiteId: string;
   dayStartIso: string;
   dayEndIso: string;
@@ -2028,8 +2388,11 @@ function AppointmentModal(props: {
   const isReschedule = props.modal.mode === "reschedule";
   // Booking for an existing contact (deep-link): lock identity, submit its id.
   const bookingContact = props.modal.mode !== "reschedule" ? props.modal.contact ?? null : null;
-  const [serviceId, setServiceId] = useState(props.services[0]?.id ?? "");
+  const [serviceId, setServiceId] = useState(props.modal.mode === "reschedule" ? props.modal.appt.service_id : "");
   const [staffId, setStaffId] = useState<string>("");
+  const [step, setStep] = useState<1 | 2 | 3>(isReschedule ? 2 : 1);
+  const [selectedDate, setSelectedDate] = useState(props.date);
+  const [calendarMonth, setCalendarMonth] = useState(props.date.slice(0, 7));
   const [slots, setSlots] = useState<Slot[]>([]);
   const [slotStart, setSlotStart] = useState<string>("");
   const [loadingSlots, setLoadingSlots] = useState(false);
@@ -2053,7 +2416,7 @@ function AppointmentModal(props: {
     setSearched(false);
   };
 
-  const loadSlots = async () => {
+  const loadSlots = async (nextDate = selectedDate) => {
     // Reschedule keeps the appointment's own service; "new"/"walk-in" uses the picked one.
     const effectiveServiceId = props.modal.mode === "reschedule" ? props.modal.appt.service_id : serviceId;
     if (!effectiveServiceId) return;
@@ -2063,14 +2426,16 @@ function AppointmentModal(props: {
     setSlotStart("");
     setSearched(false);
     try {
+      const nextMonth = nextDate.slice(0, 7);
+      const monthStart = `${nextMonth}-01`;
+      const monthEnd = `${shiftMonth(nextMonth, 1)}-01`;
       const params = new URLSearchParams({
         client_id: props.clientId, // the endpoint re-validates module + site↔client
         site_id: props.currentSiteId,
         service_id: effectiveServiceId,
-        from: props.dayStartIso,
-        to: props.dayEndIso,
+        from: siteMidnightIso(monthStart, props.timezone),
+        to: siteMidnightIso(monthEnd, props.timezone),
       });
-      if (staffId) params.set("staff_id", staffId);
       const res = await fetch(`/api/scheduling/internal/availability?${params.toString()}`);
       if (!res.ok) {
         props.onError("No se pudo cargar la disponibilidad.");
@@ -2124,140 +2489,418 @@ function AppointmentModal(props: {
     });
   };
 
-  const title = isReschedule
-    ? "Reagendar cita"
-    : props.modal.mode === "walkin"
-      ? "Registrar atención sin cita"
-      : bookingContact
-        ? "Agendar cita"
-        : "Nueva cita";
+  const title = step === 3
+    ? isReschedule ? "Confirmar el cambio" : "Confirmar la cita"
+    : isReschedule
+      ? "Reagendar cita"
+      : props.modal.mode === "walkin"
+        ? "Registrar atención sin cita"
+        : bookingContact
+          ? "Agendar cita"
+          : "Nueva cita";
 
-  const inputCls = "rounded-lg border border-line-strong bg-transparent px-2 py-1.5";
-  const selectCls = "rounded-lg border border-line-strong bg-transparent px-2 py-1.5";
+  const rescheduleAppt = props.modal.mode === "reschedule" ? props.modal.appt : null;
+  const inputCls = "u-focus h-11 rounded-xl border border-line-strong bg-surface px-3 text-sm outline-none placeholder:text-faint";
+  const selectedService = props.services.find((service) => service.id === (rescheduleAppt?.service_id ?? serviceId));
+  const selectedSlot = slots.find((slot) => slot.start_at === slotStart);
+  const effectiveStaffId = staffId || selectedSlot?.staff_id || rescheduleAppt?.staff_id || "";
+  const selectedStaff = props.staff.find((staff) => staff.id === effectiveStaffId);
+  const selectedSite = props.sites.find((site) => site.id === props.currentSiteId);
+  const activeStaff = props.staff.filter((staff) => staff.active);
+  const toneForStaff = (id: string): StaffTone => {
+    const index = activeStaff.findIndex((staff) => staff.id === id);
+    return STAFF_APPT_TONES[(index < 0 ? 0 : index) % STAFF_APPT_TONES.length];
+  };
+  const visibleSlots = staffId
+    ? slots.filter((slot) => siteDayKey(slot.start_at, props.timezone) === selectedDate && slot.available_staff_ids.includes(staffId))
+    : slots
+        .filter((slot) => siteDayKey(slot.start_at, props.timezone) === selectedDate)
+        .filter((slot, index, all) => all.findIndex((candidate) => candidate.start_at === slot.start_at) === index);
+  const dateValue = (() => {
+    const [year, month, day] = selectedDate.split("-").map(Number);
+    return new Date(Date.UTC(year, month - 1, day));
+  })();
+  const dateHeadlineRaw = new Intl.DateTimeFormat("es-CO", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    timeZone: "UTC",
+  }).format(dateValue).replace(",", "");
+  const dateHeadline = dateHeadlineRaw.charAt(0).toUpperCase() + dateHeadlineRaw.slice(1);
+  const shortDateLabel = new Intl.DateTimeFormat("es-CO", {
+    weekday: "short",
+    day: "numeric",
+    month: "short",
+    timeZone: "UTC",
+  }).format(dateValue).replaceAll(".", "").replace(",", "").replaceAll(" de ", " ").replace(/\bsept\b/i, "sep");
+  const monthLabel = new Intl.DateTimeFormat("es-CO", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(new Date(`${calendarMonth}-01T00:00:00Z`)).replace(" de ", " ");
+  const monthDays = calendarDays(calendarMonth);
+  const selectedDaySlots = slots.filter((slot) => siteDayKey(slot.start_at, props.timezone) === selectedDate);
+  const availabilityCount = (dayKey: string, forStaffId = staffId): number => {
+    const daySlots = slots.filter((slot) => siteDayKey(slot.start_at, props.timezone) === dayKey);
+    const eligible = forStaffId ? daySlots.filter((slot) => slot.available_staff_ids.includes(forStaffId)) : daySlots;
+    return new Set(eligible.map((slot) => slot.start_at)).size;
+  };
+  const staffAvailabilityCount = (candidateStaffId: string): number =>
+    new Set(
+      selectedDaySlots
+        .filter((slot) => slot.available_staff_ids.includes(candidateStaffId))
+        .map((slot) => slot.start_at),
+    ).size;
+  const todayKey = todayAtSite(props.timezone);
+  const clientLabel = rescheduleAppt
+    ? rescheduleAppt.contact_name ?? "Atención sin cita"
+    : (bookingContact?.contactName ?? name.trim()) || (props.modal.mode === "walkin" ? "Atención sin cita" : "");
+  const originLabel = isReschedule ? "Reagendación" : props.modal.mode === "walkin" ? "Atención sin cita" : "Mostrador";
+  const phoneLabel = (rescheduleAppt?.primary_identity ?? phone.trim()) || "—";
+  const staffInitials = (selectedStaff?.name ?? "?")
+    .replace(/^\[[^\]]+\]\s*/, "")
+    .split(/\s+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join("");
+  const stepItems = [
+    { value: 1 as const, label: "Cliente y servicio" },
+    { value: 2 as const, label: "Profesional y hora" },
+    { value: 3 as const, label: "Confirmar" },
+  ];
+
+  const changeStaff = (nextStaffId: string) => {
+    setStaffId(nextStaffId);
+    setSlotStart("");
+  };
+
+  const changeDate = (nextDate: string) => {
+    setSelectedDate(nextDate);
+    const nextMonth = nextDate.slice(0, 7);
+    const monthChanged = nextMonth !== calendarMonth;
+    setCalendarMonth(nextMonth);
+    setSlotStart("");
+    if (monthChanged) void loadSlots(nextDate);
+  };
+
+  const changeMonth = (delta: number) => {
+    const nextMonth = shiftMonth(calendarMonth, delta);
+    setCalendarMonth(nextMonth);
+    setSlotStart("");
+    void loadSlots(`${nextMonth}-01`);
+  };
+
+  const advance = () => {
+    if (step === 1) {
+      if (!serviceId) {
+        props.onError("Selecciona un servicio.");
+        return;
+      }
+      setStep(2);
+      void loadSlots();
+      return;
+    }
+    if (step === 2) {
+      if (!slotStart) {
+        props.onError("Selecciona un horario.");
+        return;
+      }
+      setStep(3);
+    }
+  };
+
+  const goBack = () => {
+    props.onError(null);
+    setStep((current) => {
+      if (current === 3) return 2;
+      if (current === 2) return isReschedule ? 2 : 1;
+      return current;
+    });
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={props.onClose}>
+    <div className="u-module-modal z-50 flex items-center justify-center bg-black/45 p-2 sm:p-4" onClick={props.onClose}>
       <div
         ref={dialogRef as RefObject<HTMLDivElement>}
         role="dialog"
         aria-modal="true"
         aria-labelledby={MODAL_TITLE_ID}
-        className="flex max-h-[90vh] w-full max-w-md flex-col overflow-y-auto rounded-xl border border-line bg-popover p-5 text-popover-foreground shadow-xl"
+        className={`flex max-h-[calc(100vh-1rem)] flex-col overflow-hidden rounded-2xl border border-line bg-popover text-popover-foreground shadow-2xl sm:max-h-[calc(100vh-2rem)] ${step === 2 ? "w-[min(94rem,calc(100vw-1rem))] sm:h-[min(52rem,calc(100vh-2rem))] sm:w-[min(94rem,calc(100vw-2rem))]" : "w-[min(70rem,calc(100vw-1rem))] sm:w-[min(70rem,calc(100vw-2rem))]"}`}
         onClick={(e) => e.stopPropagation()}
       >
-        <h2 id={MODAL_TITLE_ID} className="text-lg font-semibold">{title}</h2>
+        <header className="flex min-h-16 shrink-0 items-start gap-3 border-b border-line px-4 py-3 sm:items-center sm:px-6">
+          <h2 id={MODAL_TITLE_ID} className="shrink-0 text-lg font-semibold">{title}</h2>
+          <nav aria-label="Pasos para crear la cita" className="min-w-0 flex-1 overflow-x-auto">
+            <ol className="flex w-max items-center gap-1.5">
+              {stepItems.map((item) => {
+                const complete = item.value < step;
+                const current = item.value === step;
+                return (
+                  <li key={item.value}>
+                    <button
+                      type="button"
+                      aria-current={current ? "step" : undefined}
+                      onClick={() => {
+                        if (item.value <= step || (item.value === 3 && !!slotStart)) setStep(item.value);
+                      }}
+                      className={`inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg px-2.5 text-xs transition-colors ${current ? "bg-ink font-medium text-ink-fg" : complete ? "bg-subtle text-foreground" : "text-faint"}`}
+                    >
+                      <span className={`inline-flex size-5 items-center justify-center rounded-full text-[0.6875rem] ${complete ? "bg-success/15 text-success" : current ? "bg-ink-fg text-ink" : "bg-subtle text-faint"}`}>
+                        {complete ? "✓" : item.value}
+                      </span>
+                      {item.label}
+                    </button>
+                  </li>
+                );
+              })}
+            </ol>
+          </nav>
+          <button type="button" aria-label="Cerrar" onClick={props.onClose} className="inline-flex size-9 shrink-0 items-center justify-center rounded-lg text-xl text-muted hover:bg-subtle hover:text-foreground">×</button>
+        </header>
 
-        {/* ── Servicio y profesional ── the WHAT and WHO. Grouped and labelled so the
-              form reads as three steps, not one undifferentiated stack of controls. */}
-        <fieldset className="mt-4 flex flex-col gap-3 text-sm">
-          <legend className="u-th mb-1">Servicio y profesional</legend>
-          {!isReschedule ? (
-            <label className="flex flex-col gap-1">
-              <span className="text-xs text-muted">Servicio</span>
-              <select
-                value={serviceId}
-                onChange={(e) => {
-                  setServiceId(e.target.value);
-                  resetSlots();
-                }}
-                className={selectCls}
-              >
-                {props.services.map((s) => (
-                  <option key={s.id} value={s.id}>{s.name} ({s.duration_min}m)</option>
-                ))}
-              </select>
-            </label>
-          ) : null}
-          <label className="flex flex-col gap-1">
-            <span className="text-xs text-muted">Profesional</span>
-            <select
-              value={staffId}
-              onChange={(e) => {
-                setStaffId(e.target.value);
-                resetSlots();
-              }}
-              className={selectCls}
-            >
-              <option value="">Cualquiera</option>
-              {/* NEW bookings offer ACTIVE staff only — an inactive barber's lane is visible
-                  for history but must not be selectable for a new appointment. */}
-              {props.staff.filter((s) => s.active).map((s) => (
-                <option key={s.id} value={s.id}>{s.name}</option>
-              ))}
-            </select>
-          </label>
-        </fieldset>
+        <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] overflow-y-auto lg:overflow-hidden">
+          <main className={step === 2 ? "min-h-[32rem] lg:min-h-0 lg:overflow-hidden" : "min-h-[25rem] px-4 py-4 sm:px-6 lg:overflow-y-auto"}>
+            {step === 1 ? (
+              <section aria-labelledby="booking-client-heading" className="mx-auto max-w-5xl">
+                <p className="u-th">Paso 1 de 3</p>
+                <h3 id="booking-client-heading" className="mt-1.5 text-xl font-semibold">Cliente y servicio</h3>
+                <p className="mt-1 text-sm text-muted">Identifica al cliente y elige qué servicio desea reservar.</p>
+                <div className="mt-5 grid gap-7 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]">
+                  <div>
+                    <p className="u-th">Cliente</p>
+                    <div className="mt-3">
+                      {bookingContact ? (
+                        <div className="rounded-2xl border border-line-strong bg-subtle p-4">
+                          <span className="u-th">Cliente seleccionado</span>
+                          <p className="mt-2 text-base font-semibold">{bookingContact.contactName}</p>
+                          <p className="mt-1 text-sm text-muted">La cita quedará vinculada a este contacto.</p>
+                        </div>
+                      ) : isReschedule ? (
+                        <div className="rounded-2xl border border-line-strong bg-subtle p-4">
+                          <span className="u-th">Cliente de la cita</span>
+                          <p className="mt-2 text-base font-semibold">{clientLabel}</p>
+                        </div>
+                      ) : (
+                        <div className="grid gap-4">
+                          <label className="flex flex-col gap-1.5">
+                            <span className="text-sm font-medium">Nombre del cliente</span>
+                            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={props.modal.mode === "walkin" ? "Opcional para atención sin cita" : "Ej. Lucía Ferrer"} className={inputCls} autoFocus />
+                          </label>
+                          <div className="grid gap-4 sm:grid-cols-2">
+                            <label className="flex flex-col gap-1.5">
+                              <span className="text-sm font-medium">Teléfono</span>
+                              <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+57 300 000 0000" className={inputCls} inputMode="tel" />
+                            </label>
+                            <label className="flex flex-col gap-1.5">
+                              <span className="text-sm font-medium">Correo electrónico</span>
+                              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Opcional" className={inputCls} inputMode="email" />
+                            </label>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
 
-        {/* ── Horario ── search, then its result stated OUT LOUD: a spinner label while
-              loading, an explicit empty message when nothing comes back (never silence),
-              and the slot picker when it does. */}
-        <div className="mt-4 flex flex-col gap-2 border-t border-line pt-4 text-sm">
-          <p className="u-th">Horario</p>
-          <button
-            onClick={loadSlots}
-            disabled={loadingSlots || (!isReschedule && !serviceId)}
-            className="self-start rounded-lg border border-line-strong px-3 py-1.5 hover:bg-subtle disabled:opacity-50"
-          >
-            {loadingSlots ? "Buscando…" : "Buscar horarios"}
-          </button>
-          {loadingSlots ? (
-            <p className="text-xs text-muted">Buscando…</p>
-          ) : searched && slots.length === 0 ? (
-            <p className="rounded-lg border border-line bg-subtle px-3 py-2 text-xs text-muted">
-              No hay horarios disponibles para esta combinación.
-            </p>
-          ) : slots.length > 0 ? (
-            <div className="flex max-h-40 flex-wrap gap-1.5 overflow-y-auto">
-              {slots.map((s) => (
-                <button
-                  key={`${s.start_at}-${s.staff_id}`}
-                  onClick={() => {
-                    setSlotStart(s.start_at);
-                    if (!staffId) setStaffId(s.staff_id);
-                  }}
-                  className={`u-mono rounded-md border px-2 py-1 text-xs ${slotStart === s.start_at ? "border-accent bg-accent/10 text-accent" : "border-line hover:bg-subtle"}`}
-                >
-                  {fmtTime(s.start_at, props.timezone)}
-                </button>
-              ))}
-            </div>
-          ) : null}
-        </div>
+                  <div className="border-t border-line pt-5 lg:border-l lg:border-t-0 lg:pl-7 lg:pt-0">
+                    <p className="u-th">Servicio</p>
+                    <div className="mt-3 grid max-h-[22rem] gap-2.5 overflow-y-auto pr-1 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2">
+                      {props.services.map((service) => {
+                        const selected = service.id === serviceId;
+                        return (
+                          <button
+                            key={service.id}
+                            type="button"
+                            aria-pressed={selected}
+                            onClick={() => {
+                              setServiceId(service.id);
+                              resetSlots();
+                            }}
+                            className={`flex min-h-16 items-center justify-between rounded-xl border p-3.5 text-left transition-colors ${selected ? "border-ink bg-ink text-ink-fg" : "border-line-strong bg-surface hover:bg-subtle"}`}
+                          >
+                            <span className="font-semibold">{service.name}</span>
+                            <span className={`u-mono ml-3 text-xs ${selected ? "text-ink-fg/70" : "text-muted"}`}>{service.duration_min} min</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              </section>
+            ) : null}
 
-        {/* ── Datos del cliente ── only for a NEW booking / walk-in; a reschedule keeps
-              the appointment's own customer. */}
-        {!isReschedule ? (
-          <div className="mt-4 flex flex-col gap-2 border-t border-line pt-4 text-sm">
-            <p className="u-th">Datos del cliente</p>
-            {bookingContact ? (
-              // Booking for an existing contact — identity is LOCKED to the record, never typed.
-              <div className="flex flex-col gap-1">
-                <span className="text-xs text-muted">Cliente</span>
-                <div className="rounded-lg border border-line bg-subtle px-2 py-1.5">{bookingContact.contactName}</div>
-              </div>
+            {step === 2 ? (
+              <section aria-labelledby="booking-slot-heading" className="grid h-full min-h-0 lg:grid-cols-[minmax(0,2.08fr)_minmax(21rem,1fr)]">
+                <h3 id="booking-slot-heading" className="sr-only">Profesional y hora</h3>
+
+                <div className="min-h-0 p-4 sm:p-6 lg:pr-7">
+                  <div className="flex h-full min-h-[31rem] flex-col overflow-hidden rounded-2xl border border-line bg-surface">
+                    <div className="flex min-h-16 shrink-0 items-center justify-between gap-4 border-b border-line px-5">
+                      <div className="min-w-0">
+                        <strong className="text-lg capitalize">{monthLabel}</strong>
+                        <span className="ml-4 hidden truncate text-sm text-muted sm:inline">{selectedSite?.name ?? "Sede actual"}</span>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <button type="button" onClick={() => changeDate(todayKey)} className="h-9 rounded-lg border border-line-strong px-3 text-sm hover:bg-subtle">Hoy</button>
+                        <button type="button" aria-label="Mes anterior" onClick={() => changeMonth(-1)} className="inline-flex size-9 items-center justify-center rounded-lg border border-line-strong text-lg text-muted hover:bg-subtle hover:text-foreground">‹</button>
+                        <button type="button" aria-label="Mes siguiente" onClick={() => changeMonth(1)} className="inline-flex size-9 items-center justify-center rounded-lg border border-line-strong text-lg text-muted hover:bg-subtle hover:text-foreground">›</button>
+                      </div>
+                    </div>
+
+                    <div className="grid h-11 shrink-0 grid-cols-7 border-b border-line bg-subtle/35 text-center text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-muted">
+                      {['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'].map((label) => <span key={label} className="flex items-center justify-center">{label}</span>)}
+                    </div>
+
+                    <div
+                      className="grid min-h-0 flex-1 grid-cols-7 gap-x-1 px-2 py-1"
+                      style={{ gridTemplateRows: `repeat(${monthDays.length / 7}, minmax(4.5rem, 1fr))` }}
+                    >
+                      {monthDays.map((day) => {
+                        const freeCount = day.inMonth ? availabilityCount(day.key) : 0;
+                        const selected = selectedDate === day.key;
+                        return (
+                          <button
+                            key={day.key}
+                            type="button"
+                            aria-label={`Seleccionar ${day.key}${freeCount ? ", hay cupos" : ""}`}
+                            aria-pressed={selected}
+                            onClick={() => changeDate(day.key)}
+                            className={`group flex min-h-0 flex-col items-center justify-center rounded-2xl px-1 text-center transition-colors ${day.inMonth ? "hover:bg-subtle/60" : "text-faint hover:bg-subtle/35"}`}
+                          >
+                            <span className={`inline-flex size-11 items-center justify-center rounded-full text-base tabular-nums transition-colors ${selected ? "bg-ink font-semibold text-ink-fg shadow-sm" : day.inMonth ? "font-medium text-foreground group-hover:bg-chip" : "text-faint"}`}>{day.day}</span>
+                            {freeCount > 0 ? <span className="mt-1 text-[0.6875rem] font-medium text-muted">Hay cupos</span> : <span className="mt-1 h-4" />}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex min-h-0 flex-col border-t border-line bg-subtle/25 lg:border-l lg:border-t-0">
+                  <fieldset className="shrink-0 px-5 py-5">
+                    <legend className="u-th">Profesional</legend>
+                    <div className="mt-3 grid gap-2">
+                      <button type="button" aria-pressed={!staffId} onClick={() => changeStaff("")} className={`flex min-h-14 items-center gap-3 rounded-xl border bg-surface px-3.5 text-left transition-colors ${!staffId ? "border-ink shadow-sm" : "border-line hover:border-line-strong"}`}>
+                        <span className="size-6 shrink-0 rounded-md border border-dashed border-line-strong bg-subtle" />
+                        <span className="min-w-0 flex-1"><strong className="block text-sm">Cualquier profesional</strong><span className="block truncate text-xs text-muted">{availabilityCount(selectedDate, "") > 0 ? "Hay cupos" : "Sin cupos"}</span></span>
+                        {!staffId ? <span className="inline-flex size-5 items-center justify-center rounded-full bg-ink text-xs text-ink-fg">✓</span> : null}
+                      </button>
+
+                      {/* NEW bookings offer ACTIVE staff only — an inactive barber's lane is visible
+                          for history but must not be selectable for a new appointment. */}
+                      {activeStaff.map((candidate) => {
+                        const count = staffAvailabilityCount(candidate.id);
+                        const selected = staffId === candidate.id;
+                        return (
+                          <button key={candidate.id} type="button" aria-pressed={selected} disabled={count === 0} onClick={() => changeStaff(candidate.id)} className={`flex min-h-14 items-center gap-3 rounded-xl border bg-surface px-3.5 text-left transition-colors ${selected ? "border-ink shadow-sm" : "border-line hover:border-line-strong"} disabled:cursor-not-allowed disabled:opacity-45`}>
+                            <span className={`u-appt-swatch ${toneForStaff(candidate.id)} size-6 shrink-0 rounded-md`} />
+                            <span className="min-w-0 flex-1"><strong className="block truncate text-sm">{candidate.name}</strong><span className="block text-xs text-muted">{count > 0 ? "Hay cupos" : "Sin cupos"}</span></span>
+                            {selected ? <span className="inline-flex size-5 items-center justify-center rounded-full bg-ink text-xs text-ink-fg">✓</span> : null}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </fieldset>
+
+                  <div className="min-h-0 flex-1 border-t border-line px-5 py-4">
+                    <div className="flex items-center justify-between gap-3">
+                      <p className="text-sm"><strong className="capitalize">{shortDateLabel}</strong><span className="ml-2 text-muted">{visibleSlots.length > 0 ? "Hay cupos" : "Sin cupos"}</span></p>
+                      <span className="rounded-lg bg-subtle px-2.5 py-1 text-xs font-semibold">24h</span>
+                    </div>
+
+                    {loadingSlots ? (
+                      <div className="mt-3 grid grid-cols-3 gap-2 overflow-hidden">
+                        {Array.from({ length: 9 }, (_, index) => <div key={index} className="h-12 animate-pulse rounded-xl bg-subtle" />)}
+                        <p className="sr-only">Buscando…</p>
+                      </div>
+                    ) : searched && visibleSlots.length === 0 ? (
+                      <p className="mt-3 rounded-xl border border-line bg-surface px-3 py-3 text-xs text-muted">No hay horarios disponibles para esta combinación.</p>
+                    ) : visibleSlots.length > 0 ? (
+                      <div className="mt-3 grid max-h-[15.5rem] grid-cols-3 gap-2 overflow-y-auto pr-1">
+                        {visibleSlots.map((slot) => (
+                          <button
+                            key={`${slot.start_at}-${slot.staff_id}`}
+                            type="button"
+                            aria-pressed={slotStart === slot.start_at}
+                            onClick={() => {
+                              setSlotStart(slot.start_at);
+                              if (!staffId) setStaffId(slot.staff_id);
+                            }}
+                            className={`u-mono h-12 rounded-xl border text-sm transition-colors ${slotStart === slot.start_at ? "border-ink bg-ink text-ink-fg" : "border-line-strong bg-surface hover:border-ink hover:bg-subtle"}`}
+                          >
+                            {fmtTime(slot.start_at, props.timezone)}
+                          </button>
+                        ))}
+                      </div>
+                    ) : null}
+                    {!slotStart ? <p className="mt-3 text-xs text-faint">Selecciona un horario para continuar.</p> : null}
+                  </div>
+                </div>
+              </section>
+            ) : null}
+
+            {step === 3 ? (
+              <section aria-labelledby="booking-confirm-heading" aria-label="Resumen de la cita" className="mx-auto max-w-5xl py-1 sm:py-2">
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex min-w-0 items-center gap-4">
+                    <span className={`u-appt-swatch ${selectedStaff ? toneForStaff(selectedStaff.id) : "u-appt-staff-slate"} size-16 shrink-0 overflow-hidden rounded-2xl`} aria-hidden>
+                      <span className="flex size-full items-center justify-center text-base font-semibold">{staffInitials}</span>
+                    </span>
+                    <div className="min-w-0">
+                      <h3 id="booking-confirm-heading" className="truncate text-2xl font-semibold sm:text-3xl">{dateHeadline}, {slotStart ? fmtTime(slotStart, props.timezone) : "—"}</h3>
+                      <p className="mt-1 truncate text-sm text-muted sm:text-base">{clientLabel || "Atención sin cita"} · {selectedService?.name ?? "Servicio"} con {selectedStaff?.name ?? "cualquier profesional"}</p>
+                    </div>
+                  </div>
+                  <span className="w-fit shrink-0 rounded-xl border border-line bg-subtle px-3 py-2 text-sm font-medium">Horario libre</span>
+                </div>
+
+                <dl className="mt-7 grid overflow-hidden rounded-2xl border border-line bg-surface text-sm sm:grid-cols-2 lg:grid-cols-4">
+                  {[
+                    ["Cliente", clientLabel || "Atención sin cita"],
+                    ["Teléfono", phoneLabel],
+                    ["Servicio", selectedService?.name ?? "Servicio"],
+                    ["Duración", `${selectedService?.duration_min ?? 0} min`],
+                    ["Profesional", selectedStaff?.name ?? "Cualquier profesional"],
+                    ["Sede", selectedSite?.name ?? "Sede actual"],
+                    ["Estado inicial", "Sin confirmar"],
+                    ["Origen", originLabel],
+                  ].map(([label, value], index) => (
+                    <div key={label} className={`min-w-0 px-4 py-3.5 ${index >= 4 ? "border-t border-line" : ""} ${index % 4 !== 0 ? "lg:border-l lg:border-line" : ""} ${index % 2 !== 0 ? "sm:border-l sm:border-line" : ""}`}>
+                      <dt className="text-xs text-muted">{label}</dt>
+                      <dd className={`mt-1 truncate font-semibold ${label === "Teléfono" || label === "Duración" ? "u-mono" : ""}`}>{value}</dd>
+                    </div>
+                  ))}
+                </dl>
+
+                <div className="mt-5 flex flex-col gap-3 border-t border-line pt-5 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-center gap-3 text-sm">
+                    <span className={`u-appt-swatch ${selectedStaff ? toneForStaff(selectedStaff.id) : "u-appt-staff-slate"} size-6 shrink-0 rounded-lg`} />
+                    <span>Color de {selectedStaff?.name ?? "la cita"}</span>
+                    <span className="text-muted">Automático</span>
+                  </div>
+                  <p className="text-xs text-muted">Termina a las {selectedSlot ? fmtTime(selectedSlot.service_end_at, props.timezone) : "—"}</p>
+                </div>
+              </section>
+            ) : null}
+          </main>
+
+          <footer className={`flex min-h-16 items-center gap-2 border-t border-line px-5 py-3 ${step === 3 ? "justify-between bg-subtle/45" : "justify-end bg-popover"}`}>
+            {step === 3 ? <p className="hidden text-sm text-muted sm:block">Nada se guarda hasta que confirmes.</p> : <button type="button" onClick={props.onClose} className="h-10 rounded-xl px-4 text-sm text-muted transition-colors hover:bg-subtle hover:text-foreground">Cancelar</button>}
+            <div className="flex items-center justify-end gap-2">
+            {step > 1 && !(isReschedule && step === 2) ? (
+              <button type="button" onClick={goBack} className="h-10 rounded-xl border border-line-strong px-5 text-sm transition-colors hover:bg-subtle">Volver</button>
+            ) : null}
+            {step === 3 ? (
+              <button type="button" onClick={submit} disabled={pending || !slotStart} className="h-10 rounded-xl bg-ink px-6 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50">
+                {pending ? "Guardando…" : isReschedule ? "Confirmar cambio" : "Crear cita"}
+              </button>
             ) : (
-              <>
-                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Nombre del cliente" className={inputCls} />
-                <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="Teléfono (E.164, ej. +57300…)" className={inputCls} />
-                <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email opcional" className={inputCls} />
-              </>
+              <button type="button" onClick={advance} disabled={(step === 1 && !serviceId) || (step === 2 && !slotStart)} className="h-10 rounded-xl bg-ink px-6 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-40">
+                Continuar
+              </button>
             )}
-          </div>
-        ) : null}
-
-        <div className="mt-5 border-t border-line pt-4">
-          {/* Say WHY the primary is disabled, rather than leaving a dead grey button. */}
-          {!slotStart ? (
-            <p className="mb-2 text-xs text-faint">Selecciona un horario para continuar.</p>
-          ) : null}
-          <div className="flex justify-end gap-2">
-            <button onClick={props.onClose} className="rounded-lg border border-line-strong px-3 py-1.5 text-sm hover:bg-subtle">
-              Cancelar
-            </button>
-            <button onClick={submit} disabled={pending || !slotStart} className="rounded-lg bg-ink px-3 py-1.5 text-sm font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50">
-              {pending ? "Guardando…" : isReschedule ? "Reagendar" : "Agendar"}
-            </button>
-          </div>
+            </div>
+          </footer>
         </div>
       </div>
     </div>

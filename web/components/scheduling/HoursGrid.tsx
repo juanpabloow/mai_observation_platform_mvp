@@ -15,6 +15,15 @@ import type { WeeklyHours } from "@worker/scheduling/types.js";
  * and not an empty write.
  */
 export const DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
+export const DAY_LABELS: Record<string, string> = {
+  mon: "Lun",
+  tue: "Mar",
+  wed: "Mié",
+  thu: "Jue",
+  fri: "Vie",
+  sat: "Sáb",
+  sun: "Dom",
+};
 
 export type HourRow = { on: boolean; start: string; end: string };
 export type HourGrid = Record<string, HourRow>;
@@ -47,7 +56,7 @@ export function HoursGrid({ grid, setGrid }: { grid: HourGrid; setGrid: (g: Hour
               checked={grid[d].on}
               onChange={(e) => setGrid({ ...grid, [d]: { ...grid[d], on: e.target.checked } })}
             />
-            {d}
+            {DAY_LABELS[d]}
           </label>
           <input
             type="time"

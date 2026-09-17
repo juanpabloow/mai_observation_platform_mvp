@@ -29,7 +29,8 @@ test('AgendaView shows an inactive lane chip but offers only active staff for ne
   const src = web('components/scheduling/AgendaView.tsx');
   assert.ok(/active:\s*boolean/.test(src), 'StaffOpt carries active');
   assert.ok(src.includes('inactive'), 'renders an inactive marker');
-  assert.ok(/props\.staff\.filter\(\(s\)\s*=>\s*s\.active\)/.test(src), 'the booking dropdown filters to active staff');
+  assert.ok(/const activeStaff\s*=\s*props\.staff\.filter\(\(staff\)\s*=>\s*staff\.active\)/.test(src), 'the booking picker filters to active staff');
+  assert.ok(src.includes('activeStaff.map((candidate) => {'), 'only the active roster is rendered in the booking picker');
 });
 
 test('every deactivate has an inverse: site/service in AdminPanel, staff on the Staff roster', () => {
@@ -40,7 +41,7 @@ test('every deactivate has an inverse: site/service in AdminPanel, staff on the 
     assert.ok(src.includes(`kind="${kind}"`), `ActiveToggle rendered for ${kind}`);
   }
   assert.ok(!/deactivate\w+Action\(clientId,[^)]*\)\)}>Deactivate<\/button>\s*:\s*null/.test(src), 'the old one-way `? Deactivate : null` is gone');
-  assert.ok(src.includes('Activate'), 'an Activate affordance exists');
+  assert.ok(src.includes('Activar'), 'an Activate affordance exists');
   // Deactivating a barber must stay reversible wherever the control lives. On the
   // Staff roster it is a CHECKBOX bound to the same `active` flag, so the same patch
   // turns it off and on — there is no separate, irreversible "deactivate" path.

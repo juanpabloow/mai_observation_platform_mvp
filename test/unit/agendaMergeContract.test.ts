@@ -58,12 +58,13 @@ test('an inactive barber is LABELLED, and their appointments stay openable', () 
 
 test('an inactive barber is NEVER offered for a new booking or a reschedule', () => {
   const src = read(VIEW);
-  // The modal's barber picker is the only staff selector that creates/moves an
+  // The modal's professional picker is the only staff control that creates/moves an
   // appointment; the server refuses inactive staff too, so this keeps the operator
-  // from reaching a guaranteed error.
-  assert.ok(src.includes('props.staff.filter((s) => s.active).map((s) => ('), 'the booking picker filters to active');
-  const picker = src.slice(src.indexOf('<span className="text-xs text-muted">Profesional</span>'));
-  assert.ok(picker.includes('(s) => s.active'), '…in the Profesional select specifically');
+  // from reaching a guaranteed error. It is now a visual chip group rather than a select.
+  assert.ok(src.includes('const activeStaff = props.staff.filter((staff) => staff.active)') && src.includes('activeStaff.map((candidate) => {'), 'the booking picker filters to active');
+  const pickerStart = src.indexOf('<legend className="u-th">Profesional</legend>');
+  const picker = src.slice(pickerStart, src.indexOf('</fieldset>', pickerStart));
+  assert.ok(picker.includes('activeStaff.map((candidate)'), '…in the Profesional picker specifically');
 });
 
 // ─────────────── main's rules: canonical identity ───────────────
@@ -118,6 +119,35 @@ test('Day/Week and the KPI comparison survived the merge', () => {
   const src = read(VIEW);
   assert.ok(src.includes('function ratioDelta(') && src.includes('function pointDelta('), 'delta maths intact');
   assert.ok(src.includes('higherIsBetter={false}'), 'no-show delta still inverts its colour');
+});
+
+test('Week view lays simultaneous appointments into lanes instead of stacking them', () => {
+  const src = read(VIEW);
+  assert.ok(src.includes('function layoutWeekAppointments('), 'week collision layout exists');
+  assert.ok(src.includes('start >= clusterEnd'), 'appointments that only touch do not count as overlapping');
+  assert.ok(src.includes('Math.min(2, laneEnds.length)'), 'week never creates more than two visible lanes');
+  assert.ok(src.includes('weekLayout.lanes.has(appt.id)'), 'overflow appointments are not painted as illegible cards');
+  assert.ok(src.includes('weekLane={weekLayout?.lanes.get(a.id)}'), 'each visible weekly card receives its computed lane');
+  assert.ok(src.includes('lane / laneCount') && src.includes('100 / laneCount'), 'weekly cards split horizontal space');
+  assert.ok(src.includes('week ?') && src.includes('service_name'), 'week has its own compact card hierarchy');
+});
+
+test('Week view matches the weekly reading model without changing Day view', () => {
+  const src = read(VIEW);
+  assert.ok(src.includes('Ocupación semanal'), 'the weekly summary reports occupancy');
+  assert.ok(src.includes('u-appt-swatch'), 'the weekly legend uses the professional pastel colours');
+  assert.ok(src.includes('sticky right-0 z-20'), 'week has its time rail on the right');
+  assert.ok(src.includes('{!isWeek ? ('), 'the day-only left rail remains conditional');
+  assert.ok(src.includes('week={isWeek}'), 'cards explicitly switch between week and day rendering');
+  assert.ok(src.includes('+{group.appointments.length} más'), 'overflow is represented by a compact +N marker');
+  assert.ok(src.includes('function WeekOverflowDialog('), 'the marker opens an accessible appointment chooser');
+});
+
+test('Day view opens in professional columns while keeping the row toggle available', () => {
+  const src = read(VIEW);
+  assert.ok(src.includes('useState<"rows" | "columns">("columns")'), 'professional columns are the day default');
+  assert.ok(src.includes('setDesktopLayout("rows")'), 'the compact row layout remains available');
+  assert.ok(src.includes('setDesktopLayout("columns")'), 'the column toggle remains explicit');
 });
 
 test('the calendar reads the SITE timezone, never the browser', () => {
@@ -198,6 +228,33 @@ test('the new-appointment modal explains itself — search, empty, and disabled 
   assert.ok(src.includes('Selecciona un horario para continuar.'), 'the disabled primary explains why');
   // It is a real dialog for assistive tech, and Escape/focus are handled.
   assert.ok(src.includes('role="dialog"') && src.includes('aria-modal="true"'), 'the modal is a labelled dialog');
+});
+
+test('manual booking is a three-step operator flow with one rich final confirmation', () => {
+  const src = read(VIEW);
+  for (const label of ['Cliente y servicio', 'Profesional y hora', 'Confirmar']) {
+    assert.ok(src.includes(`label: "${label}"`), `${label} is an explicit step`);
+  }
+  assert.ok(!src.includes('label: "Detalles"'), 'the low-value details screen is removed');
+  assert.ok(src.includes('lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]'), 'client and service share one balanced desktop screen');
+  assert.ok(src.includes('lg:grid-cols-[minmax(0,2.08fr)_minmax(21rem,1fr)]'), 'desktop gives the month two thirds and professional/time one third');
+  assert.ok(!src.includes('aria-label="Resumen de la selección"'), 'intermediate screens do not repeat a persistent summary');
+  assert.equal(src.match(/aria-label="Resumen de la cita"/g)?.length, 1, 'the summary appears once, on the final confirmation screen');
+  assert.ok(src.includes('Horario libre') && src.includes('Nada se guarda hasta que confirmes.'), 'the final confirmation explains availability and commit timing');
+  assert.ok(src.includes('Color de {selectedStaff?.name') && src.includes('Automático'), 'the automatic professional colour is explained');
+  assert.ok(src.includes('Crear cita'), 'the final action names its outcome');
+  assert.ok(src.includes('visibleSlots'), 'any-professional availability collapses duplicate clock times');
+});
+
+test('manual booking has a real selectable month with concise availability labels', () => {
+  const src = read(VIEW);
+  assert.ok(src.includes('function siteMidnightIso('), 'selected local days are converted in the site timezone');
+  assert.ok(src.includes('function calendarDays(') && src.includes('Mes anterior') && src.includes('Mes siguiente'), 'the full month calendar is navigable');
+  assert.ok(src.includes('onClick={() => changeDate(day.key)}'), 'choosing a day refreshes the booking date');
+  assert.ok(src.includes('from: siteMidnightIso(monthStart, props.timezone)') && src.includes('to: siteMidnightIso(monthEnd, props.timezone)'), 'one real monthly availability query feeds day and professional counts');
+  assert.ok(src.includes('const [serviceId, setServiceId] = useState(props.modal.mode === "reschedule" ? props.modal.appt.service_id : "")'), 'new appointments do not preselect a service');
+  assert.ok(src.includes('Hay cupos') && !src.includes('horarios libres hoy'), 'calendar and professional cards avoid noisy slot counts');
+  assert.ok(src.includes('className="u-module-modal'), 'the dialog centres against the module canvas');
 });
 
 test('control geometry is unified on the toolbar tokens', () => {
