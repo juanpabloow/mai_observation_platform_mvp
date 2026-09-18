@@ -319,12 +319,22 @@
   --appt-cut-ink: #6c7484;
   --appt-cut-title: #29323d;
 
-  /* The one SOLID family — reserved for a premium package, so at most a couple
-     of cards per day carry it and it keeps its "look at me" weight. */
-  --appt-feature-fill: #5b4ba6;
-  --appt-feature-rule: #3f3277;
-  --appt-feature-ink: rgba(255, 255, 255, 0.78);
-  --appt-feature-title: #ffffff;
+  /* FEATURE is a quiet sage, not the solid purple it used to be. Now that the card
+     fill carries the SERVICE, every card on the board wears a family colour — a
+     saturated block among pastels stopped reading as "premium" and just read as an
+     error. It keeps its own hue so it is still distinguishable at a glance. */
+  --appt-feature-fill: #dfece3;
+  --appt-feature-rule: #2f5741;
+  --appt-feature-ink: #4a6b57;
+  --appt-feature-title: #23402f;
+
+  /* Hairline EDGES for the four service families — the tinted 1px border the
+     reference draws all round a card, mixed light enough to sit on white without
+     becoming a second stripe. */
+  --appt-color-edge: #d8d0ee;
+  --appt-grooming-edge: #e3d5b8;
+  --appt-cut-edge: #c8d3e0;
+  --appt-feature-edge: #c9dfd1;
 
   /* The pink is the --danger-tint (#f2c0c9) family, lightened to stay readable
      under dark text; the rule is the brand red so urgency reads at a glance. */
@@ -381,10 +391,15 @@
   --appt-cut-ink: #9aa5b4;
   --appt-cut-title: #e4e9ef;
 
-  --appt-feature-fill: #5b4ba6;
-  --appt-feature-rule: #b7a9f0;
-  --appt-feature-ink: rgba(255, 255, 255, 0.78);
-  --appt-feature-title: #ffffff;
+  --appt-feature-fill: #1f2e26;
+  --appt-feature-rule: #8fc7a8;
+  --appt-feature-ink: #9dbfab;
+  --appt-feature-title: #dceee4;
+
+  --appt-color-edge: rgba(255, 255, 255, 0.12);
+  --appt-grooming-edge: rgba(255, 255, 255, 0.12);
+  --appt-cut-edge: rgba(255, 255, 255, 0.12);
+  --appt-feature-edge: rgba(255, 255, 255, 0.12);
 
   --appt-danger-fill: #3d1b23;
   --appt-danger-rule: #f2555a;
@@ -1109,37 +1124,52 @@ body {
   --appt-avatar-fg: var(--appt-staff-blue-ink);
 }
 
+/*
+ * SERVICE cards, like professional ones, wear an even hairline all round rather than
+ * a saturated category stripe — the reference has no stripe, and with the fill now
+ * carrying the service there is nothing left for a 3px rule to add. Pairs with a
+ * family class: `u-appt-service u-appt-cut`.
+ */
+.u-appt-service {
+  border-left-width: 1px;
+  border-left-color: var(--appt-edge);
+  --appt-title: var(--foreground);
+  --appt-avatar-bg: rgba(255, 255, 255, 0.86);
+}
+.dark .u-appt-service {
+  --appt-avatar-bg: rgba(255, 255, 255, 0.1);
+}
 .u-appt-color {
   --appt-fill: var(--appt-color-fill);
   --appt-rule: var(--appt-color-rule);
   --appt-ink: var(--appt-color-ink);
   --appt-title: var(--appt-color-title);
-  --appt-edge: color-mix(in srgb, var(--appt-color-rule) 16%, transparent);
+  --appt-edge: var(--appt-color-edge);
+  --appt-avatar-fg: var(--appt-color-rule);
 }
 .u-appt-grooming {
   --appt-fill: var(--appt-grooming-fill);
   --appt-rule: var(--appt-grooming-rule);
   --appt-ink: var(--appt-grooming-ink);
   --appt-title: var(--appt-grooming-title);
-  --appt-edge: color-mix(in srgb, var(--appt-grooming-rule) 16%, transparent);
+  --appt-edge: var(--appt-grooming-edge);
+  --appt-avatar-fg: var(--appt-grooming-rule);
 }
 .u-appt-cut {
   --appt-fill: var(--appt-cut-fill);
   --appt-rule: var(--appt-cut-rule);
   --appt-ink: var(--appt-cut-ink);
   --appt-title: var(--appt-cut-title);
-  --appt-edge: color-mix(in srgb, var(--appt-cut-rule) 12%, transparent);
+  --appt-edge: var(--appt-cut-edge);
+  --appt-avatar-fg: var(--appt-cut-rule);
 }
 .u-appt-feature {
   --appt-fill: var(--appt-feature-fill);
   --appt-rule: var(--appt-feature-rule);
   --appt-ink: var(--appt-feature-ink);
   --appt-title: var(--appt-feature-title);
-  --appt-edge: transparent;
-  /* On the solid block the disc keeps a fixed white/purple pair in BOTH themes —
-     the family rule is too dark (light) / too light (dark) to invert cleanly. */
-  --appt-avatar-bg: #ffffff;
-  --appt-avatar-fg: #5b4ba6;
+  --appt-edge: var(--appt-feature-edge);
+  --appt-avatar-fg: var(--appt-feature-rule);
 }
 .u-appt-danger {
   --appt-fill: var(--appt-danger-fill);

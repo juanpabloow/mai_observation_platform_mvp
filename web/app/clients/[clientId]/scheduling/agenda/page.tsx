@@ -197,7 +197,7 @@ export default async function ClientAgendaPage({
       // query. They only drive the "closed" hatching of a day / barber lane.
       openingHours={site.opening_hours}
       staff={staff.map((s) => ({ id: s.id, name: s.name, active: s.active, workingHours: s.working_hours }))}
-      services={services.map((s) => ({ id: s.id, name: s.name, duration_min: s.effective_duration_min }))}
+      services={services.map((s) => ({ id: s.id, name: s.name, duration_min: s.effective_duration_min, category: s.category, price: s.effective_price }))}
       view={view}
       kpis={summarise(appts)}
       previousKpis={summarise(prevAppts)}
