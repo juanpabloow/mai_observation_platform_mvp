@@ -61,10 +61,14 @@ test('an inactive barber is NEVER offered for a new booking or a reschedule', ()
   // The modal's professional picker is the only staff control that creates/moves an
   // appointment; the server refuses inactive staff too, so this keeps the operator
   // from reaching a guaranteed error. It is now a visual chip group rather than a select.
-  assert.ok(src.includes('const activeStaff = props.staff.filter((staff) => staff.active)') && src.includes('activeStaff.map((candidate) => {'), 'the booking picker filters to active');
-  const pickerStart = src.indexOf('<legend className="u-th">Profesional</legend>');
-  const picker = src.slice(pickerStart, src.indexOf('</fieldset>', pickerStart));
-  assert.ok(picker.includes('activeStaff.map((candidate)'), '…in the Profesional picker specifically');
+  assert.ok(src.includes('const activeStaff = props.staff.filter((staff) => staff.active)'), 'the booking roster is the ACTIVE roster');
+  // The picker's options are derived from activeStaff (now via a search filter inside
+  // the popover), so an inactive barber cannot reach the list at all.
+  assert.match(src, /activeStaff\s*\n?\s*\.filter\(\(c\) => c\.name/, 'the picker options come from activeStaff');
+  const pickerStart = src.indexOf('aria-label="Elegir profesional"');
+  const picker = src.slice(pickerStart, src.indexOf('</div>\n                        </div>', pickerStart));
+  assert.ok(picker.includes('activeStaff') && picker.includes('role="option"'), '…in the Profesional popover specifically');
+  assert.ok(!picker.includes('props.staff.map'), 'the popover never maps the unfiltered roster');
 });
 
 // ─────────────── main's rules: canonical identity ───────────────
@@ -81,14 +85,13 @@ test('identity is canonical — primary_identity replaced the raw phone column',
   }
 });
 
-test('the drawer shows name then identity — never the internal UUID', () => {
+test('the appointment detail shows canonical identity — never the internal UUID', () => {
   const src = read(VIEW);
-  assert.ok(src.includes('{appt.contact_name ?? "Sin cita"}'), 'the name is the title');
-  assert.ok(src.includes('{appt.primary_identity}'), 'the identity is the subtitle');
-  assert.ok(src.includes('appt.primary_identity ? ('), 'absent identity renders nothing');
+  assert.ok(src.includes('appt.contact_name ?? "Atención sin cita"'), 'the name is the title');
+  assert.ok(src.includes('appt.primary_identity ?? "—"'), 'the canonical identity is a labelled field');
   // public_reference is still carried for other uses, but must not be the subtitle.
-  const subtitle = src.slice(src.indexOf('{appt.contact_name ?? "Sin cita"}'), src.indexOf('{appt.primary_identity}'));
-  assert.ok(!subtitle.includes('public_reference'), 'the UUID/reference is not shown as identity');
+  const detail = src.slice(src.indexOf('function ApptDrawer('), src.indexOf('/** Modal for new appointment'));
+  assert.ok(!detail.includes('public_reference'), 'the UUID/reference is not shown as identity');
 });
 
 // ─────────────── the redesign that had to survive ───────────────
@@ -121,26 +124,47 @@ test('Day/Week and the KPI comparison survived the merge', () => {
   assert.ok(src.includes('higherIsBetter={false}'), 'no-show delta still inverts its colour');
 });
 
-test('Week view lays simultaneous appointments into lanes instead of stacking them', () => {
+test('Week groups by hour block: one readable card, the rest behind an in-flow +N', () => {
   const src = read(VIEW);
-  assert.ok(src.includes('function layoutWeekAppointments('), 'week collision layout exists');
-  assert.ok(src.includes('start >= clusterEnd'), 'appointments that only touch do not count as overlapping');
-  assert.ok(src.includes('Math.min(2, laneEnds.length)'), 'week never creates more than two visible lanes');
-  assert.ok(src.includes('weekLayout.lanes.has(appt.id)'), 'overflow appointments are not painted as illegible cards');
-  assert.ok(src.includes('weekLane={weekLayout?.lanes.get(a.id)}'), 'each visible weekly card receives its computed lane');
-  assert.ok(src.includes('lane / laneCount') && src.includes('100 / laneCount'), 'weekly cards split horizontal space');
-  assert.ok(src.includes('week ?') && src.includes('service_name'), 'week has its own compact card hierarchy');
+  assert.ok(src.includes('function bucketWeekAppointments('), 'week groups appointments into hour blocks');
+  assert.ok(src.includes('const WEEK_HOUR_PX = 76'), 'week has its own block scale, separate from the day grid');
+  assert.ok(
+    src.includes('Math.min(Math.max(zonedParts(appt.start_at, tz).h, fromHour), toHour - 1)'),
+    'an out-of-hours booking is clamped into an edge block, never dropped',
+  );
+  assert.ok(src.includes('const [lead, ...rest] = block.appointments'), 'the earliest appointment in a block keeps the card');
+  // The whole point of the block model: the "+N citas" chip is a SIBLING of the card
+  // inside the cell, so it can never be absolutely positioned over another card.
+  const chip = src.slice(src.indexOf('onClick={() => setWeekOverflow(rest)}'));
+  assert.ok(!chip.slice(0, 600).includes('absolute'), 'the +N indicator is in flow, not floating over neighbours');
+  assert.ok(chip.includes('h-5 shrink-0'), 'the +N indicator is a fixed-height flex child of its block');
+  assert.ok(src.includes('function WeekBlockCard('), 'week has its own card geometry');
 });
 
 test('Week view matches the weekly reading model without changing Day view', () => {
   const src = read(VIEW);
   assert.ok(src.includes('Ocupación semanal'), 'the weekly summary reports occupancy');
   assert.ok(src.includes('u-appt-swatch'), 'the weekly legend uses the professional pastel colours');
-  assert.ok(src.includes('sticky right-0 z-20'), 'week has its time rail on the right');
-  assert.ok(src.includes('{!isWeek ? ('), 'the day-only left rail remains conditional');
-  assert.ok(src.includes('week={isWeek}'), 'cards explicitly switch between week and day rendering');
-  assert.ok(src.includes('+{group.appointments.length} más'), 'overflow is represented by a compact +N marker');
+  assert.ok(src.includes('sticky left-0 z-20 w-14'), 'the hour rail leads the grid in both views');
+  assert.ok(!src.includes('sticky right-0 z-20'), 'no trailing rail — that made week read as a table');
+  assert.ok(src.includes('+{rest.length} {rest.length === 1 ? "cita" : "citas"}'), 'overflow is a compact +N marker');
   assert.ok(src.includes('function WeekOverflowDialog('), 'the marker opens an accessible appointment chooser');
+  // Day keeps the proportional grid: a 90-minute booking stays twice a 45-minute one.
+  assert.ok(src.includes('height={Math.max(22, ((endMin - startMin) / 60) * HOUR_PX - 2)}'), 'day cards keep real duration heights');
+});
+
+test('closed columns and professional load are stated, not left to colour alone', () => {
+  const src = read(VIEW);
+  assert.ok(src.includes('u-closed-hatch'), 'a closed day/lane gets the neutral striped surface');
+  assert.ok(src.includes('sub: closed ? "Cerrado" : `${n} cita${n === 1 ? "" : "s"}`'), 'a column header carries its own load');
+});
+
+test('avatar initials survive an environment-tagged seed name', () => {
+  const src = read(VIEW);
+  assert.ok(src.includes('function initialsOf('), 'initials are derived in one shared place');
+  // "[DEV] Daniela Ríos" must not collapse to "D" for every professional on the board.
+  assert.ok(src.includes('replace(/^\\s*[[(][^\\])]*[\\])]\\s*/, "")'), 'a leading [DEV]/(test) tag is stripped first');
+  assert.ok(src.includes('.slice(0, 2)'), 'two words make the initials, as the reference writes them');
 });
 
 test('Day view opens in professional columns while keeping the row toggle available', () => {
@@ -185,16 +209,11 @@ test('the TODOs explaining still-missing backend were not dropped', () => {
 
 // ─────────────── the UX consolidation pass (Senior Frontend Engineer) ───────────────
 
-test('selecting an appointment ALWAYS shows its detail — inline on xl, overlay below', () => {
+test('selecting an appointment opens one centred record modal / mobile bottom sheet', () => {
   const src = read(VIEW);
-  // The fix for the sub-1280 dead click: the drawer decides its own frame off the
-  // viewport width and renders as a right-anchored overlay when it can't sit beside
-  // the grid.
-  assert.ok(src.includes('useIsOverlayWidth(1279.98)'), 'the drawer keys off the xl beside/overlay line');
-  assert.ok(src.includes('fixed inset-y-0 right-0') && src.includes('w-[min(360px,90vw)]'), 'overlay is a right drawer with a mobile-safe width');
-  assert.ok(src.includes('xl:flex'), 'the inline desktop column survives');
-  // The SAME body renders in both modes — proven by the header title resolving exactly
-  // once (a duplicated body would resolve it twice).
+  assert.ok(src.includes('sm:items-center') && src.includes('sm:w-[min(58rem,calc(100vw-2rem))]'), 'desktop centres a bounded detail modal');
+  assert.ok(src.includes('items-end justify-center') && src.includes('rounded-t-3xl'), 'mobile presents the same record as a bottom sheet');
+  // The SAME body renders at every width.
   assert.equal(src.match(/STATUS_TITLE\[appt\.status\]/g)?.length, 1, 'the drawer body is written once, not per-mode');
   // Overlay contract: scrim + focus trap (Escape/restore) come from the shared Overlay.
   assert.ok(src.includes('OVERLAY_SCRIM') && src.includes('useTrappedPanel'), 'the overlay has a scrim and a focus trap');
@@ -224,8 +243,8 @@ test('the Month view is not offered as a dead disabled control', () => {
 test('the new-appointment modal explains itself — search, empty, and disabled states', () => {
   const src = read(VIEW);
   assert.ok(src.includes('Buscando…'), 'the search shows a loading label');
-  assert.ok(src.includes('No hay horarios disponibles para esta combinación.'), 'an empty search says so out loud');
-  assert.ok(src.includes('Selecciona un horario para continuar.'), 'the disabled primary explains why');
+  assert.ok(src.includes('No hay horarios libres para esta combinación.'), 'an empty search says so out loud');
+  assert.ok(src.includes('Elige un horario para continuar.'), 'the disabled primary explains why');
   // It is a real dialog for assistive tech, and Escape/focus are handled.
   assert.ok(src.includes('role="dialog"') && src.includes('aria-modal="true"'), 'the modal is a labelled dialog');
 });
@@ -236,12 +255,20 @@ test('manual booking is a three-step operator flow with one rich final confirmat
     assert.ok(src.includes(`label: "${label}"`), `${label} is an explicit step`);
   }
   assert.ok(!src.includes('label: "Detalles"'), 'the low-value details screen is removed');
-  assert.ok(src.includes('lg:grid-cols-[minmax(0,1fr)_minmax(0,1.05fr)]'), 'client and service share one balanced desktop screen');
-  assert.ok(src.includes('lg:grid-cols-[minmax(0,2.08fr)_minmax(21rem,1fr)]'), 'desktop gives the month two thirds and professional/time one third');
+  assert.ok(src.includes('className="grid min-h-0 flex-1 gap-0 lg:grid-cols-2"'), 'client and service share one balanced desktop screen');
+  assert.ok(src.includes('lg:grid-cols-[minmax(0,1fr)_22rem]'), 'the month takes the flexible column and the times a fixed rail');
   assert.ok(!src.includes('aria-label="Resumen de la selección"'), 'intermediate screens do not repeat a persistent summary');
   assert.equal(src.match(/aria-label="Resumen de la cita"/g)?.length, 1, 'the summary appears once, on the final confirmation screen');
-  assert.ok(src.includes('Horario libre') && src.includes('Nada se guarda hasta que confirmes.'), 'the final confirmation explains availability and commit timing');
-  assert.ok(src.includes('Color de {selectedStaff?.name') && src.includes('Automático'), 'the automatic professional colour is explained');
+  assert.ok(src.includes('Nada se guarda hasta que confirmes.'), 'the final confirmation explains commit timing');
+  assert.ok(src.includes('queda reservado para'), 'and says what creating it will reserve');
+  assert.ok(src.includes('>Color de la cita<') && src.includes('Automático'), 'the automatic service colour is explained');
+  assert.ok(src.includes('Se cambia en Configuración → Servicios.'), 'and says where the family is actually edited');
+  // The preview must use the SERVICE'S STORED CATEGORY, not a fresh guess from its
+  // name, or step 3 would promise a colour the board then draws differently.
+  assert.ok(
+    src.includes('serviceCategory(selectedService.name, selectedService.category)'),
+    'the colour preview reads the stored category',
+  );
   assert.ok(src.includes('Crear cita'), 'the final action names its outcome');
   assert.ok(src.includes('visibleSlots'), 'any-professional availability collapses duplicate clock times');
 });
@@ -264,4 +291,20 @@ test('control geometry is unified on the toolbar tokens', () => {
   assert.ok(src.includes('h-[var(--control-h)] w-9'), 'the steppers are 38×36, not the old 28px discs');
   assert.ok(src.includes('className={CONTROL_CLS}'), 'Hoy reuses the shared control class');
   assert.ok(!src.includes('rounded-md border border-line-strong px-3 text-sm transition-colors hover:bg-hover'), 'the old ad-hoc 9px control string is gone');
+});
+
+test('control heights are absolute px, because this app scales the rem ramp', () => {
+  const src = read(VIEW);
+  // The root font-size is 14.4px, so Tailwind's rem steps under-deliver by 10%:
+  // h-11 = 39.6px (not 44), h-10 = 36px, h-9 = 32.4px (not 36), h-8 = 28.8px. Every
+  // control height that has to MEAN something is therefore written in px.
+  for (const rem of [' h-7\\b', ' h-8\\b', ' h-9\\b', ' h-11\\b']) {
+    assert.ok(!new RegExp(rem).test(src), `no rem-scale${rem.replace('\\\\b', '')} control height`);
+  }
+  assert.ok(src.includes('h-[44px]'), 'touch controls are a real 44px');
+  assert.ok(src.includes('lg:h-[36px]'), 'and fall back to the compact desktop size from lg up');
+  // The segmented pill fills its 34px shell exactly (3px padding a side), which is
+  // what the reference draws — h-7 left a 1.4px gap top and bottom.
+  assert.ok(src.includes('h-[34px] items-center gap-0.5 rounded-[9px] bg-chip p-[3px]'), 'the segmented shell is 34px');
+  assert.ok(src.includes('flex h-[28px] items-center rounded-[7px]'), 'its pills are 28px, filling the shell');
 });

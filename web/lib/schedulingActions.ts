@@ -3,7 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { isUuid } from "./clientModuleValidation";
-import { canAccessSchedulingSite, canOperateScheduling } from "./access";
+import { canAccessSchedulingSite, canOperateScheduling, isSchedulingStaff } from "./access";
+import { listContacts } from "@worker/db/repositories/contacts.js";
 import { getAppointmentById } from "@worker/db/repositories/scheduling/appointments.js";
 import {
   createAppointment,
@@ -71,6 +72,64 @@ async function gateAppointment(clientId: string, appointmentId: string) {
 
 function agendaPath(clientId: string): string {
   return `/clients/${clientId}/scheduling/agenda`;
+}
+
+/**
+ * One row of the booking modal's customer search. A deliberately NARROW projection of
+ * ContactListItem: the modal needs to tell two people named "Lucía" apart and to warn
+ * about a duplicate booking, and nothing else. Everything here is stored or computed in
+ * SQL by listContacts — none of it is inferred in the UI.
+ */
+export interface ContactSearchHit {
+  id: string;
+  name: string | null;
+  /** Phone-or-email. NULL for a staff-scoped login, which must not see identities. */
+  identity: string | null;
+  /** ≥1 completed appointment — the "Ya es cliente" chip. */
+  isCustomer: boolean;
+  appointmentCount: number;
+  /** Last COMPLETED appointment already in the past. */
+  lastVisitAt: string | null;
+  /** Their next appointment, if any — powers the "possible duplicate" warning. */
+  nextAppointmentAt: string | null;
+}
+
+/**
+ * Search this CLIENT's contacts for the booking modal.
+ *
+ * Scoped twice over: the module gate resolves the validated client, and `clientId` is
+ * then passed to listContacts so the query itself is client-filtered — a tenant with
+ * two shops can never surface the other shop's customers here. Identities are withheld
+ * from staff-scoped logins, matching the agenda page's own rule for primary_identity.
+ */
+export async function searchSchedulingContactsAction(
+  clientId: string,
+  search: string,
+): Promise<{ ok: true; hits: ContactSearchHit[] } | { ok: false; error: string }> {
+  const ctx = await gate(clientId);
+  if (!ctx) return { ok: false, error: GENERIC_GATE };
+  const term = search.trim();
+  // Below two characters every contact matches, which is a table scan rendered as a
+  // useless list. The caller shows its "keep typing" hint instead.
+  if (term.length < 2) return { ok: true, hits: [] };
+  const { items } = await listContacts(ctx.scope.tenantId, {
+    search: term,
+    clientId: ctx.client.id,
+    limit: 8,
+  });
+  const hideIdentity = isSchedulingStaff(ctx.scope);
+  return {
+    ok: true,
+    hits: items.map((c) => ({
+      id: c.id,
+      name: c.name,
+      identity: hideIdentity ? null : c.phone_e164 ?? c.email ?? null,
+      isCustomer: c.is_customer,
+      appointmentCount: c.appointment_count,
+      lastVisitAt: c.last_visit_at ? c.last_visit_at.toISOString() : null,
+      nextAppointmentAt: c.next_appointment_at ? c.next_appointment_at.toISOString() : null,
+    })),
+  };
 }
 
 export interface ManualAppointmentInput {

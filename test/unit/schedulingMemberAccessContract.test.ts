@@ -52,8 +52,10 @@ test('the agenda narrows reads server-side and exposes dedicated phone, tablet, 
   assert.match(view, /hidden min-h-0 flex-1 overflow-y-auto bg-canvas p-4 md:block xl:hidden/);
   assert.match(view, /hidden min-h-0 flex-1 overflow-auto xl:block/);
   assert.match(view, /function MobileAppointmentCard/);
-  assert.match(view, /toneClass=\{appointmentToneClass\(appt, staffTones\)\}/);
-  assert.match(view, /new Map<string, StaffTone>/);
+  // A card is painted by its SERVICE family (services.category), not by whoever is
+  // assigned — so a staff-scoped login sees the same colours as reception.
+  assert.match(view, /toneClass=\{appointmentToneClass\(appt\)\}/);
+  assert.match(view, /u-appt-service \$\{apptCategoryClass\(serviceCategory\(/);
   assert.match(view, /grid grid-cols-2 gap-2\.5 p-3/);
   assert.doesNotMatch(view, /border-(amber|emerald|sky)-/);
   assert.match(view, /modal && props\.canOperate/);
