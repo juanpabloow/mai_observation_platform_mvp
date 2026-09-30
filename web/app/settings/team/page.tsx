@@ -39,7 +39,7 @@ export default async function TeamSettingsPage() {
       role: m.role as MemberRole,
       clientId: m.member_client_id,
       clientName: m.client_name,
-      schedulingAccess: null,
+      clientRole: null,
       schedulingSiteId: null,
       schedulingSiteName: null,
       schedulingStaffId: null,
@@ -56,7 +56,7 @@ export default async function TeamSettingsPage() {
       email: inv.email,
       role: inv.role,
       clientName: inv.client_name,
-      schedulingAccess: null,
+      clientRole: null,
       schedulingSiteName: null,
       schedulingStaffName: null,
       status: inv.status,
@@ -83,7 +83,11 @@ export default async function TeamSettingsPage() {
 
       <section className="space-y-2">
         <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Owner &amp; admins</h2>
-        <TeamMembers members={adminViews} clients={clientOptions} viewerRole={scope.role as "owner" | "admin"} />
+        <TeamMembers
+          members={adminViews}
+          clients={clientOptions}
+          viewer={{ agency: true, isOwner: scope.role === "owner", canManageMembers: false, canAssignOwner: true }}
+        />
       </section>
 
       <section className="space-y-2">

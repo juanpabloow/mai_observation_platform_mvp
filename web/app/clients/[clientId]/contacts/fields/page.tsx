@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
-import { hasFullAccess } from "@/lib/access";
+import { canManageClient } from "@/lib/access";
 import { listFieldDefinitions } from "@worker/db/repositories/clientFieldDefinitions.js";
 import { FieldDefinitions } from "@/components/contacts/FieldDefinitions";
 import { ModuleHeader } from "@/components/ui/ModuleHeader";
@@ -18,7 +18,7 @@ export default async function ContactFieldsPage({ params }: { params: Promise<{ 
   await connection();
   const { clientId } = await params;
   const { scope, client } = await requireClientModulePage(clientId, "crm");
-  if (!hasFullAccess(scope)) notFound(); // owner/admin only
+  if (!canManageClient(scope, clientId)) notFound(); // agency or this client's Owner
 
   const defs = await listFieldDefinitions(scope.tenantId, client.id);
 

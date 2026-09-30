@@ -63,7 +63,7 @@ test('sidebar: WORKSPACE is Workflows → Analytics → Inbox (Hub removed from 
   assert.ok(src.includes('const onAnalytics ='), 'the two rows split on the analytics route so only one is active');
   // Inbox is appended to the SAME group (module-gated), so it renders under Workspace.
   assert.ok(src.includes('workspace.push({'), 'Inbox joins the Workspace group');
-  assert.ok(src.includes('sections = [{ label: "Workspace", items: workspace }];'), 'Workspace is the first section');
+  assert.ok(src.includes('sections.push({ label: "Workspace", items: workspace })'), 'Workspace is the first section');
 
   // Executions and per-workflow Settings are still NOT rail items.
   const ctx = slice(src, 'if (clientId) {', '} else if (isMember) {');
@@ -100,7 +100,7 @@ test('sidebar: Inbox uses the unified client-level route + aggregated pending ba
   const src = read('components/AppSidebar.tsx');
   // The Conversations section is now gated by the inbox module; the Inbox item lives
   // inside that block.
-  const conv = slice(src, 'if (moduleKeys.includes("inbox"))', 'if (moduleKeys.includes("crm"))');
+  const conv = slice(src, 'if (moduleKeys.includes("inbox"))', 'if (moduleKeys.includes("crm")');
   assert.ok(conv.includes('key: "inbox"'), 'the Conversations section is the Inbox');
   assert.ok(conv.includes('href: c("/inbox")'), 'Inbox → the unified /clients/{id}/inbox route');
   assert.ok(
@@ -113,8 +113,10 @@ test('sidebar: modules + roles still gate the entries', () => {
   const src = read('components/AppSidebar.tsx');
   assert.ok(src.includes('moduleKeys.includes("crm")'), 'Contacts gated by the crm module');
   assert.ok(src.includes('moduleKeys.includes("scheduling")'), 'Agenda gated by the scheduling module');
-  assert.ok(src.includes('if (!isMember) {'), 'Administration (Team/Modules) is owner/admin only');
-  assert.ok(src.includes('clientId !== defaultClientId'), 'Modules hidden for the default client');
+  // Administration (Users & access) is behind the client-admin capability; Modules stays
+  // agency-only and hidden for the default client.
+  assert.ok(src.includes('if (canManageThisClient) {'), 'Administration gated (agency or client owner)');
+  assert.ok(src.includes('!isMember && clientId !== defaultClientId'), 'Modules is agency-only + non-default');
 });
 
 test('sidebar: collapsed mode keeps navigation accessible (aria-label + tooltip + aria-current)', () => {

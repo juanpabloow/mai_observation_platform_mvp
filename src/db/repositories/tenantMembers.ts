@@ -31,12 +31,20 @@ export interface MembershipScopeRow {
   tenant_id: string;
   role: string;
   member_client_id: string | null;
-  scheduling_access: SchedulingAccess | null;
+  client_role: ClientRole | null;
   scheduling_site_id: string | null;
   scheduling_staff_id: string | null;
 }
 
-export type SchedulingAccess = 'staff' | 'reception';
+/**
+ * The client-level role for a `member` (the people who work AT a client). NULL for
+ * owner/admin (the agency). See web/lib/access.ts for what each grants.
+ *   owner  → full control of THEIR client (incl. settings, custom fields, team);
+ *   editor → the operational role (inbox, contacts, agenda + booking);
+ *   staff  → own agenda only (sees the whole site, books its own column).
+ * Only `staff` carries a scheduling_site_id + scheduling_staff_id binding.
+ */
+export type ClientRole = 'owner' | 'editor' | 'staff';
 
 /**
  * The current user's membership with its role + per-member client scope — the
@@ -45,7 +53,7 @@ export type SchedulingAccess = 'staff' | 'reception';
  */
 export async function getMembershipForUser(userId: string): Promise<MembershipScopeRow | null> {
   const result = await query<MembershipScopeRow>(
-    `SELECT tenant_id, role, member_client_id, scheduling_access,
+    `SELECT tenant_id, role, member_client_id, client_role,
             scheduling_site_id, scheduling_staff_id
        FROM tenant_members
       WHERE user_id = $1
@@ -68,21 +76,36 @@ export async function setMembershipRole(params: {
   userId: string;
   role: 'owner' | 'admin' | 'member';
   memberClientId?: string | null;
+  /** Required-ish when role === 'member' (defaults to 'editor'). Only 'owner' | 'editor'
+   *  here — a 'staff' login needs a site+staff binding, set via setMemberClientRole. */
+  clientRole?: 'owner' | 'editor';
 }): Promise<number> {
   const memberClientId = params.role === 'member' ? (params.memberClientId ?? null) : null;
+  const clientRole = params.role === 'member' ? (params.clientRole ?? 'editor') : null;
   if (params.role === 'member' && !memberClientId) {
     throw new Error("setMembershipRole: role='member' requires a memberClientId");
   }
   const result = await query(
     `UPDATE tenant_members
-        SET role = $3, member_client_id = $4,
-            scheduling_access = NULL,
+        SET role = $3, member_client_id = $4, client_role = $5,
             scheduling_site_id = NULL,
             scheduling_staff_id = NULL
       WHERE tenant_id = $1 AND user_id = $2`,
-    [params.tenantId, params.userId, params.role, memberClientId],
+    [params.tenantId, params.userId, params.role, memberClientId, clientRole],
   );
   return result.rowCount ?? 0;
+}
+
+/** How many CLIENT OWNERS a client has — the last-owner guard reads this so the final
+ *  Client Owner of a client can never be demoted or removed. */
+export async function countClientOwners(tenantId: string, clientId: string): Promise<number> {
+  const result = await query<{ n: string }>(
+    `SELECT count(*)::int AS n FROM tenant_members
+      WHERE tenant_id = $1 AND role = 'member'
+        AND member_client_id = $2 AND client_role = 'owner'`,
+    [tenantId, clientId],
+  );
+  return Number(result.rows[0]?.n ?? 0);
 }
 
 /**
@@ -150,7 +173,7 @@ export async function linkUserToTenantAsOwner(params: {
      ON CONFLICT (tenant_id, user_id) DO UPDATE SET
        role = 'owner',
        member_client_id = NULL,
-       scheduling_access = NULL,
+       client_role = NULL,
        scheduling_site_id = NULL,
        scheduling_staff_id = NULL`,
     [params.tenantId, params.userId],
@@ -186,7 +209,7 @@ export interface MemberWithDetails {
   role: string;
   member_client_id: string | null;
   client_name: string | null;
-  scheduling_access: SchedulingAccess | null;
+  client_role: ClientRole | null;
   scheduling_site_id: string | null;
   scheduling_site_name: string | null;
   scheduling_staff_id: string | null;
@@ -201,7 +224,7 @@ export interface MemberWithDetails {
 export async function listMembersForTenant(tenantId: string): Promise<MemberWithDetails[]> {
   const result = await query<MemberWithDetails>(
     `SELECT tm.user_id, u.email, u.name, tm.role, tm.member_client_id,
-            c.name AS client_name, tm.scheduling_access, tm.scheduling_site_id,
+            c.name AS client_name, tm.client_role, tm.scheduling_site_id,
             s.name AS scheduling_site_name, tm.scheduling_staff_id,
             st.name AS scheduling_staff_name, tm.created_at
        FROM tenant_members tm
@@ -247,18 +270,18 @@ export async function getMemberInTenant(
 ): Promise<{
   role: string;
   member_client_id: string | null;
-  scheduling_access: SchedulingAccess | null;
+  client_role: ClientRole | null;
   scheduling_site_id: string | null;
   scheduling_staff_id: string | null;
 } | null> {
   const result = await query<{
     role: string;
     member_client_id: string | null;
-    scheduling_access: SchedulingAccess | null;
+    client_role: ClientRole | null;
     scheduling_site_id: string | null;
     scheduling_staff_id: string | null;
   }>(
-    `SELECT role, member_client_id, scheduling_access, scheduling_site_id,
+    `SELECT role, member_client_id, client_role, scheduling_site_id,
             scheduling_staff_id
        FROM tenant_members
       WHERE tenant_id = $1 AND user_id = $2`,
@@ -268,35 +291,34 @@ export async function getMemberInTenant(
 }
 
 /**
- * Bind a client-scoped member to a scheduling profile. Passing `access: null`
- * removes the scheduling restriction and restores the legacy client-member
- * behavior. Composite foreign keys in the migration enforce that site and staff
- * belong to the member's tenant/client and to each other.
+ * Set a member's CLIENT ROLE (owner | editor | staff) within their client. `staff`
+ * carries a site + staff binding (both required); owner/editor clear it (they see the
+ * whole client). Composite foreign keys in the migration enforce that the site belongs
+ * to the member's tenant/client and the staff to that site. Scoped to `role='member'
+ * AND member_client_id=clientId`, so it can never touch an owner/admin or a member of
+ * another client.
  */
-export async function setMemberSchedulingAccess(params: {
+export async function setMemberClientRole(params: {
   tenantId: string;
   userId: string;
   clientId: string;
-  access: SchedulingAccess | null;
+  clientRole: ClientRole;
   siteId?: string | null;
   staffId?: string | null;
 }): Promise<number> {
-  const siteId = params.access ? (params.siteId ?? null) : null;
-  const staffId = params.access === 'staff' ? (params.staffId ?? null) : null;
-  if (params.access && !siteId) {
-    throw new Error('setMemberSchedulingAccess: a scheduling profile requires a site');
-  }
-  if (params.access === 'staff' && !staffId) {
-    throw new Error("setMemberSchedulingAccess: access='staff' requires a staff resource");
+  const siteId = params.clientRole === 'staff' ? (params.siteId ?? null) : null;
+  const staffId = params.clientRole === 'staff' ? (params.staffId ?? null) : null;
+  if (params.clientRole === 'staff' && (!siteId || !staffId)) {
+    throw new Error("setMemberClientRole: clientRole='staff' requires a site and a staff resource");
   }
   const result = await query(
     `UPDATE tenant_members
-        SET scheduling_access = $4,
+        SET client_role = $4,
             scheduling_site_id = $5,
             scheduling_staff_id = $6
       WHERE tenant_id = $1 AND user_id = $2
         AND role = 'member' AND member_client_id = $3`,
-    [params.tenantId, params.userId, params.clientId, params.access, siteId, staffId],
+    [params.tenantId, params.userId, params.clientId, params.clientRole, siteId, staffId],
   );
   return result.rowCount ?? 0;
 }

@@ -1,5 +1,6 @@
 import { connection } from "next/server";
-import { requireFullAccessOrLand } from "@/lib/access";
+import { notFound } from "next/navigation";
+import { canManageClient } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 import { listStaff } from "@worker/db/repositories/scheduling/staff.js";
@@ -30,9 +31,10 @@ export default async function ClientSchedulingAdminPage({
   params: Promise<{ clientId: string }>;
 }) {
   await connection();
-  await requireFullAccessOrLand(); // owner/admin only
   const { clientId } = await params;
   const { scope, client } = await requireClientModulePage(clientId, "scheduling");
+  // Settings are for the agency OR this client's OWNER — editors/staff are 404'd.
+  if (!canManageClient(scope, clientId)) notFound();
   const tenantId = scope.tenantId;
 
   const [sites, services, staff] = await Promise.all([

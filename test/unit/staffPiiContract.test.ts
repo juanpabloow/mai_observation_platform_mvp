@@ -82,7 +82,7 @@ test('no API route reads staff PII (public booking, machine API)', () => {
   }
 });
 
-test('the Staff page is the ONLY page that reads staff PII, and it is owner/admin gated', () => {
+test('the Staff page is the ONLY page that reads staff PII, and it is client-admin gated', () => {
   // The roster moved from Team to SCHEDULING → Staff, and the PII read moved WITH it.
   // The assertion is unchanged in intent: exactly one page, and this is the one.
   const readers = filesUnder('web/app')
@@ -91,7 +91,8 @@ test('the Staff page is the ONLY page that reads staff PII, and it is owner/admi
   assert.deepEqual(readers, ['clients/[clientId]/scheduling/staff/page.tsx'], 'exactly one page reads the PII');
 
   const page = root('web/app/clients/[clientId]/scheduling/staff/page.tsx');
-  assert.ok(page.includes('requireFullAccessOrLand()'), 'behind the owner/admin gate');
+  // The agency OR this client's Owner (canManageClient) — editors/staff are 404'd.
+  assert.ok(page.includes('canManageClient(scope, clientId)'), 'behind the client-admin gate');
   assert.ok(page.includes('requireClientModulePage(clientId, "scheduling")'), 'and behind the module gate');
 
   // Team is logins and roles now — it must not read a staff row at all.

@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { requireFullAccessForAction } from "./access";
+import { canManageClient } from "./access";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, type WeeklyHours } from "@worker/scheduling/types.js";
 import { localWallClockToUtc } from "@worker/scheduling/timezone.js";
@@ -43,19 +43,18 @@ import {
 } from "@worker/db/repositories/scheduling/exceptions.js";
 
 /**
- * Owner/admin CRUD for a SINGLE CLIENT's scheduling resource model (sites, staff,
- * the client's OWN service catalogue, per-site enablement, exceptions). Services now
- * belong to the client (services.client_id) — never shared across clients. Every
- * action is validated FOUR ways,
- * in this order, before any mutation:
- *   1. owner/admin              — requireFullAccessForAction (throws for a member);
- *   2. tenant + client of route — resolveClientModuleContext (the URL clientId is
- *      validated against the session's tenant + access scope);
- *   3. non-default client       — the Unassigned client can't have scheduling;
- *   4. scheduling ENABLED       — the module must be on for that client.
- * Then the TARGET resource (site/staff/exception) must belong to that client — a
- * forged id from another client is rejected, so there is NO cross-client admin.
- * Soft-delete (deactivate) preserves appointment history.
+ * CLIENT-ADMIN CRUD for a SINGLE CLIENT's scheduling resource model (sites, staff, the
+ * client's OWN service catalogue, per-site enablement, exceptions). Services belong to
+ * the client (services.client_id) — never shared across clients. Every action is
+ * validated in this order, before any mutation:
+ *   1. tenant + client of route — resolveClientModuleContext (the URL clientId is
+ *      validated against the session's tenant + access scope; non-default; module ON);
+ *   2. client-admin capability  — canManageClient: the agency (owner/admin) OR this
+ *      client's OWNER. An Editor or Staff login is refused (they operate the agenda but
+ *      never configure it).
+ * Then the TARGET resource (site/staff/exception) must belong to that client — a forged
+ * id from another client is rejected, so there is NO cross-client admin. Soft-delete
+ * (deactivate) preserves appointment history.
  */
 
 export type AdminResult = { ok: true; id?: string } | { ok: false; error: string };
@@ -65,9 +64,12 @@ export type AdminResult = { ok: true; id?: string } | { ok: false; error: string
 async function requireSchedulingAdmin(
   clientId: string,
 ): Promise<{ ok: true; tenantId: string } | { ok: false; error: string }> {
-  await requireFullAccessForAction(); // owner/admin only — throws for a member
   const res = await resolveClientModuleContext(clientId, "scheduling");
-  if (!res.ok) return { ok: false, error: "Scheduling isn’t available for this client." };
+  // Editors/Staff can reach the scheduling module but MUST NOT configure it — only the
+  // client OWNER (or the agency) manages sites/services/staff/hours/rules.
+  if (!res.ok || !canManageClient(res.context.scope, clientId)) {
+    return { ok: false, error: "Scheduling isn’t available for this client." };
+  }
   return { ok: true, tenantId: res.context.scope.tenantId };
 }
 

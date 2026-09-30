@@ -2,11 +2,11 @@
 
 import { revalidatePath } from "next/cache";
 import { getServerSession } from "./session";
-import { requireFullAccessForAction } from "./access";
+import { getAccessScope, hasFullAccess, isClientOwner, requireFullAccessForAction, type AccessScope } from "./access";
 import { getClientById } from "@worker/db/repositories/clients.js";
 import {
   getMembershipForUser,
-  type SchedulingAccess,
+  type ClientRole,
 } from "@worker/db/repositories/tenantMembers.js";
 import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
 import { getStaffById } from "@worker/db/repositories/scheduling/staff.js";
@@ -36,11 +36,36 @@ function appBaseUrl(): string {
 function roleLabel(
   role: InvitationRole,
   clientName: string | null,
-  schedulingAccess: SchedulingAccess | null = null,
+  clientRole: ClientRole | null = null,
 ): string {
-  if (schedulingAccess === "staff") return `staff at ${clientName ?? "a client"}`;
-  if (schedulingAccess === "reception") return `reception at ${clientName ?? "a client"}`;
+  if (clientRole === "owner") return `the owner of ${clientName ?? "a client"}`;
+  if (clientRole === "staff") return `staff at ${clientName ?? "a client"}`;
+  if (clientRole === "editor") return `an editor at ${clientName ?? "a client"}`;
   return role === "member" ? `a member of ${clientName ?? "a client"}` : "an admin";
+}
+
+/**
+ * ESCALATION GATE — may `scope` grant `clientRole` for `clientId`? The security core:
+ *   - the AGENCY (tenant owner/admin) may grant any client role for any of their clients;
+ *   - a CLIENT OWNER may grant editor/staff for THEIR client ONLY — never another Owner,
+ *     never another client, never a tenant role. Creating a Client Owner is reserved to
+ *     the agency, so an account takeover can't propagate itself.
+ *   - Editors and Staff may grant nothing.
+ * Deny-by-default: anything not explicitly permitted is refused.
+ */
+function canGrantClientRole(
+  scope: AccessScope,
+  clientId: string,
+  clientRole: ClientRole,
+): { ok: true } | { ok: false; error: string } {
+  if (hasFullAccess(scope)) return { ok: true };
+  if (isClientOwner(scope, clientId)) {
+    if (clientRole === "owner") {
+      return { ok: false, error: "Only the agency can add another Owner to this client." };
+    }
+    return { ok: true }; // editor or staff, own client
+  }
+  return { ok: false, error: "You don't have permission to invite people to this client." };
 }
 
 function inviteEmailHtml(params: {
@@ -48,10 +73,10 @@ function inviteEmailHtml(params: {
   tenantName: string;
   role: InvitationRole;
   clientName: string | null;
-  schedulingAccess?: SchedulingAccess | null;
+  clientRole?: ClientRole | null;
   acceptUrl: string;
 }): string {
-  const what = roleLabel(params.role, params.clientName, params.schedulingAccess ?? null);
+  const what = roleLabel(params.role, params.clientName, params.clientRole ?? null);
   // Inline styles only (email clients strip <style>); plain, legible, no tracking.
   return `<!doctype html><html><body style="margin:0;background:#f5f5f4;padding:24px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c1917">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
@@ -91,59 +116,69 @@ export async function createInvitationAction(input: {
   email: string;
   role: InvitationRole;
   memberClientId?: string | null;
-  schedulingAccess?: SchedulingAccess | null;
+  clientRole?: ClientRole | null;
   schedulingSiteId?: string | null;
   schedulingStaffId?: string | null;
 }): Promise<{ ok: boolean; error?: string; emailSent?: boolean; acceptUrl?: string }> {
-  const scope = await requireFullAccessForAction(); // owner/admin only
+  // Any authenticated user reaches here; the capability to invite THIS role for THIS
+  // client is enforced below (agency for admins / any client role; a Client Owner for
+  // editor+staff of their own client). Never trust the surface that called us.
+  const scope = await getAccessScope();
 
   const email = normalizeEmail(input.email ?? "");
   if (!EMAIL_RE.test(email)) return { ok: false, error: "Enter a valid email address." };
   if (input.role !== "admin" && input.role !== "member") {
     return { ok: false, error: "Invalid role." };
   }
-  // Boundary (RBAC-3): inviting an ADMIN is owner-only — admins manage members, not
-  // the admin tier. An admin can still invite members.
-  if (input.role === "admin" && scope.role !== "owner") {
-    return { ok: false, error: "Only the owner can invite an admin." };
+  // ADMIN invites are AGENCY-ONLY and owner-only — a client owner can never mint an
+  // admin (that would be a tenant-level escalation), and an admin can't mint an admin.
+  if (input.role === "admin") {
+    if (!hasFullAccess(scope) || scope.role !== "owner") {
+      return { ok: false, error: "Only the workspace owner can invite an admin." };
+    }
   }
 
-  // Role↔client rule + same-tenant client (also enforced by the DB).
   let memberClientId: string | null = null;
   let clientName: string | null = null;
-  let schedulingAccess: SchedulingAccess | null = null;
+  let clientRole: ClientRole | null = null;
   let schedulingSiteId: string | null = null;
   let schedulingStaffId: string | null = null;
   if (input.role === "member") {
     const clientId = input.memberClientId ?? null;
     if (!clientId) return { ok: false, error: "A member invitation must include a client." };
+
+    const requestedRole = input.clientRole ?? null;
+    if (requestedRole !== "owner" && requestedRole !== "editor" && requestedRole !== "staff") {
+      return { ok: false, error: "Choose a valid role (Owner, Editor or Staff)." };
+    }
+    // ESCALATION GATE — before any lookup: may the ACTOR grant this exact role for this
+    // exact client? (Deny-by-default; a Client Owner can't create Owners or reach other clients.)
+    const grant = canGrantClientRole(scope, clientId, requestedRole);
+    if (!grant.ok) return { ok: false, error: grant.error };
+
     const client = await getClientById({ tenantId: scope.tenantId, clientId });
     if (!client) return { ok: false, error: "That client doesn't belong to your workspace." };
+    if (client.is_default) return { ok: false, error: "The Unassigned client can't have client roles." };
     memberClientId = clientId;
-    clientName = client.is_default ? "Unassigned" : client.name;
+    clientName = client.name;
+    clientRole = requestedRole;
 
-    const requestedAccess = input.schedulingAccess ?? null;
-    if (requestedAccess !== null && requestedAccess !== "staff" && requestedAccess !== "reception") {
-      return { ok: false, error: "Invalid scheduling access." };
-    }
-    if (requestedAccess) {
+    // Only STAFF carries a site + staff binding; owner/editor see the whole client.
+    if (requestedRole === "staff") {
       const siteId = input.schedulingSiteId ?? null;
-      if (!siteId) return { ok: false, error: "Choose a site for scheduling access." };
+      if (!siteId) return { ok: false, error: "Choose a site for this staff login." };
       const site = await getSiteById(scope.tenantId, siteId);
       if (!site || site.client_id !== clientId || !site.active) {
         return { ok: false, error: "That site isn't active for the selected client." };
       }
-      schedulingAccess = requestedAccess;
       schedulingSiteId = siteId;
-      if (requestedAccess === "staff") {
-        const staffId = input.schedulingStaffId ?? null;
-        if (!staffId) return { ok: false, error: "Choose the staff member for this login." };
-        const staff = await getStaffById(scope.tenantId, staffId);
-        if (!staff || staff.site_id !== siteId || !staff.active || !staff.takes_bookings) {
-          return { ok: false, error: "That staff member isn't bookable at the selected site." };
-        }
-        schedulingStaffId = staffId;
+      const staffId = input.schedulingStaffId ?? null;
+      if (!staffId) return { ok: false, error: "Choose the staff member for this login." };
+      const staff = await getStaffById(scope.tenantId, staffId);
+      if (!staff || staff.site_id !== siteId || !staff.active || !staff.takes_bookings) {
+        return { ok: false, error: "That staff member isn't bookable at the selected site." };
       }
+      schedulingStaffId = staffId;
     }
   }
 
@@ -157,7 +192,7 @@ export async function createInvitationAction(input: {
       email,
       role: input.role,
       memberClientId,
-      schedulingAccess,
+      clientRole,
       schedulingSiteId,
       schedulingStaffId,
       tokenHash,
@@ -185,7 +220,7 @@ export async function createInvitationAction(input: {
       tenantName,
       role: input.role,
       clientName,
-      schedulingAccess,
+      clientRole,
       acceptUrl,
     }),
   });
@@ -263,7 +298,7 @@ export async function acceptInvitationAction(
 
   const redirectTo =
     invite.role === "member" && invite.member_client_id
-      ? invite.scheduling_access
+      ? invite.client_role === "staff"
         ? `/clients/${invite.member_client_id}/scheduling/agenda`
         : `/clients/${invite.member_client_id}/workflows/all/analytics`
       : "/";
@@ -276,12 +311,26 @@ export async function listInvitationsAction(): Promise<InvitationListRow[]> {
   return listInvitationsForTenant(scope.tenantId);
 }
 
-/** RBAC-3 wiring: revoke a pending invitation (owner/admin only, tenant-scoped). */
+/**
+ * Revoke a pending invitation. The AGENCY revokes any invite in its tenant; a CLIENT
+ * OWNER may revoke ONLY a pending member invite to their OWN client (so they can manage
+ * their own pending Editors/Staff). Tenant-scoped throughout — a foreign id never takes
+ * effect. Editors/Staff can't reach it.
+ */
 export async function revokeInvitationAction(
   invitationId: string,
 ): Promise<{ ok: boolean }> {
-  const scope = await requireFullAccessForAction();
+  const scope = await getAccessScope();
+  if (!hasFullAccess(scope)) {
+    if (scope.clientRole !== "owner" || !scope.memberClientId) return { ok: false };
+    const invites = await listInvitationsForTenant(scope.tenantId);
+    const target = invites.find((i) => i.id === invitationId);
+    if (!target || target.role !== "member" || target.member_client_id !== scope.memberClientId) {
+      return { ok: false };
+    }
+  }
   const ok = await revokeInvitation({ tenantId: scope.tenantId, invitationId });
   revalidatePath("/settings/team");
+  if (scope.memberClientId) revalidatePath(`/clients/${scope.memberClientId}/team`);
   return { ok };
 }

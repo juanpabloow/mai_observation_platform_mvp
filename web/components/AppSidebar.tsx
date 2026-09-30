@@ -250,7 +250,7 @@ interface Account {
   name: string | null;
   email: string;
   role: "owner" | "admin" | "member";
-  accessLabel: "staff" | "reception" | null;
+  accessLabel: "owner" | "editor" | "staff" | null;
   clientLabel: string | null;
   canSwitchClients: boolean;
 }
@@ -419,7 +419,7 @@ export function AppSidebar({
   email,
   role,
   clientLabel,
-  schedulingAccess,
+  clientRole,
 }: {
   /** Display name for the account footer; falls back to the email when absent. */
   name: string | null;
@@ -433,7 +433,8 @@ export function AppSidebar({
   email: string;
   role: "owner" | "admin" | "member";
   clientLabel: string | null;
-  schedulingAccess: "staff" | "reception" | null;
+  /** The client-level role (owner/editor/staff) for a member; null for the agency. */
+  clientRole: "owner" | "editor" | "staff" | null;
 }) {
   const pathname = usePathname();
   const { collapsed, mobileOpen, setMobileOpen } = useSidebar();
@@ -459,7 +460,7 @@ export function AppSidebar({
   // Brand target: the Hub for owner/admin; a member has no Hub access, so their
   // brand links to their own client (mirrors the header's memberLandingHref).
   const homeHref = memberClientId
-    ? schedulingAccess
+    ? clientRole === "staff"
       ? `/clients/${memberClientId}/scheduling/agenda`
       : `/clients/${memberClientId}/workflows`
     : "/";
@@ -467,7 +468,7 @@ export function AppSidebar({
     name,
     email,
     role,
-    accessLabel: schedulingAccess,
+    accessLabel: clientRole,
     clientLabel,
     canSwitchClients: memberClientId === null,
   };
@@ -486,163 +487,147 @@ export function AppSidebar({
     // Analytics is a /workflows/<scope>/analytics route, so it lives UNDER /workflows; the
     // active split between the two rows keys off whether the current path is that surface.
     const onAnalytics = /\/workflows\/[^/]+\/analytics(?:\/|$)/.test(pathname);
-    if (isMember && schedulingAccess) {
-      const schedulingItems: NavItem[] = [
+    // WHAT THIS login may see/manage in this client context (mirrors the server; hides
+    // controls the viewer can't use so no empty/broken page ever appears in the rail):
+    //   canSeeGeneral    — Workspace/CRM/analytics/inbox: the agency, or an owner/editor
+    //                      of THIS client. A staff login is excluded (agenda only).
+    //   canManageThisClient — settings, roster, custom fields, team: the agency or this
+    //                      client's OWNER. Editors and staff never.
+    const forOwnClient = memberClientId !== null && clientId === memberClientId;
+    const canSeeGeneral = !isMember || ((clientRole === "owner" || clientRole === "editor") && forOwnClient);
+    const canManageThisClient = !isMember || (clientRole === "owner" && forOwnClient);
+    if (clientRole === "staff") {
+      // STAFF: their own agenda, and nothing else.
+      sections = [
         {
-          key: "agenda",
-          label: schedulingAccess === "staff" ? "My schedule" : "Agenda",
-          href: c("/scheduling/agenda"),
-          icon: Icon.agenda,
-          active: pathname.startsWith(c("/scheduling/agenda")),
+          label: SCHEDULING_SECTION,
+          items: [
+            {
+              key: "agenda",
+              label: "My schedule",
+              href: c("/scheduling/agenda"),
+              icon: Icon.agenda,
+              active: pathname.startsWith(c("/scheduling/agenda")),
+            },
+          ],
         },
       ];
-      sections = [{ label: SCHEDULING_SECTION, items: schedulingItems }];
     } else {
-    // WORKSPACE — the top-level places. Hub was removed from the rail (per request); the
-    // brand wordmark still links home. Workflows (the client's workflow CONTEXT), then
-    // Analytics (the aggregate / per-workflow analytics surface), then Inbox. Both
-    // Workflows and Analytics are SCOPE-AWARE: they follow the header's selected workflow,
-    // or the "all" aggregate — the same scope the switcher drives.
-    const workspace: NavItem[] = [
-      {
-        key: "workflows",
-        label: "Workflows",
-        href: scopeHref(clientId, "executions", scope),
-        icon: Icon.workflows,
-        // Only one row is active at a time — Workflows yields to Analytics on its route.
-        active: onWorkflows && !onAnalytics,
-      },
-      {
-        key: "analytics",
-        label: "Analytics",
-        href: scopeHref(clientId, "analytics", scope),
-        icon: Icon.overview,
-        active: onWorkflows && onAnalytics,
-      },
-    ];
-    // Inbox only when the `inbox` module is enabled — hides the link, the badge, and
-    // (no countEndpoint rendered) stops the pending-count polling.
-    if (moduleKeys.includes("inbox")) {
-      workspace.push({
-        key: "inbox",
-        label: "Inbox",
-        href: c("/inbox"),
-        icon: Icon.inbox,
-        active: pathname.startsWith(c("/inbox")),
-        countEndpoint: `/api/inbox/${clientId}/pending-count`,
-      });
-    }
-    // Reuniones sits in WORKSPACE beside Inbox (both are places where work
-    // ARRIVES), and only when the `meetings` module is enabled — a rail item
-    // whose route 404s is worse than an absent one. No count endpoint: there is
-    // no meetings storage yet, so a badge would be inventing a number.
-    if (moduleKeys.includes("meetings")) {
-      workspace.push({
-        key: "meetings",
-        label: "Reuniones",
-        href: c("/reuniones"),
-        icon: Icon.meetings,
-        active: pathname.startsWith(c("/reuniones")),
-      });
-    }
-    // TODO(nav): the target design's CRM group also lists "Tasks" and "Sites", and
-    // SCHEDULING lists "Scheduling analytics". None of those routes exist in this
-    // build, so they are deliberately NOT rendered — a rail item that 404s is worse
-    // than an absent one. Confirm before I add them (each needs a real page first).
-    // TODO(nav): the target puts "Users & access" inside CRM and drops "Modules"
-    // entirely; here both live under ADMINISTRATION because they are owner/admin
-    // client-administration surfaces, not CRM ones. Confirm before moving.
-    // TODO(nav): the target has no "Custom fields" row; this build does, because
-    // /contacts/fields is a real page. Confirm before hiding it.
-    sections = [{ label: "Workspace", items: workspace }];
-    if (moduleKeys.includes("crm")) {
-      const onFields = pathname.startsWith(c("/contacts/fields"));
-      const crm: NavItem[] = [
-        {
-          key: "contacts",
-          label: "Contacts",
-          href: c("/contacts"),
-          icon: Icon.contacts,
-          // Exclude the fields sub-route so exactly ONE row is ever active.
-          active: pathname.startsWith(c("/contacts")) && !onFields,
-        },
-      ];
-      // The only other REAL CRM route. The reference also shows Tasks and Sites —
-      // neither exists in the app, so they are deliberately not invented here.
-      if (!isMember) {
-        crm.push({
-          key: "contact-fields",
-          label: "Custom fields",
-          href: c("/contacts/fields"),
-          icon: Icon.modules,
-          active: onFields,
-        });
+      sections = [];
+      // WORKSPACE — Workflows, Analytics (both SCOPE-AWARE), then Inbox/Reuniones
+      // (module-gated). Owner/editor and the agency.
+      if (canSeeGeneral) {
+        const workspace: NavItem[] = [
+          {
+            key: "workflows",
+            label: "Workflows",
+            href: scopeHref(clientId, "executions", scope),
+            icon: Icon.workflows,
+            active: onWorkflows && !onAnalytics,
+          },
+          {
+            key: "analytics",
+            label: "Analytics",
+            href: scopeHref(clientId, "analytics", scope),
+            icon: Icon.overview,
+            active: onWorkflows && onAnalytics,
+          },
+        ];
+        if (moduleKeys.includes("inbox")) {
+          workspace.push({
+            key: "inbox",
+            label: "Inbox",
+            href: c("/inbox"),
+            icon: Icon.inbox,
+            active: pathname.startsWith(c("/inbox")),
+            countEndpoint: `/api/inbox/${clientId}/pending-count`,
+          });
+        }
+        if (moduleKeys.includes("meetings")) {
+          workspace.push({
+            key: "meetings",
+            label: "Reuniones",
+            href: c("/reuniones"),
+            icon: Icon.meetings,
+            active: pathname.startsWith(c("/reuniones")),
+          });
+        }
+        sections.push({ label: "Workspace", items: workspace });
       }
-      sections.push({ label: "CRM", items: crm });
-    }
-    if (moduleKeys.includes("scheduling")) {
-      const scheduling: NavItem[] = [
-        { key: "agenda", label: "Agenda", href: c("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(c("/scheduling/agenda")) },
-      ];
-      // STAFF (the roster) and Scheduling settings are both owner/admin only, and
-      // never for the DEFAULT client (it can't have scheduling). The module gate
-      // already ensured `scheduling` is enabled for this client.
-      if (!isMember && clientId !== defaultClientId) {
-        scheduling.push({
-          key: "staff",
-          label: "Staff",
-          href: c("/scheduling/staff"),
-          icon: Icon.team,
-          active: pathname.startsWith(c("/scheduling/staff")),
-        });
-        scheduling.push({
-          key: "scheduling-settings",
-          label: "Configuración de agenda",
-          href: c("/scheduling/admin"),
-          icon: Icon.schedulingAdmin,
-          active: pathname.startsWith(c("/scheduling/admin")),
-        });
+      // CRM — Contacts for owner/editor/agency; Custom fields only for those who can
+      // MANAGE the client (owner or agency). Field mappings/plumbing are agency-only,
+      // handled elsewhere.
+      if (moduleKeys.includes("crm") && canSeeGeneral) {
+        const onFields = pathname.startsWith(c("/contacts/fields"));
+        const crm: NavItem[] = [
+          {
+            key: "contacts",
+            label: "Contacts",
+            href: c("/contacts"),
+            icon: Icon.contacts,
+            active: pathname.startsWith(c("/contacts")) && !onFields,
+          },
+        ];
+        if (canManageThisClient) {
+          crm.push({
+            key: "contact-fields",
+            label: "Custom fields",
+            href: c("/contacts/fields"),
+            icon: Icon.modules,
+            active: onFields,
+          });
+        }
+        sections.push({ label: "CRM", items: crm });
       }
-      sections.push({ label: "Scheduling", items: scheduling });
-    }
-    if (!isMember) {
-      const admin: NavItem[] = [
-        // The LABEL is "Users & access"; the key, the route and the components stay
-        // `team` so no link, import or test id breaks. This row is logins and roles —
-        // the barber roster is SCHEDULING → Staff.
-        { key: "team", label: "Users & access", href: c("/team"), icon: Icon.team, active: pathname.startsWith(c("/team")) },
-      ];
-      // Modules is hidden for the DEFAULT client (it can't have modules).
-      if (clientId !== defaultClientId) {
-        admin.push({ key: "modules", label: "Modules", href: c("/modules"), icon: Icon.modules, active: pathname.startsWith(c("/modules")) });
+      // SCHEDULING — Agenda for anyone with scheduling access; the roster + settings only
+      // for those who can manage the client (owner or agency).
+      if (moduleKeys.includes("scheduling")) {
+        const scheduling: NavItem[] = [
+          { key: "agenda", label: "Agenda", href: c("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(c("/scheduling/agenda")) },
+        ];
+        if (canManageThisClient && clientId !== defaultClientId) {
+          scheduling.push({
+            key: "staff",
+            label: "Staff",
+            href: c("/scheduling/staff"),
+            icon: Icon.team,
+            active: pathname.startsWith(c("/scheduling/staff")),
+          });
+          scheduling.push({
+            key: "scheduling-settings",
+            label: "Configuración de agenda",
+            href: c("/scheduling/admin"),
+            icon: Icon.schedulingAdmin,
+            active: pathname.startsWith(c("/scheduling/admin")),
+          });
+        }
+        sections.push({ label: "Scheduling", items: scheduling });
       }
-      sections.push({ label: "Administration", items: admin });
-    }
+      // ADMINISTRATION — Users & access for the client OWNER (and the agency); Modules is
+      // AGENCY-ONLY plumbing (a client can't toggle its own modules).
+      if (canManageThisClient) {
+        const admin: NavItem[] = [
+          { key: "team", label: "Users & access", href: c("/team"), icon: Icon.team, active: pathname.startsWith(c("/team")) },
+        ];
+        if (!isMember && clientId !== defaultClientId) {
+          admin.push({ key: "modules", label: "Modules", href: c("/modules"), icon: Icon.modules, active: pathname.startsWith(c("/modules")) });
+        }
+        sections.push({ label: "Administration", items: admin });
+      }
     }
   } else if (isMember) {
+    // A member landed OFF their client path (e.g. root) — a small stand-in until they
+    // navigate in. Staff → their agenda; owner/editor → analytics + contacts/agenda.
     const m = (p: string) => `/clients/${memberClientId}${p}`;
     const memberModules = enabledModules[memberClientId] ?? [];
-    const items: NavItem[] = schedulingAccess
-      ? [{
-          key: "agenda",
-          label: schedulingAccess === "staff" ? "My schedule" : "Agenda",
-          href: m("/scheduling/agenda"),
-          icon: Icon.agenda,
-          active: pathname.startsWith(m("/scheduling")),
-        }]
-      : [
-      {
-        key: "analytics",
-        label: "Analytics",
-        href: scopeHref(memberClientId, "analytics", scopeFor(memberClientId)),
-        icon: Icon.overview,
-        active: false,
-      },
-    ];
-    if (!schedulingAccess && memberModules.includes("crm")) {
+    const items: NavItem[] =
+      clientRole === "staff"
+        ? [{ key: "agenda", label: "My schedule", href: m("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(m("/scheduling")) }]
+        : [{ key: "analytics", label: "Analytics", href: scopeHref(memberClientId, "analytics", scopeFor(memberClientId)), icon: Icon.overview, active: false }];
+    if (clientRole !== "staff" && memberModules.includes("crm")) {
       items.push({ key: "contacts", label: "Contacts", href: m("/contacts"), icon: Icon.contacts, active: pathname.startsWith(m("/contacts")) });
     }
-    if (!schedulingAccess && memberModules.includes("scheduling")) {
+    if (clientRole !== "staff" && memberModules.includes("scheduling")) {
       items.push({ key: "agenda", label: "Agenda", href: m("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(m("/scheduling")) });
     }
     sections = [{ label: "Client", items }];

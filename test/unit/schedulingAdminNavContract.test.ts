@@ -41,15 +41,15 @@ test('sidebar: Configuración de agenda appears INSIDE a client, gated by module
   const sched = slice(src, 'if (moduleKeys.includes("scheduling")) {', 'sections.push({ label: "Scheduling"');
   // Agenda always; Scheduling settings only for owner/admin on a non-default client.
   assert.ok(sched.includes('key: "agenda"'), 'Agenda is in the client Scheduling section');
-  assert.ok(sched.includes('!isMember && clientId !== defaultClientId'), 'settings gated: owner/admin + non-default');
+  assert.ok(sched.includes('canManageThisClient && clientId !== defaultClientId'), 'settings gated: agency/owner + non-default');
   assert.ok(sched.includes('key: "scheduling-settings"'), 'the settings item is present');
   assert.ok(sched.includes('label: "Configuración de agenda"'), 'the user-facing name is clear and Spanish');
   assert.ok(sched.includes('c("/scheduling/admin")'), 'settings → the per-client canonical admin route');
 });
 
-test('canonical page: owner/admin + scheduling-module gate, renders the client-scoped AdminPanel', () => {
+test('canonical page: agency/owner + scheduling-module gate, renders the client-scoped AdminPanel', () => {
   const src = read('app/clients/[clientId]/scheduling/admin/page.tsx');
-  assert.ok(src.includes('requireFullAccessOrLand('), 'owner/admin gate (members bounced)');
+  assert.ok(src.includes('canManageClient(scope, clientId)'), 'client-admin gate (agency or client owner; editors/staff 404)');
   assert.ok(src.includes('requireClientModulePage(clientId, "scheduling")'), 'tenant+client+non-default+enabled gate');
   assert.ok(src.includes('clientId: client.id'), 'sites/staff loaded with the VALIDATED client id');
   assert.ok(src.includes('<AdminPanel'), 'renders the AdminPanel');
@@ -90,8 +90,9 @@ test('legacy /scheduling/admin: NO global admin — redirect only', () => {
 
 test('actions: every admin action validates the route client (no cross-client admin)', () => {
   const src = read('lib/schedulingAdminActions.ts');
-  // The shared guard checks owner/admin + tenant + client + non-default + enabled.
-  assert.ok(src.includes('requireFullAccessForAction()'), 'guard: owner/admin');
+  // The shared guard checks tenant + client + non-default + enabled, then client-admin
+  // capability (agency OR this client's owner — editors/staff refused).
+  assert.ok(src.includes('canManageClient(res.context.scope, clientId)'), 'guard: agency or client owner');
   assert.ok(src.includes('resolveClientModuleContext(clientId, "scheduling")'), 'guard: tenant+client+non-default+enabled');
   // Resource-ownership helpers keep a forged id from another client from taking effect.
   assert.ok(src.includes('async function siteInClient'), 'site→client ownership helper');

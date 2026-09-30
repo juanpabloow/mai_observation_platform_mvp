@@ -3,7 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { isUuid } from "./clientModuleValidation";
-import { canAccessSchedulingSite, canOperateScheduling, isSchedulingStaff } from "./access";
+import { canAccessSchedulingSite, canAccessSchedulingStaff, canOperateScheduling, isSchedulingStaff } from "./access";
 import { listContacts } from "@worker/db/repositories/contacts.js";
 import { getAppointmentById } from "@worker/db/repositories/scheduling/appointments.js";
 import {
@@ -63,7 +63,10 @@ async function gateAppointment(clientId: string, appointmentId: string) {
   if (
     !appointment ||
     appointment.client_id !== ctx.client.id ||
-    !canAccessSchedulingSite(ctx.scope, appointment.site_id)
+    !canAccessSchedulingSite(ctx.scope, appointment.site_id) ||
+    // A staff login may act only on its OWN column — cancel/confirm/complete/no-show/
+    // reschedule of another staff member's appointment is refused here.
+    !canAccessSchedulingStaff(ctx.scope, appointment.staff_id)
   ) {
     return null;
   }
@@ -163,6 +166,14 @@ export async function createManualAppointmentAction(
   if (!canAccessSchedulingSite(ctx.scope, input.siteId)) {
     return { ok: false, error: GENERIC_GATE };
   }
+  // A staff login books ONLY into its own column: an explicit other-staff id is refused,
+  // and an omitted ("any") id is pinned to their own resource. Everyone else may pass a
+  // staff id (or null for "any", resolved by the booking domain).
+  let staffId = input.staffId ?? null;
+  if (isSchedulingStaff(ctx.scope)) {
+    if (staffId && !canAccessSchedulingStaff(ctx.scope, staffId)) return { ok: false, error: GENERIC_GATE };
+    staffId = ctx.scope.schedulingStaffId;
+  }
   const start = new Date(input.startAt);
   if (Number.isNaN(start.getTime())) return { ok: false, error: "Invalid start time." };
 
@@ -180,7 +191,7 @@ export async function createManualAppointmentAction(
     tenantId: ctx.scope.tenantId,
     siteId: input.siteId,
     serviceId: input.serviceId,
-    staffId: input.staffId ?? null,
+    staffId,
     startAt: start,
     contactId: input.contactId ?? null,
     channel: channelUserId ? channel : null,
@@ -251,6 +262,10 @@ export async function rescheduleAppointmentAction(
   const gated = await gateAppointment(clientId, appointmentId);
   if (!gated) return { ok: false, error: GENERIC_GATE };
   const { ctx } = gated;
+  // A staff login can't move the appointment to ANOTHER staff member's column.
+  if (isSchedulingStaff(ctx.scope) && staffId && !canAccessSchedulingStaff(ctx.scope, staffId)) {
+    return { ok: false, error: GENERIC_GATE };
+  }
   const start = new Date(startAt);
   if (Number.isNaN(start.getTime())) return { ok: false, error: "Invalid start time." };
   const r = await rescheduleAppointment({

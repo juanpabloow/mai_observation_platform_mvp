@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { resolveClientModuleContext } from "./clientModuleAccess";
-import { hasFullAccess } from "./access";
+import { canManageClient } from "./access";
 import {
   createFieldDefinition,
   updateFieldDefinition,
@@ -19,7 +19,9 @@ export type FieldDefActionResult = { ok: true } | { ok: false; error: string };
 async function gate(clientId: string) {
   const resolved = await resolveClientModuleContext(clientId, "crm");
   if (!resolved.ok) return null;
-  if (!hasFullAccess(resolved.context.scope)) return null; // owner/admin only
+  // The client OWNER (or the agency) manages custom-field definitions; an Editor may
+  // fill fields on a contact but not define them.
+  if (!canManageClient(resolved.context.scope, clientId)) return null;
   return resolved.context;
 }
 

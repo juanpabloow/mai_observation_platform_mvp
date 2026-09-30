@@ -3,13 +3,14 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  changeClientRoleAction,
   changeMemberRoleAction,
   reassignMemberClientAction,
   removeMemberAction,
-  setMemberSchedulingAccessAction,
 } from "@/lib/memberActions";
 
 export type MemberRole = "owner" | "admin" | "member";
+export type ClientRole = "owner" | "editor" | "staff";
 
 export interface TeamMemberView {
   userId: string;
@@ -17,7 +18,7 @@ export interface TeamMemberView {
   role: MemberRole;
   clientId: string | null;
   clientName: string | null;
-  schedulingAccess: "staff" | "reception" | null;
+  clientRole: ClientRole | null;
   schedulingSiteId: string | null;
   schedulingSiteName: string | null;
   schedulingStaffId: string | null;
@@ -34,33 +35,49 @@ export interface TeamSiteOption {
   staff: Array<{ id: string; name: string }>;
 }
 
+/**
+ * What the viewer may DO, mirroring the server boundary (the actions are the real gate;
+ * this only hides what the viewer can't do so no broken control appears):
+ *   agency           — tenant owner/admin: reassign client, promote/demote admins;
+ *   isOwner          — tenant owner: manage the admin tier;
+ *   canManageMembers — may manage the member rows shown (client role + remove) — true for
+ *                      the agency and for a Client Owner on their own client's page;
+ *   canAssignOwner   — may grant the client role 'owner' (agency only).
+ */
+export interface TeamViewer {
+  agency: boolean;
+  isOwner: boolean;
+  canManageMembers: boolean;
+  canAssignOwner: boolean;
+}
+
 const ROLE_BADGE: Record<MemberRole, string> = {
   owner: "bg-violet-500/15 text-violet-700 dark:text-violet-300",
   admin: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
   member: "bg-subtle text-muted",
 };
 
-/**
- * Tenant members list with inline management controls, scoped to the viewer's
- * capability (the server actions are the real gate; this only hides what the
- * viewer can't do): the owner row is never editable; admin rows are editable only
- * by the owner; member rows are editable by owner or admin.
- */
+const CLIENT_ROLE_LABEL: Record<ClientRole, string> = {
+  owner: "Owner",
+  editor: "Editor",
+  staff: "Staff",
+};
+
 export function TeamMembers({
   members,
-  clients,
+  clients = [],
   sites = [],
-  viewerRole,
+  viewer,
 }: {
   members: TeamMemberView[];
-  clients: TeamClientOption[];
+  clients?: TeamClientOption[];
   sites?: TeamSiteOption[];
-  viewerRole: "owner" | "admin";
+  viewer: TeamViewer;
 }) {
   return (
     <ul className="divide-y divide-line overflow-hidden rounded-2xl border border-line">
       {members.map((m) => (
-        <MemberRow key={m.userId} member={m} clients={clients} sites={sites} viewerRole={viewerRole} />
+        <MemberRow key={m.userId} member={m} clients={clients} sites={sites} viewer={viewer} />
       ))}
     </ul>
   );
@@ -70,12 +87,12 @@ function MemberRow({
   member,
   clients,
   sites,
-  viewerRole,
+  viewer,
 }: {
   member: TeamMemberView;
   clients: TeamClientOption[];
   sites: TeamSiteOption[];
-  viewerRole: "owner" | "admin";
+  viewer: TeamViewer;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
@@ -83,26 +100,27 @@ function MemberRow({
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [demoting, setDemoting] = useState(false);
   const [demoteClient, setDemoteClient] = useState(clients[0]?.id ?? "");
-  const [scheduleAccess, setScheduleAccess] = useState<"standard" | "staff" | "reception">(
-    member.schedulingAccess ?? "standard",
-  );
-  const [scheduleSiteId, setScheduleSiteId] = useState(member.schedulingSiteId ?? sites[0]?.id ?? "");
-  const initialSite = sites.find((site) => site.id === (member.schedulingSiteId ?? sites[0]?.id));
-  const [scheduleStaffId, setScheduleStaffId] = useState(
-    member.schedulingStaffId ?? initialSite?.staff[0]?.id ?? "",
-  );
-  const selectedScheduleSite = sites.find((site) => site.id === scheduleSiteId);
+  const [clientRole, setClientRole] = useState<ClientRole>(member.clientRole ?? "editor");
+  const [siteId, setSiteId] = useState(member.schedulingSiteId ?? sites[0]?.id ?? "");
+  const initialSite = sites.find((s) => s.id === (member.schedulingSiteId ?? sites[0]?.id));
+  const [staffId, setStaffId] = useState(member.schedulingStaffId ?? initialSite?.staff[0]?.id ?? "");
+  const selectedSite = sites.find((s) => s.id === siteId);
 
-  function changeScheduleSite(nextSiteId: string) {
-    setScheduleSiteId(nextSiteId);
-    setScheduleStaffId(sites.find((site) => site.id === nextSiteId)?.staff[0]?.id ?? "");
+  function changeSite(nextSiteId: string) {
+    setSiteId(nextSiteId);
+    setStaffId(sites.find((s) => s.id === nextSiteId)?.staff[0]?.id ?? "");
   }
 
-  const isOwnerViewer = viewerRole === "owner";
-  // Capability (mirrors the server boundary): owner row immutable; admin rows
-  // owner-only; member rows owner-or-admin.
+  // Which rows this viewer may act on (mirrors the server): the tenant owner is
+  // immutable; admins are owner-only; members are managed by the agency or the client's
+  // Owner. A Client Owner cannot act on another Owner (so canManageMembers still hides
+  // owner-row controls for a non-agency viewer).
   const manageable =
-    member.role !== "owner" && (member.role === "member" || isOwnerViewer);
+    member.role === "owner"
+      ? false
+      : member.role === "admin"
+        ? viewer.agency && viewer.isOwner
+        : viewer.canManageMembers && !(member.clientRole === "owner" && !viewer.agency);
 
   async function run(fn: () => Promise<{ ok: boolean; error?: string }>) {
     setBusy(true);
@@ -134,19 +152,20 @@ function MemberRow({
           </span>
           {member.role === "member" ? (
             <span className="truncate text-xs text-muted">
-              · {member.schedulingAccess === "staff"
-                ? `Staff · ${member.schedulingStaffName ?? "unassigned"}`
-                : member.schedulingAccess === "reception"
-                  ? `Reception · ${member.schedulingSiteName ?? "unassigned"}`
-                  : member.clientName ?? "—"}
+              · {member.clientRole ? CLIENT_ROLE_LABEL[member.clientRole] : "—"}
+              {member.clientRole === "staff" && member.schedulingStaffName
+                ? ` · ${member.schedulingStaffName}`
+                : member.clientName
+                  ? ` · ${member.clientName}`
+                  : ""}
             </span>
           ) : null}
         </div>
 
         {manageable ? (
           <div className="flex shrink-0 items-center gap-2">
-            {/* MEMBER: reassign client */}
-            {member.role === "member" ? (
+            {/* MEMBER: reassign client (agency only) */}
+            {member.role === "member" && viewer.agency && clients.length > 0 ? (
               <label className="flex items-center gap-1.5 text-xs text-muted">
                 <span className="sr-only">Client</span>
                 <select
@@ -168,8 +187,8 @@ function MemberRow({
               </label>
             ) : null}
 
-            {/* MEMBER → admin (owner only) */}
-            {member.role === "member" && isOwnerViewer ? (
+            {/* MEMBER → admin (tenant owner only) */}
+            {member.role === "member" && viewer.agency && viewer.isOwner ? (
               <button
                 type="button"
                 disabled={busy}
@@ -182,8 +201,8 @@ function MemberRow({
               </button>
             ) : null}
 
-            {/* ADMIN → member (owner only) — needs a client */}
-            {member.role === "admin" && isOwnerViewer ? (
+            {/* ADMIN → member (tenant owner only) — needs a client */}
+            {member.role === "admin" && viewer.agency && viewer.isOwner ? (
               demoting ? (
                 <span className="flex items-center gap-1.5">
                   <select
@@ -266,62 +285,75 @@ function MemberRow({
         ) : null}
       </div>
 
-      {manageable && member.role === "member" && member.clientId && sites.length > 0 ? (
+      {/* CLIENT ROLE editor — owner/editor/staff for a member of this client. The "Owner"
+          option only appears for the agency (a Client Owner can't mint Owners); staff
+          needs a site + staff binding. */}
+      {manageable && member.role === "member" && member.clientId && viewer.canManageMembers ? (
         <div className="flex flex-wrap items-end gap-2 rounded-lg bg-subtle px-3 py-2">
           <label className="flex flex-col gap-1 text-xs text-muted">
-            Schedule access
+            Role
             <select
-              value={scheduleAccess}
+              value={clientRole}
               disabled={busy}
-              onChange={(event) => setScheduleAccess(event.target.value as typeof scheduleAccess)}
+              onChange={(event) => setClientRole(event.target.value as ClientRole)}
               className="rounded-md border border-line bg-card px-2 py-1.5 text-foreground"
             >
-              <option value="standard">Standard member</option>
-              <option value="staff">Staff · own schedule</option>
-              <option value="reception">Reception · site agenda</option>
+              {viewer.canAssignOwner ? <option value="owner">Owner</option> : null}
+              <option value="editor">Editor</option>
+              <option value="staff">Staff</option>
             </select>
           </label>
-          {scheduleAccess !== "standard" ? (
-            <label className="flex flex-col gap-1 text-xs text-muted">
-              Site
-              <select
-                value={scheduleSiteId}
-                disabled={busy}
-                onChange={(event) => changeScheduleSite(event.target.value)}
-                className="rounded-md border border-line bg-card px-2 py-1.5 text-foreground"
-              >
-                {sites.map((site) => <option key={site.id} value={site.id}>{site.name}</option>)}
-              </select>
-            </label>
-          ) : null}
-          {scheduleAccess === "staff" ? (
-            <label className="flex flex-col gap-1 text-xs text-muted">
-              Staff profile
-              <select
-                value={scheduleStaffId}
-                disabled={busy}
-                onChange={(event) => setScheduleStaffId(event.target.value)}
-                className="rounded-md border border-line bg-card px-2 py-1.5 text-foreground"
-              >
-                {(selectedScheduleSite?.staff ?? []).map((staff) => (
-                  <option key={staff.id} value={staff.id}>{staff.name}</option>
-                ))}
-              </select>
-            </label>
+          {clientRole === "staff" ? (
+            <>
+              <label className="flex flex-col gap-1 text-xs text-muted">
+                Site
+                <select
+                  value={siteId}
+                  disabled={busy}
+                  onChange={(event) => changeSite(event.target.value)}
+                  className="rounded-md border border-line bg-card px-2 py-1.5 text-foreground"
+                >
+                  {sites.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="flex flex-col gap-1 text-xs text-muted">
+                Staff profile
+                <select
+                  value={staffId}
+                  disabled={busy}
+                  onChange={(event) => setStaffId(event.target.value)}
+                  className="rounded-md border border-line bg-card px-2 py-1.5 text-foreground"
+                >
+                  {(selectedSite?.staff ?? []).map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </>
           ) : null}
           <button
             type="button"
-            disabled={busy || (scheduleAccess !== "standard" && !scheduleSiteId) || (scheduleAccess === "staff" && !scheduleStaffId)}
-            onClick={() => run(() => setMemberSchedulingAccessAction({
-              targetUserId: member.userId,
-              clientId: member.clientId as string,
-              access: scheduleAccess === "standard" ? null : scheduleAccess,
-              siteId: scheduleAccess === "standard" ? null : scheduleSiteId,
-              staffId: scheduleAccess === "staff" ? scheduleStaffId : null,
-            }))}
+            disabled={busy || (clientRole === "staff" && (!siteId || !staffId))}
+            onClick={() =>
+              run(() =>
+                changeClientRoleAction({
+                  targetUserId: member.userId,
+                  clientId: member.clientId as string,
+                  clientRole,
+                  siteId: clientRole === "staff" ? siteId : null,
+                  staffId: clientRole === "staff" ? staffId : null,
+                }),
+              )
+            }
             className="rounded-md bg-foreground px-3 py-1.5 text-xs font-medium text-background disabled:opacity-50"
           >
-            Save access
+            Save role
           </button>
         </div>
       ) : null}

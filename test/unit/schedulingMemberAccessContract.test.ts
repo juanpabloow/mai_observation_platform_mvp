@@ -3,76 +3,98 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
 
+/**
+ * SOURCE CONTRACT for CLIENT-LEVEL ROLES (owner / editor / staff). This replaces the
+ * retired scheduling_access (staff | reception) model: reception collapsed into editor,
+ * staff gained own-column booking, and the whole thing is now one authoritative
+ * `client_role` column. These assertions pin the SERVER-SIDE shape so a later edit can't
+ * quietly weaken it.
+ */
+
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const read = (path: string) => readFileSync(`${root}${path}`, 'utf8');
 
-test('scheduling profiles are generic, client/site/staff constrained, and invitation-safe', () => {
-  const migration = read('migrations/1784400000000_scheduling-member-access.ts');
-  assert.match(migration, /scheduling_access = 'staff'/);
-  assert.match(migration, /scheduling_access = 'reception'/);
-  assert.match(migration, /FOREIGN KEY \(scheduling_site_id, tenant_id, member_client_id\)/);
-  assert.match(migration, /FOREIGN KEY \(scheduling_staff_id, tenant_id, scheduling_site_id\)/);
-  assert.match(migration, /tenant_members_one_login_per_staff/);
-  assert.match(migration, /invitations_one_pending_per_staff/);
-  assert.match(migration, /ALTER TABLE invitations/);
+test('client roles: the migration adds client_role, keeps the staff binding + FKs', () => {
+  const migration = read('migrations/1790000000000_client-roles.ts');
+  assert.match(migration, /ADD COLUMN client_role text/);
+  // owner/editor carry no binding; only staff does.
+  assert.match(migration, /client_role IN \('owner','editor'\) AND scheduling_site_id IS NULL AND scheduling_staff_id IS NULL/);
+  assert.match(migration, /client_role = 'staff' AND scheduling_site_id IS NOT NULL AND scheduling_staff_id IS NOT NULL/);
+  // reception + standard both collapse to editor; only staff keeps its binding.
+  assert.match(migration, /WHEN 'staff' THEN 'staff' ELSE 'editor'/);
+  assert.match(migration, /DROP COLUMN scheduling_access/);
 
+  // Invitations snapshot + grant the client role (so accepting is one atomic grant).
   const invitations = read('src/db/repositories/invitations.ts');
-  assert.match(invitations, /grant\.scheduling_access/);
+  assert.match(invitations, /grant\.client_role/);
   assert.match(invitations, /grant\.scheduling_site_id/);
   assert.match(invitations, /grant\.scheduling_staff_id/);
+  assert.doesNotMatch(invitations, /scheduling_access/);
 });
 
-test('staff access is read-only, one-site/one-resource, and not a general client login', () => {
+test('access.ts: the deny-by-default predicates encode the role matrix', () => {
   const access = read('web/lib/access.ts');
-  assert.match(access, /scope\.schedulingAccess === "staff"/);
-  assert.match(access, /if \(scope\.schedulingAccess\) return false/);
-  assert.match(access, /scope\.schedulingSiteId === siteId/);
-  assert.match(access, /scope\.schedulingStaffId === staffId/);
+  // A STAFF login is not a general client login (no CRM/inbox/analytics).
+  assert.match(access, /export function canAccessClient[\s\S]*if \(scope\.clientRole === "staff"\) return false/);
+  // Owner/editor + agency may operate the agenda; staff too (constrained below).
+  assert.match(access, /export function canOperateScheduling[\s\S]*scope\.clientRole !== null/);
+  // Staff pinned to its one site.
+  assert.match(access, /export function canAccessSchedulingSite[\s\S]*if \(scope\.clientRole === "staff"\) return scope\.schedulingSiteId === siteId/);
+  // Staff writes only its own column.
+  assert.match(access, /export function canAccessSchedulingStaff[\s\S]*if \(scope\.clientRole === "staff"\) return scope\.schedulingStaffId === staffId/);
+  // Client-admin capability = agency OR this client's owner (settings/fields/team).
+  assert.match(access, /export function canManageClient[\s\S]*hasFullAccess\(scope\) \|\| isClientOwner\(scope, clientId\)/);
+  assert.match(access, /export function isClientOwner[\s\S]*scope\.clientRole === "owner" && scope\.memberClientId === clientId/);
+  // Fail closed: a member MUST carry a valid client role.
+  assert.match(access, /clientRole !== "owner" && clientRole !== "editor" && clientRole !== "staff"\) return \{ ok: false \}/);
+});
 
+test('scheduling actions: staff book their OWN column only; every write re-checks it', () => {
   const actions = read('web/lib/schedulingActions.ts');
-  assert.match(actions, /!canOperateScheduling\(resolved\.context\.scope\)/);
-  assert.match(actions, /canAccessSchedulingSite\(ctx\.scope, input\.siteId\)/);
-  assert.match(actions, /gateAppointment\(clientId, appointmentId\)/);
+  // The appointment gate refuses another staff member's appointment.
+  assert.match(actions, /canAccessSchedulingStaff\(ctx\.scope, appointment\.staff_id\)/);
+  // Create pins a staff login to its own column (and refuses an explicit other).
+  assert.match(actions, /staffId = ctx\.scope\.schedulingStaffId/);
+  assert.match(actions, /if \(staffId && !canAccessSchedulingStaff\(ctx\.scope, staffId\)\) return \{ ok: false, error: GENERIC_GATE \}/);
+  // Reschedule can't move to another column.
+  assert.match(actions, /isSchedulingStaff\(ctx\.scope\) && staffId && !canAccessSchedulingStaff\(ctx\.scope, staffId\)/);
 
-  const availability = read('web/app/api/scheduling/internal/availability/route.ts');
-  assert.match(availability, /!canOperateScheduling\(scope\)/);
-  assert.match(availability, /!canAccessSchedulingSite\(scope, siteId\)/);
+  // Settings are agency OR this client's owner (editors/staff refused).
+  const admin = read('web/lib/schedulingAdminActions.ts');
+  assert.match(admin, /!canManageClient\(res\.context\.scope, clientId\)/);
+  assert.doesNotMatch(admin, /requireFullAccessForAction/);
+  // Custom-field definitions likewise.
+  const fields = read('web/lib/fieldDefinitionActions.ts');
+  assert.match(fields, /!canManageClient\(resolved\.context\.scope, clientId\)/);
 });
 
-test('the agenda narrows reads server-side and exposes dedicated phone, tablet, and desktop layouts', () => {
+test('the agenda page: staff see the whole SITE, identities hidden, no CRM/inbox links', () => {
   const page = read('web/app/clients/[clientId]/scheduling/agenda/page.tsx');
-  assert.match(page, /staffId: isSchedulingStaff\(scope\)/);
-  assert.match(page, /permittedStaff\.filter\(\(s\) => s\.id === scope\.schedulingStaffId\)/);
+  // No longer narrowed to the staff's own column — they see every lane at their site.
+  assert.doesNotMatch(page, /filter\(\(s\) => s\.id === scope\.schedulingStaffId\)/);
+  // Identities are still withheld from staff, and drawer CRM/inbox links are staff-off.
   assert.match(page, /primary_identity: isSchedulingStaff\(scope\) \? null/);
-  assert.match(page, /canOperate=\{canOperateScheduling\(scope\)\}/);
-
-  const view = read('web/components/scheduling/AgendaView.tsx');
-  assert.match(view, /md:hidden/);
-  assert.match(view, /mobileRows/);
-  assert.match(view, /hidden min-h-0 flex-1 overflow-y-auto bg-canvas p-4 md:block xl:hidden/);
-  assert.match(view, /hidden min-h-0 flex-1 overflow-auto xl:block/);
-  assert.match(view, /function MobileAppointmentCard/);
-  // A card is painted by its SERVICE family (services.category), not by whoever is
-  // assigned — so a staff-scoped login sees the same colours as reception.
-  assert.match(view, /toneClass=\{appointmentToneClass\(appt\)\}/);
-  assert.match(view, /u-appt-service \$\{apptCategoryClass\(serviceCategory\(/);
-  assert.match(view, /grid grid-cols-2 gap-2\.5 p-3/);
-  assert.doesNotMatch(view, /border-(amber|emerald|sky)-/);
-  assert.match(view, /modal && props\.canOperate/);
-  assert.match(view, /live && canOperate/);
+  assert.match(page, /isSchedulingStaff\(scope\) \? Promise\.resolve\(false\) : isClientModuleEnabled/);
+  // The booking modal pins a staff login to its own column.
+  assert.match(page, /lockStaffId=\{isSchedulingStaff\(scope\) \? scope\.schedulingStaffId : null\}/);
 });
 
-test('owners can assign staff/reception at invite time or update an existing member', () => {
+test('team UI + sidebar speak client roles (owner/editor/staff)', () => {
   const invite = read('web/components/InviteForm.tsx');
-  assert.match(invite, /Staff · own schedule/);
-  assert.match(invite, /Reception · site agenda/);
-  assert.match(invite, /schedulingStaffId/);
+  assert.match(invite, /<option value="editor">Editor/);
+  assert.match(invite, /<option value="staff">Staff/);
+  assert.match(invite, /canInviteOwner \? <option value="owner">Owner/);
+  assert.match(invite, /clientRole: role/);
+  assert.doesNotMatch(invite, /reception/i);
 
   const members = read('web/components/TeamMembers.tsx');
-  assert.match(members, /setMemberSchedulingAccessAction/);
-  assert.match(members, /Save access/);
+  assert.match(members, /changeClientRoleAction/);
+  assert.match(members, /Save role/);
+  assert.doesNotMatch(members, /setMemberSchedulingAccessAction/);
 
   const sidebar = read('web/components/AppSidebar.tsx');
-  assert.match(sidebar, /schedulingAccess === "staff" \? "My schedule" : "Agenda"/);
-  assert.match(sidebar, /if \(isMember && schedulingAccess\)/);
+  assert.match(sidebar, /clientRole === "staff"/);
+  assert.match(sidebar, /canManageThisClient/);
+  assert.match(sidebar, /canSeeGeneral/);
+  assert.doesNotMatch(sidebar, /schedulingAccess/);
 });

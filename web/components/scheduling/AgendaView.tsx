@@ -440,8 +440,12 @@ export function AgendaView(props: {
   returnContactId: string | null;
   /** owner/admin — controls whether admin links (Add staff) render. */
   canManage: boolean;
-  /** Owner/admin/reception/legacy member. Staff schedule logins are read-only. */
+  /** owner/admin, client owner/editor, and staff can all operate the agenda; a staff
+   *  login is restricted to its OWN column by the server actions. */
   canOperate: boolean;
+  /** When set (a staff login), the booking modal pins the barber picker to this id —
+   *  the staff's own column. The server enforces it regardless. */
+  lockStaffId: string | null;
   timezone: string;
   date: string;
   view: string;
@@ -2482,6 +2486,8 @@ function AppointmentModal(props: {
   staff: StaffOpt[];
   services: ServiceOpt[];
   modal: ModalState;
+  /** Staff login → pin the barber to this id (its own column). */
+  lockStaffId: string | null;
   onClose: () => void;
   onError: (e: string | null) => void;
   onDone: () => void;
@@ -2490,7 +2496,8 @@ function AppointmentModal(props: {
   // Booking for an existing contact (deep-link): lock identity, submit its id.
   const bookingContact = props.modal.mode !== "reschedule" ? props.modal.contact ?? null : null;
   const [serviceId, setServiceId] = useState(props.modal.mode === "reschedule" ? props.modal.appt.service_id : "");
-  const [staffId, setStaffId] = useState<string>("");
+  // A staff login starts (and stays) on its own column; the server refuses any other.
+  const [staffId, setStaffId] = useState<string>(props.lockStaffId ?? "");
   const [step, setStep] = useState<1 | 2 | 3>(isReschedule ? 2 : 1);
   const [selectedDate, setSelectedDate] = useState(props.date);
   const [calendarMonth, setCalendarMonth] = useState(props.date.slice(0, 7));

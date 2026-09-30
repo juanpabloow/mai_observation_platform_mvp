@@ -5,7 +5,7 @@ import { requireTenant } from "./requireAuth";
 import {
   getMembershipForUser,
   type MembershipScopeRow,
-  type SchedulingAccess,
+  type ClientRole,
 } from "@worker/db/repositories/tenantMembers.js";
 
 /**
@@ -16,13 +16,23 @@ import {
  *
  *  - owner / admin → FULL data access (memberClientId === null, i.e. "all
  *    clients"). For RBAC-1 the two are equivalent for data; admin vs owner only
- *    diverges for owner-only actions in later steps.
- *  - member         → exactly ONE client (memberClientId) and NOTHING else.
+ *    diverges for owner-only actions in later steps. These are the AGENCY.
+ *  - member         → exactly ONE client (memberClientId), and within it a CLIENT
+ *    ROLE that says what they may do (see ClientRole): the people who work at that
+ *    client (the barbershop). Never another client, never a tenant-level surface.
+ *
+ * CLIENT ROLES (only meaningful for role === "member"):
+ *  - owner  → full control of THEIR client (inbox, contacts, agenda, settings,
+ *             custom fields, and managing this client's Editors/Staff);
+ *  - editor → the operational role (inbox, contacts, agenda + booking); no settings,
+ *             custom fields or team;
+ *  - staff  → their own agenda: sees the whole SITE but may create/modify only their
+ *             OWN column; never contacts, inbox, analytics or settings.
  *
  * The scope is resolved from the SESSION at the data layer — the URL is never
- * trusted. Resolution FAILS CLOSED: an unknown role, or a 'member' with no
- * client (a state the DB CHECK forbids), yields no access rather than silently
- * widening to all clients.
+ * trusted. Resolution FAILS CLOSED: an unknown role, a 'member' with no client, or a
+ * member with an unknown/absent client role yields no access rather than silently
+ * widening.
  */
 
 export type Role = "owner" | "admin" | "member";
@@ -33,51 +43,73 @@ export interface AccessScope {
   role: Role;
   /** null = all clients (owner/admin); otherwise the single client a member sees. */
   memberClientId: string | null;
-  /** Optional scheduling profile for a client-scoped member. */
-  schedulingAccess: SchedulingAccess | null;
+  /** The client-level role — non-null iff role === "member". */
+  clientRole: ClientRole | null;
+  /** Non-null iff clientRole === "staff" (the one staff resource + its site). */
   schedulingSiteId: string | null;
   schedulingStaffId: string | null;
 }
 
-/** owner/admin — full data access, no per-client restriction. */
+/** owner/admin — full data access, no per-client restriction (the AGENCY). */
 export function hasFullAccess(scope: AccessScope): boolean {
   return scope.memberClientId === null;
 }
 
 /**
- * Deny-by-default client predicate: may this scope see this client? Tenant
- * scoping is assumed already applied (clientId must be a validated tenant client);
- * here owner/admin see any of THEIR clients, a member only their one client.
+ * The CLIENT OWNER of a specific client — full control of THAT client (settings,
+ * custom fields, team) but nothing outside it, and never the agency tier.
+ */
+export function isClientOwner(scope: AccessScope, clientId: string): boolean {
+  return scope.role === "member" && scope.clientRole === "owner" && scope.memberClientId === clientId;
+}
+
+/**
+ * Deny-by-default client predicate: may this scope see this client's GENERAL data
+ * (workflows, inbox, CRM, analytics)? owner/admin: any client of their tenant; a
+ * client OWNER or EDITOR: only their one client. A STAFF login is intentionally
+ * NARROWER — its one permitted surface is scheduling, admitted explicitly by the
+ * scheduling module gate; treating it as a general client member here would expose
+ * inbox/CRM/analytics by typing those URLs directly.
  */
 export function canAccessClient(scope: AccessScope, clientId: string): boolean {
-  // Scheduling profiles are intentionally narrower than a normal client member.
-  // Their one permitted surface is admitted explicitly by the scheduling module
-  // gate; treating them as a general client member here would expose workflows,
-  // inbox, CRM and analytics by typing those URLs directly.
-  if (scope.schedulingAccess) return false;
+  if (scope.clientRole === "staff") return false;
   return scope.memberClientId === null || scope.memberClientId === clientId;
 }
 
-/** A staff login is read-only and sees one staff resource at one site. */
+/**
+ * May this scope MANAGE this client — its scheduling settings, custom field
+ * definitions, and its team (Editors/Staff)? The agency (owner/admin) may manage any
+ * of their clients; a Client Owner may manage only their own. Editors and Staff never.
+ */
+export function canManageClient(scope: AccessScope, clientId: string): boolean {
+  return hasFullAccess(scope) || isClientOwner(scope, clientId);
+}
+
+/** A staff login — bound to one staff resource at one site; sees only scheduling. */
 export function isSchedulingStaff(scope: AccessScope): boolean {
-  return scope.role === "member" && scope.schedulingAccess === "staff";
+  return scope.clientRole === "staff";
 }
 
-/** Reception and legacy members may operate an agenda; staff logins may not. */
+/** Every client role (owner/editor/staff) — and the agency — may operate an agenda.
+ *  A staff login is further restricted to its own column by canAccessSchedulingStaff. */
 export function canOperateScheduling(scope: AccessScope): boolean {
-  return hasFullAccess(scope) || scope.schedulingAccess !== "staff";
+  return hasFullAccess(scope) || scope.clientRole !== null;
 }
 
-/** Site predicate for scheduling pages and every scheduling Server Action. */
+/** Site predicate for scheduling pages and every scheduling Server Action. Owner/
+ *  editor (and the agency) operate the whole client; a staff login is pinned to its
+ *  one site. */
 export function canAccessSchedulingSite(scope: AccessScope, siteId: string): boolean {
-  if (hasFullAccess(scope)) return true;
-  return scope.schedulingAccess === null || scope.schedulingSiteId === siteId;
+  if (scope.clientRole === "staff") return scope.schedulingSiteId === siteId;
+  return true;
 }
 
-/** Staff predicate for appointment reads. Reception/legacy/full access see all. */
+/** Staff WRITE predicate: a staff login may only create/modify appointments in its
+ *  OWN column. Everyone else (owner/editor/agency) may act on any staff at a site they
+ *  can access. This is the guard the appointment-write actions call. */
 export function canAccessSchedulingStaff(scope: AccessScope, staffId: string): boolean {
-  if (!isSchedulingStaff(scope)) return true;
-  return scope.schedulingStaffId === staffId;
+  if (scope.clientRole === "staff") return scope.schedulingStaffId === staffId;
+  return true;
 }
 
 /**
@@ -89,7 +121,9 @@ export function canAccessSchedulingStaff(scope: AccessScope, staffId: string): b
  * owner/admin → the Hub.
  */
 export function memberLandingHref(scope: AccessScope): string {
-  if (scope.memberClientId && scope.schedulingAccess) {
+  // A staff login's only surface is the agenda; owner/editor land on their client's
+  // aggregate analytics (always a valid page, empty state when there's no data yet).
+  if (scope.memberClientId && scope.clientRole === "staff") {
     return `/clients/${scope.memberClientId}/scheduling/agenda`;
   }
   return scope.memberClientId
@@ -111,16 +145,21 @@ function buildScope(userId: string, membership: MembershipScopeRow | null): Scop
   // deny rather than treat a missing client as "see everything".
   if (role === "member" && !memberClientId) return { ok: false };
 
-  const schedulingAccess = role === "member" ? membership.scheduling_access : null;
+  const clientRole = role === "member" ? membership.client_role : null;
   const schedulingSiteId = role === "member" ? membership.scheduling_site_id : null;
   const schedulingStaffId = role === "member" ? membership.scheduling_staff_id : null;
-  if (schedulingAccess !== null && schedulingAccess !== "staff" && schedulingAccess !== "reception") {
+
+  // A member MUST carry a valid client role; a non-member MUST carry none. Unknown →
+  // deny (never default to a wider role). The DB CHECK is the belt; this is the code side.
+  if (role === "member") {
+    if (clientRole !== "owner" && clientRole !== "editor" && clientRole !== "staff") return { ok: false };
+  } else if (clientRole !== null) {
     return { ok: false };
   }
+  // The site/staff binding exists iff the member is staff (mirrors the DB CHECK).
   if (
-    (schedulingAccess === "staff" && (!schedulingSiteId || !schedulingStaffId)) ||
-    (schedulingAccess === "reception" && (!schedulingSiteId || schedulingStaffId !== null)) ||
-    (schedulingAccess === null && (schedulingSiteId !== null || schedulingStaffId !== null))
+    (clientRole === "staff" && (!schedulingSiteId || !schedulingStaffId)) ||
+    (clientRole !== "staff" && (schedulingSiteId !== null || schedulingStaffId !== null))
   ) {
     return { ok: false };
   }
@@ -131,7 +170,7 @@ function buildScope(userId: string, membership: MembershipScopeRow | null): Scop
       userId,
       role,
       memberClientId,
-      schedulingAccess,
+      clientRole,
       schedulingSiteId,
       schedulingStaffId,
     },

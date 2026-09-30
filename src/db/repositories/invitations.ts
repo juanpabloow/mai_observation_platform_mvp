@@ -1,6 +1,6 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { pool, query } from '../client.js';
-import type { SchedulingAccess } from './tenantMembers.js';
+import type { ClientRole } from './tenantMembers.js';
 
 /** Roles that can be invited (never 'owner' — owner = the tenant creator). */
 export type InvitationRole = 'admin' | 'member';
@@ -13,7 +13,7 @@ export interface InvitationRow {
   email: string;
   role: InvitationRole;
   member_client_id: string | null;
-  scheduling_access: SchedulingAccess | null;
+  client_role: ClientRole | null;
   scheduling_site_id: string | null;
   scheduling_staff_id: string | null;
   status: InvitationStatus;
@@ -29,7 +29,7 @@ export interface InvitationWithNames {
   email: string;
   role: InvitationRole;
   member_client_id: string | null;
-  scheduling_access: SchedulingAccess | null;
+  client_role: ClientRole | null;
   scheduling_site_id: string | null;
   scheduling_site_name: string | null;
   scheduling_staff_id: string | null;
@@ -47,7 +47,7 @@ export interface InvitationListRow {
   role: InvitationRole;
   member_client_id: string | null;
   client_name: string | null;
-  scheduling_access: SchedulingAccess | null;
+  client_role: ClientRole | null;
   scheduling_site_id: string | null;
   scheduling_site_name: string | null;
   scheduling_staff_id: string | null;
@@ -92,7 +92,7 @@ export async function createOrReplacePendingInvitation(params: {
   email: string;
   role: InvitationRole;
   memberClientId: string | null;
-  schedulingAccess?: SchedulingAccess | null;
+  clientRole?: ClientRole | null;
   schedulingSiteId?: string | null;
   schedulingStaffId?: string | null;
   tokenHash: string;
@@ -102,14 +102,14 @@ export async function createOrReplacePendingInvitation(params: {
   const email = normalizeEmail(params.email);
   const result = await query<InvitationRow>(
     `INSERT INTO invitations
-       (tenant_id, email, role, member_client_id, scheduling_access,
+       (tenant_id, email, role, member_client_id, client_role,
         scheduling_site_id, scheduling_staff_id, token_hash, invited_by, expires_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
      ON CONFLICT (tenant_id, email) WHERE status = 'pending'
      DO UPDATE SET
        role = EXCLUDED.role,
        member_client_id = EXCLUDED.member_client_id,
-       scheduling_access = EXCLUDED.scheduling_access,
+       client_role = EXCLUDED.client_role,
        scheduling_site_id = EXCLUDED.scheduling_site_id,
        scheduling_staff_id = EXCLUDED.scheduling_staff_id,
        token_hash = EXCLUDED.token_hash,
@@ -117,7 +117,7 @@ export async function createOrReplacePendingInvitation(params: {
        expires_at = EXCLUDED.expires_at,
        created_at = now(),
        accepted_at = NULL
-     RETURNING id, tenant_id, email, role, member_client_id, scheduling_access,
+     RETURNING id, tenant_id, email, role, member_client_id, client_role,
                scheduling_site_id, scheduling_staff_id, status,
                expires_at, created_at, accepted_at`,
     [
@@ -125,7 +125,7 @@ export async function createOrReplacePendingInvitation(params: {
       email,
       params.role,
       params.memberClientId,
-      params.role === 'member' ? (params.schedulingAccess ?? null) : null,
+      params.role === 'member' ? (params.clientRole ?? null) : null,
       params.role === 'member' ? (params.schedulingSiteId ?? null) : null,
       params.role === 'member' ? (params.schedulingStaffId ?? null) : null,
       params.tokenHash,
@@ -147,7 +147,7 @@ export async function getInvitationByTokenHash(
 ): Promise<InvitationWithNames | null> {
   const result = await query<InvitationWithNames>(
     `SELECT i.id, i.tenant_id, i.email, i.role, i.member_client_id,
-            i.scheduling_access, i.scheduling_site_id, s.name AS scheduling_site_name,
+            i.client_role, i.scheduling_site_id, s.name AS scheduling_site_name,
             i.scheduling_staff_id, st.name AS scheduling_staff_name, i.status,
             i.expires_at, t.name AS tenant_name, c.name AS client_name
        FROM invitations i
@@ -200,11 +200,11 @@ export async function acceptInvitation(params: {
     const inv = await client.query<{
       role: InvitationRole;
       member_client_id: string | null;
-      scheduling_access: SchedulingAccess | null;
+      client_role: ClientRole | null;
       scheduling_site_id: string | null;
       scheduling_staff_id: string | null;
     }>(
-      `SELECT role, member_client_id, scheduling_access, scheduling_site_id,
+      `SELECT role, member_client_id, client_role, scheduling_site_id,
               scheduling_staff_id
          FROM invitations
         WHERE id = $1 AND tenant_id = $2 AND status = 'pending' AND expires_at > now()
@@ -219,7 +219,7 @@ export async function acceptInvitation(params: {
     const grant = inv.rows[0];
     const ins = await client.query(
       `INSERT INTO tenant_members
-         (tenant_id, user_id, role, member_client_id, scheduling_access,
+         (tenant_id, user_id, role, member_client_id, client_role,
           scheduling_site_id, scheduling_staff_id)
        VALUES ($1, $2, $3, $4, $5, $6, $7)
        ON CONFLICT (tenant_id, user_id) DO NOTHING`,
@@ -228,7 +228,7 @@ export async function acceptInvitation(params: {
         params.userId,
         grant.role,
         grant.member_client_id,
-        grant.scheduling_access,
+        grant.client_role,
         grant.scheduling_site_id,
         grant.scheduling_staff_id,
       ],
@@ -251,7 +251,7 @@ export async function acceptInvitation(params: {
 export async function listInvitationsForTenant(tenantId: string): Promise<InvitationListRow[]> {
   const result = await query<InvitationListRow>(
     `SELECT i.id, i.email, i.role, i.member_client_id, c.name AS client_name,
-            i.scheduling_access, i.scheduling_site_id, s.name AS scheduling_site_name,
+            i.client_role, i.scheduling_site_id, s.name AS scheduling_site_name,
             i.scheduling_staff_id, st.name AS scheduling_staff_name,
             i.status, i.expires_at, i.created_at, i.accepted_at,
             iu.email AS invited_by_email

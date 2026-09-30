@@ -1,5 +1,6 @@
 import { connection } from "next/server";
-import { requireFullAccessOrLand } from "@/lib/access";
+import { notFound } from "next/navigation";
+import { canManageClient } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 // listStaffAdmin, NOT listStaff: this page is owner/admin only (both gates below), and
@@ -41,10 +42,11 @@ export default async function ClientStaffPage({
   searchParams: Promise<{ s?: string; site?: string; dtab?: string }>;
 }) {
   await connection();
-  await requireFullAccessOrLand(); // owner/admin only
   const { clientId } = await params;
   const sp = await searchParams;
   const { scope, client } = await requireClientModulePage(clientId, "scheduling");
+  // The roster is for the agency OR this client's OWNER — editors/staff are 404'd.
+  if (!canManageClient(scope, clientId)) notFound();
 
   return (
     <StaffWorkspace

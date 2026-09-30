@@ -132,19 +132,24 @@ export default async function ClientAgendaPage({
     // staff only (AgendaView).
     listStaff(tenantId, { siteId: site.id, clientId: client.id, includeInactive: true }),
     listServicesForSite(tenantId, site.id),
-    listAppointments(tenantId, { siteId: site.id, staffId: isSchedulingStaff(scope) ? (scope.schedulingStaffId ?? undefined) : undefined, from: rangeStart, to: rangeEnd, clientId: client.id }),
-    listAppointments(tenantId, { siteId: site.id, staffId: isSchedulingStaff(scope) ? (scope.schedulingStaffId ?? undefined) : undefined, from: prevStart, to: prevEnd, clientId: client.id }),
-    scope.schedulingAccess ? Promise.resolve(false) : isClientModuleEnabled(tenantId, client.id, "crm"),
-    scope.schedulingAccess ? Promise.resolve(false) : isClientModuleEnabled(tenantId, client.id, "inbox"),
+    // A staff login SEES the whole site (all columns) for context — the site is already
+    // pinned to their one site by canAccessSchedulingSite (the `sites` filter above), and
+    // their WRITE is restricted to their own column by the scheduling actions.
+    listAppointments(tenantId, { siteId: site.id, from: rangeStart, to: rangeEnd, clientId: client.id }),
+    listAppointments(tenantId, { siteId: site.id, from: prevStart, to: prevEnd, clientId: client.id }),
+    // CRM/inbox drawer links are for owner/editor (they can open contacts/conversations);
+    // a staff login never sees contacts or the inbox, so those links are withheld.
+    isSchedulingStaff(scope) ? Promise.resolve(false) : isClientModuleEnabled(tenantId, client.id, "crm"),
+    isSchedulingStaff(scope) ? Promise.resolve(false) : isClientModuleEnabled(tenantId, client.id, "inbox"),
   ]);
   // Lanes = every ACTIVE staff member + any INACTIVE one who still has an appointment in
   // this window. Deactivation is forward-looking: it stops new bookings, never hides the
   // history that already points at that resource.
   const apptStaffIds = new Set(appts.map((a) => a.staff_id));
-  const permittedStaff = allStaff.filter((s) => s.active || apptStaffIds.has(s.id));
-  const staff = isSchedulingStaff(scope)
-    ? permittedStaff.filter((s) => s.id === scope.schedulingStaffId)
-    : permittedStaff;
+  // Lanes = active staff + anyone with an appointment in range. A staff login sees the
+  // whole site's lanes (decision: "see whole site, book own column"); it is scoped to a
+  // single site by the `sites` filter above.
+  const staff = allStaff.filter((s) => s.active || apptStaffIds.has(s.id));
 
   /** The same four metrics the view shows, computed over an arbitrary window. */
   const summarise = (rows: typeof appts) => {
@@ -187,6 +192,9 @@ export default async function ClientAgendaPage({
       from={sp.from ?? null}
       canManage={hasFullAccess(scope)}
       canOperate={canOperateScheduling(scope)}
+      // A staff login books only into its OWN column — the modal locks the barber picker
+      // to this id (the server enforces it regardless).
+      lockStaffId={isSchedulingStaff(scope) ? scope.schedulingStaffId : null}
       timezone={site.timezone}
       date={dateStr}
       dayStartIso={dayStart.toISOString()}

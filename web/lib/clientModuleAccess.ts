@@ -49,11 +49,14 @@ export async function resolveClientModuleForScope(
   moduleKey: ClientModuleKey,
 ): Promise<ClientModuleResolution> {
   if (!isUuid(clientId)) return { ok: false };
-  const schedulingProfileAccess =
+  // A STAFF login is denied by canAccessClient (it must not reach CRM/inbox/analytics),
+  // so the scheduling module admits it explicitly here. Owner/editor already pass
+  // canAccessClient, so this branch is staff-only.
+  const schedulingStaffAccess =
     moduleKey === "scheduling" &&
-    scope.schedulingAccess !== null &&
+    scope.clientRole === "staff" &&
     scope.memberClientId === clientId;
-  if (!canAccessClient(scope, clientId) && !schedulingProfileAccess) return { ok: false };
+  if (!canAccessClient(scope, clientId) && !schedulingStaffAccess) return { ok: false };
   const client = await getClientById({ tenantId: scope.tenantId, clientId });
   if (!client) return { ok: false };
   if (client.is_default) return { ok: false }; // Unassigned can't have modules

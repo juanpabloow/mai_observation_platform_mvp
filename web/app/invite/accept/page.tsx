@@ -78,13 +78,15 @@ export default async function AcceptInvitePage({
 
   // Valid pending invite.
   const roleText =
-    invite.scheduling_access === "staff"
-      ? `staff (${invite.scheduling_staff_name ?? "assigned schedule"}) at ${invite.client_name ?? "a client"}`
-      : invite.scheduling_access === "reception"
-        ? `reception at ${invite.scheduling_site_name ?? invite.client_name ?? "a client"}`
-        : invite.role === "member"
-          ? `a member of ${invite.client_name ?? "a client"}`
-          : "an admin";
+    invite.client_role === "owner"
+      ? `the owner of ${invite.client_name ?? "a client"}`
+      : invite.client_role === "staff"
+        ? `staff (${invite.scheduling_staff_name ?? "assigned schedule"}) at ${invite.client_name ?? "a client"}`
+        : invite.client_role === "editor"
+          ? `an editor at ${invite.client_name ?? "a client"}`
+          : invite.role === "member"
+            ? `a member of ${invite.client_name ?? "a client"}`
+            : "an admin";
   const session = await getServerSession();
   const currentEmail = session?.user?.email ? normalizeEmail(session.user.email) : null;
 

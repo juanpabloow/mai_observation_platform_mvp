@@ -203,11 +203,13 @@ test('the appearance change did not alter navigation, gating or permissions', ()
   assert.ok(src.includes('moduleKeys.includes("inbox")'), 'Inbox still module-gated');
   assert.ok(src.includes('moduleKeys.includes("crm")'), 'CRM still module-gated');
   assert.ok(src.includes('moduleKeys.includes("scheduling")'), 'Scheduling still module-gated');
-  // Role gates.
-  assert.ok(src.includes('if (!isMember) {'), 'owner/admin-only items still gated by role');
-  assert.ok(src.includes('clientId !== defaultClientId'), 'the default client still hides Modules');
+  // Role gates (client roles): client-admin items behind canManageThisClient; Modules
+  // stays agency-only; general surfaces behind canSeeGeneral.
+  assert.ok(src.includes('canManageThisClient'), 'client-admin items gated by role (agency or client owner)');
+  assert.ok(src.includes('canSeeGeneral'), 'general surfaces gated (staff excluded)');
+  assert.ok(src.includes('!isMember && clientId !== defaultClientId'), 'the default client still hides agency-only Modules');
   // Structure.
-  assert.ok(src.includes('sections = [{ label: "Workspace", items: workspace }];'), 'Workspace is still first');
+  assert.ok(src.includes('sections.push({ label: "Workspace", items: workspace })'), 'Workspace is still the first section');
   assert.ok(src.includes('countEndpoint: `/api/inbox/${clientId}/pending-count`'), 'the real badge endpoint is intact');
   // And exactly one active treatment still exists.
   assert.equal(src.match(/bg-nav-active font-semibold text-white/g)?.length, 1, 'one active treatment in the rail');

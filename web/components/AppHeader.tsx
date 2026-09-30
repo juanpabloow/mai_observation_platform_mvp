@@ -1,6 +1,6 @@
 import { headers } from "next/headers";
 import { getServerSession } from "@/lib/session";
-import { getSessionScope } from "@/lib/access";
+import { getSessionScope, isSchedulingStaff } from "@/lib/access";
 import { listClientsForTenant } from "@worker/db/repositories/clients.js";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { HeaderBar, type HeaderClient, type HeaderWorkflow } from "./HeaderBar";
@@ -42,7 +42,9 @@ export async function AppHeader() {
   // Narrow to the access scope: a member sees only their client + its workflows.
   const memberClientId = scope.memberClientId;
   const visibleClients = memberClientId ? clients.filter((c) => c.id === memberClientId) : clients;
-  const visibleWorkflows = scope.schedulingAccess
+  // A STAFF login has no workflow surfaces (agenda only), so its switcher is empty.
+  // Owner/editor keep their client's workflows.
+  const visibleWorkflows = isSchedulingStaff(scope)
     ? []
     : memberClientId
       ? workflows.filter((w) => w.client_id === memberClientId)

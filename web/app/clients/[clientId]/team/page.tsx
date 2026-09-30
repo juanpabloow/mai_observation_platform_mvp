@@ -1,7 +1,7 @@
 import { connection } from "next/server";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { requireFullAccessOrLand } from "@/lib/access";
+import { canManageClient, getAccessScope, hasFullAccess } from "@/lib/access";
 import { getClientForTenant } from "@/lib/clientWorkflow";
 import { listClientsForTenant } from "@worker/db/repositories/clients.js";
 import {
@@ -20,20 +20,18 @@ function fmtDate(d: Date): string {
 }
 
 /**
- * USERS & ACCESS for one client (CLIENT level — the route is still /team, and the
- * components and identifiers still say Team; only the label a person reads changed,
- * so no link or import breaks).
+ * USERS & ACCESS for one client (CLIENT level). Reachable by the AGENCY (owner/admin) OR
+ * this client's OWNER — anyone else 404s (canManageClient; the URL is never trusted).
+ * This screen answers one question: WHO CAN LOG IN to this client and with what role
+ * (Owner / Editor / Staff).
  *
- * Owner/admin only (requireFullAccessOrLand sends a member to their own client); the
- * clientId is resolved tenant-scoped via getClientForTenant, so a foreign/bogus client
- * 404s and the URL is never trusted. This screen answers exactly one question: WHO CAN
- * LOG IN and with what role. Invite a member here and they're auto-scoped to this
- * client; reassign moves them to another client; remove revokes.
+ * A CLIENT OWNER manages Editors/Staff of their own client only, and can never mint
+ * another Owner or reach any agency surface — the server actions enforce all of that; the
+ * UI here just hides the controls the viewer can't use (no all-clients picker, no admin
+ * tier, no "Owner" option in the role select).
  *
- * The barber ROSTER briefly lived here and does not any more — a barber is not a
- * platform user. It is SCHEDULING → Staff (/clients/{id}/scheduling/staff), which is
- * also where the employee contact details are read; this page loads no staff row at
- * all, let alone a PII one.
+ * The barber ROSTER is not here — a barber is not a platform login. It lives in
+ * SCHEDULING → Staff; this page loads no PII staff row.
  */
 export default async function ClientTeamPage({
   params,
@@ -41,22 +39,26 @@ export default async function ClientTeamPage({
   params: Promise<{ clientId: string }>;
 }) {
   await connection();
-  const scope = await requireFullAccessOrLand(); // owner/admin only
+  const scope = await getAccessScope();
   const { clientId } = await params;
   const client = await getClientForTenant(clientId); // tenant-scoped; foreign → null
   if (!client) notFound();
+  // Agency, or this client's Owner. Editors/Staff/other-client logins are indistinguishably 404'd.
+  if (!canManageClient(scope, clientId)) notFound();
+  const agency = hasFullAccess(scope);
   const clientLabel = client.is_default ? "Unassigned" : client.name;
 
-  const [clients, members, invites, sites, staff] = await Promise.all([
-    listClientsForTenant(scope.tenantId),
+  const [members, invites, sites, staff, allClients] = await Promise.all([
     listMembersForTenant(scope.tenantId),
     listInvitationsForTenant(scope.tenantId),
     listSites(scope.tenantId, { clientId }),
     listSchedulingResourcesForClient(scope.tenantId, clientId),
+    // The all-clients picker is an AGENCY feature (reassign a member's client); a Client
+    // Owner never sees other clients, so don't even load them for them.
+    agency ? listClientsForTenant(scope.tenantId) : Promise.resolve([]),
   ]);
 
-  // All clients — for the per-row "move to another client" picker in TeamMembers.
-  const clientOptions = clients.map((c) => ({ id: c.id, name: c.is_default ? "Unassigned" : c.name }));
+  const clientOptions = allClients.map((c) => ({ id: c.id, name: c.is_default ? "Unassigned" : c.name }));
   const siteOptions = sites.map((site) => ({
     id: site.id,
     name: site.name,
@@ -65,7 +67,7 @@ export default async function ClientTeamPage({
       .map((person) => ({ id: person.id, name: person.name })),
   }));
 
-  // THIS client's members.
+  // THIS client's members only (other clients' rows are never rendered).
   const memberViews: TeamMemberView[] = members
     .filter((m) => m.role === "member" && m.member_client_id === clientId)
     .map((m) => ({
@@ -74,7 +76,7 @@ export default async function ClientTeamPage({
       role: "member",
       clientId: m.member_client_id,
       clientName: m.client_name,
-      schedulingAccess: m.scheduling_access,
+      clientRole: m.client_role,
       schedulingSiteId: m.scheduling_site_id,
       schedulingSiteName: m.scheduling_site_name,
       schedulingStaffId: m.scheduling_staff_id,
@@ -82,7 +84,7 @@ export default async function ClientTeamPage({
       isYou: m.user_id === scope.userId,
     }));
 
-  // THIS client's invitations.
+  // THIS client's invitations only.
   // eslint-disable-next-line react-hooks/purity -- dynamic Server Component; connection() disables prerendering.
   const now = Date.now();
   const inviteViews: TeamInviteView[] = invites
@@ -92,7 +94,7 @@ export default async function ClientTeamPage({
       email: inv.email,
       role: inv.role,
       clientName: inv.client_name,
-      schedulingAccess: inv.scheduling_access,
+      clientRole: inv.client_role,
       schedulingSiteName: inv.scheduling_site_name,
       schedulingStaffName: inv.scheduling_staff_name,
       status: inv.status,
@@ -107,17 +109,14 @@ export default async function ClientTeamPage({
       <ModuleHeader
         title="Users & access"
         status={clientLabel}
-        center={
-          <p className="truncate text-sm text-muted">
-            Invite users, assign roles and limit scheduling access.
-          </p>
-        }
+        center={<p className="truncate text-sm text-muted">Invite people and set their role at this business.</p>}
       />
 
       <p className="text-sm text-muted">
-        Members of <span className="text-foreground">{clientLabel}</span> can see only this
-        client&rsquo;s data. Admins (full access) are managed at the Hub. Looking for barbers?
-        They live in{" "}
+        People who work at <span className="text-foreground">{clientLabel}</span>. An{" "}
+        <span className="text-foreground">Owner</span> runs the business, an{" "}
+        <span className="text-foreground">Editor</span> handles the inbox, contacts and agenda, and{" "}
+        <span className="text-foreground">Staff</span> see only their own agenda. Looking for barbers? They live in{" "}
         <Link href={`/clients/${clientId}/scheduling/staff`} className="text-accent hover:underline">
           Scheduling &rarr; Staff
         </Link>
@@ -125,29 +124,24 @@ export default async function ClientTeamPage({
       </p>
 
       <section className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Members</h2>
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted">People</h2>
         {memberViews.length === 0 ? (
           <p className="rounded-2xl border border-dashed border-line px-4 py-8 text-center text-sm text-faint">
-            No members assigned to this client yet.
+            No one has been added to this business yet.
           </p>
         ) : (
           <TeamMembers
             members={memberViews}
             clients={clientOptions}
             sites={siteOptions}
-            viewerRole={scope.role as "owner" | "admin"}
+            viewer={{ agency, isOwner: scope.role === "owner", canManageMembers: true, canAssignOwner: agency }}
           />
         )}
       </section>
 
       <section className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Invite teammate</h2>
-        <InviteForm
-          mode="member"
-          clientId={clientId}
-          clientName={clientLabel}
-          sites={siteOptions}
-        />
+        <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Invite someone</h2>
+        <InviteForm mode="member" clientId={clientId} clientName={clientLabel} sites={siteOptions} canInviteOwner={agency} />
       </section>
 
       {inviteViews.length > 0 ? <TeamInvitations invites={inviteViews} /> : null}
