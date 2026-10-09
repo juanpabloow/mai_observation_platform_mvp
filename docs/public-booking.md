@@ -124,7 +124,7 @@ Un valor no numérico o fuera de rango cae al defecto (nunca desactiva un límit
 
 ## Migración
 
-`migrations/1784500000000_public-booking-rate-limit.ts` crea
+`migrations/1796000000000_public-booking-rate-limit.ts` crea
 `public_booking_rate_buckets` (tenant, cliente, sede, alcance `ip|phone`, hash HMAC,
 ventana, contador, expiración) con FK compuesta a `sites (id, tenant_id, client_id)` y
 `ON DELETE CASCADE`. Solo guarda hashes. Los buckets vencidos se barren por sede, de forma

@@ -4,7 +4,7 @@ import { query } from '../../client.js';
 /**
  * PERSISTENT fixed-window rate limit for public booking creation, shared by every web
  * instance through PostgreSQL (table public_booking_rate_buckets, migration
- * 1784500000000). Complements — does not replace — the per-process in-memory limiter
+ * 1796000000000). Complements — does not replace — the per-process in-memory limiter
  * the public READ endpoints keep using.
  *
  * Privacy: callers pass the raw IP / phone; this module only ever persists
