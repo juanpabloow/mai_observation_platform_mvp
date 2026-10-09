@@ -1197,24 +1197,25 @@ test('inbox: the selected row is marked by a fill AND a shape, and never shifts'
   assert.ok(src.includes('border-warn/25 bg-warn-soft'), 'a pending row keeps its own amber mark');
 });
 
-test('inbox: customer / bot / human-agent messages stay visually distinct', () => {
+test('inbox: customer / bot / human-agent are THREE distinct bubble treatments', () => {
   const src = read('components/MessageTranscript.tsx');
   assert.ok(src.includes('const isUser = msg.sender === "user"'), 'customer is identified');
   assert.ok(src.includes('const isAgent = msg.sender === "human_agent"'), 'the human agent is identified');
-  // Customer = WHITE bubble on the left.
-  assert.ok(src.includes('border border-bubble-in-border bg-bubble-in text-bubble-in-fg'), 'customer bubble (white, left)');
-  // The BUSINESS side — bot AND human agent — is the SOLID near-black bubble (design image
-  // 19). They are told apart NOT by fill but by the EQUIPO signature above the run and the
-  // sender disc (initials vs BOT). The failed-agent case keeps its own outlined-red style.
-  assert.ok(src.includes('bg-bubble-bot text-bubble-bot-fg'), 'the business bubble is near-black');
-  assert.ok(/·\s*equipo/i.test(src), 'a human agent\'s run is signed "· equipo"');
-  // THE TAIL is what says who is speaking, alongside the fill: three corners take
-  // --radius-bubble and the one pointing at the speaker collapses to the tail token.
+  // Customer = neutral LIGHT bubble (left) — the quietest.
+  assert.ok(src.includes('border border-bubble-in-border bg-bubble-in text-bubble-in-fg'), 'customer bubble (light, left)');
+  // Bot = low-key neutral DARK bubble (right).
+  assert.ok(src.includes('bg-bubble-bot text-bubble-bot-fg rounded-br-bubble-tail'), 'bot bubble (neutral dark, right)');
+  // Human agent = the BRAND TINT (right) — the ONE coloured bubble, the most distinct, so a
+  // supervisor finds a person's reply at a glance. Backed by side + the EQUIPO signature.
+  assert.ok(
+    src.includes('border border-bubble-agent-border bg-bubble-agent text-bubble-agent-fg'),
+    'human-agent bubble carries the brand tint (distinct from the bot)',
+  );
+  assert.ok(/·\s*equipo/i.test(src), 'a human agent\'s run is also signed "· equipo"');
   assert.ok(src.includes('rounded-bl-bubble-tail'), 'the customer\'s tail points bottom-left');
   assert.ok(src.includes('rounded-br-bubble-tail'), 'the business side points bottom-right');
-  // A FAILED agent send must not be mistaken for a normal one now that both are red:
-  // normal is the SOLID fill, failed is OUTLINED.
-  assert.ok(src.includes('border border-danger bg-danger/12 text-danger'), 'failed is outlined, not solid');
+  // A FAILED agent send is OUTLINED danger — distinct from the normal brand-tint fill.
+  assert.ok(src.includes('border border-danger bg-danger/12 text-danger'), 'failed is outlined danger, not solid');
 });
 
 test('inbox: the timestamp sits OUTSIDE the bubble, so it steals width from no line', () => {
@@ -1239,7 +1240,7 @@ test('inbox: the timestamp sits OUTSIDE the bubble, so it steals width from no l
   assert.ok(src.includes('whitespace-pre-wrap break-words'), 'the body keeps its own wrapping');
 });
 
-test('inbox: the voices stay distinguishable — customer vs business by fill, bot vs agent by signature, and side', () => {
+test('inbox: the three voices are distinct by FILL (side + signature back it)', () => {
   const css = read('app/globals.css');
   // The transcript now has its OWN grey ground, which is what lets the customer bubble
   // be white. Before, the transcript was white and the customer was grey — the two
@@ -1301,27 +1302,32 @@ test('inbox: the voices stay distinguishable — customer vs business by fill, b
   for (const theme of ['light', 'dark'] as const) {
     const map = themeVars(theme);
     const inbound = resolve(map, 'bubble-in');
-    const business = resolve(map, 'bubble-bot');
-    assert.ok(inbound && business, `${theme}: the customer + business fills are defined`);
-    // TWO fills (design image 19): the CUSTOMER is white, the BUSINESS side (bot AND human
-    // agent) is one near-black fill. The fill split is customer vs business; bot vs agent is
-    // the EQUIPO signature + the sender disc, asserted on the markup below — not a colour.
-    assert.notEqual(inbound, business, `${theme}: the customer's fill is not the business one`);
-    // Neither may BE the ground itself, or the bubble has no edge against it.
+    const bot = resolve(map, 'bubble-bot');
+    const agent = resolve(map, 'bubble-agent');
+    assert.ok(inbound && bot && agent, `${theme}: customer + bot + agent fills are defined`);
+    // THREE distinct fills now: customer (neutral light), bot (neutral dark), human agent
+    // (brand tint). bot ≠ agent is the WHOLE POINT — a human reply must not read as the bot.
+    assert.notEqual(inbound, bot, `${theme}: the customer's fill is not the bot's`);
+    assert.notEqual(agent, bot, `${theme}: the human-agent fill is not the bot's`);
+    assert.notEqual(agent, inbound, `${theme}: the human-agent fill is not the customer's`);
+    // None may BE the ground itself, or the bubble has no edge against it.
     assert.notEqual(inbound, resolve(map, 'thread-bg'), `${theme}: inbound is not the ground`);
-    assert.notEqual(business, resolve(map, 'thread-bg'), `${theme}: the business bubble is not the ground`);
+    assert.notEqual(bot, resolve(map, 'thread-bg'), `${theme}: the bot bubble is not the ground`);
+    assert.notEqual(agent, resolve(map, 'thread-bg'), `${theme}: the agent bubble is not the ground`);
   }
-  assert.ok(css.includes('--color-bubble-bot: var(--bubble-bot)'), 'exposed as a utility');
+  assert.ok(css.includes('--color-bubble-bot: var(--bubble-bot)'), 'bot exposed as a utility');
+  assert.ok(css.includes('--color-bubble-agent: var(--bubble-agent)'), 'agent exposed as a utility');
 
   const transcript = read('components/MessageTranscript.tsx');
-  // BOT vs AGENT is carried by the SIGNATURE (a human run is labelled "· equipo") + the
-  // sender disc (initials vs BOT), not by an edge or a hue.
+  // The brand-tint fill is the primary cue; the SIDE + the "· equipo" signature + the disc
+  // back it (so the distinction survives greyscale / colour-blindness).
   assert.ok(/·\s*equipo/i.test(transcript), 'the agent run carries the EQUIPO signature');
-  // …plus the SIDE — customer left, business right — the cue that survives greyscale.
   assert.ok(transcript.includes('rounded-bl-bubble-tail'), 'the customer sits left');
   assert.ok(transcript.includes('rounded-br-bubble-tail'), 'the business sits right');
-  // The business bubble is a solid fill — a border on a dark fill is invisible.
-  assert.equal(/border border-bubble-bot-border/.test(transcript), false, 'the business bubble is unbordered');
+  // The bot bubble is a solid dark fill (a border there is invisible); the AGENT bubble is a
+  // light tint and DOES carry a brand hairline.
+  assert.equal(/border border-bubble-bot-border/.test(transcript), false, 'the bot bubble is unbordered');
+  assert.ok(transcript.includes('border border-bubble-agent-border'), 'the agent bubble carries a brand hairline');
 });
 
 test('inbox: no function crosses the server→client boundary', () => {

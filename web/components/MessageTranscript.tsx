@@ -358,7 +358,7 @@ function MessageRun({
           title={isAgent ? (agentName ?? "Agente") : "Enviado por el bot"}
           className={`u-mono mb-5 flex size-[26px] shrink-0 items-center justify-center rounded-full text-[0.53125rem] font-semibold tracking-tight ${
             isAgent
-              ? "border-[1.5px] border-ink bg-surface text-foreground"
+              ? "border-[1.5px] border-brand bg-surface text-foreground"
               : "bg-bubble-bot text-bubble-bot-fg"
           }`}
         >
@@ -415,18 +415,25 @@ function Bubble({
   const sending = msg.status === "sending";
   const failed = msg.status === "failed";
   const time = formatChatTime(new Date(msg.occurredAt));
-  // The stamp now sits INSIDE the bubble (design image): light on the dark team/bot fills,
-  // faint on the white customer bubble, danger on a failed send.
-  const timeColor = failed ? "text-danger/70" : isUser ? "text-faint" : "text-white/55";
+  // The stamp sits INSIDE the bubble: faint on the light customer + light brand-tint agent
+  // bubbles, light on the dark bot fill, danger on a failed send.
+  const timeColor = failed
+    ? "text-danger/70"
+    : isUser
+      ? "text-faint"
+      : isAgent
+        ? "text-bubble-agent-fg/70"
+        : "text-white/55";
 
   const bubbleClass = isUser
     ? "border border-bubble-in-border bg-bubble-in text-bubble-in-fg rounded-bl-bubble-tail"
     : isAgent
       ? failed
         ? "border border-danger bg-danger/12 text-danger rounded-br-bubble-tail"
-        : // The TEAM bubble is a near-black fill with light text (design image); the EQUIPO
-          // signature above and the agent's disc distinguish it from the bot beside it.
-          "bg-bubble-bot text-bubble-bot-fg rounded-br-bubble-tail"
+        : // The HUMAN agent carries the BRAND TINT — the ONE coloured bubble, so a
+          // supervisor spots a person's reply among the neutral bot messages. The bot
+          // stays a low-key neutral dark; the EQUIPO signature + the agent's disc back it.
+          "border border-bubble-agent-border bg-bubble-agent text-bubble-agent-fg rounded-br-bubble-tail"
       : "bg-bubble-bot text-bubble-bot-fg rounded-br-bubble-tail";
 
   const body =

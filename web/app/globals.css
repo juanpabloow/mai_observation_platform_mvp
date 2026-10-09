@@ -563,20 +563,18 @@
   --bubble-bot-inset: #262a31;
   --bubble-bot-rule: #2e323a;
   --bubble-bot-label: #8a93a3;
-  /* HUMAN AGENT (right) — a faint BRAND TINT. A person answering sits on the business
-     side but must not be mistaken for the bot, so it keeps the side and drops the dark
-     fill. It used to be plain white, which worked while the customer bubble was grey;
-     now that the customer is white, white-on-white would leave SIDE as the only cue.
-     A 7% brand wash is enough to tell a colleague from the customer and is nowhere near
-     the wall of solid red this replaced (four replies in a row read as errors). */
-  /* HUMAN AGENT (right) — WHITE with an INK edge. It sits on the business side but must
-     not be mistaken for the bot, so it keeps the side and drops the dark fill; the ink
-     border is what makes a colleague's reply as loud as the bot's without spending a
-     hue on it. It was a brand-red wash, which put a fourth colour in a thread that only
-     needs to answer "who said this". */
-  --bubble-agent: var(--bubble-in);
-  --bubble-agent-border: var(--ink);
-  --bubble-agent-fg: var(--foreground);
+  /* HUMAN AGENT (right) — a SOFT BRAND TINT. This is the whole point of the inbox: a
+     person's reply is what a supervisor scans for, so it is the MOST distinct of the three
+     and the ONLY coloured bubble. It carries the SAME brand accent as the sidebar active
+     row and Agendar cita (--brand), used as a TINT — a soft wash + a brand hairline, never
+     a saturated fill (a wall of solid red reads as errors). The customer stays a neutral
+     light and the bot a neutral dark, so the one coloured bubble jumps out. Text is
+     near-black for maximum legibility (16:1). Light + dark are tuned SEPARATELY: a wash
+     that reads as "soft red" on white turns muddy on near-black, so dark uses its own
+     maroon tint against the --brand (#f2555a) the dark theme already elevates to. */
+  --bubble-agent: #fdecee; /* ≈ --brand at 8% on white */
+  --bubble-agent-border: rgba(230, 10, 47, 0.38); /* --brand hairline */
+  --bubble-agent-fg: #12151b; /* = --foreground — 16.6:1 on the tint */
 }
 .dark {
   --thread-bg: #101012;
@@ -586,9 +584,11 @@
   --bubble-bot: #26292f;
   --bubble-bot-border: rgba(255, 255, 255, 0.17);
   --bubble-bot-fg: #eceef2;
-  --bubble-agent: var(--bubble-in);
-  --bubble-agent-border: var(--ink);
-  --bubble-agent-fg: var(--foreground);
+  /* HUMAN AGENT (dark) — a dark MAROON tint against the dark theme's elevated brand
+     (#f2555a), tuned on near-black so it reads as "the red one" without going muddy. */
+  --bubble-agent: #3a2024;
+  --bubble-agent-border: rgba(242, 85, 90, 0.5);
+  --bubble-agent-fg: #f4e9ea; /* 12.7:1 on the tint */
   --bubble-bot-inset: #2f333b;
   --bubble-bot-rule: rgba(255, 255, 255, 0.14);
   --bubble-bot-label: #9aa2b1;
