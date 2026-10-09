@@ -736,6 +736,59 @@ html[data-text-scale='large'] {
   --conversation-row-h: 66px;
 }
 
+/*
+ * ── FRAMED SHELL (Shopify-style) ─────────────────────────────────────────────
+ * From xl up, whenever the app rail is in the DOM (signed-in screens), the page
+ * GROUND takes the rail's colour, the rail sits flush on it with no divider, and the
+ * header + content column (`.u-shell-frame`) becomes ONE rounded panel inset from the
+ * ground on the top, right and bottom. Below xl the rail is an off-canvas drawer, so
+ * there is no ground to frame and the layout stays full-bleed.
+ *
+ * Keyed on the rail itself (`[data-collapsed]` — the desktop <aside> and its streaming
+ * placeholder carry it; the mobile drawer does not) rather than on a route list, so a
+ * chromeless screen (login, /book) can never be framed by mistake.
+ *
+ * The ground follows the rail palette: dark rail → dark ground (the default), light
+ * rail → a light-grey ground one step darker than the canvas, so the panel still reads
+ * as raised in both.
+ */
+:root {
+  --frame-gap: 8px;
+  --frame-radius: 16px;
+  --frame-ground: var(--sidebar-bg);
+  --frame-edge: transparent;
+}
+/* Light app + light rail: the rail's #eef0f3 is the canvas's own value, so the panel
+   would vanish into it — step the ground (and the rail on it) down a notch. */
+html:not(.dark)[data-sidebar-theme='light'] {
+  --sidebar-bg: #e3e5ea;
+}
+/* Dark app: the canvas is #101012, so a #1a1a1a ground would sit LIGHTER than the
+   panel and read as a hole. Drop the ground (and the rail on it) to near-black and give
+   the panel a hairline so it lifts. Neutral greys only (R=G=B), like the black rail. */
+html.dark {
+  --sidebar-bg: #070707;
+  --sidebar-border: #1f1f1f;
+  --sidebar-hover-dark: #1c1c1c;
+  --frame-edge: rgba(255, 255, 255, 0.08);
+}
+@media (min-width: 1280px) {
+  body:has([data-collapsed]) {
+    background: var(--frame-ground);
+  }
+  body:has([data-collapsed]) [data-collapsed] {
+    border-right-color: transparent;
+    background: var(--frame-ground);
+  }
+  body:has([data-collapsed]) .u-shell-frame {
+    margin: var(--frame-gap) var(--frame-gap) var(--frame-gap) 0;
+    border: 1px solid var(--frame-edge);
+    border-radius: var(--frame-radius);
+    background: var(--background);
+    overflow: hidden;
+  }
+}
+
 /* Full-screen dialog scrim, centred over the MODULE canvas rather than over the
    sidebar + canvas combined. On tablet/phone the sidebar is off-canvas, so the
    ordinary viewport centre is already the module centre. */
@@ -1302,4 +1355,20 @@ body {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
   }
+}
+
+/*
+ * ── Public booking (/book/{slug}) ───────────────────────────────────────────────
+ * The availability DOT under a bookable day. Blue, not the emerald success tone: it
+ * says "there is room", not "done". Decorative — every day button also carries the
+ * state in its accessible name, and the legend spells it out.
+ */
+:root {
+  --booking-dot: #2563eb;
+}
+.dark {
+  --booking-dot: #60a5fa;
+}
+.u-booking-dot {
+  background-color: var(--booking-dot);
 }

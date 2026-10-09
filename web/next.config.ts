@@ -17,6 +17,31 @@ const nextConfig: NextConfig = {
   },
   // Used by the shared db layer + auth; keep them as runtime Node deps, don't bundle.
   serverExternalPackages: ["pg", "pino", "better-auth"],
+  // PUBLIC booking surfaces only (audited: no other security headers are set anywhere
+  // — no CSP, no middleware headers). Deliberately NOT a global CSP: Next's inline
+  // runtime and the Turnstile iframe (challenges.cloudflare.com) need a nonce-based
+  // policy designed and tested on its own. Permissions-Policy only switches off
+  // capabilities the booking flow never uses; Turnstile needs none of them.
+  // The /api/booking handlers set nosniff + Referrer-Policy + no-store THEMSELVES
+  // (web/lib/publicBookingApi.ts), so here they only get Permissions-Policy — no
+  // header is ever sent twice.
+  async headers() {
+    const permissions = {
+      key: "Permissions-Policy",
+      value: "camera=(), microphone=(), geolocation=(), payment=(), usb=(), browsing-topics=()",
+    };
+    return [
+      {
+        source: "/book/:path*",
+        headers: [
+          { key: "X-Content-Type-Options", value: "nosniff" },
+          { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
+          permissions,
+        ],
+      },
+      { source: "/api/booking/:path*", headers: [permissions] },
+    ];
+  },
   // Use webpack (this config function) instead of the default Turbopack, so we
   // can map the worker's NodeNext ".js" import specifiers to their ".ts" sources.
   webpack: (config) => {

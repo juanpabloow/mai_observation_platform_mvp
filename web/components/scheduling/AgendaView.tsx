@@ -483,6 +483,8 @@ export function AgendaView(props: {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   /** Appointments intentionally collapsed behind a weekly "+N más" indicator. */
   const [weekOverflow, setWeekOverflow] = useState<Appt[] | null>(null);
+  const [weekOverflowTitle, setWeekOverflowTitle] = useState<string | undefined>();
+  const [weeklyLayout, setWeeklyLayout] = useState<"team" | "hours">("team");
   /** Client-side facets over the ALREADY loaded range. */
   const [statusFilter, setStatusFilter] = useState("");
   const [staffFilter, setStaffFilter] = useState("");
@@ -599,7 +601,8 @@ export function AgendaView(props: {
   );
   const nextMobileAppointment = useMemo(() => {
     return mobileRows.find(
-      (appt) => appt.status !== "cancelled" && appt.status !== "completed",
+      (appt) => (appt.status === "scheduled" || appt.status === "confirmed")
+        && new Date(appt.start_at).getTime() >= Date.now(),
     ) ?? null;
   }, [mobileRows]);
   const mobileCompleted = mobileRows.filter((appt) => appt.status === "completed").length;
@@ -858,6 +861,11 @@ export function AgendaView(props: {
               </div>
             ) : null}
             <div className="hidden shrink-0 items-center gap-2 xl:flex">
+              <button
+                type="button"
+                onClick={() => navigate({ date: nowParts.dayKey })}
+                className="h-[34px] rounded-[9px] border border-line bg-surface px-3 text-xs font-medium text-foreground hover:bg-chip"
+              >Hoy</button>
               <div className="flex h-[34px] items-center gap-0.5 rounded-[9px] bg-chip p-[3px]">
                 <DesktopSeg active={!isWeek} onClick={() => navigate({ view: "day" })}>Día</DesktopSeg>
                 <DesktopSeg active={isWeek} onClick={() => navigate({ view: "week" })}>Semana</DesktopSeg>
@@ -961,8 +969,8 @@ export function AgendaView(props: {
             />
           </label>
 
-          <div className="mt-3 flex items-center gap-2 overflow-x-auto pb-0.5 md:hidden">
-            <div className="flex h-[44px] shrink-0 items-center rounded-lg bg-chip p-[3px]">
+          <div className="mt-3 grid grid-cols-2 items-center gap-2 md:hidden">
+            <div className="col-span-2 flex h-[44px] w-fit items-center rounded-lg bg-chip p-[3px]">
               <Seg active={!isWeek} onClick={() => navigate({ view: "day" })}>Día</Seg>
               <Seg active={isWeek} onClick={() => navigate({ view: "week" })}>Semana</Seg>
             </div>
@@ -973,7 +981,7 @@ export function AgendaView(props: {
                   id="mobile-agenda-status"
                   value={statusFilter}
                   onChange={(event) => setStatusFilter(event.target.value)}
-                  className="h-[44px] min-w-[7.25rem] shrink-0 rounded-lg border border-line bg-surface px-2.5 text-xs text-foreground"
+                  className="h-[44px] min-w-0 w-full rounded-lg border border-line bg-surface px-2.5 text-xs text-foreground"
                 >
                   <option value="">Todos los estados</option>
                   {STATUSES.map((status) => <option key={status} value={status}>{STATUS_LABEL[status]}</option>)}
@@ -985,7 +993,7 @@ export function AgendaView(props: {
                       id="mobile-agenda-staff"
                       value={staffFilter}
                       onChange={(event) => setStaffFilter(event.target.value)}
-                      className="h-[44px] min-w-[7.25rem] shrink-0 rounded-lg border border-line bg-surface px-2.5 text-xs text-foreground"
+                      className="h-[44px] min-w-0 w-full rounded-lg border border-line bg-surface px-2.5 text-xs text-foreground"
                     >
                       <option value="">Todo el equipo</option>
                       {props.staff.map((staff) => <option key={staff.id} value={staff.id}>{staff.name}</option>)}
@@ -1186,7 +1194,14 @@ export function AgendaView(props: {
               {isWeek && weeklyOccupancy !== null ? `Ocupación semanal ${weeklyOccupancy}% · ` : ""}
               {overlapIds.size > 0 ? `${overlapIds.size} citas con solapamiento` : "Sin solapamientos"}
             </span>
-            {!isWeek ? (
+            {isWeek ? (
+              <div className="flex shrink-0 items-center rounded-lg border border-line p-0.5" aria-label="Distribución semanal">
+                <button type="button" onClick={() => setWeeklyLayout("team")} aria-pressed={weeklyLayout === "team"}
+                  className={`h-[28px] rounded-md px-2.5 text-xs font-medium ${weeklyLayout === "team" ? "bg-foreground text-surface" : "text-muted hover:bg-chip"}`}>Equipo</button>
+                <button type="button" onClick={() => setWeeklyLayout("hours")} aria-pressed={weeklyLayout === "hours"}
+                  className={`h-[28px] rounded-md px-2.5 text-xs font-medium ${weeklyLayout === "hours" ? "bg-foreground text-surface" : "text-muted hover:bg-chip"}`}>Horas</button>
+              </div>
+            ) : (
               <div className="hidden items-center rounded-lg border border-line p-0.5 xl:flex">
                 <button
                   type="button"
@@ -1207,7 +1222,7 @@ export function AgendaView(props: {
                   <ColumnsIcon />
                 </button>
               </div>
-            ) : null}
+            )}
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto bg-canvas px-3 pb-8 pt-3 md:hidden">
             {mobileRows.length === 0 ? (
@@ -1273,7 +1288,9 @@ export function AgendaView(props: {
           {/* TABLET — a touch-first board. It deliberately is neither the phone
               timeline stretched wide nor the dense desktop hour grid squeezed into
               an iPad. Cards keep a 44px+ target and use the same real appointment
-              data/detail drawer as both neighbouring layouts. */}
+              data/detail drawer as both neighbouring layouts. In the week "Equipo"
+              view the team board (md+) replaces it, so it is not rendered at all. */}
+          {isWeek && weeklyLayout === "team" ? null : (
           <div className="hidden min-h-0 flex-1 overflow-y-auto bg-canvas p-4 md:block xl:hidden">
             {mobileRows.length === 0 ? (
               <div className="flex min-h-[22rem] items-center justify-center rounded-2xl border border-dashed border-line-strong bg-surface">
@@ -1332,6 +1349,7 @@ export function AgendaView(props: {
               </div>
             )}
           </div>
+          )}
 
           {!isWeek && desktopLayout === "rows" ? (
             <DesktopHourRows
@@ -1345,7 +1363,26 @@ export function AgendaView(props: {
             />
           ) : null}
 
-          {isWeek || desktopLayout === "columns" ? (
+          {isWeek && weeklyLayout === "team" ? (
+            <WeekTeamBoard
+              days={weekDays}
+              staff={shownStaff}
+              appointments={visible}
+              openingHours={props.openingHours}
+              timezone={tz}
+              today={nowParts.dayKey}
+              overlapIds={overlapIds}
+              selectedId={selectedId}
+              onOpen={setSelectedId}
+              onDay={(date) => navigate({ date, view: "day" })}
+              onMore={(appointments, title) => {
+                setWeekOverflowTitle(title);
+                setWeekOverflow(appointments);
+              }}
+            />
+          ) : null}
+
+          {(isWeek && weeklyLayout === "hours") || (!isWeek && desktopLayout === "columns") ? (
           <div className="hidden min-h-0 flex-1 overflow-auto xl:block">
             {/* min-w-full (NOT min-w-max) is what lets the lanes BREATHE: the row is
                 at least as wide as the viewport, the lanes divide it evenly, and
@@ -1634,11 +1671,13 @@ export function AgendaView(props: {
       {weekOverflow ? (
         <WeekOverflowDialog
           appointments={weekOverflow}
+          title={weekOverflowTitle}
           timezone={tz}
           overlapIds={overlapIds}
-          onClose={() => setWeekOverflow(null)}
+          onClose={() => { setWeekOverflow(null); setWeekOverflowTitle(undefined); }}
           onSelect={(appointmentId) => {
             setWeekOverflow(null);
+            setWeekOverflowTitle(undefined);
             setSelectedId(appointmentId);
           }}
         />
@@ -1648,6 +1687,111 @@ export function AgendaView(props: {
 }
 
 // ── Small presentational pieces ───────────────────────────────────────────────
+
+/** Weekly overview: each professional has one row, with bookings ordered inside
+ * each local day. Overflow opens the existing accessible appointment chooser. */
+function WeekTeamBoard({
+  days, staff, appointments, openingHours, timezone, today, overlapIds, selectedId,
+  onOpen, onDay, onMore,
+}: {
+  days: string[];
+  staff: StaffOpt[];
+  appointments: Appt[];
+  openingHours: WeeklyHours;
+  timezone: string;
+  today: string;
+  overlapIds: Set<string>;
+  selectedId: string | null;
+  onOpen: (id: string) => void;
+  onDay: (date: string) => void;
+  onMore: (appointments: Appt[], title: string) => void;
+}) {
+  const byCell = new Map<string, Appt[]>();
+  const rows = [...staff];
+  const knownStaff = new Set(staff.map((person) => person.id));
+  for (const appt of [...appointments].sort((a, b) => a.start_at.localeCompare(b.start_at))) {
+    const key = `${appt.staff_id}/${zonedParts(appt.start_at, timezone).dayKey}`;
+    const cell = byCell.get(key) ?? [];
+    cell.push(appt);
+    byCell.set(key, cell);
+    if (!knownStaff.has(appt.staff_id)) {
+      rows.push({ id: appt.staff_id, name: appt.staff_name ?? "Sin profesional", active: false, workingHours: {} });
+      knownStaff.add(appt.staff_id);
+    }
+  }
+
+  return (
+    <div className="hidden min-h-0 flex-1 overflow-auto md:block" aria-label="Semana por profesional">
+      <div className="grid min-h-full min-w-[1050px] grid-cols-[112px_repeat(7,minmax(134px,1fr))] content-start">
+        <div className="sticky left-0 top-0 z-30 flex h-[72px] items-center border-b border-r border-line bg-surface px-3 text-xs font-medium text-muted">Equipo</div>
+        {days.map((day) => {
+          const [year, month, date] = day.split("-").map(Number);
+          const weekday = new Date(Date.UTC(year, month - 1, date)).getUTCDay();
+          const isToday = day === today;
+          return (
+            <button key={day} type="button" onClick={() => onDay(day)}
+              aria-label={`Ver agenda del ${date} de ${ES_MONTHS[month - 1]}`}
+              className={`sticky top-0 z-20 flex h-[72px] items-center justify-center gap-2 border-b border-r border-line text-sm transition hover:bg-chip ${isToday ? "bg-chip" : "bg-surface"}`}>
+              <span className={`flex size-8 items-center justify-center rounded-full font-semibold ${isToday ? "bg-ink text-ink-fg" : "text-foreground"}`}>{date}</span>
+              <span className={isToday ? "font-medium text-foreground" : "text-muted"}>{ES_WEEKDAYS[weekday]}</span>
+            </button>
+          );
+        })}
+        {rows.map((person) => {
+          const maxCount = Math.max(0, ...days.map((day) => (byCell.get(`${person.id}/${day}`) ?? []).length));
+          const rowHeight = Math.max(172, Math.min(maxCount, 5) * 37 + 46);
+          const total = days.reduce((count, day) => count + (byCell.get(`${person.id}/${day}`) ?? []).length, 0);
+          return (
+            <div key={person.id} className="contents">
+              <div className="sticky left-0 z-10 flex flex-col items-center justify-center gap-2 border-b border-r border-line bg-surface px-2 py-4 text-center" style={{ minHeight: rowHeight }}>
+                <span aria-hidden className="flex size-11 shrink-0 items-center justify-center rounded-full border-2 border-line-strong bg-chip text-sm font-semibold text-foreground">
+                  {initialsOf(person.name)}
+                </span>
+                <span className="line-clamp-2 text-xs font-semibold leading-snug text-foreground">{person.name}</span>
+                <span className="text-[11px] text-faint">{person.active ? `${total} citas` : "Inactivo"}</span>
+              </div>
+              {days.map((day) => {
+                const cell = byCell.get(`${person.id}/${day}`) ?? [];
+                const shown = cell.slice(0, 5);
+                const rest = cell.slice(5);
+                const closed = !staffWorksOn(person.workingHours, openingHours, weekdayKeyOf(day));
+                return (
+                  <div key={day} className={`flex min-w-0 flex-col justify-center gap-1 border-b border-r border-line px-1.5 py-3 ${closed ? "u-closed-hatch" : day === today ? "bg-chip/25" : "bg-surface"}`} style={{ minHeight: rowHeight }}>
+                    {shown.map((appt) => {
+                      const attention = overlapIds.has(appt.id);
+                      const client = appt.contact_name ?? "Atención sin cita";
+                      const state = STATUS_LABEL[appt.status] ?? appt.status;
+                      return (
+                        <button key={appt.id} type="button" onClick={() => onOpen(appt.id)}
+                          title={`${fmtTime(appt.start_at, timezone)} – ${fmtTime(appt.service_end_at, timezone)} · ${client} · ${appt.service_name} · ${state}${attention ? " · Solapamiento" : ""}`}
+                          aria-label={`${fmtTime(appt.start_at, timezone)} ${client} — ${appt.service_name} — ${state}${attention ? " — solapamiento" : ""}`}
+                          className={`u-appt ${appointmentToneClass(appt)} flex h-[32px] min-w-0 items-center gap-1.5 rounded-md px-2 text-left transition hover:brightness-95 ${selectedId === appt.id ? "ring-2 ring-service-purple" : ""}`}>
+                          <span className="u-appt-ink u-mono shrink-0 text-[11px]">{fmtTime(appt.start_at, timezone)}</span>
+                          <strong className={`min-w-0 flex-1 truncate text-xs font-semibold ${appt.status === "cancelled" ? "line-through opacity-60" : ""}`}>{client}</strong>
+                          {attention || appt.status !== "confirmed" ? (
+                            <span aria-hidden className="shrink-0 text-[11px] font-semibold">
+                              {attention ? "!" : appt.status === "completed" ? "✓" : appt.status === "cancelled" ? "×" : appt.status === "no_show" ? "!" : "○"}
+                            </span>
+                          ) : null}
+                        </button>
+                      );
+                    })}
+                    {rest.length > 0 ? (
+                      <button type="button" onClick={() => onMore(rest, `${person.name} · ${Number(day.slice(-2))} ${ES_MONTHS[Number(day.slice(5, 7)) - 1]}`)}
+                        aria-label={`Ver ${rest.length} citas más de ${person.name} el ${day}`}
+                        className="min-h-7 rounded-md text-xs font-medium text-muted transition hover:bg-chip hover:text-foreground">+{rest.length} más</button>
+                    ) : null}
+                    {cell.length === 0 ? <span className="text-center text-xs text-faintest">{closed ? "No disponible" : "—"}</span> : null}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 function DesktopHourRows({
   appointments,
@@ -1754,12 +1898,14 @@ function ColumnsIcon() {
  */
 function WeekOverflowDialog({
   appointments,
+  title: customTitle,
   timezone,
   overlapIds,
   onClose,
   onSelect,
 }: {
   appointments: Appt[];
+  title?: string;
   timezone: string;
   overlapIds: Set<string>;
   onClose: () => void;
@@ -1769,9 +1915,9 @@ function WeekOverflowDialog({
   const start = appointments[0]?.start_at;
   // Named after the HOUR BLOCK the chip sat in, not after the first appointment's
   // exact time — the rows below each print their own, and the block is what was clicked.
-  const title = start
+  const title = customTitle ?? (start
     ? `Más citas de ${String(zonedParts(start, timezone).h).padStart(2, "0")}:00`
-    : "Más citas";
+    : "Más citas");
 
   return (
     <>
@@ -2281,7 +2427,7 @@ function ApptCard({
       aria-label={`${fmtTime(appt.start_at, tz)} ${appt.contact_name ?? "Sin cita"} — ${appt.service_name} — ${STATUS_LABEL[appt.status] ?? appt.status}${overlapping ? " — solapamiento" : ""}`}
       // leading-tight is load-bearing: at the default line-height the three lines
       // don't fit a short card and the service name gets cropped in half.
-      className={`u-appt ${toneClass} absolute overflow-hidden px-1.5 text-left leading-tight ${
+      className={`u-appt ${toneClass} absolute flex flex-col items-stretch justify-start overflow-hidden px-2 text-left leading-tight ${
         compact ? "py-0.5" : "py-1"
       } ${selected ? "ring-2 ring-service-purple" : ""}`}
       style={{
@@ -2294,7 +2440,7 @@ function ApptCard({
       }}
     >
           <span className="flex items-start justify-between gap-1">
-            <span className="u-appt-ink u-mono truncate text-[10px]">
+            <span className="u-appt-ink u-mono truncate text-[11px]">
               {fmtTime(appt.start_at, tz)} — {fmtTime(appt.service_end_at, tz)}
               {compact ? state : ""}
             </span>
@@ -2310,7 +2456,7 @@ function ApptCard({
               <Initial name={appt.staff_name} on="card" />
             )}
           </span>
-          <span className={`block truncate text-[12px] font-semibold ${cancelled ? "line-through" : ""}`}>
+          <span className={`block truncate text-[13px] font-semibold ${cancelled ? "line-through" : ""}`}>
             {appt.contact_name ?? "Sin cita"}
           </span>
           {/* The service owns its line and the STATE owns the next one. Appending the
@@ -2320,7 +2466,7 @@ function ApptCard({
               the time, where it is at least complete. */}
           {compact ? null : (
             <>
-              <span className="u-appt-ink block truncate text-[11px]">{appt.service_name}</span>
+              <span className="u-appt-ink block truncate text-xs">{appt.service_name}</span>
               {state ? (
                 <span className="u-appt-ink block truncate text-[10px] opacity-80 first-letter:uppercase">
                   {state.replace(/^ · /, "")}

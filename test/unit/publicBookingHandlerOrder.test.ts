@@ -57,7 +57,7 @@ test('services GET already gates on the resolver before any service-scoped read'
   // uniform so a future edit can't regress it.
   const src = read('services/route.ts');
   const gate = src.indexOf('getPublicBookingSiteBySlug(');
-  const use = src.indexOf('listServicesForSite(');
+  const use = src.indexOf('listPublicServicesForSite(');
   assert.ok(gate >= 0 && use >= 0);
-  assert.ok(gate < use, 'the site gate must run before listServicesForSite');
+  assert.ok(gate < use, 'the site gate must run before listPublicServicesForSite');
 });

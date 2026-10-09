@@ -25,7 +25,7 @@ booking page, how to test a double-booking race, and V1 decisions/limitations.
   idempotency, and a Postgres GiST **exclusion constraint** that guarantees no two
   active appointments overlap for the same staff.
 - **n8n API** — `/api/scheduling/v1/*` (Bearer token).
-- **Public booking page** — `/book/{site_slug}` (+ public `/api/booking/*`).
+- **Public booking page** — `/book/{site_slug}` (+ public `/api/booking/*`). Security, env vars, migration and launch checklist: [public-booking.md](public-booking.md).
 - **Internal UI** — Agenda (day view, column per barber), Contacts, and Scheduling
   admin (CRUD sites/services/staff/exceptions).
 - **Realtime** — see §8.

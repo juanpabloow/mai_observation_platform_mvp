@@ -9,6 +9,7 @@ import {
   listStaffServices,
 } from "@worker/db/repositories/scheduling/services.js";
 import { listExceptions } from "@worker/db/repositories/scheduling/exceptions.js";
+import { isSchedulingBookable } from "@worker/db/repositories/clientModules.js";
 import { AdminPanel } from "@/components/scheduling/AdminPanel";
 
 /**
@@ -53,6 +54,9 @@ export default async function ClientSchedulingAdminPage({
   const siteServiceMap = Object.fromEntries(siteServiceRows.map((x) => [x.siteId, x.serviceIds]));
 
   const exceptions = (await Promise.all(sites.map((s) => listExceptions(tenantId, { siteId: s.id, from: new Date() })))).flat();
+  // The same predicate the public gate relies on (non-default client + module enabled),
+  // read for real rather than assumed from the page gate — it feeds "Enlace de reservas".
+  const schedulingEnabled = await isSchedulingBookable(tenantId, client.id);
 
   return (
     <AdminPanel
@@ -83,6 +87,7 @@ export default async function ClientSchedulingAdminPage({
       }))}
       staff={staff.map((s) => ({ id: s.id, site_id: s.site_id, name: s.name, active: s.active, serviceIds: staffServiceMap[s.id] ?? [], working_hours: s.working_hours }))}
       siteServiceMap={siteServiceMap}
+      schedulingEnabled={schedulingEnabled}
       exceptions={exceptions.map((e) => ({
         id: e.id,
         site_id: e.site_id,
