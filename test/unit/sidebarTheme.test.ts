@@ -25,16 +25,18 @@ const read = (rel: string): string => readFileSync(`${web}${rel}`, 'utf8');
 
 // ───────────────────────────── The preference ───────────────────────────────
 
-test('Light is the default whenever the cookie is absent, blank or unknown', () => {
-  assert.equal(DEFAULT_SIDEBAR_THEME, 'light');
-  assert.equal(parseSidebarTheme(undefined), 'light');
-  assert.equal(parseSidebarTheme(null), 'light');
-  assert.equal(parseSidebarTheme(''), 'light');
-  // A tampered or stale cookie must degrade to Light, never throw or render blank.
-  assert.equal(parseSidebarTheme('BLACK'), 'light');
-  assert.equal(parseSidebarTheme('dark'), 'light');
-  assert.equal(parseSidebarTheme('__proto__'), 'light');
-  assert.equal(parseSidebarTheme('black; rm -rf'), 'light');
+test('the DARK rail is the default whenever the cookie is absent, blank or unknown', () => {
+  assert.equal(DEFAULT_SIDEBAR_THEME, 'black');
+  assert.equal(parseSidebarTheme(undefined), 'black');
+  assert.equal(parseSidebarTheme(null), 'black');
+  assert.equal(parseSidebarTheme(''), 'black');
+  // A tampered or stale cookie must degrade to the default, never throw or render blank.
+  assert.equal(parseSidebarTheme('BLACK'), 'black');
+  assert.equal(parseSidebarTheme('dark'), 'black');
+  assert.equal(parseSidebarTheme('__proto__'), 'black');
+  assert.equal(parseSidebarTheme('light; rm -rf'), 'black');
+  // An explicit choice of Light is still honoured.
+  assert.equal(parseSidebarTheme('light'), 'light');
 });
 
 test('a valid cookie resolves to that theme', () => {
@@ -216,12 +218,12 @@ test('the appearance change did not alter navigation, gating or permissions', ()
 });
 
 test('the repaint kept the stored cookie VALUE, so saved preferences still resolve', () => {
-  // The palette became navy and the menu now reads "Navy", but the stored value is
-  // still `black`. Renaming it would have made every previously-saved cookie
-  // unknown, silently bouncing those users back to Light.
+  // The palette was repainted (navy, then neutral near-black, labelled "Dark"), but the
+  // stored value is still `black`. Renaming it would have made every previously-saved
+  // cookie unknown, silently bouncing those users to the default.
   assert.equal(parseSidebarTheme('black'), 'black');
   assert.ok(sidebarThemeCookie('black').startsWith('sidebar-theme=black'));
-  assert.equal(SIDEBAR_THEME_LABELS.black, 'Navy', 'the label is decoupled from the value');
+  assert.equal(SIDEBAR_THEME_LABELS.black, 'Dark', 'the label is decoupled from the value');
   assert.equal(SIDEBAR_THEME_LABELS.light, 'Light');
   const menu = read('components/AccountMenu.tsx');
   assert.ok(menu.includes('{SIDEBAR_THEME_LABELS[opt]}'), 'the menu renders the label, not the raw value');

@@ -10,6 +10,7 @@ import {
   resolveEffectivePrice,
 } from '../db/repositories/scheduling/availabilityData.js';
 import {
+  countActiveFutureForPhoneAtSite,
   getAppointmentForUpdate,
   findByIdempotencyKey,
   insertAppointment,
@@ -43,7 +44,8 @@ export type BookingError =
   | 'invalid_transition' // illegal status change / reschedule from terminal
   | 'module_disabled' // the client's scheduling module is off (incl. concurrent disable)
   | 'contact_conflict' // explicit contact_id disagrees with the typed identity (C-4.1)
-  | 'invalid_phone'; // customer_phone can't be normalized for the site's region (QA-3)
+  | 'invalid_phone' // customer_phone can't be normalized for the site's region (QA-3)
+  | 'active_limit'; // the phone already holds the max future active bookings here (public cap)
 
 export type BookingResult<T> = { ok: true; value: T; deduped?: boolean } | { ok: false; error: BookingError; message: string };
 
@@ -79,6 +81,13 @@ export interface CreateAppointmentInput {
   createdByType: ActorType;
   createdByUserId?: string | null;
   idempotencyKey?: string | null;
+  /** PUBLIC-BOOKING CAP: when set, refuse (active_limit, zero writes) if the normalized
+   *  customer_phone already holds this many ACTIVE (scheduled/confirmed) future
+   *  appointments at THIS site. Enforced inside the booking transaction under a per-phone
+   *  advisory lock, so concurrent requests can't race past it. Only the public route sets
+   *  it; staff, n8n and walk-in paths are unaffected. Requires customerPhone — a public
+   *  booking without one is refused rather than left uncapped. */
+  maxActiveFuturePerPhone?: number | null;
   /** REQUIRED authorization scope: the site's client MUST equal this, else
    * not_found. Every production caller (n8n API, public booking, internal
    * actions, seed) resolves and passes it — there is no scope-less path. */
@@ -221,6 +230,19 @@ export async function createAppointment(
       if (!(await isSchedulingEnabledForUpdate(client, input.tenantId, clientId))) {
         return { kind: 'module_disabled' as const };
       }
+      // Public cap — checked BEFORE any contact is resolved/created, so a refusal writes
+      // nothing at all (not even a new contact).
+      if (input.maxActiveFuturePerPhone != null) {
+        if (!normalizedCustomerPhone) return { kind: 'active_limit' as const };
+        const active = await countActiveFutureForPhoneAtSite(client, {
+          tenantId: input.tenantId,
+          clientId,
+          siteId: input.siteId,
+          phoneE164: normalizedCustomerPhone,
+          now,
+        });
+        if (active >= input.maxActiveFuturePerPhone) return { kind: 'active_limit' as const };
+      }
       let contactId: string | null = null;
       // QA-3: may the conversation be linked to the appointment contact? ONLY when that
       // contact owns the conversation's OWN identity (channel_user_id) — never when the
@@ -360,6 +382,13 @@ export async function createAppointment(
     // Scheduling was disabled (possibly concurrently) → zero writes, module_disabled.
     if (created.kind === 'module_disabled') {
       return { ok: false, error: 'module_disabled', message: 'Scheduling is disabled for this client.' };
+    }
+    if (created.kind === 'active_limit') {
+      return {
+        ok: false,
+        error: 'active_limit',
+        message: 'This phone already has the maximum number of upcoming bookings at this site.',
+      };
     }
     // C-4.1 explicit-contact guards (zero writes — the tx returned before insert).
     if (created.kind === 'contact_not_found') {

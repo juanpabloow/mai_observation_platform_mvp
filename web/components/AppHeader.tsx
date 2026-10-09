@@ -4,8 +4,8 @@ import { canSeeWorkflowInsights, getSessionScope } from "@/lib/access";
 import { listClientsForTenant } from "@worker/db/repositories/clients.js";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { HeaderBar, type HeaderClient, type HeaderWorkflow } from "./HeaderBar";
+import { isChromelessPath } from "@/lib/shellChrome";
 
-const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password"];
 
 /**
  * Global app header (logo / breadcrumb / profile). SERVER component in the root
@@ -23,9 +23,10 @@ const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/res
 export async function AppHeader() {
   // Path comes from middleware's x-pathname header (data-layer, not trusted gate).
   const pathname = (await headers()).get("x-pathname") ?? "";
-  if (AUTH_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
-    return null;
-  }
+  // Auth screens and the PUBLIC booking page (/book — a signed-in operator opening their
+  // own link from Configuración de agenda must see exactly what a customer sees). One
+  // list, shared with the layout's framed shell: lib/shellChrome.ts.
+  if (isChromelessPath(pathname)) return null;
 
   // Graceful (non-redirecting) scope read — the header renders null when logged
   // out / scope-less rather than redirecting (the page itself owns redirects).

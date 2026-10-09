@@ -1,3 +1,5 @@
+import { headers } from "next/headers";
+import { isChromelessPath } from "@/lib/shellChrome";
 import { getSessionScope } from "@/lib/access";
 import { getServerSession } from "@/lib/session";
 import { buildEnabledModulesMap } from "@/lib/enabledModulesMap";
@@ -31,6 +33,10 @@ import { AppSidebar } from "./AppSidebar";
  * logged-out → no rail.
  */
 export async function AppSidebarServer() {
+  // The PUBLIC booking page renders with no app chrome, even for a signed-in operator
+  // (same rule as AppHeader). x-pathname comes from middleware — UX only, not a gate.
+  const pathname = (await headers()).get("x-pathname") ?? "";
+  if (isChromelessPath(pathname)) return null;
   const scope = await getSessionScope();
   if (!scope) return null;
   const session = await getServerSession();

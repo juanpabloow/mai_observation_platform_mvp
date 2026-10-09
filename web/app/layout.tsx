@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
 import { AppSidebarServer } from "@/components/AppSidebarServer";
@@ -8,6 +8,7 @@ import { ScopeProviderServer } from "@/components/ScopeProviderServer";
 import { ScopeSync } from "@/components/ScopeSync";
 import { Providers } from "./providers";
 import { parseSidebarTheme, SIDEBAR_THEME_COOKIE } from "@/lib/sidebarTheme";
+import { isChromelessPath } from "@/lib/shellChrome";
 import { parseTextScale, TEXT_SCALE_COOKIE } from "@/lib/textScale";
 import "./globals.css";
 
@@ -33,12 +34,17 @@ export default async function RootLayout({
 }>) {
   // Sidebar appearance is a personal cookie preference, read HERE (server) and
   // stamped on <html> so the very first painted frame already has the right rail —
-  // no flash, no client round-trip. An absent/unknown cookie resolves to Light.
+  // no flash, no client round-trip. An absent/unknown cookie resolves to the dark rail.
   const jar = await cookies();
   const sidebarTheme = parseSidebarTheme(jar.get(SIDEBAR_THEME_COOKIE)?.value);
   // Text size is the same kind of preference (see lib/textScale.ts): read here so the
   // very first frame is already at the chosen scale, with no resize flash.
   const textScale = parseTextScale(jar.get(TEXT_SCALE_COOKIE)?.value);
+  // Screens that never carry the app chrome (auth, the public booking page). Used only
+  // to decide whether the streaming placeholder for the rail is drawn — the frame
+  // itself keys on the REAL rail being in the DOM (see .u-shell-frame), so a stale
+  // value here can never frame a chromeless page.
+  const chromeless = isChromelessPath((await headers()).get("x-pathname") ?? "");
 
   return (
     <html
@@ -70,14 +76,28 @@ export default async function RootLayout({
               <ScopeSync />
             </Suspense>
             {/* [sidebar | (header / content)]. On auth screens both the sidebar and
-                the header render null, so content fills the full viewport. */}
+                the header render null, so content fills the full viewport.
+
+                FRAMED SHELL (xl+, whenever the rail is present): the page ground takes
+                the rail's colour, the rail sits flush on it with no divider, and the
+                header + content become ONE rounded panel inset from the ground — see
+                `.u-shell-frame` in globals.css. The placeholder carries data-collapsed
+                so a streaming first paint is already framed, never framed-late. */}
             <div className="flex min-h-0 flex-1">
               <Suspense
-                fallback={<div className="hidden w-[var(--sidebar-width)] shrink-0 border-r border-sidebar-border bg-sidebar-bg xl:block" />}
+                fallback={
+                  chromeless ? null : (
+                    <div
+                      data-collapsed="false"
+                      aria-hidden
+                      className="hidden w-[var(--sidebar-width)] shrink-0 border-r border-sidebar-border bg-sidebar-bg xl:block"
+                    />
+                  )
+                }
               >
                 <AppSidebarServer />
               </Suspense>
-              <div className="flex min-w-0 min-h-0 flex-1 flex-col">
+              <div className="u-shell-frame flex min-w-0 min-h-0 flex-1 flex-col">
                 <Suspense fallback={null}>
                   <AppHeader />
                 </Suspense>

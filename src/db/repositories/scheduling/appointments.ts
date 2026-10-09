@@ -105,6 +105,44 @@ export async function insertAppointment(client: PoolClient, input: InsertAppoint
   return firstRowOrThrow(r, 'insertAppointment');
 }
 
+/**
+ * PUBLIC-BOOKING CAP: how many ACTIVE (scheduled/confirmed) appointments that start
+ * after `now` this site already holds for the contact(s) owning this E.164 phone.
+ *
+ * Runs on the booking transaction and FIRST takes a transaction-scoped advisory lock keyed
+ * by (tenant, site, phone), so two concurrent public bookings for the same phone serialize
+ * here: the second one counts AFTER the first commits and can't slip past the cap. The
+ * lock is taken before the per-staff insert lock, always in that order, so the two can
+ * never form a cycle. The phone only feeds the lock hash — nothing is persisted.
+ *
+ * Matches the phone through the identity spine (contact_identities, the canonical
+ * mapping) and the contact's own phone_e164, both scoped to (tenant, client).
+ */
+export async function countActiveFutureForPhoneAtSite(
+  client: PoolClient,
+  input: { tenantId: string; clientId: string; siteId: string; phoneE164: string; now: Date },
+): Promise<number> {
+  await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [
+    `public-booking-cap:${input.tenantId}:${input.siteId}:${input.phoneE164}`,
+  ]);
+  const r = await client.query<{ n: number }>(
+    `SELECT COUNT(*)::int AS n
+       FROM appointments a
+      WHERE a.tenant_id = $1 AND a.client_id = $2 AND a.site_id = $3
+        AND a.status IN ('scheduled','confirmed')
+        AND a.start_at > $4
+        AND a.contact_id IN (
+              SELECT ci.contact_id FROM contact_identities ci
+               WHERE ci.tenant_id = $1 AND ci.client_id = $2 AND ci.kind = 'phone' AND ci.value = $5
+              UNION
+              SELECT c.id FROM contacts c
+               WHERE c.tenant_id = $1 AND c.client_id = $2 AND c.phone_e164 = $5
+            )`,
+    [input.tenantId, input.clientId, input.siteId, input.now, input.phoneE164],
+  );
+  return r.rows[0]?.n ?? 0;
+}
+
 /** Record an audit event on the same txn client (or pool). */
 export async function recordAppointmentEvent(
   input: {

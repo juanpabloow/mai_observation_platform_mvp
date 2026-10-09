@@ -4,6 +4,7 @@ import { useCallback, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { DAYS, DAY_LABELS, gridFromWeekly, HoursGrid, weeklyFromGrid, type HourGrid } from "./HoursGrid";
+import { BookingLinkCard } from "./BookingLinkCard";
 import {
   activateServiceAction,
   activateSiteAction,
@@ -96,6 +97,7 @@ export function AdminPanel({
   staff,
   exceptions,
   siteServiceMap,
+  schedulingEnabled = true,
 }: {
   clientId: string;
   clientName: string;
@@ -105,6 +107,9 @@ export function AdminPanel({
   exceptions: Exception[];
   /** REAL per-site enablement (site_services): siteId → enabled serviceIds. */
   siteServiceMap: Record<string, string[]>;
+  /** Whether this client can host public booking right now (non-default + module on) —
+   *  drives the "Enlace de reservas" status. */
+  schedulingEnabled?: boolean;
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -196,7 +201,16 @@ export function AdminPanel({
               onNavigate={setTab}
             />
           ) : null}
-          {tab === "sites" ? <SitesSection clientId={clientId} sites={sites} run={run} pending={pending} /> : null}
+          {tab === "sites" ? (
+            <SitesSection
+              clientId={clientId}
+              sites={sites}
+              run={run}
+              pending={pending}
+              schedulingEnabled={schedulingEnabled}
+              siteServiceMap={siteServiceMap}
+            />
+          ) : null}
           {tab === "services" ? (
             <ServicesSection clientId={clientId} sites={sites} services={services} siteServiceMap={siteServiceMap} run={run} pending={pending} />
           ) : null}
@@ -754,7 +768,23 @@ function CopyId({ label, value }: { label: string; value: string }) {
  *  seeded from the stored values — in an editable form. This is the fix for the reported
  *  bug: the site's real hours are now shown (not a blank create form pretending to be
  *  them). Save persists via updateSiteAction and immediately changes availability. */
-function EditableSite({ clientId, site, run, pending, initiallyEditing = false }: { clientId: string; site: Site; run: Run; pending: boolean; initiallyEditing?: boolean }) {
+function EditableSite({
+  clientId,
+  site,
+  run,
+  pending,
+  initiallyEditing = false,
+  schedulingEnabled = true,
+  serviceCount = 0,
+}: {
+  clientId: string;
+  site: Site;
+  run: Run;
+  pending: boolean;
+  initiallyEditing?: boolean;
+  schedulingEnabled?: boolean;
+  serviceCount?: number;
+}) {
   const [editing, setEditing] = useState(initiallyEditing);
   const [name, setName] = useState(site.name);
   const [slug, setSlug] = useState(site.slug);
@@ -804,6 +834,8 @@ function EditableSite({ clientId, site, run, pending, initiallyEditing = false }
         </button>
         <ActiveToggle clientId={clientId} kind="site" id={site.id} name={site.name} active={site.active} run={run} pending={pending} />
       </div>
+
+      <BookingLinkCard slug={site.slug} siteActive={site.active} schedulingEnabled={schedulingEnabled} serviceCount={serviceCount} />
 
       {editing ? (
         <div className="border-t border-line bg-card/40 p-4">
@@ -857,7 +889,21 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
-function SitesSection({ clientId, sites, run, pending }: { clientId: string; sites: Site[]; run: Run; pending: boolean }) {
+function SitesSection({
+  clientId,
+  sites,
+  run,
+  pending,
+  schedulingEnabled,
+  siteServiceMap,
+}: {
+  clientId: string;
+  sites: Site[];
+  run: Run;
+  pending: boolean;
+  schedulingEnabled: boolean;
+  siteServiceMap: Record<string, string[]>;
+}) {
   const [creating, setCreating] = useState(false);
   const [query, setQuery] = useState("");
   const [selectedId, setSelectedId] = useState(sites[0]?.id ?? "");
@@ -923,7 +969,16 @@ function SitesSection({ clientId, sites, run, pending }: { clientId: string; sit
         </aside>
         <div className="min-w-0 p-3 sm:p-4">
           {selectedSite ? (
-            <EditableSite key={selectedSite.id} clientId={clientId} site={selectedSite} run={run} pending={pending} initiallyEditing />
+            <EditableSite
+              key={selectedSite.id}
+              clientId={clientId}
+              site={selectedSite}
+              run={run}
+              pending={pending}
+              initiallyEditing
+              schedulingEnabled={schedulingEnabled}
+              serviceCount={siteServiceMap[selectedSite.id]?.length ?? 0}
+            />
           ) : (
             <div className="flex min-h-72 flex-col items-center justify-center text-center">
               <p className="text-sm font-semibold text-foreground">Aún no hay sedes</p>

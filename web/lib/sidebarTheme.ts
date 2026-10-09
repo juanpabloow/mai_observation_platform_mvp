@@ -15,18 +15,23 @@
 export const SIDEBAR_THEME_COOKIE = 'sidebar-theme';
 export const SIDEBAR_THEMES = ['light', 'black'] as const;
 export type SidebarTheme = (typeof SIDEBAR_THEMES)[number];
-/** Light is the default: an unset, unknown or tampered cookie must never break the rail. */
-export const DEFAULT_SIDEBAR_THEME: SidebarTheme = 'light';
+/**
+ * The DARK rail is the default (the framed shell: a dark ground the rail sits flush on,
+ * with the content as a rounded panel on top — see `.u-shell-frame` in globals.css).
+ * An unset, unknown or tampered cookie resolves to it and must never break the rail;
+ * anyone who explicitly chose Light keeps Light (their cookie still says `light`).
+ */
+export const DEFAULT_SIDEBAR_THEME: SidebarTheme = 'black';
 
 /**
  * What each option is CALLED in the menu. Split from the stored value on purpose:
- * the dark rail was repainted deep navy, but its cookie value stays `black` so
- * preferences saved before the repaint keep resolving instead of silently
- * falling back to Light.
+ * the dark rail has been repainted more than once (navy, then neutral near-black),
+ * but its cookie value stays `black` so preferences saved before a repaint keep
+ * resolving instead of silently falling back to the default.
  */
 export const SIDEBAR_THEME_LABELS: Record<SidebarTheme, string> = {
   light: 'Light',
-  black: 'Navy',
+  black: 'Dark',
 };
 
 /** Narrow an arbitrary cookie value to a known theme, else the default. */
