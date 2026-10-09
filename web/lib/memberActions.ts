@@ -213,10 +213,24 @@ export async function changeClientRoleAction(input: {
     });
     if (updated === 0) return { ok: false, error: "Member not found." };
   } catch (error) {
-    if ((error as { code?: string }).code === "23505") {
+    // The real error is logged server-side (never shown to the user); the member sees a
+    // specific, human-readable reason for the known Postgres failure classes instead of a
+    // blank "Could not update the role."
+    const code = (error as { code?: string }).code;
+    console.error("changeClientRoleAction failed", { clientRole: input.clientRole, code, error });
+    if (code === "23505") {
       return { ok: false, error: "That staff profile is already linked to another login." };
     }
-    return { ok: false, error: "Could not update the role." };
+    if (code === "23514") {
+      // A CHECK rejected the combination (e.g. a role the database doesn't allow, or a
+      // staff role missing its site/staff binding).
+      return { ok: false, error: "That role isn't allowed for this member. Pick Owner, Setter or Staff (Staff needs a site and a staff profile)." };
+    }
+    if (code === "23503") {
+      // A foreign key rejected the site/staff — not part of this client.
+      return { ok: false, error: "That site or staff member isn't part of this client." };
+    }
+    return { ok: false, error: "Could not update the role. Please try again." };
   }
 
   // Dropping to staff removes CRM/inbox reach — release any conversations they held here.
