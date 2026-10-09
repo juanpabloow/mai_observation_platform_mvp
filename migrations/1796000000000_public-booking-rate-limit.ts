@@ -22,6 +22,12 @@ import type { MigrationBuilder } from 'node-pg-migrate';
  * name a site of another tenant/client, and ON DELETE CASCADE removes them with the site.
  *
  * Reversible: down() drops the table (it holds only ephemeral counters).
+ *
+ * NAMING: first written as 1784500000000_… on a branch cut before main gained
+ * 1790000000000_client-roles and 1795000000000_setter-role. node-pg-migrate refuses a
+ * pending migration dated BEFORE ones already run ("Not run migration … is preceding
+ * already run migration …"), so it was renamed to sort after them. The content is
+ * unchanged. test/unit/migrationOrder.test.ts guards the ordering.
  */
 export async function up(pgm: MigrationBuilder): Promise<void> {
   pgm.sql(`
