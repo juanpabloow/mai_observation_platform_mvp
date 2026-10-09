@@ -10,7 +10,7 @@ import {
 } from "@/lib/memberActions";
 
 export type MemberRole = "owner" | "admin" | "member";
-export type ClientRole = "owner" | "editor" | "staff";
+export type ClientRole = "owner" | "setter" | "staff";
 
 export interface TeamMemberView {
   userId: string;
@@ -59,7 +59,7 @@ const ROLE_BADGE: Record<MemberRole, string> = {
 
 const CLIENT_ROLE_LABEL: Record<ClientRole, string> = {
   owner: "Owner",
-  editor: "Editor",
+  setter: "Setter",
   staff: "Staff",
 };
 
@@ -100,7 +100,7 @@ function MemberRow({
   const [confirmRemove, setConfirmRemove] = useState(false);
   const [demoting, setDemoting] = useState(false);
   const [demoteClient, setDemoteClient] = useState(clients[0]?.id ?? "");
-  const [clientRole, setClientRole] = useState<ClientRole>(member.clientRole ?? "editor");
+  const [clientRole, setClientRole] = useState<ClientRole>(member.clientRole ?? "setter");
   const [siteId, setSiteId] = useState(member.schedulingSiteId ?? sites[0]?.id ?? "");
   const initialSite = sites.find((s) => s.id === (member.schedulingSiteId ?? sites[0]?.id));
   const [staffId, setStaffId] = useState(member.schedulingStaffId ?? initialSite?.staff[0]?.id ?? "");
@@ -285,7 +285,7 @@ function MemberRow({
         ) : null}
       </div>
 
-      {/* CLIENT ROLE editor — owner/editor/staff for a member of this client. The "Owner"
+      {/* CLIENT ROLE editor — owner/setter/staff for a member of this client. The "Owner"
           option only appears for the agency (a Client Owner can't mint Owners); staff
           needs a site + staff binding. */}
       {manageable && member.role === "member" && member.clientId && viewer.canManageMembers ? (
@@ -299,7 +299,7 @@ function MemberRow({
               className="rounded-md border border-line bg-card px-2 py-1.5 text-foreground"
             >
               {viewer.canAssignOwner ? <option value="owner">Owner</option> : null}
-              <option value="editor">Editor</option>
+              <option value="setter">Setter</option>
               <option value="staff">Staff</option>
             </select>
           </label>

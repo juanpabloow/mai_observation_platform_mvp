@@ -40,7 +40,7 @@ function roleLabel(
 ): string {
   if (clientRole === "owner") return `the owner of ${clientName ?? "a client"}`;
   if (clientRole === "staff") return `staff at ${clientName ?? "a client"}`;
-  if (clientRole === "editor") return `an editor at ${clientName ?? "a client"}`;
+  if (clientRole === "setter") return `a setter at ${clientName ?? "a client"}`;
   return role === "member" ? `a member of ${clientName ?? "a client"}` : "an admin";
 }
 
@@ -148,8 +148,8 @@ export async function createInvitationAction(input: {
     if (!clientId) return { ok: false, error: "A member invitation must include a client." };
 
     const requestedRole = input.clientRole ?? null;
-    if (requestedRole !== "owner" && requestedRole !== "editor" && requestedRole !== "staff") {
-      return { ok: false, error: "Choose a valid role (Owner, Editor or Staff)." };
+    if (requestedRole !== "owner" && requestedRole !== "setter" && requestedRole !== "staff") {
+      return { ok: false, error: "Choose a valid role (Owner, Setter or Staff)." };
     }
     // ESCALATION GATE — before any lookup: may the ACTOR grant this exact role for this
     // exact client? (Deny-by-default; a Client Owner can't create Owners or reach other clients.)

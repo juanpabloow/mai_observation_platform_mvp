@@ -94,7 +94,7 @@ export async function changeMemberRoleAction(input: {
       userId: input.targetUserId,
       role: input.newRole,
       memberClientId,
-      clientRole: "editor",
+      clientRole: "setter",
     });
     if (updated === 0) return { ok: false, error: "Member not found." };
   } catch {
@@ -135,7 +135,7 @@ export async function reassignMemberClientAction(input: {
       userId: input.targetUserId,
       role: "member",
       memberClientId: input.clientId,
-      clientRole: target.client_role === "owner" ? "owner" : "editor",
+      clientRole: target.client_role === "owner" ? "owner" : "setter",
     });
   } catch {
     return { ok: false, error: "Could not reassign the client." };
@@ -148,7 +148,7 @@ export async function reassignMemberClientAction(input: {
 }
 
 /**
- * Set a member's CLIENT ROLE (owner | editor | staff) within their client. The agency
+ * Set a member's CLIENT ROLE (owner | setter | staff) within their client. The agency
  * or the client's Owner may run it; only the agency may assign 'owner'; the last Owner
  * can't be demoted. `staff` requires a site + staff binding, validated here before the
  * DB's composite foreign keys enforce it again.
@@ -162,7 +162,7 @@ export async function changeClientRoleAction(input: {
 }): Promise<Result> {
   const scope = await getAccessScope();
   if (!canManageClient(scope, input.clientId)) return { ok: false, error: PERMISSION_DENIED };
-  if (input.clientRole !== "owner" && input.clientRole !== "editor" && input.clientRole !== "staff") {
+  if (input.clientRole !== "owner" && input.clientRole !== "setter" && input.clientRole !== "staff") {
     return { ok: false, error: "Invalid role." };
   }
   // Only the AGENCY may create/assign a Client Owner.

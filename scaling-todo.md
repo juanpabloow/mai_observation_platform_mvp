@@ -108,3 +108,16 @@ it here; don't duplicate per-surface.
   10s timeout, no queue). Fine at v1 volume; a durable outbound queue/worker with
   backoff-free manual retry semantics would decouple the agent's click from channel
   latency as send volume grows.
+
+## Client roles (Setter)
+
+- **Billing is ✗ for the Setter** — the client's operating document says the Setter must
+  not see billing/payments. Payments aren't built yet; when they are, the Setter defaults
+  to NO access (gate on a capability like the existing `canSeeWorkflowInsights`, i.e.
+  owner/agency only). Add the server gate + hide the nav the same way analytics is hidden.
+- **Meetings (Reuniones) vs Setter is undecided.** The Setter matrix lists only inbox,
+  contacts and agenda; meetings is a newer module not in that matrix. For now the Setter's
+  sidebar HIDES Reuniones (it's grouped with insights), but the meetings pages are only
+  module + `canAccessClient`-gated, so a Setter could still reach them by URL. Decide the
+  policy (likely ✓ — it's conversation content — or ✗) and gate it server-side; until then
+  treat it like billing (default ✗) if it matters for a given client.

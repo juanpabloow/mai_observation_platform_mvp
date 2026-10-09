@@ -202,7 +202,7 @@ export async function seedContact(
 
 export async function seedMember(
   tenantId: string,
-  opts: { role?: 'owner' | 'admin' | 'member'; clientId?: string; clientRole?: 'owner' | 'editor' } = {},
+  opts: { role?: 'owner' | 'admin' | 'member'; clientId?: string; clientRole?: 'owner' | 'setter' } = {},
 ): Promise<string> {
   const role = opts.role ?? 'owner';
   const memberClientId = role === 'member' ? opts.clientId ?? null : null;
@@ -210,7 +210,7 @@ export async function seedMember(
   // A client member MUST carry a client role (DB CHECK). Defaults to 'editor' (the
   // operational role, no site/staff binding). A 'staff' login needs a binding, so it is
   // created with setMemberClientRole after seeding rather than here.
-  const clientRole = role === 'member' ? (opts.clientRole ?? 'editor') : null;
+  const clientRole = role === 'member' ? (opts.clientRole ?? 'setter') : null;
   const userId = randomUUID();
   await query(`INSERT INTO "user" ("id", "name", "email", "emailVerified") VALUES ($1, $2, $3, true)`, [
     userId,

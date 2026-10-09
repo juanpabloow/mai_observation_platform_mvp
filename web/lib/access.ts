@@ -22,10 +22,11 @@ import {
  *    client (the barbershop). Never another client, never a tenant-level surface.
  *
  * CLIENT ROLES (only meaningful for role === "member"):
- *  - owner  → full control of THEIR client (inbox, contacts, agenda, settings,
- *             custom fields, and managing this client's Editors/Staff);
- *  - editor → the operational role (inbox, contacts, agenda + booking); no settings,
- *             custom fields or team;
+ *  - owner  → full control of THEIR client (inbox, contacts, agenda, analytics,
+ *             settings, custom fields, and managing this client's Setters/Staff);
+ *  - setter → works the chats + CRM: inbox, contacts, agenda + booking. NO analytics,
+ *             executions, workflow internals, settings, custom fields or team. (This
+ *             REPLACED the old generic "editor".)
  *  - staff  → their own agenda: sees the whole SITE but may create/modify only their
  *             OWN column; never contacts, inbox, analytics or settings.
  *
@@ -65,15 +66,32 @@ export function isClientOwner(scope: AccessScope, clientId: string): boolean {
 
 /**
  * Deny-by-default client predicate: may this scope see this client's GENERAL data
- * (workflows, inbox, CRM, analytics)? owner/admin: any client of their tenant; a
- * client OWNER or EDITOR: only their one client. A STAFF login is intentionally
- * NARROWER — its one permitted surface is scheduling, admitted explicitly by the
- * scheduling module gate; treating it as a general client member here would expose
- * inbox/CRM/analytics by typing those URLs directly.
+ * (inbox, CRM, agenda — AND, for those allowed, workflows/analytics)? owner/admin: any
+ * client of their tenant; a client OWNER or SETTER: only their one client. A STAFF login
+ * is intentionally NARROWER — its one permitted surface is scheduling, admitted
+ * explicitly by the scheduling module gate; treating it as a general client member here
+ * would expose inbox/CRM by typing those URLs directly.
+ *
+ * NOTE: this admits the SETTER to the client (it needs inbox/contacts/agenda). Analytics,
+ * executions and workflow internals are a SEPARATE capability — canSeeWorkflowInsights —
+ * which the Setter does NOT have; those surfaces gate on it, not on canAccessClient.
  */
 export function canAccessClient(scope: AccessScope, clientId: string): boolean {
   if (scope.clientRole === "staff") return false;
   return scope.memberClientId === null || scope.memberClientId === clientId;
+}
+
+/**
+ * May this scope see WORKFLOW INSIGHTS — analytics, the executions list/detail, and
+ * workflow internals (settings/config)? The agency and a client OWNER may; a SETTER may
+ * NOT (its job is the chats, contacts and agenda, not the numbers), and neither may
+ * STAFF. This is the capability the executions/analytics/settings surfaces gate on, so a
+ * Setter still resolves a workflow for its INBOX but is refused everything else under it.
+ */
+export function canSeeWorkflowInsights(scope: AccessScope, clientId?: string): boolean {
+  if (hasFullAccess(scope)) return true;
+  if (scope.clientRole !== "owner") return false;
+  return clientId === undefined || scope.memberClientId === clientId;
 }
 
 /**
@@ -90,7 +108,7 @@ export function isSchedulingStaff(scope: AccessScope): boolean {
   return scope.clientRole === "staff";
 }
 
-/** Every client role (owner/editor/staff) — and the agency — may operate an agenda.
+/** Every client role (owner/setter/staff) — and the agency — may operate an agenda.
  *  A staff login is further restricted to its own column by canAccessSchedulingStaff. */
 export function canOperateScheduling(scope: AccessScope): boolean {
   return hasFullAccess(scope) || scope.clientRole !== null;
@@ -121,14 +139,15 @@ export function canAccessSchedulingStaff(scope: AccessScope, staffId: string): b
  * owner/admin → the Hub.
  */
 export function memberLandingHref(scope: AccessScope): string {
-  // A staff login's only surface is the agenda; owner/editor land on their client's
-  // aggregate analytics (always a valid page, empty state when there's no data yet).
-  if (scope.memberClientId && scope.clientRole === "staff") {
-    return `/clients/${scope.memberClientId}/scheduling/agenda`;
+  // Staff → their agenda. SETTER → the client attention queue (inbox): they can't see
+  // analytics, so the old "all/analytics" landing would 404 for them. Owner → their
+  // client's aggregate analytics. Agency → the Hub.
+  if (scope.memberClientId) {
+    if (scope.clientRole === "staff") return `/clients/${scope.memberClientId}/scheduling/agenda`;
+    if (scope.clientRole === "setter") return `/clients/${scope.memberClientId}/inbox`;
+    return `/clients/${scope.memberClientId}/workflows/all/analytics`; // owner
   }
-  return scope.memberClientId
-    ? `/clients/${scope.memberClientId}/workflows/all/analytics`
-    : "/";
+  return "/";
 }
 
 type ScopeResult = { ok: true; scope: AccessScope } | { ok: false };
@@ -152,7 +171,7 @@ function buildScope(userId: string, membership: MembershipScopeRow | null): Scop
   // A member MUST carry a valid client role; a non-member MUST carry none. Unknown →
   // deny (never default to a wider role). The DB CHECK is the belt; this is the code side.
   if (role === "member") {
-    if (clientRole !== "owner" && clientRole !== "editor" && clientRole !== "staff") return { ok: false };
+    if (clientRole !== "owner" && clientRole !== "setter" && clientRole !== "staff") return { ok: false };
   } else if (clientRole !== null) {
     return { ok: false };
   }

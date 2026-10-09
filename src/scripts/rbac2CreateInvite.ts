@@ -85,10 +85,10 @@ async function main(): Promise<void> {
     email: normalizeEmail(email),
     role,
     memberClientId,
-    // A member invite needs a client role (DB CHECK). This CLI defaults to 'editor' (the
+    // A member invite needs a client role (DB CHECK). This CLI defaults to 'setter' (the
     // operational role); owner/staff invites — staff needs a site+staff binding — go
     // through the Team UI (createInvitationAction).
-    clientRole: role === 'member' ? 'editor' : null,
+    clientRole: role === 'member' ? 'setter' : null,
     tokenHash: hashInviteToken(rawToken),
     invitedBy: owner.user_id,
     expiresAt: new Date(Date.now() + TTL_DAYS * 24 * 60 * 60 * 1000),

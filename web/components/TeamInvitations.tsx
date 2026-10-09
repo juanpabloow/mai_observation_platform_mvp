@@ -9,7 +9,7 @@ export interface TeamInviteView {
   email: string;
   role: "admin" | "member";
   clientName: string | null;
-  clientRole: "owner" | "editor" | "staff" | null;
+  clientRole: "owner" | "setter" | "staff" | null;
   schedulingSiteName: string | null;
   schedulingStaffName: string | null;
   status: "pending" | "accepted" | "revoked" | "expired";
@@ -32,7 +32,7 @@ function roleLabel(inv: TeamInviteView): string {
   if (inv.clientRole === "staff") {
     return `staff · ${inv.schedulingStaffName ?? "—"} · ${inv.schedulingSiteName ?? "—"}`;
   }
-  if (inv.clientRole === "editor") return `editor · ${inv.clientName ?? "—"}`;
+  if (inv.clientRole === "setter") return `setter · ${inv.clientName ?? "—"}`;
   return inv.role === "member" ? `member · ${inv.clientName ?? "—"}` : "admin";
 }
 

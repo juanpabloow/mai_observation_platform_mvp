@@ -67,9 +67,9 @@ test('inbox pages are inbox-gated (unified + legacy thread); per-workflow defers
 
 test('sidebar hides Conversations/Inbox (and its polling badge) when inbox is off', () => {
   const src = read('web/components/AppSidebar.tsx');
-  assert.ok(src.includes('if (moduleKeys.includes("inbox"))'), 'the Conversations section is inbox-gated');
+  assert.ok(src.includes('moduleKeys.includes("inbox")'), 'the Inbox item is inbox-gated');
   // The pending-count endpoint (polling) lives inside that gated block.
-  const gated = src.slice(src.indexOf('if (moduleKeys.includes("inbox"))'));
+  const gated = src.slice(src.indexOf('moduleKeys.includes("inbox")'));
   assert.ok(gated.slice(0, 400).includes('/pending-count'), 'the pending badge/poll is inside the gate');
 });
 

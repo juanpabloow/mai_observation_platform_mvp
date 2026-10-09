@@ -39,12 +39,13 @@ export interface MembershipScopeRow {
 /**
  * The client-level role for a `member` (the people who work AT a client). NULL for
  * owner/admin (the agency). See web/lib/access.ts for what each grants.
- *   owner  → full control of THEIR client (incl. settings, custom fields, team);
- *   editor → the operational role (inbox, contacts, agenda + booking);
+ *   owner  → full control of THEIR client (incl. settings, custom fields, team, analytics);
+ *   setter → works the chats + CRM: inbox, contacts, agenda + booking. NO analytics,
+ *            executions or workflow internals. (Replaced the old generic "editor".)
  *   staff  → own agenda only (sees the whole site, books its own column).
  * Only `staff` carries a scheduling_site_id + scheduling_staff_id binding.
  */
-export type ClientRole = 'owner' | 'editor' | 'staff';
+export type ClientRole = 'owner' | 'setter' | 'staff';
 
 /**
  * The current user's membership with its role + per-member client scope — the
@@ -76,12 +77,12 @@ export async function setMembershipRole(params: {
   userId: string;
   role: 'owner' | 'admin' | 'member';
   memberClientId?: string | null;
-  /** Required-ish when role === 'member' (defaults to 'editor'). Only 'owner' | 'editor'
+  /** Required-ish when role === 'member' (defaults to 'setter'). Only 'owner' | 'setter'
    *  here — a 'staff' login needs a site+staff binding, set via setMemberClientRole. */
-  clientRole?: 'owner' | 'editor';
+  clientRole?: 'owner' | 'setter';
 }): Promise<number> {
   const memberClientId = params.role === 'member' ? (params.memberClientId ?? null) : null;
-  const clientRole = params.role === 'member' ? (params.clientRole ?? 'editor') : null;
+  const clientRole = params.role === 'member' ? (params.clientRole ?? 'setter') : null;
   if (params.role === 'member' && !memberClientId) {
     throw new Error("setMembershipRole: role='member' requires a memberClientId");
   }
@@ -291,8 +292,8 @@ export async function getMemberInTenant(
 }
 
 /**
- * Set a member's CLIENT ROLE (owner | editor | staff) within their client. `staff`
- * carries a site + staff binding (both required); owner/editor clear it (they see the
+ * Set a member's CLIENT ROLE (owner | setter | staff) within their client. `staff`
+ * carries a site + staff binding (both required); owner/setter clear it (they see the
  * whole client). Composite foreign keys in the migration enforce that the site belongs
  * to the member's tenant/client and the staff to that site. Scoped to `role='member'
  * AND member_client_id=clientId`, so it can never touch an owner/admin or a member of

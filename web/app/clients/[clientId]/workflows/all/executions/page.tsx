@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import { redirect } from "next/navigation";
-import { resolveRememberedWorkflow } from "@/lib/clientWorkflow";
+import { requireWorkflowInsights, resolveRememberedWorkflow } from "@/lib/clientWorkflow";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
@@ -19,6 +19,7 @@ export default async function AllExecutionsRedirect({
   searchParams: Promise<SearchParams>;
 }) {
   await connection();
+  await requireWorkflowInsights(); // executions are agency/owner only — Setter 404s
   const { clientId } = await params;
   const from = first((await searchParams).from);
   const workflowId = await resolveRememberedWorkflow(clientId, from);

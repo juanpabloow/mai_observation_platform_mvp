@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { getWorkflowByN8nId, listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { getClientById, type ClientRow } from "@worker/db/repositories/clients.js";
 import type { WorkflowRow } from "@worker/db/types.js";
-import { getAccessScope, canAccessClient } from "./access";
+import { getAccessScope, canAccessClient, canSeeWorkflowInsights } from "./access";
 
 /**
  * Resolution of a (clientId, workflowId) URL pair against the current tenant.
@@ -69,6 +69,18 @@ export const resolveWorkflowUnderClient = cache(
  * row when the URL is canonical. `subpath` is this route's tail under the
  * workflow (e.g. "executions", "conversations/settings", `conversations/<id>`).
  */
+/**
+ * Chokepoint for WORKFLOW INSIGHTS — analytics, the executions list/detail, and workflow
+ * internals (settings/config). The agency and a client OWNER pass; a SETTER (and staff)
+ * is 404'd. A Setter still RESOLVES a workflow for its inbox (that uses canAccessClient),
+ * so call THIS in addition, at the top of each insights page/layout, to refuse the
+ * numbers and raw executions while leaving the inbox reachable.
+ */
+export async function requireWorkflowInsights(): Promise<void> {
+  const scope = await getAccessScope();
+  if (!canSeeWorkflowInsights(scope)) notFound();
+}
+
 export async function requireWorkflowUnderClient(
   urlClientId: string,
   workflowId: string,

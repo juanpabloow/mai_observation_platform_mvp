@@ -53,16 +53,18 @@ test('sidebar: WORKSPACE is Workflows → Analytics → Inbox (Hub removed from 
   // per-workflow Settings are NOT rail items: they are reached from the Workflows list
   // and the header scope switcher.
   const src = read('components/AppSidebar.tsx');
-  const workspace = slice(src, 'const workspace: NavItem[] = [', '];');
-  assert.ok(!workspace.includes('key: "hub"'), 'Hub is no longer a rail item — the brand wordmark links home instead');
-  assert.ok(workspace.includes('key: "workflows"'), 'Workflows is the first workspace item');
-  assert.ok(workspace.includes('scopeHref(clientId, "executions", scope)'), 'Workflows href still comes from scopeHref');
-  assert.ok(workspace.includes('key: "analytics"'), 'Analytics is a rail item again');
-  assert.ok(workspace.includes('scopeHref(clientId, "analytics", scope)'), 'Analytics href is scope-aware too');
+  assert.ok(!src.includes('key: "hub"'), 'Hub is no longer a rail item — the brand wordmark links home instead');
+  // Workflows + Analytics are INSIGHTS (agency/owner) — pushed only under canSeeInsights,
+  // so a Setter never sees them.
+  const insights = slice(src, 'if (canSeeInsights) {', 'if (canSeeGeneral && moduleKeys.includes("inbox"))');
+  assert.ok(insights.includes('key: "workflows"'), 'Workflows is an insights item');
+  assert.ok(insights.includes('scopeHref(clientId, "executions", scope)'), 'Workflows href comes from scopeHref');
+  assert.ok(insights.includes('key: "analytics"'), 'Analytics is an insights item');
+  assert.ok(insights.includes('scopeHref(clientId, "analytics", scope)'), 'Analytics href is scope-aware');
   assert.ok(src.includes('const onWorkflows = pathname.startsWith(c("/workflows"));'), 'active across all /workflows/… routes');
   assert.ok(src.includes('const onAnalytics ='), 'the two rows split on the analytics route so only one is active');
-  // Inbox is appended to the SAME group (module-gated), so it renders under Workspace.
-  assert.ok(src.includes('workspace.push({'), 'Inbox joins the Workspace group');
+  // Inbox rides the SAME Workspace group but is gated on GENERAL access (so a Setter sees it).
+  assert.ok(src.includes('canSeeGeneral && moduleKeys.includes("inbox")'), 'Inbox is gated on general access + the inbox module');
   assert.ok(src.includes('sections.push({ label: "Workspace", items: workspace })'), 'Workspace is the first section');
 
   // Executions and per-workflow Settings are still NOT rail items.
@@ -100,7 +102,7 @@ test('sidebar: Inbox uses the unified client-level route + aggregated pending ba
   const src = read('components/AppSidebar.tsx');
   // The Conversations section is now gated by the inbox module; the Inbox item lives
   // inside that block.
-  const conv = slice(src, 'if (moduleKeys.includes("inbox"))', 'if (moduleKeys.includes("crm")');
+  const conv = slice(src, 'moduleKeys.includes("inbox")', 'moduleKeys.includes("meetings")');
   assert.ok(conv.includes('key: "inbox"'), 'the Conversations section is the Inbox');
   assert.ok(conv.includes('href: c("/inbox")'), 'Inbox → the unified /clients/{id}/inbox route');
   assert.ok(

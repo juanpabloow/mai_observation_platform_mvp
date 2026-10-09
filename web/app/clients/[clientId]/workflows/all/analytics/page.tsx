@@ -2,7 +2,7 @@ import Link from "next/link";
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
 import { getCurrentTenantId } from "@/lib/tenant";
-import { getClientForTenant } from "@/lib/clientWorkflow";
+import { getClientForTenant, requireWorkflowInsights } from "@/lib/clientWorkflow";
 import {
   coerceRangeDays,
   getTenantConversationSummary,
@@ -48,6 +48,7 @@ export default async function AllWorkflowsAnalyticsPage({
   searchParams: Promise<SearchParams>;
 }) {
   await connection();
+  await requireWorkflowInsights(); // aggregate analytics is agency/owner only — Setter 404s
   const { clientId } = await params;
   const sp = await searchParams;
   const days = coerceRangeDays(first(sp.range));

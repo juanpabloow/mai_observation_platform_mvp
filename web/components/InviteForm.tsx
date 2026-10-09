@@ -20,11 +20,11 @@ type InviteFormProps =
       canInviteOwner?: boolean;
     };
 
-type ClientRole = "owner" | "editor" | "staff";
+type ClientRole = "owner" | "setter" | "staff";
 
 const ROLE_HINT: Record<ClientRole, string> = {
   owner: "Owner — full control of this business (people, settings, everything).",
-  editor: "Editor — inbox, contacts and the whole agenda. No settings.",
+  setter: "Setter — chats, contacts and agenda.",
   staff: "Staff — their own agenda only. No contacts or inbox.",
 };
 
@@ -41,7 +41,7 @@ export function InviteForm(props: InviteFormProps) {
   const [email, setEmail] = useState("");
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<Result | null>(null);
-  const [role, setRole] = useState<ClientRole>("editor");
+  const [role, setRole] = useState<ClientRole>("setter");
   const [siteId, setSiteId] = useState(props.mode === "member" ? (props.sites[0]?.id ?? "") : "");
   const selectedSite = props.mode === "member" ? props.sites.find((site) => site.id === siteId) : null;
   const [staffId, setStaffId] = useState(props.mode === "member" ? (props.sites[0]?.staff[0]?.id ?? "") : "");
@@ -107,7 +107,7 @@ export function InviteForm(props: InviteFormProps) {
               className="rounded-lg border border-line bg-card px-3 py-2 outline-none focus:border-line-strong"
             >
               {canInviteOwner ? <option value="owner">Owner</option> : null}
-              <option value="editor">Editor</option>
+              <option value="setter">Setter</option>
               <option value="staff">Staff</option>
             </select>
           </label>

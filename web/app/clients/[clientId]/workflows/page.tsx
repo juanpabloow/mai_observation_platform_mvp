@@ -1,7 +1,7 @@
 import { connection } from "next/server";
 import { notFound, redirect } from "next/navigation";
 import { getAccessScope } from "@/lib/access";
-import { getClientForTenant } from "@/lib/clientWorkflow";
+import { getClientForTenant, requireWorkflowInsights } from "@/lib/clientWorkflow";
 import { resolveWorkflowScope } from "@/lib/workflowScope";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { ClientWorkflowsList, type ClientWorkflowRow } from "@/components/ClientWorkflowsList";
@@ -27,6 +27,7 @@ export default async function ClientWorkflowsPage({
   params: Promise<{ clientId: string }>;
 }) {
   await connection();
+  await requireWorkflowInsights(); // the workflows/executions list is agency/owner only — Setter 404s
   const { clientId } = await params;
 
   const scope = await getAccessScope();

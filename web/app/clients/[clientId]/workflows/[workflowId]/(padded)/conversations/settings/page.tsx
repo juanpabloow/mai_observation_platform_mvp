@@ -5,7 +5,7 @@ import { listRecentRawForWorkflow } from "@worker/db/repositories/executions.js"
 import type { ConversationRole } from "@worker/db/types.js";
 import { getCurrentTenantId } from "@/lib/tenant";
 import { getAccessScope, hasFullAccess } from "@/lib/access";
-import { requireWorkflowUnderClient } from "@/lib/clientWorkflow";
+import { requireWorkflowInsights, requireWorkflowUnderClient } from "@/lib/clientWorkflow";
 import { getWebhookRow } from "@worker/db/repositories/webhooks.js";
 import {
   buildExecutionResolver,
@@ -35,6 +35,7 @@ export default async function ConversationSettingsPage({
   params: Promise<{ clientId: string; workflowId: string }>;
 }) {
   await connection();
+  await requireWorkflowInsights(); // workflow settings are agency/owner only — Setter 404s
   const { clientId, workflowId } = await params;
 
   const workflow = await requireWorkflowUnderClient(

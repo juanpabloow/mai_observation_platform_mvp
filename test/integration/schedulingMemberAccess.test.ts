@@ -21,7 +21,7 @@ import {
 
 after(closeDb);
 
-test('client roles: staff/editor grants are tenant-client-site safe and invitations copy them atomically', async () => {
+test('client roles: staff/setter grants are tenant-client-site safe and invitations copy them atomically', async () => {
   const scenario = await seedScenario({ enableScheduling: true });
   try {
     const staffUser = await seedMember(scenario.tenantId, { role: 'member', clientId: scenario.clientId });
@@ -45,18 +45,18 @@ test('client roles: staff/editor grants are tenant-client-site safe and invitati
       scheduling_staff_id: scenario.staffA,
     });
 
-    // EDITOR → whole client, no site/staff binding.
+    // SETTER → whole client, no site/staff binding.
     assert.equal(await setMemberClientRole({
       tenantId: scenario.tenantId,
       userId: editorUser,
       clientId: scenario.clientId,
-      clientRole: 'editor',
+      clientRole: 'setter',
     }), 1);
     assert.deepEqual(await getMembershipForUser(editorUser), {
       tenant_id: scenario.tenantId,
       role: 'member',
       member_client_id: scenario.clientId,
-      client_role: 'editor',
+      client_role: 'setter',
       scheduling_site_id: null,
       scheduling_staff_id: null,
     });

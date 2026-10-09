@@ -10,7 +10,13 @@
  * never be the wrong kind for the active page (the H-8.1 flush/trapped-pane bug).
  * Route groups don't affect the URL.
  */
-export default function WorkspaceLayout({ children }: { children: React.ReactNode }) {
+import { requireWorkflowInsights } from "@/lib/clientWorkflow";
+
+export default async function WorkspaceLayout({ children }: { children: React.ReactNode }) {
+  // (workspace) is the EXECUTIONS feature (table + raw execution-detail pane). It is
+  // workflow INSIGHTS — the agency and a client OWNER only; a Setter is 404'd here even
+  // though it can reach the inbox under the same workflow.
+  await requireWorkflowInsights();
   // Cancel the app shell's universal content gutter (layout.tsx applies
   // p-[var(--content-pad)] to every page) so a full-bleed section really reaches the
   // edges. The negative margin exactly equals the padding, so it never causes overflow;

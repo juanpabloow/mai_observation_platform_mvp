@@ -46,7 +46,7 @@ test('access.ts: the deny-by-default predicates encode the role matrix', () => {
   assert.match(access, /export function canManageClient[\s\S]*hasFullAccess\(scope\) \|\| isClientOwner\(scope, clientId\)/);
   assert.match(access, /export function isClientOwner[\s\S]*scope\.clientRole === "owner" && scope\.memberClientId === clientId/);
   // Fail closed: a member MUST carry a valid client role.
-  assert.match(access, /clientRole !== "owner" && clientRole !== "editor" && clientRole !== "staff"\) return \{ ok: false \}/);
+  assert.match(access, /clientRole !== "owner" && clientRole !== "setter" && clientRole !== "staff"\) return \{ ok: false \}/);
 });
 
 test('scheduling actions: staff book their OWN column only; every write re-checks it', () => {
@@ -79,9 +79,10 @@ test('the agenda page: staff see the whole SITE, identities hidden, no CRM/inbox
   assert.match(page, /lockStaffId=\{isSchedulingStaff\(scope\) \? scope\.schedulingStaffId : null\}/);
 });
 
-test('team UI + sidebar speak client roles (owner/editor/staff)', () => {
+test('team UI + sidebar speak client roles (owner/setter/staff)', () => {
   const invite = read('web/components/InviteForm.tsx');
-  assert.match(invite, /<option value="editor">Editor/);
+  assert.match(invite, /<option value="setter">Setter/);
+  assert.doesNotMatch(invite, /value="editor"/);
   assert.match(invite, /<option value="staff">Staff/);
   assert.match(invite, /canInviteOwner \? <option value="owner">Owner/);
   assert.match(invite, /clientRole: role/);

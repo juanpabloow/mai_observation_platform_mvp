@@ -250,7 +250,7 @@ interface Account {
   name: string | null;
   email: string;
   role: "owner" | "admin" | "member";
-  accessLabel: "owner" | "editor" | "staff" | null;
+  accessLabel: "owner" | "setter" | "staff" | null;
   clientLabel: string | null;
   canSwitchClients: boolean;
 }
@@ -433,8 +433,8 @@ export function AppSidebar({
   email: string;
   role: "owner" | "admin" | "member";
   clientLabel: string | null;
-  /** The client-level role (owner/editor/staff) for a member; null for the agency. */
-  clientRole: "owner" | "editor" | "staff" | null;
+  /** The client-level role (owner/setter/staff) for a member; null for the agency. */
+  clientRole: "owner" | "setter" | "staff" | null;
 }) {
   const pathname = usePathname();
   const { collapsed, mobileOpen, setMobileOpen } = useSidebar();
@@ -489,12 +489,14 @@ export function AppSidebar({
     const onAnalytics = /\/workflows\/[^/]+\/analytics(?:\/|$)/.test(pathname);
     // WHAT THIS login may see/manage in this client context (mirrors the server; hides
     // controls the viewer can't use so no empty/broken page ever appears in the rail):
-    //   canSeeGeneral    — Workspace/CRM/analytics/inbox: the agency, or an owner/editor
-    //                      of THIS client. A staff login is excluded (agenda only).
-    //   canManageThisClient — settings, roster, custom fields, team: the agency or this
-    //                      client's OWNER. Editors and staff never.
+    //   canSeeGeneral  — Inbox / Contacts / Agenda: the agency, or an OWNER or SETTER of
+    //                    THIS client. (Staff is handled separately: agenda only.)
+    //   canSeeInsights — Workflows / Analytics / Reuniones: the agency or the OWNER only —
+    //                    a SETTER is excluded (its job is the chats, not the numbers).
+    //   canManageThisClient — settings, roster, custom fields, team: the agency or OWNER.
     const forOwnClient = memberClientId !== null && clientId === memberClientId;
-    const canSeeGeneral = !isMember || ((clientRole === "owner" || clientRole === "editor") && forOwnClient);
+    const canSeeGeneral = !isMember || ((clientRole === "owner" || clientRole === "setter") && forOwnClient);
+    const canSeeInsights = !isMember || (clientRole === "owner" && forOwnClient);
     const canManageThisClient = !isMember || (clientRole === "owner" && forOwnClient);
     if (clientRole === "staff") {
       // STAFF: their own agenda, and nothing else.
@@ -514,10 +516,12 @@ export function AppSidebar({
       ];
     } else {
       sections = [];
-      // WORKSPACE — Workflows, Analytics (both SCOPE-AWARE), then Inbox/Reuniones
-      // (module-gated). Owner/editor and the agency.
-      if (canSeeGeneral) {
-        const workspace: NavItem[] = [
+      // WORKSPACE — Workflows + Analytics (+ Reuniones) are INSIGHTS: agency/owner only, so
+      // a Setter never sees them. Inbox is the attention queue — shown to anyone with
+      // general access (the Setter included). The section renders only if it has items.
+      const workspace: NavItem[] = [];
+      if (canSeeInsights) {
+        workspace.push(
           {
             key: "workflows",
             label: "Workflows",
@@ -532,28 +536,28 @@ export function AppSidebar({
             icon: Icon.overview,
             active: onWorkflows && onAnalytics,
           },
-        ];
-        if (moduleKeys.includes("inbox")) {
-          workspace.push({
-            key: "inbox",
-            label: "Inbox",
-            href: c("/inbox"),
-            icon: Icon.inbox,
-            active: pathname.startsWith(c("/inbox")),
-            countEndpoint: `/api/inbox/${clientId}/pending-count`,
-          });
-        }
-        if (moduleKeys.includes("meetings")) {
-          workspace.push({
-            key: "meetings",
-            label: "Reuniones",
-            href: c("/reuniones"),
-            icon: Icon.meetings,
-            active: pathname.startsWith(c("/reuniones")),
-          });
-        }
-        sections.push({ label: "Workspace", items: workspace });
+        );
       }
+      if (canSeeGeneral && moduleKeys.includes("inbox")) {
+        workspace.push({
+          key: "inbox",
+          label: "Inbox",
+          href: c("/inbox"),
+          icon: Icon.inbox,
+          active: pathname.startsWith(c("/inbox")),
+          countEndpoint: `/api/inbox/${clientId}/pending-count`,
+        });
+      }
+      if (canSeeInsights && moduleKeys.includes("meetings")) {
+        workspace.push({
+          key: "meetings",
+          label: "Reuniones",
+          href: c("/reuniones"),
+          icon: Icon.meetings,
+          active: pathname.startsWith(c("/reuniones")),
+        });
+      }
+      if (workspace.length > 0) sections.push({ label: "Workspace", items: workspace });
       // CRM — Contacts for owner/editor/agency; Custom fields only for those who can
       // MANAGE the client (owner or agency). Field mappings/plumbing are agency-only,
       // handled elsewhere.
@@ -617,13 +621,17 @@ export function AppSidebar({
     }
   } else if (isMember) {
     // A member landed OFF their client path (e.g. root) — a small stand-in until they
-    // navigate in. Staff → their agenda; owner/editor → analytics + contacts/agenda.
+    // navigate in. Staff → agenda; SETTER → inbox (never analytics); owner → analytics.
     const m = (p: string) => `/clients/${memberClientId}${p}`;
     const memberModules = enabledModules[memberClientId] ?? [];
     const items: NavItem[] =
       clientRole === "staff"
         ? [{ key: "agenda", label: "My schedule", href: m("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(m("/scheduling")) }]
-        : [{ key: "analytics", label: "Analytics", href: scopeHref(memberClientId, "analytics", scopeFor(memberClientId)), icon: Icon.overview, active: false }];
+        : clientRole === "setter"
+          ? memberModules.includes("inbox")
+            ? [{ key: "inbox", label: "Inbox", href: m("/inbox"), icon: Icon.inbox, active: pathname.startsWith(m("/inbox")), countEndpoint: `/api/inbox/${memberClientId}/pending-count` }]
+            : []
+          : [{ key: "analytics", label: "Analytics", href: scopeHref(memberClientId, "analytics", scopeFor(memberClientId)), icon: Icon.overview, active: false }];
     if (clientRole !== "staff" && memberModules.includes("crm")) {
       items.push({ key: "contacts", label: "Contacts", href: m("/contacts"), icon: Icon.contacts, active: pathname.startsWith(m("/contacts")) });
     }

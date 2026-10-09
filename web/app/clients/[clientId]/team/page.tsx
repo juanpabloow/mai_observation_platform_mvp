@@ -114,8 +114,8 @@ export default async function ClientTeamPage({
 
       <p className="text-sm text-muted">
         People who work at <span className="text-foreground">{clientLabel}</span>. An{" "}
-        <span className="text-foreground">Owner</span> runs the business, an{" "}
-        <span className="text-foreground">Editor</span> handles the inbox, contacts and agenda, and{" "}
+        <span className="text-foreground">Owner</span> runs the business, a{" "}
+        <span className="text-foreground">Setter</span> works the chats, contacts and agenda, and{" "}
         <span className="text-foreground">Staff</span> see only their own agenda. Looking for barbers? They live in{" "}
         <Link href={`/clients/${clientId}/scheduling/staff`} className="text-accent hover:underline">
           Scheduling &rarr; Staff

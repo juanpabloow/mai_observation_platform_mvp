@@ -82,8 +82,8 @@ export default async function AcceptInvitePage({
       ? `the owner of ${invite.client_name ?? "a client"}`
       : invite.client_role === "staff"
         ? `staff (${invite.scheduling_staff_name ?? "assigned schedule"}) at ${invite.client_name ?? "a client"}`
-        : invite.client_role === "editor"
-          ? `an editor at ${invite.client_name ?? "a client"}`
+        : invite.client_role === "setter"
+          ? `a setter at ${invite.client_name ?? "a client"}`
           : invite.role === "member"
             ? `a member of ${invite.client_name ?? "a client"}`
             : "an admin";
