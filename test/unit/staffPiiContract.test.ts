@@ -109,10 +109,13 @@ test('the Staff page is the ONLY page that reads staff PII, and it is client-adm
 });
 
 test('NO CHAIR is derived from takes_bookings, not from active', () => {
+  // The status is derived in the shared presence module (audit F1); StaffTab feeds it.
   const src = root('web/components/scheduling/staff/StaffTab.tsx');
-  assert.ok(/if \(!s\.takesBookings\) key = "no_chair";/.test(src), 'no_chair comes from takes_bookings');
+  const presence = root('web/components/scheduling/mobile/team/presence.ts');
+  assert.ok(/if \(!input\.takesBookings\) status = "no_chair";/.test(presence), 'no_chair comes from takes_bookings');
+  assert.ok(/takesBookings: s\.takesBookings,/.test(src), 'and the roster passes the column through');
   assert.ok(
-    !/if \(!s\.active\) key = "no_chair";/.test(src),
+    !/takesBookings: s\.active/.test(src) && !/if \(!(s|input)\.active\) (key|status) = "no_chair";/.test(src + presence),
     'active must not stand in for it — "no longer works here" and "holds no chair" are different facts',
   );
 });

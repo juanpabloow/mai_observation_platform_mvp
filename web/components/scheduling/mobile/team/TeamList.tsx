@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation";
 import { Icon, ICON, M_CARD, MSegmented, MStaffAvatar } from "@/components/scheduling/mobile/kit";
 import { initialsOf } from "@/lib/staffTone";
 import type { StaffMember, StaffServiceOpt, StaffSiteOpt } from "@/components/scheduling/staff/StaffTab";
-import type { Presence } from "./presence";
+import { presenceSegCounts, type Presence } from "./presence";
 
 export type TeamSeg = "all" | "on" | "off";
 
@@ -55,7 +55,9 @@ export function TeamList({
   onAdd?: () => void;
 }) {
   const router = useRouter();
-  const onCount = rows.filter((r) => r.presence.onShift).length;
+  // Same set as the desktop pills: Todos = everyone listed, inactive included; En turno =
+  // on shift now; Fuera = the rest (presence.ts).
+  const counts = presenceSegCounts(rows.map((r) => r.presence));
   const q = search.trim().toLocaleLowerCase("es");
   const visible = rows.filter((r) => {
     if (seg === "on" && !r.presence.onShift) return false;
@@ -131,9 +133,9 @@ export function TeamList({
           value={seg}
           onChange={onSeg}
           options={[
-            { value: "all", label: `Todos ${rows.length}` },
-            { value: "on", label: `En turno ${onCount}` },
-            { value: "off", label: `Fuera ${rows.length - onCount}` },
+            { value: "all", label: `Todos ${counts.all}` },
+            { value: "on", label: `En turno ${counts.on}` },
+            { value: "off", label: `Fuera ${counts.off}` },
           ]}
         />
 

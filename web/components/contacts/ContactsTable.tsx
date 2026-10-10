@@ -26,7 +26,7 @@ import { formatStampFull, formatStampShort, relativeAgeShort } from "@/lib/forma
  * ONE REAL LINK PER ROW. The name is a link stretched over the whole row via
  * `after:absolute after:inset-0`, so the entire 54px band is clickable while the row
  * contributes exactly one tab stop and no JS click handler. Anything that must be
- * separately clickable inside the row (the "+ Agregar email" prompt, the ··· menu)
+ * separately clickable inside the row (the "+ Agregar email" prompt, the → record link)
  * lifts above that overlay with `relative z-10`.
  */
 
@@ -57,6 +57,7 @@ const OPTIONAL_HEAD: Record<ContactColumnKey, string> = {
 };
 
 export function ContactsTable({
+  clientId,
   contacts,
   selectedId,
   ownerName,
@@ -64,6 +65,8 @@ export function ContactsTable({
   hrefWith,
   now,
 }: {
+  /** The VALIDATED client the page resolved — every link out of a row stays inside it. */
+  clientId: string;
   contacts: ContactListItem[];
   selectedId: string | null;
   /** userId → display name. Built once by the page; never a per-row lookup. */
@@ -73,7 +76,7 @@ export function ContactsTable({
   hrefWith: (patch: Record<string, string | undefined>) => string;
   now: Date;
 }) {
-  // The `···` column sits LAST in the core template, so the extras have to be spliced
+  // The record-link (→) column sits LAST in the core template, so the extras have to be spliced
   // in before it rather than appended — otherwise the row menu drifts into the middle
   // of the table the moment one optional column is on.
   const coreTracks = CORE_TEMPLATE.split(" ");
@@ -246,17 +249,21 @@ export function ContactsTable({
               </span>
             ))}
 
-            {/* ── Row menu. A LINK to the contact's record rather than a popover: the
-                   design draws a `···` affordance and every action behind it (edit,
-                   book, note, merge) already lives on the record and the panel, so a
-                   third copy of that menu would be a third place to keep in sync. ── */}
+            {/* ── Open the record. A LINK to the contact's full record rather than a
+                   popover: every action (edit, book, note, merge) already lives on the
+                   record and the panel, so a third copy of a menu would be a third place
+                   to keep in sync. It used to wear `···`, which promises a menu it never
+                   opened, and pointed at the legacy /contacts/{id} — a detour through
+                   the no-client shell ("Elige un cliente") before the redirect landed.
+                   The arrow is the app's "go to" mark ("Ver en la agenda →"). ── */}
             <span role="cell" className="text-right">
               <Link
-                href={`/contacts/${c.id}`}
+                href={`/clients/${clientId}/contacts/${c.id}`}
                 aria-label={`Abrir la ficha de ${c.name?.trim() || c.channel_user_id}`}
+                title="Abrir la ficha"
                 className="relative z-10 inline-flex size-6 items-center justify-center rounded-sm text-xs text-faint no-underline transition-colors hover:bg-subtle hover:text-foreground"
               >
-                ···
+                <span aria-hidden>→</span>
               </Link>
             </span>
           </div>

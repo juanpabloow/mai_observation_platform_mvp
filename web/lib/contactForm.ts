@@ -81,24 +81,61 @@ export function cleanIdentities(kind: IdentityKindLite, values: string[]): strin
 }
 
 export interface IdentityCheck {
-  /** May the form submit? False ONLY when both lists are empty. */
+  /** May the form submit? Only with at least one identity AND every typed one valid. */
   canSubmit: boolean;
   /** The blocking message, or null. */
   error: string | null;
   phones: string[];
   emails: string[];
+  /** Typed values that do not normalize — the field already says "no parece válido". */
+  invalidPhones: string[];
+  invalidEmails: string[];
 }
 
 /**
- * THE identity rule, in one function: at least one of phone or email, name irrelevant.
+ * THE identity rule, in one function: at least one of phone or email, name irrelevant —
+ * and nothing typed may be invalid. "Listo para guardar" and the submit button both read
+ * `canSubmit`, so a malformed email ("abc") is never announced as ready (audit F2/C1);
+ * the server enforces the same rule in parseContactCreate.
  * Note what it does NOT do — it never requires a name, never requires both, and never
- * blocks on a duplicate. A duplicate is a warning; an empty pair is the only hard stop.
+ * blocks on a duplicate. A duplicate is a warning; an empty pair or an invalid value is
+ * a hard stop.
  */
 export function checkIdentity(rawPhones: string[], rawEmails: string[]): IdentityCheck {
   const phones = cleanIdentities("phone", rawPhones);
   const emails = cleanIdentities("email", rawEmails);
+  const invalidPhones = phones.filter((v) => normalizeIdentity("phone", v) === null);
+  const invalidEmails = emails.filter((v) => normalizeIdentity("email", v) === null);
   const empty = phones.length === 0 && emails.length === 0;
-  return { canSubmit: !empty, error: empty ? COPY.needsIdentity : null, phones, emails };
+  const error = empty
+    ? COPY.needsIdentity
+    : invalidEmails.length > 0
+      ? COPY.invalidEmail
+      : invalidPhones.length > 0
+        ? COPY.invalidPhone
+        : null;
+  return { canSubmit: error === null, error, phones, emails, invalidPhones, invalidEmails };
+}
+
+/**
+ * The EDIT form's added identities (it never removes one). Same normalization as
+ * create for the email: a malformed one blocks the save instead of being written to
+ * contacts.email (parseContactPatch rejects it too). Phones keep their existing edit
+ * behaviour.
+ */
+export function checkAddedIdentities(rawPhones: string[], rawEmails: string[]): {
+  count: number;
+  error: string | null;
+  phones: string[];
+  emails: string[];
+} {
+  const c = checkIdentity(rawPhones, rawEmails);
+  return {
+    count: c.phones.length + c.emails.length,
+    error: c.invalidEmails.length > 0 ? COPY.invalidEmail : null,
+    phones: c.phones,
+    emails: c.emails,
+  };
 }
 
 // ── Edit: what actually changed ────────────────────────────────────────────────

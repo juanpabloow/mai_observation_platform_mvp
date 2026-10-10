@@ -3,6 +3,7 @@
 import { useTheme } from "next-themes";
 import type { Exception, Service, Site, Staff } from "../../AdminPanel";
 import { MToast } from "../kit";
+import { categoriesPhrase } from "@/lib/schedulingOverview";
 import { BlockForm, BlocksList } from "./BlocksMobile";
 import { RULE_KEYS, ruleLabel, plural } from "./logic";
 import { RulesScreen } from "./RulesMobile";
@@ -110,7 +111,8 @@ function Home({ nav, clientId, clientName, sites, services, staff, exceptions }:
   const activeSites = sites.filter((s) => s.active);
   const inactiveSites = sites.length - activeSites.length;
   const activeServices = services.filter((s) => s.active);
-  const categories = new Set(activeServices.map((s) => s.category ?? "none")).size;
+  // STORED categories, as the Servicios screen groups them — see schedulingOverview.ts.
+  const categories = categoriesPhrase(activeServices);
   const activeStaff = staff.filter((p) => p.active);
   const inactiveStaff = staff.length - activeStaff.length;
 
@@ -137,7 +139,7 @@ function Home({ nav, clientId, clientName, sites, services, staff, exceptions }:
         <NavRow
           icon={CFG_ICON.svc}
           title="Servicios"
-          sub={`${plural(activeServices.length, "activo", "activos")} · ${plural(categories, "categoría", "categorías")}`}
+          sub={`${plural(activeServices.length, "activo", "activos")} · ${categories.charAt(0).toLowerCase()}${categories.slice(1)}`}
           onClick={() => nav.go("servicios")}
         />
         <NavRow

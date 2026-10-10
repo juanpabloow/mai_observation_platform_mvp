@@ -293,6 +293,7 @@ export default async function ClientContactsPage({
                 stopping at the table and exposing the canvas. */}
             <div className="min-h-0 flex-1 overflow-auto">
               <ContactsTable
+                clientId={client.id}
                 contacts={contacts}
                 selectedId={panelId}
                 ownerName={ownerName}

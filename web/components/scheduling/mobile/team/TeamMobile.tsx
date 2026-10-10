@@ -3,19 +3,16 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { MToast, staffColors } from "@/components/scheduling/mobile/kit";
-import type { StaffAppointment, StaffTabProps, StaffTimeOff } from "@/components/scheduling/staff/StaffTab";
+import type { StaffAppointment, StaffTabProps } from "@/components/scheduling/staff/StaffTab";
 import { CreateForm } from "./forms";
-import { presenceFor, todayLoad, type Weekly } from "./presence";
+import { presenceFor, rosterOrder, todayLoad } from "./presence";
 import { TeamList, type TeamRow, type TeamSeg } from "./TeamList";
 import { TeamMember } from "./TeamMember";
 
-/** What only the phone screens need, on top of the roster the desktop already gets. */
+/** What only the phone screens need, on top of the roster the desktop already gets (site
+ *  hours and closures now live on the roster props: both widths derive presence from them). */
 export interface TeamMobileExtras {
   clientName: string;
-  /** The site's opening hours — a professional with no hours of their own inherits them. */
-  openingHours: Weekly;
-  /** Site-wide closures (exceptions naming no staff) — nobody is on shift during one. */
-  closures: StaffTimeOff[];
   /** `?p=` — the professional whose detail screen is open. */
   selectedId: string | null;
   /** May the viewer add a professional? (The server checks again on create.) */
@@ -74,25 +71,25 @@ export function TeamMobile({ clientId, staff, extras }: { clientId: string; staf
   const fmtDay = (iso: string) =>
     new Intl.DateTimeFormat("es-CO", { timeZone: tz, day: "numeric", month: "short" }).format(new Date(iso)).replace(/\./g, "");
 
-  const rows: TeamRow[] = staff.members
+  // Active first (their order from the server: by name); inactive ones last, still shown —
+  // the same roster, in the same order, as the desktop (rosterOrder).
+  const rows: TeamRow[] = rosterOrder(staff.members)
     .map((member) => {
       const appts = apptsBy.get(member.id) ?? [];
       const presence = presenceFor({
         active: member.active,
         workingHours: member.workingHours,
-        siteHours: extras.openingHours,
+        siteHours: staff.openingHours,
         appts,
         timeOff: staff.timeOff.filter((t) => t.staffId === member.id),
-        closures: extras.closures,
+        closures: staff.closures,
         now,
         tz,
         fmtDay,
       });
       const load = member.takesBookings ? todayLoad(appts).label : "No recibe citas";
       return { member, presence, load };
-    })
-    // Active first (their order from the server: by name); inactive ones last, still shown.
-    .sort((a, b) => Number(b.member.active) - Number(a.member.active));
+    });
 
   const href = (id: string | null) => {
     const p = new URLSearchParams();
@@ -118,7 +115,7 @@ export function TeamMobile({ clientId, staff, extras }: { clientId: string; staf
           siteName={siteName}
           tz={tz}
           now={now}
-          openingHours={extras.openingHours}
+          openingHours={staff.openingHours}
           timeOff={staff.timeOff.filter((t) => t.staffId === selected.member.id)}
           windowAppointments={staff.windowAppointments.filter((a) => a.staffId === selected.member.id)}
           color={colors.get(selected.member.id)}

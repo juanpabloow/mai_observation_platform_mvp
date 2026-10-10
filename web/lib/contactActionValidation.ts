@@ -1,4 +1,11 @@
 import { z } from "zod";
+import { normalizeE164 } from "@worker/scheduling/phone.js";
+
+/** The spine's own email shape (contactIdentities.ts / contactForm.ts): a value that
+ *  fails it would be stored verbatim in contacts.email and filed as an opaque id. */
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const INVALID_PHONE = "Ese número no parece válido. Incluye el indicativo del país.";
+export const INVALID_EMAIL = "Ese email no parece válido.";
 
 /**
  * PURE runtime validation for the contact-update patch — the anti-over-posting
@@ -40,12 +47,18 @@ export const ContactPatchInput = z.strictObject({
 export type ContactPatch = z.infer<typeof ContactPatchInput>;
 
 /** safeParse wrapper. On success the value is a FRESH validated object (never
- * the original input), with only the whitelisted keys that were present. */
-export function parseContactPatch(input: unknown): { ok: true; value: ContactPatch } | { ok: false } {
+ * the original input), with only the whitelisted keys that were present. A readable
+ * `error` is set only where the operator can act on it (a malformed email). */
+export function parseContactPatch(input: unknown): { ok: true; value: ContactPatch } | { ok: false; error?: string } {
   const result = ContactPatchInput.safeParse(input);
   if (!result.success) return { ok: false };
   // Rebuild explicitly — belt on top of strictObject's suspenders.
   const v = result.data;
+  // An email, when one is SET, must be a real one (the same rule as create). An empty
+  // string still clears the field exactly as before — that is not a malformed email.
+  if (v.email !== undefined && v.email.trim() !== "" && !EMAIL_RE.test(v.email.trim().toLowerCase())) {
+    return { ok: false, error: INVALID_EMAIL };
+  }
   const value: ContactPatch = {};
   if (v.name !== undefined) value.name = v.name;
   if (v.phone !== undefined) value.phone = v.phone;
@@ -125,5 +138,9 @@ export function parseContactCreate(
   const emails = cleanList(v.emails);
   // THE identity rule. Neither field is required on its own; the pair is.
   if (phones.length === 0 && emails.length === 0) return { ok: false, error: NEEDS_IDENTITY };
+  // And every typed one must be real — the same normalization the spine applies. Without
+  // this, "abc" reached resolveContactByIdentity and was written to contacts.email as-is.
+  if (emails.some((e) => !EMAIL_RE.test(e.toLowerCase()))) return { ok: false, error: INVALID_EMAIL };
+  if (phones.some((p) => normalizeE164(p) === null)) return { ok: false, error: INVALID_PHONE };
   return { ok: true, value: { ...v, phones, emails } };
 }

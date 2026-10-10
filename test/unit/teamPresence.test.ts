@@ -120,11 +120,13 @@ test('an hours draft must be real ordered ranges before it can be saved', () => 
 // ── Wiring (source level): the phone tree is additive and keeps the server's rules ──
 const web = (rel: string): string => readFileSync(fileURLToPath(new URL(`../../web/${rel}`, import.meta.url)), 'utf8');
 
-test('phone Equipo is its own md:hidden tree; the desktop roster stays as it was', () => {
+test('phone Equipo is its own md:hidden tree; both rosters get the same members', () => {
   const ws = web('components/scheduling/staff/StaffWorkspace.tsx');
   assert.ok(ws.includes('<TeamMobile'), 'the workspace renders the phone tree');
   assert.ok(ws.includes('hidden md:flex'), 'and hides the desktop tree below md');
-  assert.ok(ws.includes('members: staff.members.filter((m) => m.active)'), 'the desktop roster still gets ACTIVE staff only');
+  // Phase-1 follow-up: the desktop no longer drops inactive professionals silently — both
+  // trees list and count the same roster (staffPresenceParity.test.ts).
+  assert.ok(!ws.includes('members.filter((m) => m.active)'), 'the desktop roster is not filtered to ACTIVE staff');
   assert.ok(web('components/scheduling/mobile/team/TeamMobile.tsx').includes('md:hidden'), 'the phone tree never shows on tablet/desktop');
   // The phone detail is `?p=`, never the desktop drawer's `?s=` (whose focus trap would
   // mount hidden and swallow Escape).

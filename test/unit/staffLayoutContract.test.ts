@@ -107,7 +107,8 @@ test('the presence counts are CLICKABLE facet pills in the title band, from one 
   assert.equal(/label="Status"/.test(src), false, 'the duplicate Status dropdown is gone');
   // Counts must be over the WHOLE roster, never the filtered view, or clicking a pill
   // would change the numbers beside it.
-  assert.ok(src.includes('props.members.reduce'), 'counts come from the full roster');
+  // (Counted by the shared rosterFacetCounts — presence.ts — so the phone agrees.)
+  assert.ok(src.includes('rosterFacetCounts(props.members.map('), 'counts come from the full roster');
   assert.equal(/counts = filtered\./.test(src), false, 'never from the filtered list');
   // ONE definition, shared. Contacts must not have kept a private copy.
   const primitives = read('web/components/ui/primitives.tsx');

@@ -112,6 +112,12 @@ async function loadRoster(
     listStaffCertifications(tenantId, staffIds),
   ]);
 
+  const openingHours = (site.opening_hours ?? {}) as Record<string, { start: string; end: string }[]>;
+  // Site-wide closures (no staff named): nobody is "en turno" during one — on any width.
+  const closures = exceptions
+    .filter((e) => !e.staff_id)
+    .map((e) => ({ staffId: "", startsAt: e.starts_at.toISOString(), endsAt: e.ends_at.toISOString(), reason: e.reason }));
+
   const staffProps: StaffTabProps = {
     sites: sites.map((s) => ({ id: s.id, name: s.name, timezone: s.timezone })),
     currentSiteId: site.id,
@@ -186,16 +192,13 @@ async function loadRoster(
         endsAt: e.ends_at.toISOString(),
         reason: e.reason,
       })),
+    openingHours,
+    closures,
   };
 
   return {
     staff: staffProps,
     mobile: {
-      openingHours: (site.opening_hours ?? {}) as Record<string, { start: string; end: string }[]>,
-      // Site-wide closures (no staff named): nobody is "en turno" during one.
-      closures: exceptions
-        .filter((e) => !e.staff_id)
-        .map((e) => ({ staffId: "", startsAt: e.starts_at.toISOString(), endsAt: e.ends_at.toISOString(), reason: e.reason })),
       selectedId: sp.p ?? null,
     },
   };

@@ -6,7 +6,7 @@ import { deleteContactAction, updateContactAction } from "@/lib/contactActions";
 import { addNoteAction, attachTagAction, createTagAction, detachTagAction } from "@/lib/crmActions";
 import { formatDateTime } from "@/lib/format";
 import type { ContactEditInitial, NoteView, TagView } from "@/lib/contactShared";
-import { COPY, buildEditPatch, changedFields, checkIdentity, unsavedLabel, type ContactFormValues } from "@/lib/contactForm";
+import { COPY, buildEditPatch, changedFields, checkAddedIdentities, unsavedLabel, type ContactFormValues } from "@/lib/contactForm";
 import type { FieldDefView } from "../ContactProperties";
 import { BTN_DANGER, BTN_PRIMARY, BTN_QUIET, BTN_SECONDARY, ContactFormDrawer } from "./ContactFormDrawer";
 import { ContactSections } from "./ContactSections";
@@ -91,10 +91,8 @@ export function ContactEditForm({
   const patch = (p: Partial<ContactFormValues>) => setValues((v) => ({ ...v, ...p }));
 
   const changes = useMemo(() => changedFields(baseline, values), [baseline, values]);
-  const addedIdentities = useMemo(() => {
-    const c = checkIdentity(newPhones, newEmails);
-    return c.phones.length + c.emails.length;
-  }, [newPhones, newEmails]);
+  const added = useMemo(() => checkAddedIdentities(newPhones, newEmails), [newPhones, newEmails]);
+  const addedIdentities = added.count;
   const noteAdded = newNote.trim() !== "" ? 1 : 0;
   const totalChanges = changes.length + (addedIdentities > 0 ? 1 : 0) + noteAdded;
   const dirty = totalChanges > 0;
@@ -117,11 +115,14 @@ export function ContactEditForm({
       setError(COPY.needsIdentity);
       return;
     }
+    if (added.error) {
+      setError(added.error);
+      return;
+    }
     start(async () => {
       const body = buildEditPatch(baseline, values);
       // Added identities ride along on the same patch: updateContact's phone/email are
       // the scalar mirror, and a NEW value only fills them when they were empty.
-      const added = checkIdentity(newPhones, newEmails);
       if (added.phones.length > 0 && initial.phones.length === 0) body.phone = added.phones[0];
       if (added.emails.length > 0 && initial.emails.length === 0) body.email = added.emails[0];
 
@@ -270,7 +271,7 @@ export function ContactEditForm({
                 <button type="button" onClick={onClose} disabled={pending} className={BTN_QUIET}>
                   Cancelar
                 </button>
-                <button type="button" onClick={save} disabled={pending || !dirty} className={BTN_PRIMARY}>
+                <button type="button" onClick={save} disabled={pending || !dirty || added.error !== null} className={BTN_PRIMARY}>
                   {pending ? "Guardando…" : "Guardar cambios"}
                 </button>
               </div>

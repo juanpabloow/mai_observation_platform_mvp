@@ -40,7 +40,7 @@ export async function updateContactAction(
 ): Promise<ContactActionResult> {
   if (!isUuid(contactId)) return { ok: false, error: GENERIC };
   const parsedPatch = parseContactPatch(patch);
-  if (!parsedPatch.ok) return { ok: false, error: GENERIC };
+  if (!parsedPatch.ok) return { ok: false, error: parsedPatch.error ?? GENERIC };
   const resolved = await resolveClientModuleContext(clientId, "crm");
   if (!resolved.ok) return { ok: false, error: GENERIC };
   const { scope, client } = resolved.context;

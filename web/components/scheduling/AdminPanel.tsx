@@ -21,6 +21,7 @@ import {
   updateSiteAction,
 } from "@/lib/schedulingAdminActions";
 import { PageShell } from "@/components/ui/PageShell";
+import { checksProgress, servicesSummaryHelper, servicesSummaryTitle } from "@/lib/schedulingOverview";
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
 
 type WeeklyHours = Record<string, Array<{ start: string; end: string }>>;
@@ -271,13 +272,11 @@ function SettingsOverview({
   const ready = activeSites.length > 0 && activeServices.length > 0 && activeStaff.length > 0;
   const doneSteps = [activeSites.length > 0, activeServices.length > 0, activeStaff.length > 0].filter(Boolean).length;
 
-  /** Distinct categories in use — the reference's "N categorías" on the services card. */
-  const categoryCount = new Set(activeServices.map((service) => service.category ?? "none")).size;
   /** The soonest upcoming block, so the card says WHEN and not just how many. */
   const nextBlock = [...exceptions].sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at))[0];
   const nextBlockSite = nextBlock ? sites.find((site) => site.id === nextBlock.site_id) : undefined;
 
-  const summaries: Array<{ label: string; value: number; helper: string; tab?: SettingsTab; href?: string }> = [
+  const summaries: Array<{ label: string; value: number; helper: string; title?: string; tab?: SettingsTab; href?: string }> = [
     {
       label: "Sedes activas",
       value: activeSites.length,
@@ -291,7 +290,10 @@ function SettingsOverview({
     {
       label: "Servicios activos",
       value: activeServices.length,
-      helper: `${categoryCount} categoría${categoryCount === 1 ? "" : "s"} · ${activeServices.filter((service) => service.featured).length} destacados`,
+      // STORED categories, as the Servicios tab groups them; the tooltip spells out the
+      // agenda's inferred colours and that ★ is the flag. See schedulingOverview.ts.
+      helper: servicesSummaryHelper(activeServices),
+      title: servicesSummaryTitle(activeServices),
       tab: "services",
     },
     {
@@ -387,6 +389,8 @@ function SettingsOverview({
   });
 
   const openProblems = rows.filter((row) => row.state !== "ok").length;
+  // The badge counts the checks LISTED below, so it never reads "3 / 3" over four ticks.
+  const progress = checksProgress(rows);
 
   return (
     <>
@@ -396,7 +400,7 @@ function SettingsOverview({
             <>
               <span className="text-[0.6875rem] text-muted">{item.label}</span>
               <strong className="mt-1 block text-[1.375rem] font-semibold leading-tight tracking-[-0.01em] text-foreground">{item.value}</strong>
-              <span className="mt-1 block truncate text-[0.6875rem] text-faint">{item.helper}</span>
+              <span title={item.title} className="mt-1 block truncate text-[0.6875rem] text-faint">{item.helper}</span>
             </>
           );
           return item.href ? (
@@ -411,7 +415,7 @@ function SettingsOverview({
         <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-surface">
           <div className="flex shrink-0 items-center gap-2.5 border-b border-line px-4 py-3">
             <h2 className="text-sm font-semibold text-foreground">Estado de la configuración</h2>
-            <span className="u-mono rounded-md border border-line bg-chip px-1.5 py-0.5 text-[0.6875rem] text-muted">{doneSteps} / 3</span>
+            <span className="u-mono rounded-md border border-line bg-chip px-1.5 py-0.5 text-[0.6875rem] text-muted">{progress.done} / {progress.total}</span>
             <span className="flex-1" />
             <span className="truncate text-[0.6875rem] text-muted">
               {ready

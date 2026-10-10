@@ -142,7 +142,17 @@ export function workSpans(working: Weekly | null | undefined, site: Weekly | nul
 const LIVE = new Set(["scheduled", "confirmed"]);
 const covers = (s: PresenceSpan, now: number) => Date.parse(s.startsAt) <= now && Date.parse(s.endsAt) > now;
 
-export function presenceFor(input: {
+/**
+ * "Trabaja hoy": the professional has working hours on today's SITE-local weekday (their
+ * own ∩ the site's opening hours, or the site's when they inherit). It says nothing about
+ * the clock — someone whose shift ended at 19:00 still "works today" at 22:30. "En turno
+ * ahora" is `presenceFor(...).onShift`.
+ */
+export function worksToday(working: Weekly | null | undefined, site: Weekly | null | undefined, now: number, tz: string): boolean {
+  return workSpans(working, site, zonedClock(now, tz).weekday).length > 0;
+}
+
+export interface PresenceInput {
   active: boolean;
   workingHours: Weekly | null | undefined;
   siteHours: Weekly | null | undefined;
@@ -156,7 +166,9 @@ export function presenceFor(input: {
   tz: string;
   /** Formats a day for "Ausencia hasta el …". */
   fmtDay?: (iso: string) => string;
-}): Presence {
+}
+
+export function presenceFor(input: PresenceInput): Presence {
   const { now, tz } = input;
   if (!input.active) {
     return { kind: "inactive", chip: "⊘ Inactivo", chipClass: "u-m-st-no_show", sub: "No recibe citas nuevas", onShift: false };
@@ -203,6 +215,87 @@ export function presenceFor(input: {
   const last = spans[spans.length - 1];
   if (last) return { ...OFF, sub: `Terminó a las ${fromMin(last[1])}` };
   return { ...OFF, sub: "No trabaja hoy" };
+}
+
+/**
+ * The desktop/tablet roster's status (StaffTab), derived FROM `presenceFor` so every
+ * width answers "who is on shift now" the same way. The roster keeps its finer words —
+ * "Disponible" (on shift, has bookings today) vs "En turno" (on shift, none), "Ausente",
+ * "Sin silla" — but on/off shift is always the shared presence, never a guess from
+ * "has hours today". "Fuera de turno" (works today, not now) and "Sin turno hoy" (no
+ * hours today) are the two halves of "Trabaja hoy" vs "En turno ahora".
+ */
+export type RosterStatus =
+  | "with_client"
+  | "available"
+  | "on_shift"
+  | "off_shift"
+  | "off_today"
+  | "time_off"
+  | "no_chair"
+  | "inactive";
+
+export function rosterStatus(input: Omit<PresenceInput, "active"> & { takesBookings: boolean; active?: boolean }): {
+  status: RosterStatus;
+  presence: Presence;
+  /** Counted under "En turno" — identical to the phone's segment. */
+  onShift: boolean;
+  worksToday: boolean;
+  /** The time-off exception covering now, if any. */
+  away?: PresenceSpan;
+} {
+  // INACTIVE (`active = false`, no new bookings) is listed on every width, labelled, and
+  // is never on shift — the same answer the phone gives.
+  const active = input.active ?? true;
+  const presence = presenceFor({ ...input, active });
+  const works = worksToday(input.workingHours, input.siteHours, input.now, input.tz);
+  const away = input.timeOff.find((t) => covers(t, input.now));
+  const hasBookings = input.appts.some((a) => a.status !== "cancelled");
+  let status: RosterStatus;
+  // NO CHAIR is a fact about bookings (takes_bookings = false), not about presence: a
+  // front-desk hire still counts as on/off shift by their hours, like on the phone.
+  if (!active) status = "inactive";
+  else if (!input.takesBookings) status = "no_chair";
+  else if (presence.kind === "busy") status = "with_client";
+  else if (away) status = "time_off";
+  else if (presence.kind === "on") status = hasBookings ? "available" : "on_shift";
+  else status = works ? "off_shift" : "off_today";
+  return { status, presence, onShift: presence.onShift, worksToday: works, away };
+}
+
+/**
+ * The roster's facet pills. "En turno" is everyone on shift NOW, a client in the chair
+ * included — the phone's "En turno" segment — and "Fuera" is everyone else, INACTIVE
+ * professionals included (they are not working), so En turno + Fuera = Todos on both
+ * widths and match the phone. ("available" / "off_today" are the pills' historical keys.)
+ */
+export type RosterFacet = "with_client" | "available" | "off_today";
+
+export function inRosterFacet(r: { status: RosterStatus; onShift: boolean }, facet: RosterFacet): boolean {
+  if (facet === "with_client") return r.status === "with_client";
+  return facet === "available" ? r.onShift : !r.onShift;
+}
+
+export function rosterFacetCounts(list: { status: RosterStatus; onShift: boolean }[]): Record<RosterFacet, number> {
+  return {
+    with_client: list.filter((r) => inRosterFacet(r, "with_client")).length,
+    available: list.filter((r) => inRosterFacet(r, "available")).length,
+    off_today: list.filter((r) => inRosterFacet(r, "off_today")).length,
+  };
+}
+
+/**
+ * ONE roster for every width: every professional of the site, active first (in the
+ * server's order, by name), inactive last — listed and labelled, never dropped.
+ */
+export function rosterOrder<T extends { active: boolean }>(members: T[]): T[] {
+  return [...members].sort((a, b) => Number(b.active) - Number(a.active));
+}
+
+/** The phone's segments over the same roster: Todos / En turno / Fuera. */
+export function presenceSegCounts(list: { onShift: boolean }[]): { all: number; on: number; off: number } {
+  const on = list.filter((r) => r.onShift).length;
+  return { all: list.length, on, off: list.length - on };
 }
 
 /** "3 citas hoy · 2,3 h" — cancelled appointments do not count. */

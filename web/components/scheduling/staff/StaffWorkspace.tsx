@@ -31,8 +31,8 @@ export function StaffWorkspace({
   clientId: string;
   /**
    * null when the client has no site — a barber belongs to one. `members` includes the
-   * INACTIVE ones: the phone screens list them (labelled); the desktop roster gets the
-   * active ones only, exactly as before.
+   * INACTIVE ones, and BOTH widths list them (last, labelled "Inactivo") and count them
+   * the same way — see rosterOrder / rosterFacetCounts in presence.ts.
    */
   staff: StaffTabProps | null;
   /** What only the phone screens need (client name, site hours, closures, `?p=`). */
@@ -45,7 +45,7 @@ export function StaffWorkspace({
   // card, one row down and clickable; the client is named by the breadcrumb, which is the
   // app's answer to "whose data am I looking at" on every screen.
   const slots: StaffHeaderSlots = { title: "Staff" };
-  const desk = staff ? { ...staff, members: staff.members.filter((m) => m.active) } : null;
+  const desk = staff;
 
   return (
     <>

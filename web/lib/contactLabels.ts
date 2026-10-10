@@ -1,5 +1,6 @@
 import type { PreferredChannel } from "@worker/db/repositories/contacts.js";
 import type { AppointmentStatus } from "@worker/db/repositories/scheduling/appointments.js";
+import { STATUS_NAME } from "@/components/scheduling/agenda/status";
 
 /**
  * HUMAN LABELS for everything a contact stores as an enum or a machine string.
@@ -101,12 +102,18 @@ export function sourceLabel(channel: string | null | undefined): string {
 
 // ── Appointment status ─────────────────────────────────────────────────────────
 
+/**
+ * The AGENDA's words for an appointment's STATE (agenda/status.ts) — one vocabulary on
+ * every surface that shows a cita. The ficha used to say "Agendada" / "No asistió" for
+ * what the agenda calls "Sin confirmar" / "Inasistencia" (audit V6/D3). Event titles
+ * ("Cita agendada", "No asistió" on the timeline) name what HAPPENED and stay as they are.
+ */
 export const APPOINTMENT_STATUS_LABELS: Record<AppointmentStatus, string> = {
-  scheduled: "Agendada",
-  confirmed: "Confirmada",
-  completed: "Completada",
-  cancelled: "Cancelada",
-  no_show: "No asistió",
+  scheduled: STATUS_NAME.scheduled,
+  confirmed: STATUS_NAME.confirmed,
+  completed: STATUS_NAME.completed,
+  cancelled: STATUS_NAME.cancelled,
+  no_show: STATUS_NAME.no_show,
 };
 
 export function appointmentStatusLabel(status: AppointmentStatus): string {
