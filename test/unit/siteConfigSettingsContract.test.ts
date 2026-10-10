@@ -44,20 +44,27 @@ test('settings are task-oriented and editors are progressively disclosed', () =>
   assert.ok(src.includes('>Configuración de agenda</h1>'), 'the screen uses the clear Spanish name');
   assert.ok(src.includes('border-b-2') && src.includes('border-foreground text-foreground'), 'settings use compact underline tabs');
   // SEDES edit in place (the reference's list + detail on one surface); SERVICES edit
-  // in a dialog, so a hundred-row catalogue never unfolds a form inside the list.
+  // in a wide editor OVER the menu, so a hundred-row catalogue never unfolds a form inside the list.
   assert.ok(src.includes('aria-expanded={editing}'), 'the site editor is disclosed inside its detail pane');
-  assert.ok(src.includes('aria-haspopup="dialog"'), 'the service editor opens over the list instead');
+  assert.ok(src.includes('<ServiceMenu'), 'the Servicios tab is the services menu');
+  const editor = web('components/scheduling/services/ServiceEditor.tsx');
+  assert.ok(editor.includes('role="dialog"') && editor.includes('fixed inset-0 z-50'), 'the service editor opens over the list');
 });
 
-test('every settings form lives in a centred modal, never fixed on the page', () => {
+test('every settings form opens over the page, never fixed into a tab', () => {
   const src = web('components/scheduling/AdminPanel.tsx');
   assert.ok(src.includes('function ConfigModal('), 'there is one modal primitive');
-  for (const title of ['Nueva sede', 'Nuevo servicio', 'Nuevo bloqueo']) {
+  for (const title of ['Nueva sede', 'Nuevo bloqueo']) {
     assert.ok(src.includes(`title="${title}"`), `${title} is created in a modal`);
   }
-  // Four openings of the one primitive: create site / create service / edit service /
-  // create block. A form rendered permanently into a tab would not be one of these.
-  assert.equal(src.match(/<ConfigModal/g)?.length, 4, 'no settings form escapes the modal primitive');
+  // Two openings of the modal primitive (create site / create block); services create
+  // AND edit in the wide ServiceEditor overlay. Neither renders a form into a tab.
+  assert.equal(src.match(/<ConfigModal/g)?.length, 2, 'no settings form escapes the modal primitive');
+  const menu = web('components/scheduling/services/ServiceMenu.tsx');
+  assert.equal(menu.match(/<ServiceEditor/g)?.length, 1, 'one editor serves both create and edit');
+  // The editor asks before discarding, and archiving (never deleting) preserves history.
+  assert.ok(web('components/scheduling/services/ServiceEditor.tsx').includes('¿Descartar los cambios?'), 'unsaved changes are protected');
+  assert.ok(menu.includes('deactivateServiceAction') && !/delete.*Service|eliminar permanentemente/i.test(menu), 'archive, never permanent delete');
 });
 
 test('touch targets reach 44px below lg while desktop keeps the compact 34-36px', () => {
@@ -91,4 +98,26 @@ test('updateSiteAction validates scheduling_config (a bad value cannot silently 
   const src = web('lib/schedulingAdminActions.ts');
   assert.ok(src.includes('sanitizeSchedulingConfig('), 'config is sanitized before persistence');
   assert.ok(/booking_horizon_days[\s\S]*1, 365/.test(src) || src.includes('1, 365'), 'horizon is range-checked');
+});
+
+test('a failed save never creates the same service twice; retrying resumes from what was written', () => {
+  // The BEHAVIOUR is proven in test/unit/serviceSave.test.ts (fake actions failing at each
+  // step) and test/integration/serviceCreateAtomic.test.ts (the real transaction). Here:
+  // the editor really uses that sequence, and the create really is the atomic one.
+  const editor = web('components/scheduling/services/ServiceEditor.tsx');
+  assert.ok(editor.includes('const out = await runServiceSave('), 'the editor saves through runServiceSave');
+  assert.ok(editor.includes('const persisted = useRef<PersistedService>({'), 'it keeps what the server holds across attempts');
+  assert.ok(editor.includes('const leave = () => (wrote.current ? onSaved() : onClose());'), 'a partial save is not hidden on close');
+  const action = web('lib/schedulingAdminActions.ts');
+  assert.ok(action.includes('svc = await createServiceWithSites('), 'createServiceAction is the transactional create');
+  assert.ok(!/createService\(\{/.test(action), 'the non-atomic insert-then-link path is gone');
+});
+
+test('a service card does not clip its own ⋯ menu', () => {
+  const menu = web('components/scheduling/services/ServiceMenu.tsx');
+  const card = menu.slice(menu.indexOf('function ServiceCard'), menu.indexOf('function CategoryButton'));
+  const article = card.slice(card.indexOf('<article'), card.indexOf('>', card.indexOf('className={`group')));
+  assert.ok(!article.includes('overflow-hidden'), 'the card has no overflow-hidden');
+  assert.ok(!article.includes('opacity-75'), 'the archived dimming is on the content, not on the card (no stacking trap)');
+  assert.ok(article.includes('menuOpen ? "z-10" : ""'), 'the open card sits above its siblings');
 });

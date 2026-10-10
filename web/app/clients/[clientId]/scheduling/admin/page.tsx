@@ -55,7 +55,14 @@ export default async function ClientSchedulingAdminPage({
   );
   const siteServiceMap = Object.fromEntries(siteServiceRows.map((x) => [x.siteId, x.serviceIds]));
 
-  const exceptions = (await Promise.all(sites.map((s) => listExceptions(tenantId, { siteId: s.id, from: new Date() })))).flat();
+  const now = new Date();
+  const exceptions = (await Promise.all(sites.map((s) => listExceptions(tenantId, { siteId: s.id, from: now })))).flat();
+  // The phone's "Pasados" tab: blocks that ENDED in the last 90 days (same repository,
+  // same per-site scoping). Read-only history — the desktop list is unchanged.
+  const pastFrom = new Date(now.getTime() - 90 * 86_400_000);
+  const pastExceptions = (await Promise.all(sites.map((s) => listExceptions(tenantId, { siteId: s.id, from: pastFrom, to: now }))))
+    .flat()
+    .filter((e) => e.ends_at.getTime() <= now.getTime());
   // The same predicate the public gate relies on (non-default client + module enabled),
   // read for real rather than assumed from the page gate — it feeds "Enlace de reservas".
   const schedulingEnabled = await isSchedulingBookable(tenantId, client.id);
@@ -90,6 +97,14 @@ export default async function ClientSchedulingAdminPage({
       staff={staff.map((s) => ({ id: s.id, site_id: s.site_id, name: s.name, active: s.active, serviceIds: staffServiceMap[s.id] ?? [], working_hours: s.working_hours }))}
       siteServiceMap={siteServiceMap}
       schedulingEnabled={schedulingEnabled}
+      pastExceptions={pastExceptions.map((e) => ({
+        id: e.id,
+        site_id: e.site_id,
+        staff_id: e.staff_id,
+        starts_at: e.starts_at.toISOString(),
+        ends_at: e.ends_at.toISOString(),
+        reason: e.reason,
+      }))}
       exceptions={exceptions.map((e) => ({
         id: e.id,
         site_id: e.site_id,

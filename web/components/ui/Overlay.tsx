@@ -68,7 +68,7 @@ export function useFocusTrap(
         node.querySelectorAll<HTMLElement>(
           'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
         ),
-      ).filter((el) => el.offsetParent !== null);
+      ).filter((el) => el.offsetParent !== null && !el.closest("[inert]"));
 
     // Move focus in, so the first Tab lands inside rather than back in the page.
     (focusable()[0] ?? node).focus({ preventScroll: true });

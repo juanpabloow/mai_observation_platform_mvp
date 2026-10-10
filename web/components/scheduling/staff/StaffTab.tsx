@@ -43,6 +43,8 @@ export interface StaffServiceOpt {
   active: boolean;
   durationMin: number;
   description: string | null;
+  /** services.category — the colour family on the phone screens (optional). */
+  category?: string | null;
 }
 export interface StaffCertification {
   id: string;
@@ -81,6 +83,8 @@ export interface StaffMember {
 export interface StaffAppointment {
   id: string;
   staffId: string;
+  /** The service row, for its stored category on the phone screens (optional). */
+  serviceId?: string;
   startAt: string;
   endAt: string;
   serviceName: string;
@@ -1334,7 +1338,7 @@ function StaffDetail({
 // <input> gives you); the empty string means "cleared", which maps to NULL on the way
 // out — the column's own empty state. Keeping that translation in ONE place is why
 // these are functions and not inline ternaries in the JSX.
-interface ProfileDraft {
+export interface ProfileDraft {
   /** The barber's NAME. It lives in this draft — and so behind the panel's unsaved bar —
    *  rather than in a separate editor, because there is exactly one write path per field
    *  on this screen. */
@@ -1363,7 +1367,7 @@ const EMPLOYMENT_TYPES = [
   { value: "contractor", label: "Contractor" },
 ] as const;
 
-function profileFromMember(m: StaffMember): ProfileDraft {
+export function profileFromMember(m: StaffMember): ProfileDraft {
   return {
     name: m.name,
     title: m.title ?? "",
@@ -1380,11 +1384,11 @@ function profileFromMember(m: StaffMember): ProfileDraft {
   };
 }
 
-type ProfileKey = keyof ProfileDraft;
+export type ProfileKey = keyof ProfileDraft;
 
 /** Which fields differ from what is stored — the number the unsaved bar reports, and
  *  the exact set the patch will carry. */
-function dirtyProfileFields(d: ProfileDraft, m: StaffMember): ProfileKey[] {
+export function dirtyProfileFields(d: ProfileDraft, m: StaffMember): ProfileKey[] {
   const stored = profileFromMember(m);
   return (Object.keys(d) as ProfileKey[]).filter((k) =>
     k === "skills"
@@ -1408,7 +1412,7 @@ function profileError(d: ProfileDraft): string | null {
 }
 
 /** Only the changed fields, translated to the repository's shape ("" → null). */
-function profilePatch(d: ProfileDraft, dirty: ProfileKey[]): Record<string, unknown> {
+export function profilePatch(d: ProfileDraft, dirty: ProfileKey[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const blank = (v: string) => (v.trim() === "" ? null : v.trim());
   for (const k of dirty) {

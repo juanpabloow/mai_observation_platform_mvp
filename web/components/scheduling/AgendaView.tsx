@@ -2,12 +2,34 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useEffect, useMemo, useRef, useState, useTransition, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type RefObject } from "react";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { PageShell } from "@/components/ui/PageShell";
 import { PageHeading } from "@/components/ui/PageTitle";
-import { CONTROL_CLS, MODULE_SEARCH_CLS, OUTLINE_CLS } from "@/components/ui/primitives";
-import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
+import { dayBlocks, hourState, type AgendaBlock, type DayBlock } from "@/lib/agendaBlocks";
+import { AttentionChip, Avatar, FIELD, INPUT, POPOVER, Spinner, StatusChip, buttonClass, segmentClass, segmentShell } from "./ui/system";
+import { MobileAgenda } from "./mobile/MobileAgenda";
+import {
+  Icon,
+  ICON,
+  M_CARD,
+  M_SMALL,
+  MButton,
+  MClientAvatar,
+  MConfirm,
+  MIconButton,
+  MPill,
+  MRadio,
+  MScreen,
+  MSegmented,
+  MStaffAvatar,
+  MStateChip,
+  MToast,
+  Sheet,
+  staffColors,
+} from "./mobile/kit";
+import { OVERLAY_SCRIM, useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
+import { dayHeadline, monthTitle } from "@/lib/siteCalendar";
 import { apptCategory, apptCategoryClass, serviceCategory, type ApptCategory } from "@/lib/agendaCategory";
 import { priceLabelCOP } from "@/lib/money";
 import {
@@ -16,10 +38,13 @@ import {
   confirmAppointmentAction,
   createManualAppointmentAction,
   noShowAppointmentAction,
+  listAppointmentActivityAction,
   rescheduleAppointmentAction,
   searchSchedulingContactsAction,
   type ContactSearchHit,
 } from "@/lib/schedulingActions";
+import { AppointmentPanel } from "./agenda/AppointmentPanel";
+import { AppointmentPreview } from "./agenda/AppointmentPreview";
 
 /** Serializable shapes passed from the server page. */
 interface SiteOpt { id: string; name: string; timezone: string }
@@ -46,7 +71,7 @@ interface ServiceOpt {
    *  when the service has no price; the card then shows only its duration. */
   price: string | null;
 }
-interface Appt {
+export interface Appt {
   id: string;
   public_reference: string;
   staff_id: string;
@@ -70,6 +95,8 @@ interface Appt {
    *  canonical now. NULL for walk-ins / contacts with no phone or email. */
   primary_identity: string | null;
   source_conversation_id: string | null;
+  /** Server-computed: may this login act on this appointment (gateAppointment's checks). */
+  can_modify: boolean;
 }
 
 /**
@@ -98,6 +125,8 @@ function appointmentToneClass(appt: Appt): string {
   return `u-appt-service ${apptCategoryClass(serviceCategory(appt.service_name, appt.service_category))}`;
 }
 interface Slot { start_at: string; service_end_at: string; staff_id: string; available_staff_ids: string[] }
+/** Blocked time (schedule_exceptions). staff_id NULL = the whole site is blocked. */
+type BlockOpt = AgendaBlock;
 /** When booking for an existing contact (C-4.1 deep-link), the modal locks the identity
  *  to this contact and submits its id — staff never retype what's on the record. */
 interface ContactPrefill { contactId: string; contactName: string }
@@ -112,10 +141,10 @@ const HOUR_PX = 120;
 /**
  * WEEK's vertical scale. The reference week is a BLOCK grid, not a proportional one:
  * seven narrow columns can't carry proportional heights and stay readable, so one hour
- * is one fixed cell that holds a single full-size card plus its "+N citas" chip. 76px
- * is the floor at which the card's two lines and a 20px chip all fit uncropped.
+ * is one fixed cell that holds AT MOST TWO cards plus a "+N más" chip. 96px is the
+ * floor at which two one-line cards and a 20px chip all fit uncropped.
  */
-const WEEK_HOUR_PX = 76;
+const WEEK_HOUR_PX = 96;
 /**
  * The grid's OPERATING WINDOW. Fixed on purpose: deriving it from the data meant a
  * single stray early booking stretched the grid to 3 AM and pushed the real working
@@ -157,14 +186,6 @@ const STATUS_LABEL: Record<string, string> = {
   cancelled: "Cancelada",
   no_show: "Inasistencia",
 };
-/** Drawer header copy, mirroring the design's "Appointment confirmed". */
-const STATUS_TITLE: Record<string, string> = {
-  scheduled: "Cita sin confirmar",
-  confirmed: "Cita confirmada",
-  completed: "Cita completada",
-  cancelled: "Cita cancelada",
-  no_show: "Marcada como inasistencia",
-};
 
 // Spanish date vocabulary, spelled out here rather than pulled from Intl("es") for
 // two reasons: it is DETERMINISTIC (no "sept."/"sep" locale-data drift between the
@@ -203,6 +224,7 @@ function gmtLabel(tz: string): string {
   return name ?? tz;
 }
 const minutesOf = (p: { h: number; m: number }) => p.h * 60 + p.m;
+
 const clockMinutes = (clock: string) => {
   const [hour, minute] = clock.split(":").map(Number);
   return hour * 60 + minute;
@@ -465,6 +487,14 @@ export function AgendaView(props: {
   staff: StaffOpt[];
   services: ServiceOpt[];
   appointments: Appt[];
+  /** Blocked time in the visible range for this site (may be empty). */
+  blocks: BlockOpt[];
+  clientName: string;
+  /** Appointments per site-local day of the week around `date` (phone day strip). */
+  weekCounts: Record<string, number>;
+  /** Deep links (validated server-side against the loaded data). */
+  initialStaffId: string | null;
+  initialApptId: string | null;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -484,14 +514,24 @@ export function AgendaView(props: {
       : null;
   const [modal, setModal] = useState<ModalState | null>(initialModal);
   /** The appointment open in the side drawer (never a modal — the grid stays visible). */
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(props.initialApptId);
+  /**
+   * HOVER PREVIEW — which appointment, and where its card is on screen. Shown after a
+   * short delay on mouse hover (never on touch: a tap opens the detail), or at once on
+   * keyboard focus. The hide is delayed too, so the pointer can travel from the card
+   * into the preview without it flickering shut.
+   */
+  const [preview, setPreview] = useState<{ appt: Appt; rect: DOMRect } | null>(null);
+  const previewTimers = useRef<{ show: number | null; hide: number | null }>({ show: null, hide: null });
+  /** An appointment just "located" from the detail — flashed so the eye finds it. */
+  const [flashId, setFlashId] = useState<string | null>(null);
   /** Appointments intentionally collapsed behind a weekly "+N más" indicator. */
   const [weekOverflow, setWeekOverflow] = useState<Appt[] | null>(null);
   const [weekOverflowTitle, setWeekOverflowTitle] = useState<string | undefined>();
   const [weeklyLayout, setWeeklyLayout] = useState<"team" | "hours">("team");
   /** Client-side facets over the ALREADY loaded range. */
   const [statusFilter, setStatusFilter] = useState("");
-  const [staffFilter, setStaffFilter] = useState("");
+  const [staffFilter, setStaffFilter] = useState(props.initialStaffId ?? "");
   const [searchQuery, setSearchQuery] = useState("");
   // Day view opens in the staff-column layout: it is the fastest way for reception
   // to see each professional's availability. The compact row list remains one click away.
@@ -571,13 +611,88 @@ export function AgendaView(props: {
     return () => document.removeEventListener("keydown", onKey);
   }, [selectedId]);
 
-  const run = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
+  /** A short confirmation after a successful action (the phone shows it as a toast). */
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 2600);
+    return () => window.clearTimeout(t);
+  }, [notice]);
+  const run = (fn: () => Promise<{ ok: boolean; error?: string }>, success?: string) => {
     setError(null);
     startTransition(async () => {
       const r = await fn();
       if (!r.ok) setError(r.error ?? "No se pudo completar la acción.");
-      else router.refresh();
+      else {
+        if (success) setNotice(success);
+        router.refresh();
+      }
     });
+  };
+
+  // ── Hover preview + "locate" ───────────────────────────────────────────────────
+  const hidePreviewSoon = useCallback(() => {
+    const t = previewTimers.current;
+    if (t.show) {
+      window.clearTimeout(t.show);
+      t.show = null;
+    }
+    if (t.hide) window.clearTimeout(t.hide);
+    t.hide = window.setTimeout(() => setPreview(null), 140);
+  }, []);
+  const keepPreview = useCallback(() => {
+    const t = previewTimers.current;
+    if (t.hide) {
+      window.clearTimeout(t.hide);
+      t.hide = null;
+    }
+  }, []);
+  /** Spread onto every appointment card: hover / focus show the preview, and the
+   *  data attribute lets "Localizar en el calendario" find the card again. */
+  const previewProps = (appt: Appt) => ({
+    "data-appt-id": appt.id,
+    "aria-describedby": preview?.appt.id === appt.id ? "appt-preview" : undefined,
+    onPointerEnter: (e: React.PointerEvent<HTMLElement>) => {
+      if (e.pointerType !== "mouse" || selectedId || modal) return;
+      const el = e.currentTarget;
+      const t = previewTimers.current;
+      keepPreview();
+      if (t.show) window.clearTimeout(t.show);
+      t.show = window.setTimeout(() => setPreview({ appt, rect: el.getBoundingClientRect() }), 180);
+    },
+    onPointerLeave: hidePreviewSoon,
+    onFocus: (e: React.FocusEvent<HTMLElement>) => {
+      // Keyboard alternative to hover: a VISIBLE focus shows the preview; Enter opens.
+      if (selectedId || modal || !e.currentTarget.matches(":focus-visible")) return;
+      keepPreview();
+      setPreview({ appt, rect: e.currentTarget.getBoundingClientRect() });
+    },
+    onBlur: () => setPreview(null),
+  });
+  // A scrolled or resized grid moves the card out from under its preview — drop it.
+  useEffect(() => {
+    if (!preview) return;
+    const drop = () => setPreview(null);
+    window.addEventListener("scroll", drop, true);
+    window.addEventListener("resize", drop);
+    return () => {
+      window.removeEventListener("scroll", drop, true);
+      window.removeEventListener("resize", drop);
+    };
+  }, [preview]);
+  const openAppointment = (id: string) => {
+    setPreview(null);
+    setSelectedId(id);
+  };
+  const locateAppointment = (id: string) => {
+    // Each layout (desktop grid, tablet board, phone timeline) renders its own copy
+    // of the card and only one is displayed — scroll to the one actually on screen.
+    const el = [...document.querySelectorAll<HTMLElement>(`[data-appt-id="${CSS.escape(id)}"]`)].find(
+      (node) => node.getClientRects().length > 0,
+    );
+    el?.scrollIntoView({ block: "center", inline: "center", behavior: "smooth" });
+    setFlashId(id);
+    window.setTimeout(() => setFlashId((current) => (current === id ? null : current)), 1800);
   };
 
   // ── Derived, all from the loaded range ──────────────────────────────────────
@@ -609,7 +724,6 @@ export function AgendaView(props: {
         && new Date(appt.start_at).getTime() >= Date.now(),
     ) ?? null;
   }, [mobileRows]);
-  const mobileCompleted = mobileRows.filter((appt) => appt.status === "completed").length;
   const kpis = props.kpis;
   const prev = props.previousKpis;
   const rangeCaption = isWeek ? "Esta semana" : "Hoy";
@@ -660,6 +774,25 @@ export function AgendaView(props: {
   }, [isWeek, props.rangeStartIso, tz]);
   const shownDayKeys = isWeek ? weekDays : [zonedParts(props.dayStartIso, tz).dayKey];
   const nowVisible = shownDayKeys.includes(nowParts.dayKey) && nowParts.h >= fromHour && nowParts.h < toHour;
+  const teamColors = staffColors(props.staff.map((s) => s.id));
+  const weekCountsFromRange: Record<string, number> = {};
+  for (const a of props.appointments) {
+    if (a.status === "cancelled" || (props.lockStaffId && a.staff_id !== props.lockStaffId)) continue;
+    const k = zonedParts(a.start_at, tz).dayKey;
+    weekCountsFromRange[k] = (weekCountsFromRange[k] ?? 0) + 1;
+  }
+
+  // BLOCKED time for the layouts that list or stack days (phone, tablet, desktop "por
+  // hora", week by hours). A barber filter keeps that barber's blocks and the site-wide
+  // ones; a text search is about appointments, so blocks step aside while it is active.
+  const staffNameById = new Map(props.staff.map((s) => [s.id, s.name]));
+  const blocksOn = (dayKey: string, lo = 0, hi = 24 * 60): DayBlock[] =>
+    searchQuery.trim() ? [] : dayBlocks(props.blocks, dayKey, tz, { staffFilter, staffNames: staffNameById, lo, hi });
+  // Days the phone/tablet lists show: every day with an appointment AND every day with
+  // a block — a blocked day with nothing booked must still say it is blocked.
+  const listDayKeys = Array.from(
+    new Set([...mobileDayKeys, ...shownDayKeys.filter((dk) => blocksOn(dk).length > 0)]),
+  ).sort();
 
   // Picking a barber in the "Todo el equipo" facet collapses the grid to that column —
   // the job the removed chips used to do, using a control that already existed.
@@ -667,6 +800,12 @@ export function AgendaView(props: {
   /** The site-local day a DAY view is showing — the weekday every barber lane is
    *  checked against. */
   const dayWeekday = weekdayKeyOf(zonedParts(props.dayStartIso, tz).dayKey);
+  // Who could take a booking in a DAY view's hour row: the filtered barber, or every
+  // active barber who works that weekday. Blocks only close an hour when they cover it
+  // for ALL of them (lib/agendaBlocks.hourState); the engine decides the real slots.
+  const bookableStaffIds = (staffFilter ? props.staff.filter((st) => st.id === staffFilter) : props.staff)
+    .filter((st) => st.active && staffWorksOn(st.workingHours, props.openingHours, dayWeekday))
+    .map((st) => st.id);
   const columns: {
     key: string;
     label: string;
@@ -687,7 +826,9 @@ export function AgendaView(props: {
         return {
           key: dk,
           label: ES_WEEKDAYS_UPPER[wd],
-          sub: closed ? "Cerrado" : `${n} cita${n === 1 ? "" : "s"}`,
+          sub: closed
+            ? "Cerrado"
+            : `${n} cita${n === 1 ? "" : "s"}${blocksOn(dk).length > 0 ? ` · ${blocksOn(dk).length} bloqueo${blocksOn(dk).length === 1 ? "" : "s"}` : ""}`,
           dayNum: String(dd),
           isToday: dk === nowParts.dayKey,
           closed,
@@ -798,7 +939,38 @@ export function AgendaView(props: {
     // card, separated by hairlines — not a row of independent boxes floating on the
     // canvas, which made the screen read as five unrelated widgets.
     <main className="flex min-h-0 flex-1 flex-col">
-      <PageShell surface="canvas" className="gap-3">
+      {/* PHONE (< md) — its own layout, not the grid squeezed (mobile/MobileAgenda). */}
+      <div className="-m-[var(--content-pad)] md:hidden">
+        <MobileAgenda
+          title={props.lockStaffId ? "Mi agenda" : "Agenda"}
+          subtitle={
+            props.lockStaffId
+              ? [props.staff.find((s) => s.id === props.lockStaffId)?.name, currentSite?.name].filter(Boolean).join(" · ")
+              : currentSite?.name ?? ""
+          }
+          badge={initialsOf(props.clientName)}
+          timezone={tz}
+          date={props.date}
+          todayKey={nowParts.dayKey}
+          view={isWeek ? "week" : "day"}
+          appointments={props.appointments}
+          weekCounts={isWeek ? weekCountsFromRange : props.weekCounts}
+          blocks={props.blocks}
+          staff={props.staff}
+          openingHours={props.openingHours}
+          showTeam={!props.lockStaffId && props.staff.length > 1}
+          ownStaffId={props.lockStaffId}
+          canBook={props.canOperate}
+          initialStaffFilter={props.initialStaffId ? [props.initialStaffId] : []}
+          onNavigate={(patch) => navigate(patch)}
+          onOpen={openAppointment}
+          onNew={() => setModal({ mode: "new" })}
+        />
+      </div>
+      <div className="md:hidden">
+        <MToast message={notice} bottom={84} />
+      </div>
+      <PageShell surface="canvas" className="gap-3 max-md:hidden">
       {/* ── PAGE TITLE ── the same band Customers renders, now carrying the screen's
              two ACTIONS on its right. The Agenda used to spend a whole row on a title
              with nothing but empty space beside it, and a SECOND row whose only real
@@ -809,15 +981,10 @@ export function AgendaView(props: {
           is ONE object (name it, steer it, read its numbers), and three rules across
           it chopped that into four slabs. The grid below still gets its own rule —
           that seam is real, it separates chrome from the canvas. */}
-      <div className="rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]">
-        <div className="px-4 pb-3 pt-4 md:px-[var(--panel-pad)] md:pb-0 md:pt-3 xl:p-[14px]">
+      <div className="rounded-sch-card border border-line bg-surface shadow-[var(--shadow-card)] max-md:hidden">
+        <div className="px-[var(--panel-pad)] pt-3 xl:p-[14px]">
           <div className="flex items-start justify-between gap-3 md:items-center xl:gap-[14px]">
             <div className="min-w-0 shrink-0 md:flex md:items-center md:gap-2">
-              <p className="truncate text-[0.6875rem] font-semibold uppercase tracking-[0.12em] text-faint">
-                <span className="md:hidden">
-                  {props.canOperate ? currentSite?.name ?? "Agenda" : `Mi agenda · ${currentSite?.name ?? ""}`}
-                </span>
-              </p>
               <div className="mt-0.5 [&_h1]:text-[1.55rem] [&_h1]:font-semibold [&_h1]:leading-tight [&_h1]:tracking-[-0.03em] md:mt-0 md:[&_h1]:text-[19px]">
                 <PageHeading title="Agenda" />
               </div>
@@ -825,7 +992,7 @@ export function AgendaView(props: {
                 {`${currentSite?.name ?? ""}${props.sites.length > 1 ? ` · ${props.sites.length} sedes` : " · 1 sede"}`}
               </span>
             </div>
-            <label className={`relative hidden min-w-[14rem] flex-1 xl:flex ${MODULE_SEARCH_CLS}`}>
+            <label className={`${FIELD} relative hidden h-[36px] min-w-[14rem] flex-1 items-center gap-2 xl:flex`}>
               <span className="sr-only">Buscar en la agenda</span>
               <svg aria-hidden viewBox="0 0 24 24" fill="none" className="pointer-events-none size-4 shrink-0 text-faint">
                 <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.6" />
@@ -838,27 +1005,16 @@ export function AgendaView(props: {
                 placeholder="Buscar cliente, servicio o profesional…"
                 className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-faint"
               />
-              <kbd className="u-mono pointer-events-none ml-auto shrink-0 rounded border border-line bg-surface px-1.5 py-0.5 text-[0.625rem] text-faint">
+              <kbd className="u-mono pointer-events-none ml-auto shrink-0 rounded-md border border-line bg-surface px-1.5 py-0.5 text-[0.625rem] text-faint">
                 ⌘F
               </kbd>
             </label>
-            <button
-              type="button"
-              onClick={() => navigate({ date: zonedParts(new Date().toISOString(), tz).dayKey })}
-              className="inline-flex h-[44px] shrink-0 items-center rounded-lg border border-line-strong bg-surface px-3 text-xs font-semibold text-foreground md:hidden"
-            >
-              Hoy
-            </button>
             {props.canOperate ? (
               <div className="ml-auto hidden items-center gap-2 md:flex xl:hidden">
-                <button type="button" onClick={() => setModal({ mode: "walkin" })} className={OUTLINE_CLS}>
+                <button type="button" onClick={() => setModal({ mode: "walkin" })} className={buttonClass()}>
                   Atención sin cita
                 </button>
-                <button
-                  type="button"
-                  onClick={() => setModal({ mode: "new" })}
-                  className="inline-flex h-[var(--control-h)] shrink-0 items-center gap-2 whitespace-nowrap rounded-lg bg-ink px-3.5 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover"
-                >
+                <button type="button" onClick={() => setModal({ mode: "new" })} className={buttonClass({ variant: "primary" })}>
                   Agendar cita
                   <kbd className="u-mono rounded bg-white/20 px-1 text-[0.625rem] font-normal">&#8984;A</kbd>
                 </button>
@@ -868,18 +1024,18 @@ export function AgendaView(props: {
               <button
                 type="button"
                 onClick={() => navigate({ date: nowParts.dayKey })}
-                className="h-[34px] rounded-[9px] border border-line bg-surface px-3 text-xs font-medium text-foreground hover:bg-chip"
+                className={buttonClass({ size: "sm" })}
               >Hoy</button>
-              <div className="flex h-[34px] items-center gap-0.5 rounded-[9px] bg-chip p-[3px]">
+              <div role="group" aria-label="Vista" className={segmentShell("sm")}>
                 <DesktopSeg active={!isWeek} onClick={() => navigate({ view: "day" })}>Día</DesktopSeg>
                 <DesktopSeg active={isWeek} onClick={() => navigate({ view: "week" })}>Semana</DesktopSeg>
               </div>
-              <div className="flex h-[34px] items-center rounded-[9px] border border-line bg-surface p-0.5">
+              <div className="flex h-[36px] items-center rounded-sch-control border border-line-strong bg-surface p-0.5">
                 <DesktopStep label="Anterior" onClick={() => shiftDate(isWeek ? -7 : -1)} direction="left" />
                 <button
                   type="button"
                   onClick={() => navigate({ date: zonedParts(new Date().toISOString(), tz).dayKey })}
-                  className="h-[28px] min-w-[7.5rem] rounded-[7px] px-2 text-[12.5px] font-semibold tabular-nums text-foreground hover:bg-chip"
+                  className="u-focus h-full min-w-[7.5rem] rounded-[calc(var(--sch-radius-control)-3px)] px-2 text-[13px] font-semibold tabular-nums text-foreground hover:bg-subtle"
                 >
                   {dateMain}{yearLabel ? <span className="ml-1 font-normal text-faint">{yearLabel}</span> : null}
                 </button>
@@ -889,7 +1045,7 @@ export function AgendaView(props: {
                 <summary
                   aria-label="Filtrar agenda"
                   title="Filtros de profesional y estado"
-                  className="relative flex size-[34px] cursor-pointer list-none items-center justify-center rounded-[9px] border border-line bg-surface text-muted transition hover:bg-chip hover:text-foreground [&::-webkit-details-marker]:hidden"
+                  className="u-focus relative flex size-[36px] cursor-pointer list-none items-center justify-center rounded-sch-control border border-line-strong bg-surface text-muted transition-colors hover:bg-subtle hover:text-foreground [&::-webkit-details-marker]:hidden"
                 >
                   <svg aria-hidden viewBox="0 0 16 16" className="size-[15px]" fill="none" stroke="currentColor" strokeWidth="1.5">
                     <path d="M2.5 4.5h11M4.5 8h7M6.5 11.5h3" />
@@ -898,13 +1054,13 @@ export function AgendaView(props: {
                     {props.staff.filter((staff) => staff.active).length}
                   </span>
                 </summary>
-                <div className="absolute right-0 top-10 z-40 w-64 rounded-xl border border-line bg-surface p-3 shadow-[var(--shadow-card)]">
+                <div className={`absolute right-0 top-11 z-40 w-64 p-3 ${POPOVER}`}>
                   <label className="block text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-faint">
                     Profesional
                     <select
                       value={staffFilter}
                       onChange={(event) => setStaffFilter(event.target.value)}
-                      className="mt-1.5 h-[44px] w-full rounded-lg border border-line bg-surface px-2.5 text-sm normal-case tracking-normal text-foreground lg:h-[36px]"
+                      className={`mt-1.5 normal-case tracking-normal ${INPUT}`}
                     >
                       <option value="">Todo el equipo</option>
                       {props.staff.map((staff) => <option key={staff.id} value={staff.id}>{staff.name}</option>)}
@@ -915,7 +1071,7 @@ export function AgendaView(props: {
                     <select
                       value={statusFilter}
                       onChange={(event) => setStatusFilter(event.target.value)}
-                      className="mt-1.5 h-[44px] w-full rounded-lg border border-line bg-surface px-2.5 text-sm normal-case tracking-normal text-foreground lg:h-[36px]"
+                      className={`mt-1.5 normal-case tracking-normal ${INPUT}`}
                     >
                       <option value="">Todos los estados</option>
                       {STATUSES.map((status) => <option key={status} value={status}>{STATUS_LABEL[status]}</option>)}
@@ -927,7 +1083,7 @@ export function AgendaView(props: {
                 <button
                   type="button"
                   onClick={() => setModal({ mode: "new" })}
-                  className="inline-flex h-[34px] shrink-0 items-center gap-1.5 rounded-[9px] bg-ink px-[14px] text-[13px] font-semibold text-ink-fg transition-colors hover:bg-ink-hover"
+                  className={buttonClass({ variant: "primary", size: "sm" })}
                 >
                   <span aria-hidden className="text-[15px] font-normal">＋</span>
                   Nueva cita
@@ -935,117 +1091,13 @@ export function AgendaView(props: {
               ) : null}
             </div>
           </div>
-
-          <div className="mt-4 grid grid-cols-[2.5rem_1fr_2.5rem] items-center rounded-xl bg-chip p-1 md:hidden">
-            <button
-              type="button"
-              aria-label="Día anterior"
-              onClick={() => shiftDate(isWeek ? -7 : -1)}
-              className="flex size-10 items-center justify-center rounded-lg text-xl text-muted active:bg-surface"
-            >
-              &lsaquo;
-            </button>
-            <div className="min-w-0 text-center">
-              <p className="truncate text-sm font-semibold capitalize text-foreground">{dateMain}</p>
-              {yearLabel ? <p className="u-mono text-[0.625rem] text-faint">{yearLabel}</p> : null}
-            </div>
-            <button
-              type="button"
-              aria-label="Día siguiente"
-              onClick={() => shiftDate(isWeek ? 7 : 1)}
-              className="flex size-10 items-center justify-center rounded-lg text-xl text-muted active:bg-surface"
-            >
-              &rsaquo;
-            </button>
-          </div>
-
-          <label className="relative mt-3 block md:hidden">
-            <span className="sr-only">Buscar en la agenda</span>
-            <svg aria-hidden viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint">
-              <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.6" />
-              <path d="m16 16 4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-            </svg>
-            <input
-              value={searchQuery}
-              onChange={(event) => setSearchQuery(event.target.value)}
-              placeholder="Buscar cliente, servicio o profesional…"
-              className="h-[44px] w-full rounded-xl border border-line bg-chip pl-9 pr-3 text-sm text-foreground outline-none focus:border-line-strong focus:bg-chip"
-            />
-          </label>
-
-          <div className="mt-3 grid grid-cols-2 items-center gap-2 md:hidden">
-            <div className="col-span-2 flex h-[44px] w-fit items-center rounded-lg bg-chip p-[3px]">
-              <Seg active={!isWeek} onClick={() => navigate({ view: "day" })}>Día</Seg>
-              <Seg active={isWeek} onClick={() => navigate({ view: "week" })}>Semana</Seg>
-            </div>
-            {props.canOperate ? (
-              <>
-                <label className="sr-only" htmlFor="mobile-agenda-status">Estado</label>
-                <select
-                  id="mobile-agenda-status"
-                  value={statusFilter}
-                  onChange={(event) => setStatusFilter(event.target.value)}
-                  className="h-[44px] min-w-0 w-full rounded-lg border border-line bg-surface px-2.5 text-xs text-foreground"
-                >
-                  <option value="">Todos los estados</option>
-                  {STATUSES.map((status) => <option key={status} value={status}>{STATUS_LABEL[status]}</option>)}
-                </select>
-                {props.staff.length > 1 ? (
-                  <>
-                    <label className="sr-only" htmlFor="mobile-agenda-staff">Profesional</label>
-                    <select
-                      id="mobile-agenda-staff"
-                      value={staffFilter}
-                      onChange={(event) => setStaffFilter(event.target.value)}
-                      className="h-[44px] min-w-0 w-full rounded-lg border border-line bg-surface px-2.5 text-xs text-foreground"
-                    >
-                      <option value="">Todo el equipo</option>
-                      {props.staff.map((staff) => <option key={staff.id} value={staff.id}>{staff.name}</option>)}
-                    </select>
-                  </>
-                ) : null}
-              </>
-            ) : null}
-          </div>
         </div>
-
-        <div className="flex min-h-11 items-center gap-3 border-t border-line bg-surface px-4 py-2 md:hidden">
-          <span className="inline-flex items-baseline gap-1.5 whitespace-nowrap">
-            <strong className="u-mono text-xs font-semibold text-foreground">{mobileRows.length}</strong>
-            <span className="text-xs text-muted">{mobileRows.length === 1 ? "cita" : "citas"}</span>
-          </span>
-          <span aria-hidden className="h-4 w-px bg-line" />
-          <span className="min-w-0 flex-1 truncate text-xs text-muted">
-            {mobileCompleted} completadas
-          </span>
-          <span className="min-w-0 shrink truncate text-right text-xs text-muted">
-            <span className="text-faint">Próxima </span>
-            <strong className="u-mono font-semibold text-foreground">
-              {nextMobileAppointment ? fmtTime(nextMobileAppointment.start_at, tz) : "—"}
-            </strong>
-          </span>
-        </div>
-
-        {props.canOperate ? (
-          <div className="grid grid-cols-2 gap-2 border-t border-line px-4 py-3 md:hidden">
-            <button type="button" onClick={() => setModal({ mode: "walkin" })} className={OUTLINE_CLS}>
-              Sin cita
-            </button>
-            <button
-              type="button"
-              onClick={() => setModal({ mode: "new" })}
-              className="inline-flex h-[var(--control-h)] items-center justify-center rounded-lg bg-ink px-3 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover"
-            >
-              Agendar cita
-            </button>
-          </div>
-        ) : null}
       </div>
 
       {/* ── CONTROL BAR ── the tools that steer the calendar: where you are (date +
              steppers), what you see (Día/Semana), and the two facets. It wraps as one
              deliberate second band on intermediate widths rather than compressing. */}
-      <div className="hidden flex-wrap items-center gap-2 rounded-xl border border-line bg-surface px-[var(--panel-pad)] py-2.5 shadow-[var(--shadow-card)] md:flex xl:hidden">
+      <div className="hidden flex-wrap items-center gap-2 rounded-sch-card border border-line bg-surface px-[var(--panel-pad)] py-2.5 shadow-[var(--shadow-card)] md:flex xl:hidden">
         <label className="relative order-first w-full lg:w-auto lg:min-w-[17rem] lg:flex-1">
           <span className="sr-only">Buscar en la agenda</span>
           <svg aria-hidden viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint">
@@ -1056,13 +1108,13 @@ export function AgendaView(props: {
             value={searchQuery}
             onChange={(event) => setSearchQuery(event.target.value)}
             placeholder="Buscar cliente, servicio o profesional…"
-            className="h-[var(--control-h)] w-full rounded-lg border border-line bg-chip pl-9 pr-3 text-sm text-foreground outline-none focus:border-line-strong focus:bg-chip"
+            className={`${INPUT} pl-9`}
           />
         </label>
         <button
           type="button"
           onClick={() => navigate({ date: zonedParts(new Date().toISOString(), tz).dayKey })}
-          className={CONTROL_CLS}
+          className={buttonClass()}
         >
           Hoy
         </button>
@@ -1090,7 +1142,7 @@ export function AgendaView(props: {
             "lifted out" of the track, which is why it needs no drop shadow (a hairline
             does the same job). Month is NOT offered — see the TODO above; a permanently
             disabled control only promises something the product can't do. */}
-        <div className="ml-1 flex h-[var(--control-h)] items-center gap-0.5 rounded-lg bg-chip p-1">
+        <div role="group" aria-label="Vista" className={`ml-1 ${segmentShell()}`}>
           <Seg active={!isWeek} onClick={() => navigate({ view: "day" })}>Día</Seg>
           <Seg active={isWeek} onClick={() => navigate({ view: "week" })}>Semana</Seg>
         </div>
@@ -1126,7 +1178,7 @@ export function AgendaView(props: {
       </div>
 
       {error ? (
-        <p role="alert" className="border-b border-line bg-danger/10 px-[var(--panel-pad)] py-2 text-sm text-danger">
+        <p role="alert" className="rounded-sch-control bg-danger/10 px-[var(--panel-pad)] py-2.5 text-sm text-danger">
           {error}
         </p>
       ) : null}
@@ -1179,8 +1231,8 @@ export function AgendaView(props: {
         />
       </div>
 
-      {/* ── CALENDAR GRID + DRAWER ── */}
-      <div className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]">
+      {/* ── CALENDAR GRID + DRAWER ── (tablet + desktop; the phone has MobileAgenda) */}
+      <div className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)] max-md:hidden">
         <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <div className="hidden h-10 shrink-0 items-center gap-3 border-b border-line px-3.5 md:flex">
             <span className="u-mono text-xs font-semibold text-foreground">{visible.length}</span>
@@ -1189,7 +1241,7 @@ export function AgendaView(props: {
             <div className="ml-2 flex min-w-0 items-center gap-3 overflow-hidden">
               {serviceLegend.map(({ family, label }) => (
                 <span key={family} className="inline-flex shrink-0 items-center gap-1.5 text-[0.6875rem] text-muted">
-                  <span aria-hidden className={`u-appt-swatch u-appt-service ${apptCategoryClass(family)} size-3 rounded-[3px]`} />
+                  <span aria-hidden className={`u-appt-swatch u-appt-service ${apptCategoryClass(family)} size-3 rounded-full`} />
                   <span className="max-w-32 truncate">{label}</span>
                 </span>
               ))}
@@ -1199,20 +1251,20 @@ export function AgendaView(props: {
               {overlapIds.size > 0 ? `${overlapIds.size} citas con solapamiento` : "Sin solapamientos"}
             </span>
             {isWeek ? (
-              <div className="flex shrink-0 items-center rounded-lg border border-line p-0.5" aria-label="Distribución semanal">
+              <div role="group" className={segmentShell("sm")} aria-label="Distribución semanal">
                 <button type="button" onClick={() => setWeeklyLayout("team")} aria-pressed={weeklyLayout === "team"}
-                  className={`h-[28px] rounded-md px-2.5 text-xs font-medium ${weeklyLayout === "team" ? "bg-foreground text-surface" : "text-muted hover:bg-chip"}`}>Equipo</button>
+                  className={segmentClass(weeklyLayout === "team")}>Equipo</button>
                 <button type="button" onClick={() => setWeeklyLayout("hours")} aria-pressed={weeklyLayout === "hours"}
-                  className={`h-[28px] rounded-md px-2.5 text-xs font-medium ${weeklyLayout === "hours" ? "bg-foreground text-surface" : "text-muted hover:bg-chip"}`}>Horas</button>
+                  className={segmentClass(weeklyLayout === "hours")}>Horas</button>
               </div>
             ) : (
-              <div className="hidden items-center rounded-lg border border-line p-0.5 xl:flex">
+              <div role="group" aria-label="Distribución del día" className={`max-xl:hidden ${segmentShell("sm")}`}>
                 <button
                   type="button"
                   onClick={() => setDesktopLayout("rows")}
                   aria-pressed={desktopLayout === "rows"}
                   aria-label="Agrupar por hora"
-                  className={`flex size-7 items-center justify-center rounded-md ${desktopLayout === "rows" ? "bg-foreground text-surface" : "text-muted hover:bg-chip"}`}
+                  className={`${segmentClass(desktopLayout === "rows")} aspect-square justify-center px-0`}
                 >
                   <RowsIcon />
                 </button>
@@ -1221,74 +1273,13 @@ export function AgendaView(props: {
                   onClick={() => setDesktopLayout("columns")}
                   aria-pressed={desktopLayout === "columns"}
                   aria-label="Una columna por profesional"
-                  className={`flex size-7 items-center justify-center rounded-md ${desktopLayout === "columns" ? "bg-foreground text-surface" : "text-muted hover:bg-chip"}`}
+                  className={`${segmentClass(desktopLayout === "columns")} aspect-square justify-center px-0`}
                 >
                   <ColumnsIcon />
                 </button>
               </div>
             )}
           </div>
-          <div className="min-h-0 flex-1 overflow-y-auto bg-canvas px-3 pb-8 pt-3 md:hidden">
-            {mobileRows.length === 0 ? (
-              <div className="rounded-2xl border border-dashed border-line-strong bg-surface px-6 py-12 text-center">
-                <span aria-hidden className="mx-auto flex size-11 items-center justify-center rounded-xl bg-chip text-xl text-muted">✓</span>
-                <p className="mt-3 text-sm font-semibold text-foreground">No hay citas en esta vista</p>
-                <p className="mx-auto mt-1 max-w-[16rem] text-xs leading-relaxed text-muted">
-                  Cuando se agende una cita aparecerá aquí en orden cronológico.
-                </p>
-              </div>
-            ) : (
-              <div className="space-y-3">
-                {mobileDayKeys.map((dayKey) => {
-                  const [year, month, day] = dayKey.split("-").map(Number);
-                  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
-                  const dayAppointments = mobileRows.filter((appt) => zonedParts(appt.start_at, tz).dayKey === dayKey);
-                  return (
-                    <section key={dayKey} className="overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]">
-                      <div className="flex items-center justify-between border-b border-line-row bg-card px-3 py-2.5">
-                        <div className="flex items-center gap-2">
-                          <span className="u-mono flex size-8 items-center justify-center rounded-lg border border-line bg-chip text-xs font-semibold text-foreground">
-                            {day}
-                          </span>
-                          <span>
-                            <h2 className="text-xs font-semibold uppercase tracking-[0.1em] text-foreground">
-                              {ES_WEEKDAYS_UPPER[weekday]}
-                            </h2>
-                            <span className="block text-[0.625rem] capitalize text-muted">{ES_MONTHS[month - 1]} {year}</span>
-                          </span>
-                        </div>
-                        <span className="u-mono rounded-md bg-chip px-2 py-1 text-[0.625rem] text-muted">
-                          {dayAppointments.length} {dayAppointments.length === 1 ? "cita" : "citas"}
-                        </span>
-                      </div>
-                      <div className="space-y-2 p-2.5">
-                        {dayAppointments.map((appt) => {
-                          const isNext = nextMobileAppointment?.id === appt.id;
-                          return (
-                            <MobileAppointmentCard
-                              key={appt.id}
-                              appt={appt}
-                              toneClass={appointmentToneClass(appt)}
-                              timezone={tz}
-                              attention={overlapIds.has(appt.id)}
-                              next={isNext}
-                              showStaff={props.canOperate}
-                              onOpen={() => setSelectedId(appt.id)}
-                            />
-                          );
-                        })}
-                      </div>
-                    </section>
-                  );
-                })}
-                <div className="flex items-center justify-center gap-2 py-2 text-[0.6875rem] text-faint">
-                  <span className="size-1.5 rounded-full bg-success" />
-                  Actualización automática cada 20 segundos
-                </div>
-              </div>
-            )}
-          </div>
-
           {/* TABLET — a touch-first board. It deliberately is neither the phone
               timeline stretched wide nor the dense desktop hour grid squeezed into
               an iPad. Cards keep a 44px+ target and use the same real appointment
@@ -1296,25 +1287,25 @@ export function AgendaView(props: {
               view the team board (md+) replaces it, so it is not rendered at all. */}
           {isWeek && weeklyLayout === "team" ? null : (
           <div className="hidden min-h-0 flex-1 overflow-y-auto bg-canvas p-4 md:block xl:hidden">
-            {mobileRows.length === 0 ? (
-              <div className="flex min-h-[22rem] items-center justify-center rounded-2xl border border-dashed border-line-strong bg-surface">
+            {listDayKeys.length === 0 ? (
+              <div className="flex min-h-[22rem] items-center justify-center rounded-sch-card border border-dashed border-line-strong bg-surface">
                 <div className="max-w-xs text-center">
-                  <span aria-hidden className="mx-auto flex size-12 items-center justify-center rounded-xl bg-chip text-xl text-muted">✓</span>
+                  <span aria-hidden className="mx-auto flex size-11 items-center justify-center rounded-full bg-chip text-xl text-muted">✓</span>
                   <p className="mt-3 text-sm font-semibold text-foreground">No hay citas en esta vista</p>
                   <p className="mt-1 text-xs leading-relaxed text-muted">Cambia la fecha, el estado o el profesional para consultar otro turno.</p>
                 </div>
               </div>
             ) : (
               <div className="space-y-5">
-                {mobileDayKeys.map((dayKey) => {
+                {listDayKeys.map((dayKey) => {
                   const [year, month, day] = dayKey.split("-").map(Number);
                   const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
                   const dayAppointments = mobileRows.filter((appt) => zonedParts(appt.start_at, tz).dayKey === dayKey);
                   return (
-                    <section key={dayKey} className="overflow-hidden rounded-2xl border border-line bg-surface shadow-[0_1px_2px_rgba(18,21,27,0.04)]">
+                    <section key={dayKey} className="overflow-hidden rounded-sch-card border border-line bg-surface shadow-[var(--shadow-card)]">
                       <div className="flex items-center justify-between border-b border-line bg-canvas/50 px-4 py-3">
                         <div className="flex items-center gap-3">
-                          <span className="u-mono flex size-10 items-center justify-center rounded-xl bg-foreground text-sm font-semibold text-surface">{day}</span>
+                          <span className="u-mono flex size-9 items-center justify-center rounded-sch-control border border-line bg-chip text-sm font-semibold text-foreground">{day}</span>
                           <span>
                             <h2 className="text-sm font-semibold text-foreground">{ES_WEEKDAYS_UPPER[weekday]}</h2>
                             <span className="text-xs capitalize text-muted">{ES_MONTHS[month - 1]} {year}</span>
@@ -1326,6 +1317,9 @@ export function AgendaView(props: {
                       </div>
 
                       <div className="grid grid-cols-2 gap-2.5 p-3">
+                        {blocksOn(dayKey).map((b) => (
+                          <BlockRow key={b.id} block={b} className="col-span-2" />
+                        ))}
                         {dayAppointments.map((appt) => {
                           const isNext = nextMobileAppointment?.id === appt.id;
                           return (
@@ -1338,6 +1332,7 @@ export function AgendaView(props: {
                               next={isNext}
                               showStaff={props.canOperate}
                               roomy
+                              flash={appt.id === flashId}
                               onOpen={() => setSelectedId(appt.id)}
                             />
                           );
@@ -1358,6 +1353,8 @@ export function AgendaView(props: {
           {!isWeek && desktopLayout === "rows" ? (
             <DesktopHourRows
               appointments={mobileRows}
+              blocks={blocksOn(shownDayKeys[0])}
+              bookableStaffIds={bookableStaffIds}
               hours={hours}
               timezone={tz}
               overlapIds={overlapIds}
@@ -1377,7 +1374,10 @@ export function AgendaView(props: {
               today={nowParts.dayKey}
               overlapIds={overlapIds}
               selectedId={selectedId}
-              onOpen={setSelectedId}
+              flashId={flashId}
+              blocks={props.blocks}
+              previewFor={previewProps}
+              onOpen={openAppointment}
               onDay={(date) => navigate({ date, view: "day" })}
               onMore={(appointments, title) => {
                 setWeekOverflowTitle(title);
@@ -1463,7 +1463,7 @@ export function AgendaView(props: {
                 >
                   <div
                     className={`sticky top-0 z-10 flex ${headClass} items-center border-b border-line px-2 ${
-                      col.closed ? "bg-closed-bg" : col.isToday && isWeek ? "bg-chip/70" : "bg-surface"
+                      col.closed ? "bg-closed-bg" : col.isToday && isWeek ? "bg-[color-mix(in_srgb,var(--chip)_70%,var(--surface))]" : "bg-surface"
                     } ${isWeek ? "justify-center" : "gap-2"}`}
                   >
                     {isWeek && col.dayNum ? (
@@ -1513,33 +1513,62 @@ export function AgendaView(props: {
                        chip are siblings inside the same block, so the chip can never
                        cover the hour above or below it. */
                     <div className={`relative ${col.closed ? "u-closed-hatch" : ""}`} style={{ height: bodyHeight }}>
+                      {/* BLOCKED time — under the cards, on the same hour scale. */}
+                      {blocksOn(col.key, fromHour * 60, toHour * 60).map((b) => (
+                        <div
+                          key={b.id}
+                          title={`${b.label} · ${b.when}`}
+                          className="u-closed-hatch absolute inset-x-1 overflow-hidden rounded-sch-event border border-dashed border-line-strong px-2 py-1"
+                          style={{ top: offsetTop(b.sMin), height: Math.max(18, ((b.eMin - b.sMin) / 60) * rowHeight - 2) }}
+                        >
+                          <span className="block truncate text-[11px] font-medium text-muted">{b.label}</span>
+                        </div>
+                      ))}
+                      {/* …and an edge marker ABOVE them, so an hour whose cards cover the
+                          block still reads as blocked. */}
+                      {blocksOn(col.key, fromHour * 60, toHour * 60).map((b) => (
+                        <span
+                          key={`${b.id}-edge`}
+                          title={`${b.label} · ${b.when}`}
+                          className="absolute right-0.5 z-[1] w-1 rounded-full bg-[repeating-linear-gradient(180deg,var(--faint)_0_4px,transparent_4px_7px)]"
+                          style={{ top: offsetTop(b.sMin), height: Math.max(18, ((b.eMin - b.sMin) / 60) * rowHeight - 2) }}
+                        />
+                      ))}
                       {weekBlocks.map((block) => {
-                        const [lead, ...rest] = block.appointments;
+                        // At most TWO cards per hour block; everything else is counted in
+                        // the in-flow "+N más" chip, which opens EVERY appointment of the
+                        // block (nothing is hidden for good, nothing is left out of the count).
+                        const [lead, second, ...rest] = block.appointments;
+                        const shown = [lead, second].filter((x): x is Appt => Boolean(x));
                         return (
                           <div
                             key={block.hour}
-                            className="flex flex-col gap-1 border-b border-line-soft p-1"
+                            // `relative` lifts the in-flow hour cell above the absolutely
+                            // positioned block overlay drawn before it.
+                            className="relative flex flex-col gap-1 border-b border-line-soft p-1"
                             style={{ height: rowHeight }}
                           >
-                            {lead ? (
+                            {shown.map((appt) => (
                               <WeekBlockCard
-                                appt={lead}
-                                toneClass={appointmentToneClass(lead)}
+                                key={appt.id}
+                                appt={appt}
+                                toneClass={appointmentToneClass(appt)}
                                 tz={tz}
-                                overlapping={overlapIds.has(lead.id)}
-                                selected={lead.id === selectedId}
-                                crowded={rest.length > 0}
-                                onOpen={() => setSelectedId(lead.id)}
+                                overlapping={overlapIds.has(appt.id)}
+                                selected={appt.id === selectedId || appt.id === flashId}
+                                crowded={shown.length > 1 || rest.length > 0}
+                                previewProps={previewProps(appt)}
+                                onOpen={() => openAppointment(appt.id)}
                               />
-                            ) : null}
+                            ))}
                             {rest.length > 0 ? (
                               <button
                                 type="button"
-                                aria-label={`Ver ${rest.length} cita${rest.length === 1 ? "" : "s"} más a las ${String(block.hour).padStart(2, "0")}:00`}
-                                onClick={() => setWeekOverflow(rest)}
+                                aria-label={`Ver las ${block.appointments.length} citas de las ${String(block.hour).padStart(2, "0")}:00 (${rest.length} más)`}
+                                onClick={() => setWeekOverflow(block.appointments)}
                                 className="flex h-5 shrink-0 items-center justify-center rounded-md border border-line bg-chip text-[0.625rem] font-medium text-foreground transition hover:border-foreground hover:bg-foreground hover:text-background"
                               >
-                                +{rest.length} {rest.length === 1 ? "cita" : "citas"}
+                                +{rest.length} más
                               </button>
                             ) : null}
                           </div>
@@ -1559,6 +1588,36 @@ export function AgendaView(props: {
                         appointment booked into a closed day stays fully readable
                         (it exists; it just shouldn't look bookable around it). */}
                     {col.closed ? <div aria-hidden className="u-closed-hatch absolute inset-0" /> : null}
+                    {/* BLOCKED time (schedule_exceptions) — the barber's own blocks and the
+                        site-wide ones, under the cards like the closed wash. */}
+                    {props.blocks
+                      .filter((b) => b.staff_id === null || b.staff_id === col.key)
+                      .map((b) => {
+                        const dayStartMs = Date.parse(props.dayStartIso);
+                        const dayEndMs = Date.parse(props.dayEndIso);
+                        const fromMs = Math.max(Date.parse(b.starts_at), dayStartMs);
+                        const toMs = Math.min(Date.parse(b.ends_at), dayEndMs);
+                        if (toMs <= fromMs) return null;
+                        const lo = fromHour * 60;
+                        const hi = toHour * 60;
+                        const sMin = Math.min(Math.max(minutesOf(zonedParts(new Date(fromMs).toISOString(), tz)), lo), hi);
+                        const eMinRaw = toMs >= dayEndMs ? hi : minutesOf(zonedParts(new Date(toMs).toISOString(), tz));
+                        const eMin = Math.min(Math.max(eMinRaw, sMin), hi);
+                        if (eMin <= sMin) return null;
+                        return (
+                          <div
+                            key={b.id}
+                            title={`Bloqueado${b.reason ? ` · ${b.reason}` : ""}`}
+                            className="u-closed-hatch absolute inset-x-1 overflow-hidden rounded-sch-event border border-dashed border-line-strong px-2 py-1"
+                            style={{ top: offsetTop(sMin), height: Math.max(18, ((eMin - sMin) / 60) * HOUR_PX - 2) }}
+                          >
+                            <span className="block truncate text-[11px] font-medium text-muted">
+                              Bloqueado{b.staff_id === null ? " · toda la sede" : ""}
+                              {b.reason ? ` · ${b.reason}` : ""}
+                            </span>
+                          </div>
+                        );
+                      })}
                     {hours.map((h) => (
                       <div
                         key={h}
@@ -1592,7 +1651,9 @@ export function AgendaView(props: {
                             lane={dayLanes?.get(a.id)}
                             overlapping={overlapIds.has(a.id)}
                             selected={a.id === selectedId}
-                            onOpen={() => setSelectedId(a.id)}
+                            flash={a.id === flashId}
+                            previewProps={previewProps(a)}
+                            onOpen={() => openAppointment(a.id)}
                           />
                         );
                       })}
@@ -1635,22 +1696,58 @@ export function AgendaView(props: {
         </section>
 
         {selected ? (
-          <ApptDrawer
+          <AppointmentPanel
+            key={selected.id}
             appt={selected}
+            timezone={tz}
             toneClass={appointmentToneClass(selected)}
-            tz={tz}
             siteName={currentSite?.name ?? "Sede actual"}
-            pending={pending}
-            contactsBase={props.contactsBase}
-            inboxBase={props.inboxBase}
-            fromQS={fromQS}
+            originLabel={ORIGIN_LABEL[selected.origin] ?? (selected.origin || "—")}
             canOperate={props.canOperate}
+            canModify={selected.can_modify}
+            pending={pending}
+            error={error}
+            contactHref={selected.contact_id && props.contactsBase ? `${props.contactsBase}/${selected.contact_id}${fromQS}` : null}
+            conversationHref={
+              selected.source_conversation_id && props.inboxBase
+                ? `${props.inboxBase}?c=${encodeURIComponent(selected.source_conversation_id)}`
+                : null
+            }
+            // "Volver a reservar": the existing book-for-contact deep link (the page only
+            // honours it with CRM on and the contact in this client).
+            bookAgainHref={
+              props.canOperate && selected.contact_id && props.contactsBase
+                ? `${props.basePath}?site=${encodeURIComponent(props.currentSiteId)}&book=${encodeURIComponent(selected.contact_id)}`
+                : null
+            }
             onClose={() => setSelectedId(null)}
+            onLocate={() => locateAppointment(selected.id)}
             onReschedule={() => setModal({ mode: "reschedule", appt: selected })}
-            onConfirm={() => run(() => confirmAppointmentAction(props.clientId, selected.id))}
-            onComplete={() => run(() => completeAppointmentAction(props.clientId, selected.id))}
-            onNoShow={() => run(() => noShowAppointmentAction(props.clientId, selected.id))}
-            onCancel={() => run(() => cancelAppointmentAction(props.clientId, selected.id))}
+            onStatus={(target, reason) =>
+              run(
+                () =>
+                  target === "confirmed"
+                    ? confirmAppointmentAction(props.clientId, selected.id)
+                    : target === "completed"
+                      ? completeAppointmentAction(props.clientId, selected.id)
+                      : target === "no_show"
+                        ? noShowAppointmentAction(props.clientId, selected.id)
+                        : cancelAppointmentAction(props.clientId, selected.id, reason),
+                target === "confirmed" ? "Cita confirmada" : target === "completed" ? "Cita completada" : target === "no_show" ? "Inasistencia registrada" : "Cita cancelada",
+              )
+            }
+            staffColor={teamColors.get(selected.staff_id)}
+            loadActivity={() => listAppointmentActivityAction(props.clientId, selected.id)}
+          />
+        ) : null}
+        {preview && !selected && !modal ? (
+          <AppointmentPreview
+            id="appt-preview"
+            appt={preview.appt}
+            timezone={tz}
+            anchor={preview.rect}
+            onPointerEnter={keepPreview}
+            onPointerLeave={hidePreviewSoon}
           />
         ) : null}
       </div>
@@ -1662,8 +1759,11 @@ export function AgendaView(props: {
           modal={modal}
           onClose={() => setModal(null)}
           onError={setError}
-          onDone={() => {
+          error={error}
+          onNotice={setNotice}
+          onDone={(dayKey) => {
             setModal(null);
+            if (dayKey && dayKey !== props.date && !props.returnContactId) return navigate({ date: dayKey });
             // Deep-linked from a contact record → return there so the new/moved
             // appointment is visible in context; otherwise just refresh the agenda.
             if (props.returnContactId) router.push(`/clients/${props.clientId}/contacts/${props.returnContactId}`);
@@ -1695,7 +1795,7 @@ export function AgendaView(props: {
 /** Weekly overview: each professional has one row, with bookings ordered inside
  * each local day. Overflow opens the existing accessible appointment chooser. */
 function WeekTeamBoard({
-  days, staff, appointments, openingHours, timezone, today, overlapIds, selectedId,
+  days, staff, appointments, openingHours, timezone, today, overlapIds, selectedId, flashId, blocks, previewFor,
   onOpen, onDay, onMore,
 }: {
   days: string[];
@@ -1706,6 +1806,9 @@ function WeekTeamBoard({
   today: string;
   overlapIds: Set<string>;
   selectedId: string | null;
+  flashId: string | null;
+  blocks: BlockOpt[];
+  previewFor: (appt: Appt) => Record<string, unknown>;
   onOpen: (id: string) => void;
   onDay: (date: string) => void;
   onMore: (appointments: Appt[], title: string) => void;
@@ -1759,17 +1862,33 @@ function WeekTeamBoard({
                 const shown = cell.slice(0, 5);
                 const rest = cell.slice(5);
                 const closed = !staffWorksOn(person.workingHours, openingHours, weekdayKeyOf(day));
+                const dayBlocks = blocks.filter(
+                  (b) =>
+                    (b.staff_id === null || b.staff_id === person.id) &&
+                    zonedParts(b.starts_at, timezone).dayKey <= day &&
+                    zonedParts(new Date(Date.parse(b.ends_at) - 1).toISOString(), timezone).dayKey >= day,
+                );
                 return (
                   <div key={day} className={`flex min-w-0 flex-col justify-center gap-1 border-b border-r border-line px-1.5 py-3 ${closed ? "u-closed-hatch" : day === today ? "bg-chip/25" : "bg-surface"}`} style={{ minHeight: rowHeight }}>
+                    {dayBlocks.length > 0 ? (
+                      <span
+                        title={dayBlocks.map((b) => `Bloqueado ${fmtTime(b.starts_at, timezone)}–${fmtTime(b.ends_at, timezone)}${b.reason ? ` · ${b.reason}` : ""}`).join("\n")}
+                        className="u-closed-hatch flex h-6 min-w-0 items-center rounded-sch-event border border-dashed border-line-strong px-2 text-[11px] font-medium text-muted"
+                      >
+                        <span className="truncate">
+                          Bloqueado{dayBlocks[0].reason ? ` · ${dayBlocks[0].reason}` : ""}
+                        </span>
+                      </span>
+                    ) : null}
                     {shown.map((appt) => {
                       const attention = overlapIds.has(appt.id);
                       const client = appt.contact_name ?? "Atención sin cita";
                       const state = STATUS_LABEL[appt.status] ?? appt.status;
                       return (
                         <button key={appt.id} type="button" onClick={() => onOpen(appt.id)}
-                          title={`${fmtTime(appt.start_at, timezone)} – ${fmtTime(appt.service_end_at, timezone)} · ${client} · ${appt.service_name} · ${state}${attention ? " · Solapamiento" : ""}`}
+                          {...previewFor(appt)}
                           aria-label={`${fmtTime(appt.start_at, timezone)} ${client} — ${appt.service_name} — ${state}${attention ? " — solapamiento" : ""}`}
-                          className={`u-appt ${appointmentToneClass(appt)} flex h-[32px] min-w-0 items-center gap-1.5 rounded-md px-2 text-left transition hover:brightness-95 ${selectedId === appt.id ? "ring-2 ring-service-purple" : ""}`}>
+                          className={`u-appt ${appointmentToneClass(appt)} flex h-[32px] min-w-0 items-center gap-1.5 rounded-md px-2 text-left transition-shadow hover:shadow-[0_0_0_2px_var(--foreground)] ${selectedId === appt.id || flashId === appt.id ? "ring-2 ring-service-purple" : ""}`}>
                           <span className="u-appt-ink u-mono shrink-0 text-[11px]">{fmtTime(appt.start_at, timezone)}</span>
                           <strong className={`min-w-0 flex-1 truncate text-xs font-semibold ${appt.status === "cancelled" ? "line-through opacity-60" : ""}`}>{client}</strong>
                           {attention || appt.status !== "confirmed" ? (
@@ -1781,8 +1900,8 @@ function WeekTeamBoard({
                       );
                     })}
                     {rest.length > 0 ? (
-                      <button type="button" onClick={() => onMore(rest, `${person.name} · ${Number(day.slice(-2))} ${ES_MONTHS[Number(day.slice(5, 7)) - 1]}`)}
-                        aria-label={`Ver ${rest.length} citas más de ${person.name} el ${day}`}
+                      <button type="button" onClick={() => onMore(cell, `${person.name} · ${Number(day.slice(-2))} ${ES_MONTHS[Number(day.slice(5, 7)) - 1]}`)}
+                        aria-label={`Ver las ${cell.length} citas de ${person.name} el ${day} (${rest.length} más)`}
                         className="min-h-7 rounded-md text-xs font-medium text-muted transition hover:bg-chip hover:text-foreground">+{rest.length} más</button>
                     ) : null}
                     {cell.length === 0 ? <span className="text-center text-xs text-faintest">{closed ? "No disponible" : "—"}</span> : null}
@@ -1799,6 +1918,8 @@ function WeekTeamBoard({
 
 function DesktopHourRows({
   appointments,
+  blocks,
+  bookableStaffIds,
   hours,
   timezone,
   overlapIds,
@@ -1807,6 +1928,8 @@ function DesktopHourRows({
   onBook,
 }: {
   appointments: Appt[];
+  blocks: DayBlock[];
+  bookableStaffIds: string[];
   hours: number[];
   timezone: string;
   overlapIds: Set<string>;
@@ -1818,9 +1941,18 @@ function DesktopHourRows({
     <div className="hidden min-h-0 flex-1 overflow-y-auto bg-surface xl:block">
       {hours.map((hour) => {
         const inHour = appointments.filter((appt) => zonedParts(appt.start_at, timezone).h === hour);
+        // A block is listed in the hour it STARTS (or the first hour shown, if earlier).
+        // The row stops offering "Agendar en esta hora" ONLY when the hour is blocked for
+        // every barber who could take it, for all of its 60 minutes — one barber's block
+        // or a 15-minute block keeps the offer (the engine then shows the real slots).
+        const startsHere = blocks.filter((b) => Math.max(Math.floor(b.sMin / 60), hours[0]) === hour);
+        const covered = hourState(blocks, hour, bookableStaffIds) === "blocked";
         return (
           <div key={hour} className="grid min-h-[6.1rem] grid-cols-[minmax(0,1fr)_4.75rem] border-b border-line last:border-b-0">
-            <div className="min-w-0 p-2.5">
+            <div className="flex min-w-0 flex-col gap-2 p-2.5">
+              {startsHere.map((b) => (
+                <BlockRow key={b.id} block={b} />
+              ))}
               {inHour.length > 0 ? (
                 <div className="grid h-full grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] gap-2">
                   {inHour.map((appt) => {
@@ -1856,11 +1988,13 @@ function DesktopHourRows({
                     );
                   })}
                 </div>
+              ) : covered ? (
+                startsHere.length > 0 ? null : <div className="flex h-full min-h-[4.9rem] items-center px-3 text-xs text-faint">Horario bloqueado</div>
               ) : canOperate ? (
                 <button
                   type="button"
                   onClick={onBook}
-                  className="flex h-full min-h-[4.9rem] w-full items-center justify-center gap-2 rounded-lg border border-dashed border-line text-xs text-faint transition hover:border-line-strong hover:bg-canvas/50 hover:text-foreground"
+                  className="u-focus flex h-full min-h-[4.9rem] w-full items-center justify-center gap-2 rounded-sch-event border border-dashed border-line text-xs text-faint transition hover:border-line-strong hover:bg-canvas/50 hover:text-foreground"
                 >
                   <span aria-hidden className="text-base">＋</span>
                   Agendar en esta hora
@@ -1920,8 +2054,8 @@ function WeekOverflowDialog({
   // Named after the HOUR BLOCK the chip sat in, not after the first appointment's
   // exact time — the rows below each print their own, and the block is what was clicked.
   const title = customTitle ?? (start
-    ? `Más citas de ${String(zonedParts(start, timezone).h).padStart(2, "0")}:00`
-    : "Más citas");
+    ? `Citas de las ${String(zonedParts(start, timezone).h).padStart(2, "0")}:00`
+    : "Citas");
 
   return (
     <>
@@ -1932,17 +2066,19 @@ function WeekOverflowDialog({
         aria-modal="true"
         aria-labelledby="week-overflow-title"
         tabIndex={-1}
-        className="fixed left-1/2 top-1/2 z-50 flex max-h-[min(32rem,80vh)] w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]"
+        className="fixed left-1/2 top-1/2 z-50 flex max-h-[min(32rem,80vh)] w-[min(26rem,calc(100vw-2rem))] -translate-x-1/2 -translate-y-1/2 flex-col overflow-hidden rounded-sch-card border border-line bg-popover shadow-[var(--shadow-float)] sm:rounded-sch-modal"
       >
-        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-4 py-3">
+        <header className="flex shrink-0 items-center justify-between gap-3 border-b border-line px-5 py-3.5">
           <div className="min-w-0">
             <h2 id="week-overflow-title" className="truncate text-sm font-semibold text-foreground">{title}</h2>
             <p className="mt-0.5 text-xs text-muted">
-              {appointments.length} cita{appointments.length === 1 ? "" : "s"} adicional{appointments.length === 1 ? "" : "es"}
+              {appointments.length} cita{appointments.length === 1 ? "" : "s"} en total
             </p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Cerrar" className="u-tap text-muted hover:text-foreground">
-            &#10005;
+          <button type="button" onClick={onClose} aria-label="Cerrar" className={buttonClass({ variant: "tertiary", size: "sm", className: "w-[44px] px-0 lg:w-[36px]" })}>
+            <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.5">
+              <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
+            </svg>
           </button>
         </header>
         <div className="min-h-0 space-y-2 overflow-y-auto p-3">
@@ -1962,9 +2098,7 @@ function WeekOverflowDialog({
                 </span>
                 <span className="shrink-0 text-right">
                   <span className="u-mono block text-xs font-semibold text-foreground">{fmtTime(appt.start_at, timezone)}</span>
-                  <span className="block text-[0.625rem] text-muted">
-                    {overlapping ? "Revisar" : STATUS_LABEL[appt.status] ?? appt.status}
-                  </span>
+                  <span className="mt-0.5 block">{overlapping ? <AttentionChip size="sm" /> : <StatusChip status={appt.status} size="sm" />}</span>
                 </span>
               </button>
             );
@@ -1972,6 +2106,16 @@ function WeekOverflowDialog({
         </div>
       </section>
     </>
+  );
+}
+
+/** A block as a ROW in the list layouts — hatched like the grids, never clickable. */
+function BlockRow({ block, className = "" }: { block: DayBlock; className?: string }) {
+  return (
+    <div className={`u-closed-hatch flex min-h-[44px] items-center gap-3 rounded-sch-event border border-dashed border-line-strong px-3 py-2 ${className}`}>
+      <span className="u-mono shrink-0 text-xs font-semibold tabular-nums text-foreground">{block.when}</span>
+      <span className="min-w-0 truncate text-xs font-medium text-muted">{block.label}</span>
+    </div>
   );
 }
 
@@ -1989,6 +2133,7 @@ function MobileAppointmentCard({
   next,
   showStaff,
   roomy = false,
+  flash = false,
   onOpen,
 }: {
   appt: Appt;
@@ -1998,16 +2143,18 @@ function MobileAppointmentCard({
   next: boolean;
   showStaff: boolean;
   roomy?: boolean;
+  flash?: boolean;
   onOpen: () => void;
 }) {
   return (
     <button
       type="button"
+      data-appt-id={appt.id}
       onClick={onOpen}
       aria-current={next ? "step" : undefined}
       className={`u-appt ${toneClass} relative flex w-full items-stretch overflow-hidden rounded-lg text-left transition active:scale-[0.995] ${
         roomy ? "min-h-[6.75rem]" : "min-h-[5.75rem]"
-      } ${next ? "ring-2 ring-brand/20" : ""} ${appt.status === "cancelled" ? "opacity-65" : ""}`}
+      } ${flash ? "animate-pulse ring-2 ring-service-purple" : next ? "ring-2 ring-brand/20" : ""} ${appt.status === "cancelled" ? "opacity-65" : ""}`}
     >
       <span className={`u-mono flex w-[4.4rem] shrink-0 flex-col border-r border-current/10 px-3 ${roomy ? "py-3.5" : "py-3"}`}>
         <strong className="text-sm font-semibold tabular-nums text-foreground">{fmtTime(appt.start_at, timezone)}</strong>
@@ -2038,35 +2185,15 @@ function MobileAppointmentCard({
   );
 }
 
+/** The lifecycle chip of the list layouts — the shared StatusChip (or the conflict
+ *  marker), so a state looks the same in every layout and in the detail panel. */
 function MobileStatus({ status, attention }: { status: string; attention: boolean }) {
-  const label = attention ? "Revisar" : STATUS_LABEL[status] ?? status;
-  const tone = attention
-    ? "border-warn/30 bg-warn/10 text-warn"
-    : status === "completed"
-      ? "border-success/30 bg-success/10 text-success"
-      : status === "cancelled" || status === "no_show"
-        ? "border-danger/30 bg-danger/10 text-danger"
-        : status === "confirmed"
-          ? "border-success/25 bg-success/8 text-success"
-          : "border-line bg-surface/70 text-muted";
-
-  return (
-    <span className={`inline-flex h-6 shrink-0 items-center rounded-full border px-2 text-[0.625rem] font-semibold ${tone}`}>
-      {label}
-    </span>
-  );
+  return attention ? <AttentionChip size="sm" /> : <StatusChip status={status} size="sm" />;
 }
 
 function DesktopSeg({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={`flex h-[28px] items-center rounded-[7px] px-3 text-[12.5px] font-medium transition-colors ${
-        active ? "bg-foreground text-surface" : "text-muted hover:text-foreground"
-      }`}
-    >
+    <button type="button" onClick={onClick} aria-pressed={active} className={segmentClass(active)}>
       {children}
     </button>
   );
@@ -2086,7 +2213,7 @@ function DesktopStep({
       type="button"
       onClick={onClick}
       aria-label={label}
-      className="flex size-[28px] items-center justify-center rounded-[7px] text-muted transition-colors hover:bg-chip hover:text-foreground"
+      className="u-focus flex aspect-square h-full items-center justify-center rounded-[calc(var(--sch-radius-control)-3px)] text-muted transition-colors hover:bg-subtle hover:text-foreground"
     >
       <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
         <path d={direction === "left" ? "M9.8 3.5 5.3 8l4.5 4.5" : "M6.2 3.5 10.7 8l-4.5 4.5"} />
@@ -2095,16 +2222,10 @@ function DesktopStep({
   );
 }
 
+/** The tablet bar's square steppers — a secondary control at the shared height. */
 function IconBtn({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      // 38px tall to sit level with the toolbar controls, 36px wide so the interactive
-      // target clears the 36×36 minimum on its own — no u-tap padding hack needed.
-      className="inline-flex h-[var(--control-h)] w-9 items-center justify-center rounded-lg border border-line-strong text-lg leading-none text-muted transition-colors hover:bg-subtle hover:text-foreground"
-    >
+    <button type="button" onClick={onClick} aria-label={label} className={buttonClass({ className: "w-[44px] px-0 text-lg leading-none text-muted lg:w-[40px]" })}>
       {children}
     </button>
   );
@@ -2124,18 +2245,7 @@ function Seg({
   children: React.ReactNode;
 }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={disabled}
-      aria-pressed={active}
-      title={title}
-      className={`flex h-full items-center rounded-md px-3 text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
-        active
-          ? "bg-foreground font-semibold text-surface"
-          : "font-medium text-muted hover:text-foreground"
-      }`}
-    >
+    <button type="button" onClick={onClick} disabled={disabled} aria-pressed={active} title={title} className={segmentClass(Boolean(active))}>
       {children}
     </button>
   );
@@ -2157,7 +2267,7 @@ function Facet({
 }) {
   const current = options.find((o) => o.value === value);
   return (
-    <div className="relative inline-flex h-[var(--control-h)] items-center gap-1.5 rounded-lg border border-line-strong bg-surface px-3 text-sm text-foreground transition-colors hover:bg-subtle">
+    <div className={buttonClass({ className: "u-focus relative font-normal" })}>
       {icon ? <span className="pointer-events-none shrink-0 text-faint">{icon}</span> : null}
       <span className="pointer-events-none whitespace-nowrap">{current?.label ?? label}</span>
       <span aria-hidden className="pointer-events-none text-faint">&#9662;</span>
@@ -2292,17 +2402,13 @@ function initialsOf(name: string | null | undefined): string {
   return initials || "?";
 }
 
+/** A professional's initials — the shared circular Avatar. On a pastel card it takes the
+ *  card's own avatar tone; elsewhere the neutral chip (muted = a closed/inactive lane). */
 function Initial({ name, muted, on }: { name: string | null; muted?: boolean; on?: "card" }) {
+  if (on === "card") return <Avatar name={name} size="xs" tone="card" />;
   return (
-    <span
-      aria-hidden
-      className={`flex shrink-0 items-center justify-center rounded-md font-semibold ${
-        on === "card"
-          ? "u-appt-avatar size-[1.125rem] text-[0.5625rem]"
-          : `size-6 text-[0.625rem] text-white ${muted ? "bg-closed-fg" : "bg-service-purple"}`
-      }`}
-    >
-      {initialsOf(name)}
+    <span className={muted ? "opacity-60" : ""}>
+      <Avatar name={name} size="sm" />
     </span>
   );
 }
@@ -2320,6 +2426,7 @@ function WeekBlockCard({
   overlapping,
   selected,
   crowded,
+  previewProps,
   onOpen,
 }: {
   appt: Appt;
@@ -2327,18 +2434,16 @@ function WeekBlockCard({
   tz: string;
   overlapping: boolean;
   selected: boolean;
-  /** The block also carries a "+N citas" chip, so only two lines are left for a card. */
+  /** The block holds a second card or a "+N más" chip, so this card gets ONE line. */
   crowded: boolean;
+  previewProps: Record<string, unknown>;
   onOpen: () => void;
 }) {
   const cancelled = appt.status === "cancelled";
   /**
-   * Only the states that need ACTING ON get a line of their own here. "Completada"
-   * used to be appended to the client line, where it pushed a real name out of a
-   * 150px column and cropped it mid-word ("[DEV] Mía Torres · completa…"). Who the
-   * appointment is with outranks a status the drawer states in full, so the client
-   * name now owns its line and the status takes the third one — or the tooltip, when
-   * a "+N citas" chip has already claimed the space.
+   * Only the states that need ACTING ON get a line of their own here; "Completada" is
+   * in the preview and the detail. The client name owns its line so it is never pushed
+   * out of a narrow column.
    */
   const state = cancelled
     ? "Cancelada"
@@ -2354,21 +2459,26 @@ function WeekBlockCard({
     <button
       type="button"
       onClick={onOpen}
-      title={`${fmtTime(appt.start_at, tz)} – ${fmtTime(appt.service_end_at, tz)} · ${client} · ${appt.service_name} · ${STATUS_LABEL[appt.status] ?? appt.status}`}
+      {...previewProps}
       aria-label={`${fmtTime(appt.start_at, tz)} ${client} — ${appt.service_name} — ${STATUS_LABEL[appt.status] ?? appt.status}${overlapping ? " — solapamiento" : ""}`}
-      className={`u-appt ${toneClass} flex min-h-0 flex-1 flex-col justify-center overflow-hidden px-2 py-1 text-left leading-tight ${
+      className={`u-appt ${toneClass} flex min-h-0 flex-1 flex-col justify-center overflow-hidden px-2 py-0.5 text-left leading-tight transition-shadow hover:shadow-[0_0_0_2px_var(--foreground)] ${
         selected ? "ring-2 ring-service-purple" : ""
       }`}
     >
-      <strong className={`block truncate text-[11.5px] font-semibold ${cancelled ? "line-through" : ""}`}>
-        {appt.service_name}
-      </strong>
-      <span className="u-appt-ink block truncate text-[10.5px]">
-        <span className="u-mono">{fmtTime(appt.start_at, tz)}</span> · {client}
-      </span>
-      {state && !crowded ? (
-        <span className="u-appt-ink block truncate text-[10px] opacity-80">{state}</span>
-      ) : null}
+      {crowded ? (
+        <span className="flex min-w-0 items-center gap-1.5 text-[11px]">
+          <span className="u-appt-ink u-mono shrink-0">{fmtTime(appt.start_at, tz)}</span>
+          <strong className={`min-w-0 truncate font-semibold ${cancelled ? "line-through" : ""}`}>{client}</strong>
+        </span>
+      ) : (
+        <>
+          <strong className={`block truncate text-[11.5px] font-semibold ${cancelled ? "line-through" : ""}`}>{appt.service_name}</strong>
+          <span className="u-appt-ink block truncate text-[10.5px]">
+            <span className="u-mono">{fmtTime(appt.start_at, tz)}</span> · {client}
+          </span>
+          {state ? <span className="u-appt-ink block truncate text-[10px] opacity-80">{state}</span> : null}
+        </>
+      )}
     </button>
   );
 }
@@ -2391,6 +2501,8 @@ function ApptCard({
   lane,
   overlapping,
   selected,
+  flash,
+  previewProps,
   onOpen,
 }: {
   appt: Appt;
@@ -2402,6 +2514,10 @@ function ApptCard({
   lane?: DayLane;
   overlapping: boolean;
   selected: boolean;
+  /** Just "located" from the detail panel — a brief ring so the eye finds it. */
+  flash: boolean;
+  /** Hover / focus preview handlers + the data-appt-id the locate action looks for. */
+  previewProps: Record<string, unknown>;
   onOpen: () => void;
 }) {
   const unconfirmed = appt.status === "scheduled";
@@ -2418,22 +2534,29 @@ function ApptCard({
     (overlapping ? " · traslape" : "") +
     (appt.status === "no_show" ? " · inasistencia" : "") +
     (cancelled ? " · cancelada" : "");
-  /** A SHORT booking has room for two lines, not three. Rather than crop the third
-   *  mid-glyph, it drops the service line and folds the state onto the time — the grid
-   *  already says when it is, and the drawer has the rest. The threshold rose with the
-   *  larger, more legible type (time 10px / name 12px / service 11px): three of those
-   *  lines only fit once the card is ~48px (≈50 min) tall. */
-  const compact = height < 48;
+  /**
+   * The card's height IS its duration (never padded to fit text — that would lie about
+   * when the barber is free), so the CONTENT adapts to the room instead, essential
+   * first:
+   *   tiny  (< 30px, ~15 min)  one line: start · client
+   *   short (< 48px)           time range, then the client
+   *   mid   (< 70px)           + the service
+   *   tall                     + the state line
+   * The hover preview and the detail carry everything a shorter tier leaves out.
+   */
+  const tier = height < 30 ? "tiny" : height < 48 ? "short" : height < 70 ? "mid" : "tall";
+  const client = appt.contact_name ?? "Sin cita";
   return (
     <button
       type="button"
       onClick={onOpen}
+      {...previewProps}
       aria-label={`${fmtTime(appt.start_at, tz)} ${appt.contact_name ?? "Sin cita"} — ${appt.service_name} — ${STATUS_LABEL[appt.status] ?? appt.status}${overlapping ? " — solapamiento" : ""}`}
-      // leading-tight is load-bearing: at the default line-height the three lines
-      // don't fit a short card and the service name gets cropped in half.
-      className={`u-appt ${toneClass} absolute flex flex-col items-stretch justify-start overflow-hidden px-2 text-left leading-tight ${
-        compact ? "py-0.5" : "py-1"
-      } ${selected ? "ring-2 ring-service-purple" : ""}`}
+      // leading-tight is load-bearing: at the default line-height the lines don't fit
+      // a short card and the last one gets cropped in half.
+      className={`u-appt ${toneClass} absolute flex flex-col items-stretch justify-start overflow-hidden px-2 text-left leading-tight transition-shadow hover:shadow-[0_0_0_2px_var(--foreground)] ${
+        tier === "tiny" ? "justify-center py-0" : tier === "short" ? "py-0.5" : "py-1"
+      } ${selected || flash ? "ring-2 ring-service-purple" : ""} ${flash ? "animate-pulse" : ""}`}
       style={{
         top,
         height,
@@ -2443,10 +2566,17 @@ function ApptCard({
         width: `calc(${100 / (lane?.laneCount ?? 1)}% - ${(lane?.laneCount ?? 1) > 1 ? 6 : 8}px)`,
       }}
     >
+      {tier === "tiny" ? (
+        <span className="flex min-w-0 items-center gap-1.5 text-[11px]">
+          <span className="u-appt-ink u-mono shrink-0">{fmtTime(appt.start_at, tz)}</span>
+          <span className={`min-w-0 truncate font-semibold ${cancelled ? "line-through" : ""}`}>{client}</span>
+        </span>
+      ) : (
+        <>
           <span className="flex items-start justify-between gap-1">
             <span className="u-appt-ink u-mono truncate text-[11px]">
               {fmtTime(appt.start_at, tz)} — {fmtTime(appt.service_end_at, tz)}
-              {compact ? state : ""}
+              {tier === "short" ? state : ""}
             </span>
             {unassigned ? (
               // Nobody is on this walk-in: a red "?" disc where the barber would be.
@@ -2460,162 +2590,16 @@ function ApptCard({
               <Initial name={appt.staff_name} on="card" />
             )}
           </span>
-          <span className={`block truncate text-[13px] font-semibold ${cancelled ? "line-through" : ""}`}>
-            {appt.contact_name ?? "Sin cita"}
-          </span>
-          {/* The service owns its line and the STATE owns the next one. Appending the
-              state to the service cropped both at once in a split overlap lane
-              ("[DEV] Cut + beard · com…"); a card this tall has room for the extra
-              line. Only a card too short for three lines still folds the state onto
-              the time, where it is at least complete. */}
-          {compact ? null : (
-            <>
-              <span className="u-appt-ink block truncate text-xs">{appt.service_name}</span>
-              {state ? (
-                <span className="u-appt-ink block truncate text-[10px] opacity-80 first-letter:uppercase">
-                  {state.replace(/^ · /, "")}
-                </span>
-              ) : null}
-            </>
-          )}
+          <span className={`block truncate text-[13px] font-semibold ${cancelled ? "line-through" : ""}`}>{client}</span>
+          {/* The service owns its line and the STATE owns the next one, so neither crops
+              the other in a split overlap lane. */}
+          {tier === "mid" || tier === "tall" ? <span className="u-appt-ink block truncate text-xs">{appt.service_name}</span> : null}
+          {tier === "tall" && state ? (
+            <span className="u-appt-ink block truncate text-[10px] opacity-80 first-letter:uppercase">{state.replace(/^ · /, "")}</span>
+          ) : null}
+        </>
+      )}
     </button>
-  );
-}
-
-/** Appointment detail. Desktop/tablet use the V2 centred record modal; mobile uses the
- * same content as a bottom sheet. Only actions backed by real server mutations render. */
-function ApptDrawer({
-  appt,
-  toneClass,
-  tz,
-  siteName,
-  pending,
-  contactsBase,
-  inboxBase,
-  fromQS,
-  canOperate,
-  onClose,
-  onReschedule,
-  onConfirm,
-  onComplete,
-  onNoShow,
-  onCancel,
-}: {
-  appt: Appt;
-  toneClass: string;
-  tz: string;
-  /** The site whose agenda this appointment was opened from — the record's location. */
-  siteName: string;
-  pending: boolean;
-  contactsBase: string | null;
-  inboxBase: string | null;
-  fromQS: string;
-  canOperate: boolean;
-  onClose: () => void;
-  onReschedule: () => void;
-  onConfirm: () => void;
-  onComplete: () => void;
-  onNoShow: () => void;
-  onCancel: () => void;
-}) {
-  const live = appt.status === "scheduled" || appt.status === "confirmed";
-  const panelRef = useTrappedPanel({ active: true, onClose });
-  const start = new Date(appt.start_at);
-  const dateLabel = new Intl.DateTimeFormat("es-CO", {
-    timeZone: tz,
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  }).format(start).replace(",", "");
-  const initials = initialsOf(appt.contact_name);
-
-  const body = (
-    <>
-      <header className="flex min-h-16 shrink-0 items-center justify-between gap-3 border-b border-line px-5 sm:px-6">
-        <div className="min-w-0">
-          <h2 className="text-base font-semibold text-foreground">Detalle de la cita</h2>
-          <p className="mt-0.5 truncate text-xs text-muted first-letter:uppercase">{dateLabel}</p>
-        </div>
-        <button type="button" onClick={onClose} aria-label="Cerrar detalle" className="inline-flex size-10 items-center justify-center rounded-lg text-xl text-muted hover:bg-subtle hover:text-foreground">
-          ×
-        </button>
-      </header>
-
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5 sm:px-7 sm:py-6">
-        <section className="flex flex-col gap-5 sm:flex-row sm:items-start sm:justify-between">
-          <div className="flex min-w-0 items-center gap-4">
-            <span aria-hidden className={`u-appt-swatch ${toneClass} flex size-14 shrink-0 items-center justify-center rounded-2xl text-sm font-semibold text-foreground sm:size-16`}>
-              {initials}
-            </span>
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="truncate text-xl font-semibold tracking-tight text-foreground sm:text-2xl">{appt.contact_name ?? "Atención sin cita"}</h3>
-                <span className="rounded-full border border-line bg-subtle px-2.5 py-1 text-[0.6875rem] font-medium text-muted">
-                  {STATUS_TITLE[appt.status] ?? appt.status}
-                </span>
-              </div>
-              <p className="mt-1 text-sm text-muted">{appt.service_name} · {appt.staff_name ?? "Sin profesional"}</p>
-            </div>
-          </div>
-          <div className="shrink-0 text-left sm:text-right">
-            <p className="u-mono text-xl font-semibold text-foreground">{fmtTime(appt.start_at, tz)} – {fmtTime(appt.service_end_at, tz)}</p>
-            <p className="mt-1 text-xs text-muted">{appt.duration_min} min</p>
-          </div>
-        </section>
-
-        {live && canOperate ? (
-          <div className="mt-6 flex flex-wrap gap-2 border-y border-line py-4">
-            {appt.status === "scheduled" ? <button type="button" onClick={onConfirm} disabled={pending} className="inline-flex h-[44px] items-center rounded-xl lg:h-[36px] bg-ink px-4 text-sm font-semibold text-ink-fg disabled:opacity-50">Confirmar cita</button> : null}
-            <button type="button" onClick={onComplete} disabled={pending} className="inline-flex h-[44px] items-center rounded-xl lg:h-[36px] border border-line-strong px-4 text-sm font-medium hover:bg-subtle disabled:opacity-50">Completar</button>
-            <button type="button" onClick={onReschedule} disabled={pending} className="inline-flex h-[44px] items-center rounded-xl lg:h-[36px] border border-line-strong px-4 text-sm font-medium hover:bg-subtle disabled:opacity-50">Reprogramar</button>
-            <button type="button" onClick={onNoShow} disabled={pending} className="inline-flex h-[44px] items-center rounded-xl lg:h-[36px] border border-line-strong px-4 text-sm font-medium hover:bg-subtle disabled:opacity-50">Inasistencia</button>
-          </div>
-        ) : null}
-
-        <dl className="mt-6 grid overflow-hidden rounded-2xl border border-line bg-surface text-sm sm:grid-cols-2 lg:grid-cols-4">
-          {/* The record's reading order: WHO and WHAT first, then WHERE, then how to
-              reach them and where the booking came from. Status is not repeated here —
-              the header chip is the one place it is stated. */}
-          {[
-            ["Cliente", appt.contact_name ?? "Atención sin cita"],
-            ["Servicio", appt.service_name],
-            ["Profesional", appt.staff_name ?? "Sin profesional"],
-            ["Sede", siteName],
-            ["Teléfono o correo", appt.primary_identity ?? "—"],
-            ["Origen", ORIGIN_LABEL[appt.origin] ?? (appt.origin || "—")],
-            ["Duración", `${appt.duration_min} min`],
-            ["Precio", priceLabelCOP(appt.price) ?? "Sin precio"],
-          ].map(([label, value], index) => (
-            <div key={label} className={`min-w-0 px-4 py-3.5 ${index >= 2 ? "border-t border-line sm:border-t-0" : ""} ${index >= 4 ? "lg:border-t lg:border-line" : ""} ${index % 2 !== 0 ? "sm:border-l sm:border-line" : ""} ${index % 4 !== 0 ? "lg:border-l lg:border-line" : ""}`}>
-              <dt className="text-xs text-muted">{label}</dt>
-              <dd className={`mt-1 truncate font-semibold text-foreground ${label === "Duración" || label === "Precio" ? "u-mono" : ""}`}>{value}</dd>
-            </div>
-          ))}
-        </dl>
-
-        <div className="mt-5 flex flex-wrap items-center gap-2">
-          {appt.contact_id && contactsBase ? <Link href={`${contactsBase}/${appt.contact_id}${fromQS}`} className="inline-flex h-[44px] items-center rounded-xl lg:h-[36px] border border-line-strong px-4 text-sm font-medium hover:bg-subtle">Abrir contacto ↗</Link> : null}
-          {appt.source_conversation_id && inboxBase ? <Link href={`${inboxBase}?c=${encodeURIComponent(appt.source_conversation_id)}`} className="inline-flex h-[44px] items-center rounded-xl lg:h-[36px] border border-line-strong px-4 text-sm font-medium hover:bg-subtle">Ver conversación ↗</Link> : null}
-          {live && canOperate ? <button type="button" onClick={onCancel} disabled={pending} className="ml-auto inline-flex h-[44px] items-center rounded-xl lg:h-[36px] px-4 text-sm font-medium text-danger hover:bg-danger/10 disabled:opacity-50">Cancelar cita…</button> : null}
-        </div>
-      </div>
-    </>
-  );
-
-  return (
-    <>
-      <button type="button" aria-label="Cerrar detalle" className={OVERLAY_SCRIM} onClick={onClose} />
-      <div className="pointer-events-none fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-4">
-        <aside
-          ref={panelRef as RefObject<HTMLElement>}
-          aria-label="Detalle de la cita"
-          className="pointer-events-auto flex max-h-[92dvh] w-full flex-col overflow-hidden rounded-t-3xl border border-line bg-surface shadow-2xl sm:w-[min(58rem,calc(100vw-2rem))] sm:rounded-2xl"
-        >
-          {body}
-        </aside>
-      </div>
-    </>
   );
 }
 
@@ -2636,7 +2620,12 @@ function AppointmentModal(props: {
   lockStaffId: string | null;
   onClose: () => void;
   onError: (e: string | null) => void;
-  onDone: () => void;
+  /** `dayKey` = the site day the appointment landed on (phone returns to it). */
+  onDone: (dayKey?: string) => void;
+  /** The current error (the phone flow shows it in its own footer). */
+  error?: string | null;
+  /** A short confirmation for the phone's toast ("Cita creada"). */
+  onNotice?: (message: string) => void;
 }) {
   const isReschedule = props.modal.mode === "reschedule";
   // Booking for an existing contact (deep-link): lock identity, submit its id.
@@ -2680,7 +2669,54 @@ function AppointmentModal(props: {
   // A modal COVERS the calendar, so it owes the reader the overlay contract: focus in
   // on open, Escape to close, focus back on close (Overlay.tsx). The backdrop click is
   // wired separately below.
-  const dialogRef = useTrappedPanel({ active: true, onClose: props.onClose });
+  // Below md the booking is the phone's full-screen flow (its own layer), same state.
+  const isPhone = useIsOverlayWidth(767.98);
+  const dialogRef = useTrappedPanel({ active: !isPhone, onClose: props.onClose });
+  const [phoneSheet, setPhoneSheet] = useState<"month" | "contact" | "discard" | null>(null);
+  /** "Estado inicial" (phone step 3): confirmed = create, then the real confirm. */
+  const [initialStatus, setInitialStatus] = useState<"scheduled" | "confirmed">("scheduled");
+  /** One key per open form: a retried submit replays instead of booking twice. */
+  const [idemKey] = useState(() => crypto.randomUUID());
+  /**
+   * The browser's / system's BACK inside the phone flow (Android back, iOS swipe) must
+   * not throw the booking away. Opening the flow adds one same-URL history entry (the
+   * native History API, which Next's router integrates); Back then acts on the FLOW —
+   * closes an open sheet, else goes back a step, else asks before discarding choices,
+   * else closes — and re-arms the entry. Closing from the UI removes it, so the next
+   * Back is a normal one.
+   */
+  const backGuard = useRef<{ onBack: () => boolean }>({ onBack: () => false });
+  const leavingHistory = useRef(false);
+  useEffect(() => {
+    if (!isPhone) return;
+    const mark = () => window.history.pushState({ ...window.history.state, mBooking: true }, "");
+    mark();
+    const onPop = () => {
+      if (leavingHistory.current) return;
+      if (backGuard.current.onBack()) mark();
+      else leavingHistory.current = true;
+    };
+    window.addEventListener("popstate", onPop);
+    return () => {
+      window.removeEventListener("popstate", onPop);
+      if (!leavingHistory.current && window.history.state?.mBooking) {
+        leavingHistory.current = true;
+        window.history.back();
+      }
+    };
+  }, [isPhone]);
+  /** Drop the guard entry BEFORE navigating elsewhere (after a successful create). */
+  const dropBackGuard = () =>
+    new Promise<void>((done) => {
+      if (!isPhone || !window.history.state?.mBooking) return done();
+      leavingHistory.current = true;
+      const settle = () => {
+        window.removeEventListener("popstate", settle);
+        done();
+      };
+      window.addEventListener("popstate", settle);
+      window.history.back();
+    });
 
   /**
    * Customer lookup, debounced. The action is client-scoped server-side; this only
@@ -2762,6 +2798,10 @@ function AppointmentModal(props: {
     }
     props.onError(null);
     startTransition(async () => {
+      // A thrown action (offline, server unreachable) must not escape the transition:
+      // that unmounts the form and loses every choice. Say so and keep the form as is —
+      // the idempotency key makes the retry safe even if the first request did land.
+      try {
       if (isReschedule) {
         const r = await rescheduleAppointmentAction(
           props.clientId,
@@ -2770,6 +2810,7 @@ function AppointmentModal(props: {
           staffId || null,
         );
         if (!r.ok) return props.onError(r.error);
+        props.onNotice?.("Cita reprogramada");
       } else {
         const r = await createManualAppointmentAction(props.clientId, {
           siteId: props.currentSiteId,
@@ -2791,10 +2832,17 @@ function AppointmentModal(props: {
                   customerEmail: email || undefined,
                 }),
           walkIn: props.modal.mode === "walkin",
+          idempotencyKey: idemKey,
+          initialStatus: isPhone ? initialStatus : undefined,
         });
         if (!r.ok) return props.onError(r.error);
+        props.onNotice?.(r.warning ?? "Cita creada");
       }
-      props.onDone();
+      await dropBackGuard();
+      props.onDone(isPhone ? siteDayKey(slotStart, props.timezone) : undefined);
+      } catch {
+        props.onError("No se pudo guardar: revisa la conexión e inténtalo de nuevo. Tus datos se conservan.");
+      }
     });
   };
 
@@ -2809,7 +2857,7 @@ function AppointmentModal(props: {
           : "Nueva cita";
 
   const rescheduleAppt = props.modal.mode === "reschedule" ? props.modal.appt : null;
-  const inputCls = "u-focus h-[44px] rounded-xl border border-line-strong bg-surface px-3 text-sm outline-none placeholder:text-faint lg:h-[36px]";
+  const inputCls = INPUT;
   const selectedService = props.services.find((service) => service.id === (rescheduleAppt?.service_id ?? serviceId));
   const selectedSlot = slots.find((slot) => slot.start_at === slotStart);
   const effectiveStaffId = staffId || selectedSlot?.staff_id || rescheduleAppt?.staff_id || "";
@@ -3022,6 +3070,600 @@ function AppointmentModal(props: {
     });
   };
 
+  const phoneHasChoices = Boolean(customer.label || serviceId || slotStart) && !isReschedule;
+  useEffect(() => {
+    backGuard.current.onBack = () => {
+      // An open sheet (month, new contact, or the discard question itself — where Back
+      // means "Seguir editando") is the top layer: Back closes only it.
+      if (phoneSheet) {
+        setPhoneSheet(null);
+        return true;
+      }
+      if (step === 3 || (step === 2 && !isReschedule)) {
+        goBack();
+        return true;
+      }
+      if (phoneHasChoices) {
+        setPhoneSheet("discard");
+        return true;
+      }
+      props.onClose();
+      return false;
+    };
+  });
+
+  // ── PHONE (< md) — the reference's 3-step flow (§03) on the SAME state and actions ──
+  if (isPhone) {
+    const stepName = step === 1 ? "Cliente y servicio" : step === 2 ? "Profesional, fecha y hora" : "Confirmar";
+    const dayState = (dayKey: string): "ok" | "full" | "closed" | "past" | "unknown" => {
+      if (dayKey < todayKey) return "past";
+      if (hasAnyHours(props.openingHours) && !opensOn(props.openingHours, weekdayKeyOf(dayKey))) return "closed";
+      if (loadingSlots || dayKey.slice(0, 7) !== calendarMonth) return "unknown";
+      return availabilityCount(dayKey) > 0 ? "ok" : "full";
+    };
+    const stripStart = selectedDate < todayKey ? selectedDate : addDays(selectedDate, -3) < todayKey ? todayKey : addDays(selectedDate, -3);
+    const strip = Array.from({ length: 7 }, (_, i) => addDays(stripStart, i));
+    const wdShort = (dayKey: string) => ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"][new Date(`${dayKey}T00:00:00Z`).getUTCDay()];
+    const nextWith = (from: string, ok: (d: string) => boolean) => {
+      for (let i = 1; i <= 31; i++) {
+        const d = addDays(from, i);
+        if (d.slice(0, 7) !== calendarMonth) break;
+        if (ok(d)) return d;
+      }
+      return null;
+    };
+    const selState = dayState(selectedDate);
+    const nextOk = nextWith(selectedDate, (d) => dayState(d) === "ok");
+    const hasChoices = Boolean(customer.label || serviceId || slotStart) && !isReschedule;
+    const requestClose = () => (hasChoices ? setPhoneSheet("discard") : props.onClose());
+    const staffChoices = props.lockStaffId ? activeStaff.filter((s) => s.id === props.lockStaffId) : activeStaff;
+    const teamColors = staffColors(props.staff.map((s) => s.id));
+    const ready = step === 1 ? step1Ready : step === 2 ? Boolean(slotStart) : Boolean(slotStart);
+    const summary =
+      step === 1
+        ? step1Ready
+          ? summaryParts([selectedService ? `${selectedService.duration_min} min` : null])
+          : customer.label
+            ? "Falta el servicio"
+            : serviceId
+              ? "Falta el cliente"
+              : "Elige un cliente y un servicio"
+        : step === 2
+          ? slotStart
+            ? [shortDateLabel, timeRangeLabel, selectedStaff?.name?.split(" ").filter((w) => !/^\[/.test(w))[0]].filter(Boolean).join(" · ")
+            : "Elige un horario"
+          : "Nada se guarda hasta que confirmes";
+    const pickFamily = (f: "all" | ApptCategory) => setServiceFamily(f);
+    const fam = (f: ApptCategory) => ({ cut: "u-m-cut", grooming: "u-m-grooming", color: "u-m-color", feature: "u-m-feature" } as Partial<Record<ApptCategory, string>>)[f] ?? "u-m-neutral";
+    const heroFamily = bookingFamily ? fam(bookingFamily) : "u-m-neutral";
+    const confirmRows: [string, string][] = [
+      ["Cliente", customer.label ?? "—"],
+      ["Contacto", customer.identity ?? "—"],
+      ["Servicio", selectedService?.name ?? "—"],
+      ["Precio", priceLabelCOP(selectedService?.price ?? null) ?? "A consultar"],
+      ["Duración", selectedService ? `${selectedService.duration_min} min` : "—"],
+      ["Profesional", selectedStaff?.name ?? "Cualquiera"],
+      ["Sede", selectedSite?.name ?? "—"],
+    ];
+    const tzLabel = (() => {
+      const name = new Intl.DateTimeFormat("es", { timeZone: props.timezone, timeZoneName: "shortOffset" }).formatToParts(new Date()).find((p) => p.type === "timeZoneName")?.value;
+      const raw = props.timezone.split("/").pop() ?? "";
+      const CITY: Record<string, string> = { Bogota: "Bogotá", Mexico_City: "Ciudad de México", Panama: "Panamá", Asuncion: "Asunción", Sao_Paulo: "São Paulo" };
+      const city = CITY[raw] ?? raw.replace(/_/g, " ");
+      return `Hora de ${city}${name ? ` (${name})` : ""}`;
+    })();
+    const resultsLabel =
+      contactQuery.trim().length < 2 ? "Escribe al menos dos letras para buscar" : contactSearching ? "Buscando…" : `${contactHits.length} resultado${contactHits.length === 1 ? "" : "s"}`;
+    const hitHint = (hit: ContactSearchHit) =>
+      hit.nextAppointmentAt
+        ? `Ya tiene cita el ${contactDateLabel(hit.nextAppointmentAt, true)}`
+        : hit.lastVisitAt
+          ? `Última visita: ${contactDateLabel(hit.lastVisitAt, false)}`
+          : "Sin citas próximas";
+    const newPhoneDigits = phone.replace(/\D/g, "").length;
+    const newContactValid = name.trim().length > 0 && (phone.trim() === "" || newPhoneDigits >= 7);
+
+    return (
+      <MScreen
+        label={title}
+        onEscape={() => (phoneSheet ? setPhoneSheet(null) : requestClose())}
+        header={
+          <div className="flex flex-col gap-[10px]">
+            <div className="flex min-h-[44px] items-center gap-1.5">
+              <MIconButton label="Cerrar" onClick={requestClose}>
+                <Icon d={ICON.close} size={18} width={1.6} />
+              </MIconButton>
+              <div className="-ml-1 flex min-w-0 flex-1 flex-col">
+                <h2 className="m-0 truncate text-[17px] font-semibold leading-[1.25]">{isReschedule ? "Reprogramar cita" : props.modal.mode === "walkin" ? "Atención sin cita" : "Nueva cita"}</h2>
+                <span className="text-[13px] text-m-tx3">
+                  Paso {step} de 3 · {stepName}
+                </span>
+              </div>
+            </div>
+            <div aria-hidden className="grid grid-cols-3 gap-1.5">
+              {[1, 2, 3].map((i) => (
+                <span key={i} className={`block h-1 rounded-[2px] ${i <= step ? "bg-m-tx" : "bg-m-bd"}`} />
+              ))}
+            </div>
+          </div>
+        }
+        footer={
+          <div className="flex flex-col gap-[10px]">
+            {props.error ? (
+              <p role="alert" className="rounded-[12px] bg-m-dnbg px-3 py-2 text-[14px] text-m-dn">
+                {props.error}
+              </p>
+            ) : null}
+            <div aria-live="polite" className="flex min-h-5 items-center gap-2">
+              <span aria-hidden className={`size-2 flex-none rounded-full ${ready && step < 3 ? "bg-m-ok" : "bg-m-tx3"}`} />
+              <span className={`min-w-0 truncate text-[14px] ${step === 2 && slotStart ? "font-semibold" : ""} ${ready || step === 3 ? "text-m-tx" : "text-m-tx3"}`}>{summary}</span>
+            </div>
+            <div className="flex gap-2">
+              {step > 1 && !(isReschedule && step === 2) ? <MButton onClick={goBack}>Volver</MButton> : null}
+              {step === 3 ? (
+                <MButton kind="primary" grow disabled={!slotStart} loading={pending} loadingLabel={isReschedule ? "Guardando…" : "Creando…"} onClick={submit}>
+                  {isReschedule ? "Confirmar cambio" : "Crear cita"}
+                </MButton>
+              ) : (
+                <MButton kind="primary" grow disabled={(step === 1 && !step1Ready) || (step === 2 && !slotStart)} onClick={advance}>
+                  Continuar
+                </MButton>
+              )}
+            </div>
+          </div>
+        }
+      >
+        <div className="flex flex-col gap-[22px]">
+          {step === 1 ? (
+            <>
+              <section className="flex flex-col gap-[10px]">
+                <h2 className="m-0 text-[15px] font-semibold">Cliente</h2>
+                {customer.label ? (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-3 rounded-[16px] border-[1.5px] border-m-tx bg-m-sf py-[10px] pl-[14px] pr-[10px]">
+                      <MClientAvatar name={customerMode === "anonymous" ? null : customer.label} />
+                      <div className="flex min-w-0 flex-1 flex-col">
+                        <span className="break-words text-[16px] font-semibold leading-[1.3]">{customer.label}</span>
+                        {customerMode === "anonymous" && !bookingContact ? (
+                          <span className="text-[14px] text-m-tx3">Cliente presente, sin datos de contacto</span>
+                        ) : customer.identity ? (
+                          <span className="u-tnum text-[14px] text-m-tx3">{customer.identity}</span>
+                        ) : customerMode === "new" && !pickedContact ? (
+                          <span className="text-[14px] text-m-tx3">Contacto nuevo · se crea al confirmar la cita</span>
+                        ) : null}
+                      </div>
+                      {!bookingContact ? (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setPickedContact(null);
+                            setCustomerMode("search");
+                            setName("");
+                            setPhone("");
+                            setEmail("");
+                          }}
+                          className={M_SMALL}
+                        >
+                          Cambiar
+                        </button>
+                      ) : null}
+                    </div>
+                    {pickedContact?.nextAppointmentAt ? (
+                      <div role="status" className="flex gap-2 rounded-[12px] bg-m-warnbg px-3 py-[10px] text-[14px] leading-[1.4] text-m-warn">
+                        <span aria-hidden>!</span>
+                        <span>Ya tiene cita el {contactDateLabel(pickedContact.nextAppointmentAt, true)}. Revisa que no sea un duplicado.</span>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-[10px]">
+                    <label className="u-focus flex h-[48px] items-center gap-2 rounded-[12px] border border-m-bd bg-m-sf px-3 text-m-tx3">
+                      <Icon d={ICON.search} size={18} />
+                      <input
+                        type="search"
+                        value={contactQuery}
+                        onChange={(e) => setContactQuery(e.target.value)}
+                        placeholder="Nombre o teléfono"
+                        aria-label="Buscar cliente"
+                        className="h-[44px] min-w-0 flex-1 border-0 bg-transparent text-[16px] text-m-tx outline-none placeholder:text-m-tx3"
+                      />
+                    </label>
+                    <span className="text-[13px] text-m-tx3">{resultsLabel}</span>
+                    <div className={M_CARD}>
+                      {contactHits.map((hit) => (
+                        <button
+                          key={hit.id}
+                          type="button"
+                          onClick={() => {
+                            setPickedContact(hit);
+                            setContactQuery("");
+                          }}
+                          className="flex min-h-[64px] w-full items-center gap-3 border-0 border-t border-m-dv bg-transparent py-[10px] pl-[14px] pr-3 text-left text-m-tx first:border-t-0"
+                        >
+                          <MClientAvatar name={hit.name} size={40} />
+                          <span className="flex min-w-0 flex-1 flex-col">
+                            <span className="break-words text-[16px] leading-[1.3]">{hit.name ?? "Contacto sin nombre"}</span>
+                            <span className="u-tnum text-[13px] text-m-tx3">{[hit.identity, hitHint(hit)].filter(Boolean).join(" · ")}</span>
+                          </span>
+                        </button>
+                      ))}
+                      {contactSearched && contactHits.length === 0 ? (
+                        <div className="flex flex-col gap-1 px-[14px] py-4">
+                          <span className="text-[15px] font-semibold">Sin resultados para «{contactQuery.trim()}»</span>
+                          <span className="text-[14px] text-m-tx3">Revisa el nombre o el número, o crea el contacto.</span>
+                        </div>
+                      ) : null}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (/^[+\d\s()-]{7,}$/.test(contactQuery.trim())) setPhone(contactQuery.trim());
+                          else if (contactQuery.trim()) setName(contactQuery.trim());
+                          setPhoneSheet("contact");
+                        }}
+                        className="flex min-h-[56px] w-full items-center gap-3 border-0 border-t border-m-dv bg-transparent px-[14px] text-left text-[15px] text-m-tx first:border-t-0"
+                      >
+                        <span aria-hidden className="flex size-10 flex-none items-center justify-center rounded-full border-[1.5px] border-dashed border-m-tx3 text-[18px]">
+                          +
+                        </span>
+                        {contactQuery.trim().length >= 2 ? `Crear contacto «${contactQuery.trim()}»` : "Crear contacto"}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setCustomerMode("anonymous")}
+                        className="flex min-h-[56px] w-full items-center gap-3 border-0 border-t border-m-dv bg-transparent px-[14px] text-left text-[15px] text-m-tx"
+                      >
+                        <span aria-hidden className="flex size-10 flex-none items-center justify-center rounded-full bg-m-sf2 text-[15px]">
+                          →
+                        </span>
+                        <span className="flex flex-col">
+                          <span>Atención sin cita</span>
+                          <span className="text-[13px] text-m-tx3">Cliente presente, sin registrar datos</span>
+                        </span>
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </section>
+              <section className="flex flex-col gap-[10px]">
+                <h2 className="m-0 text-[15px] font-semibold">Servicio</h2>
+                {serviceFamilies.length > 1 ? (
+                  <div role="group" aria-label="Categorías" className="flex flex-wrap gap-2">
+                    <MPill selected={serviceFamily === "all"} onClick={() => pickFamily("all")}>
+                      Todos
+                    </MPill>
+                    {serviceFamilies.map((f) => (
+                      <MPill key={f} selected={serviceFamily === f} onClick={() => pickFamily(f)} dot={fam(f)}>
+                        {SERVICE_FAMILY_LABEL[f] ?? f}
+                      </MPill>
+                    ))}
+                  </div>
+                ) : null}
+                <div role="radiogroup" aria-label="Servicio" className={M_CARD}>
+                  {filteredServices.map((service) => {
+                    const sel = service.id === serviceId;
+                    const f = fam(serviceCategory(service.name, service.category));
+                    return (
+                      <button
+                        key={service.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={sel}
+                        onClick={() => {
+                          setServiceId(service.id);
+                          resetSlots();
+                        }}
+                        className="flex min-h-[64px] w-full items-center gap-3 border-0 border-t border-m-dv bg-transparent py-[10px] pl-[14px] pr-3 text-left text-m-tx first:border-t-0"
+                      >
+                        <MRadio on={sel} />
+                        <span className="flex min-w-0 flex-1 flex-col">
+                          <span className="flex items-center gap-2 text-[16px] leading-[1.3]">
+                            <span aria-hidden className={`${f} size-[10px] flex-none rounded-full bg-[var(--m-dot)]`} />
+                            <span className="break-words">{service.name}</span>
+                          </span>
+                          <span className="pl-[18px] text-[13px] text-m-tx3">{service.duration_min} min</span>
+                        </span>
+                        <span className="u-tnum whitespace-nowrap text-[15px]">{priceLabelCOP(service.price) ?? "A consultar"}</span>
+                      </button>
+                    );
+                  })}
+                  {filteredServices.length === 0 ? <p className="px-[14px] py-4 text-[14px] text-m-tx3">No hay servicios en esta categoría.</p> : null}
+                </div>
+              </section>
+            </>
+          ) : null}
+
+          {step === 2 ? (
+            <>
+              <section className="flex flex-col gap-[10px]">
+                <h2 className="m-0 text-[15px] font-semibold">Profesional</h2>
+                <div role="radiogroup" aria-label="Profesional" className="grid grid-cols-4 gap-2">
+                  {[...(props.lockStaffId ? [] : [{ id: "", name: "Cualquiera" }]), ...staffChoices].map((s) => {
+                    const sel = staffId === s.id;
+                    return (
+                      <button
+                        key={s.id || "any"}
+                        type="button"
+                        role="radio"
+                        aria-checked={sel}
+                        onClick={() => changeStaff(s.id)}
+                        className={`flex min-h-[84px] min-w-0 flex-col items-center justify-center gap-1.5 rounded-[12px] bg-m-sf px-0.5 py-2 text-m-tx ${sel ? "border border-m-tx shadow-[inset_0_0_0_1px_var(--m-tx)]" : "border border-m-bd"}`}
+                      >
+                        <MStaffAvatar id={s.id || null} name={s.name} size={44} color={s.id ? teamColors.get(s.id) : undefined} />
+                        <span className={`max-w-full truncate text-[13px] ${sel ? "font-semibold" : ""}`}>{s.id ? s.name.replace(/^\s*[[(][^\])]*[\])]\s*/, "").split(/\s+/)[0] : "Cualquiera"}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </section>
+              <section className="flex flex-col gap-[10px]">
+                <div className="flex items-center gap-2">
+                  <h2 className="m-0 text-[15px] font-semibold">Fecha</h2>
+                  <span className="whitespace-nowrap text-[14px] capitalize text-m-tx3">{monthTitle(calendarMonth)}</span>
+                  <button type="button" onClick={() => setPhoneSheet("month")} className="ml-auto flex h-[44px] flex-none items-center gap-1.5 whitespace-nowrap rounded-[12px] border border-m-bd bg-m-sf px-3 text-[14px] text-m-tx">
+                    <Icon d={ICON.calendar} size={16} width={1.4} />
+                    Ver mes
+                  </button>
+                </div>
+                <div className="flex gap-[2px]">
+                  {strip.map((d) => {
+                    const sel = d === selectedDate;
+                    const av = dayState(d);
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        aria-label={`${wdShort(d)} ${Number(d.slice(8))} · ${({ ok: "con cupos", full: "sin cupos", closed: "cerrado", past: "pasado", unknown: "sin datos" } as const)[av]}`}
+                        aria-pressed={sel}
+                        disabled={av === "past"}
+                        onClick={() => changeDate(d)}
+                        className={`flex min-h-[68px] min-w-0 flex-1 flex-col items-center justify-center gap-[3px] rounded-[12px] border p-0 disabled:opacity-50 ${
+                          sel ? "border-m-pri bg-m-pri" : av === "closed" ? "border-m-bd bg-m-sf2" : "border-m-bd bg-m-sf"
+                        }`}
+                      >
+                        <span className={`text-[12px] ${sel ? "text-m-onpri" : "text-m-tx3"}`}>{wdShort(d)}</span>
+                        <span className={`text-[17px] font-semibold ${sel ? "text-m-onpri" : av === "ok" || av === "unknown" ? "text-m-tx" : "text-m-tx3"} ${av === "closed" ? "line-through" : ""}`}>{Number(d.slice(8))}</span>
+                        <span
+                          aria-hidden
+                          className={`size-1.5 rounded-full ${av === "ok" ? (sel ? "bg-m-onpri" : "bg-m-ok") : "bg-transparent"} ${av === "full" ? (sel ? "shadow-[inset_0_0_0_1.5px_var(--m-onpri)]" : "shadow-[inset_0_0_0_1.5px_var(--m-tx3)]") : ""}`}
+                        />
+                      </button>
+                    );
+                  })}
+                </div>
+                <Legend />
+              </section>
+              <section className="flex flex-col gap-[10px]">
+                <div className="flex flex-wrap items-baseline gap-2">
+                  <h2 className="m-0 text-[15px] font-semibold">{dayHeadline(selectedDate)}</h2>
+                  <span className="text-[13px] text-m-tx3">{tzLabel}</span>
+                </div>
+                {loadingSlots ? (
+                  <div role="status" aria-label="Cargando disponibilidad" className="flex flex-col gap-2">
+                    <span className="text-[13px] text-m-tx3">Buscando horarios disponibles…</span>
+                    <div className="grid grid-cols-[repeat(auto-fill,minmax(76px,1fr))] gap-2">
+                      {Array.from({ length: 8 }, (_, i) => (
+                        <span key={i} className="h-[48px] animate-pulse rounded-[12px] bg-m-sk" />
+                      ))}
+                    </div>
+                  </div>
+                ) : slotGroups.length === 0 ? (
+                  <div className="flex flex-col gap-1.5 rounded-[16px] border border-m-bd bg-m-sf px-4 py-[18px]">
+                    <span className="text-[16px] font-semibold">
+                      {selState === "closed" ? "Cerrado" : selState === "past" ? "Fecha pasada" : staffId && selectedStaff ? `Sin cupos con ${selectedStaff.name.replace(/^\s*[[(][^\])]*[\])]\s*/, "").split(/\s+/)[0]}` : "Sin cupos este día"}
+                    </span>
+                    <span className="text-[14px] leading-[1.45] text-m-tx3">
+                      {selState === "closed"
+                        ? `${selectedSite?.name ?? "La sede"} no abre este día.`
+                        : selState === "past"
+                          ? "Elige hoy o un día posterior."
+                          : staffId
+                            ? "Prueba con otro profesional o elige otro día."
+                            : "Elige otro día."}
+                    </span>
+                    {selState === "past" ? (
+                      <button type="button" onClick={() => changeDate(todayKey)} className={`${M_SMALL} mt-1.5 self-start`}>
+                        Ir a hoy
+                      </button>
+                    ) : nextOk ? (
+                      <button type="button" onClick={() => changeDate(nextOk)} className={`${M_SMALL} mt-1.5 self-start`}>
+                        {selState === "closed" ? `Ir al ${wdShort(nextOk).toLowerCase()} ${Number(nextOk.slice(8))}` : `Próximo con cupos: ${wdShort(nextOk).toLowerCase()} ${Number(nextOk.slice(8))}`}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : (
+                  slotGroups.map((group) => (
+                    <div key={group.key} className="flex flex-col gap-2 pb-1.5">
+                      <div className="flex items-baseline gap-2">
+                        <span className="text-[14px] font-semibold text-m-tx2">{group.label}</span>
+                        <span className="text-[13px] text-m-tx3">
+                          {group.slots.length} horario{group.slots.length === 1 ? "" : "s"}
+                        </span>
+                      </div>
+                      <div role="radiogroup" aria-label={group.label} className="grid grid-cols-[repeat(auto-fill,minmax(76px,1fr))] gap-2">
+                        {group.slots.map((slot) => {
+                          const sel = slot.start_at === slotStart;
+                          return (
+                            <button
+                              key={slot.start_at}
+                              type="button"
+                              role="radio"
+                              aria-checked={sel}
+                              onClick={() => {
+                                setSlotStart(slot.start_at);
+                                if (!staffId) setStaffId(slot.staff_id);
+                              }}
+                              className={`u-tnum flex min-h-[48px] items-center justify-center rounded-[12px] border p-0 text-[15px] ${sel ? "border-m-pri bg-m-pri font-semibold text-m-onpri" : "border-m-bd bg-m-sf text-m-tx"}`}
+                            >
+                              {fmtTime(slot.start_at, props.timezone)}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))
+                )}
+              </section>
+            </>
+          ) : null}
+
+          {step === 3 ? (
+            <>
+              <div className={`${heroFamily} flex flex-col gap-0.5 rounded-[16px] bg-[var(--m-fill)] px-4 py-[14px]`}>
+                <span className="text-[15px] text-m-tx2">{dayHeadline(selectedDate)}</span>
+                <span className="u-tnum text-[30px] font-semibold leading-[1.15] tracking-[-0.02em]">{timeRangeLabel ?? "—"}</span>
+                <div className="mt-1 flex flex-wrap items-center gap-2">
+                  <span className="text-[14px] text-m-tx2">{[selectedService ? `${selectedService.duration_min} min` : null, selectedService?.name].filter(Boolean).join(" · ")}</span>
+                  {!isReschedule ? <MStateChip status={initialStatus} /> : null}
+                </div>
+              </div>
+              <div className={M_CARD}>
+                {confirmRows.map(([k, v]) => (
+                  <div key={k} className="flex min-h-[48px] items-start gap-3 border-t border-m-dv px-[14px] py-3 first:border-t-0">
+                    <span className="w-24 flex-none text-[14px] text-m-tx3">{k}</span>
+                    <span className="u-tnum min-w-0 flex-1 break-words text-right text-[15px] leading-[1.35]">{v}</span>
+                  </div>
+                ))}
+              </div>
+              {!isReschedule ? (
+                <section className="flex flex-col gap-[10px]">
+                  <h2 className="m-0 text-[15px] font-semibold">Estado inicial</h2>
+                  <MSegmented
+                    label="Estado inicial"
+                    stretch
+                    value={initialStatus}
+                    options={[
+                      { value: "scheduled", label: "○ Sin confirmar" },
+                      { value: "confirmed", label: "✓ Confirmada" },
+                    ]}
+                    onChange={setInitialStatus}
+                  />
+                </section>
+              ) : null}
+              <section className="flex flex-col gap-[10px]">
+                <h2 className="m-0 text-[15px] font-semibold">Color en la agenda</h2>
+                <div className="flex min-h-[64px] items-center gap-3 rounded-[16px] border border-m-bd bg-m-sf py-[10px] pl-[14px] pr-3">
+                  <span aria-hidden className={`${heroFamily} flex size-10 flex-none items-center justify-center rounded-full bg-[var(--m-fill)] shadow-[inset_0_0_0_1px_var(--m-bd)]`}>
+                    <span className="size-3.5 rounded-full bg-[var(--m-dot)]" />
+                  </span>
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="text-[15px]">Automático · {bookingFamily ? SERVICE_FAMILY_LABEL[bookingFamily] ?? "Sin categoría" : "Sin categoría"}</span>
+                    <span className="text-[13px] text-m-tx3">Según la categoría del servicio</span>
+                  </span>
+                </div>
+              </section>
+            </>
+          ) : null}
+        </div>
+
+        <Sheet open={phoneSheet === "month"} onClose={() => setPhoneSheet(null)} label="Elegir fecha" bodyClassName="flex flex-col gap-3 px-4 pb-[max(20px,env(safe-area-inset-bottom))]">
+          <div className="flex items-center gap-1">
+            <span className="flex-1 text-[18px] font-semibold capitalize">{monthTitle(calendarMonth)}</span>
+            <button type="button" aria-label="Mes anterior" disabled={calendarMonth <= todayKey.slice(0, 7)} onClick={() => changeMonth(-1)} className="flex size-[44px] items-center justify-center rounded-[12px] border border-m-bd bg-m-sf text-m-tx disabled:text-m-tx3">
+              <Icon d={ICON.back} size={18} width={1.6} />
+            </button>
+            <button type="button" aria-label="Mes siguiente" onClick={() => changeMonth(1)} className="flex size-[44px] items-center justify-center rounded-[12px] border border-m-bd bg-m-sf text-m-tx">
+              <Icon d={ICON.next} size={18} width={1.6} />
+            </button>
+          </div>
+          <div aria-hidden className="grid grid-cols-7 text-center text-[12px] text-m-tx3">
+            {["L", "M", "X", "J", "V", "S", "D"].map((l, i) => (
+              <span key={`${l}${i}`}>{l}</span>
+            ))}
+          </div>
+          <div className="grid grid-cols-7 gap-[2px]">
+            {monthDays.map((day) => {
+              if (!day.inMonth) return <span key={day.key} />;
+              const av = dayState(day.key);
+              const sel = day.key === selectedDate;
+              return (
+                <button
+                  key={day.key}
+                  type="button"
+                  aria-label={`${day.day} · ${({ ok: "con cupos", full: "sin cupos", closed: "cerrado", past: "pasado", unknown: "sin datos" } as const)[av]}`}
+                  aria-pressed={sel}
+                  disabled={av === "past" || av === "closed"}
+                  onClick={() => {
+                    changeDate(day.key);
+                    setPhoneSheet(null);
+                  }}
+                  className={`flex min-h-[48px] flex-col items-center justify-center gap-[3px] rounded-[12px] border-0 p-0 text-[16px] ${av === "past" ? "opacity-50" : ""} ${
+                    sel ? "bg-m-pri font-semibold text-m-onpri" : `bg-transparent ${av === "closed" ? "text-m-tx3 line-through" : av === "full" ? "text-m-tx3" : "text-m-tx"}`
+                  }`}
+                >
+                  <span>{day.day}</span>
+                  <span
+                    aria-hidden
+                    className={`size-[5px] rounded-full ${av === "ok" ? (sel ? "bg-m-onpri" : "bg-m-ok") : "bg-transparent"} ${av === "full" ? "shadow-[inset_0_0_0_1.2px_var(--m-tx3)]" : ""}`}
+                  />
+                </button>
+              );
+            })}
+          </div>
+          <Legend />
+          <MButton className="w-full" onClick={() => setPhoneSheet(null)}>
+            Cerrar
+          </MButton>
+        </Sheet>
+
+        <Sheet open={phoneSheet === "contact"} onClose={() => setPhoneSheet(null)} label="Crear contacto" bodyClassName="flex flex-col gap-[14px] px-4 pb-[max(20px,env(safe-area-inset-bottom))]">
+          <span className="text-[18px] font-semibold">Crear contacto</span>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="nc-name" className="text-[14px] font-semibold">
+              Nombre
+            </label>
+            <input id="nc-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" className="h-[48px] rounded-[12px] border border-m-bd bg-m-sf px-[14px] text-[16px] text-m-tx" />
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="nc-phone" className="text-[14px] font-semibold">
+              Teléfono <span className="font-normal text-m-tx3">(opcional)</span>
+            </label>
+            <input id="nc-phone" type="tel" inputMode="tel" autoComplete="tel" value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+57 300 000 0000" className="u-tnum h-[48px] rounded-[12px] border border-m-bd bg-m-sf px-[14px] text-[16px] text-m-tx" />
+            {phone.trim() && newPhoneDigits < 7 ? (
+              <span role="alert" className="text-[13px] text-m-dn">
+                Escribe al menos 7 dígitos.
+              </span>
+            ) : null}
+          </div>
+          <div className="flex flex-col gap-1.5">
+            <label htmlFor="nc-email" className="text-[14px] font-semibold">
+              Correo <span className="font-normal text-m-tx3">(opcional)</span>
+            </label>
+            <input id="nc-email" type="email" inputMode="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} className="h-[48px] rounded-[12px] border border-m-bd bg-m-sf px-[14px] text-[16px] text-m-tx" />
+          </div>
+          <span className="text-[13px] text-m-tx3">El contacto se crea al confirmar la cita.</span>
+          <div className="flex gap-2">
+            <MButton onClick={() => setPhoneSheet(null)}>Cancelar</MButton>
+            <MButton
+              kind="primary"
+              grow
+              disabled={!newContactValid}
+              onClick={() => {
+                setPickedContact(null);
+                setCustomerMode("new");
+                setPhoneSheet(null);
+              }}
+            >
+              Usar este contacto
+            </MButton>
+          </div>
+        </Sheet>
+
+        <Sheet open={phoneSheet === "discard"} onClose={() => setPhoneSheet(null)} alert label="¿Descartar la cita?" bodyClassName="pb-[max(20px,env(safe-area-inset-bottom))]">
+          <MConfirm title="¿Descartar la cita?" body="Se perderán el cliente, el servicio y el horario elegidos. No se ha guardado nada.">
+            <div className="flex flex-col gap-2 pt-1">
+              <MButton data-autofocus className="w-full font-semibold" onClick={() => setPhoneSheet(null)}>
+                Seguir editando
+              </MButton>
+              <MButton kind="danger" className="w-full" onClick={props.onClose}>
+                Descartar
+              </MButton>
+            </div>
+          </MConfirm>
+        </Sheet>
+      </MScreen>
+    );
+  }
+
   return (
     <div className="u-module-modal z-50 flex items-center justify-center bg-black/45 sm:p-4" onClick={props.onClose}>
       <div
@@ -3029,7 +3671,7 @@ function AppointmentModal(props: {
         role="dialog"
         aria-modal="true"
         aria-labelledby={MODAL_TITLE_ID}
-        className="flex h-dvh w-dvw flex-col overflow-hidden bg-popover text-popover-foreground shadow-2xl sm:h-[min(704px,calc(100dvh-2rem))] sm:w-[min(992px,calc(100vw-2rem))] sm:rounded-2xl sm:border sm:border-line xl:h-[min(720px,calc(100dvh-2rem))] xl:w-[min(1120px,calc(100vw-2rem))]"
+        className="flex h-dvh w-dvw flex-col overflow-hidden bg-popover text-popover-foreground shadow-2xl sm:h-[min(640px,calc(100dvh-2rem))] sm:w-[min(992px,calc(100vw-2rem))] sm:rounded-sch-modal sm:border sm:border-line xl:h-[min(680px,calc(100dvh-2rem))] xl:w-[min(1120px,calc(100vw-2rem))]"
         onClick={(e) => e.stopPropagation()}
       >
         {/* HEADER — one row at every width, but the step indicator changes form with
@@ -3053,9 +3695,11 @@ function AppointmentModal(props: {
               type="button"
               aria-label="Cerrar"
               onClick={props.onClose}
-              className="inline-flex size-[44px] shrink-0 items-center justify-center rounded-xl border border-line-strong text-xl text-muted hover:bg-subtle hover:text-foreground sm:hidden"
+              className={buttonClass({ variant: "tertiary", className: "w-[44px] px-0 text-xl sm:hidden" })}
             >
-              ×
+              <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
+              </svg>
             </button>
           </div>
 
@@ -3097,7 +3741,7 @@ function AppointmentModal(props: {
                       aria-current={current ? "step" : undefined}
                       disabled={!reachable}
                       onClick={() => reachable && setStep(item.value)}
-                      className={`inline-flex h-[28px] items-center gap-2 whitespace-nowrap rounded-lg pl-1 pr-2.5 text-xs transition-colors ${
+                      className={`u-focus inline-flex h-[32px] items-center gap-2 whitespace-nowrap rounded-full pl-1 pr-3 text-xs transition-colors ${
                         current
                           ? "bg-ink font-medium text-ink-fg"
                           : reachable
@@ -3106,7 +3750,7 @@ function AppointmentModal(props: {
                       }`}
                     >
                       <span
-                        className={`u-mono inline-flex size-[18px] items-center justify-center rounded-full text-[0.625rem] ${
+                        className={`u-mono inline-flex size-6 items-center justify-center rounded-full text-[0.6875rem] leading-none ${
                           complete
                             ? "bg-success/15 text-success"
                             : current
@@ -3129,10 +3773,12 @@ function AppointmentModal(props: {
             type="button"
             aria-label="Cerrar"
             onClick={props.onClose}
-            className="hidden size-[36px] shrink-0 items-center justify-center rounded-lg text-xl text-muted hover:bg-subtle hover:text-foreground sm:inline-flex"
+            className={buttonClass({ variant: "tertiary", size: "sm", className: "w-[44px] px-0 text-xl max-sm:hidden lg:w-[36px]" })}
           >
-            ×
-          </button>
+              <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
+              </svg>
+            </button>
         </header>
 
         <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] overflow-y-auto lg:overflow-hidden">
@@ -3172,7 +3818,7 @@ function AppointmentModal(props: {
                     </div>
 
                     {bookingContact || isReschedule ? null : customerMode === "anonymous" ? null : customerMode === "new" ? null : (
-                      <label className="u-focus flex h-[44px] items-center gap-2.5 rounded-xl border border-line-strong bg-surface px-3 lg:h-[38px]">
+                      <label className={`${FIELD} flex h-[44px] items-center gap-2.5 lg:h-[40px]`}>
                         <span className="sr-only">Buscar cliente por nombre o teléfono</span>
                         <svg aria-hidden viewBox="0 0 16 16" className="size-3.5 shrink-0 text-faint" fill="none" stroke="currentColor" strokeWidth="1.5">
                           <circle cx="7" cy="7" r="4.4" />
@@ -3198,18 +3844,18 @@ function AppointmentModal(props: {
 
                   <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 pb-4 sm:px-5">
                     {bookingContact ? (
-                      <div className="rounded-xl border border-foreground bg-subtle/50 p-3.5">
+                      <div className="rounded-sch-card border border-foreground bg-subtle/50 p-3.5">
                         <span className="u-th">Cliente seleccionado</span>
                         <p className="mt-1.5 text-sm font-semibold">{bookingContact.contactName}</p>
                         <p className="mt-1 text-xs text-muted">La cita quedará vinculada a este contacto.</p>
                       </div>
                     ) : isReschedule ? (
-                      <div className="rounded-xl border border-line-strong bg-subtle/50 p-3.5">
+                      <div className="rounded-sch-card border border-line-strong bg-subtle/50 p-3.5">
                         <span className="u-th">Cliente de la cita</span>
                         <p className="mt-1.5 text-sm font-semibold">{clientLabel}</p>
                       </div>
                     ) : customerMode === "anonymous" ? (
-                      <div className="rounded-xl border border-dashed border-line-strong p-3.5">
+                      <div className="rounded-sch-card border border-dashed border-line-strong p-3.5">
                         <p className="text-sm font-semibold">Atención sin cita</p>
                         <p className="mt-1 text-xs leading-relaxed text-muted">
                           No se guardará ningún contacto. Úsalo solo si el cliente no deja sus datos.
@@ -3243,7 +3889,7 @@ function AppointmentModal(props: {
                       </div>
                     ) : pickedContact ? (
                       <>
-                        <div className="flex items-center gap-3 rounded-xl border border-foreground bg-subtle/40 p-3">
+                        <div className="flex items-center gap-3 rounded-sch-card border border-foreground bg-subtle/40 p-3">
                           <span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-full bg-chip text-xs font-semibold text-foreground">
                             {initialsOf(pickedContact.name ?? pickedContact.identity)}
                           </span>
@@ -3266,7 +3912,7 @@ function AppointmentModal(props: {
                             a warning, not a block, because two visits in a week is a
                             normal thing a person can want. */}
                         {pickedContact.nextAppointmentAt ? (
-                          <div className="flex items-start gap-2.5 rounded-xl border border-warn-rule/35 bg-warn-soft p-3">
+                          <div className="flex items-start gap-2.5 rounded-sch-card border border-warn-rule/35 bg-warn-soft p-3">
                             <span aria-hidden className="mt-px flex size-4 shrink-0 items-center justify-center rounded-full bg-warn-rule/20 text-[0.625rem] font-semibold text-warn">!</span>
                             <p className="flex-1 text-xs leading-relaxed text-warn">
                               Ya tiene una cita el{" "}
@@ -3278,11 +3924,11 @@ function AppointmentModal(props: {
                           </div>
                         ) : null}
                         <dl className="grid grid-cols-2 gap-2">
-                          <div className="rounded-lg border border-line px-3 py-2">
+                          <div className="rounded-sch-control border border-line px-3 py-2">
                             <dt className="text-[0.6875rem] text-muted">Citas en total</dt>
                             <dd className="u-mono mt-0.5 text-sm font-semibold">{pickedContact.appointmentCount}</dd>
                           </div>
-                          <div className="rounded-lg border border-line px-3 py-2">
+                          <div className="rounded-sch-control border border-line px-3 py-2">
                             <dt className="text-[0.6875rem] text-muted">Última visita</dt>
                             <dd className="mt-0.5 text-sm font-semibold">
                               {pickedContact.lastVisitAt ? contactDateLabel(pickedContact.lastVisitAt, false) : "Sin visitas"}
@@ -3297,7 +3943,7 @@ function AppointmentModal(props: {
                             key={hit.id}
                             type="button"
                             onClick={() => setPickedContact(hit)}
-                            className="flex items-center gap-3 rounded-xl border border-line p-3 text-left transition-colors hover:bg-subtle/60"
+                            className="u-focus flex items-center gap-3 rounded-sch-control border border-line p-3 text-left transition-colors hover:bg-subtle"
                           >
                             <span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-full bg-chip text-xs font-semibold text-foreground">
                               {initialsOf(hit.name ?? hit.identity)}
@@ -3308,7 +3954,7 @@ function AppointmentModal(props: {
                             </span>
                             <span className="flex shrink-0 flex-col items-end gap-1">
                               {hit.isCustomer ? (
-                                <span className="rounded-md bg-success/10 px-1.5 py-0.5 text-[0.625rem] font-medium text-success">Ya es cliente</span>
+                                <span className="rounded-full bg-success/10 px-2 py-0.5 text-[0.625rem] font-medium text-success">Ya es cliente</span>
                               ) : null}
                               <span className="text-[0.625rem] text-faint">
                                 {hit.appointmentCount} {hit.appointmentCount === 1 ? "cita" : "citas"}
@@ -3331,9 +3977,9 @@ function AppointmentModal(props: {
                           <button
                             type="button"
                             onClick={() => { setCustomerMode("new"); setName(contactQuery.trim()); }}
-                            className="flex items-center gap-2.5 rounded-xl border border-dashed border-line-strong p-3 text-left transition-colors hover:bg-subtle/60"
+                            className="u-focus flex items-center gap-2.5 rounded-sch-control border border-dashed border-line-strong p-3 text-left transition-colors hover:bg-subtle"
                           >
-                            <span aria-hidden className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-chip text-base text-foreground">+</span>
+                            <span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-full bg-chip text-base leading-none text-foreground">+</span>
                             <span className="flex min-w-0 flex-1 flex-col">
                               <span className="truncate text-sm font-semibold">Crear contacto «{contactQuery.trim()}»</span>
                               <span className="truncate text-xs text-muted">Solo nombre y teléfono; el resto se completa después</span>
@@ -3357,7 +4003,7 @@ function AppointmentModal(props: {
                     </div>
                     {isReschedule ? null : (
                       <>
-                        <label className="u-focus flex h-[44px] items-center gap-2.5 rounded-xl border border-line-strong bg-subtle/50 px-3 lg:h-[38px]">
+                        <label className={`${FIELD} flex h-[44px] items-center gap-2.5 lg:h-[40px]`}>
                           <span className="sr-only">Buscar servicio</span>
                           <svg aria-hidden viewBox="0 0 16 16" className="size-3.5 shrink-0 text-faint" fill="none" stroke="currentColor" strokeWidth="1.5">
                             <circle cx="7" cy="7" r="4.4" />
@@ -3381,7 +4027,7 @@ function AppointmentModal(props: {
                                   type="button"
                                   aria-pressed={active}
                                   onClick={() => setServiceFamily(family)}
-                                  className={`h-[32px] shrink-0 rounded-lg px-3 text-xs transition-colors ${
+                                  className={`u-focus h-[44px] shrink-0 rounded-sch-control px-3 text-xs transition-colors lg:h-[32px] ${
                                     active ? "bg-ink font-medium text-ink-fg" : "border border-line-strong bg-surface hover:bg-subtle"
                                   }`}
                                 >
@@ -3407,14 +4053,14 @@ function AppointmentModal(props: {
                           aria-pressed={selected}
                           disabled={isReschedule}
                           onClick={() => { setServiceId(service.id); resetSlots(); }}
-                          className={`flex flex-col gap-1.5 rounded-xl border p-3 text-left transition-colors disabled:cursor-default ${
+                          className={`u-focus flex flex-col gap-1.5 rounded-sch-control border p-3 text-left transition-colors disabled:cursor-default ${
                             selected ? "border-foreground bg-subtle/40" : "border-line hover:bg-subtle/60"
                           }`}
                         >
                           <span className="flex items-center gap-2">
                             {/* The card's colour bar IS the agenda colour this booking
                                 will get — the same family class the board uses. */}
-                            <span aria-hidden className={`u-appt-swatch u-appt-service ${apptCategoryClass(family)} h-5 w-2 shrink-0 rounded-[3px]`} />
+                            <span aria-hidden className={`u-appt-swatch u-appt-service ${apptCategoryClass(family)} h-5 w-1.5 shrink-0 rounded-full`} />
                             <span className="min-w-0 flex-1 truncate text-sm font-semibold">{service.name}</span>
                             {selected ? (
                               <span aria-hidden className="flex size-4 shrink-0 items-center justify-center rounded-full bg-ink text-[0.625rem] text-ink-fg">✓</span>
@@ -3451,9 +4097,9 @@ function AppointmentModal(props: {
                   <div className="flex shrink-0 items-center gap-2">
                     <strong className="truncate text-sm font-semibold capitalize">{monthLabel}</strong>
                     <span className="flex-1" />
-                    <button type="button" onClick={() => changeDate(todayKey)} className="h-[32px] rounded-lg border border-line-strong px-2.5 text-xs transition-colors hover:bg-subtle">Hoy</button>
-                    <button type="button" aria-label="Mes anterior" onClick={() => changeMonth(-1)} className="inline-flex size-[32px] items-center justify-center rounded-lg border border-line-strong text-base text-muted transition-colors hover:bg-subtle hover:text-foreground">‹</button>
-                    <button type="button" aria-label="Mes siguiente" onClick={() => changeMonth(1)} className="inline-flex size-[32px] items-center justify-center rounded-lg border border-line-strong text-base text-muted transition-colors hover:bg-subtle hover:text-foreground">›</button>
+                    <button type="button" onClick={() => changeDate(todayKey)} className={buttonClass({ size: "sm" })}>Hoy</button>
+                    <button type="button" aria-label="Mes anterior" onClick={() => changeMonth(-1)} className={buttonClass({ size: "sm", className: "w-[44px] px-0 text-base text-muted lg:w-[36px]" })}>‹</button>
+                    <button type="button" aria-label="Mes siguiente" onClick={() => changeMonth(1)} className={buttonClass({ size: "sm", className: "w-[44px] px-0 text-base text-muted lg:w-[36px]" })}>›</button>
                   </div>
 
                   {/* Single-letter weekday heads: at seven columns the three-letter
@@ -3483,7 +4129,7 @@ function AppointmentModal(props: {
                           aria-pressed={selected}
                           disabled={disabled}
                           onClick={() => changeDate(day.key)}
-                          className={`flex min-h-0 flex-col items-center justify-center gap-0.5 rounded-xl transition-colors ${
+                          className={`u-focus flex min-h-0 flex-col items-center justify-center gap-0.5 rounded-sch-control transition-colors ${
                             selected
                               ? "bg-ink text-ink-fg"
                               : hasRoom
@@ -3510,10 +4156,10 @@ function AppointmentModal(props: {
 
                   <div className="flex shrink-0 flex-wrap items-center gap-x-3.5 gap-y-1.5">
                     <span className="inline-flex items-center gap-1.5 text-[0.6875rem] text-muted">
-                      <span aria-hidden className="size-3 rounded bg-subtle/70" />Hay cupos
+                      <span aria-hidden className="size-3 rounded-full bg-subtle" />Hay cupos
                     </span>
                     <span className="inline-flex items-center gap-1.5 text-[0.6875rem] text-faint">
-                      <span aria-hidden className="size-3 rounded border border-line" />Sin cupos o cerrado
+                      <span aria-hidden className="size-3 rounded-full border border-line" />Sin cupos o cerrado
                     </span>
                     <span className="ml-auto hidden text-[0.6875rem] text-faint xl:block">
                       No se muestra cuántos cupos hay, solo si hay disponibilidad.
@@ -3539,12 +4185,12 @@ function AppointmentModal(props: {
                       aria-haspopup="listbox"
                       aria-expanded={staffPickerOpen}
                       onClick={() => setStaffPickerOpen((open) => !open)}
-                      className="flex h-[48px] items-center gap-2.5 rounded-xl border border-line-strong bg-surface px-2.5 text-left transition-colors hover:bg-subtle lg:h-[40px]"
+                      className="u-focus flex h-[44px] items-center gap-2.5 rounded-sch-control border border-line-strong bg-surface px-2.5 text-left transition-colors hover:bg-subtle lg:h-[40px]"
                     >
                       {selectedStaff ? (
                         <Initial name={selectedStaff.name} />
                       ) : (
-                        <span aria-hidden className="flex size-6 shrink-0 items-center justify-center rounded-md border border-dashed border-line-strong bg-subtle text-[0.625rem] text-muted">∗</span>
+                        <span aria-hidden className="flex size-6 shrink-0 items-center justify-center rounded-full border border-dashed border-line-strong bg-subtle text-[0.625rem] leading-none text-muted">∗</span>
                       )}
                       <span className="min-w-0 flex-1 truncate text-sm font-medium">
                         {selectedStaff?.name ?? "Cualquier profesional"}
@@ -3558,7 +4204,7 @@ function AppointmentModal(props: {
                         <div
                           role="listbox"
                           aria-label="Elegir profesional"
-                          className="absolute left-4 right-4 top-[calc(100%-0.5rem)] z-20 flex max-h-[19rem] flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[0_16px_36px_rgba(18,21,27,0.16)] sm:left-5 sm:right-5"
+                          className="absolute left-4 right-4 top-[calc(100%-0.5rem)] z-20 flex max-h-[19rem] flex-col overflow-hidden rounded-sch-card border border-line bg-popover shadow-[var(--shadow-float)] sm:left-5 sm:right-5"
                         >
                           <div className="flex shrink-0 flex-col gap-2 border-b border-line p-2.5">
                             {activeStaff.length > 8 ? (
@@ -3567,7 +4213,7 @@ function AppointmentModal(props: {
                                 onChange={(event) => setStaffQuery(event.target.value)}
                                 placeholder="Buscar profesional…"
                                 aria-label="Buscar profesional"
-                                className="h-[36px] rounded-lg border border-line bg-subtle/50 px-2.5 text-xs outline-none placeholder:text-faint"
+                                className={`${INPUT} text-xs`}
                                 autoFocus
                               />
                             ) : null}
@@ -3577,9 +4223,9 @@ function AppointmentModal(props: {
                               role="option"
                               aria-selected={!staffId}
                               onClick={() => { changeStaff(""); setStaffPickerOpen(false); }}
-                              className="flex h-[42px] items-center gap-2.5 rounded-lg border border-dashed border-line-strong px-2.5 text-left transition-colors hover:bg-subtle"
+                              className="u-focus flex h-[44px] items-center gap-2.5 rounded-sch-control border border-dashed border-line-strong px-2.5 text-left transition-colors hover:bg-subtle lg:h-[40px]"
                             >
-                              <span aria-hidden className="flex size-6 shrink-0 items-center justify-center rounded-md bg-chip text-[0.625rem] text-muted">∗</span>
+                              <span aria-hidden className="flex size-6 shrink-0 items-center justify-center rounded-full bg-chip text-[0.625rem] leading-none text-muted">∗</span>
                               <span className="flex min-w-0 flex-1 flex-col">
                                 <span className="truncate text-xs font-medium">Cualquier profesional</span>
                                 <span className="truncate text-[0.625rem] text-muted">Asigna al primero con cupo</span>
@@ -3601,7 +4247,7 @@ function AppointmentModal(props: {
                                     aria-selected={selected}
                                     disabled={count === 0}
                                     onClick={() => { changeStaff(candidate.id); setStaffPickerOpen(false); }}
-                                    className="flex h-[42px] w-full items-center gap-2.5 rounded-lg px-2.5 text-left transition-colors hover:bg-subtle disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent"
+                                    className="u-focus flex h-[44px] w-full items-center gap-2.5 rounded-sch-control px-2.5 text-left transition-colors hover:bg-subtle lg:h-[40px] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent"
                                   >
                                     <Initial name={candidate.name} muted={count === 0} />
                                     <span className="min-w-0 flex-1 truncate text-xs font-medium">{candidate.name}</span>
@@ -3633,12 +4279,12 @@ function AppointmentModal(props: {
                     {loadingSlots ? (
                       <>
                         {Array.from({ length: 6 }, (_, index) => (
-                          <div key={index} className="h-[44px] shrink-0 animate-pulse rounded-xl bg-subtle" />
+                          <div key={index} className="h-[44px] shrink-0 animate-pulse rounded-sch-control bg-subtle" />
                         ))}
                         <p className="sr-only">Buscando horarios…</p>
                       </>
                     ) : searched && visibleSlots.length === 0 ? (
-                      <p className="rounded-xl border border-line bg-subtle/40 p-3 text-xs leading-relaxed text-muted">
+                      <p className="rounded-sch-card border border-line bg-subtle/40 p-3 text-xs leading-relaxed text-muted">
                         No hay horarios libres para esta combinación. Prueba otro día o
                         cambia de profesional.
                       </p>
@@ -3659,7 +4305,7 @@ function AppointmentModal(props: {
                                   // endpoint offered this exact slot for.
                                   if (!staffId) setStaffId(slot.staff_id);
                                 }}
-                                className={`u-mono h-[44px] shrink-0 rounded-xl border text-sm transition-colors ${
+                                className={`u-focus u-mono h-[44px] shrink-0 rounded-sch-control border text-sm transition-colors ${
                                   active
                                     ? "border-ink bg-ink font-medium text-ink-fg"
                                     : "border-line-strong bg-surface hover:border-foreground hover:bg-subtle"
@@ -3693,8 +4339,8 @@ function AppointmentModal(props: {
                 <h3 id="booking-confirm-heading" className="sr-only">Confirmar la cita</h3>
 
                 <div className="flex min-h-0 min-w-0 flex-col gap-3.5 overflow-y-auto border-b border-line p-4 sm:p-5 lg:border-b-0 lg:border-r">
-                  <div className="flex shrink-0 items-center gap-3.5 rounded-xl border border-line bg-subtle/30 p-3.5">
-                    <span aria-hidden className={`u-appt-swatch ${bookingToneClass} h-12 w-2 shrink-0 rounded-[3px]`} />
+                  <div className="flex shrink-0 items-center gap-3.5 rounded-sch-card border border-line bg-subtle/30 p-3.5">
+                    <span aria-hidden className={`u-appt-swatch ${bookingToneClass} h-12 w-1.5 shrink-0 rounded-full`} />
                     <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="truncate text-lg font-semibold capitalize sm:text-xl">
                         {shortDateLabel}{slotStart ? ` · ${fmtTime(slotStart, props.timezone)}` : ""}
@@ -3703,12 +4349,12 @@ function AppointmentModal(props: {
                         {timeRangeLabel ?? "Sin horario"} · {selectedService?.duration_min ?? 0} min
                       </span>
                     </div>
-                    <span className="shrink-0 rounded-lg border border-line bg-surface px-2 py-1 text-[0.6875rem] font-medium text-muted">
+                    <span className="shrink-0 rounded-full border border-line bg-surface px-2.5 py-1 text-[0.6875rem] font-medium text-muted">
                       {isReschedule ? "Reprogramada" : "Sin confirmar"}
                     </span>
                   </div>
 
-                  <dl className="shrink-0 overflow-hidden rounded-xl border border-line">
+                  <dl className="shrink-0 overflow-hidden rounded-sch-card border border-line">
                     {[
                       { label: "Cliente", value: clientLabel || "Atención sin cita" },
                       { label: "Teléfono o correo", value: phoneLabel, mono: true },
@@ -3733,14 +4379,14 @@ function AppointmentModal(props: {
                 </div>
 
                 <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto p-4 sm:p-5">
-                  <div className="flex shrink-0 flex-col gap-2.5 rounded-xl border border-line p-3.5">
+                  <div className="flex shrink-0 flex-col gap-2.5 rounded-sch-card border border-line p-3.5">
                     <div className="flex items-center gap-2">
                       <span className="text-[0.8125rem] font-semibold">Color de la cita</span>
                       <span className="flex-1" />
                       <span className="text-[0.6875rem] text-faint">Automático</span>
                     </div>
                     <div className="flex items-center gap-2.5">
-                      <span aria-hidden className={`u-appt-swatch ${bookingToneClass} h-[28px] w-10 shrink-0 rounded-lg`} />
+                      <span aria-hidden className={`u-appt-swatch ${bookingToneClass} h-[28px] w-10 shrink-0 rounded-sch-event`} />
                       <p className="flex-1 text-xs leading-relaxed text-muted">
                         {bookingFamily
                           ? <>Hereda el color de <strong className="font-medium text-foreground">{(SERVICE_FAMILY_LABEL[bookingFamily] ?? "").toLocaleLowerCase("es")}</strong>. Se cambia en Configuración → Servicios.</>
@@ -3755,7 +4401,7 @@ function AppointmentModal(props: {
                       is wired, so none of the three is drawn rather than drawn dead.
                       TODO(agenda): add them as the model gains note / colour / an
                         outbound confirmation send. */}
-                  <div className="flex shrink-0 items-start gap-2.5 rounded-xl border border-line bg-subtle/40 p-3">
+                  <div className="flex shrink-0 items-start gap-2.5 rounded-sch-card border border-line bg-subtle/40 p-3">
                     <span aria-hidden className="mt-px flex size-4 shrink-0 items-center justify-center rounded-full bg-chip text-[0.625rem] font-semibold text-muted">i</span>
                     <p className="flex-1 text-xs leading-relaxed text-muted">
                       Nada se guarda hasta que confirmes. Al crear la cita, el cupo de{" "}
@@ -3772,7 +4418,7 @@ function AppointmentModal(props: {
               on, and the running summary of what has been chosen. It is the same bar at
               every width; on the phone the summary drops (the header carries the step
               there) so the two CTAs keep their full 48px. */}
-          <footer className="flex min-h-[72px] shrink-0 items-center gap-3 border-t border-line bg-subtle/40 px-4 py-3 sm:px-5">
+          <footer className="flex min-h-[72px] shrink-0 items-center gap-3 border-t border-line bg-surface px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-5">
             <div className="hidden min-w-0 flex-1 flex-col gap-0.5 sm:flex">
               <span className="truncate text-xs text-foreground">
                 Paso {step} de 3 · {stepItems[step - 1].label.toLocaleLowerCase("es")}
@@ -3786,7 +4432,7 @@ function AppointmentModal(props: {
                 <button
                   type="button"
                   onClick={goBack}
-                  className="h-[48px] flex-1 rounded-xl border border-line-strong px-5 text-sm transition-colors hover:bg-subtle sm:flex-none lg:h-[40px]"
+                  className={buttonClass({ className: "flex-1 sm:flex-none" })}
                 >
                   Volver
                 </button>
@@ -3794,7 +4440,7 @@ function AppointmentModal(props: {
                 <button
                   type="button"
                   onClick={props.onClose}
-                  className="h-[48px] flex-1 rounded-xl border border-line-strong px-5 text-sm transition-colors hover:bg-subtle sm:flex-none sm:border-transparent sm:text-muted sm:hover:border-line-strong sm:hover:text-foreground lg:h-[40px]"
+                  className={buttonClass({ variant: "tertiary", className: "flex-1 border border-line-strong sm:flex-none sm:border-transparent" })}
                 >
                   Cancelar
                 </button>
@@ -3804,8 +4450,10 @@ function AppointmentModal(props: {
                   type="button"
                   onClick={submit}
                   disabled={pending || !slotStart}
-                  className="h-[48px] flex-1 rounded-xl bg-ink px-6 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50 sm:flex-none lg:h-[40px]"
+                  aria-busy={pending || undefined}
+                  className={buttonClass({ variant: "primary", className: "flex-1 px-6 sm:flex-none" })}
                 >
+                  {pending ? <Spinner /> : null}
                   {pending ? "Guardando…" : isReschedule ? "Confirmar cambio" : "Crear cita"}
                 </button>
               ) : (
@@ -3813,7 +4461,7 @@ function AppointmentModal(props: {
                   type="button"
                   onClick={advance}
                   disabled={(step === 1 && !step1Ready) || (step === 2 && !slotStart)}
-                  className="h-[48px] flex-1 rounded-xl bg-ink px-6 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-40 sm:flex-none lg:h-[40px]"
+                  className={buttonClass({ variant: "primary", className: "flex-1 px-6 sm:flex-none" })}
                 >
                   Continuar
                 </button>
@@ -3828,3 +4476,25 @@ function AppointmentModal(props: {
 
 /** Stable id linking the dialog to its heading — only one modal is ever mounted. */
 const MODAL_TITLE_ID = "agenda-appt-modal-title";
+
+/** Availability legend of the phone booking (strip + month): dot / ring / struck. */
+function Legend() {
+  return (
+    <div className="flex flex-wrap gap-[14px] text-[12.5px] text-m-tx3">
+      <span className="flex items-center gap-1.5">
+        <span aria-hidden className="size-1.5 rounded-full bg-m-ok" />
+        Con cupos
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span aria-hidden className="size-1.5 rounded-full shadow-[inset_0_0_0_1.5px_var(--m-tx3)]" />
+        Sin cupos
+      </span>
+      <span className="flex items-center gap-1.5">
+        <span aria-hidden className="line-through">
+          12
+        </span>
+        Cerrado
+      </span>
+    </div>
+  );
+}

@@ -39,9 +39,12 @@ test('every deactivate has an inverse: site/service in AdminPanel, staff on the 
   const src = web('components/scheduling/AdminPanel.tsx');
   // The state-reflecting toggle replaces the old `active ? <Deactivate/> : null` one-way door.
   // STAFF moved to SCHEDULING → Staff; its inverse is asserted below.
-  for (const kind of ['site', 'service']) {
-    assert.ok(src.includes(`kind="${kind}"`), `ActiveToggle rendered for ${kind}`);
-  }
+  assert.ok(src.includes('kind="site"'), 'ActiveToggle rendered for site');
+  // SERVICES: archive (= deactivate) and its inverse, Reactivar, live on the services
+  // menu; archiving is guarded by the upcoming-appointment count like the toggle.
+  const menu = web('components/scheduling/services/ServiceMenu.tsx');
+  assert.ok(menu.includes('deactivateServiceAction') && menu.includes('activateServiceAction'), 'a service archive has its inverse');
+  assert.ok(menu.includes('Reactivar') && menu.includes('countUpcomingAppointmentsAction(clientId, "service"'), 'reactivate exists; archive counts upcoming first');
   assert.ok(!/deactivate\w+Action\(clientId,[^)]*\)\)}>Deactivate<\/button>\s*:\s*null/.test(src), 'the old one-way `? Deactivate : null` is gone');
   assert.ok(src.includes('Activar'), 'an Activate affordance exists');
   // Deactivating a barber must stay reversible wherever the control lives. On the
