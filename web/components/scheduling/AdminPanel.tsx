@@ -23,6 +23,7 @@ import {
 } from "@/lib/schedulingAdminActions";
 import { PageShell } from "@/components/ui/PageShell";
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
+import { SERVICE_DESCRIPTION_MAX } from "@/lib/serviceDescription";
 
 type WeeklyHours = Record<string, Array<{ start: string; end: string }>>;
 
@@ -889,6 +890,30 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
+/** Optional service description — a full-width textarea with a live character counter.
+ *  The server trims, maps whitespace-only → NULL and rejects over the limit; `maxLength`
+ *  just stops the typing early so the counter never needs a red state. */
+function DescriptionField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="mt-4">
+      <label className="mb-1.5 flex flex-col gap-1.5">
+        <span className="text-xs font-medium text-foreground">
+          Descripción <span className="font-normal text-faint">(opcional)</span>
+        </span>
+        <textarea
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          rows={3}
+          maxLength={SERVICE_DESCRIPTION_MAX}
+          placeholder="Qué incluye este servicio — lo usa el bot para responder «¿qué incluye X?». Texto plano, sin formato."
+          className="min-h-[4.5rem] w-full resize-y rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-foreground outline-none transition focus:border-foreground"
+        />
+      </label>
+      <p className="text-right text-[0.6875rem] text-faint">{value.length}/{SERVICE_DESCRIPTION_MAX}</p>
+    </div>
+  );
+}
+
 function SitesSection({
   clientId,
   sites,
@@ -1036,10 +1061,13 @@ function EditableService({ clientId, service, activeSites, siteServiceMap, run, 
   const [bAfter, setBAfter] = useState(String(service.buffer_after_min));
   const [featured, setFeatured] = useState(service.featured);
   const [category, setCategory] = useState(service.category ?? "");
+  const [description, setDescription] = useState(service.description ?? "");
   const save = () =>
     run(async () => {
       const r = await updateServiceAction(clientId, service.id, {
         name: name.trim(),
+        // The action trims, maps whitespace-only → NULL, and rejects over 500 chars.
+        description,
         durationMin: Number(duration),
         price: price === "" ? null : Number(price),
         bufferBeforeMin: Number(bBefore),
@@ -1109,6 +1137,7 @@ function EditableService({ clientId, service, activeSites, siteServiceMap, run, 
               </select>
             </Field>
           </div>
+          <DescriptionField value={description} onChange={setDescription} />
           {service.active ? (
             <div className="mt-5 border-t border-line pt-4">
               <p className="mb-2 text-xs font-medium text-foreground">Disponible en</p>
@@ -1160,6 +1189,7 @@ function ServicesSection({
   const [bBefore, setBBefore] = useState("0");
   const [bAfter, setBAfter] = useState("0");
   const [category, setCategory] = useState("");
+  const [description, setDescription] = useState("");
   // Sites the new service will be enabled at — default ALL active sites, so a
   // freshly created service is bookable everywhere unless narrowed.
   const [siteIds, setSiteIds] = useState<string[]>(activeSites.map((s) => s.id));
@@ -1172,6 +1202,7 @@ function ServicesSection({
       const r = await createServiceAction({
         clientId,
         name: name.trim(),
+        description, // the action trims, maps whitespace-only → NULL, and caps at 500
         durationMin: Number(duration),
         price: price ? Number(price) : null,
         bufferBeforeMin: Number(bBefore),
@@ -1179,7 +1210,7 @@ function ServicesSection({
         siteIds,
         category: category === "" ? null : category,
       });
-      if (r.ok) { setName(""); setCategory(""); setSiteIds(activeSites.map((s) => s.id)); setCreating(false); }
+      if (r.ok) { setName(""); setDescription(""); setCategory(""); setSiteIds(activeSites.map((s) => s.id)); setCreating(false); }
       return r;
     });
 
@@ -1251,6 +1282,7 @@ function ServicesSection({
               </select>
             </Field>
           </div>
+          <DescriptionField value={description} onChange={setDescription} />
           <div>
             <p className="mb-2 mt-5 border-t border-line pt-4 text-xs font-medium text-foreground">Disponible en</p>
             <div className="flex flex-wrap gap-1.5">

@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { canManageClient } from "./access";
 import { resolveClientModuleContext } from "./clientModuleAccess";
+import { normalizeServiceDescription } from "./serviceDescription";
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, type WeeklyHours } from "@worker/scheduling/types.js";
 import { localWallClockToUtc } from "@worker/scheduling/timezone.js";
 import {
@@ -192,6 +193,8 @@ export async function createServiceAction(input: {
   if (!auth.ok) return auth;
   if (!input.name.trim()) return { ok: false, error: "Name is required." };
   if (!(input.durationMin > 0)) return { ok: false, error: "Duration must be positive." };
+  const desc = normalizeServiceDescription(input.description);
+  if (!desc.ok) return { ok: false, error: desc.error };
   // Every enablement target must be one of THIS client's sites.
   for (const siteId of input.siteIds ?? []) {
     if (!(await siteInClient(auth.tenantId, input.clientId, siteId))) return { ok: false, error: FOREIGN };
@@ -200,7 +203,7 @@ export async function createServiceAction(input: {
     tenantId: auth.tenantId,
     clientId: input.clientId, // the VALIDATED route client — the service's owner
     name: input.name.trim(),
-    description: input.description ?? null,
+    description: desc.value,
     durationMin: input.durationMin,
     price: input.price ?? null,
     bufferBeforeMin: input.bufferBeforeMin ?? 0,
@@ -221,12 +224,20 @@ export async function updateServiceAction(
 ): Promise<AdminResult> {
   const auth = await requireSchedulingAdmin(clientId);
   if (!auth.ok) return auth;
-  // `category` is pulled OUT of the spread so the raw string never reaches the
-  // repository: absent = not in the patch, present = narrowed to a storable family
-  // (or NULL, which means "go back to inferring it from the name").
-  const { category, ...rest } = patch;
+  // `category` and `description` are pulled OUT of the spread so raw values never reach the
+  // repository unvalidated: category is narrowed to a storable family (or NULL = infer from
+  // name); description is trimmed, whitespace→NULL, and rejected over 500 chars (naming the
+  // field). Absent = not in the patch (left unchanged).
+  const { category, description, ...rest } = patch;
+  let descriptionPatch: { description?: string | null } = {};
+  if (description !== undefined) {
+    const d = normalizeServiceDescription(description);
+    if (!d.ok) return { ok: false, error: d.error };
+    descriptionPatch = { description: d.value };
+  }
   const row = await updateService(auth.tenantId, clientId, id, {
     ...rest,
+    ...descriptionPatch,
     ...(category !== undefined ? { category: parseServiceCategory(category) } : {}),
   });
   if (!row) return { ok: false, error: "Service not found." };

@@ -334,6 +334,27 @@ the full shapes are unchanged, so programmatic callers are unaffected.
   identity labels. Measured ~1 266 B → ~795 B (−40 %).
 - **`price_label` on service objects** (`GET /services`) — Colombian format from the raw
   `price` (`"35000.00"` → `"$35.000"`; cents kept as `"$2.500,50"`); raw `price` unchanged.
+- **`description` on service objects** (`GET /services`) — the operator's optional "what this
+  includes" text (plain text, ≤ 500 chars), so an agent can answer "¿qué incluye X?" from data
+  instead of inventing it. `null` when unset. Additive: every existing field keeps its shape.
+
+Executed (`Bearer` with `scheduling.read` + `X-Workflow-Ref`), one service with a description
+and one without:
+
+```
+GET /api/scheduling/v1/services?site_id=…
+→ 200 {
+  "services": [
+    { "id": "437bb0c3-…", "name": "Beard trim", "description": null,
+      "duration_min": 30, "price": "15.00", "price_label": "$15",
+      "buffer_before_min": 0, "buffer_after_min": 0, "featured": false },
+    { "id": "1e7d3aa6-…", "name": "Haircut",
+      "description": "Incluye lavado, corte a tijera y peinado final.",
+      "duration_min": 60, "price": "30.00", "price_label": "$30",
+      "buffer_before_min": 0, "buffer_after_min": 0, "featured": false }
+  ]
+}
+```
 
 **Guidance for a conversational (LLM) caller:** **send `compact=true`** on availability,
 appointments and contact reads; on availability **read `free_blocks` first** (it is the
