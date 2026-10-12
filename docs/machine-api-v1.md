@@ -48,7 +48,7 @@ revealing which):
 ```
 
 ### 1.3 Capabilities — deny-by-default
-Each token grants an explicit set from exactly these five, dot-separated:
+Each token grants an explicit set from exactly these six, dot-separated:
 
 | Capability | Grants |
 |---|---|
@@ -57,6 +57,7 @@ Each token grants an explicit set from exactly these five, dot-separated:
 | `scheduling.write` | create / cancel / reschedule / confirm / complete / no-show |
 | `crm.read` | contact lookup and reads |
 | `crm.write` | contact upsert, notes, tags, field + consent writes |
+| `catalog.read` | product catalogue reads (name, price, availability) |
 
 A token grants **only** what it lists. An unknown/removed capability string is treated as
 **absent** — never a wildcard. Each route declares the ONE capability it requires; the
@@ -365,7 +366,7 @@ only to pin an exact booking time; and **resolve by name and day+time, never by 
 
 ---
 
-## 2. The three families
+## 2. The families
 
 ### 2.1 Handoff — capability `handoff`
 The conversation contract (inbound messages, mode checks, human escalation, outbound
@@ -573,6 +574,74 @@ GET  /api/crm/v1/contacts/{tenant-B contact id}    (tenant-A token)  → 404 not
 GET  /api/crm/v1/field-definitions  X-Workflow-Ref: <tenant-B wf>    → 404 not_found
 GET  /api/crm/v1/field-definitions  X-Workflow-Ref: (blank)          → 400 workflow_ref_required
 ```
+
+### 2.4 Catalog — capability `catalog.read`
+What the business SELLS (products), as opposed to what it DOES (services, §2.2). **INFORM
+ONLY**: there is exactly one endpoint, it is read-only, and nothing in the family lets an
+agent order, hold, reserve or price-change anything. A product is generic — the first user
+is a barbershop selling waxes and oils, but the field names never say so.
+
+#### `GET /api/catalog/v1/products` — `catalog.read`
+The ACTIVE products of the client the workflow ref resolves to. Optional query params:
+- `q` — matches the product NAME, case- **and accent-insensitively** (`?q=balsamo` finds
+  "Bálsamo").
+- `category` — exact, case-insensitive category match.
+
+Rules that matter to an agent:
+- **Out-of-stock products ARE returned**, with `in_stock: false`, so the agent can say
+  "lo tenemos, pero ahora está agotado" instead of "no existe".
+- Archived products are never returned. An empty catalogue is `{ "products": [], "truncated": false }`, never an error.
+- Sorted by `(sort_order, name)`. Capped at **200**; `truncated` is `true` when the cap hid rows.
+- `price` is the raw stored value; `price_label` is the SAME canonical money label services
+  use (§1 E-4), so a product and a service at the same price read identically.
+
+Executed live (`X-Workflow-Ref: <catalog wf>`, token with `catalog.read`):
+```
+GET /api/catalog/v1/products
+→ 200
+{
+  "products": [
+    {
+      "id": "05a19984-ba0d-4d31-a551-c31b9181341c",
+      "name": "Bálsamo para barba",
+      "description": "Hidrata y da forma a la barba sin apelmazar.",
+      "price": "30.00",
+      "price_label": "$30",
+      "category": "Barba",
+      "in_stock": true
+    },
+    {
+      "id": "7d3612f5-e8fb-4080-9122-2e3cc5eba373",
+      "name": "Óleo nocturno",
+      "description": null,
+      "price": "52000.00",
+      "price_label": "$52.000",
+      "category": "Barba",
+      "in_stock": false
+    },
+    {
+      "id": "ccf66ebc-fdce-4ba9-8e6a-6001e082942d",
+      "name": "Shampoo sólido",
+      "description": null,
+      "price": "18000.00",
+      "price_label": "$18.000",
+      "category": "Cabello",
+      "in_stock": true
+    }
+  ],
+  "truncated": false
+}
+```
+
+#### Refusals + isolation (verified live)
+```
+GET /api/catalog/v1/products   (token WITHOUT catalog.read)            → 401 unauthorized
+GET /api/catalog/v1/products   X-Workflow-Ref: (blank)                 → 400 workflow_ref_required
+GET /api/catalog/v1/products   X-Workflow-Ref: <another client's wf>   → 403 module_disabled (or 404 not_found if the ref is unknown)
+GET /api/catalog/v1/products   (tenant-A token, tenant-B workflow)     → 404 not_found
+```
+A token scoped to client A can never list client B's products: tenant + client are derived
+from the token + workflow ref, never sent by the caller.
 
 ---
 

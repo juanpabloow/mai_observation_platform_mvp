@@ -44,7 +44,7 @@ export interface Scenario {
  * at otherClientId's site) and/or `enableCrm`.
  */
 export async function seedScenario(
-  opts: { openingHours?: WeeklyHours; enableScheduling?: boolean; enableCrm?: boolean } = {},
+  opts: { openingHours?: WeeklyHours; enableScheduling?: boolean; enableCrm?: boolean; enableCatalog?: boolean } = {},
 ): Promise<Scenario> {
   const tenantId = randomUUID();
   await query(`INSERT INTO tenants (id, name) VALUES ($1, $2)`, [tenantId, `Test Tenant ${tenantId.slice(0, 8)}`]);
@@ -114,8 +114,36 @@ export async function seedScenario(
       await setClientModuleEnabled({ tenantId, clientId: c, moduleKey: 'crm', enabled: true });
     }
   }
+  if (opts.enableCatalog) {
+    for (const c of [clientId, otherClientId]) {
+      await setClientModuleEnabled({ tenantId, clientId: c, moduleKey: 'catalog', enabled: true });
+    }
+  }
 
   return { tenantId, defaultClientId, clientId, otherClientId, siteId, siteSlug: slug, staffA, staffB, serviceHaircut, serviceBeard, serviceColor };
+}
+
+/** Insert a product owned by `clientId`. Price is required (> 0), like the real column. */
+export async function seedProduct(
+  tenantId: string,
+  clientId: string,
+  opts: { name?: string; price?: number; description?: string | null; category?: string | null; inStock?: boolean; sortOrder?: number } = {},
+): Promise<string> {
+  const r = await query<{ id: string }>(
+    `INSERT INTO products (tenant_id, client_id, name, description, price, category, in_stock, sort_order)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+    [
+      tenantId,
+      clientId,
+      opts.name ?? `Product ${randomUUID().slice(0, 6)}`,
+      opts.description ?? null,
+      opts.price ?? 25000,
+      opts.category ?? null,
+      opts.inStock ?? true,
+      opts.sortOrder ?? 0,
+    ],
+  );
+  return r.rows[0].id;
 }
 
 /** Helpers for the client-scoping tests. */

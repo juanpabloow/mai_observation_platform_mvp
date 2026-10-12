@@ -121,3 +121,36 @@ it here; don't duplicate per-surface.
   module + `canAccessClient`-gated, so a Setter could still reach them by URL. Decide the
   policy (likely ✓ — it's conversation content — or ✗) and gate it server-side; until then
   treat it like billing (default ✗) if it matters for a given client.
+
+## Product catalog
+
+The catalog is INFORM-ONLY in v1 (a client lists what it sells; the bot can read name,
+price, description and availability — no orders, reservations, stock quantities or
+payments). Deferred, in rough dependency order:
+
+- **Product images.** A product has no image yet. When added, the *platform* stores the
+  image (object storage, like the meetings uploads) but the *workflow* decides how/whether
+  to send it on a given channel — the API stays channel-blind (it would expose a URL, not
+  push media).
+- **Variants** (sizes / presentations, e.g. 30ml vs 100ml). For now model each as a
+  SEPARATE product. A real variant model (one product, many SKUs with their own price +
+  availability) lands when a client actually needs shared metadata across sizes.
+- **Stock QUANTITIES.** v1 has only the boolean `in_stock` (disponible/agotado). Real
+  counts require recorded sales/movements first (you can't decrement what you don't log),
+  so quantities come with — not before — the sales phase.
+- **Reserve-for-pickup at an appointment.** Linking a product hold to a scheduling
+  appointment (the bot sets aside an item for a booked visit) needs the write side the
+  INFORM-ONLY rule deliberately excludes here.
+- **Orders / delivery.** A real order object (line items, totals, status, fulfilment) is a
+  separate module that CONSUMES the catalog; `products.is_active` archiving exists precisely
+  so order history can keep referencing a product that's no longer offered.
+- **Payments link.** When payments ship, tie a product sale to the ticket (and to
+  commissions). The `catalog.read` capability stays read-only; a sale is a different family
+  with its own write capability, never bolted onto the catalog read.
+- **Categories table.** Category is free text in v1 (one column, no joins, no CRUD). A real
+  `product_categories` table (ordering, rename-propagation, per-category rules) is worth it
+  only once a client manages enough products that free text drifts ("Barba" vs "barba" vs
+  "Cuidado de barba"); until then it would add a table + management UI for no gain.
+- **Reorder UI.** `sort_order` exists and the API honours it, but there's no drag-to-order
+  control yet (every row defaults to 0 → name order), the same deferral services made for
+  `display_order`. Add a reorder control (owner-only) alongside this column when wanted.

@@ -112,6 +112,13 @@ const Icon = {
       />
     </svg>
   ),
+  /* Catalog ("Productos") — a price tag: what the business SELLS, priced. */
+  catalog: (
+    <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
+      <path d="M4 7a2 2 0 0 1 2-2h5.2a2 2 0 0 1 1.4.6l7 7a2 2 0 0 1 0 2.8l-4.2 4.2a2 2 0 0 1-2.8 0l-7-7a2 2 0 0 1-.6-1.4V7Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <circle cx="8.5" cy="8.5" r="1.2" fill="currentColor" />
+    </svg>
+  ),
 } as const;
 
 interface NavItem {
@@ -607,6 +614,22 @@ export function AppSidebar({
         }
         sections.push({ label: "Scheduling", items: scheduling });
       }
+      // CATALOG — "Productos": what the client sells. Shown to anyone with general access
+      // (owner/setter/agency — the Setter answers customers about products), never Staff.
+      if (moduleKeys.includes("catalog") && canSeeGeneral) {
+        sections.push({
+          label: "Catálogo",
+          items: [
+            {
+              key: "catalog",
+              label: "Productos",
+              href: c("/catalog"),
+              icon: Icon.catalog,
+              active: pathname.startsWith(c("/catalog")),
+            },
+          ],
+        });
+      }
       // ADMINISTRATION — Users & access for the client OWNER (and the agency); Modules is
       // AGENCY-ONLY plumbing (a client can't toggle its own modules).
       if (canManageThisClient) {
@@ -637,6 +660,9 @@ export function AppSidebar({
     }
     if (clientRole !== "staff" && memberModules.includes("scheduling")) {
       items.push({ key: "agenda", label: "Agenda", href: m("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(m("/scheduling")) });
+    }
+    if (clientRole !== "staff" && memberModules.includes("catalog")) {
+      items.push({ key: "catalog", label: "Productos", href: m("/catalog"), icon: Icon.catalog, active: pathname.startsWith(m("/catalog")) });
     }
     sections = [{ label: "Client", items }];
   } else {

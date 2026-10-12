@@ -88,5 +88,6 @@ export async function setClientModuleAction(input: {
   revalidatePath(`/clients/${clientId}/contacts`);
   revalidatePath(`/clients/${clientId}/scheduling/agenda`);
   revalidatePath(`/clients/${clientId}/inbox`);
+  revalidatePath(`/clients/${clientId}/catalog`);
   return { ok: true, module: view };
 }

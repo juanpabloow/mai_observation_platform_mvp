@@ -13,14 +13,19 @@ import {
  * unknown string is never a wildcard, and legacy tokens get exactly the pre-C-5 authority.
  */
 
-test('the vocabulary is exactly the five capabilities', () => {
-  assert.deepEqual([...ALL_CAPABILITIES], ['handoff', 'scheduling.read', 'scheduling.write', 'crm.read', 'crm.write']);
+test('the vocabulary is exactly the six capabilities', () => {
+  assert.deepEqual(
+    [...ALL_CAPABILITIES],
+    ['handoff', 'scheduling.read', 'scheduling.write', 'crm.read', 'crm.write', 'catalog.read'],
+  );
 });
 
-test('LEGACY_CAPABILITIES is the pre-C-5 authority — NO crm.*', () => {
+test('LEGACY_CAPABILITIES is the pre-C-5 authority — NO crm.* and NO catalog.*', () => {
   assert.deepEqual([...LEGACY_CAPABILITIES], ['handoff', 'scheduling.read', 'scheduling.write']);
   assert.ok(!LEGACY_CAPABILITIES.includes('crm.read' as never));
   assert.ok(!LEGACY_CAPABILITIES.includes('crm.write' as never));
+  // A new API family must never be auto-granted to existing tokens.
+  assert.ok(!LEGACY_CAPABILITIES.includes('catalog.read' as never));
 });
 
 test('isCapability accepts only the vocabulary', () => {

@@ -103,6 +103,27 @@ export function canManageClient(scope: AccessScope, clientId: string): boolean {
   return hasFullAccess(scope) || isClientOwner(scope, clientId);
 }
 
+/**
+ * May this scope READ the product catalog AND flip a product's availability (in_stock)?
+ * The agency, a client OWNER, and a SETTER may — the Setter answers customers about
+ * products and is the one at the counter who notices a product run out. STAFF may not
+ * (its one surface is scheduling). This is exactly canAccessClient's audience (owner +
+ * setter + agency, never staff), so it reuses that predicate rather than re-deriving it.
+ */
+export function canReadCatalog(scope: AccessScope, clientId: string): boolean {
+  return canAccessClient(scope, clientId);
+}
+
+/**
+ * May this scope MANAGE the catalog — create / edit / archive / reorder a product, and
+ * change its name or price? The agency or this client's OWNER only. A Setter reads and
+ * toggles availability but never changes prices or names; Staff never. Mirrors
+ * canManageClient (the same authority scheduling settings use).
+ */
+export function canManageCatalog(scope: AccessScope, clientId: string): boolean {
+  return canManageClient(scope, clientId);
+}
+
 /** A staff login — bound to one staff resource at one site; sees only scheduling. */
 export function isSchedulingStaff(scope: AccessScope): boolean {
   return scope.clientRole === "staff";

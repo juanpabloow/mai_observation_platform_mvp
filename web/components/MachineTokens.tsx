@@ -28,6 +28,7 @@ const CAPABILITIES: { key: string; label: string; hint: string }[] = [
   { key: "scheduling.write", label: "Book and change appointments", hint: "Create, cancel, reschedule, confirm, complete" },
   { key: "crm.read", label: "Read contacts", hint: "Look up and read contact records" },
   { key: "crm.write", label: "Create and update contacts", hint: "Upsert, notes, tags, fields, consent" },
+  { key: "catalog.read", label: "Read the product catalog", hint: "List products, prices and availability" },
 ];
 const DEFAULT_CAPS = ["handoff", "scheduling.read", "scheduling.write"];
 const LABEL = new Map(CAPABILITIES.map((c) => [c.key, c.label]));
@@ -63,8 +64,8 @@ function CapabilityPicker({ selected, onToggle }: { selected: Set<string>; onTog
  * token ONCE; list each token's capabilities as chips; edit a token's capabilities
  * without re-issuing the secret; revoke behind an inline confirm.
  *
- * "Machine tokens", not "Handoff tokens": these credentials now cover three API families
- * (handoff, scheduling, CRM).
+ * "Machine tokens", not "Handoff tokens": these credentials now cover several API families
+ * (handoff, scheduling, CRM, catalog).
  */
 export function MachineTokens({ connections }: { connections: ConnectionTokens[] }) {
   const router = useRouter();
@@ -159,7 +160,7 @@ export function MachineTokens({ connections }: { connections: ConnectionTokens[]
       <div className="space-y-1">
         <h2 className="text-lg font-semibold tracking-tight">Machine tokens</h2>
         <p className="text-sm text-neutral-500">
-          Machine tokens let your n8n workflows call the handoff, scheduling and CRM APIs.
+          Machine tokens let your n8n workflows call the handoff, scheduling, CRM and catalog APIs.
           Each token is scoped to one connection and only its workflows, and grants only
           the capabilities you pick. The full token is shown once, at creation.
         </p>

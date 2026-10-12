@@ -23,6 +23,7 @@ export const ALL_CAPABILITIES = [
   'scheduling.write',
   'crm.read',
   'crm.write',
+  'catalog.read',
 ] as const;
 export type Capability = (typeof ALL_CAPABILITIES)[number];
 
