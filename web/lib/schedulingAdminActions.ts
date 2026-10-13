@@ -238,7 +238,7 @@ export async function updateServiceAction(
   if (!auth.ok) return auth;
   // `category` and `description` are pulled OUT of the spread so raw values never reach the
   // repository unvalidated: category is narrowed to a storable family (or NULL = infer from
-  // name); description is trimmed, whitespace→NULL, and rejected over 500 chars (naming the
+  // name); description is trimmed, whitespace→NULL, and rejected over the shared limit (naming the
   // field). Absent = not in the patch (left unchanged).
   const { category, description, ...rest } = patch;
   let descriptionPatch: { description?: string | null } = {};
