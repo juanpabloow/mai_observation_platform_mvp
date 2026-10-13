@@ -6,6 +6,8 @@ import { backfillConversationContacts } from '../db/repositories/contactIdentiti
  * For every conversation with contact_id NULL, resolve its conversation_ref through the C-2
  * phone normalizer against contact_identities in the same tenant+client and link it when
  * EXACTLY ONE contact matches; ambiguous / no-match are left untouched. Safe to re-run.
+ * A WhatsApp BSUID ref ("CO.…") is never read as a phone: it matches only its exact
+ * `external` identity (or the contact the old code created from it) — BACKFILL_CTE.
  */
 async function main(): Promise<void> {
   const { scanned, linked, ambiguous, noMatch } = await backfillConversationContacts();
@@ -14,7 +16,7 @@ async function main(): Promise<void> {
     [
       '=== E-5 conversation→contact backfill ===',
       `conversations scanned (contact_id NULL): ${scanned}`,
-      `linked (exactly one phone match):         ${linked}`,
+      `linked (exactly one identity match):      ${linked}`,
       `skipped — ambiguous (>1 match):           ${ambiguous}`,
       `skipped — no match (no phone/contact):    ${noMatch}`,
     ].join('\n'),

@@ -43,12 +43,29 @@ function validE164(candidate: string): string | null {
   return /^\+[1-9][0-9]{6,14}$/.test(candidate) ? candidate : null;
 }
 
+/**
+ * A WhatsApp business-scoped user id (BSUID): an ISO country code, a dot, an opaque
+ * alphanumeric id ("CO.1234567890"). A TRANSPORT id, never a phone. Deliberately narrow —
+ * other refs that merely contain letters ("wa:573001112233", the documented n8n form) keep
+ * normalizing by their digits exactly as before. Mirrored in SQL by BSUID_SQL_RE
+ * (contactIdentities.ts).
+ */
+const BSUID_SHAPE = /^[A-Za-z]{2}\.[A-Za-z0-9]+$/;
+export function isBsuid(value: string | null | undefined): boolean {
+  return BSUID_SHAPE.test((value ?? '').trim());
+}
+
 export function normalizeE164(
   input: string | null | undefined,
   opts?: { defaultRegion?: DialingRegion | null },
 ): string | null {
   if (!input) return null;
   const trimmed = input.trim();
+  // A BSUID ("CO.1234567890") is never a phone. Its letters used to be stripped and the
+  // digits came out as an invented phone ("+1234567890") that could even collide with a
+  // real one. It stays an opaque `external` identity (classifyIdentity). Only the BSUID
+  // shape is refused: every other input normalizes exactly as before.
+  if (isBsuid(trimmed)) return null;
   const hasPlus = trimmed.startsWith('+');
   const digits = trimmed.replace(/[^0-9]/g, '');
 
