@@ -12,11 +12,14 @@ import {
   dirtyProfileFields,
   profileFromMember,
   profilePatch,
+  publicProfileError,
   type ProfileDraft,
   type StaffMember,
   type StaffServiceOpt,
 } from "@/components/scheduling/staff/StaffTab";
 import { FullScreen, M_INPUT, MError, MField, MSection, MSwitchRow } from "./FullScreen";
+import { StaffPhotoControl } from "@/components/scheduling/staff/StaffPhotoControl";
+import { PUBLIC_BIO_MAX, PUBLIC_TITLE_MAX } from "@/lib/staffPublicProfile";
 import { hoursDraftError, WEEK_ORDER, WEEKDAY_ES, type Weekly } from "./presence";
 
 /**
@@ -258,15 +261,29 @@ export function profileErrorEs(d: ProfileDraft): string | null {
     if (!Number.isInteger(n) || n < 1 || n > 168) return "Las horas semanales deben ser un número entero de 1 a 168.";
   }
   if (d.employmentType !== "" && !EMPLOYMENT_ES.some((t) => t.value === d.employmentType)) return "Tipo de contrato desconocido.";
-  return null;
+  return publicProfileError(d, "es");
 }
 
-export function ProfileForm(props: { open: boolean; clientId: string; member: StaffMember; onClose: () => void; onSaved: (msg: string) => void }) {
+export function ProfileForm(props: { open: boolean; clientId: string; member: StaffMember; photoUploadEnabled?: boolean; onClose: () => void; onSaved: (msg: string) => void; onPhotoChanged?: () => void }) {
   if (!props.open) return null;
   return <ProfileFormBody {...props} />;
 }
 
-function ProfileFormBody({ clientId, member, onClose, onSaved }: { clientId: string; member: StaffMember; onClose: () => void; onSaved: (msg: string) => void }) {
+function ProfileFormBody({
+  clientId,
+  member,
+  photoUploadEnabled = false,
+  onClose,
+  onSaved,
+  onPhotoChanged,
+}: {
+  clientId: string;
+  member: StaffMember;
+  photoUploadEnabled?: boolean;
+  onClose: () => void;
+  onSaved: (msg: string) => void;
+  onPhotoChanged?: () => void;
+}) {
   const [profile, setProfile] = useState<ProfileDraft>(() => profileFromMember(member));
   const [skill, setSkill] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -369,6 +386,41 @@ function ProfileFormBody({ clientId, member, onClose, onSaved }: { clientId: str
             label="Recibe citas"
             hint="Apágalo para recepción o administración: trabaja aquí, pero no tiene silla."
           />
+        </div>
+      </MSection>
+      <MSection title="Perfil público">
+        <div className="flex flex-col gap-4">
+          <p className="text-[14px] leading-[1.45] text-m-tx2">Se muestra en la página de reservas. No incluyas teléfonos, correos ni enlaces.</p>
+          <StaffPhotoControl
+            clientId={clientId}
+            staffId={member.id}
+            name={member.name}
+            photoUrl={member.publicPhotoUrl}
+            enabled={photoUploadEnabled}
+            lang="es"
+            onChanged={() => onPhotoChanged?.()}
+          />
+          <MField label="Título público" htmlFor="m-prof-ptitle">
+            <input
+              id="m-prof-ptitle"
+              value={profile.publicTitle}
+              onChange={(e) => set("publicTitle", e.target.value)}
+              placeholder="Ej.: Barbero profesional"
+              maxLength={PUBLIC_TITLE_MAX + 10}
+              className={M_INPUT}
+            />
+          </MField>
+          <MField label="Presentación" hint={`(${profile.publicBio.trim().length}/${PUBLIC_BIO_MAX})`} htmlFor="m-prof-pbio">
+            <textarea
+              id="m-prof-pbio"
+              value={profile.publicBio}
+              onChange={(e) => set("publicBio", e.target.value)}
+              rows={5}
+              maxLength={PUBLIC_BIO_MAX + 40}
+              placeholder="Una presentación breve que el cliente lee antes de elegir."
+              className={`${M_INPUT} h-auto min-h-[120px] py-3 leading-[1.5]`}
+            />
+          </MField>
         </div>
       </MSection>
       <MSection title="Contacto">

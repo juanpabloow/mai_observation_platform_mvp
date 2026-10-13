@@ -12,6 +12,10 @@
 
 /** Max accepted logo size — logos are tiny; anything larger is rejected. */
 export const MAX_LOGO_BYTES = 2 * 1024 * 1024; // 2 MB
+/** Max accepted professional photo. The Team editor downsizes the picture in the browser
+ * first (max 1200 px, JPEG), so a real photo lands well under this — and under the
+ * Server Actions body limit (1 MB), which is left at its default. */
+export const MAX_STAFF_PHOTO_BYTES = 900 * 1024;
 
 export type ImageType = "png" | "jpeg" | "webp";
 
@@ -61,12 +65,13 @@ export type ImageValidation =
  * Validate an untrusted uploaded file as a logo: enforce size, then confirm it
  * is genuinely a PNG/JPEG/WebP by its bytes. Returns the validated bytes + type.
  */
-export async function validateImageFile(file: File): Promise<ImageValidation> {
+export async function validateImageFile(file: File, maxBytes: number = MAX_LOGO_BYTES): Promise<ImageValidation> {
+  const tooLarge = `Image too large (max ${maxBytes >= 1024 * 1024 ? `${Math.round(maxBytes / (1024 * 1024))} MB` : `${Math.round(maxBytes / 1024)} KB`}).`;
   if (!file || file.size === 0) return { ok: false, error: "No image selected." };
-  if (file.size > MAX_LOGO_BYTES) return { ok: false, error: "Image too large (max 2 MB)." };
+  if (file.size > maxBytes) return { ok: false, error: tooLarge };
 
   const bytes = new Uint8Array(await file.arrayBuffer());
-  if (bytes.length > MAX_LOGO_BYTES) return { ok: false, error: "Image too large (max 2 MB)." };
+  if (bytes.length > maxBytes) return { ok: false, error: tooLarge };
 
   const type = detectImageType(bytes);
   if (!type) return { ok: false, error: "Unsupported image. Use PNG, JPEG, or WebP." };

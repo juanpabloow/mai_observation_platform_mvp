@@ -51,6 +51,7 @@ export function TeamMember({
   color,
   listHref,
   onToast,
+  photoUploadEnabled = false,
 }: {
   clientId: string;
   member: StaffMember;
@@ -68,6 +69,7 @@ export function TeamMember({
   color?: string;
   listHref: string;
   onToast: (msg: string) => void;
+  photoUploadEnabled?: boolean;
 }) {
   const router = useRouter();
   const [layer, setLayer] = useState<Layer>(null);
@@ -522,7 +524,15 @@ export function TeamMember({
       }>
         <MConfirm title="¿Eliminar la ausencia?" body="La disponibilidad se restablece. Las citas existentes no se modifican." />
       </Sheet>
-      <ProfileForm open={layer === "profile"} clientId={clientId} member={member} onClose={() => setLayer(null)} onSaved={saved} />
+      <ProfileForm
+        open={layer === "profile"}
+        clientId={clientId}
+        member={member}
+        photoUploadEnabled={photoUploadEnabled}
+        onClose={() => setLayer(null)}
+        onSaved={saved}
+        onPhotoChanged={() => router.refresh()}
+      />
       <HoursForm open={layer === "hours"} clientId={clientId} member={member} siteName={siteName} openingHours={openingHours} onClose={() => setLayer(null)} onSaved={saved} />
       <CertForm open={layer === "cert"} clientId={clientId} member={member} onClose={() => setLayer(null)} onSaved={saved} />
     </>

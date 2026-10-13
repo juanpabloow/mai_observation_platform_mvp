@@ -14,6 +14,7 @@ import { listAppointments } from "@worker/db/repositories/scheduling/appointment
 import { listExceptions } from "@worker/db/repositories/scheduling/exceptions.js";
 import { utcToZonedParts, zonedPartsToUtc } from "@worker/scheduling/timezone.js";
 import { StaffWorkspace } from "@/components/scheduling/staff/StaffWorkspace";
+import { isR2Configured } from "@/lib/r2";
 import type { StaffTabProps } from "@/components/scheduling/staff/StaffTab";
 import type { TeamMobileExtras } from "@/components/scheduling/mobile/team/TeamMobile";
 
@@ -120,6 +121,8 @@ async function loadRoster(
     .map((e) => ({ id: e.id, staffId: "", startsAt: e.starts_at.toISOString(), endsAt: e.ends_at.toISOString(), reason: e.reason }));
 
   const staffProps: StaffTabProps = {
+    // A public photo can be uploaded only where object storage is configured.
+    photoUploadEnabled: isR2Configured,
     sites: sites.map((s) => ({ id: s.id, name: s.name, timezone: s.timezone })),
     currentSiteId: site.id,
     services: services.map((s) => ({
@@ -148,6 +151,10 @@ async function loadRoster(
       startDate: isoDay(s.start_date),
       skills: s.skills,
       takesBookings: s.takes_bookings,
+      // PUBLIC profile (booking page). Not PII — written to be published.
+      publicTitle: s.public_title,
+      publicBio: s.public_bio,
+      publicPhotoUrl: s.public_photo_url,
       phone: s.phone,
       email: s.email,
       emergencyContactName: s.emergency_contact_name,

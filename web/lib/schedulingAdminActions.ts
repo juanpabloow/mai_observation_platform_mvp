@@ -4,6 +4,8 @@ import { revalidatePath } from "next/cache";
 import { canManageClient } from "./access";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { normalizeServiceDescription } from "./serviceDescription";
+import { checkPublicBio, checkPublicTitle, publicProfileMessage } from "./staffPublicProfile";
+import { deleteLogo, isR2Configured, uploadStaffPhoto } from "./r2";
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, type WeeklyHours } from "@worker/scheduling/types.js";
 import { localWallClockToUtc } from "@worker/scheduling/timezone.js";
 import {
@@ -339,6 +341,10 @@ export async function updateStaffAction(
     email?: string | null;
     emergencyContactName?: string | null;
     emergencyContactPhone?: string | null;
+    // PUBLIC profile shown on /book/{slug}. Plain text, content-checked below. The photo
+    // has its own actions (uploadStaffPhotoAction / removeStaffPhotoAction).
+    publicTitle?: string | null;
+    publicBio?: string | null;
   },
 ): Promise<AdminResult> {
   const auth = await requireSchedulingAdmin(clientId);
@@ -347,7 +353,18 @@ export async function updateStaffAction(
   if (!current || !(await siteInClient(auth.tenantId, clientId, current.site_id))) return { ok: false, error: FOREIGN };
   // Narrow what the CHECK constraints already restrict, so a bad value is a readable
   // error here instead of a 500 from Postgres. Same rule, stated twice on purpose.
-  const { employmentType, weeklyHours, name, ...rest } = patch;
+  const { employmentType, weeklyHours, name, publicTitle, publicBio, ...rest } = patch;
+  const publicPatch: { publicTitle?: string | null; publicBio?: string | null } = {};
+  if (publicTitle !== undefined) {
+    const r = checkPublicTitle(publicTitle);
+    if (!r.ok) return { ok: false, error: publicProfileMessage(r.error, "Public title", r.max, "en") };
+    publicPatch.publicTitle = r.value;
+  }
+  if (publicBio !== undefined) {
+    const r = checkPublicBio(publicBio);
+    if (!r.ok) return { ok: false, error: publicProfileMessage(r.error, "Public presentation", r.max, "en") };
+    publicPatch.publicBio = r.value;
+  }
   let namePatch: { name?: string } = {};
   if (name !== undefined) {
     const trimmed = name.trim();
@@ -372,12 +389,62 @@ export async function updateStaffAction(
   const row = await updateStaff(auth.tenantId, id, {
     ...rest,
     ...namePatch,
+    ...publicPatch,
     ...(employmentType !== undefined ? { employmentType: employmentType as EmploymentType | null } : {}),
     ...(weeklyHours !== undefined ? { weeklyHours } : {}),
   });
   if (!row) return { ok: false, error: "Staff not found." };
   revalidateAdmin(clientId);
   return { ok: true, id };
+}
+
+/**
+ * Upload (or replace) a professional's PUBLIC photo — shown on the booking page.
+ * FormData { clientId, staffId, photo: File }. Same gate as every staff edit (client
+ * owner/agency + module), the staff member must belong to the client, and the file is
+ * validated by its bytes (PNG/JPEG/WebP) in uploadStaffPhoto. A replaced photo's old
+ * object is deleted best-effort.
+ */
+export async function uploadStaffPhotoAction(formData: FormData): Promise<AdminResult & { url?: string }> {
+  const clientId = String(formData.get("clientId") ?? "");
+  const staffId = String(formData.get("staffId") ?? "");
+  const file = formData.get("photo");
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  if (!isR2Configured) return { ok: false, error: "Photo upload is not configured." };
+  if (!(file instanceof File)) return { ok: false, error: "No image selected." };
+  const current = await getStaffById(auth.tenantId, staffId);
+  if (!current || !(await siteInClient(auth.tenantId, clientId, current.site_id))) return { ok: false, error: FOREIGN };
+  const up = await uploadStaffPhoto(auth.tenantId, clientId, staffId, file);
+  if (!up.ok) return { ok: false, error: up.error };
+  const row = await updateStaff(auth.tenantId, staffId, { publicPhotoUrl: up.url });
+  if (!row) return { ok: false, error: "Staff not found." };
+  if (current.public_photo_url && current.public_photo_url !== up.url) {
+    try {
+      await deleteLogo(current.public_photo_url);
+    } catch {
+      /* an orphaned old object is tolerable; never fail the upload over it */
+    }
+  }
+  revalidateAdmin(clientId);
+  return { ok: true, id: staffId, url: up.url };
+}
+
+/** Remove the public photo (the page falls back to initials). */
+export async function removeStaffPhotoAction(clientId: string, staffId: string): Promise<AdminResult> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  const current = await getStaffById(auth.tenantId, staffId);
+  if (!current || !(await siteInClient(auth.tenantId, clientId, current.site_id))) return { ok: false, error: FOREIGN };
+  if (!current.public_photo_url) return { ok: true, id: staffId };
+  await updateStaff(auth.tenantId, staffId, { publicPhotoUrl: null });
+  try {
+    await deleteLogo(current.public_photo_url);
+  } catch {
+    /* best effort */
+  }
+  revalidateAdmin(clientId);
+  return { ok: true, id: staffId };
 }
 
 export async function deactivateStaffAction(clientId: string, id: string): Promise<AdminResult> {

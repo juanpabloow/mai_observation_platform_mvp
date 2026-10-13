@@ -33,6 +33,7 @@ import { matchByName, type NameMatch } from '../../../scheduling/nameMatch.js';
 const STAFF_COLS = `s.id, s.tenant_id, s.site_id, s.name, s.working_hours, s.active,
        s.title, s.employment_type, s.weekly_hours, s.start_date,
        COALESCE(s.skills, '{}') AS skills, s.takes_bookings,
+       s.public_title, s.public_bio, s.public_photo_url,
        s.created_at, s.updated_at`;
 /** The same list for queries with no `s` alias. */
 const STAFF_COLS_BARE = STAFF_COLS.replace(/\bs\./g, '');
@@ -59,6 +60,12 @@ export interface StaffRow {
   /** Works here AND has a chair. `active` is the harder state (no longer employed);
    *  a front-desk hire is active with takes_bookings = false. */
   takes_bookings: boolean;
+  // ── Public profile (migration 1800). NOT PII: written to be published on the
+  //    booking page. NULL = not published (the page shows initials, no text). ──────
+  public_title: string | null;
+  public_bio: string | null;
+  /** https URL in the platform's own bucket; written only by the upload action. */
+  public_photo_url: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -250,6 +257,10 @@ export interface UpdateStaffInput {
   startDate?: string | null;
   skills?: string[];
   takesBookings?: boolean;
+  // ── Public profile. Validated by the caller (web/lib/staffPublicProfile.ts) ──
+  publicTitle?: string | null;
+  publicBio?: string | null;
+  publicPhotoUrl?: string | null;
   // ── PII. Writable here, readable only through the ...Admin reads ─────────────
   phone?: string | null;
   email?: string | null;
@@ -278,6 +289,10 @@ export async function updateStaff(tenantId: string, id: string, patch: UpdateSta
     add('skills', [...new Set(patch.skills.map((s) => s.trim()).filter(Boolean))]);
   }
   if (patch.takesBookings !== undefined) add('takes_bookings', patch.takesBookings);
+  if (patch.publicTitle !== undefined) add('public_title', emptyToNull(patch.publicTitle));
+  // The presentation keeps its line breaks: only an all-blank value becomes NULL.
+  if (patch.publicBio !== undefined) add('public_bio', (patch.publicBio ?? '').trim() === '' ? null : patch.publicBio);
+  if (patch.publicPhotoUrl !== undefined) add('public_photo_url', emptyToNull(patch.publicPhotoUrl));
   if (patch.phone !== undefined) add('phone', emptyToNull(patch.phone));
   if (patch.email !== undefined) add('email', emptyToNull(patch.email));
   if (patch.emergencyContactName !== undefined) add('emergency_contact_name', emptyToNull(patch.emergencyContactName));

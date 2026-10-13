@@ -8,6 +8,7 @@ import {
 import {
   IMAGE_CONTENT_TYPE,
   IMAGE_EXTENSION,
+  MAX_STAFF_PHOTO_BYTES,
   validateImageFile,
 } from "./imageValidation";
 
@@ -79,6 +80,36 @@ export async function uploadLogo(
   if (!valid.ok) return { ok: false, error: valid.error };
 
   const key = `logos/${tenantId}/${clientId}/${randomUUID()}.${IMAGE_EXTENSION[valid.type]}`;
+  await r2().send(
+    new PutObjectCommand({
+      Bucket: bucket as string,
+      Key: key,
+      Body: valid.bytes,
+      ContentType: IMAGE_CONTENT_TYPE[valid.type],
+      CacheControl: "public, max-age=31536000, immutable",
+    }),
+  );
+
+  return { ok: true, url: `${publicUrl}/${key}`, key };
+}
+
+/**
+ * A professional's PUBLIC photo for the booking page. Same rules as a logo — magic-byte
+ * validation, server-generated name, tenant/client/staff-scoped key — with the smaller
+ * photo cap. The caller has already checked that the staff member belongs to the client.
+ */
+export async function uploadStaffPhoto(
+  tenantId: string,
+  clientId: string,
+  staffId: string,
+  file: File,
+): Promise<UploadLogoResult> {
+  if (!isR2Configured) return { ok: false, error: "Photo upload is not configured." };
+
+  const valid = await validateImageFile(file, MAX_STAFF_PHOTO_BYTES);
+  if (!valid.ok) return { ok: false, error: valid.error };
+
+  const key = `staff/${tenantId}/${clientId}/${staffId}/${randomUUID()}.${IMAGE_EXTENSION[valid.type]}`;
   await r2().send(
     new PutObjectCommand({
       Bucket: bucket as string,
