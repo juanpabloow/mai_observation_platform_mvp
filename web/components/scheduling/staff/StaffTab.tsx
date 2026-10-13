@@ -37,6 +37,8 @@ import {
   IconTask,
 } from "@/components/ui/icons";
 import { StaffCreateDrawer } from "./StaffCreateDrawer";
+import { StaffPhotoControl } from "./StaffPhotoControl";
+import { PUBLIC_BIO_MAX, checkPublicBio, checkPublicTitle, publicProfileMessage } from "@/lib/staffPublicProfile";
 import { StaffHeaderCard, type StaffHeaderSlots } from "./StaffHeaderCard";
 import {
   inRosterFacet,
@@ -89,6 +91,10 @@ export interface StaffMember {
   skills: string[];
   /** Has a chair. Distinct from `active`: a front-desk hire works here and takes none. */
   takesBookings: boolean;
+  // PUBLIC profile shown on /book/{slug}. null = not published (initials, no text).
+  publicTitle: string | null;
+  publicBio: string | null;
+  publicPhotoUrl: string | null;
   // PII. Only this screen receives it (the page uses listStaffAdmin).
   phone: string | null;
   email: string | null;
@@ -218,6 +224,8 @@ export interface StaffTabProps {
   /** Which drawer tab to open on — `?dtab=` makes a barber's hours or services a
    *  link you can send someone, not a place they have to click to. */
   detailTab?: string;
+  /** Object storage is configured, so a public photo can be uploaded. */
+  photoUploadEnabled?: boolean;
 }
 
 export function StaffTab(
@@ -435,6 +443,7 @@ export function StaffTab(
                 closeHref={hrefFor(null)}
                 onSaved={() => router.refresh()}
                 initialTab={props.detailTab}
+                photoUploadEnabled={props.photoUploadEnabled ?? false}
               />
             </div>
           </div>
@@ -569,6 +578,7 @@ function StaffDetail({
   closeHref,
   onSaved,
   initialTab,
+  photoUploadEnabled,
 }: {
   member: StaffMember;
   status: { key: StatusKey; appts: StaffAppointment[] };
@@ -581,6 +591,7 @@ function StaffDetail({
   closeHref: string;
   onSaved: () => void;
   initialTab?: string;
+  photoUploadEnabled: boolean;
 }) {
   // FIVE tabs, and every one reads something real: the schedule answers performance,
   // the roster row answers details, `staff_services` answers services, `working_hours`
@@ -972,6 +983,50 @@ function StaffDetail({
               {/* SITE is read-only: a barber belongs to exactly one site in V1 and moving
                   them is not an update the repository supports. */}
               <ReadRow label="Sede" value={member.siteName} />
+            </DetailSection>
+
+            {/* PUBLIC PROFILE — the only part of a professional the booking page shows
+                besides the name (and only for someone who takes bookings). It is its own
+                set of fields on purpose: the internal Role and the contact details below
+                are never published. The photo saves immediately; title and presentation
+                ride the unsaved bar with everything else. */}
+            <DetailSection title="Public profile" icon={<IconIdentity />}>
+              <p className="px-4 pb-2 text-[11px] text-faint">
+                Shown on the public booking page. No phone numbers, e-mails or links.
+              </p>
+              <div className="px-4 pb-2">
+                <StaffPhotoControl
+                  clientId={clientId}
+                  staffId={member.id}
+                  name={member.name}
+                  photoUrl={member.publicPhotoUrl}
+                  enabled={photoUploadEnabled}
+                  lang="en"
+                  onChanged={onSaved}
+                />
+              </div>
+              <FieldRow
+                label="Public title"
+                value={profile.publicTitle}
+                onChange={(v) => setProfile((d) => ({ ...d, publicTitle: v }))}
+                placeholder="e.g. Barbero profesional"
+              />
+              <label className="flex min-w-0 flex-col gap-1 px-4 pb-3 pt-1">
+                <span className="flex items-baseline justify-between text-xs text-muted">
+                  Presentation
+                  <span className="u-tnum text-[11px] text-faint">
+                    {profile.publicBio.trim().length}/{PUBLIC_BIO_MAX}
+                  </span>
+                </span>
+                <textarea
+                  value={profile.publicBio}
+                  onChange={(e) => setProfile((d) => ({ ...d, publicBio: e.target.value }))}
+                  rows={4}
+                  maxLength={PUBLIC_BIO_MAX + 40}
+                  placeholder="A short presentation the customer reads before choosing."
+                  className="u-focus min-h-[96px] w-full resize-y rounded-md border border-line bg-surface px-2.5 py-2 text-sm leading-relaxed placeholder:text-faint"
+                />
+              </label>
             </DetailSection>
 
             {/* CONTACT — employee PII. It only reaches this component because the page
@@ -1513,6 +1568,9 @@ export interface ProfileDraft {
   /** Do they still work here? Deactivating keeps their history and their lane and stops
    *  new bookings, so it is the harder state and it is reversible from the same field. */
   active: boolean;
+  /** Public profile (booking page). "" = not published. */
+  publicTitle: string;
+  publicBio: string;
 }
 
 /** The stored employment types — mirrors the staff_employment_type_valid CHECK. */
@@ -1536,6 +1594,8 @@ export function profileFromMember(m: StaffMember): ProfileDraft {
     skills: [...m.skills],
     takesBookings: m.takesBookings,
     active: m.active,
+    publicTitle: m.publicTitle ?? "",
+    publicBio: m.publicBio ?? "",
   };
 }
 
@@ -1563,6 +1623,15 @@ function profileError(d: ProfileDraft): string | null {
   if (d.employmentType !== "" && !EMPLOYMENT_TYPES.some((t) => t.value === d.employmentType)) {
     return "Unknown employment type.";
   }
+  return publicProfileError(d, "en");
+}
+
+/** The public-profile rules (web/lib/staffPublicProfile.ts), for both editors. */
+export function publicProfileError(d: Pick<ProfileDraft, "publicTitle" | "publicBio">, lang: "es" | "en"): string | null {
+  const title = checkPublicTitle(d.publicTitle);
+  if (!title.ok) return publicProfileMessage(title.error, lang === "es" ? "Título público" : "Public title", title.max, lang);
+  const bio = checkPublicBio(d.publicBio);
+  if (!bio.ok) return publicProfileMessage(bio.error, lang === "es" ? "Presentación" : "Presentation", bio.max, lang);
   return null;
 }
 

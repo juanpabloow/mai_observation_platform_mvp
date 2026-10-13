@@ -113,16 +113,31 @@ export interface PublicSite {
   /** Weekdays the site never opens ("sun"…"sat"). Empty when no hours are configured
    * (unknown is treated as open, exactly like the internal agenda). */
   closed_weekdays: string[];
+  /** How many days ahead the site takes bookings — the calendar greys out the days past
+   * it. A published booking rule, not an internal setting; the ENGINE still enforces it. */
+  booking_horizon_days: number;
 }
 
-export function projectPublicSite(site: { name: string; address: string | null; timezone: string; opening_hours: unknown }): PublicSite {
+/** The engine's default horizon (src/scheduling/types.ts) when a site never set one. */
+const DEFAULT_HORIZON_DAYS = 30;
+
+export function projectPublicSite(site: {
+  name: string;
+  address: string | null;
+  timezone: string;
+  opening_hours: unknown;
+  scheduling_config?: unknown;
+}): PublicSite {
   const hours = (site.opening_hours && typeof site.opening_hours === "object" ? site.opening_hours : {}) as WeeklyHours;
   const configured = Object.values(hours).some((ranges) => Array.isArray(ranges) && ranges.length > 0);
+  const cfg = (site.scheduling_config && typeof site.scheduling_config === "object" ? site.scheduling_config : {}) as { booking_horizon_days?: unknown };
+  const horizon = Number(cfg.booking_horizon_days);
   return {
     name: site.name,
     address: site.address,
     timezone: site.timezone,
     closed_weekdays: configured ? WEEKDAYS.filter((d) => !(hours[d]?.length)) : [],
+    booking_horizon_days: Number.isInteger(horizon) && horizon > 0 && horizon <= 366 ? horizon : DEFAULT_HORIZON_DAYS,
   };
 }
 
@@ -152,10 +167,35 @@ export interface PublicStaff {
   name: string;
   duration_min: number;
   price: string | null;
+  /** The professional's PUBLIC profile — null when the business has not published it. */
+  title: string | null;
+  bio: string | null;
+  photo_url: string | null;
+  /** Public services this professional performs at the site (ids of the catalogue). */
+  service_ids: string[];
+}
+
+/** An https URL or nothing — a malformed or non-https value never reaches an <img>. */
+function httpsOrNull(url: string | null): string | null {
+  if (!url) return null;
+  try {
+    return new URL(url).protocol === "https:" ? url : null;
+  } catch {
+    return null;
+  }
 }
 
 export function projectPublicStaff(s: PublicStaffRow): PublicStaff {
-  return { id: s.id, name: s.name, duration_min: s.duration_min, price: s.price };
+  return {
+    id: s.id,
+    name: s.name,
+    duration_min: s.duration_min,
+    price: s.price,
+    title: s.public_title,
+    bio: s.public_bio,
+    photo_url: httpsOrNull(s.public_photo_url),
+    service_ids: s.service_ids ?? [],
+  };
 }
 
 export interface PublicSlot {

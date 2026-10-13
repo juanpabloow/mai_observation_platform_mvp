@@ -35,11 +35,16 @@ El mes del calendario se pide en tramos consecutivos de ≤14 días (el tope del
 **Público** (proyecciones en `src/db/repositories/scheduling/publicCatalog.ts` y
 `web/lib/publicBookingApi.ts`):
 
-- Sede: nombre, dirección, zona horaria, días de la semana en que cierra.
+- Sede: nombre, dirección, zona horaria, días de la semana en que cierra y horizonte de
+  reservas en días (`booking_horizon_days`, para atenuar en el calendario los días posteriores;
+  el motor lo sigue aplicando).
 - Servicios activos en la sede: id, nombre, descripción, duración y precio efectivos,
   familia de color.
 - Profesionales **activos que toman reservas** (`takes_bookings`) y prestan el servicio:
-  id, nombre, su duración y precio para ese servicio.
+  id, nombre, su duración y precio para ese servicio y su **perfil público** (migración
+  `1800`): `title`, `bio`, `photo_url` (solo https) y `service_ids` (los servicios públicos de
+  la sede que realiza). El perfil se edita en Equipo y es independiente del cargo interno y de
+  los datos de contacto, que nunca se publican. Vacío = no publicado (iniciales, sin texto).
 - Horarios libres (inicio/fin) y qué profesionales públicos están libres en cada uno.
 - Confirmación: referencia pública (UUID aleatorio, no el id de la fila), sede,
   dirección, servicio, profesional asignado, inicio/fin, duración, precio, zona horaria.
@@ -134,6 +139,34 @@ contadores). Probada up → down → up sobre la base de test local.
 **Debe aplicarse antes de desplegar el código**: sin la tabla, crear reservas públicas
 responde 500. No se ejecutó sobre producción.
 
+### Perfil público de profesionales (`1800`)
+
+`migrations/1800000000000_staff-public-profile.ts` añade a `staff` tres columnas
+**opcionales**: `public_title` (≤ 60), `public_bio` (≤ 600) y `public_photo_url` (solo
+`https://`). Es aditiva y no cambia ninguna fila existente. El `down()` se **niega** a
+ejecutarse mientras haya perfiles con datos, para no borrar presentaciones aprobadas. Hay que
+aplicarla **antes** de desplegar el código: sin las columnas, la ruta pública de
+profesionales falla. Depende de que estén aplicadas las anteriores, incluida la `1799`
+(descripciones de hasta 2.000 caracteres).
+
+La foto se sube desde Equipo al mismo bucket R2 que los logos (`staff/{tenant}/{cliente}/{profesional}/…`).
+Se valida por sus bytes (PNG, JPEG o WebP) y se reduce en el navegador a 1200 px antes de
+enviarse. Sin R2 configurado, el editor lo indica y la página muestra las iniciales.
+
+## Diseño v3 (cuatro pasos)
+
+1. **Elige tu servicio**: categorías reales (las familias del catálogo), un servicio por
+   reserva y «Ver más» independiente de la selección.
+2. **Elige a tu artista**: «Sin preferencia» no envía `staff_id`, así que asigna el motor.
+   «Ver perfil» abre un diálogo que no selecciona; «Elegir artista» sí.
+3. **Elige fecha y hora**: calendario mensual de lunes a domingo, horarios del motor en 24 h y
+   en la zona de la sede. Cambiar de servicio o de artista borra solo la hora, y lo avisa.
+4. **Tus datos**: el único paso con resumen completo y «Editar» por bloque. El éxito se
+   construye con la respuesta del servidor.
+
+Estilos acotados a `.pb3` y tokens `pb-*` (`globals.css`). Tipografía Newsreader para los
+títulos. La página es siempre clara, sin selector de tema.
+
 ## Cómo desactivar temporalmente las reservas públicas
 
 De más fino a más grueso:
@@ -145,7 +178,7 @@ De más fino a más grueso:
 
 ## Checklist de lanzamiento
 
-- [ ] Aplicar la migración en la base del entorno (`npm run migrate:prod` con la URL de ese entorno).
+- [ ] Aplicar las migraciones en la base del entorno (`npm run migrate:prod` con la URL de ese entorno), incluidas `1799` y `1800`.
 - [ ] Definir `PUBLIC_BOOKING_HASH_SECRET` (aleatorio, ≥32 caracteres) en el Web service.
 - [ ] Revisar los límites (o dejar los defectos).
 - [ ] Turnstile: crear el widget en Cloudflare con el dominio público, cargar site key y secret, luego `PUBLIC_BOOKING_TURNSTILE_ENABLED=true`.

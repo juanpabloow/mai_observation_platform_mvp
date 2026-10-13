@@ -121,6 +121,7 @@ export function TeamMobile({ clientId, staff, extras }: { clientId: string; staf
           color={colors.get(selected.member.id)}
           listHref={href(null)}
           onToast={showToast}
+          photoUploadEnabled={staff.photoUploadEnabled ?? false}
         />
       ) : (
         <TeamList

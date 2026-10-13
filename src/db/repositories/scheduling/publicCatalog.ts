@@ -63,6 +63,13 @@ export interface PublicStaffRow {
   duration_min: number;
   /** This professional's effective price for the service (staff → site → base). */
   price: string | null;
+  /** The PUBLIC profile only (migration 1800) — never `title`, never a contact field. */
+  public_title: string | null;
+  public_bio: string | null;
+  public_photo_url: string | null;
+  /** The public services (same rule as listPublicServicesForSite) this professional
+   *  performs at the site — for "Servicios que realiza" on the profile. */
+  service_ids: string[];
 }
 
 /**
@@ -78,7 +85,20 @@ export async function listPublicStaffForService(
   const r = await query<PublicStaffRow>(
     `SELECT st.id, st.name,
             COALESCE(sts.duration_override_min, ss.duration_override_min, sv.duration_min) AS duration_min,
-            COALESCE(sts.price_override, ss.price_override, sv.price) AS price
+            COALESCE(sts.price_override, ss.price_override, sv.price) AS price,
+            st.public_title, st.public_bio, st.public_photo_url,
+            ARRAY(
+              SELECT sts2.service_id
+                FROM staff_services sts2
+                JOIN site_services ss2
+                  ON ss2.service_id = sts2.service_id AND ss2.site_id = si.id
+                 AND ss2.tenant_id = si.tenant_id AND ss2.active = true
+                JOIN services sv2
+                  ON sv2.id = sts2.service_id AND sv2.tenant_id = si.tenant_id
+                 AND sv2.client_id = si.client_id AND sv2.active = true
+               WHERE sts2.staff_id = st.id AND sts2.tenant_id = si.tenant_id AND sts2.active = true
+               ORDER BY sv2.featured DESC, sv2.name
+            ) AS service_ids
        FROM sites si
        JOIN site_services ss
          ON ss.site_id = si.id AND ss.tenant_id = si.tenant_id AND ss.service_id = $3 AND ss.active = true

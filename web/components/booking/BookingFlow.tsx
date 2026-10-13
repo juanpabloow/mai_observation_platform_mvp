@@ -1,100 +1,73 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { priceLabelCOP } from "@/lib/money";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { dayHeadline, dayShort, fmtTime, monthDiff, monthSegments, shiftMonth, siteDayKey, timezoneLabel, todayAtSite, type DayKey, type MonthKey } from "@/lib/siteCalendar";
 import {
-  dayHeadline,
-  fmtTime,
-  monthDiff,
-  monthSegments,
-  shiftMonth,
-  siteDayKey,
-  timezoneLabel,
-  todayAtSite,
-  weekdayKeyOf,
-  type DayKey,
-  type HourFormat,
-  type MonthKey,
-} from "@/lib/siteCalendar";
-import { BookingStepper } from "./BookingStepper";
-import { BookingSummary, type SummaryRow } from "./BookingSummary";
-import { BookingConfirmation, type PublicConfirmation } from "./BookingConfirmation";
-import { MonthCalendar, type DayStatus } from "./MonthCalendar";
-import { ServiceList, priceText, type ServiceOption } from "./ServiceList";
-import { SlotPicker } from "./SlotPicker";
-import { StaffChooser, type StaffOption } from "./StaffChooser";
-import { TurnstileField, type TurnstileHandle } from "./TurnstileField";
+  CLEARED_MESSAGE,
+  STEP_LABELS,
+  STEP_TITLES,
+  contactErrors,
+  dayStatusOf,
+  fullPhone,
+  lastBookableDay,
+  onArtistChange,
+  onServiceChange,
+  priceShown,
+  priceText,
+  reachableStep,
+  reconcileArtist,
+  type ArtistChoice,
+  type ClearedReason,
+  type ContactDraft,
+  type ContactErrors,
+  type Selection,
+  type Step,
+} from "@/lib/publicBookingFlow";
+import { ArtistProfile } from "./ArtistProfile";
+import { ArtistStep } from "./ArtistStep";
+import { BookingDone } from "./BookingDone";
+import { DateTimeStep, type EmptyAction, type EmptyState } from "./DateTimeStep";
+import { DetailsStep, type SummaryRow } from "./DetailsStep";
+import { ServiceStep } from "./ServiceStep";
+import type { TurnstileHandle } from "./TurnstileField";
+import { CTA_BASE, ctaTone, IconArrow, IconBack, SERIF, Spinner, type PublicConfirmation, type PublicSiteView, type ServiceOption, type Slot, type StaffOption } from "./ui";
 
 /**
- * PUBLIC booking flow — three steps for a customer arriving from Instagram, WhatsApp or
- * a website:
- *   1. Servicio y profesional   2. Fecha y hora   3. Tus datos → confirmación
+ * PUBLIC BOOKING — "Gallery Reserva v3": four fixed steps for a customer arriving from
+ * Instagram, WhatsApp or the business's website.
+ *   1. Elige tu servicio   2. Elige a tu artista   3. Elige fecha y hora   4. Tus datos
  *
- * Layout (the "Reserva pública" design): one card — progress line, the current step at
- * full width, and a footer that always states the running choice in two lines next to
- * Volver / Continuar. "Continuar" is never a dead disabled button: pressed early, it says
- * what is missing. The month calendar keeps the app's own look (MonthCalendar).
+ * Header, title, progress and the bottom bar keep their place; only the content changes
+ * and scrolls naturally. Progress is navigable back to any step already reached.
  *
- * Everything real comes from the public /api/booking/{slug}/* endpoints, which run the
- * SAME booking engine as staff and n8n. This component never computes availability: it
- * asks for each month in consecutive ≤14-day segments (the endpoint's cap) and only
- * decides how to SHOW the answer. It never sends a tenant, client, price, duration,
- * status or origin — the server derives all of them.
+ * Everything real comes from /api/booking/{slug}/* — the SAME engine as staff and n8n.
+ * This component never computes availability (it asks for each month in ≤14-day
+ * segments, the endpoint's cap) and never sends a tenant, client, price, duration,
+ * status or origin: the server derives all of them, re-checks the slot at confirmation
+ * and returns the snapshot shown on success. "Sin preferencia" omits staff_id so the
+ * engine assigns whoever is free at commit time.
  *
- * Instagram/WhatsApp in-app browsers: no popups, no new tabs, no cookies, no hover-only
- * signals, 44px+ targets, real `autocomplete` and `inputMode`, and every selection lives
- * in state so the keyboard opening and closing never loses it.
+ * Instagram/WhatsApp in-app browsers: no popups or new tabs, no cookies or storage, no
+ * hover-only signals, 44px+ targets, 16px fields, real autocomplete/inputMode, and every
+ * selection lives in state so the keyboard opening and closing never loses it. The
+ * bottom bar respects the safe area and rides above the on-screen keyboard
+ * (visualViewport); the focused field is scrolled above it.
  */
 
-interface PublicSite {
-  name: string;
-  address: string | null;
-  timezone: string;
-  closed_weekdays: string[];
-}
-interface StaffDetail extends StaffOption {
-  duration_min: number;
-  price: string | null;
-}
-interface Slot {
-  start_at: string;
-  service_end_at: string;
-  staff_id: string;
-  available_staff_ids: string[];
-}
-type Step = 1 | 2 | 3;
-type Banner = { tone: "error" | "info"; text: string; retry?: () => void } | null;
-type LoadState = "idle" | "loading" | "loaded" | "error";
+type Load = "idle" | "loading" | "loaded" | "error";
+type SubmitState = "idle" | "sending" | "error" | "taken";
 
-const STEPS = [
-  { value: 1 as const, label: "Servicio y profesional" },
-  { value: 2 as const, label: "Fecha y hora" },
-  { value: 3 as const, label: "Tus datos" },
-];
-
-/** Dialling codes offered beside the phone field. The SERVER still normalizes the
- * number (site region aware) — this only saves the visitor typing the prefix. */
-const COUNTRY_CODES = [
-  { code: "+57", label: "🇨🇴 +57", nationalLength: 10 },
-  { code: "+52", label: "🇲🇽 +52", nationalLength: 10 },
-  { code: "+34", label: "🇪🇸 +34", nationalLength: 9 },
-  { code: "+1", label: "🇺🇸 +1", nationalLength: 10 },
-] as const;
-
-/** How far ahead the month arrows go. The site's booking horizon still decides which
- * days actually have room; this only stops the arrows wandering into empty years. */
-const MAX_MONTHS_AHEAD = 12;
-/** A month's availability is reused for this long before it is fetched again. */
 const AVAILABILITY_TTL_MS = 60_000;
-
-const NETWORK_ERROR = "No pudimos conectar. Revisa tu conexión e inténtalo de nuevo.";
 const UNAVAILABLE_TITLE = "Las reservas en línea no están disponibles";
+const BLANK: ContactDraft = { name: "", cc: "+57", phone: "", email: "", consent: false };
+/** Wall-clock ms for the availability cache (only ever read inside async loads). */
+const nowMs = () => Date.now();
+/** "Mié 14 oct" — the compact date, capitalised as in the design. */
+const shortDay = (d: DayKey) => {
+  const t = dayShort(d);
+  return t.charAt(0).toLocaleUpperCase("es") + t.slice(1);
+};
 
-const INPUT =
-  "u-focus h-[48px] w-full min-w-0 rounded-[10px] border border-line-strong bg-surface px-3.5 text-base text-foreground outline-none placeholder:text-faint aria-[invalid=true]:border-danger";
-
-/** A per-attempt Idempotency-Key. randomUUID needs a secure context; fall back to
- * getRandomValues so a plain-http preview still works. */
 function newIdempotencyKey(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") return crypto.randomUUID();
   const b = new Uint8Array(16);
@@ -114,27 +87,40 @@ async function readError(res: Response): Promise<{ code: string; message: string
   }
 }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-function FieldError({ id, children }: { id?: string; children: React.ReactNode }) {
-  return (
-    <span id={id} role="alert" className="flex items-center gap-1.5 text-[13px] text-danger">
-      <span aria-hidden>!</span>
-      {children}
-    </span>
-  );
+/** Bottom offset that keeps the bar above the on-screen keyboard (iOS does not resize
+ * the layout viewport; Android does with interactive-widget=resizes-content → 0). */
+function useKeyboardInset(): number {
+  const [inset, setInset] = useState(0);
+  useEffect(() => {
+    const vv = typeof window !== "undefined" ? window.visualViewport : null;
+    if (!vv) return;
+    const update = () => {
+      if (vv.scale > 1.05) return setInset(0); // pinch-zoom is not a keyboard
+      setInset(Math.max(0, Math.round(window.innerHeight - vv.height - vv.offsetTop)));
+    };
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    update();
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+    };
+  }, []);
+  return inset;
 }
 
 export function BookingFlow({
   slug,
   site,
+  logoUrl,
   initialServices,
   turnstileSiteKey,
   turnstileMisconfigured,
   privacyPolicyUrl,
 }: {
   slug: string;
-  site: PublicSite;
+  site: PublicSiteView;
+  logoUrl: string | null;
   initialServices: ServiceOption[];
   turnstileSiteKey: string | null;
   turnstileMisconfigured: boolean;
@@ -143,90 +129,117 @@ export function BookingFlow({
   const tz = site.timezone;
   const api = `/api/booking/${encodeURIComponent(slug)}`;
   const todayKey = todayAtSite(tz);
+  const lastDay = lastBookableDay(todayKey, site.booking_horizon_days);
+  const closedWeekdays = useMemo(() => new Set(site.closed_weekdays), [site.closed_weekdays]);
+  // "Bogotá (GMT−5)" with a true minus sign, as in the design.
+  const tzText = timezoneLabel(tz).replace(/GMT-(\d)/, "GMT−$1");
 
   const [step, setStep] = useState<Step>(1);
   const [unavailable, setUnavailable] = useState(false);
-  const [banner, setBanner] = useState<Banner>(null);
-  /** "Continuar" pressed before the step is complete — says what is missing. */
+  const [banner, setBanner] = useState<string | null>(null);
   const [hint, setHint] = useState("");
-  const [hourFormat, setHourFormat] = useState<HourFormat>("24");
 
-  // ── Step 1 ──
+  // ── Selection ──
   const [services, setServices] = useState<ServiceOption[]>(initialServices);
-  const [serviceId, setServiceId] = useState("");
-  const [staffId, setStaffId] = useState(""); // "" = Cualquier profesional
-  const [staffByService, setStaffByService] = useState<Record<string, StaffDetail[]>>({});
-  const [staffState, setStaffState] = useState<LoadState>("idle");
+  const [sel, setSel] = useState<Selection>({ serviceId: null, artist: null, day: null, slotStart: null });
+  const [cleared, setCleared] = useState<ClearedReason | null>(null);
+  const [artistNotice, setArtistNotice] = useState<string | null>(null);
+  const [staffByService, setStaffByService] = useState<Record<string, StaffOption[]>>({});
+  const [staffLoad, setStaffLoad] = useState<Record<string, Load>>({});
+  const [profile, setProfile] = useState<{ id: string; trigger: HTMLElement } | null>(null);
 
-  // ── Step 2 ──
+  // ── Availability ──
   const [month, setMonth] = useState<MonthKey>(todayKey.slice(0, 7));
-  const [day, setDay] = useState<DayKey | null>(null);
-  const [slotStart, setSlotStart] = useState<string | null>(null);
   const [monthSlots, setMonthSlots] = useState<Slot[]>([]);
-  const [monthState, setMonthState] = useState<LoadState>("idle");
+  const [monthLoad, setMonthLoad] = useState<Load>("idle");
+  const [anyDays, setAnyDays] = useState<Set<DayKey> | null>(null);
   const cache = useRef(new Map<string, { slots: Slot[]; at: number }>());
   const request = useRef(0);
 
-  // ── Step 3 ──
-  const [name, setName] = useState("");
-  const [countryCode, setCountryCode] = useState<string>(COUNTRY_CODES[0].code);
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [accepted, setAccepted] = useState(false);
-  const [touched, setTouched] = useState<Record<string, boolean>>({});
-  const [attempted, setAttempted] = useState(false);
+  // ── Details ──
+  const [form, setForm] = useState<ContactDraft>(BLANK);
+  const [touched, setTouched] = useState<Partial<Record<keyof ContactErrors, boolean>>>({});
+  const [showAll, setShowAll] = useState(false);
+  const [phoneServerError, setPhoneServerError] = useState<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [submit, setSubmit] = useState<SubmitState>("idle");
+  const [takenTime, setTakenTime] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<PublicConfirmation | null>(null);
-  const idemKey = useRef<string>("");
+  const idem = useRef<{ key: string; sig: string } | null>(null);
+  const sending = useRef(false);
   const turnstile = useRef<TurnstileHandle>(null);
-  const headingRef = useRef<HTMLHeadingElement>(null);
+
   const topRef = useRef<HTMLDivElement>(null);
-  /** The times panel — on the phone it sits UNDER the month, so picking a day brings it into view. */
-  const timesRef = useRef<HTMLDivElement>(null);
-  /** "¿Con quién?" — under the services on the phone, so choosing one brings it into view. */
-  const staffRef = useRef<HTMLDivElement>(null);
+  const titleRef = useRef<HTMLHeadingElement>(null);
   const firstRender = useRef(true);
+  const fromHistory = useRef(false);
+  const kbInset = useKeyboardInset();
 
-  const service = services.find((s) => s.id === serviceId) ?? null;
-  const staffList = serviceId ? staffByService[serviceId] ?? [] : [];
-  const staff = staffList.find((s) => s.id === staffId) ?? null;
+  const service = services.find((s) => s.id === sel.serviceId) ?? null;
+  const staffList = sel.serviceId ? staffByService[sel.serviceId] ?? [] : [];
+  const artist = sel.artist && sel.artist !== "any" ? staffList.find((s) => s.id === sel.artist) ?? null : null;
+  const reach = reachableStep(sel);
+  const staffParam = sel.artist && sel.artist !== "any" ? sel.artist : "";
 
-  // Move focus to the step's heading when the step changes (keyboard + screen readers),
-  // and bring the card's top into view on the phone.
+  // ── Focus, scroll and history per step ──────────────────────────────────────────
   useEffect(() => {
     if (firstRender.current) {
       firstRender.current = false;
+      if (typeof window !== "undefined") window.history.replaceState({ ...(window.history.state ?? {}), pb3Step: 1 }, "");
       return;
     }
-    const target = confirmation ? document.getElementById("booking-done-title") : headingRef.current;
+    const target = confirmation ? document.getElementById("pb-done-title") : titleRef.current;
     target?.focus({ preventScroll: true });
-    topRef.current?.scrollIntoView({ block: "start", behavior: "smooth" });
+    topRef.current?.scrollIntoView({ block: "start" });
+    if (!confirmation && !fromHistory.current && window.history.state?.pb3Step !== step) {
+      window.history.pushState({ ...(window.history.state ?? {}), pb3Step: step }, "");
+    }
+    fromHistory.current = false;
   }, [step, confirmation]);
 
-  // ── Data loading ────────────────────────────────────────────────────────────────
+  // The phone's back button walks the steps instead of leaving the page.
+  useEffect(() => {
+    const onPop = (e: PopStateEvent) => {
+      const s = (e.state?.pb3Step ?? 1) as Step;
+      fromHistory.current = true;
+      setProfile(null);
+      setStep((cur) => (s < cur ? s : cur));
+    };
+    window.addEventListener("popstate", onPop);
+    return () => window.removeEventListener("popstate", onPop);
+  }, []);
 
-  const loadStaff = useCallback(
-    async (svc: string) => {
-      setStaffState("loading");
-      try {
-        const res = await fetch(`${api}/staff?service_id=${encodeURIComponent(svc)}`, { cache: "no-store" });
-        if (res.status === 404) return setUnavailable(true);
-        if (!res.ok) {
-          setStaffState("error");
-          return;
-        }
-        const d = (await res.json()) as { staff?: StaffDetail[] };
-        setStaffByService((prev) => ({ ...prev, [svc]: d.staff ?? [] }));
-        setStaffState("loaded");
-      } catch {
-        setStaffState("error");
-      }
-    },
-    [api],
-  );
+  // ── Data ────────────────────────────────────────────────────────────────────────
+  // Loads are started by the EVENT that needs them (choosing a service, entering the
+  // date step, changing month, retrying) — never from an effect — so each request knows
+  // exactly which (service, artist, month) it answers.
 
-  const refreshServices = useCallback(async () => {
+  /** A chosen artist who does not perform the (new) service is dropped, with a notice. */
+  const applyEligibility = (svc: string, list: StaffOption[], prevArtist: ArtistChoice, prevName: string | null, svcName: string) => {
+    const ids = list.map((x) => x.id);
+    setSel((cur) => (cur.serviceId === svc ? reconcileArtist(cur, ids).sel : cur));
+    if (prevArtist && prevArtist !== "any" && !ids.includes(prevArtist)) {
+      setArtistNotice(`${prevName ?? "El artista que elegiste"} no realiza ${svcName}. Elige otro artista o reserva sin preferencia.`);
+    }
+  };
+
+  const loadStaff = async (svc: string, prevArtist: ArtistChoice = null, prevName: string | null = null, svcName = "este servicio") => {
+    setStaffLoad((m) => ({ ...m, [svc]: "loading" }));
+    try {
+      const res = await fetch(`${api}/staff?service_id=${encodeURIComponent(svc)}`, { cache: "no-store" });
+      if (res.status === 404) return setUnavailable(true);
+      if (!res.ok) return setStaffLoad((m) => ({ ...m, [svc]: "error" }));
+      const d = (await res.json()) as { staff?: StaffOption[] };
+      const list = d.staff ?? [];
+      setStaffByService((prev) => ({ ...prev, [svc]: list }));
+      setStaffLoad((m) => ({ ...m, [svc]: "loaded" }));
+      applyEligibility(svc, list, prevArtist, prevName, svcName);
+    } catch {
+      setStaffLoad((m) => ({ ...m, [svc]: "error" }));
+    }
+  };
+
+  const refreshServices = async () => {
     try {
       const res = await fetch(`${api}/services`, { cache: "no-store" });
       if (res.status === 404) return setUnavailable(true);
@@ -234,669 +247,681 @@ export function BookingFlow({
       const d = (await res.json()) as { services?: ServiceOption[] };
       setServices(d.services ?? []);
     } catch {
-      /* the banner already told the customer what happened */
+      /* the banner already says what happened */
     }
-  }, [api]);
+  };
 
-  const loadMonth = useCallback(
-    async (svc: string, stf: string, m: MonthKey, opts: { force?: boolean } = {}) => {
-      const key = `${svc}|${stf}|${m}`;
-      const hit = cache.current.get(key);
-      const id = ++request.current;
-      if (hit && !opts.force && Date.now() - hit.at < AVAILABILITY_TTL_MS) {
-        setMonthSlots(hit.slots);
-        setMonthState("loaded");
-        return hit.slots;
-      }
-      setMonthState("loading");
-      setMonthSlots([]);
-      const segments = monthSegments(m, todayAtSite(tz), tz);
-      try {
-        const responses = await Promise.all(
-          segments.map((seg) => {
-            const q = new URLSearchParams({ service_id: svc, from: seg.from.toISOString(), to: seg.to.toISOString() });
-            if (stf) q.set("staff_id", stf);
-            return fetch(`${api}/availability?${q.toString()}`, { cache: "no-store" });
-          }),
-        );
-        if (id !== request.current) return null; // a newer month/service/staff won
-        if (responses.some((r) => r.status === 404)) {
-          setUnavailable(true);
-          return null;
-        }
-        const conflict = responses.find((r) => r.status === 409);
-        if (conflict) {
-          const e = await readError(conflict);
-          setBanner({ tone: "error", text: e.message });
-          setStep(1);
-          setServiceId("");
-          void refreshServices();
-          return null;
-        }
-        if (responses.some((r) => !r.ok)) throw new Error("availability");
-        const bodies = (await Promise.all(responses.map((r) => r.json()))) as Array<{ slots?: Slot[] }>;
-        if (id !== request.current) return null;
-        const slots = bodies.flatMap((b) => b.slots ?? []);
-        cache.current.set(key, { slots, at: Date.now() });
-        setMonthSlots(slots);
-        setMonthState("loaded");
-        return slots;
-      } catch {
-        if (id !== request.current) return null;
-        setMonthState("error");
-        return null;
-      }
-    },
-    [api, tz, refreshServices],
-  );
+  /** One month of free times for (service, artist), from the cache when fresh. */
+  const fetchMonth = async (svc: string, stf: string, m: MonthKey, force = false): Promise<Slot[] | "unavailable" | "conflict" | "error"> => {
+    const key = `${svc}|${stf}|${m}`;
+    const hit = cache.current.get(key);
+    if (hit && !force && nowMs() - hit.at < AVAILABILITY_TTL_MS) return hit.slots;
+    const segments = monthSegments(m, todayAtSite(tz), tz);
+    try {
+      const responses = await Promise.all(
+        segments.map((seg) => {
+          const q = new URLSearchParams({ service_id: svc, from: seg.from.toISOString(), to: seg.to.toISOString() });
+          if (stf) q.set("staff_id", stf);
+          return fetch(`${api}/availability?${q.toString()}`, { cache: "no-store" });
+        }),
+      );
+      if (responses.some((r) => r.status === 404)) return "unavailable";
+      if (responses.some((r) => r.status === 409)) return "conflict";
+      if (responses.some((r) => !r.ok)) return "error";
+      const bodies = (await Promise.all(responses.map((r) => r.json()))) as Array<{ slots?: Slot[] }>;
+      const slots = bodies.flatMap((b) => b.slots ?? []);
+      cache.current.set(key, { slots, at: nowMs() });
+      return slots;
+    } catch {
+      return "error";
+    }
+  };
 
-  /** Slots of the loaded month, by site day, one per clock time (for "any" several
-   * professionals can share a start; the customer picks a TIME, the engine the person). */
+  /** "Otro artista sí tiene horarios ese día": asked only when a chosen artist's day is empty. */
+  const checkOthers = async (svc: string, m: MonthKey) => {
+    const r = await fetchMonth(svc, "", m);
+    if (Array.isArray(r)) setAnyDays(new Set(r.map((x) => siteDayKey(x.start_at, tz))));
+  };
+
+  const requestMonth = async (svc: string | null, art: ArtistChoice, m: MonthKey, force = false) => {
+    if (!svc || !art) return;
+    const stf = art === "any" ? "" : art;
+    const id = ++request.current;
+    setMonthLoad("loading");
+    setAnyDays(null);
+    const r = await fetchMonth(svc, stf, m, force);
+    if (id !== request.current) return; // a newer month/service/artist won
+    if (r === "unavailable") return setUnavailable(true);
+    if (r === "conflict") {
+      setBanner("Este servicio ya no está disponible en esta sede. Elige otro servicio.");
+      setSel((cur) => ({ ...cur, serviceId: null, slotStart: null }));
+      setStep(1);
+      void refreshServices();
+      return;
+    }
+    if (r === "error") return setMonthLoad("error");
+    setMonthSlots(r);
+    setMonthLoad("loaded");
+    // Keep the visitor's day when it is in this month; otherwise the first day with room.
+    const open = new Set(r.map((x) => siteDayKey(x.start_at, tz)));
+    let chosen: DayKey | null = null;
+    setSel((cur) => {
+      if (cur.day && cur.day.startsWith(m)) {
+        chosen = cur.day;
+        return cur;
+      }
+      chosen = [...open].sort()[0] ?? (m === todayKey.slice(0, 7) ? todayKey : `${m}-01`);
+      return { ...cur, day: chosen };
+    });
+    if (stf && chosen && !open.has(chosen)) void checkOthers(svc, m);
+  };
+
+  // ── Derived ─────────────────────────────────────────────────────────────────────
+
+  /** One entry per clock time (for "Sin preferencia" several artists share a start). */
   const slotsByDay = useMemo(() => {
     const map = new Map<DayKey, Slot[]>();
     const seen = new Set<string>();
-    for (const s of [...monthSlots].sort((a, b) => a.start_at.localeCompare(b.start_at))) {
-      if (seen.has(s.start_at)) continue;
-      seen.add(s.start_at);
-      const k = siteDayKey(s.start_at, tz);
+    for (const x of [...monthSlots].sort((p, q) => p.start_at.localeCompare(q.start_at))) {
+      if (seen.has(x.start_at)) continue;
+      seen.add(x.start_at);
+      const k = siteDayKey(x.start_at, tz);
       const list = map.get(k);
-      if (list) list.push(s);
-      else map.set(k, [s]);
+      if (list) list.push(x);
+      else map.set(k, [x]);
     }
     return map;
   }, [monthSlots, tz]);
+  const openDays = useMemo(() => new Set(slotsByDay.keys()), [slotsByDay]);
+  const statusOf = (d: DayKey) => dayStatusOf(d, { today: todayKey, lastDay, closedWeekdays, load: monthLoad, openDays });
+  const daySlots = sel.day ? slotsByDay.get(sel.day) ?? [] : [];
+  const slot = sel.slotStart ? daySlots.find((x) => x.start_at === sel.slotStart) ?? monthSlots.find((x) => x.start_at === sel.slotStart) ?? null : null;
 
-  // Entering step 2 (or changing what we search for) loads that month; once loaded, a
-  // day is picked for the customer when theirs has no room — the first with cupos.
-  useEffect(() => {
-    if (step !== 2 || !serviceId) return;
-    let cancelled = false;
-    void loadMonth(serviceId, staffId, month).then((slots) => {
-      if (cancelled || !slots) return;
-      const days = new Set(slots.map((s) => siteDayKey(s.start_at, tz)));
-      setDay((current) => {
-        if (current && current.startsWith(month) && days.has(current)) return current;
-        const first = [...days].sort()[0];
-        return first ?? null;
-      });
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [step, serviceId, staffId, month, loadMonth, tz]);
-
-  // ── Derived display values ──────────────────────────────────────────────────────
-
-  const daySlots = day ? slotsByDay.get(day) ?? [] : [];
-  const slot = slotStart ? daySlots.find((s) => s.start_at === slotStart) ?? null : null;
-  const closed = new Set(site.closed_weekdays);
-
-  const statusOf = (d: DayKey, inMonth: boolean): DayStatus => {
-    if (!inMonth) return "outside";
-    if (d < todayKey) return "past";
-    if (closed.has(weekdayKeyOf(d))) return "closed";
-    if (monthState === "loading" || monthState === "idle") return "loading";
-    if (monthState === "error") return "past";
-    return (slotsByDay.get(d)?.length ?? 0) > 0 ? "available" : "full";
-  };
-
-  /** Duration + price the customer will actually get: the chosen professional's own
-   * values, or — for "any" — the site's, with "Desde" when professionals differ. */
-  const durationMin = staff?.duration_min ?? service?.duration_min ?? null;
-  const priceLabel = (() => {
-    if (!service) return null;
-    if (staff) return priceText(staff.price);
-    const prices = staffList.map((s) => s.price).filter((p): p is string => p != null).map(Number);
-    if (prices.length > 1 && new Set(prices).size > 1) {
-      const min = priceLabelCOP(Math.min(...prices));
-      return min ? `Desde ${min}` : priceText(service.price);
-    }
-    return priceText(service.price);
-  })();
-  const staffLabel = !serviceId ? null : staff ? staff.name : "Primer profesional disponible";
-  const dayLabel = day ? dayHeadline(day) : null;
-  const timeLabel = slot ? `${fmtTime(slot.start_at, tz, hourFormat)} – ${fmtTime(slot.service_end_at, tz, hourFormat)}` : null;
-
-  const summaryRows: SummaryRow[] = [
-    { label: "Sede", value: site.name },
-    { label: "Servicio", value: service?.name ?? null },
-    { label: "Profesional", value: staffLabel },
-    { label: "Fecha", value: slot ? dayLabel : null },
-    { label: "Hora", value: timeLabel, mono: true },
-    { label: "Duración", value: durationMin != null && service ? `${durationMin} min` : null, mono: true },
-    { label: "Precio", value: priceLabel },
-    { label: "Zona horaria", value: timezoneLabel(tz) },
-  ];
-
-  /** The footer's two lines: WHAT (service · duration · price), then WHO and WHEN. */
-  const footLine1 = service ? [service.name, durationMin != null ? `${durationMin} min` : null, priceLabel].filter(Boolean).join(" · ") : "Elige servicio, fecha y hora";
-  const footLine2 =
-    [service ? (staff ? staff.name : "Cualquier profesional") : null, slot ? dayLabel : null, timeLabel].filter(Boolean).join(" · ") ||
-    "Nada se reserva hasta que confirmes";
-
-  // ── Step 3 validation ───────────────────────────────────────────────────────────
-
-  const country = COUNTRY_CODES.find((c) => c.code === countryCode) ?? COUNTRY_CODES[0];
-  const phoneDigits = phone.replace(/\D/g, "");
-  const fullPhone = phone.trim().startsWith("+") ? phone.trim() : `${country.code} ${phoneDigits}`;
-  const errors = {
-    name: name.trim().length < 2 ? "Escribe tu nombre para saber a quién esperamos." : "",
-    phone: !phoneDigits
-      ? "Necesitamos un número para avisarte sobre tu cita."
-      : !phone.trim().startsWith("+") && phoneDigits.length !== country.nationalLength
-        ? `El número debe tener ${country.nationalLength} dígitos (tienes ${phoneDigits.length}).`
-        : "",
-    email: email.trim() && !EMAIL_RE.test(email.trim()) ? "Revisa el correo: falta algo como «@» o «.com»." : "",
-    consent: accepted ? "" : "Marca la casilla para poder confirmar.",
-  };
-  const show = (k: keyof typeof errors) => ((attempted || touched[k]) && errors[k]) || "";
-  const touch = (k: string) => () => setTouched((t) => ({ ...t, [k]: true }));
-  const turnstileOk = !turnstileSiteKey || Boolean(turnstileToken);
-  const formOk = !errors.name && !errors.phone && !errors.email && !errors.consent && turnstileOk && !turnstileMisconfigured;
+  const durationMin = artist?.duration_min ?? service?.duration_min ?? null;
+  const price = priceShown({ servicePrice: service?.price ?? null, artist: sel.artist, staff: staffList });
+  const artistName = sel.artist === "any" ? "Sin preferencia" : artist?.name ?? "";
+  const timeLabel = slot ? fmtTime(slot.start_at, tz, "24") : null;
 
   // ── Actions ─────────────────────────────────────────────────────────────────────
 
-  const chooseService = (id: string) => {
+  const goStep = (n: Step) => {
+    if (n > reach) return;
     setBanner(null);
     setHint("");
-    if (id !== serviceId) {
-      setServiceId(id);
-      setStaffId("");
-      setDay(null);
-      setSlotStart(null);
+    if (n < 4) setSubmit((x) => (x === "taken" || x === "error" ? "idle" : x));
+    if (n === 3) {
+      const m = sel.day ? sel.day.slice(0, 7) : month;
+      if (m !== month) setMonth(m);
+      void requestMonth(sel.serviceId, sel.artist, m);
     }
-    if (!staffByService[id]) void loadStaff(id);
-    else setStaffState("loaded");
-    if (window.matchMedia("(max-width: 767px)").matches) {
-      requestAnimationFrame(() => staffRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
-    }
+    setStep(n);
   };
 
-  const chooseStaff = (id: string) => {
-    setStaffId(id);
-    setSlotStart(null);
+  const pickService = (id: string) => {
+    const r = onServiceChange(sel, id);
+    const svcName = services.find((x) => x.id === id)?.name ?? "este servicio";
+    setSel(r.sel);
+    if (r.cleared) setCleared(r.cleared);
+    setArtistNotice(null);
+    setHint("");
+    setBanner(null);
+    const cached = staffByService[id];
+    if (cached) applyEligibility(id, cached, sel.artist, artist?.name ?? null, svcName);
+    else if (staffLoad[id] !== "loading") void loadStaff(id, sel.artist, artist?.name ?? null, svcName);
+  };
+
+  const pickArtist = (choice: Exclude<ArtistChoice, null>) => {
+    const r = onArtistChange(sel, choice);
+    setSel(r.sel);
+    if (r.cleared) setCleared(r.cleared);
+    setArtistNotice(null);
+    setProfile(null);
+    setHint("");
+    if (step === 3 && choice !== sel.artist) void requestMonth(sel.serviceId, choice, month);
+  };
+
+  const pickDay = (d: DayKey) => {
+    setSel((cur) => ({ ...cur, day: d, slotStart: cur.day === d ? cur.slotStart : null }));
+    setHint("");
+    if (staffParam && sel.serviceId && monthLoad === "loaded" && !openDays.has(d) && !anyDays) void checkOthers(sel.serviceId, month);
   };
 
   const changeMonth = (delta: number) => {
-    setMonth((m) => shiftMonth(m, delta));
-    setDay(null);
-    setSlotStart(null);
+    const next = shiftMonth(month, delta);
+    setMonth(next);
+    setSel((cur) => ({ ...cur, day: null, slotStart: null }));
+    void requestMonth(sel.serviceId, sel.artist, next);
   };
 
-  const go = (next: Step) => {
-    setBanner(null);
+  const pickSlot = (start: string) => {
+    setSel((s) => ({ ...s, slotStart: start }));
+    setCleared(null);
     setHint("");
-    setStep(next);
   };
 
-  const retryMonth = () => {
-    if (serviceId) void loadMonth(serviceId, staffId, month, { force: true });
+  const pickOtherTime = () => {
+    for (const k of [...cache.current.keys()]) if (k.startsWith(`${sel.serviceId}|`)) cache.current.delete(k);
+    setSel((s) => ({ ...s, slotStart: null }));
+    setCleared("taken");
+    setSubmit("idle");
+    setStep(3);
+    void requestMonth(sel.serviceId, sel.artist, month, true);
   };
 
-  /** A slot was lost (409) or is now in the past: drop it, refetch the month, step 2. */
-  const backToTimes = (message: string) => {
-    for (const k of [...cache.current.keys()]) if (k.startsWith(`${serviceId}|`)) cache.current.delete(k);
-    setSlotStart(null);
-    setBanner({ tone: "error", text: message });
-    setStep(2);
-    if (serviceId) {
-      void loadMonth(serviceId, staffId, month, { force: true });
-    }
+  const setField = <K extends keyof ContactDraft>(k: K, v: ContactDraft[K]) => {
+    setForm((f) => ({ ...f, [k]: v }));
+    if (k === "phone" || k === "cc") setPhoneServerError(null);
+  };
+  const touch = (k: keyof ContactErrors) => setTouched((t) => ({ ...t, [k]: true }));
+  const errors = contactErrors(form, site.name);
+  const show = (k: keyof ContactErrors) => {
+    if (k === "phone" && phoneServerError) return phoneServerError;
+    return (showAll || (touched[k] && k !== "consent") ? errors[k] : "") || "";
+  };
+  const errorCount = showAll ? (["name", "phone", "email", "consent"] as const).filter((k) => show(k)).length : 0;
+
+  /** Keep the focused field visible above the bar and the keyboard (phones). */
+  const onFieldFocus = (el: HTMLElement) => {
+    if (!window.matchMedia("(max-width: 1023px)").matches) return;
+    window.setTimeout(() => el.scrollIntoView({ block: "center", behavior: "smooth" }), 280);
   };
 
-  const submit = async () => {
-    setAttempted(true);
-    if (!slot || !service || submitting) return;
-    if (!formOk) {
-      setHint(turnstileSiteKey && !turnstileToken ? "Completa la verificación de seguridad." : "Revisa los campos marcados.");
+  const confirm = async () => {
+    if (!service || !slot || sending.current) return;
+    setShowAll(true);
+    const hasErrors = Object.values(errors).some(Boolean) || Boolean(phoneServerError);
+    if (hasErrors) return;
+    if (turnstileMisconfigured) return;
+    if (turnstileSiteKey && !turnstileToken) {
+      setBanner("Completa la verificación de seguridad.");
       return;
     }
+    const payload = {
+      service_id: service.id,
+      // Omitted for "Sin preferencia": the engine assigns whoever is free AT COMMIT TIME.
+      ...(staffParam ? { staff_id: staffParam } : {}),
+      start_at: slot.start_at,
+      customer_name: form.name.trim(),
+      customer_phone: fullPhone(form),
+      ...(form.email.trim() ? { customer_email: form.email.trim() } : {}),
+      privacy_accepted: true as const,
+    };
+    // Same booking → same Idempotency-Key, so a retry after a lost response can never
+    // book twice. A DIFFERENT booking (another time, another phone…) gets a new key.
+    const sig = JSON.stringify(payload);
+    if (!idem.current || idem.current.sig !== sig) idem.current = { key: newIdempotencyKey(), sig };
+    sending.current = true;
+    setSubmit("sending");
     setBanner(null);
-    setHint("");
-    setSubmitting(true);
-    if (!idemKey.current) idemKey.current = newIdempotencyKey();
     try {
       const res = await fetch(api, {
         method: "POST",
-        headers: { "content-type": "application/json", "idempotency-key": idemKey.current },
+        headers: { "content-type": "application/json", "idempotency-key": idem.current.key },
         cache: "no-store",
-        body: JSON.stringify({
-          service_id: service.id,
-          // Omitted for "Cualquier profesional": the engine assigns whoever is free AT
-          // COMMIT TIME, which survives a race the suggested professional would lose.
-          ...(staffId ? { staff_id: staffId } : {}),
-          start_at: slot.start_at,
-          customer_name: name.trim(),
-          customer_phone: fullPhone,
-          ...(email.trim() ? { customer_email: email.trim() } : {}),
-          privacy_accepted: true,
-          ...(turnstileToken ? { turnstile_token: turnstileToken } : {}),
-        }),
+        body: JSON.stringify({ ...payload, ...(turnstileToken ? { turnstile_token: turnstileToken } : {}) }),
       });
       if (res.ok) {
         const d = (await res.json()) as { confirmation: PublicConfirmation };
-        idemKey.current = "";
+        idem.current = null;
         cache.current.clear();
+        setSubmit("idle");
         setConfirmation(d.confirmation);
         return;
       }
-      if (res.status === 404) {
-        setUnavailable(true);
-        return;
-      }
+      if (res.status === 404) return setUnavailable(true);
       const e = await readError(res);
       switch (e.code) {
         case "slot_taken":
         case "staff_unavailable":
         case "past_start":
-          backToTimes(e.message);
+          for (const k of [...cache.current.keys()]) if (k.startsWith(`${sel.serviceId}|`)) cache.current.delete(k);
+          setTakenTime(timeLabel);
+          setSubmit("taken");
           return;
         case "service_unavailable":
-          setBanner({ tone: "error", text: e.message });
-          setServiceId("");
-          setSlotStart(null);
+          setSubmit("idle");
+          setBanner(e.message);
+          setSel((s) => ({ ...s, serviceId: null, slotStart: null }));
           setStep(1);
           void refreshServices();
           return;
+        case "invalid_phone":
+          setSubmit("idle");
+          setPhoneServerError(e.message);
+          return;
         case "duplicate_request":
-          idemKey.current = "";
+          idem.current = null;
           break;
         case "verification_failed":
         case "verification_unavailable":
           turnstile.current?.reset();
+          setTurnstileToken(null);
           break;
       }
-      setBanner({ tone: "error", text: e.message });
+      setSubmit("idle");
+      setBanner(e.message);
     } catch {
       // Keep the Idempotency-Key: a retry of the SAME attempt must dedupe, never book twice.
-      setBanner({ tone: "error", text: NETWORK_ERROR, retry: () => void submit() });
+      setSubmit("error");
     } finally {
-      setSubmitting(false);
+      sending.current = false;
     }
   };
 
-  /** The footer's primary action. Never disabled for "not chosen yet": it explains. */
-  const next = () => {
-    if (step === 1) {
-      if (!serviceId) return setHint("Elige un servicio para continuar.");
-      return go(2);
-    }
-    if (step === 2) {
-      if (!slot) return setHint(day ? "Elige un horario para continuar." : "Elige un día y un horario para continuar.");
-      return go(3);
-    }
-    void submit();
-  };
-
-  const startOver = () => {
+  const restart = () => {
     setConfirmation(null);
-    setServiceId("");
-    setStaffId("");
-    setDay(null);
-    setSlotStart(null);
-    setAccepted(false);
-    setAttempted(false);
+    setSel({ serviceId: null, artist: null, day: null, slotStart: null });
+    setCleared(null);
+    setArtistNotice(null);
+    setForm((f) => ({ ...BLANK, name: f.name, cc: f.cc, phone: f.phone, email: f.email }));
+    setShowAll(false);
     setTouched({});
     setTurnstileToken(null);
-    setBanner(null);
-    setHint("");
+    setSubmit("idle");
     setMonth(todayAtSite(tz).slice(0, 7));
     setStep(1);
   };
 
+  // ── CTA / bar ───────────────────────────────────────────────────────────────────
+
+  let ctaLabel = "Continuar";
+  let ctaState: "on" | "muted" | "sending" | "outline" = "on";
+  let barHint = "";
+  let cta: () => void = () => goStep((step + 1) as Step);
+  if (confirmation) {
+    ctaLabel = "Hacer otra reserva";
+    ctaState = "outline";
+    cta = restart;
+  } else if (step === 1) {
+    if (!service) {
+      ctaState = "muted";
+      barHint = "Elige un servicio para continuar.";
+    }
+  } else if (step === 2) {
+    if (!sel.artist) {
+      ctaState = "muted";
+      barHint = "Elige un artista o Sin preferencia.";
+    }
+  } else if (step === 3) {
+    if (!slot) {
+      ctaState = "muted";
+      barHint = "Elige una hora disponible.";
+    }
+  } else {
+    cta = () => void confirm();
+    ctaLabel = submit === "sending" ? "Confirmando…" : submit === "error" ? "Reintentar" : "Confirmar cita";
+    ctaState = submit === "sending" ? "sending" : submit === "taken" || turnstileMisconfigured ? "muted" : "on";
+  }
+  const ctaDisabled = ctaState === "muted" || ctaState === "sending";
+  const onCta = () => {
+    if (ctaDisabled) {
+      if (barHint) setHint(barHint);
+      return;
+    }
+    cta();
+  };
+  const barPrice = service && !confirmation ? priceText(price, true) : "";
+  const barSub = !service
+    ? ""
+    : step === 1
+      ? `${service.name} · ${durationMin ?? service.duration_min} min`
+      : step === 2
+        ? [service.name, artistName].filter(Boolean).join(" · ")
+        : slot && sel.day
+          ? `${shortDay(sel.day)} · ${timeLabel} · ${artistName}`
+          : `${service.name} · ${artistName}`;
+
+  // ── Step 3 empty state ──────────────────────────────────────────────────────────
+
+  const empty: EmptyState | null = (() => {
+    if (step !== 3 || !sel.day || monthLoad !== "loaded") return null;
+    const st = statusOf(sel.day);
+    if (st === "open") return null;
+    const laterOpen = [...openDays].filter((d) => d > (sel.day as DayKey)).sort()[0];
+    const nextMonth = shiftMonth(month, 1);
+    const next = laterOpen
+      ? { label: `Ver ${dayShort(laterOpen)}`, action: { kind: "day" as const, day: laterOpen } }
+      : `${nextMonth}-01` <= lastDay
+        ? { label: "Ver el mes siguiente", action: { kind: "nextMonth" as const } }
+        : undefined;
+    if (st === "closed") {
+      return { title: `${site.name} no abre este día`, text: "La sede no atiende ese día de la semana. Elige otro día.", next };
+    }
+    if (st === "past" || st === "out") {
+      return { title: "Este día no se puede reservar", text: `Puedes reservar hasta el ${dayHeadline(lastDay).toLocaleLowerCase("es")}.`, next };
+    }
+    if (sel.artist === "any") {
+      return { title: "No quedan horarios este día", text: "Prueba con otro día.", next };
+    }
+    const anyHas = anyDays?.has(sel.day) ?? false;
+    return {
+      title: `${artistName} no tiene horarios este día`,
+      text: anyHas ? "Otro artista sí tiene horarios ese día. Puedes cambiar de día o reservar sin preferencia." : "Prueba con otro día o con otro artista.",
+      next,
+      alt: anyHas ? { label: "Reservar sin preferencia", action: { kind: "any" as const } } : { label: "Cambiar artista", action: { kind: "artist" as const } },
+    };
+  })();
+
+  const onEmptyAction = (a: EmptyAction) => {
+    if (a.kind === "day") pickDay(a.day);
+    else if (a.kind === "nextMonth") changeMonth(1);
+    else if (a.kind === "any") pickArtist("any");
+    else goStep(2);
+  };
+
+  // ── Step 4 summary ──────────────────────────────────────────────────────────────
+
+  const summaryRows: SummaryRow[] = [];
+  if (service) summaryRows.push({ k: "Servicio", v: service.name, sub: durationMin ? `${durationMin} min` : null, edit: { label: "Editar servicio", step: 1 } });
+  if (sel.artist)
+    summaryRows.push({
+      k: "Artista",
+      v: artistName,
+      sub: sel.artist === "any" ? "Te asignaremos un artista disponible" : null,
+      edit: { label: "Editar artista", step: 2 },
+    });
+  if (slot && sel.day)
+    summaryRows.push({
+      k: "Fecha y hora",
+      v: `${dayHeadline(siteDayKey(slot.start_at, tz))} · ${timeLabel}–${fmtTime(slot.service_end_at, tz, "24")}`,
+      sub: `Hora de ${tzText}`,
+      edit: { label: "Editar fecha y hora", step: 3 },
+    });
+  summaryRows.push({ k: "Sede", v: site.name, sub: site.address, edit: null });
+
   // ── Render ──────────────────────────────────────────────────────────────────────
 
-  /** One card. On the phone it runs edge to edge (only its top corners rounded). */
-  const CARD =
-    "flex scroll-mt-4 flex-col overflow-hidden border border-line bg-surface rounded-2xl max-sm:-mx-[var(--content-pad)] max-sm:-mb-[var(--content-pad)] max-sm:rounded-b-none max-sm:rounded-t-[18px] max-sm:border-x-0 max-sm:border-b-0";
+  const monogram = (site.name.trim().charAt(0) || "?").toLocaleUpperCase("es");
+
+  const root = "pb3 relative -m-[var(--content-pad)] flex min-h-[calc(100%_+_var(--content-pad)_*_2)] flex-none flex-col";
 
   if (unavailable) {
     return (
-      <div className={`${CARD} items-center gap-2 px-6 py-14 text-center`}>
-        <h2 className="text-lg font-semibold">{UNAVAILABLE_TITLE}</h2>
-        <p className="max-w-sm text-sm text-muted">En este momento no es posible reservar en esta sede. Comunícate directamente con ella.</p>
+      <div className={root}>
+        <div className="mx-auto flex w-full max-w-[560px] flex-1 flex-col items-start justify-center gap-2 px-6 py-16">
+          <h1 className={`${SERIF} m-0 text-[32px] leading-[1.08]`}>{UNAVAILABLE_TITLE}</h1>
+          <p className="m-0 text-[15.5px] leading-[1.5] text-pb-muted">En este momento no es posible reservar en esta sede. Comunícate directamente con ella.</p>
+        </div>
       </div>
     );
   }
 
-  if (confirmation) {
-    return (
-      <div ref={topRef} className={`${CARD} px-4 sm:px-8`}>
-        <BookingConfirmation confirmation={confirmation} firstName={name.trim().split(/\s+/)[0] || null} format={hourFormat} onAnother={startOver} />
-      </div>
-    );
-  }
-
-  const headingId = "booking-step-heading";
-  const legend = "text-[17px] font-semibold text-foreground outline-none";
+  const brandMark = logoUrl ? (
+    // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded logo (R2)
+    <img src={logoUrl} alt="" className="size-11 flex-none rounded-full border border-pb-line object-cover" />
+  ) : (
+    <span aria-hidden className={`${SERIF} flex size-11 flex-none items-center justify-center rounded-full bg-pb-ink text-[22px] text-white`}>
+      {monogram}
+    </span>
+  );
 
   return (
-    <section ref={topRef} aria-label="Reservar cita" className={CARD}>
-      <div className="border-b border-line px-4 py-3.5 sm:px-6 sm:py-4">
-        <BookingStepper steps={STEPS} current={step} onSelect={(s) => go(s)} />
-      </div>
-
-      {/* The step. From md up the card keeps ONE height across steps (the step scrolls
-          inside it), so Volver/Continuar never jump; on the phone it flows and the
-          footer rides the bottom of the screen. */}
-      <div className="flex min-w-0 flex-col gap-4 px-4 pb-6 pt-5 sm:px-8 sm:pb-8 sm:pt-7 md:h-[600px] md:overflow-y-auto">
-        {banner ? (
-          <div
-            role="alert"
-            className={`flex flex-wrap items-center gap-x-3 gap-y-2 rounded-xl px-3.5 py-3 text-sm ${
-              banner.tone === "error" ? "bg-danger/10 text-danger" : "bg-subtle text-foreground"
-            }`}
-          >
-            <span className="min-w-0 flex-1">{banner.text}</span>
-            {banner.retry ? (
-              <button type="button" onClick={banner.retry} className="u-focus h-[36px] rounded-lg border border-current px-3 text-xs font-medium">
-                Reintentar
-              </button>
-            ) : null}
+    <div className={root} ref={topRef}>
+      {/* Desktop header bar (the phone carries the brand inside the flow). */}
+      <header className="hidden flex-none border-b border-pb-line bg-white lg:block">
+        <div className="mx-auto flex max-w-[1120px] items-center gap-3.5 px-6 py-4">
+          {brandMark}
+          <div className="flex min-w-0 flex-col gap-px">
+            <span className={`${SERIF} text-[24px] leading-[1.1]`}>{site.name}</span>
+            {site.address ? <span className="truncate text-[13.5px] text-pb-muted">{site.address}</span> : null}
           </div>
-        ) : null}
+          <span className="ml-auto text-[12.5px] text-pb-muted">Impulsado por M_AI</span>
+        </div>
+      </header>
 
-        {step === 1 ? (
-          <div className="flex flex-col gap-7">
-            <section aria-labelledby={headingId} className="flex flex-col gap-3.5">
-              <h2 id={headingId} ref={headingRef} tabIndex={-1} className={legend}>
-                ¿Qué servicio quieres?
-              </h2>
-              <ServiceList services={services} selected={serviceId} onSelect={chooseService} />
-            </section>
-
-            <div ref={staffRef} role="group" aria-labelledby="booking-staff-heading" className="flex min-w-0 scroll-mt-3 flex-col gap-3">
-              <div className="flex flex-col gap-1">
-                <h3 id="booking-staff-heading" className={legend}>
-                  ¿Con quién?
-                </h3>
-                <p className="text-[13px] text-muted">
-                  {serviceId
-                    ? "Si no tienes preferencia, te asignamos a quien tenga el horario libre."
-                    : "Elige un servicio para ver quién lo hace."}
-                </p>
-              </div>
-              <StaffChooser
-                staff={staffList}
-                selected={staffId}
-                onSelect={chooseStaff}
-                disabled={!serviceId}
-                loading={staffState === "loading"}
-                error={staffState === "error" ? "No pudimos cargar los profesionales. Puedes continuar con «Cualquier profesional»." : null}
-              />
-            </div>
-          </div>
-        ) : null}
-
-        {step === 2 ? (
-          <section aria-labelledby={headingId} className="flex flex-col gap-4">
-            <h2 id={headingId} ref={headingRef} tabIndex={-1} className="sr-only">
-              Elige fecha y hora
-            </h2>
-            <div className="flex flex-wrap items-start gap-7">
-              {/* The calendar keeps the app's own look. */}
-              <div className="min-w-0 flex-[1_1_340px]">
-                <MonthCalendar
-                  month={month}
-                  selected={day}
-                  today={todayKey}
-                  statusOf={statusOf}
-                  onSelect={(d) => {
-                    setDay(d);
-                    setSlotStart(null);
-                    setHint("");
-                    if (window.matchMedia("(max-width: 767px)").matches) {
-                      requestAnimationFrame(() => timesRef.current?.scrollIntoView({ block: "start", behavior: "smooth" }));
-                    }
-                  }}
-                  onPrev={() => changeMonth(-1)}
-                  onNext={() => changeMonth(1)}
-                  canPrev={monthDiff(todayKey.slice(0, 7), month) > 0}
-                  canNext={monthDiff(todayKey.slice(0, 7), month) < MAX_MONTHS_AHEAD}
-                  loading={monthState === "loading"}
-                />
-              </div>
-
-              <div
-                ref={timesRef}
-                className="flex min-w-0 flex-[1_1_240px] scroll-mt-3 flex-col gap-3 md:min-w-[240px] md:max-w-[300px] md:border-l md:border-line md:pl-7"
-              >
-                <div className="flex items-center gap-2">
-                  <h3 className="min-w-0 flex-1 truncate text-[15px] font-semibold">{dayLabel ?? "Horarios"}</h3>
-                  <div role="group" aria-label="Formato de hora" className="flex shrink-0 rounded-lg bg-subtle p-0.5">
-                    {(["12", "24"] as const).map((f) => (
-                      <button
-                        key={f}
-                        type="button"
-                        aria-pressed={hourFormat === f}
-                        onClick={() => setHourFormat(f)}
-                        className={`u-focus h-[28px] whitespace-nowrap rounded-md px-2.5 text-xs ${
-                          hourFormat === f ? "bg-surface text-foreground shadow-[0_1px_2px_rgba(18,21,27,0.12)]" : "text-muted"
-                        }`}
-                      >
-                        {f} h
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="flex h-[40px] items-center gap-1.5 rounded-[9px] border border-line px-3 text-[13px] text-muted">
-                  Zona horaria: <span className="truncate font-medium text-foreground">{timezoneLabel(tz)}</span>
-                </div>
-
-                {monthState === "error" ? (
-                  <div className="flex flex-col items-start gap-2 rounded-xl border border-line bg-subtle/40 p-3 text-xs text-muted">
-                    No pudimos cargar la disponibilidad.
-                    <button type="button" onClick={retryMonth} className="u-focus h-[44px] rounded-lg border border-line-strong px-3 font-medium text-foreground lg:h-[36px]">
-                      Reintentar
+      <div className="flex-1">
+        <div className="mx-auto w-full max-w-[640px] px-4 pb-5 pt-3 lg:flex lg:max-w-[1120px] lg:items-start lg:gap-7 lg:px-6 lg:pb-10 lg:pt-7">
+          <main lang="es" className="flex min-w-0 flex-1 flex-col gap-5 lg:gap-[22px]">
+            {!confirmation ? (
+              <div className="flex flex-col gap-3.5">
+                <div className="flex min-h-11 items-center gap-2.5">
+                  {step > 1 ? (
+                    <button
+                      type="button"
+                      aria-label="Volver al paso anterior"
+                      onClick={() => goStep((step - 1) as Step)}
+                      className="flex size-11 flex-none items-center justify-center rounded-full border border-pb-line2 bg-white p-0 text-pb-ink lg:hidden"
+                    >
+                      <IconBack />
                     </button>
+                  ) : (
+                    <span className="lg:hidden">{brandMark}</span>
+                  )}
+                  <div className="flex min-w-0 flex-col gap-px lg:hidden">
+                    <span className={`${SERIF} text-[19px] leading-[1.1]`}>{site.name}</span>
+                    {site.address ? <span className="truncate text-[12.5px] text-pb-muted">{site.address}</span> : null}
                   </div>
-                ) : (
-                  <div className="md:max-h-[27rem] md:overflow-y-auto md:pr-1">
-                    <SlotPicker
-                      slots={daySlots}
-                      timezone={tz}
-                      format={hourFormat}
-                      selected={slotStart}
-                      onSelect={(s) => {
-                        setSlotStart(s);
-                        setHint("");
-                      }}
-                      loading={monthState === "loading" || monthState === "idle"}
-                      emptyMessage={
-                        day
-                          ? "No quedan horarios libres este día. Prueba otro día u otro profesional."
-                          : monthSlots.length === 0
-                            ? "No hay horarios libres este mes. Prueba el mes siguiente u otro profesional."
-                            : "Elige un día en el calendario para ver los horarios."
-                      }
-                    />
-                  </div>
-                )}
-              </div>
-            </div>
-          </section>
-        ) : null}
-
-        {step === 3 ? (
-          <section aria-labelledby={headingId} className="flex flex-wrap items-start gap-8">
-            <form
-              id="booking-form"
-              noValidate
-              onSubmit={(e) => {
-                e.preventDefault();
-                void submit();
-              }}
-              className="flex min-w-0 max-w-[520px] flex-[1_1_340px] flex-col gap-5"
-            >
-              <div className="flex flex-col gap-1">
-                <h2 id={headingId} ref={headingRef} tabIndex={-1} className={legend}>
-                  Tus datos
-                </h2>
-                <p className="text-[13px] text-muted">Solo lo necesario para apartar tu horario y avisarte si algo cambia.</p>
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="f-name" className="text-sm font-medium">
-                  Nombre completo
-                </label>
-                <input
-                  id="f-name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  onBlur={touch("name")}
-                  name="name"
-                  autoComplete="name"
-                  autoCapitalize="words"
-                  enterKeyHint="next"
-                  maxLength={120}
-                  aria-invalid={Boolean(show("name"))}
-                  aria-describedby={show("name") ? "e-name" : undefined}
-                  className={INPUT}
-                />
-                {show("name") ? <FieldError id="e-name">{show("name")}</FieldError> : null}
-              </div>
-
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="f-phone" className="text-sm font-medium">
-                  WhatsApp o teléfono
-                </label>
-                <div className="flex gap-2">
-                  <select
-                    aria-label="Indicativo de país"
-                    autoComplete="tel-country-code"
-                    value={countryCode}
-                    onChange={(e) => setCountryCode(e.target.value)}
-                    className="u-focus h-[48px] shrink-0 rounded-[10px] border border-line-strong bg-surface px-2.5 text-[15px] text-foreground outline-none"
-                  >
-                    {COUNTRY_CODES.map((c) => (
-                      <option key={c.code} value={c.code}>
-                        {c.label}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    id="f-phone"
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value.replace(/[^\d +]/g, ""))}
-                    onBlur={touch("phone")}
-                    name="tel"
-                    type="tel"
-                    inputMode="tel"
-                    autoComplete="tel-national"
-                    enterKeyHint="next"
-                    maxLength={32}
-                    placeholder="300 123 4567"
-                    aria-invalid={Boolean(show("phone"))}
-                    aria-describedby={show("phone") ? "e-phone" : "h-phone"}
-                    className={INPUT}
-                  />
+                  {step > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => goStep((step - 1) as Step)}
+                      className="hidden min-h-11 items-center gap-1.5 rounded-[12px] border border-pb-line2 bg-white pl-2.5 pr-3.5 text-[14px] text-pb-ink lg:flex"
+                    >
+                      <IconBack size={16} />
+                      Atrás
+                    </button>
+                  ) : null}
+                  <span className="ml-auto flex-none text-[13px] text-pb-muted [font-variant-numeric:tabular-nums]">Paso {step} de 4</span>
                 </div>
-                {show("phone") ? (
-                  <FieldError id="e-phone">{show("phone")}</FieldError>
-                ) : (
-                  <span id="h-phone" className="text-[13px] text-muted">
-                    Te contactaremos aquí si hay algún cambio en tu cita.
-                  </span>
-                )}
+                <h1 ref={titleRef} tabIndex={-1} className={`${SERIF} m-0 mt-0.5 text-[32px] leading-[1.08] tracking-[-0.01em]`}>
+                  {STEP_TITLES[step]}
+                </h1>
+                <nav aria-label="Pasos de la reserva">
+                  <ol className="m-0 grid list-none grid-cols-4 gap-1.5 p-0">
+                    {([1, 2, 3, 4] as const).map((n) => {
+                      const cur = n === step;
+                      const dis = n > reach;
+                      return (
+                        <li key={n} className="min-w-0">
+                          <button
+                            type="button"
+                            disabled={dis}
+                            aria-current={cur ? "step" : undefined}
+                            onClick={() => goStep(n)}
+                            className={`flex min-h-11 w-full flex-col items-start justify-center gap-1.5 bg-transparent p-0 text-left text-[13px] ${
+                              cur ? "font-semibold text-pb-ink" : dis ? "cursor-default text-pb-faint" : "text-pb-tx2"
+                            }`}
+                          >
+                            <span aria-hidden className={`block h-[3px] w-full rounded-[2px] ${n <= step ? "bg-pb-ink" : "bg-pb-bar"}`} />
+                            <span className="max-w-full truncate">
+                              <span className="sr-only">Paso {n}: </span>
+                              {STEP_LABELS[n]}
+                            </span>
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ol>
+                </nav>
               </div>
+            ) : null}
 
-              <div className="flex flex-col gap-1.5">
-                <label htmlFor="f-email" className="text-sm font-medium">
-                  Correo electrónico <span className="font-normal text-muted">(opcional)</span>
-                </label>
-                <input
-                  id="f-email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  onBlur={touch("email")}
-                  name="email"
-                  type="email"
-                  inputMode="email"
-                  autoComplete="email"
-                  autoCapitalize="none"
-                  enterKeyHint="done"
-                  maxLength={254}
-                  placeholder="nombre@correo.com"
-                  aria-invalid={Boolean(show("email"))}
-                  className={INPUT}
-                />
-                {show("email") ? <FieldError>{show("email")}</FieldError> : null}
+            {banner ? (
+              <div role="alert" className="rounded-[12px] border border-pb-err-bd2 bg-pb-err-bg px-3.5 py-3 text-[14px] leading-[1.45] text-pb-err-fg">
+                {banner}
               </div>
+            ) : null}
 
-              <div className="flex flex-col gap-1.5">
-                <label className="flex cursor-pointer items-start gap-3">
-                  <input
-                    type="checkbox"
-                    checked={accepted}
-                    onChange={(e) => setAccepted(e.target.checked)}
-                    required
-                    aria-invalid={Boolean(attempted && errors.consent)}
-                    className="u-focus mt-px size-5 shrink-0 cursor-pointer accent-[var(--ink)]"
-                  />
-                  <span className="text-sm leading-[1.45] text-foreground/80">
-                    Acepto que {site.name} use mis datos solo para gestionar esta reserva.
-                    {privacyPolicyUrl ? (
-                      <>
-                        {" "}
-                        <a href={privacyPolicyUrl} rel="noopener noreferrer" className="text-foreground underline underline-offset-2">
-                          Política de privacidad
-                        </a>
-                      </>
-                    ) : null}
-                  </span>
-                </label>
-                {attempted && errors.consent ? <span role="alert" className="pl-8 text-[13px] text-danger">{errors.consent}</span> : null}
+            {confirmation ? (
+              <BookingDone confirmation={confirmation} firstName={form.name.trim().split(/\s+/)[0] || null} />
+            ) : step === 1 ? (
+              <ServiceStep services={services} selected={sel.serviceId} onSelect={pickService} />
+            ) : step === 2 && service ? (
+              <ArtistStep
+                serviceName={service.name}
+                staff={staffList}
+                state={staffLoad[service.id] ?? "idle"}
+                selected={sel.artist}
+                notice={artistNotice}
+                onPick={pickArtist}
+                onView={(id, trigger) => setProfile({ id, trigger })}
+                onRetry={() => void loadStaff(service.id, sel.artist, artist?.name ?? null, service.name)}
+              />
+            ) : step === 3 && service ? (
+              <DateTimeStep
+                serviceLine={`${service.name} · ${durationMin ?? service.duration_min} min`}
+                artistLine={artistName}
+                onChangeService={() => goStep(1)}
+                onChangeArtist={() => goStep(2)}
+                notice={cleared && cleared !== "artist_gone" ? CLEARED_MESSAGE[cleared] : null}
+                month={month}
+                today={todayKey}
+                selectedDay={sel.day}
+                statusOf={statusOf}
+                onPickDay={pickDay}
+                canPrev={monthDiff(todayKey.slice(0, 7), month) > 0}
+                canNext={`${shiftMonth(month, 1)}-01` <= lastDay}
+                onPrev={() => changeMonth(-1)}
+                onNext={() => changeMonth(1)}
+                timezone={tz}
+                timezoneText={tzText}
+                slots={daySlots}
+                selectedSlot={sel.slotStart}
+                onPickSlot={pickSlot}
+                loading={monthLoad === "loading" || monthLoad === "idle"}
+                error={monthLoad === "error"}
+                onRetry={() => void requestMonth(sel.serviceId, sel.artist, month, true)}
+                empty={empty}
+                onEmptyAction={onEmptyAction}
+              />
+            ) : step === 4 && service ? (
+              <DetailsStep
+                rows={summaryRows}
+                priceLabel={priceText(price, true)}
+                priceSub={price.from ? "El precio final depende del artista asignado." : null}
+                form={form}
+                setField={setField}
+                touch={touch}
+                errors={errors}
+                show={show}
+                errorCount={errorCount}
+                submitState={submit}
+                takenTime={takenTime}
+                onPickOtherTime={pickOtherTime}
+                siteName={site.name}
+                privacyPolicyUrl={privacyPolicyUrl}
+                turnstileSiteKey={turnstileSiteKey}
+                turnstileMisconfigured={turnstileMisconfigured}
+                turnstileRef={turnstile}
+                onTurnstile={setTurnstileToken}
+                onSubmit={() => void confirm()}
+                onFieldFocus={onFieldFocus}
+                onEdit={(n) => goStep(n)}
+              />
+            ) : null}
+
+            <p className="m-0 mt-1.5 text-center text-[12.5px] text-pb-muted lg:hidden">Impulsado por M_AI</p>
+          </main>
+
+          {/* Desktop: the compact selection and the CTA, always in view. */}
+          <aside
+            aria-label="Tu selección"
+            className="sticky top-7 hidden w-[340px] flex-none flex-col gap-3.5 rounded-[16px] border border-pb-line bg-white p-5 lg:flex"
+          >
+            <h2 className={`${SERIF} m-0 text-[23px]`}>Tu selección</h2>
+            {service ? (
+              <div className="flex flex-col">
+                <MiniRow k="Servicio" v={`${service.name} · ${durationMin ?? service.duration_min} min`} />
+                {sel.artist ? <MiniRow k="Artista" v={artistName} /> : null}
+                {slot && sel.day ? <MiniRow k="Fecha y hora" v={`${shortDay(sel.day)} · ${timeLabel}`} /> : null}
               </div>
-
-              {turnstileMisconfigured ? (
-                <p role="alert" className="rounded-xl bg-danger/10 px-3 py-2.5 text-xs text-danger">
-                  Las reservas en línea no están disponibles en este momento. Inténtalo más tarde.
-                </p>
-              ) : turnstileSiteKey ? (
-                <TurnstileField ref={turnstile} siteKey={turnstileSiteKey} onToken={setTurnstileToken} />
-              ) : null}
-            </form>
-
-            <div className="min-w-0 max-w-[340px] flex-[1_1_240px]">
-              <BookingSummary rows={summaryRows} />
-            </div>
-          </section>
-        ) : null}
+            ) : (
+              <p className="m-0 text-[14px] leading-[1.5] text-pb-muted">Elige un servicio para empezar.</p>
+            )}
+            {barPrice ? (
+              <div className="flex items-baseline justify-between">
+                <span className="text-[15px] font-[590]">Precio</span>
+                <span className="text-[17px] font-semibold [font-variant-numeric:tabular-nums]">{barPrice}</span>
+              </div>
+            ) : null}
+            {barHint ? <span className="text-[13.5px] text-pb-muted">{barHint}</span> : null}
+            <CtaButton label={ctaLabel} state={ctaState} disabled={ctaDisabled} onClick={onCta} arrow={false} full />
+            {hint ? (
+              <span role="status" className="text-center text-[13px] text-pb-warn-fg">
+                {hint}
+              </span>
+            ) : null}
+            {!confirmation && step === 4 ? <span className="text-center text-[13px] text-pb-muted">Nada se reserva hasta que confirmes.</span> : null}
+          </aside>
+        </div>
       </div>
 
-      {/* FOOTER — the running choice in two lines + the actions. Sticky on the phone so
-          the primary action stays under the thumb. */}
-      <footer className="sticky bottom-0 z-10 flex flex-wrap items-center gap-3 border-t border-line bg-surface px-4 pb-5 pt-3 sm:px-6 sm:py-4">
-        <div className="flex min-w-0 flex-[1_1_220px] flex-col gap-0.5" aria-live="polite">
-          <span className="truncate text-sm text-foreground">{footLine1}</span>
-          <span className="truncate text-[12.5px] text-muted">{footLine2}</span>
-          {hint ? (
-            <span role="alert" className="flex items-center gap-1.5 text-[13px] text-warn">
-              <span aria-hidden className="size-1.5 rounded-full bg-warn-rule" />
-              {hint}
-            </span>
-          ) : null}
+      {/* Phone/tablet bottom bar: safe area + rides above the keyboard. `sticky` honours the
+          shell scroller's padding, so it is offset by --content-pad to sit flush. */}
+      <div
+        className="sticky z-10 flex-none border-t border-pb-line bg-white px-4 pb-[calc(12px+env(safe-area-inset-bottom))] pt-3 [bottom:calc(-1*var(--content-pad))] lg:hidden"
+        style={kbInset > 0 ? { transform: `translateY(-${kbInset}px)` } : undefined}
+      >
+        <div className="mx-auto flex max-w-[640px] flex-col gap-1.5">
+          <div className="flex items-center gap-3.5">
+            <div className="flex min-w-0 flex-1 flex-col gap-px" aria-live="polite">
+              {barPrice ? (
+                <>
+                  <span className="text-[18px] font-semibold [font-variant-numeric:tabular-nums]">{barPrice}</span>
+                  <span className="truncate text-[13px] text-pb-muted">{barSub}</span>
+                </>
+              ) : null}
+              {barHint ? <span className={`leading-[1.35] text-pb-muted ${barPrice ? "text-[13px]" : "text-[14px]"}`}>{barHint}</span> : null}
+              {hint ? (
+                <span role="status" className="sr-only">
+                  {hint}
+                </span>
+              ) : null}
+            </div>
+            <CtaButton label={ctaLabel} state={ctaState} disabled={ctaDisabled} onClick={onCta} arrow={!confirmation && step < 4 && ctaState !== "sending"} />
+          </div>
+          {!confirmation && step === 4 ? <span className="text-center text-[12.5px] text-pb-muted">Nada se reserva hasta que confirmes.</span> : null}
         </div>
-        <div className="flex flex-[1_1_100%] gap-2 sm:ml-auto sm:flex-none">
-          {step > 1 ? (
-            <button
-              type="button"
-              onClick={() => go((step - 1) as Step)}
-              className="u-focus h-[48px] whitespace-nowrap rounded-xl border border-line-strong bg-surface px-[18px] text-sm text-foreground transition-colors hover:bg-subtle sm:h-[44px] sm:rounded-[10px]"
-            >
-              Volver
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={next}
-            disabled={submitting || (step === 3 && turnstileMisconfigured)}
-            className="u-focus h-[48px] flex-1 whitespace-nowrap rounded-xl border border-ink bg-ink px-[22px] text-sm font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50 sm:h-[44px] sm:flex-none sm:rounded-[10px]"
-          >
-            {step === 3 ? (submitting ? "Confirmando…" : "Confirmar cita") : "Continuar"}
-          </button>
-        </div>
-      </footer>
-    </section>
+      </div>
+
+      <ArtistProfile
+        artist={profile ? staffList.find((s) => s.id === profile.id) ?? null : null}
+        siteName={site.name}
+        services={services}
+        isChosen={Boolean(profile && sel.artist === profile.id)}
+        onClose={() => setProfile(null)}
+        onChoose={(id) => pickArtist(id)}
+        returnFocusTo={profile?.trigger ?? null}
+      />
+    </div>
+  );
+}
+
+function MiniRow({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="flex flex-col gap-px border-b border-pb-hair py-[9px]">
+      <span className="text-[12.5px] text-pb-muted">{k}</span>
+      <span className="text-[15px] [font-variant-numeric:tabular-nums]">{v}</span>
+    </div>
+  );
+}
+
+function CtaButton({
+  label,
+  state,
+  disabled,
+  onClick,
+  arrow,
+  full,
+}: {
+  label: string;
+  state: "on" | "muted" | "sending" | "outline";
+  disabled: boolean;
+  onClick: () => void;
+  arrow: boolean;
+  full?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      aria-disabled={disabled || undefined}
+      aria-busy={state === "sending" || undefined}
+      onClick={onClick}
+      className={`${CTA_BASE} ${ctaTone(state)} ${full ? "w-full" : "flex-none"}`}
+    >
+      {state === "sending" ? <Spinner /> : null}
+      {label}
+      {arrow ? <IconArrow /> : null}
+    </button>
   );
 }

@@ -191,7 +191,9 @@ test('a public site answers with NO session or cookie, with no-store + nosniff h
   assert.equal(res.headers.get('x-content-type-options'), 'nosniff');
   assert.equal(res.headers.get('referrer-policy'), 'strict-origin-when-cross-origin');
   const d = (await res.json()) as { site: Record<string, unknown>; services: Array<Record<string, unknown>> };
-  assert.deepEqual(Object.keys(d.site).sort(), ['address', 'closed_weekdays', 'name', 'timezone']);
+  // booking_horizon_days (v3): a published booking rule, so the calendar can grey out the
+  // days past it — the engine still enforces it.
+  assert.deepEqual(Object.keys(d.site).sort(), ['address', 'booking_horizon_days', 'closed_weekdays', 'name', 'timezone']);
   assert.deepEqual(d.site.closed_weekdays, ['sun']);
   assert.equal(d.services.length, 1);
   assert.deepEqual(Object.keys(d.services[0]).sort(), ['description', 'duration_min', 'family', 'id', 'name', 'price']);
