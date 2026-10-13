@@ -437,7 +437,9 @@ test('contacts: the surviving editor keeps the guarantees the modal lacked', () 
   const form = read('components/contacts/form/ContactEditForm.tsx');
   // Multiple identities, not one email and one phone.
   assert.ok(form.includes('initial.phones') && form.includes('initial.emails'), 'identities are LISTS');
-  assert.ok(form.includes('checkIdentity('), 'the "at least one" rule is enforced');
+  // checkAddedIdentities wraps checkIdentity (and adds the email-validity stop).
+  assert.ok(form.includes('checkAddedIdentities('), 'the "at least one" rule is enforced');
+  assert.ok(/export function checkAddedIdentities[\s\S]*?checkIdentity\(/.test(read('lib/contactForm.ts')), 'through the one identity rule');
   // New identities go through the spine-backed section, which runs the duplicate check.
   // It now lives in the shared two-mode body, so follow the chain: the form renders
   // ContactSections in edit mode, and THAT mounts IdentitySection.
@@ -1093,13 +1095,12 @@ test('panel: appointment status is humanised and tinted from tokens', () => {
   const appts = read('components/contacts/shared/AppointmentsSection.tsx');
   assert.ok(appts.includes('appointmentStatusLabel(status)'), 'the badge prints the label, not the enum');
   assert.equal(/STATUS_LABEL/.test(stripComments(appts)), false, 'no local English label map survives');
+  // The STATE words are the agenda's (audit V6/D3): the ficha no longer says
+  // "Agendada" / "No asistió" for "Sin confirmar" / "Inasistencia". Behaviour is pinned
+  // in appointmentStatusVocabulary.test.ts; here, that the map reads the agenda's source.
   const labels = read('lib/contactLabels.ts');
-  for (const [stored, human] of [
-    ['scheduled', 'Agendada'],
-    ['completed', 'Completada'],
-    ['no_show', 'No asistió'],
-  ] as const) {
-    assert.ok(new RegExp(`${stored}:\\s*"${human}"`).test(labels), `${stored} → ${human}`);
+  for (const stored of ['scheduled', 'confirmed', 'completed', 'cancelled', 'no_show']) {
+    assert.ok(new RegExp(`${stored}:\\s*STATUS_NAME\\.${stored}`).test(labels), `${stored} → the agenda's label`);
   }
   // Tones come from --success/--warn, which flip with the theme; raw Tailwind does not.
   assert.ok(appts.includes('bg-success/10 text-success') && appts.includes('bg-warn-soft text-warn'), 'token tones');

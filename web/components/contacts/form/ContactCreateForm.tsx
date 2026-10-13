@@ -98,7 +98,7 @@ export function ContactCreateForm({
     setError(null);
     setNotice(null);
     if (!identity.canSubmit) {
-      setError(COPY.needsIdentity);
+      setError(identity.error ?? COPY.needsIdentity);
       return;
     }
     start(async () => {

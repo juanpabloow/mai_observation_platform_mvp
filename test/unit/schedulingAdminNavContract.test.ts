@@ -67,7 +67,14 @@ test('AdminPanel: no client selector — a single route client threads into ever
   // map), not a per-row inline call — the client scoping is unchanged.
   assert.ok(src.includes('DEACTIVATE[kind](clientId, id)'), 'deactivate carries clientId (via ActiveToggle)');
   assert.ok(src.includes('ACTIVATE[kind](clientId, id)'), 'activate (the inverse) carries clientId');
-  assert.ok(src.includes('setSiteServiceAction(clientId'), 'setSiteService carries clientId');
+  // Services moved to the services menu + its editor; they thread the SAME route clientId.
+  const editor = read('components/scheduling/services/ServiceEditor.tsx');
+  const menu = read('components/scheduling/services/ServiceMenu.tsx');
+  assert.ok(src.includes('<ServiceMenu\n              clientId={clientId}'), 'the services menu receives the route client');
+  assert.ok(editor.includes('setSiteServiceAction(clientId, siteId, serviceId, on)'), 'setSiteService carries clientId');
+  assert.ok(editor.includes('setStaffServiceAction(clientId, staffId, serviceId, on)'), 'setStaffService carries clientId');
+  assert.ok(editor.includes('createServiceAction({ clientId,') && editor.includes('updateServiceAction(clientId,'), 'create/update service carry clientId');
+  assert.ok(menu.includes('deactivateServiceAction(clientId, id)') && menu.includes('activateServiceAction(clientId, s.id)'), 'archive / reactivate carry clientId');
   // Staff moved to the roster, and the pairing is now toggled INLINE in the panel's
   // Services tab (it used to live in a separate editor). It still threads the SAME
   // clientId. Asserted at its new home so the contract follows the code instead of

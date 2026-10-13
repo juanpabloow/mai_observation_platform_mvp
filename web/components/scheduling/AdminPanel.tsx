@@ -5,25 +5,24 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { DAYS, DAY_LABELS, gridFromWeekly, HoursGrid, weeklyFromGrid, type HourGrid } from "./HoursGrid";
 import { BookingLinkCard } from "./BookingLinkCard";
+import { ServiceMenu } from "./services/ServiceMenu";
+import { ConfigMobile } from "./mobile/config/ConfigMobile";
 import {
   activateServiceAction,
   activateSiteAction,
   activateStaffAction,
   countUpcomingAppointmentsAction,
   createExceptionAction,
-  createServiceAction,
   createSiteAction,
   deactivateServiceAction,
   deactivateSiteAction,
   deactivateStaffAction,
   deleteExceptionAction,
-  setSiteServiceAction,
-  updateServiceAction,
   updateSiteAction,
 } from "@/lib/schedulingAdminActions";
 import { PageShell } from "@/components/ui/PageShell";
+import { checksProgress, servicesSummaryHelper, servicesSummaryTitle } from "@/lib/schedulingOverview";
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
-import { SERVICE_DESCRIPTION_MAX } from "@/lib/serviceDescription";
 
 type WeeklyHours = Record<string, Array<{ start: string; end: string }>>;
 
@@ -34,7 +33,7 @@ interface SchedulingConfig {
   default_buffer_before_min: number;
   default_buffer_after_min: number;
 }
-interface Site {
+export interface Site {
   id: string; client_id: string; slug: string; name: string; address: string | null; timezone: string; active: boolean;
   /** The site's configured weekly opening hours (C-6 — shown + editable). */
   opening_hours: WeeklyHours;
@@ -42,7 +41,7 @@ interface Site {
    *  now — shown + editable so an operator can see why availability starts N min from now. */
   scheduling_config: SchedulingConfig;
 }
-interface Service {
+export interface Service {
   id: string; name: string; description: string | null; duration_min: number;
   price: string | null; buffer_before_min: number; buffer_after_min: number; active: boolean;
   /** Operator-chosen "offer this first" flag — the assistant leads with featured services. */
@@ -51,13 +50,13 @@ interface Service {
    *  the agenda falls back to guessing from the name. */
   category: string | null;
 }
-interface Staff {
+export interface Staff {
   id: string; site_id: string; name: string; active: boolean; serviceIds: string[];
   /** Per-staff weekly working hours; {} means "inherit the site's opening hours" (C-6). */
   working_hours: WeeklyHours;
 }
 
-interface Exception { id: string; site_id: string; staff_id: string | null; starts_at: string; ends_at: string; reason: string | null }
+export interface Exception { id: string; site_id: string; staff_id: string | null; starts_at: string; ends_at: string; reason: string | null }
 
 /**
  * Control heights are RESPONSIVE by design-system rule: 44px wherever the input is a
@@ -97,6 +96,7 @@ export function AdminPanel({
   services,
   staff,
   exceptions,
+  pastExceptions = [],
   siteServiceMap,
   schedulingEnabled = true,
 }: {
@@ -106,6 +106,8 @@ export function AdminPanel({
   services: Service[];
   staff: Staff[];
   exceptions: Exception[];
+  /** Ended in the last 90 days — only the phone's "Pasados" tab reads it. */
+  pastExceptions?: Exception[];
   /** REAL per-site enablement (site_services): siteId → enabled serviceIds. */
   siteServiceMap: Record<string, string[]>;
   /** Whether this client can host public booking right now (non-default + module on) —
@@ -127,7 +129,21 @@ export function AdminPanel({
   };
 
   return (
-    <main className="flex min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]">
+    <>
+      {/* PHONE (< 768px): its own tree — Inicio + one screen per section, in the URL
+          (?m=). The desktop/tablet panel below is untouched and hidden there. */}
+      <ConfigMobile
+        clientId={clientId}
+        clientName={clientName}
+        sites={sites}
+        services={services}
+        staff={staff}
+        exceptions={exceptions}
+        pastExceptions={pastExceptions}
+        siteServiceMap={siteServiceMap}
+        schedulingEnabled={schedulingEnabled}
+      />
+    <main className="hidden min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)] md:flex">
       <PageShell grow={false} clip={false}>
         <div className="px-4 pt-3 sm:px-5">
           <div className="flex min-h-11 flex-wrap items-center justify-between gap-3">
@@ -213,7 +229,14 @@ export function AdminPanel({
             />
           ) : null}
           {tab === "services" ? (
-            <ServicesSection clientId={clientId} sites={sites} services={services} siteServiceMap={siteServiceMap} run={run} pending={pending} />
+            <ServiceMenu
+              clientId={clientId}
+              sites={sites}
+              services={services}
+              staff={staff}
+              siteServiceMap={siteServiceMap}
+              onOpenBookingLink={() => setTab("sites")}
+            />
           ) : null}
           {tab === "blocks" ? (
             <ExceptionsSection clientId={clientId} sites={sites} staff={staff} exceptions={exceptions} run={run} pending={pending} />
@@ -222,6 +245,7 @@ export function AdminPanel({
         </div>
       </PageShell>
     </main>
+    </>
   );
 }
 
@@ -248,13 +272,11 @@ function SettingsOverview({
   const ready = activeSites.length > 0 && activeServices.length > 0 && activeStaff.length > 0;
   const doneSteps = [activeSites.length > 0, activeServices.length > 0, activeStaff.length > 0].filter(Boolean).length;
 
-  /** Distinct categories in use — the reference's "N categorías" on the services card. */
-  const categoryCount = new Set(activeServices.map((service) => service.category ?? "none")).size;
   /** The soonest upcoming block, so the card says WHEN and not just how many. */
   const nextBlock = [...exceptions].sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at))[0];
   const nextBlockSite = nextBlock ? sites.find((site) => site.id === nextBlock.site_id) : undefined;
 
-  const summaries: Array<{ label: string; value: number; helper: string; tab?: SettingsTab; href?: string }> = [
+  const summaries: Array<{ label: string; value: number; helper: string; title?: string; tab?: SettingsTab; href?: string }> = [
     {
       label: "Sedes activas",
       value: activeSites.length,
@@ -268,7 +290,10 @@ function SettingsOverview({
     {
       label: "Servicios activos",
       value: activeServices.length,
-      helper: `${categoryCount} categoría${categoryCount === 1 ? "" : "s"} · ${activeServices.filter((service) => service.featured).length} destacados`,
+      // STORED categories, as the Servicios tab groups them; the tooltip spells out the
+      // agenda's inferred colours and that ★ is the flag. See schedulingOverview.ts.
+      helper: servicesSummaryHelper(activeServices),
+      title: servicesSummaryTitle(activeServices),
       tab: "services",
     },
     {
@@ -364,6 +389,8 @@ function SettingsOverview({
   });
 
   const openProblems = rows.filter((row) => row.state !== "ok").length;
+  // The badge counts the checks LISTED below, so it never reads "3 / 3" over four ticks.
+  const progress = checksProgress(rows);
 
   return (
     <>
@@ -373,7 +400,7 @@ function SettingsOverview({
             <>
               <span className="text-[0.6875rem] text-muted">{item.label}</span>
               <strong className="mt-1 block text-[1.375rem] font-semibold leading-tight tracking-[-0.01em] text-foreground">{item.value}</strong>
-              <span className="mt-1 block truncate text-[0.6875rem] text-faint">{item.helper}</span>
+              <span title={item.title} className="mt-1 block truncate text-[0.6875rem] text-faint">{item.helper}</span>
             </>
           );
           return item.href ? (
@@ -388,7 +415,7 @@ function SettingsOverview({
         <section className="flex min-h-0 flex-col overflow-hidden rounded-xl border border-line bg-surface">
           <div className="flex shrink-0 items-center gap-2.5 border-b border-line px-4 py-3">
             <h2 className="text-sm font-semibold text-foreground">Estado de la configuración</h2>
-            <span className="u-mono rounded-md border border-line bg-chip px-1.5 py-0.5 text-[0.6875rem] text-muted">{doneSteps} / 3</span>
+            <span className="u-mono rounded-md border border-line bg-chip px-1.5 py-0.5 text-[0.6875rem] text-muted">{progress.done} / {progress.total}</span>
             <span className="flex-1" />
             <span className="truncate text-[0.6875rem] text-muted">
               {ready
@@ -589,7 +616,7 @@ function RulesSection({ sites, onEdit }: { sites: Site[]; onEdit: () => void }) 
   );
 }
 
-type Run = (fn: () => Promise<{ ok: boolean; error?: string }>) => void;
+export type Run = (fn: () => Promise<{ ok: boolean; error?: string }>) => void;
 type ToggleKind = "site" | "service" | "staff";
 
 const DEACTIVATE: Record<ToggleKind, (clientId: string, id: string) => Promise<{ ok: boolean; error?: string }>> = {
@@ -890,29 +917,6 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
   );
 }
 
-/** Optional service description — a full-width textarea with a live character counter.
- *  The server trims, maps whitespace-only → NULL and rejects over the limit; `maxLength`
- *  just stops the typing early so the counter never needs a red state. */
-function DescriptionField({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  return (
-    <div className="mt-4">
-      <label className="mb-1.5 flex flex-col gap-1.5">
-        <span className="text-xs font-medium text-foreground">
-          Descripción <span className="font-normal text-faint">(opcional)</span>
-        </span>
-        <textarea
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
-          rows={3}
-          maxLength={SERVICE_DESCRIPTION_MAX}
-          placeholder="Qué incluye este servicio — lo usa el bot para responder «¿qué incluye X?». Texto plano, sin formato."
-          className="min-h-[4.5rem] w-full resize-y rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-foreground outline-none transition focus:border-foreground"
-        />
-      </label>
-      <p className="text-right text-[0.6875rem] text-faint">{value.length}/{SERVICE_DESCRIPTION_MAX}</p>
-    </div>
-  );
-}
 
 function SitesSection({
   clientId,
@@ -1027,276 +1031,6 @@ function SitesSection({
           <div className="mt-5 border-t border-line pt-4">
             <p className="mb-3 text-sm font-semibold text-foreground">Horario semanal</p>
             <HoursGrid grid={grid} setGrid={setGrid} />
-          </div>
-        </ConfigModal>
-      ) : null}
-    </Section>
-  );
-}
-
-/**
- * The colour families a service can be filed under — the ones with a palette on the
- * agenda (globals.css `.u-appt-*`), which is the same closed set the
- * services_category_valid CHECK enforces. "Unclassified" is a real, storable choice:
- * it returns the service to being coloured by keywords in its name.
- */
-const CATEGORY_OPTIONS = [
-  { value: "", label: "Sin categoría" },
-  { value: "color", label: "Color" },
-  { value: "grooming", label: "Barba y cuidado" },
-  { value: "cut", label: "Corte" },
-  { value: "feature", label: "Tratamiento destacado" },
-] as const;
-
-/** An EXISTING service's editable settings (name/duration/price/buffers/category) + its
- *  per-site enablement toggles + a copyable id. Save persists via updateServiceAction. */
-function EditableService({ clientId, service, activeSites, siteServiceMap, run, pending }: {
-  clientId: string; service: Service; activeSites: Site[]; siteServiceMap: Record<string, string[]>; run: Run; pending: boolean;
-}) {
-  const [editing, setEditing] = useState(false);
-  const [name, setName] = useState(service.name);
-  const [duration, setDuration] = useState(String(service.duration_min));
-  const [price, setPrice] = useState(service.price ?? "");
-  const [bBefore, setBBefore] = useState(String(service.buffer_before_min));
-  const [bAfter, setBAfter] = useState(String(service.buffer_after_min));
-  const [featured, setFeatured] = useState(service.featured);
-  const [category, setCategory] = useState(service.category ?? "");
-  const [description, setDescription] = useState(service.description ?? "");
-  const save = () =>
-    run(async () => {
-      const r = await updateServiceAction(clientId, service.id, {
-        name: name.trim(),
-        // The action trims, maps whitespace-only → NULL, and rejects over 500 chars.
-        description,
-        durationMin: Number(duration),
-        price: price === "" ? null : Number(price),
-        bufferBeforeMin: Number(bBefore),
-        bufferAfterMin: Number(bAfter),
-        featured,
-        // "" clears it back to NULL; the action narrows anything unexpected with
-        // parseServiceCategory, so a stale value degrades instead of failing a save.
-        category: category === "" ? null : category,
-      });
-      // Only a SAVED change dismisses the editor — a rejected one keeps the form (and
-      // the values the user typed) open beside the error.
-      if (r.ok) setEditing(false);
-      return r;
-    });
-  const enabledSiteCount = activeSites.filter((site) => (siteServiceMap[site.id] ?? []).includes(service.id)).length;
-  return (
-    <article className={`overflow-hidden rounded-xl border border-line ${service.active ? "bg-surface" : "bg-subtle/40"}`}>
-      <div className="flex flex-wrap items-center gap-3 px-4 py-3.5">
-        <span aria-hidden className={`size-2.5 rounded-full ${service.active ? "bg-success" : "bg-faintest"}`} />
-        <div className="min-w-0 flex-1">
-          <div className="flex flex-wrap items-center gap-2">
-            <h3 className="truncate text-sm font-semibold text-foreground">{service.name}</h3>
-            {service.featured ? <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[0.625rem] font-medium text-accent">Destacado</span> : null}
-            {!service.active ? <span className="rounded-full bg-chip px-2 py-0.5 text-[0.625rem] font-medium text-muted">Inactivo</span> : null}
-          </div>
-          <p className="mt-1 truncate text-xs text-muted">
-            {service.duration_min} min{service.price ? ` · $${Number(service.price).toLocaleString("es-CO")}` : ""} · {enabledSiteCount} sede{enabledSiteCount === 1 ? "" : "s"}
-          </p>
-        </div>
-        {/* haspopup, not aria-expanded: the editor is a dialog over the list now, not
-            a region unfolding inside this row. */}
-        <button type="button" className={GHOST} onClick={() => setEditing(true)} aria-haspopup="dialog">
-          Editar
-        </button>
-        <ActiveToggle clientId={clientId} kind="service" id={service.id} name={service.name} active={service.active} run={run} pending={pending} />
-      </div>
-
-      {editing ? (
-        /* The editor is a CENTRED MODAL, not an expanded row. In a catalogue of a
-           hundred services, unfolding a form in place pushed every following row down
-           the page and left the list unreadable while editing — so the row list stays a
-           scannable table and the form opens over it. */
-        <ConfigModal
-          title={service.name}
-          description="Duración, precio, categoría y sedes donde se puede reservar."
-          onClose={() => setEditing(false)}
-          footer={
-            <button className={BTN} disabled={pending || !name || !(Number(duration) > 0)} onClick={save}>Guardar cambios</button>
-          }
-        >
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <label className="flex items-center gap-2 text-xs text-muted">
-              <input type="checkbox" checked={featured} onChange={(e) => setFeatured(e.target.checked)} />
-              Mostrar primero cuando el cliente no especifica un servicio
-            </label>
-            <CopyId label="ID de servicio" value={service.id} />
-          </div>
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <Field label="Nombre"><input value={name} onChange={(e) => setName(e.target.value)} className={`${INPUT} w-full`} /></Field>
-            <Field label="Duración (min)"><input type="number" min={1} value={duration} onChange={(e) => setDuration(e.target.value)} className={`${INPUT} w-full`} /></Field>
-            <Field label="Precio"><input type="number" min={0} value={price} onChange={(e) => setPrice(e.target.value)} className={`${INPUT} w-full`} /></Field>
-            <Field label="Preparación antes (min)"><input type="number" min={0} value={bBefore} onChange={(e) => setBBefore(e.target.value)} className={`${INPUT} w-full`} /></Field>
-            <Field label="Tiempo después (min)"><input type="number" min={0} value={bAfter} onChange={(e) => setBAfter(e.target.value)} className={`${INPUT} w-full`} /></Field>
-            <Field label="Categoría" hint="Define el color de la tarjeta en la agenda.">
-              <select value={category} onChange={(e) => setCategory(e.target.value)} className={`${INPUT} w-full`}>
-                {CATEGORY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-              </select>
-            </Field>
-          </div>
-          <DescriptionField value={description} onChange={setDescription} />
-          {service.active ? (
-            <div className="mt-5 border-t border-line pt-4">
-              <p className="mb-2 text-xs font-medium text-foreground">Disponible en</p>
-              <div className="flex flex-wrap gap-1.5">
-                {activeSites.map((site) => {
-                  const on = (siteServiceMap[site.id] ?? []).includes(service.id);
-                  return (
-                    <button
-                      key={site.id}
-                      disabled={pending}
-                      onClick={() => run(() => setSiteServiceAction(clientId, site.id, service.id, !on))}
-                      className={`rounded-full border px-2.5 py-1 text-xs transition ${on ? "border-foreground bg-foreground text-background" : "border-line text-muted hover:bg-subtle"}`}
-                    >
-                      {site.name}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ) : null}
-        </ConfigModal>
-      ) : null}
-    </article>
-  );
-}
-
-function ServicesSection({
-  clientId,
-  sites,
-  services,
-  siteServiceMap,
-  run,
-  pending,
-}: {
-  clientId: string;
-  sites: Site[];
-  services: Service[];
-  siteServiceMap: Record<string, string[]>;
-  run: Run;
-  pending: boolean;
-}) {
-  const activeSites = sites.filter((s) => s.active);
-  const [creating, setCreating] = useState(false);
-  const [query, setQuery] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("all");
-  const [name, setName] = useState("");
-  const [duration, setDuration] = useState("60");
-  const [price, setPrice] = useState("");
-  const [bBefore, setBBefore] = useState("0");
-  const [bAfter, setBAfter] = useState("0");
-  const [category, setCategory] = useState("");
-  const [description, setDescription] = useState("");
-  // Sites the new service will be enabled at — default ALL active sites, so a
-  // freshly created service is bookable everywhere unless narrowed.
-  const [siteIds, setSiteIds] = useState<string[]>(activeSites.map((s) => s.id));
-
-  const toggleSite = (id: string) =>
-    setSiteIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
-
-  const submit = () =>
-    run(async () => {
-      const r = await createServiceAction({
-        clientId,
-        name: name.trim(),
-        description, // the action trims, maps whitespace-only → NULL, and caps at 500
-        durationMin: Number(duration),
-        price: price ? Number(price) : null,
-        bufferBeforeMin: Number(bBefore),
-        bufferAfterMin: Number(bAfter),
-        siteIds,
-        category: category === "" ? null : category,
-      });
-      if (r.ok) { setName(""); setDescription(""); setCategory(""); setSiteIds(activeSites.map((s) => s.id)); setCreating(false); }
-      return r;
-    });
-
-  const filteredServices = services.filter((service) => {
-    const matchesQuery = service.name.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es"));
-    const matchesCategory = categoryFilter === "all" || (categoryFilter === "none" ? !service.category : service.category === categoryFilter);
-    return matchesQuery && matchesCategory;
-  });
-
-  return (
-    <Section
-      title="Servicios"
-      description="Define qué se puede reservar, cuánto dura y en qué sedes está disponible."
-      action={<button type="button" className={BTN} onClick={() => setCreating(true)}>+ Nuevo servicio</button>}
-    >
-      <div className="flex flex-col gap-3 rounded-xl border border-line bg-surface p-3 sm:p-4">
-        <div className="flex flex-wrap items-center gap-2 border-b border-line pb-3">
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder="Buscar servicio…"
-            aria-label="Buscar servicio"
-            className={`${INPUT} min-w-0 flex-1 bg-subtle/60 sm:max-w-sm`}
-          />
-          <select value={categoryFilter} onChange={(event) => setCategoryFilter(event.target.value)} aria-label="Filtrar por categoría" className={INPUT}>
-            <option value="all">Todas las categorías</option>
-            <option value="cut">Corte</option>
-            <option value="grooming">Barba y cuidado</option>
-            <option value="color">Color</option>
-            <option value="feature">Tratamiento destacado</option>
-            <option value="none">Sin categoría</option>
-          </select>
-          <span className="u-mono ml-auto text-xs text-faint">{filteredServices.length} servicio{filteredServices.length === 1 ? "" : "s"}</span>
-        </div>
-        {filteredServices.map((s) => (
-          <EditableService key={s.id} clientId={clientId} service={s} activeSites={activeSites} siteServiceMap={siteServiceMap} run={run} pending={pending} />
-        ))}
-        {filteredServices.length === 0 ? (
-          <div className="rounded-xl border border-dashed border-line px-4 py-10 text-center">
-            <p className="text-sm font-semibold text-foreground">No encontramos servicios</p>
-            <p className="mt-1 text-xs text-muted">Cambia la búsqueda o el filtro de categoría.</p>
-          </div>
-        ) : null}
-      </div>
-      {creating ? (
-        <ConfigModal
-          title="Nuevo servicio"
-          description="Define duración, precio y las sedes donde se podrá reservar."
-          onClose={() => setCreating(false)}
-          footer={
-            <button
-              className={BTN}
-              disabled={pending || !name || !(Number(duration) > 0) || siteIds.length === 0}
-              onClick={submit}
-            >
-              Crear servicio
-            </button>
-          }
-        >
-          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-            <Field label="Nombre"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Corte clásico" className={`${INPUT} w-full`} /></Field>
-            <Field label="Duración (min)"><input type="number" min={1} value={duration} onChange={(e) => setDuration(e.target.value)} className={`${INPUT} w-full`} /></Field>
-            <Field label="Precio"><input type="number" min={0} value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Opcional" className={`${INPUT} w-full`} /></Field>
-            <Field label="Preparación antes (min)"><input type="number" min={0} value={bBefore} onChange={(e) => setBBefore(e.target.value)} className={`${INPUT} w-full`} /></Field>
-            <Field label="Tiempo después (min)"><input type="number" min={0} value={bAfter} onChange={(e) => setBAfter(e.target.value)} className={`${INPUT} w-full`} /></Field>
-            <Field label="Categoría" hint="Define el color de la tarjeta en la agenda.">
-              <select value={category} onChange={(e) => setCategory(e.target.value)} className={`${INPUT} w-full`} aria-label="Categoría">
-                {CATEGORY_OPTIONS.map((c) => <option key={c.value} value={c.value}>{c.label}</option>)}
-              </select>
-            </Field>
-          </div>
-          <DescriptionField value={description} onChange={setDescription} />
-          <div>
-            <p className="mb-2 mt-5 border-t border-line pt-4 text-xs font-medium text-foreground">Disponible en</p>
-            <div className="flex flex-wrap gap-1.5">
-              {activeSites.map((site) => (
-                <button
-                  key={site.id}
-                  type="button"
-                  onClick={() => toggleSite(site.id)}
-                  className={`rounded-full border px-2.5 py-1 text-xs transition ${siteIds.includes(site.id) ? "border-foreground bg-foreground text-background" : "border-line text-muted hover:bg-subtle"}`}
-                >
-                  {site.name}
-                </button>
-              ))}
-            </div>
           </div>
         </ConfigModal>
       ) : null}

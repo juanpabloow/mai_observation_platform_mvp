@@ -5,6 +5,7 @@ import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import {
   canAccessClient,
   canAccessSchedulingSite,
+  canAccessSchedulingStaff,
   canOperateScheduling,
   hasFullAccess,
   isClientOwner,
@@ -42,6 +43,10 @@ export default async function ClientAgendaPage({
     book?: string;
     reschedule?: string;
     return?: string;
+    /** Open the agenda filtered to one professional (from the Equipo screens). */
+    staff?: string;
+    /** Open one appointment's detail (from a professional's "Hoy" list). */
+    appt?: string;
   }>;
 }) {
   await connection();
@@ -123,11 +128,16 @@ export default async function ClientAgendaPage({
   // PREVIOUS equivalent window, for the KPI deltas. Same query, same client scoping,
   // just shifted back by the range's own length — so "vs last week" compares like
   // with like (a 7-day week against the prior 7 days, a day against the day before).
+  // The phone agenda's day strip shows which days of THIS week have appointments, even
+  // in the day view — so the week window is always known.
+  const weekStart = zonedPartsToUtc(y, m, d + mondayOffset, 0, 0, site.timezone);
+  const weekEnd = zonedPartsToUtc(y, m, d + mondayOffset + 7, 0, 0, site.timezone);
+
   const rangeMs = rangeEnd.getTime() - rangeStart.getTime();
   const prevStart = new Date(rangeStart.getTime() - rangeMs);
   const prevEnd = new Date(rangeStart.getTime());
 
-  const [allStaff, services, appts, prevAppts, crmEnabled, inboxEnabled] = await Promise.all([
+  const [allStaff, services, appts, prevAppts, crmEnabled, inboxEnabled, exceptions, weekAppts] = await Promise.all([
     // includeInactive: a deactivated barber must still get a lane IF they have
     // appointments in the VISIBLE RANGE — otherwise their (intact) appointments have
     // nowhere to render and disappear. Note the range is now day OR week, so this
@@ -144,7 +154,21 @@ export default async function ClientAgendaPage({
     // a staff login never sees contacts or the inbox, so those links are withheld.
     isSchedulingStaff(scope) ? Promise.resolve(false) : isClientModuleEnabled(tenantId, client.id, "crm"),
     isSchedulingStaff(scope) ? Promise.resolve(false) : isClientModuleEnabled(tenantId, client.id, "inbox"),
+    // BLOCKED time (schedule_exceptions) overlapping the visible range, for THIS site
+    // only — drawn on the board so a blocked hour never reads as bookable whitespace.
+    listExceptions(tenantId, { siteId: site.id, from: rangeStart, to: rangeEnd }),
+    // Same query, same scoping, over the week — only COUNTED (per site-local day).
+    view === "week" ? Promise.resolve(null) : listAppointments(tenantId, { siteId: site.id, from: weekStart, to: weekEnd, clientId: client.id }),
   ]);
+  const weekCounts: Record<string, number> = {};
+  for (const a of weekAppts ?? appts) {
+    if (a.status === "cancelled") continue;
+    // A staff login's phone agenda is "Mi agenda": count only its own appointments.
+    if (isSchedulingStaff(scope) && a.staff_id !== scope.schedulingStaffId) continue;
+    const p = utcToZonedParts(a.start_at, site.timezone);
+    const key = `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+    weekCounts[key] = (weekCounts[key] ?? 0) + 1;
+  }
   // Lanes = every ACTIVE staff member + any INACTIVE one who still has an appointment in
   // this window. Deactivation is forward-looking: it stops new bookings, never hides the
   // history that already points at that resource.
@@ -180,6 +204,11 @@ export default async function ClientAgendaPage({
   // used only to build the in-app /contacts/{id} path.
   const returnContactId = sp.return && isUuid(sp.return) ? sp.return : null;
 
+  // Deep links from the Equipo screens: a ?staff= that is not one of THIS site's lanes,
+  // or an ?appt= that is not in the loaded range, is ignored (never trusted, never fetched).
+  const initialStaffId = sp.staff && isUuid(sp.staff) && staff.some((s) => s.id === sp.staff) ? sp.staff : null;
+  const initialApptId = sp.appt && isUuid(sp.appt) && appts.some((a) => a.id === sp.appt) ? sp.appt : null;
+
   // serviceId → stored category, built once for the whole board.
   const serviceCategoryById = new Map(services.map((s) => [s.id, s.category]));
 
@@ -189,7 +218,7 @@ export default async function ClientAgendaPage({
   // case is already filtered out, so every block it does see carries its reason).
   const isStaff = isSchedulingStaff(scope);
   const myStaffId = scope.schedulingStaffId;
-  const rawBlocks = await listExceptions(tenantId, { siteId: site.id, from: rangeStart, to: rangeEnd });
+  const rawBlocks = exceptions;
   const blocks = rawBlocks
     .filter((b) => !isStaff || b.staff_id === null || b.staff_id === myStaffId)
     .map((b) => ({
@@ -207,6 +236,10 @@ export default async function ClientAgendaPage({
   return (
     <AgendaView
       clientId={client.id}
+      clientName={client.name}
+      weekCounts={weekCounts}
+      initialStaffId={initialStaffId}
+      initialApptId={initialApptId}
       basePath={`/clients/${client.id}/scheduling/agenda`}
       contactsBase={crmEnabled ? `/clients/${client.id}/contacts` : null}
       inboxBase={inboxEnabled ? `/clients/${client.id}/inbox` : null}
@@ -259,6 +292,11 @@ export default async function ClientAgendaPage({
         contact_id: a.contact_id,
         contact_name: a.contact_name,
         primary_identity: isSchedulingStaff(scope) ? null : a.primary_identity,
+        // May THIS login act on THIS appointment — the exact checks gateAppointment
+        // (lib/schedulingActions.ts) applies to every write and to the activity read.
+        // Visibility is unchanged: a staff login still sees the whole site.
+        can_modify:
+          canOperateScheduling(scope) && canAccessSchedulingSite(scope, a.site_id) && canAccessSchedulingStaff(scope, a.staff_id),
         source_conversation_id: a.source_conversation_id,
       }))}
     />

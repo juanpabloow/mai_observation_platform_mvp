@@ -27,7 +27,8 @@ import {
   deleteStaffCertification,
 } from "@worker/db/repositories/scheduling/staffCertifications.js";
 import {
-  createService,
+  createServiceWithSites,
+  ServiceSiteLinkError,
   deactivateService,
   getServiceById,
   reactivateService,
@@ -201,19 +202,28 @@ export async function createServiceAction(input: {
   for (const siteId of input.siteIds ?? []) {
     if (!(await siteInClient(auth.tenantId, input.clientId, siteId))) return { ok: false, error: FOREIGN };
   }
-  const svc = await createService({
-    tenantId: auth.tenantId,
-    clientId: input.clientId, // the VALIDATED route client — the service's owner
-    name: input.name.trim(),
-    description: desc.value,
-    durationMin: input.durationMin,
-    price: input.price ?? null,
-    bufferBeforeMin: input.bufferBeforeMin ?? 0,
-    bufferAfterMin: input.bufferAfterMin ?? 0,
-    category: parseServiceCategory(input.category),
-  });
-  for (const siteId of input.siteIds ?? []) {
-    await setSiteService(auth.tenantId, siteId, svc.id);
+  // The service and its initial site links are ONE transaction: if any link fails the
+  // whole create rolls back, so a retry can never leave a duplicate or an orphan. The
+  // id is returned only after COMMIT.
+  let svc;
+  try {
+    svc = await createServiceWithSites(
+      {
+        tenantId: auth.tenantId,
+        clientId: input.clientId, // the VALIDATED route client — the service's owner
+        name: input.name.trim(),
+        description: desc.value,
+        durationMin: input.durationMin,
+        price: input.price ?? null,
+        bufferBeforeMin: input.bufferBeforeMin ?? 0,
+        bufferAfterMin: input.bufferAfterMin ?? 0,
+        category: parseServiceCategory(input.category),
+      },
+      input.siteIds ?? [],
+    );
+  } catch (err) {
+    if (err instanceof ServiceSiteLinkError) return { ok: false, error: FOREIGN };
+    throw err;
   }
   revalidateAdmin(input.clientId);
   return { ok: true, id: svc.id };

@@ -1,6 +1,7 @@
 "use client";
 
 import type { WeeklyHours } from "@worker/scheduling/types.js";
+import { dayFromIntervals, intervalsFromDay, type Range } from "./mobile/config/logic";
 
 /**
  * The 7-day WEEKLY HOURS editor and its converters — shared by the two things that
@@ -25,21 +26,30 @@ export const DAY_LABELS: Record<string, string> = {
   sun: "Dom",
 };
 
-export type HourRow = { on: boolean; start: string; end: string };
+/** `pauses` are the gaps between a day's stored intervals (a lunch break set on the
+ *  phone editor). They are carried through untouched so editing the day's outer hours
+ *  here never drops the afternoon interval; a pause the new hours no longer contain is
+ *  dropped (the day is then one interval). */
+export type HourRow = { on: boolean; start: string; end: string; pauses?: Range[] };
 export type HourGrid = Record<string, HourRow>;
 
 export function gridFromWeekly(weekly: WeeklyHours): HourGrid {
   return Object.fromEntries(
     DAYS.map((d) => {
-      const slot = weekly?.[d as keyof WeeklyHours]?.[0];
-      return [d, slot ? { on: true, start: slot.start, end: slot.end } : { on: false, start: "09:00", end: "18:00" }];
+      const day = dayFromIntervals(weekly?.[d as keyof WeeklyHours]);
+      return [d, day.on ? { on: true, start: day.start, end: day.end, ...(day.pauses.length ? { pauses: day.pauses } : {}) } : { on: false, start: "09:00", end: "18:00" }];
     }),
   );
 }
 
 export function weeklyFromGrid(grid: HourGrid): WeeklyHours {
   const out: WeeklyHours = {};
-  for (const d of DAYS) if (grid[d].on) out[d as keyof WeeklyHours] = [{ start: grid[d].start, end: grid[d].end }];
+  for (const d of DAYS) {
+    if (!grid[d].on) continue;
+    const row = grid[d];
+    const list = row.pauses?.length ? intervalsFromDay({ on: true, start: row.start, end: row.end, pauses: row.pauses }) : [{ start: row.start, end: row.end }];
+    if (list.length > 0) out[d as keyof WeeklyHours] = list;
+  }
   return out;
 }
 
@@ -72,6 +82,9 @@ export function HoursGrid({ grid, setGrid }: { grid: HourGrid; setGrid: (g: Hour
             onChange={(e) => setGrid({ ...grid, [d]: { ...grid[d], end: e.target.value } })}
             className={INPUT}
           />
+          {grid[d].on && grid[d].pauses?.length ? (
+            <span className="text-faint">{grid[d].pauses!.map((p) => `Pausa ${p.start}–${p.end}`).join(" · ")}</span>
+          ) : null}
         </div>
       ))}
     </div>

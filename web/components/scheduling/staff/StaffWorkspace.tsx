@@ -1,6 +1,7 @@
 import { PageShell } from "@/components/ui/PageShell";
 import { StaffHeaderCard, type StaffHeaderSlots } from "./StaffHeaderCard";
 import { StaffTab, type StaffTabProps } from "./StaffTab";
+import { TeamMobile, type TeamMobileExtras } from "@/components/scheduling/mobile/team/TeamMobile";
 
 /**
  * STAFF — the operational roster, under SCHEDULING.
@@ -25,10 +26,17 @@ import { StaffTab, type StaffTabProps } from "./StaffTab";
 export function StaffWorkspace({
   clientId,
   staff,
+  mobile,
 }: {
   clientId: string;
-  /** null when the client has no site — a barber belongs to one. */
+  /**
+   * null when the client has no site — a barber belongs to one. `members` includes the
+   * INACTIVE ones, and BOTH widths list them (last, labelled "Inactivo") and count them
+   * the same way — see rosterOrder / rosterFacetCounts in presence.ts.
+   */
   staff: StaffTabProps | null;
+  /** What only the phone screens need (client name, site hours, closures, `?p=`). */
+  mobile: TeamMobileExtras | null;
 }) {
   // The screen's name, drawn inside StaffHeaderCard so the card is one box. The roster
   // fills in the controls (search + the primary action), which are the part only it knows.
@@ -37,17 +45,22 @@ export function StaffWorkspace({
   // card, one row down and clickable; the client is named by the breadcrumb, which is the
   // app's answer to "whose data am I looking at" on every screen.
   const slots: StaffHeaderSlots = { title: "Staff" };
+  const desk = staff;
 
   return (
-    <main className="flex min-h-0 w-full flex-1 flex-col">
+    <>
+    {/* PHONE (< md): the Equipo screens, built from the mobile kit. Desktop and tablet
+        never render it; the tree below is hidden on phones instead. */}
+    {staff && mobile ? <TeamMobile clientId={clientId} staff={staff} extras={mobile} /> : null}
+    <main className={`${staff ? "hidden md:flex" : "flex"} min-h-0 w-full flex-1 flex-col`}>
       {/* `surface="canvas"`: this screen is NOT one card. PageShell contributes the region
           (flex, min-h-0, flex-1) and lets the layout's canvas show through; the cards below
           are the page's own, so there is no card inside a card and no doubled border.
           `relative` makes this the drawer's positioning context, which is what lets the
           drawer run the FULL height of the region. */}
       <PageShell surface="canvas" className="relative">
-        {staff ? (
-          <StaffTab clientId={clientId} header={slots} {...staff} />
+        {desk ? (
+          <StaffTab clientId={clientId} header={slots} {...desk} />
         ) : (
           // The one real empty state: no site, so there is nowhere for a member to belong.
           // It keeps the header card so the screen does not lose its title and its
@@ -69,5 +82,6 @@ export function StaffWorkspace({
         )}
       </PageShell>
     </main>
+    </>
   );
 }
