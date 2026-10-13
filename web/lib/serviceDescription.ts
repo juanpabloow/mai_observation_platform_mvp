@@ -2,14 +2,14 @@
  * Server-side validation for a service's optional `description` — one pure function so the
  * rule is testable on its own and the admin actions can't drift from it.
  *
- * Rule (mirrors the DB CHECK in migration 1797):
+ * Rule (mirrors the DB CHECK in migration 1799):
  *   - undefined / null / whitespace-only  → NULL (no description);
- *   - trimmed, plain text, ≤ 500 characters → stored trimmed;
- *   - longer than 500 → rejected, naming the field (the action returns it; the DB CHECK is
+ *   - trimmed, plain text, ≤ 2000 characters → stored trimmed;
+ *   - longer than 2000 → rejected, naming the field (the action returns it; the DB CHECK is
  *     the backstop). No markdown is interpreted — it is stored and shown as plain text.
  */
 
-export const SERVICE_DESCRIPTION_MAX = 500;
+export const SERVICE_DESCRIPTION_MAX = 2000;
 
 export type DescriptionResult =
   | { ok: true; value: string | null }
