@@ -57,6 +57,15 @@ export function useFocusTrap(
   ref: RefObject<HTMLElement | null>,
   { active, onClose }: { active: boolean; onClose: () => void },
 ): void {
+  // The latest onClose, read at Escape time. It must NOT be an effect dependency:
+  // callers pass an inline closure (a new function every render), and re-running the
+  // trap on each render moved focus back to the panel's first control on EVERY
+  // keystroke — typing in any field of the staff panel stopped after one letter.
+  const onCloseRef = useRef(onClose);
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  }, [onClose]);
+
   useEffect(() => {
     if (!active) return;
     const node = ref.current;
@@ -76,7 +85,7 @@ export function useFocusTrap(
     const onKeyDown = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
         e.stopPropagation();
-        onClose();
+        onCloseRef.current();
         return;
       }
       if (e.key !== "Tab") return;
@@ -99,7 +108,7 @@ export function useFocusTrap(
       document.removeEventListener("keydown", onKeyDown, true);
       restoreTo?.focus?.({ preventScroll: true });
     };
-  }, [active, onClose, ref]);
+  }, [active, ref]);
 }
 
 /** A ref you can hand to a panel that needs the trap, without wiring useRef at every
