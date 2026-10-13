@@ -3,10 +3,12 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createContactAction } from "@/lib/contactActions";
-import { COPY, checkIdentity, type ContactFormValues } from "@/lib/contactForm";
+import { COPY, checkIdentity, createDraftKey, type ContactFormValues } from "@/lib/contactForm";
+import { buttonClass } from "@/components/ui/controls";
+import { useLeaveGuard } from "@/components/ui/useLeaveGuard";
 import type { FieldDefView } from "../ContactProperties";
 import { ContactSections } from "./ContactSections";
-import { BTN_PRIMARY, BTN_SECONDARY, ContactFormDrawer, FormBanner } from "./ContactFormDrawer";
+import { ContactFormDrawer, DrawerActions, FormBanner } from "./ContactFormDrawer";
 import { CheckRow, INPUT_CLS, type OwnerOption } from "./formPrimitives";
 
 /**
@@ -73,6 +75,9 @@ export function ContactCreateForm({
     tags: [],
   };
   const [values, setValues] = useState<ContactFormValues>(blank);
+  // The fingerprint of the last CLEAN state: the blank form, the blank form with the
+  // owner that survived "Guardar y crear otro", or what a save already wrote.
+  const [cleanKey, setCleanKey] = useState(() => createDraftKey(blank, [""], [""], ""));
   const patch = (p: Partial<ContactFormValues>) => setValues((v) => ({ ...v, ...p }));
 
   const [phones, setPhones] = useState<string[]>([""]);
@@ -84,11 +89,19 @@ export function ContactCreateForm({
 
   const identity = useMemo(() => checkIdentity(phones, emails), [phones, emails]);
 
+  // REAL changes only (see createDraftKey): an opened-and-left-empty identity row or a
+  // whitespace note is not a draft, so closing then does not ask.
+  const dirty = createDraftKey(values, phones, emails, note) !== cleanKey;
+  // Every way out — Cancelar, Cerrar, the scrim, Escape, Back — goes through this.
+  const guard = useLeaveGuard({ dirty, onLeave: onClose });
+
   const reset = () => {
     // The OWNER survives: someone creating five contacts in a row is assigning all five
     // to the same person, and re-picking them each time is the kind of friction that
     // makes "guardar y crear otro" not worth using.
-    setValues((v) => ({ ...blank, assignedTo: v.assignedTo }));
+    const next = { ...blank, assignedTo: values.assignedTo };
+    setValues(next);
+    setCleanKey(createDraftKey(next, [""], [""], ""));
     setPhones([""]);
     setEmails([""]);
     setNote("");
@@ -120,6 +133,8 @@ export function ContactCreateForm({
         setError(r.error);
         return;
       }
+      // Written: what is on screen is saved, so closing from here does not ask.
+      setCleanKey(createDraftKey(values, phones, emails, note));
       // The spine may have RESOLVED to somebody who already had this number rather than
       // creating anyone. Saying "contacto creado" then would teach operators to ignore
       // the duplicate warning, so the two outcomes are reported differently.
@@ -137,7 +152,8 @@ export function ContactCreateForm({
       }
       router.refresh();
       if (createAnother) reset();
-      else onClose();
+      // Saved: leave without asking (and drop the Back guard's history entry).
+      else guard.leave();
     });
   };
 
@@ -146,7 +162,9 @@ export function ContactCreateForm({
       title="Nuevo contacto"
       subtitle="Solo necesitas un teléfono o un email — el resto se puede completar después."
       placement={placement}
-      onClose={onClose}
+      onClose={guard.requestLeave}
+      guard={guard}
+      discardBody="El contacto no se ha creado. Lo que escribiste se perderá."
       /*
         ONE STATE LINE, AND ONLY WHEN IT SAYS SOMETHING NEW. The banner used to carry
         `identityHint` while the identity rule was unmet — the exact sentence
@@ -157,37 +175,28 @@ export function ContactCreateForm({
       */
       banner={identity.canSubmit ? <FormBanner tone="success">{COPY.readyToSave}</FormBanner> : undefined}
       footer={
-        <div className="flex flex-col gap-2 px-3 py-3">
-          {error ? (
-            <p role="alert" className="text-xs text-danger">
-              {error}
-            </p>
-          ) : null}
-          {notice ? (
-            <p role="status" className="text-xs text-warn">
-              {notice}
-            </p>
-          ) : null}
-          <div className="flex items-center justify-between gap-2">
-            <label className="flex cursor-pointer items-center gap-2 text-xs text-muted">
+        <DrawerActions
+          error={error}
+          notice={notice}
+          leading={
+            <label className="flex min-h-[44px] cursor-pointer items-center gap-2 text-xs text-muted lg:min-h-0">
               <input
                 type="checkbox"
                 checked={createAnother}
                 onChange={(e) => setCreateAnother(e.target.checked)}
-                className="size-3.5 accent-[var(--brand)]"
+                className="u-focus size-4 accent-[var(--ink)]"
               />
               <span className="whitespace-nowrap">Guardar y crear otro</span>
             </label>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={onClose} className={BTN_SECONDARY} disabled={pending}>
-                Cancelar
-              </button>
-              <button type="button" onClick={submit} className={BTN_PRIMARY} disabled={pending || !identity.canSubmit}>
-                {pending ? "Creando…" : "Crear contacto"}
-              </button>
-            </div>
-          </div>
-        </div>
+          }
+        >
+          <button type="button" onClick={guard.requestLeave} className={buttonClass({ variant: "secondary" })} disabled={pending}>
+            Cancelar
+          </button>
+          <button type="button" onClick={submit} className={buttonClass({ variant: "primary" })} disabled={pending || !identity.canSubmit}>
+            {pending ? "Creando…" : "Crear contacto"}
+          </button>
+        </DrawerActions>
       }
     >
       {/* The SAME component the ficha reads and the edit drawer writes — one declaration

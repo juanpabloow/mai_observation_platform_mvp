@@ -138,6 +138,34 @@ export function checkAddedIdentities(rawPhones: string[], rawEmails: string[]): 
   };
 }
 
+/**
+ * A comparable FINGERPRINT of the create form's draft, for "are there real changes?".
+ * Whitespace-only fields and opened-but-empty identity rows count as nothing, identities
+ * compare by their typed order, and the field set is the one changedFields tracks. The
+ * create form keeps the fingerprint of its last clean state (blank, after "Guardar y
+ * crear otro", or after a save that kept the form open) and asks before closing only
+ * when the current one differs.
+ */
+export function createDraftKey(values: ContactFormValues, phones: string[], emails: string[], note: string): string {
+  const clean = (list: string[]) => list.map((v) => v.trim()).filter(Boolean);
+  const sortedCustom = Object.keys(values.customFields)
+    .sort()
+    .map((k) => [k, values.customFields[k] ?? null]);
+  return JSON.stringify([
+    values.name.trim(),
+    values.stage,
+    values.assignedTo ?? null,
+    values.preferredChannel ?? null,
+    values.doNotContact,
+    values.consent,
+    sortedCustom,
+    [...values.tags].sort(),
+    clean(phones),
+    clean(emails),
+    note.trim(),
+  ]);
+}
+
 // ── Edit: what actually changed ────────────────────────────────────────────────
 
 /** The editable surface of a contact, as the form holds it. Identity lists are excluded

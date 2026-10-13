@@ -125,10 +125,13 @@ export function contactDisplayName(name: string | null, identities: IdentityView
   return identities[0]?.value ?? fallback;
 }
 
-/** The agenda `date` query key (YYYY-MM-DD) for an appointment. Uses the UTC date of the
- * start instant — correct for business-hour appointments in America/* (UTC-5/-6) where
- * local and UTC dates agree during the day; a near-midnight edge can differ (the site's
- * timezone isn't carried in the wire shape — noted as a minor approximation). */
-export function agendaDateKey(iso: string): string {
-  return iso.slice(0, 10);
+/** The agenda date in the appointment's site zone. Legacy callers without a zone keep
+ * their UTC fallback; never infer the zone from another appointment of the contact. */
+export function agendaDateKey(iso: string, timeZone?: string): string {
+  if (!timeZone) return iso.slice(0, 10);
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date(iso));
+  const part = (type: string) => parts.find((p) => p.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}-${part("day")}`;
 }

@@ -239,6 +239,9 @@ export default async function ClientContactsPage({
         title="Contactos"
         count={summary.total}
         center={<ContactsSearch />}
+        // The PRIMARY rides its own slot so the phone header can give it the title row
+        // (see ModuleHeader): Filtrar used to sit on top of "Contactos" at 360–390px.
+        primary={<NewContactButton />}
         actions={
           <>
           {/* ONE ROW, ACTIONS FOLDED (design 27a). Only Buscar, Filtrar and the
@@ -253,9 +256,6 @@ export default async function ClientContactsPage({
             visibleColumns={visibleColumns}
             fieldsHref={isFullAccess ? `${base}/fields` : undefined}
           />
-          {/* Just the button: it asks the LANE to open the drawer (see ContactsPanelLane).
-              Mounting the form from in here is what used to make it float over the page. */}
-          <NewContactButton />
           </>
         }
       />

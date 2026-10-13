@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { formatDateTime, formatChatTime, formatDayLabel, localDayKey } from "@/lib/format";
+import { formatDayLabelEs, formatLocalDateTime, formatTime24, localDayKey } from "@/lib/format";
 import { agendaDateKey } from "@/lib/contactShared";
 import { timelineCopy, TIMELINE_FILTERS } from "@/lib/timelineCopy";
 import { CRM_COPY } from "@/lib/contactLabels";
@@ -66,15 +66,15 @@ function ConversationExtra({ clientId, item }: { clientId: string; item: Timelin
   );
 }
 
-function AppointmentExtra({ clientId, item }: { clientId: string; item: TimelineItemView }) {
+function AppointmentExtra({ clientId, item, timezone }: { clientId: string; item: TimelineItemView; timezone?: string }) {
   const startAt = str(item.meta.startAt);
   const staff = str(item.meta.staffName);
   return (
     <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-faint">
-      {startAt ? <span>{formatDateTime(new Date(startAt))}</span> : null}
+      {startAt ? <span>{formatLocalDateTime(startAt, timezone)}</span> : null}
       {staff ? <span>· {staff}</span> : null}
       {startAt ? (
-        <Link href={`/clients/${clientId}/scheduling/agenda?date=${agendaDateKey(startAt)}`} className="text-muted hover:text-foreground">
+        <Link href={`/clients/${clientId}/scheduling/agenda?date=${agendaDateKey(startAt, timezone)}`} className="inline-flex items-center text-muted hover:text-foreground max-sm:min-h-[44px]">
           Ver en la agenda →
         </Link>
       ) : null}
@@ -82,7 +82,7 @@ function AppointmentExtra({ clientId, item }: { clientId: string; item: Timeline
   );
 }
 
-function TimelineRow({ clientId, item }: { clientId: string; item: TimelineItemView }) {
+function TimelineRow({ clientId, item, appointmentTimezone }: { clientId: string; item: TimelineItemView; appointmentTimezone?: string }) {
   const copy = timelineCopy(item.kind);
   const when = new Date(item.occurred_at);
 
@@ -93,7 +93,7 @@ function TimelineRow({ clientId, item }: { clientId: string; item: TimelineItemV
         <KindIcon kind={copy.icon} className="size-3.5 shrink-0 text-faint" />
         <span className="text-foreground">{copy.title}</span>
         <span className="text-faint">· {actorLabel(item)}</span>
-        <span className="ml-auto shrink-0 text-faint">{formatChatTime(when)}</span>
+        <span className="ml-auto shrink-0 text-faint">{formatTime24(when)}</span>
       </li>
     );
   }
@@ -107,13 +107,13 @@ function TimelineRow({ clientId, item }: { clientId: string; item: TimelineItemV
       <div className="min-w-0 flex-1">
         <div className="flex items-start justify-between gap-2">
           <span className="text-sm font-medium text-foreground">{copy.title}</span>
-          <span className="shrink-0 text-xs text-faint" title={formatDateTime(when)}>
-            {formatChatTime(when)}
+          <span className="shrink-0 text-xs text-faint" title={formatLocalDateTime(when)}>
+            {formatTime24(when)}
           </span>
         </div>
         {item.summary ? <p className="mt-0.5 line-clamp-3 whitespace-pre-wrap break-words text-sm text-muted">{item.summary}</p> : null}
         {item.kind === "conversation" ? <ConversationExtra clientId={clientId} item={item} /> : null}
-        {item.kind.startsWith("appointment_") ? <AppointmentExtra clientId={clientId} item={item} /> : null}
+        {item.kind.startsWith("appointment_") ? <AppointmentExtra clientId={clientId} item={item} timezone={appointmentTimezone} /> : null}
         <p className="mt-0.5 text-[11px] text-faint">{actorLabel(item)}</p>
       </div>
     </li>
@@ -125,11 +125,14 @@ export function ContactTimeline({
   contactId,
   initialItems,
   initialCursor,
+  appointmentTimezones = {},
 }: {
   clientId: string;
   contactId: string;
   initialItems: TimelineItemView[];
   initialCursor: string | null;
+  /** Per appointment id, from site-scoped data already loaded by the server. */
+  appointmentTimezones?: Record<string, string>;
 }) {
   const [items, setItems] = useState<TimelineItemView[]>(initialItems);
   const [cursor, setCursor] = useState<string | null>(initialCursor);
@@ -208,7 +211,7 @@ export function ContactTimeline({
     const key = localDayKey(d);
     const last = groups[groups.length - 1];
     if (last && last.key === key) last.items.push(it);
-    else groups.push({ key, label: formatDayLabel(d, now), items: [it] });
+    else groups.push({ key, label: formatDayLabelEs(d, now), items: [it] });
   }
 
   return (
@@ -313,7 +316,7 @@ export function ContactTimeline({
               </div>
               <ul className="flex flex-col divide-y divide-line/60">
                 {g.items.map((it) => (
-                  <TimelineRow key={it.id} clientId={clientId} item={it} />
+                  <TimelineRow key={it.id} clientId={clientId} item={it} appointmentTimezone={appointmentTimezones[str(it.ref.appointmentId) ?? ""]} />
                 ))}
               </ul>
             </div>

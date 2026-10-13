@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { formatDateTime } from "@/lib/format";
+import { formatLocalDate } from "@/lib/format";
 import type { MemberOption, TaskView } from "@/lib/contactShared";
 import { completeTaskAction, createTaskAction } from "@/lib/crmActions";
 import { CRM_COPY } from "@/lib/contactLabels";
@@ -86,7 +86,7 @@ export function TasksSection({
                 <span className="truncate text-sm text-foreground">{t.title}</span>
                 <span className="truncate text-[11px] text-faint">
                   {t.assigneeName ? t.assigneeName : "Unassigned"}
-                  {t.dueAt ? ` · due ${formatDateTime(new Date(t.dueAt))}` : ""}
+                  {t.dueAt ? ` · vence el ${formatLocalDate(t.dueAt)}` : ""}
                 </span>
               </span>
               {canManage(t) ? (

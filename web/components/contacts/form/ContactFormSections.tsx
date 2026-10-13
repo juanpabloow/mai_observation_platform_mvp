@@ -40,10 +40,10 @@ export function AssignmentSection({
       <Field label="Dueño del contacto">
         <OwnerPicker options={owners} value={ownerId} onChange={onOwnerChange} />
       </Field>
-      <Field label="Stage">
+      <Field label="Etapa">
         <Segmented
           name="contact-stage"
-          ariaLabel="Stage"
+          ariaLabel="Etapa"
           value={stage}
           onChange={onStageChange}
           options={stages.map((s: string) => ({ value: s, label: stageLabel(s) }))}

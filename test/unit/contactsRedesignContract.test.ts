@@ -305,7 +305,10 @@ test('contacts: the controls are ONE row each, and share one height', () => {
   // The 420px cap is GONE. It existed while the header held six controls; with the
   // actions folded into `···` the search takes all the slack, because it is the
   // screen's primary verb. The floor is what still matters.
-  assert.ok(toolbar.includes('min-w-[15rem] flex-1'), 'the search never drops below 240px and takes the slack');
+  // PHONE (< md): the header's opt-in two-row layout puts the search beside Filtrar and
+  // `···` (at 360px a 15rem floor pushed them over the title), so the floor there is 8rem
+  // — still never just its icon. From md up the 15rem floor holds.
+  assert.ok(toolbar.includes('min-w-[8rem] flex-1') && toolbar.includes('md:min-w-[15rem]'), 'the search has a floor at every width (8rem on phones, 15rem from md) and takes the slack');
   assert.ok(!/max-w-\[420px\]/.test(toolbar), 'and it is no longer capped at 420px');
   // The COMPACT form (detail panel open) keeps its cap, or the row cannot fit.
   assert.ok(toolbar.includes('compact ? "max-w-[240px]" : ""'), 'only the compact form is capped');
@@ -570,11 +573,14 @@ test('contacts: the row is fully clickable via ONE real link (no duplicate tab s
   // The row height is the SHARED entity-row token (--entity-row-h, 56px) so Contacts and
   // Staff read as one list. Still not the dense --row-h: this is a customer list, not a log.
   assert.ok(src.includes('${ENTITY_ROW_CLS}'), 'the row uses the shared entity-row geometry');
-  assert.ok(src.includes('className={`relative grid ${ENTITY_ROW_CLS}'), 'the row is the positioning context');
+  assert.ok(src.includes('className={`relative ${GRID} ${ENTITY_ROW_CLS}'), 'the row is the positioning context');
   assert.ok(read('components/ui/primitives.tsx').includes('--entity-row-h'), 'and the shared token is defined');
   // A grid, not a table — and the head and the rows read the SAME template, which is
   // what keeps the sticky head aligned with its body.
-  assert.ok((src.match(/gridTemplateColumns: template/g) ?? []).length === 2, 'head and rows share one template');
+  // (The template is a CSS variable pair — desktop + tablet, see lib/contactListLayout —
+  // because an inline gridTemplateColumns cannot change at a breakpoint.)
+  assert.ok((src.match(/\$\{GRID\}/g) ?? []).length === 2, 'head and rows share one template');
+  assert.ok(src.includes('style={gridVars}') && (src.match(/--contacts-tpl-md/g) ?? []).length >= 2, 'declared once, on the table');
   // Semantics are preserved explicitly rather than inherited from the tag.
   for (const role of ['role="table"', 'role="row"', 'role="columnheader"', 'role="cell"']) {
     assert.ok(src.includes(role), `the grid still announces ${role}`);

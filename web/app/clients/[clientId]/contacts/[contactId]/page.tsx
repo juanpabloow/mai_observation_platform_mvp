@@ -91,7 +91,7 @@ export default async function ClientContactDetailPage({
       {/* Back to the list, carrying `from` (the origin workflow) unchanged. */}
       <Link
         href={`/clients/${client.id}/contacts${fromQS}`}
-        className="u-th inline-flex w-fit items-center gap-1.5 rounded-md py-1 transition-colors hover:text-foreground"
+        className="u-th inline-flex w-fit items-center gap-1.5 rounded-md py-1 transition-colors hover:text-foreground max-sm:min-h-[44px] max-sm:min-w-[44px]"
       >
         ← Contactos
       </Link>

@@ -14,6 +14,13 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const read = (rel: string): string => readFileSync(`${root}${rel}`, 'utf8');
+/** The Scheduling design system: its own file PLUS the shared controls it re-exports
+ *  unchanged (web/components/ui/controls.tsx, promoted so CRM uses the same vocabulary). */
+const SYSTEM = (): string => {
+  const sys = read('web/components/scheduling/ui/system.tsx');
+  assert.ok(sys.includes('export * from "@/components/ui/controls";'), 'system.tsx re-exports the shared controls');
+  return `${sys}\n${read('web/components/ui/controls.tsx')}`;
+};
 
 const VIEW = 'web/components/scheduling/AgendaView.tsx';
 /** The appointment detail moved out of AgendaView into a side panel of its own. */
@@ -321,7 +328,7 @@ test('manual booking has a real selectable month with concise availability label
 });
 
 test('control geometry comes from ONE Scheduling system, not per-screen strings', () => {
-  const sys = read('web/components/scheduling/ui/system.tsx');
+  const sys = SYSTEM();
   assert.ok(sys.includes('md: "h-[44px] px-4 lg:h-[40px]"') && sys.includes('sm: "h-[44px] px-3.5 lg:h-[36px] lg:text-[13px]"'), 'two button sizes, both 44px on touch');
   for (const v of ['primary:', 'secondary:', 'tertiary:', 'destructive:']) assert.ok(sys.includes(v), `variant ${v}`);
   const css = read('web/app/globals.css');
@@ -338,18 +345,18 @@ test('control geometry comes from ONE Scheduling system, not per-screen strings'
 test('control heights are absolute px, because this app scales the rem ramp', () => {
   // The root font-size is a preference (90% compact), so Tailwind's rem steps shrink:
   // h-11 = 39.6px (not 44), h-9 = 32.4px. Control heights are written in px.
-  for (const rel of [VIEW, PANEL, 'web/components/scheduling/ui/system.tsx', 'web/components/scheduling/ui/Menu.tsx']) {
+  for (const rel of [VIEW, PANEL, 'web/components/scheduling/ui/system.tsx', 'web/components/ui/controls.tsx', 'web/components/scheduling/ui/Menu.tsx']) {
     const src = read(rel).replace(/\/\*[\s\S]*?\*\//g, '');
     for (const rem of [' h-7\\b', ' h-8\\b', ' h-9\\b', ' h-11\\b']) {
       assert.ok(!new RegExp(rem).test(src), `${rel}: no rem-scale${rem.replace('\\\\b', '')} control height`);
     }
   }
-  assert.ok(read('web/components/scheduling/ui/system.tsx').includes('export const INPUT = `${FIELD} h-[44px] lg:h-[40px]`;'), 'fields are a real 44px on touch');
+  assert.ok(SYSTEM().includes('export const INPUT = `${FIELD} h-[44px] lg:h-[40px]`;'), 'fields are a real 44px on touch');
 });
 
 test('a confirmation inside the detail panel is modal: Tab cannot reach the panel behind it', () => {
   const panel = read(PANEL);
-  const sys = read('web/components/scheduling/ui/system.tsx');
+  const sys = SYSTEM();
   // Everything behind the confirmation is inert while it is open (one wrapper).
   assert.ok(panel.includes('const layer = useModalLayer(confirm !== null'), 'the panel uses the shared modal layer');
   assert.ok(panel.includes('<div inert={layer.inert} className="flex min-h-0 flex-1 flex-col">'), 'the panel body is inert behind it');

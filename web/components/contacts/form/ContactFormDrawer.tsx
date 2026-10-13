@@ -1,15 +1,27 @@
 "use client";
 
-import { useEffect, type ReactNode } from "react";
+import { useEffect, type ReactNode, type RefObject } from "react";
 import { useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
-import {
-  CONTACT_PANEL_FRAME,
-  CONTACT_PANEL_REGION,
-  CONTACT_PANEL_WIDTH,
-  ContactPanelShell,
-  PANEL_CLOSE_CLS,
-  PanelCloseIcon,
-} from "@/components/contacts/shared/ContactPanelShell";
+import { ConfirmDialog, IconButton, useModalLayer } from "@/components/ui/controls";
+import { useKeyboardInset } from "@/components/ui/useKeyboardInset";
+import { CONTACT_PANEL_FRAME, CONTACT_PANEL_REGION, CONTACT_PANEL_WIDTH, ContactPanelShell } from "@/components/contacts/shared/ContactPanelShell";
+
+/** What the drawer needs from useLeaveGuard to ask "¿Descartar los cambios?". */
+export interface DrawerLeaveGuard {
+  asking: boolean;
+  onEscape: () => void;
+  keepEditing: () => void;
+  discard: () => void;
+}
+
+/** The close (×) control — the shared IconButton: 44px on touch, 36px from lg. */
+export function DrawerCloseButton({ onClick }: { onClick: () => void }) {
+  return (
+    <IconButton label="Cerrar" onClick={onClick}>
+      <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
+    </IconButton>
+  );
+}
 
 /**
  * The shell both contact forms render into: a right-hand drawer that COVERS the list.
@@ -47,6 +59,8 @@ export function ContactFormDrawer({
   children,
   labelledBy = "contact-form-title",
   placement = "region",
+  guard,
+  discardBody = "Lo que escribiste no se ha guardado.",
 }: {
   title: string;
   subtitle?: string;
@@ -64,6 +78,13 @@ export function ContactFormDrawer({
   labelledBy?: string;
   /** Where the box is anchored — see the note above. Defaults to the editor's geometry. */
   placement?: "region" | "lane";
+  /**
+   * The unsaved-changes guard (useLeaveGuard). With it, `onClose` is the guard's
+   * requestLeave (asks when there are real changes), Escape closes the question first,
+   * and the drawer renders the shared "¿Descartar los cambios?" over itself.
+   */
+  guard?: DrawerLeaveGuard;
+  discardBody?: string;
 }) {
   const lane = placement === "lane";
   // The SAME breakpoint the ficha beside-s at (see ContactSidePanel): a lane panel is a
@@ -71,7 +92,13 @@ export function ContactFormDrawer({
   // so it is always modal.
   const overlaying = useIsOverlayWidth(1279.98);
   const modal = lane ? overlaying : true;
-  const panelRef = useTrappedPanel({ active: modal, onClose });
+  const onEscape = guard ? guard.onEscape : onClose;
+  const panelRef = useTrappedPanel({ active: modal, onClose: onEscape });
+  // The question is a modal LAYER over the form: everything behind it is inert, focus
+  // lands on "Seguir editando" (the safe choice) and returns when it closes.
+  const discardLayer = useModalLayer(Boolean(guard?.asking), panelRef as RefObject<HTMLElement | null>);
+  // Keep the footer (Guardar) above an on-screen keyboard, and the focused field in view.
+  const keyboard = useKeyboardInset(panelRef as RefObject<HTMLElement | null>);
 
   // Escape closes at EVERY width. The focus trap owns that key while it is engaged, so
   // this only covers the case the trap is deliberately off: a lane panel at xl+, in flow
@@ -80,11 +107,24 @@ export function ContactFormDrawer({
   useEffect(() => {
     if (modal) return;
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onEscape();
     };
     document.addEventListener("keydown", onKeyDown);
     return () => document.removeEventListener("keydown", onKeyDown);
-  }, [modal, onClose]);
+  }, [modal, onEscape]);
+
+  const discardDialog = guard?.asking ? (
+    <ConfirmDialog
+      layerRef={discardLayer.layerRef}
+      id={`${labelledBy}-discard`}
+      title="¿Descartar los cambios?"
+      body={discardBody}
+      cancelLabel="Seguir editando"
+      confirmLabel="Descartar"
+      onCancel={guard.keepEditing}
+      onConfirm={guard.discard}
+    />
+  ) : null;
 
   const shell = (
     <ContactPanelShell
@@ -106,9 +146,9 @@ export function ContactFormDrawer({
             </div>
           )}
           {titleBlock ? null : (
-            <button type="button" onClick={onClose} aria-label="Cerrar" className={PANEL_CLOSE_CLS}>
-              <PanelCloseIcon />
-            </button>
+            <span className="-mr-2 -mt-1.5 shrink-0">
+              <DrawerCloseButton onClick={onClose} />
+            </span>
           )}
         </div>
       }
@@ -137,10 +177,14 @@ export function ContactFormDrawer({
         />
         {/* `xl:contents` makes this wrapper vanish from xl up, so the region below drops
             straight into the page's panel lane and the column is in flow. */}
-        <div className="fixed inset-y-0 right-0 z-50 flex xl:contents">
+        {/* Full width on a phone (the old 90vw cap left a 44px sliver of list beside a
+            346px form); the panel width from sm up. `bottom` follows the keyboard. */}
+        <div className="fixed inset-y-0 right-0 z-50 flex xl:contents max-sm:left-0" style={keyboard ? { bottom: keyboard } : undefined}>
           <div
-            className={`flex max-w-[90vw] shrink-0 self-stretch ${CONTACT_PANEL_REGION}`}
-            style={{ width: CONTACT_PANEL_WIDTH }}
+            className={`flex w-full shrink-0 self-stretch sm:w-[var(--contact-panel-region-w)] sm:max-w-[90vw] ${CONTACT_PANEL_REGION}`}
+          // The shared width rides a CSS variable so the phone can take the full width
+          // (a 90vw sheet left a 44px sliver of list beside the form) while sm+ keeps it.
+          style={{ "--contact-panel-region-w": CONTACT_PANEL_WIDTH } as React.CSSProperties}
           >
             <aside
               ref={panelRef as React.RefObject<HTMLElement>}
@@ -150,9 +194,12 @@ export function ContactFormDrawer({
               // it plainly is.
               aria-modal={modal || undefined}
               aria-labelledby={labelledBy}
-              className={`u-panel-in min-h-0 flex-1 ${CONTACT_PANEL_FRAME}`}
+              className={`u-panel-in relative min-h-0 flex-1 max-sm:rounded-none max-sm:border-0 ${CONTACT_PANEL_FRAME}`}
             >
-              {shell}
+              <div inert={guard?.asking || undefined} className="contents">
+                {shell}
+              </div>
+              {discardDialog}
             </aside>
           </div>
         </div>
@@ -179,10 +226,15 @@ export function ContactFormDrawer({
         // Width is an inline style, not a Tailwind arbitrary value: a class built from
         // a template literal is invisible to the scanner, so the utility would only
         // exist for as long as some earlier build happened to emit it.
-        style={{ width: `min(${CONTACT_PANEL_WIDTH}, 100%)` }}
-        className={`u-panel-in absolute inset-y-0 right-0 z-50 ${CONTACT_PANEL_FRAME}`}
+        // Full width on a phone; the shared panel width from sm (via a CSS variable, so
+        // the class stays a static, scanner-visible string).
+        style={{ "--contact-drawer-w": `min(${CONTACT_PANEL_WIDTH}, 100%)`, ...(keyboard ? { bottom: keyboard } : null) } as React.CSSProperties}
+        className={`u-panel-in absolute inset-y-0 right-0 z-50 w-full sm:w-[var(--contact-drawer-w)] max-sm:rounded-none max-sm:border-0 ${CONTACT_PANEL_FRAME}`}
       >
-        {shell}
+        <div inert={guard?.asking || undefined} className="contents">
+          {shell}
+        </div>
+        {discardDialog}
       </aside>
     </>
   );
@@ -191,4 +243,43 @@ export function ContactFormDrawer({
 /** The form banner + the footer buttons, re-exported from the neutral chrome. They were
  *  written here, but the staff editor needs the same three tones and the same four
  *  buttons — a second copy is how two editors drift into two looks. */
-export { PanelBanner as FormBanner, BTN_PRIMARY, BTN_SECONDARY, BTN_QUIET, BTN_DANGER } from "@/components/ui/panelChrome";
+export { PanelBanner as FormBanner } from "@/components/ui/panelChrome";
+
+/**
+ * The footer BOTH contact forms use: the form-level message, then one row with the
+ * form's own extra on the left ("Guardar y crear otro" when creating, "Eliminar" when
+ * editing) and the actions on the right. On a phone the extra takes its own line and
+ * the actions split the width, so neither wraps nor shrinks below 44px. The bottom
+ * padding clears the iPhone home indicator.
+ */
+export function DrawerActions({
+  error,
+  notice,
+  leading,
+  children,
+}: {
+  error?: string | null;
+  notice?: string | null;
+  leading?: ReactNode;
+  children: ReactNode;
+}) {
+  return (
+    <div className="flex flex-col gap-2 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3">
+      {error ? (
+        <p role="alert" className="flex items-start gap-1.5 text-xs text-danger">
+          <span aria-hidden>⚠</span>
+          <span>{error}</span>
+        </p>
+      ) : null}
+      {notice ? (
+        <p role="status" className="text-xs text-warn">
+          {notice}
+        </p>
+      ) : null}
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+        {leading ? <div className="flex min-w-0 items-center">{leading}</div> : <span aria-hidden className="hidden sm:block" />}
+        <div className="flex items-center gap-2 max-sm:[&>*]:flex-1">{children}</div>
+      </div>
+    </div>
+  );
+}
