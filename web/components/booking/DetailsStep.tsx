@@ -234,7 +234,7 @@ export function DetailsStep({
           {emailErr ? <FieldError id="pb-email-err" text={emailErr} /> : null}
         </div>
 
-        <div className="flex flex-col gap-2 rounded-[12px] bg-pb-sf2 py-3 pl-1.5 pr-3.5">
+        <div className="flex flex-col gap-2 rounded-[12px] border border-pb-line bg-white py-3 pl-1.5 pr-3.5">
           <label className="flex cursor-pointer items-start gap-0.5">
             <span className="relative -mt-2.5 flex size-11 flex-none items-center justify-center">
               <input

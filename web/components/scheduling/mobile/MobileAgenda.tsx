@@ -21,6 +21,8 @@ interface StaffOpt {
   name: string;
   active: boolean;
   workingHours: WeeklyHours;
+  /** Public photo (Equipo → Perfil público); initials when absent. */
+  photoUrl?: string | null;
 }
 
 const WD_LONG = ["Domingo", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
@@ -306,7 +308,7 @@ export function MobileAgenda(props: {
                 onClick={() => setProF(toggle(proF, s.id))}
                 className={`flex size-[44px] flex-none items-center justify-center rounded-full border-0 bg-transparent p-0 ${sel ? "shadow-[inset_0_0_0_2px_var(--m-tx)]" : ""} ${proF.length && !sel ? "opacity-45" : ""}`}
               >
-                <MStaffAvatar id={s.id} name={s.name} size={36} color={colors.get(s.id)} />
+                <MStaffAvatar id={s.id} name={s.name} size={36} color={colors.get(s.id)} photoUrl={s.photoUrl} />
               </button>
             );
           })}
@@ -466,7 +468,7 @@ export function MobileAgenda(props: {
                     className="flex min-h-[56px] w-full items-center gap-3 border-0 border-t border-m-dv bg-transparent px-1 py-1.5 text-left text-m-tx first:border-t-0"
                   >
                     <MCheck on={on} />
-                    <MStaffAvatar id={s.id} name={s.name} size={32} color={colors.get(s.id)} />
+                    <MStaffAvatar id={s.id} name={s.name} size={32} color={colors.get(s.id)} photoUrl={s.photoUrl} />
                     <span className="flex-1 text-[16px] leading-[1.3]">{s.name}</span>
                   </button>
                 );

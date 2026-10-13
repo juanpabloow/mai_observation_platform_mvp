@@ -657,50 +657,30 @@ export function BookingFlow({
 
   return (
     <div className={root} ref={topRef}>
-      {/* Desktop header bar (the phone carries the brand inside the flow). */}
-      <header className="hidden flex-none border-b border-pb-line bg-white lg:block">
-        <div className="mx-auto flex max-w-[1120px] items-center gap-3.5 px-6 py-4">
-          {brandMark}
-          <div className="flex min-w-0 flex-col gap-px">
-            <span className={`${SERIF} text-[24px] leading-[1.1]`}>{site.name}</span>
-            {site.address ? <span className="truncate text-[13.5px] text-pb-muted">{site.address}</span> : null}
-          </div>
-          <span className="ml-auto text-[12.5px] text-pb-muted">Impulsado por M_AI</span>
-        </div>
-      </header>
-
       <div className="flex-1">
-        <div className="mx-auto w-full max-w-[640px] px-4 pb-5 pt-3 lg:flex lg:max-w-[1120px] lg:items-start lg:gap-7 lg:px-6 lg:pb-10 lg:pt-7">
+        <div className="mx-auto w-full max-w-[640px] px-4 pb-5 pt-3 lg:flex lg:max-w-[1120px] lg:items-start lg:gap-7 lg:px-6 lg:pb-10 lg:pt-9">
           <main lang="es" className="flex min-w-0 flex-1 flex-col gap-5 lg:gap-[22px]">
             {!confirmation ? (
               <div className="flex flex-col gap-3.5">
+                {/* ONE brand row at every width, inside the column: back (from step 2),
+                    the business mark and name, and the step count. On the phone the back
+                    button takes the mark's place to keep the row on one line. */}
                 <div className="flex min-h-11 items-center gap-2.5">
                   {step > 1 ? (
                     <button
                       type="button"
                       aria-label="Volver al paso anterior"
                       onClick={() => goStep((step - 1) as Step)}
-                      className="flex size-11 flex-none items-center justify-center rounded-full border border-pb-line2 bg-white p-0 text-pb-ink lg:hidden"
+                      className="flex size-11 flex-none items-center justify-center rounded-full border border-pb-line2 bg-white p-0 text-pb-ink"
                     >
                       <IconBack />
                     </button>
-                  ) : (
-                    <span className="lg:hidden">{brandMark}</span>
-                  )}
-                  <div className="flex min-w-0 flex-col gap-px lg:hidden">
-                    <span className={`${SERIF} text-[19px] leading-[1.1]`}>{site.name}</span>
-                    {site.address ? <span className="truncate text-[12.5px] text-pb-muted">{site.address}</span> : null}
-                  </div>
-                  {step > 1 ? (
-                    <button
-                      type="button"
-                      onClick={() => goStep((step - 1) as Step)}
-                      className="hidden min-h-11 items-center gap-1.5 rounded-[12px] border border-pb-line2 bg-white pl-2.5 pr-3.5 text-[14px] text-pb-ink lg:flex"
-                    >
-                      <IconBack size={16} />
-                      Atrás
-                    </button>
                   ) : null}
+                  <span className={step > 1 ? "hidden lg:block" : ""}>{brandMark}</span>
+                  <div className="flex min-w-0 flex-col gap-px">
+                    <span className={`${SERIF} truncate text-[19px] leading-[1.1] lg:text-[21px]`}>{site.name}</span>
+                    {site.address ? <span className="truncate text-[12.5px] text-pb-muted lg:text-[13px]">{site.address}</span> : null}
+                  </div>
                   <span className="ml-auto flex-none text-[13px] text-pb-muted [font-variant-numeric:tabular-nums]">Paso {step} de 4</span>
                 </div>
                 <h1 ref={titleRef} tabIndex={-1} className={`${SERIF} m-0 mt-0.5 text-[32px] leading-[1.08] tracking-[-0.01em]`}>
@@ -810,7 +790,7 @@ export function BookingFlow({
               />
             ) : null}
 
-            <p className="m-0 mt-1.5 text-center text-[12.5px] text-pb-muted lg:hidden">Impulsado por M_AI</p>
+            <p className="m-0 mt-1.5 text-center text-[12.5px] text-pb-muted lg:mt-4 lg:text-left">Impulsado por M_AI</p>
           </main>
 
           {/* Desktop: the compact selection and the CTA, always in view. */}

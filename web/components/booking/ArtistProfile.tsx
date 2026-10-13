@@ -83,19 +83,21 @@ export function ArtistProfile({
             <span className="text-[15px] font-[590]">Perfil del artista</span>
           </div>
           <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-5">
-            <Portrait
-              photoUrl={artist.photo_url}
-              initials={artistInitials(artist.name)}
-              tone={artistTone(artist.id)}
-              label={artist.photo_url ? `Foto de ${artist.name}` : `${artist.name}, sin foto`}
-              className="h-[300px] w-full flex-none overflow-hidden rounded-[16px] lg:h-[260px]"
-              initialsClass="text-[72px]"
-            />
-            <div className="flex flex-col gap-1">
-              <h2 id="pb-profile-name" className={`${SERIF} m-0 text-[40px] leading-none [overflow-wrap:anywhere]`}>
-                {artist.name}
-              </h2>
-              <span className="text-[14px] text-pb-muted">{[artist.title, siteName].filter(Boolean).join(" · ")}</span>
+            <div className="flex items-center gap-4 pt-1">
+              <Portrait
+                photoUrl={artist.photo_url}
+                initials={artistInitials(artist.name)}
+                tone={artistTone(artist.id)}
+                label={artist.photo_url ? `Foto de ${artist.name}` : `${artist.name}, sin foto`}
+                className="size-24 flex-none overflow-hidden rounded-full lg:size-28"
+                initialsClass="text-[34px]"
+              />
+              <div className="flex min-w-0 flex-col gap-1">
+                <h2 id="pb-profile-name" className={`${SERIF} m-0 text-[34px] leading-none [overflow-wrap:anywhere]`}>
+                  {artist.name}
+                </h2>
+                <span className="text-[14px] text-pb-muted">{[artist.title, siteName].filter(Boolean).join(" · ")}</span>
+              </div>
             </div>
             {artist.bio ? <p className="m-0 whitespace-pre-line text-[16px] leading-[1.6] text-pb-body">{artist.bio}</p> : null}
             {performs.length > 0 ? (

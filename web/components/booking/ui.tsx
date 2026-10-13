@@ -54,9 +54,10 @@ export interface PublicConfirmation {
   timezone: string;
 }
 
-/** Selected card: 1px black border + 1px ring (2px total, the layout never jumps). */
+/** Selected card: 1px black border + 1px ring (2px total, the layout never jumps). Cards
+ * stay WHITE on the grey ground either way; the ring and the ✓ say "selected". */
 export const ring = (selected: boolean) =>
-  selected ? "border border-pb-ink shadow-[0_0_0_1px_#111316] bg-pb-sel" : "border border-pb-line bg-white";
+  selected ? "border border-pb-ink shadow-[0_0_0_1px_#111316] bg-white" : "border border-pb-line bg-white";
 
 /** The black primary action; `muted` is the design's disabled look (still focusable). */
 export const CTA_BASE =

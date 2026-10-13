@@ -87,10 +87,26 @@ export function AttentionChip({ size = "md" }: { size?: "md" | "sm" }) {
   );
 }
 
-/** A person's initials in a circle, centred optically (flex + leading-none). */
-export function Avatar({ name, size = "md", tone = "neutral" }: { name: string | null; size?: "xs" | "sm" | "md" | "lg"; tone?: "neutral" | "card" }) {
+/** A person's initials in a circle, centred optically (flex + leading-none). With a
+ *  `photoUrl` (a professional's public photo, the business's own R2 object) the photo
+ *  takes the circle instead. */
+export function Avatar({
+  name,
+  size = "md",
+  tone = "neutral",
+  photoUrl,
+}: {
+  name: string | null;
+  size?: "xs" | "sm" | "md" | "lg";
+  tone?: "neutral" | "card";
+  photoUrl?: string | null;
+}) {
   const dims = { xs: "size-[1.125rem] text-[0.5rem]", sm: "size-6 text-[0.625rem]", md: "size-9 text-xs", lg: "size-12 text-sm" }[size];
   const fill = tone === "card" ? "u-appt-avatar" : "bg-chip text-foreground";
+  if (photoUrl) {
+    // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
+    return <img src={photoUrl} alt="" aria-hidden className={`inline-block shrink-0 rounded-full object-cover ${dims}`} />;
+  }
   return (
     <span aria-hidden className={`inline-flex shrink-0 items-center justify-center rounded-full font-semibold leading-none tracking-tight ${dims} ${fill}`}>
       {name ? initialsOf(name) : "—"}

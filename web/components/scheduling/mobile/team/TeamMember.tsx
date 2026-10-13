@@ -165,7 +165,7 @@ export function TeamMember({
       <div className="flex flex-col gap-4 px-4 pb-[max(32px,env(safe-area-inset-bottom))] pt-4">
         <MError message={error} />
         <div className="flex items-center gap-[14px]">
-          <MStaffAvatar id={member.id} name={member.name} size={64} color={color} />
+          <MStaffAvatar id={member.id} name={member.name} size={64} color={color} photoUrl={member.publicPhotoUrl} />
           <div className="flex min-w-0 flex-col gap-1.5">
             <PresenceChip presence={presence} />
             <span className="text-[14px] text-m-tx2">{presence.sub}</span>

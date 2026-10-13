@@ -8,7 +8,7 @@ import { BTN_PRIMARY_SM, BTN_SECONDARY, IconCheck, IconShuffle, LINK_BTN, Portra
  * STEP 2 — Elige a tu artista. Its own step, apart from the service and the date.
  * "Sin preferencia" lets the ENGINE assign whoever is free when the booking is confirmed
  * (no staff_id is sent) — nothing here picks someone arbitrarily. "Ver perfil" and
- * "Elegir artista" are separate actions: opening a profile never changes the choice.
+ * "Elegir" are separate actions: opening a profile never changes the choice.
  */
 export function ArtistStep({
   serviceName,
@@ -40,76 +40,75 @@ export function ArtistStep({
           <span>{notice}</span>
         </div>
       ) : null}
-      <div role="group" aria-label="Artista" className="grid grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))] gap-2.5">
+      {/* One full-width row per option (avatar · who · action), like a staff list. */}
+      <div role="group" aria-label="Artista" className="flex flex-col gap-2.5">
         {state === "loaded" && staff.length === 0 ? null : (
-        <div className={`flex items-center gap-3.5 rounded-[16px] p-3.5 ${ring(anySel)}`}>
-          <span aria-hidden className="flex size-14 flex-none items-center justify-center rounded-full bg-pb-lav">
-            <IconShuffle />
-          </span>
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="text-[16.5px] font-[590]">Sin preferencia</span>
-            <span className="text-[13.5px] leading-[1.4] text-pb-muted">Te asignaremos un artista disponible para el servicio elegido.</span>
+          <div className={`flex items-center gap-3.5 rounded-[16px] p-3.5 sm:gap-4 sm:p-4 ${ring(anySel)}`}>
+            <span aria-hidden className="flex size-16 flex-none items-center justify-center rounded-full bg-pb-lav sm:size-20">
+              <IconShuffle />
+            </span>
+            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className={`${SERIF} text-[21px] leading-[1.15] sm:text-[23px]`}>Sin preferencia</span>
+              <span className="text-[13.5px] leading-[1.4] text-pb-muted">Te asignamos un artista disponible.</span>
+            </div>
+            <button
+              type="button"
+              aria-pressed={anySel}
+              aria-label={anySel ? "Sin preferencia, elegido" : "Elegir sin preferencia"}
+              onClick={() => onPick("any")}
+              className={`flex-none ${anySel ? BTN_PRIMARY_SM : BTN_SECONDARY}`}
+            >
+              {anySel ? "Elegido" : "Elegir"}
+            </button>
           </div>
-          <button
-            type="button"
-            aria-pressed={anySel}
-            aria-label={anySel ? "Sin preferencia, elegido" : "Elegir sin preferencia"}
-            onClick={() => onPick("any")}
-            className={`flex-none ${anySel ? BTN_PRIMARY_SM : BTN_SECONDARY}`}
-          >
-            {anySel ? "Elegido" : "Elegir"}
-          </button>
-        </div>
         )}
 
         {state === "loading" || state === "idle"
-          ? [0, 1].map((k) => <div key={k} aria-hidden className="h-[176px] rounded-[16px] bg-pb-hair" />)
+          ? [0, 1].map((k) => <div key={k} aria-hidden className="h-[112px] rounded-[16px] bg-pb-hair" />)
           : null}
 
         {staff.map((a) => {
           const sel = selected === a.id;
           return (
-            <article key={a.id} className={`flex gap-3.5 rounded-[16px] p-3 ${ring(sel)}`}>
-              <div className="relative flex-none self-stretch">
+            <article key={a.id} className={`flex items-center gap-3.5 rounded-[16px] p-3.5 sm:gap-4 sm:p-4 ${ring(sel)}`}>
+              <div className="relative flex-none">
                 <Portrait
                   photoUrl={a.photo_url}
                   initials={artistInitials(a.name)}
                   tone={artistTone(a.id)}
                   label={a.photo_url ? `Foto de ${a.name}` : `${a.name}, sin foto`}
-                  className="h-full min-h-[148px] w-[104px] overflow-hidden rounded-[12px] lg:min-h-[160px] lg:w-[120px]"
-                  initialsClass="text-[34px]"
+                  className="size-16 overflow-hidden rounded-full sm:size-20"
+                  initialsClass="text-[24px] sm:text-[28px]"
                 />
                 {sel ? (
-                  <span aria-hidden className="absolute right-1.5 top-1.5 flex size-6 items-center justify-center rounded-full bg-pb-ink">
+                  <span aria-hidden className="absolute -right-0.5 -top-0.5 flex size-6 items-center justify-center rounded-full border-2 border-white bg-pb-ink">
                     <IconCheck size={12} width={2.4} />
                   </span>
                 ) : null}
               </div>
-              <div className="flex min-w-0 flex-1 flex-col gap-1">
-                <h2 className={`${SERIF} m-0 text-[25px] leading-[1.1] [overflow-wrap:anywhere]`}>{a.name}</h2>
-                {a.title ? <span className="text-[13px] text-pb-muted">{a.title}</span> : null}
-                {a.bio ? <p className="m-0 mt-0.5 line-clamp-2 text-[14px] leading-[1.45] text-pb-tx2">{bioLead(a.bio)}</p> : null}
-                <div className="mt-auto flex flex-wrap items-center gap-x-1.5 gap-y-1 pt-1.5">
-                  <button
-                    type="button"
-                    aria-pressed={sel}
-                    aria-label={sel ? `${a.name}, elegido` : `Elegir a ${a.name}`}
-                    onClick={() => onPick(a.id)}
-                    className={sel ? BTN_PRIMARY_SM : BTN_SECONDARY}
-                  >
-                    {sel ? "Elegido" : "Elegir artista"}
-                  </button>
-                  <button
-                    type="button"
-                    aria-haspopup="dialog"
-                    aria-label={`Ver perfil de ${a.name}`}
-                    onClick={(e) => onView(a.id, e.currentTarget)}
-                    className={LINK_BTN}
-                  >
-                    Ver perfil
-                  </button>
-                </div>
+              <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                <h2 className={`${SERIF} m-0 truncate text-[21px] leading-[1.15] sm:text-[23px]`}>{a.name}</h2>
+                {a.title ? <span className="line-clamp-2 text-[13.5px] leading-[1.35] text-pb-muted">{a.title}</span> : null}
+                {a.bio ? <p className="m-0 hidden line-clamp-1 text-[13.5px] leading-[1.45] text-pb-tx2 sm:block">{bioLead(a.bio)}</p> : null}
+                <button
+                  type="button"
+                  aria-haspopup="dialog"
+                  aria-label={`Ver perfil de ${a.name}`}
+                  onClick={(e) => onView(a.id, e.currentTarget)}
+                  className={`${LINK_BTN} -mb-2 -ml-2 self-start`}
+                >
+                  Ver perfil
+                </button>
               </div>
+              <button
+                type="button"
+                aria-pressed={sel}
+                aria-label={sel ? `${a.name}, elegido` : `Elegir a ${a.name}`}
+                onClick={() => onPick(a.id)}
+                className={`flex-none ${sel ? BTN_PRIMARY_SM : BTN_SECONDARY}`}
+              >
+                {sel ? "Elegido" : "Elegir"}
+              </button>
             </article>
           );
         })}

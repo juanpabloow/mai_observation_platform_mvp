@@ -264,7 +264,7 @@ export default async function ClientAgendaPage({
       // Weekly hours come off the site/staff rows ALREADY loaded above — no extra
       // query. They only drive the "closed" hatching of a day / barber lane.
       openingHours={site.opening_hours}
-      staff={staff.map((s) => ({ id: s.id, name: s.name, active: s.active, workingHours: s.working_hours }))}
+      staff={staff.map((s) => ({ id: s.id, name: s.name, active: s.active, workingHours: s.working_hours, photoUrl: s.public_photo_url }))}
       services={services.map((s) => ({ id: s.id, name: s.name, duration_min: s.effective_duration_min, category: s.category, price: s.effective_price }))}
       view={view}
       kpis={summarise(appts)}
