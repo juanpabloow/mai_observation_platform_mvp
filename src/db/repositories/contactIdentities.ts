@@ -1,6 +1,6 @@
 import type { PoolClient, QueryResultRow } from 'pg';
 import { query, firstRowOrThrow, withTransaction } from '../client.js';
-import { normalizeE164 } from '../../scheduling/phone.js';
+import { isBsuid, normalizeE164 } from '../../scheduling/phone.js';
 import { logger } from '../../logger.js';
 import type { ContactRow } from './contacts.js';
 
@@ -58,6 +58,49 @@ export function classifyDeclaredIdentity(kind: IdentityKind, raw: string | null 
     return EMAIL_RE.test(l) ? { kind: 'email', value: l } : null;
   }
   return { kind: 'external', value: trimmed };
+}
+
+/**
+ * BSUID COMPATIBILITY (no batch repair, no merge — but see the write note below).
+ *
+ * Before the BSUID fix, normalizeE164 stripped letters, so a WhatsApp business-scoped user
+ * id "CO.1234567890" was stored as the PHONE identity "+1234567890". Now a BSUID (isBsuid) is an
+ * `external` identity, so a contact created the old way would no longer be found by its
+ * own BSUID and a second contact would be created. This returns the phone the OLD code
+ * derived, so the resolve/lookup paths can still find that contact — but ONLY the contact
+ * whose channel_user_id IS that BSUID (it was created by it). A real phone that happens to
+ * equal the digits, on any other contact, never matches. The legacy identity is left as-is
+ * (measured by docs/ops/gallery-identity-diagnostic.sql; any repair is a separate,
+ * authorised migration). This only READS old rows to find the contact; the caller then
+ * writes like any inbound message does (the BSUID is learned as an `external` identity).
+ */
+export function legacyBsuidPhone(value: string | null | undefined): string | null {
+  if (!isBsuid(value)) return null;
+  // Exactly the old default path: every digit, 7–15 of them, no leading zero.
+  const digits = (value ?? '').replace(/[^0-9]/g, '');
+  if (digits.length < 7 || digits.length > 15 || digits[0] === '0') return null;
+  return `+${digits}`;
+}
+
+/**
+ * isBsuid in SQL (POSIX ERE), for a raw column value — surrounding whitespace allowed,
+ * as classifyIdentity trims. A constant: never interpolate input into it.
+ */
+const BSUID_SQL_RE = `'^[[:space:]]*[A-Za-z]{2}[.][A-Za-z0-9]+[[:space:]]*$'`;
+
+/** Contacts created by `bsuid` under the old classification (legacy phone identity). */
+async function legacyBsuidContactIds(run: Run, tenantId: string, clientId: string, bsuid: string): Promise<string[]> {
+  const legacy = legacyBsuidPhone(bsuid);
+  if (!legacy) return [];
+  const r = await run<{ contact_id: string }>(
+    `SELECT DISTINCT ci.contact_id
+       FROM contact_identities ci
+       JOIN contacts c ON c.id = ci.contact_id AND c.tenant_id = ci.tenant_id AND c.client_id = ci.client_id
+      WHERE ci.tenant_id = $1 AND ci.client_id = $2 AND ci.kind = 'phone' AND ci.value = $3
+        AND btrim(c.channel_user_id) = $4`,
+    [tenantId, clientId, legacy, bsuid.trim()],
+  );
+  return r.rows.map((row) => row.contact_id);
 }
 
 export interface ResolveIdentityInput {
@@ -205,6 +248,8 @@ async function recordCandidate(run: Run, tenantId: string, clientId: string, kee
  * string equality). Because a phone identity is UNIQUE per (tenant,client), a NULL match
  * can only be this contact's; a conversation already linked to a different contact is left
  * untouched (the identity spine already records duplicate candidates for real collisions).
+ * A BSUID ref ("CO.…", isBsuid) is never digit-normalized; it links only by EXACT equality
+ * with one of the contact's `external` identities.
  * Returns the number of conversations newly linked.
  */
 export async function linkNullConversationsByPhone(
@@ -219,9 +264,21 @@ export async function linkNullConversationsByPhone(
         SET contact_id = $3, updated_at = now()
       WHERE c.tenant_id = $1
         AND c.contact_id IS NULL
-        AND ('+' || regexp_replace(c.conversation_ref, '[^0-9]', '', 'g')) IN (
-          SELECT ci.value FROM contact_identities ci
-           WHERE ci.tenant_id = $1 AND ci.client_id = $2 AND ci.contact_id = $3 AND ci.kind = 'phone'
+        AND (
+          -- Any other ref matches the contact's phone by its digits (the original rule).
+          -- A BSUID ("CO.…") is NOT a phone: stripping its letters would link the
+          -- conversation to whoever has those digits as a real phone.
+          (c.conversation_ref !~ ${BSUID_SQL_RE}
+            AND ('+' || regexp_replace(c.conversation_ref, '[^0-9]', '', 'g')) IN (
+              SELECT ci.value FROM contact_identities ci
+               WHERE ci.tenant_id = $1 AND ci.client_id = $2 AND ci.contact_id = $3 AND ci.kind = 'phone'
+            ))
+          -- A BSUID matches only that exact opaque id, held as the contact's external identity.
+          OR (c.conversation_ref ~ ${BSUID_SQL_RE}
+            AND btrim(c.conversation_ref) IN (
+              SELECT ci.value FROM contact_identities ci
+               WHERE ci.tenant_id = $1 AND ci.client_id = $2 AND ci.contact_id = $3 AND ci.kind = 'external'
+            ))
         )
         AND EXISTS (
           SELECT 1 FROM (
@@ -299,9 +356,16 @@ export async function ensureContactForInboundMessage(
 
 // The NULL-contact conversations + their canonical client + phone-normalized ref, and the
 // contacts each matches — shared by the E-5 backfill's count + link passes.
+// A BSUID ref is never read as a phone (its digits could be a real person's number). It
+// matches the contact holding that exact `external` identity, or — compatibility, read
+// only — the contact the OLD code created from it (legacy phone identity AND
+// channel_user_id = that BSUID; see legacyBsuidPhone). If both exist (the split the old
+// code could leave), the conversation is ambiguous and is left unlinked.
 const BACKFILL_CTE = `
   nullconv AS (
     SELECT c.id AS conv_id, c.tenant_id,
+           (c.conversation_ref ~ ${BSUID_SQL_RE}) AS is_bsuid,
+           btrim(c.conversation_ref) AS ref,
            ('+' || regexp_replace(c.conversation_ref, '[^0-9]', '', 'g')) AS e164,
            (SELECT cw.client_id FROM (
                SELECT DISTINCT ON (w.n8n_workflow_id) w.client_id
@@ -317,14 +381,21 @@ const BACKFILL_CTE = `
       FROM nullconv nc
       JOIN contact_identities ci
         ON ci.tenant_id = nc.tenant_id AND ci.client_id = nc.client_id
-       AND ci.kind = 'phone' AND ci.value = nc.e164
+      JOIN contacts ct
+        ON ct.id = ci.contact_id AND ct.tenant_id = ci.tenant_id AND ct.client_id = ci.client_id
      WHERE nc.client_id IS NOT NULL
+       AND (
+         (NOT nc.is_bsuid AND ci.kind = 'phone' AND ci.value = nc.e164)
+         OR (nc.is_bsuid AND ci.kind = 'external' AND ci.value = nc.ref)
+         OR (nc.is_bsuid AND ci.kind = 'phone' AND ci.value = nc.e164 AND btrim(ct.channel_user_id) = nc.ref)
+       )
      GROUP BY nc.conv_id, nc.tenant_id
   )`;
 
 /**
  * E-5 backfill (idempotent, no migration). Links every NULL-contact conversation whose
- * conversation_ref normalizes (phone) to EXACTLY ONE contact in the same tenant+client;
+ * conversation_ref normalizes (phone) — or, for a BSUID, equals an external identity
+ * (see BACKFILL_CTE) — to EXACTLY ONE contact in the same tenant+client;
  * leaves ambiguous (>1) and no-match untouched. Running twice is a no-op (linked rows leave
  * the NULL set). Never overwrites an existing link.
  */
@@ -374,6 +445,17 @@ export async function resolveContactByIdentity(
     [input.tenantId, input.clientId, ...idents.flatMap((i) => [i.kind, i.value])],
   );
   const matchedIds = found.rows.map((r) => r.contact_id);
+
+  // BSUID compatibility: a contact created before the fix carries the legacy phone, not the
+  // BSUID. Exactly one such contact (created BY this BSUID) is the same person; more than
+  // one is ambiguous and is not guessed.
+  if (matchedIds.length === 0) {
+    const bsuid = idents.find((i) => i.kind === 'external' && legacyBsuidPhone(i.value));
+    if (bsuid) {
+      const legacy = await legacyBsuidContactIds(run, input.tenantId, input.clientId, bsuid.value);
+      if (legacy.length === 1) matchedIds.push(legacy[0]);
+    }
+  }
 
   if (matchedIds.length === 0) {
     // CREATE — race-safe: create, then claim the primary identity; if lost, adopt the winner.
@@ -507,7 +589,16 @@ export async function findContactIdsByIdentity(
         AND (kind, value) IN (SELECT * FROM unnest($3::text[], $4::text[]))`,
     [input.tenantId, input.clientId, kinds, values],
   );
-  return r.rows.map((row) => row.contact_id);
+  const ids = r.rows.map((row) => row.contact_id);
+  // BSUID compatibility (read-only): see legacyBsuidPhone.
+  if (ids.length === 0) {
+    const bsuid = pairs.find((p) => p.kind === 'external' && legacyBsuidPhone(p.value));
+    if (bsuid) {
+      const legacy = await legacyBsuidContactIds(run, input.tenantId, input.clientId, bsuid.value);
+      if (legacy.length === 1) return legacy;
+    }
+  }
+  return ids;
 }
 
 export interface IdentityMatch {
@@ -568,7 +659,8 @@ export async function findContactMatchesByIdentity(
   const scalarMatch =
     n.kind === 'phone'
       ? `('+' || regexp_replace(coalesce(c.phone_e164, ''), '[^0-9]', '', 'g')) = ${digits}
-         OR ('+' || regexp_replace(coalesce(c.channel_user_id, ''), '[^0-9]', '', 'g')) = ${digits}`
+         OR (coalesce(c.channel_user_id, '') !~ ${BSUID_SQL_RE}
+             AND ('+' || regexp_replace(coalesce(c.channel_user_id, ''), '[^0-9]', '', 'g')) = ${digits})`
       : `lower(coalesce(c.email, '')) = $4 OR lower(coalesce(c.channel_user_id, '')) = $4`;
 
   const params: unknown[] = [tenantId, clientId, n.kind, n.value];
