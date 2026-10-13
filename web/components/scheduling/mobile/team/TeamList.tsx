@@ -147,7 +147,7 @@ export function TeamList({
               onClick={() => sessionStorage.setItem("m-team-from-list", "1")}
               className={`flex min-h-[92px] w-full items-start gap-3 py-[14px] pl-[14px] pr-3 text-left text-m-tx no-underline ${i ? "border-t border-m-dv" : ""}`}
             >
-              <MStaffAvatar id={r.member.id} name={r.member.name} size={44} color={colors.get(r.member.id)} />
+              <MStaffAvatar id={r.member.id} name={r.member.name} size={44} color={colors.get(r.member.id)} photoUrl={r.member.publicPhotoUrl} />
               <span className="flex min-w-0 flex-1 flex-col gap-[5px]">
                 <span className="text-[16px] font-semibold leading-[1.3] [overflow-wrap:anywhere] [text-wrap:pretty]">{r.member.name}</span>
                 <span className="flex flex-wrap items-center gap-x-2 gap-y-1">

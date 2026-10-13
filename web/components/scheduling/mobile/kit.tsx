@@ -452,8 +452,25 @@ export function staffAvatarColor(id: string): string {
   return AVATAR_COLORS[(h >>> 0) % AVATAR_COLORS.length];
 }
 
-export function MStaffAvatar({ id, name, size = 24, color }: { id: string | null; name: string | null; size?: number; color?: string }) {
+export function MStaffAvatar({
+  id,
+  name,
+  size = 24,
+  color,
+  photoUrl,
+}: {
+  id: string | null;
+  name: string | null;
+  size?: number;
+  color?: string;
+  /** The professional's public photo (Equipo → Perfil público); initials when absent. */
+  photoUrl?: string | null;
+}) {
   const fs = size >= 56 ? 18 : size >= 40 ? 14 : size >= 28 ? 11 : 9.5;
+  if (id && photoUrl) {
+    // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
+    return <img src={photoUrl} alt="" aria-hidden className="flex-none rounded-full object-cover" style={{ width: size, height: size }} />;
+  }
   return (
     <span
       aria-hidden

@@ -504,13 +504,18 @@ function StaffCard({
     <article className={`flex min-h-[188px] flex-col overflow-hidden rounded-xl border bg-surface transition-colors sm:min-h-[218px] xl:min-h-[238px] ${selected ? "border-foreground" : "border-line hover:border-line-strong"}`}>
       <div className="flex flex-1 flex-col gap-2.5 p-3.5 sm:gap-3 sm:p-4">
         <div className="flex items-start gap-3">
-          <span
-            aria-hidden
-            style={avatarToneStyle(member.name) as React.CSSProperties}
-            className="u-staff-avatar u-mono flex size-11 shrink-0 items-center justify-center rounded-xl border text-sm font-semibold"
-          >
-            {initials(member.name)}
-          </span>
+          {member.publicPhotoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
+            <img src={member.publicPhotoUrl} alt="" aria-hidden className="size-11 shrink-0 rounded-xl border border-line object-cover" />
+          ) : (
+            <span
+              aria-hidden
+              style={avatarToneStyle(member.name) as React.CSSProperties}
+              className="u-staff-avatar u-mono flex size-11 shrink-0 items-center justify-center rounded-xl border text-sm font-semibold"
+            >
+              {initials(member.name)}
+            </span>
+          )}
           <span className="flex min-w-0 flex-1 flex-col gap-0.5">
             <span className="truncate text-[0.9375rem] font-semibold tracking-[-0.015em] text-foreground">{member.name}</span>
             <span className="truncate text-xs text-muted">{member.title ?? (member.takesBookings ? "Profesional" : "Recepción")}</span>
@@ -749,12 +754,17 @@ function StaffDetail({
       >
         <div className="flex w-full min-w-0 items-start gap-2.5">
           <span className="relative shrink-0">
-            <span
-              aria-hidden
-              className={`u-mono flex size-[38px] items-center justify-center rounded-full text-[13px] font-semibold ${avatarColor(member.name)}`}
-            >
-              {initials(member.name)}
-            </span>
+            {member.publicPhotoUrl ? (
+              // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
+              <img src={member.publicPhotoUrl} alt="" aria-hidden className="size-[38px] rounded-full object-cover" />
+            ) : (
+              <span
+                aria-hidden
+                className={`u-mono flex size-[38px] items-center justify-center rounded-full text-[13px] font-semibold ${avatarColor(member.name)}`}
+              >
+                {initials(member.name)}
+              </span>
+            )}
             <span aria-hidden className={`absolute -bottom-px -right-px size-[11px] rounded-full border-2 border-surface ${s.dot}`} />
           </span>
 

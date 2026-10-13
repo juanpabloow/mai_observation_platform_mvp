@@ -33,7 +33,7 @@ test('the v3 flow has exactly four steps with the specified titles, labels and f
   // Nothing promises a message the platform does not send.
   assert.ok(!/Te enviamos la confirmación por WhatsApp/.test(code(bookingSrc)), 'no fake WhatsApp promise');
   const artist = root(`${BOOKING_DIR}/ArtistStep.tsx`);
-  for (const s of ['Sin preferencia', 'Ver perfil', 'Elegir artista']) assert.ok(artist.includes(s), s);
+  for (const s of ['Sin preferencia', 'Ver perfil', '{sel ? "Elegido" : "Elegir"}', 'aria-label={sel ? `${a.name}, elegido` : `Elegir a ${a.name}`}']) assert.ok(artist.includes(s), s);
   const cal = root(`${BOOKING_DIR}/DateTimeStep.tsx`);
   for (const s of ['Hay cupos', 'Sin cupos o cerrado', 'Mes anterior', 'Mes siguiente', '"LU", "MA", "MI", "JU", "VI", "SÁ", "DO"']) assert.ok(cal.includes(s), s);
   assert.ok(root(`${BOOKING_DIR}/ServiceStep.tsx`).includes('Ver más'), 'Ver más on services');
@@ -112,7 +112,7 @@ test('responsive contract: 44px+ targets, sticky bar with safe area + keyboard, 
   // v3 palette: white ground, neutral greys, no cream/sand/brown surfaces.
   const css = root('web/app/globals.css');
   const block = css.slice(css.indexOf('Public booking v3'), css.indexOf('SCHEDULING design system'));
-  assert.ok(block.includes('--color-pb-ink: #111316') && block.includes('background: #ffffff'));
+  assert.ok(block.includes('--color-pb-ink: #111316') && block.includes('background: #f4f5f7'), 'neutral light-grey ground, white cards');
   for (const beige of ['#f5efe6', '#efe7da', '#e9dfcf', '#f4ede3', '#d6c3a5']) assert.ok(!block.toLowerCase().includes(beige), `no v2 beige ${beige}`);
   assert.ok(root('web/app/book/[siteSlug]/layout.tsx').includes('Newsreader('), 'Newsreader titles (page and not-found)');
 });

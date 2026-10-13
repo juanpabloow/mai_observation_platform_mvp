@@ -61,7 +61,7 @@ type WeeklyHours = Partial<Record<string, HoursRange[]>>;
  *  their existing appointments stay visible) with an "inactive" chip, but they are NOT
  *  offered for NEW bookings (the modal's Barber dropdown filters to active).
  *  `workingHours` = {} means "inherit the site's opening hours" (the common case). */
-interface StaffOpt { id: string; name: string; active: boolean; workingHours: WeeklyHours }
+interface StaffOpt { id: string; name: string; active: boolean; workingHours: WeeklyHours; photoUrl?: string | null }
 interface ServiceOpt {
   id: string;
   name: string;
@@ -890,10 +890,9 @@ export function AgendaView(props: {
         };
       })
     : shownStaff.map((st) => {
-        // Initials + name + TODAY'S LOAD, which is what the reference's professional
-        // column header carries and what a receptionist scans the board for. No avatar
-        // image exists on staff, so the initials ARE the avatar.
-        // TODO(agenda): swap for a real photo if staff ever gains an avatar_url.
+        // Avatar + name + TODAY'S LOAD, which is what the reference's professional
+        // column header carries and what a receptionist scans the board for. The avatar
+        // is the professional's public photo when Equipo has one, else the initials.
         // An INACTIVE barber still gets a lane (the server only includes them when
         // they have appointments in range) so their history stays reachable.
         const closed = !staffWorksOn(st.workingHours, props.openingHours, dayWeekday);
@@ -902,6 +901,7 @@ export function AgendaView(props: {
           key: st.id,
           label: st.name,
           initial: st.name,
+          photoUrl: st.photoUrl ?? null,
           inactive: !st.active,
           closed,
           sub: closed ? "Cerrado" : `${n} cita${n === 1 ? "" : "s"}`,
@@ -1552,7 +1552,7 @@ export function AgendaView(props: {
                       </span>
                     ) : (
                       <>
-                        {col.initial ? <Initial name={col.initial} muted={col.closed} /> : null}
+                        {col.initial ? <Initial name={col.initial} muted={col.closed} photoUrl={(col as { photoUrl?: string | null }).photoUrl ?? null} /> : null}
                         <span className="flex min-w-0 flex-col leading-tight">
                           <span className={`truncate text-xs font-semibold ${col.closed ? "text-closed-fg" : "text-foreground"}`}>
                             {col.label}
@@ -1927,9 +1927,14 @@ function WeekTeamBoard({
           return (
             <div key={person.id} className="contents">
               <div className="sticky left-0 z-10 flex flex-col items-center justify-center gap-2 border-b border-r border-line bg-surface px-2 py-4 text-center" style={{ minHeight: rowHeight }}>
-                <span aria-hidden className="flex size-11 shrink-0 items-center justify-center rounded-full border-2 border-line-strong bg-chip text-sm font-semibold text-foreground">
-                  {initialsOf(person.name)}
-                </span>
+                {person.photoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
+                  <img src={person.photoUrl} alt="" aria-hidden className="size-11 shrink-0 rounded-full border-2 border-line-strong object-cover" />
+                ) : (
+                  <span aria-hidden className="flex size-11 shrink-0 items-center justify-center rounded-full border-2 border-line-strong bg-chip text-sm font-semibold text-foreground">
+                    {initialsOf(person.name)}
+                  </span>
+                )}
                 <span className="line-clamp-2 text-xs font-semibold leading-snug text-foreground">{person.name}</span>
                 <span className="text-[11px] text-faint">{person.active ? `${total} citas` : "Inactivo"}</span>
               </div>
@@ -2480,11 +2485,11 @@ function initialsOf(name: string | null | undefined): string {
 
 /** A professional's initials — the shared circular Avatar. On a pastel card it takes the
  *  card's own avatar tone; elsewhere the neutral chip (muted = a closed/inactive lane). */
-function Initial({ name, muted, on }: { name: string | null; muted?: boolean; on?: "card" }) {
-  if (on === "card") return <Avatar name={name} size="xs" tone="card" />;
+function Initial({ name, muted, on, photoUrl }: { name: string | null; muted?: boolean; on?: "card"; photoUrl?: string | null }) {
+  if (on === "card") return <Avatar name={name} size="xs" tone="card" photoUrl={photoUrl} />;
   return (
     <span className={muted ? "opacity-60" : ""}>
-      <Avatar name={name} size="sm" />
+      <Avatar name={name} size="sm" photoUrl={photoUrl} />
     </span>
   );
 }

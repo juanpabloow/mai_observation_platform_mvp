@@ -1409,6 +1409,8 @@ body {
   --color-pb-bar: #e6e8eb;
   --color-pb-sel: #f5f6f8;
   --color-pb-sf2: #f3f4f6;
+  /* The page ground: a soft neutral grey (not the v2 sand) so white cards stand out. */
+  --color-pb-ground: #f4f5f7;
   --color-pb-lav: #ece8f5;
   --color-pb-lav-fg: #4b3f78;
   --color-pb-sage: #e2eadf;
@@ -1431,7 +1433,7 @@ body {
      treatment, just recoloured for this surface. */
   --focus-edge: #2f6be4;
   color-scheme: light;
-  background: #ffffff;
+  background: #f4f5f7;
   color: #111316;
   font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
   -webkit-font-smoothing: antialiased;
