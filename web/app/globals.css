@@ -1387,19 +1387,114 @@ body {
 }
 
 /*
- * ── Public booking (/book/{slug}) ───────────────────────────────────────────────
- * The availability DOT under a bookable day. Blue, not the emerald success tone: it
- * says "there is room", not "done". Decorative — every day button also carries the
- * state in its accessible name, and the legend spells it out.
+ * ── Public booking v3 (/book/{slug}) ────────────────────────────────────────────
+ * The "Gallery Reserva v3" palette: white ground, light neutral greys for secondary
+ * surfaces, near-black ink for text and the primary action, discreet pastels only on
+ * avatars. Scoped by NAME (pb-*) and used only under `.pb3`, so no other module moves.
+ * The public page is light by design (no theme switch): `.pb3` pins its own colours and
+ * `color-scheme: light`, so an operator's dark preference never reaches a customer.
  */
-:root {
-  --booking-dot: #2563eb;
+@theme inline {
+  --color-pb-ink: #111316;
+  --color-pb-body: #22252a;
+  --color-pb-tx2: #3a3d42;
+  --color-pb-muted: #5e636b;
+  --color-pb-faint: #868b93;
+  --color-pb-struck: #9a9fa6;
+  --color-pb-dis: #c5c9ce;
+  --color-pb-line: #e4e6ea;
+  --color-pb-line2: #d9dce1;
+  --color-pb-line3: #cdd1d6;
+  --color-pb-hair: #eef0f2;
+  --color-pb-bar: #e6e8eb;
+  --color-pb-sel: #f5f6f8;
+  --color-pb-sf2: #f3f4f6;
+  --color-pb-lav: #ece8f5;
+  --color-pb-lav-fg: #4b3f78;
+  --color-pb-sage: #e2eadf;
+  --color-pb-sage-fg: #2f5a38;
+  --color-pb-ok: #4e7a5a;
+  --color-pb-warn-bg: #f6ecd9;
+  --color-pb-warn-bd: #e6d2ac;
+  --color-pb-warn-fg: #5a4114;
+  --color-pb-err: #9e2a1c;
+  --color-pb-err-bd: #b4382a;
+  --color-pb-err-bg: #f8e7e4;
+  --color-pb-err-bd2: #ebc4bd;
+  --color-pb-err-fg: #7a2318;
+  --color-pb-focus: #2f6be4;
+  --color-pb-star: #e8a317;
+  --font-pb-serif: var(--font-pb-newsreader), Georgia, "Times New Roman", serif;
 }
-.dark {
-  --booking-dot: #60a5fa;
+.pb3 {
+  /* The app-wide focus ring (@layer base, below) in the v3 focus blue — the ONE focus
+     treatment, just recoloured for this surface. */
+  --focus-edge: #2f6be4;
+  color-scheme: light;
+  background: #ffffff;
+  color: #111316;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
 }
-.u-booking-dot {
-  background-color: var(--booking-dot);
+.pb3 .pb-nosb {
+  scrollbar-width: none;
+}
+.pb3 .pb-nosb::-webkit-scrollbar {
+  display: none;
+}
+@keyframes pb-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes pb-in {
+  from {
+    transform: translateY(16px);
+    opacity: 0;
+  }
+  to {
+    transform: none;
+    opacity: 1;
+  }
+}
+.pb3 .pb-spin {
+  animation: pb-spin 0.8s linear infinite;
+}
+.pb3 dialog.pb-dialog {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  max-width: none;
+  max-height: none;
+  background: #ffffff;
+  color: #111316;
+}
+.pb3 dialog.pb-dialog::backdrop {
+  background: rgba(17, 19, 22, 0.4);
+}
+/* Phone: the profile is a full view that slides in. Desktop: a centred 560px dialog. */
+.pb3 dialog.pb-dialog[open] {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  animation: pb-in 0.22s ease;
+}
+@media (min-width: 1024px) {
+  .pb3 dialog.pb-dialog[open] {
+    inset: 50% auto auto 50%;
+    transform: translate(-50%, -50%);
+    width: 560px;
+    height: auto;
+    max-height: 88dvh;
+    border-radius: 24px;
+    overflow: hidden;
+    box-shadow: 0 16px 48px rgba(17, 19, 22, 0.18);
+    animation: none;
+  }
 }
 
 /*

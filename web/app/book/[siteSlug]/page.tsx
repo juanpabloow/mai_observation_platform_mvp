@@ -4,9 +4,7 @@ import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/s
 import { getPublicBrandLogo, listPublicServicesForSite } from "@worker/db/repositories/scheduling/publicCatalog.js";
 import { projectPublicService, projectPublicSite } from "@/lib/publicBookingApi";
 import { publicClientConfig, readPublicBookingPolicy } from "@/lib/publicBookingPolicy";
-import { initialsOf } from "@/lib/staffTone";
 import { BookingFlow } from "@/components/booking/BookingFlow";
-import { BookingThemeSwitch } from "@/components/booking/BookingThemeSwitch";
 
 /**
  * PUBLIC booking page /book/{siteSlug}. No auth, no cookies. Resolves the site through
@@ -17,8 +15,12 @@ import { BookingThemeSwitch } from "@/components/booking/BookingThemeSwitch";
  * first paint already lists services (no spinner on a slow in-app browser).
  *
  * The browser receives ONLY public values: the site's name/address/timezone/closed
- * weekdays, the services, and — from the policy — the Turnstile SITE key and the
- * privacy-policy URL. Never a tenant/client id, never a secret.
+ * weekdays/booking horizon, the services, the business logo URL and — from the policy —
+ * the Turnstile SITE key and the privacy-policy URL. Never a tenant/client id, never a secret.
+ *
+ * Design: "Gallery Reserva v3" (white ground, near-black ink, Newsreader titles — the
+ * font comes from ./layout.tsx). The look is scoped to `.pb3` (globals.css) so no other
+ * module changes, and the page is light by design — there is no theme switch here.
  *
  * robots: noindex. These pages are reached from links the business shares (Instagram,
  * WhatsApp, its website); indexing them would only publish slugs — including ones
@@ -27,8 +29,10 @@ import { BookingThemeSwitch } from "@/components/booking/BookingThemeSwitch";
  */
 export const dynamic = "force-dynamic";
 
-// Zoom is never blocked: no maximum-scale / user-scalable here.
-export const viewport: Viewport = { width: "device-width", initialScale: 1 };
+// Zoom is never blocked: no maximum-scale / user-scalable here. `resizes-content` lets
+// Android Chrome shrink the layout above the keyboard, so the bottom bar stays on top of
+// it (iOS ignores it; the flow follows visualViewport there).
+export const viewport: Viewport = { width: "device-width", initialScale: 1, interactiveWidget: "resizes-content", themeColor: "#ffffff" };
 
 const ROBOTS: Metadata["robots"] = { index: false, follow: false };
 
@@ -45,7 +49,7 @@ export async function generateMetadata({ params }: { params: Promise<{ siteSlug:
     return { title: "Reserva no disponible", robots: ROBOTS };
   }
   const title = `Reserva en ${site.name}`;
-  const description = `Elige servicio, profesional y horario, y confirma tu cita en ${site.name} en menos de un minuto. Sin crear cuenta.`;
+  const description = `Elige servicio, artista y horario, y confirma tu cita en ${site.name} en menos de un minuto. Sin crear cuenta.`;
   return {
     title,
     description,
@@ -69,42 +73,16 @@ export default async function PublicBookingPage({ params }: { params: Promise<{ 
   const config = publicClientConfig(readPublicBookingPolicy());
 
   return (
-    <main lang="es" className="mx-auto flex w-full max-w-[1080px] flex-1 flex-col gap-3.5 sm:gap-5 sm:px-0 sm:py-6">
-      {/* The business first: its logo (or a monogram), its name, one warm line. */}
-      <header className="flex items-center gap-3.5 sm:px-1">
-        {logoUrl ? (
-          // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded logo (R2)
-          <img src={logoUrl} alt="" className="size-12 shrink-0 rounded-xl border border-line bg-surface object-cover" />
-        ) : (
-          <span aria-hidden className="flex size-12 shrink-0 items-center justify-center rounded-xl bg-ink text-base font-semibold text-ink-fg">
-            {initialsOf(site.name)}
-          </span>
-        )}
-        <div className="flex min-w-0 flex-1 flex-col gap-[3px]">
-          <h1 className="text-xl font-semibold tracking-[-0.01em] text-foreground">{site.name}</h1>
-          <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] text-muted">
-            {site.address ? (
-              <span className="inline-flex items-center gap-[5px]">
-                <svg viewBox="0 0 16 16" className="size-[13px]" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden>
-                  <path d="M8 14s5-4.2 5-8A5 5 0 0 0 3 6c0 3.8 5 8 5 8Z" />
-                  <circle cx="8" cy="6" r="1.7" />
-                </svg>
-                {site.address}
-              </span>
-            ) : null}
-            <span>Reserva en menos de un minuto · sin crear cuenta</span>
-          </p>
-        </div>
-        <BookingThemeSwitch />
-      </header>
+    <div lang="es" className="flex min-h-full flex-none flex-col">
       <BookingFlow
         slug={siteSlug}
         site={publicSite}
+        logoUrl={logoUrl}
         initialServices={services}
         turnstileSiteKey={config.turnstileSiteKey}
         turnstileMisconfigured={config.turnstileMisconfigured}
         privacyPolicyUrl={config.privacyPolicyUrl}
       />
-    </main>
+    </div>
   );
 }

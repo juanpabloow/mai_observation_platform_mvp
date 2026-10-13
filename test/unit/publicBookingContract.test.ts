@@ -19,20 +19,34 @@ const notFound = root('web/app/book/[siteSlug]/not-found.tsx');
 /** Visible JSX text + string literals, comments stripped. */
 const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '');
 
-test('the flow has exactly three steps with the specified names and final CTA', () => {
+test('the v3 flow has exactly four steps with the specified titles, labels and final CTA', () => {
   const flow = root(`${BOOKING_DIR}/BookingFlow.tsx`);
-  for (const label of ['Servicio y profesional', 'Fecha y hora', 'Tus datos']) assert.ok(flow.includes(`label: "${label}"`), label);
-  assert.equal((flow.match(/\{ value: \d as const, label:/g) ?? []).length, 3);
-  assert.ok(flow.includes('Confirmar cita'));
-  assert.ok(root(`${BOOKING_DIR}/BookingConfirmation.tsx`).includes('Tu cita está confirmada'));
-  assert.ok(root(`${BOOKING_DIR}/BookingConfirmation.tsx`).includes('Reservar otra cita'));
-  assert.ok(root(`${BOOKING_DIR}/BookingConfirmation.tsx`).includes('Añadir a mi calendario'));
+  const logic = root('web/lib/publicBookingFlow.ts');
+  for (const t of ['Elige tu servicio', 'Elige a tu artista', 'Elige fecha y hora', 'Tus datos']) assert.ok(logic.includes(`"${t}"`), t);
+  for (const l of ['Servicio', 'Artista', 'Fecha', 'Datos']) assert.ok(logic.includes(`"${l}"`), l);
+  assert.ok(flow.includes('([1, 2, 3, 4] as const)'), 'four progress steps');
+  assert.ok(flow.includes('Paso {step} de 4'));
+  assert.ok(flow.includes('"Confirmar cita"'));
+  const done = root(`${BOOKING_DIR}/BookingDone.tsx`);
+  for (const s of ['Tu cita está reservada', 'Añadir a mi calendario']) assert.ok(done.includes(s), s);
+  assert.ok(flow.includes('Hacer otra reserva'));
   // Nothing promises a message the platform does not send.
   assert.ok(!/Te enviamos la confirmación por WhatsApp/.test(code(bookingSrc)), 'no fake WhatsApp promise');
-  assert.ok(root(`${BOOKING_DIR}/StaffChooser.tsx`).includes('Cualquier profesional'));
-  assert.ok(flow.includes('Primer profesional disponible'));
-  const cal = root(`${BOOKING_DIR}/MonthCalendar.tsx`);
-  for (const s of ['Hay cupos', 'Sin cupos', 'Cerrado', 'Mes anterior', 'Mes siguiente']) assert.ok(cal.includes(s), s);
+  const artist = root(`${BOOKING_DIR}/ArtistStep.tsx`);
+  for (const s of ['Sin preferencia', 'Ver perfil', 'Elegir artista']) assert.ok(artist.includes(s), s);
+  const cal = root(`${BOOKING_DIR}/DateTimeStep.tsx`);
+  for (const s of ['Hay cupos', 'Sin cupos o cerrado', 'Mes anterior', 'Mes siguiente', '"LU", "MA", "MI", "JU", "VI", "SÁ", "DO"']) assert.ok(cal.includes(s), s);
+  assert.ok(root(`${BOOKING_DIR}/ServiceStep.tsx`).includes('Ver más'), 'Ver más on services');
+});
+
+test('"Sin preferencia" sends NO staff_id (the engine assigns); the profile never selects', () => {
+  const flow = root(`${BOOKING_DIR}/BookingFlow.tsx`);
+  assert.ok(flow.includes('...(staffParam ? { staff_id: staffParam } : {})'), 'staff_id only for a chosen artist');
+  assert.ok(flow.includes('const staffParam = sel.artist && sel.artist !== "any" ? sel.artist : "";'));
+  const profile = root(`${BOOKING_DIR}/ArtistProfile.tsx`);
+  assert.ok(profile.includes('showModal()') && profile.includes('onCancel'), 'a modal dialog that Escape closes');
+  assert.ok(profile.includes('trigger.current = returnFocusTo') && profile.includes('t?.focus()'), 'focus returns to the trigger');
+  assert.ok(/onClick=\{onClose\}/.test(profile) && profile.includes('onChoose(artist.id)'), 'closing and choosing are separate actions');
 });
 
 test('every visible string of the public flow is Spanish — the old English copy is gone', () => {
@@ -70,29 +84,37 @@ test('in-app browser rules: no popups/new tabs in the flow, real autocomplete + 
   const flow = root(`${BOOKING_DIR}/BookingFlow.tsx`);
   assert.ok(!/window\.open\(/.test(bookingSrc), 'no window.open');
   assert.ok(!/target="_blank"/.test(bookingSrc), 'no new tabs during the flow');
-  assert.ok(flow.includes('autoComplete="name"') && flow.includes('autoComplete="tel-national"') && flow.includes('autoComplete="email"'));
-  assert.ok(flow.includes('autoComplete="tel-country-code"'), 'the dialling code is its own field');
-  assert.ok(flow.includes('inputMode="tel"') && flow.includes('type="tel"'), 'numeric phone keyboard');
-  assert.ok(flow.includes('inputMode="email"'));
+  const form = root(`${BOOKING_DIR}/DetailsStep.tsx`);
+  assert.ok(form.includes('autoComplete="name"') && form.includes('autoComplete="tel-national"') && form.includes('autoComplete="email"'));
+  assert.ok(form.includes('autoComplete="tel-country-code"'), 'the dialling code is its own field');
+  assert.ok(form.includes('inputMode="tel"') && form.includes('type="tel"'), 'numeric phone keyboard');
+  assert.ok(form.includes('inputMode="email"'));
   assert.ok(!/maximum-scale|maximumScale|userScalable|user-scalable/.test(code(page)), 'zoom is never blocked');
-  assert.ok(/const INPUT =[\s\S]*?text-base/.test(flow), 'inputs are 16px (no iOS focus zoom)');
-  assert.ok(!/document\.cookie|localStorage|sessionStorage/.test(code(bookingSrc)), 'the flow needs no cookies / storage (the optional theme choice is next-themes)');
+  void flow;
+  const details = root(`${BOOKING_DIR}/DetailsStep.tsx`);
+  assert.ok(/const INPUT =[\s\S]*?text-\[16px\]/.test(details), 'inputs are 16px (no iOS focus zoom)');
+  assert.ok(!/document\.cookie|localStorage|sessionStorage/.test(code(bookingSrc)), 'the flow needs no cookies / storage');
   assert.ok(!/onMouseEnter|onMouseOver|:hover-only/.test(bookingSrc), 'no hover-only affordance');
 });
 
-test('responsive contract: 44px+ touch targets, sticky phone footer, centred container, no gradients/glass', () => {
+test('responsive contract: 44px+ targets, sticky bar with safe area + keyboard, 1120px desktop, v3 palette', () => {
   const flow = root(`${BOOKING_DIR}/BookingFlow.tsx`);
-  assert.ok(/h-\[48px\]/.test(flow) && /h-\[44px\]/.test(bookingSrc), 'controls are real px heights');
-  assert.ok(!/ h-(7|8|9|10|11)\b/.test(bookingSrc), 'no rem-scaled control heights (this app scales the rem ramp)');
-  assert.ok(flow.includes('sticky bottom-0'), 'the primary action stays under the thumb');
-  assert.ok(flow.includes('md:h-[600px] md:overflow-y-auto'), 'from md up the card keeps one height; the step scrolls inside it');
-  assert.ok(flow.includes('footLine1') && flow.includes('footLine2'), 'the footer states the running choice in two lines');
-  assert.ok(flow.includes('<BookingSummary rows={summaryRows} />'), 'the full "Revisa tu reserva" record sits beside the form in step 3');
-  assert.ok(!/disabled=\{!canContinue\}/.test(flow), 'Continuar is never a dead button — pressed early it explains (hint)');
-  assert.ok(flow.includes('max-sm:-mx-[var(--content-pad)]'), 'on the phone the card runs edge to edge');
-  assert.ok(page.includes('mx-auto') && page.includes('max-w-[1080px]'), 'centred on desktop');
+  const ui = root(`${BOOKING_DIR}/ui.tsx`);
+  assert.ok(/size-11/.test(bookingSrc) && /min-h-\[44px\]|min-h-11/.test(bookingSrc), 'controls are 44px');
+  assert.ok(!/ h-(7|8|9|10)\b/.test(bookingSrc), 'no rem-scaled small control heights (this app scales the rem ramp)');
+  assert.ok(flow.includes('className="sticky z-10') && flow.includes('[bottom:calc(-1*var(--content-pad))]') && flow.includes('env(safe-area-inset-bottom)'), 'the bar stays under the thumb, flush and above the safe area');
+  assert.ok(flow.includes('window.visualViewport') && flow.includes('translateY(-${kbInset}px)'), 'the bar rides above the on-screen keyboard');
+  assert.ok(page.includes('interactiveWidget: "resizes-content"'), 'Android resizes the layout above the keyboard');
+  assert.ok(flow.includes('lg:max-w-[1120px]') && flow.includes('w-[340px]'), 'desktop: 1120px container + 340px selection panel');
+  assert.ok(!/disabled=\{!canContinue\}/.test(flow) && flow.includes('aria-disabled'), 'Continuar stays focusable and explains (hint) instead of going dead');
   assert.ok(!/gradient|backdrop-blur|backdrop-filter/.test(bookingSrc + page), 'no gradients, no glassmorphism');
-  assert.ok(flow.includes('bg-ink') && flow.includes('text-ink-fg'), 'black primary button');
+  assert.ok(ui.includes('"bg-pb-ink text-white"'), 'near-black primary action');
+  // v3 palette: white ground, neutral greys, no cream/sand/brown surfaces.
+  const css = root('web/app/globals.css');
+  const block = css.slice(css.indexOf('Public booking v3'), css.indexOf('SCHEDULING design system'));
+  assert.ok(block.includes('--color-pb-ink: #111316') && block.includes('background: #ffffff'));
+  for (const beige of ['#f5efe6', '#efe7da', '#e9dfcf', '#f4ede3', '#d6c3a5']) assert.ok(!block.toLowerCase().includes(beige), `no v2 beige ${beige}`);
+  assert.ok(root('web/app/book/[siteSlug]/layout.tsx').includes('Newsreader('), 'Newsreader titles (page and not-found)');
 });
 
 test('the public flow never touches staff actions, contact search or walk-in', () => {
