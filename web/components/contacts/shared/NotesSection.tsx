@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useTransition } from "react";
-import { formatDateTime } from "@/lib/format";
+import { formatLocalDateTime } from "@/lib/format";
 import type { NoteView } from "@/lib/contactShared";
 import { addNoteAction, deleteNoteAction } from "@/lib/crmActions";
 import { CRM_COPY } from "@/lib/contactLabels";
@@ -100,7 +100,7 @@ export function NotesSection({
               <div className="mt-1 flex items-center gap-2 text-[11px] text-faint">
                 <span>{n.authorName ?? "Sistema"}</span>
                 <span aria-hidden>·</span>
-                <span>{formatDateTime(new Date(n.createdAt))}</span>
+                <span>{formatLocalDateTime(n.createdAt)}</span>
                 {n.edited ? <span className="text-faint">· editada</span> : null}
                 {canEdit(n) ? (
                   <button

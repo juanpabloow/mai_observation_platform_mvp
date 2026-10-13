@@ -2,7 +2,7 @@
 
 import { useState, useTransition } from "react";
 import Link from "next/link";
-import { formatDateTime } from "@/lib/format";
+import { formatLocalDateTime } from "@/lib/format";
 import { agendaDateKey, type AppointmentSummary, type AppointmentView } from "@/lib/contactShared";
 import { cancelAppointmentAction } from "@/lib/schedulingActions";
 import { CRM_COPY, appointmentStatusLabel } from "@/lib/contactLabels";
@@ -37,7 +37,7 @@ function StatusBadge({ status }: { status: AppointmentStatus }) {
 }
 
 function agendaHref(clientId: string, a: AppointmentView): string {
-  return `/clients/${clientId}/scheduling/agenda?date=${agendaDateKey(a.startAt)}`;
+  return `/clients/${clientId}/scheduling/agenda?date=${agendaDateKey(a.startAt, a.siteTimezone)}`;
 }
 
 function NextCard({
@@ -67,7 +67,7 @@ function NextCard({
         <div className="min-w-0">
           <p className="truncate text-sm font-medium text-foreground">{appt.serviceName}</p>
           <p className="truncate text-xs text-muted">
-            {formatDateTime(new Date(appt.startAt))}
+            {formatLocalDateTime(appt.startAt, appt.siteTimezone)}
             {appt.staffName ? ` · ${appt.staffName}` : ""}
           </p>
         </div>
@@ -103,7 +103,7 @@ function PastRow({ clientId, appt }: { clientId: string; appt: AppointmentView }
       >
         <span className="flex min-w-0 flex-col">
           <span className="truncate text-sm text-foreground">{appt.serviceName}</span>
-          <span className="truncate text-xs text-faint">{formatDateTime(new Date(appt.startAt))}</span>
+          <span className="truncate text-xs text-faint">{formatLocalDateTime(appt.startAt, appt.siteTimezone)}</span>
         </span>
         <StatusBadge status={appt.status} />
       </Link>

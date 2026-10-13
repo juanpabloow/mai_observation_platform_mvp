@@ -93,7 +93,10 @@ export function ContactsSearch({ compact = false }: { compact?: boolean } = {}) 
       // are three, and capping the field just left a band of empty card between the
       // input and `Filtrar`. Search is this screen's primary verb — it should be the
       // widest thing in the row.
-      className={`${MODULE_SEARCH_CLS} min-w-[15rem] flex-1 ${compact ? "max-w-[240px]" : ""}`}
+      // Below md the field shares its row with Filtrar and `···` (ModuleHeader's phone
+      // layout): its floor drops to 8rem — still never just an icon — and it is a 44px
+      // touch target. From md the 15rem floor holds.
+      className={`${MODULE_SEARCH_CLS} min-w-[8rem] flex-1 max-lg:h-[44px] md:min-w-[15rem] ${compact ? "max-w-[240px]" : ""}`}
     >
       <SearchIcon />
       <input
@@ -102,7 +105,8 @@ export function ContactsSearch({ compact = false }: { compact?: boolean } = {}) 
         onChange={(e) => setDraft(e.target.value)}
         placeholder={compact ? "Buscar contacto…" : "Buscar nombre, email o teléfono…"}
         aria-label="Buscar contactos"
-        className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-faint"
+        // 16px on phones: iOS zooms the page into any field smaller than that.
+        className="min-w-0 flex-1 self-stretch bg-transparent text-[16px] text-foreground outline-none placeholder:text-faint md:text-[13px]"
       />
       {q ? (
         <button
@@ -185,10 +189,10 @@ function Menu({
         title={iconOnly ? label : undefined}
         className={
           iconOnly
-            ? `inline-flex size-[var(--control-h)] shrink-0 items-center justify-center rounded-lg border text-muted transition-colors hover:text-foreground ${
+            ? `u-focus inline-flex size-[var(--control-h)] shrink-0 items-center justify-center rounded-lg border text-muted transition-colors hover:text-foreground max-lg:size-[44px] ${
                 open || active ? "border-faint text-foreground" : "border-line-strong"
               }`
-            : `${OUTLINE_CLS} ${active ? "border-ink text-foreground" : ""}`
+            : `u-focus ${OUTLINE_CLS} max-lg:h-[44px] ${active ? "border-ink text-foreground" : ""}`
         }
       >
         {icon}
@@ -223,7 +227,7 @@ function MenuOption({
       role="menuitemradio"
       aria-checked={selected}
       onClick={onSelect}
-      className={`flex min-h-9 w-full items-center gap-2 px-3 text-left text-sm transition-colors hover:bg-subtle ${
+      className={`flex min-h-9 w-full items-center gap-2 px-3 text-left text-sm transition-colors hover:bg-subtle max-md:min-h-[44px] ${
         selected ? "font-medium text-foreground" : "text-muted"
       }`}
     >
@@ -350,7 +354,7 @@ function ItemIcon({ d }: { d: string }) {
 }
 
 const ITEM_CLS =
-  "flex min-h-9 w-full items-center gap-2.5 px-3 text-left text-sm text-foreground no-underline transition-colors hover:bg-subtle";
+  "flex min-h-9 w-full items-center gap-2.5 px-3 text-left text-sm text-foreground no-underline transition-colors hover:bg-subtle max-md:min-h-[44px]";
 
 export function ContactsOverflowMenu({
   clientId,
@@ -379,7 +383,7 @@ export function ContactsOverflowMenu({
     <button
       type="button"
       onClick={() => setView("root")}
-      className="flex min-h-9 w-full items-center gap-2 border-b border-line-row px-3 text-left text-[0.71875rem] font-semibold text-muted transition-colors hover:text-foreground"
+      className="flex min-h-9 w-full items-center gap-2 border-b border-line-row px-3 text-left text-[0.71875rem] font-semibold text-muted transition-colors hover:text-foreground max-md:min-h-[44px]"
     >
       <svg viewBox="0 0 16 16" className="size-3 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
         <path d="M9.5 3.5 5 8l4.5 4.5" />
@@ -408,7 +412,7 @@ export function ContactsOverflowMenu({
             <>
               <Back title="Columnas" />
               {OPTIONAL_COLUMNS.map((c) => (
-                <label key={c.key} className="flex min-h-9 cursor-pointer items-center gap-2.5 px-3 text-sm transition-colors hover:bg-subtle">
+                <label key={c.key} className="flex min-h-9 cursor-pointer items-center gap-2.5 px-3 text-sm transition-colors hover:bg-subtle max-md:min-h-[44px]">
                   <input
                     type="checkbox"
                     checked={visibleColumns.includes(c.key)}

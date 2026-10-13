@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { lookupIdentityAction, type IdentityMatchView } from "@/lib/contactActions";
 import {
@@ -128,8 +128,10 @@ function CheckFeedback({
   onContinue,
   dismissed,
   now,
+  errorId,
 }: {
   clientId: string;
+  errorId?: string;
   state: CheckState;
   kind: IdentityKindLite;
   onContinue: () => void;
@@ -138,8 +140,13 @@ function CheckFeedback({
 }) {
   if (state.kind === "idle") return null;
   if (state.kind === "invalid") {
+    // An ERROR, so it reads as one: danger text with a glyph, tied to its field
+    // (aria-describedby + the field's red edge) — distinct from the focus ring.
     return (
-      <p className="mt-1 text-[11px] text-faint">{kind === "phone" ? COPY.invalidPhone : COPY.invalidEmail}</p>
+      <p id={errorId} className="mt-1 flex items-start gap-1 text-[11px] font-medium text-danger">
+        <span aria-hidden>⚠</span>
+        <span>{kind === "phone" ? COPY.invalidPhone : COPY.invalidEmail}</span>
+      </p>
     );
   }
   if (state.kind === "checking") {
@@ -220,6 +227,8 @@ function IdentityRow({
   const state = useIdentityCheck(clientId, kind, value, excludeContactId);
   const normalized = normalizeIdentity(kind, value);
   const dismissed = normalized !== null && dismissedValues.includes(normalized);
+  const invalid = state.kind === "invalid";
+  const errorId = useId();
 
   return (
     <div>
@@ -233,6 +242,8 @@ function IdentityRow({
             mono={kind === "phone"}
             inputMode={kind === "phone" ? "tel" : "email"}
             ariaLabel={kind === "phone" ? "Teléfono" : "Email"}
+            invalid={invalid}
+            ariaDescribedBy={invalid ? errorId : undefined}
           />
         </div>
         {canRemove ? (
@@ -240,7 +251,7 @@ function IdentityRow({
             type="button"
             onClick={onRemove}
             aria-label={kind === "phone" ? "Quitar este teléfono" : "Quitar este email"}
-            className="shrink-0 rounded-md border border-line px-2 py-2 text-sm leading-none text-faint transition-colors hover:border-line-strong hover:text-foreground"
+            className="u-focus inline-flex shrink-0 items-center justify-center rounded-md border border-line px-2 py-2 text-sm leading-none text-faint transition-colors hover:border-line-strong hover:text-foreground max-lg:size-[44px]"
           >
             ×
           </button>
@@ -248,6 +259,7 @@ function IdentityRow({
       </div>
       <CheckFeedback
         clientId={clientId}
+        errorId={errorId}
         state={state}
         kind={kind}
         dismissed={dismissed}
@@ -326,7 +338,7 @@ export function IdentitySection({
         <button
           type="button"
           onClick={() => onPhonesChange([...phones, ""])}
-          className="w-fit whitespace-nowrap rounded-md px-1 py-0.5 text-xs text-muted transition-colors hover:text-foreground"
+          className="u-focus inline-flex w-fit items-center whitespace-nowrap rounded-md px-1 py-0.5 text-xs text-muted transition-colors hover:text-foreground max-lg:min-h-[44px]"
         >
           {COPY.addPhone}
         </button>
@@ -352,7 +364,7 @@ export function IdentitySection({
         <button
           type="button"
           onClick={() => onEmailsChange([...emails, ""])}
-          className="w-fit whitespace-nowrap rounded-md px-1 py-0.5 text-xs text-muted transition-colors hover:text-foreground"
+          className="u-focus inline-flex w-fit items-center whitespace-nowrap rounded-md px-1 py-0.5 text-xs text-muted transition-colors hover:text-foreground max-lg:min-h-[44px]"
         >
           {COPY.addEmail}
         </button>

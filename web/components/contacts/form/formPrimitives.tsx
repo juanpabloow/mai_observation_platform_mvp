@@ -74,8 +74,9 @@ export function Field({
   );
 }
 
+// Touch widths (< lg): a real 44px target and 16px text (iOS zooms into smaller fields).
 export const INPUT_CLS =
-  "u-focus w-full rounded-lg border border-line-strong bg-surface px-2.5 py-2 text-sm text-foreground transition-colors placeholder:text-faintest";
+  "u-focus w-full rounded-lg border border-line-strong bg-surface px-2.5 py-2 text-sm text-foreground transition-colors placeholder:text-faintest max-lg:min-h-[44px] max-md:text-[16px]";
 
 /** Text input with an optional leading glyph, matching the reference's boxed fields. */
 export function TextInput({
@@ -126,7 +127,7 @@ export function TextInput({
         aria-label={ariaLabel}
         aria-describedby={ariaDescribedBy}
         aria-invalid={invalid || undefined}
-        className={`w-full bg-transparent py-2 text-sm text-foreground outline-none placeholder:text-faintest ${mono ? "u-mono" : ""}`}
+        className={`w-full bg-transparent py-2 text-sm text-foreground outline-none placeholder:text-faintest max-lg:h-[42px] max-md:text-[16px] ${mono ? "u-mono" : ""}`}
       />
     </div>
   );
@@ -159,7 +160,7 @@ export function Segmented<T extends string>({
             key={o.value}
             // px-1.5 + 13px: at the panel's width four options share ~356px, and at px-2/14px
             // "WhatsApp" was the one label that truncated.
-            className={`relative flex min-w-0 flex-1 cursor-pointer items-center justify-center whitespace-nowrap rounded-md px-1.5 py-1.5 text-[0.8125rem] transition-colors ${
+            className={`relative flex min-w-0 flex-1 cursor-pointer items-center justify-center whitespace-nowrap rounded-md px-1.5 py-1.5 text-[0.8125rem] transition-colors max-lg:min-h-[44px] ${
               active
                 ? "border border-line-strong bg-surface font-medium text-foreground"
                 : "border border-transparent text-muted hover:text-foreground"
@@ -201,18 +202,18 @@ export function Switch({
         <span className="text-sm font-medium text-foreground">{label}</span>
         {note ? <span className="text-[11px] leading-4 text-faint">{note}</span> : null}
       </span>
+      {/* The BUTTON is the 44px target; the track inside it is the same 20×36 pill. */}
       <button
         type="button"
         role="switch"
         aria-checked={checked}
         aria-label={label}
         onClick={() => onChange(!checked)}
-        className={`relative h-5 w-9 shrink-0 rounded-full transition-colors ${checked ? "bg-brand" : "bg-line-strong"}`}
+        className="u-focus -my-2 -mr-2 inline-flex h-[44px] w-[52px] shrink-0 items-center justify-center rounded-sch-control"
       >
-        <span
-          aria-hidden
-          className={`absolute top-0.5 size-4 rounded-full bg-white transition-[left] ${checked ? "left-[18px]" : "left-0.5"}`}
-        />
+        <span aria-hidden className={`relative h-5 w-9 rounded-full transition-colors ${checked ? "bg-brand" : "bg-line-strong"}`}>
+          <span className={`absolute top-0.5 size-4 rounded-full bg-white transition-[left] ${checked ? "left-[18px]" : "left-0.5"}`} />
+        </span>
       </button>
     </div>
   );
@@ -286,7 +287,7 @@ export function ChipSelect({
             role={multi ? "checkbox" : "radio"}
             aria-checked={on}
             onClick={() => onToggle(v)}
-            className={`inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2.5 py-1.5 text-[0.8125rem] transition-colors ${
+            className={`inline-flex items-center gap-1 whitespace-nowrap rounded-md px-2.5 py-1.5 text-[0.8125rem] transition-colors max-lg:min-h-[44px] ${
               on
                 ? "bg-foreground font-medium text-background"
                 : "border border-line bg-chip text-muted hover:text-foreground"
@@ -446,14 +447,14 @@ export function TagChips({
       {tags.map((t) => (
         <span
           key={t}
-          className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-line bg-chip px-2 py-0.5 text-xs text-foreground"
+          className="inline-flex items-center gap-1 whitespace-nowrap rounded-md border border-line bg-chip px-2 py-0.5 text-xs text-foreground max-lg:min-h-[44px] max-lg:pr-0"
         >
           {t}
           <button
             type="button"
             onClick={() => onRemove(t)}
             aria-label={`Quitar etiqueta ${t}`}
-            className="text-faint transition-colors hover:text-foreground"
+            className="u-focus inline-flex items-center justify-center rounded-md text-faint transition-colors hover:text-foreground max-lg:size-[44px]"
           >
             ×
           </button>
@@ -484,7 +485,7 @@ export function TagChips({
             e.currentTarget.value = "";
           }
         }}
-        className="u-focus min-w-20 flex-1 rounded-md border border-dashed border-line-strong bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-faint focus:border-solid"
+        className="u-focus min-w-20 flex-1 rounded-md border border-dashed border-line-strong bg-transparent px-2 py-1 text-sm text-foreground placeholder:text-faint focus:border-solid max-lg:min-h-[44px] max-md:text-[16px]"
       />
     </div>
   );

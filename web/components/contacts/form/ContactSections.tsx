@@ -253,7 +253,7 @@ export function ContactSections(props: Props) {
             <ReadField label="Dueño">{props.read.ownerLabel ?? <span className="text-faint">Sin asignar</span>}</ReadField>
             {/* The SAME chip the record header and the list use — stage is never a bare
                 word in one place and a pill in another. */}
-            <ReadField label="Stage">
+            <ReadField label="Etapa">
               <StageChip stage={props.read.stage} />
             </ReadField>
           </ReadGrid>

@@ -1,10 +1,12 @@
 import Link from "next/link";
+import type { CSSProperties } from "react";
 import type { ContactListItem, PreferredChannel } from "@worker/db/repositories/contacts.js";
 import { ContactAvatar } from "@/components/contacts/ContactAvatar";
 import { Chip, ENTITY_ROW_CLS, OwnerDisc, StackedCell, StageChip, TABLE_HEADER_CLS, VisitsMeter } from "@/components/ui/primitives";
 import { channelLabel, sourceLabel } from "@/lib/contactLabels";
 import type { ContactColumnKey } from "@/lib/contactColumns";
 import { formatStampFull, formatStampShort, relativeAgeShort } from "@/lib/format";
+import { CORE_TEMPLATE, TABLET_TEMPLATE, mobileRowLines, withOptionalTracks } from "@/lib/contactListLayout";
 
 /**
  * THE contacts table, in the redesign's shape (docs/ui-redesign-crm-inbox.md §2.3).
@@ -30,10 +32,6 @@ import { formatStampFull, formatStampShort, relativeAgeShort } from "@/lib/forma
  * lifts above that overlay with `relative z-10`.
  */
 
-/** The seven columns the design specifies, in order. */
-const CORE_TEMPLATE =
-  "minmax(200px,1.7fr) minmax(128px,1fr) minmax(92px,0.72fr) minmax(108px,0.86fr) minmax(140px,1fr) 44px 28px";
-
 /**
  * The optional columns keep working, appended after `Dueño`.
  *
@@ -43,11 +41,9 @@ const CORE_TEMPLATE =
  * should not quietly delete function — so they still render, after the core seven,
  * each at a fixed 1fr. The DEFAULT is the artboard; the extras are opt-in.
  */
-const OPTIONAL_TRACK = "minmax(110px,1fr)";
-
 const OPTIONAL_HEAD: Record<ContactColumnKey, string> = {
   channel: "Canal",
-  stage: "Stage",
+  stage: "Etapa",
   owner: "Dueño asignado",
   nextAppt: "Próxima cita",
   visits: "Visitas totales",
@@ -79,11 +75,13 @@ export function ContactsTable({
   // The record-link (→) column sits LAST in the core template, so the extras have to be spliced
   // in before it rather than appended — otherwise the row menu drifts into the middle
   // of the table the moment one optional column is on.
-  const coreTracks = CORE_TEMPLATE.split(" ");
-  const rowMenuTrack = coreTracks.pop()!;
-  const template = [...coreTracks, ...optionalColumns.map(() => OPTIONAL_TRACK), rowMenuTrack].join(
-    " ",
-  );
+  // Desktop and tablet templates as CSS variables, picked by breakpoint (see
+  // lib/contactListLayout): an inline `gridTemplateColumns` cannot be responsive.
+  const gridVars = {
+    "--contacts-tpl": withOptionalTracks(CORE_TEMPLATE, optionalColumns.length),
+    "--contacts-tpl-md": withOptionalTracks(TABLET_TEMPLATE, optionalColumns.length),
+  } as CSSProperties;
+  const GRID = "grid [grid-template-columns:var(--contacts-tpl-md)] lg:[grid-template-columns:var(--contacts-tpl)]";
 
   // The meter is relative to THIS PAGE's busiest contact, so the column reads as
   // "who comes in most, of the people I'm looking at". A fixed ceiling would make
@@ -91,11 +89,69 @@ export function ContactsTable({
   const maxVisits = contacts.reduce((m, c) => Math.max(m, c.visit_count), 0);
 
   return (
-    <div role="table" aria-label="Contactos" className="min-w-[860px]">
+    <>
+    {/* ── PHONE (< md): one compact row per contact. The table below is hidden here —
+           it measured 860px inside a 345px card at 390. Same links as the table: the row
+           opens the quick view (`?c=`), the arrow opens the full record. ── */}
+    <ul aria-label="Contactos" className="md:hidden">
+      {contacts.map((c) => {
+        const selected = c.id === selectedId;
+        const lines = mobileRowLines(c);
+        const overdue = c.overdue_task_count > 0;
+        return (
+          <li
+            key={c.id}
+            className={`relative flex min-h-[72px] items-center gap-3 border-b border-line-soft py-2.5 pl-4 pr-1 last:border-b-0 ${selected ? "bg-chip" : ""}`}
+          >
+            <ContactAvatar name={c.name} fallback={c.channel_user_id} size={38} />
+            <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+              <span className="flex min-w-0 items-center gap-1.5">
+                <Link
+                  href={hrefWith({ c: c.id })}
+                  scroll={false}
+                  aria-current={selected ? "true" : undefined}
+                  className={`u-focus truncate text-[15px] font-medium tracking-[-0.01em] text-foreground no-underline after:absolute after:inset-0 after:content-[''] ${
+                    lines.titleIsId ? "u-mono" : ""
+                  }`}
+                >
+                  {lines.title}
+                </Link>
+                {c.messaging_consent === "opted_out" ? (
+                  <Chip tone="muted" title="Este contacto rechazó la mensajería">
+                    no contactar
+                  </Chip>
+                ) : null}
+                {overdue ? (
+                  <Chip tone="warn" title={`${c.overdue_task_count} tarea(s) vencida(s) para este contacto`}>
+                    {c.overdue_task_count === 1 ? "1 vencida" : `${c.overdue_task_count} vencidas`}
+                  </Chip>
+                ) : null}
+              </span>
+              <span className={`truncate text-[13px] ${lines.identityKind === "phone" ? "u-mono text-muted" : lines.identityKind === "email" ? "text-muted" : "text-faint"}`}>
+                {lines.identity}
+              </span>
+              <span className="truncate text-xs text-faint">
+                {sourceLabel(c.channel)} ·{" "}
+                <span title={formatStampFull(c.last_contact_at)}>{relativeAgeShort(c.last_contact_at, now)}</span>
+              </span>
+            </span>
+            <Link
+              href={`/clients/${clientId}/contacts/${c.id}`}
+              aria-label={`Abrir la ficha de ${lines.title}`}
+              title="Abrir la ficha"
+              className="u-focus relative z-10 inline-flex size-[44px] shrink-0 items-center justify-center rounded-sch-control text-base text-faint no-underline transition-colors hover:bg-subtle hover:text-foreground"
+            >
+              <span aria-hidden>→</span>
+            </Link>
+          </li>
+        );
+      })}
+    </ul>
+
+    <div role="table" aria-label="Contactos" style={gridVars} className="hidden md:block md:min-w-[680px] lg:min-w-[860px]">
       <div
         role="row"
-        style={{ gridTemplateColumns: template }}
-        className={`sticky top-0 z-10 grid bg-surface ${TABLE_HEADER_CLS}`}
+        className={`sticky top-0 z-10 ${GRID} bg-surface ${TABLE_HEADER_CLS}`}
       >
         {/* Sentence-case sans at 590 — NOT the app's older mono-uppercase `u-th`. The
             design moved the table head to the same voice as the panel section headings,
@@ -103,7 +159,7 @@ export function ContactsTable({
         <span role="columnheader">Nombre</span>
         <span role="columnheader">Teléfono</span>
         <span role="columnheader">Origen</span>
-        <span role="columnheader">Visitas</span>
+        <span role="columnheader" className="max-lg:hidden">Visitas</span>
         <span role="columnheader">Última interacción</span>
         <span role="columnheader">Dueño</span>
         {optionalColumns.map((k) => (
@@ -125,8 +181,7 @@ export function ContactsTable({
           <div
             role="row"
             key={c.id}
-            style={{ gridTemplateColumns: template }}
-            className={`relative grid ${ENTITY_ROW_CLS} ${
+            className={`relative ${GRID} ${ENTITY_ROW_CLS} ${
               // SELECTION IS THE ONLY THING THAT CHANGES A ROW'S GROUND — one step
               // darker, no tint, no left rule. The panel that opens beside it is already
               // the loud signal; a coloured bar as well read as an alert.
@@ -213,8 +268,8 @@ export function ContactsTable({
               {sourceLabel(c.channel)}
             </span>
 
-            {/* ── Visitas ── */}
-            <span role="cell" className="min-w-0">
+            {/* ── Visitas (desktop only; the record keeps the figure) ── */}
+            <span role="cell" className="min-w-0 max-lg:hidden">
               <VisitsMeter value={c.visit_count} max={maxVisits} />
             </span>
 
@@ -261,7 +316,7 @@ export function ContactsTable({
                 href={`/clients/${clientId}/contacts/${c.id}`}
                 aria-label={`Abrir la ficha de ${c.name?.trim() || c.channel_user_id}`}
                 title="Abrir la ficha"
-                className="relative z-10 inline-flex size-6 items-center justify-center rounded-sm text-xs text-faint no-underline transition-colors hover:bg-subtle hover:text-foreground"
+                className="relative z-10 inline-flex size-6 items-center justify-center rounded-sm text-xs text-faint no-underline transition-colors hover:bg-subtle hover:text-foreground max-lg:size-[44px] max-lg:text-sm"
               >
                 <span aria-hidden>→</span>
               </Link>
@@ -270,6 +325,7 @@ export function ContactsTable({
         );
       })}
     </div>
+    </>
   );
 }
 

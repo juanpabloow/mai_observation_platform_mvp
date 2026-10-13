@@ -4,18 +4,16 @@ import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { deleteContactAction, updateContactAction } from "@/lib/contactActions";
 import { addNoteAction, attachTagAction, createTagAction, detachTagAction } from "@/lib/crmActions";
-import { formatDateTime } from "@/lib/format";
+import { formatLocalDateTime } from "@/lib/format";
 import type { ContactEditInitial, NoteView, TagView } from "@/lib/contactShared";
 import { COPY, buildEditPatch, changedFields, checkAddedIdentities, unsavedLabel, type ContactFormValues } from "@/lib/contactForm";
 import type { FieldDefView } from "../ContactProperties";
-import { BTN_DANGER, BTN_PRIMARY, BTN_QUIET, BTN_SECONDARY, ContactFormDrawer } from "./ContactFormDrawer";
+import { ContactFormDrawer, DrawerActions, DrawerCloseButton } from "./ContactFormDrawer";
+import { buttonClass } from "@/components/ui/controls";
+import { useLeaveGuard } from "@/components/ui/useLeaveGuard";
 import { ContactSections } from "./ContactSections";
 import { Avatar, INPUT_CLS, type OwnerOption } from "./formPrimitives";
-import {
-  ContactPanelHeader,
-  PANEL_CLOSE_CLS,
-  PanelCloseIcon,
-} from "../shared/ContactPanelShell";
+import { ContactPanelHeader } from "../shared/ContactPanelShell";
 import { contactToneStyle } from "../shared/ContactHeaderBlock";
 
 /** Re-exported so callers can keep importing it from the component they render; the
@@ -96,6 +94,8 @@ export function ContactEditForm({
   const noteAdded = newNote.trim() !== "" ? 1 : 0;
   const totalChanges = changes.length + (addedIdentities > 0 ? 1 : 0) + noteAdded;
   const dirty = totalChanges > 0;
+  // Every way out — Cancelar, Cerrar, the scrim, Escape, Back — asks when `dirty`.
+  const guard = useLeaveGuard({ dirty, onLeave: onClose });
 
   // A contact must never be left with no way to reach it. The existing identities are
   // not removable here, so this can only trip if a contact somehow has none on record.
@@ -170,7 +170,8 @@ export function ContactEditForm({
       }
 
       router.refresh();
-      onClose();
+      // Saved: leave without asking (and drop the Back guard's history entry).
+      guard.leave();
     });
   };
 
@@ -182,7 +183,9 @@ export function ContactEditForm({
         setError(r.error);
         return;
       }
-      router.push(`/clients/${clientId}/contacts`);
+      // REPLACE, not push: the Back guard's entry is the current one, and pushing past it
+      // would leave a ghost entry behind the list.
+      router.replace(`/clients/${clientId}/contacts`);
       router.refresh();
     });
   };
@@ -197,11 +200,7 @@ export function ContactEditForm({
       })}
       titleBlock={
         <ContactPanelHeader
-          closeAction={
-            <button type="button" onClick={onClose} aria-label="Cerrar" className={PANEL_CLOSE_CLS}>
-              <PanelCloseIcon />
-            </button>
-          }
+          closeAction={<DrawerCloseButton onClick={guard.requestLeave} />}
           facts={{
             displayName: initial.displayName,
             primaryIdentity: initial.phones[0] ?? initial.emails[0] ?? null,
@@ -213,7 +212,9 @@ export function ContactEditForm({
           }}
         />
       }
-      onClose={onClose}
+      onClose={guard.requestLeave}
+      guard={guard}
+      discardBody="Hay cambios sin guardar en este contacto."
       footer={
         <div className="flex flex-col">
           {/* The unsaved-changes bar. Amber, above the actions, with its own Descartar —
@@ -224,58 +225,57 @@ export function ContactEditForm({
                 <span aria-hidden>⚠</span>
                 {unsavedLabel(totalChanges)}
               </span>
-              <button type="button" onClick={discard} disabled={pending} className="whitespace-nowrap text-xs font-medium text-warn hover:opacity-80">
+              <button type="button" onClick={discard} disabled={pending} className="u-focus -my-1 inline-flex min-h-[44px] items-center whitespace-nowrap rounded-sch-control px-2 text-xs font-medium text-warn hover:opacity-80 lg:min-h-0">
                 Descartar
               </button>
             </div>
           ) : null}
 
-          {error ? (
-            <p role="alert" className="px-3 pt-2 text-xs text-danger">
-              {error}
-            </p>
-          ) : null}
-
           {confirmDelete ? (
-            <div className="flex flex-col gap-2 px-3 py-3">
+            <div className="flex flex-col gap-2 px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3">
+              {error ? (
+                <p role="alert" className="text-xs text-danger">
+                  {error}
+                </p>
+              ) : null}
               <p className="text-xs leading-4 text-foreground">
                 ¿Eliminar a <strong>{initial.displayName}</strong>? Se borran sus notas, etiquetas y tareas. Sus
                 conversaciones y citas se conservan, pero quedan sin contacto. Si solo quieres sacarlo de la lista,
-                cambia el stage a Archivado.
+                cambia la etapa a Archivado.
               </p>
-              <div className="flex items-center justify-end gap-2">
-                <button type="button" onClick={() => setConfirmDelete(false)} className={BTN_SECONDARY} disabled={pending}>
+              <div className="flex items-center justify-end gap-2 max-sm:[&>*]:flex-1">
+                <button type="button" onClick={() => setConfirmDelete(false)} className={buttonClass({ variant: "secondary" })} disabled={pending}>
                   Cancelar
                 </button>
-                <button
-                  type="button"
-                  onClick={remove}
-                  disabled={pending}
-                  className="inline-flex h-9 shrink-0 items-center whitespace-nowrap rounded-md bg-danger px-3.5 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:opacity-45"
-                >
+                <button type="button" onClick={remove} disabled={pending} className={buttonClass({ variant: "destructive" })}>
                   {pending ? "Eliminando…" : "Sí, eliminar"}
                 </button>
               </div>
             </div>
           ) : (
-            <div className="flex items-center justify-between gap-2 px-3 py-3">
-              {/* Delete sits on the LEFT, away from Guardar — they are not neighbours. */}
-              {canDelete ? (
-                <button type="button" onClick={() => setConfirmDelete(true)} disabled={pending} className={BTN_DANGER}>
-                  Eliminar
-                </button>
-              ) : (
-                <span />
-              )}
-              <div className="flex items-center gap-2">
-                <button type="button" onClick={onClose} disabled={pending} className={BTN_QUIET}>
-                  Cancelar
-                </button>
-                <button type="button" onClick={save} disabled={pending || !dirty || added.error !== null} className={BTN_PRIMARY}>
-                  {pending ? "Guardando…" : "Guardar cambios"}
-                </button>
-              </div>
-            </div>
+            <DrawerActions
+              error={error}
+              leading={
+                // Delete sits on the LEFT, away from Guardar — they are not neighbours.
+                canDelete ? (
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDelete(true)}
+                    disabled={pending}
+                    className={buttonClass({ variant: "tertiary", className: "text-danger hover:text-danger" })}
+                  >
+                    Eliminar
+                  </button>
+                ) : undefined
+              }
+            >
+              <button type="button" onClick={guard.requestLeave} disabled={pending} className={buttonClass({ variant: "secondary" })}>
+                Cancelar
+              </button>
+              <button type="button" onClick={save} disabled={pending || !dirty || added.error !== null} className={buttonClass({ variant: "primary" })}>
+                {pending ? "Guardando…" : "Guardar cambios"}
+              </button>
+            </DrawerActions>
           )}
         </div>
       }
@@ -322,7 +322,7 @@ export function ContactEditForm({
                     <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                       <span className="flex items-baseline gap-1.5">
                         <span className="text-xs font-medium text-foreground">{n.authorName ?? "Sistema"}</span>
-                        <span className="u-mono text-[10px] text-faint">{formatDateTime(new Date(n.createdAt))}</span>
+                        <span className="u-mono text-[10px] text-faint">{formatLocalDateTime(n.createdAt)}</span>
                       </span>
                       <p className="whitespace-pre-wrap break-words text-[0.8125rem] leading-5 text-muted">{n.body}</p>
                     </div>

@@ -108,7 +108,9 @@ export function ContactRecord(props: ContactRecordProps) {
         the two behaviours are mutually exclusive at this layout. Filling won because the
         gap was visible on every record and the sticky only paid off on the long ones.
       */}
-      <div className="flex flex-col gap-4 xl:grid xl:grid-cols-[300px_minmax(0,1fr)_340px] xl:items-stretch">
+      {/* Phone: every button in the record's columns is a real 44px target. Scoped to
+          THIS container, so the same shared sections inside Inbox's panel are untouched. */}
+      <div className="flex flex-col gap-4 max-sm:[&_button]:min-h-[44px] max-sm:[&_button]:min-w-[44px] max-sm:[&_a]:min-h-[44px] max-sm:[&_a]:min-w-[44px] xl:grid xl:grid-cols-[300px_minmax(0,1fr)_340px] xl:items-stretch">
         <div className="flex min-w-0 flex-col">
           <ContactProperties
             clientId={props.clientId}
@@ -126,6 +128,13 @@ export function ContactRecord(props: ContactRecordProps) {
         contactId={props.contactId}
         initialItems={props.timelineItems}
         initialCursor={props.timelineCursor}
+        // Resolve EACH appointment's site zone. A contact can visit several sites;
+        // the next appointment's zone must not repaint the whole CRM history.
+        appointmentTimezones={Object.fromEntries([
+          ...props.appointments.upcoming,
+          ...props.appointments.past,
+          ...(props.appointments.next ? [props.appointments.next] : []),
+        ].map((a) => [a.id, a.siteTimezone]))}
       />
 
       <div className="flex min-w-0 flex-col gap-3">
@@ -190,8 +199,10 @@ function ContactRecordHeader({
   schedulingEnabled: boolean;
   edit: ContactRecordProps["edit"];
 }) {
+  // 36px (rem) on desktop as before; a real 44px below sm, where the actions take their
+  // own full-width row under the name.
   const action =
-    "inline-flex h-9 shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-line-strong bg-surface px-3 text-xs text-muted transition-colors hover:border-faint hover:text-foreground";
+    "u-focus inline-flex h-9 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg border border-line-strong bg-surface px-3 text-xs text-muted transition-colors hover:border-faint hover:text-foreground max-sm:h-[44px] max-sm:text-sm";
   const primaryIdentity = identities[0]?.value ?? null;
   // ONE dot-separated run. Each fact is omitted rather than shown empty: "· 0 no-shows"
   // on somebody who has never missed one is noise, and "· última —" is worse than absent.
@@ -238,7 +249,9 @@ function ContactRecordHeader({
           ))}
         </p>
       </div>
-      <div className="flex shrink-0 flex-wrap items-center gap-2">
+      {/* PHONE: the actions drop to their own row and split it, so the name keeps the
+          whole width (it was cut to "Sa…" beside two buttons at 390px). */}
+      <div className="flex shrink-0 flex-wrap items-center gap-2 max-sm:basis-full max-sm:[&>*]:flex-1">
         {edit ? (
           <EditContactButton
             clientId={clientId}
@@ -268,7 +281,7 @@ function ContactRecordHeader({
         {schedulingEnabled ? (
           <Link
             href={`/clients/${clientId}/scheduling/agenda?book=${encodeURIComponent(contactId)}&return=${encodeURIComponent(contactId)}`}
-            className={BOOK_CLS}
+            className={`${BOOK_CLS} justify-center max-sm:h-[44px] max-sm:text-sm`}
           >
             <IconPlus />
             Agendar cita

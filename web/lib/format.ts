@@ -10,6 +10,61 @@ export function formatDateTime(date: Date): string {
   });
 }
 
+/**
+ * A date + time the way Scheduling writes them: Spanish, 24-hour, in the given timezone
+ * ("9 oct 2026, 15:30"). Pass the SITE's timezone when the moment belongs to a place (an
+ * appointment); without one it falls back to the viewer's own zone — never a hard-coded
+ * city. `formatDateTime` above stays as it is for the English, operator-facing screens
+ * (executions) that still use it.
+ */
+export function formatLocalDateTime(date: Date | string, timeZone?: string): string {
+  const d = typeof date === "string" ? new Date(date) : date;
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("es", {
+    timeZone,
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  })
+    .format(d)
+    .replace(/\./g, "")
+    // Scheduling's month vocabulary is three letters everywhere ("sep", not "sept").
+    .replace(/\bsept\b/, "sep");
+}
+
+/** The date alone, same vocabulary ("9 oct 2026") — for date-only values like a task's due day. */
+export function formatLocalDate(date: Date | string, timeZone?: string): string {
+  const d = typeof date === "string" ? new Date(date) : date;
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("es", { timeZone, day: "numeric", month: "short", year: "numeric" })
+    .format(d)
+    .replace(/\./g, "")
+    .replace(/\bsept\b/, "sep");
+}
+
+/** A 24-hour wall-clock ("15:30"), as Scheduling writes times. */
+export function formatTime24(date: Date | string, timeZone?: string): string {
+  const d = typeof date === "string" ? new Date(date) : date;
+  if (Number.isNaN(d.getTime())) return "—";
+  return new Intl.DateTimeFormat("es", { timeZone, hour: "2-digit", minute: "2-digit", hourCycle: "h23" }).format(d);
+}
+
+/**
+ * A Spanish day divider for the contact record's timeline: "Hoy" / "Ayer" / "9 oct 2026".
+ * (Inbox's chat keeps formatDayLabel; its transcript is out of this change's scope.)
+ */
+export function formatDayLabelEs(date: Date, now: Date): string {
+  const key = localDayKey(date);
+  if (key === localDayKey(now)) return "Hoy";
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  if (key === localDayKey(yesterday)) return "Ayer";
+  return formatLocalDate(date);
+}
+
 /** Format a millisecond duration as "850ms" / "1.2s" / "1.5m", or "—" if null. */
 export function formatDuration(ms: number | null): string {
   if (ms === null) return "—";

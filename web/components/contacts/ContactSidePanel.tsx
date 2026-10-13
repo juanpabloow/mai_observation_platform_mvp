@@ -156,13 +156,18 @@ export function ContactSidePanel({
           desktop layout is byte-identical to the beside-card it has always been. This is
           what a row click produces at EVERY width now — a sheet below xl, the column above
           it — instead of a selected row and no visible panel. */}
-      <div className="fixed inset-y-0 right-0 z-50 flex xl:contents">
+      <div className="fixed inset-y-0 right-0 z-50 flex xl:contents max-sm:left-0">
         {/* THE PANEL REGION. The quick view sits in flow inside it and the edit drawer
             overlays it absolutely, so both occupy the identical box — same top, same
             bottom, same right edge, same width. Pressing "Editar" swaps the contents
             without moving the frame. (Was `hidden xl:flex` — the bug; now always `flex`,
             with the layer above deciding overlay vs column.) */}
-        <div className={`flex max-w-[90vw] shrink-0 self-stretch ${CONTACT_PANEL_REGION}`} style={{ width: CONTACT_PANEL_WIDTH }}>
+        <div
+          className={`flex w-full shrink-0 self-stretch sm:w-[var(--contact-panel-region-w)] sm:max-w-[90vw] ${CONTACT_PANEL_REGION}`}
+          // The shared width rides a CSS variable so the phone can take the full width
+          // (a 90vw sheet left a 44px sliver of list beside the form) while sm+ keeps it.
+          style={{ "--contact-panel-region-w": CONTACT_PANEL_WIDTH } as React.CSSProperties}
+        >
       <aside
         ref={panelRef as RefObject<HTMLElement>}
         aria-label="Detalles del contacto"
