@@ -1,7 +1,10 @@
 # Gallery — incidentes de producción: correcciones de código (oct. 2026)
 
-Estado: **propuesta local**, rama `fix/gallery-incidents-v1` (desde `origin/main` `f7c4cf7`).
-Nada de esto está desplegado y no se ha escrito ningún dato de producción.
+Estado: **integrado para revisión** en `fix/gallery-incidents-integration`, sobre `main`
+`75df605` (PR #16 + staff/Time Off + PR #17). Las correcciones restantes se trasladaron desde
+`fix/gallery-incidents-v1` sin duplicar BSUID. No se han desplegado esas correcciones ni
+escrito datos de producción. Los apartados históricos describen la auditoría inicial de
+`f7c4cf7`; para la secuencia actual usar la actualización al inicio del plan de despliegue.
 
 Documentos hermanos, **separados a propósito**:
 - `docs/ops/gallery-incidents-deploy-plan.md`: despliegue por etapas, criterios de parada y rollback.

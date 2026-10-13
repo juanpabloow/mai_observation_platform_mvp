@@ -1,7 +1,44 @@
 # Gallery — plan de despliegue, criterios de parada y rollback
 
-Estado: **preparado, sin ejecutar**. Cada paso marcado 🔒 requiere autorización explícita del
-usuario: diagnóstico de producción, commit, push, despliegue y cualquier cambio en Railway.
+Estado: **plan histórico de la primera integración**. La base `f7c4cf7` y la contingencia C
+que aparecen más abajo documentan el diagnóstico original; **ya no son instrucciones para
+el siguiente despliegue**. No desplegar una imagen antigua que elimine el rediseño o las
+funciones de staff/ausencias. Cada despliegue, cambio en Railway o reparación de datos sigue
+requiriendo autorización explícita.
+
+## Integración actual — 13 de octubre de 2026
+
+- `main` está en `75df605599a14a93db9eac51423cf270eb82e837`: incluye el PR #16 (BSUID),
+  `8dff1c2` (staff y Time Off) y el PR #17 (rediseño y auditoría de Scheduling).
+- `fix/gallery-incidents-integration` parte de ese `main` y aplica **solo** las correcciones
+  restantes y las herramientas/documentación. No vuelve a aplicar el commit de identidad.
+- El diagnóstico original y sus datos históricos se conservan; no se han ejecutado backfills,
+  fusiones, importaciones ni reparaciones de producción.
+- Las validaciones de contactos del port ya están incluidas en el PR #17. No desplegar esa
+  rama antigua por separado ni duplicar sus cambios.
+- La web de producción carga el diseño nuevo. Esto no certifica el SHA del Worker: antes de
+  desplegar estas correcciones hay que registrar el commit Active de **ambos** servicios y
+  confirmar que el despliegue previo terminó.
+- El workflow n8n continúa sin cambios. Su mapeo es una propuesta para una copia de pruebas;
+  su publicación y activación requieren aprobación específica.
+
+### Próximo despliegue (no ejecutado)
+
+1. Revisar el PR de `fix/gallery-incidents-integration`, sus pruebas y su diff contra `75df605`.
+2. Confirmar la versión Active de Worker y Web service; no desplegar mientras el anterior
+   siga en cola. Si `main` cambia, volver a integrar y verificar antes de aprobar el PR.
+3. Autorizar el merge/despliegue por separado. No hay migraciones nuevas en esta integración.
+4. Humo sin escrituras: Inbox, contactos, Agenda, Staff y Configuración cargan; catálogo con
+   Bearer inválido devuelve 401 JSON en lugar de 307; revisar envíos en Analytics sin
+   interpretar aceptación como entrega. No enviar mensajes ni crear citas reales para probar.
+5. Si hay una regresión, usar la imagen Active **registrada justo antes de este despliegue**,
+   que debe conservar BSUID, rediseño y Time Off. No reutilizar a ciegas R0 ni la antigua C.
+6. Q1 y Q3 siguen intactos. Cualquier diagnóstico posterior requiere sesión de solo lectura;
+   cualquier reparación de datos necesita su propio plan y autorización.
+
+---
+
+## Plan original (archivo de contexto; no ejecutar con sus antiguas imágenes)
 
 Fuera de este despliegue, por decisión:
 - la reconciliación comercial con Fresha (`docs/proposals/gallery-fresha-reconciliation-2026-10.md`);
