@@ -10,6 +10,8 @@ import { CONTROL_CLS, MODULE_SEARCH_CLS, OUTLINE_CLS } from "@/components/ui/pri
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
 import { apptCategory, apptCategoryClass, serviceCategory, type ApptCategory } from "@/lib/agendaCategory";
 import { priceLabelCOP } from "@/lib/money";
+import { TimeOffForm } from "@/components/scheduling/timeoff/TimeOffForm";
+import { deleteTimeOffAction } from "@/lib/timeOffActions";
 import {
   cancelAppointmentAction,
   completeAppointmentAction,
@@ -101,9 +103,20 @@ interface Slot { start_at: string; service_end_at: string; staff_id: string; ava
 /** When booking for an existing contact (C-4.1 deep-link), the modal locks the identity
  *  to this contact and submits its id — staff never retype what's on the record. */
 interface ContactPrefill { contactId: string; contactName: string }
-type ModalState =
+/** A Time Off block (schedule exception): staff_id null = a whole-site closure, otherwise
+ *  one staff member. `reason` is INTERNAL — only present for roles allowed to see it. */
+interface Block {
+  id: string;
+  staff_id: string | null;
+  starts_at: string;
+  ends_at: string;
+  reason: string | null;
+}
+type BookingModalState =
   | { mode: "new" | "walkin"; contact?: ContactPrefill }
   | { mode: "reschedule"; appt: Appt };
+/** The agenda's modal states — the booking ones plus Time Off (create / edit a block). */
+type ModalState = BookingModalState | { mode: "block" } | { mode: "editBlock"; block: Block };
 
 /** The calendar body's vertical scale. One hour = this many px. 60 is the floor
  *  at which a 45-minute card still fits its three lines (time / customer /
@@ -465,6 +478,13 @@ export function AgendaView(props: {
   staff: StaffOpt[];
   services: ServiceOpt[];
   appointments: Appt[];
+  /** Time Off blocks in the visible range (site-wide + per-staff), pre-filtered to what
+   *  this viewer may see. */
+  blocks: Block[];
+  /** May create/edit STAFF time off (owner/setter/agency — never a staff login). */
+  canBlockStaff: boolean;
+  /** May create/edit SITE closures (owner/agency only). */
+  canBlockSite: boolean;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -650,6 +670,52 @@ export function AgendaView(props: {
   const headClass = isWeek ? "h-14" : "h-12";
   const bodyHeight = (toHour - fromHour) * rowHeight;
   const offsetTop = (mins: number) => ((mins - fromHour * 60) / 60) * rowHeight;
+
+  // Appointments that sit INSIDE a Time Off block (kept via the conflict flow) — flagged in
+  // the agenda. An appointment conflicts with a block applying to its staff (or a site
+  // closure) that overlaps its time.
+  const conflictIds = useMemo(() => {
+    const out = new Set<string>();
+    for (const a of props.appointments) {
+      if (a.status === "cancelled") continue;
+      const aStart = Date.parse(a.start_at);
+      const aEnd = Date.parse(a.service_end_at);
+      for (const b of props.blocks) {
+        if (b.staff_id !== null && b.staff_id !== a.staff_id) continue;
+        if (aStart < Date.parse(b.ends_at) && aEnd > Date.parse(b.starts_at)) {
+          out.add(a.id);
+          break;
+        }
+      }
+    }
+    return out;
+  }, [props.appointments, props.blocks]);
+
+  /** The portion of a block inside ONE local day [dayStartIso, dayEndIso] as a positioned
+   *  band, or null when it doesn't intersect that day. Clamps to the grid window exactly
+   *  like appointment cards, and treats the exclusive end-midnight as the bottom of the grid. */
+  const bandForDay = (b: Block, dayStartIso: string, dayEndIso: string) => {
+    const dS = Date.parse(dayStartIso);
+    const dE = Date.parse(dayEndIso);
+    const bS = Date.parse(b.starts_at);
+    const bE = Date.parse(b.ends_at);
+    if (bE <= dS || bS >= dE) return null;
+    const lo = fromHour * 60;
+    const hi = toHour * 60;
+    const startMin = bS <= dS ? lo : Math.min(Math.max(minutesOf(zonedParts(b.starts_at, tz)), lo), hi);
+    const endMin = bE >= dE ? hi : Math.min(Math.max(minutesOf(zonedParts(b.ends_at, tz)), startMin), hi);
+    return { top: offsetTop(startMin), height: Math.max(10, offsetTop(endMin) - offsetTop(startMin)), fullDay: startMin <= lo && endMin >= hi };
+  };
+
+  /** Blocks that cover a given local day key (for the WEEK view, where a column is a day).
+   *  Lexicographic YYYY-MM-DD compare; the exclusive end-midnight is pulled back 1ms so a
+   *  full-day block doesn't bleed into the next day. */
+  const blocksOnDay = (dayKey: string): Block[] =>
+    props.blocks.filter((b) => {
+      const startKey = zonedParts(b.starts_at, tz).dayKey;
+      const endKey = zonedParts(new Date(Date.parse(b.ends_at) - 1).toISOString(), tz).dayKey;
+      return startKey <= dayKey && dayKey <= endKey;
+    });
 
   /** The "now" marker — only drawn when today is inside the rendered range. */
   const nowParts = zonedParts(new Date().toISOString(), tz);
@@ -851,6 +917,11 @@ export function AgendaView(props: {
             </button>
             {props.canOperate ? (
               <div className="ml-auto hidden items-center gap-2 md:flex xl:hidden">
+                {props.canBlockStaff || props.canBlockSite ? (
+                  <button type="button" onClick={() => setModal({ mode: "block" })} className={OUTLINE_CLS}>
+                    Bloquear horario
+                  </button>
+                ) : null}
                 <button type="button" onClick={() => setModal({ mode: "walkin" })} className={OUTLINE_CLS}>
                   Atención sin cita
                 </button>
@@ -923,6 +994,11 @@ export function AgendaView(props: {
                   </label>
                 </div>
               </details>
+              {props.canBlockStaff || props.canBlockSite ? (
+                <button type="button" onClick={() => setModal({ mode: "block" })} className={OUTLINE_CLS}>
+                  Bloquear horario
+                </button>
+              ) : null}
               {props.canOperate ? (
                 <button
                   type="button"
@@ -1444,6 +1520,12 @@ export function AgendaView(props: {
                 const columnAppointments = visible.filter((appt) => inColumn(appt, col.key));
                 const weekBlocks = isWeek ? bucketWeekAppointments(columnAppointments, tz, fromHour, toHour) : null;
                 const dayLanes = isWeek ? null : layoutDayLanes(columnAppointments);
+                // WEEK view aggregates all staff per day, so per-staff bands don't map here:
+                // a SITE closure hatches the whole day column, and any staff time off shows as
+                // a count chip. The rich per-staff band lives in the day view.
+                const dayBlocks = isWeek ? blocksOnDay(col.key) : [];
+                const weekSiteClosed = dayBlocks.some((b) => b.staff_id === null);
+                const weekStaffBlocks = dayBlocks.filter((b) => b.staff_id !== null).length;
                 return (
                 <div
                   key={col.key}
@@ -1512,7 +1594,12 @@ export function AgendaView(props: {
                     /* WEEK — a column of fixed HOUR BLOCKS. The card and its "+N citas"
                        chip are siblings inside the same block, so the chip can never
                        cover the hour above or below it. */
-                    <div className={`relative ${col.closed ? "u-closed-hatch" : ""}`} style={{ height: bodyHeight }}>
+                    <div className={`relative ${col.closed ? "u-closed-hatch" : weekSiteClosed ? "u-timeoff-hatch-site" : ""}`} style={{ height: bodyHeight }}>
+                      {!col.closed && (weekSiteClosed || weekStaffBlocks > 0) ? (
+                        <span className="u-timeoff-ink pointer-events-none absolute left-1 top-1 z-[1] rounded bg-timeoff-bg px-1 text-[0.5625rem] font-semibold">
+                          {weekSiteClosed ? "Cerrado" : `Fuera · ${weekStaffBlocks}`}
+                        </span>
+                      ) : null}
                       {weekBlocks.map((block) => {
                         const [lead, ...rest] = block.appointments;
                         return (
@@ -1527,6 +1614,7 @@ export function AgendaView(props: {
                                 toneClass={appointmentToneClass(lead)}
                                 tz={tz}
                                 overlapping={overlapIds.has(lead.id)}
+                                conflict={conflictIds.has(lead.id)}
                                 selected={lead.id === selectedId}
                                 crowded={rest.length > 0}
                                 onOpen={() => setSelectedId(lead.id)}
@@ -1559,6 +1647,29 @@ export function AgendaView(props: {
                         appointment booked into a closed day stays fully readable
                         (it exists; it just shouldn't look bookable around it). */}
                     {col.closed ? <div aria-hidden className="u-closed-hatch absolute inset-0" /> : null}
+                    {/* TIME OFF bands for THIS staff column (+ site closures, which apply to
+                        everyone). Painted over the closed wash, under the cards — a kept
+                        conflicting appointment still reads clearly on top. */}
+                    {props.blocks
+                      .filter((b) => b.staff_id === col.key || b.staff_id === null)
+                      .map((b) => {
+                        const band = bandForDay(b, props.dayStartIso, props.dayEndIso);
+                        if (!band) return null;
+                        const siteWide = b.staff_id === null;
+                        const editable = siteWide ? props.canBlockSite : props.canBlockStaff;
+                        return (
+                          <BlockBand
+                            key={b.id}
+                            top={band.top}
+                            height={band.height}
+                            siteWide={siteWide}
+                            fullDay={band.fullDay}
+                            reason={b.reason}
+                            editable={editable}
+                            onOpen={() => setModal({ mode: "editBlock", block: b })}
+                          />
+                        );
+                      })}
                     {hours.map((h) => (
                       <div
                         key={h}
@@ -1591,6 +1702,7 @@ export function AgendaView(props: {
                             height={Math.max(22, ((endMin - startMin) / 60) * HOUR_PX - 2)}
                             lane={dayLanes?.get(a.id)}
                             overlapping={overlapIds.has(a.id)}
+                            conflict={conflictIds.has(a.id)}
                             selected={a.id === selectedId}
                             onOpen={() => setSelectedId(a.id)}
                           />
@@ -1656,7 +1768,7 @@ export function AgendaView(props: {
       </div>
       </PageShell>
 
-      {modal && props.canOperate ? (
+      {modal && modal.mode !== "block" && modal.mode !== "editBlock" && props.canOperate ? (
         <AppointmentModal
           {...props}
           modal={modal}
@@ -1669,6 +1781,21 @@ export function AgendaView(props: {
             if (props.returnContactId) router.push(`/clients/${props.clientId}/contacts/${props.returnContactId}`);
             else router.refresh();
           }}
+        />
+      ) : null}
+
+      {/* Time Off — the SAME form as the staff tab, opened from the agenda header or by
+          clicking an existing block. Gated to those who may create at least one kind. */}
+      {modal && (modal.mode === "block" || modal.mode === "editBlock") && (props.canBlockStaff || props.canBlockSite) ? (
+        <BlockModal
+          clientId={props.clientId}
+          siteId={props.currentSiteId}
+          tz={tz}
+          staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name }))}
+          canSiteClosure={props.canBlockSite}
+          canStaffTimeOff={props.canBlockStaff}
+          edit={modal.mode === "editBlock" ? modal.block : undefined}
+          onClose={() => setModal(null)}
         />
       ) : null}
 
@@ -2313,11 +2440,155 @@ function Initial({ name, muted, on }: { name: string | null; muted?: boolean; on
  * overlap. Two lines only: the service, then the exact start time beside the client,
  * because the block only says which hour it falls in.
  */
+/**
+ * The Time Off modal — the SAME TimeOffForm as the staff tab, in the agenda's overlay chrome.
+ * Opened from the header ("Bloquear horario", create) or by clicking a block (edit). Edit mode
+ * also offers Delete, behind an inline confirm. All writes are server-gated regardless.
+ */
+function BlockModal({
+  clientId,
+  siteId,
+  tz,
+  staff,
+  canSiteClosure,
+  canStaffTimeOff,
+  edit,
+  onClose,
+}: {
+  clientId: string;
+  siteId: string;
+  tz: string;
+  staff: { id: string; name: string }[];
+  canSiteClosure: boolean;
+  canStaffTimeOff: boolean;
+  edit?: Block;
+  onClose: () => void;
+}) {
+  const router = useRouter();
+  const [pending, startTransition] = useTransition();
+  const [delError, setDelError] = useState<string | null>(null);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const closeRef = useRef(onClose);
+  useEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
+  const close = () => closeRef.current();
+  const panelRef = useTrappedPanel({ active: true, onClose: close });
+
+  // Delete is offered only to a viewer who may edit this KIND of block (server re-enforces).
+  const canDelete = edit ? (edit.staff_id === null ? canSiteClosure : canStaffTimeOff) : false;
+  const remove = () =>
+    startTransition(async () => {
+      if (!edit) return;
+      const r = await deleteTimeOffAction(clientId, edit.id);
+      if (r.ok) {
+        router.refresh();
+        onClose();
+      } else {
+        setDelError(r.error ?? "No se pudo eliminar el bloqueo.");
+      }
+    });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-5">
+      <button type="button" aria-label="Cerrar" className={OVERLAY_SCRIM} onClick={close} />
+      <section
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={edit ? "Editar bloqueo" : "Bloquear horario"}
+        tabIndex={-1}
+        className="relative z-50 flex max-h-[min(720px,calc(100dvh-2rem))] w-full flex-col overflow-hidden rounded-t-2xl border border-line bg-surface sm:max-w-lg sm:rounded-2xl"
+      >
+        <header className="flex shrink-0 items-start gap-4 border-b border-line px-4 py-3.5 sm:px-5">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-semibold text-foreground">{edit ? "Editar bloqueo" : "Bloquear horario"}</h2>
+            <p className="mt-0.5 text-xs text-muted">Quita disponibilidad sin cambiar el horario semanal.</p>
+          </div>
+          <button type="button" onClick={close} aria-label="Cerrar" className="flex size-9 shrink-0 items-center justify-center rounded-lg text-lg text-muted transition hover:bg-subtle hover:text-foreground">×</button>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          <TimeOffForm
+            clientId={clientId}
+            siteId={siteId}
+            staff={staff}
+            canSiteClosure={canSiteClosure}
+            tz={tz}
+            edit={edit ? { id: edit.id, staffId: edit.staff_id, startsAt: edit.starts_at, endsAt: edit.ends_at, reason: edit.reason } : undefined}
+            onDone={onClose}
+            onClose={close}
+          />
+          {canDelete ? (
+            <div className="mt-4 border-t border-line pt-3">
+              {delError ? <p role="alert" className="mb-2 rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{delError}</p> : null}
+              {confirmDel ? (
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs text-muted">¿Eliminar este bloqueo? La disponibilidad vuelve de inmediato.</span>
+                  <span className="flex gap-2">
+                    <button type="button" onClick={() => setConfirmDel(false)} className="rounded-lg border border-line px-2.5 py-1 text-xs text-muted hover:bg-subtle">Cancelar</button>
+                    <button type="button" disabled={pending} onClick={remove} className="rounded-lg border border-danger/40 px-2.5 py-1 text-xs text-danger hover:bg-danger/10 disabled:opacity-50">Eliminar</button>
+                  </span>
+                </div>
+              ) : (
+                <button type="button" onClick={() => setConfirmDel(true)} className="text-xs text-danger hover:underline">Eliminar bloqueo</button>
+              )}
+            </div>
+          ) : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/**
+ * A Time Off band inside a DAY column — a warm hatched region that reads as "not bookable",
+ * visually distinct from an appointment card, a free slot, and the grey "closed" wash. It
+ * carries a "Fuera" label (+ the internal reason for roles allowed to see it). A site closure
+ * uses the stronger hatch. Clickable to edit/delete when the viewer may; otherwise a read-only
+ * marker. Rendered under the cards so a kept conflicting appointment stays legible on top.
+ */
+function BlockBand({
+  top,
+  height,
+  siteWide,
+  fullDay,
+  reason,
+  editable,
+  onOpen,
+}: {
+  top: number;
+  height: number;
+  siteWide: boolean;
+  fullDay: boolean;
+  reason: string | null;
+  editable: boolean;
+  onOpen: () => void;
+}) {
+  const base = siteWide ? "Cerrado" : fullDay ? "Fuera · todo el día" : "Fuera";
+  const label = reason?.trim() ? `${base} · ${reason.trim()}` : base;
+  const cls = `absolute inset-x-0 overflow-hidden border-y border-timeoff-edge ${siteWide ? "u-timeoff-hatch-site" : "u-timeoff-hatch"}`;
+  const inner = (
+    <span className="u-timeoff-ink pointer-events-none absolute left-1 right-1 top-0.5 truncate text-[0.625rem] font-semibold">
+      {label}
+    </span>
+  );
+  return editable ? (
+    <button type="button" onClick={onOpen} title={label} aria-label={label} className={`${cls} cursor-pointer text-left`} style={{ top, height }}>
+      {inner}
+    </button>
+  ) : (
+    <div aria-hidden title={label} className={cls} style={{ top, height }}>
+      {inner}
+    </div>
+  );
+}
+
 function WeekBlockCard({
   appt,
   toneClass,
   tz,
   overlapping,
+  conflict,
   selected,
   crowded,
   onOpen,
@@ -2326,6 +2597,8 @@ function WeekBlockCard({
   toneClass: string;
   tz: string;
   overlapping: boolean;
+  /** Kept despite falling inside a Time Off block — flagged so it's never a silent clash. */
+  conflict?: boolean;
   selected: boolean;
   /** The block also carries a "+N citas" chip, so only two lines are left for a card. */
   crowded: boolean;
@@ -2342,13 +2615,15 @@ function WeekBlockCard({
    */
   const state = cancelled
     ? "Cancelada"
-    : appt.status === "no_show"
-      ? "Inasistencia"
-      : overlapping
-        ? "Traslape"
-        : appt.status === "scheduled"
-          ? "Sin confirmar"
-          : "";
+    : conflict
+      ? "En bloqueo"
+      : appt.status === "no_show"
+        ? "Inasistencia"
+        : overlapping
+          ? "Traslape"
+          : appt.status === "scheduled"
+            ? "Sin confirmar"
+            : "";
   const client = appt.contact_name ?? "Atención sin cita";
   return (
     <button
@@ -2390,6 +2665,7 @@ function ApptCard({
   height,
   lane,
   overlapping,
+  conflict,
   selected,
   onOpen,
 }: {
@@ -2401,6 +2677,8 @@ function ApptCard({
   /** Its slot in an overlap cluster — absent when nothing overlaps it. */
   lane?: DayLane;
   overlapping: boolean;
+  /** Kept despite falling inside a Time Off block — flagged so it's never a silent clash. */
+  conflict?: boolean;
   selected: boolean;
   onOpen: () => void;
 }) {
@@ -2415,6 +2693,7 @@ function ApptCard({
     // `completed` no longer owns a colour (the family does), so it says so here —
     // otherwise a done appointment would be indistinguishable.
     (appt.status === "completed" ? " · completada" : "") +
+    (conflict ? " · en bloqueo" : "") +
     (overlapping ? " · traslape" : "") +
     (appt.status === "no_show" ? " · inasistencia" : "") +
     (cancelled ? " · cancelada" : "");
@@ -2443,6 +2722,15 @@ function ApptCard({
         width: `calc(${100 / (lane?.laneCount ?? 1)}% - ${(lane?.laneCount ?? 1) > 1 ? 6 : 8}px)`,
       }}
     >
+          {conflict ? (
+            <span
+              aria-hidden
+              title="Dentro de un bloqueo — se mantuvo desde la gestión de tiempo fuera"
+              className="u-timeoff-ink absolute right-0.5 top-0.5 text-[10px] font-bold leading-none"
+            >
+              ⚠
+            </span>
+          ) : null}
           <span className="flex items-start justify-between gap-1">
             <span className="u-appt-ink u-mono truncate text-[11px]">
               {fmtTime(appt.start_at, tz)} — {fmtTime(appt.service_end_at, tz)}
@@ -2631,7 +2919,7 @@ function AppointmentModal(props: {
   dayEndIso: string;
   staff: StaffOpt[];
   services: ServiceOpt[];
-  modal: ModalState;
+  modal: BookingModalState;
   /** Staff login → pin the barber to this id (its own column). */
   lockStaffId: string | null;
   onClose: () => void;

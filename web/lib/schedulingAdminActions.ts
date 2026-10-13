@@ -14,6 +14,7 @@ import {
   updateSite,
 } from "@worker/db/repositories/scheduling/sites.js";
 import {
+  activeStaffNameTaken,
   createStaff,
   deactivateStaff,
   getStaffById,
@@ -36,7 +37,7 @@ import {
   updateService,
   parseServiceCategory,
 } from "@worker/db/repositories/scheduling/services.js";
-import { countUpcomingAppointmentsForResource } from "@worker/db/repositories/scheduling/appointments.js";
+import { countUpcomingAppointmentsForResource, listAppointments } from "@worker/db/repositories/scheduling/appointments.js";
 import {
   createException,
   deleteException,
@@ -86,6 +87,7 @@ async function staffInClient(tenantId: string, clientId: string, staffId: string
 }
 
 const FOREIGN = "Not found for this client.";
+const DUP_STAFF_NAME = "Ya existe un profesional activo con ese nombre en esta sede.";
 
 /** Mirrors the staff_employment_type_valid CHECK. */
 const EMPLOYMENT_TYPES: readonly string[] = ["full_time", "part_time", "contractor"];
@@ -289,10 +291,14 @@ export async function createStaffAction(input: {
 }): Promise<AdminResult> {
   const auth = await requireSchedulingAdmin(input.clientId);
   if (!auth.ok) return auth;
-  if (!input.name.trim()) return { ok: false, error: "Name is required." };
+  const name = input.name.trim();
+  if (!name) return { ok: false, error: "Name is required." };
   if (!(await siteInClient(auth.tenantId, input.clientId, input.siteId))) return { ok: false, error: FOREIGN };
+  // Display name must be unique among ACTIVE staff of the site (case-insensitive) — the bot
+  // reads it to customers, so two active "Andrés" make the offer ambiguous.
+  if (await activeStaffNameTaken(auth.tenantId, input.siteId, name)) return { ok: false, error: DUP_STAFF_NAME };
   try {
-    const st = await createStaff({ tenantId: auth.tenantId, siteId: input.siteId, name: input.name.trim(), workingHours: input.workingHours });
+    const st = await createStaff({ tenantId: auth.tenantId, siteId: input.siteId, name, workingHours: input.workingHours });
     for (const serviceId of input.serviceIds ?? []) {
       await setStaffService(auth.tenantId, st.id, serviceId);
     }
@@ -327,18 +333,35 @@ export async function updateStaffAction(
 ): Promise<AdminResult> {
   const auth = await requireSchedulingAdmin(clientId);
   if (!auth.ok) return auth;
-  if (!(await staffInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
+  const current = await getStaffById(auth.tenantId, id);
+  if (!current || !(await siteInClient(auth.tenantId, clientId, current.site_id))) return { ok: false, error: FOREIGN };
   // Narrow what the CHECK constraints already restrict, so a bad value is a readable
   // error here instead of a 500 from Postgres. Same rule, stated twice on purpose.
-  const { employmentType, weeklyHours, ...rest } = patch;
+  const { employmentType, weeklyHours, name, ...rest } = patch;
+  let namePatch: { name?: string } = {};
+  if (name !== undefined) {
+    const trimmed = name.trim();
+    if (!trimmed) return { ok: false, error: "Name is required." };
+    namePatch = { name: trimmed };
+  }
   if (employmentType !== undefined && employmentType !== null && !EMPLOYMENT_TYPES.includes(employmentType)) {
     return { ok: false, error: "Unknown employment type." };
   }
   if (weeklyHours !== undefined && weeklyHours !== null && !(Number.isInteger(weeklyHours) && weeklyHours >= 1 && weeklyHours <= 168)) {
     return { ok: false, error: "Weekly hours must be between 1 and 168." };
   }
+  // Uniqueness only binds ACTIVE staff: check the RESULTING name + active state (excluding
+  // self), so a rename-into-a-namesake or a reactivation-into-a-namesake is refused, but a
+  // no-op save or renaming a deactivated member is fine. Renaming is otherwise free —
+  // appointments reference staff by id, never by the name.
+  const resultingName = namePatch.name ?? current.name;
+  const resultingActive = patch.active ?? current.active;
+  if (resultingActive && (await activeStaffNameTaken(auth.tenantId, current.site_id, resultingName, id))) {
+    return { ok: false, error: DUP_STAFF_NAME };
+  }
   const row = await updateStaff(auth.tenantId, id, {
     ...rest,
+    ...namePatch,
     ...(employmentType !== undefined ? { employmentType: employmentType as EmploymentType | null } : {}),
     ...(weeklyHours !== undefined ? { weeklyHours } : {}),
   });
@@ -443,6 +466,44 @@ export async function countUpcomingAppointmentsAction(
     kind === "site" ? { clientId, siteId: id } : kind === "staff" ? { clientId, staffId: id } : { clientId, serviceId: id };
   const count = await countUpcomingAppointmentsForResource(auth.tenantId, filter);
   return { ok: true, count };
+}
+
+/** The LIST behind the deactivation confirmation (3d): future active appointments for a
+ *  staff member, so the operator sees exactly whom they'd affect before deactivating. The
+ *  appointments are NEVER cancelled — deactivation only stops NEW bookings. Owner/admin +
+ *  client scoping; a foreign/forged id yields an empty list. */
+export interface UpcomingApptView {
+  id: string;
+  start_at: string; // ISO UTC
+  service_name: string;
+  contact_name: string | null;
+  site_timezone: string;
+}
+export type UpcomingListResult = { ok: true; appointments: UpcomingApptView[] } | { ok: false; error: string };
+
+export async function listStaffUpcomingAppointmentsAction(
+  clientId: string,
+  staffId: string,
+): Promise<UpcomingListResult> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  if (!(await staffInClient(auth.tenantId, clientId, staffId))) return { ok: true, appointments: [] };
+  const rows = await listAppointments(auth.tenantId, {
+    clientId,
+    staffId,
+    status: ["scheduled", "confirmed"],
+    from: new Date(),
+  });
+  return {
+    ok: true,
+    appointments: rows.map((a) => ({
+      id: a.id,
+      start_at: a.start_at.toISOString(),
+      service_name: a.service_name_snapshot,
+      contact_name: a.contact_name,
+      site_timezone: a.site_timezone,
+    })),
+  };
 }
 
 export async function setStaffServiceAction(

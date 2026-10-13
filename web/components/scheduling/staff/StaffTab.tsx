@@ -9,9 +9,13 @@ import { ACT_PRIMARY } from "@/components/ui/panelChrome";
 import {
   addStaffCertificationAction,
   deleteStaffCertificationAction,
+  listStaffUpcomingAppointmentsAction,
   setStaffServiceAction,
   updateStaffAction,
+  type UpcomingApptView,
 } from "@/lib/schedulingAdminActions";
+import { deleteTimeOffAction } from "@/lib/timeOffActions";
+import { TimeOffForm } from "@/components/scheduling/timeoff/TimeOffForm";
 import { PageShell } from "@/components/ui/PageShell";
 import {
   CONTROL_CLS,
@@ -61,6 +65,9 @@ export interface StaffMember {
   siteName: string;
   /** weekday → ranges; {} means "inherit the site's opening hours". */
   workingHours: Record<string, { start: string; end: string }[]>;
+  /** The member's SITE opening hours — so the Hours footer can show the effective
+   *  (inherited) total when the barber has no own shifts. */
+  siteOpeningHours: Record<string, { start: string; end: string }[]>;
   serviceIds: string[];
   // ── Profile (staff-fields migration). null = nobody has filled it in. ────────
   title: string | null;
@@ -97,6 +104,8 @@ export interface StaffWindowAppointment {
   serviceName: string;
 }
 export interface StaffTimeOff {
+  /** The schedule_exceptions id — needed to edit/delete a block. */
+  id: string;
   staffId: string;
   startsAt: string;
   endsAt: string;
@@ -561,6 +570,14 @@ function StaffDetail({
   const [profile, setProfile] = useState<ProfileDraft>(() => profileFromMember(member));
   const [saving, startSave] = useTransition();
   const [saveError, setSaveError] = useState<string | null>(null);
+  // Time Off tab: an inline create/edit form + per-row delete.
+  const [toForm, setToForm] = useState<null | { editing?: StaffTimeOff }>(null);
+  const [toBusy, startTo] = useTransition();
+  const [toError, setToError] = useState<string | null>(null);
+  const [toConfirmDel, setToConfirmDel] = useState<string | null>(null);
+  // Deactivation guard: the future appointments a deactivation would affect — shown for an
+  // explicit confirmation. NEVER auto-cancelled; deactivating only stops NEW bookings.
+  const [deactivateConfirm, setDeactivateConfirm] = useState<UpcomingApptView[] | null>(null);
   const router = useRouter();
   const panelRef = useTrappedPanel({ active: true, onClose: () => router.push(closeHref, { scroll: false }) });
   const dirtyDays = countDirtyDays(draft, member.workingHours);
@@ -569,6 +586,44 @@ function StaffDetail({
   // Mirror the CHECK constraints client-side: the schema already refuses these, this
   // just says so before the round trip.
   const invalid = profileError(profile);
+
+  /** Commit the whole panel in ONE patch — untouched fields stay absent, so a save never
+   *  rewrites a column the operator didn't look at. Deactivation here only flips active; it
+   *  never cancels an appointment. */
+  const commitSave = () => {
+    setSaveError(null);
+    setDeactivateConfirm(null);
+    startSave(async () => {
+      const patch: Parameters<typeof updateStaffAction>[2] = {};
+      if (dirtyDays > 0) {
+        const weekly: Record<string, { start: string; end: string }[]> = {};
+        for (const d of WEEKDAYS) if ((draft[d] ?? []).length > 0) weekly[d] = draft[d];
+        patch.workingHours = weekly as never;
+      }
+      Object.assign(patch, profilePatch(profile, dirtyFields));
+      const r = await updateStaffAction(clientId, member.id, patch);
+      if (!r.ok) setSaveError(r.error);
+      else onSaved();
+    });
+  };
+
+  /** Save, but if this save DEACTIVATES a member with future appointments, surface them
+   *  first and require an explicit confirmation (the appointments are kept either way). */
+  const requestSave = () => {
+    setSaveError(null);
+    const deactivating = member.active && !profile.active;
+    if (!deactivating) {
+      commitSave();
+      return;
+    }
+    startSave(async () => {
+      const res = await listStaffUpcomingAppointmentsAction(clientId, member.id);
+      const appts = res.ok ? res.appointments : [];
+      if (appts.length > 0) setDeactivateConfirm(appts);
+      else commitSave();
+    });
+  };
+
   const s = STATUS[status.key];
   // The header's ONE meta line, the contact panel's "identity · contacto desde" applied
   // to an employee: what they do and how long they have done it. Both facts were already
@@ -909,6 +964,10 @@ function StaffDetail({
                 placeholder="Add an email"
                 type="email"
               />
+              <p className="px-4 pb-1 text-[11px] text-faint">
+                This is a contact detail only. It does not change how — or whether — this person
+                logs in; a login is a separate account managed under Team.
+              </p>
               <FieldRow
                 label="Emergency"
                 value={profile.emergencyContactName}
@@ -1214,19 +1273,27 @@ function StaffDetail({
               })}
             </div>
 
-            <div className="flex items-center gap-2 text-xs text-muted">
-              <span className="u-mono text-foreground">
-                {Math.round(
-                  WEEKDAYS.reduce(
-                    (n, d) => n + (draft[d] ?? []).reduce((m, r) => m + minutesBetween(r.start, r.end), 0),
-                    0,
-                  ) / 60,
-                )}{" "}
-                H
-              </span>
-              <span aria-hidden className="text-faintest">&middot;</span>
-              <span className="u-mono">{WEEKDAYS.filter((d) => (draft[d] ?? []).length > 0).length} DAYS</span>
-            </div>
+            {(() => {
+              // When the barber has NO own shifts, an empty working_hours means they INHERIT
+              // the site's opening hours (availability.ts). The footer must reflect that
+              // effective schedule, not "0 H · 0 DAYS", which contradicted the inherit rule.
+              const draftHasHours = WEEKDAYS.some((d) => (draft[d] ?? []).length > 0);
+              const eff = (draftHasHours ? draft : member.siteOpeningHours) as Record<string, { start: string; end: string }[]>;
+              const totalH = Math.round(
+                WEEKDAYS.reduce((n, d) => n + (eff[d] ?? []).reduce((m, r) => m + minutesBetween(r.start, r.end), 0), 0) / 60,
+              );
+              const days = WEEKDAYS.filter((d) => (eff[d] ?? []).length > 0).length;
+              return (
+                <div className="flex items-center gap-2 text-xs text-muted">
+                  {!draftHasHours ? (
+                    <span className="rounded bg-chip px-1.5 py-0.5 text-[10px] font-medium text-muted">Site hours</span>
+                  ) : null}
+                  <span className="u-mono text-foreground">{totalH} H</span>
+                  <span aria-hidden className="text-faintest">&middot;</span>
+                  <span className="u-mono">{days} DAYS</span>
+                </div>
+              );
+            })()}
           </div>
           </PanelSection>
         ) : (
@@ -1236,38 +1303,91 @@ function StaffDetail({
             trailing={timeOff.length > 0 ? `${timeOff.length} booked` : undefined}
           >
           <div className="flex flex-col gap-2">
-            {timeOff.length === 0 ? (
+            {toError ? <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{toError}</p> : null}
+
+            {toForm ? (
+              <div className="rounded-lg border border-line bg-card/40 p-3">
+                <TimeOffForm
+                  clientId={clientId}
+                  siteId={member.siteId}
+                  staff={[{ id: member.id, name: member.name }]}
+                  fixedStaffId={member.id}
+                  canSiteClosure={false}
+                  tz={tz}
+                  edit={
+                    toForm.editing
+                      ? {
+                          id: toForm.editing.id,
+                          staffId: toForm.editing.staffId,
+                          startsAt: toForm.editing.startsAt,
+                          endsAt: toForm.editing.endsAt,
+                          reason: toForm.editing.reason,
+                        }
+                      : undefined
+                  }
+                  onDone={() => setToForm(null)}
+                  onClose={() => setToForm(null)}
+                />
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => {
+                  setToError(null);
+                  setToForm({});
+                }}
+                className="w-fit rounded-lg border border-line-strong px-3 py-1.5 text-xs font-medium text-foreground transition hover:bg-subtle"
+              >
+                + Add time off
+              </button>
+            )}
+
+            {timeOff.length === 0 && !toForm ? (
               <p className="text-sm text-muted">No time off booked.</p>
             ) : (
-              timeOff.map((t) => {
-                const days = Math.max(
-                  1,
-                  Math.round((new Date(t.endsAt).getTime() - new Date(t.startsAt).getTime()) / 86_400_000),
-                );
-                return (
-                  <div
-                    key={`${t.startsAt}-${t.endsAt}`}
-                    className="flex items-center gap-2.5 rounded-lg border border-danger-tint bg-danger-tint/20 px-3 py-2.5"
-                  >
-                    <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-brand" />
-                    <span className="flex min-w-0 flex-1 flex-col">
-                      <span className="truncate text-xs font-semibold text-foreground">
-                        {t.reason?.trim() || "Time off"}
+              [...timeOff]
+                .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
+                .map((t) => {
+                  const days = Math.max(
+                    1,
+                    Math.round((new Date(t.endsAt).getTime() - new Date(t.startsAt).getTime()) / 86_400_000),
+                  );
+                  const past = new Date(t.endsAt).getTime() <= now.getTime();
+                  return (
+                    <div
+                      key={t.id}
+                      className={`flex items-center gap-2.5 rounded-lg border px-3 py-2.5 ${
+                        past ? "border-line bg-subtle/40 opacity-70" : "border-timeoff-edge bg-timeoff-bg/30"
+                      }`}
+                    >
+                      <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${past ? "bg-faintest" : "bg-timeoff-fg"}`} />
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate text-xs font-semibold text-foreground">
+                          {t.reason?.trim() || "Time off"}
+                          {past ? <span className="ml-1 font-normal text-faint">· past</span> : null}
+                        </span>
+                        <span className="u-mono truncate text-[11px] text-muted">
+                          {fmtDay(t.startsAt, tz)} &rarr; {fmtDay(t.endsAt, tz)} · {days} {days === 1 ? "day" : "days"}
+                        </span>
                       </span>
-                      <span className="u-mono truncate text-[11px] text-muted">
-                        {fmtDay(t.startsAt, tz)} &rarr; {fmtDay(t.endsAt, tz)}
-                      </span>
-                    </span>
-                    <span className="u-mono shrink-0 text-[11px] text-brand">
-                      {days} {days === 1 ? "day" : "days"}
-                    </span>
-                  </div>
-                );
-              })
+                      {/* Past blocks are history (read-only); future/current ones can be edited or removed. */}
+                      {!past ? (
+                        toConfirmDel === t.id ? (
+                          <span className="flex shrink-0 gap-1.5">
+                            <button type="button" disabled={toBusy} onClick={() => startTo(async () => { setToError(null); const r = await deleteTimeOffAction(clientId, t.id); if (r.ok) { setToConfirmDel(null); router.refresh(); } else setToError(r.error ?? "No se pudo eliminar."); })} className="rounded border border-danger/40 px-2 py-0.5 text-[11px] text-danger hover:bg-danger/10 disabled:opacity-50">Delete</button>
+                            <button type="button" onClick={() => setToConfirmDel(null)} className="rounded border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-subtle">Keep</button>
+                          </span>
+                        ) : (
+                          <span className="flex shrink-0 gap-1.5">
+                            <button type="button" onClick={() => { setToError(null); setToForm({ editing: t }); }} className="rounded border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-subtle">Edit</button>
+                            <button type="button" onClick={() => setToConfirmDel(t.id)} className="rounded border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-subtle">Delete</button>
+                          </span>
+                        )
+                      ) : null}
+                    </div>
+                  );
+                })
             )}
-            {/* TODO(staff): time off is `schedule_exceptions` — real, but with no
-                approval flow and no way to request one from here. Blocked time is
-                created in Scheduling settings. */}
           </div>
           </PanelSection>
         )}
@@ -1298,30 +1418,41 @@ function StaffDetail({
           <button
             type="button"
             disabled={saving || changes === 0 || invalid !== null}
-            onClick={() => {
-              setSaveError(null);
-              startSave(async () => {
-                // ONE patch for everything that changed. Fields that were not touched
-                // are absent, so a save never rewrites a column the operator did not
-                // look at (and `null` for a cleared field is meaningful, not a no-op).
-                const patch: Parameters<typeof updateStaffAction>[2] = {};
-                if (dirtyDays > 0) {
-                  // Drop empty days: `{}` for a weekday is the model's "off", and an
-                  // entirely empty map is its "inherit the site's hours".
-                  const weekly: Record<string, { start: string; end: string }[]> = {};
-                  for (const d of WEEKDAYS) if ((draft[d] ?? []).length > 0) weekly[d] = draft[d];
-                  patch.workingHours = weekly as never;
-                }
-                Object.assign(patch, profilePatch(profile, dirtyFields));
-                const r = await updateStaffAction(clientId, member.id, patch);
-                if (!r.ok) setSaveError(r.error);
-                else onSaved();
-              });
-            }}
+            onClick={requestSave}
             className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md bg-ink px-3 text-xs font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50"
           >
             {saving ? "Saving…" : "Save changes"}
           </button>
+        </div>
+      ) : null}
+
+      {/* DEACTIVATION GUARD (3d): the future appointments this deactivation would affect.
+          Nothing is cancelled — they are kept and simply stop being added to. */}
+      {deactivateConfirm ? (
+        <div className="flex shrink-0 flex-col gap-2 border-t border-line bg-surface px-4 py-3">
+          <p className="text-xs font-semibold text-foreground">
+            {member.name} has {deactivateConfirm.length} upcoming appointment{deactivateConfirm.length === 1 ? "" : "s"}
+          </p>
+          <p className="text-[11px] text-muted">
+            Deactivating stops new bookings. These are kept — nothing is cancelled. Handle them with each
+            customer if needed.
+          </p>
+          <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto">
+            {deactivateConfirm.map((a) => (
+              <li key={a.id} className="u-mono truncate text-[11px] text-muted">
+                {fmtDay(a.start_at, a.site_timezone)} · {a.service_name}
+                {a.contact_name ? ` · ${a.contact_name}` : ""}
+              </li>
+            ))}
+          </ul>
+          <div className="flex flex-wrap justify-end gap-2">
+            <button type="button" onClick={() => setDeactivateConfirm(null)} className="inline-flex h-8 items-center rounded-md border border-line-strong bg-surface px-3 text-xs hover:bg-hover">
+              Cancel
+            </button>
+            <button type="button" disabled={saving} onClick={commitSave} className="inline-flex h-8 items-center rounded-md border border-danger/40 px-3 text-xs text-danger hover:bg-danger/10 disabled:opacity-50">
+              Deactivate anyway
+            </button>
+          </div>
         </div>
       ) : null}
     </aside>

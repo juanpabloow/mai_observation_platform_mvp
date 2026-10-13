@@ -412,6 +412,51 @@ export async function countUpcomingAppointmentsForResource(
   return r.rows[0]?.n ?? 0;
 }
 
+/** An active appointment that OVERLAPS a proposed time-off block — powers the conflict
+ *  flow (list them, keep or cancel; never auto-cancel). */
+export interface OverlappingAppointment {
+  id: string;
+  staff_id: string;
+  staff_name: string | null;
+  start_at: Date;
+  service_end_at: Date;
+  service_name: string;
+  contact_name: string | null;
+  status: string;
+}
+
+/**
+ * Active (scheduled|confirmed) appointments of a client's site that OVERLAP [from, to).
+ * Overlap is `start_at < to AND service_end_at > from` (an appointment that starts before
+ * the block but runs into it still conflicts). `staffId` limits to one staff member (a
+ * staff block); omit it for a SITE closure (every staff at the site). Tenant+client scoped.
+ */
+export async function listActiveAppointmentsOverlapping(
+  tenantId: string,
+  filter: { clientId: string; siteId: string; staffId?: string | null; from: Date; to: Date },
+): Promise<OverlappingAppointment[]> {
+  const params: unknown[] = [tenantId, filter.clientId, filter.siteId, filter.from, filter.to];
+  let staffClause = '';
+  if (filter.staffId) {
+    params.push(filter.staffId);
+    staffClause = `AND a.staff_id = $${params.length}`;
+  }
+  const r = await query<OverlappingAppointment>(
+    `SELECT a.id, a.staff_id, st.name AS staff_name, a.start_at, a.service_end_at,
+            a.service_name_snapshot AS service_name, ct.name AS contact_name, a.status
+       FROM appointments a
+       JOIN staff st ON st.id = a.staff_id AND st.tenant_id = a.tenant_id
+       LEFT JOIN contacts ct
+         ON ct.id = a.contact_id AND ct.tenant_id = a.tenant_id AND ct.client_id = a.client_id
+      WHERE a.tenant_id = $1 AND a.client_id = $2 AND a.site_id = $3
+        AND a.status IN ('scheduled', 'confirmed')
+        AND a.start_at < $5 AND a.service_end_at > $4 ${staffClause}
+      ORDER BY a.start_at`,
+    params,
+  );
+  return r.rows;
+}
+
 /** A contact's active appointment described in words an agent/customer can read back:
  *  local day + time (in the appointment's OWN site tz) + service name. */
 export interface ActiveAppointmentView {

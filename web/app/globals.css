@@ -449,11 +449,22 @@
      caption in the header carries the meaning; this is the quiet texture under it. */
   --closed-stripe: rgba(41, 50, 61, 0.05);
   --closed-fg: #98a0ab;
+  /* TIME OFF (one-off blocks) — a WARM amber hatch, deliberately distinct from the cool
+     grey "closed" wash and from any service colour, so a block reads as "someone is out",
+     not "the shop is shut" and not an appointment. Stronger stripe than closed. */
+  --timeoff-bg: #f4ece0;
+  --timeoff-stripe: rgba(146, 102, 41, 0.16);
+  --timeoff-fg: #8a6a3a;
+  --timeoff-edge: rgba(146, 102, 41, 0.38);
 }
 .dark {
   --closed-bg: #17181b;
   --closed-stripe: rgba(255, 255, 255, 0.04);
   --closed-fg: #6f7480;
+  --timeoff-bg: #241f16;
+  --timeoff-stripe: rgba(221, 180, 120, 0.14);
+  --timeoff-fg: #cba978;
+  --timeoff-edge: rgba(221, 180, 120, 0.32);
 }
 
 /*
@@ -610,6 +621,9 @@
   --color-queue-row-active: var(--queue-row-active);
   --color-closed-bg: var(--closed-bg);
   --color-closed-fg: var(--closed-fg);
+  --color-timeoff-bg: var(--timeoff-bg);
+  --color-timeoff-fg: var(--timeoff-fg);
+  --color-timeoff-edge: var(--timeoff-edge);
   --color-hover: var(--hover);
   --radius-card: var(--radius-card);
   /* Exposed as `rounded-bubble` / `rounded-bubble-tail` — see the note on the pair. */
@@ -1331,6 +1345,21 @@ body {
 .u-closed-hatch {
   background-color: var(--closed-bg);
   background-image: repeating-linear-gradient(45deg, var(--closed-stripe) 0 2px, transparent 2px 8px);
+}
+
+/* TIME OFF band: warm amber hatch. A staff block is the base; a SITE closure uses a
+   denser stripe (`--site`) so it reads stronger across every column. The label ("Fuera")
+   is carried in the markup, in `--timeoff-fg`. */
+.u-timeoff-hatch {
+  background-color: var(--timeoff-bg);
+  background-image: repeating-linear-gradient(135deg, var(--timeoff-stripe) 0 3px, transparent 3px 9px);
+}
+.u-timeoff-hatch-site {
+  background-color: var(--timeoff-bg);
+  background-image: repeating-linear-gradient(135deg, var(--timeoff-stripe) 0 4px, transparent 4px 7px);
+}
+.u-timeoff-ink {
+  color: var(--timeoff-fg);
 }
 
 /* Minimum 40px touch target for compact icon controls, without changing layout. */

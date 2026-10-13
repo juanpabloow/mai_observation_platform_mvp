@@ -81,6 +81,38 @@ export async function createException(input: CreateExceptionInput): Promise<Sche
   return firstRowOrThrow(r, 'createException');
 }
 
+export interface UpdateExceptionInput {
+  startsAt?: Date;
+  endsAt?: Date;
+  reason?: string | null;
+}
+
+/** Edit a block's window/reason (tenant-scoped). The site and staff scope never change —
+ *  to re-point a block you delete and recreate. ends_at > starts_at is the DB CHECK's job;
+ *  the caller validates first for a clean message. Returns the row, or null if not found. */
+export async function updateException(
+  tenantId: string,
+  id: string,
+  patch: UpdateExceptionInput,
+): Promise<ScheduleExceptionRow | null> {
+  const sets: string[] = [];
+  const params: unknown[] = [id, tenantId];
+  const add = (col: string, val: unknown) => {
+    params.push(val);
+    sets.push(`${col} = $${params.length}`);
+  };
+  if (patch.startsAt !== undefined) add('starts_at', patch.startsAt);
+  if (patch.endsAt !== undefined) add('ends_at', patch.endsAt);
+  if (patch.reason !== undefined) add('reason', patch.reason);
+  if (sets.length === 0) return getExceptionById(tenantId, id);
+  sets.push('updated_at = now()');
+  const r = await query<ScheduleExceptionRow>(
+    `UPDATE schedule_exceptions SET ${sets.join(', ')} WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+    params,
+  );
+  return r.rows[0] ?? null;
+}
+
 export async function deleteException(tenantId: string, id: string): Promise<boolean> {
   const r = await query(`DELETE FROM schedule_exceptions WHERE id = $1 AND tenant_id = $2`, [id, tenantId]);
   return (r.rowCount ?? 0) > 0;

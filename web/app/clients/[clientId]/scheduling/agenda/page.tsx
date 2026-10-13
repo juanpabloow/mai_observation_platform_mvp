@@ -3,15 +3,18 @@ import { ModuleHeader } from "@/components/ui/ModuleHeader";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import {
+  canAccessClient,
   canAccessSchedulingSite,
   canOperateScheduling,
   hasFullAccess,
+  isClientOwner,
   isSchedulingStaff,
 } from "@/lib/access";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 import { listStaff } from "@worker/db/repositories/scheduling/staff.js";
 import { listServicesForSite } from "@worker/db/repositories/scheduling/services.js";
 import { listAppointments, getAppointmentById } from "@worker/db/repositories/scheduling/appointments.js";
+import { listExceptions } from "@worker/db/repositories/scheduling/exceptions.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { getContactById } from "@worker/db/repositories/contacts.js";
 import { isUuid } from "@/lib/clientModuleValidation";
@@ -180,6 +183,27 @@ export default async function ClientAgendaPage({
   // serviceId → stored category, built once for the whole board.
   const serviceCategoryById = new Map(services.map((s) => [s.id, s.category]));
 
+  // TIME OFF blocks in the visible window (site-wide + per-staff). A STAFF login sees only
+  // its OWN blocks and site closures (matrix: "own only"); everyone else sees them all. The
+  // reason is internal — it's withheld from a staff login for anyone else's block (here, that
+  // case is already filtered out, so every block it does see carries its reason).
+  const isStaff = isSchedulingStaff(scope);
+  const myStaffId = scope.schedulingStaffId;
+  const rawBlocks = await listExceptions(tenantId, { siteId: site.id, from: rangeStart, to: rangeEnd });
+  const blocks = rawBlocks
+    .filter((b) => !isStaff || b.staff_id === null || b.staff_id === myStaffId)
+    .map((b) => ({
+      id: b.id,
+      staff_id: b.staff_id,
+      starts_at: b.starts_at.toISOString(),
+      ends_at: b.ends_at.toISOString(),
+      reason: b.reason,
+    }));
+  // Who may create/edit blocks (the server re-enforces): staff time off → owner/setter/agency
+  // (canAccessClient, never a staff login); site closures → owner/agency only.
+  const canBlockStaff = canAccessClient(scope, client.id);
+  const canBlockSite = hasFullAccess(scope) || isClientOwner(scope, client.id);
+
   return (
     <AgendaView
       clientId={client.id}
@@ -192,6 +216,9 @@ export default async function ClientAgendaPage({
       from={sp.from ?? null}
       canManage={hasFullAccess(scope)}
       canOperate={canOperateScheduling(scope)}
+      canBlockStaff={canBlockStaff}
+      canBlockSite={canBlockSite}
+      blocks={blocks}
       // A staff login books only into its OWN column — the modal locks the barber picker
       // to this id (the server enforces it regardless).
       lockStaffId={isSchedulingStaff(scope) ? scope.schedulingStaffId : null}

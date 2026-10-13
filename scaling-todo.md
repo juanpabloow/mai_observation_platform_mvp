@@ -154,3 +154,25 @@ payments). Deferred, in rough dependency order:
 - **Reorder UI.** `sort_order` exists and the API honours it, but there's no drag-to-order
   control yet (every row defaults to 0 → name order), the same deferral services made for
   `display_order`. Add a reorder control (owner-only) alongside this column when wanted.
+
+## Scheduling — Time Off & staff editing
+
+- **Staff-name uniqueness DB backstop.** Uniqueness (ACTIVE staff, per site, case-insensitive)
+  is enforced in the server action (`activeStaffNameTaken` in create/updateStaffAction). The
+  belt-and-braces DB guarantee — `CREATE UNIQUE INDEX ON staff (tenant_id, site_id,
+  lower(btrim(name))) WHERE active` — was deliberately NOT added this phase: `staff` is an
+  existing populated table, and a `CREATE UNIQUE INDEX` that finds pre-existing duplicate active
+  names would FAIL the migration and block the deploy. Add the index once prod data is verified
+  clean (or after a one-off de-dupe), so the DB enforces what the action already does.
+- **Owner override to book INTO a block.** Every write path (incl. an owner booking manually)
+  returns the normal `unavailable` for a slot inside a Time Off block. A force-book override for
+  owners was considered and deferred: it isn't trivial (a `force` flag threaded through the
+  booking engine + a stored reason), and the simpler path — shrink or delete the block first —
+  already exists. Revisit if operators ask for it.
+- **Recurring time off is out of scope** (as specified): recurring patterns are the weekly
+  hours' job. Time Off is one-off blocks only. If a "every Monday off" need appears, it belongs
+  in `working_hours`, not here.
+- **Week-view per-staff bands.** The week grid aggregates all staff per day, so a per-staff
+  partial band has no single column to live in; the week shows SITE closures as a day hatch and
+  staff time off as a "Fuera · N" count, while the DAY view carries the full per-staff bands. A
+  dedicated per-staff week grid (one row per staff × 7 days) could render bands if added.

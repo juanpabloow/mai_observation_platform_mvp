@@ -84,7 +84,8 @@ async function loadRoster(
     listServices(tenantId, clientId, false),
     listAppointments(tenantId, { siteId: site.id, clientId, from: dayStart, to: dayEnd }),
     listAppointments(tenantId, { siteId: site.id, clientId, from: windowStart, to: windowEnd, limit: 1000 }),
-    listExceptions(tenantId, { siteId: site.id, from: dayStart, to: windowEnd }),
+    // Time Off tab shows PAST + upcoming blocks, so the window reaches back too.
+    listExceptions(tenantId, { siteId: site.id, from: windowStart, to: windowEnd }),
   ]);
 
   // One grouped query each instead of one per barber — the roster is the only place
@@ -112,6 +113,7 @@ async function loadRoster(
       siteId: s.site_id,
       siteName: sites.find((x) => x.id === s.site_id)?.name ?? site.name,
       workingHours: (s.working_hours ?? {}) as Record<string, { start: string; end: string }[]>,
+      siteOpeningHours: (sites.find((x) => x.id === s.site_id)?.opening_hours ?? {}) as Record<string, { start: string; end: string }[]>,
       serviceIds: serviceIds.get(s.id) ?? [],
       // Profile. Every one of these is a real column as of the staff-fields
       // migration; a null means nobody has filled it in, which the Details tab
@@ -162,6 +164,7 @@ async function loadRoster(
       // exceptions that name a staff member.
       .filter((e) => e.staff_id)
       .map((e) => ({
+        id: e.id,
         staffId: e.staff_id as string,
         startsAt: e.starts_at.toISOString(),
         endsAt: e.ends_at.toISOString(),

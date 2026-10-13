@@ -304,6 +304,30 @@ export async function deactivateStaff(tenantId: string, id: string): Promise<boo
   return (r.rowCount ?? 0) > 0;
 }
 
+/**
+ * Is there ANOTHER ACTIVE staff member at this site whose name matches case-insensitively?
+ * The display name is what the bot reads to customers, so two active "Andrés" at one site
+ * make an offer ambiguous (matchByName would return `ambiguous`). Enforced in the server
+ * action; this is the query behind it. `excludeId` skips the row being renamed. Only ACTIVE
+ * staff collide — an archived namesake doesn't reserve the name.
+ */
+export async function activeStaffNameTaken(
+  tenantId: string,
+  siteId: string,
+  name: string,
+  excludeId?: string,
+): Promise<boolean> {
+  const r = await query(
+    `SELECT 1 FROM staff
+      WHERE tenant_id = $1 AND site_id = $2 AND active = true
+        AND lower(btrim(name)) = lower(btrim($3))
+        AND ($4::uuid IS NULL OR id <> $4)
+      LIMIT 1`,
+    [tenantId, siteId, name, excludeId ?? null],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
 /** The inverse of deactivateStaff — reactivation restores availability + new bookings
  * for this staff member with no data migration and no side effects. Returns true if a
  * staff member was reactivated (false if not found / already active). */
