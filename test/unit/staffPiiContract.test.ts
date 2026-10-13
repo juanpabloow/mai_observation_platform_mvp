@@ -109,23 +109,33 @@ test('the Staff page is the ONLY page that reads staff PII, and it is client-adm
 });
 
 test('NO CHAIR is derived from takes_bookings, not from active', () => {
+  // The status is derived in the shared presence module (audit F1); StaffTab feeds it.
   const src = root('web/components/scheduling/staff/StaffTab.tsx');
-  assert.ok(/if \(!s\.takesBookings\) key = "no_chair";/.test(src), 'no_chair comes from takes_bookings');
+  const presence = root('web/components/scheduling/mobile/team/presence.ts');
+  assert.ok(/if \(!input\.takesBookings\) status = "no_chair";/.test(presence), 'no_chair comes from takes_bookings');
+  assert.ok(/takesBookings: s\.takesBookings,/.test(src), 'and the roster passes the column through');
   assert.ok(
-    !/if \(!s\.active\) key = "no_chair";/.test(src),
+    !/takesBookings: s\.active/.test(src) && !/if \(!(s|input)\.active\) (key|status) = "no_chair";/.test(src + presence),
     'active must not stand in for it — "no longer works here" and "holds no chair" are different facts',
   );
 });
 
 test('the service form can set a category (so a bad classification is correctable)', () => {
-  const src = root('web/components/scheduling/AdminPanel.tsx');
-  assert.ok(src.includes('const CATEGORY_OPTIONS'), 'the closed set is declared once');
+  // The closed set lives in ONE module the services menu and its editor share.
+  const cats = root('web/components/scheduling/services/categories.ts');
+  assert.ok(cats.includes('export const CATEGORY_GROUPS'), 'the closed set is declared once');
   for (const v of ['color', 'grooming', 'cut', 'feature']) {
-    assert.ok(new RegExp(`value: "${v}"`).test(src), `the form offers ${v}`);
+    assert.ok(new RegExp(`value: "${v}"`).test(cats), `the form offers ${v}`);
   }
-  assert.ok(/value: "",\s*label: "Sin categoría"/.test(src), 'clearing back to unclassified is offered');
-  // Both the create and the edit path must send it.
-  assert.equal(src.split('category: category === "" ? null : category').length - 1, 2, 'create AND edit send it');
+  assert.ok(/value: "",\s*label: "Sin categoría"/.test(cats), 'clearing back to unclassified is offered');
+  // Both the create and the edit path send it: one `fields` object carries the
+  // category and is spread into BOTH server actions.
+  const editor = root('web/components/scheduling/services/ServiceEditor.tsx');
+  assert.ok(editor.includes('category: form.category === "" ? null : form.category'), 'the category is in the saved fields');
+  // The editor's save sequence (lib/serviceSave) spreads the same fields into the update.
+  assert.ok(editor.includes('update: (id, patch) => updateServiceAction(clientId, id, patch)'), 'edit goes through the update action');
+  assert.ok(root('web/lib/serviceSave.ts').includes('actions.update(persisted.id, { ...input.fields'), 'edit sends it');
+  assert.ok(editor.includes('createServiceAction({ clientId, ...fields'), 'create sends it');
 });
 
 test('services.category is the primary source of the colour family; keywords are the fallback', () => {

@@ -15,6 +15,7 @@ import { listExceptions } from "@worker/db/repositories/scheduling/exceptions.js
 import { utcToZonedParts, zonedPartsToUtc } from "@worker/scheduling/timezone.js";
 import { StaffWorkspace } from "@/components/scheduling/staff/StaffWorkspace";
 import type { StaffTabProps } from "@/components/scheduling/staff/StaffTab";
+import type { TeamMobileExtras } from "@/components/scheduling/mobile/team/TeamMobile";
 
 /**
  * STAFF — the operational roster, a SCHEDULING surface.
@@ -39,7 +40,8 @@ export default async function ClientStaffPage({
   // No `tab`: the roster is the only view now (the Turnos/Ausencias stubs are gone —
   // see StaffWorkspace), so there is nothing for it to select. An old `?tab=shifts`
   // bookmark simply lands on the roster.
-  searchParams: Promise<{ s?: string; site?: string; dtab?: string }>;
+  // `p` is the PHONE detail screen (Equipo → a professional); `s` stays the desktop drawer.
+  searchParams: Promise<{ s?: string; site?: string; dtab?: string; p?: string }>;
 }) {
   await connection();
   const { clientId } = await params;
@@ -48,10 +50,22 @@ export default async function ClientStaffPage({
   // The roster is for the agency OR this client's OWNER — editors/staff are 404'd.
   if (!canManageClient(scope, clientId)) notFound();
 
+  const roster = await loadRoster(scope.tenantId, client.id, sp);
   return (
     <StaffWorkspace
       clientId={client.id}
-      staff={await loadRoster(scope.tenantId, client.id, sp)}
+      staff={roster?.staff ?? null}
+      mobile={
+        roster
+          ? {
+              ...roster.mobile,
+              clientName: client.name,
+              // Creating a professional is the same capability as seeing this page
+              // (canManageClient above); createStaffAction re-checks it on the server.
+              canCreate: true,
+            }
+          : null
+      }
     />
   );
 }
@@ -65,8 +79,8 @@ export default async function ClientStaffPage({
 async function loadRoster(
   tenantId: string,
   clientId: string,
-  sp: { s?: string; site?: string; dtab?: string },
-): Promise<StaffTabProps | null> {
+  sp: { s?: string; site?: string; dtab?: string; p?: string },
+): Promise<{ staff: StaffTabProps; mobile: Omit<TeamMobileExtras, "clientName" | "canCreate"> } | null> {
   const sites = await listSites(tenantId, { clientId, includeInactive: false });
   if (sites.length === 0) return null; // a barber belongs to a site — no site, no roster
   const site = sites.find((s) => s.id === sp.site) ?? sites[0];
@@ -80,7 +94,10 @@ async function loadRoster(
   const windowEnd = new Date(dayStart.getTime() + 30 * 86400_000);
 
   const [staff, services, todayAppts, windowAppts, exceptions] = await Promise.all([
-    listStaffAdmin(tenantId, { siteId: site.id, clientId, includeInactive: false }),
+    // includeInactive: the PHONE roster lists inactive professionals (labelled), and the
+    // site's avatar colours are built over every staff id, as on the agenda. The desktop
+    // roster still receives the ACTIVE ones only (StaffWorkspace filters), as before.
+    listStaffAdmin(tenantId, { siteId: site.id, clientId, includeInactive: true }),
     listServices(tenantId, clientId, false),
     listAppointments(tenantId, { siteId: site.id, clientId, from: dayStart, to: dayEnd }),
     listAppointments(tenantId, { siteId: site.id, clientId, from: windowStart, to: windowEnd, limit: 1000 }),
@@ -96,7 +113,13 @@ async function loadRoster(
     listStaffCertifications(tenantId, staffIds),
   ]);
 
-  return {
+  const openingHours = (site.opening_hours ?? {}) as Record<string, { start: string; end: string }[]>;
+  // Site-wide closures (no staff named): nobody is "en turno" during one — on any width.
+  const closures = exceptions
+    .filter((e) => !e.staff_id)
+    .map((e) => ({ id: e.id, staffId: "", startsAt: e.starts_at.toISOString(), endsAt: e.ends_at.toISOString(), reason: e.reason }));
+
+  const staffProps: StaffTabProps = {
     sites: sites.map((s) => ({ id: s.id, name: s.name, timezone: s.timezone })),
     currentSiteId: site.id,
     services: services.map((s) => ({
@@ -105,6 +128,7 @@ async function loadRoster(
       active: s.active,
       durationMin: s.duration_min,
       description: s.description,
+      category: s.category,
     })),
     members: staff.map((s) => ({
       id: s.id,
@@ -143,6 +167,7 @@ async function loadRoster(
     todayAppointments: todayAppts.map((a) => ({
       id: a.id,
       staffId: a.staff_id ?? "",
+      serviceId: a.service_id,
       startAt: a.start_at.toISOString(),
       endAt: a.service_end_at.toISOString(),
       serviceName: a.service_name_snapshot,
@@ -170,6 +195,15 @@ async function loadRoster(
         endsAt: e.ends_at.toISOString(),
         reason: e.reason,
       })),
+    openingHours,
+    closures,
+  };
+
+  return {
+    staff: staffProps,
+    mobile: {
+      selectedId: sp.p ?? null,
+    },
   };
 }
 

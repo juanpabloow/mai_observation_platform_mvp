@@ -1122,7 +1122,7 @@ body {
  * here — never by threading a colour through the component.
  */
 .u-appt {
-  border-radius: 8px;
+  border-radius: var(--sch-radius-event);
   background-color: var(--appt-fill);
   color: var(--appt-title);
   border: 1px solid var(--appt-edge, transparent);
@@ -1401,3 +1401,206 @@ body {
 .u-booking-dot {
   background-color: var(--booking-dot);
 }
+
+/*
+ * ── SCHEDULING design system ────────────────────────────────────────────────────
+ * One shape per KIND of component, used by the agenda, the appointment detail, the
+ * booking modal and the services menu (web/components/scheduling/ui/system.tsx):
+ *   controls (buttons, inputs, selects, menus' items' container)  → 12px
+ *   cards (appointment detail sections, service cards, popovers)    → 16px
+ *   modals (desktop)                                                → 24px
+ *   appointment EVENTS in the time grid (as short as 22px)          → 8px
+ *   state chips → pill; avatars → circle.
+ * Scoped by NAME (sch-*): no other module reads these, so changing them never moves
+ * the CRM or the Inbox.
+ *
+ * The destructive fill is a fixed red, not --danger: --danger turns to red-400 in dark
+ * mode for TEXT, and white on red-400 is 2.8:1. White on #dc2626 is 4.8:1 in both.
+ */
+:root {
+  --sch-radius-control: 12px;
+  --sch-radius-card: 16px;
+  --sch-radius-modal: 24px;
+  --sch-radius-event: 8px; /* appointment blocks in the time grid — can be 22px tall */
+}
+@theme inline {
+  --radius-sch-control: var(--sch-radius-control);
+  --radius-sch-card: var(--sch-radius-card);
+  --radius-sch-modal: var(--sch-radius-modal);
+  --radius-sch-event: var(--sch-radius-event);
+  --color-sch-destructive: #dc2626;
+  --color-sch-destructive-hover: #b91c1c;
+}
+
+/*
+ * ── Appointment STATE tones (agenda preview header + status selector) ────────────
+ * A state colour, NOT the service pastel the card wears — so "what is it" (fill) and
+ * "where is it in its lifecycle" (this) never share a channel. Always paired with the
+ * state written in words.
+ */
+:root {
+  --status-scheduled-bg: #e8effd;
+  --status-scheduled-fg: #1d4ea6;
+  --status-confirmed-bg: #e4f3ea;
+  --status-confirmed-fg: #17643a;
+  --status-completed-bg: #eceef2;
+  --status-completed-fg: #474c55;
+  --status-no_show-bg: #fde9e9;
+  --status-no_show-fg: #a3222f;
+  --status-cancelled-bg: #f1f2f4;
+  --status-cancelled-fg: #6e7075;
+}
+.dark {
+  --status-scheduled-bg: rgba(96, 165, 250, 0.16);
+  --status-scheduled-fg: #a8c8fb;
+  --status-confirmed-bg: rgba(74, 222, 128, 0.14);
+  --status-confirmed-fg: #8ee3ad;
+  --status-completed-bg: rgba(255, 255, 255, 0.08);
+  --status-completed-fg: #c9cbd1;
+  --status-no_show-bg: rgba(248, 113, 113, 0.16);
+  --status-no_show-fg: #f8a9a9;
+  --status-cancelled-bg: rgba(255, 255, 255, 0.05);
+  --status-cancelled-fg: #9a9ca2;
+}
+.u-status-scheduled { background-color: var(--status-scheduled-bg); color: var(--status-scheduled-fg); }
+.u-status-confirmed { background-color: var(--status-confirmed-bg); color: var(--status-confirmed-fg); }
+.u-status-completed { background-color: var(--status-completed-bg); color: var(--status-completed-fg); }
+.u-status-no_show { background-color: var(--status-no_show-bg); color: var(--status-no_show-fg); }
+.u-status-cancelled { background-color: var(--status-cancelled-bg); color: var(--status-cancelled-fg); }
+
+/*
+ * ── SCHEDULING · MOBILE (reference "M_AI Scheduling Móvil v2") ──────────────────
+ * The phone layouts of the agenda, appointment detail, booking, configuration and
+ * team read these `m-*` tokens — values taken from the reference, light and dark.
+ * Scoped by NAME (and the `.u-sch-m` container for type): nothing outside Scheduling's
+ * mobile screens reads them, so the desktop and other modules never move.
+ */
+:root {
+  --m-bg: #f5f6f8;
+  --m-sf: #ffffff;
+  --m-sf2: #eef0f3;
+  --m-bd: #e1e4e9;
+  --m-dv: #eceef1;
+  --m-tx: #12151b;
+  --m-tx2: #3a3d44;
+  --m-tx3: #646a78; /* 4.6:1 on --m-bg */
+  --m-pri: #12151b;
+  --m-onpri: #ffffff;
+  --m-scrim: rgba(18, 21, 27, 0.42);
+  --m-dn: #b4232f;
+  --m-dnbg: #fbeaed;
+  --m-dnbd: #f3d2d8;
+  --m-ok: #1c6338;
+  --m-info: #2f6be4;
+  --m-sk: #e6e9ed;
+  --m-warnbg: #fcf0da;
+  --m-warn: #7f520c;
+  /* Appointment pastels = the service CATEGORY (fill) + its swatch dot. */
+  --m-azul: #e6eefa;
+  --m-azul-s: #6e8fd3;
+  --m-arena: #f6ecd9;
+  --m-arena-s: #c2995a;
+  --m-lila: #eee9fa;
+  --m-lila-s: #957fd0;
+  --m-salvia: #e4f1e9;
+  --m-salvia-s: #6fae88;
+  --m-neutro: #eef0f3;
+  --m-neutro-s: #9ba3b2;
+  /* State chips: background / foreground. */
+  --m-st-scheduled-bg: #fcf0da;
+  --m-st-scheduled-fg: #7f520c;
+  --m-st-confirmed-bg: #e1f0e6;
+  --m-st-confirmed-fg: #1c6338;
+  --m-st-completed-bg: #e4e7ec;
+  --m-st-completed-fg: #3a3f47;
+  --m-st-cancelled-bg: #fbe8eb;
+  --m-st-cancelled-fg: #9e1a2c;
+  --m-st-no_show-bg: #e6eaf2;
+  --m-st-no_show-fg: #3f4d66;
+}
+.dark {
+  --m-bg: #0e1014;
+  --m-sf: #171a20;
+  --m-sf2: #22262e;
+  --m-bd: #2b3039;
+  --m-dv: #242830;
+  --m-tx: #f2f3f5;
+  --m-tx2: #c9cdd4;
+  --m-tx3: #9aa1ac;
+  --m-pri: #f2f3f5;
+  --m-onpri: #12151b;
+  --m-scrim: rgba(0, 0, 0, 0.6);
+  --m-dn: #ff8a8a;
+  --m-dnbg: #3a1d21;
+  --m-dnbd: #5a2a30;
+  --m-ok: #86d9a3;
+  --m-info: #8fb2ff;
+  --m-sk: #262a32;
+  --m-warnbg: #3a2e17;
+  --m-warn: #f2c46b;
+  --m-azul: #1e2839;
+  --m-arena: #2f291d;
+  --m-lila: #29243b;
+  --m-salvia: #1d2c24;
+  --m-neutro: #23272f;
+  --m-st-scheduled-bg: #3a2e17;
+  --m-st-scheduled-fg: #f2c46b;
+  --m-st-confirmed-bg: #183021;
+  --m-st-confirmed-fg: #86d9a3;
+  --m-st-completed-bg: #2a2f38;
+  --m-st-completed-fg: #c9cdd4;
+  --m-st-cancelled-bg: #3a1d21;
+  --m-st-cancelled-fg: #ff9a9a;
+  --m-st-no_show-bg: #232b38;
+  --m-st-no_show-fg: #afc0db;
+}
+@theme inline {
+  --color-m-bg: var(--m-bg);
+  --color-m-sf: var(--m-sf);
+  --color-m-sf2: var(--m-sf2);
+  --color-m-bd: var(--m-bd);
+  --color-m-dv: var(--m-dv);
+  --color-m-tx: var(--m-tx);
+  --color-m-tx2: var(--m-tx2);
+  --color-m-tx3: var(--m-tx3);
+  --color-m-pri: var(--m-pri);
+  --color-m-onpri: var(--m-onpri);
+  --color-m-scrim: var(--m-scrim);
+  --color-m-dn: var(--m-dn);
+  --color-m-dnbg: var(--m-dnbg);
+  --color-m-dnbd: var(--m-dnbd);
+  --color-m-ok: var(--m-ok);
+  --color-m-info: var(--m-info);
+  --color-m-sk: var(--m-sk);
+  --color-m-warnbg: var(--m-warnbg);
+  --color-m-warn: var(--m-warn);
+}
+/* The reference is set in the platform UI face (SF Pro on iOS) at 15px. Focus is the
+   app's ONE treatment (layered base rule / .u-focus) — not the reference's blue ring. */
+.u-sch-m {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  font-size: 15px;
+  color: var(--m-tx);
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
+.u-sch-m .u-tnum {
+  font-variant-numeric: tabular-nums;
+}
+.u-sch-m .u-noscroll {
+  scrollbar-width: none;
+}
+.u-sch-m .u-noscroll::-webkit-scrollbar {
+  display: none;
+}
+/* Category pastel of an appointment card (fill) and its swatch dot. */
+.u-m-cut { --m-fill: var(--m-azul); --m-dot: var(--m-azul-s); }
+.u-m-grooming { --m-fill: var(--m-arena); --m-dot: var(--m-arena-s); }
+.u-m-color { --m-fill: var(--m-lila); --m-dot: var(--m-lila-s); }
+.u-m-feature { --m-fill: var(--m-salvia); --m-dot: var(--m-salvia-s); }
+.u-m-neutral { --m-fill: var(--m-neutro); --m-dot: var(--m-neutro-s); }
+.u-m-st-scheduled { background-color: var(--m-st-scheduled-bg); color: var(--m-st-scheduled-fg); }
+.u-m-st-confirmed { background-color: var(--m-st-confirmed-bg); color: var(--m-st-confirmed-fg); }
+.u-m-st-completed { background-color: var(--m-st-completed-bg); color: var(--m-st-completed-fg); }
+.u-m-st-cancelled { background-color: var(--m-st-cancelled-bg); color: var(--m-st-cancelled-fg); }
+.u-m-st-no_show { background-color: var(--m-st-no_show-bg); color: var(--m-st-no_show-fg); }

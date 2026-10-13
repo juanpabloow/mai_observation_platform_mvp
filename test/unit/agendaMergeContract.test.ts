@@ -16,6 +16,9 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const read = (rel: string): string => readFileSync(`${root}${rel}`, 'utf8');
 
 const VIEW = 'web/components/scheduling/AgendaView.tsx';
+/** The appointment detail moved out of AgendaView into a side panel of its own. */
+const PANEL = 'web/components/scheduling/agenda/AppointmentPanel.tsx';
+const PREVIEW = 'web/components/scheduling/agenda/AppointmentPreview.tsx';
 const PAGE = 'web/app/clients/[clientId]/scheduling/agenda/page.tsx';
 const REPO = 'src/db/repositories/scheduling/appointments.ts';
 
@@ -86,12 +89,14 @@ test('identity is canonical — primary_identity replaced the raw phone column',
 });
 
 test('the appointment detail shows canonical identity — never the internal UUID', () => {
-  const src = read(VIEW);
-  assert.ok(src.includes('appt.contact_name ?? "Atención sin cita"'), 'the name is the title');
-  assert.ok(src.includes('appt.primary_identity ?? "—"'), 'the canonical identity is a labelled field');
-  // public_reference is still carried for other uses, but must not be the subtitle.
-  const detail = src.slice(src.indexOf('function ApptDrawer('), src.indexOf('/** Modal for new appointment'));
-  assert.ok(!detail.includes('public_reference'), 'the UUID/reference is not shown as identity');
+  for (const rel of [PANEL, PREVIEW]) {
+    const src = read(rel);
+    assert.ok(src.includes('appt.contact_name ?? "Atención sin cita"'), `${rel}: the name is the title`);
+    // The canonical identity (phone-or-email) — absent for a staff login, so only drawn when sent.
+    assert.ok(src.includes('appt.primary_identity ?'), `${rel}: the canonical identity is shown when present`);
+    // public_reference is still carried for other uses, but must not be shown as identity.
+    assert.ok(!src.includes('public_reference'), `${rel}: the UUID/reference is not shown as identity`);
+  }
 });
 
 // ─────────────── the redesign that had to survive ───────────────
@@ -103,7 +108,7 @@ test('the redesigned CALENDAR survived — main\'s horizontal card list did not'
   }
   assert.ok(src.includes('HOUR_PX'), 'the vertical time grid is intact');
   assert.ok(src.includes('GRID_FROM_HOUR') && src.includes('GRID_TO_HOUR'), 'the operating window is intact');
-  assert.ok(src.includes('function ApptDrawer('), 'the side drawer is intact');
+  assert.ok(src.includes('<AppointmentPanel'), 'the detail side panel is wired');
   // The pre-merge layout was a row of fixed-width per-staff card columns.
   assert.ok(!src.includes('flex min-h-0 flex-1 gap-3 overflow-x-auto'), 'the old card list is gone');
   assert.ok(!src.includes('function ActBtn('), 'the old inline action buttons are gone');
@@ -124,18 +129,20 @@ test('Day/Week and the KPI comparison survived the merge', () => {
   assert.ok(src.includes('higherIsBetter={false}'), 'no-show delta still inverts its colour');
 });
 
-test('Week groups by hour block: one readable card, the rest behind an in-flow +N', () => {
+test('Week groups by hour block: at most two cards, the rest behind an in-flow +N', () => {
   const src = read(VIEW);
   assert.ok(src.includes('function bucketWeekAppointments('), 'week groups appointments into hour blocks');
-  assert.ok(src.includes('const WEEK_HOUR_PX = 76'), 'week has its own block scale, separate from the day grid');
+  assert.ok(src.includes('const WEEK_HOUR_PX = 96'), 'week has its own block scale, separate from the day grid');
   assert.ok(
     src.includes('Math.min(Math.max(zonedParts(appt.start_at, tz).h, fromHour), toHour - 1)'),
     'an out-of-hours booking is clamped into an edge block, never dropped',
   );
-  assert.ok(src.includes('const [lead, ...rest] = block.appointments'), 'the earliest appointment in a block keeps the card');
-  // The whole point of the block model: the "+N citas" chip is a SIBLING of the card
+  assert.ok(src.includes('const [lead, second, ...rest] = block.appointments'), 'the two earliest appointments in a block keep a card');
+  // The +N chip opens EVERY appointment of the block — nothing is hidden for good.
+  assert.ok(src.includes('onClick={() => setWeekOverflow(block.appointments)}'), 'the overflow opens the whole block');
+  // The whole point of the block model: the "+N" chip is a SIBLING of the cards
   // inside the cell, so it can never be absolutely positioned over another card.
-  const chip = src.slice(src.indexOf('onClick={() => setWeekOverflow(rest)}'));
+  const chip = src.slice(src.indexOf('onClick={() => setWeekOverflow(block.appointments)}'));
   assert.ok(!chip.slice(0, 600).includes('absolute'), 'the +N indicator is in flow, not floating over neighbours');
   assert.ok(chip.includes('h-5 shrink-0'), 'the +N indicator is a fixed-height flex child of its block');
   assert.ok(src.includes('function WeekBlockCard('), 'week has its own card geometry');
@@ -147,7 +154,8 @@ test('Week view matches the weekly reading model without changing Day view', () 
   assert.ok(src.includes('u-appt-swatch'), 'the weekly legend uses the professional pastel colours');
   assert.ok(src.includes('sticky left-0 z-20 w-14'), 'the hour rail leads the grid in both views');
   assert.ok(!src.includes('sticky right-0 z-20'), 'no trailing rail — that made week read as a table');
-  assert.ok(src.includes('+{rest.length} {rest.length === 1 ? "cita" : "citas"}'), 'overflow is a compact +N marker');
+  assert.ok(src.includes('+{rest.length} más'), 'overflow is a compact +N marker');
+  assert.ok(src.includes('onClick={() => onMore(cell,'), 'the team view\'s +N opens the whole cell too');
   assert.ok(src.includes('function WeekOverflowDialog('), 'the marker opens an accessible appointment chooser');
   // Day keeps the proportional grid: a 90-minute booking stays twice a 45-minute one.
   assert.ok(src.includes('height={Math.max(22, ((endMin - startMin) / 60) * HOUR_PX - 2)}'), 'day cards keep real duration heights');
@@ -195,8 +203,9 @@ test('module gating and the real lifecycle actions survived', () => {
     assert.ok(src.includes(action), `${action} is still wired`);
   }
   // Contact / conversation links only when the owning module is enabled.
-  assert.ok(src.includes('appt.contact_id && contactsBase'), 'contact link is CRM-gated');
-  assert.ok(src.includes('appt.source_conversation_id && inboxBase'), 'conversation link is inbox-gated');
+  assert.ok(src.includes('selected.contact_id && props.contactsBase'), 'contact link is CRM-gated');
+  assert.ok(src.includes('selected.source_conversation_id && props.inboxBase'), 'conversation link is inbox-gated');
+  assert.ok(src.includes('listAppointmentActivityAction'), 'activity is the real read action');
 });
 
 test('the TODOs explaining still-missing backend were not dropped', () => {
@@ -209,14 +218,41 @@ test('the TODOs explaining still-missing backend were not dropped', () => {
 
 // ─────────────── the UX consolidation pass (Senior Frontend Engineer) ───────────────
 
-test('selecting an appointment opens one centred record modal / mobile bottom sheet', () => {
-  const src = read(VIEW);
-  assert.ok(src.includes('sm:items-center') && src.includes('sm:w-[min(58rem,calc(100vw-2rem))]'), 'desktop centres a bounded detail modal');
-  assert.ok(src.includes('items-end justify-center') && src.includes('rounded-t-3xl'), 'mobile presents the same record as a bottom sheet');
-  // The SAME body renders at every width.
-  assert.equal(src.match(/STATUS_TITLE\[appt\.status\]/g)?.length, 1, 'the drawer body is written once, not per-mode');
-  // Overlay contract: scrim + focus trap (Escape/restore) come from the shared Overlay.
-  assert.ok(src.includes('OVERLAY_SCRIM') && src.includes('useTrappedPanel'), 'the overlay has a scrim and a focus trap');
+test('selecting an appointment opens a side panel built from the shared Scheduling system', () => {
+  const panel = read(PANEL);
+  assert.ok(panel.includes('fixed inset-y-0 right-0 z-50 flex w-full'), 'a right-hand panel; full width on the phone');
+  assert.ok(panel.includes('md:w-[min(34rem,calc(100vw-3rem))]'), 'one readable column from md');
+  assert.ok(panel.includes('from "../ui/system"') && panel.includes('from "../ui/Menu"'), 'it composes the shared system, not its own controls');
+  for (const own of ['function IconButton', 'function ConfirmDialog', 'rounded-[10px]', 'h-[36px]']) {
+    assert.ok(!panel.includes(own), `no panel-local "${own}"`);
+  }
+  // Reading order: when → who → what → history.
+  const at = (s: string) => panel.indexOf(s);
+  assert.ok(at('id="appt-panel-title"') < at('id="appt-panel-client"') && at('id="appt-panel-client"') < at('id="appt-panel-service"') && at('id="appt-panel-service"') < at('id="appt-panel-activity"'), 'date → client → service → activity');
+  // Each action once: "Completar" is the footer primary only; reschedule is the service card's.
+  // The rule lives in the shared plan (behaviour-tested in appointmentActionPlan.test.ts).
+  assert.ok(read('web/lib/appointmentActionPlan.ts').includes('stateMenu: transitions.filter((t) => t !== "completed")'), 'the state menu does not repeat the footer primary');
+  assert.ok(panel.includes('const stateTargets = plan.stateMenu;'), 'and the panel builds its menu from it');
+  assert.equal((panel.match(/onClick=\{props\.onReschedule\}/g) ?? []).length, 1, 'one reschedule control on the desktop panel');
+  // Below md the detail is the phone sheet (mobile/MobileAppointmentSheet), same props.
+  assert.ok(panel.includes('if (phone) {') && panel.includes('<MobileAppointmentSheet'), 'the phone gets its own bottom sheet');
+  assert.ok(panel.includes('useTrappedPanel') && panel.includes('const onEscape = useCallback'), 'focus trap with a stable close handler');
+  assert.ok(panel.includes('DESTRUCTIVE.has(target)') && panel.includes('<ConfirmDialog'), 'cancel / no-show confirm first');
+  assert.ok(read('web/components/scheduling/agenda/status.ts').includes('NEXT_STATUSES'), 'transitions mirror the engine');
+  for (const fake of ['Añadir formulario', 'política de pagos', 'recurrencia', 'cita de grupo', 'Ver venta', 'Finalizar compra']) {
+    assert.ok(!panel.toLowerCase().includes(fake.toLowerCase()), `no "${fake}" control`);
+  }
+  assert.ok(read(VIEW).includes('{selected ? (\n          <AppointmentPanel'), 'the panel renders beside the grid, not instead of it');
+});
+
+test('hovering an appointment shows an informational, viewport-clamped preview', () => {
+  const view = read(VIEW);
+  const preview = read(PREVIEW);
+  assert.ok(view.includes('e.pointerType !== "mouse"'), 'touch never depends on hover — a tap opens the detail');
+  assert.ok(view.includes(':focus-visible'), 'keyboard focus is the hover alternative');
+  assert.ok(view.includes('hidePreviewSoon') && view.includes('keepPreview'), 'the pointer can cross into the preview without flicker');
+  assert.ok(preview.includes('role="tooltip"') && !preview.includes('<button'), 'the preview is information, never a form');
+  assert.ok(preview.includes('vw - margin') && preview.includes('vh - h - margin'), 'it is clamped inside the viewport');
 });
 
 test('the calendar speaks 24-hour time, never AM/PM', () => {
@@ -284,27 +320,60 @@ test('manual booking has a real selectable month with concise availability label
   assert.ok(src.includes('className="u-module-modal'), 'the dialog centres against the module canvas');
 });
 
-test('control geometry is unified on the toolbar tokens', () => {
+test('control geometry comes from ONE Scheduling system, not per-screen strings', () => {
+  const sys = read('web/components/scheduling/ui/system.tsx');
+  assert.ok(sys.includes('md: "h-[44px] px-4 lg:h-[40px]"') && sys.includes('sm: "h-[44px] px-3.5 lg:h-[36px] lg:text-[13px]"'), 'two button sizes, both 44px on touch');
+  for (const v of ['primary:', 'secondary:', 'tertiary:', 'destructive:']) assert.ok(sys.includes(v), `variant ${v}`);
+  const css = read('web/app/globals.css');
+  for (const [k, px] of [['control', 12], ['card', 16], ['modal', 24], ['event', 8]] as const) {
+    assert.ok(css.includes(`--sch-radius-${k}: ${px}px`), `radius token ${k} = ${px}px`);
+  }
   const src = read(VIEW);
-  // The date steppers clear the 36×36 minimum on their own; the Today button and the
-  // facets ride the shared control primitives / --control-h token.
-  assert.ok(src.includes('h-[var(--control-h)] w-9'), 'the steppers are 38×36, not the old 28px discs');
-  assert.ok(src.includes('className={CONTROL_CLS}'), 'Hoy reuses the shared control class');
-  assert.ok(!src.includes('rounded-md border border-line-strong px-3 text-sm transition-colors hover:bg-hover'), 'the old ad-hoc 9px control string is gone');
+  assert.ok(src.includes('segmentShell("sm")') && src.includes('buttonClass({ variant: "primary"'), 'the toolbar uses the shared segmented control and buttons');
+  for (const old of ['rounded-[9px]', 'rounded-[7px]', 'h-[34px]', 'className={CONTROL_CLS}', 'className={OUTLINE_CLS}']) {
+    assert.ok(!src.includes(old), `the old ad-hoc "${old}" is gone`);
+  }
 });
 
 test('control heights are absolute px, because this app scales the rem ramp', () => {
-  const src = read(VIEW);
-  // The root font-size is 14.4px, so Tailwind's rem steps under-deliver by 10%:
-  // h-11 = 39.6px (not 44), h-10 = 36px, h-9 = 32.4px (not 36), h-8 = 28.8px. Every
-  // control height that has to MEAN something is therefore written in px.
-  for (const rem of [' h-7\\b', ' h-8\\b', ' h-9\\b', ' h-11\\b']) {
-    assert.ok(!new RegExp(rem).test(src), `no rem-scale${rem.replace('\\\\b', '')} control height`);
+  // The root font-size is a preference (90% compact), so Tailwind's rem steps shrink:
+  // h-11 = 39.6px (not 44), h-9 = 32.4px. Control heights are written in px.
+  for (const rel of [VIEW, PANEL, 'web/components/scheduling/ui/system.tsx', 'web/components/scheduling/ui/Menu.tsx']) {
+    const src = read(rel).replace(/\/\*[\s\S]*?\*\//g, '');
+    for (const rem of [' h-7\\b', ' h-8\\b', ' h-9\\b', ' h-11\\b']) {
+      assert.ok(!new RegExp(rem).test(src), `${rel}: no rem-scale${rem.replace('\\\\b', '')} control height`);
+    }
   }
-  assert.ok(src.includes('h-[44px]'), 'touch controls are a real 44px');
-  assert.ok(src.includes('lg:h-[36px]'), 'and fall back to the compact desktop size from lg up');
-  // The segmented pill fills its 34px shell exactly (3px padding a side), which is
-  // what the reference draws — h-7 left a 1.4px gap top and bottom.
-  assert.ok(src.includes('h-[34px] items-center gap-0.5 rounded-[9px] bg-chip p-[3px]'), 'the segmented shell is 34px');
-  assert.ok(src.includes('flex h-[28px] items-center rounded-[7px]'), 'its pills are 28px, filling the shell');
+  assert.ok(read('web/components/scheduling/ui/system.tsx').includes('export const INPUT = `${FIELD} h-[44px] lg:h-[40px]`;'), 'fields are a real 44px on touch');
+});
+
+test('a confirmation inside the detail panel is modal: Tab cannot reach the panel behind it', () => {
+  const panel = read(PANEL);
+  const sys = read('web/components/scheduling/ui/system.tsx');
+  // Everything behind the confirmation is inert while it is open (one wrapper).
+  assert.ok(panel.includes('const layer = useModalLayer(confirm !== null'), 'the panel uses the shared modal layer');
+  assert.ok(panel.includes('<div inert={layer.inert} className="flex min-h-0 flex-1 flex-col">'), 'the panel body is inert behind it');
+  // The layer focuses the SAFE choice, and restores focus to what opened it.
+  assert.ok(sys.includes('querySelector<HTMLElement>("[data-autofocus]")') && sys.includes('data-autofocus>'), 'focus lands on the safe choice');
+  assert.ok(sys.includes('back.isConnected ? back : fallback?.current'), 'focus returns to the opener (or the panel)');
+  const overlay = read('web/components/ui/Overlay.tsx');
+  assert.ok(overlay.includes('!el.closest("[inert]")'), 'the focus trap ignores inert content');
+});
+
+test('blocked time shows in EVERY agenda layout, not only the day columns', () => {
+  // The coverage RULES are behaviour-tested in test/unit/agendaBlocks.test.ts.
+  const src = read(VIEW);
+  assert.ok(src.includes('from "@/lib/agendaBlocks"'), 'one shared helper module');
+  assert.equal((src.match(/\{blocksOn\(dayKey\)\.map\(\(b\) => \(/g) ?? []).length, 1, 'the tablet board draws block rows');
+  // The phone's list (mobile/MobileAgenda) draws them through lib/mobileAgenda.buildDay,
+  // whose behaviour (site-wide + the professional in view, clipped per day) is unit-tested.
+  const phone = read('web/components/scheduling/mobile/MobileAgenda.tsx');
+  assert.ok(phone.includes('buildDay(visible, props.blocks, props.date, tz, now, { staffInView })'), 'the phone list includes blocks');
+  assert.ok(phone.includes('⊘ Bloqueado ·'), 'and draws them as blocks');
+  assert.ok(src.includes('...shownDayKeys.filter((dk) => blocksOn(dk).length > 0)'), 'a blocked day without appointments still appears');
+  assert.equal((src.match(/\{listDayKeys\.length === 0 \? \(/g) ?? []).length, 1, 'the tablet empty state accounts for blocks');
+  assert.ok(src.includes('blocks={blocksOn(shownDayKeys[0])}') && src.includes('bookableStaffIds={bookableStaffIds}'), 'the hour rows know the blocks AND who could take a booking');
+  assert.ok(src.includes('const covered = hourState(blocks, hour, bookableStaffIds) === "blocked";'), 'only a fully blocked hour stops offering a booking');
+  assert.ok(src.includes('blocksOn(col.key, fromHour * 60, toHour * 60).map('), 'week by hours draws blocks');
+  assert.ok(src.includes('className="relative flex flex-col gap-1 border-b border-line-soft p-1"'), 'week hour cells paint ABOVE the block overlay');
 });

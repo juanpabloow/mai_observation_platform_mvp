@@ -38,6 +38,15 @@ import {
 } from "@/components/ui/icons";
 import { StaffCreateDrawer } from "./StaffCreateDrawer";
 import { StaffHeaderCard, type StaffHeaderSlots } from "./StaffHeaderCard";
+import {
+  inRosterFacet,
+  rosterFacetCounts,
+  rosterOrder,
+  rosterStatus,
+  type RosterFacet,
+  type RosterStatus,
+  type Weekly,
+} from "@/components/scheduling/mobile/team/presence";
 
 /** Serializable shapes from the server page. */
 export interface StaffSiteOpt { id: string; name: string; timezone: string }
@@ -47,6 +56,8 @@ export interface StaffServiceOpt {
   active: boolean;
   durationMin: number;
   description: string | null;
+  /** services.category — the colour family on the phone screens (optional). */
+  category?: string | null;
 }
 export interface StaffCertification {
   id: string;
@@ -88,6 +99,8 @@ export interface StaffMember {
 export interface StaffAppointment {
   id: string;
   staffId: string;
+  /** The service row, for its stored category on the phone screens (optional). */
+  serviceId?: string;
   startAt: string;
   endAt: string;
   serviceName: string;
@@ -134,7 +147,7 @@ const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 const DETAIL_TABS = ["performance", "details", "services", "hours", "time off"] as const;
 type DetailTab = (typeof DETAIL_TABS)[number];
 
-type StatusKey = "with_client" | "available" | "on_shift" | "off_today" | "time_off" | "no_chair";
+type StatusKey = RosterStatus;
 
 // ── HOURS DRAFT ──────────────────────────────────────────────────────────────
 // The Hours tab edits a LOCAL copy so the unsaved bar has something to compare
@@ -179,9 +192,11 @@ const STATUS: Record<StatusKey, { label: string; dot: string; text: string; chip
   with_client: { label: "Con cliente", dot: "bg-service-purple", text: "text-service-purple", chip: "border-service-purple/20 bg-service-purple/8" },
   available: { label: "Disponible", dot: "bg-success", text: "text-success", chip: "border-success/25 bg-success/8" },
   on_shift: { label: "En turno", dot: "bg-success/60", text: "text-success", chip: "border-success/25 bg-success/8" },
+  off_shift: { label: "Fuera de turno", dot: "bg-faintest", text: "text-faint", chip: "border-line bg-chip" },
   off_today: { label: "Sin turno hoy", dot: "bg-faintest", text: "text-faint", chip: "border-line bg-chip" },
   time_off: { label: "Ausente", dot: "bg-brand", text: "text-brand", chip: "border-brand/20 bg-brand-soft" },
   no_chair: { label: "Sin silla", dot: "bg-faintest", text: "text-faint", chip: "border-line bg-chip" },
+  inactive: { label: "Inactivo", dot: "bg-faintest", text: "text-faint", chip: "border-line bg-chip" },
 };
 
 export interface StaffTabProps {
@@ -195,6 +210,11 @@ export interface StaffTabProps {
   todayAppointments: StaffAppointment[];
   windowAppointments: StaffWindowAppointment[];
   timeOff: StaffTimeOff[];
+  /** The site's opening hours — a professional with no hours of their own inherits them,
+   *  and their own hours count only where the site is open (same rule as availability). */
+  openingHours: Weekly;
+  /** Site-wide closures (exceptions naming no staff) — nobody is on shift during one. */
+  closures: StaffTimeOff[];
   /** Which drawer tab to open on — `?dtab=` makes a barber's hours or services a
    *  link you can send someone, not a place they have to click to. */
   detailTab?: string;
@@ -220,9 +240,6 @@ export function StaffTab(
   const windowAppointments = props.windowAppointments ?? [];
   const timeOff = props.timeOff ?? [];
 
-  /** The site-local weekday key of "now" — what the working-hours map is indexed by. */
-  const todayKey = WEEKDAYS[weekdayIndex(now, tz)];
-
   const byStaff = useMemo(() => {
     const map = new Map<string, StaffAppointment[]>();
     for (const a of props.todayAppointments ?? []) {
@@ -235,57 +252,68 @@ export function StaffTab(
     return map;
   }, [props.todayAppointments]);
 
-  /** Status + footer for one barber, entirely derived. */
+  /**
+   * Status + footer for one barber, entirely derived — through the SAME presence the phone
+   * roster uses (presence.ts), so 390, 768 and 1440 agree on who is on shift now. "Has
+   * hours today" alone used to read as "Disponible" after the shift had ended.
+   */
   const describe = (s: StaffMember) => {
     const appts = byStaff.get(s.id) ?? [];
-    const off = timeOff.find((t) => t.staffId === s.id && new Date(t.startsAt) <= now && new Date(t.endsAt) > now);
-    const worksToday = s.workingHours[todayKey]?.length ? true : Object.keys(s.workingHours).length === 0;
-    const inChair = appts.find((a) => new Date(a.startAt) <= now && new Date(a.endAt) > now);
     const next = appts.find((a) => new Date(a.startAt) > now);
-
-    let key: StatusKey;
-    let suffix = "";
     // NO CHAIR is takes_bookings, NOT active. They are different facts: `active =
     // false` means they no longer work here (and the page does not even load them),
     // while takes_bookings = false is a front-desk hire who works every day and
     // simply has no agenda lane. Deriving this from `active` conflated the two.
-    if (!s.takesBookings) key = "no_chair";
-    else if (off) {
-      key = "time_off";
+    const r = rosterStatus({
+      active: s.active,
+      takesBookings: s.takesBookings,
+      workingHours: s.workingHours,
+      siteHours: props.openingHours,
+      appts,
+      timeOff: timeOff.filter((t) => t.staffId === s.id),
+      closures: props.closures ?? [],
+      now: now.getTime(),
+      tz,
+    });
+    const key: StatusKey = r.status;
+    const off = r.away;
+    let suffix = "";
+    if (key === "time_off" && off) {
       const days = Math.max(1, Math.round((new Date(off.endsAt).getTime() - new Date(off.startsAt).getTime()) / 86_400_000));
       suffix = ` · ${days} ${days === 1 ? "día" : "días"}`;
-    } else if (inChair) {
-      key = "with_client";
-      suffix = ` · hasta ${fmtTime(inChair.endAt, tz)}`;
-    } else if (!worksToday) key = "off_today";
-    else if (appts.length > 0 || next) key = "available";
-    else key = "on_shift";
+    } else if (key === "with_client") {
+      const inChair = appts.find((a) => new Date(a.startAt) <= now && new Date(a.endAt) > now);
+      if (inChair) suffix = ` · hasta ${fmtTime(inChair.endAt, tz)}`;
+    } else if (key === "off_shift" || key === "inactive") {
+      // "Entra a las 09:00", "Terminó a las 19:00", "Sede cerrada hasta las …" — the
+      // phone's words for why a professional who works today is not on shift now.
+      suffix = ` · ${r.presence.sub}`;
+    }
 
-    return { key, suffix, appts, next, off, worksToday };
+    return { key, suffix, appts, next, off, worksToday: r.worksToday, onShift: r.onShift };
   };
 
-  const filtered = props.members.filter((s) => {
+  // Inactive professionals are listed (last, labelled) exactly as on the phone.
+  const filtered = rosterOrder(props.members).filter((s) => {
     const serviceNames = props.services
       .filter((service) => s.serviceIds.includes(service.id))
       .map((service) => service.name);
     const haystack = [s.name, s.title, s.siteName, ...serviceNames].filter(Boolean).join(" ").toLowerCase();
     if (search && !haystack.includes(search.toLowerCase())) return false;
     if (serviceFilter && !s.serviceIds.includes(serviceFilter)) return false;
-    if (statusFilter && describe(s).key !== statusFilter) return false;
+    if (statusFilter) {
+      const d = describe(s);
+      if (!inRosterFacet({ status: d.key, onShift: d.onShift }, statusFilter as RosterFacet)) return false;
+    }
     return true;
   });
 
   // The legend: real counts over the WHOLE roster, not the filtered view.
-  const counts = props.members.reduce(
-    (acc, s) => {
-      const k = describe(s).key;
-      if (k === "with_client") acc.withClient += 1;
-      else if (k === "available" || k === "on_shift") acc.available += 1;
-      else acc.off += 1;
-      return acc;
-    },
-    { withClient: 0, available: 0, off: 0 },
-  );
+  const facets = rosterFacetCounts(props.members.map((s) => {
+    const d = describe(s);
+    return { status: d.key, onShift: d.onShift };
+  }));
+  const counts = { withClient: facets.with_client, available: facets.available, off: facets.off_today };
 
   const selected = props.selectedId ? props.members.find((s) => s.id === props.selectedId) ?? null : null;
   const hrefFor = (id: string | null) => {
@@ -1465,7 +1493,7 @@ function StaffDetail({
 // <input> gives you); the empty string means "cleared", which maps to NULL on the way
 // out — the column's own empty state. Keeping that translation in ONE place is why
 // these are functions and not inline ternaries in the JSX.
-interface ProfileDraft {
+export interface ProfileDraft {
   /** The barber's NAME. It lives in this draft — and so behind the panel's unsaved bar —
    *  rather than in a separate editor, because there is exactly one write path per field
    *  on this screen. */
@@ -1494,7 +1522,7 @@ const EMPLOYMENT_TYPES = [
   { value: "contractor", label: "Contractor" },
 ] as const;
 
-function profileFromMember(m: StaffMember): ProfileDraft {
+export function profileFromMember(m: StaffMember): ProfileDraft {
   return {
     name: m.name,
     title: m.title ?? "",
@@ -1511,11 +1539,11 @@ function profileFromMember(m: StaffMember): ProfileDraft {
   };
 }
 
-type ProfileKey = keyof ProfileDraft;
+export type ProfileKey = keyof ProfileDraft;
 
 /** Which fields differ from what is stored — the number the unsaved bar reports, and
  *  the exact set the patch will carry. */
-function dirtyProfileFields(d: ProfileDraft, m: StaffMember): ProfileKey[] {
+export function dirtyProfileFields(d: ProfileDraft, m: StaffMember): ProfileKey[] {
   const stored = profileFromMember(m);
   return (Object.keys(d) as ProfileKey[]).filter((k) =>
     k === "skills"
@@ -1539,7 +1567,7 @@ function profileError(d: ProfileDraft): string | null {
 }
 
 /** Only the changed fields, translated to the repository's shape ("" → null). */
-function profilePatch(d: ProfileDraft, dirty: ProfileKey[]): Record<string, unknown> {
+export function profilePatch(d: ProfileDraft, dirty: ProfileKey[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   const blank = (v: string) => (v.trim() === "" ? null : v.trim());
   for (const k of dirty) {
@@ -1908,9 +1936,4 @@ function fmtDay(iso: string, tz: string): string {
 }
 function dayKey(d: Date, tz: string): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
-}
-/** 0=Sunday, in the SITE's timezone — the index into the working-hours map. */
-function weekdayIndex(d: Date, tz: string): number {
-  const name = new Intl.DateTimeFormat("en-US", { timeZone: tz, weekday: "short" }).format(d).toLowerCase().slice(0, 3);
-  return Math.max(0, (WEEKDAYS as readonly string[]).indexOf(name));
 }

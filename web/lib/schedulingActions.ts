@@ -3,9 +3,10 @@
 import { revalidatePath } from "next/cache";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { isUuid } from "./clientModuleValidation";
+import { createThenMaybeConfirm, type CreateOutcome, type ManualBookingResult } from "./manualBooking";
 import { canAccessSchedulingSite, canAccessSchedulingStaff, canOperateScheduling, isSchedulingStaff } from "./access";
 import { listContacts } from "@worker/db/repositories/contacts.js";
-import { getAppointmentById } from "@worker/db/repositories/scheduling/appointments.js";
+import { getAppointmentById, listAppointmentEvents } from "@worker/db/repositories/scheduling/appointments.js";
 import {
   createAppointment,
   rescheduleAppointment,
@@ -25,25 +26,29 @@ import {
 
 export type ActionResult = { ok: true } | { ok: false; error: string };
 
-const GENERIC_GATE = "Not available.";
+const GENERIC_GATE = "No disponible.";
 
+/** Spanish copy for a booking-engine error — the agenda is a Spanish surface, so an
+ * English "No se pudo cancelar la cita." no longer reaches the operator. */
 function messageFor(error: BookingError, fallback: string): string {
   switch (error) {
     case "conflict_slot":
-      return "That time was just booked. Pick another slot.";
+      return "Ese horario se acaba de ocupar. Elige otro.";
     case "unavailable":
-      return "That time is not available.";
+      return "Ese horario no está disponible.";
     case "no_staff":
-      return "The selected staff can't take that time.";
+      return "Ese profesional no puede tomar ese horario.";
     case "not_found":
-      return "Not available.";
+      return "No disponible.";
     case "module_disabled":
       // A concurrent disable — generic, no internal detail leaked.
-      return "Not available.";
+      return "No disponible.";
     case "invalid_transition":
-      return "That status change isn't allowed.";
+      return "Ese cambio de estado no está permitido.";
     case "contact_conflict":
-      return "That phone or email already belongs to a different contact.";
+      return "Ese teléfono o correo ya pertenece a otro contacto.";
+    case "invalid_phone":
+      return "No pudimos leer el teléfono. Escríbelo con el indicativo del país.";
     default:
       return fallback;
   }
@@ -150,6 +155,11 @@ export interface ManualAppointmentInput {
    *  without creating/mutating a contact. Wins over typed identity; the domain refuses a
    *  contact_id that isn't this client's, or typed identity that resolves elsewhere. */
   contactId?: string;
+  /** One per open booking form (a UUID): a retried submit replays instead of booking
+   *  twice — the engine's idempotency, namespaced so it can't collide with API keys. */
+  idempotencyKey?: string;
+  /** "Estado inicial": `confirmed` runs the real confirm transition after creating. */
+  initialStatus?: "scheduled" | "confirmed";
 }
 
 /** Create a manual appointment or walk-in from the agenda. A walk-in without any
@@ -157,8 +167,15 @@ export interface ManualAppointmentInput {
 export async function createManualAppointmentAction(
   clientId: string,
   input: ManualAppointmentInput,
-): Promise<ActionResult> {
-  if (!isUuid(input.siteId) || !isUuid(input.serviceId) || (input.staffId && !isUuid(input.staffId)) || (input.contactId && !isUuid(input.contactId))) {
+): Promise<ManualBookingResult> {
+  if (
+    !isUuid(input.siteId) ||
+    !isUuid(input.serviceId) ||
+    (input.staffId && !isUuid(input.staffId)) ||
+    (input.contactId && !isUuid(input.contactId)) ||
+    (input.idempotencyKey && !isUuid(input.idempotencyKey)) ||
+    (input.initialStatus && input.initialStatus !== "scheduled" && input.initialStatus !== "confirmed")
+  ) {
     return { ok: false, error: GENERIC_GATE };
   }
   const ctx = await gate(clientId);
@@ -175,7 +192,7 @@ export async function createManualAppointmentAction(
     staffId = ctx.scope.schedulingStaffId;
   }
   const start = new Date(input.startAt);
-  if (Number.isNaN(start.getTime())) return { ok: false, error: "Invalid start time." };
+  if (Number.isNaN(start.getTime())) return { ok: false, error: "La hora de inicio no es válida." };
 
   // C-4.1: booking for an existing contact attaches to it directly (no typed identity).
   // Otherwise a walk-in with a name+phone still resolves a contact (channel 'walk_in') so
@@ -187,6 +204,7 @@ export async function createManualAppointmentAction(
     ? input.channelUserId ?? (input.customerPhone || input.customerName || "").trim()
     : undefined;
 
+  const create = async (): Promise<CreateOutcome> => {
   const result = await createAppointment({
     tenantId: ctx.scope.tenantId,
     siteId: input.siteId,
@@ -202,14 +220,22 @@ export async function createManualAppointmentAction(
     origin: input.walkIn ? "walk_in" : "internal",
     createdByType: "agent",
     createdByUserId: ctx.scope.userId,
-    idempotencyKey: null,
+    idempotencyKey: input.idempotencyKey ? `agenda-manual:${input.idempotencyKey}` : null,
     // The VALIDATED contextual client — a site of another client is not-found.
     scopeClientId: ctx.client.id,
   });
+  if (!result.ok) return { ok: false, error: messageFor(result.error, "No se pudo crear la cita.") };
+  return { ok: true, id: result.value.id, status: result.value.status };
+  };
 
-  if (!result.ok) return { ok: false, error: messageFor(result.error, "Could not create the appointment.") };
-  revalidatePath(agendaPath(ctx.client.id));
-  return { ok: true };
+  const outcome = await createThenMaybeConfirm(
+    create,
+    // The SAME gated transition the detail's "Confirmar" runs (own-column rule included).
+    (id) => transition("confirmed", clientId, id, "No se pudo confirmar la cita."),
+    input.initialStatus ?? "scheduled",
+  );
+  if (outcome.ok) revalidatePath(agendaPath(ctx.client.id));
+  return outcome;
 }
 
 async function transition(
@@ -237,19 +263,19 @@ async function transition(
 }
 
 export async function cancelAppointmentAction(clientId: string, appointmentId: string, reason?: string): Promise<ActionResult> {
-  return transition("cancelled", clientId, appointmentId, "Could not cancel.", reason);
+  return transition("cancelled", clientId, appointmentId, "No se pudo cancelar la cita.", reason);
 }
 
 export async function confirmAppointmentAction(clientId: string, appointmentId: string): Promise<ActionResult> {
-  return transition("confirmed", clientId, appointmentId, "Could not confirm.");
+  return transition("confirmed", clientId, appointmentId, "No se pudo confirmar la cita.");
 }
 
 export async function completeAppointmentAction(clientId: string, appointmentId: string): Promise<ActionResult> {
-  return transition("completed", clientId, appointmentId, "Could not complete.");
+  return transition("completed", clientId, appointmentId, "No se pudo completar la cita.");
 }
 
 export async function noShowAppointmentAction(clientId: string, appointmentId: string): Promise<ActionResult> {
-  return transition("no_show", clientId, appointmentId, "Could not mark no-show.");
+  return transition("no_show", clientId, appointmentId, "No se pudo marcar la inasistencia.");
 }
 
 export async function rescheduleAppointmentAction(
@@ -267,7 +293,7 @@ export async function rescheduleAppointmentAction(
     return { ok: false, error: GENERIC_GATE };
   }
   const start = new Date(startAt);
-  if (Number.isNaN(start.getTime())) return { ok: false, error: "Invalid start time." };
+  if (Number.isNaN(start.getTime())) return { ok: false, error: "La hora de inicio no es válida." };
   const r = await rescheduleAppointment({
     tenantId: ctx.scope.tenantId,
     appointmentId,
@@ -277,7 +303,80 @@ export async function rescheduleAppointmentAction(
     actorUserId: ctx.scope.userId,
     scopeClientId: ctx.client.id,
   });
-  if (!r.ok) return { ok: false, error: messageFor(r.error, "Could not reschedule.") };
+  if (!r.ok) return { ok: false, error: messageFor(r.error, "No se pudo reprogramar la cita.") };
   revalidatePath(agendaPath(ctx.client.id));
   return { ok: true };
+}
+
+/**
+ * One row of an appointment's ACTIVITY ("Ver actividad" in the agenda detail) — a
+ * read-only projection of `appointment_events`. Deliberately narrow: what happened,
+ * who originated it (a role, never a user id) and when, plus the two details an
+ * operator acts on (a reschedule's old/new time, a cancellation's typed reason).
+ * Staff ids, user ids and the raw detail blob never leave the server.
+ */
+export interface AppointmentActivityItem {
+  id: string;
+  type: "created" | "rescheduled" | "cancelled" | "confirmed" | "completed" | "no_show" | "note" | "other";
+  actor: "team" | "public" | "agent" | "system";
+  at: string;
+  reason: string | null;
+  fromStart: string | null;
+  toStart: string | null;
+}
+
+const ACTIVITY_TYPE: Record<string, AppointmentActivityItem["type"]> = {
+  appointment_created: "created",
+  appointment_rescheduled: "rescheduled",
+  appointment_cancelled: "cancelled",
+  appointment_confirmed: "confirmed",
+  appointment_completed: "completed",
+  appointment_no_show: "no_show",
+  manual_note: "note",
+};
+const ACTIVITY_ACTOR: Record<string, AppointmentActivityItem["actor"]> = {
+  agent: "team",
+  public: "public",
+  n8n: "agent",
+  system: "system",
+};
+
+function isoOrNull(v: unknown): string | null {
+  if (typeof v !== "string" && !(v instanceof Date)) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString();
+}
+
+/**
+ * READ an appointment's activity. Same gate as every mutation here (gateAppointment):
+ * the module context, the appointment belonging to THIS client and an allowed site,
+ * and — for a staff login — their OWN column only. Changes nothing.
+ */
+export async function listAppointmentActivityAction(
+  clientId: string,
+  appointmentId: string,
+): Promise<{ ok: true; items: AppointmentActivityItem[] } | { ok: false; error: string }> {
+  if (!isUuid(appointmentId)) return { ok: false, error: GENERIC_GATE };
+  const gated = await gateAppointment(clientId, appointmentId);
+  if (!gated) return { ok: false, error: GENERIC_GATE };
+  const events = await listAppointmentEvents(gated.ctx.scope.tenantId, appointmentId);
+  return {
+    ok: true,
+    items: events.map((e) => {
+      const detail = (e.detail ?? {}) as Record<string, unknown>;
+      const from = (detail.from && typeof detail.from === "object" ? detail.from : {}) as Record<string, unknown>;
+      const to = (detail.to && typeof detail.to === "object" ? detail.to : {}) as Record<string, unknown>;
+      const reason = typeof detail.reason === "string" && detail.reason.trim() ? detail.reason.trim().slice(0, 500) : null;
+      const moved = e.event_type === "appointment_rescheduled";
+      return {
+        id: e.id,
+        type: ACTIVITY_TYPE[e.event_type] ?? "other",
+        actor: ACTIVITY_ACTOR[e.actor_type] ?? "system",
+        at: new Date(e.created_at).toISOString(),
+        reason,
+        fromStart: moved ? isoOrNull(from.start_at) : null,
+        toStart: moved ? isoOrNull(to.start_at) : null,
+      };
+    }),
+  };
 }

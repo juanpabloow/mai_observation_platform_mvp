@@ -1,4 +1,4 @@
-import { query, firstRowOrThrow } from '../../client.js';
+import { query, firstRowOrThrow, withTransaction } from '../../client.js';
 import { matchByName, type NameMatch } from '../../../scheduling/nameMatch.js';
 
 /**
@@ -149,23 +149,51 @@ export interface CreateServiceInput {
   category?: ServiceCategory | null;
 }
 
+const INSERT_SERVICE_SQL = `INSERT INTO services (tenant_id, client_id, name, description, duration_min, price, buffer_before_min, buffer_after_min, category)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`;
+
+const insertServiceParams = (input: CreateServiceInput): unknown[] => [
+  input.tenantId,
+  input.clientId,
+  input.name,
+  input.description ?? null,
+  input.durationMin,
+  input.price ?? null,
+  input.bufferBeforeMin ?? 0,
+  input.bufferAfterMin ?? 0,
+  input.category ?? null,
+];
+
 export async function createService(input: CreateServiceInput): Promise<ServiceRow> {
-  const r = await query<ServiceRow>(
-    `INSERT INTO services (tenant_id, client_id, name, description, duration_min, price, buffer_before_min, buffer_after_min, category)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING *`,
-    [
-      input.tenantId,
-      input.clientId,
-      input.name,
-      input.description ?? null,
-      input.durationMin,
-      input.price ?? null,
-      input.bufferBeforeMin ?? 0,
-      input.bufferAfterMin ?? 0,
-      input.category ?? null,
-    ],
-  );
+  const r = await query<ServiceRow>(INSERT_SERVICE_SQL, insertServiceParams(input));
   return firstRowOrThrow(r, 'createService');
+}
+
+/** Thrown when an initial site link of createServiceWithSites writes nothing (the site
+ * is not one of the service's client's sites, or vanished since it was validated). */
+export class ServiceSiteLinkError extends Error {
+  constructor(readonly siteId: string) {
+    super(`createServiceWithSites: site ${siteId} could not be linked to the new service`);
+    this.name = 'ServiceSiteLinkError';
+  }
+}
+
+/**
+ * Create a service AND enable it at its initial sites ATOMICALLY: one transaction on one
+ * connection. Every link uses the same guarded same-client INSERT … SELECT as
+ * setSiteService, but here a link that writes 0 rows is an error, not a silent no-op —
+ * and any failure rolls the whole thing back, so no service exists without the sites it
+ * was created for. The row is returned only after COMMIT.
+ */
+export async function createServiceWithSites(input: CreateServiceInput, siteIds: readonly string[]): Promise<ServiceRow> {
+  return withTransaction(async (tx) => {
+    const svc = firstRowOrThrow(await tx.query<ServiceRow>(INSERT_SERVICE_SQL, insertServiceParams(input)), 'createServiceWithSites');
+    for (const siteId of new Set(siteIds)) {
+      const r = await tx.query(SITE_SERVICE_UPSERT_SQL, [input.tenantId, siteId, svc.id, true, null, null]);
+      if ((r.rowCount ?? 0) === 0) throw new ServiceSiteLinkError(siteId);
+    }
+    return svc;
+  });
 }
 
 export interface UpdateServiceInput {
@@ -234,6 +262,19 @@ export async function reactivateService(tenantId: string, clientId: string, id: 
 
 // ── site_services ────────────────────────────────────────────────────────────
 
+/** The guarded same-client upsert behind setSiteService and createServiceWithSites:
+ * it only inserts when the site and the service belong to the SAME client. */
+const SITE_SERVICE_UPSERT_SQL = `INSERT INTO site_services (tenant_id, site_id, service_id, active, duration_override_min, price_override)
+       SELECT $1, $2, $3, $4, $5, $6
+        FROM sites si
+        JOIN services sv ON sv.client_id = si.client_id AND sv.tenant_id = si.tenant_id
+       WHERE si.id = $2 AND si.tenant_id = $1 AND sv.id = $3
+     ON CONFLICT (site_id, service_id) DO UPDATE
+       SET active = EXCLUDED.active,
+           duration_override_min = EXCLUDED.duration_override_min,
+           price_override = EXCLUDED.price_override,
+           updated_at = now()`;
+
 /** Enable (upsert) a service at a site. Validates STRUCTURALLY that the site and
  * the service belong to the SAME client (not just the same tenant): the guarded
  * INSERT ... SELECT only inserts when a same-client (site, service) pair exists. A
@@ -245,16 +286,7 @@ export async function setSiteService(
   opts: { active?: boolean; durationOverrideMin?: number | null; priceOverride?: number | null } = {},
 ): Promise<void> {
   await query(
-    `INSERT INTO site_services (tenant_id, site_id, service_id, active, duration_override_min, price_override)
-       SELECT $1, $2, $3, $4, $5, $6
-        FROM sites si
-        JOIN services sv ON sv.client_id = si.client_id AND sv.tenant_id = si.tenant_id
-       WHERE si.id = $2 AND si.tenant_id = $1 AND sv.id = $3
-     ON CONFLICT (site_id, service_id) DO UPDATE
-       SET active = EXCLUDED.active,
-           duration_override_min = EXCLUDED.duration_override_min,
-           price_override = EXCLUDED.price_override,
-           updated_at = now()`,
+    SITE_SERVICE_UPSERT_SQL,
     [tenantId, siteId, serviceId, opts.active ?? true, opts.durationOverrideMin ?? null, opts.priceOverride ?? null],
   );
 }
