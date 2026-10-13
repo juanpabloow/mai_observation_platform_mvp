@@ -33,6 +33,10 @@ export interface LoadAvailabilityParams {
   /** C-2: exclude one appointment from the busy set — the appointment being
    * rescheduled must not block its own new slot (so "move my 11:45 to 12:15" works). */
   excludeAppointmentId?: string | null;
+  /** Use THIS timing instead of the service's current one — a reschedule checks the slot
+   *  with the appointment's own snapshot (the interval it will actually occupy), so a later
+   *  catalogue change can neither block a valid move nor let an invalid one through. */
+  timingOverride?: { durationMin: number; bufferBeforeMin: number; bufferAfterMin: number } | null;
 }
 
 export interface AvailabilityResult {
@@ -129,7 +133,11 @@ export async function loadAvailability(params: LoadAvailabilityParams): Promise<
   // Candidate staff (+ their per-staff duration override). Specific staff if
   // requested and qualified, else all active qualified staff at the site.
   const staffParams: unknown[] = [params.tenantId, params.siteId, params.serviceId];
-  let staffWhere = 's.tenant_id = $1 AND s.site_id = $2 AND s.active = true';
+  // takes_bookings: a professional who does not take bookings (front desk, or someone
+  // whose online booking is off) is never a candidate — on ANY surface (agenda, public
+  // page, bot), because all three book through this engine. It used to be honoured only by
+  // the public page's display, so "any professional" could still be assigned to them.
+  let staffWhere = 's.tenant_id = $1 AND s.site_id = $2 AND s.active = true AND s.takes_bookings = true';
   if (params.staffId) {
     staffParams.push(params.staffId);
     staffWhere += ` AND s.id = $${staffParams.length}`;
@@ -181,11 +189,17 @@ export async function loadAvailability(params: LoadAvailabilityParams): Promise<
   const staff = staffRows.rows.map((s) => ({
     id: s.id,
     working_hours: s.working_hours,
-    timing: {
-      duration_min: s.staff_duration_override_min ?? site.site_duration_override_min ?? site.base_duration_min,
-      buffer_before_min: buffers.before_min,
-      buffer_after_min: buffers.after_min,
-    },
+    timing: params.timingOverride
+      ? {
+          duration_min: params.timingOverride.durationMin,
+          buffer_before_min: params.timingOverride.bufferBeforeMin,
+          buffer_after_min: params.timingOverride.bufferAfterMin,
+        }
+      : {
+          duration_min: s.staff_duration_override_min ?? site.site_duration_override_min ?? site.base_duration_min,
+          buffer_before_min: buffers.before_min,
+          buffer_after_min: buffers.after_min,
+        },
     busy: busyRows.rows.filter((b) => b.staff_id === s.id).map((b) => ({ from: b.blocked_from, until: b.blocked_until })),
     exceptions: excRows.rows.filter((e) => e.staff_id === s.id).map((e) => ({ from: e.starts_at, until: e.ends_at })),
   }));
@@ -220,6 +234,8 @@ export async function isSlotAvailable(
     now: Date;
     /** C-2: the appointment being rescheduled — excluded from its own busy check. */
     excludeAppointmentId?: string | null;
+    /** The appointment's own snapshot timing (reschedule). */
+    timingOverride?: LoadAvailabilityParams["timingOverride"];
   },
   client?: PoolClient,
 ): Promise<{ available: boolean; serviceEndAt: Date | null; buffers: { before_min: number; after_min: number } | null }> {
@@ -239,6 +255,7 @@ export async function isSlotAvailable(
     to: windowEnd,
     now: params.now,
     excludeAppointmentId: params.excludeAppointmentId ?? null,
+    timingOverride: params.timingOverride ?? null,
   });
   if (!avail) return { available: false, serviceEndAt: null, buffers: null };
   const slot = avail.slots.find((s) => s.start_at.getTime() === params.startAt.getTime());

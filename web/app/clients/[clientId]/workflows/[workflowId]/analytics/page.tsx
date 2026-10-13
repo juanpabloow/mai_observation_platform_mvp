@@ -8,7 +8,9 @@ import {
   getConversationSummary,
   getExecutionDailySeries,
   getExecutionSummary,
+  getHandoffSendSummary,
 } from "@worker/db/repositories/analytics.js";
+import { handoffSendTile } from "@/lib/handoffSendMetrics";
 import {
   ConversationTurnsChart,
   ExecutionsByStatusChart,
@@ -60,12 +62,16 @@ export default async function AnalyticsPage({
 
   const tenantId = await getCurrentTenantId();
   const scope = { tenantId, n8nWorkflowId: workflowId, days };
-  const [summary, series, convSummary, convSeries] = await Promise.all([
+  const [summary, series, convSummary, convSeries, sends] = await Promise.all([
     getExecutionSummary(scope),
     getExecutionDailySeries(scope),
     getConversationSummary(scope),
     getConversationDailySeries(scope),
+    getHandoffSendSummary(scope),
   ]);
+  // Agent sends are a SEPARATE measure from execution success (a caught provider error
+  // still ends the execution as `success`); shown only where the workflow sends any.
+  const sendTile = sends.total > 0 ? handoffSendTile(sends, days) : null;
 
   const completed = summary.success + summary.error;
   const successRate = completed > 0 ? Math.round((summary.success / completed) * 100) : null;
@@ -82,7 +88,12 @@ export default async function AnalyticsPage({
       ) : (
         <>
           <KpiGrid>
-            <SuccessRateCard rate={successRate} success={summary.success} error={summary.error} />
+            <SuccessRateCard
+              rate={successRate}
+              success={summary.success}
+              error={summary.error}
+              caption="Workflow executions — not message delivery."
+            />
             <KpiCard
               label={`Executions · ${days}d`}
               value={summary.total.toLocaleString()}
@@ -99,6 +110,15 @@ export default async function AnalyticsPage({
               sub="per execution"
             />
           </KpiGrid>
+
+          {sendTile ? (
+            <KpiGrid>
+              <KpiCard label={sendTile.label} value={sendTile.value} sub={sendTile.sub}>
+                {sendTile.failures ? <div className="mt-1.5 text-xs text-muted">Failed by code: {sendTile.failures}</div> : null}
+                <div className="mt-1.5 text-xs text-faint">{sendTile.note}</div>
+              </KpiCard>
+            </KpiGrid>
+          ) : null}
 
           <AnalyticsColumns
             primary={

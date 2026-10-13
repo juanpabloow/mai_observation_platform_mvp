@@ -158,8 +158,9 @@ test('certifications belong to a staff member of the SAME tenant, and expiry ord
     /staff_certifications_dates_valid/,
   );
 
-  assert.equal(await deleteStaffCertification(s.tenantId, soon.id), true);
-  assert.equal(await deleteStaffCertification(other.tenantId, soon.id), false, 'no cross-tenant delete');
+  assert.equal(await deleteStaffCertification(other.tenantId, s.staffA, soon.id), false, 'no cross-tenant delete');
+  assert.equal(await deleteStaffCertification(s.tenantId, s.staffB, soon.id), false, 'not through another staff member');
+  assert.equal(await deleteStaffCertification(s.tenantId, s.staffA, soon.id), true);
 });
 
 test('services.category is optional, constrained, and clearable', async () => {

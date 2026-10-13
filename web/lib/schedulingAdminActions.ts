@@ -452,7 +452,7 @@ export async function deleteStaffCertificationAction(
   const auth = await requireSchedulingAdmin(clientId);
   if (!auth.ok) return auth;
   if (!(await staffInClient(auth.tenantId, clientId, staffId))) return { ok: false, error: FOREIGN };
-  const ok = await deleteStaffCertification(auth.tenantId, id);
+  const ok = await deleteStaffCertification(auth.tenantId, staffId, id);
   if (!ok) return { ok: false, error: "Certification not found." };
   revalidateAdmin(clientId);
   return { ok: true };
@@ -550,6 +550,13 @@ export async function createExceptionAction(input: {
   // confirm the site belongs to this client in the same lookup.
   const site = await getSiteById(auth.tenantId, input.siteId);
   if (!site || site.client_id !== input.clientId) return { ok: false, error: FOREIGN };
+  // A staff-level block must name a professional OF THIS SITE. The insert only checked the
+  // site, so a foreign staff id was accepted and stored (reads are site-scoped, so it never
+  // blocked anyone — but it was data that belonged to nobody here).
+  if (input.staffId) {
+    const st = await getStaffById(auth.tenantId, input.staffId);
+    if (!st || st.site_id !== input.siteId) return { ok: false, error: FOREIGN };
+  }
   let s: Date;
   let e: Date;
   try {

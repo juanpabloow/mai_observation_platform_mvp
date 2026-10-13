@@ -180,12 +180,15 @@ Failure `200` (a *delivered verdict*, not a transport error):
 {
   "status": "rejected",
   "code": "CHANNEL_POLICY | INVALID_RECIPIENT | CHANNEL_ERROR",
-  "detail": "free text shown to the agent, e.g. why the channel refused"
+  "detail": "free text shown to the agent, e.g. why the channel refused",
+  "provider": { "http_status": 500, "code": 131000, "subcode": null, "trace_id": "Meta fbtrace_id" }
 }
 ```
 
 Rules:
 - `CHANNEL_POLICY` is the generic slot for channel rules (messaging windows, template requirements, rate limits). The platform renders `detail` verbatim; it never understands the policy.
+- **Classify by the provider's code, never by default.** `CHANNEL_POLICY` only for codes that are channel rules (e.g. Meta 131047 re-engagement, 470, rate/spam limits); `INVALID_RECIPIENT` only for recipient codes (e.g. 131026); everything else — including generic errors such as Meta 131000 / HTTP 5xx — is `CHANNEL_ERROR`. A catch-all that answers `CHANNEL_POLICY` makes a provider failure look like an expired window. Reference mapping: `tools/n8n/handoffSendErrorMapping.mjs` (a proposal; verify the codes against Meta's documentation).
+- `provider` (optional) carries the provider's own numbers so the evidence survives the classification: `http_status` (100–599), `code`, `subcode` (short alphanumerics) and `trace_id` (the provider's trace id, e.g. Meta `fbtrace_id`, 8–64 chars — what provider support needs to investigate one call). The platform appends them to the stored detail ("(HTTP 500 · código 131000)") and shows the `code` beside it. The provider's free-text message is never read — it can echo the recipient.
 - Webhook unreachable / timeout (10s) / `5xx` → the platform marks the message **failed** and shows the agent a manual *Retry* (same `idempotency_key`). No automatic retries in v1 — double-sending to an end user is worse than asking the agent to click again.
 - The platform records the message (`sending → sent | failed`) itself; the workflow does not push human messages back.
 
@@ -276,7 +279,7 @@ WhatsApp Trigger
 `Webhook (POST) → verify X-Handoff-Signature → map conversation_ref → wa_id → WhatsApp Send (same credentials + phoneNumberId 1079483095237963) → respond`
 
 - Success → `{ "status": "sent" }`.
-- Meta's 24-hour customer-service window expired → `{ "status": "rejected", "code": "CHANNEL_POLICY", "detail": "WhatsApp 24h service window expired — only approved templates can be sent" }`. The platform shows that sentence to the agent without understanding it. (Template-message sending as the recovery path: future enhancement, not v1.)
+- Meta's 24-hour customer-service window expired (**Meta code 131047**, not any error) → `{ "status": "rejected", "code": "CHANNEL_POLICY", "detail": "WhatsApp 24h service window expired — only approved templates can be sent", "provider": { "http_status": 400, "code": 131047 } }`. Any other Meta error maps by its code (see §5 rules); a generic 131000/5xx is `CHANNEL_ERROR`. The platform shows that sentence to the agent without understanding it. (Template-message sending as the recovery path: future enhancement, not v1.)
 - **Optional memory write (D5):** after a successful send, insert the human's reply into the bot's Postgres chat-memory table (session key = `wa_id`) as an assistant turn — so when the conversation returns to `bot`, the AI resumes knowing what the human said instead of with amnesia about the whole human exchange.
 
 ## B.4 Known interaction: the buffer on takeover

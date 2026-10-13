@@ -48,6 +48,7 @@ export async function listPublicServicesForSite(tenantId: string, siteId: string
                   ON sts.staff_id = st.id AND sts.service_id = sv.id
                  AND sts.tenant_id = si.tenant_id AND sts.active = true
                WHERE st.site_id = si.id AND st.tenant_id = si.tenant_id AND st.active = true
+                 AND st.takes_bookings = true
             )
       ORDER BY sv.featured DESC, sv.name`,
     [tenantId, siteId],

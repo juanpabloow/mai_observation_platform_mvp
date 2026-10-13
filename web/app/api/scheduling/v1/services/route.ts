@@ -1,6 +1,6 @@
 import { authenticateScheduling, resolveOwnedSite, schedulingError } from "@/lib/schedulingApi";
 import { priceLabelCOP } from "@/lib/money";
-import { listServicesForSite } from "@worker/db/repositories/scheduling/services.js";
+import { listBookableServicesForSite } from "@worker/db/repositories/scheduling/services.js";
 
 /**
  * GET /api/scheduling/v1/services?site_id=[&featured=true] — services enabled at a site
@@ -25,7 +25,9 @@ export async function GET(req: Request): Promise<Response> {
   // returns site_inactive (409), not a misleading site_not_found.
   const owned = await resolveOwnedSite(auth.auth, siteId, { requireActive: true });
   if (!owned.ok) return owned.response;
-  const all = await listServicesForSite(auth.auth.tenantId, owned.site.id); // already featured-first
+  // Only what a bookable professional can perform (the public page's rule) — the bot never
+  // offers a service it then cannot find a slot for. Already featured-first.
+  const all = await listBookableServicesForSite(auth.auth.tenantId, owned.site.id);
   const featured = all.filter((s) => s.featured);
   // Empty-fallback: featured=true with NONE configured → the full list, never an empty offer.
   const chosen = featuredOnly && featured.length > 0 ? featured : all;

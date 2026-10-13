@@ -1,5 +1,6 @@
 import "server-only";
 import { createHmac } from "node:crypto";
+import { rejectionDetail } from "./handoffDiagnostics";
 
 /**
  * THE single outbound chokepoint (docs/handoff-contract-v1.md §5 Exchange 4). Signs
@@ -73,7 +74,9 @@ export async function sendToWebhook(params: {
       return {
         kind: "rejected",
         code: typeof obj.code === "string" ? obj.code : null,
-        detail: typeof obj.detail === "string" ? obj.detail : null,
+        // The optional `provider` numbers (HTTP status, provider code) ride along in the
+        // detail — allow-listed, never the provider's free text (handoffDiagnostics.ts).
+        detail: rejectionDetail(typeof obj.detail === "string" ? obj.detail : null, obj.provider),
       };
     }
     return { kind: "failed", detail: "Webhook returned an unrecognized response." };

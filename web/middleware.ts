@@ -22,6 +22,9 @@ import { getSessionCookie } from "better-auth/cookies";
 // /api/health is the public uptime probe: it must return 200/503 cookieless.
 // /api/scheduling is the MACHINE scheduling API (Bearer token, like /api/handoff).
 // /api/crm is the MACHINE CRM API (Bearer token, like /api/handoff) — C-5.
+// /api/catalog is the MACHINE product-catalog API (Bearer token + catalog.read, like
+// /api/crm). It shipped without this entry, so every cookieless call got a 307 to /login
+// (production answered exactly that); the route tests import the handler and never saw it.
 // /book is the PUBLIC booking page and /api/booking its public endpoints — both
 // cookieless and self-protected (site-slug scoping + rate limiting).
 // /forgot-password and /reset-password are the account-recovery pages: their
@@ -50,6 +53,7 @@ const PUBLIC_PREFIXES = [
   "/api/health",
   "/api/scheduling",
   "/api/crm",
+  "/api/catalog",
   "/api/booking",
   "/book",
   "/api/meetings/v1/jobs",
