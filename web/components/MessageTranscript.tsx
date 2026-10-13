@@ -460,9 +460,12 @@ function Bubble({
         </span>
         {/* THE STRUCTURED BLOCK — the slots the bot offered, and which one was taken. */}
         {msg.payload ? <PayloadBlock payload={msg.payload} onDark={!isUser} /> : null}
-        {failed && msg.failureDetail ? (
+        {failed && (msg.failureDetail || msg.failureCode) ? (
           <span className="mt-1.5 block rounded-sm bg-danger/12 px-1.5 py-1 text-[0.6875rem] text-danger">
             {msg.failureDetail}
+            {/* The classification code, as stored — the evidence an operator needs to tell a
+                policy rejection from a provider error (it was never shown). */}
+            {msg.failureCode ? <span className="u-mono ml-1 opacity-80">[{msg.failureCode}]</span> : null}
           </span>
         ) : null}
       </div>

@@ -23,6 +23,7 @@ import {
 } from "@/lib/inboxView";
 import { groupConversations, pendingCount, type InboxGroupMeta } from "@/lib/inboxGroups";
 import { scopeHref } from "@/lib/scopeSurface";
+import { useScope } from "@/components/ScopeProvider";
 
 interface GridPayload {
   conversations: InboxConversationView[];
@@ -335,6 +336,11 @@ export function ClientInboxWorkspace({
                 workflow selector; this list follows the active scope. */}
             {stale ? <span className="u-mono text-[0.6875rem] text-faint">Reconectando…</span> : null}
           </div>
+          {/* THE ACTIVE FILTER, said where the list is. The scope persists (URL, else a
+              30-day cookie), so a plain "Inbox" link can open already filtered — and the
+              only trace used to be the header breadcrumb. Clearing uses the SAME path as
+              the header switcher (cookie + URL), so it does not come back on reload. */}
+          {scope !== "all" ? <ActiveWorkflowFilter clientId={clientId} name={all.find((v) => v.workflowName)?.workflowName ?? null} /> : null}
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -345,11 +351,13 @@ export function ClientInboxWorkspace({
               />
             ) : (
               <p className="px-4 py-10 text-center text-sm text-faint">
-                No conversations yet. They appear here when a workflow posts messages or an agent takes one over.
+                {scope === "all"
+                  ? "Todavía no hay conversaciones. Aparecen aquí cuando un flujo publica mensajes o una persona toma una."
+                  : "Este flujo todavía no tiene conversaciones."}
               </p>
             )
           ) : groups.length === 0 ? (
-            <p className="px-4 py-10 text-center text-sm text-faint">No conversations match your filters.</p>
+            <p className="px-4 py-10 text-center text-sm text-faint">Ninguna conversación coincide con la búsqueda.</p>
           ) : (
             // TODO(inbox): the design's third lane, "CLOSED TODAY", has no state
             //   behind it — `conversations.mode` is DB-constrained to bot|pending|human
@@ -673,5 +681,35 @@ function PersonGlyph() {
       <circle cx="8" cy="5.2" r="2.6" stroke="currentColor" strokeWidth="1.4" />
       <path d="M3.5 13c0-2.3 2-3.6 4.5-3.6s4.5 1.3 4.5 3.6" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
     </svg>
+  );
+}
+
+/** "Mostrando solo el flujo X · Quitar filtro" — the persisted workflow scope, visible and
+ *  clearable from the list itself. */
+function ActiveWorkflowFilter({ clientId, name }: { clientId: string; name: string | null }) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { setScope } = useScope();
+  const clear = () => {
+    setScope(clientId, "all");
+    const p = new URLSearchParams(searchParams.toString());
+    p.delete("workflow");
+    const qs = p.toString();
+    router.push(`/clients/${encodeURIComponent(clientId)}/inbox${qs ? `?${qs}` : ""}`);
+  };
+  return (
+    <p role="status" className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-muted">
+      <span>
+        Mostrando solo el flujo <strong className="font-medium text-foreground">{name ?? "seleccionado"}</strong>
+      </span>
+      <span aria-hidden>·</span>
+      <button
+        type="button"
+        onClick={clear}
+        className="u-focus inline-flex items-center rounded-md font-medium text-foreground underline-offset-2 hover:underline max-md:min-h-[44px]"
+      >
+        Quitar filtro
+      </button>
+    </p>
   );
 }

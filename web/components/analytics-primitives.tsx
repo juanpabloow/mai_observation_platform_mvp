@@ -74,14 +74,18 @@ export function SuccessRateCard({
   rate,
   success,
   error,
+  caption,
 }: {
   rate: number | null;
   success: number;
   error: number;
+  /** Optional line saying WHAT the rate measures (e.g. executions, not delivery). */
+  caption?: string;
 }) {
   return (
     <KpiCard label="Success rate" value={rate === null ? "—" : `${rate}%`}>
       <RateBar success={success} error={error} />
+      {caption ? <div className="mt-1.5 text-xs text-faint">{caption}</div> : null}
     </KpiCard>
   );
 }

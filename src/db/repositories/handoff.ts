@@ -322,6 +322,30 @@ export async function getHandoffMessage(
 }
 
 /**
+ * CLAIM a failed human-agent message for a retry, atomically: it moves `failed` →
+ * `sending` (clearing the prior failure) only if it is still `failed`. Returns null when
+ * the message is not retryable — already `sent`, already being sent by another click, not
+ * a human-agent message, or not in this conversation. This is what stops "Reintentar"
+ * from POSTing a message that was already delivered, and two concurrent clicks from
+ * POSTing it twice (the row lock serialises them; the loser matches no row).
+ */
+export async function claimFailedMessageForRetry(
+  tenantId: string,
+  conversationId: string,
+  messageId: string,
+): Promise<HandoffMessageRow | null> {
+  const r = await query<HandoffMessageRow>(
+    `UPDATE handoff_messages
+        SET status = 'sending', failure_code = NULL, failure_detail = NULL
+      WHERE tenant_id = $1 AND conversation_id = $2 AND id = $3
+        AND sender = 'human_agent' AND status = 'failed'
+      RETURNING *`,
+    [tenantId, conversationId, messageId],
+  );
+  return r.rows[0] ?? null;
+}
+
+/**
  * A page of a conversation's messages, newest first. `before` (an occurred_at
  * cursor) fetches the messages older than it; id is the stable tiebreaker.
  */

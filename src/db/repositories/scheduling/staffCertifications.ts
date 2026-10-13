@@ -83,8 +83,11 @@ export async function createStaffCertification(
   return firstRowOrThrow(r, 'createStaffCertification');
 }
 
-/** Hard delete: a certification entered by mistake has no history worth keeping. */
-export async function deleteStaffCertification(tenantId: string, id: string): Promise<boolean> {
-  const r = await query(`DELETE FROM staff_certifications WHERE id = $1 AND tenant_id = $2`, [id, tenantId]);
+/** Hard delete: a certification entered by mistake has no history worth keeping.
+ *  Scoped to the STAFF member too: the caller checks that `staffId` belongs to its client,
+ *  and without `staff_id` in the WHERE a client owner could delete ANOTHER client's
+ *  certification in the same tenant by pairing their own staffId with a foreign id. */
+export async function deleteStaffCertification(tenantId: string, staffId: string, id: string): Promise<boolean> {
+  const r = await query(`DELETE FROM staff_certifications WHERE id = $1 AND tenant_id = $2 AND staff_id = $3`, [id, tenantId, staffId]);
   return (r.rowCount ?? 0) > 0;
 }

@@ -101,6 +101,39 @@ export async function listServicesForSite(tenantId: string, siteId: string): Pro
   return r.rows;
 }
 
+/**
+ * The services the BOT may offer at a site: everything listServicesForSite returns, minus
+ * services no bookable professional can perform (active, takes_bookings, an active
+ * staff_services row). The public booking page applies the same rule (publicCatalog.ts);
+ * the bot used to list such services and then find no slots for them. listServicesForSite
+ * itself is unchanged — the agenda and the settings screens need every enabled service.
+ */
+export async function listBookableServicesForSite(tenantId: string, siteId: string): Promise<SiteServiceRow[]> {
+  const r = await query<SiteServiceRow>(
+    `SELECT s.*, ss.id AS site_service_id, ss.duration_override_min, ss.price_override,
+            COALESCE(ss.duration_override_min, s.duration_min) AS effective_duration_min,
+            COALESCE(ss.price_override, s.price) AS effective_price
+       FROM sites si
+       JOIN site_services ss
+         ON ss.site_id = si.id AND ss.tenant_id = si.tenant_id AND ss.active = true
+       JOIN services s
+         ON s.id = ss.service_id AND s.tenant_id = si.tenant_id
+        AND s.client_id = si.client_id AND s.active = true
+      WHERE si.id = $2 AND si.tenant_id = $1 AND si.active = true
+        AND EXISTS (
+              SELECT 1 FROM staff st
+                JOIN staff_services sts
+                  ON sts.staff_id = st.id AND sts.service_id = s.id
+                 AND sts.tenant_id = si.tenant_id AND sts.active = true
+               WHERE st.site_id = si.id AND st.tenant_id = si.tenant_id
+                 AND st.active = true AND st.takes_bookings = true
+            )
+      ORDER BY s.featured DESC, s.name`,
+    [tenantId, siteId],
+  );
+  return r.rows;
+}
+
 /** Resolve a service NAME (case/accent-insensitive) to its id, among the services ENABLED
  * at this site (the set an availability/booking call can actually use). Returns a
  * discriminated match so the route can emit not_found (with the valid names) or

@@ -273,3 +273,52 @@ export async function getTopWorkflowsByExecutions(s: {
   );
   return r.rows;
 }
+
+/**
+ * HUMAN-AGENT SENDS (handoff Exchange 4), kept APART from execution success. An n8n
+ * execution that catches a provider error and answers `rejected` ends as `success`, so the
+ * execution rate says nothing about whether an agent's reply reached the customer. This
+ * counts the platform's own record of each send:
+ *   - accepted : the workflow answered `sent` (accepted by the channel — NOT a delivery
+ *                receipt: WhatsApp sent/delivered/read webhooks are not ingested);
+ *   - failed   : rejected by the workflow or not delivered to it, by failure code;
+ *   - pending  : still `sending` (no outcome recorded yet).
+ * Denominator: every human-agent message in the window (accepted + failed + pending).
+ */
+export interface HandoffSendSummary {
+  total: number;
+  accepted: number;
+  failed: number;
+  pending: number;
+  failedByCode: { code: string; count: number }[];
+}
+
+export async function getHandoffSendSummary(s: AnalyticsScope): Promise<HandoffSendSummary> {
+  const SCOPE = `hm.tenant_id = $1 AND hm.sender = 'human_agent'
+        AND hm.occurred_at >= ${WINDOW_START}
+        AND ($4::text IS NULL OR c.n8n_workflow_id = $4)
+        AND ($5::uuid IS NULL OR EXISTS (
+              SELECT 1 FROM workflows w
+               WHERE w.tenant_id = c.tenant_id AND w.n8n_workflow_id = c.n8n_workflow_id AND w.client_id = $5))`;
+  const totals = await query<{ total: number; accepted: number; failed: number; pending: number }>(
+    `SELECT count(*)::int AS total,
+            count(*) FILTER (WHERE hm.status = 'sent')::int AS accepted,
+            count(*) FILTER (WHERE hm.status = 'failed')::int AS failed,
+            count(*) FILTER (WHERE hm.status = 'sending')::int AS pending
+       FROM handoff_messages hm
+       JOIN conversations c ON c.id = hm.conversation_id AND c.tenant_id = hm.tenant_id
+      WHERE ${SCOPE}`,
+    [...params(s)],
+  );
+  const codes = await query<{ code: string; count: number }>(
+    `SELECT COALESCE(hm.failure_code, 'UNKNOWN') AS code, count(*)::int AS count
+       FROM handoff_messages hm
+       JOIN conversations c ON c.id = hm.conversation_id AND c.tenant_id = hm.tenant_id
+      WHERE ${SCOPE} AND hm.status = 'failed'
+      GROUP BY 1
+      ORDER BY 2 DESC, 1`,
+    [...params(s)],
+  );
+  const t = totals.rows[0];
+  return { total: t.total, accepted: t.accepted, failed: t.failed, pending: t.pending, failedByCode: codes.rows };
+}

@@ -569,6 +569,13 @@ export async function rescheduleAppointment(input: RescheduleInput): Promise<Boo
           startAt: input.startAt,
           now,
           excludeAppointmentId: input.appointmentId,
+          // The SNAPSHOT, not the service's current timing: the check must test the very
+          // interval moveInterval writes below (it used to test the current duration).
+          timingOverride: {
+            durationMin: current.duration_min_snapshot,
+            bufferBeforeMin: current.buffer_before_min_snapshot,
+            bufferAfterMin: current.buffer_after_min_snapshot,
+          },
         },
       );
       // New interval from the SNAPSHOT duration/buffers (for moveInterval below).

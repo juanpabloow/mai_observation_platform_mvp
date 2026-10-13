@@ -167,6 +167,7 @@ export async function listStaffForService(
          ON sv.id = ss.service_id AND sv.tenant_id = si.tenant_id AND sv.active = true
        JOIN staff s
          ON s.site_id = si.id AND s.tenant_id = si.tenant_id AND s.active = true
+        AND s.takes_bookings = true
        JOIN staff_services sts
          ON sts.staff_id = s.id AND sts.service_id = sv.id AND sts.tenant_id = si.tenant_id AND sts.active = true
       WHERE si.id = $2 AND si.tenant_id = $1 AND si.active = true

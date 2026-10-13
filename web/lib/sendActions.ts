@@ -8,7 +8,7 @@ import type { InboxMessageView, SendActionResult } from "./inboxView";
 import {
   getAgentSummary,
   getConversationForClient,
-  getHandoffMessage,
+  claimFailedMessageForRetry,
   insertMessage,
   updateMessageDelivery,
   type InboxConversationDetail,
@@ -108,22 +108,19 @@ export async function retrySendAction(
     };
   }
 
-  const msg = await getHandoffMessage(scope.tenantId, conversationId, messageId);
-  if (!msg || msg.sender !== "human_agent") {
-    return { ok: false, code: "not_found", error: "That message can't be retried." };
-  }
-
+  // The webhook first: claiming before it would strand the row in 'sending' when sending
+  // is disabled.
   const guard = await resolveEnabledWebhook(scope.tenantId, conv.n8n_workflow_id);
   if (!guard.ok) return guard.result;
 
-  // Back to 'sending', clear the prior failure, reuse the SAME id (idempotency key).
-  await updateMessageDelivery({
-    tenantId: scope.tenantId,
-    messageId,
-    status: "sending",
-    failureCode: null,
-    failureDetail: null,
-  });
+  // ATOMIC claim: only a still-FAILED human-agent message moves back to 'sending' (prior
+  // failure cleared, SAME id = same idempotency key). An already-sent message, or a second
+  // concurrent click, claims nothing — so a retry can never re-POST a delivered message
+  // or POST the same one twice.
+  const msg = await claimFailedMessageForRetry(scope.tenantId, conversationId, messageId);
+  if (!msg) {
+    return { ok: false, code: "not_found", error: "That message can't be retried." };
+  }
   const view = await deliverMessage(scope.tenantId, conv, guard.webhook, {
     id: msg.id,
     text: msg.text ?? "",
