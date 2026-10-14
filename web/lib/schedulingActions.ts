@@ -7,6 +7,8 @@ import { createThenMaybeConfirm, type CreateOutcome, type ManualBookingResult } 
 import { canAccessSchedulingSite, canAccessSchedulingStaff, canOperateScheduling, isSchedulingStaff } from "./access";
 import { listContacts } from "@worker/db/repositories/contacts.js";
 import { getAppointmentById, listAppointmentEvents } from "@worker/db/repositories/scheduling/appointments.js";
+import { ensureReviewRequest } from "@worker/db/repositories/scheduling/reviews.js";
+import { reviewLinkSecret, reviewPath, signReviewToken } from "./reviewLink";
 import {
   createAppointment,
   rescheduleAppointment,
@@ -378,5 +380,32 @@ export async function listAppointmentActivityAction(
         toStart: moved ? isoOrNull(to.start_at) : null,
       };
     }),
+  };
+}
+
+export type ReviewLinkResult =
+  | { ok: true; path: string; answered: boolean; expiresAt: string }
+  | { ok: false; error: string };
+
+/**
+ * The REVIEW LINK of a COMPLETED appointment ("Enlace de reseña"). Same gate as every
+ * action here (gateAppointment) — so a staff login only gets links for its OWN column.
+ * Idempotent: the first call creates the request, later calls return the same link.
+ * Returns a PATH; the panel prefixes the browser's current origin (like bookingUrl).
+ */
+export async function getReviewLinkAction(clientId: string, appointmentId: string): Promise<ReviewLinkResult> {
+  if (!isUuid(appointmentId)) return { ok: false, error: GENERIC_GATE };
+  const gated = await gateAppointment(clientId, appointmentId);
+  if (!gated) return { ok: false, error: GENERIC_GATE };
+  if (gated.appointment.status !== "completed") return { ok: false, error: "Solo las citas completadas pueden recibir reseña." };
+  const secret = reviewLinkSecret();
+  if (!secret) return { ok: false, error: "Los enlaces de reseña no están disponibles en este momento." };
+  const req = await ensureReviewRequest(gated.ctx.scope.tenantId, gated.ctx.client.id, appointmentId);
+  if (!req) return { ok: false, error: GENERIC_GATE };
+  return {
+    ok: true,
+    path: reviewPath(signReviewToken(req.id, secret)),
+    answered: req.status !== "requested",
+    expiresAt: new Date(req.expires_at).toISOString(),
   };
 }

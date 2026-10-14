@@ -8,6 +8,7 @@ import { appointmentActionPlan } from "@/lib/appointmentActionPlan";
 import { priceLabelCOP } from "@/lib/money";
 import { dayHeadline, fmtTime, longDate, siteDayKey } from "@/lib/siteCalendar";
 import type { AppointmentActivityItem } from "@/lib/schedulingActions";
+import { ReviewLinkCard, type ReviewLinkLoader } from "./ReviewLink";
 import type { Appt } from "../AgendaView";
 import { Menu, MenuButton } from "../ui/Menu";
 import { Alert, Avatar, Button, CARD, ConfirmDialog, IconButton, StatusChip, TEXTAREA, buttonClass, useModalLayer } from "../ui/system";
@@ -26,6 +27,7 @@ import { DESTRUCTIVE, STATUS_NAME, type AppointmentStatus } from "./status";
  *   service card Cambiar hora o profesional (= reschedule)
  *   client card  Ver ficha · Conversación · Reservar de nuevo
  *   activity     Ver actividad
+ *   review       Enlace de reseña (completed appointments only)
  * Things this product has no model for (comments, forms, payment policy, recurrence,
  * group bookings, checkout) are not drawn at all.
  *
@@ -79,6 +81,7 @@ export function AppointmentPanel(props: {
   onReschedule: () => void;
   onStatus: (target: Target, reason?: string) => void;
   loadActivity: () => Promise<{ ok: true; items: AppointmentActivityItem[] } | { ok: false; error: string }>;
+  loadReviewLink: ReviewLinkLoader;
   /** The professional's avatar colour on the phone (same as the agenda list). */
   staffColor?: string;
 }) {
@@ -156,6 +159,7 @@ export function AppointmentPanel(props: {
         onReschedule={props.onReschedule}
         onStatus={props.onStatus}
         loadActivity={props.loadActivity}
+        loadReviewLink={props.loadReviewLink}
       />
     );
   }
@@ -317,6 +321,8 @@ export function AppointmentPanel(props: {
                   ) : null}
                 </div>
               </section>
+
+              {plan.reviewLink ? <ReviewLinkCard load={props.loadReviewLink} siteName={props.siteName} phone={appt.primary_identity?.includes("@") ? null : appt.primary_identity} /> : null}
 
               {/* HISTORY — read through the same appointment gate on the server. */}
               {plan.readActivity ? (

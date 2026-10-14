@@ -9,6 +9,7 @@ import { CATEGORY_GROUPS } from "../services/categories";
 import type { Appt } from "../AgendaView";
 import { type AppointmentStatus } from "../agenda/status";
 import { appointmentActionPlan } from "@/lib/appointmentActionPlan";
+import { reviewShareText, useReviewLink, whatsappHref, type ReviewLinkLoader } from "../agenda/ReviewLink";
 import { serviceCategory } from "@/lib/agendaCategory";
 import { mFamilyClass } from "./MobileAgenda";
 import { Icon, ICON, MButton, MClientAvatar, MConfirm, MIconButton, MPill, MStaffAvatar, MStateChip, Sheet, STATE_ICON, STATE_LABEL } from "./kit";
@@ -76,6 +77,7 @@ export function MobileAppointmentSheet(props: {
   onReschedule: () => void;
   onStatus: (target: Target, reason?: string) => void;
   loadActivity: () => Promise<{ ok: true; items: AppointmentActivityItem[] } | { ok: false; error: string }>;
+  loadReviewLink: ReviewLinkLoader;
 }) {
   const { appt, timezone: tz } = props;
   const [view, setView] = useState<View>("detail");
@@ -98,6 +100,7 @@ export function MobileAppointmentSheet(props: {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [appt.id]);
 
+  const review = useReviewLink(props.loadReviewLink);
   const canAct = plan.reschedule;
   const allowed = new Set<string>(plan.transitions);
   const primary: { label: string; target: Target } | null = plan.primary ? { label: plan.primary === "confirmed" ? "Confirmar" : "Completar", target: plan.primary } : null;
@@ -151,6 +154,7 @@ export function MobileAppointmentSheet(props: {
           <span className="text-m-tx3">{activity.state === "error" ? "No se pudo cargar la actividad." : "Sin actividad registrada."}</span>
         ),
     }] : []),
+    ...(plan.reviewLink ? [{ k: "Reseña", v: <ReviewRow review={review} siteName={props.siteName} phone={phone} /> }] : []),
     {
       k: "Color",
       v: (
@@ -416,5 +420,38 @@ export function MobileAppointmentSheet(props: {
         </MConfirm>
       </Sheet>
     </>
+  );
+}
+
+/** "Reseña" row of a COMPLETED appointment: create the link, then copy or open WhatsApp. */
+function ReviewRow({ review, siteName, phone }: { review: ReturnType<typeof useReviewLink>; siteName: string; phone: string | null }) {
+  const { s, create, copy } = review;
+  if (s.state === "idle" || s.state === "error") {
+    return (
+      <span className="flex flex-col items-start gap-2">
+        {s.state === "error" ? <span role="alert" className="text-[14px] text-m-dn">{s.error}</span> : <span className="text-m-tx3">Se publica solo si la apruebas.</span>}
+        <MButton onClick={create} className="h-[44px]">
+          {s.state === "error" ? "Reintentar" : "Crear enlace de reseña"}
+        </MButton>
+      </span>
+    );
+  }
+  if (s.state === "loading") return <span className="text-m-tx3">Creando enlace…</span>;
+  const wa = whatsappHref(phone, reviewShareText(siteName, s.url));
+  return (
+    <span className="flex flex-col items-start gap-2">
+      {s.answered ? <span className="text-m-tx3">El cliente ya respondió.</span> : null}
+      <span className="flex flex-wrap gap-2">
+        <MButton onClick={copy} className="h-[44px]">
+          {s.copied ? "Copiado" : "Copiar enlace"}
+        </MButton>
+        {wa ? (
+          <a href={wa} target="_blank" rel="noopener noreferrer" className="flex h-[44px] items-center rounded-[12px] border border-m-bd bg-m-sf px-4 text-[15px] text-m-tx">
+            WhatsApp
+          </a>
+        ) : null}
+      </span>
+      <span aria-live="polite" className="sr-only">{s.copied ? "Enlace copiado" : ""}</span>
+    </span>
   );
 }

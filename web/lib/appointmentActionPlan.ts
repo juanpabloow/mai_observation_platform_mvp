@@ -30,6 +30,8 @@ export interface ActionPlan {
   reschedule: boolean;
   /** "Ver actividad" — the server reads it through the same appointment gate. */
   readActivity: boolean;
+  /** "Enlace de reseña" — only for a COMPLETED appointment this login may act on. */
+  reviewLink: boolean;
 }
 
 export function appointmentActionPlan(input: { canOperate: boolean; canModify: boolean; status: string }): ActionPlan {
@@ -44,5 +46,6 @@ export function appointmentActionPlan(input: { canOperate: boolean; canModify: b
     primary: !allowed || !live ? null : input.status === "scheduled" ? "confirmed" : "completed",
     reschedule: allowed && live,
     readActivity: allowed,
+    reviewLink: allowed && input.status === "completed",
   };
 }

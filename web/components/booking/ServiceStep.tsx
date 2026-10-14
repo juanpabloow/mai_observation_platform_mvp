@@ -4,7 +4,8 @@ import { useId, useState } from "react";
 import type { ApptCategory } from "@/lib/agendaCategory";
 import { priceLabelCOP } from "@/lib/money";
 import { needsMore } from "@/lib/publicBookingFlow";
-import { IconCheck, IconClock, IconPlus, LINK_BTN, ring, SERIF, type ServiceOption } from "./ui";
+import { ratingText, reviewCountText } from "@/lib/publicReviews";
+import { IconCheck, IconClock, IconPlus, IconStar, LINK_BTN, ring, SERIF, type ServiceOption } from "./ui";
 
 /**
  * STEP 1 — Elige tu servicio. One service per booking (no cart). The categories are the
@@ -134,6 +135,16 @@ function ServiceCard({
               {s.duration_min} min
             </span>
             <span className="text-[15px] font-semibold text-pb-ink">{price}</span>
+            {s.rating ? (
+              <span className="flex items-center gap-[3px] text-pb-tx2" aria-label={`${ratingText(s.rating.average)} de 5, ${reviewCountText(s.rating.count)}`}>
+                <IconStar />
+                <span aria-hidden>
+                  {ratingText(s.rating.average)} <span className="text-pb-muted">({s.rating.count})</span>
+                </span>
+              </span>
+            ) : (
+              <span className="rounded-[6px] bg-pb-sf2 px-[7px] py-0.5 text-[12px] text-pb-tx2">Sin reseñas aún</span>
+            )}
             {selected ? <span className="sr-only">Seleccionado</span> : null}
           </span>
         </button>

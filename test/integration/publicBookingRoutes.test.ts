@@ -196,7 +196,7 @@ test('a public site answers with NO session or cookie, with no-store + nosniff h
   assert.deepEqual(Object.keys(d.site).sort(), ['address', 'booking_horizon_days', 'closed_weekdays', 'name', 'timezone']);
   assert.deepEqual(d.site.closed_weekdays, ['sun']);
   assert.equal(d.services.length, 1);
-  assert.deepEqual(Object.keys(d.services[0]).sort(), ['description', 'duration_min', 'family', 'id', 'name', 'price']);
+  assert.deepEqual(Object.keys(d.services[0]).sort(), ['description', 'duration_min', 'family', 'id', 'name', 'price', 'rating']);
 });
 
 test('unknown / inactive / module-disabled / default-client / kill switch → the SAME 404 on every endpoint', async () => {

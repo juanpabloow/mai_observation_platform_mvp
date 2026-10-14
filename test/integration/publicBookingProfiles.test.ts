@@ -91,7 +91,7 @@ test('the staff endpoint returns the PUBLIC profile and the public services each
   assert.equal(ana.bio, BIO);
   assert.equal(ana.photo_url, 'https://cdn.example.com/staff/ana.jpg');
   assert.deepEqual([...(ana.service_ids as string[])].sort(), [site.cut, site.beard].sort(), 'never a service the site does not offer');
-  assert.deepEqual(Object.keys(ana).sort(), ['bio', 'duration_min', 'id', 'name', 'photo_url', 'price', 'service_ids', 'title']);
+  assert.deepEqual(Object.keys(ana).sort(), ['bio', 'duration_min', 'id', 'name', 'photo_url', 'price', 'rating', 'reviews', 'service_ids', 'title']);
 });
 
 test('no internal role, contact field, inactive or no-chair professional ever leaks', async () => {

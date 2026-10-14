@@ -14,6 +14,7 @@ test('recognizes every client-level surface', () => {
   assert.deepEqual(parseClientSurface(`/clients/${CID}/contacts/abc-123`), { clientId: CID, label: 'Contactos' });
   assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/agenda`), { clientId: CID, label: 'Agenda' });
   assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/agenda/`), { clientId: CID, label: 'Agenda' });
+  assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/reviews`), { clientId: CID, label: 'Reseñas' });
   // Per-client scheduling admin (canonical route).
   assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/admin`), {
     clientId: CID,

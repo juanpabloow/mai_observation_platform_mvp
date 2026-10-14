@@ -1,5 +1,6 @@
 import type { BookingError } from "@worker/scheduling/booking.js";
 import type { PublicServiceRow, PublicStaffRow } from "@worker/db/repositories/scheduling/publicCatalog.js";
+import type { PublicReviewRow, RatingSummary } from "@worker/db/repositories/scheduling/reviews.js";
 import { serviceCategory, type ApptCategory } from "@/lib/agendaCategory";
 
 /**
@@ -149,9 +150,11 @@ export interface PublicService {
   price: string | null;
   /** The agenda colour family — decoration only. */
   family: ApptCategory;
+  /** APPROVED reviews only (migration 1801); null = no reviews yet. */
+  rating: RatingSummary | null;
 }
 
-export function projectPublicService(s: PublicServiceRow): PublicService {
+export function projectPublicService(s: PublicServiceRow, ratings?: ReadonlyMap<string, RatingSummary>): PublicService {
   return {
     id: s.id,
     name: s.name,
@@ -159,7 +162,21 @@ export function projectPublicService(s: PublicServiceRow): PublicService {
     duration_min: s.duration_min,
     price: s.price,
     family: serviceCategory(s.name, s.category),
+    rating: ratings?.get(s.id) ?? null,
   };
+}
+
+/** One APPROVED review as a visitor sees it: author is "Nombre I.", never a contact field. */
+export interface PublicReview {
+  author: string;
+  service: string;
+  rating: number;
+  comment: string | null;
+  submitted_at: string;
+}
+
+export function projectPublicReview(r: PublicReviewRow): PublicReview {
+  return { author: r.author_display, service: r.service_name, rating: r.rating, comment: r.comment, submitted_at: r.submitted_at.toISOString() };
 }
 
 export interface PublicStaff {
@@ -173,6 +190,10 @@ export interface PublicStaff {
   photo_url: string | null;
   /** Public services this professional performs at the site (ids of the catalogue). */
   service_ids: string[];
+  /** APPROVED reviews only; null = none yet. */
+  rating: RatingSummary | null;
+  /** The latest approved reviews (≤ 10), newest first. */
+  reviews: PublicReview[];
 }
 
 /** An https URL or nothing — a malformed or non-https value never reaches an <img>. */
@@ -185,7 +206,10 @@ function httpsOrNull(url: string | null): string | null {
   }
 }
 
-export function projectPublicStaff(s: PublicStaffRow): PublicStaff {
+export function projectPublicStaff(
+  s: PublicStaffRow,
+  extra: { ratings?: ReadonlyMap<string, RatingSummary>; reviews?: readonly PublicReviewRow[] } = {},
+): PublicStaff {
   return {
     id: s.id,
     name: s.name,
@@ -195,6 +219,8 @@ export function projectPublicStaff(s: PublicStaffRow): PublicStaff {
     bio: s.public_bio,
     photo_url: httpsOrNull(s.public_photo_url),
     service_ids: s.service_ids ?? [],
+    rating: extra.ratings?.get(s.id) ?? null,
+    reviews: (extra.reviews ?? []).filter((r) => r.staff_id === s.id).map(projectPublicReview),
   };
 }
 

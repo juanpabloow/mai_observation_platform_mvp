@@ -88,6 +88,12 @@ curl "${H[@]}" -X POST "$BASE/appointments/$ID/cancel"     -H "Content-Type: app
 curl "${H[@]}" -X POST "$BASE/appointments/$ID/complete"
 curl "${H[@]}" -X POST "$BASE/appointments/$ID/no-show"
 curl "${H[@]}" -X POST "$BASE/appointments/$ID/reschedule" -H "Content-Type: application/json" -d '{"start_at":"2026-08-05T16:00:00Z"}'
+
+# Review link of a COMPLETED appointment (scheduling.write). Idempotent: always the same
+# link; renewed for 30 days if it expired unanswered. Sends nothing — n8n delivers it.
+# → { "review_link": { "url", "path", "status": "requested" | "answered", "expires_at" } }
+#   404 unknown / other client · 409 not_completed · 503 no link secret configured
+curl "${H[@]}" -X POST "$BASE/appointments/$ID/review-link"
 ```
 
 ## Notes
