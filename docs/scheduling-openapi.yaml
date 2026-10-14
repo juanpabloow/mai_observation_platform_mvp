@@ -292,7 +292,7 @@ paths:
                   has_availability:
                     type: object
                     additionalProperties: { type: boolean }
-                    description: "E-3: { 'YYYY-MM-DD': true|false } for each requested local day."
+                    description: "E-3: { 'YYYY-MM-DD': true|false } for each site-local day the END-EXCLUSIVE window [from, to) touches — a `to` at local midnight does not add the day starting there."
                   free_blocks:
                     type: array
                     description: "E-3: contiguous free runs collapsed per day+staff, labels ready to read aloud."
@@ -332,7 +332,7 @@ paths:
                             next_available: { type: [object, "null"], description: "First REAL engine slot after the window (same service + professional), or null." }
                       alternatives:
                         type: array
-                        description: "Other professionals with real slots for the same service in the same window."
+                        description: "Other professionals with real slots for the same service in the same window (slots_checked: true, with first_slot). In a 409 staff_service_mismatch body, alternatives are NAMES ONLY (slots_checked: false) — query their slots before offering a time."
                         items: { type: object }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }

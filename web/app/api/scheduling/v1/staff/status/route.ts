@@ -105,6 +105,9 @@ export async function GET(req: Request): Promise<Response> {
       shift: x.shift.map((s) => ({ from: localClock24(s.from, tz), until: localClock24(s.until, tz) === "00:00" ? "24:00" : localClock24(s.until, tz) })),
       causes: x.causes.map((c) => ({ code: c.code, coverage: c.coverage, public_reason: c.public_reason })),
     })),
-    note: "Status only: whether the professional works. Bookable times depend on a service — call /availability for slots.",
+    // "working" = has shift time that day not covered by a site closure or their own block.
+    // It does NOT mean free slots (those depend on the service and on appointments, which are
+    // not read here) and it does NOT confirm physical presence.
+    note: "Status only: whether the professional has a shift that day. 'working' does not guarantee bookable slots (call /availability with a service) nor physical presence.",
   });
 }

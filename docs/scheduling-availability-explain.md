@@ -46,7 +46,7 @@ explanation: {
              customer_message, causes: [{ code, coverage: "all"|"part", minutes, public_reason }] }],
     next_available: { start_at, service_end_at, day, time, start_label } | null
   }],
-  alternatives: [{ staff_id, staff_name, slot_count, first_slot }]   // otros con slots reales
+  alternatives: [{ staff_id, staff_name, slot_count, first_slot, slots_checked: true }]   // otros con slots reales
 }
 ```
 
@@ -70,7 +70,9 @@ Cómo se arma la respuesta:
   agrega `explanation` con uno de estos `summary`:
   - `staff_does_not_perform_service`: el profesional no hace ese servicio;
   - `not_bookable`: el profesional no recibe reservas.
-  En ese caso, `alternatives` son quienes sí lo hacen.
+  En ese caso, `alternatives` son quienes sí lo hacen, **solo con nombre** y
+  `slots_checked: false`: no son horarios. Hay que consultar `/availability` para ese
+  profesional antes de ofrecer una hora.
 
 ### `summary` / `causes[].code`
 
@@ -90,6 +92,26 @@ Cómo se arma la respuesta:
 | `min_notice` / `beyond_booking_horizon` / `in_the_past` | reglas de reserva | frases propias |
 | `multiple` / `unknown` | varias causas / ninguna identificada | «X no tiene disponibilidad para ese horario.» |
 
+### Rango de fechas: `[from, to)` fin-exclusivo
+
+`has_availability` lista los días locales de la sede que toca la ventana. Un `to` exactamente
+a medianoche local **no** agrega el día que empieza ahí.
+
+- Antes, una consulta de un día respondía también el siguiente con `false`.
+- Las fechas son locales de la sede: `2026-11-04T00:00Z` en Bogotá es el 3 de noviembre a las 19:00.
+- Los slots no cambian. El motor sigue recorriendo los mismos días, y ningún slot puede empezar en `to`.
+
+### Errores: nunca son una ausencia
+
+Estas respuestas **no** traen `explanation` y nunca deben leerse como «está de vacaciones»
+ni como cualquier otro motivo:
+
+- `400` (`staff_not_found`, parámetros inválidos), `401`, `403`, `404`;
+- `5xx`, timeouts o errores de red.
+
+El bot debe decir que no pudo consultar la agenda y ofrecer intentarlo de nuevo o pasar con
+el equipo.
+
 ## `GET /api/scheduling/v1/staff/status?site_id=&(staff_id|staff)=&date=YYYY-MM-DD&days=1..14`
 
 Responde «¿trabaja hoy?» **sin servicio**. Se basa solo en el horario de la sede, el turno y
@@ -104,6 +126,10 @@ Cada día trae:
 - `summary`, más `public_reason` cuando un bloqueo cubre todo el turno;
 - `customer_message`;
 - `shift`: lo que queda del turno después de los bloqueos.
+
+`working` significa que el profesional tiene turno ese día sin bloqueos que lo cubran.
+**No garantiza** cupo, porque eso depende del servicio y de las citas, que aquí no se leen.
+Tampoco confirma presencia física. Para horas concretas, consultar `/availability`.
 
 Usa la misma autenticación (`scheduling.read`) y el mismo aislamiento cliente → sede →
 profesional.

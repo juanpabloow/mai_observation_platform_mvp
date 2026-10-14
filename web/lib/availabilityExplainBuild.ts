@@ -53,7 +53,8 @@ export interface StaffExplanationJson {
 export interface ExplanationJson {
   version: number;
   staff: StaffExplanationJson[];
-  alternatives: Array<{ staff_id: string; staff_name: string | null; slot_count: number; first_slot: SlotRef }>;
+  /** slots_checked: true — each alternative comes WITH a real engine slot (first_slot). */
+  alternatives: Array<{ staff_id: string; staff_name: string | null; slot_count: number; first_slot: SlotRef; slots_checked: true }>;
 }
 
 export async function buildExplanation(input: {
@@ -129,7 +130,7 @@ export async function buildExplanation(input: {
       }
     }
     for (const [id, list] of [...per.entries()].sort((a, b) => a[1][0].start_at.getTime() - b[1][0].start_at.getTime())) {
-      alternatives.push({ staff_id: id, staff_name: nameById.get(id) ?? null, slot_count: list.length, first_slot: slotRef(list[0], tz, locale) });
+      alternatives.push({ staff_id: id, staff_name: nameById.get(id) ?? null, slot_count: list.length, first_slot: slotRef(list[0], tz, locale), slots_checked: true });
     }
   }
   return { version: EXPLANATION_VERSION, staff, alternatives };

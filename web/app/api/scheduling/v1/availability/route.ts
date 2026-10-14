@@ -8,7 +8,7 @@ import { buildExplanation } from "@/lib/availabilityExplainBuild";
 import { EXPLANATION_VERSION } from "@/lib/availabilityExplanation";
 import { listStaff, listStaffForService } from "@worker/db/repositories/scheduling/staff.js";
 import { getServiceById } from "@worker/db/repositories/scheduling/services.js";
-import { localDatesInRange } from "@worker/scheduling/timezone.js";
+import { localDaysInWindow } from "@worker/scheduling/timezone.js";
 
 /**
  * GET /api/scheduling/v1/availability?site_id=&(service_id|service)=&(staff_id|staff)?=&from=&to=[&compact=true]
@@ -112,7 +112,9 @@ export async function GET(req: Request): Promise<Response> {
                 next_available: null,
               },
             ],
-            alternatives: qualified.map((q) => ({ staff_id: q.id, staff_name: q.name })),
+            // NAMES ONLY — who performs the service, NOT who has time: slots_checked=false means
+            // a caller must query /availability for that professional before offering any hour.
+            alternatives: qualified.map((q) => ({ staff_id: q.id, staff_name: q.name, slots_checked: false })),
           },
         },
         { status: 409 },
@@ -147,7 +149,9 @@ export async function GET(req: Request): Promise<Response> {
     owned.site.scheduling_config.slot_interval_min * 60_000,
   );
   // E-3 §2c: yes/no per requested local day, so a caller answers "¿hay cupo mañana?" by index.
-  const requestedDays = localDatesInRange(from, to, tz).map((d) => `${d.year}-${String(d.month).padStart(2, "0")}-${String(d.day).padStart(2, "0")}`);
+  // The window is END-EXCLUSIVE: `to` at a local midnight does not add the day starting there
+  // (it used to: a one-day query answered {day: false, nextDay: false}).
+  const requestedDays = localDaysInWindow(from, to, tz);
   const hasAvailability = computeHasAvailability(requestedDays, result.slots.map((s) => localDay(s.start_at, tz)));
 
   // E-3 §2b: compact trims each slot to what a conversational caller needs to choose + book.

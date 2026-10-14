@@ -3,10 +3,11 @@ import { createRequire } from 'node:module';
 import { resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { after, mock, test } from 'node:test';
-import { query } from '../../src/db/client.js';
+import { query, withTransaction } from '../../src/db/client.js';
+import { insertAppointment } from '../../src/db/repositories/scheduling/appointments.js';
 import { issueToken } from '../../src/db/repositories/handoffTokens.js';
 import { createException } from '../../src/db/repositories/scheduling/exceptions.js';
-import { localWallClockToUtc } from '../../src/scheduling/timezone.js';
+import { localWallClockToUtc, utcToZonedParts } from '../../src/scheduling/timezone.js';
 import { cleanupTenant, closeDb, seedMember, seedScenario, seedSiteForClient, seedWorkflow, type Scenario } from './fixtures.js';
 
 /**
@@ -96,6 +97,7 @@ test('full-day vacation with a public reason: explained, alternatives and the ne
   // Alternatives: Federico, with a real slot that same Wednesday.
   assert.deepEqual(e.alternatives.map((a: { staff_name: string }) => a.staff_name), ['Federico']);
   assert.equal(e.alternatives[0].first_slot.day, WED);
+  assert.equal(e.alternatives[0].slots_checked, true, 'with a real slot');
   assert.ok(e.alternatives[0].slot_count > 0);
   assert.ok(!leaks(r.text), 'the internal reason never appears');
 });
@@ -144,6 +146,8 @@ test('site closure, service mismatch and not bookable', async () => {
   assert.equal(mm.json.error.code, 'staff_service_mismatch');
   assert.equal(mm.json.explanation.staff[0].summary, 'staff_does_not_perform_service');
   assert.deepEqual(mm.json.explanation.alternatives.map((a: { staff_name: string }) => a.staff_name), ['Falla']);
+  assert.deepEqual(mm.json.explanation.alternatives.map((a: { slots_checked: boolean }) => a.slots_checked), [false], 'names only: a slot query is still needed');
+  assert.ok(mm.json.explanation.alternatives.every((a: Record<string, unknown>) => !('first_slot' in a)));
   const mmPlain = await avail(s, { staff: 'Federico', service_id: s.serviceColor, from: day(THU).toISOString(), to: day('2026-11-06').toISOString() });
   assert.equal(mmPlain.json.explanation, undefined, 'no explain → the old body');
 
@@ -224,4 +228,109 @@ test('forms: the public reason is explicit, validated per scope, default none, n
     (e: { code?: string }) => e.code === '23514',
   );
   CURRENT = null;
+});
+
+// ── Rango de fechas (has_availability fin-exclusivo) ────────────────────────────────
+
+test('has_availability is end-exclusive: one day, several days, midnight boundaries; slots unchanged', async () => {
+  const s = await gallery();
+  const base = { staff: 'Falla', service_id: s.serviceHaircut };
+  const one = await avail(s, { ...base, from: day(WED).toISOString(), to: day(THU).toISOString() });
+  assert.deepEqual(Object.keys(one.json.has_availability), [WED], 'a [00:00, next 00:00) window is ONE day');
+  const three = await avail(s, { ...base, from: day(WED).toISOString(), to: day('2026-11-07').toISOString() });
+  assert.deepEqual(Object.keys(three.json.has_availability), [WED, THU, '2026-11-06']);
+  const plusOneMs = await avail(s, { ...base, from: day(WED).toISOString(), to: new Date(day(THU).getTime() + 1).toISOString() });
+  assert.deepEqual(Object.keys(plusOneMs.json.has_availability), [WED, THU]);
+  // UTC-midnight inputs are Bogotá 19:00 the day before — reported as LOCAL days.
+  const utc = await avail(s, { ...base, from: '2026-11-04T00:00:00Z', to: '2026-11-05T00:00:00Z' });
+  assert.deepEqual(Object.keys(utc.json.has_availability), ['2026-11-03', WED]);
+  // The slots are exactly those of the same window ending 1 ms earlier (no slot can start at `to`).
+  const before = await avail(s, { ...base, from: day(WED).toISOString(), to: new Date(day(THU).getTime() - 1).toISOString() });
+  assert.deepEqual(one.json.slots, before.json.slots);
+  assert.deepEqual(one.json.free_blocks, before.json.free_blocks);
+});
+
+// ── Casos aislados del frente (fixtures sintéticos) ─────────────────────────────────
+
+test('normal shift and a day WITHOUT shift, from status and from availability', async () => {
+  const s = await gallery();
+  const hours = { mon: [{ start: '09:00', end: '18:00' }], tue: [{ start: '09:00', end: '18:00' }], thu: [{ start: '09:00', end: '18:00' }] };
+  await query(`UPDATE staff SET working_hours = $2 WHERE id = $1`, [s.falla, JSON.stringify(hours)]);
+  const st = await status(s, { staff: 'Falla', date: WED, days: '2' });
+  assert.deepEqual(st.json.days.map((d: { status: string; summary: string }) => [d.status, d.summary]), [['not_working', 'off_shift'], ['working', 'working']]);
+  assert.equal(st.json.days[0].customer_message, 'Falla no trabaja ese día.');
+  const av = await avail(s, { staff: 'Falla', service_id: s.serviceHaircut, from: day(WED).toISOString(), to: day(THU).toISOString(), explain: 'true' });
+  assert.equal(av.json.explanation.staff[0].summary, 'off_shift');
+  assert.equal(av.json.explanation.staff[0].public_reason, null);
+});
+
+test('working but no slots for the service (fully booked): status "working", availability "booked"', async () => {
+  const s = await gallery();
+  for (let h = 9; h < 18; h++) {
+    const start = day(THU, `${String(h).padStart(2, '0')}:00`);
+    const end = new Date(start.getTime() + 3600_000);
+    await withTransaction((c) =>
+      insertAppointment(c, {
+        tenantId: s.tenantId, clientId: s.clientId, siteId: s.siteId, contactId: null, sourceConversationId: null,
+        staffId: s.falla, serviceId: s.serviceHaircut, startAt: start, serviceEndAt: end, blockedFrom: start, blockedUntil: end,
+        serviceNameSnapshot: 'Haircut', durationMinSnapshot: 60, priceSnapshot: null, bufferBeforeMinSnapshot: 0, bufferAfterMinSnapshot: 0,
+        origin: 'internal', createdByType: 'agent', createdByUserId: null, idempotencyKey: null,
+      }),
+    );
+  }
+  const st = await status(s, { staff: 'Falla', date: THU });
+  assert.equal(st.json.days[0].status, 'working', 'status reads shifts and blocks, never appointments');
+  assert.match(st.json.note, /does not guarantee bookable slots/);
+  const av = await avail(s, { staff: 'Falla', service_id: s.serviceHaircut, from: day(THU).toISOString(), to: day('2026-11-06').toISOString(), explain: 'true' });
+  const f = av.json.explanation.staff[0];
+  assert.equal(f.summary, 'booked');
+  assert.equal(f.public_reason, null);
+  assert.equal(f.customer_message, 'Falla ya tiene ocupado ese horario.');
+  assert.ok(!/vacaciones/i.test(av.text));
+  assert.ok(!/"contact|"appointment/i.test(JSON.stringify(av.json.explanation)), 'no appointment detail');
+});
+
+test('partial absence: status partly_working, never a whole-day absence', async () => {
+  const s = await gallery();
+  await createException({ tenantId: s.tenantId, siteId: s.siteId, staffId: s.falla, startsAt: day(WED, '14:00'), endsAt: day(WED, '16:00'), reason: SENSITIVE, publicReason: 'vacation' });
+  const st = await status(s, { staff: 'Falla', date: WED });
+  const d = st.json.days[0];
+  assert.equal(d.status, 'partly_working');
+  assert.equal(d.public_reason, null, 'no reason claimed for the whole day');
+  assert.equal(d.customer_message, 'Falla trabaja solo parte de ese día.');
+  assert.deepEqual(d.shift, [{ from: '09:00', until: '14:00' }, { from: '16:00', until: '18:00' }]);
+  assert.ok(!leaks(st.text));
+});
+
+test('"¿Falla está hoy?" / "¿mañana?" without a service: date defaults to today at the site', async () => {
+  const s = await gallery();
+  const t = utcToZonedParts(new Date(), 'America/Bogota');
+  const today = `${t.year}-${String(t.month).padStart(2, '0')}-${String(t.day).padStart(2, '0')}`;
+  const noDate = await status(s, { staff: 'Falla' });
+  assert.equal(noDate.status, 200);
+  assert.equal(noDate.json.days.length, 1);
+  assert.equal(noDate.json.days[0].date, today);
+  const tm = new Date(Date.UTC(t.year, t.month - 1, t.day + 1));
+  const tomorrow = `${tm.getUTCFullYear()}-${String(tm.getUTCMonth() + 1).padStart(2, '0')}-${String(tm.getUTCDate()).padStart(2, '0')}`;
+  const next = await status(s, { staff: 'Falla', date: tomorrow, days: '1' });
+  assert.equal(next.json.days[0].date, tomorrow);
+});
+
+test('errors never read as an absence: unknown artist, bad token, foreign workflow ref', async () => {
+  const s = await gallery();
+  const unknown = await avail(s, { staff: 'Nadie', service_id: s.serviceHaircut, from: day(WED).toISOString(), to: day(THU).toISOString(), explain: 'true' });
+  assert.equal(unknown.status, 400);
+  assert.equal(unknown.json.error.code, 'staff_not_found');
+  assert.equal(unknown.json.explanation, undefined);
+  const unknownStatus = await status(s, { staff: 'Nadie', date: WED });
+  assert.equal(unknownStatus.status, 400);
+  const noAuth = await avail({ siteId: s.siteId, hdr: { 'x-workflow-ref': s.hdr['x-workflow-ref'] } }, { staff: 'Falla', service_id: s.serviceHaircut, from: day(WED).toISOString(), to: day(THU).toISOString(), explain: 'true' });
+  assert.equal(noAuth.status, 401);
+  const badRef = await avail({ siteId: s.siteId, hdr: { ...s.hdr, 'x-workflow-ref': 'wf-not-this-client' } }, { staff: 'Falla', service_id: s.serviceHaircut, from: day(WED).toISOString(), to: day(THU).toISOString(), explain: 'true' });
+  assert.ok(badRef.status >= 400 && badRef.status < 500, `foreign workflow ref → ${badRef.status}`);
+  const badRefStatus = await status({ siteId: s.siteId, hdr: { ...s.hdr, 'x-workflow-ref': 'wf-not-this-client' } }, { staff: 'Falla', date: WED });
+  assert.ok(badRefStatus.status >= 400 && badRefStatus.status < 500);
+  for (const r of [unknown, unknownStatus, noAuth, badRef, badRefStatus]) {
+    assert.ok(!/vacaciones|public_reason|explanation/i.test(r.text), `an error body (${r.status}) carries no absence reason`);
+  }
 });
