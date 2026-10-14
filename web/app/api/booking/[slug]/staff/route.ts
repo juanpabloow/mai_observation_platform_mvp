@@ -4,6 +4,7 @@ import { projectPublicStaff, publicError, publicJson, publicNotFound, publicRate
 import { readPublicBookingPolicy } from "@/lib/publicBookingPolicy";
 import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
 import { listPublicStaffForService } from "@worker/db/repositories/scheduling/publicCatalog.js";
+import { publicStaffRatings, publicStaffReviews } from "@worker/db/repositories/scheduling/reviews.js";
 
 /**
  * GET /api/booking/{slug}/staff?service_id= — PUBLIC. The professionals at the site who
@@ -26,5 +27,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     return publicError(400, "invalid_request", "Elige un servicio válido.");
   }
   const staff = await listPublicStaffForService(site.tenant_id, site.id, serviceId);
-  return publicJson({ staff: staff.map(projectPublicStaff) });
+  const ids = staff.map((s) => s.id);
+  // APPROVED reviews only, of THIS site's professionals.
+  const [ratings, reviews] = await Promise.all([publicStaffRatings(site.tenant_id, site.id), publicStaffReviews(site.tenant_id, site.id, ids)]);
+  return publicJson({ staff: staff.map((s) => projectPublicStaff(s, { ratings, reviews })) });
 }

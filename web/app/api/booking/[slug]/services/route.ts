@@ -3,6 +3,7 @@ import { projectPublicService, projectPublicSite, publicJson, publicNotFound, pu
 import { readPublicBookingPolicy } from "@/lib/publicBookingPolicy";
 import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
 import { listPublicServicesForSite } from "@worker/db/repositories/scheduling/publicCatalog.js";
+import { publicServiceRatings } from "@worker/db/repositories/scheduling/reviews.js";
 
 /**
  * GET /api/booking/{slug}/services — PUBLIC (no auth). Resolves the site by its
@@ -19,9 +20,9 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
   const { slug } = await params;
   const site = await getPublicBookingSiteBySlug(slug);
   if (!site) return publicNotFound();
-  const services = await listPublicServicesForSite(site.tenant_id, site.id);
+  const [services, ratings] = await Promise.all([listPublicServicesForSite(site.tenant_id, site.id), publicServiceRatings(site.tenant_id, site.id)]);
   return publicJson({
     site: projectPublicSite(site),
-    services: services.map(projectPublicService),
+    services: services.map((s) => projectPublicService(s, ratings)),
   });
 }

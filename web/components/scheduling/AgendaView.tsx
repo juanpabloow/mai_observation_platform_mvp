@@ -41,6 +41,7 @@ import {
   createManualAppointmentAction,
   noShowAppointmentAction,
   listAppointmentActivityAction,
+  getReviewLinkAction,
   rescheduleAppointmentAction,
   searchSchedulingContactsAction,
   type ContactSearchHit,
@@ -1799,6 +1800,7 @@ export function AgendaView(props: {
             }
             staffColor={teamColors.get(selected.staff_id)}
             loadActivity={() => listAppointmentActivityAction(props.clientId, selected.id)}
+            loadReviewLink={() => getReviewLinkAction(props.clientId, selected.id)}
           />
         ) : null}
         {preview && !selected && !modal ? (

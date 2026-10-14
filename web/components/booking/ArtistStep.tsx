@@ -2,7 +2,8 @@
 
 import { artistInitials, artistTone, type ArtistChoice } from "@/lib/publicBookingFlow";
 import { bioLead } from "@/lib/staffPublicProfile";
-import { BTN_PRIMARY_SM, BTN_SECONDARY, IconCheck, IconShuffle, LINK_BTN, Portrait, ring, SERIF, type StaffOption } from "./ui";
+import { ratingText, reviewCountText } from "@/lib/publicReviews";
+import { BTN_PRIMARY_SM, BTN_SECONDARY, IconCheck, IconShuffle, IconStar, LINK_BTN, Portrait, ring, SERIF, type StaffOption } from "./ui";
 
 /**
  * STEP 2 — Elige a tu artista. Its own step, apart from the service and the date.
@@ -71,7 +72,7 @@ export function ArtistStep({
           const sel = selected === a.id;
           return (
             <article key={a.id} className={`flex items-center gap-3.5 rounded-[16px] p-3.5 sm:gap-4 sm:p-4 ${ring(sel)}`}>
-              <div className="relative flex-none">
+              <div className={`relative flex-none ${a.rating ? "pb-2.5" : ""}`}>
                 <Portrait
                   photoUrl={a.photo_url}
                   initials={artistInitials(a.name)}
@@ -80,6 +81,15 @@ export function ArtistStep({
                   className="size-16 overflow-hidden rounded-full sm:size-20"
                   initialsClass="text-[24px] sm:text-[28px]"
                 />
+                {a.rating ? (
+                  <span
+                    aria-label={`${ratingText(a.rating.average)} de 5, ${reviewCountText(a.rating.count)}`}
+                    className="absolute bottom-0 left-1/2 flex -translate-x-1/2 items-center gap-1 whitespace-nowrap rounded-full border border-pb-line bg-white px-2 py-0.5 text-[13px] font-semibold [font-variant-numeric:tabular-nums]"
+                  >
+                    <IconStar />
+                    <span aria-hidden>{ratingText(a.rating.average)}</span>
+                  </span>
+                ) : null}
                 {sel ? (
                   <span aria-hidden className="absolute -right-0.5 -top-0.5 flex size-6 items-center justify-center rounded-full border-2 border-white bg-pb-ink">
                     <IconCheck size={12} width={2.4} />
@@ -88,7 +98,11 @@ export function ArtistStep({
               </div>
               <div className="flex min-w-0 flex-1 flex-col gap-0.5">
                 <h2 className={`${SERIF} m-0 truncate text-[21px] leading-[1.15] sm:text-[23px]`}>{a.name}</h2>
-                {a.title ? <span className="line-clamp-2 text-[13.5px] leading-[1.35] text-pb-muted">{a.title}</span> : null}
+                {a.title || a.rating ? (
+                  <span className="line-clamp-2 text-[13.5px] leading-[1.35] text-pb-muted">
+                    {[a.title, a.rating ? reviewCountText(a.rating.count) : null].filter(Boolean).join(" · ")}
+                  </span>
+                ) : null}
                 {a.bio ? <p className="m-0 hidden line-clamp-1 text-[13.5px] leading-[1.45] text-pb-tx2 sm:block">{bioLead(a.bio)}</p> : null}
                 <button
                   type="button"

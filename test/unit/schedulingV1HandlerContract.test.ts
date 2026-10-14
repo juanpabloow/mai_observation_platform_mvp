@@ -55,6 +55,7 @@ const ALL = [
   'appointments/[id]/complete/route.ts',
   'appointments/[id]/no-show/route.ts',
   'appointments/[id]/reschedule/route.ts',
+  'appointments/[id]/review-link/route.ts',
 ];
 
 test('every v1 handler authenticates before reading body/query', () => {
@@ -109,6 +110,16 @@ test('confirm/complete/no-show validate the id (isUuid) BEFORE calling the domai
   assertBefore('appointments/[id]/confirm/route.ts', 'isUuid(id)', 'transitionStatus(');
   assertBefore('appointments/[id]/complete/route.ts', 'isUuid(id)', 'transitionStatus(');
   assertBefore('appointments/[id]/no-show/route.ts', 'isUuid(id)', 'transitionStatus(');
+});
+
+test('review-link validates the id, pins the client and only links COMPLETED appointments', () => {
+  const rel = 'appointments/[id]/review-link/route.ts';
+  assertContains(rel, 'authenticateScheduling(req, "scheduling.write")');
+  assertBefore(rel, 'isUuid(id)', 'getAppointmentById(');
+  assertContains(rel, 'appt.client_id !== clientId');
+  assertBefore(rel, 'appt.client_id !== clientId', 'ensureReviewRequest(');
+  assertBefore(rel, 'appt.status !== "completed"', 'ensureReviewRequest(');
+  assertContains(rel, 'ensureReviewRequest(tenantId, clientId, id)');
 });
 
 test('cancel and reschedule resolve the appointment target (UUID or by-time) BEFORE the domain', () => {

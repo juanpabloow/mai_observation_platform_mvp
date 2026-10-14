@@ -14,6 +14,19 @@ export interface PublicSiteView {
   booking_horizon_days: number;
 }
 
+export interface RatingSummary {
+  average: number;
+  count: number;
+}
+
+export interface PublicReview {
+  author: string;
+  service: string;
+  rating: number;
+  comment: string | null;
+  submitted_at: string;
+}
+
 export interface ServiceOption {
   id: string;
   name: string;
@@ -21,6 +34,8 @@ export interface ServiceOption {
   duration_min: number;
   price: string | null;
   family: ApptCategory;
+  /** Approved reviews only; null = none yet. */
+  rating?: RatingSummary | null;
 }
 
 export interface StaffOption {
@@ -32,6 +47,8 @@ export interface StaffOption {
   bio: string | null;
   photo_url: string | null;
   service_ids: string[];
+  rating?: RatingSummary | null;
+  reviews?: PublicReview[];
 }
 
 export interface Slot {
@@ -144,6 +161,15 @@ export function IconShuffle() {
   return (
     <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="#4B3F78" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
       <path d="M3 7h3.5c2.5 0 3.8 1.3 5.5 5s3 5 5.5 5H21M18 14l3 3-3 3M3 17h3.5c1.2 0 2.1-.3 2.9-1M14.6 8c.8-.7 1.7-1 2.9-1H21M18 4l3 3-3 3" />
+    </svg>
+  );
+}
+
+/** The design's amber star (decorative — the number beside it carries the meaning). */
+export function IconStar({ size = 13 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden className="flex-none">
+      <path d="M8 1.6l1.9 4 4.4.5-3.3 3 .9 4.3L8 11.3l-3.9 2.1.9-4.3-3.3-3 4.4-.5z" fill="#E8A317" />
     </svg>
   );
 }

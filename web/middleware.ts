@@ -27,6 +27,8 @@ import { getSessionCookie } from "better-auth/cookies";
 // (production answered exactly that); the route tests import the handler and never saw it.
 // /book is the PUBLIC booking page and /api/booking its public endpoints — both
 // cookieless and self-protected (site-slug scoping + rate limiting).
+// /resena is the PUBLIC review page and /api/resena its submit endpoint — cookieless,
+// protected by the signed link token (web/lib/reviewLink.ts) and rate limiting.
 // /forgot-password and /reset-password are the account-recovery pages: their
 // whole audience is logged-out users, so they must never bounce to /login.
 //
@@ -56,6 +58,8 @@ const PUBLIC_PREFIXES = [
   "/api/catalog",
   "/api/booking",
   "/book",
+  "/api/resena",
+  "/resena",
   "/api/meetings/v1/jobs",
   "/api/meetings/v1/maintenance",
 ];

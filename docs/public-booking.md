@@ -112,6 +112,7 @@ Railway (no en el worker ni en maintenance).
 | `NEXT_PUBLIC_TURNSTILE_SITE_KEY` | — | Site key de Turnstile (pública). La página la lee en cada request, así que no requiere rebuild. |
 | `PUBLIC_BOOKING_TURNSTILE_SECRET_KEY` | — | Secret de Turnstile (solo servidor). |
 | `PUBLIC_BOOKING_PRIVACY_POLICY_URL` | — | URL absoluta `https://…` de la política de privacidad; si existe, se enlaza junto al checkbox. |
+| `REVIEW_LINK_SECRET` | `PUBLIC_BOOKING_HASH_SECRET`, luego `BETTER_AUTH_SECRET` | Clave HMAC (≥16) que firma los enlaces de reseña. Cambiarla invalida todos los enlaces pendientes. Sin ninguna, no se emiten ni aceptan enlaces (falla cerrado). |
 
 Un valor no numérico o fuera de rango cae al defecto (nunca desactiva un límite).
 
@@ -153,6 +154,50 @@ La foto se sube desde Equipo al mismo bucket R2 que los logos (`staff/{tenant}/{
 Se valida por sus bytes (PNG, JPEG o WebP) y se reduce en el navegador a 1200 px antes de
 enviarse. Sin R2 configurado, el editor lo indica y la página muestra las iniciales.
 
+### Reseñas (`1801`)
+
+`migrations/1801000000000_appointment-reviews.ts` crea `appointment_reviews` (una por cita,
+FK compuesta a `appointments (id, tenant_id, client_id)` y a `sites`) y añade la restricción
+`UNIQUE (id, tenant_id, client_id)` en `appointments`. Es aditiva. El `down()` se niega
+mientras haya reseñas enviadas. Hay que aplicarla **antes** de desplegar: sin la tabla, las
+rutas públicas de servicios y profesionales fallan, porque leen las calificaciones. Probada
+up → down → up en la base de test local. No se ejecutó sobre producción.
+
+## Reseñas
+
+Decisiones de producto (13 oct 2026):
+
+- **Origen.** Solo hay reseñas de citas **completadas**, mediante un enlace por cita.
+- **Quién pide el enlace.**
+  - El negocio, desde Agenda → cita → «Reseña» → «Crear enlace»: copia el enlace o abre
+    WhatsApp con el texto preparado; nada se envía solo.
+  - n8n, con `POST /api/scheduling/v1/appointments/{id}/review-link`.
+- **Moderación.** El negocio aprueba cada reseña antes de publicarla, en Scheduling →
+  Reseñas (`/clients/{id}/scheduling/reviews`, solo dueño o agencia).
+- **Autor.** Se muestra nombre e inicial («Andrés G.»), calculado del contacto; el cliente
+  no lo escribe.
+
+Flujo: `requested` (enlace creado) → `pending` (el cliente respondió) → `approved` |
+`hidden`. Una decisión se puede cambiar después. En la página de reservas solo cuentan
+y se muestran las aprobadas: el promedio y el número por artista y por servicio, y las 10
+más recientes de cada artista en su perfil.
+
+El enlace es `/resena/{id}.{firma}`: firma HMAC, sin secreto guardado en la base.
+
+- El mismo enlace se puede volver a copiar.
+- Dura 30 días; pedirlo de nuevo renueva uno vencido que no se respondió.
+- Un enlace falsificado, de otra base, de una sede inactiva o de un módulo apagado
+  responde lo mismo que uno inexistente.
+
+El envío (`POST /api/resena/{token}`) tiene estas garantías:
+
+- **Atómico:** un doble clic o un enlace reutilizado no crea una segunda reseña (409).
+- **Entrada:** rechaza campos desconocidos y exige el consentimiento de publicación.
+- **Comentario:** aplica las reglas de texto público (sin enlaces, correos ni teléfonos;
+  ≤ 600 caracteres).
+- **Abuso:** tiene límite por IP.
+- **Logs:** no registran el nombre, el comentario ni el token.
+
 ## Diseño v3 (cuatro pasos)
 
 1. **Elige tu servicio**: categorías reales (las familias del catálogo), un servicio por
@@ -178,7 +223,7 @@ De más fino a más grueso:
 
 ## Checklist de lanzamiento
 
-- [ ] Aplicar las migraciones en la base del entorno (`npm run migrate:prod` con la URL de ese entorno), incluidas `1799` y `1800`.
+- [ ] Aplicar las migraciones en la base del entorno (`npm run migrate:prod` con la URL de ese entorno), incluidas `1799`, `1800` y `1801` (reseñas), **antes** de desplegar el código.
 - [ ] Definir `PUBLIC_BOOKING_HASH_SECRET` (aleatorio, ≥32 caracteres) en el Web service.
 - [ ] Revisar los límites (o dejar los defectos).
 - [ ] Turnstile: crear el widget en Cloudflare con el dominio público, cargar site key y secret, luego `PUBLIC_BOOKING_TURNSTILE_ENABLED=true`.
@@ -187,3 +232,4 @@ De más fino a más grueso:
 - [ ] Probar el enlace desde Configuración de agenda → Abrir página, en el navegador de Instagram y de WhatsApp.
 - [ ] Hacer una reserva real de prueba en una sede de prueba y cancelarla desde la agenda.
 - [ ] Confirmar en logs que no aparecen teléfonos, correos ni tokens.
+- [ ] Reseñas: completar una cita de prueba, crear su enlace, responderlo, aprobarlo en Scheduling → Reseñas y verlo en el perfil del artista.

@@ -94,6 +94,11 @@ const Icon = {
       <path d="M13 9h6a1.5 1.5 0 0 1 1.5 1.5V20M7 8h3M7 12h3M7 16h3M16 13h1.5M16 16h1.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
     </svg>
   ),
+  reviews: (
+    <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
+      <path d="M12 4.2l2.3 4.7 5.2.7-3.8 3.6.9 5.1L12 15.9l-4.6 2.4.9-5.1-3.8-3.6 5.2-.7z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  ),
   schedulingAdmin: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
       <rect x="4" y="5" width="16" height="15" rx="2" stroke="currentColor" strokeWidth="1.6" />
@@ -603,6 +608,13 @@ export function AppSidebar({
             href: c("/scheduling/staff"),
             icon: Icon.team,
             active: pathname.startsWith(c("/scheduling/staff")),
+          });
+          scheduling.push({
+            key: "scheduling-reviews",
+            label: "Reseñas",
+            href: c("/scheduling/reviews"),
+            icon: Icon.reviews,
+            active: pathname.startsWith(c("/scheduling/reviews")),
           });
           scheduling.push({
             key: "scheduling-settings",

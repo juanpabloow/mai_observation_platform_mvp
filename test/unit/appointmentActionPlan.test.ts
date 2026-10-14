@@ -100,3 +100,18 @@ test('both detail surfaces decide from the shared plan — no separate visual ru
   const page = read('web/app/clients/[clientId]/scheduling/agenda/page.tsx');
   assert.ok(page.includes('listAppointments(tenantId, { siteId: site.id, from: rangeStart, to: rangeEnd, clientId: client.id })'), 'the same site-wide read');
 });
+
+test('the review link is offered ONLY for a completed appointment this login may act on', () => {
+  assert.equal(appointmentActionPlan({ ...OWN, status: 'completed' }).reviewLink, true);
+  assert.equal(appointmentActionPlan({ ...RECEPTION, status: 'completed' }).reviewLink, true);
+  assert.equal(appointmentActionPlan({ ...OTHER, status: 'completed' }).reviewLink, false, 'not someone else’s appointment');
+  assert.equal(appointmentActionPlan({ canOperate: false, canModify: true, status: 'completed' }).reviewLink, false);
+  for (const status of ['scheduled', 'confirmed', 'cancelled', 'no_show']) {
+    assert.equal(appointmentActionPlan({ ...OWN, status }).reviewLink, false, `${status}: no review link`);
+  }
+  const panel = read('web/components/scheduling/agenda/AppointmentPanel.tsx');
+  const sheet = read('web/components/scheduling/mobile/MobileAppointmentSheet.tsx');
+  assert.ok(panel.includes('{plan.reviewLink ? <ReviewLinkCard'), 'desktop shows it from the plan');
+  assert.ok(sheet.includes('...(plan.reviewLink ? [{ k: "Reseña"'), 'phone shows it from the plan');
+  assert.ok(read('web/components/scheduling/AgendaView.tsx').includes('getReviewLinkAction(props.clientId, selected.id)'));
+});

@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import { notFound } from "next/navigation";
 import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
 import { getPublicBrandLogo, listPublicServicesForSite } from "@worker/db/repositories/scheduling/publicCatalog.js";
+import { publicServiceRatings } from "@worker/db/repositories/scheduling/reviews.js";
 import { projectPublicService, projectPublicSite } from "@/lib/publicBookingApi";
 import { publicClientConfig, readPublicBookingPolicy } from "@/lib/publicBookingPolicy";
 import { BookingFlow } from "@/components/booking/BookingFlow";
@@ -64,11 +65,12 @@ export default async function PublicBookingPage({ params }: { params: Promise<{ 
   const site = await resolve(siteSlug);
   if (!site) notFound();
 
-  const [serviceRows, logoUrl] = await Promise.all([
+  const [serviceRows, logoUrl, ratings] = await Promise.all([
     listPublicServicesForSite(site.tenant_id, site.id),
     getPublicBrandLogo(site.tenant_id, site.client_id),
+    publicServiceRatings(site.tenant_id, site.id),
   ]);
-  const services = serviceRows.map(projectPublicService);
+  const services = serviceRows.map((s) => projectPublicService(s, ratings));
   const publicSite = projectPublicSite(site);
   const config = publicClientConfig(readPublicBookingPolicy());
 
