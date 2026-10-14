@@ -8,6 +8,8 @@ import {
   type TimeOffConflict,
   type TimeOffResult,
 } from "@/lib/timeOffActions";
+import type { PublicAbsenceReason } from "@/lib/publicAbsenceReason";
+import { effectivePublicReason, PublicReasonField } from "./PublicReasonField";
 
 /**
  * The ONE Time Off form — used from the agenda header ("Bloquear horario"), a staff
@@ -32,6 +34,8 @@ export interface TimeOffEdit {
   startsAt: string; // ISO UTC
   endsAt: string; // ISO UTC
   reason: string | null;
+  /** What a customer may be told (null = nothing). Absent on old callers → treated as null. */
+  publicReason?: PublicAbsenceReason | null;
 }
 
 /** UTC ISO → local {date:"YYYY-MM-DD", time:"HH:MM"} in the given IANA tz (display only). */
@@ -103,6 +107,7 @@ export function TimeOffForm({
         startTime: start.time,
         endTime: end.time,
         reason: edit.reason ?? "",
+        publicReason: edit.publicReason ?? null,
       };
     }
     const today = todayLocal(tz);
@@ -116,6 +121,7 @@ export function TimeOffForm({
       startTime: "09:00",
       endTime: "13:00",
       reason: "",
+      publicReason: null as PublicAbsenceReason | null,
     };
   }, [edit, tz, fixedStaffId, staff, canSiteClosure]);
 
@@ -128,6 +134,7 @@ export function TimeOffForm({
   const [startTime, setStartTime] = useState(initial.startTime);
   const [endTime, setEndTime] = useState(initial.endTime);
   const [reason, setReason] = useState(initial.reason);
+  const [publicReason, setPublicReason] = useState<PublicAbsenceReason | null>(initial.publicReason);
 
   const lockScope = !!fixedStaffId || !!edit; // scope/staff can't move on an existing block or a column form
 
@@ -135,7 +142,7 @@ export function TimeOffForm({
     setError(null);
     setConflicts(null);
     startTransition(async () => {
-      const common = { clientId, reason, confirm };
+      const common = { clientId, reason, confirm, publicReason: effectivePublicReason(publicReason, scope) };
       const timing =
         kind === "full_day"
           ? ({ mode: "full_day", startDate, endDate } as const)
@@ -213,6 +220,13 @@ export function TimeOffForm({
       <Field label="Motivo" hint="Interno — el asistente nunca lo menciona a un cliente.">
         <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Ej. Vacaciones, Festivo" maxLength={200} className={INPUT} />
       </Field>
+
+      <PublicReasonField
+        scope={scope}
+        value={publicReason}
+        onChange={setPublicReason}
+        who={scope === "staff" ? staff.find((m) => m.id === (fixedStaffId ?? (edit?.staffId || staffId)))?.name ?? null : null}
+      />
 
       {conflicts ? (
         <div className="rounded-lg border border-timeoff-edge bg-timeoff-bg/40 p-3">

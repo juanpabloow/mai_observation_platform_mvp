@@ -52,9 +52,12 @@ test('agenda page: block perms + a staff login sees only its own blocks (+ site 
 
 test('the machine API can never expose the reason (availability only reads the time bounds)', () => {
   const av = read('src/db/repositories/scheduling/availabilityData.ts');
-  // The exceptions read selects ONLY staff_id + the time window — not `reason`.
+  // The engine's exceptions read selects ONLY staff_id + the time window — not `reason`.
   assert.match(av, /SELECT staff_id, starts_at, ends_at\s*\n\s*FROM schedule_exceptions/);
-  assert.doesNotMatch(av, /SELECT[^;]*reason[^;]*FROM schedule_exceptions/);
+  // No read of schedule_exceptions selects the INTERNAL `reason` column. (The explainer's
+  // read selects `public_reason` — the separate, explicitly chosen customer-facing code.)
+  assert.doesNotMatch(av, /SELECT[^;]*(?<!public_)\breason\b[^;]*FROM schedule_exceptions/);
+  assert.match(av, /SELECT staff_id, starts_at, ends_at, public_reason\s*\n\s*FROM schedule_exceptions/);
 });
 
 test('staff name uniqueness is enforced server-side (active, per site, case-insensitive)', () => {

@@ -104,6 +104,7 @@ export default async function ClientSchedulingAdminPage({
         starts_at: e.starts_at.toISOString(),
         ends_at: e.ends_at.toISOString(),
         reason: e.reason,
+        public_reason: e.public_reason ?? null,
       }))}
       exceptions={exceptions.map((e) => ({
         id: e.id,
@@ -112,6 +113,7 @@ export default async function ClientSchedulingAdminPage({
         starts_at: e.starts_at.toISOString(),
         ends_at: e.ends_at.toISOString(),
         reason: e.reason,
+        public_reason: e.public_reason ?? null,
       }))}
     />
   );

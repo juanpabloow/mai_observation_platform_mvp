@@ -272,6 +272,7 @@ paths:
         - { name: from, in: query, required: true, schema: { type: string, format: date-time } }
         - { name: to, in: query, required: true, schema: { type: string, format: date-time }, description: "Window; max 45 days from `from`." }
         - { name: compact, in: query, required: false, description: "E-3: trim each slot to {day,start_label,end_label,time,staff_name}. free_blocks + has_availability are unchanged.", schema: { type: boolean } }
+        - { name: explain, in: query, required: false, description: "ADDITIVE, opt-in (v1): adds `explanation` — why each requested professional has or lacks slots per local day, a block's PUBLIC reason only (never the internal text), the next real slot after the window and other professionals with slots. Slots are computed identically. On 409 staff_service_mismatch, adds `explanation` to the error body (same status and code). See docs/scheduling-availability-explain.md.", schema: { type: boolean } }
         - { $ref: "#/components/parameters/Tz" }
         - { $ref: "#/components/parameters/Locale" }
       responses:
@@ -291,7 +292,7 @@ paths:
                   has_availability:
                     type: object
                     additionalProperties: { type: boolean }
-                    description: "E-3: { 'YYYY-MM-DD': true|false } for each requested local day."
+                    description: "E-3: { 'YYYY-MM-DD': true|false } for each site-local day the END-EXCLUSIVE window [from, to) touches — a `to` at local midnight does not add the day starting there."
                   free_blocks:
                     type: array
                     description: "E-3: contiguous free runs collapsed per day+staff, labels ready to read aloud."
@@ -310,11 +311,52 @@ paths:
                     type: array
                     description: "Full Slot (default) OR the compact shape {day,start_label,end_label,time,staff_name} when compact=true."
                     items: { $ref: "#/components/schemas/Slot" }
+                  explanation:
+                    description: "Only with explain=true. Contract in docs/scheduling-availability-explain.md."
+                    type: object
+                    properties:
+                      version: { type: integer, enum: [1] }
+                      staff:
+                        type: array
+                        items:
+                          type: object
+                          properties:
+                            staff_id: { type: string, format: uuid }
+                            staff_name: { type: [string, "null"] }
+                            status: { type: string, enum: [available, partial, unavailable] }
+                            summary: { type: string, description: "available | site_closed_day | outside_site_hours | off_shift | site_closure | absence | booked | service_does_not_fit | no_valid_start_in_window | min_notice | beyond_booking_horizon | in_the_past | multiple | unknown (409 only: staff_does_not_perform_service | not_bookable)" }
+                            public_reason: { type: [string, "null"], enum: [vacation, unavailable, site_closed, null] }
+                            public_reason_label: { type: [string, "null"] }
+                            customer_message: { type: string, description: "Safe es-CO sentence built from codes only." }
+                            days: { type: array, items: { type: object } }
+                            next_available: { type: [object, "null"], description: "First REAL engine slot after the window (same service + professional), or null." }
+                      alternatives:
+                        type: array
+                        description: "Other professionals with real slots for the same service in the same window (slots_checked: true, with first_slot). In a 409 staff_service_mismatch body, alternatives are NAMES ONLY (slots_checked: false) — query their slots before offering a time."
+                        items: { type: object }
         "400": { $ref: "#/components/responses/BadRequest" }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "404": { $ref: "#/components/responses/NotFound" }
         "409": { $ref: "#/components/responses/Conflict" }
+  /staff/status:
+    get:
+      summary: Whether a professional works on a day (no service needed)
+      description: "From opening hours, the professional's shift and blocks only — no appointment is read and no bookable time is returned (slots depend on a service; use /availability). A block's PUBLIC reason is returned only when it covers the whole shift. Same client → site → staff scoping as /availability."
+      parameters:
+        - { $ref: "#/components/parameters/WorkflowRef" }
+        - { name: site_id, in: query, required: true, schema: { type: string, format: uuid } }
+        - { name: staff_id, in: query, required: false, description: "Provide staff_id OR staff (the name).", schema: { type: string, format: uuid } }
+        - { name: staff, in: query, required: false, schema: { type: string } }
+        - { name: date, in: query, required: false, description: "Site-local YYYY-MM-DD; default today at the site.", schema: { type: string } }
+        - { name: days, in: query, required: false, description: "1–14 consecutive days (default 1).", schema: { type: integer, minimum: 1, maximum: 14 } }
+      responses:
+        "200":
+          description: "{ site, staff: {id,name,takes_bookings}, days: [{date, status: working|partly_working|not_working, summary, public_reason, public_reason_label, customer_message, shift: [{from,until}], causes}] }"
+        "400": { $ref: "#/components/responses/BadRequest" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404": { $ref: "#/components/responses/NotFound" }
   /appointments:
     get:
       summary: List appointments (safe filters; the resolved client only)

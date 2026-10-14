@@ -198,4 +198,19 @@ export function localDatesInRange(
   return out;
 }
 
+/**
+ * The local dates a HALF-OPEN window [from, to) touches, in `timeZone` — "YYYY-MM-DD".
+ * A day counts only if some instant of it lies before `to`: a window ending exactly at a
+ * local midnight does NOT include the day that starts there (localDatesInRange, which the
+ * engine walks, is inclusive of that boundary day — harmless there, since no slot can start
+ * at or after `to`, but wrong for a per-day answer such as `has_availability`).
+ */
+export function localDaysInWindow(from: Date, to: Date, timeZone: string): string[] {
+  if (to.getTime() <= from.getTime()) return [];
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return localDatesInRange(from, to, timeZone)
+    .filter((d) => zonedPartsToUtc(d.year, d.month, d.day, 0, 0, timeZone).getTime() < to.getTime())
+    .map((d) => `${d.year}-${pad(d.month)}-${pad(d.day)}`);
+}
+
 export const WEEKDAY_ORDER = WEEKDAYS;

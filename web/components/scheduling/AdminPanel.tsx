@@ -23,6 +23,8 @@ import {
 import { PageShell } from "@/components/ui/PageShell";
 import { checksProgress, servicesSummaryHelper, servicesSummaryTitle } from "@/lib/schedulingOverview";
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
+import { effectivePublicReason, PublicReasonField } from "./timeoff/PublicReasonField";
+import { PUBLIC_REASON_LABEL, type PublicAbsenceReason } from "@/lib/publicAbsenceReason";
 
 type WeeklyHours = Record<string, Array<{ start: string; end: string }>>;
 
@@ -56,7 +58,17 @@ export interface Staff {
   working_hours: WeeklyHours;
 }
 
-export interface Exception { id: string; site_id: string; staff_id: string | null; starts_at: string; ends_at: string; reason: string | null }
+export interface Exception {
+  id: string;
+  site_id: string;
+  staff_id: string | null;
+  starts_at: string;
+  ends_at: string;
+  /** INTERNAL note (team only). */
+  reason: string | null;
+  /** What a customer may be told (migration 1803); null = nothing. */
+  public_reason?: PublicAbsenceReason | null;
+}
 
 /**
  * Control heights are RESPONSIVE by design-system rule: 44px wherever the input is a
@@ -1045,6 +1057,8 @@ function ExceptionsSection({ clientId, sites, staff, exceptions, run, pending }:
   const [start, setStart] = useState("");
   const [end, setEnd] = useState("");
   const [reason, setReason] = useState("");
+  const [publicReason, setPublicReason] = useState<PublicAbsenceReason | null>(null);
+  const scope = staffId ? "staff" : "site";
 
   const submit = () =>
     run(async () => {
@@ -1057,8 +1071,9 @@ function ExceptionsSection({ clientId, sites, staff, exceptions, run, pending }:
         startsAt: start,
         endsAt: end,
         reason: reason || undefined,
+        publicReason: effectivePublicReason(publicReason, scope),
       });
-      if (r.ok) { setStart(""); setEnd(""); setReason(""); setCreating(false); }
+      if (r.ok) { setStart(""); setEnd(""); setReason(""); setPublicReason(null); setCreating(false); }
       return r;
     });
 
@@ -1105,6 +1120,7 @@ function ExceptionsSection({ clientId, sites, staff, exceptions, run, pending }:
               <span>
                 <strong className="font-medium text-foreground">{e.reason ?? "Bloqueo de agenda"}</strong>
                 <span className="mt-1 block text-xs text-muted">{fmt(e.starts_at, zone)} → {fmt(e.ends_at, zone)} · {site?.name ?? "—"} · {st ? st.name : "Toda la sede"}</span>
+                <span className="mt-0.5 block text-xs text-faint">Cliente: {e.public_reason ? PUBLIC_REASON_LABEL[e.public_reason] : "sin motivo (solo «no hay disponibilidad»)"}</span>
               </span>
               <button className={GHOST} disabled={pending} onClick={() => run(() => deleteExceptionAction(clientId, e.id))}>Eliminar</button>
             </li>
@@ -1136,6 +1152,9 @@ function ExceptionsSection({ clientId, sites, staff, exceptions, run, pending }:
             <Field label="Hasta"><input type="datetime-local" value={end} onChange={(e) => setEnd(e.target.value)} className={`${INPUT} w-full`} /></Field>
             <div className="sm:col-span-2">
               <Field label="Motivo" hint="Visible solo para el equipo."><input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Ej. Vacaciones" className={`${INPUT} w-full`} /></Field>
+            </div>
+            <div className="sm:col-span-2">
+              <PublicReasonField scope={scope} value={publicReason} onChange={setPublicReason} who={staff.find((s) => s.id === staffId)?.name ?? null} />
             </div>
           </div>
         </ConfigModal>

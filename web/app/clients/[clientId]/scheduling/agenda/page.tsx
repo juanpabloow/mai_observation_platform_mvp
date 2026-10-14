@@ -227,6 +227,7 @@ export default async function ClientAgendaPage({
       starts_at: b.starts_at.toISOString(),
       ends_at: b.ends_at.toISOString(),
       reason: b.reason,
+      public_reason: b.public_reason ?? null,
     }));
   // Who may create/edit blocks (the server re-enforces): staff time off → owner/setter/agency
   // (canAccessClient, never a staff login); site closures → owner/agency only.

@@ -13,7 +13,10 @@ export interface ScheduleExceptionRow {
   staff_id: string | null;
   starts_at: Date;
   ends_at: Date;
+  /** INTERNAL note — never returned by the machine API, never sent to a model. */
   reason: string | null;
+  /** What MAY be told to a customer (migration 1803); null = nothing (the default). */
+  public_reason: 'vacation' | 'unavailable' | 'site_closed' | null;
   type: string;
   created_at: Date;
   updated_at: Date;
@@ -64,6 +67,7 @@ export interface CreateExceptionInput {
   startsAt: Date;
   endsAt: Date;
   reason?: string | null;
+  publicReason?: 'vacation' | 'unavailable' | 'site_closed' | null;
 }
 
 export async function createException(input: CreateExceptionInput): Promise<ScheduleExceptionRow> {
@@ -71,11 +75,11 @@ export async function createException(input: CreateExceptionInput): Promise<Sche
     throw new Error('createException: ends_at must be after starts_at');
   }
   const r = await query<ScheduleExceptionRow>(
-    `INSERT INTO schedule_exceptions (tenant_id, site_id, staff_id, starts_at, ends_at, reason)
-       SELECT $1, $2, $3, $4, $5, $6
+    `INSERT INTO schedule_exceptions (tenant_id, site_id, staff_id, starts_at, ends_at, reason, public_reason)
+       SELECT $1, $2, $3, $4, $5, $6, $7
         WHERE EXISTS (SELECT 1 FROM sites WHERE id = $2 AND tenant_id = $1)
      RETURNING *`,
-    [input.tenantId, input.siteId, input.staffId ?? null, input.startsAt, input.endsAt, input.reason ?? null],
+    [input.tenantId, input.siteId, input.staffId ?? null, input.startsAt, input.endsAt, input.reason ?? null, input.publicReason ?? null],
   );
   if (!r.rows[0]) throw new Error('createException: site not found for tenant');
   return firstRowOrThrow(r, 'createException');
@@ -85,6 +89,7 @@ export interface UpdateExceptionInput {
   startsAt?: Date;
   endsAt?: Date;
   reason?: string | null;
+  publicReason?: 'vacation' | 'unavailable' | 'site_closed' | null;
 }
 
 /** Edit a block's window/reason (tenant-scoped). The site and staff scope never change —
@@ -104,6 +109,7 @@ export async function updateException(
   if (patch.startsAt !== undefined) add('starts_at', patch.startsAt);
   if (patch.endsAt !== undefined) add('ends_at', patch.endsAt);
   if (patch.reason !== undefined) add('reason', patch.reason);
+  if (patch.publicReason !== undefined) add('public_reason', patch.publicReason);
   if (sets.length === 0) return getExceptionById(tenantId, id);
   sets.push('updated_at = now()');
   const r = await query<ScheduleExceptionRow>(
