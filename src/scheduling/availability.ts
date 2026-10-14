@@ -10,8 +10,10 @@ import type { AvailabilityRequest, Slot, StaffAvailabilityInput, WeeklyHours } f
 
 const MS_PER_MIN = 60_000;
 
-/** UTC spans for a weekday's local ranges on a specific local date. */
-function hoursToSpans(
+/** UTC spans for a weekday's local ranges on a specific local date. Exported for the
+ * availability EXPLAINER (availabilityExplain.ts), which must read hours exactly as the
+ * engine does — the engine itself is unchanged. */
+export function hoursToSpans(
   hours: WeeklyHours,
   date: { year: number; month: number; day: number },
   weekday: Weekday,

@@ -118,7 +118,7 @@ async function loadRoster(
   // Site-wide closures (no staff named): nobody is "en turno" during one — on any width.
   const closures = exceptions
     .filter((e) => !e.staff_id)
-    .map((e) => ({ id: e.id, staffId: "", startsAt: e.starts_at.toISOString(), endsAt: e.ends_at.toISOString(), reason: e.reason }));
+    .map((e) => ({ id: e.id, staffId: "", startsAt: e.starts_at.toISOString(), endsAt: e.ends_at.toISOString(), reason: e.reason, publicReason: e.public_reason ?? null }));
 
   const staffProps: StaffTabProps = {
     // A public photo can be uploaded only where object storage is configured.
@@ -201,6 +201,7 @@ async function loadRoster(
         startsAt: e.starts_at.toISOString(),
         endsAt: e.ends_at.toISOString(),
         reason: e.reason,
+        publicReason: e.public_reason ?? null,
       })),
     openingHours,
     closures,

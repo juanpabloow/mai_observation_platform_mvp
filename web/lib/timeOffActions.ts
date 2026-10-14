@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { canAccessClient, canManageClient } from "./access";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { normalizeReason, normalizeTimeOff, type TimeOffInput } from "./timeOffValidation";
+import { parsePublicReason } from "./publicAbsenceReason";
 import { localWallClockToUtc } from "@worker/scheduling/timezone.js";
 import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
 import { getStaffById } from "@worker/db/repositories/scheduling/staff.js";
@@ -34,7 +35,8 @@ import { listActiveAppointmentsOverlapping } from "@worker/db/repositories/sched
  *
  * Times are entered as LOCAL wall-clock and anchored to the SITE timezone via the one tz
  * system (localWallClockToUtc). The reason is INTERNAL — it is stored but the machine API
- * never returns it.
+ * never returns it. `publicReason` is the SEPARATE, explicit choice of what a customer may
+ * be told (a controlled code, default none) — see web/lib/publicAbsenceReason.ts.
  */
 
 export interface TimeOffConflict {
@@ -91,6 +93,8 @@ export async function createTimeOffAction(
     siteId: string;
     staffId?: string | null;
     reason?: string | null;
+    /** What a customer may be told — a controlled code, or null (the default: nothing). */
+    publicReason?: string | null;
     /** Keep overlapping appointments (they stay; the agenda flags them as conflicting). */
     confirm?: boolean;
   } & TimeOffInput,
@@ -98,6 +102,8 @@ export async function createTimeOffAction(
   const siteWide = !input.staffId;
   const auth = await requireTimeOff(input.clientId, siteWide);
   if (!auth.ok) return auth;
+  const publicReason = parsePublicReason(input.publicReason, siteWide ? "site" : "staff");
+  if (!publicReason.ok) return { ok: false, error: publicReason.error };
 
   const site = await getSiteById(auth.tenantId, input.siteId);
   if (!site || site.client_id !== input.clientId) return { ok: false, error: FOREIGN };
@@ -137,6 +143,7 @@ export async function createTimeOffAction(
     startsAt,
     endsAt,
     reason: normalizeReason(input.reason),
+    publicReason: publicReason.value,
   });
   revalidate(input.clientId);
   return { ok: true, id: row.id };
@@ -145,7 +152,7 @@ export async function createTimeOffAction(
 export async function updateTimeOffAction(
   clientId: string,
   id: string,
-  patch: { reason?: string | null; confirm?: boolean } & TimeOffInput,
+  patch: { reason?: string | null; publicReason?: string | null; confirm?: boolean } & TimeOffInput,
 ): Promise<TimeOffResult> {
   // Resolve the block first (tenant-scoped) via the owning client's scope to learn its
   // site + staff scope, then gate by that scope.
@@ -162,6 +169,9 @@ export async function updateTimeOffAction(
   if (!auth.ok) return auth;
   // Past blocks are history (read-only).
   if (block.ends_at.getTime() <= Date.now()) return { ok: false, error: "Un bloqueo pasado no se puede editar." };
+  // Omitted = keep what the block has; an explicit value (or "") replaces it.
+  const publicReason = patch.publicReason === undefined ? null : parsePublicReason(patch.publicReason, siteWide ? "site" : "staff");
+  if (publicReason && !publicReason.ok) return { ok: false, error: publicReason.error };
 
   const shape = normalizeTimeOff(patch);
   if (!shape.ok) return { ok: false, error: shape.error };
@@ -186,7 +196,12 @@ export async function updateTimeOffAction(
     if (overlapping.length > 0) return { ok: false, conflicts: overlapping.map(toConflict) };
   }
 
-  const row = await updateException(tenantId, id, { startsAt, endsAt, reason: normalizeReason(patch.reason) });
+  const row = await updateException(tenantId, id, {
+    startsAt,
+    endsAt,
+    reason: normalizeReason(patch.reason),
+    ...(publicReason ? { publicReason: publicReason.value } : {}),
+  });
   if (!row) return { ok: false, error: FOREIGN };
   revalidate(clientId);
   return { ok: true, id };

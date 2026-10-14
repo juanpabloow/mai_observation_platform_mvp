@@ -315,6 +315,8 @@ export interface BlockDraft {
   h1: string;
   h2: string;
   reason: string;
+  /** What a customer may be told — chosen explicitly; NO template ever sets it. */
+  publicReason: "vacation" | "unavailable" | "site_closed" | null;
   /** The template that prefilled the form, if any (shown, never saved by itself). */
   tpl: string | null;
 }
@@ -323,7 +325,7 @@ export const BLOCK_TEMPLATES = ["Almuerzo", "Vacaciones", "Festivo", "Capacitaci
 
 /** An empty draft, or one PREFILLED from a template — never saved on its own. */
 export function blockDraft(siteId: string, todayKey: string, tpl: string | null = null): BlockDraft {
-  const base: BlockDraft = { siteId, scope: "site", staffId: "", from: todayKey, to: todayKey, allDay: true, h1: "09:00", h2: "10:00", reason: "", tpl: null };
+  const base: BlockDraft = { siteId, scope: "site", staffId: "", from: todayKey, to: todayKey, allDay: true, h1: "09:00", h2: "10:00", reason: "", publicReason: null, tpl: null };
   const tomorrow = addDays(todayKey, 1);
   switch (tpl) {
     case "Almuerzo":

@@ -129,6 +129,8 @@ export interface StaffTimeOff {
   startsAt: string;
   endsAt: string;
   reason: string | null;
+  /** What a customer may be told (null = nothing). */
+  publicReason?: "vacation" | "unavailable" | "site_closed" | null;
 }
 
 /**

@@ -48,6 +48,7 @@ const ALL = [
   'sites/route.ts',
   'services/route.ts',
   'staff/route.ts',
+  'staff/status/route.ts',
   'availability/route.ts',
   'appointments/route.ts',
   'appointments/[id]/cancel/route.ts',
@@ -67,7 +68,7 @@ test('sites lists ONLY the resolved client', () => {
 });
 
 test('services/staff/availability resolve the site as OWNED by the client', () => {
-  for (const rel of ['services/route.ts', 'staff/route.ts', 'availability/route.ts']) {
+  for (const rel of ['services/route.ts', 'staff/route.ts', 'availability/route.ts', 'staff/status/route.ts']) {
     assertContains(rel, 'resolveOwnedSite(auth.auth');
   }
 });
@@ -140,7 +141,9 @@ test('staff/availability resolve service/staff (id OR name) before the engine', 
   // before the engine call.
   assertContains('availability/route.ts', 'resolveServiceParam(');
   assertContains('availability/route.ts', 'resolveStaffParam(');
-  assertBefore('availability/route.ts', 'resolveServiceParam(', 'loadAvailability(');
+  // prepareAvailability + computeAvailability IS loadAvailability (same reads, same engine).
+  assertBefore('availability/route.ts', 'resolveServiceParam(', 'prepareAvailability(');
+  assertBefore('availability/route.ts', 'resolveStaffParam(', 'prepareAvailability(');
   assertContains('staff/route.ts', 'resolveServiceParam(');
   assertBefore('staff/route.ts', 'resolveServiceParam(', 'listStaffForService(');
 });

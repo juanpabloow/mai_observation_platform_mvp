@@ -3,6 +3,8 @@
 import { useMemo, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { createExceptionAction, deleteExceptionAction } from "@/lib/schedulingAdminActions";
+import { PUBLIC_REASON_LABEL } from "@/lib/publicAbsenceReason";
+import { effectivePublicReason, PublicReasonField } from "../../timeoff/PublicReasonField";
 import type { Exception, Site, Staff } from "../../AdminPanel";
 import { MButton, MSegmented, MStaffAvatar, Sheet } from "../kit";
 import { BLOCK_TEMPLATES, blockDraft, blockPayload, blockWhen, dayLabel, tzLabel, zonedParts, type BlockDraft } from "./logic";
@@ -172,6 +174,7 @@ export function BlocksList({
               {[
                 ["Alcance", sel.member ? sel.member.name : "Toda la sede"],
                 ["Sede", sel.site?.name ?? "—"],
+                ["Cliente", open.public_reason ? PUBLIC_REASON_LABEL[open.public_reason] : "Sin motivo"],
               ].map(([k, v], i) => (
                 <div key={k} className={`flex min-h-[48px] items-center gap-[12px] px-[14px] py-[10px] ${i ? "border-t border-m-dv" : ""}`}>
                   <span className="w-[90px] flex-none text-[14px] text-m-tx3">{k}</span>
@@ -258,6 +261,7 @@ export function BlockForm({
       startsAt: payload.startsAt,
       endsAt: payload.endsAt,
       reason: d.reason.trim() || undefined,
+      publicReason: effectivePublicReason(d.publicReason, d.scope),
     });
     setSaving(false);
     if (!r.ok) {
@@ -395,6 +399,14 @@ export function BlockForm({
       <Field id="bf-r" label="Motivo" optional hint="Lo ve el equipo en la agenda; no se muestra a los clientes.">
         <input id="bf-r" value={d.reason} onChange={(e) => set({ reason: e.target.value })} placeholder="Ej.: Vacaciones" maxLength={200} className={INPUT_M} />
       </Field>
+
+      <PublicReasonField
+        variant="mobile"
+        scope={d.scope}
+        value={d.publicReason}
+        onChange={(v) => set({ publicReason: v })}
+        who={people.find((p) => p.id === d.staffId)?.name ?? null}
+      />
 
       <ConfirmSheet
         open={discard}

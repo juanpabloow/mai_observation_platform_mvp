@@ -141,6 +141,8 @@ interface Block {
   starts_at: string;
   ends_at: string;
   reason: string | null;
+  /** What a customer may be told (migration 1803); null = nothing. */
+  public_reason?: "vacation" | "unavailable" | "site_closed" | null;
 }
 type BookingModalState =
   | { mode: "new" | "walkin"; contact?: ContactPrefill }
@@ -2576,7 +2578,7 @@ function BlockModal({
             staff={staff}
             canSiteClosure={canSiteClosure}
             tz={tz}
-            edit={edit ? { id: edit.id, staffId: edit.staff_id, startsAt: edit.starts_at, endsAt: edit.ends_at, reason: edit.reason } : undefined}
+            edit={edit ? { id: edit.id, staffId: edit.staff_id, startsAt: edit.starts_at, endsAt: edit.ends_at, reason: edit.reason, publicReason: edit.public_reason ?? null } : undefined}
             onDone={onClose}
             onClose={close}
           />

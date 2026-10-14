@@ -2,7 +2,10 @@ import { authenticateScheduling, parseIsoDate, resolveLabelParams, resolveOwnedS
 import { resolveServiceParam, resolveStaffParam } from "@/lib/semanticParams";
 import { computeFreeBlocks, computeHasAvailability } from "@/lib/availabilityView";
 import { localClock24, localDay, localTimeFields } from "@/lib/localTime";
-import { loadAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
+import { prepareAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
+import { computeAvailability } from "@worker/scheduling/availability.js";
+import { buildExplanation } from "@/lib/availabilityExplainBuild";
+import { EXPLANATION_VERSION } from "@/lib/availabilityExplanation";
 import { listStaff, listStaffForService } from "@worker/db/repositories/scheduling/staff.js";
 import { getServiceById } from "@worker/db/repositories/scheduling/services.js";
 import { localDatesInRange } from "@worker/scheduling/timezone.js";
@@ -23,6 +26,13 @@ import { localDatesInRange } from "@worker/scheduling/timezone.js";
  * staff_name); the full slot shape is the DEFAULT so existing callers are unaffected. A
  * conversational caller should use compact=true + free_blocks. When staff is omitted, slots
  * across all qualified staff are returned. The window [from,to] is capped by the engine.
+ *
+ * `?explain=true` (ADDITIVE, opt-in) adds an `explanation` block — WHY each requested
+ * professional has or lacks slots per local day (site closed, off shift, a block with its
+ * PUBLIC reason only, booked, the service does not fit, booking rules, or `multiple` /
+ * `unknown`), the next real slot after the window and other professionals with slots. The
+ * slots themselves are computed exactly as without it. See web/lib/availabilityExplanation.ts
+ * and docs/scheduling-availability-explain.md. Without the flag the response is unchanged.
  */
 export const dynamic = "force-dynamic";
 
@@ -37,6 +47,11 @@ export async function GET(req: Request): Promise<Response> {
   if (!labels.ok) return labels.response;
   const p = new URL(req.url).searchParams;
   const siteId = p.get("site_id");
+  const explainRaw = p.get("explain");
+  if (explainRaw !== null && explainRaw !== "true" && explainRaw !== "false") {
+    return schedulingError(400, "invalid_request", "explain must be true or false.");
+  }
+  const explain = explainRaw === "true";
   const from = parseIsoDate(p.get("from"));
   const to = parseIsoDate(p.get("to"));
   if (!siteId) return schedulingError(400, "invalid_request", "site_id is required.");
@@ -70,24 +85,55 @@ export async function GET(req: Request): Promise<Response> {
       const staffName = nameById.get(stf.value) ?? "That staff member";
       const service = await getServiceById(auth.auth.tenantId, auth.auth.clientId, svc.value);
       const who = qualified.map((q) => q.name).join(", ") || "no one at this site";
-      return schedulingError(
-        409,
-        "staff_service_mismatch",
-        `${staffName} doesn’t perform ${service?.name ?? "that service"}. Staff who do: ${who}. Omit the staff filter to see all availability, or pick a service ${staffName} performs.`,
+      const message = `${staffName} doesn’t perform ${service?.name ?? "that service"}. Staff who do: ${who}. Omit the staff filter to see all availability, or pick a service ${staffName} performs.`;
+      if (!explain) return schedulingError(409, "staff_service_mismatch", message);
+      // Same 409 and code; explain=true adds WHY — a professional who does not take bookings
+      // is not the same as one who does not perform the service.
+      const row = staffRows.find((s) => s.id === stf.value);
+      const notBookable = row ? !row.takes_bookings : false;
+      const name = nameById.get(stf.value) ?? "El profesional";
+      return Response.json(
+        {
+          error: { code: "staff_service_mismatch", message },
+          explanation: {
+            version: EXPLANATION_VERSION,
+            staff: [
+              {
+                staff_id: stf.value,
+                staff_name: nameById.get(stf.value) ?? null,
+                status: "unavailable",
+                summary: notBookable ? "not_bookable" : "staff_does_not_perform_service",
+                public_reason: null,
+                public_reason_label: null,
+                customer_message: notBookable
+                  ? `${name} no tiene reservas disponibles por este medio.`
+                  : `${name} no realiza ${service?.name ?? "ese servicio"}.`,
+                days: [],
+                next_available: null,
+              },
+            ],
+            alternatives: qualified.map((q) => ({ staff_id: q.id, staff_name: q.name })),
+          },
+        },
+        { status: 409 },
       );
     }
   }
 
-  const result = await loadAvailability({
+  const now = new Date();
+  // prepare + compute IS loadAvailability (same reads, same engine); split here so the
+  // explanation reads exactly what the slots were computed from.
+  const prepared = await prepareAvailability({
     tenantId: auth.auth.tenantId,
     siteId: owned.site.id,
     serviceId: svc.value,
     staffId: stf.value,
     from,
     to,
-    now: new Date(),
+    now,
   });
-  if (!result) return schedulingError(404, "service_not_found", "That service isn’t offered at this site. Call GET /api/scheduling/v1/services?site_id=… to get valid service ids.");
+  const result = prepared ? { site: prepared.site, slots: prepared.request ? computeAvailability(prepared.request) : [] } : null;
+  if (!result || !prepared) return schedulingError(404, "service_not_found", "That service isn’t offered at this site. Call GET /api/scheduling/v1/services?site_id=… to get valid service ids.");
 
   // Label timezone: the ?tz override, else the site's own timezone (the physical place).
   const tz = labels.tzOverride ?? result.site.timezone;
@@ -128,6 +174,23 @@ export async function GET(req: Request): Promise<Response> {
         },
   );
 
+  const explanation = explain
+    ? await buildExplanation({
+        tenantId: auth.auth.tenantId,
+        siteId: owned.site.id,
+        serviceId: svc.value,
+        staffId: stf.value,
+        from,
+        to,
+        now,
+        prepared,
+        slots: result.slots,
+        nameById,
+        tz,
+        locale: labels.locale,
+      })
+    : undefined;
+
   return Response.json({
     // `timezone` is the site's own tz; `timezone_used` is what the *_label/*_local fields
     // were formatted in (differs only when ?tz was passed).
@@ -138,5 +201,6 @@ export async function GET(req: Request): Promise<Response> {
     // and *_label fields are display-only. Duration can differ per staff, so the window is
     // carried per slot rather than a single value.
     slots,
+    ...(explanation ? { explanation } : {}),
   });
 }

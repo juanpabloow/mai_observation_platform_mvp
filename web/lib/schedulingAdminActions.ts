@@ -2,6 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { canManageClient } from "./access";
+import { parsePublicReason } from "./publicAbsenceReason";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { normalizeServiceDescription } from "./serviceDescription";
 import { checkPublicBio, checkPublicTitle, publicProfileMessage } from "./staffPublicProfile";
@@ -610,9 +611,13 @@ export async function createExceptionAction(input: {
   startsAt: string;
   endsAt: string;
   reason?: string;
+  /** What a customer may be told — a controlled code, or null (the default: nothing). */
+  publicReason?: string | null;
 }): Promise<AdminResult> {
   const auth = await requireSchedulingAdmin(input.clientId);
   if (!auth.ok) return auth;
+  const publicReason = parsePublicReason(input.publicReason, input.staffId ? "staff" : "site");
+  if (!publicReason.ok) return { ok: false, error: publicReason.error };
   // Anchor the entered wall-clock to the SITE's timezone (not the browser's), and
   // confirm the site belongs to this client in the same lookup.
   const site = await getSiteById(auth.tenantId, input.siteId);
@@ -634,7 +639,7 @@ export async function createExceptionAction(input: {
   }
   if (e.getTime() <= s.getTime()) return { ok: false, error: "End must be after start." };
   try {
-    const row = await createException({ tenantId: auth.tenantId, siteId: input.siteId, staffId: input.staffId ?? null, startsAt: s, endsAt: e, reason: input.reason ?? undefined });
+    const row = await createException({ tenantId: auth.tenantId, siteId: input.siteId, staffId: input.staffId ?? null, startsAt: s, endsAt: e, reason: input.reason ?? undefined, publicReason: publicReason.value });
     revalidateAdmin(input.clientId);
     return { ok: true, id: row.id };
   } catch (err) {

@@ -1,7 +1,8 @@
 import type { PoolClient } from 'pg';
 import { query } from '../../client.js';
 import { computeAvailability } from '../../../scheduling/availability.js';
-import type { SchedulingConfig, Slot, WeeklyHours } from '../../../scheduling/types.js';
+import type { AvailabilityRequest, SchedulingConfig, Slot, WeeklyHours } from '../../../scheduling/types.js';
+import type { ExplainException, PublicAbsenceReason } from '../../../scheduling/availabilityExplain.js';
 
 /**
  * Assembles the pure availability engine's input from the DB and runs it. THE
@@ -124,8 +125,27 @@ export async function resolveEffectivePrice(
   return r.rows[0]?.price ?? null;
 }
 
+/** The engine's input for a request window, plus the site/buffers the result carries.
+ *  `request` is null when no professional qualifies (the result is then no slots). */
+export interface PreparedAvailability {
+  site: AvailabilityResult['site'];
+  buffers: AvailabilityResult['buffers'];
+  request: AvailabilityRequest | null;
+}
+
 /** Full availability computation for a request window. */
 export async function loadAvailability(params: LoadAvailabilityParams): Promise<AvailabilityResult | null> {
+  const prepared = await prepareAvailability(params);
+  if (!prepared) return null;
+  const slots = prepared.request ? computeAvailability(prepared.request) : [];
+  return { site: prepared.site, buffers: prepared.buffers, slots };
+}
+
+/**
+ * Assemble the engine input (the reads loadAvailability always did, unchanged). Split out
+ * so the availability EXPLAINER reads exactly what the engine computed from.
+ */
+export async function prepareAvailability(params: LoadAvailabilityParams): Promise<PreparedAvailability | null> {
   const site = await resolveSiteService(params.tenantId, params.siteId, params.serviceId);
   if (!site) return null;
   const buffers = siteBuffers(site);
@@ -161,7 +181,7 @@ export async function loadAvailability(params: LoadAvailabilityParams): Promise<
     slug: site.slug,
     name: site.name,
   };
-  if (staffRows.rows.length === 0) return { site: resultSite, buffers, slots: [] };
+  if (staffRows.rows.length === 0) return { site: resultSite, buffers, request: null };
   const staffIds = staffRows.rows.map((s) => s.id);
 
   const busyRows = await query<{ staff_id: string; blocked_from: Date; blocked_until: Date }>(
@@ -204,7 +224,7 @@ export async function loadAvailability(params: LoadAvailabilityParams): Promise<
     exceptions: excRows.rows.filter((e) => e.staff_id === s.id).map((e) => ({ from: e.starts_at, until: e.ends_at })),
   }));
 
-  const slots = computeAvailability({
+  const request: AvailabilityRequest = {
     site: {
       id: site.id,
       timezone: site.timezone,
@@ -216,9 +236,38 @@ export async function loadAvailability(params: LoadAvailabilityParams): Promise<
     from: params.from,
     to: params.to,
     now: params.now,
-  });
+  };
+  return { site: resultSite, buffers, request };
+}
 
-  return { site: resultSite, buffers, slots };
+/**
+ * The blocks behind an explanation, with their PUBLIC reason only (migration 1803) — the
+ * internal `reason` text is not selected. Same site/window/staff filter as the engine's
+ * read. Separate from prepareAvailability on purpose: booking and plain availability never
+ * depend on the new column.
+ */
+export async function loadExplainExceptions(params: {
+  tenantId: string;
+  siteId: string;
+  from: Date;
+  to: Date;
+  staffIds: string[];
+}): Promise<{ site: ExplainException[]; staff: Map<string, ExplainException[]> }> {
+  const r = await query<{ staff_id: string | null; starts_at: Date; ends_at: Date; public_reason: PublicAbsenceReason | null }>(
+    `SELECT staff_id, starts_at, ends_at, public_reason
+       FROM schedule_exceptions
+      WHERE tenant_id = $1 AND site_id = $2 AND ends_at > $3 AND starts_at < $4
+        AND (staff_id IS NULL OR staff_id = ANY($5::uuid[]))`,
+    [params.tenantId, params.siteId, params.from, params.to, params.staffIds],
+  );
+  const staff = new Map<string, ExplainException[]>();
+  const site: ExplainException[] = [];
+  for (const e of r.rows) {
+    const x = { from: e.starts_at, until: e.ends_at, public_reason: e.public_reason };
+    if (e.staff_id === null) site.push(x);
+    else staff.set(e.staff_id, [...(staff.get(e.staff_id) ?? []), x]);
+  }
+  return { site, staff };
 }
 
 /** Whether a specific (start, staff) is currently bookable — used by the booking

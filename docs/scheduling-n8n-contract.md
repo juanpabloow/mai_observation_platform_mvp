@@ -70,6 +70,13 @@ curl "${H[@]}" "$BASE/staff?site_id=$SITE&service_id=$SVC"
 # Availability (staff_id optional = "any"); from/to are ISO-8601
 curl "${H[@]}" "$BASE/availability?site_id=$SITE&service_id=$SVC&from=2026-08-05T00:00:00Z&to=2026-08-06T00:00:00Z"
 
+# WHY a professional has no slots (additive, opt-in — slots are unchanged). Use
+# explanation.staff[0].customer_message; never infer "vacaciones" without public_reason.
+curl "${H[@]}" "$BASE/availability?site_id=$SITE&service_id=$SVC&staff=Falla&from=2026-08-05T05:00:00Z&to=2026-08-06T05:00:00Z&compact=true&explain=true"
+
+# "¿Trabaja Falla hoy?" without a service (no bookable times — those need a service).
+curl "${H[@]}" "$BASE/staff/status?site_id=$SITE&staff=Falla&date=2026-08-05"
+
 # Create (Idempotency-Key required). conversation_ref MAY be sent; workflow_ref
 # is NOT a body field — provenance is the X-Workflow-Ref header.
 curl "${H[@]}" -H "Idempotency-Key: 4f0e...uuid" -H "Content-Type: application/json" \
