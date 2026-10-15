@@ -5,6 +5,8 @@ import { formatLocalDate } from "@/lib/format";
 import type { MemberOption, TaskView } from "@/lib/contactShared";
 import { completeTaskAction, createTaskAction } from "@/lib/crmActions";
 import { CRM_COPY } from "@/lib/contactLabels";
+import { validateTaskTitle } from "@/lib/crmFieldRules";
+import { FieldError } from "./FieldError";
 
 /**
  * SHARED open-tasks block (C-4): the contact's open tasks with a Complete action, and a
@@ -24,6 +26,8 @@ export function TasksSection({
   viewerIsFullAccess,
   onChanged,
   allowCreate = true,
+  addOpen,
+  onAddOpenChange,
 }: {
   clientId: string;
   contactId: string;
@@ -33,13 +37,25 @@ export function TasksSection({
   viewerIsFullAccess: boolean;
   onChanged?: () => void;
   allowCreate?: boolean;
+  /** CONTROLLED add form (the inbox ficha opens it from its section heading "+ Tarea").
+   *  Omitted ⇒ the section keeps its own "Añadir tarea" button, as before. */
+  addOpen?: boolean;
+  onAddOpenChange?: (open: boolean) => void;
 }) {
   const [pending, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [due, setDue] = useState("");
   const [assignee, setAssignee] = useState("");
-  const [adding, setAdding] = useState(false);
+  const [ownAdding, setOwnAdding] = useState(false);
+  const [titleErr, setTitleErr] = useState<string | null>(null);
+  const controlled = addOpen !== undefined;
+  const adding = controlled ? addOpen : ownAdding;
+  const setAdding = (open: boolean) => {
+    setTitleErr(null);
+    if (controlled) onAddOpenChange?.(open);
+    else setOwnAdding(open);
+  };
 
   const canManage = (t: TaskView) =>
     viewerIsFullAccess || t.createdByUserId === viewerUserId || t.assignedToUserId === viewerUserId;
@@ -54,8 +70,10 @@ export function TasksSection({
   };
 
   const create = () => {
+    const invalid = validateTaskTitle(title);
+    setTitleErr(invalid);
+    if (invalid) return;
     const t = title.trim();
-    if (!t) return;
     setErr(null);
     start(async () => {
       const r = await createTaskAction(clientId, contactId, {
@@ -85,7 +103,7 @@ export function TasksSection({
               <span className="flex min-w-0 flex-col">
                 <span className="truncate text-sm text-foreground">{t.title}</span>
                 <span className="truncate text-[11px] text-faint">
-                  {t.assigneeName ? t.assigneeName : "Unassigned"}
+                  {t.assigneeName ? t.assigneeName : "Sin asignar"}
                   {t.dueAt ? ` · vence el ${formatLocalDate(t.dueAt)}` : ""}
                 </span>
               </span>
@@ -107,12 +125,25 @@ export function TasksSection({
       {allowCreate ? (
         adding ? (
           <div className="flex flex-col gap-1.5 rounded-lg border border-line p-2.5">
-            <input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Título de la tarea" className={INPUT} autoFocus />
+            <label htmlFor={`task-title-${contactId}`} className="text-xs font-medium text-foreground">
+              Título de la tarea
+            </label>
+            <input
+              id={`task-title-${contactId}`}
+              value={title}
+              onChange={(e) => setTitle(e.target.value)}
+              onBlur={() => title !== "" && setTitleErr(validateTaskTitle(title))}
+              aria-invalid={Boolean(titleErr)}
+              aria-describedby={titleErr ? `task-title-err-${contactId}` : undefined}
+              className={INPUT}
+              autoFocus
+            />
+            <FieldError id={`task-title-err-${contactId}`} text={titleErr} />
             <div className="flex flex-wrap items-center gap-1.5">
               <input type="date" value={due} onChange={(e) => setDue(e.target.value)} className={INPUT} aria-label="Fecha límite" />
               {assignableMembers.length > 0 ? (
-                <select value={assignee} onChange={(e) => setAssignee(e.target.value)} className={INPUT} aria-label="Assignee">
-                  <option value="">Unassigned</option>
+                <select value={assignee} onChange={(e) => setAssignee(e.target.value)} className={INPUT} aria-label="Responsable">
+                  <option value="">Sin asignar</option>
                   {assignableMembers.map((m) => (
                     <option key={m.userId} value={m.userId}>
                       {m.name ?? m.email}
@@ -122,7 +153,7 @@ export function TasksSection({
               ) : null}
             </div>
             <div className="flex items-center gap-2">
-              <button type="button" onClick={create} disabled={pending || !title.trim()} className="rounded-md bg-ink px-3 py-1.5 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50">
+              <button type="button" onClick={create} disabled={pending} className="rounded-md bg-ink px-3 py-1.5 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50">
                 {CRM_COPY.actions.create}
               </button>
               <button type="button" onClick={() => setAdding(false)} className="text-xs text-faint hover:text-foreground">
@@ -131,6 +162,8 @@ export function TasksSection({
               {err ? <span className="text-xs text-danger">{err}</span> : null}
             </div>
           </div>
+        ) : controlled ? (
+          err ? <span className="text-xs text-danger">{err}</span> : null
         ) : (
           <div className="flex items-center gap-2">
             <button type="button" onClick={() => setAdding(true)} className="rounded-lg border border-line px-2 py-1 text-xs text-muted hover:bg-subtle hover:text-foreground">

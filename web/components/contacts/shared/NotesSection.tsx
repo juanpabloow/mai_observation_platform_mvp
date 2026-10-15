@@ -5,6 +5,8 @@ import { formatLocalDateTime } from "@/lib/format";
 import type { NoteView } from "@/lib/contactShared";
 import { addNoteAction, deleteNoteAction } from "@/lib/crmActions";
 import { CRM_COPY } from "@/lib/contactLabels";
+import { validateNoteBody } from "@/lib/crmFieldRules";
+import { FieldError } from "./FieldError";
 
 /**
  * SHARED notes block (C-4): a list of notes (body + author + time) with an inline
@@ -35,6 +37,8 @@ export function NotesSection({
   viewerIsFullAccess,
   onChanged,
   dense = false,
+  addOpen,
+  onAddOpenChange,
 }: {
   clientId: string;
   contactId: string;
@@ -43,14 +47,26 @@ export function NotesSection({
   viewerIsFullAccess: boolean;
   onChanged?: () => void;
   dense?: boolean;
+  /** CONTROLLED composer (inbox ficha: "+ Nota" in the heading). Omitted ⇒ the composer
+   *  is always shown above the list, as before. */
+  addOpen?: boolean;
+  onAddOpenChange?: (open: boolean) => void;
 }) {
   const [body, setBody] = useState("");
   const [err, setErr] = useState<string | null>(null);
   const [pending, start] = useTransition();
+  const [bodyErr, setBodyErr] = useState<string | null>(null);
+  const controlled = addOpen !== undefined;
+  const showComposer = controlled ? addOpen : true;
 
   const canEdit = (n: NoteView) => viewerIsFullAccess || n.createdByUserId === viewerUserId;
 
   const add = () => {
+    if (controlled) {
+      const invalid = validateNoteBody(body);
+      setBodyErr(invalid);
+      if (invalid) return;
+    }
     const text = body.trim();
     if (!text) return;
     setErr(null);
@@ -59,6 +75,7 @@ export function NotesSection({
       if (!r.ok) setErr(r.error);
       else {
         setBody("");
+        if (controlled) onAddOpenChange?.(false);
         onChanged?.();
       }
     });
@@ -74,21 +91,41 @@ export function NotesSection({
 
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-col gap-1.5">
-        <textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder="Agregar nota…"
-          rows={dense ? 2 : 3}
-          className={INPUT}
-        />
-        <div className="flex items-center gap-2">
-          <button type="button" onClick={add} disabled={pending || !body.trim()} className={PRIMARY}>
-            {CRM_COPY.actions.addNote}
-          </button>
-          {err ? <span className="text-xs text-danger">{err}</span> : null}
+      {showComposer ? (
+        <div className={`flex flex-col gap-1.5 ${controlled ? "rounded-lg border border-line p-2.5" : ""}`}>
+          {controlled ? (
+            <label htmlFor={`note-body-${contactId}`} className="text-xs font-medium text-foreground">
+              Nota
+            </label>
+          ) : null}
+          <textarea
+            id={`note-body-${contactId}`}
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            onBlur={() => controlled && body !== "" && setBodyErr(validateNoteBody(body))}
+            placeholder={controlled ? undefined : "Agregar nota…"}
+            aria-invalid={Boolean(bodyErr)}
+            aria-describedby={bodyErr ? `note-body-err-${contactId}` : undefined}
+            rows={dense ? 2 : 3}
+            className={INPUT}
+            autoFocus={controlled}
+          />
+          <FieldError id={`note-body-err-${contactId}`} text={bodyErr} />
+          <div className="flex items-center gap-2">
+            <button type="button" onClick={add} disabled={pending || (!controlled && !body.trim())} className={PRIMARY}>
+              {CRM_COPY.actions.addNote}
+            </button>
+            {controlled ? (
+              <button type="button" onClick={() => { setBody(""); setBodyErr(null); onAddOpenChange?.(false); }} className="text-xs text-faint hover:text-foreground">
+                {CRM_COPY.actions.cancel}
+              </button>
+            ) : null}
+            {err ? <span className="text-xs text-danger">{err}</span> : null}
+          </div>
         </div>
-      </div>
+      ) : err ? (
+        <span className="text-xs text-danger">{err}</span>
+      ) : null}
 
       {notes.length === 0 ? (
         <p className="text-sm text-faint">{CRM_COPY.empty.notes}</p>

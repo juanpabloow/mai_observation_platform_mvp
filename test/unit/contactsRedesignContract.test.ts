@@ -1165,9 +1165,14 @@ test('inbox: the restyle preserved ?c=, the workflow scope, search and polling',
   assert.ok(src.includes('searchParams.get("c")'), 'selection still reads ?c=');
   assert.ok(src.includes('p.set("c", id)'), 'selecting still sets ?c= …');
   assert.ok(src.includes('searchParams.toString()'), '… preserving the other params');
-  assert.ok(src.includes('No in-panel workflow selector'), 'the header remains the single workflow selector');
+  // Inbox redesign (1g): the list gained a workflow selector, but it is the header
+  // switcher's TWIN — it writes the SAME scope (cookie + ?workflow=), never a second,
+  // client-side filter, so the header, the sidebar links and the list cannot disagree.
+  assert.ok(src.includes('writes the SAME scope as the header switcher'), 'one scope, two entry points');
+  assert.ok(src.includes('setScope(clientId, id)') && src.includes('p.set("workflow", id)'), 'the selector writes the shared scope');
+  assert.equal(/\.filter\(\(v\) => v\.workflowId/.test(src), false, 'and the list is never filtered by workflow on the client');
   assert.ok(src.includes('POLL_MS'), 'polling is intact');
-  assert.ok(src.includes('Reconectando…'), 'the stale/reconnecting state is intact (in Spanish)');
+  assert.ok(src.includes('No pudimos actualizar la bandeja.'), 'the stale state is intact (in Spanish, with Reintentar)');
 });
 
 test('inbox: three columns + the details collapse and drawer are intact', () => {
@@ -1185,7 +1190,7 @@ test('inbox: the real groups and the real pending count still drive the queue', 
   assert.ok(src.includes('pendingCount('), 'the counter is computed from the real list');
   // Spanish, and sentence case (§3.1): it was a mono uppercase badge, which on the pane's
   // own title read as a status chip rather than as a count.
-  assert.ok(src.includes('{pending === 1 ? "te necesita" : "te necesitan"}'), 'and is rendered, pluralised');
+  assert.ok(src.includes('{pending === 1 ? "necesita una persona" : "necesitan una persona"}'), 'and is rendered, pluralised');
 });
 
 test('inbox: the selected row is marked by a fill AND a shape, and never shifts', () => {
@@ -1201,7 +1206,9 @@ test('inbox: the selected row is marked by a fill AND a shape, and never shifts'
   // EVERY state carries a border (transparent when idle) so selecting a row cannot
   // move its neighbours by a pixel.
   assert.ok(src.includes('border-transparent hover:bg-queue-row-active/50'), 'the idle row reserves the same border');
-  assert.ok(src.includes('border-warn/25 bg-warn-soft'), 'a pending row keeps its own amber mark');
+  // A pending row is marked by its "Necesita una persona" chip (text + icon), not by a
+  // tinted card — the redesign keeps one fill for selection only.
+  assert.ok(src.includes('<StateChip kind={who.kind} size="sm">'), 'a pending row carries its own chip');
 });
 
 test('inbox: customer / bot / human-agent are THREE distinct bubble treatments', () => {
@@ -1218,7 +1225,10 @@ test('inbox: customer / bot / human-agent are THREE distinct bubble treatments',
     src.includes('border border-bubble-agent-border bg-bubble-agent text-bubble-agent-fg'),
     'human-agent bubble carries the brand tint (distinct from the bot)',
   );
-  assert.ok(/·\s*equipo/i.test(src), 'a human agent\'s run is also signed "· equipo"');
+  // The redesign's "Equipo · azul claro + autor": a person's run is signed with WHO —
+  // "Tú (Laura)" for you (read from the agent id), the colleague's first name otherwise.
+  assert.ok(src.includes('first.agentUserId === viewerUserId'), "your own replies are recognised by id, not name");
+  assert.ok(src.includes('`Tú${agentFirst ? ` (${agentFirst})` : ""}`'), 'a human agent\'s run is signed with its author');
   assert.ok(src.includes('rounded-bl-bubble-tail'), 'the customer\'s tail points bottom-left');
   assert.ok(src.includes('rounded-br-bubble-tail'), 'the business side points bottom-right');
   // A FAILED agent send is OUTLINED danger — distinct from the normal brand-tint fill.
@@ -1328,7 +1338,7 @@ test('inbox: the three voices are distinct by FILL (side + signature back it)', 
   const transcript = read('components/MessageTranscript.tsx');
   // The brand-tint fill is the primary cue; the SIDE + the "· equipo" signature + the disc
   // back it (so the distinction survives greyscale / colour-blindness).
-  assert.ok(/·\s*equipo/i.test(transcript), 'the agent run carries the EQUIPO signature');
+  assert.ok(transcript.includes('agentFirst ?? "Equipo"'), 'the agent run carries its author (Equipo when unknown)');
   assert.ok(transcript.includes('rounded-bl-bubble-tail'), 'the customer sits left');
   assert.ok(transcript.includes('rounded-br-bubble-tail'), 'the business sits right');
   // The bot bubble is a solid dark fill (a border there is invisible); the AGENT bubble is a

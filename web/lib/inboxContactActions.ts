@@ -22,7 +22,7 @@ import { linkConversationToContact } from "@worker/db/repositories/contacts.js";
  */
 export type LinkResult = { ok: true; contactId: string } | { ok: false; error: string };
 
-const GENERIC = "Not found.";
+const GENERIC = "No disponible.";
 
 export async function linkConversationContactAction(clientId: string, conversationId: string): Promise<LinkResult> {
   if (!isUuid(conversationId)) return { ok: false, error: GENERIC };

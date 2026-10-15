@@ -583,9 +583,25 @@
      near-black for maximum legibility (16:1). Light + dark are tuned SEPARATELY: a wash
      that reads as "soft red" on white turns muddy on near-black, so dark uses its own
      maroon tint against the --brand (#f2555a) the dark theme already elevates to. */
-  --bubble-agent: #fdecee; /* ≈ --brand at 8% on white */
-  --bubble-agent-border: rgba(230, 10, 47, 0.38); /* --brand hairline */
-  --bubble-agent-fg: #12151b; /* = --foreground — 16.6:1 on the tint */
+  /* Inbox redesign ("Inbox de Gallery", S4): the TEAM speaks in LIGHT BLUE + its author
+     label ("Tú (Laura)", "Diego"). Red is reserved for errors and the shell's active row,
+     so a person's reply no longer wears the brand tint — the blue keeps it the one
+     coloured bubble without reading as an alert. */
+  --bubble-agent: #e9f0fe;
+  --bubble-agent-border: #c6d7f7;
+  --bubble-agent-fg: #12151b; /* = --foreground — 15.9:1 on the tint */
+  /* The three state signals of the inbox (who answers · attention · 24 h window). Text +
+     icon always carry the meaning; the tint only groups. */
+  --chip-pending-bg: #fdf1d8;
+  --chip-pending-fg: #7c4a03;
+  --chip-you-bg: #e8f0fd;
+  --chip-you-fg: #1d4ea6;
+  --chip-bot-bg: #efecfb;
+  --chip-bot-fg: #4a3d9c;
+  --chip-open-bg: #e5f3e9;
+  --chip-open-fg: #1b6532;
+  --chip-closed-bg: #eef0f3;
+  --chip-closed-fg: #555a62;
 }
 .dark {
   --thread-bg: #101012;
@@ -597,9 +613,20 @@
   --bubble-bot-fg: #eceef2;
   /* HUMAN AGENT (dark) — a dark MAROON tint against the dark theme's elevated brand
      (#f2555a), tuned on near-black so it reads as "the red one" without going muddy. */
-  --bubble-agent: #3a2024;
-  --bubble-agent-border: rgba(242, 85, 90, 0.5);
-  --bubble-agent-fg: #f4e9ea; /* 12.7:1 on the tint */
+  /* TEAM (dark) — a deep blue on graphite, clear text. */
+  --bubble-agent: #1b2740;
+  --bubble-agent-border: rgba(110, 150, 235, 0.42);
+  --bubble-agent-fg: #e7edf9; /* 12.9:1 on the tint */
+  --chip-pending-bg: rgba(251, 191, 36, 0.14);
+  --chip-pending-fg: #f8d27a;
+  --chip-you-bg: rgba(96, 140, 230, 0.18);
+  --chip-you-fg: #b3c9f6;
+  --chip-bot-bg: rgba(150, 130, 240, 0.18);
+  --chip-bot-fg: #cbc2f6;
+  --chip-open-bg: rgba(74, 222, 128, 0.13);
+  --chip-open-fg: #9ae2b2;
+  --chip-closed-bg: #24242a;
+  --chip-closed-fg: #b1b1b7;
   --bubble-bot-inset: #2f333b;
   --bubble-bot-rule: rgba(255, 255, 255, 0.14);
   --bubble-bot-label: #9aa2b1;
@@ -656,6 +683,16 @@
   --color-bubble-bot-border: var(--bubble-bot-border);
   --color-bubble-bot-fg: var(--bubble-bot-fg);
   --color-bubble-agent: var(--bubble-agent);
+  --color-chip-pending-bg: var(--chip-pending-bg);
+  --color-chip-pending-fg: var(--chip-pending-fg);
+  --color-chip-you-bg: var(--chip-you-bg);
+  --color-chip-you-fg: var(--chip-you-fg);
+  --color-chip-bot-bg: var(--chip-bot-bg);
+  --color-chip-bot-fg: var(--chip-bot-fg);
+  --color-chip-open-bg: var(--chip-open-bg);
+  --color-chip-open-fg: var(--chip-open-fg);
+  --color-chip-closed-bg: var(--chip-closed-bg);
+  --color-chip-closed-fg: var(--chip-closed-fg);
   --color-bubble-agent-border: var(--bubble-agent-border);
   --color-bubble-agent-fg: var(--bubble-agent-fg);
   --color-bubble-bot-inset: var(--bubble-bot-inset);
