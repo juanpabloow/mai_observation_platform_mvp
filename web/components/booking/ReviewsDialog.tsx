@@ -69,7 +69,10 @@ export function ReviewsDialog({ target, onClose, returnFocusTo }: { target: Revi
                 <span className="font-semibold [font-variant-numeric:tabular-nums]">{ratingText(target.rating.average)}</span>
                 <span className="text-pb-muted">· {reviewCountText(target.rating.count)}</span>
               </span>
-              <span className="text-[12.5px] leading-[1.4] text-pb-muted">{target.scope} De clientes con una cita completada; publicadas por el negocio.</span>
+              <span className="text-[12.5px] leading-[1.4] text-pb-muted">
+                {target.scope} De clientes con una cita completada; publicadas por el negocio.
+                {target.reviews.length > 0 && target.reviews.length < target.rating.count ? ` Las ${target.reviews.length} más recientes.` : ""}
+              </span>
             </div>
             <button
               ref={closeBtn}

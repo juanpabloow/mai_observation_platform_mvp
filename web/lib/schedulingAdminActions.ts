@@ -5,12 +5,25 @@ import { canManageClient } from "./access";
 import { parsePublicReason } from "./publicAbsenceReason";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { normalizeServiceDescription } from "./serviceDescription";
-import { checkPublicBio, checkPublicTitle, publicProfileMessage } from "./staffPublicProfile";
+import { checkPublicTitle, publicProfileMessage } from "./staffPublicProfile";
 import { deleteLogo, isR2Configured, uploadServiceImage, uploadStaffPhoto } from "./r2";
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, type WeeklyHours } from "@worker/scheduling/types.js";
 import { localWallClockToUtc } from "@worker/scheduling/timezone.js";
 import { dialingRegionForTimezone, normalizeE164 } from "@worker/scheduling/phone.js";
 import { checkCategoryInput, checkIncludes, E164_RE, safeMapsUrl } from "./bookingPage";
+import { checkPublicBio, checkPublicLine } from "./staffPublicProfile";
+import {
+  createPromotion,
+  duplicatePromotion,
+  getPromotion,
+  listPromotionEvents,
+  setPromotionImage,
+  setPromotionStatus,
+  updatePromotion,
+  type PromotionInput,
+  type WriteResult,
+} from "@worker/db/repositories/scheduling/promotions.js";
+import type { PromotionStatus } from "@worker/scheduling/promotions.js";
 import {
   BookingCategoryNameTaken,
   createBookingCategory,
@@ -23,6 +36,7 @@ import {
   createSite,
   deactivateSite,
   getSiteById,
+  listSites,
   reactivateSite,
   updateSite,
 } from "@worker/db/repositories/scheduling/sites.js";
@@ -79,14 +93,14 @@ export type AdminResult = { ok: true; id?: string } | { ok: false; error: string
  * which condition failed — matches the module gate's indistinguishable denials). */
 async function requireSchedulingAdmin(
   clientId: string,
-): Promise<{ ok: true; tenantId: string } | { ok: false; error: string }> {
+): Promise<{ ok: true; tenantId: string; /** who is acting — for audit trails (promotion_events) */ userId: string } | { ok: false; error: string }> {
   const res = await resolveClientModuleContext(clientId, "scheduling");
   // Editors/Staff can reach the scheduling module but MUST NOT configure it — only the
   // client OWNER (or the agency) manages sites/services/staff/hours/rules.
   if (!res.ok || !canManageClient(res.context.scope, clientId)) {
     return { ok: false, error: "Scheduling isn’t available for this client." };
   }
-  return { ok: true, tenantId: res.context.scope.tenantId };
+  return { ok: true, tenantId: res.context.scope.tenantId, userId: res.context.scope.userId };
 }
 
 /** The target SITE must belong to this client (tenant-scoped). */
@@ -866,4 +880,178 @@ export async function removeServiceImageAction(clientId: string, serviceId: stri
   }
   revalidateAdmin(clientId);
   return { ok: true, id: serviceId };
+}
+
+// ── Promotions (migration 1805) ─────────────────────────────────────────────────
+// The rules (publishable? eligible?) live in src/scheduling/promotions.ts and are applied
+// by the repository on every write; these actions validate the INPUT, resolve the site's
+// timezone for the two windows and translate results into the operator's Spanish.
+
+export interface PromotionForm {
+  name: string;
+  description: string;
+  conditions: string;
+  siteId: string;
+  sortOrder: string;
+  benefitType: string;
+  serviceIds: string[];
+  staffIds: string[];
+  /** A. When the booking can be made — local wall clock "YYYY-MM-DDTHH:MM" in the site's tz. */
+  bookableFrom: string;
+  bookableUntil: string;
+  /** B. When the appointment must happen. ISO weekdays 1–7; dates YYYY-MM-DD; times HH:MM. */
+  weekdays: number[];
+  appointmentFrom: string;
+  appointmentUntil: string;
+  timeFrom: string;
+  timeUntil: string;
+}
+
+const PROMO_ERRORS: Record<Exclude<WriteResult, { ok: true }>["error"], string> = {
+  not_found: "No encontramos esta promoción.",
+  stale: "Otra persona cambió esta promoción mientras la editabas. Recarga para ver la última versión; tus cambios no se guardaron.",
+  foreign: "Revisa los servicios, artistas y sede elegidos: alguno no pertenece a este negocio.",
+  invalid_move: "Ese cambio de estado no está permitido.",
+  cannot_publish: "Todavía no se puede publicar.",
+};
+const promoResult = (r: WriteResult): AdminResult & { version?: number } =>
+  r.ok ? { ok: true, id: r.id, version: r.version } : { ok: false, error: r.error === "cannot_publish" && r.problems?.length ? r.problems.join(" ") : PROMO_ERRORS[r.error] };
+
+async function promotionInput(tenantId: string, clientId: string, f: PromotionForm): Promise<{ ok: true; value: PromotionInput } | { ok: false; error: string }> {
+  const name = checkPublicLine(f.name, 80);
+  if (!name.ok) return { ok: false, error: publicProfileMessage(name.error, "Nombre", name.max) };
+  if (!name.value) return { ok: false, error: "Escribe el nombre de la promoción." };
+  const desc = checkPublicBio(f.description);
+  if (!desc.ok) return { ok: false, error: publicProfileMessage(desc.error, "Descripción", desc.max) };
+  const cond = checkPublicBio(f.conditions);
+  if (!cond.ok) return { ok: false, error: publicProfileMessage(cond.error, "Condiciones", cond.max) };
+  if (f.benefitType !== "two_for_one") return { ok: false, error: "Elige un tipo de beneficio disponible." };
+  const sort = Number(f.sortOrder || 0);
+  if (!Number.isInteger(sort) || sort < 0 || sort > 999) return { ok: false, error: "El orden debe ser un número entre 0 y 999." };
+  const sites = await listSites(tenantId, { clientId });
+  const site = f.siteId ? sites.find((x) => x.id === f.siteId) : sites[0];
+  if (f.siteId && !site) return { ok: false, error: PROMO_ERRORS.foreign };
+  const tz = site?.timezone ?? "America/Bogota";
+  const instant = (v: string, label: string): Date | null | "bad" => {
+    if (!v.trim()) return null;
+    try {
+      return localWallClockToUtc(v.trim(), tz);
+    } catch {
+      return label ? "bad" : null;
+    }
+  };
+  const from = instant(f.bookableFrom, "desde");
+  const until = instant(f.bookableUntil, "hasta");
+  if (from === "bad" || until === "bad") return { ok: false, error: "Revisa las fechas de vigencia." };
+  if (from && until && until <= from) return { ok: false, error: "La vigencia termina antes de empezar." };
+  const day = /^\d{4}-\d{2}-\d{2}$/;
+  const time = /^([01]\d|2[0-3]):[0-5]\d$/;
+  if ((f.appointmentFrom && !day.test(f.appointmentFrom)) || (f.appointmentUntil && !day.test(f.appointmentUntil))) return { ok: false, error: "Revisa las fechas de las citas." };
+  if (f.appointmentFrom && f.appointmentUntil && f.appointmentUntil < f.appointmentFrom) return { ok: false, error: "Las fechas de las citas terminan antes de empezar." };
+  if (Boolean(f.timeFrom) !== Boolean(f.timeUntil)) return { ok: false, error: "Escribe las dos horas de la franja de las citas, o ninguna." };
+  if (f.timeFrom && (!time.test(f.timeFrom) || !time.test(f.timeUntil) || f.timeUntil <= f.timeFrom)) return { ok: false, error: "Revisa la franja horaria de las citas." };
+  const weekdays = [...new Set(f.weekdays.map(Number))].filter((d) => Number.isInteger(d) && d >= 1 && d <= 7).sort();
+  return {
+    ok: true,
+    value: {
+      site_id: site && f.siteId ? site.id : null,
+      name: name.value,
+      description: desc.value,
+      conditions: cond.value,
+      sort_order: sort,
+      benefit_type: "two_for_one",
+      benefit_params: {},
+      bookable_from: from,
+      bookable_until: until,
+      appointment_weekdays: weekdays.length && weekdays.length < 7 ? weekdays : null,
+      appointment_from: f.appointmentFrom || null,
+      appointment_until: f.appointmentUntil || null,
+      appointment_time_from: f.timeFrom || null,
+      appointment_time_until: f.timeUntil || null,
+      service_ids: f.serviceIds,
+      staff_ids: f.staffIds,
+    },
+  };
+}
+
+/** Create (id = null) or edit a promotion. An edit names the version it read. */
+export async function savePromotionAction(clientId: string, id: string | null, version: number | null, form: PromotionForm): Promise<AdminResult & { version?: number }> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  const input = await promotionInput(auth.tenantId, clientId, form);
+  if (!input.ok) return { ok: false, error: input.error };
+  const r = id
+    ? await updatePromotion(auth.tenantId, clientId, id, version ?? -1, input.value, auth.userId)
+    : await createPromotion(auth.tenantId, clientId, input.value, auth.userId);
+  if (r.ok) revalidateAdmin(clientId);
+  return promoResult(r);
+}
+
+/** Publish, pause, resume or archive (only allowed moves; publishing re-validates). */
+export async function setPromotionStatusAction(clientId: string, id: string, version: number, to: PromotionStatus): Promise<AdminResult & { version?: number }> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  const r = await setPromotionStatus(auth.tenantId, clientId, id, version, to, auth.userId);
+  if (r.ok) revalidateAdmin(clientId);
+  return promoResult(r);
+}
+
+export async function duplicatePromotionAction(clientId: string, id: string): Promise<AdminResult & { version?: number }> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  const r = await duplicatePromotion(auth.tenantId, clientId, id, auth.userId);
+  if (r.ok) revalidateAdmin(clientId);
+  return promoResult(r);
+}
+
+/** Who changed what, newest first (names only — never an e-mail). */
+export async function listPromotionHistoryAction(
+  clientId: string,
+  id: string,
+): Promise<{ ok: true; events: Array<{ type: string; actor: string | null; at: string; version: number; detail: Record<string, unknown> }> } | { ok: false; error: string }> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  const rows = await listPromotionEvents(auth.tenantId, clientId, id);
+  return { ok: true, events: rows.map((e) => ({ type: e.event_type, actor: e.actor_name, at: e.created_at.toISOString(), version: e.version, detail: e.detail })) };
+}
+
+export async function uploadPromotionImageAction(formData: FormData): Promise<AdminResult & { url?: string }> {
+  const clientId = String(formData.get("clientId") ?? "");
+  const promotionId = String(formData.get("promotionId") ?? "");
+  const file = formData.get("image");
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  if (!isR2Configured) return { ok: false, error: "La subida de imágenes no está configurada." };
+  if (!(file instanceof File)) return { ok: false, error: "Elige una imagen." };
+  // The promotion must be THIS client's before anything is stored for it.
+  if (!(await getPromotion(auth.tenantId, clientId, promotionId))) return { ok: false, error: FOREIGN };
+  const up = await uploadServiceImage(auth.tenantId, clientId, promotionId, file, "promotions");
+  if (!up.ok) return { ok: false, error: up.error };
+  const set = await setPromotionImage(auth.tenantId, clientId, promotionId, up.url);
+  if (!set.ok) return { ok: false, error: FOREIGN };
+  if (set.previous && set.previous !== up.url) {
+    try {
+      await deleteLogo(set.previous);
+    } catch {
+      /* best-effort cleanup */
+    }
+  }
+  revalidateAdmin(clientId);
+  return { ok: true, id: promotionId, url: up.url };
+}
+
+export async function removePromotionImageAction(clientId: string, promotionId: string): Promise<AdminResult> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  const set = await setPromotionImage(auth.tenantId, clientId, promotionId, null);
+  if (!set.ok) return { ok: false, error: FOREIGN };
+  if (set.previous) {
+    try {
+      await deleteLogo(set.previous);
+    } catch {
+      /* best-effort cleanup */
+    }
+  }
+  revalidateAdmin(clientId);
+  return { ok: true, id: promotionId };
 }

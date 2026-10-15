@@ -5,6 +5,8 @@ import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 import { listStaff } from "@worker/db/repositories/scheduling/staff.js";
 import { listBookingCategories } from "@worker/db/repositories/scheduling/bookingCategories.js";
+import { listPromotions } from "@worker/db/repositories/scheduling/promotions.js";
+import { utcToZonedParts } from "@worker/scheduling/timezone.js";
 import {
   listServices,
   listServicesForSite,
@@ -39,12 +41,21 @@ export default async function ClientSchedulingAdminPage({
   if (!canManageClient(scope, clientId)) notFound();
   const tenantId = scope.tenantId;
 
-  const [sites, services, staff, bookingCategories] = await Promise.all([
+  const [sites, services, staff, bookingCategories, promotions] = await Promise.all([
     listSites(tenantId, { clientId: client.id, includeInactive: true }),
     listServices(tenantId, client.id, true),
     listStaff(tenantId, { clientId: client.id, includeInactive: true }),
     listBookingCategories(tenantId, client.id),
+    listPromotions(tenantId, client.id),
   ]);
+  // The promotion editor works in the SITE's wall clock (A. vigencia), never the browser's.
+  const tzOf = (siteId: string | null) => sites.find((x) => x.id === siteId)?.timezone ?? sites[0]?.timezone ?? "America/Bogota";
+  const localInput = (d: Date | null, tz: string) => {
+    if (!d) return "";
+    const z = utcToZonedParts(d, tz);
+    const p2 = (n: number) => String(n).padStart(2, "0");
+    return `${z.year}-${p2(z.month)}-${p2(z.day)}T${p2(z.hour)}:${p2(z.minute)}`;
+  };
 
   const staffServices = await Promise.all(
     staff.map(async (s) => ({ staffId: s.id, serviceIds: (await listStaffServices(tenantId, s.id)).filter((x) => x.active).map((x) => x.service_id) })),
@@ -104,6 +115,30 @@ export default async function ClientSchedulingAdminPage({
         public_image_url: s.public_image_url,
         public_includes: s.public_includes,
         public_upgrade_service_id: s.public_upgrade_service_id,
+      }))}
+      promotions={promotions.map((p) => ({
+        id: p.id,
+        status: p.status,
+        version: p.version,
+        booked_count: p.booked_count,
+        image_url: p.image_url,
+        form: {
+          name: p.name,
+          description: p.description ?? "",
+          conditions: p.conditions ?? "",
+          siteId: p.site_id ?? "",
+          sortOrder: String(p.sort_order),
+          benefitType: p.benefit_type,
+          serviceIds: p.service_ids,
+          staffIds: p.staff_ids,
+          bookableFrom: localInput(p.bookable_from, tzOf(p.site_id)),
+          bookableUntil: localInput(p.bookable_until, tzOf(p.site_id)),
+          weekdays: p.appointment_weekdays ?? [],
+          appointmentFrom: p.appointment_from ?? "",
+          appointmentUntil: p.appointment_until ?? "",
+          timeFrom: p.appointment_time_from ?? "",
+          timeUntil: p.appointment_time_until ?? "",
+        },
       }))}
       bookingCategories={bookingCategories.map((c) => ({
         id: c.id,

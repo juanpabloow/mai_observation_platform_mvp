@@ -31,6 +31,7 @@ import { ArtistStep } from "./ArtistStep";
 import { BookingDone } from "./BookingDone";
 import { BusinessInfo } from "./BusinessInfo";
 import { ReviewsDialog, type ReviewsTarget } from "./ReviewsDialog";
+import type { PublicPromotionView } from "./ServiceStep";
 import { DateTimeStep, type EmptyAction, type EmptyState } from "./DateTimeStep";
 import { DetailsStep, type SummaryRow } from "./DetailsStep";
 import { ServiceStep } from "./ServiceStep";
@@ -139,6 +140,7 @@ export function BookingFlow({
   initialCategories = [],
   siteRating = null,
   siteReviews = [],
+  promotions = [],
   turnstileSiteKey,
   turnstileMisconfigured,
   privacyPolicyUrl,
@@ -151,6 +153,8 @@ export function BookingFlow({
   /** The BUSINESS rating (every approved review of the site) and its latest reviews. */
   siteRating?: RatingSummary | null;
   siteReviews?: PublicReview[];
+  /** Published promotions on offer now (the server already applied window A). */
+  promotions?: PublicPromotionView[];
   turnstileSiteKey: string | null;
   turnstileMisconfigured: boolean;
   privacyPolicyUrl: string | null;
@@ -838,11 +842,12 @@ export function BookingFlow({
                   onSelect={pickService}
                   onReserve={reserveService}
                   onOpenReviews={(s, t) =>
-                    s.rating ? openReviews({ title: `de ${s.name}`, scope: "Solo citas de este servicio.", rating: s.rating, reviews: s.reviews ?? [] }, t) : undefined
+                    s.rating ? openReviews({ title: `de ${s.name}`, scope: "Solo citas de este servicio.", rating: s.rating, reviews: (s.reviews ?? []).slice(0, 3) }, t) : undefined
                   }
                   siteName={site.name}
                   whatsapp={site.whatsapp ?? null}
                   willRecheck={Boolean(sel.artist || sel.slotStart)}
+                  promotions={promotions}
                 />
                 <BusinessInfo
                   siteName={site.name}
@@ -864,7 +869,7 @@ export function BookingFlow({
                 onView={(id, trigger) => setProfile({ id, trigger })}
                 onRetry={() => void loadStaff(service.id, sel.artist, artist?.name ?? null, service.name)}
                 onOpenReviews={(a, t) =>
-                  a.rating ? openReviews({ title: `de ${a.name}`, scope: "Solo citas con este artista.", rating: a.rating, reviews: a.reviews ?? [] }, t) : undefined
+                  a.rating ? openReviews({ title: `de ${a.name}`, scope: "Solo citas con este artista.", rating: a.rating, reviews: (a.reviews ?? []).slice(0, 3) }, t) : undefined
                 }
               />
             ) : step === 3 && service ? (

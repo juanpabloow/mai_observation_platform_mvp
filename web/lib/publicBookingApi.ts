@@ -3,6 +3,8 @@ import type { PublicCategoryRow, PublicServiceRow, PublicStaffRow } from "@worke
 import type { PublicReviewRow, PublicSiteReviewRow, RatingSummary } from "@worker/db/repositories/scheduling/reviews.js";
 import { serviceCategory, type ApptCategory } from "@/lib/agendaCategory";
 import { directionsUrl, E164_RE, hoursLines, type CategoryLayout } from "@/lib/bookingPage";
+import type { PromotionRow } from "@worker/db/repositories/scheduling/promotions.js";
+import { appointmentRuleText, BENEFIT_LABEL } from "@worker/scheduling/promotions.js";
 
 /**
  * The PUBLIC booking API's response vocabulary — one place for the headers, the single
@@ -353,5 +355,31 @@ export function projectPublicConfirmation(
     duration_min: appt.duration_min_snapshot,
     price: appt.price_snapshot,
     timezone: site.timezone,
+  };
+}
+
+/** A promotion as the PUBLIC page may show it (published and on offer — the repository
+ *  already filtered it). No status, version, staff ids or internal dates leave here. */
+export interface PublicPromotion {
+  id: string;
+  name: string;
+  description: string | null;
+  conditions: string | null;
+  image_url: string | null;
+  benefit_label: string;
+  rule_text: string | null;
+  service_ids: string[];
+}
+
+export function projectPublicPromotion(p: PromotionRow): PublicPromotion {
+  return {
+    id: p.id,
+    name: p.name,
+    description: p.description,
+    conditions: p.conditions,
+    image_url: httpsOrNull(p.image_url),
+    benefit_label: BENEFIT_LABEL[p.benefit_type],
+    rule_text: appointmentRuleText(p),
+    service_ids: p.service_ids,
   };
 }

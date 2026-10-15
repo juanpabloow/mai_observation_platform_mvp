@@ -125,7 +125,7 @@ export async function uploadStaffPhoto(
 }
 
 /**
- * A service's PUBLIC image for the booking page (the featured card). Same rules as a staff
+ * A service's (or a promotion's, `kind`) PUBLIC image for the booking page. Same rules as a staff
  * photo — magic-byte validation, server-generated name, tenant/client/service-scoped key.
  * The caller has already checked that the service belongs to the client.
  */
@@ -134,13 +134,14 @@ export async function uploadServiceImage(
   clientId: string,
   serviceId: string,
   file: File,
+  kind: "services" | "promotions" = "services",
 ): Promise<UploadLogoResult> {
   if (!isR2Configured) return { ok: false, error: "Photo upload is not configured." };
 
   const valid = await validateImageFile(file, MAX_SERVICE_IMAGE_BYTES);
   if (!valid.ok) return { ok: false, error: valid.error };
 
-  const key = `services/${tenantId}/${clientId}/${serviceId}/${randomUUID()}.${IMAGE_EXTENSION[valid.type]}`;
+  const key = `${kind}/${tenantId}/${clientId}/${serviceId}/${randomUUID()}.${IMAGE_EXTENSION[valid.type]}`;
   await r2().send(
     new PutObjectCommand({
       Bucket: bucket as string,

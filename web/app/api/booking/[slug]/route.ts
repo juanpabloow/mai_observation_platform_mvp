@@ -15,6 +15,8 @@ import { readPublicBookingPolicy } from "@/lib/publicBookingPolicy";
 import { TURNSTILE_TOKEN_MAX, verifyTurnstileToken } from "@/lib/turnstileVerify";
 import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
 import { getPublicStaffName, isPublicServiceAtSite } from "@worker/db/repositories/scheduling/publicCatalog.js";
+import { getPromotion, rulesOf } from "@worker/db/repositories/scheduling/promotions.js";
+import { checkEligibility, INELIGIBLE_MESSAGE } from "@worker/scheduling/promotions.js";
 import {
   consumeRateBucket,
   hashRateKey,
@@ -65,6 +67,9 @@ const Body = z
     /** The price the visitor was SHOWN (null = "precio a consultar"). Never used to set
      * the price — only compared with the engine's, which refuses on a difference. */
     expected_price: z.string().regex(/^\d{1,8}(\.\d{1,2})?$/).nullable().optional(),
+    /** A promotion the visitor chose (or arrived with from an ad). Validated HERE with the
+     * shared rules (src/scheduling/promotions.ts) — the link never skips a condition. */
+    promotion_id: z.string().uuid().optional(),
   })
   .strict();
 
@@ -189,6 +194,31 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
   // may still book it. Same predicate as the list (publicServicePredicate).
   if (!(await isPublicServiceAtSite(site.tenant_id, site.id, data.service_id))) {
     return publicEngineError("not_found");
+  }
+
+  // PROMOTIONS: the same eligibility the page and the agenda use, on the server. A booking
+  // that does not qualify is refused with every reason (the page explains and lets the
+  // visitor correct it) — never booked silently at another price. Today no benefit type is
+  // bookable yet (the 2×1's booking rules are pending), so every promotion is refused here.
+  if (data.promotion_id) {
+    const promo = await getPromotion(site.tenant_id, site.client_id, data.promotion_id);
+    const verdict = promo
+      ? checkEligibility(rulesOf(promo), { now, startAt, timeZone: site.timezone, siteId: site.id, serviceId: data.service_id, staffId: data.staff_id ?? null })
+      : { eligible: false, reasons: ["not_published" as const] };
+    // FAIL CLOSED: no benefit is APPLIED by the engine yet (nothing would freeze
+    // appointments.promotion_snapshot), so even an eligible promotion is not booked here —
+    // it must never become a booking at the base price that looks promotional.
+    const reasons = verdict.eligible ? (["benefit_not_bookable"] as const) : verdict.reasons;
+    return publicJson(
+      {
+        error: {
+          code: "promotion_not_applicable",
+          message: INELIGIBLE_MESSAGE[reasons[0]],
+          reasons: reasons.map((r) => ({ code: r, message: INELIGIBLE_MESSAGE[r] })),
+        },
+      },
+      409,
+    );
   }
 
   const result = await createAppointment({

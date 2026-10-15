@@ -6,6 +6,7 @@ import Link from "next/link";
 import { DAYS, DAY_LABELS, gridFromWeekly, HoursGrid, weeklyFromGrid, type HourGrid } from "./HoursGrid";
 import { BookingLinkCard } from "./BookingLinkCard";
 import { ServiceMenu } from "./services/ServiceMenu";
+import { PromotionsSection, type PromotionAdminRow } from "./promotions/PromotionsSection";
 import { ConfigMobile } from "./mobile/config/ConfigMobile";
 import {
   activateServiceAction,
@@ -105,12 +106,13 @@ export interface Exception {
 const INPUT = "h-[44px] lg:h-[36px] rounded-lg border border-line-strong bg-surface px-3 text-sm text-foreground outline-none transition focus:border-foreground disabled:bg-subtle disabled:text-faint";
 const BTN = "inline-flex h-[44px] lg:h-[36px] items-center justify-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background transition hover:opacity-90 disabled:opacity-50";
 const GHOST = "inline-flex h-[44px] lg:h-[34px] items-center justify-center rounded-lg border border-line px-3 lg:px-2.5 text-xs text-muted transition hover:bg-subtle hover:text-foreground";
-type SettingsTab = "overview" | "sites" | "services" | "blocks" | "rules";
+type SettingsTab = "overview" | "sites" | "services" | "promotions" | "blocks" | "rules";
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: "overview", label: "Resumen" },
   { id: "sites", label: "Sedes y horarios" },
   { id: "services", label: "Servicios" },
+  { id: "promotions", label: "Promociones" },
   { id: "blocks", label: "Bloqueos" },
   { id: "rules", label: "Reglas" },
 ];
@@ -133,6 +135,7 @@ export function AdminPanel({
   siteServiceMap,
   schedulingEnabled = true,
   bookingCategories = [],
+  promotions = [],
 }: {
   clientId: string;
   clientName: string;
@@ -149,6 +152,8 @@ export function AdminPanel({
   schedulingEnabled?: boolean;
   /** The business's booking-page categories (migration 1804). */
   bookingCategories?: BookingCategory[];
+  /** The business's promotions (migration 1805), as the editor opens them. */
+  promotions?: PromotionAdminRow[];
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -273,6 +278,15 @@ export function AdminPanel({
               siteServiceMap={siteServiceMap}
               bookingCategories={bookingCategories}
               onOpenBookingLink={() => setTab("sites")}
+            />
+          ) : null}
+          {tab === "promotions" ? (
+            <PromotionsSection
+              clientId={clientId}
+              promotions={promotions}
+              services={services.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
+              staff={staff.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name, site_id: x.site_id }))}
+              sites={sites.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
             />
           ) : null}
           {tab === "blocks" ? (

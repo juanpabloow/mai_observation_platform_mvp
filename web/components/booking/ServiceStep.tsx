@@ -2,11 +2,11 @@
 
 import { useEffect, useId, useState } from "react";
 import type { ApptCategory } from "@/lib/agendaCategory";
-import { pageSections, upgradeOffer, whatsappLink, type PageSection, type PageService } from "@/lib/bookingPage";
+import { pageSections, upgradeOffer, whatsappLink, type PageService } from "@/lib/bookingPage";
 import { priceLabelCOP } from "@/lib/money";
 import { needsMore } from "@/lib/publicBookingFlow";
+import { PromotionCard } from "./PromotionCard";
 import {
-  BTN_PRIMARY_SM,
   CTA_BASE,
   ctaTone,
   IconArrow,
@@ -68,9 +68,22 @@ export function asPageService(s: ServiceOption): ServiceOption & PageService {
 
 const prefersReducedMotion = () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+/** A promotion as the page receives it (projectPublicPromotion). */
+export interface PublicPromotionView {
+  id: string;
+  name: string;
+  description: string | null;
+  conditions: string | null;
+  image_url: string | null;
+  benefit_label: string;
+  rule_text: string | null;
+  service_ids: string[];
+}
+
 export function ServiceStep({
   services,
   categories,
+  promotions = [],
   selected,
   onSelect,
   onReserve,
@@ -90,6 +103,7 @@ export function ServiceStep({
   whatsapp: string | null;
   /** An artist or a time is already chosen: switching service re-checks them. */
   willRecheck: boolean;
+  promotions?: PublicPromotionView[];
 }) {
   const all = services.map(asPageService);
   const page = pageSections(all, categories, { hasWhatsapp: Boolean(whatsapp) });
@@ -105,12 +119,22 @@ export function ServiceStep({
 
   const cardProps = { all, selected, onSelect, onOpenReviews, willRecheck };
 
-  if (!page) return <LegacyCatalogue services={all} {...cardProps} />;
+  if (!page) {
+    return (
+      <div className="flex flex-col gap-[22px]">
+        <LegacyCatalogue services={all} {...cardProps} />
+        <PromotionsBlock promotions={promotions} services={all} />
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-[18px]">
       <h2 className={`${SERIF} m-0 text-[24px] leading-tight lg:text-[26px]`}>¿Qué quieres vivir hoy?</h2>
-      {page.sections.length > 1 ? <SectionNav sections={page.sections} /> : null}
+      {(() => {
+        const nav = [...page.sections.map((g) => ({ key: g.key, name: g.name })), ...(promotions.length ? [{ key: "promos", name: "Promociones" }] : [])];
+        return nav.length > 1 ? <SectionNav sections={nav} /> : null;
+      })()}
       <div className="flex flex-col gap-[26px]">
         {page.sections.map((g) => (
           <section key={g.key} id={`pb-sec-${g.key}`} aria-labelledby={`pb-sec-h-${g.key}`} className="flex scroll-mt-4 flex-col gap-2.5">
@@ -136,6 +160,7 @@ export function ServiceStep({
           </section>
         ))}
       </div>
+      <PromotionsBlock promotions={promotions} services={all} />
       {page.contacts.length > 0 ? (
         <div className="flex flex-col gap-1">
           {page.contacts.map((c) => {
@@ -154,8 +179,29 @@ export function ServiceStep({
   );
 }
 
+/**
+ * "Promociones": published promotions on offer now (window A, applied by the server).
+ * Information only for now — booking WITH a promotion opens once its benefit is bookable
+ * (the server refuses any promotion booking until then, src/scheduling/promotions.ts).
+ */
+function PromotionsBlock({ promotions, services }: { promotions: PublicPromotionView[]; services: ServiceOption[] }) {
+  if (promotions.length === 0) return null;
+  return (
+    <section id="pb-sec-promos" aria-labelledby="pb-sec-h-promos" className="flex scroll-mt-4 flex-col gap-2.5">
+      <h3 id="pb-sec-h-promos" className={`${SERIF} m-0 text-[23px] leading-tight`}>
+        Promociones
+      </h3>
+      <div className="grid grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))] gap-3">
+        {promotions.map((p) => (
+          <PromotionCard key={p.id} promo={{ ...p, services: p.service_ids.map((id) => services.find((s) => s.id === id)?.name ?? "").filter(Boolean) }} />
+        ))}
+      </div>
+    </section>
+  );
+}
+
 /** The groups as chips that jump to each section; the one in view is marked. */
-function SectionNav<S>({ sections }: { sections: PageSection<S>[] }) {
+function SectionNav({ sections }: { sections: Array<{ key: string; name: string }> }) {
   const [current, setCurrent] = useState(sections[0]?.key ?? "");
   useEffect(() => {
     if (typeof IntersectionObserver === "undefined") return;
@@ -331,7 +377,12 @@ function UpgradeOffer({ from, target, delta, onSwitch, willRecheck }: { from: Pa
           {willRecheck ? <span className="block text-[13px] text-pb-muted">Si cambias, revisaremos de nuevo el artista y la hora.</span> : null}
         </span>
       </p>
-      <button type="button" onClick={onSwitch} className={`${BTN_PRIMARY_SM} self-start`}>
+      {/* Not BTN_PRIMARY_SM: a long service name must wrap at 360 px, never overflow. */}
+      <button
+        type="button"
+        onClick={onSwitch}
+        className="pb-sel pb-press inline-flex min-h-[44px] max-w-full items-center self-start rounded-[12px] border border-pb-ink bg-pb-ink px-4 py-2 text-left text-[15px] font-[590] leading-snug text-white"
+      >
         Cambiar a {target.name}
       </button>
     </div>
