@@ -1,105 +1,157 @@
 "use client";
 
-import { useState } from "react";
+import { useId, useRef, useState } from "react";
 import type { InboxMode } from "@/lib/inboxView";
+import { BTN_PRIMARY, BTN_SECONDARY, IconLock, IconSend } from "./inbox/InboxUi";
 
 /**
- * The reply composer (H-3 activation).
- *   - bot     → disabled input, "El bot está atendiendo esta conversación…"
- *   - pending → disabled input, "Toma esta conversación para responder."
- *   - human   → input + Send ENABLED for anyone with client access,
- *               UNLESS `blockedReason` says the provider will not accept it.
+ * The reply composer, IN FLOW (it does not float: the last message always stays above it).
  *
- * Enter sends, Shift+Enter inserts a newline. Sending is OPTIMISTIC and fire-and-
- * forget: on submit the input clears immediately (the parent renders the sending
- * bubble), so the agent can compose the next message right away — the input is not
- * blocked while a prior send is in flight.
+ * What it shows, in this order of precedence — the reason the operator must read first is
+ * the one they cannot fix by taking the conversation:
+ *   1. the WhatsApp 24 h window is closed (or never opened) → ONE line in its place, with
+ *      "Plantilla no disponible": templates are not connected yet, so the button never
+ *      pretends otherwise;
+ *   2. the bot answers / nobody took it → one line + "Tomar conversación";
+ *   3. a person answers → the field + send.
+ *
+ * DRAFT PER CONVERSATION: kept in sessionStorage under the client + conversation, so
+ * switching conversations (or going back to the list on the phone) never loses it.
+ * Enter sends and Shift+Enter breaks the line on desktop/tablet; on a touch phone Enter is
+ * a line break and the button sends. The hint appears when the field is focused.
  */
+
+const draftKey = (clientId: string, conversationId: string) => `inbox-draft:${clientId}:${conversationId}`;
+
+function readDraft(key: string): string {
+  try {
+    return typeof window === "undefined" ? "" : (window.sessionStorage.getItem(key) ?? "");
+  } catch {
+    return "";
+  }
+}
+function writeDraft(key: string, value: string): void {
+  try {
+    if (value) window.sessionStorage.setItem(key, value);
+    else window.sessionStorage.removeItem(key);
+  } catch {
+    /* private mode / quota — the draft simply isn't kept */
+  }
+}
+
 export function Composer({
+  clientId,
+  conversationId,
   mode,
   onSend,
   blockedReason = null,
+  onTake,
+  takeDisabledReason = null,
 }: {
+  clientId: string;
+  conversationId: string;
   mode: InboxMode;
   onSend: (text: string) => void;
-  /**
-   * A provider-side rule that makes replying impossible right now — today only
-   * WhatsApp's 24-hour service window (see serviceWindow). Null when sending is fine.
-   *
-   * It is checked ALONGSIDE `mode`, not instead of it: a conversation can be both
-   * bot-handled and outside the window, and the reason the agent needs to read first is
-   * the one they cannot fix by taking the conversation.
-   */
+  /** The 24 h window line (closed / never opened). Null when the window is open. */
   blockedReason?: string | null;
+  /** Opens the "Tomar conversación" confirmation (bot / pending). */
+  onTake?: () => void;
+  /** Why this login cannot take it, when it cannot. */
+  takeDisabledReason?: string | null;
 }) {
-  const [text, setText] = useState("");
-  const enabled = mode === "human" && blockedReason === null;
-  // The placeholder reflects the MODE when the agent can't type; the 24h-window reason
-  // shows in the amber banner above, never doubled into the field.
-  const placeholder =
-    mode === "bot"
-      ? "El bot está atendiendo esta conversación. Tómala para responder."
-      : mode === "pending"
-        ? "Toma esta conversación para responder."
-        : "Escribe un mensaje…";
+  const key = draftKey(clientId, conversationId);
+  const [text, setText] = useState(() => readDraft(key));
+  const [focused, setFocused] = useState(false);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  const hintId = useId();
 
+  if (blockedReason) {
+    return (
+      <div className="flex flex-col items-start gap-2.5 rounded-2xl border border-line bg-surface px-3.5 py-2.5 sm:flex-row sm:items-center sm:gap-3">
+        <span className="flex min-w-0 flex-1 items-start gap-2 text-sm leading-snug text-muted">
+          <span className="mt-0.5 text-faint">
+            <IconLock />
+          </span>
+          {blockedReason}
+        </span>
+        <button type="button" disabled title="Las plantillas de WhatsApp aún no están conectadas" className={BTN_SECONDARY}>
+          Plantilla no disponible
+        </button>
+      </div>
+    );
+  }
+
+  if (mode !== "human") {
+    return (
+      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-surface px-3.5 py-2.5">
+        <span className="min-w-0 flex-1 text-sm leading-snug text-muted">
+          {mode === "bot" ? "El bot está respondiendo. Toma la conversación para escribir." : "Nadie está respondiendo todavía. Tómala para escribir."}
+        </span>
+        {onTake ? (
+          <button type="button" onClick={onTake} disabled={Boolean(takeDisabledReason)} title={takeDisabledReason ?? undefined} className={BTN_PRIMARY}>
+            Tomar conversación
+          </button>
+        ) : null}
+        {takeDisabledReason ? <span className="w-full text-xs text-faint">{takeDisabledReason}</span> : null}
+      </div>
+    );
+  }
+
+  const update = (v: string) => {
+    setText(v);
+    writeDraft(key, v);
+    const el = ref.current;
+    if (el) {
+      el.style.height = "auto";
+      el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+    }
+  };
   const submit = () => {
     const trimmed = text.trim();
-    if (!enabled || trimmed === "") return;
-    setText(""); // clear immediately so the next message can be composed
+    if (trimmed === "") return;
+    update("");
     onSend(trimmed);
   };
-
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      submit();
-    }
+    if (e.key !== "Enter" || e.shiftKey || e.nativeEvent.isComposing) return;
+    // On a touch phone Enter is a line break; the button sends.
+    if (window.matchMedia("(pointer: coarse) and (max-width: 767.98px)").matches) return;
+    e.preventDefault();
+    submit();
   };
 
   return (
-    <div className="flex flex-col gap-2">
-      {/* THE 24h WINDOW notice (design image): an amber strip above the field. WhatsApp
-          only accepts free-form replies inside 24h of the customer's last message; outside
-          it, only an approved template can be sent. */}
-      {blockedReason ? (
-        <div className="flex items-center gap-2.5 rounded-lg border border-warn/30 bg-warn-soft px-3 py-2.5">
-          <svg aria-hidden viewBox="0 0 16 16" fill="none" className="size-4 shrink-0 text-warn">
-            <circle cx="8" cy="8" r="6.4" stroke="currentColor" strokeWidth="1.4" />
-            <path d="M8 5v3.4M8 10.8h.01" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />
-          </svg>
-          <span className="min-w-0 flex-1 text-[0.8125rem] leading-snug text-warn">{blockedReason}</span>
-          <button
-            type="button"
-            disabled
-            title="Las plantillas de WhatsApp aún no están conectadas"
-            className="shrink-0 text-[0.8125rem] font-semibold text-warn transition-opacity hover:opacity-80 disabled:cursor-not-allowed"
-          >
-            Enviar plantilla
-          </button>
-        </div>
-      ) : null}
-      {/* The field + Enviar on one clean row (design image). `u-focus` puts the ring on the
-          card, not the textarea (which is outline-none). */}
-      <div className="u-focus flex items-end gap-2 rounded-xl border border-line bg-surface px-2.5 py-2 shadow-[var(--shadow-float)]">
+    <div className="flex flex-col gap-1">
+      <div className="u-focus flex items-end gap-2 rounded-2xl border border-line bg-surface py-1.5 pl-3.5 pr-1.5">
+        <label htmlFor={`${hintId}-field`} className="sr-only">
+          Mensaje
+        </label>
         <textarea
-          value={enabled ? text : ""}
-          onChange={(e) => setText(e.target.value)}
+          id={`${hintId}-field`}
+          ref={ref}
+          value={text}
+          onChange={(e) => update(e.target.value)}
           onKeyDown={onKeyDown}
-          disabled={!enabled}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
           rows={1}
-          placeholder={placeholder}
-          className="min-h-[2.25rem] w-full flex-1 resize-none bg-transparent px-1.5 py-1.5 text-sm outline-none placeholder:text-faint disabled:cursor-not-allowed disabled:opacity-60"
+          placeholder="Escribe un mensaje"
+          aria-describedby={hintId}
+          className="max-h-40 min-h-[2.5rem] w-full flex-1 resize-none bg-transparent py-2 text-base leading-snug outline-none placeholder:text-faint md:text-[0.9375rem]"
         />
         <button
           type="button"
-          disabled={!enabled || text.trim() === ""}
           onClick={submit}
-          className="mb-0.5 inline-flex h-9 shrink-0 items-center rounded-lg bg-ink px-4 text-sm font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50"
+          disabled={text.trim() === ""}
+          aria-label="Enviar mensaje"
+          className="mb-0.5 inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-ink text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:bg-chip disabled:text-faint md:size-9"
         >
-          Enviar
+          <IconSend />
         </button>
       </div>
+      <span id={hintId} className={`hidden px-1 text-[0.6875rem] text-faint md:block ${focused ? "" : "md:invisible"}`}>
+        Enter envía · Shift + Enter hace salto de línea
+      </span>
     </div>
   );
 }

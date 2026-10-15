@@ -29,9 +29,9 @@ export interface InboxActionResult {
   header?: InboxHeaderView;
 }
 
-const FORBIDDEN = "You don't have access to this conversation.";
-const NOT_FOUND = "This conversation no longer exists.";
-const INBOX_DISABLED = "Inbox is disabled for this client.";
+const FORBIDDEN = "No tienes acceso a esta conversación.";
+const NOT_FOUND = "Esta conversación ya no existe.";
+const INBOX_DISABLED = "El inbox está desactivado para este cliente.";
 
 /** Server-side INBOX module gate for the human-intervention actions. Hiding the UI
  * is never enough — take/dismiss/return are refused when inbox is off for the client
@@ -96,7 +96,7 @@ export async function dismissConversationAction(
     return {
       ok: false,
       conflict: true,
-      error: "This conversation is no longer pending.",
+      error: "Esta conversación ya no está esperando a una persona.",
       header: toHeaderView(conv),
     };
   }
@@ -113,7 +113,7 @@ export async function dismissConversationAction(
     return {
       ok: false,
       conflict: true,
-      error: "This conversation is no longer pending.",
+      error: "Esta conversación ya no está esperando a una persona.",
       header: fresh ? toHeaderView(fresh) : undefined,
     };
   }
@@ -139,7 +139,7 @@ export async function returnConversationToBotAction(
     return {
       ok: false,
       conflict: true,
-      error: "This conversation isn't currently with an agent.",
+      error: "Esta conversación no la está atendiendo una persona.",
       header: toHeaderView(conv),
     };
   }
@@ -148,7 +148,7 @@ export async function returnConversationToBotAction(
   if (!isAssigned && !hasFullAccess(scope)) {
     return {
       ok: false,
-      error: "Only the assigned agent or an admin can return this conversation to the bot.",
+      error: "Solo la persona asignada o un administrador puede devolverla al bot.",
     };
   }
 
@@ -162,7 +162,7 @@ export async function returnConversationToBotAction(
     return {
       ok: false,
       conflict: true,
-      error: "This conversation changed before it could be returned.",
+      error: "La conversación cambió antes de poder devolverla. Revisa su estado.",
       header: fresh ? toHeaderView(fresh) : undefined,
     };
   }
@@ -171,7 +171,7 @@ export async function returnConversationToBotAction(
 }
 
 function takenMessage(name: string | null): string {
-  return name ? `Already taken by ${name}.` : "Already taken by another agent.";
+  return name ? `${name.trim().split(/\s+/)[0]} ya la tomó.` : "Otra persona ya la tomó.";
 }
 
 function revalidateInbox(clientId: string, conversationId: string): void {

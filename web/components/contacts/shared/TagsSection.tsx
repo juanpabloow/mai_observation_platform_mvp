@@ -5,6 +5,8 @@ import type { TagView } from "@/lib/contactShared";
 import { tagChipClass } from "@/lib/tagColors";
 import { attachTagAction, createTagAction, detachTagAction } from "@/lib/crmActions";
 import { CRM_COPY } from "@/lib/contactLabels";
+import { validateTagName } from "@/lib/crmFieldRules";
+import { FieldError } from "./FieldError";
 
 /**
  * SHARED tags block (C-4): current tags as colored chips with a remove ✕, plus an add
@@ -22,6 +24,8 @@ export function TagsSection({
   catalogue,
   canManageCatalog,
   onChanged,
+  addOpen,
+  onAddOpenChange,
 }: {
   clientId: string;
   contactId: string;
@@ -29,12 +33,27 @@ export function TagsSection({
   catalogue: TagView[];
   canManageCatalog: boolean;
   onChanged?: () => void;
+  /** CONTROLLED add row (inbox ficha: "+ Etiqueta" in the heading). Omitted ⇒ the add
+   *  controls are always shown, as before. */
+  addOpen?: boolean;
+  onAddOpenChange?: (open: boolean) => void;
 }) {
   const [pending, start] = useTransition();
   const [err, setErr] = useState<string | null>(null);
   const [pick, setPick] = useState("");
   const [newName, setNewName] = useState("");
-  const [creating, setCreating] = useState(false);
+  const [ownCreating, setOwnCreating] = useState(false);
+  const [nameErr, setNameErr] = useState<string | null>(null);
+  const controlled = addOpen !== undefined;
+  const showAdd = controlled ? addOpen : true;
+  // Controlled: opening the row IS "create a tag" when there is nothing to pick.
+  const creating = controlled ? addOpen && (ownCreating || catalogue.length === 0) : ownCreating;
+  const setCreating = (open: boolean) => {
+    setNameErr(null);
+    setOwnCreating(open);
+    if (controlled && !open) onAddOpenChange?.(false);
+  };
+  const existingNames = [...tags, ...catalogue].map((t) => t.name);
 
   const attached = new Set(tags.map((t) => t.id));
   const suggestable = catalogue.filter((t) => !attached.has(t.id));
@@ -43,7 +62,7 @@ export function TagsSection({
     setErr(null);
     start(async () => {
       const r = await fn();
-      if (!r.ok) setErr(r.error ?? "Something went wrong.");
+      if (!r.ok) setErr(r.error ?? "No se pudo guardar.");
       else onChanged?.();
     });
   };
@@ -55,13 +74,15 @@ export function TagsSection({
   };
   const detach = (tagId: string) => run(() => detachTagAction(clientId, contactId, tagId));
   const create = () => {
+    const invalid = validateTagName(newName, existingNames);
+    setNameErr(invalid);
+    if (invalid) return;
     const name = newName.trim();
-    if (!name) return;
     setErr(null);
     start(async () => {
       const r = await createTagAction(clientId, name, "gray");
       if (!r.ok || !r.id) {
-        setErr(r.ok ? "Could not create tag." : r.error);
+        setErr(r.ok ? "No se pudo crear la etiqueta." : r.error);
         return;
       }
       const a = await attachTagAction(clientId, contactId, r.id);
@@ -97,6 +118,7 @@ export function TagsSection({
         ))}
       </div>
 
+      {showAdd ? (
       <div className="flex flex-wrap items-center gap-2">
         {suggestable.length > 0 ? (
           <select value={pick} onChange={(e) => attach(e.target.value)} disabled={pending} className={INPUT} aria-label="Agregar etiqueta existente">
@@ -111,15 +133,24 @@ export function TagsSection({
 
         {canManageCatalog ? (
           creating ? (
-            <span className="inline-flex items-center gap-1.5">
+            <span className="inline-flex flex-wrap items-center gap-1.5">
+              {controlled ? (
+                <label htmlFor={`tag-name-${contactId}`} className="w-full text-xs font-medium text-foreground">
+                  Nombre de la etiqueta
+                </label>
+              ) : null}
               <input
+                id={`tag-name-${contactId}`}
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
-                placeholder="Nombre de la etiqueta"
+                onBlur={() => newName !== "" && setNameErr(validateTagName(newName, existingNames))}
+                placeholder={controlled ? undefined : "Nombre de la etiqueta"}
+                aria-invalid={Boolean(nameErr)}
+                aria-describedby={nameErr ? `tag-name-err-${contactId}` : undefined}
                 className={INPUT}
                 autoFocus
               />
-              <button type="button" onClick={create} disabled={pending || !newName.trim()} className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-subtle disabled:opacity-50">
+              <button type="button" onClick={create} disabled={pending} className="rounded-lg border border-line px-2 py-1 text-xs hover:bg-subtle disabled:opacity-50">
                 {CRM_COPY.actions.create}
               </button>
               <button type="button" onClick={() => { setCreating(false); setNewName(""); }} className="text-xs text-faint hover:text-foreground">
@@ -132,8 +163,12 @@ export function TagsSection({
             </button>
           )
         ) : null}
+        <FieldError id={`tag-name-err-${contactId}`} text={nameErr} />
         {err ? <span className="text-xs text-danger">{err}</span> : null}
       </div>
+      ) : err ? (
+        <span className="text-xs text-danger">{err}</span>
+      ) : null}
     </div>
   );
 }

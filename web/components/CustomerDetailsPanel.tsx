@@ -3,28 +3,33 @@
 import { useCallback, useEffect, useState, useTransition, type ReactNode } from "react";
 import Link from "next/link";
 import type { ContactPanelData } from "@/lib/contactPanel";
-import { ContactAvatar } from "@/components/contacts/ContactAvatar";
-import { BOOK_CLS, SectionHeading, TOOLBAR_PRIMARY_CLS } from "@/components/ui/primitives";
-import { IconPlus } from "@/components/ui/icons";
+import { SectionHeading } from "@/components/ui/primitives";
 import { channelLabel } from "@/lib/contactLabels";
-import { relativeAgeShort } from "@/lib/format";
 import { AppointmentsSection } from "@/components/contacts/shared/AppointmentsSection";
 import { TasksSection } from "@/components/contacts/shared/TasksSection";
 import { NotesSection } from "@/components/contacts/shared/NotesSection";
 import { TagsSection } from "@/components/contacts/shared/TagsSection";
 import { linkConversationContactAction } from "@/lib/inboxContactActions";
+import { formatConversationRef } from "@/lib/inboxView";
+import { avatarText, isPhoneRef } from "@/lib/inboxPresent";
+import { BTN_PRIMARY, BTN_SECONDARY, IconBack, IconClose, InboxAvatar } from "./inbox/InboxUi";
 
 /**
- * The inbox CUSTOMER PANEL (C-4) — the moment the platform's promise becomes visible:
- * an agent replying in chat sees who the person is and when they are next coming in,
- * without leaving the thread. A COMPACT variant assembled from the SAME shared
- * components as the record's left column + rail (identity summary, next appointment,
- * open tasks, recent notes + composer, tags) — not a parallel implementation.
+ * The inbox CUSTOMER CARD — "Ficha del cliente" (frames 1e / 2g / 3e).
  *
- * It loads the contact linked to the open conversation from a session-authed route
- * (client-scoped; re-validated server-side). When the conversation has NO linked contact,
- * it offers to link/create one through C-2's identity chokepoint
- * (linkConversationContactAction) so the channel identity attaches without a duplicate.
+ * Compact, top to bottom: identity (name · channel · workflow), the phone — or the channel
+ * ID in monospace when there is no phone (it is never presented as a number) — "Agendar
+ * cita" + "Abrir contacto", the NEXT APPOINTMENT card with visits and no-shows, then tasks,
+ * notes and tags as sections whose "+" opens the form: no permanent empty forms.
+ *
+ * The disc is the inbox's own (InboxAvatar, keyed by the conversation identifier), so one
+ * person wears one disc across the queue, the thread and this card.
+ *
+ * Built from the SAME shared components as the contact record (C-4): AppointmentsSection
+ * (kept behind "Gestionar citas", so cancel/reschedule from the inbox still work),
+ * TasksSection, NotesSection, TagsSection — opened in their CONTROLLED mode from the "+".
+ * The contact loads from the session-authed, client-scoped route; when the conversation has
+ * no linked contact it offers to link one through C-2's identity chokepoint.
  */
 
 interface PanelResponse {
@@ -37,6 +42,7 @@ export function CustomerDetailsPanel({
   clientId,
   conversationId,
   conversationRef,
+  workflowName = null,
   viewerUserId,
   viewerIsFullAccess,
   onClose,
@@ -44,6 +50,7 @@ export function CustomerDetailsPanel({
   clientId: string;
   conversationId: string;
   conversationRef: string;
+  workflowName?: string | null;
   viewerUserId: string;
   viewerIsFullAccess: boolean;
   onClose?: () => void;
@@ -65,9 +72,6 @@ export function CustomerDetailsPanel({
     }
   }, [clientId, conversationId]);
 
-  // The workspace keys this component by conversation id, so it remounts (fresh
-  // "loading" state) on selection change. load()'s setState runs only AFTER the fetch
-  // await (the sanctioned async pattern) — the rule can't see past the callback.
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect -- setState is async (post-fetch), not a sync cascade
     void load();
@@ -82,54 +86,66 @@ export function CustomerDetailsPanel({
     });
   };
 
+  const identityLine = isPhoneRef(conversationRef) ? (
+    <IdentityRow label="Teléfono" value={formatConversationRef(conversationRef)} />
+  ) : (
+    <IdentityRow label="ID de canal" value={conversationRef} mono />
+  );
+
   return (
     <div className="flex h-full min-h-0 w-full flex-col">
-      {/* h-14 — aligned with the queue header, the thread header and the app header. */}
-      <div className="flex h-[var(--topbar-height)] shrink-0 items-center justify-between border-b border-line px-3">
-        <h2 className="text-[0.875rem] font-semibold tracking-[-0.01em] text-foreground">Cliente</h2>
+      <div className="flex h-[var(--topbar-height)] min-h-14 shrink-0 items-center gap-1 border-b border-line px-2 md:px-4">
         {onClose ? (
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Cerrar los datos del cliente"
-            className="u-tap flex size-[22px] items-center justify-center rounded-sm text-xs text-faint transition-colors hover:bg-subtle hover:text-foreground"
-          >
-            ✕
+          <button type="button" onClick={onClose} aria-label="Volver a la conversación" className="inline-flex size-11 items-center justify-center rounded-full hover:bg-subtle md:hidden">
+            <IconBack />
+          </button>
+        ) : null}
+        <h2 className="flex-1 text-[0.9375rem] font-semibold tracking-[-0.01em] text-foreground">Ficha del cliente</h2>
+        {onClose ? (
+          <button type="button" onClick={onClose} aria-label="Cerrar la ficha del cliente" className="hidden size-9 items-center justify-center rounded-lg text-muted hover:bg-subtle hover:text-foreground md:inline-flex">
+            <IconClose />
           </button>
         ) : null}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
+      <div className="min-h-0 flex-1 overflow-y-auto pb-[env(safe-area-inset-bottom)]">
         {state.status === "loading" ? (
-          <p className="px-4 py-4 text-sm text-faint">Cargando…</p>
+          <div className="flex flex-col gap-3 px-4 py-4" aria-busy="true" aria-label="Cargando la ficha">
+            <span className="h-10 w-2/3 animate-pulse rounded-lg bg-chip" />
+            <span className="h-24 animate-pulse rounded-xl bg-chip" />
+          </div>
         ) : state.status === "error" ? (
-          <p className="px-4 py-4 text-sm text-faint">No se pudieron cargar los datos del contacto.</p>
+          <div className="flex flex-col items-start gap-2 px-4 py-4">
+            <p className="text-sm text-muted">No se pudieron cargar los datos del contacto.</p>
+            <button type="button" onClick={() => void load()} className={BTN_SECONDARY}>
+              Reintentar
+            </button>
+          </div>
         ) : state.data && state.data.contactId && state.data.panel ? (
           <Ready
             clientId={clientId}
             contactId={state.data.contactId}
             data={state.data.panel}
             schedulingEnabled={state.data.schedulingEnabled}
+            workflowName={workflowName}
+            identityLine={identityLine}
+            conversationRef={conversationRef}
             viewerUserId={viewerUserId}
             viewerIsFullAccess={viewerIsFullAccess}
             onChanged={load}
           />
         ) : (
           <div className="flex flex-col gap-3 px-4 py-4">
-            <div>
-              <p className="text-sm font-medium text-foreground">Sin contacto vinculado</p>
-              <p className="mt-0.5 text-sm text-faint">
-                Esta conversación (
-                <span className="u-mono break-all text-xs">{conversationRef}</span>) todavía no
-                está vinculada a un contacto.
-              </p>
+            <div className="flex items-center gap-3">
+              <InboxAvatar text={avatarText(null, conversationRef)} toneKey={conversationRef} size={40} />
+              <div className="flex min-w-0 flex-col">
+                <span className="text-[1.0625rem] font-semibold text-foreground">Contacto sin nombre</span>
+                <span className="truncate text-xs text-muted">{["WhatsApp", workflowName].filter(Boolean).join(" · ")}</span>
+              </div>
             </div>
-            <button
-              type="button"
-              onClick={link}
-              disabled={linking}
-              className={`w-fit ${TOOLBAR_PRIMARY_CLS}`}
-            >
+            {identityLine}
+            <p className="text-sm text-muted">Esta conversación todavía no está vinculada a un contacto.</p>
+            <button type="button" onClick={link} disabled={linking} className={`w-fit ${BTN_PRIMARY}`}>
               {linking ? "Vinculando…" : "Vincular contacto"}
             </button>
             {linkErr ? <span className="text-xs text-danger">{linkErr}</span> : null}
@@ -140,150 +156,97 @@ export function CustomerDetailsPanel({
   );
 }
 
+function IdentityRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  return (
+    <p className="flex min-w-0 items-baseline gap-2 text-sm">
+      <span className="shrink-0 text-muted">{label}</span>
+      <span className={`min-w-0 truncate text-foreground ${mono ? "u-mono text-xs" : "tabular-nums"}`}>{value}</span>
+    </p>
+  );
+}
+
 function Ready({
   clientId,
   contactId,
   data,
   schedulingEnabled,
+  workflowName,
+  identityLine,
+  conversationRef,
   viewerUserId,
   viewerIsFullAccess,
   onChanged,
 }: {
   clientId: string;
+  conversationRef: string;
   contactId: string;
   data: ContactPanelData;
   schedulingEnabled: boolean;
+  workflowName: string | null;
+  identityLine: ReactNode;
   viewerUserId: string;
   viewerIsFullAccess: boolean;
   onChanged: () => void;
 }) {
-  const primaryIdentity = data.identities[0]?.value ?? null;
-  const apptTotal = data.appointments.upcoming.length + data.appointments.past.length;
-  // "hace 4 d la última" — the most recent appointment that has already happened. Derived
-  // from the list the panel already holds rather than asked for separately: `past` is
-  // every appointment behind us, so the newest of those IS the last visit.
-  const lastVisitAt = data.appointments.past.reduce<string | null>(
-    (latest, a) => (latest === null || a.startAt > latest ? a.startAt : latest),
-    null,
-  );
-  const preferredChannel = data.summary.preferredChannel ?? null;
+  const [open, setOpen] = useState<null | "task" | "note" | "tag">(null);
+  const [manageAppts, setManageAppts] = useState(false);
+  const channel = data.summary.preferredChannel ? channelLabel(data.summary.preferredChannel) : "WhatsApp";
+  const next = data.appointments.next;
+  const visits = data.summary.visitCount;
+  const noShows = data.summary.noShowCount;
+  const toggle = (k: "task" | "note" | "tag") => setOpen((o) => (o === k ? null : k));
 
   return (
     <div className="flex flex-col">
-      {/*
-        ── IDENTITY (§3.5.2) ──
-        LEFT-aligned, not centred. The panel used to stack a centred disc over a centred
-        name, which reads as a profile card; this is a working surface beside a live
-        conversation, so the design puts the identity on one line and gives the vertical
-        space back to the content underneath.
-      */}
-      <div className="flex flex-col gap-2.5 px-4 pb-3 pt-3">
-        <div className="flex items-center gap-2.5">
-          <ContactAvatar
-            name={data.summary.displayName}
-            fallback={primaryIdentity ?? data.summary.displayName}
-            size={38}
-          />
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <div className="flex min-w-0 items-baseline gap-2">
-              <span className="min-w-0 truncate text-[0.9375rem] tracking-[-0.015em] text-foreground">
-                {data.summary.displayName}
-              </span>
-              <Link
-                href={`/clients/${clientId}/contacts/${contactId}`}
-                className="ml-auto shrink-0 text-[0.71875rem] text-brand no-underline hover:underline"
-              >
-                Ficha ↗
-              </Link>
-            </div>
-            <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-              {primaryIdentity ? (
-                <span className="u-mono truncate text-[0.71875rem] text-muted">{primaryIdentity}</span>
-              ) : null}
-              {preferredChannel ? (
-                <>
-                  <span aria-hidden className="text-faintest">·</span>
-                  <span className="flex items-center gap-1.5 whitespace-nowrap text-[0.71875rem] text-muted">
-                    <span aria-hidden className="size-1.5 rounded-full bg-foreground" />
-                    {channelLabel(preferredChannel)}
-                  </span>
-                </>
-              ) : null}
-            </div>
+      <div className="flex flex-col gap-3 px-4 pb-4 pt-4">
+        <div className="flex items-center gap-3">
+          <InboxAvatar text={avatarText(data.summary.displayName, conversationRef)} toneKey={conversationRef} size={40} />
+          <div className="flex min-w-0 flex-col">
+            <span className="truncate text-[1.0625rem] font-semibold tracking-[-0.01em] text-foreground">{data.summary.displayName}</span>
+            <span className="truncate text-xs text-muted">{[channel, workflowName].filter(Boolean).join(" · ")}</span>
           </div>
         </div>
-
-        {/* ── ACTIONS (§3.5.3). `Agendar cita` is the ONE red button in this panel — see
-               the note on --ink in globals.css for why nothing else here is. ── */}
-        {schedulingEnabled ? (
-          <div className="flex items-center gap-1.5">
-            <Link
-              href={`/clients/${clientId}/scheduling/agenda?book=${contactId}`}
-              className={`flex-1 justify-center ${BOOK_CLS}`}
-            >
-              <IconPlus />
+        {identityLine}
+        <div className="flex gap-2">
+          {schedulingEnabled ? (
+            <Link href={`/clients/${clientId}/scheduling/agenda?book=${contactId}`} className={`flex-1 ${BTN_PRIMARY}`}>
               Agendar cita
             </Link>
-            <Link
-              href={`/clients/${clientId}/contacts/${contactId}`}
-              aria-label="Más acciones sobre este contacto"
-              title="Más acciones"
-              className="inline-flex h-8 w-[34px] shrink-0 items-center justify-center rounded-md border border-line-strong text-muted no-underline transition-colors hover:border-faint hover:text-foreground"
-            >
-              ···
-            </Link>
+          ) : null}
+          <Link href={`/clients/${clientId}/contacts/${contactId}`} className={`${schedulingEnabled ? "" : "flex-1"} ${BTN_SECONDARY}`}>
+            Abrir contacto
+          </Link>
+        </div>
+
+        {schedulingEnabled ? (
+          <div className="flex flex-col gap-1 rounded-xl border border-line px-3.5 py-3">
+            <span className="text-xs text-muted">Próxima cita</span>
+            {next ? (
+              <>
+                <span className="text-[0.9375rem] font-semibold text-foreground">{apptWhen(next.startAt, next.siteTimezone)}</span>
+                <span className="text-sm text-muted">{[next.serviceName, next.staffName].filter(Boolean).join(" · ")}</span>
+              </>
+            ) : (
+              <span className="text-sm text-foreground">Sin cita próxima</span>
+            )}
+            <span className={`text-xs ${noShows > 0 ? "text-warn" : "text-faint"}`}>
+              {visits} {visits === 1 ? "visita" : "visitas"} · {noShows} {noShows === 1 ? "inasistencia" : "inasistencias"}
+            </span>
+            {data.appointments.upcoming.length > 0 ? (
+              <button type="button" onClick={() => setManageAppts((m) => !m)} aria-expanded={manageAppts} className="mt-1 self-start text-xs font-medium text-foreground underline underline-offset-2">
+                {manageAppts ? "Ocultar citas" : "Gestionar citas"}
+              </button>
+            ) : null}
+            {manageAppts ? (
+              <div className="mt-2">
+                <AppointmentsSection clientId={clientId} appointments={data.appointments} onChanged={onChanged} showHistory={false} />
+              </div>
+            ) : null}
           </div>
         ) : null}
       </div>
 
-      {/*
-        ── THE STAT STRIP (§3.5.4) ──
-        Three numbers on one tinted band: how often they come, how often they don't, and
-        how long since. They belong together — "14 visitas · 1 no-show" is a judgement
-        about a person that neither number makes alone — and the design bands them so they
-        read as one sentence rather than three tiles.
-        The no-show count goes WARN only when it is non-zero: "0 no-shows" must not shout.
-      */}
-      <div className="flex flex-wrap items-center justify-center gap-x-2.5 gap-y-1 border-y border-line bg-panel-hero px-4 py-2.5">
-        <Stat value={data.summary.visitCount} label={data.summary.visitCount === 1 ? "visita" : "visitas"} />
-        <span aria-hidden className="text-faintest">·</span>
-        <Stat
-          value={data.summary.noShowCount}
-          label={data.summary.noShowCount === 1 ? "no-show" : "no-shows"}
-          tone={data.summary.noShowCount > 0 ? "warn" : undefined}
-        />
-        {lastVisitAt ? (
-          <>
-            <span aria-hidden className="text-faintest">·</span>
-            <Stat value={relativeAgeShort(lastVisitAt)} label="la última" />
-          </>
-        ) : null}
-      </div>
-
-      {schedulingEnabled ? (
-        <Section
-          title="Próxima cita"
-          trailing={
-            apptTotal > 0 ? (
-              <Link
-                href={`/clients/${clientId}/contacts/${contactId}`}
-                className="text-inherit no-underline hover:text-foreground"
-              >
-                {apptTotal} en total →
-              </Link>
-            ) : undefined
-          }
-        >
-          <AppointmentsSection
-            clientId={clientId}
-            appointments={data.appointments}
-            onChanged={onChanged}
-            showHistory={false}
-          />
-        </Section>
-      ) : null}
-
-      <Section title="Tareas abiertas">
+      <Section title={`Tareas abiertas (${data.openTasks.length})`} add="Tarea" open={open === "task"} onAdd={() => toggle("task")}>
         <TasksSection
           clientId={clientId}
           contactId={contactId}
@@ -292,10 +255,12 @@ function Ready({
           viewerUserId={viewerUserId}
           viewerIsFullAccess={viewerIsFullAccess}
           onChanged={onChanged}
+          addOpen={open === "task"}
+          onAddOpenChange={(o) => setOpen(o ? "task" : null)}
         />
       </Section>
 
-      <Section title="Notas">
+      <Section title={`Notas (${data.recentNotes.length})`} add="Nota" open={open === "note"} onAdd={() => toggle("note")}>
         <NotesSection
           clientId={clientId}
           contactId={contactId}
@@ -304,10 +269,12 @@ function Ready({
           viewerIsFullAccess={viewerIsFullAccess}
           onChanged={onChanged}
           dense
+          addOpen={open === "note"}
+          onAddOpenChange={(o) => setOpen(o ? "note" : null)}
         />
       </Section>
 
-      <Section title="Etiquetas">
+      <Section title={`Etiquetas (${data.tags.length})`} add="Etiqueta" open={open === "tag"} onAdd={() => toggle("tag")}>
         <TagsSection
           clientId={clientId}
           contactId={contactId}
@@ -315,55 +282,46 @@ function Ready({
           catalogue={[]}
           canManageCatalog={viewerIsFullAccess}
           onChanged={onChanged}
+          addOpen={open === "tag"}
+          onAddOpenChange={(o) => setOpen(o ? "tag" : null)}
         />
       </Section>
     </div>
   );
 }
 
-/** One number-plus-noun in the stat strip. The NUMBER is the content; the noun labels it. */
-function Stat({
-  value,
-  label,
-  tone,
-}: {
-  value: number | string;
-  label: string;
-  tone?: "warn";
-}) {
-  return (
-    <span className="flex items-baseline gap-1.5 whitespace-nowrap">
-      <span
-        className={`text-[0.8125rem] font-semibold tracking-[-0.01em] ${
-          tone === "warn" ? "text-warn" : "text-foreground"
-        }`}
-      >
-        {value}
-      </span>
-      <span className="text-[0.71875rem] text-faint">{label}</span>
-    </span>
-  );
+/** "Jue 15 oct · 10:00" in the SITE's timezone (an appointment happens at a place). */
+function apptWhen(iso: string, tz: string): string {
+  const d = new Date(iso);
+  const day = d.toLocaleDateString("es-CO", { weekday: "short", day: "numeric", month: "short", timeZone: tz }).replace(/\./g, "");
+  const time = d.toLocaleTimeString("es-CO", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: tz });
+  return `${day.charAt(0).toUpperCase()}${day.slice(1)} · ${time}`;
 }
 
-/**
- * One section of the panel: the shared heading, the content, closed by a full-width rule.
- *
- * `SectionHeading` rather than a local label constant — this panel used to define its own
- * `SECTION_LABEL` string, which is exactly how the inbox's headings and the contact
- * panel's headings ended up as two different sizes of the same idea.
- */
+/** A ficha section: shared heading with a "+ X" that opens its form. */
 function Section({
   title,
-  trailing,
+  add,
+  open,
+  onAdd,
   children,
 }: {
   title: string;
-  trailing?: ReactNode;
+  add: string;
+  open: boolean;
+  onAdd: () => void;
   children: ReactNode;
 }) {
   return (
-    <section className="flex flex-col gap-2.5 border-b border-line px-4 py-3 last:border-b-0">
-      <SectionHeading title={title} trailing={trailing} />
+    <section className="flex flex-col gap-2.5 border-t border-line px-4 py-3.5">
+      <SectionHeading
+        title={title}
+        trailing={
+          <button type="button" onClick={onAdd} aria-expanded={open} className="inline-flex min-h-[44px] items-center gap-1 rounded-md px-1 text-sm font-medium text-foreground hover:bg-subtle md:min-h-8">
+            <span aria-hidden>+</span> {add}
+          </button>
+        }
+      />
       {children}
     </section>
   );

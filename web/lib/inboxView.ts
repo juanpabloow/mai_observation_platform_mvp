@@ -23,10 +23,14 @@ export interface InboxConversationView {
   /** ACTIVE iff the customer wrote within the activity window (SQL-computed). */
   active: boolean;
   assignedAgentName: string | null;
+  /** Who handles it — so the row can say "Tú respondes" vs "Diego responde". */
+  assignedAgentUserId: string | null;
   lastMessageText: string | null;
   lastMessageSender: InboxSender | null;
   lastMessageContentType: string | null;
   lastMessageAt: string | null; // ISO
+  /** The customer's last inbound message (ISO) — the WhatsApp 24 h window. Null if never. */
+  lastUserMessageAt: string | null;
   createdAt: string; // ISO
   pendingSince: string | null; // ISO
   /** Latest escalation reason — set only on PENDING conversations. */
@@ -115,6 +119,9 @@ export interface InboxMessageView {
   id: string;
   sender: InboxSender;
   agentName: string | null;
+  /** The operator who sent a human_agent message — so "Tú (Laura)" is read from an id,
+   *  never guessed from a name. Optional: older payload builders omit it. */
+  agentUserId?: string | null;
   text: string | null;
   contentType: string;
   status: string; // received | sending | sent | failed

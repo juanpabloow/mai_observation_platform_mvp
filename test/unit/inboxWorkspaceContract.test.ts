@@ -34,11 +34,15 @@ test('workspace: preserves the ?c= deep link; NO in-panel workflow filter (heade
   assert.ok(src.includes('searchParams.get("c")'), 'selection reads the ?c= param');
   assert.ok(src.includes('p.set("c", id)'), 'selecting sets ?c= …');
   assert.ok(src.includes('searchParams.toString()'), '… while preserving the other params');
-  // W-2: the in-panel workflow filter was removed — the header switcher is the single
-  // workflow selector, and the list follows the active scope (the component is keyed by
-  // it, re-seeded with the already-scoped payload on a scope change).
-  assert.ok(!src.includes('aria-label="Filter by workflow"'), 'there is NO in-panel workflow filter');
-  assert.ok(src.includes('No in-panel workflow selector'), 'the workspace follows the header scope');
+  // W-2 still holds: ONE workflow scope. The redesign's in-list selector (1g) is not a
+  // second filter — it writes the SAME scope as the header switcher (setScope + the
+  // ?workflow= param), the page re-seeds the already-scoped list, and it is offered only to
+  // the logins that have the header switcher (canSeeWorkflowInsights).
+  assert.ok(!src.includes('aria-label="Filter by workflow"'), 'there is NO client-side workflow filter');
+  assert.ok(src.includes('writes the SAME scope as the header switcher'), 'the selector is the header switcher\'s twin');
+  assert.ok(src.includes('setScope(clientId, id)'), 'it writes the shared scope');
+  const page = read('app/clients/[clientId]/inbox/page.tsx');
+  assert.ok(page.includes('canSeeWorkflowInsights(scope, client.id)'), 'offered to the same logins as the header switcher');
 });
 
 test('workspace: reuses the REAL chat + handoff actions (InboxThread), client-scoped fetch', () => {
@@ -78,8 +82,12 @@ test('customer panel: assembled from SHARED contact components, loads the linked
   //
   // What must NOT be re-implemented is the DISC, which is the recognition cue shared
   // across the queue, the thread and both panels — so that stays the shared component.
-  assert.ok(src.includes('<ContactAvatar'), 'the identity disc is the shared one');
-  assert.equal(/function (ContactAvatar|Avatar)\(/.test(src), false, 'and is not redeclared here');
+  // The redesign gives the inbox ONE pastel disc (InboxAvatar), keyed by the conversation
+  // identifier, so a person wears the same disc in the queue, the thread and this card.
+  assert.ok(src.includes('<InboxAvatar'), 'the identity disc is the inbox\'s shared one');
+  assert.ok(read('components/ClientInboxWorkspace.tsx').includes('<InboxAvatar'), '… the same one the queue uses');
+  assert.ok(read('components/InboxThread.tsx').includes('<InboxAvatar'), '… and the thread header');
+  assert.equal(/function (ContactAvatar|Avatar|InboxAvatar)\(/.test(src), false, 'and is not redeclared here');
   // The section HEADING is shared too — this panel used to define its own SECTION_LABEL
   // string, which is how the inbox's headings and the contact panel's ended up as two
   // different sizes of the same idea.

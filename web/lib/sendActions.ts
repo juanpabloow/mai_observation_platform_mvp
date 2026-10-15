@@ -37,25 +37,25 @@ export async function sendMessageAction(
 ): Promise<SendActionResult> {
   const scope = await getAccessScope();
   if (!canAccessClient(scope, clientId)) {
-    return { ok: false, code: "forbidden", error: "You don't have access to this conversation." };
+    return { ok: false, code: "forbidden", error: "No tienes acceso a esta conversación." };
   }
   if (!(await isClientModuleEnabled(scope.tenantId, clientId, "inbox"))) {
-    return { ok: false, code: "disabled", error: "Inbox is disabled for this client." };
+    return { ok: false, code: "disabled", error: "El inbox está desactivado para este cliente." };
   }
   if (typeof text !== "string" || text.trim().length === 0) {
-    return { ok: false, code: "invalid", error: "Message can't be empty." };
+    return { ok: false, code: "invalid", error: "El mensaje no puede estar vacío." };
   }
   if (Buffer.byteLength(text, "utf8") > MAX_TEXT_BYTES) {
-    return { ok: false, code: "invalid", error: "Message is too long (64 KB max)." };
+    return { ok: false, code: "invalid", error: "El mensaje es demasiado largo (máximo 64 KB)." };
   }
 
   const conv = await getConversationForClient(scope.tenantId, clientId, conversationId);
-  if (!conv) return { ok: false, code: "not_found", error: "This conversation no longer exists." };
+  if (!conv) return { ok: false, code: "not_found", error: "Esta conversación ya no existe." };
   if (conv.mode !== "human") {
     return {
       ok: false,
       code: "mode_changed",
-      error: "This conversation was returned to the bot — you can't send right now.",
+      error: "La conversación volvió al bot: tómala de nuevo para escribir.",
       header: toHeaderView(conv),
     };
   }
@@ -91,19 +91,19 @@ export async function retrySendAction(
 ): Promise<SendActionResult> {
   const scope = await getAccessScope();
   if (!canAccessClient(scope, clientId)) {
-    return { ok: false, code: "forbidden", error: "You don't have access to this conversation." };
+    return { ok: false, code: "forbidden", error: "No tienes acceso a esta conversación." };
   }
   if (!(await isClientModuleEnabled(scope.tenantId, clientId, "inbox"))) {
-    return { ok: false, code: "disabled", error: "Inbox is disabled for this client." };
+    return { ok: false, code: "disabled", error: "El inbox está desactivado para este cliente." };
   }
 
   const conv = await getConversationForClient(scope.tenantId, clientId, conversationId);
-  if (!conv) return { ok: false, code: "not_found", error: "This conversation no longer exists." };
+  if (!conv) return { ok: false, code: "not_found", error: "Esta conversación ya no existe." };
   if (conv.mode !== "human") {
     return {
       ok: false,
       code: "mode_changed",
-      error: "This conversation was returned to the bot — you can't send right now.",
+      error: "La conversación volvió al bot: tómala de nuevo para escribir.",
       header: toHeaderView(conv),
     };
   }
@@ -119,7 +119,7 @@ export async function retrySendAction(
   // or POST the same one twice.
   const msg = await claimFailedMessageForRetry(scope.tenantId, conversationId, messageId);
   if (!msg) {
-    return { ok: false, code: "not_found", error: "That message can't be retried." };
+    return { ok: false, code: "not_found", error: "Ese mensaje no se puede reintentar." };
   }
   const view = await deliverMessage(scope.tenantId, conv, guard.webhook, {
     id: msg.id,
@@ -141,13 +141,13 @@ async function resolveEnabledWebhook(tenantId: string, n8nWorkflowId: string): P
   if (!webhook) {
     return {
       ok: false,
-      result: { ok: false, code: "no_webhook", error: "No send webhook is configured for this workflow." },
+      result: { ok: false, code: "no_webhook", error: "Este flujo no tiene configurado el envío de mensajes." },
     };
   }
   if (!webhook.enabled) {
     return {
       ok: false,
-      result: { ok: false, code: "disabled", error: "Sending is disabled for this workflow." },
+      result: { ok: false, code: "disabled", error: "El envío está desactivado para este flujo." },
     };
   }
   return { ok: true, webhook: { url: webhook.url, secret: webhook.secret } };
@@ -190,7 +190,7 @@ async function deliverMessage(
   } else if (outcome.kind === "rejected") {
     status = "failed";
     failureCode = outcome.code ?? "REJECTED";
-    failureDetail = outcome.detail ?? "The channel rejected the message.";
+    failureDetail = outcome.detail ?? "El canal rechazó el mensaje.";
     deliveryResult = "rejected";
   } else {
     status = "failed";

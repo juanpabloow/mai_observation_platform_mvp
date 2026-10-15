@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 import { getAgentSummary, isWorkflowHandoffActive } from "@worker/db/repositories/handoff.js";
-import { hasFullAccess } from "@/lib/access";
+import { canSeeWorkflowInsights, hasFullAccess } from "@/lib/access";
+import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { resolveWorkflowScope, validateWorkflowForClient } from "@/lib/workflowScope";
 import { loadScopedClientInbox } from "@/lib/inboxData";
@@ -15,8 +16,9 @@ const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v
  * grouped by real state (Needs human attention / Human / Bot), opening the chat via the
  * existing `?c=<conversationId>` deep link.
  *
- * W-2: the list respects the W-1 workflow SCOPE — there is no in-panel workflow picker;
- * the header switcher is the only selector. The effective scope is URL-first
+ * W-2: the list respects the W-1 workflow SCOPE. The redesign adds an in-list selector,
+ * but it writes the SAME scope as the header switcher (cookie + `?workflow=`) and is
+ * offered to the SAME logins (canSeeWorkflowInsights) — one scope, two entry points. The effective scope is URL-first
  * (?workflow=<id>, validated) then the remembered cookie; 'all' ⇒ every conversation,
  * a workflow ⇒ only its conversations. The scope is resolved HERE (server) and both the
  * initial list and the poll route filter at the data layer, so groups/counts/pending
@@ -48,10 +50,15 @@ export default async function ClientInboxPage({
     effective = await resolveWorkflowScope(scope.tenantId, client.id, scope);
   }
 
-  const [initial, viewer] = await Promise.all([
+  const [initial, viewer, tenantWorkflows] = await Promise.all([
     loadScopedClientInbox(scope.tenantId, client.id, effective),
     getAgentSummary(scope.userId),
+    canSeeWorkflowInsights(scope, client.id) ? listWorkflowsWithClientForTenant(scope.tenantId) : Promise.resolve(null),
   ]);
+  // This client's workflows only (the header narrows the same way).
+  const workflows = tenantWorkflows
+    ? tenantWorkflows.filter((w) => w.client_id === client.id).map((w) => ({ id: w.n8n_workflow_id, name: w.name, active: w.active }))
+    : null;
 
   // Empty-state nuance (H-6): when a specific workflow is scoped but has NO conversations
   // yet, distinguish "not set up for handoff" from "set up but quiet" so the empty state
@@ -71,6 +78,7 @@ export default async function ClientInboxPage({
       viewerUserId={scope.userId}
       viewerName={viewer?.name ?? null}
       viewerIsFullAccess={hasFullAccess(scope)}
+      workflows={workflows}
     />
   );
 }

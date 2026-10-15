@@ -602,6 +602,8 @@ export interface InboxConversationRow {
   last_message_sender: MessageSender | null;
   last_message_content_type: string | null;
   last_message_at: Date | null;
+  /** The customer's last INBOUND message — drives the WhatsApp 24 h window chip. */
+  last_user_message_at: Date | null;
   created_at: Date;
   /** When it last entered 'pending' (for the pending-age label); null if never. */
   pending_since: Date | null;
@@ -755,7 +757,7 @@ export async function listConversationsForWorkflow(
   const r = await query<InboxConversationRow>(
     `SELECT
        c.id, c.conversation_ref, c.n8n_workflow_id, c.mode,
-       c.assigned_agent_user_id, c.last_message_at, c.created_at,
+       c.assigned_agent_user_id, c.last_message_at, c.last_user_message_at, c.created_at,
        cw.workflow_name,
        u.name AS assigned_agent_name,
        lm.text AS last_message_text,
@@ -806,7 +808,7 @@ export async function listConversationsForClient(
   const r = await query<InboxConversationRow>(
     `SELECT
        c.id, c.conversation_ref, c.n8n_workflow_id, c.mode,
-       c.assigned_agent_user_id, c.last_message_at, c.created_at,
+       c.assigned_agent_user_id, c.last_message_at, c.last_user_message_at, c.created_at,
        cw.workflow_name,
        u.name AS assigned_agent_name,
        lm.text AS last_message_text,
