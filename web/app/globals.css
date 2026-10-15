@@ -762,6 +762,51 @@ html[data-text-scale='large'] {
 }
 
 /*
+ * TOP BAR preference (lib/topbarPref.ts). Hidden only from xl up, where the rail is always
+ * on screen — below that the bar holds the menu button and always stays. With the bar
+ * hidden, the rail shows its own collapse control so nothing is lost.
+ */
+.u-rail-toggle {
+  display: none;
+}
+@media (min-width: 1280px) {
+  html[data-topbar='hidden'] .u-topbar {
+    display: none;
+  }
+  html[data-topbar='hidden'] .u-rail-toggle {
+    display: inline-flex;
+  }
+}
+
+/*
+ * Inbox list rows, WhatsApp-style: a hairline BETWEEN conversations, starting at the text
+ * column (not under the avatar). It disappears next to the selected or hovered row, whose
+ * own background already separates it. Left = row margin + border + padding + avatar + gap.
+ */
+.u-inbox-row {
+  position: relative;
+}
+.u-inbox-row + .u-inbox-row::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 65px;
+  right: 17px;
+  height: 1px;
+  background: var(--line-row);
+  pointer-events: none;
+}
+@media (min-width: 768px) {
+  .u-inbox-row + .u-inbox-row::before {
+    left: 59px;
+  }
+}
+.u-inbox-row:has(> a:hover, > a[aria-current='page'])::before,
+.u-inbox-row:has(> a:hover, > a[aria-current='page']) + .u-inbox-row::before {
+  opacity: 0;
+}
+
+/*
  * ── Shell geometry ───────────────────────────────────────────────────────────
  * Fixed PIXEL values on purpose: these are chrome dimensions, not content, so
  * they must NOT ride the 90% rem scale (a 236px rail that silently became 212px

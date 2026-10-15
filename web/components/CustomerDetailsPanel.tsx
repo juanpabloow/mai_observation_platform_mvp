@@ -137,7 +137,7 @@ export function CustomerDetailsPanel({
         ) : (
           <div className="flex flex-col gap-3 px-4 py-4">
             <div className="flex items-center gap-3">
-              <InboxAvatar text={avatarText(null, conversationRef)} toneKey={conversationRef} size={40} />
+              <InboxAvatar text={avatarText(null, conversationRef)} toneKey={conversationRef} large />
               <div className="flex min-w-0 flex-col">
                 <span className="text-[1.0625rem] font-semibold text-foreground">Contacto sin nombre</span>
                 <span className="truncate text-xs text-muted">{["WhatsApp", workflowName].filter(Boolean).join(" · ")}</span>
@@ -200,9 +200,9 @@ function Ready({
     <div className="flex flex-col">
       <div className="flex flex-col gap-3 px-4 pb-4 pt-4">
         <div className="flex items-center gap-3">
-          <InboxAvatar text={avatarText(data.summary.displayName, conversationRef)} toneKey={conversationRef} size={40} />
+          <InboxAvatar text={avatarText(data.summary.displayName, conversationRef)} toneKey={conversationRef} large />
           <div className="flex min-w-0 flex-col">
-            <span className="truncate text-[1.0625rem] font-semibold tracking-[-0.01em] text-foreground">{data.summary.displayName}</span>
+            <span className="truncate text-[1.0625rem] font-semibold tracking-[-0.01em] text-foreground md:text-[0.9375rem]">{data.summary.displayName}</span>
             <span className="truncate text-xs text-muted">{[channel, workflowName].filter(Boolean).join(" · ")}</span>
           </div>
         </div>

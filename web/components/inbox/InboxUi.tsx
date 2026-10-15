@@ -51,13 +51,15 @@ const PASTELS: ReadonlyArray<readonly [string, string]> = [
 ];
 const NEUTRAL: readonly [string, string] = ["#eceef1", "#474c54"];
 
-export function InboxAvatar({ text, toneKey, size = 36 }: { text: string; toneKey: string; size?: number }) {
+export function InboxAvatar({ text, toneKey, large = false }: { text: string; toneKey: string; large?: boolean }) {
   const [bg, fg] = text === "#" || text === "?" ? NEUTRAL : PASTELS[(avatarToneIndex(toneKey) - 1) % PASTELS.length];
   return (
     <span
       aria-hidden
-      style={{ width: size, height: size, backgroundColor: bg, color: fg }}
-      className="flex shrink-0 items-center justify-center rounded-full text-[0.75rem] font-semibold"
+      style={{ backgroundColor: bg, color: fg }}
+      className={`flex shrink-0 items-center justify-center rounded-full font-semibold ${
+        large ? "size-10 text-[0.8125rem] md:size-9 md:text-xs" : "size-9 text-xs md:size-8 md:text-[0.6875rem]"
+      }`}
     >
       {text}
     </span>
@@ -120,9 +122,9 @@ export function InboxConfirm({
 
 /** The inbox's buttons: 44px tall on touch, 36px from md up. */
 export const BTN_PRIMARY =
-  "inline-flex h-11 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-ink px-4 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50 md:h-9";
+  "inline-flex h-11 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl bg-ink px-4 text-sm font-semibold text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:opacity-50 md:h-8 md:px-3 md:text-[0.8125rem]";
 export const BTN_SECONDARY =
-  "inline-flex h-11 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-line-strong bg-surface px-3.5 text-sm font-medium text-foreground transition-colors hover:bg-subtle disabled:cursor-not-allowed disabled:opacity-50 md:h-9";
+  "inline-flex h-11 shrink-0 items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border border-line-strong bg-surface px-3.5 text-sm font-medium text-foreground transition-colors hover:bg-subtle disabled:cursor-not-allowed disabled:opacity-50 md:h-8 md:px-3 md:text-[0.8125rem]";
 
 // ── Icons (decorative; the text beside them carries the meaning) ────────────────────
 

@@ -137,14 +137,14 @@ export function Composer({
           rows={1}
           placeholder="Escribe un mensaje"
           aria-describedby={hintId}
-          className="max-h-40 min-h-[2.5rem] w-full flex-1 resize-none bg-transparent py-2 text-base leading-snug outline-none placeholder:text-faint md:text-[0.9375rem]"
+          className="max-h-40 min-h-[2.5rem] w-full flex-1 resize-none bg-transparent py-2 text-base leading-snug outline-none placeholder:text-faint md:min-h-[2.125rem] md:py-1.5 md:text-[0.875rem]"
         />
         <button
           type="button"
           onClick={submit}
           disabled={text.trim() === ""}
           aria-label="Enviar mensaje"
-          className="mb-0.5 inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-ink text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:bg-chip disabled:text-faint md:size-9"
+          className="mb-0.5 inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-ink text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:bg-chip disabled:text-faint md:size-8"
         >
           <IconSend />
         </button>

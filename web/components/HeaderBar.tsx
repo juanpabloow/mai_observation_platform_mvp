@@ -263,7 +263,8 @@ export function HeaderBar({
     // The header now starts AFTER the sidebar and spans only the content column;
     // the brand moved into the rail, so this bar carries navigation state only.
     // h-14 matches the rail's brand block, so the two line up across the seam.
-    <header className="flex h-[var(--topbar-height)] shrink-0 items-center justify-between gap-3 border-b border-line px-[14px]">
+    // `u-topbar`: hidden from xl up when the person turned the bar off (lib/topbarPref.ts).
+    <header className="u-topbar flex h-[var(--topbar-height)] shrink-0 items-center justify-between gap-3 border-b border-line px-[14px]">
       {/* LEFT — sidebar controls */}
       <div className="flex shrink-0 items-center gap-2">
         {/* Mobile: opens the sidebar as a drawer. */}

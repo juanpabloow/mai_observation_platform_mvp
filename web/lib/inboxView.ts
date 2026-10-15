@@ -281,7 +281,7 @@ export function conversationAvatarLabel(ref: string, name?: string | null): stri
 
 function firstName(name: string | null): string {
   const n = (name ?? "").trim().split(/\s+/)[0];
-  return n || "Agent";
+  return n || "Equipo";
 }
 
 /**

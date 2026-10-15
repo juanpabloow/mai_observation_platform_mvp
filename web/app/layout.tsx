@@ -10,6 +10,8 @@ import { Providers } from "./providers";
 import { parseSidebarTheme, SIDEBAR_THEME_COOKIE } from "@/lib/sidebarTheme";
 import { isChromelessPath } from "@/lib/shellChrome";
 import { parseTextScale, TEXT_SCALE_COOKIE } from "@/lib/textScale";
+import { parseTopbarPref, resolveTopbarPref, TOPBAR_COOKIE } from "@/lib/topbarPref";
+import { getSessionScope } from "@/lib/access";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -45,12 +47,17 @@ export default async function RootLayout({
   // itself keys on the REAL rail being in the DOM (see .u-shell-frame), so a stale
   // value here can never frame a chromeless page.
   const chromeless = isChromelessPath((await headers()).get("x-pathname") ?? "");
+  // Top bar (lib/topbarPref.ts): the stored choice, else the ROLE default — resolved only
+  // when it matters (no choice yet, a page with chrome), so public pages pay no lookup.
+  const storedTopbar = parseTopbarPref(jar.get(TOPBAR_COOKIE)?.value);
+  const topbar = resolveTopbarPref(storedTopbar, storedTopbar || chromeless ? null : ((await getSessionScope())?.role ?? null));
 
   return (
     <html
       lang="en"
       data-sidebar-theme={sidebarTheme}
       data-text-scale={textScale}
+      data-topbar={topbar}
       // next-themes sets the theme class on <html> before hydration; suppress the
       // resulting server/client class mismatch warning (no-flash approach).
       suppressHydrationWarning

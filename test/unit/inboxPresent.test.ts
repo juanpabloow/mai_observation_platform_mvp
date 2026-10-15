@@ -23,6 +23,8 @@ import {
 } from '../../web/lib/inboxPresent.js';
 import { validateNoteBody, validateTagName, validateTaskTitle, TAG_NAME_MAX } from '../../web/lib/crmFieldRules.js';
 import { groupConversations, INBOX_GROUP_ORDER } from '../../web/lib/inboxGroups.js';
+import { parseTopbarPref, resolveTopbarPref, topbarCookie } from '../../web/lib/topbarPref.js';
+import { conversationPreview } from '../../web/lib/inboxView.js';
 
 /**
  * The inbox redesign's pure rules ("Inbox de Gallery"): Spanish 24 h dates, titles and
@@ -59,6 +61,11 @@ test('identity: name, else known phone, else "Contacto sin nombre"; a channel id
   assert.equal(avatarText('Falla', 'x'), 'F');
   assert.equal(avatarText(null, '573005550142'), '#');
   assert.equal(avatarText(null, 'wa-bsuid-7f3c9a'), '?');
+  // A stored "name" without a letter or digit is not a name.
+  assert.deepEqual(conversationTitle('.', 'wa-bsuid-7f3c9a'), { text: 'Contacto sin nombre', kind: 'unknown' });
+  assert.deepEqual(conversationTitle(' - ', '573005550142'), { text: '+57 300 555 0142', kind: 'phone' });
+  assert.equal(avatarText('.', 'wa-bsuid-7f3c9a'), '?');
+  assert.equal(avatarText('(Andrés) Gómez', 'x'), 'AG', 'initials skip punctuation');
 });
 
 test('who answers: pending / you / a colleague / the bot — from ids, never from names', () => {
@@ -78,7 +85,15 @@ test('the 24 h window: open with hours left, closed with its age, never opened',
   const closed = windowState(lastAt(24 + 72), NOW);
   assert.equal(closed.state, 'closed');
   assert.deepEqual(windowChip(closed), { open: false, label: 'Ventana de 24 h vencida' });
-  assert.equal(windowClosedLine(closed), 'La ventana de 24 h se cerró hace 3 d. WhatsApp solo permite enviar una plantilla aprobada.');
+  assert.equal(
+    windowClosedLine(closed, NOW),
+    'El cliente escribió por última vez hace 4 d (Dom 14:30). WhatsApp solo permite responder dentro de 24 h; ahora solo se puede enviar una plantilla aprobada.',
+  );
+  // The reported case: closed "22 h ago" read as "22 h < 24 h". The line now states the
+  // time since the customer's LAST message (46 h) and when it was.
+  const reported = windowState(lastAt(46), NOW);
+  assert.equal(reported.state, 'closed');
+  assert.match(windowClosedLine(reported, NOW) ?? '', /^El cliente escribió por última vez hace 46 h \(Mar 16:30\)\./);
   assert.deepEqual(windowState(null, NOW), { state: 'never' });
   assert.equal(windowChip(windowState(null, NOW)), null);
   assert.match(windowClosedLine(windowState(null, NOW)) ?? '', /después de que la persona te escriba primero/);
@@ -173,4 +188,22 @@ test('ficha form rules: empty, too long and repeated tag — the server limits',
   assert.equal(validateTagName(' cliente FRECUENTE ', ['Cliente frecuente']), 'Esa etiqueta ya existe.');
   assert.equal(validateTagName('Clíente frecuente', ['Cliente frecuente']), 'Esa etiqueta ya existe.', 'accent-insensitive');
   assert.equal(validateTagName('VIP', ['Cliente frecuente']), null);
+});
+
+test('top bar preference: the choice wins; otherwise shown for owner/admin, hidden for everyone else', () => {
+  assert.equal(parseTopbarPref('hidden'), 'hidden');
+  assert.equal(parseTopbarPref('nope'), null);
+  assert.equal(parseTopbarPref(undefined), null);
+  assert.equal(resolveTopbarPref(null, 'owner'), 'shown');
+  assert.equal(resolveTopbarPref(null, 'admin'), 'shown');
+  assert.equal(resolveTopbarPref(null, 'member'), 'hidden', 'non-admin profiles start without it');
+  assert.equal(resolveTopbarPref(null, null), 'hidden');
+  assert.equal(resolveTopbarPref('shown', 'member'), 'shown', 'a member can turn it on');
+  assert.equal(resolveTopbarPref('hidden', 'owner'), 'hidden', 'an admin can turn it off');
+  assert.match(topbarCookie('hidden'), /^topbar=hidden; path=\/; max-age=31536000/);
+});
+
+test('an agent with no name is "Equipo", never "Agent"', () => {
+  const p = conversationPreview({ lastMessageSender: 'human_agent', lastMessageText: '.', lastMessageContentType: 'text', assignedAgentName: null } as never);
+  assert.equal(p, 'Equipo: .');
 });

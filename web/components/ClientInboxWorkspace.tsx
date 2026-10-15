@@ -241,14 +241,16 @@ export function ClientInboxWorkspace({
   const threadReady = thread && thread.header.id === selectedId ? thread : null;
 
   return (
-    <PageShell as="main" row ariaLabel="Inbox">
+    // Phone: the inbox IS the screen — out of the floating card (no gutter, border,
+    // radius or shadow). From md up it is the usual card.
+    <PageShell as="main" row ariaLabel="Inbox" className="max-md:-m-[var(--content-pad)] max-md:rounded-none max-md:border-0 max-md:shadow-none">
       {/* ── LIST ── */}
       <aside
         aria-label="Conversations"
-        className={`min-h-0 w-full shrink-0 border-r border-line md:flex md:w-[316px] lg:w-[340px] xl:w-[360px] ${selectedId ? "hidden md:flex" : "flex"}`}
+        className={`min-h-0 w-full shrink-0 border-r border-line md:flex md:w-[300px] lg:w-[320px] xl:w-[336px] ${selectedId ? "hidden md:flex" : "flex"}`}
       >
         <div className="flex min-h-0 w-full flex-col overflow-hidden">
-          <div className="flex flex-col gap-2.5 border-b border-line px-3.5 pb-3 pt-3">
+          <div className="flex flex-col gap-2.5 border-b border-line px-3.5 pb-3 pt-3 md:gap-2 md:px-3 md:pb-2.5 md:pt-2">
             <div className="flex min-h-[var(--topbar-height)] items-center gap-2">
               <PageTitle title="Inbox">
                 {pending > 0 ? (
@@ -261,7 +263,7 @@ export function ClientInboxWorkspace({
               {/* The in-list workflow selector writes the SAME scope as the header switcher. */}
               {workflows && workflows.length > 0 ? <WorkflowSelector clientId={clientId} scope={scope} workflows={workflows} /> : null}
             </div>
-            <div className="u-focus flex h-11 items-center gap-2 rounded-xl border border-transparent bg-chip px-3 md:h-10">
+            <div className="u-focus flex h-11 items-center gap-2 rounded-xl border border-transparent bg-chip px-3 md:h-9">
               <span className="text-faint">
                 <IconSearch />
               </span>
@@ -271,7 +273,7 @@ export function ClientInboxWorkspace({
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Buscar nombre, número o mensaje"
                 aria-label="Buscar conversaciones"
-                className="min-w-0 flex-1 bg-transparent text-base text-foreground outline-none placeholder:text-faint md:text-sm"
+                className="min-w-0 flex-1 bg-transparent text-base text-foreground outline-none placeholder:text-faint md:text-[0.8125rem]"
               />
               {search ? (
                 <button type="button" onClick={() => setSearch("")} aria-label="Borrar búsqueda" className="inline-flex size-8 items-center justify-center rounded-full text-faint hover:text-foreground">
@@ -324,7 +326,7 @@ export function ClientInboxWorkspace({
               groups.map((g) => (
                 <div key={g.key} role="group" aria-label={g.meta.label}>
                   {tab === "all" ? (
-                    <h2 className="sticky top-0 z-10 flex items-center gap-2 bg-surface px-3.5 pb-1.5 pt-3.5 text-xs font-semibold text-foreground">
+                    <h2 className="sticky top-0 z-10 flex items-center gap-2 bg-surface px-3.5 pb-1.5 pt-3.5 text-xs font-semibold text-foreground md:px-3 md:pt-3">
                       <GroupDot tone={g.meta.tone} />
                       {g.meta.label}
                       <span className="ml-auto font-normal text-faint">{capCount(g.items.length)}</span>
@@ -332,10 +334,10 @@ export function ClientInboxWorkspace({
                   ) : null}
                   {dayBuckets(g.items, now).map((b) => (
                     <div key={b.key}>
-                      <h3 className="px-3.5 pb-1 pt-2 text-[0.6875rem] font-medium text-faint">{b.label}</h3>
+                      <h3 className="px-3.5 pb-1 pt-2 text-[0.6875rem] font-medium text-faint md:px-3 md:pt-1.5">{b.label}</h3>
                       <ul>
                         {b.items.map((v) => (
-                          <li key={v.id}>
+                          <li key={v.id} className="u-inbox-row">
                             <ConversationRow view={v} href={hrefFor(v.id)} selected={v.id === selectedId} now={now} viewerUserId={viewerUserId} />
                           </li>
                         ))}
@@ -432,7 +434,9 @@ export function ClientInboxWorkspace({
 /** Todas · Escalado · Persona · Bot — the same groups, with counts. */
 function InboxTabs({ tab, counts, onChange }: { tab: InboxTab; counts: Record<InboxTab, number>; onChange: (t: InboxTab) => void }) {
   return (
-    <div role="group" aria-label="Filtrar conversaciones" className="flex gap-1.5 md:gap-1 lg:gap-1.5">
+    // Always the full width of the column (each tab grows from its own content), a
+    // little apart from the search field above.
+    <div role="group" aria-label="Filtrar conversaciones" className="mt-1.5 flex w-full gap-1.5 md:mt-1 md:gap-1 lg:gap-1.5">
       {INBOX_TABS.map((t) => {
         const on = t.key === tab;
         const icon = t.key === "pending" ? <IconClockAlert /> : t.key === "human" ? <IconPerson className="size-3.5" /> : t.key === "bot" ? <IconBot className="size-3.5" /> : null;
@@ -443,7 +447,7 @@ function InboxTabs({ tab, counts, onChange }: { tab: InboxTab; counts: Record<In
             aria-pressed={on}
             aria-label={`${t.name}, ${counts[t.key]}`}
             onClick={() => onChange(t.key)}
-            className={`inline-flex h-11 flex-none items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border px-3 text-sm transition-colors md:h-9 md:gap-1 md:px-2.5 md:text-[0.8125rem] lg:gap-1.5 lg:px-3 lg:text-sm ${on ? "border-ink bg-ink font-semibold text-ink-fg" : "border-line-strong text-foreground hover:bg-subtle"}`}
+            className={`inline-flex h-11 flex-auto items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border px-3 text-sm transition-colors md:h-8 md:gap-1 md:px-2 md:text-[0.8125rem] lg:gap-1.5 lg:px-2.5 ${on ? "border-ink bg-ink font-semibold text-ink-fg" : "border-line-strong text-foreground hover:bg-subtle"}`}
           >
             {icon}
             {t.label ? <span>{t.label}</span> : null}
@@ -587,17 +591,17 @@ function ConversationRow({
       scroll={false}
       aria-current={selected ? "page" : undefined}
       aria-label={`${title.text} — ${who.label}${expired ? ", ventana vencida" : ""}`}
-      className={`mx-1.5 my-px flex items-start gap-3 rounded-xl border px-2.5 py-2.5 transition-colors ${
+      className={`mx-1.5 my-px flex items-start gap-3 rounded-xl border px-2.5 py-2.5 transition-colors md:gap-2.5 md:py-2 ${
         selected ? "border-transparent bg-queue-row-active" : "border-transparent hover:bg-queue-row-active/50"
       }`}
     >
       <InboxAvatar text={avatarText(view.contactName, view.conversationRef)} toneKey={view.conversationRef} />
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="flex items-baseline justify-between gap-2">
-          <span className={`truncate text-[0.9375rem] font-semibold leading-snug text-foreground ${title.kind === "phone" ? "tabular-nums" : ""}`}>{title.text}</span>
+          <span className={`truncate text-[0.9375rem] font-semibold leading-snug text-foreground md:text-[0.875rem] ${title.kind === "phone" ? "tabular-nums" : ""}`}>{title.text}</span>
           {view.lastMessageAt ? <span className="shrink-0 text-xs tabular-nums text-faint">{listStamp(new Date(view.lastMessageAt), now)}</span> : null}
         </span>
-        <span className={`text-[0.8125rem] leading-snug text-muted ${lines === 2 ? "line-clamp-2" : "truncate"}`}>{conversationPreview(view)}</span>
+        <span className={`text-[0.8125rem] leading-snug text-muted md:text-[0.78125rem] ${lines === 2 ? "line-clamp-2" : "truncate"}`}>{conversationPreview(view)}</span>
         {view.mode !== "bot" || expired ? (
           <span className="mt-1 flex flex-wrap items-center gap-1.5">
             {view.mode !== "bot" ? (
