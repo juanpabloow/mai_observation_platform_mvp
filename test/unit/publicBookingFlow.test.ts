@@ -28,7 +28,7 @@ import {
 const TZ = 'America/Bogota';
 
 test('four steps; each needs the previous choices', () => {
-  assert.deepEqual(Object.values(STEP_TITLES), ['Elige tu servicio', 'Elige a tu artista', 'Elige fecha y hora', 'Tus datos']);
+  assert.deepEqual(Object.values(STEP_TITLES), ['Elige tu experiencia', 'Elige a tu artista', 'Elige fecha y hora', 'Tus datos']);
   assert.equal(reachableStep({ serviceId: null, artist: null, slotStart: null }), 1);
   assert.equal(reachableStep({ serviceId: 's', artist: null, slotStart: null }), 2);
   assert.equal(reachableStep({ serviceId: 's', artist: 'any', slotStart: null }), 3);

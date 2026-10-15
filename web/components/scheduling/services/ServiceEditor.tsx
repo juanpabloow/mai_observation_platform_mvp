@@ -5,13 +5,18 @@ import { useTrappedPanel } from "@/components/ui/Overlay";
 import { apptCategoryClass, serviceCategory } from "@/lib/agendaCategory";
 import {
   createServiceAction,
+  removeServiceImageAction,
   setSiteServiceAction,
   setStaffServiceAction,
   updateServiceAction,
+  updateServicePresentationAction,
+  uploadServiceImageAction,
 } from "@/lib/schedulingAdminActions";
+import { checkIncludes, featuredMissing, INCLUDES_ITEM_MAX, INCLUDES_MAX_ITEMS } from "@/lib/bookingPage";
+import { downscaleImage } from "../staff/StaffPhotoControl";
 import { runServiceSave, type PersistedService } from "@/lib/serviceSave";
 import { SERVICE_DESCRIPTION_MAX } from "@/lib/serviceDescription";
-import type { Service, Site, Staff } from "../AdminPanel";
+import type { BookingCategory, Service, Site, Staff } from "../AdminPanel";
 import { Alert, Button, CARD, CheckRow, ConfirmDialog, Field, INPUT, TEXTAREA, buttonClass, useModalLayer } from "../ui/system";
 import { CATEGORY_CHOICES } from "./categories";
 
@@ -39,7 +44,31 @@ const SECTIONS = [
   { id: "svc-pricing", label: "Precio y duración" },
   { id: "svc-staff", label: "Profesionales" },
   { id: "svc-sites", label: "Sedes y reserva en línea" },
+  { id: "svc-page", label: "Página de reservas" },
 ] as const;
+
+/** How the service is PRESENTED on the public booking page (migration 1804). Saved after
+ *  the service itself, by its own action; it never changes the agenda or the bot. */
+interface PageForm {
+  categoryId: string;
+  visible: boolean;
+  sort: string;
+  recommended: boolean;
+  includes: string;
+  upgradeId: string;
+}
+
+function initialPage(mode: Mode): PageForm {
+  const s = mode.kind === "edit" ? mode.service : null;
+  return {
+    categoryId: s?.public_category_id ?? "",
+    visible: s?.public_visible ?? true,
+    sort: String(s?.public_sort ?? 0),
+    recommended: Boolean(s?.public_recommended),
+    includes: (s?.public_includes ?? []).join("\n"),
+    upgradeId: s?.public_upgrade_service_id ?? "",
+  };
+}
 
 export interface FormState {
   name: string;
@@ -139,6 +168,8 @@ export function ServiceEditor({
   sites,
   staff,
   siteServiceMap,
+  bookingCategories = [],
+  allServices = [],
   onClose,
   onSaved,
 }: {
@@ -149,10 +180,22 @@ export function ServiceEditor({
   /** Active professionals of this client. */
   staff: Staff[];
   siteServiceMap: Record<string, string[]>;
+  /** The business's booking-page categories. */
+  bookingCategories?: BookingCategory[];
+  /** Active services of this client, for "Alternativa superior". */
+  allServices?: Service[];
   onClose: () => void;
   onSaved: () => void;
 }) {
   const initial = useMemo<FormState>(() => initialForm(mode, sites, staff, siteServiceMap), [mode, sites, staff, siteServiceMap]);
+  const initialPageForm = useMemo(() => initialPage(mode), [mode]);
+  // The image uploads at once, so it needs a saved service: an existing one (a new service
+  // gets its image after the first Guardar, when the editor reopens it).
+  const editId = mode.kind === "edit" ? mode.service.id : null;
+  const [page, setPage] = useState<PageForm>(initialPageForm);
+  const [image, setImage] = useState<string | null>(mode.kind === "edit" ? (mode.service.public_image_url ?? null) : null);
+  const [imageBusy, setImageBusy] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
 
   const [form, setForm] = useState<FormState>(initial);
   const [touched, setTouched] = useState<Partial<Record<keyof FormState, boolean>>>({});
@@ -172,8 +215,10 @@ export function ServiceEditor({
   const leave = () => (wrote.current ? onSaved() : onClose());
 
   const errors = validate(form, mode);
+  const includesCheck = checkIncludes(page.includes);
+  const pageError = !includesCheck.ok ? includesCheck.error : !/^\d{1,3}$/.test(page.sort.trim()) ? "El orden debe ser un número entre 0 y 999." : null;
   const show = (k: keyof FormState) => ((attempted || touched[k]) && errors[k]) || "";
-  const dirty = JSON.stringify(form) !== JSON.stringify(initial);
+  const dirty = JSON.stringify(form) !== JSON.stringify(initial) || JSON.stringify(page) !== JSON.stringify(initialPageForm);
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setForm((f) => ({ ...f, [k]: v }));
   const touch = (k: keyof FormState) => () => setTouched((t) => ({ ...t, [k]: true }));
   const toggle = (k: "staffIds" | "siteIds", id: string) =>
@@ -199,13 +244,28 @@ export function ServiceEditor({
 
   const save = async () => {
     setAttempted(true);
-    if (Object.keys(errors).length > 0) {
-      setError("Revisa los campos marcados.");
+    if (Object.keys(errors).length > 0 || pageError) {
+      setError(pageError ?? "Revisa los campos marcados.");
       return;
     }
     setSaving(true);
     setError(null);
     const out = await saveServiceForm(clientId, persisted.current, form, sites, staff);
+    if (out.ok && persisted.current.id && JSON.stringify(page) !== JSON.stringify(initialPageForm)) {
+      const pr = await updateServicePresentationAction(clientId, persisted.current.id, {
+        categoryId: page.categoryId || null,
+        visible: page.visible,
+        sort: page.sort.trim(),
+        recommended: page.recommended,
+        includes: page.includes,
+        upgradeServiceId: page.upgradeId || null,
+      });
+      setSaving(false);
+      if (pr.ok) return onSaved();
+      wrote.current = true;
+      setError(`El servicio se guardó, pero no su presentación en la página. ${pr.error} Pulsa Guardar para reintentar.`);
+      return;
+    }
     setSaving(false);
     if (out.ok) return onSaved();
     if (out.partial) wrote.current = true;
@@ -327,6 +387,23 @@ export function ServiceEditor({
               )}
             </Section>
 
+            <PageSection
+              clientId={clientId}
+              serviceId={editId}
+              page={page}
+              setPage={setPage}
+              categories={bookingCategories}
+              others={allServices.filter((x) => x.id !== editId)}
+              image={image}
+              setImage={setImage}
+              imageBusy={imageBusy}
+              setImageBusy={setImageBusy}
+              imageError={imageError}
+              setImageError={setImageError}
+              form={form}
+              error={pageError && attempted ? pageError : null}
+            />
+
             <Section id="svc-sites" title="Sedes y reserva en línea" subtitle="Dónde se puede reservar este servicio (agenda interna, agente y página pública)." error={show("siteIds")}>
               {sites.length === 0 ? (
                 <p className="text-sm text-muted">No hay sedes activas.</p>
@@ -374,5 +451,166 @@ function Section({ id, title, subtitle, error, children }: { id: string; title: 
         </p>
       ) : null}
     </section>
+  );
+}
+
+/** "Página de reservas": group, visibility, order, badge, image, "Qué incluye" and the
+ *  explicit better alternative. The image uploads at once (existing services only); the
+ *  rest is saved with Guardar. */
+function PageSection({
+  clientId,
+  serviceId,
+  page,
+  setPage,
+  categories,
+  others,
+  image,
+  setImage,
+  imageBusy,
+  setImageBusy,
+  imageError,
+  setImageError,
+  form,
+  error,
+}: {
+  clientId: string;
+  serviceId: string | null;
+  page: PageForm;
+  setPage: (p: PageForm) => void;
+  categories: BookingCategory[];
+  others: Service[];
+  image: string | null;
+  setImage: (url: string | null) => void;
+  imageBusy: boolean;
+  setImageBusy: (b: boolean) => void;
+  imageError: string | null;
+  setImageError: (e: string | null) => void;
+  form: FormState;
+  error: string | null;
+}) {
+  const cat = categories.find((c) => c.id === page.categoryId) ?? null;
+  const includes = checkIncludes(page.includes);
+  const missing =
+    cat?.layout === "featured"
+      ? featuredMissing({
+          image_url: image,
+          description: form.description,
+          includes: includes.ok ? (includes.value ?? []) : [],
+          price: form.price.trim() === "" ? null : form.price,
+          duration_min: Number(form.duration),
+        })
+      : [];
+  const target = others.find((o) => o.id === page.upgradeId) ?? null;
+  const delta = target && target.price != null && form.price.trim() !== "" ? Number(target.price) - Number(form.price) : null;
+
+  const upload = async (file: File | undefined) => {
+    if (!file || !serviceId) return;
+    setImageError(null);
+    setImageBusy(true);
+    try {
+      const fd = new FormData();
+      fd.set("clientId", clientId);
+      fd.set("serviceId", serviceId);
+      fd.set("image", await downscaleImage(file));
+      const r = await uploadServiceImageAction(fd);
+      if (r.ok) setImage(r.url ?? null);
+      else setImageError(r.error);
+    } catch {
+      setImageError("No pudimos subir la imagen. Inténtalo de nuevo.");
+    } finally {
+      setImageBusy(false);
+    }
+  };
+  const remove = async () => {
+    if (!serviceId) return;
+    setImageBusy(true);
+    const r = await removeServiceImageAction(clientId, serviceId);
+    setImageBusy(false);
+    if (r.ok) setImage(null);
+    else setImageError(r.error);
+  };
+
+  return (
+    <Section id="svc-page" title="Página de reservas" subtitle="Cómo se presenta en la página pública. No cambia la agenda ni el agente." error={error ?? undefined}>
+      <CheckRow checked={page.visible} onChange={() => setPage({ ...page, visible: !page.visible })} hint="Si lo ocultas, sigue disponible en la agenda y para el agente.">
+        Visible en la página de reservas
+      </CheckRow>
+      <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
+        <Field label="Categoría en la página" hint={categories.length === 0 ? "Crea categorías en «Página de reservas · Categorías»." : undefined}>
+          <select value={page.categoryId} onChange={(e) => setPage({ ...page, categoryId: e.target.value })} className={INPUT}>
+            <option value="">Sin categoría (Otros servicios)</option>
+            {categories
+              .filter((c) => c.layout !== "contact")
+              .map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                  {c.visible ? "" : " (oculta)"}
+                </option>
+              ))}
+          </select>
+        </Field>
+        <Field label="Orden">
+          <input inputMode="numeric" value={page.sort} onChange={(e) => setPage({ ...page, sort: e.target.value })} className={INPUT} />
+        </Field>
+      </div>
+      {missing.length > 0 ? (
+        <Alert>
+          No se mostrará en «{cat?.name}» hasta que tenga: {missing.join(", ")}.
+        </Alert>
+      ) : null}
+      <CheckRow checked={page.recommended} onChange={() => setPage({ ...page, recommended: !page.recommended })} hint="Muestra la etiqueta «Recomendado» en la tarjeta.">
+        Recomendado
+      </CheckRow>
+      <Field label="Qué incluye" optional hint={`Una línea por punto · máximo ${INCLUDES_MAX_ITEMS} líneas de ${INCLUDES_ITEM_MAX} caracteres. Solo contenido aprobado.`}>
+        <textarea value={page.includes} onChange={(e) => setPage({ ...page, includes: e.target.value })} rows={4} className={TEXTAREA} />
+      </Field>
+      <Field
+        label="Alternativa superior"
+        optional
+        hint={
+          target
+            ? delta != null && delta > 0
+              ? `La página dirá: «Pásate a ${target.name} por $${delta.toLocaleString("es-CO")} más».`
+              : "No se mostrará: la alternativa debe costar más que este servicio."
+            : "Se ofrece al elegir este servicio, con la diferencia real de precio."
+        }
+      >
+        <select value={page.upgradeId} onChange={(e) => setPage({ ...page, upgradeId: e.target.value })} className={INPUT}>
+          <option value="">Ninguna</option>
+          {others.map((o) => (
+            <option key={o.id} value={o.id}>
+              {o.name}
+            </option>
+          ))}
+        </select>
+      </Field>
+      <Field label="Imagen" optional hint={serviceId ? "PNG, JPEG o WebP. Se guarda al subirla." : "Guarda el servicio para poder subir su imagen."}>
+        <span className="flex flex-wrap items-center gap-3">
+          {image ? (
+            // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded image (R2)
+            <img src={image} alt="" className="h-16 w-28 rounded-sch-control border border-line object-cover" />
+          ) : null}
+          <label className={buttonClass({ className: serviceId && !imageBusy ? "cursor-pointer" : "pointer-events-none opacity-60" })}>
+            {imageBusy ? "Subiendo…" : image ? "Cambiar imagen" : "Subir imagen"}
+            <input
+              type="file"
+              accept="image/png,image/jpeg,image/webp"
+              disabled={!serviceId || imageBusy}
+              className="sr-only"
+              onChange={(e) => {
+                void upload(e.target.files?.[0]);
+                e.target.value = "";
+              }}
+            />
+          </label>
+          {image && serviceId ? (
+            <Button size="sm" variant="tertiary" onClick={() => void remove()} disabled={imageBusy}>
+              Quitar
+            </Button>
+          ) : null}
+        </span>
+      </Field>
+      {imageError ? <Alert>{imageError}</Alert> : null}
+    </Section>
   );
 }

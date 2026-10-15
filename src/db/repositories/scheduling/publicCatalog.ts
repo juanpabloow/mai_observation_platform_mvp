@@ -14,7 +14,27 @@ import { query } from '../../client.js';
  *
  * Callers pass the (tenant, site) the public gate (getPublicBookingSiteBySlug)
  * resolved — never anything taken from the request.
+ *
+ * PAGE VISIBILITY (migration 1804) is a separate, presentation-only rule: a service is
+ * offered on the PAGE when it is `public_visible` and its booking category (if any, of
+ * the SAME client) is visible and lists services (not a `contact` group). It never
+ * changes what the agenda or the bot may book — those keep reading services.ts.
  */
+
+/**
+ * The page-visibility predicate for a service `sv` at site `si`, as ONE SQL fragment so
+ * the catalogue, the staff list, the availability guard and the booking guard can never
+ * disagree. A category reference to another client is ignored (treated as ungrouped).
+ */
+export function publicServicePredicate(sv: string, si: string): string {
+  return `${sv}.public_visible = true
+        AND NOT EXISTS (
+              SELECT 1 FROM booking_categories bcx
+               WHERE bcx.id = ${sv}.public_category_id
+                 AND bcx.tenant_id = ${si}.tenant_id AND bcx.client_id = ${si}.client_id
+                 AND (bcx.visible = false OR bcx.layout = 'contact')
+            )`;
+}
 
 export interface PublicServiceRow {
   id: string;
@@ -26,6 +46,14 @@ export interface PublicServiceRow {
   price: string | null;
   /** Operator-chosen colour family (CHECK-constrained); NULL = unclassified. */
   category: string | null;
+  /** The booking-page group (same client, visible, a listing layout); NULL = ungrouped. */
+  public_category_id: string | null;
+  public_sort: number;
+  public_recommended: boolean;
+  public_image_url: string | null;
+  public_includes: string[] | null;
+  /** The explicit better alternative; only meaningful when it is itself in this list. */
+  public_upgrade_service_id: string | null;
 }
 
 export async function listPublicServicesForSite(tenantId: string, siteId: string): Promise<PublicServiceRow[]> {
@@ -33,14 +61,20 @@ export async function listPublicServicesForSite(tenantId: string, siteId: string
     `SELECT sv.id, sv.name, sv.description,
             COALESCE(ss.duration_override_min, sv.duration_min) AS duration_min,
             COALESCE(ss.price_override, sv.price) AS price,
-            sv.category
+            sv.category,
+            bc.id AS public_category_id,
+            sv.public_sort, sv.public_recommended, sv.public_image_url, sv.public_includes,
+            sv.public_upgrade_service_id
        FROM sites si
        JOIN site_services ss
          ON ss.site_id = si.id AND ss.tenant_id = si.tenant_id AND ss.active = true
        JOIN services sv
          ON sv.id = ss.service_id AND sv.tenant_id = si.tenant_id
         AND sv.client_id = si.client_id AND sv.active = true
+       LEFT JOIN booking_categories bc
+         ON bc.id = sv.public_category_id AND bc.tenant_id = si.tenant_id AND bc.client_id = si.client_id
       WHERE si.tenant_id = $1 AND si.id = $2 AND si.active = true
+        AND ${publicServicePredicate('sv', 'si')}
         -- A service nobody can perform is not offered: it would only ever show "Sin cupos".
         AND EXISTS (
               SELECT 1 FROM staff st
@@ -50,7 +84,7 @@ export async function listPublicServicesForSite(tenantId: string, siteId: string
                WHERE st.site_id = si.id AND st.tenant_id = si.tenant_id AND st.active = true
                  AND st.takes_bookings = true
             )
-      ORDER BY sv.featured DESC, sv.name`,
+      ORDER BY sv.public_sort, sv.featured DESC, sv.name`,
     [tenantId, siteId],
   );
   return r.rows;
@@ -97,7 +131,8 @@ export async function listPublicStaffForService(
                   ON sv2.id = sts2.service_id AND sv2.tenant_id = si.tenant_id
                  AND sv2.client_id = si.client_id AND sv2.active = true
                WHERE sts2.staff_id = st.id AND sts2.tenant_id = si.tenant_id AND sts2.active = true
-               ORDER BY sv2.featured DESC, sv2.name
+                 AND ${publicServicePredicate('sv2', 'si')}
+               ORDER BY sv2.public_sort, sv2.featured DESC, sv2.name
             ) AS service_ids
        FROM sites si
        JOIN site_services ss
@@ -111,6 +146,7 @@ export async function listPublicStaffForService(
        JOIN staff_services sts
          ON sts.staff_id = st.id AND sts.service_id = sv.id AND sts.tenant_id = si.tenant_id AND sts.active = true
       WHERE si.tenant_id = $1 AND si.id = $2 AND si.active = true
+        AND ${publicServicePredicate('sv', 'si')}
       ORDER BY st.name, st.id`,
     [tenantId, siteId, serviceId],
   );
@@ -143,4 +179,45 @@ export async function getPublicBrandLogo(tenantId: string, clientId: string): Pr
   } catch {
     return null;
   }
+}
+
+/**
+ * Is `serviceId` offered on the PAGE of this site right now? The booking POST asks it
+ * before the engine, so a service hidden from the page (or listed only as a WhatsApp
+ * link) cannot be booked by calling the public API directly. Same predicate as the list.
+ */
+export async function isPublicServiceAtSite(tenantId: string, siteId: string, serviceId: string): Promise<boolean> {
+  const r = await query<{ ok: boolean }>(
+    `SELECT true AS ok
+       FROM sites si
+       JOIN site_services ss
+         ON ss.site_id = si.id AND ss.tenant_id = si.tenant_id AND ss.service_id = $3 AND ss.active = true
+       JOIN services sv
+         ON sv.id = ss.service_id AND sv.tenant_id = si.tenant_id
+        AND sv.client_id = si.client_id AND sv.active = true
+      WHERE si.tenant_id = $1 AND si.id = $2 AND si.active = true
+        AND ${publicServicePredicate('sv', 'si')}`,
+    [tenantId, siteId, serviceId],
+  );
+  return r.rows.length > 0;
+}
+
+export interface PublicCategoryRow {
+  id: string;
+  name: string;
+  tagline: string | null;
+  layout: 'list' | 'featured' | 'contact';
+  sort_order: number;
+}
+
+/** The business's VISIBLE booking-page groups, in order (the page drops empty ones). */
+export async function listPublicCategories(tenantId: string, clientId: string): Promise<PublicCategoryRow[]> {
+  const r = await query<PublicCategoryRow>(
+    `SELECT id, name, tagline, layout, sort_order
+       FROM booking_categories
+      WHERE tenant_id = $1 AND client_id = $2 AND visible = true
+      ORDER BY sort_order, lower(name)`,
+    [tenantId, clientId],
+  );
+  return r.rows;
 }

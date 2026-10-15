@@ -18,6 +18,9 @@ export interface SiteRow {
   opening_hours: WeeklyHours;
   scheduling_config: SchedulingConfig;
   active: boolean;
+  /** Public contact for the booking page (migration 1804): E.164 WhatsApp, https Maps. */
+  public_whatsapp: string | null;
+  public_maps_url: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -116,6 +119,8 @@ export interface UpdateSiteInput {
   openingHours?: WeeklyHours;
   schedulingConfig?: SchedulingConfig;
   active?: boolean;
+  publicWhatsapp?: string | null;
+  publicMapsUrl?: string | null;
 }
 
 export async function updateSite(tenantId: string, id: string, patch: UpdateSiteInput): Promise<SiteRow | null> {
@@ -132,6 +137,8 @@ export async function updateSite(tenantId: string, id: string, patch: UpdateSite
   if (patch.openingHours !== undefined) add('opening_hours', JSON.stringify(patch.openingHours));
   if (patch.schedulingConfig !== undefined) add('scheduling_config', JSON.stringify(patch.schedulingConfig));
   if (patch.active !== undefined) add('active', patch.active);
+  if (patch.publicWhatsapp !== undefined) add('public_whatsapp', patch.publicWhatsapp);
+  if (patch.publicMapsUrl !== undefined) add('public_maps_url', patch.publicMapsUrl);
   if (sets.length === 0) return getSiteById(tenantId, id);
   sets.push('updated_at = now()');
   const r = await query<SiteRow>(

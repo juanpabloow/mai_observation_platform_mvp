@@ -16,6 +16,8 @@ export const MAX_LOGO_BYTES = 2 * 1024 * 1024; // 2 MB
  * first (max 1200 px, JPEG), so a real photo lands well under this — and under the
  * Server Actions body limit (1 MB), which is left at its default. */
 export const MAX_STAFF_PHOTO_BYTES = 900 * 1024;
+/** A service's booking-page image. Same cap as a photo: the editor downsizes it in the browser first (Server Actions body limit, 1 MB). */
+export const MAX_SERVICE_IMAGE_BYTES = 900 * 1024;
 
 export type ImageType = "png" | "jpeg" | "webp";
 

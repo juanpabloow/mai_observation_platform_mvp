@@ -22,8 +22,8 @@ const code = (src: string) => src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*
 test('the v3 flow has exactly four steps with the specified titles, labels and final CTA', () => {
   const flow = root(`${BOOKING_DIR}/BookingFlow.tsx`);
   const logic = root('web/lib/publicBookingFlow.ts');
-  for (const t of ['Elige tu servicio', 'Elige a tu artista', 'Elige fecha y hora', 'Tus datos']) assert.ok(logic.includes(`"${t}"`), t);
-  for (const l of ['Servicio', 'Artista', 'Fecha', 'Datos']) assert.ok(logic.includes(`"${l}"`), l);
+  for (const t of ['Elige tu experiencia', 'Elige a tu artista', 'Elige fecha y hora', 'Tus datos']) assert.ok(logic.includes(`"${t}"`), t);
+  for (const l of ['Experiencia', 'Artista', 'Fecha y hora', 'Datos']) assert.ok(logic.includes(`"${l}"`), l);
   assert.ok(flow.includes('([1, 2, 3, 4] as const)'), 'four progress steps');
   assert.ok(flow.includes('Paso {step} de 4'));
   assert.ok(flow.includes('"Confirmar cita"'));

@@ -6,9 +6,19 @@ import { parsePublicReason } from "./publicAbsenceReason";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { normalizeServiceDescription } from "./serviceDescription";
 import { checkPublicBio, checkPublicTitle, publicProfileMessage } from "./staffPublicProfile";
-import { deleteLogo, isR2Configured, uploadStaffPhoto } from "./r2";
+import { deleteLogo, isR2Configured, uploadServiceImage, uploadStaffPhoto } from "./r2";
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, type WeeklyHours } from "@worker/scheduling/types.js";
 import { localWallClockToUtc } from "@worker/scheduling/timezone.js";
+import { dialingRegionForTimezone, normalizeE164 } from "@worker/scheduling/phone.js";
+import { checkCategoryInput, checkIncludes, E164_RE, safeMapsUrl } from "./bookingPage";
+import {
+  BookingCategoryNameTaken,
+  createBookingCategory,
+  deleteBookingCategory,
+  setServiceImage,
+  updateBookingCategory,
+  updateServicePresentation,
+} from "@worker/db/repositories/scheduling/bookingCategories.js";
 import {
   createSite,
   deactivateSite,
@@ -141,18 +151,40 @@ export async function createSiteAction(input: {
 export async function updateSiteAction(
   clientId: string,
   id: string,
-  patch: { slug?: string; name?: string; address?: string; timezone?: string; openingHours?: WeeklyHours; schedulingConfig?: SchedulingConfig; active?: boolean },
+  patch: {
+    slug?: string;
+    name?: string;
+    address?: string;
+    timezone?: string;
+    openingHours?: WeeklyHours;
+    schedulingConfig?: SchedulingConfig;
+    active?: boolean;
+    /** Booking page contact (migration 1804). "" clears it. */
+    publicWhatsapp?: string;
+    publicMapsUrl?: string;
+  },
 ): Promise<AdminResult> {
   const auth = await requireSchedulingAdmin(clientId);
   if (!auth.ok) return auth;
   if (!(await siteInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
+  const contact = validatePublicContact(patch, patch.timezone ?? (await getSiteById(auth.tenantId, id))?.timezone ?? "America/Bogota");
+  if (!contact.ok) return { ok: false, error: contact.error };
+
   // A bad scheduling_config value silently breaks availability, so validate it here.
   if (patch.schedulingConfig) {
     const cfg = sanitizeSchedulingConfig(patch.schedulingConfig);
     if (!cfg.ok) return { ok: false, error: cfg.error };
     patch = { ...patch, schedulingConfig: cfg.value };
   }
-  const row = await updateSite(auth.tenantId, id, patch);
+  const row = await updateSite(auth.tenantId, id, {
+    slug: patch.slug,
+    name: patch.name,
+    timezone: patch.timezone,
+    openingHours: patch.openingHours,
+    schedulingConfig: patch.schedulingConfig,
+    active: patch.active,
+    ...contact.value,
+  });
   if (!row) return { ok: false, error: "Site not found." };
   revalidateAdmin(clientId);
   return { ok: true, id };
@@ -684,4 +716,154 @@ function sanitizeSchedulingConfig(
   if (horizon === null) return { ok: false, error: "Booking horizon must be a whole number of days (1–365)." };
   if (bBefore === null || bAfter === null) return { ok: false, error: "Buffers must be a whole number of minutes (0 or more)." };
   return { ok: true, value: { slot_interval_min: slot, min_notice_min: notice, booking_horizon_days: horizon, default_buffer_before_min: bBefore, default_buffer_after_min: bAfter } };
+}
+
+/**
+ * The booking page's public contact, validated before any write: the WhatsApp number in
+ * E.164 (a local number is read in the site's dialing region), the Maps link only when it
+ * is https AND Google Maps, the address as plain text. "" clears a value; an absent key
+ * leaves it unchanged. Messages are for the operator, in Spanish.
+ */
+function validatePublicContact(
+  patch: { address?: string; publicWhatsapp?: string; publicMapsUrl?: string },
+  timezone: string,
+): { ok: true; value: { address?: string | null; publicWhatsapp?: string | null; publicMapsUrl?: string | null } } | { ok: false; error: string } {
+  const value: { address?: string | null; publicWhatsapp?: string | null; publicMapsUrl?: string | null } = {};
+  if (patch.address !== undefined) {
+    const a = patch.address.replace(/\s+/g, " ").trim();
+    if (a.length > 200) return { ok: false, error: "La dirección admite hasta 200 caracteres." };
+    value.address = a || null;
+  }
+  if (patch.publicWhatsapp !== undefined) {
+    const raw = patch.publicWhatsapp.trim();
+    if (!raw) value.publicWhatsapp = null;
+    else {
+      const e164 = normalizeE164(raw, { defaultRegion: dialingRegionForTimezone(timezone) });
+      if (!e164 || !E164_RE.test(e164)) return { ok: false, error: "Revisa el número de WhatsApp: escríbelo con el indicativo, por ejemplo +57 300 123 4567." };
+      value.publicWhatsapp = e164;
+    }
+  }
+  if (patch.publicMapsUrl !== undefined) {
+    const raw = patch.publicMapsUrl.trim();
+    if (!raw) value.publicMapsUrl = null;
+    else {
+      const safe = safeMapsUrl(raw);
+      if (!safe) return { ok: false, error: "El enlace de «Cómo llegar» debe ser de Google Maps (https://maps.app.goo.gl/… o https://www.google.com/maps/…)." };
+      value.publicMapsUrl = safe;
+    }
+  }
+  return { ok: true, value };
+}
+
+// ── Booking page catalog (migration 1804) — presentation only ─────────────────────
+// Same gate as every catalogue edit (agency or this client's OWNER). None of these
+// touches a service's name, duration, price, active flag or site enablement, so the
+// agenda and the bot are unaffected by how the page shows a service.
+
+/** Create (id = null) or update one of this client's booking-page categories. */
+export async function saveBookingCategoryAction(
+  clientId: string,
+  id: string | null,
+  input: { name: string; tagline: string; layout: string; sortOrder: number | string; visible: boolean },
+): Promise<AdminResult> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  const checked = checkCategoryInput(input);
+  if (!checked.ok) return { ok: false, error: checked.error };
+  try {
+    if (id) {
+      const ok = await updateBookingCategory(auth.tenantId, clientId, id, checked.value);
+      if (!ok) return { ok: false, error: FOREIGN };
+      revalidateAdmin(clientId);
+      return { ok: true, id };
+    }
+    const newId = await createBookingCategory(auth.tenantId, clientId, checked.value);
+    revalidateAdmin(clientId);
+    return { ok: true, id: newId };
+  } catch (err) {
+    if (err instanceof BookingCategoryNameTaken) return { ok: false, error: "Ya hay una categoría con ese nombre." };
+    throw err;
+  }
+}
+
+/** Delete a category: its services stay published, just ungrouped. */
+export async function deleteBookingCategoryAction(clientId: string, id: string): Promise<AdminResult> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  const ok = await deleteBookingCategory(auth.tenantId, clientId, id);
+  if (!ok) return { ok: false, error: FOREIGN };
+  revalidateAdmin(clientId);
+  return { ok: true };
+}
+
+/** A service's presentation on the booking page (group, visibility, order, badge,
+ *  "Qué incluye", its better alternative). The image has its own upload action. */
+export async function updateServicePresentationAction(
+  clientId: string,
+  serviceId: string,
+  input: { categoryId: string | null; visible: boolean; sort: number | string; recommended: boolean; includes: string; upgradeServiceId: string | null },
+): Promise<AdminResult> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  const includes = checkIncludes(input.includes ?? "");
+  if (!includes.ok) return { ok: false, error: includes.error };
+  const sort = Number(input.sort);
+  if (!Number.isInteger(sort) || sort < 0 || sort > 999) return { ok: false, error: "El orden debe ser un número entre 0 y 999." };
+  if (input.upgradeServiceId && input.upgradeServiceId === serviceId) return { ok: false, error: "Un servicio no puede ser su propia alternativa." };
+  const ok = await updateServicePresentation(auth.tenantId, clientId, serviceId, {
+    categoryId: input.categoryId || null,
+    visible: Boolean(input.visible),
+    sort,
+    recommended: Boolean(input.recommended),
+    includes: includes.value,
+    upgradeServiceId: input.upgradeServiceId || null,
+  });
+  if (!ok) return { ok: false, error: FOREIGN };
+  revalidateAdmin(clientId);
+  return { ok: true, id: serviceId };
+}
+
+/**
+ * Upload (or replace) a service's booking-page image. FormData { clientId, serviceId,
+ * image: File }. Validated by its bytes in uploadServiceImage; the service must be this
+ * client's. A replaced image's old object is deleted best-effort.
+ */
+export async function uploadServiceImageAction(formData: FormData): Promise<AdminResult & { url?: string }> {
+  const clientId = String(formData.get("clientId") ?? "");
+  const serviceId = String(formData.get("serviceId") ?? "");
+  const file = formData.get("image");
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  if (!isR2Configured) return { ok: false, error: "La subida de imágenes no está configurada." };
+  if (!(file instanceof File)) return { ok: false, error: "Elige una imagen." };
+  if (!(await getServiceById(auth.tenantId, clientId, serviceId))) return { ok: false, error: FOREIGN };
+  const up = await uploadServiceImage(auth.tenantId, clientId, serviceId, file);
+  if (!up.ok) return { ok: false, error: up.error };
+  const set = await setServiceImage(auth.tenantId, clientId, serviceId, up.url);
+  if (!set.ok) return { ok: false, error: FOREIGN };
+  if (set.previous && set.previous !== up.url) {
+    try {
+      await deleteLogo(set.previous);
+    } catch {
+      /* best-effort cleanup */
+    }
+  }
+  revalidateAdmin(clientId);
+  return { ok: true, id: serviceId, url: up.url };
+}
+
+export async function removeServiceImageAction(clientId: string, serviceId: string): Promise<AdminResult> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  const set = await setServiceImage(auth.tenantId, clientId, serviceId, null);
+  if (!set.ok) return { ok: false, error: FOREIGN };
+  if (set.previous) {
+    try {
+      await deleteLogo(set.previous);
+    } catch {
+      /* best-effort cleanup */
+    }
+  }
+  revalidateAdmin(clientId);
+  return { ok: true, id: serviceId };
 }

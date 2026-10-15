@@ -8,12 +8,13 @@ import {
   publicInvalid,
   publicJson,
   publicNotFound,
+  publicPriceChanged,
   publicRateLimited,
 } from "@/lib/publicBookingApi";
 import { readPublicBookingPolicy } from "@/lib/publicBookingPolicy";
 import { TURNSTILE_TOKEN_MAX, verifyTurnstileToken } from "@/lib/turnstileVerify";
 import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
-import { getPublicStaffName } from "@worker/db/repositories/scheduling/publicCatalog.js";
+import { getPublicStaffName, isPublicServiceAtSite } from "@worker/db/repositories/scheduling/publicCatalog.js";
 import {
   consumeRateBucket,
   hashRateKey,
@@ -61,6 +62,9 @@ const Body = z
     /** The visitor ticked "I accept the processing of my data to manage this booking". */
     privacy_accepted: z.literal(true),
     turnstile_token: z.string().max(TURNSTILE_TOKEN_MAX).nullish(),
+    /** The price the visitor was SHOWN (null = "precio a consultar"). Never used to set
+     * the price — only compared with the engine's, which refuses on a difference. */
+    expected_price: z.string().regex(/^\d{1,8}(\.\d{1,2})?$/).nullable().optional(),
   })
   .strict();
 
@@ -180,6 +184,13 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
     return publicRateLimited(phoneBucket.retryAfterSec);
   }
 
+  // The PAGE's catalogue is the public offer: a service hidden from the page (or shown
+  // only as a WhatsApp link) is not bookable here, even though the agenda and the bot
+  // may still book it. Same predicate as the list (publicServicePredicate).
+  if (!(await isPublicServiceAtSite(site.tenant_id, site.id, data.service_id))) {
+    return publicEngineError("not_found");
+  }
+
   const result = await createAppointment({
     tenantId: site.tenant_id,
     siteId: site.id,
@@ -199,6 +210,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
     // of the same tenant (the unique index is (tenant_id, idempotency_key)).
     idempotencyKey: `public:${site.id}:${clientKey}`,
     maxActiveFuturePerPhone: policy.maxActivePerPhone,
+    ...(data.expected_price !== undefined ? { expectedPrice: data.expected_price } : {}),
     // Defense in depth: the booking engine rejects any site/appointment outside
     // this client (the resolver already proved the site's client hosts booking).
     scopeClientId: site.client_id,
@@ -211,6 +223,7 @@ export async function POST(req: Request, { params }: { params: Promise<{ slug: s
     // uses, never a 403 that would reveal the site once existed here.
     if (result.error === "module_disabled") return publicNotFound();
     logger.info({ site: siteDiag, error: result.error }, "public booking: refused");
+    if (result.error === "price_changed") return publicPriceChanged(result.price ?? null);
     return publicEngineError(result.error);
   }
 

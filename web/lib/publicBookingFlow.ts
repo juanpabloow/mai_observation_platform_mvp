@@ -16,12 +16,12 @@ export type Step = 1 | 2 | 3 | 4;
 export type ArtistChoice = null | "any" | string;
 
 export const STEP_TITLES: Record<Step, string> = {
-  1: "Elige tu servicio",
+  1: "Elige tu experiencia",
   2: "Elige a tu artista",
   3: "Elige fecha y hora",
   4: "Tus datos",
 };
-export const STEP_LABELS: Record<Step, string> = { 1: "Servicio", 2: "Artista", 3: "Fecha", 4: "Datos" };
+export const STEP_LABELS: Record<Step, string> = { 1: "Experiencia", 2: "Artista", 3: "Fecha y hora", 4: "Datos" };
 
 /** The furthest step the visitor may open: each step needs the previous choices. */
 export function reachableStep(s: { serviceId: string | null; artist: ArtistChoice; slotStart: string | null }): Step {
@@ -197,6 +197,21 @@ export function priceShown(input: {
     return { label: priceLabelCOP(Math.min(...prices)), from: true };
   }
   return { label: priceLabelCOP(input.servicePrice), from: false };
+}
+
+/**
+ * The EXACT price the visitor is being shown, for the server's price guard (the booking
+ * POST's `expected_price`): the chosen artist's price, or — for "Sin preferencia" — the
+ * one price every available artist shares. `undefined` when the page shows a range
+ * ("Desde …") or the artists are not loaded: then nothing is compared. The server still
+ * decides the price; this only lets it refuse a silent change.
+ */
+export function expectedPriceOf(input: { artist: ArtistChoice; staff: ReadonlyArray<{ id: string; price: string | null }> }): string | null | undefined {
+  const chosen = input.artist && input.artist !== "any" ? input.staff.find((s) => s.id === input.artist) : null;
+  if (chosen) return chosen.price;
+  if (input.artist !== "any" || input.staff.length === 0) return undefined;
+  const distinct = new Set(input.staff.map((s) => (s.price == null ? "none" : String(Number(s.price)))));
+  return distinct.size === 1 ? input.staff[0].price : undefined;
 }
 
 export function priceText(p: { label: string | null; from: boolean }, withCurrency = false): string {

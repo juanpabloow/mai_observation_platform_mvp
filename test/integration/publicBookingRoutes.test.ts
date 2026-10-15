@@ -193,10 +193,11 @@ test('a public site answers with NO session or cookie, with no-store + nosniff h
   const d = (await res.json()) as { site: Record<string, unknown>; services: Array<Record<string, unknown>> };
   // booking_horizon_days (v3): a published booking rule, so the calendar can grey out the
   // days past it — the engine still enforces it.
-  assert.deepEqual(Object.keys(d.site).sort(), ['address', 'booking_horizon_days', 'closed_weekdays', 'name', 'timezone']);
+  assert.deepEqual(Object.keys(d.site).sort(), ['address', 'booking_horizon_days', 'closed_weekdays', 'directions_url', 'hours', 'name', 'timezone', 'whatsapp']);
   assert.deepEqual(d.site.closed_weekdays, ['sun']);
   assert.equal(d.services.length, 1);
-  assert.deepEqual(Object.keys(d.services[0]).sort(), ['description', 'duration_min', 'family', 'id', 'name', 'price', 'rating']);
+  assert.deepEqual(Object.keys(d.services[0]).sort(), ['category_id', 'description', 'duration_min', 'family', 'id', 'image_url', 'includes', 'name', 'price', 'rating', 'recommended', 'reviews', 'upgrade_to']);
+  assert.ok(Array.isArray(d.categories), 'the booking-page categories travel with the catalogue');
 });
 
 test('unknown / inactive / module-disabled / default-client / kill switch → the SAME 404 on every endpoint', async () => {

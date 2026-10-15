@@ -129,5 +129,5 @@ test('the services endpoint publishes the booking horizon (a rule), not internal
   const res = await (await servicesRoute())(new Request(`http://localhost/api/booking/${site.slug}/services`, { headers: { 'x-forwarded-for': ip() } }), ctx(site.slug));
   const d = (await res.json()) as { site: Record<string, unknown> };
   assert.equal(d.site.booking_horizon_days, 45);
-  assert.deepEqual(Object.keys(d.site).sort(), ['address', 'booking_horizon_days', 'closed_weekdays', 'name', 'timezone']);
+  assert.deepEqual(Object.keys(d.site).sort(), ['address', 'booking_horizon_days', 'closed_weekdays', 'directions_url', 'hours', 'name', 'timezone', 'whatsapp']);
 });

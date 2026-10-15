@@ -40,6 +40,15 @@ export interface ServiceRow {
    *  said, and the caller falls back to matching keywords in the NAME (see
    *  web/lib/agendaCategory.ts). CHECK-constrained to the families that have a palette. */
   category: ServiceCategory | null;
+  /** Booking-page presentation (migration 1804) — read by the page and its editor only;
+   *  the agenda and the bot ignore it. See bookingCategories.ts. */
+  public_category_id: string | null;
+  public_visible: boolean;
+  public_sort: number;
+  public_recommended: boolean;
+  public_image_url: string | null;
+  public_includes: string[] | null;
+  public_upgrade_service_id: string | null;
   created_at: Date;
   updated_at: Date;
 }

@@ -54,6 +54,8 @@ export function DetailsStep({
   onSubmit,
   onFieldFocus,
   onEdit,
+  priceChange = null,
+  onAcceptPrice,
 }: {
   rows: SummaryRow[];
   priceLabel: string;
@@ -76,6 +78,9 @@ export function DetailsStep({
   onSubmit: () => void;
   onFieldFocus: (el: HTMLElement) => void;
   onEdit: (step: 1 | 2 | 3) => void;
+  /** The server refused because the price changed: what was shown and what it is now. */
+  priceChange?: { previous: string; current: string; accepted: boolean } | null;
+  onAcceptPrice?: () => void;
 }) {
   const nameErr = show("name");
   const phoneErr = show("phone");
@@ -92,6 +97,27 @@ export function DetailsStep({
           <span>
             <strong className="font-[590]">No pudimos conectar.</strong> Tu cita aún no está reservada. Tus datos siguen aquí; vuelve a intentarlo.
           </span>
+        </div>
+      ) : null}
+      {priceChange ? (
+        <div role="alert" className="pb-rise flex flex-col gap-2.5 rounded-[12px] border border-pb-warn-bd bg-pb-warn-bg px-3.5 py-3 text-[14px] leading-[1.45] text-pb-warn-fg">
+          <span>
+            <strong className="font-[590]">El precio cambió mientras reservabas.</strong> Antes:{" "}
+            <span className="line-through [font-variant-numeric:tabular-nums]">{priceChange.previous}</span>. Ahora:{" "}
+            <strong className="font-[590] [font-variant-numeric:tabular-nums]">{priceChange.current}</strong>. Tu cita aún no está reservada.
+          </span>
+          {priceChange.accepted ? (
+            <span className="flex items-center gap-1.5 font-[590]">
+              <span className="pb-pop flex">
+                <IconCheck size={16} stroke="#5a4114" />
+              </span>
+              Aceptaste el nuevo precio. Ya puedes confirmar.
+            </span>
+          ) : (
+            <button type="button" onClick={onAcceptPrice} className="pb-press inline-flex min-h-11 self-start items-center rounded-[12px] bg-pb-ink px-4 text-[15px] text-white">
+              Acepto el nuevo precio
+            </button>
+          )}
         </div>
       ) : null}
       {submitState === "taken" ? (
@@ -125,7 +151,9 @@ export function DetailsStep({
             <span className="text-[15px] font-[590]">Precio</span>
             {priceSub ? <span className="text-[12.5px] text-pb-muted">{priceSub}</span> : null}
           </span>
-          <span className="text-[17px] font-semibold [font-variant-numeric:tabular-nums]">{priceLabel}</span>
+          <span key={priceLabel} className="pb-fade text-[17px] font-semibold [font-variant-numeric:tabular-nums]">
+            {priceLabel}
+          </span>
         </div>
       </section>
 

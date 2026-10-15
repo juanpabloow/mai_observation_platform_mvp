@@ -4,6 +4,7 @@ import { canManageClient } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 import { listStaff } from "@worker/db/repositories/scheduling/staff.js";
+import { listBookingCategories } from "@worker/db/repositories/scheduling/bookingCategories.js";
 import {
   listServices,
   listServicesForSite,
@@ -38,10 +39,11 @@ export default async function ClientSchedulingAdminPage({
   if (!canManageClient(scope, clientId)) notFound();
   const tenantId = scope.tenantId;
 
-  const [sites, services, staff] = await Promise.all([
+  const [sites, services, staff, bookingCategories] = await Promise.all([
     listSites(tenantId, { clientId: client.id, includeInactive: true }),
     listServices(tenantId, client.id, true),
     listStaff(tenantId, { clientId: client.id, includeInactive: true }),
+    listBookingCategories(tenantId, client.id),
   ]);
 
   const staffServices = await Promise.all(
@@ -79,6 +81,8 @@ export default async function ClientSchedulingAdminPage({
         address: s.address,
         timezone: s.timezone,
         active: s.active,
+        public_whatsapp: s.public_whatsapp,
+        public_maps_url: s.public_maps_url,
         opening_hours: s.opening_hours, // C-6: shown + editable
         scheduling_config: s.scheduling_config, // min notice / horizon / slot granularity — shown + editable
       }))}
@@ -93,6 +97,22 @@ export default async function ClientSchedulingAdminPage({
         active: s.active,
         featured: s.featured,
         category: s.category,
+        public_category_id: s.public_category_id,
+        public_visible: s.public_visible,
+        public_sort: s.public_sort,
+        public_recommended: s.public_recommended,
+        public_image_url: s.public_image_url,
+        public_includes: s.public_includes,
+        public_upgrade_service_id: s.public_upgrade_service_id,
+      }))}
+      bookingCategories={bookingCategories.map((c) => ({
+        id: c.id,
+        name: c.name,
+        tagline: c.tagline,
+        layout: c.layout,
+        sort_order: c.sort_order,
+        visible: c.visible,
+        service_count: c.service_count,
       }))}
       staff={staff.map((s) => ({ id: s.id, site_id: s.site_id, name: s.name, active: s.active, serviceIds: staffServiceMap[s.id] ?? [], working_hours: s.working_hours }))}
       siteServiceMap={siteServiceMap}

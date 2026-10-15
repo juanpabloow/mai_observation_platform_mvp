@@ -8,6 +8,7 @@ import {
 import {
   IMAGE_CONTENT_TYPE,
   IMAGE_EXTENSION,
+  MAX_SERVICE_IMAGE_BYTES,
   MAX_STAFF_PHOTO_BYTES,
   validateImageFile,
 } from "./imageValidation";
@@ -110,6 +111,36 @@ export async function uploadStaffPhoto(
   if (!valid.ok) return { ok: false, error: valid.error };
 
   const key = `staff/${tenantId}/${clientId}/${staffId}/${randomUUID()}.${IMAGE_EXTENSION[valid.type]}`;
+  await r2().send(
+    new PutObjectCommand({
+      Bucket: bucket as string,
+      Key: key,
+      Body: valid.bytes,
+      ContentType: IMAGE_CONTENT_TYPE[valid.type],
+      CacheControl: "public, max-age=31536000, immutable",
+    }),
+  );
+
+  return { ok: true, url: `${publicUrl}/${key}`, key };
+}
+
+/**
+ * A service's PUBLIC image for the booking page (the featured card). Same rules as a staff
+ * photo — magic-byte validation, server-generated name, tenant/client/service-scoped key.
+ * The caller has already checked that the service belongs to the client.
+ */
+export async function uploadServiceImage(
+  tenantId: string,
+  clientId: string,
+  serviceId: string,
+  file: File,
+): Promise<UploadLogoResult> {
+  if (!isR2Configured) return { ok: false, error: "Photo upload is not configured." };
+
+  const valid = await validateImageFile(file, MAX_SERVICE_IMAGE_BYTES);
+  if (!valid.ok) return { ok: false, error: valid.error };
+
+  const key = `services/${tenantId}/${clientId}/${serviceId}/${randomUUID()}.${IMAGE_EXTENSION[valid.type]}`;
   await r2().send(
     new PutObjectCommand({
       Bucket: bucket as string,

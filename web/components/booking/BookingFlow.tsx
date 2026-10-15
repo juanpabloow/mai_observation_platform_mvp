@@ -8,6 +8,7 @@ import {
   STEP_TITLES,
   contactErrors,
   dayStatusOf,
+  expectedPriceOf,
   fullPhone,
   lastBookableDay,
   onArtistChange,
@@ -23,14 +24,35 @@ import {
   type Selection,
   type Step,
 } from "@/lib/publicBookingFlow";
+import { whatsappLink } from "@/lib/bookingPage";
+import { priceLabelCOP } from "@/lib/money";
 import { ArtistProfile } from "./ArtistProfile";
 import { ArtistStep } from "./ArtistStep";
 import { BookingDone } from "./BookingDone";
+import { BusinessInfo } from "./BusinessInfo";
+import { ReviewsDialog, type ReviewsTarget } from "./ReviewsDialog";
 import { DateTimeStep, type EmptyAction, type EmptyState } from "./DateTimeStep";
 import { DetailsStep, type SummaryRow } from "./DetailsStep";
 import { ServiceStep } from "./ServiceStep";
 import type { TurnstileHandle } from "./TurnstileField";
-import { CTA_BASE, ctaTone, IconArrow, IconBack, SERIF, Spinner, type PublicConfirmation, type PublicSiteView, type ServiceOption, type Slot, type StaffOption } from "./ui";
+import {
+  CTA_BASE,
+  ctaTone,
+  IconArrow,
+  IconBack,
+  IconWhatsApp,
+  RatingButton,
+  SERIF,
+  Spinner,
+  type CategoryView,
+  type PublicConfirmation,
+  type PublicReview,
+  type PublicSiteView,
+  type RatingSummary,
+  type ServiceOption,
+  type Slot,
+  type StaffOption,
+} from "./ui";
 
 /**
  * PUBLIC BOOKING — "Gallery Reserva v3": four fixed steps for a customer arriving from
@@ -78,10 +100,10 @@ function newIdempotencyKey(): string {
   return `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-${h.slice(16, 20)}-${h.slice(20)}`;
 }
 
-async function readError(res: Response): Promise<{ code: string; message: string }> {
+async function readError(res: Response): Promise<{ code: string; message: string; price?: string | null }> {
   try {
-    const d = (await res.json()) as { error?: { code?: string; message?: string } };
-    return { code: d.error?.code ?? "", message: d.error?.message ?? "No pudimos completar la reserva. Inténtalo de nuevo." };
+    const d = (await res.json()) as { error?: { code?: string; message?: string; price?: string | null } };
+    return { code: d.error?.code ?? "", message: d.error?.message ?? "No pudimos completar la reserva. Inténtalo de nuevo.", price: d.error?.price };
   } catch {
     return { code: "", message: "No pudimos completar la reserva. Inténtalo de nuevo." };
   }
@@ -114,6 +136,9 @@ export function BookingFlow({
   site,
   logoUrl,
   initialServices,
+  initialCategories = [],
+  siteRating = null,
+  siteReviews = [],
   turnstileSiteKey,
   turnstileMisconfigured,
   privacyPolicyUrl,
@@ -122,6 +147,10 @@ export function BookingFlow({
   site: PublicSiteView;
   logoUrl: string | null;
   initialServices: ServiceOption[];
+  initialCategories?: CategoryView[];
+  /** The BUSINESS rating (every approved review of the site) and its latest reviews. */
+  siteRating?: RatingSummary | null;
+  siteReviews?: PublicReview[];
   turnstileSiteKey: string | null;
   turnstileMisconfigured: boolean;
   privacyPolicyUrl: string | null;
@@ -135,12 +164,17 @@ export function BookingFlow({
   const tzText = timezoneLabel(tz).replace(/GMT-(\d)/, "GMT−$1");
 
   const [step, setStep] = useState<Step>(1);
+  // Which way the visitor last moved, so the next step slides in from that side.
+  const [stepDir, setStepDir] = useState<"fwd" | "back" | null>(null);
+  const [monthDir, setMonthDir] = useState<"fwd" | "back" | null>(null);
   const [unavailable, setUnavailable] = useState(false);
   const [banner, setBanner] = useState<string | null>(null);
   const [hint, setHint] = useState("");
 
   // ── Selection ──
   const [services, setServices] = useState<ServiceOption[]>(initialServices);
+  const [categories, setCategories] = useState<CategoryView[]>(initialCategories);
+  const [reviews, setReviews] = useState<{ target: ReviewsTarget; trigger: HTMLElement } | null>(null);
   const [sel, setSel] = useState<Selection>({ serviceId: null, artist: null, day: null, slotStart: null });
   const [cleared, setCleared] = useState<ClearedReason | null>(null);
   const [artistNotice, setArtistNotice] = useState<string | null>(null);
@@ -165,6 +199,8 @@ export function BookingFlow({
   const [submit, setSubmit] = useState<SubmitState>("idle");
   const [takenTime, setTakenTime] = useState<string | null>(null);
   const [confirmation, setConfirmation] = useState<PublicConfirmation | null>(null);
+  // The server refused because the price changed: shown vs current (raw numeric strings).
+  const [priceChange, setPriceChange] = useState<{ previous: string | null; current: string | null; accepted: boolean } | null>(null);
   const idem = useRef<{ key: string; sig: string } | null>(null);
   const sending = useRef(false);
   const turnstile = useRef<TurnstileHandle>(null);
@@ -203,6 +239,8 @@ export function BookingFlow({
       const s = (e.state?.pb3Step ?? 1) as Step;
       fromHistory.current = true;
       setProfile(null);
+      setReviews(null);
+      setStepDir("back");
       setStep((cur) => (s < cur ? s : cur));
     };
     window.addEventListener("popstate", onPop);
@@ -244,8 +282,9 @@ export function BookingFlow({
       const res = await fetch(`${api}/services`, { cache: "no-store" });
       if (res.status === 404) return setUnavailable(true);
       if (!res.ok) return;
-      const d = (await res.json()) as { services?: ServiceOption[] };
+      const d = (await res.json()) as { services?: ServiceOption[]; categories?: CategoryView[] };
       setServices(d.services ?? []);
+      if (d.categories) setCategories(d.categories);
     } catch {
       /* the banner already says what happened */
     }
@@ -346,6 +385,7 @@ export function BookingFlow({
 
   const goStep = (n: Step) => {
     if (n > reach) return;
+    setStepDir(n >= step ? "fwd" : "back");
     setBanner(null);
     setHint("");
     if (n < 4) setSubmit((x) => (x === "taken" || x === "error" ? "idle" : x));
@@ -370,6 +410,15 @@ export function BookingFlow({
     else if (staffLoad[id] !== "loading") void loadStaff(id, sel.artist, artist?.name ?? null, svcName);
   };
 
+  /** "Reservar mi experiencia": choose the service and go straight on to the artist. */
+  const reserveService = (id: string) => {
+    pickService(id);
+    setStepDir("fwd");
+    setStep(2);
+  };
+
+  const openReviews = (target: ReviewsTarget, trigger: HTMLElement) => setReviews({ target, trigger });
+
   const pickArtist = (choice: Exclude<ArtistChoice, null>) => {
     const r = onArtistChange(sel, choice);
     setSel(r.sel);
@@ -388,6 +437,7 @@ export function BookingFlow({
 
   const changeMonth = (delta: number) => {
     const next = shiftMonth(month, delta);
+    setMonthDir(delta > 0 ? "fwd" : "back");
     setMonth(next);
     setSel((cur) => ({ ...cur, day: null, slotStart: null }));
     void requestMonth(sel.serviceId, sel.artist, next);
@@ -404,6 +454,7 @@ export function BookingFlow({
     setSel((s) => ({ ...s, slotStart: null }));
     setCleared("taken");
     setSubmit("idle");
+    setStepDir("back");
     setStep(3);
     void requestMonth(sel.serviceId, sel.artist, month, true);
   };
@@ -436,6 +487,10 @@ export function BookingFlow({
       setBanner("Completa la verificación de seguridad.");
       return;
     }
+    if (priceChange && !priceChange.accepted) return;
+    // The price the visitor is SHOWN (after an accepted change: the new one). The server
+    // never takes it as the price — it refuses with price_changed if it no longer holds.
+    const shown = priceChange ? priceChange.current : expectedPriceOf({ artist: sel.artist, staff: staffList });
     const payload = {
       service_id: service.id,
       // Omitted for "Sin preferencia": the engine assigns whoever is free AT COMMIT TIME.
@@ -445,6 +500,7 @@ export function BookingFlow({
       customer_phone: fullPhone(form),
       ...(form.email.trim() ? { customer_email: form.email.trim() } : {}),
       privacy_accepted: true as const,
+      ...(shown !== undefined ? { expected_price: shown } : {}),
     };
     // Same booking → same Idempotency-Key, so a retry after a lost response can never
     // book twice. A DIFFERENT booking (another time, another phone…) gets a new key.
@@ -465,6 +521,7 @@ export function BookingFlow({
         idem.current = null;
         cache.current.clear();
         setSubmit("idle");
+        setPriceChange(null);
         setConfirmation(d.confirmation);
         return;
       }
@@ -489,6 +546,14 @@ export function BookingFlow({
           setSubmit("idle");
           setPhoneServerError(e.message);
           return;
+        case "price_changed":
+          // Nothing was booked. Show both prices and ask for an explicit acceptance;
+          // refresh what the page lists so every price on it is the current one.
+          setSubmit("idle");
+          setPriceChange({ previous: shown ?? null, current: e.price ?? null, accepted: false });
+          if (sel.serviceId) void loadStaff(sel.serviceId, sel.artist, artist?.name ?? null, service.name);
+          void refreshServices();
+          return;
         case "duplicate_request":
           idem.current = null;
           break;
@@ -510,6 +575,8 @@ export function BookingFlow({
 
   const restart = () => {
     setConfirmation(null);
+    setPriceChange(null);
+    setStepDir("back");
     setSel({ serviceId: null, artist: null, day: null, slotStart: null });
     setCleared(null);
     setArtistNotice(null);
@@ -551,6 +618,10 @@ export function BookingFlow({
     cta = () => void confirm();
     ctaLabel = submit === "sending" ? "Confirmando…" : submit === "error" ? "Reintentar" : "Confirmar cita";
     ctaState = submit === "sending" ? "sending" : submit === "taken" || turnstileMisconfigured ? "muted" : "on";
+    if (priceChange && !priceChange.accepted && submit !== "sending") {
+      ctaState = "muted";
+      barHint = "Revisa el nuevo precio para continuar.";
+    }
   }
   const ctaDisabled = ctaState === "muted" || ctaState === "sending";
   const onCta = () => {
@@ -560,7 +631,9 @@ export function BookingFlow({
     }
     cta();
   };
-  const barPrice = service && !confirmation ? priceText(price, true) : "";
+  // After an accepted (or pending) price change the server's current price is the one shown.
+  const priceNow = priceChange ? { label: priceLabelCOP(priceChange.current), from: false } : price;
+  const barPrice = service && !confirmation ? priceText(priceNow, true) : "";
   const barSub = !service
     ? ""
     : step === 1
@@ -632,6 +705,8 @@ export function BookingFlow({
   // ── Render ──────────────────────────────────────────────────────────────────────
 
   const monogram = (site.name.trim().charAt(0) || "?").toLocaleUpperCase("es");
+  const waHello = whatsappLink(site.whatsapp ?? null, `Hola ${site.name}, quiero reservar.`);
+  const stepAnim = stepDir === "fwd" ? "pb-step-fwd" : stepDir === "back" ? "pb-step-back" : "";
 
   const root = "pb3 relative -m-[var(--content-pad)] flex min-h-[calc(100%_+_var(--content-pad)_*_2)] flex-none flex-col";
 
@@ -679,9 +754,33 @@ export function BookingFlow({
                   <span className={step > 1 ? "hidden lg:block" : ""}>{brandMark}</span>
                   <div className="flex min-w-0 flex-col gap-px">
                     <span className={`${SERIF} truncate text-[19px] leading-[1.1] lg:text-[21px]`}>{site.name}</span>
-                    {site.address ? <span className="truncate text-[12.5px] text-pb-muted lg:text-[13px]">{site.address}</span> : null}
+                    {siteRating && step === 1 ? (
+                      <span className="flex min-w-0 items-center">
+                        <RatingButton
+                          rating={siteRating}
+                          label={site.name}
+                          onOpen={(t) =>
+                            openReviews({ title: `de ${site.name}`, scope: "Todas las citas de la sede.", rating: siteRating, reviews: siteReviews }, t)
+                          }
+                        />
+                      </span>
+                    ) : site.address ? (
+                      <span className="truncate text-[12.5px] text-pb-muted lg:text-[13px]">{site.address}</span>
+                    ) : null}
                   </div>
-                  <span className="ml-auto flex-none text-[13px] text-pb-muted [font-variant-numeric:tabular-nums]">Paso {step} de 4</span>
+                  <span className="ml-auto flex flex-none items-center gap-2">
+                    {waHello ? (
+                      <a
+                        href={waHello}
+                        rel="noopener noreferrer"
+                        aria-label={`Escribir a ${site.name} por WhatsApp`}
+                        className="pb-press flex size-11 items-center justify-center rounded-full border border-pb-line2 bg-white text-pb-ink"
+                      >
+                        <IconWhatsApp />
+                      </a>
+                    ) : null}
+                    <span className="text-[13px] text-pb-muted [font-variant-numeric:tabular-nums]">Paso {step} de 4</span>
+                  </span>
                 </div>
                 <h1 ref={titleRef} tabIndex={-1} className={`${SERIF} m-0 mt-0.5 text-[32px] leading-[1.08] tracking-[-0.01em]`}>
                   {STEP_TITLES[step]}
@@ -702,7 +801,12 @@ export function BookingFlow({
                               cur ? "font-semibold text-pb-ink" : dis ? "cursor-default text-pb-faint" : "text-pb-tx2"
                             }`}
                           >
-                            <span aria-hidden className={`block h-[3px] w-full rounded-[2px] ${n <= step ? "bg-pb-ink" : "bg-pb-bar"}`} />
+                            <span aria-hidden className="relative block h-[3px] w-full overflow-hidden rounded-[2px] bg-pb-bar">
+                              <span
+                                className="absolute inset-0 origin-left bg-pb-ink transition-transform duration-200 ease-out motion-reduce:transition-none"
+                                style={{ transform: n <= step ? "scaleX(1)" : "scaleX(0)" }}
+                              />
+                            </span>
                             <span className="max-w-full truncate">
                               <span className="sr-only">Paso {n}: </span>
                               {STEP_LABELS[n]}
@@ -722,10 +826,33 @@ export function BookingFlow({
               </div>
             ) : null}
 
+            <div key={confirmation ? "done" : step} className={confirmation ? "pb-fade" : stepAnim}>
             {confirmation ? (
-              <BookingDone confirmation={confirmation} firstName={form.name.trim().split(/\s+/)[0] || null} />
+              <BookingDone confirmation={confirmation} firstName={form.name.trim().split(/\s+/)[0] || null} site={site} />
             ) : step === 1 ? (
-              <ServiceStep services={services} selected={sel.serviceId} onSelect={pickService} />
+              <div className="flex flex-col gap-6">
+                <ServiceStep
+                  services={services}
+                  categories={categories}
+                  selected={sel.serviceId}
+                  onSelect={pickService}
+                  onReserve={reserveService}
+                  onOpenReviews={(s, t) =>
+                    s.rating ? openReviews({ title: `de ${s.name}`, scope: "Solo citas de este servicio.", rating: s.rating, reviews: s.reviews ?? [] }, t) : undefined
+                  }
+                  siteName={site.name}
+                  whatsapp={site.whatsapp ?? null}
+                  willRecheck={Boolean(sel.artist || sel.slotStart)}
+                />
+                <BusinessInfo
+                  siteName={site.name}
+                  address={site.address}
+                  hours={site.hours ?? []}
+                  directionsUrl={site.directions_url ?? null}
+                  whatsapp={site.whatsapp ?? null}
+                  whatsappText={`Hola ${site.name}, quiero reservar.`}
+                />
+              </div>
             ) : step === 2 && service ? (
               <ArtistStep
                 serviceName={service.name}
@@ -736,6 +863,9 @@ export function BookingFlow({
                 onPick={pickArtist}
                 onView={(id, trigger) => setProfile({ id, trigger })}
                 onRetry={() => void loadStaff(service.id, sel.artist, artist?.name ?? null, service.name)}
+                onOpenReviews={(a, t) =>
+                  a.rating ? openReviews({ title: `de ${a.name}`, scope: "Solo citas con este artista.", rating: a.rating, reviews: a.reviews ?? [] }, t) : undefined
+                }
               />
             ) : step === 3 && service ? (
               <DateTimeStep
@@ -763,12 +893,19 @@ export function BookingFlow({
                 onRetry={() => void requestMonth(sel.serviceId, sel.artist, month, true)}
                 empty={empty}
                 onEmptyAction={onEmptyAction}
+                monthDir={monthDir}
               />
             ) : step === 4 && service ? (
               <DetailsStep
                 rows={summaryRows}
-                priceLabel={priceText(price, true)}
-                priceSub={price.from ? "El precio final depende del artista asignado." : null}
+                priceLabel={priceText(priceNow, true)}
+                priceSub={priceNow.from ? "El precio final depende del artista asignado." : null}
+                priceChange={
+                  priceChange
+                    ? { previous: priceText({ label: priceLabelCOP(priceChange.previous), from: false }, true), current: priceText({ label: priceLabelCOP(priceChange.current), from: false }, true), accepted: priceChange.accepted }
+                    : null
+                }
+                onAcceptPrice={() => setPriceChange((p) => (p ? { ...p, accepted: true } : p))}
                 form={form}
                 setField={setField}
                 touch={touch}
@@ -789,6 +926,7 @@ export function BookingFlow({
                 onEdit={(n) => goStep(n)}
               />
             ) : null}
+            </div>
 
             <p className="m-0 mt-1.5 text-center text-[12.5px] text-pb-muted lg:mt-4 lg:text-left">Impulsado por M_AI</p>
           </main>
@@ -801,9 +939,9 @@ export function BookingFlow({
             <h2 className={`${SERIF} m-0 text-[23px]`}>Tu selección</h2>
             {service ? (
               <div className="flex flex-col">
-                <MiniRow k="Servicio" v={`${service.name} · ${durationMin ?? service.duration_min} min`} />
-                {sel.artist ? <MiniRow k="Artista" v={artistName} /> : null}
-                {slot && sel.day ? <MiniRow k="Fecha y hora" v={`${shortDay(sel.day)} · ${timeLabel}`} /> : null}
+                <MiniRow key={`s-${service.id}`} k="Servicio" v={`${service.name} · ${durationMin ?? service.duration_min} min`} />
+                {sel.artist ? <MiniRow key={`a-${sel.artist}`} k="Artista" v={artistName} /> : null}
+                {slot && sel.day ? <MiniRow key={`t-${slot.start_at}`} k="Fecha y hora" v={`${shortDay(sel.day)} · ${timeLabel}`} /> : null}
               </div>
             ) : (
               <p className="m-0 text-[14px] leading-[1.5] text-pb-muted">Elige un servicio para empezar.</p>
@@ -811,7 +949,9 @@ export function BookingFlow({
             {barPrice ? (
               <div className="flex items-baseline justify-between">
                 <span className="text-[15px] font-[590]">Precio</span>
-                <span className="text-[17px] font-semibold [font-variant-numeric:tabular-nums]">{barPrice}</span>
+                <span key={barPrice} className="pb-fade text-[17px] font-semibold [font-variant-numeric:tabular-nums]">
+                  {barPrice}
+                </span>
               </div>
             ) : null}
             {barHint ? <span className="text-[13.5px] text-pb-muted">{barHint}</span> : null}
@@ -837,8 +977,12 @@ export function BookingFlow({
             <div className="flex min-w-0 flex-1 flex-col gap-px" aria-live="polite">
               {barPrice ? (
                 <>
-                  <span className="text-[18px] font-semibold [font-variant-numeric:tabular-nums]">{barPrice}</span>
-                  <span className="truncate text-[13px] text-pb-muted">{barSub}</span>
+                  <span key={barPrice} className="pb-fade text-[18px] font-semibold [font-variant-numeric:tabular-nums]">
+                    {barPrice}
+                  </span>
+                  <span key={barSub} className="pb-fade truncate text-[13px] text-pb-muted">
+                    {barSub}
+                  </span>
                 </>
               ) : null}
               {barHint ? <span className={`leading-[1.35] text-pb-muted ${barPrice ? "text-[13px]" : "text-[14px]"}`}>{barHint}</span> : null}
@@ -854,6 +998,7 @@ export function BookingFlow({
         </div>
       </div>
 
+      <ReviewsDialog target={reviews?.target ?? null} onClose={() => setReviews(null)} returnFocusTo={reviews?.trigger ?? null} />
       <ArtistProfile
         artist={profile ? staffList.find((s) => s.id === profile.id) ?? null : null}
         siteName={site.name}
@@ -869,7 +1014,7 @@ export function BookingFlow({
 
 function MiniRow({ k, v }: { k: string; v: string }) {
   return (
-    <div className="flex flex-col gap-px border-b border-pb-hair py-[9px]">
+    <div className="pb-fade flex flex-col gap-px border-b border-pb-hair py-[9px]">
       <span className="text-[12.5px] text-pb-muted">{k}</span>
       <span className="text-[15px] [font-variant-numeric:tabular-nums]">{v}</span>
     </div>

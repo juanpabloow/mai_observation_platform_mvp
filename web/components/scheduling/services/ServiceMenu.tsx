@@ -6,10 +6,11 @@ import { useTrappedPanel } from "@/components/ui/Overlay";
 import { apptCategoryClass, serviceCategory } from "@/lib/agendaCategory";
 import { priceLabelCOP } from "@/lib/money";
 import { activateServiceAction, countUpcomingAppointmentsAction, deactivateServiceAction } from "@/lib/schedulingAdminActions";
-import type { Service, Site, Staff } from "../AdminPanel";
+import type { BookingCategory, Service, Site, Staff } from "../AdminPanel";
 import { Menu as ActionMenu, MenuButton } from "../ui/Menu";
 import { Alert, Button, CARD, ConfirmDialog, FIELD, buttonClass, useModalLayer } from "../ui/system";
 import { CATEGORY_GROUPS, type CategoryGroup } from "./categories";
+import { BookingCategoriesPanel } from "./BookingCategoriesPanel";
 import { ServiceEditor } from "./ServiceEditor";
 
 /**
@@ -33,6 +34,7 @@ export function ServiceMenu({
   services,
   staff,
   siteServiceMap,
+  bookingCategories = [],
   onOpenBookingLink,
 }: {
   clientId: string;
@@ -40,6 +42,7 @@ export function ServiceMenu({
   services: Service[];
   staff: Staff[];
   siteServiceMap: Record<string, string[]>;
+  bookingCategories?: BookingCategory[];
   /** "Enlace de reservas" lives on each site — jump to Sedes y horarios. */
   onOpenBookingLink: () => void;
 }) {
@@ -123,6 +126,8 @@ export function ServiceMenu({
         </Button>
         </div>
       </div>
+
+      <BookingCategoriesPanel clientId={clientId} categories={bookingCategories} />
 
       {/* Search + filters. */}
       <div className={`flex flex-wrap items-center gap-2 p-3 ${CARD}`}>
@@ -275,6 +280,8 @@ export function ServiceMenu({
           sites={activeSites}
           staff={activeStaff}
           siteServiceMap={siteServiceMap}
+          bookingCategories={bookingCategories}
+          allServices={active}
           onClose={() => setEditor(null)}
           onSaved={() => {
             setEditor(null);

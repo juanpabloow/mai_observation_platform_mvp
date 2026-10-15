@@ -1,9 +1,9 @@
 import { checkRateLimit, clientIp } from "@/lib/schedulingApi";
-import { projectPublicService, projectPublicSite, publicJson, publicNotFound, publicRateLimited } from "@/lib/publicBookingApi";
+import { projectPublicCategory, projectPublicService, projectPublicSite, publicJson, publicNotFound, publicRateLimited } from "@/lib/publicBookingApi";
 import { readPublicBookingPolicy } from "@/lib/publicBookingPolicy";
 import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/sites.js";
-import { listPublicServicesForSite } from "@worker/db/repositories/scheduling/publicCatalog.js";
-import { publicServiceRatings } from "@worker/db/repositories/scheduling/reviews.js";
+import { listPublicCategories, listPublicServicesForSite } from "@worker/db/repositories/scheduling/publicCatalog.js";
+import { publicServiceRatings, publicServiceReviews } from "@worker/db/repositories/scheduling/reviews.js";
 
 /**
  * GET /api/booking/{slug}/services — PUBLIC (no auth). Resolves the site by its
@@ -20,9 +20,15 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
   const { slug } = await params;
   const site = await getPublicBookingSiteBySlug(slug);
   if (!site) return publicNotFound();
-  const [services, ratings] = await Promise.all([listPublicServicesForSite(site.tenant_id, site.id), publicServiceRatings(site.tenant_id, site.id)]);
+  const [services, ratings, reviews, categories] = await Promise.all([
+    listPublicServicesForSite(site.tenant_id, site.id),
+    publicServiceRatings(site.tenant_id, site.id),
+    publicServiceReviews(site.tenant_id, site.id),
+    listPublicCategories(site.tenant_id, site.client_id),
+  ]);
   return publicJson({
     site: projectPublicSite(site),
-    services: services.map((s) => projectPublicService(s, ratings)),
+    services: services.map((s) => projectPublicService(s, ratings, reviews)),
+    categories: categories.map(projectPublicCategory),
   });
 }

@@ -1508,6 +1508,11 @@ body {
   --color-pb-err-fg: #7a2318;
   --color-pb-focus: #2f6be4;
   --color-pb-star: #e8a317;
+  /* Discreet pastel accents (badges only): "Recomendado", promotions, WhatsApp. */
+  --color-pb-peach: #f8e9df;
+  --color-pb-peach-fg: #7a3f22;
+  --color-pb-sky: #e4edf7;
+  --color-pb-sky-fg: #234a6e;
   --font-pb-serif: var(--font-pb-newsreader), Georgia, "Times New Roman", serif;
 }
 .pb3 {
@@ -1557,18 +1562,30 @@ body {
 .pb3 dialog.pb-dialog::backdrop {
   background: rgba(17, 19, 22, 0.4);
 }
-/* Phone: the profile is a full view that slides in. Desktop: a centred 560px dialog. */
-.pb3 dialog.pb-dialog[open] {
+/* Phone: the profile is a full view that slides in. Desktop: a centred 560px dialog.
+   Geometry lives on the BASE rule (not [open]) so a closing dialog keeps its place while
+   it fades out; only `display` depends on [open]. */
+.pb3 dialog.pb-dialog {
   position: fixed;
   inset: 0;
   width: 100%;
   height: 100dvh;
-  display: flex;
   flex-direction: column;
+}
+.pb3 dialog.pb-dialog[open] {
+  display: flex;
   animation: pb-in 0.22s ease;
 }
+/* A bottom SHEET (reviews) on the phone: only as tall as its content. */
+.pb3 dialog.pb-dialog.pb-sheet {
+  inset: auto 0 0 0;
+  height: auto;
+  max-height: 86dvh;
+  border-radius: 24px 24px 0 0;
+}
 @media (min-width: 1024px) {
-  .pb3 dialog.pb-dialog[open] {
+  .pb3 dialog.pb-dialog,
+  .pb3 dialog.pb-dialog.pb-sheet {
     inset: 50% auto auto 50%;
     transform: translate(-50%, -50%);
     width: 560px;
@@ -1577,7 +1594,169 @@ body {
     border-radius: 24px;
     overflow: hidden;
     box-shadow: 0 16px 48px rgba(17, 19, 22, 0.18);
+  }
+  .pb3 dialog.pb-dialog[open] {
     animation: none;
+  }
+}
+
+/*
+ * ── Public booking: motion ─────────────────────────────────────────────────────
+ * Short (150–250 ms), transform/opacity only, never on a timer and never blocking a
+ * control: every animated element is clickable from its first frame. Everything here is
+ * switched off under prefers-reduced-motion (end of block), where the page simply shows
+ * the final state.
+ */
+@keyframes pb-rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pb-from-right {
+  from {
+    opacity: 0;
+    transform: translateX(18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pb-from-left {
+  from {
+    opacity: 0;
+    transform: translateX(-18px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@keyframes pb-fade {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes pb-pop {
+  0% {
+    transform: scale(0.6);
+    opacity: 0;
+  }
+  70% {
+    transform: scale(1.08);
+    opacity: 1;
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+@keyframes pb-draw {
+  to {
+    stroke-dashoffset: 0;
+  }
+}
+@keyframes pb-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+/* Cards enter one after another — 30 ms apart, the first eight only (no long waits). */
+.pb3 .pb-rise {
+  animation: pb-rise 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: calc(min(var(--i, 0), 8) * 30ms);
+}
+/* A step's content slides in from the side it comes from (forward → right). */
+.pb3 .pb-step-fwd {
+  animation: pb-from-right 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.pb3 .pb-step-back {
+  animation: pb-from-left 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.pb3 .pb-fade {
+  animation: pb-fade 0.18s ease both;
+}
+.pb3 .pb-pop {
+  animation: pb-pop 0.22s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+/* Selectable surfaces: border, ring and ground change smoothly; a press gives way a bit. */
+.pb3 .pb-sel {
+  transition:
+    border-color 0.18s ease,
+    box-shadow 0.18s ease,
+    background-color 0.18s ease,
+    color 0.18s ease,
+    transform 0.12s ease;
+}
+.pb3 .pb-press:active {
+  transform: scale(0.98);
+}
+/* Real loading only (the request is in flight): a soft sweep over the placeholder. */
+.pb3 .pb-skel {
+  background: linear-gradient(90deg, #eef0f2 0%, #f6f7f9 40%, #eef0f2 80%) 0 0 / 200% 100%;
+  animation: pb-shimmer 1.2s linear infinite;
+}
+/* The success check draws itself once the server has confirmed. */
+.pb3 .pb-check-draw {
+  stroke-dasharray: 24;
+  stroke-dashoffset: 24;
+  animation: pb-draw 0.38s 0.1s cubic-bezier(0.3, 0.7, 0.2, 1) forwards;
+}
+/* Dialogs (profile, reviews): fade/slide in and OUT (closing uses allow-discrete where
+   the browser supports it; elsewhere it simply closes). */
+.pb3 dialog.pb-dialog,
+.pb3 dialog.pb-dialog::backdrop {
+  transition:
+    opacity 0.2s ease,
+    transform 0.2s ease,
+    overlay 0.2s allow-discrete,
+    display 0.2s allow-discrete;
+}
+.pb3 dialog.pb-dialog:not([open]) {
+  opacity: 0;
+}
+.pb3 dialog.pb-dialog::backdrop {
+  opacity: 0;
+}
+.pb3 dialog.pb-dialog[open]::backdrop {
+  opacity: 1;
+}
+@starting-style {
+  .pb3 dialog.pb-dialog[open]::backdrop {
+    opacity: 0;
+  }
+}
+@media (min-width: 1024px) {
+  .pb3 dialog.pb-dialog[open] {
+    animation: pb-fade 0.18s ease;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pb3 *,
+  .pb3 *::before,
+  .pb3 *::after,
+  .pb3 dialog.pb-dialog::backdrop {
+    animation-duration: 0.001ms !important;
+    animation-delay: 0ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .pb3 .pb-skel {
+    animation: none;
+  }
+  .pb3 .pb-check-draw {
+    stroke-dashoffset: 0;
   }
 }
 

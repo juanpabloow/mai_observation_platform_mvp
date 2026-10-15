@@ -1,19 +1,44 @@
 "use client";
 
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import type { ApptCategory } from "@/lib/agendaCategory";
+import { pageSections, upgradeOffer, whatsappLink, type PageSection, type PageService } from "@/lib/bookingPage";
 import { priceLabelCOP } from "@/lib/money";
 import { needsMore } from "@/lib/publicBookingFlow";
-import { ratingText, reviewCountText } from "@/lib/publicReviews";
-import { IconCheck, IconClock, IconPlus, IconStar, LINK_BTN, ring, SERIF, type ServiceOption } from "./ui";
+import {
+  BTN_PRIMARY_SM,
+  CTA_BASE,
+  ctaTone,
+  IconArrow,
+  IconCheck,
+  IconClock,
+  IconPlus,
+  IconUp,
+  IconWhatsApp,
+  LINK_BTN,
+  RatingButton,
+  ring,
+  SERIF,
+  type CategoryView,
+  type ServiceOption,
+} from "./ui";
 
 /**
- * STEP 1 — Elige tu servicio. One service per booking (no cart). The categories are the
- * catalogue's real families; "Ver más" expands the description IN PLACE and never
- * selects. The full description is always the one stored — never a shortened copy.
+ * STEP 1 — Elige tu experiencia. One service per booking (no cart).
+ *
+ * With the business's own booking categories (migration 1804) the step asks "¿Qué
+ * quieres vivir hoy?" and shows them in the business's order: a `featured` group as large
+ * cards (only COMPLETE services — image, description, what it includes, duration and
+ * price), `list` groups as cards, and `contact` groups as a small WhatsApp link. A
+ * business that never configured categories keeps the previous grouping by family.
+ *
+ * "Ver más" expands the description IN PLACE and never selects. The rating is a button
+ * that opens the service's reviews; it is shown only when there are approved ones.
+ * Choosing a service with an explicit better alternative offers it, with the REAL price
+ * difference — switching is always a separate, deliberate tap.
  */
 
-/** Customer-facing names of the stored service families, in menu order. */
+/** Customer-facing names of the stored service families, in menu order (legacy mode). */
 const FAMILIES: Array<{ family: ApptCategory; label: string }> = [
   { family: "cut", label: "Cortes" },
   { family: "grooming", label: "Barba y cuidado" },
@@ -21,7 +46,7 @@ const FAMILIES: Array<{ family: ApptCategory; label: string }> = [
   { family: "feature", label: "Tratamientos" },
 ];
 
-export function serviceGroups(services: ServiceOption[]): Array<{ key: string; label: string; items: ServiceOption[] }> {
+export function serviceGroups<T extends ServiceOption>(services: T[]): Array<{ key: string; label: string; items: T[] }> {
   const known = new Set(FAMILIES.map((f) => f.family));
   const groups = FAMILIES.map((f) => ({ key: f.family as string, label: f.label, items: services.filter((s) => s.family === f.family) }));
   const others = services.filter((s) => !known.has(s.family));
@@ -29,21 +54,47 @@ export function serviceGroups(services: ServiceOption[]): Array<{ key: string; l
   return groups.filter((g) => g.items.length > 0);
 }
 
+/** A ServiceOption as the presentation rules read it (absent fields = not configured). */
+export function asPageService(s: ServiceOption): ServiceOption & PageService {
+  return {
+    ...s,
+    category_id: s.category_id ?? null,
+    recommended: Boolean(s.recommended),
+    image_url: s.image_url ?? null,
+    includes: s.includes ?? [],
+    upgrade_to: s.upgrade_to ?? null,
+  };
+}
+
+const prefersReducedMotion = () => typeof window !== "undefined" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
 export function ServiceStep({
   services,
+  categories,
   selected,
   onSelect,
+  onReserve,
+  onOpenReviews,
+  siteName,
+  whatsapp,
+  willRecheck,
 }: {
   services: ServiceOption[];
+  categories: CategoryView[];
   selected: string | null;
   onSelect: (id: string) => void;
+  /** "Reservar mi experiencia": choose and go on to the artist. */
+  onReserve: (id: string) => void;
+  onOpenReviews: (service: ServiceOption, trigger: HTMLElement) => void;
+  siteName: string;
+  whatsapp: string | null;
+  /** An artist or a time is already chosen: switching service re-checks them. */
+  willRecheck: boolean;
 }) {
-  const [cat, setCat] = useState<string>("all");
-  const [open, setOpen] = useState<Record<string, boolean>>({});
-  const groups = serviceGroups(services);
-  const shown = cat === "all" ? groups : groups.filter((g) => g.key === cat);
+  const all = services.map(asPageService);
+  const page = pageSections(all, categories, { hasWhatsapp: Boolean(whatsapp) });
 
-  if (services.length === 0) {
+  if (services.length === 0 && !(page && page.contacts.length)) {
     return (
       <div className="flex flex-col gap-1 rounded-[16px] border border-pb-line bg-white p-4">
         <span className="text-[16px] font-[590]">Aún no hay servicios para reservar en línea</span>
@@ -52,14 +103,106 @@ export function ServiceStep({
     );
   }
 
+  const cardProps = { all, selected, onSelect, onOpenReviews, willRecheck };
+
+  if (!page) return <LegacyCatalogue services={all} {...cardProps} />;
+
+  return (
+    <div className="flex flex-col gap-[18px]">
+      <h2 className={`${SERIF} m-0 text-[24px] leading-tight lg:text-[26px]`}>¿Qué quieres vivir hoy?</h2>
+      {page.sections.length > 1 ? <SectionNav sections={page.sections} /> : null}
+      <div className="flex flex-col gap-[26px]">
+        {page.sections.map((g) => (
+          <section key={g.key} id={`pb-sec-${g.key}`} aria-labelledby={`pb-sec-h-${g.key}`} className="flex scroll-mt-4 flex-col gap-2.5">
+            <div className="flex flex-col gap-0.5">
+              <h3 id={`pb-sec-h-${g.key}`} className={`${SERIF} m-0 leading-tight ${g.layout === "featured" ? "text-[27px]" : "text-[23px]"}`}>
+                {g.name}
+              </h3>
+              {g.tagline ? <p className="m-0 text-[14.5px] text-pb-muted">{g.tagline}</p> : null}
+            </div>
+            {g.layout === "featured" ? (
+              <div className="flex flex-col gap-3">
+                {g.items.map((s, i) => (
+                  <FeaturedCard key={s.id} index={i} service={s} selected={selected === s.id} onReserve={() => onReserve(s.id)} onOpenReviews={onOpenReviews} />
+                ))}
+              </div>
+            ) : (
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(min(300px,100%),1fr))] gap-2.5">
+                {g.items.map((s, i) => (
+                  <ServiceCard key={s.id} index={i} service={s} {...cardProps} />
+                ))}
+              </div>
+            )}
+          </section>
+        ))}
+      </div>
+      {page.contacts.length > 0 ? (
+        <div className="flex flex-col gap-1">
+          {page.contacts.map((c) => {
+            const href = whatsappLink(whatsapp, `Hola ${siteName}, quiero información sobre ${c.name}.`);
+            return href ? (
+              <a key={c.id} href={href} rel="noopener noreferrer" className={`${LINK_BTN} -ml-2 gap-2 self-start`}>
+                <IconWhatsApp size={16} />
+                {c.tagline}
+                <span className="sr-only"> Abre WhatsApp</span>
+              </a>
+            ) : null;
+          })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/** The groups as chips that jump to each section; the one in view is marked. */
+function SectionNav<S>({ sections }: { sections: PageSection<S>[] }) {
+  const [current, setCurrent] = useState(sections[0]?.key ?? "");
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const els = sections.map((g) => document.getElementById(`pb-sec-${g.key}`)).filter((x): x is HTMLElement => !!x);
+    const io = new IntersectionObserver(
+      (entries) => {
+        const seen = entries.filter((e) => e.isIntersecting).sort((a, b) => a.boundingClientRect.top - b.boundingClientRect.top)[0];
+        if (seen) setCurrent(seen.target.id.replace("pb-sec-", ""));
+      },
+      { rootMargin: "-20% 0px -60% 0px" },
+    );
+    els.forEach((el) => io.observe(el));
+    return () => io.disconnect();
+  }, [sections]);
+  return (
+    <nav aria-label="Categorías" className="pb-nosb -mx-4 flex gap-2 overflow-x-auto px-4 lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0">
+      {sections.map((g) => {
+        const on = current === g.key;
+        return (
+          <button
+            key={g.key}
+            type="button"
+            aria-current={on ? "true" : undefined}
+            onClick={() => {
+              setCurrent(g.key);
+              document.getElementById(`pb-sec-${g.key}`)?.scrollIntoView({ behavior: prefersReducedMotion() ? "auto" : "smooth", block: "start" });
+            }}
+            className={`pb-sel pb-press flex min-h-[44px] flex-none items-center whitespace-nowrap rounded-[12px] border px-[18px] text-[15px] ${
+              on ? "border-pb-ink bg-pb-ink text-white" : "border-pb-line2 bg-white text-pb-ink"
+            }`}
+          >
+            {g.name}
+          </button>
+        );
+      })}
+    </nav>
+  );
+}
+
+function LegacyCatalogue({ services, ...cardProps }: { services: Array<ServiceOption & PageService> } & Omit<CardProps, "service" | "index">) {
+  const [cat, setCat] = useState<string>("all");
+  const groups = serviceGroups(services);
+  const shown = cat === "all" ? groups : groups.filter((g) => g.key === cat);
   return (
     <div className="flex flex-col gap-[18px]">
       {groups.length > 1 ? (
-        <div
-          role="group"
-          aria-label="Categorías"
-          className="pb-nosb -mx-4 flex gap-2 overflow-x-auto px-4 lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0"
-        >
+        <div role="group" aria-label="Categorías" className="pb-nosb -mx-4 flex gap-2 overflow-x-auto px-4 lg:mx-0 lg:flex-wrap lg:overflow-visible lg:px-0">
           {[{ key: "all", label: "Todos" }, ...groups].map((c) => {
             const on = cat === c.key;
             return (
@@ -68,7 +211,7 @@ export function ServiceStep({
                 type="button"
                 aria-pressed={on}
                 onClick={() => setCat(c.key)}
-                className={`flex min-h-[44px] flex-none items-center whitespace-nowrap rounded-[12px] border px-[18px] text-[15px] ${
+                className={`pb-sel pb-press flex min-h-[44px] flex-none items-center whitespace-nowrap rounded-[12px] border px-[18px] text-[15px] ${
                   on ? "border-pb-ink bg-pb-ink text-white" : "border-pb-line2 bg-white text-pb-ink"
                 }`}
               >
@@ -78,21 +221,13 @@ export function ServiceStep({
           })}
         </div>
       ) : null}
-
       <div className="flex flex-col gap-[22px]">
         {shown.map((g) => (
           <section key={g.key} aria-label={g.label} className="flex flex-col gap-2.5">
             <h2 className={`${SERIF} m-0 text-[23px] leading-tight`}>{g.label}</h2>
             <div className="grid grid-cols-[repeat(auto-fill,minmax(min(300px,100%),1fr))] gap-2.5">
-              {g.items.map((s) => (
-                <ServiceCard
-                  key={s.id}
-                  service={s}
-                  selected={selected === s.id}
-                  expanded={!!open[s.id]}
-                  onToggle={() => setOpen((o) => ({ ...o, [s.id]: !o[s.id] }))}
-                  onSelect={() => onSelect(s.id)}
-                />
+              {g.items.map((s, i) => (
+                <ServiceCard key={s.id} index={i} service={s} {...cardProps} />
               ))}
             </div>
           </section>
@@ -102,80 +237,166 @@ export function ServiceStep({
   );
 }
 
-function ServiceCard({
-  service: s,
-  selected,
-  expanded,
-  onToggle,
-  onSelect,
-}: {
-  service: ServiceOption;
-  selected: boolean;
-  expanded: boolean;
-  onToggle: () => void;
-  onSelect: () => void;
-}) {
+interface CardProps {
+  service: ServiceOption & PageService;
+  index: number;
+  all: Array<ServiceOption & PageService>;
+  selected: string | null;
+  onSelect: (id: string) => void;
+  onOpenReviews: (service: ServiceOption, trigger: HTMLElement) => void;
+  willRecheck: boolean;
+}
+
+function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews, willRecheck }: CardProps) {
   const descId = useId();
+  const [expanded, setExpanded] = useState(false);
+  const isSel = selected === s.id;
   const price = priceLabelCOP(s.price) ?? "Precio a consultar";
   const more = needsMore(s.description);
+  const offer = isSel ? upgradeOffer(s, all) : null;
   return (
-    <div className={`flex items-start gap-3.5 rounded-[16px] p-3.5 ${ring(selected)}`}>
-      <div className="flex min-w-0 flex-1 flex-col gap-1">
+    <div style={{ ["--i" as string]: index }} className={`pb-rise flex flex-col gap-3 rounded-[16px] p-3.5 ${ring(isSel)}`}>
+      <div className="flex items-start gap-3.5">
+        <div className="flex min-w-0 flex-1 flex-col gap-1">
+          <button
+            type="button"
+            aria-pressed={isSel}
+            aria-describedby={s.description ? descId : undefined}
+            onClick={() => onSelect(s.id)}
+            className="flex min-w-0 flex-col gap-[5px] rounded-[8px] bg-transparent p-0 text-left"
+          >
+            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="text-[16.5px] font-[590] leading-[1.3] [overflow-wrap:anywhere]">{s.name}</span>
+              {s.recommended ? <span className="rounded-full bg-pb-peach px-2 py-0.5 text-[12px] font-[590] text-pb-peach-fg">Recomendado</span> : null}
+            </span>
+            <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13.5px] text-pb-muted [font-variant-numeric:tabular-nums]">
+              <span className="flex items-center gap-[5px]">
+                <IconClock />
+                {s.duration_min} min
+              </span>
+              <span className="text-[15px] font-semibold text-pb-ink">{price}</span>
+            </span>
+            {isSel ? <span className="sr-only">Seleccionado</span> : null}
+          </button>
+          {s.rating ? (
+            <span className="self-start">
+              <RatingButton rating={s.rating} label={s.name} onOpen={(t) => onOpenReviews(s, t)} />
+            </span>
+          ) : null}
+          {s.description ? (
+            <p id={descId} className={`m-0 whitespace-pre-line text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] ${expanded ? "" : "line-clamp-2"}`}>
+              {s.description}
+            </p>
+          ) : null}
+          {more ? (
+            <button type="button" aria-expanded={expanded} onClick={() => setExpanded((x) => !x)} className={`${LINK_BTN} -mb-2.5 -ml-2 -mt-1 self-start`}>
+              {expanded ? "Ver menos" : "Ver más"}
+              <span className="sr-only"> sobre {s.name}</span>
+            </button>
+          ) : null}
+        </div>
         <button
           type="button"
-          aria-pressed={selected}
-          aria-describedby={s.description ? descId : undefined}
-          onClick={onSelect}
-          className="flex min-w-0 flex-col gap-[5px] rounded-[8px] bg-transparent p-0 text-left"
+          tabIndex={-1}
+          aria-hidden
+          onClick={() => onSelect(s.id)}
+          className={`pb-sel pb-press flex size-11 flex-none items-center justify-center rounded-full border p-0 ${isSel ? "border-pb-ink bg-pb-ink" : "border-pb-line2 bg-white"}`}
         >
-          <span className="text-[16.5px] font-[590] leading-[1.3] [overflow-wrap:anywhere]">{s.name}</span>
-          <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13.5px] text-pb-muted [font-variant-numeric:tabular-nums]">
+          {isSel ? (
+            <span key="on" className="pb-pop flex">
+              <IconCheck />
+            </span>
+          ) : (
+            <IconPlus />
+          )}
+        </button>
+      </div>
+      {offer ? <UpgradeOffer from={s} target={offer.target} delta={offer.delta} onSwitch={() => onSelect(offer.target.id)} willRecheck={willRecheck} /> : null}
+    </div>
+  );
+}
+
+/** "Pásate a … por $X más" — the difference is computed from both real prices. */
+function UpgradeOffer({ from, target, delta, onSwitch, willRecheck }: { from: PageService; target: PageService; delta: number; onSwitch: () => void; willRecheck: boolean }) {
+  const amount = priceLabelCOP(String(delta)) ?? "";
+  return (
+    <div role="group" aria-label={`Alternativa a ${from.name}`} className="pb-rise flex flex-col gap-2 rounded-[12px] bg-pb-sf2 p-3">
+      <p className="m-0 flex items-start gap-2 text-[14px] leading-[1.45] text-pb-body">
+        <span className="mt-0.5 text-pb-tx2">
+          <IconUp />
+        </span>
+        <span>
+          Pásate a <span className="font-[590]">{target.name}</span> por <span className="font-[590] [font-variant-numeric:tabular-nums]">{amount} más</span>
+          <span className="text-pb-muted"> · {target.duration_min} min</span>.
+          {willRecheck ? <span className="block text-[13px] text-pb-muted">Si cambias, revisaremos de nuevo el artista y la hora.</span> : null}
+        </span>
+      </p>
+      <button type="button" onClick={onSwitch} className={`${BTN_PRIMARY_SM} self-start`}>
+        Cambiar a {target.name}
+      </button>
+    </div>
+  );
+}
+
+/** A `featured` group's large card. Rendered only for COMPLETE services (pageSections). */
+function FeaturedCard({
+  service: s,
+  index,
+  selected,
+  onReserve,
+  onOpenReviews,
+}: {
+  service: ServiceOption & PageService;
+  index: number;
+  selected: boolean;
+  onReserve: () => void;
+  onOpenReviews: (service: ServiceOption, trigger: HTMLElement) => void;
+}) {
+  const price = priceLabelCOP(s.price) ?? "";
+  return (
+    <article style={{ ["--i" as string]: index }} aria-label={s.name} className={`pb-rise overflow-hidden rounded-[20px] ${ring(selected)}`}>
+      {s.image_url ? (
+        // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded image (R2), sized by CSS
+        <img src={s.image_url} alt="" className="block aspect-[16/10] w-full object-cover lg:aspect-[21/9]" loading="eager" decoding="async" />
+      ) : null}
+      <div className="flex flex-col gap-3 p-4 lg:p-5">
+        <div className="flex flex-col gap-1">
+          <h4 className={`${SERIF} m-0 text-[26px] leading-[1.1] [overflow-wrap:anywhere]`}>{s.name}</h4>
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[14px] text-pb-muted [font-variant-numeric:tabular-nums]">
             <span className="flex items-center gap-[5px]">
               <IconClock />
               {s.duration_min} min
             </span>
-            <span className="text-[15px] font-semibold text-pb-ink">{price}</span>
-            {s.rating ? (
-              <span className="flex items-center gap-[3px] text-pb-tx2" aria-label={`${ratingText(s.rating.average)} de 5, ${reviewCountText(s.rating.count)}`}>
-                <IconStar />
-                <span aria-hidden>
-                  {ratingText(s.rating.average)} <span className="text-pb-muted">({s.rating.count})</span>
-                </span>
-              </span>
-            ) : (
-              <span className="rounded-[6px] bg-pb-sf2 px-[7px] py-0.5 text-[12px] text-pb-tx2">Sin reseñas aún</span>
-            )}
-            {selected ? <span className="sr-only">Seleccionado</span> : null}
+            <span className="text-[16px] font-semibold text-pb-ink">{price}</span>
+            {s.rating ? <RatingButton rating={s.rating} label={s.name} onOpen={(t) => onOpenReviews(s, t)} /> : null}
           </span>
+        </div>
+        {s.description ? <p className="m-0 whitespace-pre-line text-[15px] leading-[1.55] text-pb-body">{s.description}</p> : null}
+        {s.includes.length > 0 ? (
+          <div className="flex flex-col gap-1.5">
+            <h5 className="m-0 text-[13.5px] font-[590] text-pb-tx2">Qué incluye</h5>
+            <ul className="m-0 flex list-none flex-col gap-1 p-0">
+              {s.includes.map((x) => (
+                <li key={x} className="flex items-start gap-2 text-[14.5px] leading-[1.45] text-pb-body">
+                  <span className="mt-[3px] flex-none">
+                    <IconCheck size={14} stroke="#2f5a38" />
+                  </span>
+                  {x}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        <button type="button" aria-pressed={selected} onClick={onReserve} className={`${CTA_BASE} ${ctaTone("on")} w-full sm:w-auto sm:self-start`}>
+          {selected ? (
+            <span key="on" className="pb-pop flex">
+              <IconCheck />
+            </span>
+          ) : null}
+          Reservar mi experiencia
+          <IconArrow />
         </button>
-        {s.description ? (
-          <p
-            id={descId}
-            className={`m-0 whitespace-pre-line text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] ${
-              expanded ? "" : "line-clamp-2"
-            }`}
-          >
-            {s.description}
-          </p>
-        ) : null}
-        {more ? (
-          <button type="button" aria-expanded={expanded} onClick={onToggle} className={`${LINK_BTN} -mb-2.5 -ml-2 -mt-1 self-start`}>
-            {expanded ? "Ver menos" : "Ver más"}
-            <span className="sr-only"> sobre {s.name}</span>
-          </button>
-        ) : null}
       </div>
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-hidden
-        onClick={onSelect}
-        className={`flex size-11 flex-none items-center justify-center rounded-full border p-0 ${
-          selected ? "border-pb-ink bg-pb-ink" : "border-pb-line2 bg-white"
-        }`}
-      >
-        {selected ? <IconCheck /> : <IconPlus />}
-      </button>
-    </div>
+    </article>
   );
 }

@@ -10,6 +10,9 @@ import { BTN_PRIMARY_SM, BTN_SECONDARY, IconChevron, IconInfo, LINK_BTN, SERIF, 
  * room or closed, greyed = past or beyond the booking horizon. Times are listed under
  * it, in 24 h and in the SITE's timezone. Nothing here decides availability: the days
  * and times are what the public availability endpoint (the shared engine) returned.
+ *
+ * Motion: the month slides in from the side it comes from; the day's times fade in when
+ * the day changes; placeholders shimmer ONLY while the request is really in flight.
  */
 
 const WEEK_HEADER = ["LU", "MA", "MI", "JU", "VI", "SÁ", "DO"];
@@ -48,6 +51,7 @@ export function DateTimeStep({
   onRetry,
   empty,
   onEmptyAction,
+  monthDir = null,
 }: {
   serviceLine: string;
   artistLine: string;
@@ -73,6 +77,8 @@ export function DateTimeStep({
   onRetry: () => void;
   empty: EmptyState | null;
   onEmptyAction: (a: EmptyAction) => void;
+  /** Which way the month last moved, for the slide. */
+  monthDir?: "fwd" | "back" | null;
 }) {
   const cells = calendarDays(month);
   // calendarDays starts weeks on Sunday; the design starts them on Monday.
@@ -128,14 +134,21 @@ export function DateTimeStep({
             <NavButton dir="next" label="Mes siguiente" disabled={!canNext} onClick={onNext} />
           </span>
         </div>
-        <div role="group" aria-label={`Días de ${title}`} className="grid grid-cols-7 gap-y-0.5">
-          <div aria-hidden className="contents">
+        <div aria-hidden className="grid grid-cols-7">
+          <div className="contents">
             {WEEK_HEADER.map((w) => (
               <span key={w} className="pb-1.5 pt-0.5 text-center text-[12px] tracking-[0.04em] text-pb-muted">
                 {w}
               </span>
             ))}
           </div>
+        </div>
+        <div
+          key={month}
+          role="group"
+          aria-label={`Días de ${title}`}
+          className={`grid grid-cols-7 gap-y-0.5 ${monthDir === "fwd" ? "pb-step-fwd" : monthDir === "back" ? "pb-step-back" : ""}`}
+        >
           <div className="contents">
             {Array.from({ length: lead }, (_, i) => (
               <span key={`b${i}`} aria-hidden className="flex justify-center">
@@ -158,7 +171,7 @@ export function DateTimeStep({
                     aria-current={isToday ? "date" : undefined}
                     aria-label={`${isToday ? "Hoy, " : ""}${dayHeadline(c.key)}, ${DAY_STATUS_SPOKEN[st]}`}
                     onClick={() => onPickDay(c.key)}
-                    className={`relative flex size-11 items-center justify-center rounded-full p-0 text-[15px] [font-variant-numeric:tabular-nums] ${
+                    className={`pb-sel pb-press relative flex size-11 items-center justify-center rounded-full p-0 text-[15px] [font-variant-numeric:tabular-nums] ${
                       sel
                         ? "border border-pb-ink bg-pb-ink font-semibold text-white"
                         : !selectable
@@ -216,7 +229,7 @@ export function DateTimeStep({
         ) : loading ? (
           <div role="status" aria-label="Cargando horarios" className="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-2">
             {Array.from({ length: 6 }, (_, k) => (
-              <span key={k} aria-hidden className="h-12 rounded-[12px] bg-pb-hair" />
+              <span key={k} aria-hidden className="pb-skel h-12 rounded-[12px]" />
             ))}
           </div>
         ) : empty ? (
@@ -241,7 +254,7 @@ export function DateTimeStep({
             ) : null}
           </div>
         ) : (
-          <div className="flex flex-col gap-3.5">
+          <div key={selectedDay ?? "none"} className="pb-fade flex flex-col gap-3.5">
             {groups.map((g) => (
               <div key={g.name} className="flex flex-col gap-2">
                 <h3 className="m-0 text-[13px] font-[590] text-pb-muted">{g.name}</h3>
@@ -256,7 +269,7 @@ export function DateTimeStep({
                         aria-pressed={sel}
                         aria-label={`${label}, hasta las ${fmtTime(s.service_end_at, timezone, "24")}`}
                         onClick={() => onPickSlot(s.start_at)}
-                        className={`min-h-12 rounded-[12px] border text-[15.5px] [font-variant-numeric:tabular-nums] ${
+                        className={`pb-sel pb-press min-h-12 rounded-[12px] border text-[15.5px] [font-variant-numeric:tabular-nums] ${
                           sel ? "border-pb-ink bg-pb-ink font-[590] text-white" : "border-pb-line2 bg-white text-pb-ink"
                         }`}
                       >
@@ -281,7 +294,7 @@ function NavButton({ dir, label, disabled, onClick }: { dir: "prev" | "next"; la
       aria-label={label}
       disabled={disabled}
       onClick={onClick}
-      className={`flex size-11 items-center justify-center rounded-full border bg-white p-0 ${
+      className={`pb-sel pb-press flex size-11 items-center justify-center rounded-full border bg-white p-0 ${
         disabled ? "cursor-not-allowed border-pb-hair text-pb-dis" : "border-pb-line2 text-pb-ink"
       }`}
     >

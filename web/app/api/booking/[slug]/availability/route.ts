@@ -52,7 +52,11 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     }),
     listPublicStaffForService(site.tenant_id, site.id, serviceId),
   ]);
-  if (!result) return publicError(409, "service_unavailable", "Este servicio ya no está disponible en esta sede. Elige otro servicio.");
+  // No public professional = the service is not on the page any more (hidden, moved to a
+  // WhatsApp-only group, or nobody performs it): the same answer as an unbookable one.
+  if (!result || publicStaff.length === 0) {
+    return publicError(409, "service_unavailable", "Este servicio ya no está disponible en esta sede. Elige otro servicio.");
+  }
   return publicJson({
     timezone: result.site.timezone,
     slots: projectPublicSlots(result.slots, new Set(publicStaff.map((s) => s.id))),
