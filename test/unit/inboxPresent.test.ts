@@ -9,6 +9,8 @@ import {
   conversationTitle,
   dayBuckets,
   daySeam,
+  DEFAULT_INBOX_TAB,
+  INBOX_TABS,
   inTab,
   isPhoneRef,
   listStamp,
@@ -131,6 +133,8 @@ test('tabs, counts (99+), preview lines and Hoy · Ayer · Anteriores', () => {
   assert.deepEqual(tabCounts(views), { all: 4, pending: 1, human: 1, bot: 2 });
   assert.equal(inTab('pending', 'all'), true);
   assert.equal(inTab('pending', 'human'), false);
+  assert.equal(DEFAULT_INBOX_TAB, 'pending', 'the inbox opens on Escalado');
+  assert.deepEqual(INBOX_TABS.map((t) => t.key), ['pending', 'human', 'bot', 'all'], 'Todas is the last tab');
   assert.equal(capCount(99), '99');
   assert.equal(capCount(100), '99+');
   assert.equal(previewLines('pending'), 2);

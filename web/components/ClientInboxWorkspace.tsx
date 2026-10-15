@@ -23,6 +23,7 @@ import {
   capCount,
   conversationTitle,
   dayBuckets,
+  DEFAULT_INBOX_TAB,
   INBOX_TABS,
   inTab,
   listStamp,
@@ -113,7 +114,7 @@ export function ClientInboxWorkspace({
   const [data, setData] = useState<GridPayload>(initial);
   const [stale, setStale] = useState(false);
   const [search, setSearch] = useState("");
-  const [tab, setTab] = useState<InboxTab>("all");
+  const [tab, setTab] = useState<InboxTab>(DEFAULT_INBOX_TAB);
 
   const load = useCallback(async () => {
     try {
@@ -436,7 +437,7 @@ function InboxTabs({ tab, counts, onChange }: { tab: InboxTab; counts: Record<In
   return (
     // Always the full width of the column (each tab grows from its own content), a
     // little apart from the search field above.
-    <div role="group" aria-label="Filtrar conversaciones" className="mt-1.5 flex w-full gap-1.5 md:mt-1 md:gap-1 lg:gap-1.5">
+    <div role="group" aria-label="Filtrar conversaciones" className="mt-1.5 flex w-full gap-1.5 md:mt-1 md:gap-1 xl:gap-1.5">
       {INBOX_TABS.map((t) => {
         const on = t.key === tab;
         const icon = t.key === "pending" ? <IconClockAlert /> : t.key === "human" ? <IconPerson className="size-3.5" /> : t.key === "bot" ? <IconBot className="size-3.5" /> : null;
@@ -447,7 +448,7 @@ function InboxTabs({ tab, counts, onChange }: { tab: InboxTab; counts: Record<In
             aria-pressed={on}
             aria-label={`${t.name}, ${counts[t.key]}`}
             onClick={() => onChange(t.key)}
-            className={`inline-flex h-11 flex-auto items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border px-3 text-sm transition-colors md:h-8 md:gap-1 md:px-2 md:text-[0.8125rem] lg:gap-1.5 lg:px-2.5 ${on ? "border-ink bg-ink font-semibold text-ink-fg" : "border-line-strong text-foreground hover:bg-subtle"}`}
+            className={`inline-flex h-11 flex-auto items-center justify-center gap-1.5 whitespace-nowrap rounded-xl border px-3 text-sm transition-colors md:h-8 md:gap-1 md:px-2 md:text-[0.8125rem] xl:gap-1.5 xl:px-2.5 ${on ? "border-ink bg-ink font-semibold text-ink-fg" : "border-line-strong text-foreground hover:bg-subtle"}`}
           >
             {icon}
             {t.label ? <span>{t.label}</span> : null}

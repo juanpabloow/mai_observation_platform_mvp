@@ -177,11 +177,14 @@ export function windowClosedLine(w: WindowState, now: Date = new Date()): string
 
 export type InboxTab = "all" | "pending" | "human" | "bot";
 
+/** The inbox opens on what needs a person; "Todas" is the last tab. */
+export const DEFAULT_INBOX_TAB: InboxTab = "pending";
+
 export const INBOX_TABS: ReadonlyArray<{ key: InboxTab; label: string; name: string }> = [
-  { key: "all", label: "Todas", name: "Todas" },
   { key: "pending", label: "Escalado", name: "Necesitan una persona" },
   { key: "human", label: "", name: "Atiende una persona" },
   { key: "bot", label: "", name: "Atiende el bot" },
+  { key: "all", label: "Todas", name: "Todas" },
 ];
 
 export function tabCounts(views: ReadonlyArray<Pick<InboxConversationView, "mode">>): Record<InboxTab, number> {
