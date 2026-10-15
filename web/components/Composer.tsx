@@ -18,7 +18,8 @@ import { BTN_PRIMARY, BTN_SECONDARY, IconLock, IconSend } from "./inbox/InboxUi"
  * DRAFT PER CONVERSATION: kept in sessionStorage under the client + conversation, so
  * switching conversations (or going back to the list on the phone) never loses it.
  * Enter sends and Shift+Enter breaks the line on desktop/tablet; on a touch phone Enter is
- * a line break and the button sends. The hint appears when the field is focused.
+ * a line break and the button sends. The hint sits INSIDE the field, beside the send button,
+ * while it is focused and empty — below it, it reserved a blank band under the composer.
  */
 
 const draftKey = (clientId: string, conversationId: string) => `inbox-draft:${clientId}:${conversationId}`;
@@ -121,37 +122,35 @@ export function Composer({
   };
 
   return (
-    <div className="flex flex-col gap-1">
-      <div className="u-focus flex items-end gap-2 rounded-2xl border border-line bg-surface py-1.5 pl-3.5 pr-1.5">
-        <label htmlFor={`${hintId}-field`} className="sr-only">
-          Mensaje
-        </label>
-        <textarea
-          id={`${hintId}-field`}
-          ref={ref}
-          value={text}
-          onChange={(e) => update(e.target.value)}
-          onKeyDown={onKeyDown}
-          onFocus={() => setFocused(true)}
-          onBlur={() => setFocused(false)}
-          rows={1}
-          placeholder="Escribe un mensaje"
-          aria-describedby={hintId}
-          className="max-h-40 min-h-[2.5rem] w-full flex-1 resize-none bg-transparent py-2 text-base leading-snug outline-none placeholder:text-faint md:min-h-[2.125rem] md:py-1.5 md:text-[0.875rem]"
-        />
-        <button
-          type="button"
-          onClick={submit}
-          disabled={text.trim() === ""}
-          aria-label="Enviar mensaje"
-          className="mb-0.5 inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-ink text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:bg-chip disabled:text-faint md:size-8"
-        >
-          <IconSend />
-        </button>
-      </div>
-      <span id={hintId} className={`hidden px-1 text-[0.6875rem] text-faint md:block ${focused ? "" : "md:invisible"}`}>
-        Enter envía · Shift + Enter hace salto de línea
+    <div className="u-focus flex items-end gap-2 rounded-2xl border border-line bg-surface py-1.5 pl-3.5 pr-1.5">
+      <label htmlFor={`${hintId}-field`} className="sr-only">
+        Mensaje
+      </label>
+      <textarea
+        id={`${hintId}-field`}
+        ref={ref}
+        value={text}
+        onChange={(e) => update(e.target.value)}
+        onKeyDown={onKeyDown}
+        onFocus={() => setFocused(true)}
+        onBlur={() => setFocused(false)}
+        rows={1}
+        placeholder="Escribe un mensaje"
+        aria-describedby={hintId}
+        className="max-h-40 min-h-[2.5rem] w-full flex-1 resize-none bg-transparent py-2 text-base leading-snug outline-none placeholder:text-faint md:min-h-[2.125rem] md:py-1.5 md:text-[0.875rem]"
+      />
+      <span id={hintId} className={`mb-2.5 hidden shrink-0 text-[0.6875rem] text-faint md:block ${focused && !text ? "" : "md:sr-only"}`}>
+        Enter envía · Shift + Enter salto de línea
       </span>
+      <button
+        type="button"
+        onClick={submit}
+        disabled={text.trim() === ""}
+        aria-label="Enviar mensaje"
+        className="mb-0.5 inline-flex size-11 shrink-0 items-center justify-center rounded-full bg-ink text-ink-fg transition-colors hover:bg-ink-hover disabled:cursor-not-allowed disabled:bg-chip disabled:text-faint md:size-8"
+      >
+        <IconSend />
+      </button>
     </div>
   );
 }
