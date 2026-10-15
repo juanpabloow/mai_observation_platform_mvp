@@ -20,6 +20,8 @@ import { BTN_PRIMARY, BTN_SECONDARY, IconLock, IconSend } from "./inbox/InboxUi"
  * Enter sends and Shift+Enter breaks the line on desktop/tablet; on a touch phone Enter is
  * a line break and the button sends. The hint sits INSIDE the field, beside the send button,
  * while it is focused and empty — below it, it reserved a blank band under the composer.
+ * Only when the FIELD is wide enough (container query, not the viewport): with the ficha
+ * open the thread is narrow and the hint would squeeze the text to a few letters.
  */
 
 const draftKey = (clientId: string, conversationId: string) => `inbox-draft:${clientId}:${conversationId}`;
@@ -122,7 +124,7 @@ export function Composer({
   };
 
   return (
-    <div data-ib-field="" className="u-focus flex items-end gap-2 rounded-2xl border border-line bg-surface py-1.5 pl-3.5 pr-1.5">
+    <div data-ib-field="" className="u-focus @container flex items-end gap-2 rounded-2xl border border-line bg-surface py-1.5 pl-3.5 pr-1.5">
       <label htmlFor={`${hintId}-field`} className="sr-only">
         Mensaje
       </label>
@@ -139,7 +141,7 @@ export function Composer({
         aria-describedby={hintId}
         className="max-h-40 min-h-[2.5rem] w-full flex-1 resize-none bg-transparent py-2 text-base leading-snug outline-none placeholder:text-faint md:min-h-[2.125rem] md:py-1.5 md:text-[0.875rem]"
       />
-      <span id={hintId} className={`mb-2.5 hidden shrink-0 text-[0.6875rem] text-faint md:block ${focused && !text ? "" : "md:sr-only"}`}>
+      <span id={hintId} className={`mb-2.5 hidden shrink-0 whitespace-nowrap text-[0.6875rem] text-faint @lg:block ${focused && !text ? "" : "@lg:sr-only"}`}>
         Enter envía · Shift + Enter salto de línea
       </span>
       <button
