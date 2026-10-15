@@ -37,7 +37,7 @@ export function ArtistStep({
   return (
     <div className="flex flex-col gap-3">
       <p className="m-0 text-[14.5px] leading-[1.45] text-pb-muted">
-        Para <span className="font-[590] text-pb-ink">{serviceName}</span>. Ver el perfil no te asigna al artista.
+        Para <span className="font-[590] text-pb-ink">{serviceName}</span>.
       </p>
       {notice ? (
         <div role="status" className="flex items-start gap-2.5 rounded-[12px] border border-pb-warn-bd bg-pb-warn-bg px-3.5 py-3 text-[14px] leading-[1.45] text-pb-warn-fg">
@@ -96,7 +96,8 @@ export function ArtistStep({
                   {a.rating ? <RatingButton rating={a.rating} label={a.name} onOpen={(t) => onOpenReviews(a, t)} /> : null}
                 </div>
                 {a.title ? <span className="line-clamp-2 text-[13.5px] leading-[1.35] text-pb-muted">{a.title}</span> : null}
-                {a.bio ? <p className="m-0 hidden line-clamp-1 text-[13.5px] leading-[1.45] text-pb-tx2 sm:block">{bioLead(a.bio)}</p> : null}
+                {/* Only the business's approved public presentation — nothing is made up. */}
+                {a.bio ? <p className="m-0 line-clamp-2 text-[13.5px] leading-[1.45] text-pb-tx2">{bioLead(a.bio)}</p> : null}
                 <button
                   type="button"
                   aria-haspopup="dialog"

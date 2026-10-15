@@ -266,6 +266,7 @@ export function DetailsStep({
           <label className="flex cursor-pointer items-start gap-0.5">
             <span className="relative -mt-2.5 flex size-11 flex-none items-center justify-center">
               <input
+                id="pb-consent"
                 type="checkbox"
                 checked={form.consent}
                 onChange={(e) => setField("consent", e.target.checked)}
@@ -312,6 +313,10 @@ export function DetailsStep({
           <TurnstileField ref={turnstileRef} siteKey={turnstileSiteKey} onToken={onTurnstile} />
         ) : null}
 
+        {/* What happens next — only what the platform really does. */}
+        <p className="m-0 text-[13.5px] leading-[1.5] text-pb-muted">
+          Al confirmar, tu cita queda reservada de inmediato y verás todos sus datos en esta pantalla, con la opción de añadirla a tu calendario.
+        </p>
         {errorCount > 0 ? (
           <span role="status" className="text-[14px] text-pb-err">
             {errorCount === 1 ? "Revisa 1 campo para confirmar." : `Revisa ${errorCount} campos para confirmar.`}

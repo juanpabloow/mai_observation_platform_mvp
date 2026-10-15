@@ -299,7 +299,9 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
   const isSel = selected === s.id;
   const price = priceLabelCOP(s.price) ?? "Precio a consultar";
   const more = needsMore(s.description);
-  const offer = isSel ? upgradeOffer(s, all) : null;
+  // Its better alternative (real price difference) — compared at a glance, offered on select.
+  const alt = upgradeOffer(s, all);
+  const offer = isSel ? alt : null;
   return (
     <div style={{ ["--i" as string]: index }} className={`pb-rise flex flex-col gap-3 rounded-[16px] p-3.5 ${ring(isSel)}`}>
       <div className="flex items-start gap-3.5">
@@ -312,7 +314,7 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
             className="flex min-w-0 flex-col gap-[5px] rounded-[8px] bg-transparent p-0 text-left"
           >
             <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="text-[16.5px] font-[590] leading-[1.3] [overflow-wrap:anywhere]">{s.name}</span>
+              <span className="text-[16.5px] font-[590] leading-[1.3] [overflow-wrap:anywhere] [text-wrap:balance]">{s.name}</span>
               {s.recommended ? <span className="rounded-full bg-pb-peach px-2 py-0.5 text-[12px] font-[590] text-pb-peach-fg">Recomendado</span> : null}
             </span>
             <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13.5px] text-pb-muted [font-variant-numeric:tabular-nums]">
@@ -327,6 +329,12 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
           {s.rating ? (
             <span className="self-start">
               <RatingButton rating={s.rating} label={s.name} onOpen={(t) => onOpenReviews(s, t)} />
+            </span>
+          ) : null}
+          {alt && !isSel ? (
+            <span className="text-[13px] leading-[1.4] text-pb-muted [font-variant-numeric:tabular-nums]">
+              {alt.target.name}: +{priceLabelCOP(String(alt.delta))}
+              {alt.target.duration_min !== s.duration_min ? ` · ${alt.target.duration_min > s.duration_min ? "+" : "−"}${Math.abs(alt.target.duration_min - s.duration_min)} min` : ""}
             </span>
           ) : null}
           {s.description ? (
@@ -373,7 +381,11 @@ function UpgradeOffer({ from, target, delta, onSwitch, willRecheck }: { from: Pa
         </span>
         <span>
           Pásate a <span className="font-[590]">{target.name}</span> por <span className="font-[590] [font-variant-numeric:tabular-nums]">{amount} más</span>
-          <span className="text-pb-muted"> · {target.duration_min} min</span>.
+          <span className="text-pb-muted">
+            {" "}
+            · {target.duration_min} min{target.duration_min !== from.duration_min ? ` (${target.duration_min > from.duration_min ? "+" : "−"}${Math.abs(target.duration_min - from.duration_min)} min)` : ""}
+          </span>
+          .
           {willRecheck ? <span className="block text-[13px] text-pb-muted">Si cambias, revisaremos de nuevo el artista y la hora.</span> : null}
         </span>
       </p>
@@ -389,7 +401,12 @@ function UpgradeOffer({ from, target, delta, onSwitch, willRecheck }: { from: Pa
   );
 }
 
-/** A `featured` group's large card. Rendered only for COMPLETE services (pageSections). */
+/**
+ * A `featured` group's large card (Entre Nubes): image, title, duration and price first,
+ * a SHORT introduction with "Leer más" for the rest, the booking button right after it,
+ * and "Qué incluye" — collapsible on the phone, always open from `sm`. Nothing is removed:
+ * every line of the description and of "Qué incluye" stays one tap away.
+ */
 function FeaturedCard({
   service: s,
   index,
@@ -403,7 +420,12 @@ function FeaturedCard({
   onReserve: () => void;
   onOpenReviews: (service: ServiceOption, trigger: HTMLElement) => void;
 }) {
+  const descId = useId();
+  const incId = useId();
+  const [more, setMore] = useState(false);
+  const [incOpen, setIncOpen] = useState(false);
   const price = priceLabelCOP(s.price) ?? "";
+  const longText = needsMore(s.description);
   return (
     <article style={{ ["--i" as string]: index }} aria-label={s.name} className={`pb-rise overflow-hidden rounded-[20px] ${ring(selected)}`}>
       {s.image_url ? (
@@ -411,31 +433,28 @@ function FeaturedCard({
         <img src={s.image_url} alt="" className="block aspect-[16/10] w-full object-cover lg:aspect-[21/9]" loading="eager" decoding="async" />
       ) : null}
       <div className="flex flex-col gap-3 p-4 lg:p-5">
-        <div className="flex flex-col gap-1">
-          <h4 className={`${SERIF} m-0 text-[26px] leading-[1.1] [overflow-wrap:anywhere]`}>{s.name}</h4>
-          <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[14px] text-pb-muted [font-variant-numeric:tabular-nums]">
-            <span className="flex items-center gap-[5px]">
+        <div className="flex flex-col gap-1.5">
+          <h4 className={`${SERIF} m-0 text-[26px] leading-[1.1] [overflow-wrap:anywhere] [text-wrap:balance]`}>{s.name}</h4>
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1 [font-variant-numeric:tabular-nums]">
+            <span className="text-[19px] font-semibold text-pb-ink">{price}</span>
+            <span className="flex items-center gap-[5px] text-[14px] text-pb-muted">
               <IconClock />
               {s.duration_min} min
             </span>
-            <span className="text-[16px] font-semibold text-pb-ink">{price}</span>
             {s.rating ? <RatingButton rating={s.rating} label={s.name} onOpen={(t) => onOpenReviews(s, t)} /> : null}
           </span>
         </div>
-        {s.description ? <p className="m-0 whitespace-pre-line text-[15px] leading-[1.55] text-pb-body">{s.description}</p> : null}
-        {s.includes.length > 0 ? (
-          <div className="flex flex-col gap-1.5">
-            <h5 className="m-0 text-[13.5px] font-[590] text-pb-tx2">Qué incluye</h5>
-            <ul className="m-0 flex list-none flex-col gap-1 p-0">
-              {s.includes.map((x) => (
-                <li key={x} className="flex items-start gap-2 text-[14.5px] leading-[1.45] text-pb-body">
-                  <span className="mt-[3px] flex-none">
-                    <IconCheck size={14} stroke="#2f5a38" />
-                  </span>
-                  {x}
-                </li>
-              ))}
-            </ul>
+        {s.description ? (
+          <div className="flex flex-col">
+            <p id={descId} className={`m-0 whitespace-pre-line text-[15px] leading-[1.55] text-pb-body [overflow-wrap:anywhere] ${more ? "" : "line-clamp-3"}`}>
+              {s.description}
+            </p>
+            {longText ? (
+              <button type="button" aria-expanded={more} aria-controls={descId} onClick={() => setMore((x) => !x)} className={`${LINK_BTN} -mb-1 -ml-2 self-start`}>
+                {more ? "Ver menos" : "Leer más"}
+                <span className="sr-only"> sobre {s.name}</span>
+              </button>
+            ) : null}
           </div>
         ) : null}
         <button type="button" aria-pressed={selected} onClick={onReserve} className={`${CTA_BASE} ${ctaTone("on")} w-full sm:w-auto sm:self-start`}>
@@ -447,7 +466,42 @@ function FeaturedCard({
           Reservar mi experiencia
           <IconArrow />
         </button>
+        {s.includes.length > 0 ? (
+          <div className="flex flex-col gap-1.5 border-t border-pb-hair pt-3">
+            <button
+              type="button"
+              aria-expanded={incOpen}
+              aria-controls={incId}
+              onClick={() => setIncOpen((x) => !x)}
+              className="flex min-h-11 items-center justify-between gap-2 text-left text-[14.5px] font-[590] text-pb-ink sm:hidden"
+            >
+              Qué incluye ({s.includes.length})
+              <span aria-hidden className={`transition-transform duration-200 motion-reduce:transition-none ${incOpen ? "rotate-180" : ""}`}>
+                <IconChevronDown />
+              </span>
+            </button>
+            <h5 className="m-0 hidden text-[13.5px] font-[590] text-pb-tx2 sm:block">Qué incluye</h5>
+            <ul id={incId} className={`m-0 list-none flex-col gap-1 p-0 sm:flex ${incOpen ? "pb-fade flex" : "hidden"}`}>
+              {s.includes.map((x) => (
+                <li key={x} className="flex items-start gap-2 text-[14.5px] leading-[1.45] text-pb-body">
+                  <span className="mt-[3px] flex-none">
+                    <IconCheck size={14} stroke="#2f5a38" />
+                  </span>
+                  {x}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
     </article>
+  );
+}
+
+function IconChevronDown() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+      <path d="M3.5 6 8 10.5 12.5 6" />
+    </svg>
   );
 }

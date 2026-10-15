@@ -1,7 +1,8 @@
 "use client";
 
+import { useState } from "react";
 import { calendarDays, dayHeadline, fmtTime, monthTitle, type DayKey, type MonthKey } from "@/lib/siteCalendar";
-import { DAY_STATUS_SPOKEN, groupSlots, isSelectableDay, type DayStatus } from "@/lib/publicBookingFlow";
+import { DAY_STATUS_SPOKEN, groupSlots, isSelectableDay, type DayPeriod, type DayStatus } from "@/lib/publicBookingFlow";
 import { BTN_PRIMARY_SM, BTN_SECONDARY, IconChevron, IconInfo, LINK_BTN, SERIF, type Slot } from "./ui";
 
 /**
@@ -13,15 +14,21 @@ import { BTN_PRIMARY_SM, BTN_SECONDARY, IconChevron, IconInfo, LINK_BTN, SERIF, 
  *
  * Motion: the month slides in from the side it comes from; the day's times fade in when
  * the day changes; placeholders shimmer ONLY while the request is really in flight.
+ *
+ * Times are split into Mañana / Tarde / Noche tabs (only the periods that have times) so
+ * a long day does not become a long scroll; every time stays one tap away and none is
+ * removed. A struck day is closed (the site), away (the chosen artist) or full.
  */
 
 const WEEK_HEADER = ["LU", "MA", "MI", "JU", "VI", "SÁ", "DO"];
 
 /** What an empty day offers — as data; the flow performs it (onEmptyAction). */
-export type EmptyAction = { kind: "day"; day: DayKey } | { kind: "nextMonth" } | { kind: "any" } | { kind: "artist" };
+export type EmptyAction = { kind: "day"; day: DayKey } | { kind: "jump"; day: DayKey } | { kind: "nextMonth" } | { kind: "any" } | { kind: "artist" };
 export interface EmptyState {
   title: string;
   text: string;
+  /** Real alternatives from the engine ("Ana tiene horarios desde el …"). */
+  note?: string;
   next?: { label: string; action: EmptyAction };
   alt?: { label: string; action: EmptyAction };
 }
@@ -52,6 +59,7 @@ export function DateTimeStep({
   empty,
   onEmptyAction,
   monthDir = null,
+  autoPicked = false,
 }: {
   serviceLine: string;
   artistLine: string;
@@ -79,6 +87,8 @@ export function DateTimeStep({
   onEmptyAction: (a: EmptyAction) => void;
   /** Which way the month last moved, for the slide. */
   monthDir?: "fwd" | "back" | null;
+  /** The page chose this day itself (the first with room) — it says so. */
+  autoPicked?: boolean;
 }) {
   const cells = calendarDays(month);
   // calendarDays starts weeks on Sunday; the design starts them on Monday.
@@ -92,6 +102,13 @@ export function DateTimeStep({
   const blanksAfter = (7 - ((lead + monthDays.length) % 7)) % 7;
   const title = monthTitle(month);
   const groups = groupSlots(slots, timezone);
+  // The period on screen: the visitor's tap, else the one holding the chosen time, else the
+  // first with times. Never forced on them — the tabs stay in their hands.
+  const [periodPick, setPeriodPick] = useState<{ day: DayKey | null; period: DayPeriod } | null>(null);
+  const chosenPeriod = groups.find((g) => g.items.some((x) => x.start_at === selectedSlot))?.name;
+  const period: DayPeriod | undefined =
+    (periodPick && periodPick.day === selectedDay && groups.some((g) => g.name === periodPick.period) ? periodPick.period : undefined) ?? chosenPeriod ?? groups[0]?.name;
+  const shownGroups = groups.length > 1 ? groups.filter((g) => g.name === period) : groups;
   const dayTitle = selectedDay ? `${selectedDay === today ? "Hoy, " : ""}${selectedDay === today ? dayHeadline(selectedDay).toLocaleLowerCase("es") : dayHeadline(selectedDay)}` : "Elige un día";
 
   return (
@@ -161,7 +178,7 @@ export function DateTimeStep({
               const sel = c.key === selectedDay;
               const isToday = c.key === today;
               const open = st === "open";
-              const struck = st === "full" || st === "closed";
+              const struck = st === "full" || st === "closed" || st === "away";
               return (
                 <span key={c.key} className="flex justify-center">
                   <button
@@ -169,7 +186,7 @@ export function DateTimeStep({
                     disabled={!selectable}
                     aria-pressed={sel}
                     aria-current={isToday ? "date" : undefined}
-                    aria-label={`${isToday ? "Hoy, " : ""}${dayHeadline(c.key)}, ${DAY_STATUS_SPOKEN[st]}`}
+                    aria-label={`${isToday ? "Hoy, " : ""}${dayHeadline(c.key)}, ${st === "away" && artistLine ? `${artistLine} no atiende` : DAY_STATUS_SPOKEN[st]}`}
                     onClick={() => onPickDay(c.key)}
                     className={`pb-sel pb-press relative flex size-11 items-center justify-center rounded-full p-0 text-[15px] [font-variant-numeric:tabular-nums] ${
                       sel
@@ -218,6 +235,7 @@ export function DateTimeStep({
         <div className="flex flex-col gap-0.5">
           <h2 className="m-0 text-[17px] font-semibold">{dayTitle}</h2>
           <span className="text-[13px] text-pb-muted">Hora de {timezoneText}</span>
+          {autoPicked && !loading && !error && !empty ? <span className="pb-fade text-[13px] text-pb-tx2">Elegimos el primer día con cupos. Puedes cambiarlo en el calendario.</span> : null}
         </div>
         {error ? (
           <div role="alert" className="flex flex-col items-start gap-3 rounded-[16px] border border-pb-line bg-white p-4">
@@ -236,7 +254,8 @@ export function DateTimeStep({
           <div className="flex flex-col gap-3 rounded-[16px] border border-pb-line bg-white p-4">
             <div className="flex flex-col gap-1">
               <span className="text-[16px] font-[590]">{empty.title}</span>
-              <span className="text-[14px] leading-[1.45] text-pb-muted">{empty.text}</span>
+              {empty.text ? <span className="text-[14px] leading-[1.45] text-pb-muted">{empty.text}</span> : null}
+              {empty.note ? <span className="text-[14px] leading-[1.45] text-pb-tx2">{empty.note}</span> : null}
             </div>
             {empty.next || empty.alt ? (
               <div className="flex flex-wrap gap-2">
@@ -255,9 +274,27 @@ export function DateTimeStep({
           </div>
         ) : (
           <div key={selectedDay ?? "none"} className="pb-fade flex flex-col gap-3.5">
-            {groups.map((g) => (
+            {groups.length > 1 ? (
+              <div role="group" aria-label="Franja horaria" className="flex gap-1.5 rounded-[14px] bg-pb-sf2 p-1">
+                {groups.map((g) => {
+                  const on = g.name === period;
+                  return (
+                    <button
+                      key={g.name}
+                      type="button"
+                      aria-pressed={on}
+                      onClick={() => setPeriodPick({ day: selectedDay, period: g.name })}
+                      className={`pb-sel pb-press flex min-h-11 flex-1 items-center justify-center rounded-[11px] text-[15px] ${on ? "bg-white font-[590] text-pb-ink shadow-[0_1px_2px_rgba(17,19,22,0.08)]" : "text-pb-tx2"}`}
+                    >
+                      {g.name}
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+            {shownGroups.map((g) => (
               <div key={g.name} className="flex flex-col gap-2">
-                <h3 className="m-0 text-[13px] font-[590] text-pb-muted">{g.name}</h3>
+                <h3 className={groups.length > 1 ? "sr-only" : "m-0 text-[13px] font-[590] text-pb-muted"}>{g.name}</h3>
                 <div role="group" aria-label={g.name} className="grid grid-cols-[repeat(auto-fill,minmax(96px,1fr))] gap-2">
                   {g.items.map((s) => {
                     const sel = s.start_at === selectedSlot;

@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ratingText, relativeWhen, reviewCountText } from "@/lib/publicReviews";
 import { artistInitials, artistTone } from "@/lib/publicBookingFlow";
+import { bioLead } from "@/lib/staffPublicProfile";
 import { CTA_BASE, ctaTone, IconBack, IconStar, Portrait, SERIF, type ServiceOption, type StaffOption } from "./ui";
 
 /**
@@ -56,6 +57,11 @@ export function ArtistProfile({
   const performs = artist ? services.filter((s) => artist.service_ids.includes(s.id)) : [];
   // "Ver más reseñas" belongs to ONE artist: opening another profile starts collapsed.
   const [expandedFor, setExpandedFor] = useState<string | null>(null);
+  // A long presentation opens with its first sentence; the rest is one tap away.
+  const [bioFor, setBioFor] = useState<string | null>(null);
+  const bioOpen = artist !== null && bioFor === artist.id;
+  const lead = artist?.bio ? bioLead(artist.bio) : null;
+  const bioLong = Boolean(artist?.bio && lead && artist.bio.length > 220 && lead.length < artist.bio.length);
   const allReviews = artist !== null && expandedFor === artist.id;
   const reviews = artist?.reviews ?? [];
   const shown = allReviews ? reviews : reviews.slice(0, 3);
@@ -112,7 +118,24 @@ export function ArtistProfile({
                 ) : null}
               </div>
             </div>
-            {artist.bio ? <p className="m-0 whitespace-pre-line text-[16px] leading-[1.6] text-pb-body">{artist.bio}</p> : null}
+            {artist.bio ? (
+              <div className="flex flex-col">
+                <p id="pb-profile-bio" className="m-0 whitespace-pre-line text-[16px] leading-[1.6] text-pb-body">
+                  {bioLong && !bioOpen ? lead : artist.bio}
+                </p>
+                {bioLong ? (
+                  <button
+                    type="button"
+                    aria-expanded={bioOpen}
+                    aria-controls="pb-profile-bio"
+                    onClick={() => setBioFor(bioOpen ? null : artist.id)}
+                    className="inline-flex min-h-11 items-center self-start rounded-[12px] px-0 text-[14.5px] text-pb-ink underline underline-offset-[3px]"
+                  >
+                    {bioOpen ? "Ver menos" : "Leer más"}
+                  </button>
+                ) : null}
+              </div>
+            ) : null}
             {performs.length > 0 ? (
               <div className="flex flex-col gap-2.5">
                 <h3 className="m-0 text-[14px] font-[590]">Servicios que realiza</h3>

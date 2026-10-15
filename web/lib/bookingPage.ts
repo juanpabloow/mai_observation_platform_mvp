@@ -236,3 +236,95 @@ export function checkIncludes(raw: string): Checked<string[] | null> {
   }
   return { ok: true, value: out.length ? out : null };
 }
+
+// ── "¿Por qué aparece (o no) este servicio?" ────────────────────────────────────────
+
+/** Where in the settings a missing requirement is fixed. */
+export type FixArea = "basic" | "pricing" | "page" | "staff" | "sites" | "categories" | "team";
+
+export interface DiagnosisProblem {
+  code:
+    | "inactive"
+    | "hidden_on_page"
+    | "category_hidden"
+    | "category_contact"
+    | "featured_incomplete"
+    | "no_site"
+    | "site_inactive"
+    | "no_artist"
+    | "artist_not_taking_bookings";
+  message: string;
+  fix: FixArea;
+}
+
+export interface PageDiagnosis {
+  /** visible: on the page of at least one site · hidden: by a deliberate setting ·
+   *  blocked: a requirement is missing. */
+  status: "visible" | "hidden" | "blocked";
+  /** The sites where it is (or would be) listed. */
+  sites: Array<{ id: string; name: string; listed: boolean }>;
+  problems: DiagnosisProblem[];
+}
+
+/**
+ * Whether a service can APPEAR in the public catalogue, and why not — the same rules the
+ * server applies (publicCatalog.ts: publicServicePredicate + the "someone performs it"
+ * EXISTS, and pageSections' completeness rule for a featured group). Covered against the
+ * real query by test/integration/bookingPageCatalog.test.ts.
+ *
+ * It says nothing about TIMES: a listed service with no free time in the coming days is
+ * not misconfigured — that depends on the team's hours, blocks and bookings.
+ */
+export function servicePageDiagnosis(input: {
+  service: { active: boolean; visible: boolean; description: string | null; includes: string[]; imageUrl: string | null; price: string | null; durationMin: number };
+  /** The service's booking-page category, resolved (null = none). */
+  category: { name: string; visible: boolean; layout: CategoryLayout } | null;
+  /** Every site of the client, with this service's enablement and the artists there. */
+  sites: Array<{
+    id: string;
+    name: string;
+    active: boolean;
+    enabled: boolean;
+    artists: Array<{ name: string; active: boolean; takesBookings: boolean; performs: boolean }>;
+  }>;
+}): PageDiagnosis {
+  const { service: s, category: c } = input;
+  const problems: DiagnosisProblem[] = [];
+  const hidden: DiagnosisProblem[] = [];
+  if (!s.active) problems.push({ code: "inactive", message: "El servicio está archivado.", fix: "basic" });
+  if (!s.visible) hidden.push({ code: "hidden_on_page", message: "Está marcado como oculto en la página de reservas.", fix: "page" });
+  if (c && !c.visible) hidden.push({ code: "category_hidden", message: `La categoría «${c.name}» está oculta.`, fix: "categories" });
+  if (c && c.visible && c.layout === "contact") {
+    hidden.push({ code: "category_contact", message: `«${c.name}» se muestra solo como enlace a WhatsApp; sus servicios no se listan.`, fix: "categories" });
+  }
+  if (c && c.layout === "featured") {
+    const miss = featuredMissing({ image_url: s.imageUrl, description: s.description, includes: s.includes, price: s.price, duration_min: s.durationMin });
+    if (miss.length) problems.push({ code: "featured_incomplete", message: `Para mostrarse en «${c.name}» le falta: ${miss.join(", ")}.`, fix: miss.some((m) => m === "precio" || m === "duración") ? "pricing" : "page" });
+  }
+  const sites = input.sites.map((site) => {
+    const ok = site.active && site.enabled && site.artists.some((a) => a.active && a.takesBookings && a.performs);
+    return { id: site.id, name: site.name, listed: ok };
+  });
+  const enabledSites = input.sites.filter((x) => x.enabled);
+  if (enabledSites.length === 0) problems.push({ code: "no_site", message: "No está habilitado en ninguna sede.", fix: "sites" });
+  for (const site of enabledSites) {
+    if (!site.active) {
+      problems.push({ code: "site_inactive", message: `La sede «${site.name}» está inactiva.`, fix: "sites" });
+      continue;
+    }
+    const performing = site.artists.filter((a) => a.active && a.performs);
+    if (performing.length === 0) {
+      problems.push({ code: "no_artist", message: `En «${site.name}» ningún artista activo realiza este servicio.`, fix: "staff" });
+    } else if (!performing.some((a) => a.takesBookings)) {
+      problems.push({ code: "artist_not_taking_bookings", message: `En «${site.name}» quien lo realiza no recibe reservas (${performing.map((a) => a.name).join(", ")}).`, fix: "team" });
+    }
+  }
+  const listedSomewhere = sites.some((x) => x.listed);
+  const status: PageDiagnosis["status"] = hidden.length
+    ? "hidden"
+    : !s.active || problems.some((p) => p.code === "featured_incomplete") || !listedSomewhere
+      ? "blocked"
+      : "visible";
+  // When it IS listed somewhere, the remaining problems concern other sites — still worth saying.
+  return { status, sites: sites.map((x) => ({ ...x, listed: x.listed && status === "visible" })), problems: [...hidden, ...problems] };
+}

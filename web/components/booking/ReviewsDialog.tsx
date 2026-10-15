@@ -15,7 +15,7 @@ import { IconClose, IconStar, SERIF, type PublicReview, type RatingSummary } fro
  */
 
 export interface ReviewsTarget {
-  /** "de Gallery Experience" / "de Federico" / "de Corte Signature". */
+  /** "de <negocio>" / "de <artista>" / "de <servicio>". */
   title: string;
   /** One line on what is counted ("Todas las citas de la sede"). */
   scope: string;
