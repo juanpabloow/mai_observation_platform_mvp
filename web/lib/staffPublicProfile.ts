@@ -48,6 +48,12 @@ function check(raw: string | null | undefined, max: number, multiline: boolean):
   return { ok: true, value };
 }
 
+/** The same content rules for any short public line of the booking page (a category name,
+ * a tagline, one "Qué incluye" item). "" / whitespace → null. */
+export function checkPublicLine(raw: string | null | undefined, max: number): PublicTextResult {
+  return check(raw, max, false);
+}
+
 /** "" / whitespace → null (not published). */
 export function checkPublicTitle(raw: string | null | undefined): PublicTextResult {
   return check(raw, PUBLIC_TITLE_MAX, false);

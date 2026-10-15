@@ -1,7 +1,10 @@
 import type { BookingError } from "@worker/scheduling/booking.js";
-import type { PublicServiceRow, PublicStaffRow } from "@worker/db/repositories/scheduling/publicCatalog.js";
-import type { PublicReviewRow, RatingSummary } from "@worker/db/repositories/scheduling/reviews.js";
+import type { PublicCategoryRow, PublicServiceRow, PublicStaffRow } from "@worker/db/repositories/scheduling/publicCatalog.js";
+import type { PublicReviewRow, PublicSiteReviewRow, RatingSummary } from "@worker/db/repositories/scheduling/reviews.js";
 import { serviceCategory, type ApptCategory } from "@/lib/agendaCategory";
+import { directionsUrl, E164_RE, hoursLines, type CategoryLayout } from "@/lib/bookingPage";
+import type { PromotionRow } from "@worker/db/repositories/scheduling/promotions.js";
+import { appointmentRuleText, BENEFIT_LABEL } from "@worker/scheduling/promotions.js";
 
 /**
  * The PUBLIC booking API's response vocabulary — one place for the headers, the single
@@ -96,6 +99,24 @@ const ENGINE_ERRORS: Partial<Record<BookingError, { status: number; code: string
   },
 };
 
+/**
+ * The price changed between what the visitor saw and the commit: nothing was booked. The
+ * response carries the CURRENT price so the page can show it and ask for acceptance —
+ * it is the same public price the catalogue already shows, nothing internal.
+ */
+export function publicPriceChanged(price: string | null): Response {
+  return publicJson(
+    {
+      error: {
+        code: "price_changed",
+        message: "El precio cambió mientras reservabas. Revisa el nuevo precio y confirma de nuevo.",
+        price,
+      },
+    },
+    409,
+  );
+}
+
 export function publicEngineError(error: BookingError): Response {
   const e = ENGINE_ERRORS[error];
   // Anything unexpected becomes a generic, safe message — never the engine's English text.
@@ -117,6 +138,12 @@ export interface PublicSite {
   /** How many days ahead the site takes bookings — the calendar greys out the days past
    * it. A published booking rule, not an internal setting; the ENGINE still enforces it. */
   booking_horizon_days: number;
+  /** The business's public WhatsApp (E.164) — null when not configured or malformed. */
+  whatsapp: string | null;
+  /** "Cómo llegar": the business's own Google Maps link, else a search for the address. */
+  directions_url: string | null;
+  /** Weekly hours as readable lines; empty when the site has none configured. */
+  hours: Array<{ days: string; hours: string }>;
 }
 
 /** The engine's default horizon (src/scheduling/types.ts) when a site never set one. */
@@ -128,6 +155,8 @@ export function projectPublicSite(site: {
   timezone: string;
   opening_hours: unknown;
   scheduling_config?: unknown;
+  public_whatsapp?: string | null;
+  public_maps_url?: string | null;
 }): PublicSite {
   const hours = (site.opening_hours && typeof site.opening_hours === "object" ? site.opening_hours : {}) as WeeklyHours;
   const configured = Object.values(hours).some((ranges) => Array.isArray(ranges) && ranges.length > 0);
@@ -139,6 +168,9 @@ export function projectPublicSite(site: {
     timezone: site.timezone,
     closed_weekdays: configured ? WEEKDAYS.filter((d) => !(hours[d]?.length)) : [],
     booking_horizon_days: Number.isInteger(horizon) && horizon > 0 && horizon <= 366 ? horizon : DEFAULT_HORIZON_DAYS,
+    whatsapp: site.public_whatsapp && E164_RE.test(site.public_whatsapp) ? site.public_whatsapp : null,
+    directions_url: directionsUrl(site),
+    hours: hoursLines(site.opening_hours),
   };
 }
 
@@ -152,9 +184,22 @@ export interface PublicService {
   family: ApptCategory;
   /** APPROVED reviews only (migration 1801); null = no reviews yet. */
   rating: RatingSummary | null;
+  /** Latest approved reviews of THIS service (≤ 3), newest first. */
+  reviews: PublicReview[];
+  /** Booking-page presentation (migration 1804). */
+  category_id: string | null;
+  recommended: boolean;
+  image_url: string | null;
+  includes: string[];
+  /** Its explicit better alternative (a service id of this same list, or null). */
+  upgrade_to: string | null;
 }
 
-export function projectPublicService(s: PublicServiceRow, ratings?: ReadonlyMap<string, RatingSummary>): PublicService {
+export function projectPublicService(
+  s: PublicServiceRow,
+  ratings?: ReadonlyMap<string, RatingSummary>,
+  reviews?: readonly PublicSiteReviewRow[],
+): PublicService {
   return {
     id: s.id,
     name: s.name,
@@ -163,7 +208,24 @@ export function projectPublicService(s: PublicServiceRow, ratings?: ReadonlyMap<
     price: s.price,
     family: serviceCategory(s.name, s.category),
     rating: ratings?.get(s.id) ?? null,
+    reviews: (reviews ?? []).filter((r) => r.service_id === s.id).map(projectPublicReview),
+    category_id: s.public_category_id ?? null,
+    recommended: Boolean(s.public_recommended),
+    image_url: httpsOrNull(s.public_image_url ?? null),
+    includes: (s.public_includes ?? []).filter((x) => typeof x === "string" && x.trim() !== ""),
+    upgrade_to: s.public_upgrade_service_id ?? null,
   };
+}
+
+export interface PublicCategory {
+  id: string;
+  name: string;
+  tagline: string | null;
+  layout: CategoryLayout;
+}
+
+export function projectPublicCategory(c: PublicCategoryRow): PublicCategory {
+  return { id: c.id, name: c.name, tagline: c.tagline, layout: c.layout };
 }
 
 /** One APPROVED review as a visitor sees it: author is "Nombre I.", never a contact field. */
@@ -175,7 +237,7 @@ export interface PublicReview {
   submitted_at: string;
 }
 
-export function projectPublicReview(r: PublicReviewRow): PublicReview {
+export function projectPublicReview(r: Pick<PublicReviewRow, "author_display" | "service_name" | "rating" | "comment" | "submitted_at">): PublicReview {
   return { author: r.author_display, service: r.service_name, rating: r.rating, comment: r.comment, submitted_at: r.submitted_at.toISOString() };
 }
 
@@ -293,5 +355,31 @@ export function projectPublicConfirmation(
     duration_min: appt.duration_min_snapshot,
     price: appt.price_snapshot,
     timezone: site.timezone,
+  };
+}
+
+/** A promotion as the PUBLIC page may show it (published and on offer — the repository
+ *  already filtered it). No status, version, staff ids or internal dates leave here. */
+export interface PublicPromotion {
+  id: string;
+  name: string;
+  description: string | null;
+  conditions: string | null;
+  image_url: string | null;
+  benefit_label: string;
+  rule_text: string | null;
+  service_ids: string[];
+}
+
+export function projectPublicPromotion(p: PromotionRow): PublicPromotion {
+  return {
+    id: p.id,
+    name: p.name,
+    description: p.description,
+    conditions: p.conditions,
+    image_url: httpsOrNull(p.image_url),
+    benefit_label: BENEFIT_LABEL[p.benefit_type],
+    rule_text: appointmentRuleText(p),
+    service_ids: p.service_ids,
   };
 }

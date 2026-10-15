@@ -45,9 +45,12 @@ export type BookingError =
   | 'module_disabled' // the client's scheduling module is off (incl. concurrent disable)
   | 'contact_conflict' // explicit contact_id disagrees with the typed identity (C-4.1)
   | 'invalid_phone' // customer_phone can't be normalized for the site's region (QA-3)
-  | 'active_limit'; // the phone already holds the max future active bookings here (public cap)
+  | 'active_limit' // the phone already holds the max future active bookings here (public cap)
+  | 'price_changed'; // the price the customer was shown is no longer the price (zero writes)
 
-export type BookingResult<T> = { ok: true; value: T; deduped?: boolean } | { ok: false; error: BookingError; message: string };
+export type BookingResult<T> =
+  | { ok: true; value: T; deduped?: boolean }
+  | { ok: false; error: BookingError; message: string; /** price_changed only: the current price. */ price?: string | null };
 
 export interface CreateAppointmentInput {
   tenantId: string;
@@ -88,11 +91,26 @@ export interface CreateAppointmentInput {
    *  it; staff, n8n and walk-in paths are unaffected. Requires customerPhone — a public
    *  booking without one is refused rather than left uncapped. */
   maxActiveFuturePerPhone?: number | null;
+  /** PRICE GUARD: the price the customer was SHOWN for this booking (numeric string, or
+   *  null for "no price published"). When set (not undefined), the booking is refused with
+   *  price_changed — before any write — if the effective price at commit differs, so a
+   *  price edited between selection and confirmation is never charged silently. The
+   *  engine still decides the price; this only compares. Only the public route sets it. */
+  expectedPrice?: string | null;
   /** REQUIRED authorization scope: the site's client MUST equal this, else
    * not_found. Every production caller (n8n API, public booking, internal
    * actions, seed) resolves and passes it — there is no scope-less path. */
   scopeClientId: string;
   now?: Date;
+}
+
+/** Two prices as the customer would read them: equal amounts ("60000" = "60000.00"), or
+ * both unpublished. */
+function samePrice(a: string | null, b: string | null): boolean {
+  if (a == null || b == null) return a == null && b == null;
+  const x = Number(a);
+  const y = Number(b);
+  return Number.isFinite(x) && Number.isFinite(y) && Math.abs(x - y) < 0.005;
 }
 
 /** True when a required scope value is present (non-empty string). Callers may be
@@ -192,6 +210,9 @@ export async function createAppointment(
     return { ok: false, error: 'not_found', message: 'Service is not offered at this site.' };
   }
   const priceSnapshot = await resolveEffectivePrice(input.tenantId, input.siteId, input.serviceId, chosenStaffId);
+  if (input.expectedPrice !== undefined && !samePrice(input.expectedPrice, priceSnapshot)) {
+    return { ok: false, error: 'price_changed', message: 'The price changed since it was shown.', price: priceSnapshot };
+  }
   const serviceName = await serviceNameFor(input.tenantId, clientId, input.serviceId);
   if (serviceName == null) return { ok: false, error: 'not_found', message: 'Service not found.' };
 

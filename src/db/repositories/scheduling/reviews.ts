@@ -210,3 +210,53 @@ export async function publicStaffReviews(tenantId: string, siteId: string, staff
   );
   return r.rows;
 }
+
+/**
+ * The BUSINESS rating: every approved review of the site (any professional, any service).
+ * A different number from an artist's or a service's — the page labels it as the site's
+ * and never repeats it next to an artist or a service. Null when there is none.
+ */
+export async function publicSiteRating(tenantId: string, siteId: string): Promise<RatingSummary | null> {
+  const r = await query<{ average: string | null; count: number }>(
+    `SELECT round(avg(rating)::numeric, 1)::text AS average, count(*)::int AS count
+       FROM appointment_reviews
+      WHERE tenant_id = $1 AND site_id = $2 AND status = 'approved'`,
+    [tenantId, siteId],
+  );
+  const row = r.rows[0];
+  return row && row.count > 0 && row.average != null ? { average: Number(row.average), count: row.count } : null;
+}
+
+export interface PublicSiteReviewRow extends Omit<PublicReviewRow, 'staff_id'> {
+  staff_id: string | null;
+  service_id: string | null;
+}
+
+/** The latest approved reviews of the whole site, newest first. */
+export async function publicSiteReviews(tenantId: string, siteId: string, limit = 3): Promise<PublicSiteReviewRow[]> {
+  const r = await query<PublicSiteReviewRow>(
+    `SELECT staff_id, service_id, author_display, service_name, rating, comment, submitted_at
+       FROM appointment_reviews
+      WHERE tenant_id = $1 AND site_id = $2 AND status = 'approved'
+      ORDER BY submitted_at DESC
+      LIMIT $3`,
+    [tenantId, siteId, limit],
+  );
+  return r.rows;
+}
+
+/** The latest approved reviews (≤ `limit` each) of every service of the site. */
+export async function publicServiceReviews(tenantId: string, siteId: string, limit = 3): Promise<PublicSiteReviewRow[]> {
+  const r = await query<PublicSiteReviewRow>(
+    `SELECT staff_id, service_id, author_display, service_name, rating, comment, submitted_at
+       FROM (
+         SELECT rv.*, row_number() OVER (PARTITION BY rv.service_id ORDER BY rv.submitted_at DESC) AS n
+           FROM appointment_reviews rv
+          WHERE rv.tenant_id = $1 AND rv.site_id = $2 AND rv.status = 'approved' AND rv.service_id IS NOT NULL
+       ) x
+      WHERE n <= $3
+      ORDER BY service_id, submitted_at DESC`,
+    [tenantId, siteId, limit],
+  );
+  return r.rows;
+}

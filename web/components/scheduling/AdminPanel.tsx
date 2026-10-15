@@ -6,6 +6,7 @@ import Link from "next/link";
 import { DAYS, DAY_LABELS, gridFromWeekly, HoursGrid, weeklyFromGrid, type HourGrid } from "./HoursGrid";
 import { BookingLinkCard } from "./BookingLinkCard";
 import { ServiceMenu } from "./services/ServiceMenu";
+import { PromotionsSection, type PromotionAdminRow } from "./promotions/PromotionsSection";
 import { ConfigMobile } from "./mobile/config/ConfigMobile";
 import {
   activateServiceAction,
@@ -37,6 +38,9 @@ interface SchedulingConfig {
 }
 export interface Site {
   id: string; client_id: string; slug: string; name: string; address: string | null; timezone: string; active: boolean;
+  /** Booking page contact (migration 1804): E.164 WhatsApp and a Google Maps link. */
+  public_whatsapp?: string | null;
+  public_maps_url?: string | null;
   /** The site's configured weekly opening hours (C-6 — shown + editable). */
   opening_hours: WeeklyHours;
   /** min notice / booking horizon / slot granularity (+ default buffers). Config-only until
@@ -51,6 +55,24 @@ export interface Service {
   /** The colour family the agenda paints this service with; null = unclassified, and
    *  the agenda falls back to guessing from the name. */
   category: string | null;
+  /** Booking-page presentation (migration 1804) — never affects the agenda or the bot. */
+  public_category_id?: string | null;
+  public_visible?: boolean;
+  public_sort?: number;
+  public_recommended?: boolean;
+  public_image_url?: string | null;
+  public_includes?: string[] | null;
+  public_upgrade_service_id?: string | null;
+}
+/** One of the business's own groups on the booking page (migration 1804). */
+export interface BookingCategory {
+  id: string;
+  name: string;
+  tagline: string | null;
+  layout: "list" | "featured" | "contact";
+  sort_order: number;
+  visible: boolean;
+  service_count: number;
 }
 export interface Staff {
   id: string; site_id: string; name: string; active: boolean; serviceIds: string[];
@@ -84,12 +106,13 @@ export interface Exception {
 const INPUT = "h-[44px] lg:h-[36px] rounded-lg border border-line-strong bg-surface px-3 text-sm text-foreground outline-none transition focus:border-foreground disabled:bg-subtle disabled:text-faint";
 const BTN = "inline-flex h-[44px] lg:h-[36px] items-center justify-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background transition hover:opacity-90 disabled:opacity-50";
 const GHOST = "inline-flex h-[44px] lg:h-[34px] items-center justify-center rounded-lg border border-line px-3 lg:px-2.5 text-xs text-muted transition hover:bg-subtle hover:text-foreground";
-type SettingsTab = "overview" | "sites" | "services" | "blocks" | "rules";
+type SettingsTab = "overview" | "sites" | "services" | "promotions" | "blocks" | "rules";
 
 const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
   { id: "overview", label: "Resumen" },
   { id: "sites", label: "Sedes y horarios" },
   { id: "services", label: "Servicios" },
+  { id: "promotions", label: "Promociones" },
   { id: "blocks", label: "Bloqueos" },
   { id: "rules", label: "Reglas" },
 ];
@@ -111,6 +134,8 @@ export function AdminPanel({
   pastExceptions = [],
   siteServiceMap,
   schedulingEnabled = true,
+  bookingCategories = [],
+  promotions = [],
 }: {
   clientId: string;
   clientName: string;
@@ -125,6 +150,10 @@ export function AdminPanel({
   /** Whether this client can host public booking right now (non-default + module on) —
    *  drives the "Enlace de reservas" status. */
   schedulingEnabled?: boolean;
+  /** The business's booking-page categories (migration 1804). */
+  bookingCategories?: BookingCategory[];
+  /** The business's promotions (migration 1805), as the editor opens them. */
+  promotions?: PromotionAdminRow[];
 }) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
@@ -247,7 +276,17 @@ export function AdminPanel({
               services={services}
               staff={staff}
               siteServiceMap={siteServiceMap}
+              bookingCategories={bookingCategories}
               onOpenBookingLink={() => setTab("sites")}
+            />
+          ) : null}
+          {tab === "promotions" ? (
+            <PromotionsSection
+              clientId={clientId}
+              promotions={promotions}
+              services={services.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
+              staff={staff.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name, site_id: x.site_id }))}
+              sites={sites.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
             />
           ) : null}
           {tab === "blocks" ? (
@@ -829,6 +868,9 @@ function EditableSite({
   const [name, setName] = useState(site.name);
   const [slug, setSlug] = useState(site.slug);
   const [tz, setTz] = useState(site.timezone);
+  const [address, setAddress] = useState(site.address ?? "");
+  const [whatsapp, setWhatsapp] = useState(site.public_whatsapp ?? "");
+  const [mapsUrl, setMapsUrl] = useState(site.public_maps_url ?? "");
   const [grid, setGrid] = useState<HourGrid>(gridFromWeekly(site.opening_hours));
   // Booking rules that used to be config-only — now visible + editable. min_notice is why
   // "availability starts N minutes from now"; horizon caps how far ahead; slot is the grid.
@@ -846,6 +888,9 @@ function EditableSite({
         name: name.trim(),
         slug: slug.trim(),
         timezone: tz,
+        address,
+        publicWhatsapp: whatsapp,
+        publicMapsUrl: mapsUrl,
         openingHours: weeklyFromGrid(grid),
         // Merge over the existing config so the buffers (not shown here) are preserved.
         schedulingConfig: {
@@ -887,6 +932,24 @@ function EditableSite({
             <Field label="Nombre"><input value={name} onChange={(e) => setName(e.target.value)} className={`${INPUT} w-full`} /></Field>
             <Field label="URL pública"><input value={slug} onChange={(e) => setSlug(e.target.value)} className={`${INPUT} w-full`} /></Field>
             <Field label="Zona horaria"><input value={tz} onChange={(e) => setTz(e.target.value)} className={`${INPUT} w-full`} /></Field>
+          </div>
+
+          <div className="mt-5 border-t border-line pt-4">
+            <h4 className="text-sm font-semibold text-foreground">Página de reservas</h4>
+            <p className="mt-1 text-xs text-muted">
+              Lo que ve el cliente en «Ubicación y horario» y en la confirmación. El horario es el mismo de abajo; no hay otra copia.
+            </p>
+            <div className="mt-3 grid gap-3 md:grid-cols-3">
+              <Field label="Dirección" hint="Tal como la escribiría el cliente en Maps.">
+                <input value={address} maxLength={200} onChange={(e) => setAddress(e.target.value)} className={`${INPUT} w-full`} />
+              </Field>
+              <Field label="WhatsApp del negocio" hint="Con indicativo. Vacío = no se muestra.">
+                <input value={whatsapp} inputMode="tel" placeholder="+57 300 123 4567" onChange={(e) => setWhatsapp(e.target.value)} className={`${INPUT} w-full`} />
+              </Field>
+              <Field label="Enlace de Google Maps" hint="Opcional. Si está vacío, se busca la dirección.">
+                <input value={mapsUrl} inputMode="url" placeholder="https://maps.app.goo.gl/…" onChange={(e) => setMapsUrl(e.target.value)} className={`${INPUT} w-full`} />
+              </Field>
+            </div>
           </div>
 
           <div className="mt-5 border-t border-line pt-4">

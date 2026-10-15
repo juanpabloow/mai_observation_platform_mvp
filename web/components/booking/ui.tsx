@@ -5,6 +5,7 @@
  */
 
 import type { ApptCategory } from "@/lib/agendaCategory";
+import { ratingText, reviewCountText } from "@/lib/publicReviews";
 
 export interface PublicSiteView {
   name: string;
@@ -12,6 +13,17 @@ export interface PublicSiteView {
   timezone: string;
   closed_weekdays: string[];
   booking_horizon_days: number;
+  /** E.164, validated server-side; null = the business published no WhatsApp. */
+  whatsapp?: string | null;
+  directions_url?: string | null;
+  hours?: Array<{ days: string; hours: string }>;
+}
+
+export interface CategoryView {
+  id: string;
+  name: string;
+  tagline: string | null;
+  layout: "list" | "featured" | "contact";
 }
 
 export interface RatingSummary {
@@ -36,6 +48,14 @@ export interface ServiceOption {
   family: ApptCategory;
   /** Approved reviews only; null = none yet. */
   rating?: RatingSummary | null;
+  /** The latest approved reviews of this service (≤ 3). */
+  reviews?: PublicReview[];
+  /** Booking-page presentation (migration 1804). */
+  category_id?: string | null;
+  recommended?: boolean;
+  image_url?: string | null;
+  includes?: string[];
+  upgrade_to?: string | null;
 }
 
 export interface StaffOption {
@@ -72,13 +92,14 @@ export interface PublicConfirmation {
 }
 
 /** Selected card: 1px black border + 1px ring (2px total, the layout never jumps). Cards
- * stay WHITE on the grey ground either way; the ring and the ✓ say "selected". */
+ * stay WHITE on the grey ground either way; the ring and the ✓ say "selected". The change
+ * is animated (`pb-sel`, globals.css) and honours reduced motion. */
 export const ring = (selected: boolean) =>
-  selected ? "border border-pb-ink shadow-[0_0_0_1px_#111316] bg-white" : "border border-pb-line bg-white";
+  `pb-sel ${selected ? "border border-pb-ink shadow-[0_0_0_1px_#111316] bg-white" : "border border-pb-line bg-white"}`;
 
 /** The black primary action; `muted` is the design's disabled look (still focusable). */
 export const CTA_BASE =
-  "inline-flex min-h-[52px] items-center justify-center gap-2.5 whitespace-nowrap rounded-[12px] px-[22px] text-[16px] font-[590] transition-colors";
+  "pb-press inline-flex min-h-[52px] items-center justify-center gap-2.5 whitespace-nowrap rounded-[12px] px-[22px] text-[16px] font-[590] transition-[background-color,color,transform] duration-150";
 export const ctaTone = (state: "on" | "muted" | "sending" | "outline") =>
   state === "on"
     ? "bg-pb-ink text-white"
@@ -90,9 +111,9 @@ export const ctaTone = (state: "on" | "muted" | "sending" | "outline") =>
 
 /** Secondary pill-ish button ("Elegir artista", "Reservar sin preferencia"). */
 export const BTN_SECONDARY =
-  "inline-flex min-h-[44px] items-center justify-center whitespace-nowrap rounded-[12px] border border-pb-line3 bg-white px-4 text-[15px] text-pb-ink";
+  "pb-sel pb-press inline-flex min-h-[44px] items-center justify-center whitespace-nowrap rounded-[12px] border border-pb-line3 bg-white px-4 text-[15px] text-pb-ink";
 export const BTN_PRIMARY_SM =
-  "inline-flex min-h-[44px] items-center justify-center whitespace-nowrap rounded-[12px] border border-pb-ink bg-pb-ink px-4 text-[15px] font-[590] text-white";
+  "pb-sel pb-press inline-flex min-h-[44px] items-center justify-center whitespace-nowrap rounded-[12px] border border-pb-ink bg-pb-ink px-4 text-[15px] font-[590] text-white";
 /** Underlined text action ("Ver más", "Ver perfil", "Cambiar", "Editar"). */
 export const LINK_BTN =
   "inline-flex min-h-[44px] items-center rounded-[12px] px-2 text-[14px] text-pb-ink underline underline-offset-[3px]";
@@ -206,5 +227,78 @@ export function Portrait({
         {initials}
       </span>
     </div>
+  );
+}
+
+/** WhatsApp's mark, monochrome (the page stays black and white). */
+export function IconWhatsApp({ size = 18 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden className="flex-none">
+      <path d="M12 2.2a9.7 9.7 0 0 0-8.4 14.6L2.3 21.7l5-1.3A9.7 9.7 0 1 0 12 2.2Zm0 17.7a8 8 0 0 1-4.1-1.1l-.3-.2-3 .8.8-2.9-.2-.3A8 8 0 1 1 12 19.9Zm4.4-6c-.2-.1-1.4-.7-1.7-.8-.2-.1-.4-.1-.5.1l-.8 1c-.1.2-.3.2-.5.1a6.5 6.5 0 0 1-3.2-2.8c-.2-.4.2-.4.7-1.3.1-.2 0-.3 0-.4l-.8-1.8c-.2-.5-.4-.4-.5-.4h-.5a.9.9 0 0 0-.7.3 2.8 2.8 0 0 0-.9 2.1 4.9 4.9 0 0 0 1 2.6 11.2 11.2 0 0 0 4.3 3.8c1.6.7 2.2.7 3 .6a2.6 2.6 0 0 0 1.7-1.2 2.1 2.1 0 0 0 .2-1.2c-.1-.1-.3-.2-.5-.3Z" />
+    </svg>
+  );
+}
+export function IconPin() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden className="mt-px flex-none">
+      <path d="M8 14.5s4.8-4.3 4.8-8a4.8 4.8 0 1 0-9.6 0c0 3.7 4.8 8 4.8 8Z" />
+      <circle cx="8" cy="6.4" r="1.7" />
+    </svg>
+  );
+}
+export function IconHours() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden className="mt-px flex-none">
+      <circle cx="8" cy="8" r="6.2" />
+      <path d="M8 4.6V8l2.4 1.5" />
+    </svg>
+  );
+}
+export function IconClose() {
+  return (
+    <svg width="18" height="18" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+      <path d="m4 4 8 8M12 4l-8 8" />
+    </svg>
+  );
+}
+export function IconUp() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden className="flex-none">
+      <path d="M8 13V3.5M4 7.5 8 3.5l4 4" />
+    </svg>
+  );
+}
+
+/** "★ 4,8 (4)" as a button that opens the reviews it summarises — never a fake value. */
+export function RatingButton({
+  rating,
+  onOpen,
+  label,
+  size = "sm",
+}: {
+  rating: RatingSummary;
+  onOpen: (trigger: HTMLElement) => void;
+  /** What the rating is OF, for the accessible name ("Corte Signature"). */
+  label: string;
+  size?: "sm" | "md";
+}) {
+  const avg = ratingText(rating.average);
+  const count = reviewCountText(rating.count);
+  return (
+    <button
+      type="button"
+      aria-haspopup="dialog"
+      aria-label={`${avg} de 5, ${count} de ${label}. Ver reseñas`}
+      onClick={(e) => {
+        e.stopPropagation();
+        onOpen(e.currentTarget);
+      }}
+      className={`pb-sel pb-press -mx-1.5 -my-2.5 inline-flex min-h-[44px] items-center gap-1 rounded-[8px] px-1.5 text-pb-tx2 underline-offset-[3px] hover:underline ${size === "md" ? "text-[14.5px]" : "text-[13.5px]"}`}
+    >
+      <IconStar size={size === "md" ? 15 : 13} />
+      <span aria-hidden className="[font-variant-numeric:tabular-nums]">
+        <span className="font-semibold text-pb-ink">{avg}</span> <span className="text-pb-muted">({count})</span>
+      </span>
+    </button>
   );
 }
