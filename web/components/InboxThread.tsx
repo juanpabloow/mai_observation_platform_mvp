@@ -311,7 +311,7 @@ export function InboxThread({
         {announce}
       </p>
 
-      <header className="flex min-h-[var(--topbar-height)] shrink-0 flex-col gap-2 border-b border-line px-3 py-2.5 md:px-4">
+      <header className="flex min-h-[var(--topbar-height)] shrink-0 flex-col gap-2 border-b border-line px-3 py-2.5 md:gap-1.5 md:px-4 md:py-2">
         <div className="flex min-w-0 items-center gap-2.5">
           {onBack ? (
             <button
@@ -325,7 +325,7 @@ export function InboxThread({
           ) : null}
           <InboxAvatar text={avatarText(header.contactName, header.conversationRef)} toneKey={header.conversationRef} />
           <div className="flex min-w-0 flex-1 flex-col">
-            <h2 className={`truncate text-[1.0625rem] font-semibold leading-tight tracking-[-0.01em] text-foreground ${title.kind === "phone" ? "tabular-nums" : ""}`}>
+            <h2 className={`truncate text-[1.0625rem] font-semibold leading-tight tracking-[-0.01em] text-foreground md:text-[0.9375rem] ${title.kind === "phone" ? "tabular-nums" : ""}`}>
               {title.text}
             </h2>
             <span className="truncate text-xs text-muted">{sub}</span>
@@ -339,7 +339,7 @@ export function InboxThread({
               onClick={onOpenDetails}
               aria-pressed={detailsOpen}
               aria-label="Ficha del cliente"
-              className={`inline-flex size-11 shrink-0 items-center justify-center gap-1.5 rounded-xl border text-sm font-medium transition-colors md:h-9 md:w-auto md:px-3 ${
+              className={`inline-flex size-11 shrink-0 items-center justify-center gap-1.5 rounded-xl border text-sm font-medium transition-colors md:h-8 md:w-auto md:px-2.5 md:text-[0.8125rem] ${
                 detailsOpen ? "border-ink text-foreground" : "border-line-strong text-foreground hover:bg-subtle"
               }`}
             >
@@ -366,13 +366,13 @@ export function InboxThread({
       ) : null}
 
       <div className="relative min-h-0 flex-1">
-        <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto bg-[var(--thread-bg)] px-3 pb-3 pt-4 md:px-6">
+        <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto bg-[var(--thread-bg)] px-3 pb-3 pt-4 md:px-5 md:pt-3">
           {history.length > 0 ? <HistoryDisclosure turns={history} /> : null}
           {folded ? (
             <button
               type="button"
               onClick={() => setShowEarlier(true)}
-              className="mb-3 flex min-h-[44px] w-full items-center justify-center rounded-xl border border-line bg-surface px-3 text-sm text-muted transition-colors hover:text-foreground md:min-h-9"
+              className="mb-3 flex min-h-[44px] w-full items-center justify-center rounded-xl border border-line bg-surface px-3 text-sm text-muted transition-colors hover:text-foreground md:min-h-8 md:text-[0.8125rem]"
             >
               Historial antes del escalado · {earlier.length} {earlier.length === 1 ? "mensaje" : "mensajes"}
             </button>
@@ -406,7 +406,7 @@ export function InboxThread({
           conversationId={header.id}
           mode={header.mode}
           onSend={handleSend}
-          blockedReason={windowClosedLine(win)}
+          blockedReason={windowClosedLine(win, now)}
           onTake={plan.primary?.kind === "take" ? () => setConfirm("take") : undefined}
         />
       </div>
@@ -428,7 +428,7 @@ export function InboxThread({
 function HistoryDisclosure({ turns }: { turns: HistoryTurnView[] }) {
   return (
     <details className="mb-3 rounded-xl border border-line bg-surface">
-      <summary className="flex min-h-[44px] cursor-pointer items-center justify-center px-3 text-sm text-muted hover:text-foreground md:min-h-9">
+      <summary className="flex min-h-[44px] cursor-pointer items-center justify-center px-3 text-sm text-muted hover:text-foreground md:min-h-8 md:text-[0.8125rem]">
         Historial anterior · {turns.length} {turns.length === 1 ? "turno" : "turnos"}
       </summary>
       <div className="flex flex-col gap-2 border-t border-line px-3 py-3">

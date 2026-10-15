@@ -19,6 +19,7 @@ import {
   textScaleCookie,
   type TextScale,
 } from "@/lib/textScale";
+import { TOPBAR_LABELS, TOPBAR_PREFS, parseTopbarPref, topbarCookie, type TopbarPref } from "@/lib/topbarPref";
 
 /**
  * The shared ACCOUNT menu content (identity + theme + real account actions). ONE
@@ -79,6 +80,7 @@ export function AccountMenu({
       </div>
       <SidebarAppearance />
       <TextSize />
+      <TopBar />
       <div className="py-1">
         {/* Owner/admin-only management — hidden for a member (they'd be bounced). */}
         {canSwitchClients ? (
@@ -209,6 +211,51 @@ function SidebarAppearance() {
             }`}
           >
             {SIDEBAR_THEME_LABELS[opt]}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * TOP BAR — show or hide the desktop header bar (lib/topbarPref.ts). Same mechanics as the
+ * two preferences above: seeded from the attribute the server stamped (which already
+ * applied the role default), and a choice writes the attribute (instant) and the cookie
+ * (so the next SSR agrees). Below xl the bar always stays — it holds the menu button.
+ */
+function TopBar() {
+  const [pref, setPref] = useState<TopbarPref>(() =>
+    typeof document === "undefined" ? "shown" : (parseTopbarPref(document.documentElement.dataset.topbar) ?? "shown"),
+  );
+  const [touched, setTouched] = useState(false);
+
+  useEffect(() => {
+    if (!touched) return; // never persist the role DEFAULT as if the person had chosen it
+    document.documentElement.dataset.topbar = pref;
+    document.cookie = topbarCookie(pref);
+  }, [pref, touched]);
+
+  return (
+    <div className="border-b border-line px-3 py-2.5">
+      <p id="top-bar-label" className="mb-1.5 text-[10px] font-medium uppercase tracking-wider text-faint">
+        Top bar
+      </p>
+      <div role="group" aria-labelledby="top-bar-label" className="flex gap-0.5 rounded-lg border border-line p-0.5">
+        {TOPBAR_PREFS.map((opt) => (
+          <button
+            key={opt}
+            type="button"
+            onClick={() => {
+              setTouched(true);
+              setPref(opt);
+            }}
+            aria-pressed={pref === opt}
+            className={`flex-1 rounded-md px-2 py-1 text-xs transition-colors ${
+              pref === opt ? "bg-subtle font-medium text-foreground" : "text-muted hover:text-foreground"
+            }`}
+          >
+            {TOPBAR_LABELS[opt]}
           </button>
         ))}
       </div>

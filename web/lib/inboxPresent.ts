@@ -82,8 +82,14 @@ export function isPhoneRef(ref: string): boolean {
  * "Contacto sin nombre". An opaque channel id is never presented as a number — it lives
  * in the ficha as "ID de canal".
  */
+/** A stored name is only a name if it has a letter or digit ("." or "-" is not). */
+function usableName(name: string | null | undefined): string | null {
+  const n = (name ?? "").trim();
+  return /[\p{L}\p{N}]/u.test(n) ? n : null;
+}
+
 export function conversationTitle(name: string | null | undefined, ref: string): { text: string; kind: "name" | "phone" | "unknown" } {
-  const n = name?.trim();
+  const n = usableName(name);
   if (n) return { text: n, kind: "name" };
   if (isPhoneRef(ref)) return { text: formatConversationRef(ref), kind: "phone" };
   return { text: "Contacto sin nombre", kind: "unknown" };
@@ -91,8 +97,8 @@ export function conversationTitle(name: string | null | undefined, ref: string):
 
 /** The avatar text: initials for a name, "#" for a bare phone, "?" when unknown. */
 export function avatarText(name: string | null | undefined, ref: string): string {
-  const words = (name ?? "").trim().split(/\s+/).filter(Boolean);
-  if (words.length > 0) return words.slice(0, 2).map((w) => w[0]).join("").toUpperCase();
+  const words = (usableName(name) ?? "").split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w));
+  if (words.length > 0) return words.slice(0, 2).map((w) => (w.match(/[\p{L}\p{N}]/u) ?? [w[0]])[0]).join("").toUpperCase();
   return isPhoneRef(ref) ? "#" : "?";
 }
 
@@ -125,7 +131,7 @@ export const WINDOW_HOURS = 24;
 
 export type WindowState =
   | { state: "open"; hoursLeft: number }
-  | { state: "closed"; closedFor: number }
+  | { state: "closed"; closedFor: number; lastAt: string }
   | { state: "never" };
 
 /** From the customer's LAST inbound message (null = they never wrote). */
@@ -135,7 +141,13 @@ export function windowState(lastUserMessageAt: string | null, now: Date): Window
   if (Number.isNaN(t)) return { state: "never" };
   const closes = t + WINDOW_HOURS * 3_600_000;
   if (now.getTime() < closes) return { state: "open", hoursLeft: Math.max(1, Math.ceil((closes - now.getTime()) / 3_600_000)) };
-  return { state: "closed", closedFor: now.getTime() - closes };
+  return { state: "closed", closedFor: now.getTime() - closes, lastAt: new Date(t).toISOString() };
+}
+
+/** "46 h" under two days (so it can be compared with the 24 h at a glance), then "3 d". */
+function sinceShort(ms: number): string {
+  const h = Math.floor(ms / 3_600_000);
+  return h < 48 ? `${Math.max(1, h)} h` : `${Math.floor(h / 24)} d`;
 }
 
 /** The header chip. Null when the customer never wrote (no window to speak of yet). */
@@ -145,10 +157,17 @@ export function windowChip(w: WindowState): { open: boolean; label: string } | n
   return null;
 }
 
-/** The one line that replaces the composer while the window is closed or never opened. */
-export function windowClosedLine(w: WindowState): string | null {
+/**
+ * The one line that replaces the composer while the window is closed or never opened.
+ * It states the FACT the rule is measured from — how long since the customer's last
+ * message, and when that was — because "se cerró hace 22 h" read as "22 h < 24 h, it
+ * should still be open".
+ */
+export function windowClosedLine(w: WindowState, now: Date = new Date()): string | null {
   if (w.state === "closed") {
-    return `La ventana de 24 h se cerró ${agoEs(w.closedFor)}. WhatsApp solo permite enviar una plantilla aprobada.`;
+    const last = new Date(w.lastAt);
+    const since = sinceShort(w.closedFor + WINDOW_HOURS * 3_600_000);
+    return `El cliente escribió por última vez hace ${since} (${listStamp(last, now)}${daysBetween(last, now) >= 1 ? ` ${clock24(last)}` : ""}). WhatsApp solo permite responder dentro de 24 h; ahora solo se puede enviar una plantilla aprobada.`;
   }
   if (w.state === "never") return "WhatsApp solo permite escribir después de que la persona te escriba primero.";
   return null;
@@ -158,11 +177,14 @@ export function windowClosedLine(w: WindowState): string | null {
 
 export type InboxTab = "all" | "pending" | "human" | "bot";
 
+/** The inbox opens on what needs a person; "Todas" is the last tab. */
+export const DEFAULT_INBOX_TAB: InboxTab = "pending";
+
 export const INBOX_TABS: ReadonlyArray<{ key: InboxTab; label: string; name: string }> = [
-  { key: "all", label: "Todas", name: "Todas" },
   { key: "pending", label: "Escalado", name: "Necesitan una persona" },
   { key: "human", label: "", name: "Atiende una persona" },
   { key: "bot", label: "", name: "Atiende el bot" },
+  { key: "all", label: "Todas", name: "Todas" },
 ];
 
 export function tabCounts(views: ReadonlyArray<Pick<InboxConversationView, "mode">>): Record<InboxTab, number> {

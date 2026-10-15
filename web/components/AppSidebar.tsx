@@ -204,8 +204,32 @@ function SectionHeader({ label, collapsed, first }: { label: string; collapsed: 
  * is now the full-height first column, so the brand sits above the nav and the
  * header starts after the rail.
  */
-function Brand({ homeHref, collapsed, onNavigate }: { homeHref: string; collapsed: boolean; onNavigate?: () => void }) {
+/**
+ * The rail's own collapse control. The TOP BAR normally carries it; when the person hides
+ * the bar (xl+, lib/topbarPref.ts) this one shows instead — `.u-rail-toggle` is display:none
+ * unless `html[data-topbar='hidden']`, so it never doubles the header's button.
+ */
+function RailToggle({ onClick, push = false }: { onClick: () => void; push?: boolean }) {
   return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label="Toggle sidebar"
+      title="Toggle sidebar"
+      className={`u-rail-toggle shrink-0 items-center justify-center rounded-lg p-1.5 text-sidebar-muted transition-colors hover:bg-sidebar-hover hover:text-sidebar-fg ${push ? "ml-auto" : ""}`}
+    >
+      <svg viewBox="0 0 16 16" fill="none" aria-hidden className="size-4">
+        <rect x="2" y="3" width="12" height="10" rx="2" stroke="currentColor" strokeWidth="1.4" />
+        <path d="M6 3v10" stroke="currentColor" strokeWidth="1.4" />
+      </svg>
+    </button>
+  );
+}
+
+function Brand({ homeHref, collapsed, onNavigate }: { homeHref: string; collapsed: boolean; onNavigate?: () => void }) {
+  const { toggle } = useSidebar();
+  return (
+    <>
     <div
       // NO bottom rule. The brand is part of the rail, not a titlebar over it: a hairline
       // here cut the rail into two panels and made the first section heading look like it
@@ -229,7 +253,15 @@ function Brand({ homeHref, collapsed, onNavigate }: { homeHref: string; collapse
           <span className="truncate text-[0.8125rem] font-semibold tracking-tight text-sidebar-fg">MONTSERRAT_AI</span>
         )}
       </Link>
+      {collapsed ? null : <RailToggle onClick={toggle} push />}
     </div>
+    {collapsed ? (
+      // The whole row only exists while the bar is hidden (u-rail-toggle), so it adds no gap otherwise.
+      <div className="u-rail-toggle w-full shrink-0 justify-center pb-1">
+        <RailToggle onClick={toggle} />
+      </div>
+    ) : null}
+    </>
   );
 }
 

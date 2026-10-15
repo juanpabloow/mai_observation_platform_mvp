@@ -117,7 +117,7 @@ export function MessageTranscript({
   flushEventsBefore(null); // anything after the last message (e.g. a fresh takeover)
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-3 md:gap-2.5">
       {blocks.map((b) =>
         b.type === "date" ? (
           <Seam key={b.key} label={b.label} />
@@ -327,7 +327,7 @@ function Bubble({
   return (
     <div className={`flex min-w-0 max-w-full flex-col gap-1 ${isUser ? "items-start" : "items-end"}`}>
       <div
-        className={`max-w-[min(62ch,86%)] rounded-bubble px-3.5 pb-1.5 pt-2.5 md:max-w-[min(62ch,100%)] text-[0.9375rem] leading-[1.45] ${bubbleClass} ${
+        className={`max-w-[min(62ch,86%)] rounded-bubble px-3.5 pb-1.5 pt-2.5 md:max-w-[min(62ch,100%)] md:px-3 md:pt-2 text-[0.9375rem] leading-[1.45] md:text-[0.875rem] ${bubbleClass} ${
           sending ? "opacity-70" : ""
         } ${highlighted ? "ring-2 ring-[var(--warn-rule)]" : ""}`}
       >
