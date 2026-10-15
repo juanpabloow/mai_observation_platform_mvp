@@ -24,6 +24,7 @@ export interface ConnectionTokens {
  *  client bundle never imports the server-only token repo). */
 const CAPABILITIES: { key: string; label: string; hint: string }[] = [
   { key: "handoff", label: "Handoff", hint: "Conversation messages, mode & human escalation" },
+  { key: "handoff.context.read", label: "Read conversation context", hint: "Recent customer, bot and sent human messages for bot recovery; opt-in" },
   { key: "scheduling.read", label: "Read the schedule", hint: "Services, staff, availability, appointment reads" },
   { key: "scheduling.write", label: "Book and change appointments", hint: "Create, cancel, reschedule, confirm, complete" },
   { key: "crm.read", label: "Read contacts", hint: "Look up and read contact records" },

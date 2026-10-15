@@ -1,0 +1,148 @@
+RECUPERACIÓN BOT → HUMANO → BOT — IMPLEMENTACIÓN 2026-10-15
+
+Estado: código y parche offline preparados. NO desplegado ni activado en n8n.
+Base: origin/main 09df5b2 (PR #26). Rama: fix/handoff-context-recovery.
+No requiere migración ni backfill. No borra conversaciones ni memoria histórica.
+Las lecturas no cambian datos de dominio; la autenticación conserva la telemetría
+existente touchLastUsed del token. No se anuncia como sesión SQL read-only.
+
+COMPORTAMIENTO
+
+El siguiente mensaje entrante después de devolver el control al bot recupera el
+historial reciente del Inbox. Incluye preguntas anteriores/durante la atención
+humana y los mensajes del equipo que llegaron al estado sent. No dispara una
+respuesta automática por el solo hecho de pulsar Devolver al bot.
+
+La fuente de historial para el agente pasa a ser el Inbox. La memoria Postgres
+antigua y Sanitize memory quedan desactivados y desconectados, NO borrados.
+Eso evita reinyectar una memoria sin alcance de conversación que contradiga al
+historial humano. También evita ejecutar el SQL interpolado de Sanitize memory.
+No migra/limpia tablas n8n_chat_histories ni message_buffer.
+
+CONTRATO DE LECTURA
+
+GET /api/handoff/v1/context
+Parámetros obligatorios:
+  workflow_ref: ID propio del workflow, no el del borrador QA.
+  conversation_ref: la misma referencia opaca del push/gate.
+  through_message_id: message_id devuelto por el push/gate para el mensaje actual.
+
+Autorización: Bearer, permiso NUEVO handoff.context.read, opt-in.
+handoff por sí solo NO permite leer el historial. No se añade al conjunto legacy
+ni a los permisos predeterminados de tokens nuevos. Se edita desde Machine tokens
+por owner/admin; no requiere emitir otra clave. No se ha concedido en producción.
+
+Alcance: tenant + conexión del token + workflow + cliente no predeterminado,
+Inbox habilitado + conversación + ancla de cliente recibida de esa conversación.
+El cliente nunca viene de un parámetro del caller. Referencias de workflow
+ambiguas entre conexiones/clientes fallan cerradas, porque conversations no tiene
+connection_id. Un único SELECT da una fotografía consistente de modo e historial.
+
+Respuesta v1: conversation_id, mode, through_message_id, latest_transition
+(solo ID/modos/fecha), messages, truncated, history_is_authorization=false.
+Cache-Control: private, no-store. Vary: Authorization. Sin CORS público.
+
+Historial anterior al mensaje ancla, sin repetir el mensaje actual:
+  - hasta 50 mensajes de texto, 2000 caracteres/mensaje, 24000 totales;
+  - orden por fecha de registro y UUID, no por occurred_at manipulable;
+  - user/bot received o sent; human_agent SOLO sent;
+  - NO sending/failed, archivos, metadata, detalle de error, IDs/nombres internos
+    de agentes, credenciales, notas del CRM ni datos de otras conversaciones.
+  - mode human/pending: respuesta sin historial, el agente no se invoca.
+  - conversación o ancla desconocida: 404, no crea ninguna fila.
+
+PARCHE N8N — tools/n8n/handoffContextRecovery.mjs
+
+buildContextRecoveryPatch(exportDelWorkflow) es puro: no llama APIs ni publica.
+Devuelve un borrador inactivo, sin pinData. Verifica topología y rechaza reaplicar
+el parche o una topología diferente. Usar solo sobre un export ACTUAL revisado.
+No guardar exports con datos reales/credenciales en git.
+
+Flujo preparado:
+  Combine messages → Recuperar contexto Inbox → Contexto listo para bot?
+    true → AI Agent → Revalidar control antes de enviar → Conserva control bot?
+      true → Restaurar respuesta IA → router/remitentes originales
+      false → Delete Buffer 1 (no envío)
+    false → Delete Buffer 1 (no agente ni envío)
+
+Los HTTP GET nuevos reutilizan la referencia de credencial existente y el alcance
+del GET mode. Timeout 3s, sin reintentos, error → detener ejecución, NO continuar
+con memoria antigua. El mensaje actual se lee del trigger propio, NO del texto
+combinado de un buffer global. Las preguntas previas del MISMO hilo ya vienen en
+el historial. Todos los IDs de nodos originales y sus credenciales se conservan.
+
+El historial se serializa como datos JSON en el mensaje al agente. La política
+estática se añade al system prompt: recordar datos/respuestas, evitar repreguntas,
+revisar herramientas de lectura para hechos actuales y pedir consentimiento
+actual y específico para acciones. Nunca convierte un sí antiguo en autorización.
+Validación de versión, conversación, ancla, modo, tamaño y esquema antes del agente.
+
+LÍMITES IMPORTANTES
+
+- El aislamiento y los límites de lectura son controles de servidor, probados.
+- Entender preguntas pendientes/no repetir es comportamiento del LLM: el ensamblado
+  del prompt no demuestra por sí solo que el modelo obedecerá. Requiere regresión
+  manual/sintética del modelo en el banco inactivo y después el chat autorizado.
+- Revalidar el modo justo antes del envío reduce carreras; NO es una exclusión
+  atómica entre ese GET y Meta, ni bloquea una herramienta de escritura que el LLM
+  ya hubiera llamado mientras cambiaba el modo. No se anuncia como solución a
+  todas las carreras. Las herramientas/citas mantienen sus controles actuales.
+- El buffer legado usa una clave de WhatsApp no cualificada. El parche no la
+  consume como texto del agente, pero no corrige posibles colisiones de debounce
+  entre workflows que compartan esa tabla; eso requiere revisar su esquema y
+  migrar todas sus lecturas/escrituras coordinadamente en otro cambio.
+- Un humano marcado sent fue aceptado por el canal; no se afirma confirmación de
+  lectura del destinatario. Los fallidos no se presentan como algo que vio.
+- Los mensajes largos/historial antiguo pueden truncarse: el bot no debe fingir
+  disponer de toda la conversación.
+
+ORDEN DE ACTIVACIÓN — PENDIENTE DE AUTORIZACIÓN
+
+1. Revisar el diff; commit/push/PR y desplegar el backend. No hay migración.
+2. Owner autoriza ampliar el token de ESTA conexión con handoff.context.read.
+   No pegar ni mostrar el token. No conceder permisos a otras conexiones.
+3. GET de lectura en un contexto autorizado: token antiguo sin grant → 401;
+   con grant → 200 de la propia conversación/ancla; otra conversación → 404.
+4. Revisar export fresco, aplicar el parche al borrador INACTIVO. Mantener su
+   trigger sin publicar: no crear un segundo suscriptor de WhatsApp.
+5. Probar el prompt con fixtures sintéticos, ninguna herramienta de escritura
+   real. No ejecutar manualmente el workflow conectado con datos históricos.
+6. Tras la revisión, llevar solo los cambios al workflow oficial, publicar una
+   versión identificable, conservar la versión anterior para revertir configuración.
+7. Prueba controlada sin citas: pregunta del usuario, toma humana, respuesta
+   humana enviada, devolución y nuevo mensaje. Comprobar que recuerda respuesta
+   y pregunta pendiente. Repetir con envío humano fallido (no debe darlo por visto),
+   historial truncado, endpoint caído y humano que toma el chat durante el LLM.
+8. Observar ejecución/entrega antes de darlo por completo. Un Success de n8n
+   no demuestra entrega de WhatsApp ni calidad semántica del contexto.
+
+CONTINGENCIA
+
+No cambiar automáticamente el workflow activo si el endpoint o permiso faltan.
+Revocar handoff.context.read corta lecturas en la siguiente llamada. Para volver
+al comportamiento anterior, restaurar la versión previa del workflow (no borrar
+mensajes/memoria). Restaurar memoria antigua recupera también sus limitaciones.
+
+VERIFICACIONES LOCALES
+
+- Node 25.6.1; dependencias del lockfile, sin cambios de versiones.
+- Typecheck raíz y web: pasa. Build raíz y next build --webpack: pasan.
+- ESLint de los dos archivos web modificados: pasa.
+- Unit completas: 1148/1149 pasan. Un fallo de meetingsStagingScripts depende de
+  la ausencia de DATABASE_URL en el subproceso; reproducido idéntico en un checkout
+  limpio de origin/main 09df5b2, sin .env. No se modificó esa suite para ocultarlo.
+- La integración se ejecuta solo contra un contenedor PostgreSQL 16 nuevo en
+  loopback, base handoff_context_test, sin credencial real ni copia de datos.
+  El test exige host local y nombre exacto de esa base antes de escribir fixtures.
+  Resultado: 41/41 pasan en las seis suites seleccionadas, incluidos los 14 casos
+  nuevos del endpoint. Las diez pruebas unitarias nuevas de contexto/parche pasan.
+- Constructor del parche contrastado en memoria con la configuración publicada
+  del turno anterior: 48 nodos (43 originales + 5), ningún ID original perdido,
+  ningún cambio de credenciales, solo Agent y los dos nodos antiguos de memoria
+  modificados entre los originales. No se exportaron datos reales al repositorio
+  ni se subió el parche a n8n.
+- Compilación conserva avisos de middleware deprecado y jose/Edge. npm ci reporta
+  vulnerabilidades en dependencias del lockfile base; no se hizo actualización
+  automática ajena a este cambio ni se declara la plataforma libre de riesgos.
+- La base sintética de esta tarea y el checkout temporal de comparación se
+  eliminan al terminar. No se altera ningún contenedor/base preexistente.

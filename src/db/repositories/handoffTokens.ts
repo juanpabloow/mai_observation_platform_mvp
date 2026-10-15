@@ -10,7 +10,7 @@ import { query, firstRowOrThrow } from '../client.js';
  */
 
 /**
- * The machine-token capability vocabulary (C-5). Exactly these five, dot-separated,
+ * The machine-token capability vocabulary (C-5), dot-separated,
  * stored as text[]. Deny-by-default: a token grants ONLY the capabilities it lists; an
  * unknown/removed string is simply absent (never a wildcard). LEGACY_CAPABILITIES is the
  * authority every pre-C-5 token effectively had — the migration + backfill grant exactly
@@ -24,6 +24,7 @@ export const ALL_CAPABILITIES = [
   'crm.read',
   'crm.write',
   'catalog.read',
+  'handoff.context.read',
 ] as const;
 export type Capability = (typeof ALL_CAPABILITIES)[number];
 
