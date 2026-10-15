@@ -13,10 +13,10 @@ import {
  * unknown string is never a wildcard, and legacy tokens get exactly the pre-C-5 authority.
  */
 
-test('the vocabulary is exactly the six capabilities', () => {
+test('the vocabulary includes the opt-in context capability', () => {
   assert.deepEqual(
     [...ALL_CAPABILITIES],
-    ['handoff', 'scheduling.read', 'scheduling.write', 'crm.read', 'crm.write', 'catalog.read'],
+    ['handoff', 'scheduling.read', 'scheduling.write', 'crm.read', 'crm.write', 'catalog.read', 'handoff.context.read'],
   );
 });
 
@@ -26,6 +26,7 @@ test('LEGACY_CAPABILITIES is the pre-C-5 authority — NO crm.* and NO catalog.*
   assert.ok(!LEGACY_CAPABILITIES.includes('crm.write' as never));
   // A new API family must never be auto-granted to existing tokens.
   assert.ok(!LEGACY_CAPABILITIES.includes('catalog.read' as never));
+  assert.ok(!LEGACY_CAPABILITIES.includes('handoff.context.read' as never));
 });
 
 test('isCapability accepts only the vocabulary', () => {
@@ -38,6 +39,7 @@ test('isCapability accepts only the vocabulary', () => {
 test('tokenHasCapability is deny-by-default; unknown strings are never a wildcard', () => {
   assert.ok(tokenHasCapability(['handoff', 'scheduling.read'], 'handoff'));
   assert.ok(!tokenHasCapability(['handoff'], 'crm.read'), 'missing capability → denied');
+  assert.ok(!tokenHasCapability(['handoff'], 'handoff.context.read'), 'handoff alone never grants history');
   assert.ok(!tokenHasCapability([], 'handoff'), 'empty grants → denied');
   assert.ok(!tokenHasCapability(['*', 'admin'], 'crm.write'), 'an unknown/wildcard-looking string grants nothing');
   assert.ok(!tokenHasCapability(null, 'handoff'));

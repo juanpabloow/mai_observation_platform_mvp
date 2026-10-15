@@ -21,6 +21,7 @@ const BEARER = { authorization: 'Bearer test-token-not-real' };
 test('every machine API reaches its route without a session cookie', () => {
   for (const path of [
     '/api/handoff/v1/messages',
+    '/api/handoff/v1/context',
     '/api/scheduling/v1/availability',
     '/api/crm/v1/contacts/upsert',
     '/api/catalog/v1/products',
