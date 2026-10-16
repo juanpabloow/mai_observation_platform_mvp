@@ -9,12 +9,12 @@ import { setClientModuleEnabled } from '../../src/db/repositories/clientModules.
 import { cleanupTenant, closeDb, seedScenario, seedWorkflow } from './fixtures.js';
 import { GET } from '../../web/app/api/handoff/v1/context/route.js';
 
-// Run ONLY against the explicitly provided isolated test database.
-const testDb = process.env.TEST_DATABASE_URL ? new URL(process.env.TEST_DATABASE_URL) : null;
-if (!testDb || !['localhost', '127.0.0.1', '[::1]'].includes(testDb.hostname)
-    || testDb.pathname !== '/handoff_context_test') {
-  throw new Error('Set TEST_DATABASE_URL to the isolated handoff_context_test database.');
-}
+// MF-1 item 3: runs as a normal member of the integration suite against the shared
+// local test DB. Every row this file writes is scoped to its own seeded tenant and
+// removed in `after` (cleanupTenant) — the same per-tenant isolation every other
+// integration file relies on — so a dedicated database bought nothing and only caused
+// this file to be silently skipped from a normal run. test/integration/env.ts already
+// guarantees DATABASE_URL points at a local test database.
 const tenants: string[] = [];
 after(async () => { for (const t of tenants) await cleanupTenant(t); await closeDb(); });
 
