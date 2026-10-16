@@ -87,7 +87,7 @@ export interface StaffAdminRow extends StaffRow {
 
 export async function listStaff(
   tenantId: string,
-  opts: { siteId?: string; includeInactive?: boolean; clientId?: string | null } = {},
+  opts: { siteId?: string; includeInactive?: boolean; clientId?: string | null; bookableOnly?: boolean } = {},
 ): Promise<StaffRow[]> {
   const params: unknown[] = [tenantId];
   const where = ['s.tenant_id = $1'];
@@ -101,6 +101,9 @@ export async function listStaff(
     where.push(`si.client_id = $${params.length}`);
   }
   if (!opts.includeInactive) where.push('s.active = true');
+  // bookableOnly: drop staff who hold no chair (takes_bookings = false, e.g. front desk).
+  // The service-filtered read (listStaffForService) already does this unconditionally.
+  if (opts.bookableOnly) where.push('s.takes_bookings = true');
   const r = await query<StaffRow>(
     `SELECT ${STAFF_COLS} FROM staff s JOIN sites si ON si.id = s.site_id
       WHERE ${where.join(' AND ')} ORDER BY s.name`,

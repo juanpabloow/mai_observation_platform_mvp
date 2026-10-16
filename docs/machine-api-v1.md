@@ -189,6 +189,50 @@ empty_parameter` (a recognized param sent with an empty value, named), `400
 invalid_request` (an unknown `status` value, a non-`true/false` `active`, or a bad
 `from`/`to`). No identifying filter is *required* — a bare site/day listing stays valid.
 
+### 1.9a Staff list (bookable + public fields)
+
+`GET /api/scheduling/v1/staff?site_id=<uuid>` lists ACTIVE staff at a site owned by the
+token's client. Params:
+
+- **`service_id` / `service`** (optional) — only staff who perform that service. `service` is
+  the NAME (case/accent-insensitive); unknown/ambiguous → the usual `service_not_found` /
+  `ambiguous_match`.
+- **`bookable=true`** (optional) — exclude staff who hold no chair (`takes_bookings=false`,
+  e.g. the front desk), on BOTH the plain and the service-filtered path. Absent → every
+  active member is listed (the service-filtered path already implies bookable, since only
+  bookable staff perform services). Any value other than `true` → `400 invalid_request`.
+
+Each item is `{ id, name, site_id, public_title, public_bio }` — only PUBLIC fields (the
+`public_title` / `public_bio` already shown on the booking page; `null` when unpublished). No
+photo, no `takes_bookings`, no internal title, no employee PII. Ordered by name, case- and
+accent-insensitive, identically on both paths.
+
+Real responses, captured against a local instance (ids abbreviated; the site has Ana + Beto
+bookable and a non-bookable front desk "Recepción", with a published title/bio on Ana):
+
+```
+GET /api/scheduling/v1/staff?site_id=ecb25ba0-…
+→ 200
+{ "staff": [
+  { "id": "9cceff48-…", "name": "Ana",       "site_id": "ecb25ba0-…", "public_title": "Barbero senior", "public_bio": "12 años cortando en la zona." },
+  { "id": "5e3b5323-…", "name": "Beto",      "site_id": "ecb25ba0-…", "public_title": null, "public_bio": null },
+  { "id": "f9bf80a9-…", "name": "Recepción", "site_id": "ecb25ba0-…", "public_title": null, "public_bio": null } ] }
+```
+```
+GET /api/scheduling/v1/staff?site_id=ecb25ba0-…&bookable=true
+→ 200
+{ "staff": [
+  { "id": "9cceff48-…", "name": "Ana",  "site_id": "ecb25ba0-…", "public_title": "Barbero senior", "public_bio": "12 años cortando en la zona." },
+  { "id": "5e3b5323-…", "name": "Beto", "site_id": "ecb25ba0-…", "public_title": null, "public_bio": null } ] }
+```
+```
+GET /api/scheduling/v1/staff?site_id=ecb25ba0-…&bookable=true&service=Haircut
+→ 200
+{ "staff": [
+  { "id": "9cceff48-…", "name": "Ana",  "site_id": "ecb25ba0-…", "public_title": "Barbero senior", "public_bio": "12 años cortando en la zona." },
+  { "id": "5e3b5323-…", "name": "Beto", "site_id": "ecb25ba0-…", "public_title": null, "public_bio": null } ] }
+```
+
 ### 1.10 Semantic parameters (E-1, additive)
 
 An API consumed by a language model should accept the values a model handles reliably —
@@ -390,7 +434,7 @@ model). Endpoints:
 |---|---|
 | `GET /api/scheduling/v1/sites` | `scheduling.read` |
 | `GET /api/scheduling/v1/services?site_id=` | `scheduling.read` |
-| `GET /api/scheduling/v1/staff?site_id=&service_id=` | `scheduling.read` |
+| `GET /api/scheduling/v1/staff?site_id=&(service_id\|service)=&bookable=true` | `scheduling.read` |
 | `GET /api/scheduling/v1/availability?site_id=&service_id=&from=&to=&staff_id=` | `scheduling.read` |
 | `GET /api/scheduling/v1/appointments?…` | `scheduling.read` |
 | `POST /api/scheduling/v1/appointments` (requires `Idempotency-Key`) | `scheduling.write` |
@@ -663,10 +707,12 @@ GET /api/scheduling/v1/services?site_id=e5793e2a-…
 → 200   { "services": [ { "id": "90767852-…", "name": "Corte de cabello", "duration_min": 45, "price": "35000.00", … }, … ] }
 ```
 
-**3. List staff who can do that service:**
+**3. List staff** (optionally only those who can do a service). See
+[Staff list](#19a-staff-list-bookable--public-fields) below for the `bookable` filter and the
+item shape.
 ```
 GET /api/scheduling/v1/staff?site_id=e5793e2a-…&service_id=90767852-…
-→ 200   { "staff": [ { "id": "07d603c3-…", "name": "Ana Gómez" }, { "id": "…", "name": "Beto Ruiz" } ] }
+→ 200   { "staff": [ { "id": "07d603c3-…", "name": "Ana", "site_id": "e5793e2a-…", "public_title": "Barbero senior", "public_bio": "12 años cortando en la zona." }, { "id": "…", "name": "Beto", "site_id": "e5793e2a-…", "public_title": null, "public_bio": null } ] }
 ```
 
 **4. Ask for availability** (an ISO window; ≤ 45 days). Each slot carries UTC + local
