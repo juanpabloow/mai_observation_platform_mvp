@@ -118,15 +118,13 @@ export const BTN_SECONDARY =
   "pb-sel pb-press inline-flex min-h-[44px] items-center justify-center whitespace-nowrap rounded-[12px] border border-pb-line3 bg-white px-4 text-[15px] text-pb-ink";
 export const BTN_PRIMARY_SM =
   "pb-sel pb-press inline-flex min-h-[44px] items-center justify-center whitespace-nowrap rounded-[12px] border border-pb-ink bg-pb-ink px-4 text-[15px] font-[590] text-white";
-/** The 48 px pair of a card's own actions ("Ver perfil" · "Elegir"). Both carry a 1px
- * border, so the box is identical in every state and choosing never moves anything. */
-export const BTN_SECONDARY_LG =
-  "pb-sel pb-press inline-flex min-h-[48px] items-center justify-center gap-2 whitespace-nowrap rounded-[12px] border border-pb-line3 bg-white px-4 text-[15px] text-pb-ink";
-/** "Elegir" (primary, black) → "✓ Elegido" (white, black border): same size, same place. */
-export const chooseBtn = (selected: boolean) =>
-  `pb-sel pb-press inline-flex min-h-[48px] items-center justify-center gap-2 whitespace-nowrap rounded-[12px] border border-pb-ink px-4 text-[15px] font-[590] ${
-    selected ? "bg-white text-pb-ink" : "bg-pb-ink text-white"
-  }`;
+/** "Elegir" (primary, black) → "✓ Elegido" (white, black border): a 1px border in both
+ * states and a minimum width, so the box is identical and choosing never moves anything.
+ * `sm` (44 px, compact) is the quiet one of the artist cards; `md` (48 px) the dialogs. */
+export const chooseBtn = (selected: boolean, size: "md" | "sm" = "md") =>
+  `pb-sel pb-press inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[12px] border border-pb-ink font-[590] ${
+    size === "sm" ? "min-h-11 min-w-[112px] px-4 text-[14.5px]" : "min-h-[48px] px-4 text-[15px]"
+  } ${selected ? "bg-white text-pb-ink" : "bg-pb-ink text-white"}`;
 /** Underlined text action ("Ver más", "Ver perfil", "Cambiar", "Editar"). */
 export const LINK_BTN =
   "inline-flex min-h-[44px] items-center rounded-[12px] px-2 text-[14px] text-pb-ink underline underline-offset-[3px]";
