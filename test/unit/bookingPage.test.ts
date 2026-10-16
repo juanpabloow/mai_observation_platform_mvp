@@ -143,7 +143,7 @@ test('the page never shows "Sin reseñas aún" and every rating opens its own re
     assert.equal(read(`web/components/booking/${f}`).includes('Sin reseñas aún'), false, f);
   }
   const flow = read('web/components/booking/BookingFlow.tsx');
-  for (const scope of ['Todas las citas de la sede.', 'Solo citas de este servicio.', 'Solo citas con este artista.']) assert.ok(flow.includes(scope), scope);
+  for (const scope of ['Todas las reseñas de la sede.', 'Solo reseñas de este servicio.', 'Solo reseñas de este artista.']) assert.ok(flow.includes(scope), scope);
 });
 
 test('page visibility is ONE predicate, applied to the list, the staff, the availability guard and the POST', () => {

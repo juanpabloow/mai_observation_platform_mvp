@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import { ratingText, relativeWhen, reviewCountText } from "@/lib/publicReviews";
+import { originalDate, ratingText, relativeWhen, reviewCountText, reviewOrigin } from "@/lib/publicReviews";
 import { IconClose, IconStar, SERIF, type PublicReview, type RatingSummary } from "./ui";
 
 /**
@@ -11,13 +11,17 @@ import { IconClose, IconStar, SERIF, type PublicReview, type RatingSummary } fro
  *
  * It always says WHAT the reviews are about — the whole business, one artist or one
  * service — because those are different numbers and must never be read as each other.
- * Every review shown comes from a completed appointment and was approved by the business.
+ *
+ * And WHERE they come from: a review collected here came from a completed appointment; an
+ * imported one is labelled "Reseña importada de Fresha" with its original date (and a link
+ * to Fresha when there is a safe one), and is never described as an M_AI appointment.
+ * When an average mixes both, the scope line says how many were imported.
  */
 
 export interface ReviewsTarget {
   /** "de <negocio>" / "de <artista>" / "de <servicio>". */
   title: string;
-  /** One line on what is counted ("Todas las citas de la sede"). */
+  /** One line on what is counted ("Todas las reseñas de la sede"). */
   scope: string;
   rating: RatingSummary;
   reviews: PublicReview[];
@@ -70,7 +74,7 @@ export function ReviewsDialog({ target, onClose, returnFocusTo }: { target: Revi
                 <span className="text-pb-muted">· {reviewCountText(target.rating.count)}</span>
               </span>
               <span className="text-[12.5px] leading-[1.4] text-pb-muted">
-                {target.scope} De clientes con una cita completada; publicadas por el negocio.
+                {target.scope} {reviewOrigin(target.rating)}
                 {target.reviews.length > 0 && target.reviews.length < target.rating.count ? ` Las ${target.reviews.length} más recientes.` : ""}
               </span>
             </div>
@@ -104,8 +108,8 @@ export function ReviewsDialog({ target, onClose, returnFocusTo }: { target: Revi
                     </span>
                     <span className="flex min-w-0 flex-1 flex-col">
                       <span className="text-[14px] font-[590]">{rv.author}</span>
-                      <span className="truncate text-[12.5px] text-pb-muted">
-                        {rv.service} · {relativeWhen(rv.submitted_at)}
+                      <span className="text-[12.5px] leading-[1.35] text-pb-muted [overflow-wrap:anywhere]">
+                        {[rv.service, rv.source === "fresha" ? originalDate(rv.submitted_at) : relativeWhen(rv.submitted_at)].filter(Boolean).join(" · ")}
                       </span>
                     </span>
                     <span aria-label={`${rv.rating} de 5 estrellas`} className="flex flex-none gap-px">
@@ -115,6 +119,7 @@ export function ReviewsDialog({ target, onClose, returnFocusTo }: { target: Revi
                     </span>
                   </div>
                   {rv.comment ? <p className="m-0 whitespace-pre-line text-[14.5px] leading-[1.5] text-pb-body">{rv.comment}</p> : null}
+                  {rv.source === "fresha" ? <ImportedBadge url={rv.source_url ?? null} /> : null}
                 </article>
               ))
             )}
@@ -122,5 +127,20 @@ export function ReviewsDialog({ target, onClose, returnFocusTo }: { target: Revi
         </>
       ) : null}
     </dialog>
+  );
+}
+
+/** The provenance line of an imported review (and its public Fresha link, if any). */
+export function ImportedBadge({ url }: { url: string | null }) {
+  return (
+    <span className="flex flex-wrap items-center gap-x-2 text-[12.5px] text-pb-muted">
+      <span className="rounded-full bg-pb-sf2 px-2 py-0.5 text-pb-tx2">Reseña importada de Fresha</span>
+      {url ? (
+        <a href={url} rel="noopener noreferrer nofollow" className="inline-flex min-h-11 items-center text-pb-ink underline underline-offset-[3px]">
+          Ver en Fresha
+          <span className="sr-only"> (sitio externo)</span>
+        </a>
+      ) : null}
+    </span>
   );
 }

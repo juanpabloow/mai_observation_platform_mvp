@@ -869,7 +869,7 @@ export function BookingFlow({
                           rating={siteRating}
                           label={site.name}
                           onOpen={(t) =>
-                            openReviews({ title: `de ${site.name}`, scope: "Todas las citas de la sede.", rating: siteRating, reviews: siteReviews }, t)
+                            openReviews({ title: `de ${site.name}`, scope: "Todas las reseñas de la sede.", rating: siteRating, reviews: siteReviews }, t)
                           }
                         />
                       </span>
@@ -955,7 +955,7 @@ export function BookingFlow({
                   onSelect={pickService}
                   onReserve={reserveService}
                   onOpenReviews={(s, t) =>
-                    s.rating ? openReviews({ title: `de ${s.name}`, scope: "Solo citas de este servicio.", rating: s.rating, reviews: (s.reviews ?? []).slice(0, 3) }, t) : undefined
+                    s.rating ? openReviews({ title: `de ${s.name}`, scope: "Solo reseñas de este servicio.", rating: s.rating, reviews: (s.reviews ?? []).slice(0, 3) }, t) : undefined
                   }
                   siteName={site.name}
                   whatsapp={site.whatsapp ?? null}
@@ -982,7 +982,7 @@ export function BookingFlow({
                 onView={(id, trigger) => setProfile({ id, trigger })}
                 onRetry={() => void loadStaff(service.id, sel.artist, artist?.name ?? null, service.name)}
                 onOpenReviews={(a, t) =>
-                  a.rating ? openReviews({ title: `de ${a.name}`, scope: "Solo citas con este artista.", rating: a.rating, reviews: (a.reviews ?? []).slice(0, 3) }, t) : undefined
+                  a.rating ? openReviews({ title: `de ${a.name}`, scope: "Solo reseñas de este artista.", rating: a.rating, reviews: (a.reviews ?? []).slice(0, 3) }, t) : undefined
                 }
               />
             ) : step === 3 && service ? (

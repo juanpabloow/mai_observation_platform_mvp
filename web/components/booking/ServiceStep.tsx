@@ -151,7 +151,7 @@ export function ServiceStep({
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(min(300px,100%),1fr))] gap-2.5">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(min(300px,100%),1fr))] items-start gap-2.5">
                 {g.items.map((s, i) => (
                   <ServiceCard key={s.id} index={i} service={s} {...cardProps} />
                 ))}
@@ -271,7 +271,7 @@ function LegacyCatalogue({ services, ...cardProps }: { services: Array<ServiceOp
         {shown.map((g) => (
           <section key={g.key} aria-label={g.label} className="flex flex-col gap-2.5">
             <h2 className={`${SERIF} m-0 text-[23px] leading-tight`}>{g.label}</h2>
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(min(300px,100%),1fr))] gap-2.5">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(min(300px,100%),1fr))] items-start gap-2.5">
               {g.items.map((s, i) => (
                 <ServiceCard key={s.id} index={i} service={s} {...cardProps} />
               ))}
@@ -302,21 +302,23 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
   // Its better alternative (real price difference) — compared at a glance, offered on select.
   const alt = upgradeOffer(s, all);
   const offer = isSel ? alt : null;
+  // Top row: what it is (the select button) + the round ✓/+ mirror. Below, at full width:
+  // the description (2 lines + "Ver más", which only expands) and the alternative offer.
+  // "Recomendado" sits ABOVE the name so it never squeezes it.
   return (
-    <div style={{ ["--i" as string]: index }} className={`pb-rise flex flex-col gap-3 rounded-[16px] p-3.5 ${ring(isSel)}`}>
-      <div className="flex items-start gap-3.5">
+    <div style={{ ["--i" as string]: index }} className={`pb-rise flex flex-col gap-2 rounded-[16px] p-3.5 ${ring(isSel)}`}>
+      <div className="flex items-start gap-3">
         <div className="flex min-w-0 flex-1 flex-col gap-1">
           <button
             type="button"
             aria-pressed={isSel}
             aria-describedby={s.description ? descId : undefined}
             onClick={() => onSelect(s.id)}
-            className="flex min-w-0 flex-col gap-[5px] rounded-[8px] bg-transparent p-0 text-left"
+            className="flex min-h-11 min-w-0 flex-col justify-center gap-1 rounded-[8px] bg-transparent p-0 text-left"
           >
-            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="text-[16.5px] font-[590] leading-[1.3] [overflow-wrap:anywhere] [text-wrap:balance]">{s.name}</span>
-              {s.recommended ? <span className="rounded-full bg-pb-peach px-2 py-0.5 text-[12px] font-[590] text-pb-peach-fg">Recomendado</span> : null}
-            </span>
+            <span className="text-[16.5px] font-[590] leading-[1.3] [overflow-wrap:anywhere] [text-wrap:balance]">{s.name}</span>
+            {/* Read after the name (DOM order), shown above it (order-first). */}
+            {s.recommended ? <span className="order-first self-start rounded-full bg-pb-peach px-2 py-0.5 text-[12px] font-[590] leading-[1.35] text-pb-peach-fg">Recomendado</span> : null}
             <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13.5px] text-pb-muted [font-variant-numeric:tabular-nums]">
               <span className="flex items-center gap-[5px]">
                 <IconClock />
@@ -330,23 +332,6 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
             <span className="self-start">
               <RatingButton rating={s.rating} label={s.name} onOpen={(t) => onOpenReviews(s, t)} />
             </span>
-          ) : null}
-          {alt && !isSel ? (
-            <span className="text-[13px] leading-[1.4] text-pb-muted [font-variant-numeric:tabular-nums]">
-              {alt.target.name}: +{priceLabelCOP(String(alt.delta))}
-              {alt.target.duration_min !== s.duration_min ? ` · ${alt.target.duration_min > s.duration_min ? "+" : "−"}${Math.abs(alt.target.duration_min - s.duration_min)} min` : ""}
-            </span>
-          ) : null}
-          {s.description ? (
-            <p id={descId} className={`m-0 whitespace-pre-line text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] ${expanded ? "" : "line-clamp-2"}`}>
-              {s.description}
-            </p>
-          ) : null}
-          {more ? (
-            <button type="button" aria-expanded={expanded} onClick={() => setExpanded((x) => !x)} className={`${LINK_BTN} -mb-2.5 -ml-2 -mt-1 self-start`}>
-              {expanded ? "Ver menos" : "Ver más"}
-              <span className="sr-only"> sobre {s.name}</span>
-            </button>
           ) : null}
         </div>
         <button
@@ -365,6 +350,25 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
           )}
         </button>
       </div>
+      {alt && !isSel ? (
+        <span className="text-[13px] leading-[1.4] text-pb-muted [font-variant-numeric:tabular-nums]">
+          {alt.target.name}: +{priceLabelCOP(String(alt.delta))}
+          {alt.target.duration_min !== s.duration_min ? ` · ${alt.target.duration_min > s.duration_min ? "+" : "−"}${Math.abs(alt.target.duration_min - s.duration_min)} min` : ""}
+        </span>
+      ) : null}
+      {s.description ? (
+        <div className="flex flex-col">
+          <p id={descId} className={`m-0 whitespace-pre-line text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] ${expanded ? "" : "line-clamp-2"}`}>
+            {s.description}
+          </p>
+          {more ? (
+            <button type="button" aria-expanded={expanded} aria-controls={descId} onClick={() => setExpanded((x) => !x)} className={`${LINK_BTN} -mb-2.5 -ml-2 -mt-1.5 self-start`}>
+              {expanded ? "Ver menos" : "Ver más"}
+              <span className="sr-only"> sobre {s.name}</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {offer ? <UpgradeOffer from={s} target={offer.target} delta={offer.delta} onSwitch={() => onSelect(offer.target.id)} willRecheck={willRecheck} /> : null}
     </div>
   );

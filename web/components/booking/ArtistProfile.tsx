@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ratingText, relativeWhen, reviewCountText } from "@/lib/publicReviews";
+import { originalDate, ratingText, relativeWhen, reviewCountText, reviewOrigin } from "@/lib/publicReviews";
 import { artistInitials, artistTone } from "@/lib/publicBookingFlow";
 import { bioLead } from "@/lib/staffPublicProfile";
+import { ImportedBadge } from "./ReviewsDialog";
 import { CTA_BASE, ctaTone, IconBack, IconStar, Portrait, SERIF, type ServiceOption, type StaffOption } from "./ui";
 
 /**
@@ -152,7 +153,7 @@ export function ArtistProfile({
               <section aria-label="Reseñas" className="flex flex-col gap-2.5">
                 <div className="flex flex-wrap items-baseline gap-2">
                   <h3 className="m-0 text-[14px] font-[590]">Reseñas</h3>
-                  <span className="text-[12.5px] text-pb-muted">De clientes con una cita completada</span>
+                  {artist.rating ? <span className="text-[12.5px] text-pb-muted">{reviewOrigin(artist.rating)}</span> : null}
                 </div>
                 {shown.map((rv, i) => (
                   <article key={`${rv.submitted_at}-${i}`} className="flex flex-col gap-1.5 rounded-[16px] border border-pb-line bg-white p-3.5">
@@ -162,8 +163,8 @@ export function ArtistProfile({
                       </span>
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="text-[14px] font-[590]">{rv.author}</span>
-                        <span className="truncate text-[12.5px] text-pb-muted">
-                          {rv.service} · {relativeWhen(rv.submitted_at)}
+                        <span className="text-[12.5px] leading-[1.35] text-pb-muted [overflow-wrap:anywhere]">
+                          {[rv.service, rv.source === "fresha" ? originalDate(rv.submitted_at) : relativeWhen(rv.submitted_at)].filter(Boolean).join(" · ")}
                         </span>
                       </span>
                       <span aria-label={`${rv.rating} de 5 estrellas`} className="flex flex-none gap-px">
@@ -173,6 +174,7 @@ export function ArtistProfile({
                       </span>
                     </div>
                     {rv.comment ? <p className="m-0 whitespace-pre-line text-[14.5px] leading-[1.5] text-pb-body">{rv.comment}</p> : null}
+                    {rv.source === "fresha" ? <ImportedBadge url={rv.source_url ?? null} /> : null}
                   </article>
                 ))}
                 {reviews.length > 3 ? (
