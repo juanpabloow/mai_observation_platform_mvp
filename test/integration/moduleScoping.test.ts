@@ -75,13 +75,13 @@ test('contact update with a forged clientId writes NOTHING (also for valid tenan
   });
 
   // Forged/foreign client id (another client of the SAME tenant) → null, no write.
-  const forged = await updateContact(s.tenantId, contact.id, { name: 'Hacked' }, s.otherClientId);
+  const forged = await updateContact(s.tenantId, contact.id, { name: 'Hacked' }, s.otherClientId, { kind: 'user', userId: null });
   assert.equal(forged, null, 'cross-client update returns null');
   const reload = await getContactById(s.tenantId, contact.id);
   assert.equal(reload?.name, 'Original Name', 'name unchanged after forged attempt');
 
   // The right client scope updates normally.
-  const ok = await updateContact(s.tenantId, contact.id, { name: 'Renamed' }, s.clientId);
+  const ok = await updateContact(s.tenantId, contact.id, { name: 'Renamed' }, s.clientId, { kind: 'user', userId: null });
   assert.equal(ok?.name, 'Renamed');
 });
 

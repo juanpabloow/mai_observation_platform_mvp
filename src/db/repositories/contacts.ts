@@ -1,6 +1,13 @@
 import type { PoolClient } from 'pg';
-import { query } from '../client.js';
+import { query, withTransaction } from '../client.js';
 import { normalizeE164 } from '../../scheduling/phone.js';
+import { recordCrmActivity, type ActorKind } from './crmActivityEvents.js';
+
+/** Who drove a contact write — the attribution recorded on stage_changed / owner_changed. */
+export interface ContactWriteActor {
+  kind: ActorKind;
+  userId: string | null;
+}
 
 /**
  * CRM repository for the canonical PERSON entity (contacts) and the
@@ -587,13 +594,15 @@ export async function updateContact(
   tenantId: string,
   id: string,
   patch: UpdateContactInput,
-  clientId?: string | null,
+  clientId: string | null,
+  actor: ContactWriteActor,
 ): Promise<ContactRow | null> {
+  // SET clause (values only); WHERE params are appended AFTER these in the UPDATE.
   const sets: string[] = [];
-  const params: unknown[] = [id, tenantId];
+  const setParams: unknown[] = [];
   const add = (col: string, val: unknown) => {
-    params.push(val);
-    sets.push(`${col} = $${params.length}`);
+    setParams.push(val);
+    sets.push(`${col} = $${setParams.length}`);
   };
   if (patch.name !== undefined) add('name', patch.name);
   if (patch.phone !== undefined) add('phone_e164', normalizeE164(patch.phone));
@@ -615,24 +624,49 @@ export async function updateContact(
     // Keys not mentioned are preserved. A bot enriching one field must never erase another
     // — a silent full-object replace was the data-loss bug this guards against. Atomic in
     // SQL, so concurrent enrichments don't clobber via read-modify-write.
-    params.push(JSON.stringify(patch.custom_fields ?? {}));
-    const setIdx = params.length;
-    params.push(patch.custom_fields_clear ?? []);
-    const clearIdx = params.length;
+    setParams.push(JSON.stringify(patch.custom_fields ?? {}));
+    const setIdx = setParams.length;
+    setParams.push(patch.custom_fields_clear ?? []);
+    const clearIdx = setParams.length;
     sets.push(`custom_fields = (COALESCE(custom_fields, '{}'::jsonb) || $${setIdx}::jsonb) - $${clearIdx}::text[]`);
   }
   if (sets.length === 0) return getContactById(tenantId, id, clientId);
   sets.push('updated_at = now()');
-  let where = 'id = $1 AND tenant_id = $2';
-  if (clientId) {
-    params.push(clientId);
-    where += ` AND client_id = $${params.length}`;
-  }
-  const r = await query<ContactRow>(
-    `UPDATE contacts SET ${sets.join(', ')} WHERE ${where} RETURNING *`,
-    params,
-  );
-  return r.rows[0] ?? null;
+
+  // MF-1 item 6: the stage/owner change AND its audit event are written in ONE
+  // transaction, so every caller (web actions, machine API, imports) leaves identical
+  // history and the audit can never drift from the row. Lock the row, read the old
+  // auditable values, update, then record an event only for a field that actually changed.
+  return withTransaction(async (client) => {
+    const whereSel = ['id = $1', 'tenant_id = $2'];
+    const selParams: unknown[] = [id, tenantId];
+    if (clientId) { selParams.push(clientId); whereSel.push(`client_id = $${selParams.length}`); }
+    const before = (await client.query<ContactRow>(
+      `SELECT * FROM contacts WHERE ${whereSel.join(' AND ')} FOR UPDATE`, selParams)).rows[0];
+    if (!before) return null;
+
+    const updParams = [...setParams];
+    const whereUpd = [`id = $${updParams.length + 1}`, `tenant_id = $${updParams.length + 2}`];
+    updParams.push(id, tenantId);
+    if (clientId) { updParams.push(clientId); whereUpd.push(`client_id = $${updParams.length}`); }
+    const after = (await client.query<ContactRow>(
+      `UPDATE contacts SET ${sets.join(', ')} WHERE ${whereUpd.join(' AND ')} RETURNING *`, updParams)).rows[0];
+    if (!after) return null;
+
+    if (patch.stage !== undefined && before.stage !== after.stage) {
+      await recordCrmActivity(client, {
+        tenantId, clientId: after.client_id, contactId: id, eventType: 'stage_changed',
+        actorKind: actor.kind, actorUserId: actor.userId, detail: { from: before.stage, to: after.stage },
+      });
+    }
+    if (patch.assigned_to !== undefined && before.assigned_to !== after.assigned_to) {
+      await recordCrmActivity(client, {
+        tenantId, clientId: after.client_id, contactId: id, eventType: 'owner_changed',
+        actorKind: actor.kind, actorUserId: actor.userId, detail: { from: before.assigned_to, to: after.assigned_to },
+      });
+    }
+    return after;
+  });
 }
 
 /**

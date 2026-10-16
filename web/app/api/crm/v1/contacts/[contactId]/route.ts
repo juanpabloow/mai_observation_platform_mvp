@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { authenticateCrm, crmError, loadMachineContact, loadEnrichmentContact, toCompactContact, applyConsentAsAutomation, recordAutomationActivity } from "@/lib/crmApi";
+import { authenticateCrm, crmError, loadMachineContact, loadEnrichmentContact, toCompactContact, applyConsentAsAutomation } from "@/lib/crmApi";
 import { resolveLabelParams } from "@/lib/schedulingApi";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { getContactById, updateContact } from "@worker/db/repositories/contacts.js";
@@ -83,10 +83,10 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ contac
     patch.custom_fields_clear = customClear;
   }
   if (Object.keys(patch).length > 0) {
-    await updateContact(tenantId, contactId, patch, clientId);
-  }
-  if (body.stage !== undefined && body.stage !== existing.stage) {
-    await recordAutomationActivity({ tenantId, clientId, contactId, eventType: "stage_changed", detail: { from: existing.stage, to: body.stage } });
+    // MF-1 item 6: updateContact records stage_changed (and owner_changed) in its OWN
+    // transaction, so the machine PATCH no longer writes the event itself — one writer,
+    // no double event.
+    await updateContact(tenantId, contactId, patch, clientId, { kind: "automation", userId: null });
   }
   // Consent overwrites + audits (only when it actually changes).
   if (body.consent !== undefined && body.consent !== existing.messaging_consent) {

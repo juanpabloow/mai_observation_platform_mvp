@@ -89,7 +89,7 @@ export async function POST(req: Request): Promise<Response> {
 
   if (customValue !== undefined) {
     // PARTIAL: merge these keys, clear the emptied ones, preserve everything else.
-    await updateContact(tenantId, contact.id, { custom_fields: customValue, custom_fields_clear: customClear }, clientId);
+    await updateContact(tenantId, contact.id, { custom_fields: customValue, custom_fields_clear: customClear }, clientId, { kind: "automation", userId: null });
   }
   if (body.consent !== undefined && body.consent !== contact.messaging_consent) {
     await applyConsentAsAutomation(tenantId, clientId, contact.id, body.consent, body.source_label ?? "api");

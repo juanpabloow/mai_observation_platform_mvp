@@ -66,7 +66,7 @@ test('custom_fields is PARTIAL: a second key preserves the first; "" clears just
   const write = async (v: unknown) => {
     const c = validateCustomFieldValues(defs, v);
     if (!c.ok) throw new Error(c.error);
-    await updateContact(s.tenantId, contact.id, { custom_fields: c.value, custom_fields_clear: c.clear }, s.clientId);
+    await updateContact(s.tenantId, contact.id, { custom_fields: c.value, custom_fields_clear: c.clear }, s.clientId, { kind: 'user', userId: null });
   };
   await write({ color: 'blue' });
   assert.deepEqual(await cf(contact.id), { color: 'blue' });

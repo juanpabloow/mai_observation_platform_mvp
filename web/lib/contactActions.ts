@@ -76,7 +76,7 @@ export async function updateContactAction(
     repoPatch.custom_fields_clear = check.clear;
   }
 
-  const row = await updateContact(scope.tenantId, contactId, repoPatch, client.id);
+  const row = await updateContact(scope.tenantId, contactId, repoPatch, client.id, { kind: "user", userId: scope.userId });
   if (!row) return { ok: false, error: GENERIC };
 
   revalidatePath(`/clients/${client.id}/contacts`);
@@ -189,7 +189,7 @@ export async function createContactAction(clientId: string, input: unknown): Pro
     }
   }
   if (customValue !== undefined && Object.keys(customValue).length > 0) patch.custom_fields = customValue;
-  if (Object.keys(patch).length > 0) await updateContact(tenantId, contact.id, patch, client.id);
+  if (Object.keys(patch).length > 0) await updateContact(tenantId, contact.id, patch, client.id, { kind: "user", userId: scope.userId });
 
   // TAGS are their own rows. Attach by NAME: an existing tag is reused (case-insensitive
   // — "VIP" and "vip" are one tag, not two), a new name is created only when the actor
