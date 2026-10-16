@@ -98,11 +98,18 @@ export const auth = betterAuth({
     // 1.6.19 types. Better Auth owns the token lifecycle (single-use,
     // stored in `verification`).
     ...buildPasswordReset(sendEmail),
-    // DEBT (deliberately out of this hotfix): requireEmailVerification stays
-    // OFF, so unverified accounts can still sign in with a password and new
-    // unverified accounts can still accumulate (sendOnSignUp only *offers*
-    // verification). Turning it on would lock out legacy unverified users at
-    // sign-in and needs its own UX + comms before flipping.
+    // MF-1 item 8: an email/password account must PROVE it owns the email before it can sign
+    // in. This closes the invitation-hijack — an attacker could previously register an
+    // unverified account with an invited address and accept the invite (acceptInvitation only
+    // matches the email, and sign-in was allowed unverified), joining a tenant they were never
+    // invited to. It does NOT reopen account pre-hijacking: implicit linking is OFF
+    // (ACCOUNT_LINKING_POLICY.disableImplicitLinking), so verifying an email still grants
+    // nothing toward Google linking; recovery remains the password-reset flow. Existing
+    // accounts are grandfathered by migration 1806000000000 (every account present at cutover
+    // is marked verified), so no current user is locked out — the gate applies only to new
+    // email/password accounts. Google users are provider-verified. sendOnSignUp (see
+    // buildEmailVerification) delivers the verification email on signup.
+    requireEmailVerification: true,
   },
   emailVerification: buildEmailVerification(sendEmail),
   // Pin the secure linking policy explicitly instead of relying on upstream

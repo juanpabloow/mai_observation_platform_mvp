@@ -4,6 +4,8 @@
  */
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import {
   ACCOUNT_LINKING_POLICY,
@@ -17,6 +19,15 @@ import {
   VERIFIED_LOGIN_CALLBACK,
 } from "../lib/auth-verification";
 import { mapAuthErrorParam, mapClientAuthError, GENERIC_RESET_NOTICE } from "../lib/auth-errors";
+
+test("MF-1 item 8: email verification is ENFORCED for email/password sign-in", () => {
+  // requireEmailVerification lives inline in auth.ts (it configures the betterAuth instance,
+  // which can't be imported headless). Pin it at the source, like the rest of the auth guards.
+  const authSrc = readFileSync(fileURLToPath(new URL("../lib/auth.ts", import.meta.url)), "utf8");
+  assert.match(authSrc, /requireEmailVerification:\s*true/, "requireEmailVerification must be ON");
+  // The old debt (verification OFF) must be gone, not merely re-labelled.
+  assert.ok(!/requireEmailVerification stays\s*\n?\s*\/\/\s*OFF/.test(authSrc), "the 'stays OFF' debt note is removed");
+});
 
 test("account-linking policy pins the production-safe values", () => {
   assert.equal(ACCOUNT_LINKING_POLICY.enabled, true);
