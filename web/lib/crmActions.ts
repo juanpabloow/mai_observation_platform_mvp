@@ -54,7 +54,7 @@ async function gate(clientId: string): Promise<{ tenantId: string; clientId: str
   const resolved = await resolveClientModuleContext(clientId, "crm");
   if (!resolved.ok) return null;
   const { scope, client } = resolved.context;
-  return { tenantId: scope.tenantId, clientId: client.id, actor: { role: scope.role, userId: scope.userId } };
+  return { tenantId: scope.tenantId, clientId: client.id, actor: { role: scope.role, clientRole: scope.clientRole, userId: scope.userId } };
 }
 
 /** The assignee must be a tenant member with access to THIS client (owner/admin: any;

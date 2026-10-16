@@ -201,7 +201,7 @@ export async function createContactAction(clientId: string, input: unknown): Pro
   if (wantedTags.length > 0) {
     const catalogue = await listTags(tenantId, client.id);
     const byName = new Map(catalogue.map((t) => [t.name.toLowerCase(), t.id]));
-    const mayCreate = actorIsFullAccess({ role: scope.role, userId: scope.userId });
+    const mayCreate = actorIsFullAccess({ role: scope.role, clientRole: scope.clientRole, userId: scope.userId });
     for (const name of wantedTags) {
       let tagId = byName.get(name.toLowerCase());
       if (!tagId) {

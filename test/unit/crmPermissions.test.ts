@@ -13,10 +13,13 @@ import {
  * canChangeStage were removed — owner/stage changes go through C-2's contactActions
  * (owner/admin gated there), not crmPermissions.
  */
-const owner: CrmActor = { role: 'owner', userId: 'u-owner' };
-const admin: CrmActor = { role: 'admin', userId: 'u-admin' };
-const memberA: CrmActor = { role: 'member', userId: 'u-a' };
-const memberB: CrmActor = { role: 'member', userId: 'u-b' };
+const owner: CrmActor = { role: 'owner', clientRole: null, userId: 'u-owner' };
+const admin: CrmActor = { role: 'admin', clientRole: null, userId: 'u-admin' };
+// Limited members (clientRole setter/staff) keep the narrow rules.
+const memberA: CrmActor = { role: 'member', clientRole: 'setter', userId: 'u-a' };
+const memberB: CrmActor = { role: 'member', clientRole: 'staff', userId: 'u-b' };
+// MF-1 item 5: a Client Owner has FULL CRM control inside their client.
+const clientOwner: CrmActor = { role: 'member', clientRole: 'owner', userId: 'u-co' };
 
 test('notes: author edits own; another member cannot; owner/admin can', () => {
   const note = { created_by_user_id: 'u-a' };
@@ -44,8 +47,21 @@ test('assignee: member only to self; owner/admin to anyone', () => {
   assert.deepEqual(resolveAssignee(owner, null), { ok: true, assignee: null }, 'owner unassigned stays null');
 });
 
-test('tag catalogue: owner/admin only', () => {
+test('tag catalogue: full-access (agency + Client Owner) only', () => {
   assert.equal(canManageTagCatalog(owner), true);
   assert.equal(canManageTagCatalog(admin), true);
-  assert.equal(canManageTagCatalog(memberA), false);
+  assert.equal(canManageTagCatalog(clientOwner), true, 'Client Owner manages the catalogue');
+  assert.equal(canManageTagCatalog(memberA), false, 'setter cannot');
+  assert.equal(canManageTagCatalog(memberB), false, 'staff cannot');
+});
+
+test('MF-1 item 5: a Client Owner has FULL CRM control inside their client', () => {
+  const foreignNote = { created_by_user_id: 'someone-else' };
+  const foreignTask = { created_by_user_id: 'someone-else', assigned_to_user_id: 'another' };
+  assert.equal(canEditNote(clientOwner, foreignNote), true, 'edits any note');
+  assert.equal(canManageTask(clientOwner, foreignTask), true, 'manages any task');
+  assert.deepEqual(resolveAssignee(clientOwner, 'u-b'), { ok: true, assignee: 'u-b' }, 'assigns to anyone');
+  // A limited member is unchanged: still only own/assigned.
+  assert.equal(canEditNote(memberA, foreignNote), false, 'setter still limited to own note');
+  assert.equal(canManageTask(memberB, foreignTask), false, 'staff still limited to own/assigned task');
 });
