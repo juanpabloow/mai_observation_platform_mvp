@@ -19,22 +19,27 @@ test('laptop services: one per row, one fixed height, every slot reserved', () =
   assert.match(step, /lg:grid lg:h-\[108px\]/, 'one common compact height');
   assert.match(step, /lg:\[grid-template-areas:'info_side'_'desc_side'_'meta_side'\]/, 'info left, price · duration · selection right');
   assert.match(step, /lg:order-none lg:self-center/, '"Recomendado" sits beside the name on a laptop (no row of its own)');
-  assert.match(step, /<span className="hidden flex-none lg:inline-flex">\s*<RatingButton/, 'laptop: the rating sits on the name line');
+  assert.match(step, /<span className="relative z-10 hidden flex-none lg:inline-flex">\s*<RatingButton/, 'laptop: the rating sits on the name line');
   assert.match(step, /aria-hidden className="hidden h-5 lg:block lg:\[grid-area:desc\]"/, 'the description line is reserved');
   assert.match(step, /lg:line-clamp-2 lg:min-w-0">\{s\.name\}/, 'name up to two lines');
-  assert.match(step, /lg:sr-only/, 'price and duration stay in the select button for screen readers');
+  assert.match(step, /lg:sr-only/, 'price and duration stay in the card button for screen readers');
 });
 
-test('pressing the description opens the detail on a laptop (never grows the card, never selects); the alternative sits outside', () => {
-  assert.match(step, /aria-haspopup="dialog"\s+onClick=\{\(e\) => onOpenDetail\(s\.id, e\.currentTarget\)\}/);
+test('pressing the CARD opens the detail (never selects); "+" and "Añadir" choose; the alternative sits outside', () => {
+  // A stretched button: the name button's ::after covers the card — no nested buttons.
+  assert.match(step, /aria-haspopup="dialog"\s+aria-describedby=\{s\.description \? descId : undefined\}\s+onClick=\{\(e\) => onOpenDetail\(s\.id, e\.currentTarget\)\}/);
+  assert.match(step, /after:absolute after:inset-0 after:rounded-\[16px\]/);
+  assert.match(step, /focus-visible:after:outline-2/, 'the whole card shows the keyboard focus');
+  assert.doesNotMatch(step, />\s*Ver más\s*</, 'no "Ver más" link');
+  assert.doesNotMatch(step.slice(step.indexOf('function ServiceCard'), step.indexOf('function UpgradeOffer')), /aria-expanded|underline/, 'no underline, no expanding text in the card');
+  // "+" is now a real, focusable button above the overlay.
+  assert.match(step, /aria-label=\{isSel \? `\$\{s\.name\}, añadido` : `Añadir \$\{s\.name\}`\}\s+onClick=\{\(\) => onSelect\(s\.id\)\}/);
   assert.match(step, /function ServiceDetailDialog/);
-  assert.doesNotMatch(step, />\s*Ver más\s*</, 'no separate "Ver más" link: the description is the control');
-  assert.match(step, /aria-expanded=\{expanded\}\s+onClick=\{\(\) => setExpanded/, 'phone: pressing a long description expands it');
   assert.match(step, /d\.showModal\(\);/);
-  assert.match(step, /t\?\.focus\(\);/, 'focus returns to the trigger');
-  assert.match(step, /<div className="lg:hidden">\{offerBox\}<\/div>/, 'phone: inside the card');
+  assert.match(step, /t\?\.focus\(\);/, 'focus returns to the card');
+  assert.match(step, /"Añadir"/);
+  assert.match(step, /<div className="relative z-10 lg:hidden">\{offerBox\}<\/div>/, 'phone: inside the card, above the overlay');
   assert.match(step, /<div className="hidden lg:block">\{offerBox\}<\/div>/, 'laptop: outside the fixed height');
-  // Opening the detail never calls onSelect; only its explicit button does.
   const open = step.slice(step.indexOf('onOpenDetail: (id: string, trigger: HTMLElement) =>'), step.indexOf('const detailDialog'));
   assert.doesNotMatch(open, /onSelect/);
 });

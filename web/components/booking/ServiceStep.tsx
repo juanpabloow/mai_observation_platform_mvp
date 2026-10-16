@@ -313,21 +313,22 @@ interface CardProps {
 }
 
 /**
- * A service card. Phone/tablet: one natural-height card (name, duration · price, rating,
- * alternative, a 2-line description with "Ver más" in place). From `lg` (1024 px) the
- * SAME elements sit in a fixed-height horizontal row — what it is on the left, price ·
- * duration · selection aligned on the right — compact: name · "Recomendado" · rating on
- * one line, the description (reserved even when empty) below, and the Signature
- * difference under it when there is one. Every card has the same height.
- * There "Ver más" opens the detail dialog instead of growing the card, and the
- * Signature alternative of a selected card is shown BELOW it, outside the fixed height.
+ * A service card. The WHOLE card is one press target that opens the service's detail
+ * (a sheet on the phone, a dialog on a laptop) — a "stretched" button: the name button's
+ * ::after covers the card, so there is never a button inside a button. Choosing is the
+ * round "+" (a real button, above the overlay) or "Añadir" inside the detail; opening the
+ * detail never chooses. The rating and the Signature switch sit above the overlay too.
+ *
+ * Phone/tablet: natural height (name, duration · price, rating, alternative, a 2-line
+ * description). From `lg` (1024 px) the same elements sit in a fixed-height row — name ·
+ * "Recomendado" · rating on one line, the description below, the Signature difference
+ * under it when there is one; price · duration · "+" on the right. Same height for all;
+ * the alternative of a chosen card is shown BELOW it, outside that height.
  */
 function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews, willRecheck, onOpenDetail }: CardProps) {
   const descId = useId();
-  const [expanded, setExpanded] = useState(false);
   const isSel = selected === s.id;
   const price = priceLabelCOP(s.price) ?? "Precio a consultar";
-  const more = needsMore(s.description);
   // Its better alternative (real price difference) — compared at a glance, offered on select.
   const alt = upgradeOffer(s, all);
   const offer = isSel ? alt : null;
@@ -337,16 +338,16 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
     <div className="flex flex-col gap-2">
       <div
         style={{ ["--i" as string]: index }}
-        className={`pb-rise flex flex-col gap-2 rounded-[16px] p-3.5 lg:grid lg:h-[108px] lg:grid-cols-[minmax(0,1fr)_auto] lg:content-center lg:gap-x-6 lg:gap-y-0.5 lg:overflow-hidden lg:px-5 lg:py-2.5 lg:[grid-template-areas:'info_side'_'desc_side'_'meta_side'] ${ring(isSel)}`}
+        className={`pb-rise relative flex flex-col gap-2 rounded-[16px] p-3.5 transition-shadow duration-150 hover:shadow-[0_2px_12px_rgba(17,19,22,0.07)] motion-reduce:transition-none lg:grid lg:h-[108px] lg:grid-cols-[minmax(0,1fr)_auto] lg:content-center lg:gap-x-6 lg:gap-y-0.5 lg:overflow-hidden lg:px-5 lg:py-2.5 lg:[grid-template-areas:'info_side'_'desc_side'_'meta_side'] ${ring(isSel)}`}
       >
         <div className="flex items-start gap-3 lg:contents">
           <div className="flex min-w-0 flex-1 flex-col gap-1 lg:flex-row lg:items-center lg:gap-3 lg:[grid-area:info]">
             <button
               type="button"
-              aria-pressed={isSel}
+              aria-haspopup="dialog"
               aria-describedby={s.description ? descId : undefined}
-              onClick={() => onSelect(s.id)}
-              className="flex min-h-11 min-w-0 flex-col justify-center gap-1 rounded-[8px] bg-transparent p-0 text-left lg:min-w-11 lg:flex-row lg:items-center lg:justify-start lg:gap-2.5"
+              onClick={(e) => onOpenDetail(s.id, e.currentTarget)}
+              className="flex min-h-11 min-w-0 flex-col justify-center gap-1 rounded-[8px] bg-transparent p-0 text-left focus-visible:outline-none after:absolute after:inset-0 after:rounded-[16px] after:content-[''] focus-visible:after:outline focus-visible:after:outline-2 focus-visible:after:outline-offset-2 focus-visible:after:outline-pb-ink lg:min-w-11 lg:flex-row lg:items-center lg:justify-start lg:gap-2.5"
             >
               <span className="text-[16.5px] font-[590] leading-[1.3] [overflow-wrap:anywhere] [text-wrap:balance] lg:line-clamp-2 lg:min-w-0">{s.name}</span>
               {/* Read after the name (DOM order). Phone: shown above it (order-first). Laptop:
@@ -364,11 +365,11 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
                 </span>
                 <span className="text-[15px] font-semibold text-pb-ink">{price}</span>
               </span>
-              {isSel ? <span className="sr-only">Seleccionado</span> : null}
+              <span className="sr-only">{isSel ? ". Elegido. Ver el detalle" : ". Ver el detalle"}</span>
             </button>
-            {/* Laptop: the rating on the name's line (a sibling button, never nested). */}
+            {/* Laptop: the rating on the name's line (a sibling button, above the overlay). */}
             {s.rating ? (
-              <span className="hidden flex-none lg:inline-flex">
+              <span className="relative z-10 hidden flex-none lg:inline-flex">
                 <RatingButton rating={s.rating} label={s.name} onOpen={(t) => onOpenReviews(s, t)} />
               </span>
             ) : null}
@@ -383,10 +384,10 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
             </span>
             <button
               type="button"
-              tabIndex={-1}
-              aria-hidden
+              aria-pressed={isSel}
+              aria-label={isSel ? `${s.name}, añadido` : `Añadir ${s.name}`}
               onClick={() => onSelect(s.id)}
-              className={`pb-sel pb-press flex size-11 flex-none items-center justify-center rounded-full border p-0 ${isSel ? "border-pb-ink bg-pb-ink" : "border-pb-line2 bg-white"}`}
+              className={`pb-sel pb-press relative z-10 flex size-11 flex-none items-center justify-center rounded-full border p-0 ${isSel ? "border-pb-ink bg-pb-ink" : "border-pb-line2 bg-white"}`}
             >
               {isSel ? (
                 <span key="on" className="pb-pop flex">
@@ -402,7 +403,7 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
             under the description (the rating moved to the name's line). */}
         <div className={`${s.rating || altHint ? "flex" : "hidden"} ${altHint ? "lg:flex" : "lg:hidden"} flex-col items-start gap-2 lg:[grid-area:meta]`}>
           {s.rating ? (
-            <span className="lg:hidden">
+            <span className="relative z-10 lg:hidden">
               <RatingButton rating={s.rating} label={s.name} onOpen={(t) => onOpenReviews(s, t)} />
             </span>
           ) : null}
@@ -413,52 +414,16 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
             </span>
           ) : null}
         </div>
+        {/* Plain text: the full description is in the detail the card opens. */}
         {s.description ? (
-          <div className="flex flex-col lg:min-w-0 lg:flex-row lg:items-center lg:[grid-area:desc]">
-            {/* The DESCRIPTION is the control — no separate "Ver más" link. Phone: pressing a
-                long one expands it in place (a short one is plain text). Laptop: pressing it
-                opens the full detail, so the card never grows. Neither selects. */}
-            {more ? (
-              <button
-                type="button"
-                aria-expanded={expanded}
-                onClick={() => setExpanded((x) => !x)}
-                className="group -mx-1 flex min-h-11 items-end gap-1 rounded-[8px] px-1 py-0.5 text-left lg:hidden"
-              >
-                <span id={descId} className={`min-w-0 flex-1 whitespace-pre-line text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] ${expanded ? "" : "line-clamp-2"}`}>
-                  {s.description}
-                </span>
-                <span aria-hidden className={`mb-0.5 flex flex-none text-pb-muted transition-transform duration-200 motion-reduce:transition-none ${expanded ? "rotate-180" : ""}`}>
-                  <IconChevronDown />
-                </span>
-                <span className="sr-only">{expanded ? ". Ver menos" : ". Leer todo"}</span>
-              </button>
-            ) : (
-              <p id={descId} className="m-0 whitespace-pre-line text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] lg:hidden">
-                {s.description}
-              </p>
-            )}
-            <button
-              type="button"
-              aria-haspopup="dialog"
-              onClick={(e) => onOpenDetail(s.id, e.currentTarget)}
-              // Not a LINK_BTN: its `inline-flex` would override `hidden` below lg.
-              className="group -my-3 -ml-1 hidden min-h-[44px] min-w-0 max-w-full items-center gap-1 rounded-[8px] px-1 text-left lg:flex"
-            >
-              <span className="line-clamp-1 min-w-0 text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] group-hover:text-pb-ink group-hover:underline group-hover:underline-offset-[3px]">
-                {s.description}
-              </span>
-              <span aria-hidden className="flex flex-none -rotate-90 text-pb-muted group-hover:text-pb-ink">
-                <IconChevronDown />
-              </span>
-              <span className="sr-only">. Ver el detalle de {s.name}</span>
-            </button>
-          </div>
+          <p id={descId} className="m-0 line-clamp-2 whitespace-pre-line text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] lg:line-clamp-1 lg:[grid-area:desc]">
+            {s.description}
+          </p>
         ) : (
           <span aria-hidden className="hidden h-5 lg:block lg:[grid-area:desc]" />
         )}
         {/* Phone/tablet: the alternative stays inside the card (natural height). */}
-        {offerBox ? <div className="lg:hidden">{offerBox}</div> : null}
+        {offerBox ? <div className="relative z-10 lg:hidden">{offerBox}</div> : null}
       </div>
       {/* Laptop: outside the fixed-height card, so choosing never deforms it. */}
       {offerBox ? <div className="hidden lg:block">{offerBox}</div> : null}
@@ -605,7 +570,7 @@ function IconChevronDown() {
 /**
  * The full detail of a service (laptop "Ver más"): everything the card shortens, in a
  * native modal <dialog> — focus is trapped, Escape / the backdrop / the ✕ close it, and
- * focus returns to the description that opened it. Opening it never selects; "Añadir" is a
+ * focus returns to the card that opened it. Opening it never selects; "Añadir" is a
  * separate, explicit action. It closes with the ✕, Escape or a click outside. Prices, durations and names are the card's.
  */
 function ServiceDetailDialog({
@@ -727,7 +692,7 @@ function ServiceDetailDialog({
                 onClose();
               }}
               aria-label={isSel ? `${s.name}, añadido` : `Añadir ${s.name}`}
-              className={`${chooseBtn(isSel)} min-w-[160px]`}
+              className={`${chooseBtn(isSel)} w-full lg:w-auto lg:min-w-[160px]`}
             >
               {isSel ? (
                 <>
