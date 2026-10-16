@@ -317,8 +317,9 @@ interface CardProps {
  * A service card. Phone/tablet: one natural-height card (name, duration · price, rating,
  * alternative, a 2-line description with "Ver más" in place). From `lg` (1024 px) the
  * SAME elements sit in a fixed-height horizontal row — what it is on the left, price ·
- * duration · selection aligned on the right — with every slot (label, rating line,
- * description line) reserved, so no card is taller than another and nothing jumps.
+ * duration · selection aligned on the right — compact: name · "Recomendado" · rating on
+ * one line, the description (reserved even when empty) below, and the Signature
+ * difference under it when there is one. Every card has the same height.
  * There "Ver más" opens the detail dialog instead of growing the card, and the
  * Signature alternative of a selected card is shown BELOW it, outside the fixed height.
  */
@@ -337,25 +338,25 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
     <div className="flex flex-col gap-2">
       <div
         style={{ ["--i" as string]: index }}
-        className={`pb-rise flex flex-col gap-2 rounded-[16px] p-3.5 lg:grid lg:h-[152px] lg:grid-cols-[minmax(0,1fr)_auto] lg:content-center lg:gap-x-6 lg:gap-y-1 lg:overflow-hidden lg:px-5 lg:py-3 lg:[grid-template-areas:'info_side'_'meta_side'_'desc_side'] ${ring(isSel)}`}
+        className={`pb-rise flex flex-col gap-2 rounded-[16px] p-3.5 lg:grid lg:h-[108px] lg:grid-cols-[minmax(0,1fr)_auto] lg:content-center lg:gap-x-6 lg:gap-y-0.5 lg:overflow-hidden lg:px-5 lg:py-2.5 lg:[grid-template-areas:'info_side'_'desc_side'_'meta_side'] ${ring(isSel)}`}
       >
         <div className="flex items-start gap-3 lg:contents">
-          <div className="flex min-w-0 flex-1 flex-col gap-1 lg:[grid-area:info]">
+          <div className="flex min-w-0 flex-1 flex-col gap-1 lg:flex-row lg:items-center lg:gap-3 lg:[grid-area:info]">
             <button
               type="button"
               aria-pressed={isSel}
               aria-describedby={s.description ? descId : undefined}
               onClick={() => onSelect(s.id)}
-              className="flex min-h-11 min-w-0 flex-col justify-center gap-1 rounded-[8px] bg-transparent p-0 text-left"
+              className="flex min-h-11 min-w-0 flex-col justify-center gap-1 rounded-[8px] bg-transparent p-0 text-left lg:min-w-11 lg:flex-row lg:items-center lg:justify-start lg:gap-2.5"
             >
-              <span className="text-[16.5px] font-[590] leading-[1.3] [overflow-wrap:anywhere] [text-wrap:balance] lg:line-clamp-2">{s.name}</span>
-              {/* Read after the name (DOM order), shown above it (order-first). On a laptop the
-                  slot is reserved even when empty, so every name starts at the same height. */}
+              <span className="text-[16.5px] font-[590] leading-[1.3] [overflow-wrap:anywhere] [text-wrap:balance] lg:line-clamp-2 lg:min-w-0">{s.name}</span>
+              {/* Read after the name (DOM order). Phone: shown above it (order-first). Laptop:
+                  beside it, on the same line — no row of its own. */}
               {s.recommended ? (
-                <span className="order-first self-start rounded-full bg-pb-peach px-2 py-0.5 text-[12px] font-[590] leading-[1.35] text-pb-peach-fg">Recomendado</span>
-              ) : (
-                <span aria-hidden className="order-first hidden h-[22px] lg:block" />
-              )}
+                <span className="order-first flex-none self-start rounded-full bg-pb-peach px-2 py-0.5 text-[12px] font-[590] leading-[1.35] text-pb-peach-fg lg:order-none lg:self-center">
+                  Recomendado
+                </span>
+              ) : null}
               {/* Phone: duration · price under the name. Laptop: read here, SHOWN on the right. */}
               <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13.5px] text-pb-muted [font-variant-numeric:tabular-nums] lg:sr-only">
                 <span className="flex items-center gap-[5px]">
@@ -366,6 +367,12 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
               </span>
               {isSel ? <span className="sr-only">Seleccionado</span> : null}
             </button>
+            {/* Laptop: the rating on the name's line (a sibling button, never nested). */}
+            {s.rating ? (
+              <span className="hidden flex-none lg:inline-flex">
+                <RatingButton rating={s.rating} label={s.name} onOpen={(t) => onOpenReviews(s, t)} />
+              </span>
+            ) : null}
           </div>
           <div className="flex flex-none items-center gap-5 lg:[grid-area:side]">
             <span aria-hidden className="hidden min-w-[104px] flex-col items-end gap-0.5 text-right [font-variant-numeric:tabular-nums] lg:flex">
@@ -392,19 +399,25 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
             </button>
           </div>
         </div>
-        {/* Rating + alternative: stacked on the phone, one reserved line on a laptop. */}
-        <div className={`${s.rating || altHint ? "flex" : "hidden lg:flex"} flex-col items-start gap-2 lg:min-h-6 lg:flex-row lg:items-center lg:gap-3 lg:[grid-area:meta]`}>
-          {s.rating ? <RatingButton rating={s.rating} label={s.name} onOpen={(t) => onOpenReviews(s, t)} /> : null}
+        {/* Phone: rating + alternative stacked under the name. Laptop: only the alternative,
+            under the description (the rating moved to the name's line). */}
+        <div className={`${s.rating || altHint ? "flex" : "hidden"} ${altHint ? "lg:flex" : "lg:hidden"} flex-col items-start gap-2 lg:[grid-area:meta]`}>
+          {s.rating ? (
+            <span className="lg:hidden">
+              <RatingButton rating={s.rating} label={s.name} onOpen={(t) => onOpenReviews(s, t)} />
+            </span>
+          ) : null}
           {altHint ? (
-            <span className="text-[13px] leading-[1.4] text-pb-muted [font-variant-numeric:tabular-nums] lg:truncate">
+            <span className="text-[13px] leading-[1.4] text-pb-muted [font-variant-numeric:tabular-nums] lg:truncate lg:text-[12.5px]">
               {alt.target.name}: +{priceLabelCOP(String(alt.delta))}
               {alt.target.duration_min !== s.duration_min ? ` · ${alt.target.duration_min > s.duration_min ? "+" : "−"}${Math.abs(alt.target.duration_min - s.duration_min)} min` : ""}
             </span>
           ) : null}
         </div>
         {s.description ? (
-          <div className="flex flex-col lg:flex-row lg:items-center lg:gap-2 lg:[grid-area:desc]">
-            <p id={descId} className={`m-0 whitespace-pre-line text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] lg:min-w-0 lg:flex-1 ${expanded ? "" : "line-clamp-2"} lg:line-clamp-1`}>
+          <div className="flex flex-col lg:min-w-0 lg:flex-row lg:items-center lg:gap-1 lg:[grid-area:desc]">
+            {/* Laptop: "Ver más" follows the (one-line) text instead of sitting far right. */}
+            <p id={descId} className={`m-0 whitespace-pre-line text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] lg:min-w-0 lg:flex-initial ${expanded ? "" : "line-clamp-2"} lg:line-clamp-1`}>
               {s.description}
             </p>
             {more ? (
