@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { dayHeadline, dayShort, fmtTime, monthDiff, monthSegments, shiftMonth, siteDayKey, timezoneLabel, todayAtSite, type DayKey, type MonthKey } from "@/lib/siteCalendar";
+import { dayHeadline, dayShort, fmtTime, monthDiff, monthSegments, shiftMonth, siteDayKey, timezoneLabel, todayAtSite, weekdayKeyOf, type DayKey, type MonthKey } from "@/lib/siteCalendar";
 import {
   CLEARED_MESSAGE,
   STEP_LABELS,
   STEP_TITLES,
   contactErrors,
   dayStatusOf,
+  emptyDayCopy,
   expectedPriceOf,
   fullPhone,
   lastBookableDay,
@@ -17,11 +18,13 @@ import {
   priceText,
   reachableStep,
   reconcileArtist,
+  revalidateSlot,
   type ArtistChoice,
   type ClearedReason,
   type ContactDraft,
   type ContactErrors,
   type Selection,
+  type ServerDayKind,
   type Step,
 } from "@/lib/publicBookingFlow";
 import { whatsappLink } from "@/lib/bookingPage";
@@ -78,6 +81,22 @@ import {
  */
 
 type Load = "idle" | "loading" | "loaded" | "error";
+type DayReason = "vacation" | "unavailable" | "site_closed" | null;
+/** One month of availability for (service, artist choice): the engine's slots and the
+ *  server's per-day kinds (web/lib/publicAvailability.ts). */
+interface MonthData {
+  slots: Slot[];
+  days: Array<{ date: DayKey; kind: ServerDayKind; reason: DayReason }>;
+  at: number;
+}
+/** /next-available: the first real day with times, within the booking horizon. */
+interface NextInfo {
+  staffId: string | null;
+  artist: DayKey | null;
+  any: DayKey | null;
+  others: Array<{ id: string; name: string; first_day: DayKey | null }>;
+  horizon_days: number;
+}
 type SubmitState = "idle" | "sending" | "error" | "taken";
 
 const AVAILABILITY_TTL_MS = 60_000;
@@ -180,6 +199,14 @@ export function BookingFlow({
   const [categories, setCategories] = useState<CategoryView[]>(initialCategories);
   const [reviews, setReviews] = useState<{ target: ReviewsTarget; trigger: HTMLElement } | null>(null);
   const [sel, setSel] = useState<Selection>({ serviceId: null, artist: null, day: null, slotStart: null });
+  // The selection as of the LAST event, kept synchronously: handlers and async loads read
+  // it, so no decision ever depends on WHEN React runs a state updater.
+  const selRef = useRef(sel);
+  const updateSel = (next: Selection | ((cur: Selection) => Selection)) => {
+    const value = typeof next === "function" ? next(selRef.current) : next;
+    selRef.current = value;
+    setSel(value);
+  };
   const [cleared, setCleared] = useState<ClearedReason | null>(null);
   const [artistNotice, setArtistNotice] = useState<string | null>(null);
   const [staffByService, setStaffByService] = useState<Record<string, StaffOption[]>>({});
@@ -191,7 +218,13 @@ export function BookingFlow({
   const [monthSlots, setMonthSlots] = useState<Slot[]>([]);
   const [monthLoad, setMonthLoad] = useState<Load>("idle");
   const [anyDays, setAnyDays] = useState<Set<DayKey> | null>(null);
-  const cache = useRef(new Map<string, { slots: Slot[]; at: number }>());
+  // The server's per-day kinds for the loaded month (site closed / artist away / no times).
+  const [monthKinds, setMonthKinds] = useState<Map<DayKey, { kind: ServerDayKind; reason: DayReason }>>(() => new Map());
+  // The first real day with times, for this artist / anyone / each other artist.
+  const [nextInfo, setNextInfo] = useState<NextInfo | null>(null);
+  // The day the page chose itself (the first with room), so it can say so.
+  const [autoDay, setAutoDay] = useState<DayKey | null>(null);
+  const cache = useRef(new Map<string, MonthData>());
   const request = useRef(0);
 
   // ── Details ──
@@ -259,7 +292,7 @@ export function BookingFlow({
   /** A chosen artist who does not perform the (new) service is dropped, with a notice. */
   const applyEligibility = (svc: string, list: StaffOption[], prevArtist: ArtistChoice, prevName: string | null, svcName: string) => {
     const ids = list.map((x) => x.id);
-    setSel((cur) => (cur.serviceId === svc ? reconcileArtist(cur, ids).sel : cur));
+    updateSel((cur) => (cur.serviceId === svc ? reconcileArtist(cur, ids).sel : cur));
     if (prevArtist && prevArtist !== "any" && !ids.includes(prevArtist)) {
       setArtistNotice(`${prevName ?? "El artista que elegiste"} no realiza ${svcName}. Elige otro artista o reserva sin preferencia.`);
     }
@@ -295,15 +328,17 @@ export function BookingFlow({
   };
 
   /** One month of free times for (service, artist), from the cache when fresh. */
-  const fetchMonth = async (svc: string, stf: string, m: MonthKey, force = false): Promise<Slot[] | "unavailable" | "conflict" | "error"> => {
+  const fetchMonth = async (svc: string, stf: string, m: MonthKey, force = false): Promise<MonthData | "unavailable" | "conflict" | "error"> => {
+    // One cache entry per (service, artist choice, month): one artist's answer can never be
+    // read as another's, and a stale request is ignored by its caller (request.current).
     const key = `${svc}|${stf}|${m}`;
     const hit = cache.current.get(key);
-    if (hit && !force && nowMs() - hit.at < AVAILABILITY_TTL_MS) return hit.slots;
+    if (hit && !force && nowMs() - hit.at < AVAILABILITY_TTL_MS) return hit;
     const segments = monthSegments(m, todayAtSite(tz), tz);
     try {
       const responses = await Promise.all(
         segments.map((seg) => {
-          const q = new URLSearchParams({ service_id: svc, from: seg.from.toISOString(), to: seg.to.toISOString() });
+          const q = new URLSearchParams({ service_id: svc, from: seg.from.toISOString(), to: seg.to.toISOString(), explain: "1" });
           if (stf) q.set("staff_id", stf);
           return fetch(`${api}/availability?${q.toString()}`, { cache: "no-store" });
         }),
@@ -311,19 +346,36 @@ export function BookingFlow({
       if (responses.some((r) => r.status === 404)) return "unavailable";
       if (responses.some((r) => r.status === 409)) return "conflict";
       if (responses.some((r) => !r.ok)) return "error";
-      const bodies = (await Promise.all(responses.map((r) => r.json()))) as Array<{ slots?: Slot[] }>;
-      const slots = bodies.flatMap((b) => b.slots ?? []);
-      cache.current.set(key, { slots, at: nowMs() });
-      return slots;
+      const bodies = (await Promise.all(responses.map((r) => r.json()))) as Array<{ slots?: Slot[]; days?: MonthData["days"] }>;
+      const data: MonthData = { slots: bodies.flatMap((b) => b.slots ?? []), days: bodies.flatMap((b) => b.days ?? []), at: nowMs() };
+      cache.current.set(key, data);
+      return data;
     } catch {
       return "error";
     }
   };
 
-  /** "Otro artista sí tiene horarios ese día": asked only when a chosen artist's day is empty. */
-  const checkOthers = async (svc: string, m: MonthKey) => {
+  /** "Otro artista sí tiene horarios ese día": asked only when a chosen artist's day is
+   *  empty. `id` is the request it belongs to — an answer for an older choice is dropped. */
+  const checkOthers = async (svc: string, m: MonthKey, id: number) => {
     const r = await fetchMonth(svc, "", m);
-    if (Array.isArray(r)) setAnyDays(new Set(r.map((x) => siteDayKey(x.start_at, tz))));
+    if (id !== request.current || typeof r === "string") return;
+    setAnyDays(new Set(r.slots.map((x) => siteDayKey(x.start_at, tz))));
+  };
+
+  /** The first real day with times (this artist, anyone, each other artist) — asked when
+   *  the loaded month has none left for the current choice. Same staleness rule. */
+  const loadNext = async (svc: string, stf: string, id: number) => {
+    try {
+      const q = new URLSearchParams({ service_id: svc });
+      if (stf) q.set("staff_id", stf);
+      const res = await fetch(`${api}/next-available?${q.toString()}`, { cache: "no-store" });
+      if (!res.ok || id !== request.current) return;
+      const d = (await res.json()) as Omit<NextInfo, "staffId">;
+      if (id === request.current) setNextInfo({ ...d, staffId: stf || null });
+    } catch {
+      /* the month view still works without it */
+    }
   };
 
   const requestMonth = async (svc: string | null, art: ArtistChoice, m: MonthKey, force = false) => {
@@ -332,31 +384,46 @@ export function BookingFlow({
     const id = ++request.current;
     setMonthLoad("loading");
     setAnyDays(null);
+    setNextInfo(null);
     const r = await fetchMonth(svc, stf, m, force);
     if (id !== request.current) return; // a newer month/service/artist won
     if (r === "unavailable") return setUnavailable(true);
     if (r === "conflict") {
       setBanner("Este servicio ya no está disponible en esta sede. Elige otro servicio.");
-      setSel((cur) => ({ ...cur, serviceId: null, slotStart: null }));
+      updateSel((cur) => ({ ...cur, serviceId: null, slotStart: null }));
       setStep(1);
       void refreshServices();
       return;
     }
     if (r === "error") return setMonthLoad("error");
-    setMonthSlots(r);
+    setMonthSlots(r.slots);
+    setMonthKinds(new Map(r.days.map((d) => [d.date, { kind: d.kind, reason: d.reason }])));
     setMonthLoad("loaded");
-    // Keep the visitor's day when it is in this month; otherwise the first day with room.
-    const open = new Set(r.map((x) => siteDayKey(x.start_at, tz)));
-    let chosen: DayKey | null = null;
-    setSel((cur) => {
-      if (cur.day && cur.day.startsWith(m)) {
-        chosen = cur.day;
-        return cur;
-      }
-      chosen = [...open].sort()[0] ?? (m === todayKey.slice(0, 7) ? todayKey : `${m}-01`);
-      return { ...cur, day: chosen };
-    });
-    if (stf && chosen && !open.has(chosen)) void checkOthers(svc, m);
+    // Keep the visitor's day when it is in this month; otherwise the first day with room —
+    // and say that the page picked it.
+    const open = new Set(r.slots.map((x) => siteDayKey(x.start_at, tz)));
+    const cur = selRef.current;
+    const keep = Boolean(cur.day && cur.day.startsWith(m));
+    const chosen: DayKey = keep ? (cur.day as DayKey) : ([...open].sort()[0] ?? (m === todayKey.slice(0, 7) ? todayKey : `${m}-01`));
+    setAutoDay(!keep && open.has(chosen) ? chosen : null);
+    // The chosen time survives only if the engine STILL offers it for this artist choice.
+    const v = revalidateSlot({ ...cur, day: chosen }, { month: m, slots: r.slots }, (iso) => siteDayKey(iso, tz));
+    updateSel(v.sel);
+    if (v.cleared) setCleared(v.cleared);
+    if (stf && !open.has(chosen)) void checkOthers(svc, m, id);
+    if (![...open].some((d) => d >= chosen)) void loadNext(svc, stf, id);
+  };
+
+  /** Show a specific day (possibly in another month) — an explicit action of the visitor. */
+  const jumpToDay = (d: DayKey) => {
+    const m = d.slice(0, 7);
+    setAutoDay(null);
+    setHint("");
+    if (m === month) return pickDay(d);
+    setMonthDir(m > month ? "fwd" : "back");
+    setMonth(m);
+    updateSel((c) => ({ ...c, day: d, slotStart: null }));
+    void requestMonth(selRef.current.serviceId, selRef.current.artist, m);
   };
 
   // ── Derived ─────────────────────────────────────────────────────────────────────
@@ -376,7 +443,8 @@ export function BookingFlow({
     return map;
   }, [monthSlots, tz]);
   const openDays = useMemo(() => new Set(slotsByDay.keys()), [slotsByDay]);
-  const statusOf = (d: DayKey) => dayStatusOf(d, { today: todayKey, lastDay, closedWeekdays, load: monthLoad, openDays });
+  const kindMap = useMemo(() => new Map([...monthKinds].map(([d, v]) => [d, v.kind])), [monthKinds]);
+  const statusOf = (d: DayKey) => dayStatusOf(d, { today: todayKey, lastDay, closedWeekdays, load: monthLoad, openDays, kinds: kindMap });
   const daySlots = sel.day ? slotsByDay.get(sel.day) ?? [] : [];
   const slot = sel.slotStart ? daySlots.find((x) => x.start_at === sel.slotStart) ?? monthSlots.find((x) => x.start_at === sel.slotStart) ?? null : null;
 
@@ -402,9 +470,9 @@ export function BookingFlow({
   };
 
   const pickService = (id: string) => {
-    const r = onServiceChange(sel, id);
+    const r = onServiceChange(selRef.current, id);
     const svcName = services.find((x) => x.id === id)?.name ?? "este servicio";
-    setSel(r.sel);
+    updateSel(r.sel);
     if (r.cleared) setCleared(r.cleared);
     setArtistNotice(null);
     setHint("");
@@ -424,8 +492,8 @@ export function BookingFlow({
   const openReviews = (target: ReviewsTarget, trigger: HTMLElement) => setReviews({ target, trigger });
 
   const pickArtist = (choice: Exclude<ArtistChoice, null>) => {
-    const r = onArtistChange(sel, choice);
-    setSel(r.sel);
+    const r = onArtistChange(selRef.current, choice);
+    updateSel(r.sel);
     if (r.cleared) setCleared(r.cleared);
     setArtistNotice(null);
     setProfile(null);
@@ -434,28 +502,32 @@ export function BookingFlow({
   };
 
   const pickDay = (d: DayKey) => {
-    setSel((cur) => ({ ...cur, day: d, slotStart: cur.day === d ? cur.slotStart : null }));
+    updateSel((cur) => ({ ...cur, day: d, slotStart: cur.day === d ? cur.slotStart : null }));
     setHint("");
-    if (staffParam && sel.serviceId && monthLoad === "loaded" && !openDays.has(d) && !anyDays) void checkOthers(sel.serviceId, month);
+    setAutoDay(null);
+    const cur = selRef.current;
+    const stf = cur.artist && cur.artist !== "any" ? cur.artist : "";
+    if (stf && cur.serviceId && monthLoad === "loaded" && !openDays.has(d) && !anyDays) void checkOthers(cur.serviceId, month, request.current);
+    if (cur.serviceId && monthLoad === "loaded" && !nextInfo && ![...openDays].some((x) => x >= d)) void loadNext(cur.serviceId, stf, request.current);
   };
 
   const changeMonth = (delta: number) => {
     const next = shiftMonth(month, delta);
     setMonthDir(delta > 0 ? "fwd" : "back");
     setMonth(next);
-    setSel((cur) => ({ ...cur, day: null, slotStart: null }));
-    void requestMonth(sel.serviceId, sel.artist, next);
+    updateSel((cur) => ({ ...cur, day: null, slotStart: null }));
+    void requestMonth(selRef.current.serviceId, selRef.current.artist, next);
   };
 
   const pickSlot = (start: string) => {
-    setSel((s) => ({ ...s, slotStart: start }));
+    updateSel((s) => ({ ...s, slotStart: start }));
     setCleared(null);
     setHint("");
   };
 
   const pickOtherTime = () => {
     for (const k of [...cache.current.keys()]) if (k.startsWith(`${sel.serviceId}|`)) cache.current.delete(k);
-    setSel((s) => ({ ...s, slotStart: null }));
+    updateSel((s) => ({ ...s, slotStart: null }));
     setCleared("taken");
     setSubmit("idle");
     setStepDir("back");
@@ -485,7 +557,17 @@ export function BookingFlow({
     if (!service || !slot || sending.current) return;
     setShowAll(true);
     const hasErrors = Object.values(errors).some(Boolean) || Boolean(phoneServerError);
-    if (hasErrors) return;
+    if (hasErrors) {
+      // Take the visitor to the first field to fix — centred, so the fixed bar never hides
+      // it (or its error) on a phone.
+      const first = (["name", "phone", "email", "consent"] as const).find((k) => (k === "phone" && phoneServerError) || errors[k]);
+      window.setTimeout(() => {
+        const el = first ? document.getElementById(`pb-${first}`) : null;
+        el?.focus({ preventScroll: true });
+        el?.scrollIntoView({ block: "center", behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth" });
+      }, 0);
+      return;
+    }
     if (turnstileMisconfigured) return;
     if (turnstileSiteKey && !turnstileToken) {
       setBanner("Completa la verificación de seguridad.");
@@ -542,7 +624,7 @@ export function BookingFlow({
         case "service_unavailable":
           setSubmit("idle");
           setBanner(e.message);
-          setSel((s) => ({ ...s, serviceId: null, slotStart: null }));
+          updateSel((s) => ({ ...s, serviceId: null, slotStart: null }));
           setStep(1);
           void refreshServices();
           return;
@@ -581,7 +663,7 @@ export function BookingFlow({
     setConfirmation(null);
     setPriceChange(null);
     setStepDir("back");
-    setSel({ serviceId: null, artist: null, day: null, slotStart: null });
+    updateSel({ serviceId: null, artist: null, day: null, slotStart: null });
     setCleared(null);
     setArtistNotice(null);
     setForm((f) => ({ ...BLANK, name: f.name, cc: f.cc, phone: f.phone, email: f.email }));
@@ -652,35 +734,58 @@ export function BookingFlow({
 
   const empty: EmptyState | null = (() => {
     if (step !== 3 || !sel.day || monthLoad !== "loaded") return null;
-    const st = statusOf(sel.day);
-    if (st === "open") return null;
-    const laterOpen = [...openDays].filter((d) => d > (sel.day as DayKey)).sort()[0];
+    const day = sel.day;
+    const st = statusOf(day);
+    if (st === "open" || st === "loading" || st === "unknown") return null;
+    const specific = sel.artist !== "any" ? artistName : null;
+    const laterOpen = [...openDays].filter((d) => d > day).sort()[0];
+    // Beyond this month: the engine's real next day for the current choice (never a guess).
+    const nextReal = nextInfo && nextInfo.staffId === (staffParam || null) ? (specific ? nextInfo.artist : nextInfo.any) : null;
     const nextMonth = shiftMonth(month, 1);
     const next = laterOpen
       ? { label: `Ver ${dayShort(laterOpen)}`, action: { kind: "day" as const, day: laterOpen } }
-      : `${nextMonth}-01` <= lastDay
-        ? { label: "Ver el mes siguiente", action: { kind: "nextMonth" as const } }
-        : undefined;
-    if (st === "closed") {
-      return { title: `${site.name} no abre este día`, text: "La sede no atiende ese día de la semana. Elige otro día.", next };
-    }
+      : nextReal && nextReal > day
+        ? { label: `Ver ${dayShort(nextReal)}`, action: { kind: "jump" as const, day: nextReal } }
+        : !nextInfo && `${nextMonth}-01` <= lastDay
+          ? { label: "Ver el mes siguiente", action: { kind: "nextMonth" as const } }
+          : undefined;
     if (st === "past" || st === "out") {
       return { title: "Este día no se puede reservar", text: `Puedes reservar hasta el ${dayHeadline(lastDay).toLocaleLowerCase("es")}.`, next };
     }
-    if (sel.artist === "any") {
-      return { title: "No quedan horarios este día", text: "Prueba con otro día.", next };
+
+    // The chosen artist has NO time left within the booking window: say so, and offer the
+    // real alternatives as explicit actions — the artist is never changed for the visitor.
+    if (specific && nextInfo && nextInfo.staffId === staffParam && !laterOpen && !nextInfo.artist) {
+      const withTimes = nextInfo.others.filter((o) => o.first_day);
+      return {
+        title: `${specific} no tiene horarios disponibles hasta el ${dayHeadline(lastDay).toLocaleLowerCase("es")}`,
+        text: withTimes.length ? "Puedes elegir a otro artista o reservar sin preferencia." : "Por ahora ningún artista tiene horarios para este servicio en línea.",
+        note: withTimes.length ? withTimes.map((o) => `${o.name} tiene horarios desde el ${dayHeadline(o.first_day as DayKey).toLocaleLowerCase("es")}.`).join(" ") : undefined,
+        next: nextInfo.any ? { label: "Buscar sin preferencia", action: { kind: "any" as const } } : undefined,
+        alt: withTimes.length ? { label: "Ver otros artistas", action: { kind: "artist" as const } } : undefined,
+      };
     }
-    const anyHas = anyDays?.has(sel.day) ?? false;
+
+    const anyHas = specific ? (anyDays?.has(day) ?? false) : false;
+    const copy = emptyDayCopy({
+      status: st,
+      artistName: specific,
+      siteName: site.name,
+      reason: monthKinds.get(day)?.reason ?? null,
+      closedWeekday: closedWeekdays.has(weekdayKeyOf(day)),
+      othersHaveTimes: anyHas,
+    });
+    if (!specific || st === "closed") return { ...copy, next };
     return {
-      title: `${artistName} no tiene horarios este día`,
-      text: anyHas ? "Otro artista sí tiene horarios ese día. Puedes cambiar de día o reservar sin preferencia." : "Prueba con otro día o con otro artista.",
+      ...copy,
       next,
-      alt: anyHas ? { label: "Reservar sin preferencia", action: { kind: "any" as const } } : { label: "Cambiar artista", action: { kind: "artist" as const } },
+      alt: anyHas ? { label: "Reservar sin preferencia", action: { kind: "any" as const } } : { label: "Ver otros artistas", action: { kind: "artist" as const } },
     };
   })();
 
   const onEmptyAction = (a: EmptyAction) => {
     if (a.kind === "day") pickDay(a.day);
+    else if (a.kind === "jump") jumpToDay(a.day);
     else if (a.kind === "nextMonth") changeMonth(1);
     else if (a.kind === "any") pickArtist("any");
     else goStep(2);
@@ -764,7 +869,7 @@ export function BookingFlow({
                           rating={siteRating}
                           label={site.name}
                           onOpen={(t) =>
-                            openReviews({ title: `de ${site.name}`, scope: "Todas las citas de la sede.", rating: siteRating, reviews: siteReviews }, t)
+                            openReviews({ title: `de ${site.name}`, scope: "Todas las reseñas de la sede.", rating: siteRating, reviews: siteReviews }, t)
                           }
                         />
                       </span>
@@ -812,8 +917,16 @@ export function BookingFlow({
                               />
                             </span>
                             <span className="max-w-full truncate">
-                              <span className="sr-only">Paso {n}: </span>
-                              {STEP_LABELS[n]}
+                              <span className="sr-only">Paso {n}: {STEP_LABELS[n]}</span>
+                              {/* "Fecha y hora" does not fit a quarter of 360 px: a short visible label. */}
+                              <span aria-hidden className={n === 3 ? "min-[400px]:hidden" : ""}>
+                                {n === 3 ? "Fecha" : STEP_LABELS[n]}
+                              </span>
+                              {n === 3 ? (
+                                <span aria-hidden className="hidden min-[400px]:inline">
+                                  {STEP_LABELS[n]}
+                                </span>
+                              ) : null}
                             </span>
                           </button>
                         </li>
@@ -842,7 +955,7 @@ export function BookingFlow({
                   onSelect={pickService}
                   onReserve={reserveService}
                   onOpenReviews={(s, t) =>
-                    s.rating ? openReviews({ title: `de ${s.name}`, scope: "Solo citas de este servicio.", rating: s.rating, reviews: (s.reviews ?? []).slice(0, 3) }, t) : undefined
+                    s.rating ? openReviews({ title: `de ${s.name}`, scope: "Solo reseñas de este servicio.", rating: s.rating, reviews: (s.reviews ?? []).slice(0, 3) }, t) : undefined
                   }
                   siteName={site.name}
                   whatsapp={site.whatsapp ?? null}
@@ -869,7 +982,7 @@ export function BookingFlow({
                 onView={(id, trigger) => setProfile({ id, trigger })}
                 onRetry={() => void loadStaff(service.id, sel.artist, artist?.name ?? null, service.name)}
                 onOpenReviews={(a, t) =>
-                  a.rating ? openReviews({ title: `de ${a.name}`, scope: "Solo citas con este artista.", rating: a.rating, reviews: (a.reviews ?? []).slice(0, 3) }, t) : undefined
+                  a.rating ? openReviews({ title: `de ${a.name}`, scope: "Solo reseñas de este artista.", rating: a.rating, reviews: (a.reviews ?? []).slice(0, 3) }, t) : undefined
                 }
               />
             ) : step === 3 && service ? (
@@ -899,6 +1012,7 @@ export function BookingFlow({
                 empty={empty}
                 onEmptyAction={onEmptyAction}
                 monthDir={monthDir}
+                autoPicked={autoDay !== null && autoDay === sel.day}
               />
             ) : step === 4 && service ? (
               <DetailsStep

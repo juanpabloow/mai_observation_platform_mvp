@@ -173,8 +173,8 @@ test('moderation is client-scoped; only APPROVED reviews reach the booking page'
   assert.equal(await moderateReview(s.tenantId, s.clientId, tokens[1], 'hidden', 'user-1'), true);
 
   const ratings = await publicStaffRatings(s.tenantId, s.siteId);
-  assert.deepEqual(ratings.get(s.staffA), { average: 5, count: 1 }, 'the hidden 3★ does not count');
-  assert.deepEqual((await publicServiceRatings(s.tenantId, s.siteId)).get(s.serviceHaircut), { average: 5, count: 1 });
+  assert.deepEqual(ratings.get(s.staffA), { average: 5, count: 1, imported: 0 }, 'the hidden 3★ does not count');
+  assert.deepEqual((await publicServiceRatings(s.tenantId, s.siteId)).get(s.serviceHaircut), { average: 5, count: 1, imported: 0 });
   const shown = await publicStaffReviews(s.tenantId, s.siteId, [s.staffA]);
   assert.equal(shown.length, 1);
   assert.equal(shown[0].author_display, 'Lucía P.');
@@ -189,9 +189,11 @@ test('moderation is client-scoped; only APPROVED reviews reach the booking page'
   const body = JSON.parse(raw) as { staff: Array<{ id: string; rating: unknown; reviews: Array<Record<string, unknown>> }> };
   const ana = body.staff.find((x) => x.id === s.staffA);
   assert.ok(ana);
-  assert.deepEqual(ana.rating, { average: 5, count: 1 });
+  assert.deepEqual(ana.rating, { average: 5, count: 1, imported: 0 });
   assert.equal(ana.reviews.length, 1);
-  assert.deepEqual(Object.keys(ana.reviews[0]).sort(), ['author', 'comment', 'rating', 'service', 'submitted_at']);
+  assert.deepEqual(Object.keys(ana.reviews[0]).sort(), ['author', 'comment', 'rating', 'service', 'source', 'source_url', 'submitted_at']);
+  assert.equal(ana.reviews[0].source, 'mai', 'a review collected here says so');
+  assert.equal(ana.reviews[0].source_url, null);
   for (const leak of ['Mateo', 'Pérez', tokens[0], tokens[1], s.clientId, s.tenantId]) {
     assert.ok(!raw.includes(leak), `the public payload never carries ${leak}`);
   }

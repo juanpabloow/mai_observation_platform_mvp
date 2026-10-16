@@ -52,7 +52,7 @@ function Stars({ value }: { value: number }) {
   );
 }
 
-export function ReviewsModeration({ clientId, items: initial }: { clientId: string; items: ModerationItem[] }) {
+export function ReviewsModeration({ clientId, items: initial, footer = null }: { clientId: string; items: ModerationItem[]; footer?: React.ReactNode }) {
   const router = useRouter();
   const [items, setItems] = useState(initial);
   const [tab, setTab] = useState<Tab>(initial.some((i) => i.status === "pending") || initial.length === 0 ? "pending" : "approved");
@@ -132,6 +132,7 @@ export function ReviewsModeration({ clientId, items: initial }: { clientId: stri
             ))}
           </ul>
         )}
+        {footer}
       </div>
     </PageShell>
   );

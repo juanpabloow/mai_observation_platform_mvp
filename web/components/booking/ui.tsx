@@ -29,14 +29,18 @@ export interface CategoryView {
 export interface RatingSummary {
   average: number;
   count: number;
+  /** How many were imported from another platform (0/absent = all collected here). */
+  imported?: number;
 }
 
 export interface PublicReview {
   author: string;
-  service: string;
+  service: string | null;
   rating: number;
   comment: string | null;
   submitted_at: string;
+  source?: "mai" | "fresha";
+  source_url?: string | null;
 }
 
 export interface ServiceOption {
@@ -114,6 +118,23 @@ export const BTN_SECONDARY =
   "pb-sel pb-press inline-flex min-h-[44px] items-center justify-center whitespace-nowrap rounded-[12px] border border-pb-line3 bg-white px-4 text-[15px] text-pb-ink";
 export const BTN_PRIMARY_SM =
   "pb-sel pb-press inline-flex min-h-[44px] items-center justify-center whitespace-nowrap rounded-[12px] border border-pb-ink bg-pb-ink px-4 text-[15px] font-[590] text-white";
+/** "Elegir" (primary, black) → "✓ Elegido" (white, black border): a 1px border in both
+ * states and a minimum width, so the box is identical and choosing never moves anything.
+ * `sm` (44 px, outlined → black) is the quiet one of the artist cards; `md` (48 px, black →
+ * outlined) the dialogs. */
+export const chooseBtn = (selected: boolean, size: "md" | "sm" = "md") =>
+  `pb-sel pb-press inline-flex items-center justify-center gap-2 whitespace-nowrap rounded-[12px] border font-[590] ${
+    size === "sm" ? "min-h-11 min-w-[108px] px-3 text-[14.5px]" : "min-h-[48px] px-4 text-[15px]"
+  } ${
+    size === "sm"
+      ? // Quiet: a white outlined pill until chosen, then black — like the services' "+".
+        selected
+        ? "border-pb-ink bg-pb-ink text-white"
+        : "border-pb-line3 bg-white text-pb-ink shadow-[0_1px_3px_rgba(17,19,22,0.10)]"
+      : selected
+        ? "border-pb-ink bg-white text-pb-ink"
+        : "border-pb-ink bg-pb-ink text-white"
+  }`;
 /** Underlined text action ("Ver más", "Ver perfil", "Cambiar", "Editar"). */
 export const LINK_BTN =
   "inline-flex min-h-[44px] items-center rounded-[12px] px-2 text-[14px] text-pb-ink underline underline-offset-[3px]";
@@ -288,7 +309,7 @@ export function RatingButton({
     <button
       type="button"
       aria-haspopup="dialog"
-      aria-label={`${avg} de 5, ${count} de ${label}. Ver reseñas`}
+      aria-label={`${avg} de 5, ${count} de ${label}${rating.imported ? ` (${rating.imported} ${rating.imported === 1 ? "importada" : "importadas"} de Fresha)` : ""}. Ver reseñas`}
       onClick={(e) => {
         e.stopPropagation();
         onOpen(e.currentTarget);
@@ -296,8 +317,9 @@ export function RatingButton({
       className={`pb-sel pb-press -mx-1.5 -my-2.5 inline-flex min-h-[44px] items-center gap-1 rounded-[8px] px-1.5 text-pb-tx2 underline-offset-[3px] hover:underline ${size === "md" ? "text-[14.5px]" : "text-[13.5px]"}`}
     >
       <IconStar size={size === "md" ? 15 : 13} />
+      {/* Compact on screen ("5,0 (1)"); the full sentence is the accessible name. */}
       <span aria-hidden className="[font-variant-numeric:tabular-nums]">
-        <span className="font-semibold text-pb-ink">{avg}</span> <span className="text-pb-muted">({count})</span>
+        <span className="font-semibold text-pb-ink">{avg}</span> <span className="text-pb-muted">({rating.count})</span>
       </span>
     </button>
   );

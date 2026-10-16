@@ -72,3 +72,19 @@ export function relativeWhen(iso: string, now: Date = new Date()): string {
   const y = Math.floor(days / 365);
   return y === 1 ? "hace 1 año" : `hace ${y} años`;
 }
+
+/** Where the reviews of a summary come from — said plainly, never "verified". */
+export function reviewOrigin(r: { count: number; imported?: number }): string {
+  const imported = r.imported ?? 0;
+  if (imported === 0) return "De clientes con una cita completada aquí; publicadas por el negocio.";
+  // The honest scope of the control: someone checked WHERE it came from — it is not an
+  // appointment booked here and nobody can promise more than that.
+  if (imported >= r.count) return "Reseñas importadas de Fresha: se revisó su procedencia antes de publicarlas, pero no son de citas reservadas aquí.";
+  return `Incluye ${imported} ${imported === 1 ? "reseña importada" : "reseñas importadas"} de Fresha (se revisó su procedencia; no son de citas reservadas aquí). Las demás son de clientes con una cita completada aquí.`;
+}
+
+/** "14 de marzo de 2026" — an imported review shows the date it was written on Fresha. */
+export function originalDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("es-CO", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+}
+

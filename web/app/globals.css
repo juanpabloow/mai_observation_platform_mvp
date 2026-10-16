@@ -1599,6 +1599,13 @@ body {
     animation: none;
   }
 }
+/* The artist profile: photo on the left and the profile on the right — wider than the
+   560px dialogs, but never the whole window. */
+@media (min-width: 1024px) {
+  .pb3 dialog.pb-dialog.pb-profile {
+    width: min(920px, calc(100vw - 64px));
+  }
+}
 
 /*
  * ── Public booking: motion ─────────────────────────────────────────────────────
@@ -1700,6 +1707,13 @@ body {
 }
 .pb3 .pb-press:active {
   transform: scale(0.98);
+}
+/* Phones: a field scrolled into view stops above the fixed bottom bar, never under it. */
+@media (max-width: 1023px) {
+  .pb3 :is(input, select, textarea) {
+    scroll-margin-top: 1rem;
+    scroll-margin-bottom: 9.5rem;
+  }
 }
 /* Real loading only (the request is in flight): a soft sweep over the placeholder. */
 .pb3 .pb-skel {

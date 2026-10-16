@@ -234,5 +234,5 @@ test('the business rating counts every approved review of the site, not one arti
       [fx.tenantId, fx.clientId, fx.siteId, appt, fx.staffId, fx.serviceId, status, rating],
     );
   }
-  assert.deepEqual(await publicSiteRating(fx.tenantId, fx.siteId), { average: 4.5, count: 2 }, 'only approved ones');
+  assert.deepEqual(await publicSiteRating(fx.tenantId, fx.siteId), { average: 4.5, count: 2, imported: 0 }, 'only approved ones');
 });

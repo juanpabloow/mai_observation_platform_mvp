@@ -76,6 +76,8 @@ export interface BookingCategory {
 }
 export interface Staff {
   id: string; site_id: string; name: string; active: boolean; serviceIds: string[];
+  /** Holds a chair: only these are offered on the booking page and by the engine. */
+  takes_bookings?: boolean;
   /** Per-staff weekly working hours; {} means "inherit the site's opening hours" (C-6). */
   working_hours: WeeklyHours;
 }

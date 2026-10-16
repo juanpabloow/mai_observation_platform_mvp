@@ -8,7 +8,8 @@ import { normalizeServiceDescription } from "./serviceDescription";
 import { checkPublicTitle, publicProfileMessage } from "./staffPublicProfile";
 import { deleteLogo, isR2Configured, uploadServiceImage, uploadStaffPhoto } from "./r2";
 import { DEFAULT_SCHEDULING_CONFIG, type SchedulingConfig, type WeeklyHours } from "@worker/scheduling/types.js";
-import { localWallClockToUtc } from "@worker/scheduling/timezone.js";
+import { localWallClockToUtc, utcToZonedParts } from "@worker/scheduling/timezone.js";
+import { loadAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
 import { dialingRegionForTimezone, normalizeE164 } from "@worker/scheduling/phone.js";
 import { checkCategoryInput, checkIncludes, E164_RE, safeMapsUrl } from "./bookingPage";
 import { checkPublicBio, checkPublicLine } from "./staffPublicProfile";
@@ -1033,4 +1034,30 @@ export async function removePromotionImageAction(clientId: string, promotionId: 
   }
   revalidateAdmin(clientId);
   return { ok: true, id: promotionId };
+}
+
+/**
+ * "¿Tiene horarios?" — separate from "¿aparece en la página?": for each active site where
+ * the service is enabled, the first day (site calendar) with a bookable time in the next
+ * 14 days, from the SAME engine the page and the bot use. Read-only.
+ */
+export async function serviceUpcomingAvailabilityAction(
+  clientId: string,
+  serviceId: string,
+): Promise<{ ok: true; sites: Array<{ id: string; name: string; firstDay: string | null }> } | { ok: false; error: string }> {
+  const auth = await requireSchedulingAdmin(clientId);
+  if (!auth.ok) return auth;
+  if (!(await getServiceById(auth.tenantId, clientId, serviceId))) return { ok: false, error: FOREIGN };
+  const now = new Date();
+  const to = new Date(now.getTime() + 14 * 86_400_000);
+  const sites = await listSites(auth.tenantId, { clientId });
+  const out: Array<{ id: string; name: string; firstDay: string | null }> = [];
+  for (const site of sites) {
+    const avail = await loadAvailability({ tenantId: auth.tenantId, siteId: site.id, serviceId, staffId: null, from: now, to, now });
+    if (!avail) continue; // not enabled at this site
+    const first = avail.slots[0]?.start_at ?? null;
+    const z = first ? utcToZonedParts(first, site.timezone) : null;
+    out.push({ id: site.id, name: site.name, firstDay: z ? `${z.year}-${String(z.month).padStart(2, "0")}-${String(z.day).padStart(2, "0")}` : null });
+  }
+  return { ok: true, sites: out };
 }

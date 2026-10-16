@@ -1,17 +1,21 @@
 "use client";
 
-import { useEffect, useId, useState } from "react";
+import { useEffect, useId, useRef, useState } from "react";
 import type { ApptCategory } from "@/lib/agendaCategory";
 import { pageSections, upgradeOffer, whatsappLink, type PageService } from "@/lib/bookingPage";
 import { priceLabelCOP } from "@/lib/money";
 import { needsMore } from "@/lib/publicBookingFlow";
+import { ratingText, reviewCountText } from "@/lib/publicReviews";
 import { PromotionCard } from "./PromotionCard";
 import {
+  chooseBtn,
   CTA_BASE,
   ctaTone,
   IconArrow,
   IconCheck,
   IconClock,
+  IconClose,
+  IconStar,
   IconPlus,
   IconUp,
   IconWhatsApp,
@@ -107,6 +111,8 @@ export function ServiceStep({
 }) {
   const all = services.map(asPageService);
   const page = pageSections(all, categories, { hasWhatsapp: Boolean(whatsapp) });
+  // "Ver más" on a laptop opens the full detail here, so no card ever changes height.
+  const [detail, setDetail] = useState<{ id: string; trigger: HTMLElement } | null>(null);
 
   if (services.length === 0 && !(page && page.contacts.length)) {
     return (
@@ -117,13 +123,24 @@ export function ServiceStep({
     );
   }
 
-  const cardProps = { all, selected, onSelect, onOpenReviews, willRecheck };
+  const cardProps = { all, selected, onSelect, onOpenReviews, willRecheck, onOpenDetail: (id: string, trigger: HTMLElement) => setDetail({ id, trigger }) };
+  const detailDialog = (
+    <ServiceDetailDialog
+      service={detail ? all.find((x) => x.id === detail.id) ?? null : null}
+      all={all}
+      selected={selected}
+      onSelect={onSelect}
+      onClose={() => setDetail(null)}
+      returnFocusTo={detail?.trigger ?? null}
+    />
+  );
 
   if (!page) {
     return (
       <div className="flex flex-col gap-[22px]">
         <LegacyCatalogue services={all} {...cardProps} />
         <PromotionsBlock promotions={promotions} services={all} />
+        {detailDialog}
       </div>
     );
   }
@@ -151,7 +168,7 @@ export function ServiceStep({
                 ))}
               </div>
             ) : (
-              <div className="grid grid-cols-[repeat(auto-fill,minmax(min(300px,100%),1fr))] gap-2.5">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(min(300px,100%),1fr))] items-start gap-2.5 lg:grid-cols-1">
                 {g.items.map((s, i) => (
                   <ServiceCard key={s.id} index={i} service={s} {...cardProps} />
                 ))}
@@ -161,6 +178,7 @@ export function ServiceStep({
         ))}
       </div>
       <PromotionsBlock promotions={promotions} services={all} />
+      {detailDialog}
       {page.contacts.length > 0 ? (
         <div className="flex flex-col gap-1">
           {page.contacts.map((c) => {
@@ -271,7 +289,7 @@ function LegacyCatalogue({ services, ...cardProps }: { services: Array<ServiceOp
         {shown.map((g) => (
           <section key={g.key} aria-label={g.label} className="flex flex-col gap-2.5">
             <h2 className={`${SERIF} m-0 text-[23px] leading-tight`}>{g.label}</h2>
-            <div className="grid grid-cols-[repeat(auto-fill,minmax(min(300px,100%),1fr))] gap-2.5">
+            <div className="grid grid-cols-[repeat(auto-fill,minmax(min(300px,100%),1fr))] items-start gap-2.5 lg:grid-cols-1">
               {g.items.map((s, i) => (
                 <ServiceCard key={s.id} index={i} service={s} {...cardProps} />
               ))}
@@ -291,73 +309,124 @@ interface CardProps {
   onSelect: (id: string) => void;
   onOpenReviews: (service: ServiceOption, trigger: HTMLElement) => void;
   willRecheck: boolean;
+  onOpenDetail: (id: string, trigger: HTMLElement) => void;
 }
 
-function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews, willRecheck }: CardProps) {
+/**
+ * A service card. The WHOLE card is one press target that opens the service's detail
+ * (a sheet on the phone, a dialog on a laptop) — a "stretched" button: the name button's
+ * ::after covers the card, so there is never a button inside a button. Choosing is the
+ * round "+" (a real button, above the overlay) or "Añadir" inside the detail; opening the
+ * detail never chooses. The rating and the Signature switch sit above the overlay too.
+ *
+ * Phone/tablet: natural height (name, duration · price, rating, alternative, a 2-line
+ * description). From `lg` (1024 px) the same elements sit in a fixed-height row — name ·
+ * "Recomendado" · rating on one line, the description below, the Signature difference
+ * under it when there is one; price · duration · "+" on the right. Same height for all;
+ * the alternative of a chosen card is shown BELOW it, outside that height.
+ */
+function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews, willRecheck, onOpenDetail }: CardProps) {
   const descId = useId();
-  const [expanded, setExpanded] = useState(false);
   const isSel = selected === s.id;
   const price = priceLabelCOP(s.price) ?? "Precio a consultar";
-  const more = needsMore(s.description);
-  const offer = isSel ? upgradeOffer(s, all) : null;
+  // Its better alternative (real price difference) — compared at a glance, offered on select.
+  const alt = upgradeOffer(s, all);
+  const offer = isSel ? alt : null;
+  const altHint = alt && !isSel;
+  const offerBox = offer ? <UpgradeOffer from={s} target={offer.target} delta={offer.delta} onSwitch={() => onSelect(offer.target.id)} willRecheck={willRecheck} /> : null;
   return (
-    <div style={{ ["--i" as string]: index }} className={`pb-rise flex flex-col gap-3 rounded-[16px] p-3.5 ${ring(isSel)}`}>
-      <div className="flex items-start gap-3.5">
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <button
-            type="button"
-            aria-pressed={isSel}
-            aria-describedby={s.description ? descId : undefined}
-            onClick={() => onSelect(s.id)}
-            className="flex min-w-0 flex-col gap-[5px] rounded-[8px] bg-transparent p-0 text-left"
-          >
-            <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
-              <span className="text-[16.5px] font-[590] leading-[1.3] [overflow-wrap:anywhere]">{s.name}</span>
-              {s.recommended ? <span className="rounded-full bg-pb-peach px-2 py-0.5 text-[12px] font-[590] text-pb-peach-fg">Recomendado</span> : null}
-            </span>
-            <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13.5px] text-pb-muted [font-variant-numeric:tabular-nums]">
-              <span className="flex items-center gap-[5px]">
+    <div className="flex flex-col gap-2">
+      <div
+        style={{ ["--i" as string]: index }}
+        className={`pb-rise relative flex flex-col gap-2 rounded-[16px] p-3.5 transition-shadow duration-150 hover:shadow-[0_2px_12px_rgba(17,19,22,0.07)] motion-reduce:transition-none lg:grid lg:h-[108px] lg:grid-cols-[minmax(0,1fr)_auto] lg:content-center lg:gap-x-6 lg:gap-y-0.5 lg:overflow-hidden lg:px-5 lg:py-2.5 lg:[grid-template-areas:'info_side'_'desc_side'_'meta_side'] ${ring(isSel)}`}
+      >
+        <div className="flex items-start gap-3 lg:contents">
+          <div className="flex min-w-0 flex-1 flex-col gap-1 lg:flex-row lg:items-center lg:gap-3 lg:[grid-area:info]">
+            <button
+              type="button"
+              aria-haspopup="dialog"
+              aria-describedby={s.description ? descId : undefined}
+              onClick={(e) => onOpenDetail(s.id, e.currentTarget)}
+              className="flex min-h-11 min-w-0 flex-col justify-center gap-1 rounded-[8px] bg-transparent p-0 text-left focus-visible:outline-none after:absolute after:inset-0 after:rounded-[16px] after:content-[''] focus-visible:after:outline focus-visible:after:outline-2 focus-visible:after:outline-offset-2 focus-visible:after:outline-pb-ink lg:min-w-11 lg:flex-row lg:items-center lg:justify-start lg:gap-2.5"
+            >
+              <span className="text-[16.5px] font-[590] leading-[1.3] [overflow-wrap:anywhere] [text-wrap:balance] lg:line-clamp-2 lg:min-w-0">{s.name}</span>
+              {/* Read after the name (DOM order). Phone: shown above it (order-first). Laptop:
+                  beside it, on the same line — no row of its own. */}
+              {s.recommended ? (
+                <span className="order-first flex-none self-start rounded-full bg-pb-peach px-2 py-0.5 text-[12px] font-[590] leading-[1.35] text-pb-peach-fg lg:order-none lg:self-center">
+                  Recomendado
+                </span>
+              ) : null}
+              {/* Phone: duration · price under the name. Laptop: read here, SHOWN on the right. */}
+              <span className="flex flex-wrap items-center gap-x-2.5 gap-y-1 text-[13.5px] text-pb-muted [font-variant-numeric:tabular-nums] lg:sr-only">
+                <span className="flex items-center gap-[5px]">
+                  <IconClock />
+                  {s.duration_min} min
+                </span>
+                <span className="text-[15px] font-semibold text-pb-ink">{price}</span>
+              </span>
+              <span className="sr-only">{isSel ? ". Elegido. Ver el detalle" : ". Ver el detalle"}</span>
+            </button>
+            {/* Laptop: the rating on the name's line (a sibling button, above the overlay). */}
+            {s.rating ? (
+              <span className="relative z-10 hidden flex-none lg:inline-flex">
+                <RatingButton rating={s.rating} label={s.name} onOpen={(t) => onOpenReviews(s, t)} />
+              </span>
+            ) : null}
+          </div>
+          <div className="flex flex-none items-center gap-5 lg:[grid-area:side]">
+            <span aria-hidden className="hidden min-w-[104px] flex-col items-end gap-0.5 text-right [font-variant-numeric:tabular-nums] lg:flex">
+              <span className="text-[17px] font-semibold leading-tight text-pb-ink">{price}</span>
+              <span className="flex items-center gap-[5px] text-[13.5px] text-pb-muted">
                 <IconClock />
                 {s.duration_min} min
               </span>
-              <span className="text-[15px] font-semibold text-pb-ink">{price}</span>
             </span>
-            {isSel ? <span className="sr-only">Seleccionado</span> : null}
-          </button>
+            <button
+              type="button"
+              aria-pressed={isSel}
+              aria-label={isSel ? `${s.name}, añadido` : `Añadir ${s.name}`}
+              onClick={() => onSelect(s.id)}
+              className={`pb-sel pb-press relative z-10 flex size-11 flex-none items-center justify-center rounded-full border p-0 ${isSel ? "border-pb-ink bg-pb-ink" : "border-pb-line2 bg-white"}`}
+            >
+              {isSel ? (
+                <span key="on" className="pb-pop flex">
+                  <IconCheck />
+                </span>
+              ) : (
+                <IconPlus />
+              )}
+            </button>
+          </div>
+        </div>
+        {/* Phone: rating + alternative stacked under the name. Laptop: only the alternative,
+            under the description (the rating moved to the name's line). */}
+        <div className={`${s.rating || altHint ? "flex" : "hidden"} ${altHint ? "lg:flex" : "lg:hidden"} flex-col items-start gap-2 lg:[grid-area:meta]`}>
           {s.rating ? (
-            <span className="self-start">
+            <span className="relative z-10 lg:hidden">
               <RatingButton rating={s.rating} label={s.name} onOpen={(t) => onOpenReviews(s, t)} />
             </span>
           ) : null}
-          {s.description ? (
-            <p id={descId} className={`m-0 whitespace-pre-line text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] ${expanded ? "" : "line-clamp-2"}`}>
-              {s.description}
-            </p>
-          ) : null}
-          {more ? (
-            <button type="button" aria-expanded={expanded} onClick={() => setExpanded((x) => !x)} className={`${LINK_BTN} -mb-2.5 -ml-2 -mt-1 self-start`}>
-              {expanded ? "Ver menos" : "Ver más"}
-              <span className="sr-only"> sobre {s.name}</span>
-            </button>
+          {altHint ? (
+            <span className="text-[13px] leading-[1.4] text-pb-muted [font-variant-numeric:tabular-nums] lg:truncate lg:text-[12.5px]">
+              {alt.target.name}: +{priceLabelCOP(String(alt.delta))}
+              {alt.target.duration_min !== s.duration_min ? ` · ${alt.target.duration_min > s.duration_min ? "+" : "−"}${Math.abs(alt.target.duration_min - s.duration_min)} min` : ""}
+            </span>
           ) : null}
         </div>
-        <button
-          type="button"
-          tabIndex={-1}
-          aria-hidden
-          onClick={() => onSelect(s.id)}
-          className={`pb-sel pb-press flex size-11 flex-none items-center justify-center rounded-full border p-0 ${isSel ? "border-pb-ink bg-pb-ink" : "border-pb-line2 bg-white"}`}
-        >
-          {isSel ? (
-            <span key="on" className="pb-pop flex">
-              <IconCheck />
-            </span>
-          ) : (
-            <IconPlus />
-          )}
-        </button>
+        {/* Plain text: the full description is in the detail the card opens. */}
+        {s.description ? (
+          <p id={descId} className="m-0 line-clamp-2 whitespace-pre-line text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] lg:line-clamp-1 lg:[grid-area:desc]">
+            {s.description}
+          </p>
+        ) : (
+          <span aria-hidden className="hidden h-5 lg:block lg:[grid-area:desc]" />
+        )}
+        {/* Phone/tablet: the alternative stays inside the card (natural height). */}
+        {offerBox ? <div className="relative z-10 lg:hidden">{offerBox}</div> : null}
       </div>
-      {offer ? <UpgradeOffer from={s} target={offer.target} delta={offer.delta} onSwitch={() => onSelect(offer.target.id)} willRecheck={willRecheck} /> : null}
+      {/* Laptop: outside the fixed-height card, so choosing never deforms it. */}
+      {offerBox ? <div className="hidden lg:block">{offerBox}</div> : null}
     </div>
   );
 }
@@ -373,7 +442,11 @@ function UpgradeOffer({ from, target, delta, onSwitch, willRecheck }: { from: Pa
         </span>
         <span>
           Pásate a <span className="font-[590]">{target.name}</span> por <span className="font-[590] [font-variant-numeric:tabular-nums]">{amount} más</span>
-          <span className="text-pb-muted"> · {target.duration_min} min</span>.
+          <span className="text-pb-muted">
+            {" "}
+            · {target.duration_min} min{target.duration_min !== from.duration_min ? ` (${target.duration_min > from.duration_min ? "+" : "−"}${Math.abs(target.duration_min - from.duration_min)} min)` : ""}
+          </span>
+          .
           {willRecheck ? <span className="block text-[13px] text-pb-muted">Si cambias, revisaremos de nuevo el artista y la hora.</span> : null}
         </span>
       </p>
@@ -389,7 +462,12 @@ function UpgradeOffer({ from, target, delta, onSwitch, willRecheck }: { from: Pa
   );
 }
 
-/** A `featured` group's large card. Rendered only for COMPLETE services (pageSections). */
+/**
+ * A `featured` group's large card (Entre Nubes): image, title, duration and price first,
+ * a SHORT introduction with "Leer más" for the rest, the booking button right after it,
+ * and "Qué incluye" — collapsible on the phone, always open from `sm`. Nothing is removed:
+ * every line of the description and of "Qué incluye" stays one tap away.
+ */
 function FeaturedCard({
   service: s,
   index,
@@ -403,7 +481,12 @@ function FeaturedCard({
   onReserve: () => void;
   onOpenReviews: (service: ServiceOption, trigger: HTMLElement) => void;
 }) {
+  const descId = useId();
+  const incId = useId();
+  const [more, setMore] = useState(false);
+  const [incOpen, setIncOpen] = useState(false);
   const price = priceLabelCOP(s.price) ?? "";
+  const longText = needsMore(s.description);
   return (
     <article style={{ ["--i" as string]: index }} aria-label={s.name} className={`pb-rise overflow-hidden rounded-[20px] ${ring(selected)}`}>
       {s.image_url ? (
@@ -411,31 +494,28 @@ function FeaturedCard({
         <img src={s.image_url} alt="" className="block aspect-[16/10] w-full object-cover lg:aspect-[21/9]" loading="eager" decoding="async" />
       ) : null}
       <div className="flex flex-col gap-3 p-4 lg:p-5">
-        <div className="flex flex-col gap-1">
-          <h4 className={`${SERIF} m-0 text-[26px] leading-[1.1] [overflow-wrap:anywhere]`}>{s.name}</h4>
-          <span className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[14px] text-pb-muted [font-variant-numeric:tabular-nums]">
-            <span className="flex items-center gap-[5px]">
+        <div className="flex flex-col gap-1.5">
+          <h4 className={`${SERIF} m-0 text-[26px] leading-[1.1] [overflow-wrap:anywhere] [text-wrap:balance]`}>{s.name}</h4>
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1 [font-variant-numeric:tabular-nums]">
+            <span className="text-[19px] font-semibold text-pb-ink">{price}</span>
+            <span className="flex items-center gap-[5px] text-[14px] text-pb-muted">
               <IconClock />
               {s.duration_min} min
             </span>
-            <span className="text-[16px] font-semibold text-pb-ink">{price}</span>
             {s.rating ? <RatingButton rating={s.rating} label={s.name} onOpen={(t) => onOpenReviews(s, t)} /> : null}
           </span>
         </div>
-        {s.description ? <p className="m-0 whitespace-pre-line text-[15px] leading-[1.55] text-pb-body">{s.description}</p> : null}
-        {s.includes.length > 0 ? (
-          <div className="flex flex-col gap-1.5">
-            <h5 className="m-0 text-[13.5px] font-[590] text-pb-tx2">Qué incluye</h5>
-            <ul className="m-0 flex list-none flex-col gap-1 p-0">
-              {s.includes.map((x) => (
-                <li key={x} className="flex items-start gap-2 text-[14.5px] leading-[1.45] text-pb-body">
-                  <span className="mt-[3px] flex-none">
-                    <IconCheck size={14} stroke="#2f5a38" />
-                  </span>
-                  {x}
-                </li>
-              ))}
-            </ul>
+        {s.description ? (
+          <div className="flex flex-col">
+            <p id={descId} className={`m-0 whitespace-pre-line text-[15px] leading-[1.55] text-pb-body [overflow-wrap:anywhere] ${more ? "" : "line-clamp-3"}`}>
+              {s.description}
+            </p>
+            {longText ? (
+              <button type="button" aria-expanded={more} aria-controls={descId} onClick={() => setMore((x) => !x)} className={`${LINK_BTN} -mb-1 -ml-2 self-start`}>
+                {more ? "Ver menos" : "Leer más"}
+                <span className="sr-only"> sobre {s.name}</span>
+              </button>
+            ) : null}
           </div>
         ) : null}
         <button type="button" aria-pressed={selected} onClick={onReserve} className={`${CTA_BASE} ${ctaTone("on")} w-full sm:w-auto sm:self-start`}>
@@ -447,7 +527,185 @@ function FeaturedCard({
           Reservar mi experiencia
           <IconArrow />
         </button>
+        {s.includes.length > 0 ? (
+          <div className="flex flex-col gap-1.5 border-t border-pb-hair pt-3">
+            <button
+              type="button"
+              aria-expanded={incOpen}
+              aria-controls={incId}
+              onClick={() => setIncOpen((x) => !x)}
+              className="flex min-h-11 items-center justify-between gap-2 text-left text-[14.5px] font-[590] text-pb-ink sm:hidden"
+            >
+              Qué incluye ({s.includes.length})
+              <span aria-hidden className={`transition-transform duration-200 motion-reduce:transition-none ${incOpen ? "rotate-180" : ""}`}>
+                <IconChevronDown />
+              </span>
+            </button>
+            <h5 className="m-0 hidden text-[13.5px] font-[590] text-pb-tx2 sm:block">Qué incluye</h5>
+            <ul id={incId} className={`m-0 list-none flex-col gap-1 p-0 sm:flex ${incOpen ? "pb-fade flex" : "hidden"}`}>
+              {s.includes.map((x) => (
+                <li key={x} className="flex items-start gap-2 text-[14.5px] leading-[1.45] text-pb-body">
+                  <span className="mt-[3px] flex-none">
+                    <IconCheck size={14} stroke="#2f5a38" />
+                  </span>
+                  {x}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
       </div>
     </article>
+  );
+}
+
+function IconChevronDown() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.7" aria-hidden>
+      <path d="M3.5 6 8 10.5 12.5 6" />
+    </svg>
+  );
+}
+
+/**
+ * The full detail of a service (laptop "Ver más"): everything the card shortens, in a
+ * native modal <dialog> — focus is trapped, Escape / the backdrop / the ✕ close it, and
+ * focus returns to the card that opened it. Opening it never selects; "Añadir" is a
+ * separate, explicit action. It closes with the ✕, Escape or a click outside. Prices, durations and names are the card's.
+ */
+function ServiceDetailDialog({
+  service: s,
+  all,
+  selected,
+  onSelect,
+  onClose,
+  returnFocusTo,
+}: {
+  service: (ServiceOption & PageService) | null;
+  all: Array<ServiceOption & PageService>;
+  selected: string | null;
+  onSelect: (id: string) => void;
+  onClose: () => void;
+  returnFocusTo: HTMLElement | null;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  const closeBtn = useRef<HTMLButtonElement>(null);
+  const trigger = useRef<HTMLElement | null>(null);
+  const open = Boolean(s);
+  useEffect(() => {
+    const d = ref.current;
+    if (!d) return;
+    if (open && !d.open) {
+      trigger.current = returnFocusTo;
+      d.showModal();
+      closeBtn.current?.focus();
+    } else if (!open && d.open) {
+      d.close();
+      const t = trigger.current;
+      trigger.current = null;
+      t?.focus();
+    }
+  }, [open, returnFocusTo]);
+  const alt = s ? upgradeOffer(s, all) : null;
+  const isSel = Boolean(s && selected === s.id);
+  return (
+    <dialog
+      ref={ref}
+      className="pb-dialog pb-sheet"
+      aria-labelledby="pb-svc-detail-name"
+      onCancel={(e) => {
+        e.preventDefault();
+        onClose();
+      }}
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      {s ? (
+        <>
+          <div className="flex flex-none items-start justify-between gap-3 px-5 pb-2 pt-5">
+            <div className="flex min-w-0 flex-col gap-1.5">
+              {s.recommended ? <span className="self-start rounded-full bg-pb-peach px-2 py-0.5 text-[12px] font-[590] text-pb-peach-fg">Recomendado</span> : null}
+              <h2 id="pb-svc-detail-name" className={`${SERIF} m-0 text-[28px] leading-[1.1] [overflow-wrap:anywhere] [text-wrap:balance]`}>
+                {s.name}
+              </h2>
+              <span className="flex flex-wrap items-center gap-x-3 gap-y-1 [font-variant-numeric:tabular-nums]">
+                <span className="text-[17px] font-semibold text-pb-ink">{priceLabelCOP(s.price) ?? "Precio a consultar"}</span>
+                <span className="flex items-center gap-[5px] text-[14px] text-pb-muted">
+                  <IconClock />
+                  {s.duration_min} min
+                </span>
+                {s.rating ? (
+                  <span className="flex items-center gap-1 text-[14px] text-pb-tx2" aria-label={`${ratingText(s.rating.average)} de 5, ${reviewCountText(s.rating.count)}`}>
+                    <IconStar size={14} />
+                    <span aria-hidden>
+                      <span className="font-semibold text-pb-ink">{ratingText(s.rating.average)}</span> <span className="text-pb-muted">({s.rating.count})</span>
+                    </span>
+                  </span>
+                ) : null}
+              </span>
+            </div>
+            <button
+              ref={closeBtn}
+              type="button"
+              aria-label="Cerrar"
+              onClick={onClose}
+              className="flex size-11 flex-none items-center justify-center rounded-full border border-pb-line2 bg-white p-0 text-pb-ink"
+            >
+              <IconClose />
+            </button>
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 pb-4 pt-2">
+            {s.description ? <p className="m-0 max-w-[60ch] whitespace-pre-line text-[15.5px] leading-[1.6] text-pb-body [overflow-wrap:anywhere]">{s.description}</p> : null}
+            {s.includes.length > 0 ? (
+              <div className="flex flex-col gap-1.5">
+                <h3 className="m-0 text-[14px] font-[590]">Qué incluye</h3>
+                <ul className="m-0 flex list-none flex-col gap-1 p-0">
+                  {s.includes.map((x) => (
+                    <li key={x} className="flex items-start gap-2 text-[14.5px] leading-[1.45] text-pb-body">
+                      <span className="mt-[3px] flex-none">
+                        <IconCheck size={14} stroke="#2f5a38" />
+                      </span>
+                      {x}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {alt ? (
+              <p className="m-0 flex items-start gap-2 rounded-[12px] bg-pb-sf2 p-3 text-[14px] leading-[1.45] text-pb-body [font-variant-numeric:tabular-nums]">
+                <span className="mt-0.5 text-pb-tx2">
+                  <IconUp />
+                </span>
+                <span>
+                  También existe <span className="font-[590]">{alt.target.name}</span>: {priceLabelCOP(String(alt.delta))} más · {alt.target.duration_min} min.
+                </span>
+              </p>
+            ) : null}
+          </div>
+          <div className="flex flex-none flex-wrap justify-end gap-2.5 border-t border-pb-line bg-white px-5 pb-[calc(14px+env(safe-area-inset-bottom))] pt-3">
+            <button
+              type="button"
+              aria-pressed={isSel}
+              onClick={() => {
+                onSelect(s.id);
+                onClose();
+              }}
+              aria-label={isSel ? `${s.name}, añadido` : `Añadir ${s.name}`}
+              className={`${chooseBtn(isSel)} w-full lg:w-auto lg:min-w-[160px]`}
+            >
+              {isSel ? (
+                <>
+                  <IconCheck size={16} stroke="#111316" width={2.2} />
+                  Añadido
+                </>
+              ) : (
+                "Añadir"
+              )}
+            </button>
+          </div>
+        </>
+      ) : null}
+    </dialog>
   );
 }

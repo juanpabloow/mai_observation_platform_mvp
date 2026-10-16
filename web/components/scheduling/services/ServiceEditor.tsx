@@ -6,13 +6,14 @@ import { apptCategoryClass, serviceCategory } from "@/lib/agendaCategory";
 import {
   createServiceAction,
   removeServiceImageAction,
+  serviceUpcomingAvailabilityAction,
   setSiteServiceAction,
   setStaffServiceAction,
   updateServiceAction,
   updateServicePresentationAction,
   uploadServiceImageAction,
 } from "@/lib/schedulingAdminActions";
-import { checkIncludes, featuredMissing, INCLUDES_ITEM_MAX, INCLUDES_MAX_ITEMS } from "@/lib/bookingPage";
+import { checkIncludes, INCLUDES_ITEM_MAX, INCLUDES_MAX_ITEMS, servicePageDiagnosis, type FixArea, type PageDiagnosis } from "@/lib/bookingPage";
 import { downscaleImage } from "../staff/StaffPhotoControl";
 import { runServiceSave, type PersistedService } from "@/lib/serviceSave";
 import { SERVICE_DESCRIPTION_MAX } from "@/lib/serviceDescription";
@@ -274,6 +275,32 @@ export function ServiceEditor({
   };
 
   const jump = (id: string) => bodyRef.current?.querySelector(`#${id}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+  // Would it appear on the booking page with what is on screen now? Same rules as the server.
+  const includesNow = checkIncludes(page.includes);
+  const diagnosis = servicePageDiagnosis({
+    service: {
+      active: mode.kind === "edit" ? mode.service.active : true,
+      visible: page.visible,
+      description: form.description.trim() || null,
+      includes: includesNow.ok ? (includesNow.value ?? []) : [],
+      imageUrl: image,
+      price: form.price.trim() === "" ? null : form.price.trim(),
+      durationMin: Number(form.duration),
+    },
+    category: (() => {
+      const c = bookingCategories.find((x) => x.id === page.categoryId);
+      return c ? { name: c.name, visible: c.visible, layout: c.layout } : null;
+    })(),
+    sites: sites.map((site) => ({
+      id: site.id,
+      name: site.name,
+      active: site.active,
+      enabled: form.siteIds.includes(site.id),
+      artists: staff
+        .filter((p) => p.site_id === site.id)
+        .map((p) => ({ name: p.name, active: p.active, takesBookings: p.takes_bookings !== false, performs: form.staffIds.includes(p.id) })),
+    })),
+  });
   const family = serviceCategory(form.name || "servicio", form.category || null);
   const title = mode.kind === "edit" ? mode.service.name : "Nuevo servicio";
   const staffBySite = sites.map((site) => ({ site, people: staff.filter((p) => p.site_id === site.id) })).filter((g) => g.people.length > 0);
@@ -388,6 +415,9 @@ export function ServiceEditor({
             </Section>
 
             <PageSection
+              diagnosis={diagnosis}
+              dirty={dirty}
+              onJump={(area) => (area === "categories" || area === "team" ? undefined : jump(AREA_SECTION[area]))}
               clientId={clientId}
               serviceId={editId}
               page={page}
@@ -454,10 +484,91 @@ function Section({ id, title, subtitle, error, children }: { id: string; title: 
   );
 }
 
+const AREA_SECTION: Record<Exclude<FixArea, "categories" | "team">, string> = {
+  basic: "svc-basic",
+  pricing: "svc-pricing",
+  page: "svc-page",
+  staff: "svc-staff",
+  sites: "svc-sites",
+};
+const AREA_LABEL: Record<FixArea, string> = {
+  basic: "Ir a Información básica",
+  pricing: "Ir a Precio y duración",
+  page: "Ir a la sección",
+  staff: "Ir a Profesionales",
+  sites: "Ir a Sedes",
+  categories: "Se cambia en Servicios → «Página de reservas · Categorías»",
+  team: "Se cambia en Configuración → Equipo («Recibe reservas»)",
+};
+
+/** "¿Aparece en la página?" — the server's rules applied to what is on screen. Separately,
+ *  "¿Tiene horarios?" asks the real engine (no free time is not a configuration error). */
+function PageDiagnosisBox({ clientId, serviceId, diagnosis: d, dirty, onJump }: { clientId: string; serviceId: string | null; diagnosis: PageDiagnosis; dirty: boolean; onJump: (area: FixArea) => void }) {
+  const [upcoming, setUpcoming] = useState<{ state: "idle" | "loading" | "done" | "error"; sites: Array<{ name: string; firstDay: string | null }> }>({ state: "idle", sites: [] });
+  const check = async () => {
+    if (!serviceId) return;
+    setUpcoming({ state: "loading", sites: [] });
+    const r = await serviceUpcomingAvailabilityAction(clientId, serviceId);
+    setUpcoming(r.ok ? { state: "done", sites: r.sites } : { state: "error", sites: [] });
+  };
+  const head =
+    d.status === "visible"
+      ? `Aparece en la página de reservas${d.sites.filter((x) => x.listed).length ? ` de ${d.sites.filter((x) => x.listed).map((x) => x.name).join(", ")}` : ""}.`
+      : d.status === "hidden"
+        ? "No aparece en la página: está oculto por configuración."
+        : "No aparece en la página: falta un requisito.";
+  const tone = d.status === "visible" ? "border-success/40 bg-success/5" : d.status === "hidden" ? "border-line bg-subtle" : "border-warning/50 bg-warning/5";
+  return (
+    <div role="status" aria-live="polite" className={`rounded-sch-control border p-3.5 text-[13px] ${tone}`}>
+      <p className="font-semibold text-foreground">{head}</p>
+      {dirty ? <p className="mt-0.5 text-muted">Según lo que ves en pantalla; se aplica al guardar.</p> : null}
+      {d.problems.length ? (
+        <ul className="mt-2 flex flex-col gap-1.5">
+          {d.problems.map((p) => (
+            <li key={p.code + p.message} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="text-foreground">{p.message}</span>
+              {p.fix === "categories" || p.fix === "team" ? (
+                <span className="text-muted">{AREA_LABEL[p.fix]}</span>
+              ) : (
+                <button type="button" onClick={() => onJump(p.fix)} className={buttonClass({ size: "sm", variant: "tertiary" })}>
+                  {AREA_LABEL[p.fix]}
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      ) : null}
+      <div className="mt-2.5 border-t border-line pt-2.5 text-muted">
+        <p>Aparecer en la página no es lo mismo que tener horarios: los cupos dependen del horario, los bloqueos y las citas del equipo.</p>
+        {serviceId ? (
+          upcoming.state === "done" ? (
+            <ul className="mt-1.5 flex flex-col gap-0.5 text-foreground">
+              <li className="text-muted">Con la configuración guardada:</li>
+              {upcoming.sites.length === 0 ? <li>No está habilitado en ninguna sede activa.</li> : null}
+              {upcoming.sites.map((x) => (
+                <li key={x.name}>
+                  {x.name}: {x.firstDay ? `próximo día con cupos ${new Date(`${x.firstDay}T12:00:00`).toLocaleDateString("es-CO", { weekday: "long", day: "numeric", month: "long" })}` : "sin cupos en los próximos 14 días"}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <button type="button" onClick={() => void check()} disabled={upcoming.state === "loading"} className={`${buttonClass({ size: "sm" })} mt-1.5`}>
+              {upcoming.state === "loading" ? "Consultando…" : upcoming.state === "error" ? "Reintentar consulta de cupos" : "Consultar próximos cupos"}
+            </button>
+          )
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 /** "Página de reservas": group, visibility, order, badge, image, "Qué incluye" and the
  *  explicit better alternative. The image uploads at once (existing services only); the
  *  rest is saved with Guardar. */
 function PageSection({
+  diagnosis,
+  dirty,
+  onJump,
   clientId,
   serviceId,
   page,
@@ -487,19 +598,10 @@ function PageSection({
   setImageError: (e: string | null) => void;
   form: FormState;
   error: string | null;
+  diagnosis: PageDiagnosis;
+  dirty: boolean;
+  onJump: (area: FixArea) => void;
 }) {
-  const cat = categories.find((c) => c.id === page.categoryId) ?? null;
-  const includes = checkIncludes(page.includes);
-  const missing =
-    cat?.layout === "featured"
-      ? featuredMissing({
-          image_url: image,
-          description: form.description,
-          includes: includes.ok ? (includes.value ?? []) : [],
-          price: form.price.trim() === "" ? null : form.price,
-          duration_min: Number(form.duration),
-        })
-      : [];
   const target = others.find((o) => o.id === page.upgradeId) ?? null;
   const delta = target && target.price != null && form.price.trim() !== "" ? Number(target.price) - Number(form.price) : null;
 
@@ -532,6 +634,7 @@ function PageSection({
 
   return (
     <Section id="svc-page" title="Página de reservas" subtitle="Cómo se presenta en la página pública. No cambia la agenda ni el agente." error={error ?? undefined}>
+      <PageDiagnosisBox clientId={clientId} serviceId={serviceId} diagnosis={diagnosis} dirty={dirty} onJump={onJump} />
       <CheckRow checked={page.visible} onChange={() => setPage({ ...page, visible: !page.visible })} hint="Si lo ocultas, sigue disponible en la agenda y para el agente.">
         Visible en la página de reservas
       </CheckRow>
@@ -553,11 +656,6 @@ function PageSection({
           <input inputMode="numeric" value={page.sort} onChange={(e) => setPage({ ...page, sort: e.target.value })} className={INPUT} />
         </Field>
       </div>
-      {missing.length > 0 ? (
-        <Alert>
-          No se mostrará en «{cat?.name}» hasta que tenga: {missing.join(", ")}.
-        </Alert>
-      ) : null}
       <CheckRow checked={page.recommended} onChange={() => setPage({ ...page, recommended: !page.recommended })} hint="Muestra la etiqueta «Recomendado» en la tarjeta.">
         Recomendado
       </CheckRow>

@@ -1,13 +1,17 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { ratingText, relativeWhen, reviewCountText } from "@/lib/publicReviews";
+import { originalDate, ratingText, relativeWhen, reviewCountText, reviewOrigin } from "@/lib/publicReviews";
 import { artistInitials, artistTone } from "@/lib/publicBookingFlow";
+import { bioLead } from "@/lib/staffPublicProfile";
+import { ImportedBadge } from "./ReviewsDialog";
 import { CTA_BASE, ctaTone, IconBack, IconStar, Portrait, SERIF, type ServiceOption, type StaffOption } from "./ui";
 
 /**
- * The artist's PROFILE — a full view on the phone, a centred dialog on desktop (CSS in
- * globals.css, `.pb-dialog`). Native <dialog> + showModal(): focus is trapped and the
+ * The artist's PROFILE — a full view on the phone, a wide centred dialog on a laptop (CSS
+ * in globals.css, `.pb-dialog.pb-profile`): a large rounded photo (or initials), then
+ * name, real title and compact rating, the presentation, the services and the reviews
+ * with their origin. Native <dialog> + showModal(): focus is trapped and the
  * page behind is inert. Back, Escape or a tap outside close it WITHOUT changing the
  * choice; only "Elegir a …" picks. On close, focus returns to the "Ver perfil" that
  * opened it.
@@ -56,6 +60,11 @@ export function ArtistProfile({
   const performs = artist ? services.filter((s) => artist.service_ids.includes(s.id)) : [];
   // "Ver más reseñas" belongs to ONE artist: opening another profile starts collapsed.
   const [expandedFor, setExpandedFor] = useState<string | null>(null);
+  // A long presentation opens with its first sentence; the rest is one tap away.
+  const [bioFor, setBioFor] = useState<string | null>(null);
+  const bioOpen = artist !== null && bioFor === artist.id;
+  const lead = artist?.bio ? bioLead(artist.bio) : null;
+  const bioLong = Boolean(artist?.bio && lead && artist.bio.length > 220 && lead.length < artist.bio.length);
   const allReviews = artist !== null && expandedFor === artist.id;
   const reviews = artist?.reviews ?? [];
   const shown = allReviews ? reviews : reviews.slice(0, 3);
@@ -63,7 +72,7 @@ export function ArtistProfile({
   return (
     <dialog
       ref={ref}
-      className="pb-dialog"
+      className="pb-dialog pb-profile"
       aria-labelledby="pb-profile-name"
       onCancel={(e) => {
         e.preventDefault();
@@ -88,31 +97,62 @@ export function ArtistProfile({
             </button>
             <span className="text-[15px] font-[590]">Perfil del artista</span>
           </div>
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-5">
-            <div className="flex items-center gap-4 pt-1">
-              <Portrait
-                photoUrl={artist.photo_url}
-                initials={artistInitials(artist.name)}
-                tone={artistTone(artist.id)}
-                label={artist.photo_url ? `Foto de ${artist.name}` : `${artist.name}, sin foto`}
-                className="size-24 flex-none overflow-hidden rounded-full lg:size-28"
-                initialsClass="text-[34px]"
-              />
-              <div className="flex min-w-0 flex-col gap-1">
-                <h2 id="pb-profile-name" className={`${SERIF} m-0 text-[34px] leading-none [overflow-wrap:anywhere]`}>
-                  {artist.name}
-                </h2>
-                <span className="text-[14px] text-pb-muted">{[artist.title, siteName].filter(Boolean).join(" · ")}</span>
-                {artist.rating ? (
-                  <span className="mt-1 flex items-center gap-1.5 text-[15px]">
-                    <IconStar size={16} />
-                    <span className="font-semibold [font-variant-numeric:tabular-nums]">{ratingText(artist.rating.average)}</span>
-                    <span className="text-pb-muted">· {reviewCountText(artist.rating.count)}</span>
-                  </span>
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-5 lg:px-6 lg:pb-6">
+            {/* Phone: the photo at full content width, height capped so the name and the
+                presentation are still in view. Laptop: the photo beside the name, rating and
+                presentation; services and reviews below at FULL width, so no empty column
+                is left under the photo. No photo → a proportioned block with the initials —
+                no image is ever made up. */}
+            <div className="flex flex-col gap-5 lg:grid lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start lg:gap-x-7 lg:gap-y-6 lg:[grid-template-areas:'photo_head'_'body_body']">
+              <div className="flex lg:[grid-area:photo]">
+                <Portrait
+                  photoUrl={artist.photo_url}
+                  initials={artistInitials(artist.name)}
+                  tone={artistTone(artist.id)}
+                  label={artist.photo_url ? `Foto de ${artist.name}` : `${artist.name}, sin foto`}
+                  className="aspect-[4/3] max-h-[38dvh] w-full overflow-hidden rounded-[20px] object-[50%_25%] lg:aspect-[4/5] lg:max-h-[60dvh]"
+                  initialsClass="text-[64px] lg:text-[80px]"
+                />
+              </div>
+              {/* Phone: one column. Laptop: the head beside the photo, the body below both. */}
+              <div className="flex min-w-0 flex-col gap-5 lg:self-center lg:[grid-area:head]">
+                <div className="flex flex-col gap-1.5">
+                  <h2 id="pb-profile-name" className={`${SERIF} m-0 text-[34px] leading-[1.05] [overflow-wrap:anywhere] [text-wrap:balance] lg:text-[38px]`}>
+                    {artist.name}
+                  </h2>
+                  <span className="text-[15px] text-pb-muted">{[artist.title, siteName].filter(Boolean).join(" · ")}</span>
+                  {artist.rating ? (
+                    <span
+                      className="flex items-center gap-1.5 text-[15px] text-pb-tx2"
+                      aria-label={`${ratingText(artist.rating.average)} de 5, ${reviewCountText(artist.rating.count)}`}
+                    >
+                      <IconStar size={16} />
+                      <span aria-hidden className="[font-variant-numeric:tabular-nums]">
+                        <span className="font-semibold text-pb-ink">{ratingText(artist.rating.average)}</span> <span className="text-pb-muted">({artist.rating.count})</span>
+                      </span>
+                    </span>
+                  ) : null}
+                </div>
+            {artist.bio ? (
+              <div className="flex flex-col">
+                <p id="pb-profile-bio" className="m-0 max-w-[62ch] whitespace-pre-line text-[16px] leading-[1.6] text-pb-body">
+                  {bioLong && !bioOpen ? lead : artist.bio}
+                </p>
+                {bioLong ? (
+                  <button
+                    type="button"
+                    aria-expanded={bioOpen}
+                    aria-controls="pb-profile-bio"
+                    onClick={() => setBioFor(bioOpen ? null : artist.id)}
+                    className="inline-flex min-h-11 items-center self-start rounded-[12px] px-0 text-[14.5px] text-pb-ink underline underline-offset-[3px]"
+                  >
+                    {bioOpen ? "Ver menos" : "Leer más"}
+                  </button>
                 ) : null}
               </div>
-            </div>
-            {artist.bio ? <p className="m-0 whitespace-pre-line text-[16px] leading-[1.6] text-pb-body">{artist.bio}</p> : null}
+            ) : null}
+              </div>
+              <div className="flex min-w-0 flex-col gap-5 lg:[grid-area:body]">
             {performs.length > 0 ? (
               <div className="flex flex-col gap-2.5">
                 <h3 className="m-0 text-[14px] font-[590]">Servicios que realiza</h3>
@@ -129,7 +169,7 @@ export function ArtistProfile({
               <section aria-label="Reseñas" className="flex flex-col gap-2.5">
                 <div className="flex flex-wrap items-baseline gap-2">
                   <h3 className="m-0 text-[14px] font-[590]">Reseñas</h3>
-                  <span className="text-[12.5px] text-pb-muted">De clientes con una cita completada</span>
+                  {artist.rating ? <span className="text-[12.5px] text-pb-muted">{reviewOrigin(artist.rating)}</span> : null}
                 </div>
                 {shown.map((rv, i) => (
                   <article key={`${rv.submitted_at}-${i}`} className="flex flex-col gap-1.5 rounded-[16px] border border-pb-line bg-white p-3.5">
@@ -139,8 +179,8 @@ export function ArtistProfile({
                       </span>
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="text-[14px] font-[590]">{rv.author}</span>
-                        <span className="truncate text-[12.5px] text-pb-muted">
-                          {rv.service} · {relativeWhen(rv.submitted_at)}
+                        <span className="text-[12.5px] leading-[1.35] text-pb-muted [overflow-wrap:anywhere]">
+                          {[rv.service, rv.source === "fresha" ? originalDate(rv.submitted_at) : relativeWhen(rv.submitted_at)].filter(Boolean).join(" · ")}
                         </span>
                       </span>
                       <span aria-label={`${rv.rating} de 5 estrellas`} className="flex flex-none gap-px">
@@ -150,6 +190,7 @@ export function ArtistProfile({
                       </span>
                     </div>
                     {rv.comment ? <p className="m-0 whitespace-pre-line text-[14.5px] leading-[1.5] text-pb-body">{rv.comment}</p> : null}
+                    {rv.source === "fresha" ? <ImportedBadge url={rv.source_url ?? null} /> : null}
                   </article>
                 ))}
                 {reviews.length > 3 ? (
@@ -163,9 +204,12 @@ export function ArtistProfile({
                 ) : null}
               </section>
             ) : null}
+              </div>
+            </div>
           </div>
-          <div className="flex-none border-t border-pb-line bg-white px-4 pb-[calc(14px+env(safe-area-inset-bottom))] pt-3">
-            <button type="button" onClick={() => onChoose(artist.id)} className={`${CTA_BASE} ${ctaTone("on")} w-full`}>
+          {/* Fixed at the bottom of the view (outside the scroll), so it never covers content. */}
+          <div className="flex-none border-t border-pb-line bg-white px-4 pb-[calc(14px+env(safe-area-inset-bottom))] pt-3 lg:flex lg:justify-end lg:px-6">
+            <button type="button" onClick={() => onChoose(artist.id)} className={`${CTA_BASE} ${ctaTone("on")} w-full lg:w-auto lg:min-w-[300px]`}>
               {isChosen ? `Seguir con ${artist.name}` : `Elegir a ${artist.name}`}
             </button>
           </div>

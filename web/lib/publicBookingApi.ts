@@ -228,17 +228,49 @@ export function projectPublicCategory(c: PublicCategoryRow): PublicCategory {
   return { id: c.id, name: c.name, tagline: c.tagline, layout: c.layout };
 }
 
-/** One APPROVED review as a visitor sees it: author is "Nombre I.", never a contact field. */
+/**
+ * One APPROVED review as a visitor sees it: author is "Nombre I.", never a contact field.
+ * An imported review says so (`source`), carries its ORIGINAL date, and a link to the
+ * source only when it is an https Fresha page — never the internal evidence, the batch,
+ * the provenance notes or the original (pre-redaction) text.
+ */
 export interface PublicReview {
   author: string;
-  service: string;
+  /** null only for an imported review whose service the source did not say. */
+  service: string | null;
   rating: number;
   comment: string | null;
+  /** When it was written (an imported review keeps its original date). */
   submitted_at: string;
+  source: "mai" | "fresha";
+  source_url: string | null;
 }
 
-export function projectPublicReview(r: Pick<PublicReviewRow, "author_display" | "service_name" | "rating" | "comment" | "submitted_at">): PublicReview {
-  return { author: r.author_display, service: r.service_name, rating: r.rating, comment: r.comment, submitted_at: r.submitted_at.toISOString() };
+/** A link to the review's public page on Fresha — https and fresha.com only, else none. */
+export function safeFreshaUrl(url: string | null | undefined): string | null {
+  if (!url) return null;
+  try {
+    const u = new URL(url);
+    const host = u.hostname.toLowerCase();
+    return u.protocol === "https:" && (host === "fresha.com" || host.endsWith(".fresha.com")) && !u.username && !u.password ? u.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+export function projectPublicReview(
+  r: Pick<PublicReviewRow, "author_display" | "service_name" | "rating" | "comment" | "submitted_at"> & Partial<Pick<PublicReviewRow, "source" | "public_source_url">>,
+): PublicReview {
+  const source = r.source === "fresha" ? "fresha" : "mai";
+  return {
+    author: r.author_display,
+    service: r.service_name,
+    rating: r.rating,
+    comment: r.comment,
+    submitted_at: r.submitted_at.toISOString(),
+    source,
+    source_url: source === "fresha" ? safeFreshaUrl(r.public_source_url) : null,
+  };
 }
 
 export interface PublicStaff {

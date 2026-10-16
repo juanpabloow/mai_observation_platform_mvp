@@ -36,13 +36,21 @@ export function reachableStep(s: { serviceId: string | null; artist: ArtistChoic
 /**
  *  past     — before today (not selectable)
  *  out      — after the site's booking horizon (not selectable)
- *  closed   — the site never opens that weekday
+ *  closed   — the SITE does not open: its weekday hours, or a site-wide closure that day
  *  loading  — availability for the month is still on its way
  *  open     — at least one free time ("Hay cupos")
- *  full     — open weekday, but no free time for this service/artist
+ *  away     — the chosen ARTIST is not working that day (the site may well be open)
+ *  full     — people work, but no free time holds this service
  *  unknown  — availability could not be loaded (the times panel offers a retry)
+ *
+ * `closed` / `away` / `full` come from the server's day status (publicAvailability.ts),
+ * which reads the engine's own inputs; without it the page falls back to weekday hours
+ * and "full".
  */
-export type DayStatus = "past" | "out" | "closed" | "loading" | "open" | "full" | "unknown";
+export type DayStatus = "past" | "out" | "closed" | "loading" | "open" | "away" | "full" | "unknown";
+
+/** The server's public day kinds (web/lib/publicAvailability.ts). */
+export type ServerDayKind = "open" | "site_closed" | "artist_unavailable" | "no_slots";
 
 export function lastBookableDay(today: DayKey, horizonDays: number): DayKey {
   return addDays(today, Math.max(0, horizonDays));
@@ -56,6 +64,8 @@ export function dayStatusOf(
     closedWeekdays: ReadonlySet<string>;
     load: "idle" | "loading" | "loaded" | "error";
     openDays: ReadonlySet<DayKey>;
+    /** The server's per-day kinds for THIS service and artist choice, when known. */
+    kinds?: ReadonlyMap<DayKey, ServerDayKind>;
   },
 ): DayStatus {
   if (day < ctx.today) return "past";
@@ -63,7 +73,9 @@ export function dayStatusOf(
   if (ctx.closedWeekdays.has(weekdayKeyOf(day))) return "closed";
   if (ctx.load === "idle" || ctx.load === "loading") return "loading";
   if (ctx.load === "error") return "unknown";
-  return ctx.openDays.has(day) ? "open" : "full";
+  if (ctx.openDays.has(day)) return "open";
+  const k = ctx.kinds?.get(day);
+  return k === "site_closed" ? "closed" : k === "artist_unavailable" ? "away" : "full";
 }
 
 export const DAY_STATUS_SPOKEN: Record<DayStatus, string> = {
@@ -72,6 +84,7 @@ export const DAY_STATUS_SPOKEN: Record<DayStatus, string> = {
   closed: "cerrado",
   loading: "cargando disponibilidad",
   open: "hay cupos",
+  away: "el artista no atiende",
   full: "sin cupos",
   unknown: "disponibilidad no cargada",
 };
@@ -86,25 +99,84 @@ export interface SlotLike {
   start_at: string;
 }
 
-/** Morning (before 12:00) and afternoon, in the SITE's clock; empty groups dropped. */
-export function groupSlots<T extends SlotLike>(slots: T[], timeZone: string): Array<{ name: "Mañana" | "Tarde"; items: T[] }> {
-  const morning = slots.filter((s) => siteHour(s.start_at, timeZone) < 12);
-  const afternoon = slots.filter((s) => siteHour(s.start_at, timeZone) >= 12);
+export type DayPeriod = "Mañana" | "Tarde" | "Noche";
+
+/** Morning (before 12:00), afternoon (12:00–17:59) and evening (from 18:00), in the SITE's
+ *  clock; empty groups dropped. Every slot lands in exactly one group — none is hidden. */
+export function groupSlots<T extends SlotLike>(slots: T[], timeZone: string): Array<{ name: DayPeriod; items: T[] }> {
+  const at = (s: T) => siteHour(s.start_at, timeZone);
   return [
-    { name: "Mañana" as const, items: morning },
-    { name: "Tarde" as const, items: afternoon },
+    { name: "Mañana" as const, items: slots.filter((s) => at(s) < 12) },
+    { name: "Tarde" as const, items: slots.filter((s) => at(s) >= 12 && at(s) < 18) },
+    { name: "Noche" as const, items: slots.filter((s) => at(s) >= 18) },
   ].filter((g) => g.items.length > 0);
+}
+
+/**
+ * What an empty day SAYS — the three cases are never confused: the site is closed, THIS
+ * artist does not work that day, or no time is left for the service. A block's reason is
+ * used only when it is a published one ("vacation"); otherwise the wording is neutral.
+ */
+export function emptyDayCopy(input: {
+  status: Exclude<DayStatus, "open" | "loading" | "unknown">;
+  /** null = "Sin preferencia". */
+  artistName: string | null;
+  siteName: string;
+  /** The server's published reason for the day, if any. */
+  reason?: "vacation" | "unavailable" | "site_closed" | null;
+  closedWeekday: boolean;
+  /** Another artist has real times that same day (checked with the engine). */
+  othersHaveTimes: boolean;
+}): { title: string; text: string } {
+  const { status, artistName: who } = input;
+  if (status === "past" || status === "out") return { title: "Este día no se puede reservar", text: "" };
+  if (status === "closed") {
+    return input.closedWeekday
+      ? { title: `${input.siteName} no abre este día`, text: "La sede no atiende ese día de la semana. Elige otro día." }
+      : { title: "La sede está cerrada este día", text: "Elige otro día." };
+  }
+  if (status === "away" && who) {
+    const title = input.reason === "vacation" ? `${who} está de vacaciones en esa fecha` : `${who} no tiene disponibilidad este día`;
+    return {
+      title,
+      text: input.othersHaveTimes ? "Otro artista sí tiene horarios ese día. Puedes reservar sin preferencia o cambiar de día." : "Prueba con otro día o con otro artista.",
+    };
+  }
+  if (who) {
+    return {
+      title: "No quedan horarios para este servicio este día",
+      text: input.othersHaveTimes ? `${who} ya no tiene horarios libres ese día, pero otro artista sí. Puedes reservar sin preferencia o cambiar de día.` : `${who} ya no tiene horarios libres ese día. Prueba con otro día o con otro artista.`,
+    };
+  }
+  return { title: "No quedan horarios para este servicio este día", text: "Prueba con otro día." };
 }
 
 // ── Invalidation ─────────────────────────────────────────────────────────────────
 
-export type ClearedReason = "svc" | "art" | "taken" | "artist_gone";
+export type ClearedReason = "svc" | "art" | "taken" | "gone" | "artist_gone";
 
 export const CLEARED_MESSAGE: Record<Exclude<ClearedReason, "artist_gone">, string> = {
   svc: "Cambiaste el servicio, así que quitamos la hora que tenías. Elige una nueva.",
   art: "Cambiaste de artista, así que quitamos la hora que tenías. Elige una nueva.",
   taken: "Esa hora se acaba de ocupar. Elige otra; tus datos siguen guardados.",
+  gone: "La hora que habías elegido ya no está disponible. Elige otra; tus datos siguen guardados.",
 };
+
+/**
+ * After availability is reloaded (back to the date step, another month, a retry): the
+ * chosen time survives only if the engine STILL offers it for the current artist choice.
+ * Otherwise it is dropped — never kept as a selection the server would refuse.
+ */
+export function revalidateSlot(
+  sel: Selection,
+  loaded: { month: string; slots: ReadonlyArray<{ start_at: string; available_staff_ids: string[] }> },
+  dayOf: (iso: string) => DayKey,
+): { sel: Selection; cleared: ClearedReason | null } {
+  if (!sel.slotStart || !dayOf(sel.slotStart).startsWith(loaded.month)) return { sel, cleared: null };
+  const who = sel.artist && sel.artist !== "any" ? sel.artist : null;
+  const still = loaded.slots.some((s) => s.start_at === sel.slotStart && (!who || s.available_staff_ids.includes(who)));
+  return still ? { sel, cleared: null } : { sel: { ...sel, slotStart: null }, cleared: "gone" };
+}
 
 export interface Selection {
   serviceId: string | null;

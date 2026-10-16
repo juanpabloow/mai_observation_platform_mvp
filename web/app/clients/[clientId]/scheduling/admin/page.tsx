@@ -149,7 +149,7 @@ export default async function ClientSchedulingAdminPage({
         visible: c.visible,
         service_count: c.service_count,
       }))}
-      staff={staff.map((s) => ({ id: s.id, site_id: s.site_id, name: s.name, active: s.active, serviceIds: staffServiceMap[s.id] ?? [], working_hours: s.working_hours }))}
+      staff={staff.map((s) => ({ id: s.id, site_id: s.site_id, name: s.name, active: s.active, takes_bookings: s.takes_bookings, serviceIds: staffServiceMap[s.id] ?? [], working_hours: s.working_hours }))}
       siteServiceMap={siteServiceMap}
       schedulingEnabled={schedulingEnabled}
       pastExceptions={pastExceptions.map((e) => ({

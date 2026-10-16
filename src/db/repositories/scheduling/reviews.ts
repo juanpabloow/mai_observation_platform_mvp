@@ -1,13 +1,22 @@
 import { query } from '../../client.js';
 
 /**
- * APPOINTMENT REVIEWS (migration 1801). Tenant-scoped like every scheduling repository;
- * the public reads only ever return APPROVED rows and only the fields a visitor may see.
+ * APPOINTMENT REVIEWS (migrations 1801 + 1807). Tenant-scoped like every scheduling
+ * repository; the public reads only ever return APPROVED rows and only the fields a
+ * visitor may see.
  *
- *   requested → pending (customer submitted) → approved | hidden (business decided)
+ * Two SOURCES share the table and the public reads:
+ *   'mai'    collected here from a completed appointment's link:
+ *              requested → pending (customer submitted) → approved | hidden (business decided)
+ *   'fresha' imported by a PLATFORM administrator (externalReviews.ts): pending, with a
+ *            provenance review; only a platform administrator publishes or hides it. The
+ *            business can only ask for a review or a withdrawal.
+ * Everything tied to the link (request, page, submit) and the business moderation is
+ * 'mai'-only — in the SQL, so no other caller can reach an imported row through them.
  */
 
 export type ReviewStatus = 'requested' | 'pending' | 'approved' | 'hidden';
+export type ReviewSource = 'mai' | 'fresha';
 
 /** How long a review link stays usable after it is first requested. */
 export const REVIEW_LINK_DAYS = 30;
@@ -80,7 +89,7 @@ export async function getReviewForLink(reviewId: string): Promise<ReviewForLink 
                              AND cm.module_key = 'scheduling' AND cm.enabled = true
        LEFT JOIN staff st ON st.id = rv.staff_id AND st.tenant_id = rv.tenant_id
        LEFT JOIN contacts co ON co.id = a.contact_id AND co.tenant_id = rv.tenant_id AND co.client_id = rv.client_id
-      WHERE rv.id = $1`,
+      WHERE rv.id = $1 AND rv.source = 'mai'`,
     [reviewId],
   );
   return r.rows[0] ?? null;
@@ -102,7 +111,7 @@ export async function submitReview(input: {
         SET status = 'pending', rating = $2, comment = $3, author_display = $4, publish_consent = true,
             submitted_at = now(), updated_at = now()
        FROM appointments a
-      WHERE rv.id = $1 AND rv.status = 'requested' AND rv.expires_at > now()
+      WHERE rv.id = $1 AND rv.source = 'mai' AND rv.status = 'requested' AND rv.expires_at > now()
         AND a.id = rv.appointment_id AND a.tenant_id = rv.tenant_id AND a.status = 'completed'
      RETURNING rv.id`,
     [input.reviewId, input.rating, input.comment, input.authorDisplay],
@@ -134,7 +143,7 @@ export async function listReviewsForModeration(tenantId: string, clientId: strin
        JOIN appointments a ON a.id = rv.appointment_id AND a.tenant_id = rv.tenant_id
        JOIN sites si ON si.id = rv.site_id AND si.tenant_id = rv.tenant_id
        LEFT JOIN staff st ON st.id = rv.staff_id AND st.tenant_id = rv.tenant_id
-      WHERE rv.tenant_id = $1 AND rv.client_id = $2 AND rv.status <> 'requested'
+      WHERE rv.tenant_id = $1 AND rv.client_id = $2 AND rv.source = 'mai' AND rv.status <> 'requested'
         AND ($3::text IS NULL OR rv.status = $3)
       ORDER BY rv.submitted_at DESC
       LIMIT 200`,
@@ -143,12 +152,13 @@ export async function listReviewsForModeration(tenantId: string, clientId: strin
   return r.rows;
 }
 
-/** Approve or hide a SUBMITTED review of this client. Returns false for anything else. */
+/** Approve or hide a SUBMITTED review of this client — reviews COLLECTED HERE only. An
+ *  imported review is never the business's to publish or hide (platform admins do it). */
 export async function moderateReview(tenantId: string, clientId: string, reviewId: string, status: 'approved' | 'hidden', userId: string | null): Promise<boolean> {
   const r = await query(
     `UPDATE appointment_reviews
         SET status = $4, moderated_at = now(), moderated_by = $5, updated_at = now()
-      WHERE id = $3 AND tenant_id = $1 AND client_id = $2 AND status IN ('pending', 'approved', 'hidden')`,
+      WHERE id = $3 AND tenant_id = $1 AND client_id = $2 AND source = 'mai' AND status IN ('pending', 'approved', 'hidden')`,
     [tenantId, clientId, reviewId, status, userId],
   );
   return (r.rowCount ?? 0) > 0;
@@ -159,48 +169,71 @@ export async function moderateReview(tenantId: string, clientId: string, reviewI
 export interface RatingSummary {
   average: number;
   count: number;
+  /** How many of `count` were imported from another platform (0 = all collected here). */
+  imported: number;
 }
+
+const RATING_COLS = `round(avg(rating)::numeric, 1)::text AS average, count(*)::int AS count,
+            count(*) FILTER (WHERE source <> 'mai')::int AS imported`;
+const toSummary = (x: { average: string; count: number; imported: number }): RatingSummary => ({
+  average: Number(x.average),
+  count: x.count,
+  imported: x.imported,
+});
 
 /** Approved-review average and count per professional of the site. */
 export async function publicStaffRatings(tenantId: string, siteId: string): Promise<Map<string, RatingSummary>> {
-  const r = await query<{ staff_id: string; average: string; count: number }>(
-    `SELECT staff_id, round(avg(rating)::numeric, 1)::text AS average, count(*)::int AS count
+  // staff_id IS NOT NULL: an imported review whose artist was not confirmed counts for no one.
+  const r = await query<{ staff_id: string; average: string; count: number; imported: number }>(
+    `SELECT staff_id, ${RATING_COLS}
        FROM appointment_reviews
       WHERE tenant_id = $1 AND site_id = $2 AND status = 'approved' AND staff_id IS NOT NULL
       GROUP BY staff_id`,
     [tenantId, siteId],
   );
-  return new Map(r.rows.map((x) => [x.staff_id, { average: Number(x.average), count: x.count }]));
+  return new Map(r.rows.map((x) => [x.staff_id, toSummary(x)]));
 }
 
 /** Approved-review average and count per service of the site (any professional). */
 export async function publicServiceRatings(tenantId: string, siteId: string): Promise<Map<string, RatingSummary>> {
-  const r = await query<{ service_id: string; average: string; count: number }>(
-    `SELECT service_id, round(avg(rating)::numeric, 1)::text AS average, count(*)::int AS count
+  // service_id IS NOT NULL: only a CONFIRMED equivalence counts, never a service name.
+  const r = await query<{ service_id: string; average: string; count: number; imported: number }>(
+    `SELECT service_id, ${RATING_COLS}
        FROM appointment_reviews
       WHERE tenant_id = $1 AND site_id = $2 AND status = 'approved' AND service_id IS NOT NULL
       GROUP BY service_id`,
     [tenantId, siteId],
   );
-  return new Map(r.rows.map((x) => [x.service_id, { average: Number(x.average), count: x.count }]));
+  return new Map(r.rows.map((x) => [x.service_id, toSummary(x)]));
 }
 
 export interface PublicReviewRow {
   staff_id: string;
   author_display: string;
-  service_name: string;
+  /** NULL only for an imported review whose service the source did not say. */
+  service_name: string | null;
   rating: number;
   comment: string | null;
+  /** When it was WRITTEN: an imported review's original date, else when it was submitted. */
   submitted_at: Date;
+  source: ReviewSource;
+  /** Imported only; the page shows it only when it is an https Fresha link. */
+  public_source_url: string | null;
 }
+
+/** The public columns of a review row `rv` — the same list everywhere. */
+const PUBLIC_COLS = (rv: string) =>
+  `${rv}.author_display, ${rv}.service_name, ${rv}.rating, ${rv}.comment,
+   coalesce(${rv}.original_reviewed_at, ${rv}.submitted_at) AS submitted_at, ${rv}.source, ${rv}.public_source_url`;
 
 /** The latest approved reviews (≤ `limit` each) of the given professionals at the site. */
 export async function publicStaffReviews(tenantId: string, siteId: string, staffIds: string[], limit = 10): Promise<PublicReviewRow[]> {
   if (staffIds.length === 0) return [];
   const r = await query<PublicReviewRow>(
-    `SELECT staff_id, author_display, service_name, rating, comment, submitted_at
+    `SELECT staff_id, author_display, service_name, rating, comment, submitted_at, source, public_source_url
        FROM (
-         SELECT rv.*, row_number() OVER (PARTITION BY rv.staff_id ORDER BY rv.submitted_at DESC) AS n
+         SELECT rv.staff_id, ${PUBLIC_COLS('rv')},
+                row_number() OVER (PARTITION BY rv.staff_id ORDER BY coalesce(rv.original_reviewed_at, rv.submitted_at) DESC) AS n
            FROM appointment_reviews rv
           WHERE rv.tenant_id = $1 AND rv.site_id = $2 AND rv.status = 'approved' AND rv.staff_id = ANY($3::uuid[])
        ) x
@@ -217,14 +250,14 @@ export async function publicStaffReviews(tenantId: string, siteId: string, staff
  * and never repeats it next to an artist or a service. Null when there is none.
  */
 export async function publicSiteRating(tenantId: string, siteId: string): Promise<RatingSummary | null> {
-  const r = await query<{ average: string | null; count: number }>(
-    `SELECT round(avg(rating)::numeric, 1)::text AS average, count(*)::int AS count
+  const r = await query<{ average: string | null; count: number; imported: number }>(
+    `SELECT ${RATING_COLS}
        FROM appointment_reviews
       WHERE tenant_id = $1 AND site_id = $2 AND status = 'approved'`,
     [tenantId, siteId],
   );
   const row = r.rows[0];
-  return row && row.count > 0 && row.average != null ? { average: Number(row.average), count: row.count } : null;
+  return row && row.count > 0 && row.average != null ? toSummary({ ...row, average: row.average }) : null;
 }
 
 export interface PublicSiteReviewRow extends Omit<PublicReviewRow, 'staff_id'> {
@@ -235,10 +268,10 @@ export interface PublicSiteReviewRow extends Omit<PublicReviewRow, 'staff_id'> {
 /** The latest approved reviews of the whole site, newest first. */
 export async function publicSiteReviews(tenantId: string, siteId: string, limit = 3): Promise<PublicSiteReviewRow[]> {
   const r = await query<PublicSiteReviewRow>(
-    `SELECT staff_id, service_id, author_display, service_name, rating, comment, submitted_at
-       FROM appointment_reviews
-      WHERE tenant_id = $1 AND site_id = $2 AND status = 'approved'
-      ORDER BY submitted_at DESC
+    `SELECT rv.staff_id, rv.service_id, ${PUBLIC_COLS('rv')}
+       FROM appointment_reviews rv
+      WHERE rv.tenant_id = $1 AND rv.site_id = $2 AND rv.status = 'approved'
+      ORDER BY coalesce(rv.original_reviewed_at, rv.submitted_at) DESC
       LIMIT $3`,
     [tenantId, siteId, limit],
   );
@@ -248,9 +281,10 @@ export async function publicSiteReviews(tenantId: string, siteId: string, limit 
 /** The latest approved reviews (≤ `limit` each) of every service of the site. */
 export async function publicServiceReviews(tenantId: string, siteId: string, limit = 3): Promise<PublicSiteReviewRow[]> {
   const r = await query<PublicSiteReviewRow>(
-    `SELECT staff_id, service_id, author_display, service_name, rating, comment, submitted_at
+    `SELECT staff_id, service_id, author_display, service_name, rating, comment, submitted_at, source, public_source_url
        FROM (
-         SELECT rv.*, row_number() OVER (PARTITION BY rv.service_id ORDER BY rv.submitted_at DESC) AS n
+         SELECT rv.staff_id, rv.service_id, ${PUBLIC_COLS('rv')},
+                row_number() OVER (PARTITION BY rv.service_id ORDER BY coalesce(rv.original_reviewed_at, rv.submitted_at) DESC) AS n
            FROM appointment_reviews rv
           WHERE rv.tenant_id = $1 AND rv.site_id = $2 AND rv.status = 'approved' AND rv.service_id IS NOT NULL
        ) x

@@ -33,10 +33,12 @@ test('the v3 flow has exactly four steps with the specified titles, labels and f
   // Nothing promises a message the platform does not send.
   assert.ok(!/Te enviamos la confirmación por WhatsApp/.test(code(bookingSrc)), 'no fake WhatsApp promise');
   const artist = root(`${BOOKING_DIR}/ArtistStep.tsx`);
-  for (const s of ['Sin preferencia', 'Ver perfil', '{sel ? "Elegido" : "Elegir"}', 'aria-label={sel ? `${a.name}, elegido` : `Elegir a ${a.name}`}']) assert.ok(artist.includes(s), s);
+  for (const s of ['Sin preferencia', 'Ver perfil', '<ChooseLabel selected={sel} />', 'Elegido', '<>Elegir</>', 'aria-label={sel ? `${a.name}, elegido` : `Elegir a ${a.name}`}']) assert.ok(artist.includes(s), s);
   const cal = root(`${BOOKING_DIR}/DateTimeStep.tsx`);
   for (const s of ['Hay cupos', 'Sin cupos o cerrado', 'Mes anterior', 'Mes siguiente', '"LU", "MA", "MI", "JU", "VI", "SÁ", "DO"']) assert.ok(cal.includes(s), s);
-  assert.ok(root(`${BOOKING_DIR}/ServiceStep.tsx`).includes('Ver más'), 'Ver más on services');
+  // Services: pressing the card opens the full detail; "+" / "Añadir" choose.
+  const svc = root(`${BOOKING_DIR}/ServiceStep.tsx`);
+  assert.ok(svc.includes('onOpenDetail(s.id, e.currentTarget)') && svc.includes('"Añadir"'), 'the card opens the detail on services');
 });
 
 test('"Sin preferencia" sends NO staff_id (the engine assigns); the profile never selects', () => {
