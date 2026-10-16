@@ -29,7 +29,9 @@ test('reschedule passes the snapshot timing to the availability check', () => {
 test('admin actions stay inside the URL client', () => {
   const actions = read('web/lib/schedulingAdminActions.ts');
   assert.match(actions, /deleteStaffCertification\(auth\.tenantId, staffId, id\)/);
-  assert.match(actions, /if \(!st \|\| st\.site_id !== input\.siteId\) return \{ ok: false, error: FOREIGN \};/);
+  // MF-1 item 7: the staff-belongs-to-site guard for time-off blocks moved to the single
+  // writer (writeTimeOff); schedulingAdminActions.createException now delegates to it.
+  assert.match(read('web/lib/timeOffActions.ts'), /if \(!st \|\| st\.site_id !== input\.siteId\) return \{ ok: false, error: FOREIGN \};/);
   assert.match(read('src/db/repositories/scheduling/staffCertifications.ts'), /WHERE id = \$1 AND tenant_id = \$2 AND staff_id = \$3/);
 });
 
