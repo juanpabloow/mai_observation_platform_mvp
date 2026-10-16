@@ -247,10 +247,38 @@ Timestamps ISO-8601 UTC. Bodies UTF-8 JSON. `text` capped at 64KB.
 | Contract slot | This workflow's value |
 |---|---|
 | `workflow_ref` | the workflow's n8n ID (already known to the platform via ingestion) |
-| `conversation_ref` | `{{ $('WhatsApp Trigger').item.json.contacts[0].wa_id }}` — same key Phase-3 mapping already extracts, and the same key the bot's chat memory uses |
+| `conversation_ref` | the derived **`ref`** (see B.1a) — **never** `contacts[0].wa_id` directly. `wa_id` is the first fallback, but Meta omits it for a user who adopted a WhatsApp username, and may even put a BSUID in it; a raw `wa_id` mapping renders the literal string `"undefined"` for a no-phone user, which the platform now **refuses** (422 `invalid_conversation_ref`). |
+| `identities` (I-1) | the derived **`identities`** array (see B.1a): the phone as `{kind:"phone"}` when there is a real phone, and the BSUID as `{kind:"external", label:"whatsapp_bsuid"}` whenever present — so the contact carries both. |
 | `text` | `{{ $('WhatsApp Trigger').item.json.messages[0].text.body }}` |
 | `external_message_id` | `{{ $('WhatsApp Trigger').item.json.messages[0].id }}` (the `wamid` — gives free dedup on Meta webhook redeliveries) |
 | `content_type` | `"text"` (the Filter node already guarantees text-only) |
+
+### B.1a Deriving the reference and identities — the ONE helper (phone PRIMARY, BSUID fallback)
+
+WhatsApp identity is not "the `wa_id` is the phone". Meta's Cloud API sends a **business-scoped user id** (BSUID, `user_id` / `from_user_id`, e.g. `CO.2405…` or the managed-portfolio `US.ENT.…`) and, for a user who adopted a WhatsApp **username**, may send **no phone at all** — `wa_id` / `from` can be absent, or can themselves carry a BSUID. So **"`wa_id` exists" never implies "`wa_id` is a phone".** The production workflow derives everything in one helper, used for both `conversation_ref` and `identities`:
+
+```
+// one Code/Function node, run once per inbound message
+const c = $json.contacts?.[0] ?? {};
+const m = $json.messages?.[0] ?? {};
+const ref = c.wa_id || c.user_id || m.from_user_id || m.from;   // phone PRIMARY, BSUID fallback
+if (!ref) { throw new Error('no WhatsApp identifier on this message'); } // NEVER send "undefined"
+const isPhone = /^\+?[1-9][0-9]{6,14}$/.test(String(ref));       // a value counts as a phone ONLY if it is E.164 digits
+const bsuid = [c.user_id, m.from_user_id].find((v) => v && /^[A-Za-z]{2}(\.[A-Za-z0-9]+)+$/.test(String(v)));
+const identities = [
+  ...(isPhone ? [{ kind: 'phone', value: String(ref) }] : []),
+  ...(bsuid   ? [{ kind: 'external', value: String(bsuid), label: 'whatsapp_bsuid' }] : []),
+];
+return { ref, identities };
+```
+
+Why each fallback exists:
+- **`conversation_ref = ref`** — a stable per-person key. It MUST exist and MUST be real: the helper **throws** (and never calls `/messages`) when no identifier is present, instead of letting n8n render `"undefined"`. The platform refuses a sentinel ref anyway (`422 invalid_conversation_ref`), so a bad mapping fails visibly rather than fusing strangers.
+- **`identities`** — carry the phone (`kind:"phone"`) and the BSUID (`kind:"external"`, `label:"whatsapp_bsuid"`) whenever present (I-1). The phone collapses the WhatsApp phone and a typed booking phone onto one contact; the BSUID keeps a no-phone user recognizable. An `external` value is stored verbatim and **never** re-read as a phone.
+- **Lookups** (CRM `lookup`, scheduling `by-time` cancel/reschedule): use `phone=<E.164>` when there is a real phone, else `external_id=<BSUID>`. Never pass a BSUID as `phone` — the platform refuses to turn a `CC.<id>` value into a phone (it returns `invalid_phone`), by design.
+- **Sending to a BSUID-only user** (Cloud API): send with the `recipient` field (the BSUID) instead of `to` (a phone). See B.3.
+
+> Expressions above are **examples**; the contract slot is the derived value, not any one JSON path.
 
 ## B.2 Touchpoint placement in the existing graph
 
@@ -276,11 +304,13 @@ WhatsApp Trigger
 
 ## B.3 The send workflow (new, separate, ~5 nodes)
 
-`Webhook (POST) → verify X-Handoff-Signature → map conversation_ref → wa_id → WhatsApp Send (same credentials + phoneNumberId 1079483095237963) → respond`
+`Webhook (POST) → verify X-Handoff-Signature → resolve the recipient from conversation_ref → WhatsApp Send (same credentials + phoneNumberId 1079483095237963) → respond`
+
+- **Recipient resolution:** if `conversation_ref` is an E.164 phone, send to `to: <phone>` as before. If it is a BSUID (`CC.<id>` / `CC.ENT.<id>`, a user with no phone), send with the Cloud API **`recipient`** field (the BSUID) instead of `to`. Deriving "phone vs BSUID" uses the same test as B.1a (`^[A-Za-z]{2}(\.[A-Za-z0-9]+)+$` ⇒ BSUID).
 
 - Success → `{ "status": "sent" }`.
 - Meta's 24-hour customer-service window expired (**Meta code 131047**, not any error) → `{ "status": "rejected", "code": "CHANNEL_POLICY", "detail": "WhatsApp 24h service window expired — only approved templates can be sent", "provider": { "http_status": 400, "code": 131047 } }`. Any other Meta error maps by its code (see §5 rules); a generic 131000/5xx is `CHANNEL_ERROR`. The platform shows that sentence to the agent without understanding it. (Template-message sending as the recovery path: future enhancement, not v1.)
-- **Optional memory write (D5):** after a successful send, insert the human's reply into the bot's Postgres chat-memory table (session key = `wa_id`) as an assistant turn — so when the conversation returns to `bot`, the AI resumes knowing what the human said instead of with amnesia about the whole human exchange.
+- **Conversation memory now comes from `GET /api/handoff/v1/context` (not a workflow-owned table).** The bot no longer keeps its own Postgres chat-memory keyed on `wa_id`; on return-to-bot it fetches the recent bot-mode history for `(workflow_ref, conversation_ref)` from `/context` (capability `handoff.context.read`, opt-in, bounded, read-only). This is **exactly why the `conversation_ref` of B.1a must be correct and real**: a wrong or sentinel ref means the bot reads the WRONG conversation's memory (or, for a shared `"undefined"`, a stranger's) — so the platform refuses a sentinel ref, and a quarantined conversation returns no context. See `tools/n8n/handoffContextRecovery.mjs` for the reference wiring.
 
 ## B.4 Known interaction: the buffer on takeover
 

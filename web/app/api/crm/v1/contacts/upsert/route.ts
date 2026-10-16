@@ -4,6 +4,7 @@ import { resolveContactByIdentity } from "@worker/db/repositories/contactIdentit
 import { updateContact } from "@worker/db/repositories/contacts.js";
 import { listFieldDefinitions, validateCustomFieldValues } from "@worker/db/repositories/clientFieldDefinitions.js";
 import { identitiesSchema } from "@/lib/identities";
+import { isSentinelIdentifier } from "@worker/identity/sentinel.js";
 
 /**
  * POST /api/crm/v1/contacts/upsert   [crm.write]
@@ -47,6 +48,17 @@ export async function POST(req: Request): Promise<Response> {
   const parsed = Body.safeParse(raw);
   if (!parsed.success) return crmError(422, "invalid_body", parsed.error.issues[0]?.message ?? "Invalid request body.");
   const body = parsed.data;
+
+  // ID-H §1: refuse placeholder identifiers so a misconfigured workflow can't key a contact on
+  // "undefined"/an unrendered expression (which would fuse strangers). Fail loud (422).
+  for (const v of [body.phone, body.email, body.external_id]) {
+    if (v !== undefined && isSentinelIdentifier(v)) {
+      return crmError(422, "invalid_identity", "phone/email/external_id is empty or a placeholder, not a real identifier.");
+    }
+  }
+  for (const it of body.identities ?? []) {
+    if (isSentinelIdentifier(it.value)) return crmError(422, "invalid_identity", "identities: a value is empty or a placeholder, not a real identifier.");
+  }
 
   // At least one identity is required — the primary is phone → email → external.
   const primary = body.phone ?? body.email ?? body.external_id;

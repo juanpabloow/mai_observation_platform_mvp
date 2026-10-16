@@ -1,6 +1,7 @@
 import { pool, query, firstRowOrThrow } from '../client.js';
 import type { PoolClient, QueryResult, QueryResultRow } from 'pg';
 import { isInboxEnabledForUpdate } from './clientModules.js';
+import { isSentinelIdentifier, isQuarantinedRef } from '../../identity/sentinel.js';
 
 /**
  * H-1a repository for the stateful handoff entities: conversations, their message
@@ -133,6 +134,12 @@ export async function getOrCreateConversation(
   // conversation, so running the get-or-create on a SEPARATE pool connection makes its
   // INSERT ... ON CONFLICT wait on the txn's own uncommitted row lock — a self-deadlock
   // that hangs forever (the txn is awaiting this call). Same connection → no wait.
+  // ID-H §1 defense in depth: NEVER key a conversation on a sentinel ("undefined", an
+  // unrendered expression, …) or a quarantined ref — that is the stranger-collapse vector.
+  // Routes refuse these with a 422 before reaching here; this is the belt to that braces.
+  if (isSentinelIdentifier(conversationRef) || isQuarantinedRef(conversationRef)) {
+    throw new Error('getOrCreateConversation: refusing a sentinel or quarantined conversation_ref');
+  }
   const run = <T extends QueryResultRow>(text: string, params: unknown[]): Promise<QueryResult<T>> =>
     client ? client.query<T>(text, params) : query<T>(text, params);
   const inserted = await run<ConversationRow>(

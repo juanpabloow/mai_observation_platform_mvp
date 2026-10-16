@@ -9,6 +9,7 @@ import { getOrCreateConversation, insertMessage } from "@worker/db/repositories/
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { ensureContactForInboundMessage } from "@worker/db/repositories/contactIdentities.js";
 import { identitiesSchema } from "@/lib/identities";
+import { isSentinelIdentifier, isQuarantinedRef } from "@worker/identity/sentinel.js";
 import { logger } from "@worker/logger.js";
 
 /**
@@ -72,6 +73,19 @@ export async function POST(req: Request): Promise<Response> {
     return handoffError(422, "invalid_body", parsed.error.issues[0]?.message ?? "Invalid request body.");
   }
   const b = parsed.data;
+
+  // ID-H §1: refuse a garbage conversation_ref (empty/"undefined"/unrendered expression) or a
+  // quarantined ref BEFORE any write — keying a conversation on one collapses every no-phone
+  // stranger into a single thread. Fail LOUD (422 + stable code), never a silent 2xx.
+  if (isSentinelIdentifier(b.conversation_ref) || isQuarantinedRef(b.conversation_ref)) {
+    return handoffError(422, "invalid_conversation_ref", "conversation_ref is empty or a placeholder (e.g. \"undefined\"). Send the customer's wa_id, or their user_id when there is no phone.");
+  }
+  // Each DECLARED identity value must be real too (one bad identity fails the push visibly).
+  for (const it of b.identities ?? []) {
+    if (isSentinelIdentifier(it.value)) {
+      return handoffError(422, "invalid_identity", "identities: a value is empty or a placeholder, not a real identifier.");
+    }
+  }
 
   // occurred_at: optional ISO-8601 → Date (default now). Invalid → 422. (We validate
   // manually rather than with zod's .datetime(), which is stricter than we want.)

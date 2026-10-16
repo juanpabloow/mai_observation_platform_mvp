@@ -18,6 +18,7 @@ import { listAppointments, type AppointmentStatus } from "@worker/db/repositorie
 import { staffBelongsToClient } from "@worker/db/repositories/scheduling/staff.js";
 import { findContactIdsByIdentity, contactBelongsToClient } from "@worker/db/repositories/contactIdentities.js";
 import { identitiesSchema } from "@/lib/identities";
+import { isSentinelIdentifier } from "@worker/identity/sentinel.js";
 
 /**
  * /api/scheduling/v1/appointments
@@ -251,6 +252,18 @@ export async function POST(req: Request): Promise<Response> {
     return schedulingError(422, "invalid_body", parsed.error.issues[0]?.message ?? "Invalid request body.");
   }
   const b = parsed.data;
+
+  // ID-H §1: refuse placeholder attendee identifiers so a misconfigured workflow can't attach a
+  // booking to a sentinel-keyed contact (fusing strangers). customer_phone / channel_user_id /
+  // declared identities must be real; fail loud (422), never a silent create.
+  for (const v of [b.customer_phone, b.channel_user_id]) {
+    if (v !== undefined && isSentinelIdentifier(v)) {
+      return schedulingError(422, "invalid_identity", "customer_phone/channel_user_id is empty or a placeholder, not a real identifier.");
+    }
+  }
+  for (const it of b.identities ?? []) {
+    if (isSentinelIdentifier(it.value)) return schedulingError(422, "invalid_identity", "identities: a value is empty or a placeholder, not a real identifier.");
+  }
 
   // Resolve the semantic parameters server-side (site by id; service/staff by id OR name;
   // start by ISO OR site-local day+time). Each returns a SPECIFIC, actionable error. The

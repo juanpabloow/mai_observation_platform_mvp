@@ -1,6 +1,7 @@
 import { authenticateCrm, crmError, loadMachineContact, toCompactContact } from "@/lib/crmApi";
 import { resolveLabelParams } from "@/lib/schedulingApi";
 import { findContactIdsByIdentity } from "@worker/db/repositories/contactIdentities.js";
+import { isSentinelIdentifier } from "@worker/identity/sentinel.js";
 
 /**
  * GET /api/crm/v1/contacts/lookup?phone=&email=&external_id=   [crm.read]
@@ -23,6 +24,12 @@ export async function GET(req: Request): Promise<Response> {
   const externalId = p.get("external_id") ?? undefined;
   if (!phone && !email && !externalId) {
     return crmError(400, "invalid_request", "Provide at least one of phone, email, or external_id.");
+  }
+  // ID-H §1: a placeholder lookup value must fail loud, not silently match a collapsed contact.
+  for (const v of [phone, email, externalId]) {
+    if (v !== undefined && isSentinelIdentifier(v)) {
+      return crmError(422, "invalid_identity", "The lookup value is empty or a placeholder, not a real identifier.");
+    }
   }
 
   const ids = await findContactIdsByIdentity(

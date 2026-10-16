@@ -44,15 +44,25 @@ function validE164(candidate: string): string | null {
 }
 
 /**
- * A WhatsApp business-scoped user id (BSUID): an ISO country code, a dot, an opaque
- * alphanumeric id ("CO.1234567890"). A TRANSPORT id, never a phone. Deliberately narrow —
- * other refs that merely contain letters ("wa:573001112233", the documented n8n form) keep
- * normalizing by their digits exactly as before. Mirrored in SQL by BSUID_SQL_RE
- * (contactIdentities.ts).
+ * A WhatsApp business-scoped user id (BSUID): an ISO country code, then one or more
+ * dot-separated opaque alphanumeric segments. Two shapes Meta issues:
+ *   - direct:            "CO.1234567890"            (CC.<id>)
+ *   - managed portfolio: "US.ENT.11815799212886844830"  (CC.ENT.<id>, extra segment)
+ * The rule below accepts BOTH (and any future CC.<seg>.<seg>… form). A BSUID is a TRANSPORT
+ * id, NEVER a phone. Deliberately narrow — other refs that merely contain letters
+ * ("wa:573001112233", the documented n8n form) keep normalizing by their digits exactly as
+ * before. Mirrored in SQL by BSUID_SQL_RE (contactIdentities.ts). Length-capped so a
+ * pathological value can't be scanned forever.
+ *
+ * INVARIANT (regression guard for the class fixed by 1444d5a, now extended to the ENT
+ * variant): any value matching this shape returns null from normalizeE164 BEFORE any digit
+ * logic, so it can never be turned into an invented phone.
  */
-const BSUID_SHAPE = /^[A-Za-z]{2}\.[A-Za-z0-9]+$/;
+const BSUID_MAX_LENGTH = 128;
+const BSUID_SHAPE = /^[A-Za-z]{2}(?:\.[A-Za-z0-9]+)+$/;
 export function isBsuid(value: string | null | undefined): boolean {
-  return BSUID_SHAPE.test((value ?? '').trim());
+  const trimmed = (value ?? '').trim();
+  return trimmed.length <= BSUID_MAX_LENGTH && BSUID_SHAPE.test(trimmed);
 }
 
 export function normalizeE164(

@@ -1,4 +1,5 @@
 import { query } from '../client.js';
+import { isSentinelIdentifier, isQuarantinedRef } from '../../identity/sentinel.js';
 import {
   CONTEXT_MESSAGE_CHARS, CONTEXT_MESSAGE_LIMIT,
   projectConversationContext, type ContextSnapshot,
@@ -21,6 +22,9 @@ export interface ContextReadScope {
  * or clients must fail closed, not let either token read an ambiguous thread.
  */
 export async function readConversationContext(scope: ContextReadScope) {
+  // ID-H §1 defense in depth: a sentinel-keyed or quarantined conversation is never readable —
+  // history must never leak out of a collapsed/contained thread, even with a valid anchor.
+  if (isSentinelIdentifier(scope.conversationRef) || isQuarantinedRef(scope.conversationRef)) return null;
   const result = await query<ContextSnapshot>(
     `WITH scoped AS (
        SELECT c.id, c.tenant_id, c.mode, a.id AS anchor_id, a.created_at AS anchor_at

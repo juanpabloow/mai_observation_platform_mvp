@@ -1,8 +1,10 @@
 import type { PoolClient, QueryResultRow } from 'pg';
 import { query, firstRowOrThrow, withTransaction } from '../client.js';
 import { isBsuid, normalizeE164 } from '../../scheduling/phone.js';
+import { isSentinelIdentifier } from '../../identity/sentinel.js';
+import { recordCrmActivity } from './crmActivityEvents.js';
 import { logger } from '../../logger.js';
-import type { ContactRow } from './contacts.js';
+import type { ContactRow, MessagingConsent } from './contacts.js';
 
 /**
  * THE contact-identity spine (C-2). One chokepoint — resolveContactByIdentity —
@@ -30,6 +32,9 @@ export function classifyIdentity(raw: string | null | undefined): NormalizedIden
   if (raw == null) return null;
   const trimmed = String(raw).trim();
   if (!trimmed) return null;
+  // ID-H §1 defense in depth: a sentinel value ("undefined", an unrendered expression, …) is
+  // NEVER a real identity — never let it key a contact (routes also refuse it with a 422).
+  if (isSentinelIdentifier(trimmed)) return null;
   const phone = normalizeE164(trimmed);
   if (phone) return { kind: 'phone', value: phone };
   const lower = trimmed.toLowerCase();
@@ -49,6 +54,8 @@ export function classifyDeclaredIdentity(kind: IdentityKind, raw: string | null 
   if (raw == null) return null;
   const trimmed = String(raw).trim();
   if (!trimmed) return null;
+  // ID-H §1 defense in depth: a sentinel value is never a real identity, whatever its declared kind.
+  if (isSentinelIdentifier(trimmed)) return null;
   if (kind === 'phone') {
     const p = normalizeE164(trimmed);
     return p ? { kind: 'phone', value: p } : null;
@@ -86,7 +93,7 @@ export function legacyBsuidPhone(value: string | null | undefined): string | nul
  * isBsuid in SQL (POSIX ERE), for a raw column value — surrounding whitespace allowed,
  * as classifyIdentity trims. A constant: never interpolate input into it.
  */
-const BSUID_SQL_RE = `'^[[:space:]]*[A-Za-z]{2}[.][A-Za-z0-9]+[[:space:]]*$'`;
+const BSUID_SQL_RE = `'^[[:space:]]*[A-Za-z]{2}([.][A-Za-z0-9]+)+[[:space:]]*$'`;
 
 /** Contacts created by `bsuid` under the old classification (legacy phone identity). */
 async function legacyBsuidContactIds(run: Run, tenantId: string, clientId: string, bsuid: string): Promise<string[]> {
@@ -831,21 +838,48 @@ export async function mergeContacts(
     );
     await run(`DELETE FROM contact_identities WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3`, [tenantId, clientId, dropId]);
 
-    // Move child rows.
+    // Move child rows. Appointments + conversations re-point by id.
     await run(`UPDATE appointments SET contact_id=$4, updated_at=now() WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3`, [tenantId, clientId, dropId, keepId]);
     await run(`UPDATE conversations SET contact_id=$3, updated_at=now() WHERE tenant_id=$1 AND contact_id=$2`, [tenantId, dropId, keepId]);
+    // ID-H §3: notes + tasks move wholesale — they'd otherwise CASCADE-delete with the drop row,
+    // losing history on exactly the human-reviewed merges that I-1's duplicate candidates create.
+    await run(`UPDATE contact_notes SET contact_id=$4 WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3`, [tenantId, clientId, dropId, keepId]);
+    await run(`UPDATE crm_tasks SET contact_id=$4, updated_at=now() WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3`, [tenantId, clientId, dropId, keepId]);
+    // Tag links move only where the survivor doesn't already carry the tag (UNIQUE(contact_id,tag_id));
+    // the rest are true duplicates and are dropped.
+    await run(
+      `UPDATE contact_tag_links l SET contact_id=$4
+        WHERE l.tenant_id=$1 AND l.client_id=$2 AND l.contact_id=$3
+          AND NOT EXISTS (SELECT 1 FROM contact_tag_links k
+                           WHERE k.tenant_id=$1 AND k.client_id=$2 AND k.contact_id=$4 AND k.tag_id=l.tag_id)`,
+      [tenantId, clientId, dropId, keepId],
+    );
+    await run(`DELETE FROM contact_tag_links WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3`, [tenantId, clientId, dropId]);
 
-    // Survivor: keep earliest created_at; fill only empty fields; union custom_fields (keep wins).
+    // ID-H §3: consent = the MOST RESTRICTIVE of the two (never widen permission on a merge):
+    // opted_out beats unknown beats opted_in; do_not_contact true wins.
+    const consentRank: Record<MessagingConsent, number> = { opted_out: 2, unknown: 1, opted_in: 0 };
+    const mergedConsent: MessagingConsent =
+      consentRank[drop.messaging_consent] > consentRank[keep.messaging_consent] ? drop.messaging_consent : keep.messaging_consent;
+    const mergedDnc = keep.do_not_contact || drop.do_not_contact;
+    const consentChanged = mergedConsent !== keep.messaging_consent || mergedDnc !== keep.do_not_contact;
+
+    // Survivor: keep earliest created_at; fill only empty fields; union custom_fields (keep wins);
+    // apply the most-restrictive consent.
     await run(
       `UPDATE contacts
           SET created_at = LEAST(created_at, $4::timestamptz),
               name = COALESCE(name, $5), phone_e164 = COALESCE(phone_e164, $6), email = COALESCE(email, $7),
               assigned_to = COALESCE(assigned_to, $8),
               custom_fields = $9::jsonb || custom_fields,
+              messaging_consent = $10, do_not_contact = $11,
               updated_at = now()
         WHERE id=$1 AND tenant_id=$2 AND client_id=$3`,
-      [keepId, tenantId, clientId, drop.created_at, drop.name, drop.phone_e164, drop.email, drop.assigned_to, JSON.stringify(drop.custom_fields ?? {})],
+      [keepId, tenantId, clientId, drop.created_at, drop.name, drop.phone_e164, drop.email, drop.assigned_to, JSON.stringify(drop.custom_fields ?? {}), mergedConsent, mergedDnc],
     );
+    if (consentChanged) {
+      await run(`UPDATE contacts SET consent_updated_at = now(), consent_source = 'merge' WHERE id=$1 AND tenant_id=$2 AND client_id=$3`, [keepId, tenantId, clientId]);
+    }
 
     // Resolve the candidate (best-effort; it also cascades when the drop row is deleted).
     await run(
@@ -861,6 +895,18 @@ export async function mergeContacts(
          VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
       [tenantId, clientId, keepId, dropId, mergedByUserId, JSON.stringify(snapshot)],
     );
+
+    // ID-H §3: a contact_merged timeline event so the merge shows in the survivor's history
+    // (same transaction — it must not survive a rolled-back merge).
+    await recordCrmActivity(client, {
+      tenantId,
+      clientId,
+      contactId: keepId,
+      eventType: 'contact_merged',
+      actorUserId: mergedByUserId,
+      actorKind: mergedByUserId ? 'user' : 'automation',
+      detail: { kept_contact_id: keepId, dropped_contact_id: dropId, dropped_name: drop.name ?? null },
+    });
 
     await run(`DELETE FROM contacts WHERE id=$1 AND tenant_id=$2 AND client_id=$3`, [dropId, tenantId, clientId]);
     return { ok: true, keptId: keepId };

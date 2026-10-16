@@ -2,6 +2,7 @@ import { z } from "zod";
 import { authenticateHandoffRequest, handoffError, moduleDisabled, resolveWorkflowOr404 } from "@/lib/handoffApi";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { readConversationContext } from "@worker/db/repositories/handoffContext.js";
+import { isSentinelIdentifier, isQuarantinedRef } from "@worker/identity/sentinel.js";
 
 export const dynamic = "force-dynamic";
 
@@ -25,6 +26,14 @@ export async function GET(req: Request): Promise<Response> {
   const parsed = Query.safeParse(Object.fromEntries(params));
   if (!parsed.success || [...params.keys()].some((key) => params.getAll(key).length !== 1)) {
     return noStore(handoffError(422, "invalid_query", "Provide workflow_ref, conversation_ref and through_message_id only."));
+  }
+  // ID-H §1: a sentinel ref is refused outright (422); a quarantined conversation is never
+  // readable — treat it as the endpoint's standard "not found", even with a valid anchor.
+  if (isSentinelIdentifier(parsed.data.conversation_ref)) {
+    return noStore(handoffError(422, "invalid_conversation_ref", "conversation_ref is empty or a placeholder, not a real identifier."));
+  }
+  if (isQuarantinedRef(parsed.data.conversation_ref)) {
+    return noStore(handoffError(404, "not_found", "Conversation context not found."));
   }
   const wf = await resolveWorkflowOr404(auth.auth, parsed.data.workflow_ref);
   if (!wf.ok) return noStore(wf.response);
