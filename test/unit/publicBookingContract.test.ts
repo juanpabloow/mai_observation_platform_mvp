@@ -36,7 +36,9 @@ test('the v3 flow has exactly four steps with the specified titles, labels and f
   for (const s of ['Sin preferencia', 'Ver perfil', '<ChooseLabel selected={sel} />', 'Elegido', '<>Elegir</>', 'aria-label={sel ? `${a.name}, elegido` : `Elegir a ${a.name}`}']) assert.ok(artist.includes(s), s);
   const cal = root(`${BOOKING_DIR}/DateTimeStep.tsx`);
   for (const s of ['Hay cupos', 'Sin cupos o cerrado', 'Mes anterior', 'Mes siguiente', '"LU", "MA", "MI", "JU", "VI", "SÁ", "DO"']) assert.ok(cal.includes(s), s);
-  assert.ok(root(`${BOOKING_DIR}/ServiceStep.tsx`).includes('Ver más'), 'Ver más on services');
+  // Services: the description itself opens the full text (expand on the phone, detail dialog on a laptop).
+  const svc = root(`${BOOKING_DIR}/ServiceStep.tsx`);
+  assert.ok(svc.includes('aria-expanded={expanded}') && svc.includes('onOpenDetail(s.id, e.currentTarget)'), 'the description opens the full text on services');
 });
 
 test('"Sin preferencia" sends NO staff_id (the engine assigns); the profile never selects', () => {

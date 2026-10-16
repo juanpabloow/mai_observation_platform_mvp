@@ -415,26 +415,44 @@ function ServiceCard({ service: s, index, all, selected, onSelect, onOpenReviews
           ) : null}
         </div>
         {s.description ? (
-          <div className="flex flex-col lg:min-w-0 lg:flex-row lg:items-center lg:gap-1 lg:[grid-area:desc]">
-            {/* Laptop: "Ver más" follows the (one-line) text instead of sitting far right. */}
-            <p id={descId} className={`m-0 whitespace-pre-line text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] lg:min-w-0 lg:flex-initial ${expanded ? "" : "line-clamp-2"} lg:line-clamp-1`}>
-              {s.description}
-            </p>
+          <div className="flex flex-col lg:min-w-0 lg:flex-row lg:items-center lg:[grid-area:desc]">
+            {/* The DESCRIPTION is the control — no separate "Ver más" link. Phone: pressing a
+                long one expands it in place (a short one is plain text). Laptop: pressing it
+                opens the full detail, so the card never grows. Neither selects. */}
             {more ? (
-              <button type="button" aria-expanded={expanded} aria-controls={descId} onClick={() => setExpanded((x) => !x)} className={`${LINK_BTN} -mb-2.5 -ml-2 -mt-1.5 self-start lg:hidden`}>
-                {expanded ? "Ver menos" : "Ver más"}
-                <span className="sr-only"> sobre {s.name}</span>
+              <button
+                type="button"
+                aria-expanded={expanded}
+                onClick={() => setExpanded((x) => !x)}
+                className="group -mx-1 flex min-h-11 items-end gap-1 rounded-[8px] px-1 py-0.5 text-left lg:hidden"
+              >
+                <span id={descId} className={`min-w-0 flex-1 whitespace-pre-line text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] ${expanded ? "" : "line-clamp-2"}`}>
+                  {s.description}
+                </span>
+                <span aria-hidden className={`mb-0.5 flex flex-none text-pb-muted transition-transform duration-200 motion-reduce:transition-none ${expanded ? "rotate-180" : ""}`}>
+                  <IconChevronDown />
+                </span>
+                <span className="sr-only">{expanded ? ". Ver menos" : ". Leer todo"}</span>
               </button>
-            ) : null}
+            ) : (
+              <p id={descId} className="m-0 whitespace-pre-line text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] lg:hidden">
+                {s.description}
+              </p>
+            )}
             <button
               type="button"
               aria-haspopup="dialog"
               onClick={(e) => onOpenDetail(s.id, e.currentTarget)}
-              // Not LINK_BTN: its `inline-flex` would override `hidden` below lg.
-              className="-my-3 hidden min-h-[44px] flex-none items-center rounded-[12px] px-2 text-[14px] text-pb-ink underline underline-offset-[3px] lg:inline-flex"
+              // Not a LINK_BTN: its `inline-flex` would override `hidden` below lg.
+              className="group -my-3 -ml-1 hidden min-h-[44px] min-w-0 max-w-full items-center gap-1 rounded-[8px] px-1 text-left lg:flex"
             >
-              Ver más
-              <span className="sr-only"> sobre {s.name}</span>
+              <span className="line-clamp-1 min-w-0 text-[14px] leading-[1.45] text-pb-tx2 [overflow-wrap:anywhere] group-hover:text-pb-ink group-hover:underline group-hover:underline-offset-[3px]">
+                {s.description}
+              </span>
+              <span aria-hidden className="flex flex-none -rotate-90 text-pb-muted group-hover:text-pb-ink">
+                <IconChevronDown />
+              </span>
+              <span className="sr-only">. Ver el detalle de {s.name}</span>
             </button>
           </div>
         ) : (

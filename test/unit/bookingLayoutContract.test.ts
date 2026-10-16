@@ -25,9 +25,11 @@ test('laptop services: one per row, one fixed height, every slot reserved', () =
   assert.match(step, /lg:sr-only/, 'price and duration stay in the select button for screen readers');
 });
 
-test('laptop "Ver más" opens a dialog (never grows the card, never selects); the alternative sits outside', () => {
+test('pressing the description opens the detail on a laptop (never grows the card, never selects); the alternative sits outside', () => {
   assert.match(step, /aria-haspopup="dialog"\s+onClick=\{\(e\) => onOpenDetail\(s\.id, e\.currentTarget\)\}/);
   assert.match(step, /function ServiceDetailDialog/);
+  assert.doesNotMatch(step, />\s*Ver más\s*</, 'no separate "Ver más" link: the description is the control');
+  assert.match(step, /aria-expanded=\{expanded\}\s+onClick=\{\(\) => setExpanded/, 'phone: pressing a long description expands it');
   assert.match(step, /d\.showModal\(\);/);
   assert.match(step, /t\?\.focus\(\);/, 'focus returns to the trigger');
   assert.match(step, /<div className="lg:hidden">\{offerBox\}<\/div>/, 'phone: inside the card');
