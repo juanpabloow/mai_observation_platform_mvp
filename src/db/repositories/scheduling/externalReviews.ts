@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg';
 import { query, withTransaction } from '../../client.js';
 
 /**
- * EXTERNAL (Fresha) REVIEWS — import, provenance and publication (migration 1806).
+ * EXTERNAL (Fresha) REVIEWS — import, provenance and publication (migration 1807).
  *
  * Every PLATFORM function here is called only after requirePlatformAdmin() on the server
  * (web/lib/platformReviewActions.ts). They still never trust a bare id: each one names the

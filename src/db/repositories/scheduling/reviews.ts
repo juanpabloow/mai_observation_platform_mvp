@@ -1,7 +1,7 @@
 import { query } from '../../client.js';
 
 /**
- * APPOINTMENT REVIEWS (migrations 1801 + 1806). Tenant-scoped like every scheduling
+ * APPOINTMENT REVIEWS (migrations 1801 + 1807). Tenant-scoped like every scheduling
  * repository; the public reads only ever return APPROVED rows and only the fields a
  * visitor may see.
  *

@@ -5,7 +5,7 @@ import { authorDisplay, REVIEW_COMMENT_MAX } from "./publicReviews";
 
 /**
  * EXTERNAL REVIEW IMPORT — the PLAN for bringing a business's Fresha reviews into the
- * review table (migration 1806). Pure: no database, no network. A PLATFORM administrator
+ * review table (migration 1807). Pure: no database, no network. A PLATFORM administrator
  * (web/lib/platformAdmin.ts) uploads a file in the platform review screen; the server
  * builds this plan (the mandatory dry-run), the administrator confirms the equivalences,
  * and only then does the server write — re-planning from the same file first.

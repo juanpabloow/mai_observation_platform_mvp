@@ -20,7 +20,7 @@ import { importExternalReviewBatch, listExternalReviewsForClient } from '../../s
 import { cleanupTenant, closeDb, seedContact, seedMember, seedScenario, type Scenario } from './fixtures.js';
 
 /**
- * IMPORTED (FRESHA) REVIEWS — migration 1806, through the REAL server actions, the real
+ * IMPORTED (FRESHA) REVIEWS — migration 1807, through the REAL server actions, the real
  * repository, PostgreSQL and the real public handlers. The only stubs are the session
  * read and Next's request boundaries (same pattern as timeOffPermissions.test.ts).
  *

@@ -26,8 +26,8 @@ de la cuenta — de él cuelgan los módulos y los datos), `contacts` (la person
 canónica), `appointments` (la cita, con la garantía anti-solapamiento), y
 `conversations` (el hilo con estado bot→pending→human).
 
-63 tablas de dominio en 6 dominios: identidad/tenancy (9), observabilidad n8n (6),
-conversaciones/inbox (5), CRM + catálogo (12), scheduling (16), reuniones (15). (No se
+66 tablas de dominio en 6 dominios: identidad/tenancy (9), observabilidad n8n (6),
+conversaciones/inbox (5), CRM + catálogo (12), scheduling (19), reuniones (15). (No se
 cuentan `pgmigrations` ni la tabla temporal `_grandfathered_email_verified` de la
 migración 1806.) Los dominios **reuniones** (transcripción/análisis de reuniones, con sus
 worker pools) y **catálogo/promociones/reseñas** se añadieron después de la primera versión
