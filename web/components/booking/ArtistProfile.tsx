@@ -99,21 +99,23 @@ export function ArtistProfile({
           </div>
           <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-5 lg:px-6 lg:pb-6">
             {/* Phone: the photo at full content width, height capped so the name and the
-                presentation are still in view. Laptop: photo on the left (never the whole
-                window), everything else on the right. No photo → a proportioned block with
-                the initials — no image is ever made up. */}
-            <div className="flex flex-col gap-5 lg:grid lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)] lg:items-start lg:gap-7">
-              <div className="flex lg:sticky lg:top-0">
+                presentation are still in view. Laptop: the photo beside the name, rating and
+                presentation; services and reviews below at FULL width, so no empty column
+                is left under the photo. No photo → a proportioned block with the initials —
+                no image is ever made up. */}
+            <div className="flex flex-col gap-5 lg:grid lg:grid-cols-[240px_minmax(0,1fr)] lg:items-start lg:gap-x-7 lg:gap-y-6 lg:[grid-template-areas:'photo_head'_'body_body']">
+              <div className="flex lg:[grid-area:photo]">
                 <Portrait
                   photoUrl={artist.photo_url}
                   initials={artistInitials(artist.name)}
                   tone={artistTone(artist.id)}
                   label={artist.photo_url ? `Foto de ${artist.name}` : `${artist.name}, sin foto`}
                   className="aspect-[4/3] max-h-[38dvh] w-full overflow-hidden rounded-[20px] object-[50%_25%] lg:aspect-[4/5] lg:max-h-[60dvh]"
-                  initialsClass="text-[64px] lg:text-[88px]"
+                  initialsClass="text-[64px] lg:text-[80px]"
                 />
               </div>
-              <div className="flex min-w-0 flex-col gap-5">
+              {/* Phone: one column. Laptop: the head beside the photo, the body below both. */}
+              <div className="flex min-w-0 flex-col gap-5 lg:self-center lg:[grid-area:head]">
                 <div className="flex flex-col gap-1.5">
                   <h2 id="pb-profile-name" className={`${SERIF} m-0 text-[34px] leading-[1.05] [overflow-wrap:anywhere] [text-wrap:balance] lg:text-[38px]`}>
                     {artist.name}
@@ -149,6 +151,8 @@ export function ArtistProfile({
                 ) : null}
               </div>
             ) : null}
+              </div>
+              <div className="flex min-w-0 flex-col gap-5 lg:[grid-area:body]">
             {performs.length > 0 ? (
               <div className="flex flex-col gap-2.5">
                 <h3 className="m-0 text-[14px] font-[590]">Servicios que realiza</h3>

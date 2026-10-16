@@ -46,7 +46,8 @@ test('pressing the CARD opens the detail (never selects); "+" and "Añadir" choo
 
 test('artist profile: large rounded photo or initials, laptop two columns, CTA outside the scroll', () => {
   assert.match(profile, /aspect-\[4\/3\] max-h-\[38dvh\] w-full overflow-hidden rounded-\[20px\] object-\[50%_25%\] lg:aspect-\[4\/5\]/);
-  assert.match(profile, /lg:grid-cols-\[minmax\(0,320px\)_minmax\(0,1fr\)\]/);
+  assert.match(profile, /lg:grid-cols-\[240px_minmax\(0,1fr\)\]/);
+  assert.match(profile, /lg:\[grid-template-areas:'photo_head'_'body_body'\]/, 'services and reviews at full width under photo + head');
   assert.match(profile, /className="pb-dialog pb-profile"/);
   assert.match(css, /\.pb3 dialog\.pb-dialog\.pb-profile \{\s*width: min\(920px, calc\(100vw - 64px\)\);/);
   assert.match(profile, /Elegir a \$\{artist\.name\}/);
