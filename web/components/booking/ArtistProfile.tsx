@@ -8,8 +8,10 @@ import { ImportedBadge } from "./ReviewsDialog";
 import { CTA_BASE, ctaTone, IconBack, IconStar, Portrait, SERIF, type ServiceOption, type StaffOption } from "./ui";
 
 /**
- * The artist's PROFILE — a full view on the phone, a centred dialog on desktop (CSS in
- * globals.css, `.pb-dialog`). Native <dialog> + showModal(): focus is trapped and the
+ * The artist's PROFILE — a full view on the phone, a wide centred dialog on a laptop (CSS
+ * in globals.css, `.pb-dialog.pb-profile`): a large rounded photo (or initials), then
+ * name, real title and compact rating, the presentation, the services and the reviews
+ * with their origin. Native <dialog> + showModal(): focus is trapped and the
  * page behind is inert. Back, Escape or a tap outside close it WITHOUT changing the
  * choice; only "Elegir a …" picks. On close, focus returns to the "Ver perfil" that
  * opened it.
@@ -70,7 +72,7 @@ export function ArtistProfile({
   return (
     <dialog
       ref={ref}
-      className="pb-dialog"
+      className="pb-dialog pb-profile"
       aria-labelledby="pb-profile-name"
       onCancel={(e) => {
         e.preventDefault();
@@ -95,33 +97,43 @@ export function ArtistProfile({
             </button>
             <span className="text-[15px] font-[590]">Perfil del artista</span>
           </div>
-          <div className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-4 pb-5">
-            <div className="flex items-center gap-4 pt-1">
-              <Portrait
-                photoUrl={artist.photo_url}
-                initials={artistInitials(artist.name)}
-                tone={artistTone(artist.id)}
-                label={artist.photo_url ? `Foto de ${artist.name}` : `${artist.name}, sin foto`}
-                className="size-24 flex-none overflow-hidden rounded-full lg:size-28"
-                initialsClass="text-[34px]"
-              />
-              <div className="flex min-w-0 flex-col gap-1">
-                <h2 id="pb-profile-name" className={`${SERIF} m-0 text-[34px] leading-none [overflow-wrap:anywhere]`}>
-                  {artist.name}
-                </h2>
-                <span className="text-[14px] text-pb-muted">{[artist.title, siteName].filter(Boolean).join(" · ")}</span>
-                {artist.rating ? (
-                  <span className="mt-1 flex items-center gap-1.5 text-[15px]">
-                    <IconStar size={16} />
-                    <span className="font-semibold [font-variant-numeric:tabular-nums]">{ratingText(artist.rating.average)}</span>
-                    <span className="text-pb-muted">· {reviewCountText(artist.rating.count)}</span>
-                  </span>
-                ) : null}
+          <div className="flex min-h-0 flex-1 flex-col overflow-y-auto px-4 pb-5 lg:px-6 lg:pb-6">
+            {/* Phone: the photo at full content width, height capped so the name and the
+                presentation are still in view. Laptop: photo on the left (never the whole
+                window), everything else on the right. No photo → a proportioned block with
+                the initials — no image is ever made up. */}
+            <div className="flex flex-col gap-5 lg:grid lg:grid-cols-[minmax(0,320px)_minmax(0,1fr)] lg:items-start lg:gap-7">
+              <div className="flex lg:sticky lg:top-0">
+                <Portrait
+                  photoUrl={artist.photo_url}
+                  initials={artistInitials(artist.name)}
+                  tone={artistTone(artist.id)}
+                  label={artist.photo_url ? `Foto de ${artist.name}` : `${artist.name}, sin foto`}
+                  className="aspect-[4/3] max-h-[38dvh] w-full overflow-hidden rounded-[20px] object-[50%_25%] lg:aspect-[4/5] lg:max-h-[60dvh]"
+                  initialsClass="text-[64px] lg:text-[88px]"
+                />
               </div>
-            </div>
+              <div className="flex min-w-0 flex-col gap-5">
+                <div className="flex flex-col gap-1.5">
+                  <h2 id="pb-profile-name" className={`${SERIF} m-0 text-[34px] leading-[1.05] [overflow-wrap:anywhere] [text-wrap:balance] lg:text-[38px]`}>
+                    {artist.name}
+                  </h2>
+                  <span className="text-[15px] text-pb-muted">{[artist.title, siteName].filter(Boolean).join(" · ")}</span>
+                  {artist.rating ? (
+                    <span
+                      className="flex items-center gap-1.5 text-[15px] text-pb-tx2"
+                      aria-label={`${ratingText(artist.rating.average)} de 5, ${reviewCountText(artist.rating.count)}`}
+                    >
+                      <IconStar size={16} />
+                      <span aria-hidden className="[font-variant-numeric:tabular-nums]">
+                        <span className="font-semibold text-pb-ink">{ratingText(artist.rating.average)}</span> <span className="text-pb-muted">({artist.rating.count})</span>
+                      </span>
+                    </span>
+                  ) : null}
+                </div>
             {artist.bio ? (
               <div className="flex flex-col">
-                <p id="pb-profile-bio" className="m-0 whitespace-pre-line text-[16px] leading-[1.6] text-pb-body">
+                <p id="pb-profile-bio" className="m-0 max-w-[62ch] whitespace-pre-line text-[16px] leading-[1.6] text-pb-body">
                   {bioLong && !bioOpen ? lead : artist.bio}
                 </p>
                 {bioLong ? (
@@ -188,9 +200,12 @@ export function ArtistProfile({
                 ) : null}
               </section>
             ) : null}
+              </div>
+            </div>
           </div>
-          <div className="flex-none border-t border-pb-line bg-white px-4 pb-[calc(14px+env(safe-area-inset-bottom))] pt-3">
-            <button type="button" onClick={() => onChoose(artist.id)} className={`${CTA_BASE} ${ctaTone("on")} w-full`}>
+          {/* Fixed at the bottom of the view (outside the scroll), so it never covers content. */}
+          <div className="flex-none border-t border-pb-line bg-white px-4 pb-[calc(14px+env(safe-area-inset-bottom))] pt-3 lg:flex lg:justify-end lg:px-6">
+            <button type="button" onClick={() => onChoose(artist.id)} className={`${CTA_BASE} ${ctaTone("on")} w-full lg:w-auto lg:min-w-[300px]`}>
               {isChosen ? `Seguir con ${artist.name}` : `Elegir a ${artist.name}`}
             </button>
           </div>

@@ -1599,6 +1599,13 @@ body {
     animation: none;
   }
 }
+/* The artist profile: photo on the left and the profile on the right — wider than the
+   560px dialogs, but never the whole window. */
+@media (min-width: 1024px) {
+  .pb3 dialog.pb-dialog.pb-profile {
+    width: min(920px, calc(100vw - 64px));
+  }
+}
 
 /*
  * ── Public booking: motion ─────────────────────────────────────────────────────
