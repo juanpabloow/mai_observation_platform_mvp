@@ -8,7 +8,6 @@ import { needsMore } from "@/lib/publicBookingFlow";
 import { ratingText, reviewCountText } from "@/lib/publicReviews";
 import { PromotionCard } from "./PromotionCard";
 import {
-  BTN_SECONDARY_LG,
   chooseBtn,
   CTA_BASE,
   ctaTone,
@@ -605,9 +604,9 @@ function IconChevronDown() {
 
 /**
  * The full detail of a service (laptop "Ver más"): everything the card shortens, in a
- * native modal <dialog> — focus is trapped, Escape / the backdrop / "Cerrar" close it, and
- * focus returns to the "Ver más" that opened it. Opening it never selects; "Elegir este
- * servicio" is a separate, explicit action. Prices, durations and names are the card's.
+ * native modal <dialog> — focus is trapped, Escape / the backdrop / the ✕ close it, and
+ * focus returns to the description that opened it. Opening it never selects; "Añadir" is a
+ * separate, explicit action. It closes with the ✕, Escape or a click outside. Prices, durations and names are the card's.
  */
 function ServiceDetailDialog({
   service: s,
@@ -720,9 +719,6 @@ function ServiceDetailDialog({
             ) : null}
           </div>
           <div className="flex flex-none flex-wrap justify-end gap-2.5 border-t border-pb-line bg-white px-5 pb-[calc(14px+env(safe-area-inset-bottom))] pt-3">
-            <button type="button" onClick={onClose} className={BTN_SECONDARY_LG}>
-              Cerrar
-            </button>
             <button
               type="button"
               aria-pressed={isSel}
@@ -730,15 +726,16 @@ function ServiceDetailDialog({
                 onSelect(s.id);
                 onClose();
               }}
-              className={chooseBtn(isSel)}
+              aria-label={isSel ? `${s.name}, añadido` : `Añadir ${s.name}`}
+              className={`${chooseBtn(isSel)} min-w-[160px]`}
             >
               {isSel ? (
                 <>
                   <IconCheck size={16} stroke="#111316" width={2.2} />
-                  Elegido
+                  Añadido
                 </>
               ) : (
-                "Elegir este servicio"
+                "Añadir"
               )}
             </button>
           </div>
