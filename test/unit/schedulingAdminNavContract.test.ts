@@ -104,12 +104,20 @@ test('actions: every admin action validates the route client (no cross-client ad
   // Resource-ownership helpers keep a forged id from another client from taking effect.
   assert.ok(src.includes('async function siteInClient'), 'site→client ownership helper');
   assert.ok(src.includes('async function staffInClient'), 'staff→client ownership helper');
-  // Every exported action funnels through requireSchedulingAdmin first.
+  // Every exported action funnels through requireSchedulingAdmin first — EXCEPT the two
+  // time-off adapters (createException/deleteException), which MF-1 item 7 routes through the
+  // single time-off writer (writeTimeOff / deleteTimeOffAction); that writer carries the
+  // tenant+client+module+capability guard, so the client is still validated, just one level
+  // down. They are the only actions allowed to guard by delegation.
   const exported = src.match(/export async function \w+Action/g) ?? [];
   assert.ok(exported.length >= 10, 'all admin actions are present');
+  const delegatesToTimeOff = /writeTimeOff\(|deleteTimeOffAction\(/;
   for (const seg of src.split(/export async function /).slice(1)) {
-    assert.ok(seg.includes('requireSchedulingAdmin('), `an action is missing the client guard: ${seg.slice(0, 40)}`);
+    const guarded = seg.includes('requireSchedulingAdmin(') || delegatesToTimeOff.test(seg);
+    assert.ok(guarded, `an action is missing the client guard: ${seg.slice(0, 40)}`);
   }
+  // The exception actions are adapters over the ONE time-off writer (item 7).
+  assert.ok(src.includes('writeTimeOff(') && src.includes('deleteTimeOffAction('), 'exception actions delegate to the single time-off writer');
   // Tenant id comes from the validated guard, never trusted from the request.
   assert.ok(!src.includes('getCurrentTenantId'), 'tenantId comes from the guard, not an ambient read');
 });

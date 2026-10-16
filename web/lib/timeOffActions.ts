@@ -87,18 +87,28 @@ function revalidate(clientId: string): void {
   revalidatePath(`/clients/${clientId}/scheduling/staff`);
 }
 
-export async function createTimeOffAction(
-  input: {
-    clientId: string;
-    siteId: string;
-    staffId?: string | null;
-    reason?: string | null;
-    /** What a customer may be told — a controlled code, or null (the default: nothing). */
-    publicReason?: string | null;
-    /** Keep overlapping appointments (they stay; the agenda flags them as conflicting). */
-    confirm?: boolean;
-  } & TimeOffInput,
-): Promise<TimeOffResult> {
+export interface WriteTimeOffInput {
+  clientId: string;
+  siteId: string;
+  staffId?: string | null;
+  /** LOCAL wall-clock "YYYY-MM-DDTHH:MM" — anchored to the SITE timezone here. */
+  startLocal: string;
+  endLocal: string;
+  reason?: string | null;
+  /** What a customer may be told — a controlled code, or null (the default: nothing). */
+  publicReason?: string | null;
+  /** Keep overlapping appointments (they stay; the agenda flags them as conflicting). */
+  confirm?: boolean;
+}
+
+/**
+ * MF-1 item 7 — THE single writer of a time-off block (schedule_exceptions) and its rules:
+ * tiered permissions (SITE closure = canManageClient; STAFF block = canAccessClient),
+ * site/staff ownership checks, tz anchoring, and the conflict flow. Both createTimeOffAction
+ * (the structured TimeOffForm) and the legacy schedulingAdminActions.createExceptionAction
+ * adapter route through this, so there is exactly one writer with one set of rules.
+ */
+export async function writeTimeOff(input: WriteTimeOffInput): Promise<TimeOffResult> {
   const siteWide = !input.staffId;
   const auth = await requireTimeOff(input.clientId, siteWide);
   if (!auth.ok) return auth;
@@ -112,13 +122,11 @@ export async function createTimeOffAction(
     if (!st || st.site_id !== input.siteId) return { ok: false, error: FOREIGN };
   }
 
-  const shape = normalizeTimeOff(input);
-  if (!shape.ok) return { ok: false, error: shape.error };
   let startsAt: Date;
   let endsAt: Date;
   try {
-    startsAt = localWallClockToUtc(shape.startLocal, site.timezone);
-    endsAt = localWallClockToUtc(shape.endLocal, site.timezone);
+    startsAt = localWallClockToUtc(input.startLocal, site.timezone);
+    endsAt = localWallClockToUtc(input.endLocal, site.timezone);
   } catch {
     return { ok: false, error: "Fechas inválidas." };
   }
@@ -147,6 +155,32 @@ export async function createTimeOffAction(
   });
   revalidate(input.clientId);
   return { ok: true, id: row.id };
+}
+
+export async function createTimeOffAction(
+  input: {
+    clientId: string;
+    siteId: string;
+    staffId?: string | null;
+    reason?: string | null;
+    /** What a customer may be told — a controlled code, or null (the default: nothing). */
+    publicReason?: string | null;
+    /** Keep overlapping appointments (they stay; the agenda flags them as conflicting). */
+    confirm?: boolean;
+  } & TimeOffInput,
+): Promise<TimeOffResult> {
+  const shape = normalizeTimeOff(input);
+  if (!shape.ok) return { ok: false, error: shape.error };
+  return writeTimeOff({
+    clientId: input.clientId,
+    siteId: input.siteId,
+    staffId: input.staffId ?? null,
+    startLocal: shape.startLocal,
+    endLocal: shape.endLocal,
+    reason: input.reason,
+    publicReason: input.publicReason,
+    confirm: input.confirm,
+  });
 }
 
 export async function updateTimeOffAction(

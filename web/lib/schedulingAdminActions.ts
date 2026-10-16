@@ -2,7 +2,7 @@
 
 import { revalidatePath } from "next/cache";
 import { canManageClient } from "./access";
-import { parsePublicReason } from "./publicAbsenceReason";
+import { writeTimeOff, deleteTimeOffAction } from "./timeOffActions";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { normalizeServiceDescription } from "./serviceDescription";
 import { checkPublicTitle, publicProfileMessage } from "./staffPublicProfile";
@@ -66,11 +66,6 @@ import {
   parseServiceCategory,
 } from "@worker/db/repositories/scheduling/services.js";
 import { countUpcomingAppointmentsForResource, listAppointments } from "@worker/db/repositories/scheduling/appointments.js";
-import {
-  createException,
-  deleteException,
-  getExceptionById,
-} from "@worker/db/repositories/scheduling/exceptions.js";
 
 /**
  * CLIENT-ADMIN CRUD for a SINGLE CLIENT's scheduling resource model (sites, staff, the
@@ -649,6 +644,15 @@ export async function setStaffServiceAction(
 
 // ── Exceptions ───────────────────────────────────────────────────────────────
 
+/**
+ * MF-1 item 7 — these two legacy actions (desktop AdminPanel + mobile BlocksMobile) are now
+ * thin ADAPTERS over the single time-off writer in timeOffActions.ts, so there is exactly one
+ * writer of schedule_exceptions with one set of rules (tiered permissions + the conflict
+ * flow). They keep their wall-clock-pair signature so the two legacy forms are unchanged.
+ * confirm:true preserves this path's create-unconditionally behavior — the interactive
+ * conflict flow lives in the new TimeOffForm. NOTE the unified rules now permit a Setter to
+ * create a STAFF block here (as the agenda already does); SITE closures stay owner-only.
+ */
 export async function createExceptionAction(input: {
   clientId: string;
   siteId: string;
@@ -660,49 +664,24 @@ export async function createExceptionAction(input: {
   /** What a customer may be told — a controlled code, or null (the default: nothing). */
   publicReason?: string | null;
 }): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(input.clientId);
-  if (!auth.ok) return auth;
-  const publicReason = parsePublicReason(input.publicReason, input.staffId ? "staff" : "site");
-  if (!publicReason.ok) return { ok: false, error: publicReason.error };
-  // Anchor the entered wall-clock to the SITE's timezone (not the browser's), and
-  // confirm the site belongs to this client in the same lookup.
-  const site = await getSiteById(auth.tenantId, input.siteId);
-  if (!site || site.client_id !== input.clientId) return { ok: false, error: FOREIGN };
-  // A staff-level block must name a professional OF THIS SITE. The insert only checked the
-  // site, so a foreign staff id was accepted and stored (reads are site-scoped, so it never
-  // blocked anyone — but it was data that belonged to nobody here).
-  if (input.staffId) {
-    const st = await getStaffById(auth.tenantId, input.staffId);
-    if (!st || st.site_id !== input.siteId) return { ok: false, error: FOREIGN };
-  }
-  let s: Date;
-  let e: Date;
-  try {
-    s = localWallClockToUtc(input.startsAt, site.timezone);
-    e = localWallClockToUtc(input.endsAt, site.timezone);
-  } catch {
-    return { ok: false, error: "Invalid dates." };
-  }
-  if (e.getTime() <= s.getTime()) return { ok: false, error: "End must be after start." };
-  try {
-    const row = await createException({ tenantId: auth.tenantId, siteId: input.siteId, staffId: input.staffId ?? null, startsAt: s, endsAt: e, reason: input.reason ?? undefined, publicReason: publicReason.value });
-    revalidateAdmin(input.clientId);
-    return { ok: true, id: row.id };
-  } catch (err) {
-    return { ok: false, error: errText(err, "Could not create exception.") };
-  }
+  const r = await writeTimeOff({
+    clientId: input.clientId,
+    siteId: input.siteId,
+    staffId: input.staffId ?? null,
+    startLocal: input.startsAt,
+    endLocal: input.endsAt,
+    reason: input.reason,
+    publicReason: input.publicReason,
+    confirm: true, // legacy forms create unconditionally; the agenda flags any overlap
+  });
+  // With confirm:true the writer never returns conflicts; keep AdminResult's shape anyway.
+  if (!r.ok && "conflicts" in r) return { ok: false, error: "Hay citas en ese horario." };
+  return r;
 }
 
 export async function deleteExceptionAction(clientId: string, id: string): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
-  if (!auth.ok) return auth;
-  // The exception's site must belong to this client (a forged id → not found).
-  const exc = await getExceptionById(auth.tenantId, id);
-  if (!exc || !(await siteInClient(auth.tenantId, clientId, exc.site_id))) return { ok: false, error: FOREIGN };
-  const ok = await deleteException(auth.tenantId, id);
-  if (!ok) return { ok: false, error: "Exception not found." };
-  revalidateAdmin(clientId);
-  return { ok: true };
+  const r = await deleteTimeOffAction(clientId, id);
+  return r.ok ? { ok: true } : { ok: false, error: r.error ?? "No se pudo eliminar el bloqueo." };
 }
 
 function errText(err: unknown, fallback: string): string {
