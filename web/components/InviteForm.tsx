@@ -16,7 +16,7 @@ type InviteFormProps =
         name: string;
         staff: Array<{ id: string; name: string }>;
       }>;
-      /** The AGENCY may add another Owner; a Client Owner may not (editor/staff only). */
+      /** The AGENCY may add another Owner; a Client Owner may not (setter/staff only). */
       canInviteOwner?: boolean;
     };
 

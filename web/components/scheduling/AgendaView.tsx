@@ -478,7 +478,7 @@ export function AgendaView(props: {
   returnContactId: string | null;
   /** owner/admin — controls whether admin links (Add staff) render. */
   canManage: boolean;
-  /** owner/admin, client owner/editor, and staff can all operate the agenda; a staff
+  /** owner/admin, client owner/setter, and staff can all operate the agenda; a staff
    *  login is restricted to its OWN column by the server actions. */
   canOperate: boolean;
   /** When set (a staff login), the booking modal pins the barber picker to this id —

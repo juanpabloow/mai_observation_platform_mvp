@@ -1,8 +1,8 @@
 # Esquema de base de datos — MAI Observation Platform
 
-> Documento generado a partir de las 31 migraciones en `migrations/` y de los
+> Documento generado a partir de las 53 migraciones en `migrations/` y de los
 > repositorios en `src/db/repositories/`. No contiene datos de clientes ni
-> credenciales. Última revisión contra `main` @ `b5a26b5`.
+> credenciales. Última revisión contra `main` tras MF-1 (2026-10).
 
 ## Resumen (leer esto primero)
 
@@ -26,15 +26,20 @@ de la cuenta — de él cuelgan los módulos y los datos), `contacts` (la person
 canónica), `appointments` (la cita, con la garantía anti-solapamiento), y
 `conversations` (el hilo con estado bot→pending→human).
 
-40 tablas en 5 dominios: identidad/tenancy (9), observabilidad n8n (6),
-conversaciones/inbox (5), CRM (10), scheduling (10).
+63 tablas de dominio en 6 dominios: identidad/tenancy (9), observabilidad n8n (6),
+conversaciones/inbox (5), CRM + catálogo (12), scheduling (16), reuniones (15). (No se
+cuentan `pgmigrations` ni la tabla temporal `_grandfathered_email_verified` de la
+migración 1806.) Los dominios **reuniones** (transcripción/análisis de reuniones, con sus
+worker pools) y **catálogo/promociones/reseñas** se añadieron después de la primera versión
+de este documento; sus tablas se nombran aquí aunque algún diagrama por dominio de más abajo
+todavía no las dibuje.
 
 ---
 
 ## Aislamiento por tenant (por qué los diagramas no dibujan `tenants`)
 
-**Casi todas las 40 tablas tienen `tenant_id uuid NOT NULL REFERENCES tenants(id)
-ON DELETE CASCADE.`** Dibujar esa arista 36 veces haría el diagrama ilegible, así
+**Casi todas las 63 tablas tienen `tenant_id uuid NOT NULL REFERENCES tenants(id)
+ON DELETE CASCADE.`** Dibujar esa arista en cada tabla haría el diagrama ilegible, así
 que **se omite en todos los diagramas por dominio**. Asúmase presente salvo en:
 
 | Excepción | Por qué |

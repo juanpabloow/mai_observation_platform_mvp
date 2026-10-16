@@ -23,7 +23,7 @@ function fmtDate(d: Date): string {
  * USERS & ACCESS for one client (CLIENT level). Reachable by the AGENCY (owner/admin) OR
  * this client's OWNER — anyone else 404s (canManageClient; the URL is never trusted).
  * This screen answers one question: WHO CAN LOG IN to this client and with what role
- * (Owner / Editor / Staff).
+ * (Owner / Setter / Staff).
  *
  * A CLIENT OWNER manages Editors/Staff of their own client only, and can never mint
  * another Owner or reach any agency surface — the server actions enforce all of that; the

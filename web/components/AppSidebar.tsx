@@ -602,7 +602,7 @@ export function AppSidebar({
         });
       }
       if (workspace.length > 0) sections.push({ label: "Workspace", items: workspace });
-      // CRM — Contacts for owner/editor/agency; Custom fields only for those who can
+      // CRM — Contacts for owner/setter/agency; Custom fields only for those who can
       // MANAGE the client (owner or agency). Field mappings/plumbing are agency-only,
       // handled elsewhere.
       if (moduleKeys.includes("crm") && canSeeGeneral) {

@@ -150,7 +150,7 @@ export default async function ClientAgendaPage({
     // their WRITE is restricted to their own column by the scheduling actions.
     listAppointments(tenantId, { siteId: site.id, from: rangeStart, to: rangeEnd, clientId: client.id }),
     listAppointments(tenantId, { siteId: site.id, from: prevStart, to: prevEnd, clientId: client.id }),
-    // CRM/inbox drawer links are for owner/editor (they can open contacts/conversations);
+    // CRM/inbox drawer links are for owner/setter (they can open contacts/conversations);
     // a staff login never sees contacts or the inbox, so those links are withheld.
     isSchedulingStaff(scope) ? Promise.resolve(false) : isClientModuleEnabled(tenantId, client.id, "crm"),
     isSchedulingStaff(scope) ? Promise.resolve(false) : isClientModuleEnabled(tenantId, client.id, "inbox"),
