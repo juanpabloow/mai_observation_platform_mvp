@@ -84,18 +84,18 @@ export function ArtistStep({
               key={a.id}
               aria-label={a.name}
               style={{ ["--i" as string]: i + 1 }}
-              className={`pb-rise flex flex-col gap-3 rounded-[16px] p-4 lg:grid lg:grid-cols-[auto_minmax(0,1fr)_auto] lg:items-center lg:gap-x-5 lg:gap-y-1 lg:[grid-template-areas:'photo_info_actions'_'photo_bio_actions'] ${ring(sel)}`}
+              className={`pb-rise grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-x-3.5 gap-y-1 rounded-[16px] p-4 [grid-template-areas:'photo_info_actions'_'photo_bio_actions'] sm:gap-x-5 ${ring(sel)}`}
             >
-              <div className="flex items-center gap-4 lg:contents">
+              <div className="contents">
                 {/* The rating sits ON the portrait, as a pill over its lower edge. */}
-                <div className={`relative flex-none ${a.rating ? "pb-2.5" : ""} lg:[grid-area:photo]`}>
+                <div className={`relative flex-none ${a.rating ? "pb-2.5" : ""} [grid-area:photo]`}>
                   <Portrait
                     photoUrl={a.photo_url}
                     initials={artistInitials(a.name)}
                     tone={artistTone(a.id)}
                     label={a.photo_url ? `Foto de ${a.name}` : `${a.name}, sin foto`}
-                    className="size-20 overflow-hidden rounded-full"
-                    initialsClass="text-[28px]"
+                    className="size-[72px] overflow-hidden rounded-full sm:size-20"
+                    initialsClass="text-[26px] sm:text-[28px]"
                   />
                   {sel ? <SelectedDot /> : null}
                   {a.rating ? (
@@ -104,8 +104,8 @@ export function ArtistStep({
                     </span>
                   ) : null}
                 </div>
-                <div className="flex min-w-0 flex-1 flex-col gap-1 lg:self-end lg:[grid-area:info]">
-                  <h2 className={`${SERIF} m-0 text-[23px] leading-[1.12] [overflow-wrap:anywhere] [text-wrap:balance]`}>{a.name}</h2>
+                <div className="flex min-w-0 flex-col gap-1 [grid-area:info] sm:self-end">
+                  <h2 className={`${SERIF} m-0 text-[21px] leading-[1.12] [overflow-wrap:anywhere] [text-wrap:balance] sm:text-[23px]`}>{a.name}</h2>
                   {a.title ? <span className="line-clamp-2 text-[14px] leading-[1.35] text-pb-muted">{a.title}</span> : null}
                   {/* A quiet text action, not a second button: only "Elegir" looks like one. */}
                   <button
@@ -119,15 +119,16 @@ export function ArtistStep({
                   </button>
                 </div>
               </div>
-              {/* Only the business's approved public presentation — nothing is made up. */}
-              {a.bio ? <p className="m-0 line-clamp-2 text-[14px] leading-[1.45] text-pb-tx2 lg:self-start lg:[grid-area:bio]">{bioLead(a.bio)}</p> : null}
-              {/* The ONE button, compact: bottom right on the phone, on the right on a laptop. */}
+              {/* Only the business's approved public presentation — nothing is made up. Phone: one
+                  row like a staff list, so the presentation lives in the profile. */}
+              {a.bio ? <p className="m-0 hidden text-[14px] leading-[1.45] text-pb-tx2 [grid-area:bio] sm:line-clamp-2 sm:self-start">{bioLead(a.bio)}</p> : null}
+              {/* The ONE button, compact and quiet, on the right of the row. */}
               <button
                 type="button"
                 aria-pressed={sel}
                 aria-label={sel ? `${a.name}, elegido` : `Elegir a ${a.name}`}
                 onClick={() => onPick(a.id)}
-                className={`${chooseBtn(sel, "sm")} self-end lg:self-center lg:[grid-area:actions]`}
+                className={`${chooseBtn(sel, "sm")} self-center [grid-area:actions]`}
               >
                 <ChooseLabel selected={sel} />
               </button>
@@ -163,7 +164,7 @@ function SelectedDot() {
 function ChooseLabel({ selected }: { selected: boolean }) {
   return selected ? (
     <>
-      <IconCheck size={15} stroke="#111316" width={2.2} />
+      <IconCheck size={15} width={2.2} />
       Elegido
     </>
   ) : (
