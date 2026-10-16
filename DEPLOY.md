@@ -23,27 +23,39 @@ push to `main` (rebuild + redeploy). Because both services share one repo, a pus
 redeploys **both** `worker` and `web` — so even a web-only change briefly restarts
 the worker. That's harmless and expected.
 
-**⚠️ Migrations are NOT automatic.** Pushing code does **not** run DB migrations.
+**✅ Migrations run AUTOMATICALLY on deploy (MF-1 item 1).** Both `web` and `worker` carry a
+Railway **pre-deploy command** — `npm run migrate:prod up` — in their config files
+(`railway.web.json`, `railway.worker.json`). Railway runs the pre-deploy command **after the
+build and BEFORE the new container starts / takes traffic**, so pending migrations are applied
+before any new code serves. You normally just **push to `main`** — schema changes apply
+themselves.
 
-> **🔒 HARD RULE — schema must never lag deployed code.** Any push containing a
-> migration **requires `npm run migrate:prod up` (back up first — see
-> [Database migrations](#database-migrations)) BEFORE or immediately after the push.**
-> Never leave migrated code deployed against an un-migrated database.
-> This is not hypothetical: H-2/H-3 code auto-deployed while its two handoff migrations
-> sat unapplied, and the sidebar's `conversations` query then `500`'d **every**
-> authenticated page until they were run. If you can't run the migration right after
-> the push, don't push the schema-dependent code yet.
+> **🔒 A failing migration FAILS THE DEPLOY — the previous version keeps running.** Railway
+> aborts the deployment if the pre-deploy command exits non-zero: the new container never goes
+> live and the last good deployment keeps serving. So the schema can never lag deployed code —
+> either the migration succeeds and then the new code starts, or it fails and the old code keeps
+> running. This is exactly the H-2/H-3 incident the manual step used to miss (handoff migrations
+> sat unapplied while new code served, 500-ing every authenticated page). Watch the deploy
+> logs: a red pre-deploy step means fix the migration and push again, not "it'll sort itself out."
 
-- **Code-only change (no new migration):** just push to `main`. Done.
-- **Change that adds a NEW migration** (new table / column / index / etc.) — run it
-  **manually, AFTER the deploy finishes**:
-  1. Push to `main`; wait for the redeploy to complete.
-  2. Railway → **worker** service → **Console** → run:  `npm run migrate:prod up`
-  3. Verify (migration reports applied; spot-check the app).
-- **Sequence for a schema-changing deploy:** push → wait for redeploy → run
-  `npm run migrate:prod up` in the worker Console → verify.
-- **Do NOT** deploy schema-dependent code without running its migration first —
-  production will throw `relation/column does not exist` errors until it's applied.
+**Why both services (not one):** `web` and `worker` redeploy in parallel on a push, and each
+serves schema-dependent code, so **each must gate its own start** on the migration. Running the
+migration from two services at once is safe: `node-pg-migrate` takes a **Postgres advisory lock**
+around the run — the first service migrates, the second blocks until the lock releases, then
+finds nothing pending and exits 0. No double-apply, no race. (The `maintenance` service does NOT
+run it — it is a narrow purge service whose schema needs are a subset already applied by web +
+worker.)
+
+- **Code-only change (no new migration):** push to `main`. Done.
+- **Change that adds a NEW migration:** push to `main`. The pre-deploy applies it automatically;
+  watch the deploy log confirm it, then spot-check the app.
+- **Back up first for a risky migration** (data moves / drops) — the pre-deploy runs
+  unattended, so take the dump BEFORE pushing (see [Database migrations](#database-migrations)).
+
+**Manual console run is now the FALLBACK, not the procedure.** Use
+`npm run migrate:prod up` in the Railway **worker** Console only to recover — e.g. to re-run
+after fixing a failed pre-deploy, or to migrate out-of-band. The normal path is the automatic
+pre-deploy above.
 
 **Safety / discipline:**
 
@@ -74,8 +86,9 @@ the worker. That's harmless and expected.
 
 **Future improvements** (not yet implemented; tracked in `scaling-todo.md`):
 
-- Automate migrations as a Railway pre-deploy / release command, so schema changes
-  apply automatically on deploy instead of the manual Console step.
+- ~~Automate migrations as a Railway pre-deploy / release command~~ — **DONE** (MF-1 item 1):
+  `preDeployCommand: npm run migrate:prod up` on `web` + `worker`. See
+  [Deploying changes](#deploying-changes-ongoing-deploys).
 - Add a staging environment / non-`main` branch workflow before production, once
   there are real users.
 
@@ -171,21 +184,22 @@ Keep the dump **outside the repo** (it contains real data + secrets — never co
 Restore, if ever needed, with `psql "<public url>" < that-file.sql`. Only after the
 backup succeeds, run `npm run migrate:prod up`.
 
-**Recommended for the first deploy (simplest + reliable):** run it as a **one-off
-command in the Railway `worker` service** (Railway dashboard → worker → run a
-command). That runs *inside* Railway's network, so the internal `DATABASE_URL`
-reaches Postgres, and `node-pg-migrate` + `tsx` are present (the worker build runs
-a full `npm ci`). Run it **once, before** the worker/web first start, and watch it
-succeed.
+**Normally you do NOT run this by hand** — the `preDeployCommand` on `web` + `worker` runs it
+automatically on every deploy (see [Deploying changes](#deploying-changes-ongoing-deploys)). The
+notes below are for a MANUAL/fallback run (recover from a failed pre-deploy, or a one-off).
+
+**Manual run (fallback), inside Railway's network:** run it as a **one-off command in the
+Railway `worker` service** (Railway dashboard → worker → run a command). That runs *inside*
+Railway's network, so the internal `DATABASE_URL` reaches Postgres, and `node-pg-migrate` +
+`tsx` are present (the worker build runs a full `npm ci`).
 
 Notes / alternatives:
-- Run it on **one** service only (the worker) to avoid two services migrating at once.
+- The automatic pre-deploy already runs on BOTH `web` and `worker`; `node-pg-migrate`'s advisory
+  lock makes the concurrent runs safe (one migrates, the other waits then no-ops). A manual run
+  shares the same lock, so it's safe alongside a deploy too.
 - `railway run npm run migrate:prod up` from your laptop uses the **internal**
   `DATABASE_URL`, which isn't reachable from outside Railway — if you want to
   migrate from local, use the Postgres service's **public** URL instead.
-- To automate later, add `"deploy": { "preDeployCommand": "npm run migrate:prod up" }`
-  to `railway.worker.json` so migrations run before each worker deploy. Manual is
-  recommended until the deploy is stable.
 - Do **not** use `npm run migrate` in prod — it loads the local `.env` and would
   target the wrong database.
 
@@ -205,7 +219,8 @@ Authorized redirect URI:
 2. Create the **worker** and **web** services from this repo (Root Directory =
    repo root; set each one's config file path).
 3. Set Variables on both services (see above). Reference `${{ Postgres.DATABASE_URL }}`.
-4. **Run migrations** once (worker one-off: `npm run migrate:prod up`).
+4. **Migrations run themselves** — each service's `preDeployCommand` applies them before start.
+   Just deploy and watch the pre-deploy step succeed (no manual migrate needed).
 5. Deploy. The worker begins polling; the web app serves on its Railway domain.
 6. Set `BETTER_AUTH_URL` to the web's public domain (and, if using Google, the
    redirect URI), then redeploy web if it changed.
