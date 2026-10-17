@@ -1,5 +1,6 @@
 import {
   canAccessSchedulingSite,
+  canAccessSchedulingStaff,
   canOperateScheduling,
   getSessionScope,
 } from "@/lib/access";
@@ -8,6 +9,7 @@ import { isUuid } from "@/lib/clientModuleValidation";
 import { parseIsoDate } from "@/lib/schedulingApi";
 import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
 import { loadAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
+import { getAppointmentById } from "@worker/db/repositories/scheduling/appointments.js";
 
 /**
  * GET /api/scheduling/internal/availability — SESSION-authed availability for
@@ -20,6 +22,13 @@ import { loadAvailability } from "@worker/db/repositories/scheduling/availabilit
  *
  * EVERY failure is the same generic 404 — foreign, disabled, default, and
  * unknown are indistinguishable, and nothing leaks about other clients.
+ *
+ * `appointment_id` (reschedule): availability FOR MOVING THAT APPOINTMENT. It must be an
+ * appointment of this client, at this site, that this login may modify (the same staff
+ * predicate as gateAppointment) and still live. Then — exactly like the server check in
+ * rescheduleAppointment — its own block is excluded from the busy set and its STORED
+ * duration/buffers are used, and the service is the appointment's own. Every other
+ * booking, break, time off and block still counts.
  */
 export const dynamic = "force-dynamic";
 
@@ -34,12 +43,13 @@ export async function GET(req: Request): Promise<Response> {
   const siteId = p.get("site_id");
   const serviceId = p.get("service_id");
   const staffId = p.get("staff_id");
+  const appointmentId = p.get("appointment_id");
   const from = parseIsoDate(p.get("from"));
   const to = parseIsoDate(p.get("to"));
   if (!clientId || !siteId || !serviceId || !from || !to) {
     return Response.json({ error: "client_id, site_id, service_id, from, to are required" }, { status: 400 });
   }
-  if (!isUuid(siteId) || !isUuid(serviceId) || (staffId && !isUuid(staffId))) {
+  if (!isUuid(siteId) || !isUuid(serviceId) || (staffId && !isUuid(staffId)) || (appointmentId && !isUuid(appointmentId))) {
     return notFoundResponse();
   }
 
@@ -52,14 +62,35 @@ export async function GET(req: Request): Promise<Response> {
   const site = await getSiteById(scope.tenantId, siteId);
   if (!site || site.client_id !== gate.context.client.id) return notFoundResponse();
 
+  let moving: { id: string; serviceId: string; timing: { durationMin: number; bufferBeforeMin: number; bufferAfterMin: number } } | null = null;
+  if (appointmentId) {
+    const appt = await getAppointmentById(scope.tenantId, appointmentId);
+    if (
+      !appt ||
+      appt.client_id !== gate.context.client.id ||
+      appt.site_id !== site.id ||
+      !canAccessSchedulingStaff(scope, appt.staff_id) ||
+      !["scheduled", "confirmed"].includes(appt.status)
+    ) {
+      return notFoundResponse();
+    }
+    moving = {
+      id: appt.id,
+      serviceId: appt.service_id,
+      timing: { durationMin: appt.duration_min_snapshot, bufferBeforeMin: appt.buffer_before_min_snapshot, bufferAfterMin: appt.buffer_after_min_snapshot },
+    };
+  }
+
   const result = await loadAvailability({
     tenantId: scope.tenantId,
     siteId,
-    serviceId,
+    serviceId: moving?.serviceId ?? serviceId,
     staffId: staffId ?? null,
     from,
     to,
     now: new Date(),
+    excludeAppointmentId: moving?.id ?? null,
+    timingOverride: moving?.timing ?? null,
   });
   if (!result) return notFoundResponse();
   return Response.json({

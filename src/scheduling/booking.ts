@@ -47,7 +47,8 @@ export type BookingError =
   | 'contact_conflict' // explicit contact_id disagrees with the typed identity (C-4.1)
   | 'invalid_phone' // customer_phone can't be normalized for the site's region (QA-3)
   | 'active_limit' // the phone already holds the max future active bookings here (public cap)
-  | 'price_changed'; // the price the customer was shown is no longer the price (zero writes)
+  | 'price_changed' // the price the customer was shown is no longer the price (zero writes)
+  | 'stale'; // reschedule: the appointment moved since the operator read it (agenda UI only)
 
 export type BookingResult<T> =
   | { ok: true; value: T; deduped?: boolean }
@@ -590,6 +591,10 @@ export interface RescheduleInput {
   /** REQUIRED: the appointment must belong to this client, else not-found. */
   scopeClientId: string;
   now?: Date;
+  /** Optional optimistic check (agenda UI): the time and professional the operator SAW.
+   *  If the appointment moved meanwhile, nothing is written ('stale'). Checked under the
+   *  row lock, so it cannot race with another reschedule. */
+  expected?: { startAt: Date; staffId: string } | null;
 }
 
 /** Reschedule keeps the SAME appointment id, revalidates availability for the new
@@ -609,6 +614,12 @@ export async function rescheduleAppointment(input: RescheduleInput): Promise<Boo
         return { kind: 'module_disabled' as const };
       }
       if (TERMINAL.includes(current.status)) return { kind: 'invalid' as const, from: current.status };
+      if (
+        input.expected &&
+        (new Date(current.start_at).getTime() !== input.expected.startAt.getTime() || current.staff_id !== input.expected.staffId)
+      ) {
+        return { kind: 'stale' as const };
+      }
 
       const targetStaff = input.staffId ?? current.staff_id;
 
@@ -679,6 +690,9 @@ export async function rescheduleAppointment(input: RescheduleInput): Promise<Boo
     }
     if (outcome.kind === 'unavailable') {
       return { ok: false, error: 'unavailable', message: 'The new time is not available.' };
+    }
+    if (outcome.kind === 'stale') {
+      return { ok: false, error: 'stale', message: 'The appointment changed since it was read.' };
     }
     await recordSchedulingEvent({
       tenantId: outcome.moved.tenant_id,
