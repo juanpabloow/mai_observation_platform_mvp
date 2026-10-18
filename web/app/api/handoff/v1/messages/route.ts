@@ -8,6 +8,7 @@ import {
 import { getOrCreateConversation, insertMessage } from "@worker/db/repositories/handoff.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { ensureContactForInboundMessage } from "@worker/db/repositories/contactIdentities.js";
+import { parseReferral, ingestLiveReferral, recordAttributionFailure } from "@worker/attribution/ingest.js";
 import { identitiesSchema } from "@/lib/identities";
 import { isSentinelIdentifier, isQuarantinedRef } from "@worker/identity/sentinel.js";
 import { logger } from "@worker/logger.js";
@@ -123,13 +124,41 @@ export async function POST(req: Request): Promise<Response> {
   // newly-learned identifier on any later message. A plain later message (linked, no
   // identities) still skips it, so there's no cost on the hot path.
   const hasIdentities = !!b.identities && b.identities.length > 0;
-  if (b.sender === "user" && (conv.contact_id === null || hasIdentities)) {
+  // AT-1 §3: a referral on this message adds attribution work to the contact resolve below.
+  const referral = b.sender === "user" ? parseReferral(b.metadata ?? null) : ({ present: false } as const);
+  if (b.sender === "user" && (conv.contact_id === null || hasIdentities || referral.present)) {
     try {
+      // FAIL-SAFE for the whole block: the message is already stored and the bot already has its
+      // response — neither contact resolution NOR attribution may fail the push.
       if (await isClientModuleEnabled(auth.auth.tenantId, wf.clientId, "crm")) {
-        await ensureContactForInboundMessage(auth.auth.tenantId, wf.clientId, conv.id, b.conversation_ref, b.identity_label ?? "conversation", b.identities);
+        let contactId = conv.contact_id;
+        let contactWasNew = false;
+        if (conv.contact_id === null || hasIdentities) {
+          const resolved = await ensureContactForInboundMessage(auth.auth.tenantId, wf.clientId, conv.id, b.conversation_ref, b.identity_label ?? "conversation", b.identities);
+          contactId = resolved.contactId;
+          contactWasNew = resolved.created;
+        }
+        // AT-1 §3: register the ad + write the touch; set origin only for a brand-new contact.
+        // Attribution runs on its OWN transaction and is isolated here, so a failure never
+        // touches the message write (which already committed).
+        if (referral.present && referral.ok && contactId) {
+          await ingestLiveReferral({
+            tenantId: auth.auth.tenantId,
+            clientId: wf.clientId,
+            contactId,
+            contactWasNew,
+            conversationId: conv.id,
+            messageId: message.id,
+            occurredAt,
+            referral: referral.value,
+          });
+        } else if (referral.present && !referral.ok) {
+          recordAttributionFailure({ messageId: message.id, clientId: wf.clientId, reason: referral.reason });
+        }
       }
     } catch (err) {
-      logger.warn({ err: String(err), conversationId: conv.id, clientId: wf.clientId }, "D-2/I-1: contact resolve/enrich failed; message push unaffected");
+      recordAttributionFailure({ conversationId: conv.id, clientId: wf.clientId, messageId: message.id }, err);
+      logger.warn({ err: String(err), conversationId: conv.id, clientId: wf.clientId }, "D-2/I-1/AT-1: contact resolve/enrich/attribution failed; message push unaffected");
     }
   }
 

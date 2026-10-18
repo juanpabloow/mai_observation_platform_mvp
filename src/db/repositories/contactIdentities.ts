@@ -349,17 +349,20 @@ export async function ensureContactForInboundMessage(
   conversationRef: string,
   label: string,
   identities?: ResolveIdentityInput['identities'],
-): Promise<void> {
+): Promise<{ contactId: string; created: boolean }> {
   // I-1: pass the DECLARED identities through the same chokepoint. On the first message they
   // seed a new contact carrying every id; on a later message (conversation already linked) the
   // resolve still ATTACHES any newly-learned identity to the existing contact — the NULL-guarded
   // UPDATE below simply no-ops, so an existing link is never re-pointed.
-  const { contact } = await resolveContactByIdentity({ tenantId, clientId, channel: label, channelUserId: conversationRef, identities });
+  const { contact, created } = await resolveContactByIdentity({ tenantId, clientId, channel: label, channelUserId: conversationRef, identities });
   await query(
     `UPDATE conversations SET contact_id = $3, updated_at = now()
       WHERE id = $2 AND tenant_id = $1 AND contact_id IS NULL`,
     [tenantId, conversationId, contact.id],
   );
+  // AT-1 §3: the caller needs the contact id + whether it was NEW (origin is set only for a
+  // genuinely new contact; an existing one just gets a touch).
+  return { contactId: contact.id, created };
 }
 
 // The NULL-contact conversations + their canonical client + phone-normalized ref, and the
@@ -438,12 +441,12 @@ export async function backfillConversationContacts(): Promise<{ scanned: number;
 export async function resolveContactByIdentity(
   input: ResolveIdentityInput,
   client?: PoolClient,
-): Promise<{ contact: ContactRow; candidatesRecorded: number }> {
+): Promise<{ contact: ContactRow; candidatesRecorded: number; created: boolean }> {
   const run = runner(client);
   const idents = buildIdentities(input);
   if (idents.length === 0) {
     // Defensive: no usable identity → a bare contact with no identity row.
-    return { contact: await insertContact(run, input), candidatesRecorded: 0 };
+    return { contact: await insertContact(run, input), candidatesRecorded: 0, created: true };
   }
 
   const pred = idents.map((_, k) => `($${3 + 2 * k}, $${4 + 2 * k})`).join(', ');
@@ -467,13 +470,13 @@ export async function resolveContactByIdentity(
 
   if (matchedIds.length === 0) {
     // CREATE — race-safe: create, then claim the primary identity; if lost, adopt the winner.
-    const created = await insertContact(run, input);
+    const fresh = await insertContact(run, input);
     const primary = idents[0];
     const claim = await run<{ contact_id: string }>(
       `INSERT INTO contact_identities (tenant_id, client_id, contact_id, kind, value, label)
          VALUES ($1,$2,$3,$4,$5,$6)
        ON CONFLICT (tenant_id, client_id, kind, value) DO NOTHING RETURNING contact_id`,
-      [input.tenantId, input.clientId, created.id, primary.kind, primary.value, primary.label],
+      [input.tenantId, input.clientId, fresh.id, primary.kind, primary.value, primary.label],
     );
     if ((claim.rowCount ?? 0) === 0) {
       const owner = await run<{ contact_id: string }>(
@@ -481,16 +484,16 @@ export async function resolveContactByIdentity(
         [input.tenantId, input.clientId, primary.kind, primary.value],
       );
       // Drop our just-created orphan (no children yet) and adopt the existing contact.
-      await run(`DELETE FROM contacts WHERE id=$1 AND tenant_id=$2 AND client_id=$3`, [created.id, input.tenantId, input.clientId]);
+      await run(`DELETE FROM contacts WHERE id=$1 AND tenant_id=$2 AND client_id=$3`, [fresh.id, input.tenantId, input.clientId]);
       const existingId = owner.rows[0].contact_id;
       await attachIdentities(run, input, existingId, idents);
       const adopted = await fillEmptyAndTouch(run, input, existingId);
       await tryLinkConversationsByPhone(client, input.tenantId, input.clientId, adopted.id);
-      return { contact: adopted, candidatesRecorded: 0 };
+      return { contact: adopted, candidatesRecorded: 0, created: false };
     }
-    await attachIdentities(run, input, created.id, idents.slice(1));
-    await tryLinkConversationsByPhone(client, input.tenantId, input.clientId, created.id);
-    return { contact: created, candidatesRecorded: 0 };
+    await attachIdentities(run, input, fresh.id, idents.slice(1));
+    await tryLinkConversationsByPhone(client, input.tenantId, input.clientId, fresh.id);
+    return { contact: fresh, candidatesRecorded: 0, created: true };
   }
 
   // One or more existing contacts matched. Oldest wins (deterministic).
@@ -506,7 +509,7 @@ export async function resolveContactByIdentity(
     await attachIdentities(run, input, winner.id, idents);
     const finalWinner = await fillEmptyAndTouch(run, input, winner.id);
     await tryLinkConversationsByPhone(client, input.tenantId, input.clientId, finalWinner.id);
-    return { contact: finalWinner, candidatesRecorded: 0 };
+    return { contact: finalWinner, candidatesRecorded: 0, created: false };
   }
 
   // I-1: the declared identities span DIFFERENT existing contacts. NEVER auto-merge on a
@@ -519,7 +522,7 @@ export async function resolveContactByIdentity(
   for (const other of matchedIds.filter((id) => id !== winner.id)) {
     candidatesRecorded += await recordCandidate(run, input.tenantId, input.clientId, winner.id, other, 'identity_collision');
   }
-  return { contact: winner, candidatesRecorded };
+  return { contact: winner, candidatesRecorded, created: false };
 }
 
 // ── READ-ONLY lookups for the book-by-contact path (C-4.1) ──────────────────────────

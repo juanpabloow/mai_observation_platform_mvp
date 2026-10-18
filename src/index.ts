@@ -2,6 +2,7 @@ import { config } from './config.js';
 import { closePool } from './db/client.js';
 import { logger } from './logger.js';
 import { startWorker, stopWorker } from './ingestion/worker.js';
+import { startAttributionReconciliation, stopAttributionReconciliation } from './attribution/reconcile.js';
 
 /**
  * Mask the password embedded in a PostgreSQL connection string while keeping
@@ -32,6 +33,10 @@ logger.info({ logLevel: config.LOG_LEVEL }, 'starting worker');
 logger.info({ config: redactedConfig }, 'loaded configuration');
 
 startWorker();
+// AT-1 §3: attribution reconciliation shares THIS worker (not a new service) — a light
+// interval that mops up any referral message whose live attribution didn't land. Fail-safe:
+// it never throws into the ingestion loop (see runAttributionReconcileOnce).
+startAttributionReconciliation();
 // El barrido de eliminaciones de Reuniones NO va aquí: tiene su propio
 // entrypoint (`src/maintenanceMain.ts`) y su propio servicio. Este proceso es
 // el de la ingesta de n8n, y mezclarlos haría que reiniciar uno reiniciara el
@@ -47,6 +52,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   logger.info({ signal }, 'shutting down worker');
   try {
     await stopWorker();
+    await stopAttributionReconciliation();
     await closePool();
   } catch (err) {
     logger.error({ err }, 'error during shutdown');

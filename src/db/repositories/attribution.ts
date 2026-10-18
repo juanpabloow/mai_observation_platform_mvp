@@ -115,6 +115,24 @@ export async function getCampaignById(tenantId: string, clientId: string, id: st
   return r.rows[0] ?? null;
 }
 
+/**
+ * Count of inbound user messages that carry a referral, have a linked contact, but no touch yet
+ * — the reconciliation backlog and the health signal. Scoped to a tenant (the health endpoint's).
+ */
+export async function countPendingAttributions(tenantId: string): Promise<number> {
+  const r = await query<{ n: number }>(
+    `SELECT count(*)::int AS n
+       FROM handoff_messages m
+       JOIN conversations c ON c.id = m.conversation_id
+       LEFT JOIN attribution_touches t ON t.message_id = m.id
+      WHERE m.tenant_id = $1 AND m.sender = 'user'
+        AND m.metadata ? 'referral_source_id'
+        AND c.contact_id IS NOT NULL AND t.id IS NULL`,
+    [tenantId],
+  );
+  return r.rows[0]?.n ?? 0;
+}
+
 // ── Origin rules (AT-1 §2) — facts only, never inference ────────────────────────
 
 /**
