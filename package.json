@@ -21,6 +21,7 @@
     "migrate:prod": "node-pg-migrate --tsx",
     "derive:backfill": "tsx src/scripts/deriveBackfill.ts",
     "identity:contain": "tsx src/scripts/identityContainmentPlan.ts",
+    "attribution:backfill": "tsx src/scripts/attributionBackfillPlan.ts",
     "link:founder": "tsx src/scripts/linkFounder.ts",
     "rbac:set-role": "tsx src/scripts/rbacSetRole.ts",
     "rbac2:invite": "tsx src/scripts/rbac2CreateInvite.ts",
