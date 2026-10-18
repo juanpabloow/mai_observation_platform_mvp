@@ -28,7 +28,10 @@ export type CrmEventType =
   | 'owner_changed'
   | 'stage_changed'
   | 'contact_merged'
-  | 'consent_changed';
+  | 'consent_changed'
+  // AT-1: lead origin assigned, and an inbound ad/post touch recorded.
+  | 'origin_set'
+  | 'attribution_touch';
 
 export type ActorKind = 'user' | 'automation';
 

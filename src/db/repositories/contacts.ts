@@ -54,6 +54,15 @@ export interface ContactRow {
   first_contact_at: Date;
   last_contact_at: Date;
   message_count: number;
+  // ── Lead origin (AT-1), stored WITH provenance. origin_kind is a FACT, never inference. ──
+  origin_kind: import('./attribution.js').OriginKind | null;
+  first_touch_id: string | null;
+  latest_touch_id: string | null;
+  origin_set_at: Date | null;
+  /** 'system' or a user id (the actor that set the origin). */
+  origin_set_by: string | null;
+  /** The BOOKER's contact id when this contact's origin is booked_by_contact. */
+  origin_ref_contact_id: string | null;
   created_at: Date;
   updated_at: Date;
 }

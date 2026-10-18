@@ -5,6 +5,7 @@ import { isSentinelIdentifier } from '../../identity/sentinel.js';
 import { recordCrmActivity } from './crmActivityEvents.js';
 import { logger } from '../../logger.js';
 import type { ContactRow, MessagingConsent } from './contacts.js';
+import type { AdSourceType, OriginKind } from './attribution.js';
 
 /**
  * THE contact-identity spine (C-2). One chokepoint — resolveContactByIdentity —
@@ -895,6 +896,44 @@ export async function mergeContacts(
          VALUES ($1,$2,$3,$4,$5,$6::jsonb)`,
       [tenantId, clientId, keepId, dropId, mergedByUserId, JSON.stringify(snapshot)],
     );
+
+    // AT-1 §2: move attribution touches to the survivor; re-point any contact booked BY the
+    // dropped contact. The merged contact keeps the EARLIEST first touch across both.
+    await run(`UPDATE attribution_touches SET contact_id=$4 WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3`, [tenantId, clientId, dropId, keepId]);
+    await run(`UPDATE contacts SET origin_ref_contact_id=$4, updated_at=now() WHERE tenant_id=$1 AND client_id=$2 AND origin_ref_contact_id=$3`, [tenantId, clientId, dropId, keepId]);
+    const earliestTouch = (await run<{ id: string; source_type: AdSourceType }>(
+      `SELECT t.id, a.source_type FROM attribution_touches t JOIN ads a ON a.id = t.ad_id
+        WHERE t.tenant_id=$1 AND t.client_id=$2 AND t.contact_id=$3
+        ORDER BY t.occurred_at ASC, t.id ASC LIMIT 1`, [tenantId, clientId, keepId])).rows[0];
+    const latestTouch = (await run<{ id: string }>(
+      `SELECT id FROM attribution_touches WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3
+        ORDER BY occurred_at DESC, id DESC LIMIT 1`, [tenantId, clientId, keepId])).rows[0];
+    const isKnown = (o: OriginKind | null): boolean => o != null && o !== 'unknown';
+    // The earliest touch (an ad/post) is the truest first contact → it defines the origin.
+    // With no touch, prefer a known origin over 'unknown' between the two; invent nothing.
+    let mergedOrigin: OriginKind | null = keep.origin_kind;
+    if (earliestTouch) mergedOrigin = earliestTouch.source_type === 'post' ? 'meta_post' : 'meta_ad';
+    else if (!isKnown(keep.origin_kind) && isKnown(drop.origin_kind)) mergedOrigin = drop.origin_kind;
+    const mergedFirstTouch = earliestTouch?.id ?? null;
+    const mergedLatestTouch = latestTouch?.id ?? null;
+    const originChanged = mergedOrigin !== keep.origin_kind || mergedFirstTouch !== keep.first_touch_id || mergedLatestTouch !== keep.latest_touch_id;
+    await run(
+      `UPDATE contacts
+          SET origin_kind=$4, first_touch_id=$5, latest_touch_id=$6,
+              origin_ref_contact_id = COALESCE(origin_ref_contact_id, $7),
+              origin_set_at = CASE WHEN $8 THEN now() ELSE origin_set_at END,
+              origin_set_by = CASE WHEN $8 THEN $9 ELSE origin_set_by END,
+              updated_at = now()
+        WHERE id=$1 AND tenant_id=$2 AND client_id=$3`,
+      [keepId, tenantId, clientId, mergedOrigin, mergedFirstTouch, mergedLatestTouch, drop.origin_ref_contact_id, originChanged, mergedByUserId ?? 'system'],
+    );
+    if (originChanged) {
+      await recordCrmActivity(client, {
+        tenantId, clientId, contactId: keepId, eventType: 'origin_set',
+        actorUserId: mergedByUserId, actorKind: mergedByUserId ? 'user' : 'automation',
+        detail: { origin_kind: mergedOrigin ?? 'unknown', via: 'merge', first_touch_id: mergedFirstTouch },
+      });
+    }
 
     // ID-H §3: a contact_merged timeline event so the merge shows in the survivor's history
     // (same transaction — it must not survive a rolled-back merge).

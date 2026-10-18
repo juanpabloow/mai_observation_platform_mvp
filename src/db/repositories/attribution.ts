@@ -1,4 +1,6 @@
-import { query } from '../client.js';
+import type { PoolClient } from 'pg';
+import { query, withTransaction } from '../client.js';
+import { recordCrmActivity } from './crmActivityEvents.js';
 
 /**
  * Attribution repository (AT-1) — lead origin as a FACT. Tenant_id + client_id scoped like
@@ -99,4 +101,100 @@ export async function setAttributionTrackingStartedAt(
        DO UPDATE SET tracking_started_at = EXCLUDED.tracking_started_at, updated_at = now()`,
     [tenantId, clientId, at],
   );
+}
+
+/** An ad owned by this client, or null. */
+export async function getAdById(tenantId: string, clientId: string, id: string): Promise<AdRow | null> {
+  const r = await query<AdRow>(`SELECT * FROM ads WHERE id = $1 AND tenant_id = $2 AND client_id = $3`, [id, tenantId, clientId]);
+  return r.rows[0] ?? null;
+}
+
+/** A campaign owned by this client, or null. */
+export async function getCampaignById(tenantId: string, clientId: string, id: string): Promise<CampaignRow | null> {
+  const r = await query<CampaignRow>(`SELECT * FROM campaigns WHERE id = $1 AND tenant_id = $2 AND client_id = $3`, [id, tenantId, clientId]);
+  return r.rows[0] ?? null;
+}
+
+// ── Origin rules (AT-1 §2) — facts only, never inference ────────────────────────
+
+/**
+ * The origin of a contact created from an INBOUND message (pure, unit-testable):
+ *  - carried a referral → meta_ad / meta_post (the fact: an ad/post brought them);
+ *  - no referral, first message at/after tracking start → organic_whatsapp;
+ *  - no referral, before tracking start (or tracking never started) → unknown — the absence
+ *    of a referral proves nothing before capture began.
+ */
+export function decideInboundOrigin(input: {
+  hasReferral: boolean;
+  sourceType?: AdSourceType | null;
+  atOrAfterTrackingStart: boolean;
+}): OriginKind {
+  if (input.hasReferral) return input.sourceType === 'post' ? 'meta_post' : 'meta_ad';
+  return input.atOrAfterTrackingStart ? 'organic_whatsapp' : 'unknown';
+}
+
+export interface SetContactOriginInput {
+  tenantId: string;
+  clientId: string;
+  contactId: string;
+  originKind: OriginKind;
+  firstTouchId?: string | null;
+  latestTouchId?: string | null;
+  originRefContactId?: string | null;
+  /** 'system' for automation, or the acting user id. */
+  setBy: string;
+  /** A free-text manual note (manual origin only). */
+  note?: string | null;
+  /** Optional ad/campaign the operator points a manual origin at (recorded in the event). */
+  refAdId?: string | null;
+  refCampaignId?: string | null;
+  /**
+   * Which existing origins this assignment may REPLACE. Default [] = only an UNSET origin
+   * (origin_kind IS NULL) — the ingestion case ("set origin if the contact is new"). The
+   * manual path passes ['unknown','import']. A CAPTURED ad origin is NEVER in this set, so it
+   * can never be overwritten.
+   */
+  overwritable?: OriginKind[];
+}
+
+/**
+ * Set a contact's origin WITH provenance, and write the origin_set timeline event — both in
+ * one transaction. Returns true if it set, false if the current origin was outside
+ * `overwritable` (so a captured ad origin is never silently rewritten). Pass a `client` to run
+ * inside a caller's transaction (ingestion/booking); omit it to self-transact.
+ */
+export async function setContactOrigin(input: SetContactOriginInput, client?: PoolClient): Promise<boolean> {
+  const overwritable = input.overwritable ?? [];
+  const exec = async (c: PoolClient): Promise<boolean> => {
+    const upd = await c.query(
+      `UPDATE contacts
+          SET origin_kind = $4, first_touch_id = $5, latest_touch_id = $6,
+              origin_ref_contact_id = COALESCE($7, origin_ref_contact_id),
+              origin_set_at = now(), origin_set_by = $8, updated_at = now()
+        WHERE id = $3 AND tenant_id = $1 AND client_id = $2
+          AND (origin_kind IS NULL OR origin_kind = ANY($9::text[]))
+        RETURNING id`,
+      [input.tenantId, input.clientId, input.contactId, input.originKind, input.firstTouchId ?? null,
+       input.latestTouchId ?? null, input.originRefContactId ?? null, input.setBy, overwritable],
+    );
+    if ((upd.rowCount ?? 0) === 0) return false; // captured origin present → never overwrite
+    await recordCrmActivity(c, {
+      tenantId: input.tenantId,
+      clientId: input.clientId,
+      contactId: input.contactId,
+      eventType: 'origin_set',
+      actorUserId: input.setBy === 'system' ? null : input.setBy,
+      actorKind: input.setBy === 'system' ? 'automation' : 'user',
+      detail: {
+        origin_kind: input.originKind,
+        ...(input.firstTouchId ? { first_touch_id: input.firstTouchId } : {}),
+        ...(input.originRefContactId ? { origin_ref_contact_id: input.originRefContactId } : {}),
+        ...(input.refAdId ? { ad_id: input.refAdId } : {}),
+        ...(input.refCampaignId ? { campaign_id: input.refCampaignId } : {}),
+        ...(input.note ? { note: input.note } : {}),
+      },
+    });
+    return true;
+  };
+  return client ? exec(client) : withTransaction(exec);
 }

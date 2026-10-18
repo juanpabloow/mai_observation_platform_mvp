@@ -59,6 +59,9 @@ const COPY: Record<string, TimelineKindCopy> = {
   stage_changed: { title: "Cambio de stage", icon: "stage", weight: "quiet", source: "activity" },
   contact_merged: { title: "Contactos fusionados", icon: "merge", weight: "quiet", source: "activity" },
   consent_changed: { title: "Consentimiento actualizado", icon: "consent", weight: "quiet", source: "activity" },
+  // AT-1: lead origin + ad/post touches (reuse existing icons — no new UI icon this phase).
+  origin_set: { title: "Origen registrado", icon: "stage", weight: "quiet", source: "activity" },
+  attribution_touch: { title: "Contacto por anuncio", icon: "tag", weight: "quiet", source: "activity" },
 };
 
 export function timelineCopy(kind: string): TimelineKindCopy {
