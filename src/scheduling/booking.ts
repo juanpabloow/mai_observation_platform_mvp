@@ -2,6 +2,7 @@ import { isDeadlock, isExclusionViolation, isUniqueViolation, query, withTransac
 import { logger } from '../logger.js';
 import { linkConversationToContactIfUnlinked, setContactConsent, type MessagingConsent } from '../db/repositories/contacts.js';
 import { resolveContactByIdentity, contactBelongsToClient, findContactIdsByIdentity, classifyIdentity, type ResolveIdentityInput } from '../db/repositories/contactIdentities.js';
+import { setContactOrigin } from '../db/repositories/attribution.js';
 import { getOrCreateConversation } from '../db/repositories/handoff.js';
 import { normalizeE164, dialingRegionForTimezone } from './phone.js';
 import {
@@ -265,6 +266,9 @@ export async function createAppointment(
         if (active >= input.maxActiveFuturePerPhone) return { kind: 'active_limit' as const };
       }
       let contactId: string | null = null;
+      // AT-1: the id of a contact CREATED by this booking (null = matched existing / explicit),
+      // so origin is set only for a genuinely new booking contact.
+      let newContactId: string | null = null;
       // QA-3: may the conversation be linked to the appointment contact? ONLY when that
       // contact owns the conversation's OWN identity (channel_user_id) — never when the
       // appointment is for a different customer_phone (a third party). Set per branch.
@@ -312,6 +316,7 @@ export async function createAppointment(
           client,
         );
         contactId = forWhom.contact.id;
+        if (forWhom.created) newContactId = contactId;
         if (input.messagingConsent) {
           await setContactConsent(input.tenantId, clientId, contactId, input.messagingConsent, input.consentSource ?? null, client);
         }
@@ -338,10 +343,40 @@ export async function createAppointment(
           client,
         );
         contactId = resolved.contact.id;
+        if (resolved.created) newContactId = contactId;
         if (input.messagingConsent) {
           await setContactConsent(input.tenantId, clientId, contactId, input.messagingConsent, input.consentSource ?? null, client);
         }
         contactOwnsConversation = true;
+      }
+
+      // AT-1: a NEWLY created booking contact gets its origin as a FACT (setContactOrigin no-ops
+      // if an origin is already present — a returning customer resolved by phone keeps theirs).
+      // The explicit-contact path never creates, so newContactId is null there.
+      if (newContactId) {
+        let senderId: string | null = null;
+        // An n8n machine booking FOR a customer_phone carries the SENDER's own identity
+        // (channel_user_id) — a DIFFERENT person who already has a contact from their inbound
+        // message. Resolve them by LOOKUP, never create. Found → booked_by_contact.
+        if (normalizedCustomerPhone && input.channelUserId) {
+          const senderMatches = await findContactIdsByIdentity(
+            { tenantId: input.tenantId, clientId, channelUserId: input.channelUserId },
+            client,
+          );
+          senderId = senderMatches.find((id) => id !== newContactId) ?? null;
+        }
+        await setContactOrigin(
+          {
+            tenantId: input.tenantId,
+            clientId,
+            contactId: newContactId,
+            originKind: senderId ? 'booked_by_contact' : input.origin === 'public' ? 'booking_page' : 'unknown',
+            originRefContactId: senderId,
+            setBy: 'system',
+            overwritable: [],
+          },
+          client,
+        );
       }
 
       let sourceConversationId: string | null = null;
