@@ -16,7 +16,7 @@ test('timelineCopy maps every kind to its source bucket + a factual title', () =
     assert.equal(timelineCopy(k).source, 'appointment', `${k} → appointment source`);
   }
   // task_* AND the CRM facts all live in the single 'activity' API source.
-  for (const k of ['task_created', 'task_completed', 'tag_added', 'tag_removed', 'owner_changed', 'stage_changed', 'contact_merged', 'consent_changed']) {
+  for (const k of ['task_created', 'task_completed', 'tag_added', 'tag_removed', 'owner_changed', 'stage_changed', 'contact_merged', 'consent_changed', 'origin_set', 'attribution_touch']) {
     assert.equal(timelineCopy(k).source, 'activity', `${k} → activity source`);
   }
   // Factual titles, in the product's language (Spanish). The stored `kind` stays
@@ -35,6 +35,7 @@ test('timelineCopy: every kind is really mapped — no raw key leaks to the scre
     'appointment_completed', 'appointment_cancelled', 'appointment_no_show',
     'task_created', 'task_completed', 'task_reopened', 'task_cancelled', 'task_assigned',
     'tag_added', 'tag_removed', 'owner_changed', 'stage_changed', 'contact_merged', 'consent_changed',
+    'origin_set', 'attribution_touch',
   ];
   const fallbackTitle = timelineCopy('__definitely_not_a_kind__').title;
   for (const k of known) {

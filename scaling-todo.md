@@ -176,3 +176,29 @@ payments). Deferred, in rough dependency order:
   partial band has no single column to live in; the week shows SITE closures as a day hatch and
   staff time off as a "Fuera · N" count, while the DAY view carries the full per-staff bands. A
   dedicated per-staff week grid (one row per staff × 7 days) could render bands if added.
+
+## Attribution (AT-1 → AT-2/AT-3 and beyond)
+
+- **Meta Marketing API sync.** `campaigns.external_campaign_id` and `ads.campaign_id` exist but
+  nothing writes them. Sync real campaign/ad names + structure from the Meta Marketing API so an
+  ad row shows its campaign and headline without waiting for a message to carry them.
+- **Conversions API (CAPI).** `attribution_touches.ctwa_clid` is stored precisely so a future
+  phase can send conversions (bookings, completed appointments) back to Meta keyed on the click
+  id. Not sent anywhere yet.
+- **UTM capture on the booking page.** The public booking page could capture `utm_*` /
+  `fbclid` / `gclid` into a touch so organic-vs-paid is distinguishable there too (today a
+  booking-page contact is just `booking_page`).
+- **Per-ad / per-campaign dashboard (AT-2).** Counts per ad/campaign with test ads excluded by
+  default (`ads.is_test`), spend/ROI once the Marketing API sync lands, and the campaigns admin
+  UI (the `campaigns` module is registered but hidden from the modules page until AT-2).
+- **Opportunity-level attribution.** Today origin is per-contact (first/last touch). A
+  multi-touch / per-booking (opportunity) attribution model would value each touch in the path.
+- **Reconciliation scan efficiency.** `backfillAttribution` scans all referral messages +
+  all unclassified contacts each pass; fine at current volume. Scope the reconcile job to a
+  recent window (or a backlog cursor) before this grows large.
+- **Attribution health across replicas.** `failed_attributions` is an in-process counter (web),
+  so it resets on deploy and isn't summed across replicas. Move to a durable/shared counter when
+  web scales past one replica; `pending_attributions` (DB-derived) is already durable.
+- **New-client tracking start.** A client created after this phase has no `attribution_settings`
+  row, so its no-referral contacts are `unknown` until the agency sets `tracking_started_at`.
+  Consider seeding a row at client creation (tracking from creation time).
