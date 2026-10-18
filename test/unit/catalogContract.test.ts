@@ -85,7 +85,8 @@ test('capability vocabulary: catalog.read is a known capability but NOT auto-gra
 });
 
 test('module registry + modules UI know the catalog key', () => {
-  assert.match(read('src/modules/registry.ts'), /CLIENT_MODULE_KEYS = \[[\s\S]{0,120}"catalog"\] as const/);
+  // catalog is registered (no longer required to be the LAST key — AT-1 adds "campaigns" after it).
+  assert.match(read('src/modules/registry.ts'), /CLIENT_MODULE_KEYS = \[[^\]]*"catalog"[^\]]*\] as const/);
   assert.match(read('web/components/ClientModulesPanel.tsx'), /catalog: \{\s*name: "Productos"/);
 });
 

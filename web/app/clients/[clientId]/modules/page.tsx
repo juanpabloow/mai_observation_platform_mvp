@@ -34,10 +34,14 @@ export default async function ClientModulesPage({
 
   const rows = await listClientModules(tenantId, clientId);
   const byKey = new Map(rows.map((r) => [r.module_key, r]));
-  const modules: ModuleState[] = CLIENT_MODULE_KEYS.map((key) => ({
-    key,
-    enabled: byKey.get(key)?.enabled ?? false, // no row = disabled
-  }));
+  const modules: ModuleState[] = CLIENT_MODULE_KEYS
+    // AT-1 registers `campaigns` for capture, but its admin toggle + UI ship in AT-2 — keep it
+    // off the modules page for now so this phase changes no UI.
+    .filter((key) => key !== "campaigns")
+    .map((key) => ({
+      key,
+      enabled: byKey.get(key)?.enabled ?? false, // no row = disabled
+    }));
 
   const enabledCount = modules.filter((m) => m.enabled).length;
   const initial = client.name.trim()[0]?.toUpperCase() ?? "?";
