@@ -231,6 +231,13 @@ export async function listContacts(
      * same predicate set, and the keyset callers do not need it.
      */
     withTotal?: boolean;
+    /** Lead-origin filter (AT-2): contacts whose origin_kind is one of these. */
+    originKinds?: import('./attribution.js').OriginKind[];
+    /** With originKinds, also match a NULL origin (never classified) — the "Desconocido" group. */
+    includeNullOrigin?: boolean;
+    /** Campaign filter (AT-2): contacts whose FIRST touch (their origin ad) is on an ad
+     *  assigned to this campaign — i.e. the campaign's leads. */
+    campaignId?: string;
   } = {},
 ): Promise<ListContactsResult> {
   const pageSize = Math.min(Math.max(opts.limit ?? 50, 1), 200);
@@ -271,6 +278,21 @@ export async function listContacts(
       clauses.push(`${CONTACT_SEARCH_DOC} ILIKE $${params.length}`);
     }
     where.push(`(${clauses.join(' OR ')})`);
+  }
+  // AT-2 lead-origin facets. Both are plain predicates on the already client-scoped contact
+  // (the campaign one via its origin ad), pushed BEFORE the cursor/limit/offset params so the
+  // withTotal COUNT — which drops only that trailing pair/quartet — still sees them.
+  if (opts.originKinds && opts.originKinds.length > 0) {
+    params.push(opts.originKinds);
+    const anyClause = `c.origin_kind = ANY($${params.length}::text[])`;
+    where.push(opts.includeNullOrigin ? `(${anyClause} OR c.origin_kind IS NULL)` : anyClause);
+  }
+  if (opts.campaignId) {
+    params.push(opts.campaignId);
+    where.push(
+      `EXISTS (SELECT 1 FROM attribution_touches att JOIN ads ad ON ad.id = att.ad_id
+                WHERE att.id = c.first_touch_id AND ad.campaign_id = $${params.length})`,
+    );
   }
   const cursor = decodeContactCursor(opts.cursor);
   // A keyset caller must never be silently re-paged by an offset it did not intend, so

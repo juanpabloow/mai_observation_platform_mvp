@@ -17,6 +17,7 @@ import { ContactProperties, type FieldDefView } from "./ContactProperties";
 import type { ContactReadValues } from "./form/ContactSections";
 import { ContactTimeline, type TimelineItemView } from "./ContactTimeline";
 import { ContactAssociations } from "./ContactAssociations";
+import { ContactOriginCard, type ContactOriginView } from "./ContactOriginCard";
 import type { CandidateView } from "./DuplicateBanner";
 import { EditContactButton } from "./form/EditContactButton";
 import type { ContactEditPayload } from "@/lib/contactPanel";
@@ -77,6 +78,12 @@ export interface ContactRecordProps {
   valueProfile: ContactValueProfileView | null;
   /** The last COMPLETED visit, for the header's meta line. */
   lastVisitAt: string | null;
+  /** AT-2 lead origin (facts + touches) for the "Origen" card. Null → the card is hidden. */
+  originDetail: ContactOriginView | null;
+  /** May the viewer set a manual origin (agency / client owner)? A Setter sees it read-only. */
+  canManageOrigin: boolean;
+  /** This client's campaigns, for the manual-origin picker. */
+  originCampaigns: { id: string; name: string }[];
 }
 
 export function ContactRecord(props: ContactRecordProps) {
@@ -146,6 +153,15 @@ export function ContactRecord(props: ContactRecordProps) {
           changeOwnerHref={props.edit ? `?edit=1` : undefined}
         />
         <ContactPreferencesCard profile={props.valueProfile} />
+        {props.originDetail ? (
+          <ContactOriginCard
+            clientId={props.clientId}
+            contactId={props.contactId}
+            origin={props.originDetail}
+            canManage={props.canManageOrigin}
+            campaigns={props.originCampaigns}
+          />
+        ) : null}
         <ContactAssociations
           clientId={props.clientId}
           contactId={props.contactId}

@@ -10,6 +10,8 @@ import {
   type ContactTaskFilter,
 } from "@worker/db/repositories/contacts.js";
 import { listOpenCandidates } from "@worker/db/repositories/contactIdentities.js";
+import { listCampaignsWithStats } from "@worker/db/repositories/attribution.js";
+import { isOriginGroupKey, kindsForGroup } from "@/lib/originDisplay";
 import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
 import { DuplicateCandidates } from "@/components/contacts/DuplicateCandidates";
 import { ContactsFilterMenu, ContactsOverflowMenu, ContactsSearch } from "@/components/contacts/ContactsToolbar";
@@ -56,6 +58,9 @@ export default async function ClientContactsPage({
     stage?: string;
     owner?: string;
     tasks?: string;
+    /** AT-2 lead-origin facets: an origin GROUP key, and a campaign id. */
+    origin?: string;
+    campaign?: string;
     cols?: string;
     /** The contact whose panel is open, mirroring the inbox's `?c=`. */
     c?: string;
@@ -67,7 +72,7 @@ export default async function ClientContactsPage({
   await connection();
   const { clientId } = await params;
   const { scope, client } = await requireClientModulePage(clientId, "crm");
-  const { q, from, page: pageRaw, stage, owner, tasks, cols, c: selectedId, edit } = await searchParams;
+  const { q, from, page: pageRaw, stage, owner, tasks, origin, campaign, cols, c: selectedId, edit } = await searchParams;
 
   // Validate every facet before it reaches SQL — an unknown value is simply no
   // filter (never an error page, never an unfiltered tenant-wide read).
@@ -75,12 +80,24 @@ export default async function ClientContactsPage({
   const taskFilter = tasks && TASK_FILTERS.has(tasks) ? (tasks as ContactTaskFilter) : undefined;
   const search = q?.trim() || undefined;
 
-  // Owner names: ONE members query + an in-memory map (never a per-row lookup).
-  const members = await listMembersForTenant(scope.tenantId);
+  // AT-2 lead-origin facets. The origin GROUP expands to its kinds; "Desconocido" also
+  // matches a NULL (never-classified) origin. The campaign facet is validated against this
+  // client's real campaigns below (so a forged id is simply no filter).
+  const originGroup = isOriginGroupKey(origin) ? origin : undefined;
+  const originKinds = originGroup ? kindsForGroup(originGroup) : undefined;
+  const includeNullOrigin = originGroup === "desconocido";
+
+  // Owner names: ONE members query + an in-memory map (never a per-row lookup). Campaigns
+  // feed the "Campaña" facet (and validate the campaign filter) — a small bounded query.
+  const [members, campaigns] = await Promise.all([
+    listMembersForTenant(scope.tenantId),
+    listCampaignsWithStats(scope.tenantId, client.id),
+  ]);
   const ownerName = new Map(members.map((m) => [m.user_id, m.name ?? m.email]));
   // Only a real member of this tenant (or the "unassigned" sentinel) is a valid owner.
   const ownerFilter =
     owner === UNASSIGNED_OWNER ? UNASSIGNED_OWNER : owner && ownerName.has(owner) ? owner : undefined;
+  const campaignFilter = campaign && campaigns.some((c) => c.id === campaign) ? campaign : undefined;
 
   const filters = {
     search,
@@ -100,6 +117,12 @@ export default async function ClientContactsPage({
   const [{ items: contacts, total: matched }, summary, candidates, formFieldDefs] = await Promise.all([
     listContacts(scope.tenantId, {
       ...filters,
+      // AT-2 facets go to the LIST (and its withTotal count) only — the summary strip keeps
+      // describing the whole book under the base filters, so its stage/owner counts stay a
+      // drill-in target rather than collapsing to the origin slice.
+      originKinds,
+      includeNullOrigin,
+      campaignId: campaignFilter,
       limit: PAGE_SIZE,
       offset: (requestedPage - 1) * PAGE_SIZE,
       withTotal: true,
@@ -153,7 +176,7 @@ export default async function ClientContactsPage({
   const visibleColumns = parseColumns(cols);
   const base = `/clients/${client.id}/contacts`;
   const fromQS = from ? `?from=${encodeURIComponent(from)}` : "";
-  const filtered = Boolean(search || stageFilter || ownerFilter || taskFilter);
+  const filtered = Boolean(search || stageFilter || ownerFilter || taskFilter || originGroup || campaignFilter);
 
   /** Any page link keeps the whole facet set (and `from`) intact. */
   const hrefWith = (patch: Record<string, string | undefined>): string => {
@@ -164,6 +187,8 @@ export default async function ClientContactsPage({
       stage,
       owner,
       tasks,
+      origin,
+      campaign,
       cols,
       // Page 1 is the default and stays out of the URL, so a fresh list has a clean
       // link and `?page=1` never shows up in someone's address bar.
@@ -250,7 +275,7 @@ export default async function ClientContactsPage({
               hierarchy and became a wall, and with the detail panel open the row
               wrapped — which moved the primary and made the header's height
               depend on the viewport. */}
-          <ContactsFilterMenu owners={ownerOptions} />
+          <ContactsFilterMenu owners={ownerOptions} campaigns={campaigns.map((c) => ({ id: c.id, name: c.name }))} />
           <ContactsOverflowMenu
             clientId={client.id}
             visibleColumns={visibleColumns}
@@ -276,7 +301,7 @@ export default async function ClientContactsPage({
               hint={
                 filtered ? (
                   <Link
-                    href={hrefWith({ q: undefined, stage: undefined, owner: undefined, tasks: undefined, page: undefined })}
+                    href={hrefWith({ q: undefined, stage: undefined, owner: undefined, tasks: undefined, origin: undefined, campaign: undefined, page: undefined })}
                     className="text-accent hover:underline"
                   >
                     Quitar los filtros

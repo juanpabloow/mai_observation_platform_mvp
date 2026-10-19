@@ -2,9 +2,10 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
-import { hasFullAccess } from "@/lib/access";
+import { canManageCampaigns, hasFullAccess } from "@/lib/access";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { getContactById, listContactConversations } from "@worker/db/repositories/contacts.js";
+import { getContactOriginDetail, listCampaignsWithStats } from "@worker/db/repositories/attribution.js";
 import { listIdentitiesForContact, listCandidatesForContact } from "@worker/db/repositories/contactIdentities.js";
 import { listFieldDefinitions } from "@worker/db/repositories/clientFieldDefinitions.js";
 import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
@@ -46,7 +47,7 @@ export default async function ClientContactDetailPage({
   const contact = await getContactById(tenantId, contactId, client.id);
   if (!contact) notFound();
 
-  const [identities, fieldDefs, members, timeline, openTasks, attachedTags, tagCatalogue, appts, conversations, schedulingEnabled, candidates, editPayload, valueProfile] =
+  const [identities, fieldDefs, members, timeline, openTasks, attachedTags, tagCatalogue, appts, conversations, schedulingEnabled, candidates, editPayload, valueProfile, originDetail, campaigns] =
     await Promise.all([
       listIdentitiesForContact(tenantId, client.id, contactId),
       listFieldDefinitions(tenantId, client.id, { enabledOnly: true }),
@@ -67,6 +68,11 @@ export default async function ClientContactDetailPage({
       // has never completed a visit, which those cards render as their empty state — the
       // alternative would be printing "$0" at somebody who simply has not come in yet.
       getContactValueProfile(tenantId, client.id, contactId),
+      // AT-2 lead origin (facts + touches) for the "Origen" card, and this client's campaigns
+      // for the manual-origin picker. Origin is a CRM-level fact (captured regardless of the
+      // campaigns module), so it's shown here on the crm-gated record.
+      getContactOriginDetail(tenantId, client.id, contactId),
+      listCampaignsWithStats(tenantId, client.id),
     ]);
 
   const identityViews: IdentityView[] = identities.map((i) => ({ kind: i.kind, value: i.value, label: i.label }));
@@ -179,6 +185,27 @@ export default async function ClientContactDetailPage({
         mostRecentConversationId={conversations[0]?.id ?? null}
         schedulingEnabled={schedulingEnabled}
         edit={editPayload}
+        originDetail={
+          originDetail
+            ? {
+                originKind: originDetail.originKind,
+                originSetAt: originDetail.originSetAt?.toISOString() ?? null,
+                originSetBy: originDetail.originSetBy,
+                ad: originDetail.ad
+                  ? { externalId: originDetail.ad.externalId, sourceType: originDetail.ad.sourceType, headline: originDetail.ad.headline }
+                  : null,
+                campaign: originDetail.campaign,
+                touches: originDetail.touches.map((t) => ({
+                  occurredAt: t.occurredAt.toISOString(),
+                  adExternalId: t.adExternalId,
+                  adHeadline: t.adHeadline,
+                  sourceType: t.sourceType,
+                })),
+              }
+            : null
+        }
+        canManageOrigin={canManageCampaigns(scope, client.id)}
+        originCampaigns={campaigns.map((c) => ({ id: c.id, name: c.name }))}
       />
     </main>
   );

@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { MODULE_SEARCH_CLS, OUTLINE_CLS } from "@/components/ui/primitives";
 import { OPTIONAL_COLUMNS, type ContactColumnKey } from "@/lib/contactColumns";
+import { ORIGIN_GROUPS } from "@/lib/originDisplay";
 
 /**
  * The Contacts screen's CONTROLS, split the way the redesign splits them
@@ -253,19 +254,75 @@ function MenuLabel({ children }: { children: React.ReactNode }) {
  * these compose WITH a pill (owner "Paola" ∧ stage "Clientes") where the pills
  * themselves are one-of-N.
  */
-export function ContactsFilterMenu({ owners }: { owners: { userId: string; label: string }[] }) {
+export function ContactsFilterMenu({
+  owners,
+  campaigns = [],
+}: {
+  owners: { userId: string; label: string }[];
+  /** AT-2: campaigns of this client, for the "Campaña" facet. Empty → the facet is hidden. */
+  campaigns?: { id: string; name: string }[];
+}) {
   const { searchParams, apply } = useApply();
   const owner = searchParams.get("owner") ?? "";
   const tasks = searchParams.get("tasks") ?? "";
   const stage = searchParams.get("stage") ?? "";
+  const origin = searchParams.get("origin") ?? "";
+  const campaign = searchParams.get("campaign") ?? "";
   // "Sin dueño" and the three live stages are the PILLS' job; a filter is only "on" here
   // when it is something the pills cannot express.
-  const activeHere = tasks !== "" || stage === "archived" || (owner !== "" && owner !== "unassigned");
+  const activeHere =
+    tasks !== "" || stage === "archived" || (owner !== "" && owner !== "unassigned") || origin !== "" || campaign !== "";
 
   return (
-    <Menu label="Filtrar" icon={<FilterIcon />} active={activeHere} width="w-60">
+    <Menu label="Filtrar" icon={<FilterIcon />} active={activeHere} width="w-64">
       {(close) => (
         <>
+          <MenuLabel>Origen</MenuLabel>
+          <MenuOption
+            label="Cualquier origen"
+            selected={origin === ""}
+            onSelect={() => {
+              apply({ origin: "" });
+              close();
+            }}
+          />
+          {ORIGIN_GROUPS.map((g) => (
+            <MenuOption
+              key={g.key}
+              label={g.label}
+              selected={origin === g.key}
+              onSelect={() => {
+                apply({ origin: g.key });
+                close();
+              }}
+            />
+          ))}
+
+          {campaigns.length > 0 ? (
+            <>
+              <MenuLabel>Campaña</MenuLabel>
+              <MenuOption
+                label="Cualquier campaña"
+                selected={campaign === ""}
+                onSelect={() => {
+                  apply({ campaign: "" });
+                  close();
+                }}
+              />
+              {campaigns.map((c) => (
+                <MenuOption
+                  key={c.id}
+                  label={c.name}
+                  selected={campaign === c.id}
+                  onSelect={() => {
+                    apply({ campaign: c.id });
+                    close();
+                  }}
+                />
+              ))}
+            </>
+          ) : null}
+
           <MenuLabel>Tareas</MenuLabel>
           {[
             { value: "", label: "Cualquier tarea" },
