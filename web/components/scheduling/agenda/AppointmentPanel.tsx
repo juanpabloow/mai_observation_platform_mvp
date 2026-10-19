@@ -5,6 +5,7 @@ import { useCallback, useEffect, useRef, useState, type RefObject } from "react"
 import { useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
 import { MobileAppointmentSheet } from "../mobile/MobileAppointmentSheet";
 import { appointmentActionPlan } from "@/lib/appointmentActionPlan";
+import { rescheduleBlockedReason } from "@/lib/rescheduleFlow";
 import { priceLabelCOP } from "@/lib/money";
 import { dayHeadline, fmtTime, longDate, siteDayKey } from "@/lib/siteCalendar";
 import type { AppointmentActivityItem } from "@/lib/schedulingActions";
@@ -22,9 +23,9 @@ import { DESTRUCTIVE, STATUS_NAME, type AppointmentStatus } from "./status";
  * Reading order, top to bottom: WHEN (date, time, state) → WHO (client) → WHAT (service,
  * professional, price) → history (activity), and the one primary action in the footer.
  * Each action appears ONCE:
+ *   header       Cambiar fecha y hora (its own two-step flow, apart from the state)
  *   state menu   confirm · no-show · cancel (destructive ones ask first)
  *   footer       Completar cita (the primary)
- *   service card Cambiar hora o profesional (= reschedule)
  *   client card  Ver ficha · Conversación · Reservar de nuevo
  *   activity     Ver actividad
  *   review       Enlace de reseña (completed appointments only)
@@ -84,6 +85,9 @@ export function AppointmentPanel(props: {
   loadReviewLink: ReviewLinkLoader;
   /** The professional's avatar colour on the phone (same as the agenda list). */
   staffColor?: string;
+  /** A layer is open ABOVE the panel ("Cambiar fecha y hora"): its Escape is the top
+   *  layer's, so the panel must not close underneath it (focus returns to this panel). */
+  covered?: boolean;
 }) {
   const { appt, timezone: tz } = props;
   const [minimized, setMinimized] = useState(false);
@@ -99,12 +103,13 @@ export function AppointmentPanel(props: {
   // ONE stable close handler for the focus trap (it re-runs whenever this identity
   // changes, which would yank focus on every render). Escape peels layers in order:
   // an open confirmation, then an open menu, then the panel itself.
-  const latest = useRef({ menuOpen, confirm, onClose: props.onClose });
+  const latest = useRef({ menuOpen, confirm, onClose: props.onClose, covered: Boolean(props.covered) });
   useEffect(() => {
-    latest.current = { menuOpen, confirm, onClose: props.onClose };
+    latest.current = { menuOpen, confirm, onClose: props.onClose, covered: Boolean(props.covered) };
   });
   const onEscape = useCallback(() => {
     const l = latest.current;
+    if (l.covered) return;
     if (l.confirm) return setConfirm(null);
     if (l.menuOpen) return setMenuOpen(false);
     l.onClose();
@@ -124,6 +129,9 @@ export function AppointmentPanel(props: {
   // legal transitions. "Completar" is the footer's primary; the state menu does not repeat it.
   const plan = appointmentActionPlan({ canOperate: props.canOperate, canModify: props.canModify, status: appt.status });
   const stateTargets = plan.stateMenu;
+  // Why there is no "Cambiar fecha y hora" (terminal state, or another professional's
+  // appointment for a staff login) — said, not hidden.
+  const blocked = props.canOperate ? rescheduleBlockedReason({ status: appt.status, allowed: plan.allowed, staffName: appt.staff_name }) : null;
   const price = priceLabelCOP(appt.price);
   const client = appt.contact_name ?? "Atención sin cita";
   const timeRange = `${fmtTime(appt.start_at, tz)} – ${fmtTime(appt.service_end_at, tz)}`;
@@ -215,7 +223,7 @@ export function AppointmentPanel(props: {
                 <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
               </IconButton>
             </div>
-            <div className="mt-3 flex items-center gap-2">
+            <div className="mt-3 flex flex-wrap items-center gap-2">
               {stateTargets.length > 0 ? (
                 <Menu
                   label={`Estado: ${STATUS_NAME[appt.status] ?? appt.status}. Cambiar estado`}
@@ -243,7 +251,13 @@ export function AppointmentPanel(props: {
               ) : (
                 <StatusChip status={appt.status} />
               )}
+              {plan.reschedule ? (
+                <Button size="sm" className="ml-auto" onClick={props.onReschedule} disabled={props.pending}>
+                  Cambiar fecha y hora
+                </Button>
+              ) : null}
             </div>
+            {!plan.reschedule && blocked ? <p className="mt-2 text-[13px] text-muted">{blocked}</p> : null}
           </header>
 
           <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
@@ -312,13 +326,6 @@ export function AppointmentPanel(props: {
                     <Avatar name={appt.staff_name} size="sm" />
                     <span className="truncate">{appt.staff_name ?? "Sin profesional"}</span>
                   </p>
-                  {plan.reschedule ? (
-                    <div className="mt-3">
-                      <Button size="sm" onClick={props.onReschedule} disabled={props.pending}>
-                        Cambiar hora o profesional
-                      </Button>
-                    </div>
-                  ) : null}
                 </div>
               </section>
 

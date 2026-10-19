@@ -47,6 +47,7 @@ import {
   type ContactSearchHit,
 } from "@/lib/schedulingActions";
 import { AppointmentPanel } from "./agenda/AppointmentPanel";
+import { RescheduleFlow } from "./agenda/RescheduleFlow";
 import { AppointmentPreview } from "./agenda/AppointmentPreview";
 
 /** Serializable shapes passed from the server page. */
@@ -715,6 +716,31 @@ export function AgendaView(props: {
     setFlashId(id);
     window.setTimeout(() => setFlashId((current) => (current === id ? null : current)), 1800);
   };
+  const locateAppointmentRef = useRef(locateAppointment);
+  useEffect(() => {
+    locateAppointmentRef.current = locateAppointment;
+  });
+  // After "Cambiar fecha y hora": the moved appointment is highlighted on its new day
+  // (stored across the navigation; consumed once it is actually drawn).
+  useEffect(() => {
+    let id: string | null = null;
+    try {
+      id = window.sessionStorage.getItem(FLASH_KEY);
+    } catch {
+      return;
+    }
+    if (!id || !props.appointments.some((a) => a.id === id)) return;
+    const moved = id;
+    const t = window.setTimeout(() => {
+      try {
+        window.sessionStorage.removeItem(FLASH_KEY);
+      } catch {
+        /* ignore */
+      }
+      locateAppointmentRef.current(moved);
+    }, 350);
+    return () => window.clearTimeout(t);
+  }, [props.appointments]);
 
   // ── Derived, all from the loaded range ──────────────────────────────────────
   const visible = useMemo(
@@ -1026,6 +1052,14 @@ export function AgendaView(props: {
           onBlock={props.canBlockStaff || props.canBlockSite ? () => setModal({ mode: "block" }) : undefined}
         />
       </div>
+      {/* Desktop/tablet: the same short confirmation ("Cita reprogramada", "Cita creada"),
+          in the Scheduling system's colours. */}
+      {notice ? (
+        <div role="status" aria-live="polite" className="fixed bottom-6 left-1/2 z-[90] hidden min-h-[44px] -translate-x-1/2 items-center gap-2 rounded-sch-control bg-foreground px-4 text-sm text-background shadow-[var(--shadow-float)] md:flex">
+          <span aria-hidden>✓</span>
+          {notice}
+        </div>
+      ) : null}
       <div className="md:hidden">
         <MToast message={notice} bottom={84} />
       </div>
@@ -1769,6 +1803,7 @@ export function AgendaView(props: {
             originLabel={ORIGIN_LABEL[selected.origin] ?? (selected.origin || "—")}
             canOperate={props.canOperate}
             canModify={selected.can_modify}
+            covered={modal?.mode === "reschedule"}
             pending={pending}
             error={error}
             contactHref={selected.contact_id && props.contactsBase ? `${props.contactsBase}/${selected.contact_id}${fromQS}` : null}
@@ -1818,7 +1853,37 @@ export function AgendaView(props: {
       </div>
       </PageShell>
 
-      {modal && modal.mode !== "block" && modal.mode !== "editBlock" && props.canOperate ? (
+      {/* "Cambiar fecha y hora" — its own two-step flow (agenda/RescheduleFlow), not the
+          three steps of creation. */}
+      {modal && modal.mode === "reschedule" && props.canOperate ? (
+        <RescheduleFlow
+          clientId={props.clientId}
+          siteId={props.currentSiteId}
+          siteName={currentSite?.name ?? ""}
+          timezone={tz}
+          openWeekdays={new Set(Object.entries(props.openingHours).filter(([, r]) => (r?.length ?? 0) > 0).map(([k]) => k))}
+          appt={modal.appt}
+          staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl }))}
+          lockStaffId={props.lockStaffId}
+          onClose={() => setModal(null)}
+          onDone={({ dayKey, appointmentId }) => {
+            setModal(null);
+            setSelectedId(null);
+            setNotice("Cita reprogramada");
+            // Highlight it once it is drawn on its new day (this page or the next one).
+            try {
+              window.sessionStorage.setItem(FLASH_KEY, appointmentId);
+            } catch {
+              /* private mode: the highlight is a nicety */
+            }
+            if (props.returnContactId) return router.push(`/clients/${props.clientId}/contacts/${props.returnContactId}`);
+            if (dayKey !== props.date) return navigate({ date: dayKey });
+            router.refresh();
+          }}
+        />
+      ) : null}
+
+      {modal && modal.mode !== "block" && modal.mode !== "editBlock" && modal.mode !== "reschedule" && props.canOperate ? (
         <AppointmentModal
           {...props}
           modal={modal}
@@ -2849,7 +2914,11 @@ function ApptCard({
   );
 }
 
-/** Modal for new appointment / walk-in / reschedule — fetches real availability. */
+/** sessionStorage key: the appointment to highlight after "Cambiar fecha y hora". */
+const FLASH_KEY = "mai:agenda:flash";
+
+/** Modal for new appointment / walk-in — fetches real availability. (Reschedule has its
+ *  own flow: agenda/RescheduleFlow.) */
 function AppointmentModal(props: {
   clientId: string;
   timezone: string;

@@ -236,7 +236,7 @@ test('selecting an appointment opens a side panel built from the shared Scheduli
   // Reading order: when → who → what → history.
   const at = (s: string) => panel.indexOf(s);
   assert.ok(at('id="appt-panel-title"') < at('id="appt-panel-client"') && at('id="appt-panel-client"') < at('id="appt-panel-service"') && at('id="appt-panel-service"') < at('id="appt-panel-activity"'), 'date → client → service → activity');
-  // Each action once: "Completar" is the footer primary only; reschedule is the service card's.
+  // Each action once: "Completar" is the footer primary only; "Cambiar fecha y hora" is the header's.
   // The rule lives in the shared plan (behaviour-tested in appointmentActionPlan.test.ts).
   assert.ok(read('web/lib/appointmentActionPlan.ts').includes('stateMenu: transitions.filter((t) => t !== "completed")'), 'the state menu does not repeat the footer primary');
   assert.ok(panel.includes('const stateTargets = plan.stateMenu;'), 'and the panel builds its menu from it');

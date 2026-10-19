@@ -285,17 +285,28 @@ export async function rescheduleAppointmentAction(
   appointmentId: string,
   startAt: string,
   staffId?: string | null,
+  /** The time and professional the operator SAW ("Antes"): if the appointment moved in
+   *  the meantime nothing is written and the operator is told to review it. */
+  expected?: { startAt: string; staffId: string } | null,
 ): Promise<ActionResult> {
-  if (!isUuid(appointmentId) || (staffId && !isUuid(staffId))) return { ok: false, error: GENERIC_GATE };
+  if (!isUuid(appointmentId) || (staffId && !isUuid(staffId)) || (expected && !isUuid(expected.staffId))) return { ok: false, error: GENERIC_GATE };
   const gated = await gateAppointment(clientId, appointmentId);
   if (!gated) return { ok: false, error: GENERIC_GATE };
-  const { ctx } = gated;
+  const { ctx, appointment } = gated;
   // A staff login can't move the appointment to ANOTHER staff member's column.
   if (isSchedulingStaff(ctx.scope) && staffId && !canAccessSchedulingStaff(ctx.scope, staffId)) {
     return { ok: false, error: GENERIC_GATE };
   }
+  const terminal = RESCHEDULE_TERMINAL[appointment.status];
+  if (terminal) return { ok: false, error: terminal };
   const start = new Date(startAt);
   if (Number.isNaN(start.getTime())) return { ok: false, error: "La hora de inicio no es válida." };
+  const expectedStart = expected ? new Date(expected.startAt) : null;
+  if (expectedStart && Number.isNaN(expectedStart.getTime())) return { ok: false, error: GENERIC_GATE };
+  // Nothing effective to change: no write, no "reprogramada" entry in the history.
+  if (start.getTime() === new Date(appointment.start_at).getTime() && (staffId ?? appointment.staff_id) === appointment.staff_id) {
+    return { ok: false, error: "Elige una fecha, hora o profesional distintos a los actuales." };
+  }
   const r = await rescheduleAppointment({
     tenantId: ctx.scope.tenantId,
     appointmentId,
@@ -304,11 +315,26 @@ export async function rescheduleAppointmentAction(
     actorType: "agent",
     actorUserId: ctx.scope.userId,
     scopeClientId: ctx.client.id,
+    expected: expected && expectedStart ? { startAt: expectedStart, staffId: expected.staffId } : null,
   });
-  if (!r.ok) return { ok: false, error: messageFor(r.error, "No se pudo reprogramar la cita.") };
+  if (!r.ok) return { ok: false, error: RESCHEDULE_ERROR[r.error] ?? messageFor(r.error, "No se pudo reprogramar la cita.") };
   revalidatePath(agendaPath(ctx.client.id));
   return { ok: true };
 }
+
+/** A reschedule's refusals, in the words the operator acts on. */
+const RESCHEDULE_ERROR: Partial<Record<string, string>> = {
+  unavailable: "Ese horario ya no está disponible. Elige otro.",
+  conflict_slot: "Alguien acaba de ocupar ese horario. Elige otro.",
+  no_staff: "Ese profesional no puede atender este servicio en ese horario.",
+  stale: "La cita cambió mientras la editabas. Ciérrala y vuelve a abrirla para ver su horario actual.",
+  invalid_transition: "Esta cita ya no se puede cambiar de fecha.",
+};
+const RESCHEDULE_TERMINAL: Partial<Record<string, string>> = {
+  cancelled: "Esta cita está cancelada: ya no se puede cambiar su fecha.",
+  completed: "Esta cita ya se completó: no se puede cambiar su fecha.",
+  no_show: "Esta cita quedó como inasistencia: no se puede cambiar su fecha.",
+};
 
 /**
  * One row of an appointment's ACTIVITY ("Ver actividad" in the agenda detail) — a

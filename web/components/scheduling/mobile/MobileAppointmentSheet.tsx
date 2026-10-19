@@ -9,6 +9,7 @@ import { CATEGORY_GROUPS } from "../services/categories";
 import type { Appt } from "../AgendaView";
 import { type AppointmentStatus } from "../agenda/status";
 import { appointmentActionPlan } from "@/lib/appointmentActionPlan";
+import { rescheduleBlockedReason } from "@/lib/rescheduleFlow";
 import { reviewShareText, useReviewLink, whatsappHref, type ReviewLinkLoader } from "../agenda/ReviewLink";
 import { serviceCategory } from "@/lib/agendaCategory";
 import { mFamilyClass } from "./MobileAgenda";
@@ -18,6 +19,7 @@ import { Icon, ICON, MButton, MClientAvatar, MConfirm, MIconButton, MPill, MStaf
  * The appointment DETAIL on the phone (reference §02): a bottom sheet over the agenda
  * that opens part-way and expands from its handle (tap or drag). Hierarchy: when → who
  * (Llamar / WhatsApp / Ficha) → service, professional, site, origin, activity, colour →
+ * "Cambiar fecha y hora" sits visible right under the time (apart from the states) →
  * "Más acciones" + the ONE next valid step (Sin confirmar → Confirmar, Confirmada →
  * Completar). States and transitions are exactly the backend's; cancel and no-show
  * confirm first in their own sheet, with the safe option first and focused.
@@ -105,7 +107,8 @@ export function MobileAppointmentSheet(props: {
   const allowed = new Set<string>(plan.transitions);
   const primary: { label: string; target: Target } | null = plan.primary ? { label: plan.primary === "confirmed" ? "Confirmar" : "Completar", target: plan.primary } : null;
   // "Más acciones" only when it holds something this login may do or open.
-  const hasMore = plan.transitions.length > 0 || plan.reschedule || Boolean(props.bookAgainHref || props.conversationHref);
+  const hasMore = plan.transitions.length > 0 || Boolean(props.bookAgainHref || props.conversationHref);
+  const blocked = props.canOperate ? rescheduleBlockedReason({ status: appt.status, allowed: plan.allowed, staffName: appt.staff_name }) : null;
   const client = appt.contact_name ?? "Atención sin cita";
   const firstName = client.replace(/^\s*[[(][^\])]*[\])]\s*/, "").split(/\s+/)[0];
   const start = fmtTime(appt.start_at, tz);
@@ -213,6 +216,23 @@ export function MobileAppointmentSheet(props: {
             {props.error}
           </p>
         ) : null}
+        {/* "Cambiar fecha y hora" — visible, apart from the state actions and cancel. */}
+        {canAct ? (
+          <MButton
+            className="mt-3 w-full gap-2"
+            disabled={props.pending}
+            onClick={() => {
+              // Close this sheet first: the flow is its own full-screen layer.
+              setView(null);
+              props.onReschedule();
+            }}
+          >
+            <Icon d={ICON.calendar} size={18} width={1.4} />
+            Cambiar fecha y hora
+          </MButton>
+        ) : blocked ? (
+          <p className="m-0 mt-3 text-[14px] leading-[1.45] text-m-tx3">{blocked}</p>
+        ) : null}
         <div className="flex items-center gap-3 pb-3 pt-4">
           <MClientAvatar name={appt.contact_name} />
           <div className="flex min-w-0 flex-1 flex-col">
@@ -294,27 +314,6 @@ export function MobileAppointmentSheet(props: {
             );
           })}
         </div>
-        {canAct ? (
-          <button
-            type="button"
-            onClick={() => {
-              setView(null);
-              props.onReschedule();
-            }}
-            className="flex min-h-[60px] w-full items-center gap-3 border-0 border-t border-m-dv bg-transparent px-1 py-[10px] text-left text-m-tx"
-          >
-            <span aria-hidden className="flex size-9 flex-none items-center justify-center rounded-[10px] bg-m-sf2 text-[16px]">
-              ↻
-            </span>
-            <span className="flex flex-1 flex-col">
-              <span className="text-[16px]">Reprogramar</span>
-              <span className="text-[13px] text-m-tx3">Elegir otra fecha u hora</span>
-            </span>
-            <span aria-hidden className="text-[20px] text-m-tx3">
-              ›
-            </span>
-          </button>
-        ) : null}
         {props.bookAgainHref || props.conversationHref ? (
           <div className="flex flex-col">
             {props.bookAgainHref ? (
