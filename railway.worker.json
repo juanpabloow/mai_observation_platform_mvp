@@ -1,11 +1,11 @@
 {
   "$schema": "https://railway.com/railway.schema.json",
+  "_note": "NOT LINKED. The worker service is configured in the Railway DASHBOARD (Settings), not from this file — no 'Config as code' path points here, so nothing in this file is applied. Reference only. The pre-deploy migration (npm run migrate:prod up) lives in the dashboard (Settings -> Deploy -> Pre-deploy Command), NOT here — a preDeployCommand in this file would be inert (it was, and migration 1808 sat unapplied for a day). See DEPLOY.md.",
   "build": {
     "builder": "NIXPACKS",
     "buildCommand": "npm ci && npm run build:worker"
   },
   "deploy": {
-    "preDeployCommand": "npm run migrate:prod up",
     "startCommand": "npm run start:worker",
     "restartPolicyType": "ON_FAILURE",
     "restartPolicyMaxRetries": 10

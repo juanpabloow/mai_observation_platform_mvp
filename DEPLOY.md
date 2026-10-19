@@ -24,28 +24,42 @@ push to `main` (rebuild + redeploy). Because both services share one repo, a pus
 redeploys **both** `worker` and `web` — so even a web-only change briefly restarts
 the worker. That's harmless and expected.
 
-**✅ Migrations run AUTOMATICALLY on deploy (MF-1 item 1).** Both `web` and `worker` carry a
-Railway **pre-deploy command** — `npm run migrate:prod up` — in their config files
-(`railway.web.json`, `railway.worker.json`). Railway runs the pre-deploy command **after the
-build and BEFORE the new container starts / takes traffic**, so pending migrations are applied
-before any new code serves. You normally just **push to `main`** — schema changes apply
-themselves.
+**✅ Migrations run on deploy via a pre-deploy command — SET IN THE RAILWAY DASHBOARD.** Both
+`web` and `worker` run `npm run migrate:prod up` as their **Pre-deploy Command**, configured in
+each service's **Railway dashboard → Settings → Deploy → Pre-deploy Command** (NOT from a repo
+config file — see the next box). Railway runs it **after the build and BEFORE the new container
+starts / takes traffic**, so pending migrations apply before any new code serves. You normally
+just **push to `main`** — schema changes apply themselves.
 
-> **🔒 A failing migration FAILS THE DEPLOY — the previous version keeps running.** Railway
-> aborts the deployment if the pre-deploy command exits non-zero: the new container never goes
-> live and the last good deployment keeps serving. So the schema can never lag deployed code —
-> either the migration succeeds and then the new code starts, or it fails and the old code keeps
-> running. This is exactly the H-2/H-3 incident the manual step used to miss (handoff migrations
-> sat unapplied while new code served, 500-ing every authenticated page). Watch the deploy
-> logs: a red pre-deploy step means fix the migration and push again, not "it'll sort itself out."
+> **⚠️ The `railway.*.json` files are NOT linked to the services.** Both services are configured
+> entirely from the dashboard (start commands, build, deploy), and no service has a "Config as
+> code" file path set. So anything in `railway.web.json` / `railway.worker.json` — including a
+> `preDeployCommand` — is **inert**. This bit us: MF-1.1 added `preDeployCommand` ONLY to those
+> (unlinked) json files, so it never ran, and migration `1808` (AT-1) sat unapplied for a day
+> while the new code served. The fix was to add the Pre-deploy Command **in the dashboard** for
+> web and worker (done 2026-10-18); `preDeployCommand` has been **removed from the json files** so
+> they no longer imply an automation that isn't wired. The DASHBOARD is the single source of truth.
+
+> **🔎 How to VERIFY the pre-deploy is actually wired (do this after any deploy with a migration):**
+> In Railway → the service (web or worker) → the latest **Deploy → View logs**, there is a distinct
+> **"Pre-deploy"** phase BEFORE "Starting Container", running `npm run migrate:prod up` and printing
+> `Migrations complete!` (or `No migrations to run`). If there is **no Pre-deploy phase**, the
+> command is not set on that service — add it in Settings → Deploy. Also spot-check the schema
+> directly: `SELECT name FROM pgmigrations ORDER BY run_on DESC LIMIT 5;` should include the
+> migration you just shipped.
+
+> **🔒 A failing migration FAILS THE DEPLOY — the previous version keeps running.** Railway aborts
+> the deployment if the pre-deploy command exits non-zero: the new container never goes live and
+> the last good deployment keeps serving. So the schema can never lag deployed code — **as long as
+> the command is actually set in the dashboard**. (The H-2/H-3 and the AT-1 `1808` incidents were
+> both "the automation wasn't wired" — verify it per the box above, don't assume.)
 
 **Why both services (not one):** `web` and `worker` redeploy in parallel on a push, and each
-serves schema-dependent code, so **each must gate its own start** on the migration. Running the
-migration from two services at once is safe: `node-pg-migrate` takes a **Postgres advisory lock**
-around the run — the first service migrates, the second blocks until the lock releases, then
-finds nothing pending and exits 0. No double-apply, no race. (The `maintenance` service does NOT
-run it — it is a narrow purge service whose schema needs are a subset already applied by web +
-worker.)
+serves schema-dependent code, so **each must have the Pre-deploy Command** so it gates its own
+start. Running the migration from two services at once is safe: `node-pg-migrate` takes a
+**Postgres advisory lock** — the first migrates, the second blocks then finds nothing pending and
+exits 0. No double-apply, no race. (The `maintenance` service does NOT run it — a narrow purge
+service whose schema needs are a subset already applied by web + worker.)
 
 - **Code-only change (no new migration):** push to `main`. Done.
 - **Change that adds a NEW migration:** push to `main`. The pre-deploy applies it automatically;
@@ -87,9 +101,10 @@ pre-deploy above.
 
 **Future improvements** (not yet implemented; tracked in `scaling-todo.md`):
 
-- ~~Automate migrations as a Railway pre-deploy / release command~~ — **DONE** (MF-1 item 1):
-  `preDeployCommand: npm run migrate:prod up` on `web` + `worker`. See
-  [Deploying changes](#deploying-changes-ongoing-deploys).
+- ~~Automate migrations as a Railway pre-deploy / release command~~ — **DONE**: the Pre-deploy
+  Command `npm run migrate:prod up` is set in the **dashboard** for `web` + `worker` (NOT via the
+  unlinked json files — MF-1.1's json-only change never ran). See
+  [Deploying changes](#deploying-changes-ongoing-deploys) for how to verify it.
 - Add a staging environment / non-`main` branch workflow before production, once
   there are real users.
 
@@ -111,8 +126,22 @@ exactly.
 
 ## Per-service configuration
 
-Each Node service reads its build/start from a committed config file. In the
-Railway service **Settings → Config-as-code**, set the config file path:
+> **CURRENT STATE: the services are configured ENTIRELY in the Railway DASHBOARD. The
+> `railway.*.json` files are NOT linked** (no "Config as code" file path is set on any service),
+> so they are **reference only** — editing them changes nothing in production. The build/start/
+> pre-deploy values below are what is (and must stay) set in each service's dashboard Settings.
+>
+> **If you ever DO want to link the json files** (one source of truth in the repo): set
+> Settings → *Config as code* → file path to `railway.web.json` / `railway.worker.json` per
+> service. Be aware this makes the file **authoritative** and OVERRIDES the dashboard for
+> everything it specifies — `buildCommand`, `startCommand`, `restartPolicy*`, and (if you add
+> them) `healthcheckPath`/`healthcheckTimeout` and `preDeployCommand`. Anything the dashboard has
+> but the file omits may be dropped. Recommendation (2026-10): **keep using the dashboard** and do
+> NOT link the files — linking trades one surprise (an unlinked json) for another (the json
+> silently taking over start/healthcheck config). The json files intentionally no longer carry a
+> `preDeployCommand` so they can't imply an automation that isn't wired.
+>
+> The build/start for each service (set these in the dashboard):
 
 ### worker  →  `railway.worker.json`
 - **Root Directory:** repo root
@@ -185,9 +214,10 @@ Keep the dump **outside the repo** (it contains real data + secrets — never co
 Restore, if ever needed, with `psql "<public url>" < that-file.sql`. Only after the
 backup succeeds, run `npm run migrate:prod up`.
 
-**Normally you do NOT run this by hand** — the `preDeployCommand` on `web` + `worker` runs it
-automatically on every deploy (see [Deploying changes](#deploying-changes-ongoing-deploys)). The
-notes below are for a MANUAL/fallback run (recover from a failed pre-deploy, or a one-off).
+**Normally you do NOT run this by hand** — the dashboard **Pre-deploy Command** on `web` +
+`worker` runs it on every deploy (see [Deploying changes](#deploying-changes-ongoing-deploys),
+including how to VERIFY it is wired). The notes below are for a MANUAL/fallback run (recover from a
+failed pre-deploy, or a one-off).
 
 **Manual run (fallback), inside Railway's network:** run it as a **one-off command in the
 Railway `worker` service** (Railway dashboard → worker → run a command). That runs *inside*
@@ -195,9 +225,9 @@ Railway's network, so the internal `DATABASE_URL` reaches Postgres, and `node-pg
 `tsx` are present (the worker build runs a full `npm ci`).
 
 Notes / alternatives:
-- The automatic pre-deploy already runs on BOTH `web` and `worker`; `node-pg-migrate`'s advisory
-  lock makes the concurrent runs safe (one migrates, the other waits then no-ops). A manual run
-  shares the same lock, so it's safe alongside a deploy too.
+- The dashboard pre-deploy runs on BOTH `web` and `worker`; `node-pg-migrate`'s advisory lock
+  makes the concurrent runs safe (one migrates, the other waits then no-ops). A manual run shares
+  the same lock, so it's safe alongside a deploy too.
 - `railway run npm run migrate:prod up` from your laptop uses the **internal**
   `DATABASE_URL`, which isn't reachable from outside Railway — if you want to
   migrate from local, use the Postgres service's **public** URL instead.
@@ -217,11 +247,14 @@ Authorized redirect URI:
 ## Suggested first-deploy order
 
 1. Create the project and add **Postgres** (managed plugin).
-2. Create the **worker** and **web** services from this repo (Root Directory =
-   repo root; set each one's config file path).
+2. Create the **worker** and **web** services from this repo (Root Directory = repo root). Set
+   each service's Build/Start commands in the **dashboard** (see [Per-service
+   configuration](#per-service-configuration)) — do NOT rely on the `railway.*.json` files, which
+   are not linked.
 3. Set Variables on both services (see above). Reference `${{ Postgres.DATABASE_URL }}`.
-4. **Migrations run themselves** — each service's `preDeployCommand` applies them before start.
-   Just deploy and watch the pre-deploy step succeed (no manual migrate needed).
+4. **Set the Pre-deploy Command** `npm run migrate:prod up` on BOTH web and worker (Settings →
+   Deploy). Then deploy and **verify** a Pre-deploy phase appears in the logs (see [Deploying
+   changes](#deploying-changes-ongoing-deploys)) — if it's missing, migrations are NOT running.
 5. Deploy. The worker begins polling; the web app serves on its Railway domain.
 6. Set `BETTER_AUTH_URL` to the web's public domain (and, if using Google, the
    redirect URI), then redeploy web if it changed.
