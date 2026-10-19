@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
-import { canManageCampaigns, canReadCampaigns } from "@/lib/access";
+import { canManageCampaigns, canReadCampaigns, hasFullAccess } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { listAdsWithStats, listCampaignsWithStats } from "@worker/db/repositories/attribution.js";
 import { listServices } from "@worker/db/repositories/scheduling/services.js";
@@ -40,6 +40,7 @@ export default async function ClientCampaignsPage({
       clientId={client.id}
       clientName={client.name}
       canManage={canManage}
+      isAgency={hasFullAccess(scope)}
       ads={ads.map((a) => ({
         id: a.id,
         external_id: a.external_id,

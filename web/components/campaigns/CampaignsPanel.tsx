@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PageShell } from "@/components/ui/PageShell";
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
@@ -78,6 +79,7 @@ export function CampaignsPanel({
   clientId,
   clientName,
   canManage,
+  isAgency,
   ads,
   campaigns,
   services,
@@ -86,6 +88,8 @@ export function CampaignsPanel({
   clientId: string;
   clientName: string;
   canManage: boolean;
+  /** Agency (owner/admin) — the only tier that may reach the agency-only settings page. */
+  isAgency: boolean;
   ads: AdItem[];
   campaigns: CampaignItem[];
   services: Option[];
@@ -120,6 +124,11 @@ export function CampaignsPanel({
               Los anuncios que detectamos de Meta, agrupados en campañas que el asistente entiende.
             </p>
           </div>
+          {isAgency ? (
+            <Link href={`/clients/${clientId}/campaigns/settings`} className={GHOST}>
+              Configuración
+            </Link>
+          ) : null}
         </div>
         <nav aria-label="Secciones" className="flex items-center gap-1 overflow-x-auto border-t border-line px-2 sm:px-3">
           <TabButton active={tab === "ads"} onClick={() => setTab("ads")} label="Anuncios" count={unconfigured || undefined} countTitle="Sin configurar" />

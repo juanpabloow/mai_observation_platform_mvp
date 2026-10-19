@@ -1,11 +1,13 @@
 "use server";
 
+import { revalidatePath } from "next/cache";
 import { canManageClient, getAccessScope, requireFullAccessForAction } from "./access";
 import { getClientForTenant } from "./clientWorkflow";
 import { getContactById } from "@worker/db/repositories/contacts.js";
 import {
   getAdById,
   getCampaignById,
+  setAttributionBriefWindowDays,
   setAttributionTrackingStartedAt,
   setContactOrigin,
 } from "@worker/db/repositories/attribution.js";
@@ -35,6 +37,27 @@ export async function setAttributionTrackingStartedAtAction(
     at = d;
   }
   await setAttributionTrackingStartedAt(tenantId, clientId, at);
+  revalidatePath(`/clients/${clientId}/campaigns/settings`);
+  return { ok: true };
+}
+
+/**
+ * AT-2 §3 — the AT-3 BRIEF WINDOW (days). AGENCY ONLY (requireFullAccessForAction). Bounded
+ * 1..90 (mirrors the DB CHECK). Stored now; read by AT-3.
+ */
+export async function setAttributionBriefWindowDaysAction(
+  clientId: string,
+  days: number,
+): Promise<{ ok: boolean; error?: string }> {
+  const { tenantId } = await requireFullAccessForAction();
+  const client = await getClientForTenant(clientId);
+  if (!client || client.is_default) return { ok: false, error: "Unknown client." };
+  const n = Math.trunc(Number(days));
+  if (!Number.isFinite(n) || n < 1 || n > 90) {
+    return { ok: false, error: "La ventana debe estar entre 1 y 90 días." };
+  }
+  await setAttributionBriefWindowDays(tenantId, clientId, n);
+  revalidatePath(`/clients/${clientId}/campaigns/settings`);
   return { ok: true };
 }
 

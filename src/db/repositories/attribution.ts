@@ -103,6 +103,35 @@ export async function setAttributionTrackingStartedAt(
   );
 }
 
+export interface AttributionSettings {
+  tracking_started_at: Date | null;
+  /** AT-3 brief window (days) — how long a campaign brief applies after an ad touch. Default 7. */
+  brief_window_days: number;
+}
+
+/** The per-client attribution settings (a missing row = tracking not started, default window). */
+export async function getAttributionSettings(tenantId: string, clientId: string): Promise<AttributionSettings> {
+  const r = await query<{ tracking_started_at: Date | null; brief_window_days: number }>(
+    `SELECT tracking_started_at, brief_window_days FROM attribution_settings WHERE tenant_id = $1 AND client_id = $2`,
+    [tenantId, clientId],
+  );
+  return {
+    tracking_started_at: r.rows[0]?.tracking_started_at ?? null,
+    brief_window_days: r.rows[0]?.brief_window_days ?? 7,
+  };
+}
+
+/** Upsert the per-client AT-3 brief window (days). Agency-only (the web action enforces it). */
+export async function setAttributionBriefWindowDays(tenantId: string, clientId: string, days: number): Promise<void> {
+  await query(
+    `INSERT INTO attribution_settings (tenant_id, client_id, brief_window_days)
+       VALUES ($1, $2, $3)
+     ON CONFLICT (tenant_id, client_id)
+       DO UPDATE SET brief_window_days = EXCLUDED.brief_window_days, updated_at = now()`,
+    [tenantId, clientId, days],
+  );
+}
+
 /** An ad owned by this client, or null. */
 export async function getAdById(tenantId: string, clientId: string, id: string): Promise<AdRow | null> {
   const r = await query<AdRow>(`SELECT * FROM ads WHERE id = $1 AND tenant_id = $2 AND client_id = $3`, [id, tenantId, clientId]);
