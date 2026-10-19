@@ -8,6 +8,10 @@ import {
   listClientModules,
   listClientModulesForTenant,
 } from "@worker/db/repositories/clientModules.js";
+import {
+  countUnconfiguredAds,
+  unconfiguredAdCountsByClient,
+} from "@worker/db/repositories/attribution.js";
 import { AppSidebar } from "./AppSidebar";
 
 /**
@@ -45,29 +49,34 @@ export async function AppSidebarServer() {
 
   let defaultClientId: string | null = null;
   let enabledModules: Record<string, string[]> = {};
+  let adCounts: Record<string, number> = {};
   let clientLabel: string | null = null;
 
   if (scope.memberClientId) {
     // Member: their client's module rows only.
-    const [memberClient, moduleRows] = await Promise.all([
+    const [memberClient, moduleRows, unconfigured] = await Promise.all([
       getClientById({ tenantId: scope.tenantId, clientId: scope.memberClientId }),
       listClientModules(scope.tenantId, scope.memberClientId),
+      countUnconfiguredAds(scope.tenantId, scope.memberClientId),
     ]);
     // A default client never exposes modules (defensive: a member shouldn't be
     // scoped to the default, but fail closed if data says otherwise).
     if (memberClient && !memberClient.is_default) {
       enabledModules = buildEnabledModulesMap(moduleRows, null);
+      adCounts = { [scope.memberClientId]: unconfigured }; // only their own client's count
     }
     // Their client name — so the footer/menu shows where they're scoped.
     clientLabel = memberClient ? (memberClient.is_default ? "Unassigned" : memberClient.name) : null;
   } else {
-    const [defaultClient, moduleRows] = await Promise.all([
+    const [defaultClient, moduleRows, counts] = await Promise.all([
       getDefaultClientForTenant(scope.tenantId),
       listClientModulesForTenant(scope.tenantId), // one query, no N+1
+      unconfiguredAdCountsByClient(scope.tenantId), // one grouped query, no N+1
     ]);
     defaultClientId = defaultClient?.id ?? null;
     // Default client's rows excluded — Unassigned never shows module links.
     enabledModules = buildEnabledModulesMap(moduleRows, defaultClientId);
+    adCounts = counts;
   }
 
   return (
@@ -76,6 +85,7 @@ export async function AppSidebarServer() {
       memberClientId={scope.memberClientId}
       defaultClientId={defaultClientId}
       enabledModules={enabledModules}
+      adCounts={adCounts}
       email={email}
       role={scope.role}
       clientLabel={clientLabel}

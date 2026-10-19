@@ -124,6 +124,25 @@ export function canManageCatalog(scope: AccessScope, clientId: string): boolean 
   return canManageClient(scope, clientId);
 }
 
+/**
+ * May this scope READ the Campañas section (detected ads, campaigns incl. the bot brief) and
+ * a contact's ORIGIN? The agency, a client OWNER, and a SETTER may — the Setter closes the
+ * leads the bot transfers and should know what the ad promised. STAFF may not (its one surface
+ * is scheduling). Exactly canAccessClient's audience (owner + setter + agency, never staff).
+ */
+export function canReadCampaigns(scope: AccessScope, clientId: string): boolean {
+  return canAccessClient(scope, clientId);
+}
+
+/**
+ * May this scope MANAGE campaigns — create/edit/end a campaign, assign ads, set a manual
+ * contact origin? The agency or this client's OWNER only; a Setter reads but never writes,
+ * Staff never. Mirrors canManageClient (the same authority catalog + scheduling settings use).
+ */
+export function canManageCampaigns(scope: AccessScope, clientId: string): boolean {
+  return canManageClient(scope, clientId);
+}
+
 /** A staff login — bound to one staff resource at one site; sees only scheduling. */
 export function isSchedulingStaff(scope: AccessScope): boolean {
   return scope.clientRole === "staff";

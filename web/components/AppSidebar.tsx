@@ -124,6 +124,13 @@ const Icon = {
       <circle cx="8.5" cy="8.5" r="1.2" fill="currentColor" />
     </svg>
   ),
+  /* Campaigns ("Campañas") — a megaphone: ads that bring leads in. */
+  campaigns: (
+    <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
+      <path d="M4 10v4a1 1 0 0 0 1 1h2l2.5 3.5a1 1 0 0 0 1.8-.6V6.1a1 1 0 0 0-1.8-.6L7 9H5a1 1 0 0 0-1 1Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <path d="M17 9a4 4 0 0 1 0 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  ),
 } as const;
 
 interface NavItem {
@@ -134,6 +141,8 @@ interface NavItem {
   active: boolean;
   /** When set, render the polling InboxTabLink (live aggregated pending badge). */
   countEndpoint?: string;
+  /** A static number badge (e.g. unconfigured-ads count); rendered when > 0 in the expanded rail. */
+  badge?: number;
 }
 interface NavSection {
   label: string;
@@ -184,6 +193,15 @@ function NavLink({
         {item.icon}
       </span>
       {collapsed ? null : <span className="flex-1 truncate">{item.label}</span>}
+      {!collapsed && item.badge != null && item.badge > 0 ? (
+        <span
+          className="u-mono ml-2 shrink-0 rounded-full bg-nav-active px-1.5 py-0.5 text-[0.625rem] font-semibold leading-none text-white"
+          aria-label={`${item.badge} sin configurar`}
+          title={`${item.badge} sin configurar`}
+        >
+          {item.badge}
+        </span>
+      ) : null}
     </Link>
   );
 }
@@ -460,6 +478,7 @@ export function AppSidebar({
   memberClientId,
   defaultClientId,
   enabledModules,
+  adCounts,
   email,
   role,
   clientLabel,
@@ -473,6 +492,8 @@ export function AppSidebar({
   defaultClientId: string | null;
   /** clientId → ENABLED module keys (server-resolved). Drives Contacts/Agenda. */
   enabledModules: Record<string, string[]>;
+  /** clientId → count of real (non-test) ads with no campaign yet — the Campañas nav badge. */
+  adCounts: Record<string, number>;
   /** Signed-in user identity for the footer account menu. */
   email: string;
   role: "owner" | "admin" | "member";
@@ -674,6 +695,23 @@ export function AppSidebar({
           ],
         });
       }
+      // CAMPAÑAS — ads + campaigns. Shown to general access (owner/setter/agency — the Setter
+      // closes the leads the bot transfers), never Staff. A badge counts the unconfigured ads.
+      if (moduleKeys.includes("campaigns") && canSeeGeneral) {
+        sections.push({
+          label: "Campañas",
+          items: [
+            {
+              key: "campaigns",
+              label: "Campañas",
+              href: c("/campaigns"),
+              icon: Icon.campaigns,
+              active: pathname.startsWith(c("/campaigns")),
+              badge: adCounts[clientId] ?? 0,
+            },
+          ],
+        });
+      }
       // ADMINISTRATION — Users & access for the client OWNER (and the agency); Modules is
       // AGENCY-ONLY plumbing (a client can't toggle its own modules).
       if (canManageThisClient) {
@@ -707,6 +745,16 @@ export function AppSidebar({
     }
     if (clientRole !== "staff" && memberModules.includes("catalog")) {
       items.push({ key: "catalog", label: "Productos", href: m("/catalog"), icon: Icon.catalog, active: pathname.startsWith(m("/catalog")) });
+    }
+    if (clientRole !== "staff" && memberModules.includes("campaigns")) {
+      items.push({
+        key: "campaigns",
+        label: "Campañas",
+        href: m("/campaigns"),
+        icon: Icon.campaigns,
+        active: pathname.startsWith(m("/campaigns")),
+        badge: adCounts[memberClientId] ?? 0,
+      });
     }
     sections = [{ label: "Client", items }];
   } else {

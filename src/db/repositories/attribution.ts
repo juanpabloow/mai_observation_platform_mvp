@@ -255,3 +255,230 @@ export async function setContactOrigin(input: SetContactOriginInput, client?: Po
   };
   return client ? exec(client) : withTransaction(exec);
 }
+
+// ── AT-2: Campaigns / Ads management + read API ─────────────────────────────────
+// The read + management half the Campañas UI drives. Every query is tenant_id +
+// client_id scoped. is_test ads (a "TEST-" external_id) are EXCLUDED by default
+// everywhere a human sees a count; the ads list can opt them back in for the toggle.
+
+/** An ad plus the two numbers the Ads tab shows: leads (contacts whose FIRST touch is
+ *  this ad — "this ad brought them") and touches (every inbound referral on it). */
+export interface AdWithStatsRow extends AdRow {
+  campaign_name: string | null;
+  leads: number;
+  touches: number;
+}
+
+/** A campaign plus how many ads are assigned to it. */
+export interface CampaignWithStatsRow extends CampaignRow {
+  ad_count: number;
+}
+
+export interface CreateCampaignInput {
+  tenantId: string;
+  clientId: string;
+  name: string;
+  status?: CampaignStatus;
+  startDate?: string | null;
+  endDate?: string | null;
+  externalCampaignId?: string | null;
+  targetServiceId?: string | null;
+  promotionId?: string | null;
+  botBrief?: string | null;
+}
+
+export interface UpdateCampaignInput {
+  name?: string;
+  status?: CampaignStatus;
+  startDate?: string | null;
+  endDate?: string | null;
+  externalCampaignId?: string | null;
+  targetServiceId?: string | null;
+  promotionId?: string | null;
+  botBrief?: string | null;
+}
+
+/** Origin detail for the contact record's "Origen" card — the first-touch ad + its
+ *  campaign, when the origin and date were set, and every touch (ad + date). Never
+ *  returns ctwa_clid (it must never surface in any UI/API). */
+export interface ContactOriginDetail {
+  originKind: OriginKind | null;
+  originSetAt: Date | null;
+  originSetBy: string | null;
+  ad: { id: string; externalId: string; sourceType: AdSourceType; headline: string | null } | null;
+  campaign: { id: string; name: string } | null;
+  touches: Array<{ id: string; occurredAt: Date; adExternalId: string; adHeadline: string | null; sourceType: AdSourceType }>;
+}
+
+/**
+ * Ads detected for a client, with leads + touches, newest-seen first. Test ads
+ * (is_test) are excluded unless includeTest. `campaign_name` is null when unassigned.
+ */
+export async function listAdsWithStats(
+  tenantId: string,
+  clientId: string,
+  opts: { includeTest?: boolean } = {},
+): Promise<AdWithStatsRow[]> {
+  const r = await query<AdWithStatsRow>(
+    `SELECT a.*, c.name AS campaign_name,
+            (SELECT count(*)::int FROM attribution_touches t
+               WHERE t.tenant_id = a.tenant_id AND t.client_id = a.client_id AND t.ad_id = a.id) AS touches,
+            (SELECT count(*)::int FROM contacts ct
+               JOIN attribution_touches ft ON ft.id = ct.first_touch_id
+              WHERE ct.tenant_id = a.tenant_id AND ct.client_id = a.client_id AND ft.ad_id = a.id) AS leads
+       FROM ads a
+       LEFT JOIN campaigns c ON c.id = a.campaign_id
+      WHERE a.tenant_id = $1 AND a.client_id = $2
+        ${opts.includeTest ? '' : 'AND a.is_test = false'}
+      ORDER BY a.last_seen_at DESC, a.id`,
+    [tenantId, clientId],
+  );
+  return r.rows;
+}
+
+/** Real (non-test) ads with no campaign yet — the "sin configurar" nav count. */
+export async function countUnconfiguredAds(tenantId: string, clientId: string): Promise<number> {
+  const r = await query<{ n: number }>(
+    `SELECT count(*)::int AS n FROM ads
+      WHERE tenant_id = $1 AND client_id = $2 AND campaign_id IS NULL AND is_test = false`,
+    [tenantId, clientId],
+  );
+  return r.rows[0]?.n ?? 0;
+}
+
+/** clientId → count of real (non-test) unconfigured ads, for the whole tenant in ONE query
+ *  (the sidebar "sin configurar" badge — avoids an N+1 across the agency's clients). */
+export async function unconfiguredAdCountsByClient(tenantId: string): Promise<Record<string, number>> {
+  const r = await query<{ client_id: string; n: number }>(
+    `SELECT client_id, count(*)::int AS n FROM ads
+      WHERE tenant_id = $1 AND campaign_id IS NULL AND is_test = false
+      GROUP BY client_id`,
+    [tenantId],
+  );
+  const out: Record<string, number> = {};
+  for (const row of r.rows) out[row.client_id] = row.n;
+  return out;
+}
+
+/** Campaigns for a client (active first, then newest), each with its assigned-ad count. */
+export async function listCampaignsWithStats(tenantId: string, clientId: string): Promise<CampaignWithStatsRow[]> {
+  const r = await query<CampaignWithStatsRow>(
+    `SELECT c.*,
+            (SELECT count(*)::int FROM ads a WHERE a.tenant_id = c.tenant_id AND a.client_id = c.client_id AND a.campaign_id = c.id) AS ad_count
+       FROM campaigns c
+      WHERE c.tenant_id = $1 AND c.client_id = $2
+      ORDER BY (c.status = 'active') DESC, c.created_at DESC`,
+    [tenantId, clientId],
+  );
+  return r.rows;
+}
+
+export async function createCampaign(input: CreateCampaignInput): Promise<CampaignRow> {
+  const r = await query<CampaignRow>(
+    `INSERT INTO campaigns (tenant_id, client_id, name, status, start_date, end_date,
+                            external_campaign_id, target_service_id, promotion_id, bot_brief)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
+    [input.tenantId, input.clientId, input.name, input.status ?? 'active', input.startDate ?? null,
+     input.endDate ?? null, input.externalCampaignId ?? null, input.targetServiceId ?? null,
+     input.promotionId ?? null, input.botBrief ?? null],
+  );
+  return r.rows[0]!;
+}
+
+/** Patch a campaign; dynamic SET, always pinned to (id, tenant_id, client_id). */
+export async function updateCampaign(
+  tenantId: string,
+  clientId: string,
+  id: string,
+  patch: UpdateCampaignInput,
+): Promise<CampaignRow | null> {
+  const sets: string[] = [];
+  const params: unknown[] = [id, tenantId, clientId];
+  const add = (col: string, val: unknown) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+  if (patch.name !== undefined) add('name', patch.name);
+  if (patch.status !== undefined) add('status', patch.status);
+  if (patch.startDate !== undefined) add('start_date', patch.startDate);
+  if (patch.endDate !== undefined) add('end_date', patch.endDate);
+  if (patch.externalCampaignId !== undefined) add('external_campaign_id', patch.externalCampaignId);
+  if (patch.targetServiceId !== undefined) add('target_service_id', patch.targetServiceId);
+  if (patch.promotionId !== undefined) add('promotion_id', patch.promotionId);
+  if (patch.botBrief !== undefined) add('bot_brief', patch.botBrief);
+  if (sets.length === 0) return getCampaignById(tenantId, clientId, id);
+  sets.push('updated_at = now()');
+  const r = await query<CampaignRow>(
+    `UPDATE campaigns SET ${sets.join(', ')} WHERE id = $1 AND tenant_id = $2 AND client_id = $3 RETURNING *`,
+    params,
+  );
+  return r.rows[0] ?? null;
+}
+
+/** End a campaign: status='ended', end_date defaulted to today when not already set. */
+export async function endCampaign(tenantId: string, clientId: string, id: string): Promise<CampaignRow | null> {
+  const r = await query<CampaignRow>(
+    `UPDATE campaigns SET status = 'ended', end_date = COALESCE(end_date, current_date), updated_at = now()
+      WHERE id = $1 AND tenant_id = $2 AND client_id = $3 RETURNING *`,
+    [id, tenantId, clientId],
+  );
+  return r.rows[0] ?? null;
+}
+
+/**
+ * Assign (or clear, with campaignId null) the campaign of one or more ads. The caller
+ * validates that campaignId belongs to this client. Returns the number of ads changed.
+ */
+export async function assignAdsToCampaign(
+  tenantId: string,
+  clientId: string,
+  adIds: string[],
+  campaignId: string | null,
+): Promise<number> {
+  if (adIds.length === 0) return 0;
+  const r = await query(
+    `UPDATE ads SET campaign_id = $4, updated_at = now()
+      WHERE tenant_id = $1 AND client_id = $2 AND id = ANY($3::uuid[])`,
+    [tenantId, clientId, adIds, campaignId],
+  );
+  return r.rowCount ?? 0;
+}
+
+/** The contact record's origin detail (first-touch ad + campaign + every touch). */
+export async function getContactOriginDetail(
+  tenantId: string,
+  clientId: string,
+  contactId: string,
+): Promise<ContactOriginDetail | null> {
+  const head = await query<{
+    origin_kind: OriginKind | null; origin_set_at: Date | null; origin_set_by: string | null;
+    ad_id: string | null; external_id: string | null; source_type: AdSourceType | null; headline: string | null;
+    campaign_id: string | null; campaign_name: string | null;
+  }>(
+    `SELECT ct.origin_kind, ct.origin_set_at, ct.origin_set_by,
+            a.id AS ad_id, a.external_id, a.source_type, a.headline,
+            c.id AS campaign_id, c.name AS campaign_name
+       FROM contacts ct
+       LEFT JOIN attribution_touches ft ON ft.id = ct.first_touch_id
+       LEFT JOIN ads a ON a.id = ft.ad_id
+       LEFT JOIN campaigns c ON c.id = a.campaign_id
+      WHERE ct.id = $1 AND ct.tenant_id = $2 AND ct.client_id = $3`,
+    [contactId, tenantId, clientId],
+  );
+  const row = head.rows[0];
+  if (!row) return null;
+  const touchesR = await query<{ id: string; occurred_at: Date; external_id: string; headline: string | null; source_type: AdSourceType }>(
+    `SELECT t.id, t.occurred_at, a.external_id, a.headline, a.source_type
+       FROM attribution_touches t JOIN ads a ON a.id = t.ad_id
+      WHERE t.tenant_id = $1 AND t.client_id = $2 AND t.contact_id = $3
+      ORDER BY t.occurred_at ASC, t.id ASC`,
+    [tenantId, clientId, contactId],
+  );
+  return {
+    originKind: row.origin_kind,
+    originSetAt: row.origin_set_at,
+    originSetBy: row.origin_set_by,
+    ad: row.ad_id ? { id: row.ad_id, externalId: row.external_id!, sourceType: row.source_type!, headline: row.headline } : null,
+    campaign: row.campaign_id ? { id: row.campaign_id, name: row.campaign_name! } : null,
+    touches: touchesR.rows.map((t) => ({
+      id: t.id, occurredAt: t.occurred_at, adExternalId: t.external_id, adHeadline: t.headline, sourceType: t.source_type,
+    })),
+  };
+}

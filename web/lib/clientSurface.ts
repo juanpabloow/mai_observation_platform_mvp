@@ -37,6 +37,7 @@ const CLIENT_SURFACE_LABELS: ReadonlyArray<{ pattern: RegExp; label: string }> =
   { pattern: /^\/clients\/([^/]+)\/scheduling\/staff(?:\/|$)/, label: "Equipo" },
   { pattern: /^\/clients\/([^/]+)\/scheduling\/admin(?:\/|$)/, label: "Configuración de agenda" },
   { pattern: /^\/clients\/([^/]+)\/scheduling\/reviews(?:\/|$)/, label: "Reseñas" },
+  { pattern: /^\/clients\/([^/]+)\/campaigns(?:\/|$)/, label: "Campañas" },
 ];
 
 export interface ClientSurface {

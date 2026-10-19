@@ -39,6 +39,10 @@ const MODULE_COPY: Record<string, { name: string; description: string }> = {
     name: "Productos",
     description: "A catalogue of what the client sells — name, price, description and availability — that the assistant can read.",
   },
+  campaigns: {
+    name: "Campañas",
+    description: "Detected Meta ads grouped into campaigns with a brief for the assistant, plus each contact's lead origin.",
+  },
 };
 
 export function ClientModulesPanel({
