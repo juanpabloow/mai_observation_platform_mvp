@@ -31,6 +31,10 @@ export interface AdRow {
   platform: AdPlatform;
   source_type: AdSourceType;
   external_id: string;
+  /** AT-2b: the Ads Manager NAME (person-set, optional) — the referral never carries it. */
+  name: string | null;
+  /** AT-2b: per-ad note the assistant reads with the campaign brief (person-set, optional). */
+  bot_note: string | null;
   headline: string | null;
   body: string | null;
   source_url: string | null;
@@ -135,6 +139,68 @@ export async function setAttributionBriefWindowDays(tenantId: string, clientId: 
 /** An ad owned by this client, or null. */
 export async function getAdById(tenantId: string, clientId: string, id: string): Promise<AdRow | null> {
   const r = await query<AdRow>(`SELECT * FROM ads WHERE id = $1 AND tenant_id = $2 AND client_id = $3`, [id, tenantId, clientId]);
+  return r.rows[0] ?? null;
+}
+
+/** The ad with this external id for a client (the dedup key AT-1 ingestion also uses), or null. */
+export async function getAdByExternalId(
+  tenantId: string,
+  clientId: string,
+  externalId: string,
+  sourceType: AdSourceType = 'ad',
+): Promise<AdRow | null> {
+  const r = await query<AdRow>(
+    `SELECT * FROM ads WHERE tenant_id = $1 AND client_id = $2 AND platform = 'meta' AND source_type = $3 AND external_id = $4`,
+    [tenantId, clientId, sourceType, externalId],
+  );
+  return r.rows[0] ?? null;
+}
+
+export interface CreateAdInput {
+  tenantId: string;
+  clientId: string;
+  externalId: string;
+  sourceType?: AdSourceType;
+  name?: string | null;
+  botNote?: string | null;
+  campaignId?: string | null;
+}
+
+/**
+ * AT-2b: PRE-REGISTER an ad by id — the SAME row AT-1 would create on first sight (platform meta),
+ * so when the first lead writes, registerAdAndTouch's ON CONFLICT upsert finds it and only refreshes
+ * headline/body/source_url/media_type/seen (never name/bot_note/campaign_id). A duplicate (client,
+ * platform, source_type, external_id) raises 23505 (ads_unique); the caller maps it to a clear
+ * "already exists" pointing at the existing ad.
+ */
+export async function createAd(input: CreateAdInput): Promise<AdRow> {
+  const r = await query<AdRow>(
+    `INSERT INTO ads (tenant_id, client_id, platform, source_type, external_id, name, bot_note, campaign_id)
+       VALUES ($1, $2, 'meta', $3, $4, $5, $6, $7) RETURNING *`,
+    [input.tenantId, input.clientId, input.sourceType ?? 'ad', input.externalId,
+     input.name ?? null, input.botNote ?? null, input.campaignId ?? null],
+  );
+  return r.rows[0]!;
+}
+
+/** Patch a person-set ad field (name / bot_note). Pinned to (id, tenant_id, client_id). */
+export async function updateAd(
+  tenantId: string,
+  clientId: string,
+  id: string,
+  patch: { name?: string | null; botNote?: string | null },
+): Promise<AdRow | null> {
+  const sets: string[] = [];
+  const params: unknown[] = [id, tenantId, clientId];
+  const add = (col: string, val: unknown) => { params.push(val); sets.push(`${col} = $${params.length}`); };
+  if (patch.name !== undefined) add('name', patch.name);
+  if (patch.botNote !== undefined) add('bot_note', patch.botNote);
+  if (sets.length === 0) return getAdById(tenantId, clientId, id);
+  sets.push('updated_at = now()');
+  const r = await query<AdRow>(
+    `UPDATE ads SET ${sets.join(', ')} WHERE id = $1 AND tenant_id = $2 AND client_id = $3 RETURNING *`,
+    params,
+  );
   return r.rows[0] ?? null;
 }
 

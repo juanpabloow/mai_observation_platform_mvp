@@ -45,6 +45,8 @@ export default async function ClientCampaignsPage({
         id: a.id,
         external_id: a.external_id,
         source_type: a.source_type,
+        name: a.name,
+        bot_note: a.bot_note,
         headline: a.headline,
         body: a.body,
         media_type: a.media_type,

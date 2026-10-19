@@ -5,6 +5,7 @@ import { query } from '../../src/db/client.js';
 import {
   assignAdsToCampaign,
   countUnconfiguredAds,
+  createAd,
   createCampaign,
   endCampaign,
   getContactOriginDetail,
@@ -14,11 +15,15 @@ import {
   updateCampaign,
 } from '../../src/db/repositories/attribution.js';
 import { listContacts } from '../../src/db/repositories/contacts.js';
+import { issueToken } from '../../src/db/repositories/handoffTokens.js';
 import { cleanupTenant, closeDb, seedContact, seedScenario, seedWorkflow } from './fixtures.js';
+
+const { POST: Messages } = await import('../../web/app/api/handoff/v1/messages/route.js');
 
 after(closeDb);
 
 const one = async <T>(sql: string, params: unknown[]): Promise<T> => (await query<T>(sql, params)).rows[0];
+const count = async (sql: string, params: unknown[]): Promise<number> => (await query<{ n: number }>(sql, params)).rows[0].n;
 
 type S = Awaited<ReturnType<typeof seedScenario>>;
 const insertAd = async (s: S, externalId: string, campaignId: string | null = null, clientId = s.clientId): Promise<string> =>
@@ -161,5 +166,39 @@ test('AT-2 repo: contacts origin filter + campaign filter return exactly the rig
 
     const emptyCampaign = await listContacts(s.tenantId, { clientId: s.clientId, campaignId: randomUUID() });
     assert.equal(emptyCampaign.items.length, 0);
+  } finally { await cleanupTenant(s.tenantId); }
+});
+
+test('AT-2b: pre-register an ad, then a referral with the same id → ONE row, person-set fields untouched, touch attached', async () => {
+  const s = await seedScenario({ enableCrm: true, enableCampaigns: true });
+  try {
+    const wfRef = `wf-${s.tenantId.slice(0, 8)}`;
+    const { connectionId } = await seedWorkflow(s.tenantId, s.clientId, wfRef);
+    const { rawToken } = await issueToken(s.tenantId, connectionId, ['handoff']);
+    const camp = await createCampaign({ tenantId: s.tenantId, clientId: s.clientId, name: 'Pre' });
+    // Pre-register the ad by id with person-set name/note/campaign (no touches yet).
+    const pre = await createAd({ tenantId: s.tenantId, clientId: s.clientId, externalId: '900999', name: 'Factos Falla', botNote: 'presenta a Falla', campaignId: camp.id });
+
+    // The first lead writes a referral carrying the SAME id (and a headline AT-1 would store).
+    const res = await Messages(new Request('http://t/api/handoff/v1/messages', {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${rawToken}`, 'content-type': 'application/json' },
+      body: JSON.stringify({
+        workflow_ref: wfRef, conversation_ref: '573001112233', sender: 'user', text: 'hola', external_message_id: 'm1',
+        metadata: { referral_source_type: 'ad', referral_source_id: '900999', referral_headline: 'Agenda tu asesoría' },
+      }),
+    }));
+    assert.ok(res.status === 201 || res.status === 200);
+
+    const rows = await query<{ id: string; name: string; bot_note: string; campaign_id: string; headline: string }>(
+      `SELECT id, name, bot_note, campaign_id, headline FROM ads WHERE tenant_id=$1 AND external_id='900999'`, [s.tenantId]);
+    assert.equal(rows.rows.length, 1, 'AT-1 ingestion reused the pre-registered row — no duplicate');
+    const row = rows.rows[0];
+    assert.equal(row.id, pre.id, 'same ad row');
+    assert.equal(row.name, 'Factos Falla', 'person-set name untouched');
+    assert.equal(row.bot_note, 'presenta a Falla', 'person-set note untouched');
+    assert.equal(row.campaign_id, camp.id, 'person-set campaign untouched');
+    assert.equal(row.headline, 'Agenda tu asesoría', 'ingestion refreshed only the creative headline');
+    assert.equal(await count(`SELECT count(*)::int n FROM attribution_touches WHERE tenant_id=$1 AND ad_id=$2`, [s.tenantId, pre.id]), 1, 'the touch attached to the pre-registered ad');
   } finally { await cleanupTenant(s.tenantId); }
 });

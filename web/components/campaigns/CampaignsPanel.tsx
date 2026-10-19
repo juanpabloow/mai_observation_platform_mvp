@@ -5,11 +5,13 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PageShell } from "@/components/ui/PageShell";
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
-import { CAMPAIGN_BRIEF_MAX } from "@/lib/campaignsValidation";
+import { AD_NOTE_MAX, CAMPAIGN_BRIEF_MAX } from "@/lib/campaignsValidation";
 import {
   assignAdsToCampaignAction,
+  createAdAction,
   createCampaignAction,
   endCampaignAction,
+  updateAdAction,
   updateCampaignAction,
 } from "@/lib/campaignsActions";
 
@@ -25,6 +27,8 @@ export interface AdItem {
   id: string;
   external_id: string;
   source_type: "ad" | "post";
+  name: string | null;
+  bot_note: string | null;
   headline: string | null;
   body: string | null;
   media_type: string | null;
@@ -209,9 +213,21 @@ function AdsTab({
 }) {
   const [showTest, setShowTest] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<AdItem | null>(null);
   const hasTest = ads.some((a) => a.is_test);
-  const visible = ads.filter((a) => showTest || !a.is_test);
   const assignable = campaigns.filter((c) => c.status !== "ended");
+  const q = search.trim().toLocaleLowerCase("es");
+  const visible = ads.filter(
+    (a) =>
+      (showTest || !a.is_test) &&
+      (q === "" ||
+        (a.name ?? "").toLocaleLowerCase("es").includes(q) ||
+        (a.headline ?? "").toLocaleLowerCase("es").includes(q) ||
+        a.external_id.includes(q)),
+  );
+  const noRealAds = ads.filter((a) => !a.is_test).length === 0;
 
   const toggle = (id: string) =>
     setSelected((prev) => {
@@ -234,17 +250,25 @@ function AdsTab({
   return (
     <PageShell className="overflow-y-auto" ariaLabel="Anuncios detectados">
       <div className="flex min-h-full w-full flex-col gap-2.5 p-3 sm:p-4">
-        {ads.filter((a) => !a.is_test).length === 0 && !showTest ? (
+        {noRealAds && !showTest ? (
           <div className="flex min-h-72 flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-line bg-surface px-4 py-12 text-center">
             <p className="text-sm font-semibold text-foreground">Aún no detectamos anuncios</p>
             <p className="mt-1 max-w-sm text-xs text-muted">
-              Cuando alguien escriba desde un anuncio de Meta, aparecerá aquí para que lo asignes a una campaña.
+              Cuando alguien escriba desde un anuncio de Meta, aparecerá aquí. O agrégalo por su id para configurarlo
+              desde ya.
             </p>
-            {hasTest ? (
-              <button type="button" className={`${GHOST} mt-4`} onClick={() => setShowTest(true)}>
-                Mostrar anuncios de prueba
-              </button>
-            ) : null}
+            <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
+              {canManage ? (
+                <button type="button" className={BTN} onClick={() => setCreating(true)}>
+                  + Agregar anuncio
+                </button>
+              ) : null}
+              {hasTest ? (
+                <button type="button" className={GHOST} onClick={() => setShowTest(true)}>
+                  Mostrar anuncios de prueba
+                </button>
+              ) : null}
+            </div>
           </div>
         ) : (
           <div className="flex flex-col gap-3 rounded-xl border border-line bg-surface p-3 sm:p-4">
@@ -276,14 +300,26 @@ function AdsTab({
                   </select>
                 </div>
               ) : (
-                <span className="text-xs text-muted">
+                <span className="shrink-0 text-xs text-muted">
                   {visible.length} anuncio{visible.length === 1 ? "" : "s"}
                 </span>
               )}
+              <input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Buscar por nombre, titular o id…"
+                aria-label="Buscar anuncio"
+                className={`${INPUT} min-w-0 flex-1 bg-subtle/60 sm:max-w-xs`}
+              />
+              {canManage ? (
+                <button type="button" className={BTN} onClick={() => setCreating(true)}>
+                  + Agregar anuncio
+                </button>
+              ) : null}
               {hasTest ? (
-                <label className="ml-auto inline-flex items-center gap-2 text-xs text-muted">
+                <label className="inline-flex items-center gap-2 text-xs text-muted">
                   <input type="checkbox" checked={showTest} onChange={(e) => setShowTest(e.target.checked)} />
-                  Mostrar anuncios de prueba
+                  Prueba
                 </label>
               ) : null}
             </div>
@@ -299,11 +335,50 @@ function AdsTab({
                 pending={pending}
                 selected={selected.has(ad.id)}
                 onToggle={() => toggle(ad.id)}
+                onEdit={() => setEditing(ad)}
               />
             ))}
+            {visible.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-line px-4 py-8 text-center">
+                <p className="text-xs text-muted">Ningún anuncio coincide con la búsqueda.</p>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
+
+      {creating ? (
+        <AdModal
+          mode="create"
+          campaigns={assignable}
+          pending={pending}
+          onClose={() => setCreating(false)}
+          onSubmit={(values) =>
+            run(async () => {
+              const r = await createAdAction({ clientId, ...values });
+              if (r.ok) setCreating(false);
+              return r;
+            })
+          }
+        />
+      ) : null}
+
+      {editing ? (
+        <AdModal
+          mode="edit"
+          initial={editing}
+          campaigns={assignable}
+          pending={pending}
+          onClose={() => setEditing(null)}
+          onSubmit={(values) =>
+            run(async () => {
+              const r = await updateAdAction(clientId, editing.id, { name: values.name, botNote: values.botNote });
+              if (r.ok) setEditing(null);
+              return r;
+            })
+          }
+        />
+      ) : null}
     </PageShell>
   );
 }
@@ -317,6 +392,7 @@ function AdRow({
   pending,
   selected,
   onToggle,
+  onEdit,
 }: {
   clientId: string;
   ad: AdItem;
@@ -326,7 +402,11 @@ function AdRow({
   pending: boolean;
   selected: boolean;
   onToggle: () => void;
+  onEdit: () => void;
 }) {
+  // Name is the main label when present (the Ads Manager name); the creative headline drops to the
+  // body line so both stay visible. A pre-registered ad with no touches reads "Sin leads todavía".
+  const label = ad.name || ad.headline || "(sin titular)";
   return (
     <article className="flex flex-wrap items-start gap-3 overflow-hidden rounded-xl border border-line bg-surface px-4 py-3.5">
       {canManage ? (
@@ -340,7 +420,7 @@ function AdRow({
       ) : null}
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
-          <h3 className="truncate text-sm font-semibold text-foreground">{ad.headline || "(sin titular)"}</h3>
+          <h3 className="truncate text-sm font-semibold text-foreground">{label}</h3>
           <span className="rounded-full bg-chip px-2 py-0.5 text-[0.625rem] font-medium text-muted">
             {ad.source_type === "post" ? "Publicación" : "Anuncio"}
           </span>
@@ -352,12 +432,24 @@ function AdRow({
           ) : (
             <span className="rounded-full bg-warn-soft px-2 py-0.5 text-[0.625rem] font-medium text-warn">Sin configurar</span>
           )}
+          {ad.bot_note ? (
+            <span className="rounded-full bg-chip px-2 py-0.5 text-[0.625rem] font-medium text-muted" title={ad.bot_note}>
+              nota
+            </span>
+          ) : null}
           <AdId externalId={ad.external_id} />
         </div>
+        {ad.name && ad.headline ? <p className="mt-1 truncate text-xs text-muted">{ad.headline}</p> : null}
         {ad.body ? <p className="mt-1 line-clamp-2 text-xs text-muted">{ad.body}</p> : null}
         <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.6875rem] text-faint">
-          <span className="u-mono">{ad.leads} lead{ad.leads === 1 ? "" : "s"}</span>
-          <span className="u-mono">{ad.touches} contacto{ad.touches === 1 ? "" : "s"}</span>
+          {ad.touches === 0 ? (
+            <span>Sin leads todavía</span>
+          ) : (
+            <>
+              <span className="u-mono">{ad.leads} lead{ad.leads === 1 ? "" : "s"}</span>
+              <span className="u-mono">{ad.touches} contacto{ad.touches === 1 ? "" : "s"}</span>
+            </>
+          )}
           {ad.media_type ? <span>{ad.media_type}</span> : null}
           <span>Visto {fmtDate(ad.first_seen_at)} → {fmtDate(ad.last_seen_at)}</span>
           {ad.source_url ? (
@@ -369,28 +461,183 @@ function AdRow({
       </div>
 
       {canManage ? (
-        <label className="flex shrink-0 flex-col gap-1">
-          <span className="sr-only">Campaña del anuncio {ad.external_id}</span>
-          <select
-            aria-label={`Campaña del anuncio ${ad.external_id}`}
-            disabled={pending}
-            value={ad.campaign_id ?? ""}
-            onChange={(e) => {
-              const v = e.target.value;
-              run(() => assignAdsToCampaignAction(clientId, [ad.id], v === "" ? null : v));
-            }}
-            className={`${INPUT} max-w-[12rem]`}
-          >
-            <option value="">Sin campaña</option>
-            {campaigns.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="flex shrink-0 items-center gap-2">
+          <button type="button" className={GHOST} onClick={onEdit} aria-haspopup="dialog">
+            Editar
+          </button>
+          <label>
+            <span className="sr-only">Campaña del anuncio {ad.external_id}</span>
+            <select
+              aria-label={`Campaña del anuncio ${ad.external_id}`}
+              disabled={pending}
+              value={ad.campaign_id ?? ""}
+              onChange={(e) => {
+                const v = e.target.value;
+                run(() => assignAdsToCampaignAction(clientId, [ad.id], v === "" ? null : v));
+              }}
+              className={`${INPUT} max-w-[11rem]`}
+            >
+              <option value="">Sin campaña</option>
+              {campaigns.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       ) : null}
     </article>
+  );
+}
+
+interface AdValues {
+  externalId: string;
+  name: string | null;
+  botNote: string | null;
+  campaignId: string | null;
+}
+
+/** Create ("Agregar anuncio", by Meta id) or edit (name + note) an ad. */
+function AdModal({
+  mode,
+  initial,
+  campaigns,
+  pending,
+  onClose,
+  onSubmit,
+}: {
+  mode: "create" | "edit";
+  initial?: AdItem;
+  campaigns: CampaignItem[];
+  pending: boolean;
+  onClose: () => void;
+  onSubmit: (values: AdValues) => void;
+}) {
+  const [externalId, setExternalId] = useState(initial?.external_id ?? "");
+  const [name, setName] = useState(initial?.name ?? "");
+  const [note, setNote] = useState(initial?.bot_note ?? "");
+  const [campaignId, setCampaignId] = useState(initial?.campaign_id ?? "");
+
+  const closeRef = useRef(onClose);
+  useEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
+  const close = useCallback(() => closeRef.current(), []);
+  const panelRef = useTrappedPanel({ active: true, onClose: close });
+
+  const title = mode === "create" ? "Agregar anuncio" : initial?.name || initial?.headline || "Editar anuncio";
+  const idOk = mode === "edit" || /^\d+$/.test(externalId.trim());
+
+  const submit = () =>
+    onSubmit({
+      externalId: externalId.trim(),
+      name: name.trim() === "" ? null : name.trim(),
+      botNote: note.trim() === "" ? null : note,
+      campaignId: campaignId === "" ? null : campaignId,
+    });
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-5">
+      <button type="button" aria-label={`Cerrar ${title}`} className={OVERLAY_SCRIM} onClick={close} />
+      <section
+        ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
+        tabIndex={-1}
+        className="relative z-50 flex max-h-[min(760px,calc(100dvh-2rem))] w-full flex-col overflow-hidden rounded-t-2xl border border-line bg-surface sm:max-w-xl sm:rounded-2xl"
+      >
+        <header className="flex shrink-0 items-start gap-4 border-b border-line px-4 py-3.5 sm:px-5">
+          <div className="min-w-0 flex-1">
+            <h2 className="text-base font-semibold text-foreground">{title}</h2>
+            <p className="mt-0.5 text-xs text-muted">
+              {mode === "create"
+                ? "Pre-regístralo por su id de Meta para configurarlo antes del primer lead."
+                : "Nombre y nota de este anuncio."}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={close}
+            aria-label="Cerrar"
+            className="flex size-9 shrink-0 items-center justify-center rounded-lg text-lg text-muted transition hover:bg-subtle hover:text-foreground"
+          >
+            ×
+          </button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          <div className="grid gap-3">
+            {mode === "create" ? (
+              <Field label="Id del anuncio de Meta" hint="Solo dígitos, como aparece en Ads Manager.">
+                <input
+                  value={externalId}
+                  onChange={(e) => setExternalId(e.target.value)}
+                  inputMode="numeric"
+                  placeholder="Ej. 120210000000000"
+                  className={`${INPUT} w-full`}
+                />
+              </Field>
+            ) : (
+              <Field label="Id del anuncio de Meta">
+                <input value={externalId} disabled className={`${INPUT} w-full`} />
+              </Field>
+            )}
+            <Field label="Nombre" hint="El nombre del anuncio en Ads Manager (opcional). Ej. «Factos Falla».">
+              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Opcional" className={`${INPUT} w-full`} />
+            </Field>
+            {mode === "create" ? (
+              <Field label="Campaña" hint="Opcional.">
+                <select value={campaignId} onChange={(e) => setCampaignId(e.target.value)} className={`${INPUT} w-full`}>
+                  <option value="">Sin campaña</option>
+                  {campaigns.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+            ) : null}
+          </div>
+
+          <div className="mt-4">
+            <label className="mb-1.5 flex flex-col gap-1.5">
+              <span className="text-xs font-medium text-foreground">
+                Nota del anuncio <span className="font-normal text-faint">(opcional)</span>
+              </span>
+              <textarea
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                rows={3}
+                maxLength={AD_NOTE_MAX}
+                placeholder="Lo específico de ESTE anuncio. Ej. «Presenta a Falla; si lo mencionan, ofrece primero su disponibilidad»."
+                className="min-h-[4.5rem] w-full resize-y rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-foreground outline-none transition focus:border-foreground"
+              />
+            </label>
+            <div className="flex items-center justify-between">
+              <p className="text-[0.6875rem] text-faint">El asistente lo lee junto con el brief de la campaña.</p>
+              <p className="shrink-0 pl-3 text-[0.6875rem] text-faint">
+                {note.length}/{AD_NOTE_MAX}
+              </p>
+            </div>
+          </div>
+        </div>
+
+        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-card/50 px-4 py-3 sm:px-5">
+          <button
+            type="button"
+            onClick={close}
+            className="inline-flex h-[44px] items-center justify-center rounded-lg border border-line-strong px-3.5 text-sm font-medium text-foreground transition hover:bg-subtle lg:h-[36px]"
+          >
+            Cancelar
+          </button>
+          <button className={BTN} disabled={pending || !idOk} onClick={submit}>
+            {mode === "create" ? "Agregar anuncio" : "Guardar cambios"}
+          </button>
+        </footer>
+      </section>
+    </div>
   );
 }
 
@@ -707,7 +954,7 @@ function CampaignModal({
                 ))}
               </select>
             </Field>
-            <Field label="Id de campaña de Meta" hint="Opcional.">
+            <Field label="Id de campaña de Meta" hint="Opcional. En Ads Manager → Campañas, agrega la columna «ID de la campaña».">
               <input value={externalId} onChange={(e) => setExternalId(e.target.value)} placeholder="Opcional" className={`${INPUT} w-full`} />
             </Field>
           </div>

@@ -1,13 +1,17 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import {
+  AD_NOTE_MAX,
   CAMPAIGN_BRIEF_MAX,
   CAMPAIGN_NAME_MAX,
+  normalizeAdName,
+  normalizeAdNote,
   normalizeCampaignBrief,
   normalizeCampaignDate,
   normalizeCampaignName,
   normalizeCampaignStatus,
   normalizeExternalCampaignId,
+  normalizeMetaAdId,
   validateDateRange,
 } from '../../web/lib/campaignsValidation.js';
 
@@ -50,4 +54,26 @@ test('validateDateRange: end must not precede start', () => {
   assert.equal(validateDateRange('2026-02-01', '2026-01-01').ok, false);
   assert.equal(validateDateRange(null, '2026-01-01').ok, true);
   assert.equal(validateDateRange('2026-01-01', null).ok, true);
+});
+
+test('normalizeAdName: optional, blank→null, ≤200', () => {
+  assert.deepEqual(normalizeAdName(undefined), { ok: true, value: null });
+  assert.deepEqual(normalizeAdName('  '), { ok: true, value: null });
+  assert.equal(normalizeAdName('  Factos Falla ').ok && normalizeAdName('  Factos Falla ').value, 'Factos Falla');
+  assert.equal(normalizeAdName('x'.repeat(201)).ok, false);
+});
+
+test('normalizeAdNote: optional, blank→null, ≤500', () => {
+  assert.deepEqual(normalizeAdNote(''), { ok: true, value: null });
+  assert.equal(normalizeAdNote('x'.repeat(AD_NOTE_MAX)).ok, true);
+  assert.equal(normalizeAdNote('x'.repeat(AD_NOTE_MAX + 1)).ok, false);
+});
+
+test('normalizeMetaAdId: required, digits only, ≤200', () => {
+  assert.equal(normalizeMetaAdId('120210000000000').ok && normalizeMetaAdId('120210000000000').value, '120210000000000');
+  assert.equal(normalizeMetaAdId('  777  ').ok && normalizeMetaAdId('  777  ').value, '777');
+  assert.equal(normalizeMetaAdId('').ok, false);
+  assert.equal(normalizeMetaAdId('abc').ok, false);
+  assert.equal(normalizeMetaAdId('TEST-1').ok, false, 'pre-register is a real digit id, not a TEST- id');
+  assert.equal(normalizeMetaAdId('12 34').ok, false);
 });

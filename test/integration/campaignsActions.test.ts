@@ -26,7 +26,7 @@ mock.module(urlOf('next/headers'), { namedExports: { headers: async () => new He
 mock.module(urlOf('next/cache'), { namedExports: { revalidatePath: () => {}, revalidateTag: () => {} } });
 const asUser = (id: string) => { CURRENT = { id, email: `${id.slice(0, 8)}@test.local` }; };
 
-const { createCampaignAction, updateCampaignAction, endCampaignAction, assignAdsToCampaignAction } = await import('../../web/lib/campaignsActions.js');
+const { createCampaignAction, updateCampaignAction, endCampaignAction, assignAdsToCampaignAction, createAdAction, updateAdAction } = await import('../../web/lib/campaignsActions.js');
 const { setAttributionBriefWindowDaysAction } = await import('../../web/lib/attributionActions.js');
 after(closeDb);
 
@@ -119,5 +119,52 @@ test('AT-2 settings: brief window is AGENCY ONLY and bounded', async () => {
     // A client OWNER is a member → requireFullAccessForAction THROWS (a settings write is agency-only).
     asUser(owner);
     await assert.rejects(() => setAttributionBriefWindowDaysAction(s.clientId, 10), /Forbidden/);
+  } finally { await cleanupTenant(s.tenantId); }
+});
+
+test('AT-2b ads: pre-register — agency ✓, setter ✗; duplicate refused; validation; per-client id', async () => {
+  const s = await seedScenario({ enableCampaigns: true });
+  try {
+    const agency = await seedMember(s.tenantId, { role: 'owner' });
+    const setter = await seedMember(s.tenantId, { role: 'member', clientId: s.clientId, clientRole: 'setter' });
+
+    asUser(agency);
+    const created = await createAdAction({ clientId: s.clientId, externalId: '900999', name: 'Factos Falla', botNote: 'nota' });
+    assert.ok(created.ok && created.id, 'agency pre-registers an ad');
+    // duplicate id in the SAME client → refused with a clear message.
+    const dup = await createAdAction({ clientId: s.clientId, externalId: '900999' });
+    assert.equal(dup.ok, false);
+    assert.match(dup.error ?? '', /Ya existe/);
+    // the SAME id in ANOTHER client is allowed (uniqueness is per client).
+    assert.equal((await createAdAction({ clientId: s.otherClientId, externalId: '900999' })).ok, true);
+    // validation: non-digit id and an over-long note are refused.
+    assert.equal((await createAdAction({ clientId: s.clientId, externalId: 'abc' })).ok, false);
+    assert.equal((await createAdAction({ clientId: s.clientId, externalId: '900998', botNote: 'x'.repeat(501) })).ok, false);
+
+    // edit name + note.
+    assert.equal((await updateAdAction(s.clientId, created.id!, { name: 'Falla v2', botNote: 'otra' })).ok, true);
+    const row = await one<{ name: string; bot_note: string }>(`SELECT name, bot_note FROM ads WHERE id=$1`, [created.id]);
+    assert.deepEqual({ n: row.name, b: row.bot_note }, { n: 'Falla v2', b: 'otra' });
+
+    // a setter can neither pre-register nor edit.
+    asUser(setter);
+    assert.equal((await createAdAction({ clientId: s.clientId, externalId: '900997' })).ok, false);
+    assert.equal((await updateAdAction(s.clientId, created.id!, { name: 'x' })).ok, false);
+  } finally { await cleanupTenant(s.tenantId); }
+});
+
+test('AT-2b ads: module OFF and cross-client refused', async () => {
+  const off = await seedScenario({ enableCampaigns: false });
+  try {
+    const agency = await seedMember(off.tenantId, { role: 'owner' });
+    asUser(agency);
+    assert.equal((await createAdAction({ clientId: off.clientId, externalId: '900999' })).ok, false, 'module off → refused');
+  } finally { await cleanupTenant(off.tenantId); }
+
+  const s = await seedScenario({ enableCampaigns: true });
+  try {
+    const ownerA = await seedMember(s.tenantId, { role: 'member', clientId: s.clientId, clientRole: 'owner' });
+    asUser(ownerA);
+    assert.equal((await createAdAction({ clientId: s.otherClientId, externalId: '900999' })).ok, false, 'owner of A cannot pre-register in B');
   } finally { await cleanupTenant(s.tenantId); }
 });

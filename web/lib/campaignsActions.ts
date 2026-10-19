@@ -5,18 +5,24 @@ import { canManageCampaigns } from "./access";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { isUuid } from "./clientModuleValidation";
 import {
+  normalizeAdName,
+  normalizeAdNote,
   normalizeCampaignBrief,
   normalizeCampaignDate,
   normalizeCampaignName,
   normalizeCampaignStatus,
   normalizeExternalCampaignId,
+  normalizeMetaAdId,
   validateDateRange,
 } from "./campaignsValidation";
 import {
   assignAdsToCampaign,
+  createAd,
   createCampaign,
   endCampaign,
+  getAdByExternalId,
   getCampaignById,
+  updateAd,
   updateCampaign,
   type UpdateCampaignInput,
 } from "@worker/db/repositories/attribution.js";
@@ -194,6 +200,82 @@ export async function endCampaignAction(clientId: string, id: string): Promise<C
   if (!row) return { ok: false, error: "Campaña no encontrada." };
   revalidateCampaigns(clientId);
   return { ok: true, id };
+}
+
+/**
+ * AT-2b: PRE-REGISTER an ad by its Meta id, with optional name/note/campaign. A duplicate id in
+ * the same client is refused with a message pointing at the existing ad. The row is identical to
+ * what AT-1 ingestion would create, so the first lead only refreshes headline/body/seen and never
+ * duplicates or overwrites these person-set fields.
+ */
+export async function createAdAction(input: {
+  clientId: string;
+  externalId: string;
+  name?: string | null;
+  botNote?: string | null;
+  campaignId?: string | null;
+}): Promise<CampaignsResult> {
+  const auth = await requireCampaignsManager(input.clientId);
+  if (!auth.ok) return auth;
+
+  const id = normalizeMetaAdId(input.externalId);
+  if (!id.ok) return { ok: false, error: id.error };
+  const name = normalizeAdName(input.name);
+  if (!name.ok) return { ok: false, error: name.error };
+  const note = normalizeAdNote(input.botNote);
+  if (!note.ok) return { ok: false, error: note.error };
+  let campaignId: string | null = null;
+  if (input.campaignId) {
+    if (!isUuid(input.campaignId) || !(await getCampaignById(auth.tenantId, input.clientId, input.campaignId))) {
+      return { ok: false, error: "Campaña desconocida." };
+    }
+    campaignId = input.campaignId;
+  }
+
+  const dupMsg = `Ya existe un anuncio con ese id (…${id.value.slice(-6)}). Búscalo en la lista de anuncios.`;
+  if (await getAdByExternalId(auth.tenantId, input.clientId, id.value)) return { ok: false, error: dupMsg };
+  try {
+    const row = await createAd({
+      tenantId: auth.tenantId,
+      clientId: input.clientId,
+      externalId: id.value,
+      name: name.value,
+      botNote: note.value,
+      campaignId,
+    });
+    revalidateCampaigns(input.clientId);
+    return { ok: true, id: row.id };
+  } catch (err) {
+    // ads_unique (client, platform, source_type, external_id) — a race past the check above.
+    if ((err as { code?: string })?.code === "23505") return { ok: false, error: dupMsg };
+    return { ok: false, error: "No se pudo agregar el anuncio." };
+  }
+}
+
+/** AT-2b: edit a person-set ad field (name / bot_note). */
+export async function updateAdAction(
+  clientId: string,
+  adId: string,
+  patch: { name?: string | null; botNote?: string | null },
+): Promise<CampaignsResult> {
+  const auth = await requireCampaignsManager(clientId);
+  if (!auth.ok) return auth;
+  if (!isUuid(adId)) return { ok: false, error: "Anuncio no encontrado." };
+  const built: { name?: string | null; botNote?: string | null } = {};
+  if (patch.name !== undefined) {
+    const n = normalizeAdName(patch.name);
+    if (!n.ok) return { ok: false, error: n.error };
+    built.name = n.value;
+  }
+  if (patch.botNote !== undefined) {
+    const nt = normalizeAdNote(patch.botNote);
+    if (!nt.ok) return { ok: false, error: nt.error };
+    built.botNote = nt.value;
+  }
+  const row = await updateAd(auth.tenantId, clientId, adId, built);
+  if (!row) return { ok: false, error: "Anuncio no encontrado." };
+  revalidateCampaigns(clientId);
+  return { ok: true, id: adId };
 }
 
 /** Assign (campaignId) or clear (null) the campaign of one or more ads. */

@@ -11,6 +11,9 @@
 export const CAMPAIGN_NAME_MAX = 200;
 export const CAMPAIGN_BRIEF_MAX = 1500;
 export const EXTERNAL_CAMPAIGN_ID_MAX = 200;
+export const AD_NAME_MAX = 200;
+export const AD_NOTE_MAX = 500;
+export const META_AD_ID_MAX = 200;
 
 export type FieldResult<T> = { ok: true; value: T } | { ok: false; error: string };
 
@@ -69,4 +72,34 @@ export function normalizeCampaignDate(raw: string | null | undefined): FieldResu
 export function validateDateRange(start: string | null, end: string | null): FieldResult<true> {
   if (start && end && end < start) return { ok: false, error: "La fecha de fin no puede ser anterior a la de inicio." };
   return { ok: true, value: true };
+}
+
+// ── AT-2b: per-ad name + note, and pre-register by Meta id ───────────────────────────
+
+/** ad name: optional; blank → NULL; ≤200 chars (mirrors the ads.name CHECK). */
+export function normalizeAdName(raw: string | null | undefined): FieldResult<string | null> {
+  if (raw === undefined || raw === null) return { ok: true, value: null };
+  const trimmed = raw.trim();
+  if (trimmed === "") return { ok: true, value: null };
+  if (trimmed.length > AD_NAME_MAX) return { ok: false, error: `name: must be ${AD_NAME_MAX} characters or fewer.` };
+  return { ok: true, value: trimmed };
+}
+
+/** ad bot_note: optional; blank → NULL; ≤500 chars (mirrors the ads.bot_note CHECK). */
+export function normalizeAdNote(raw: string | null | undefined): FieldResult<string | null> {
+  if (raw === undefined || raw === null) return { ok: true, value: null };
+  const trimmed = raw.trim();
+  if (trimmed === "") return { ok: true, value: null };
+  if (trimmed.length > AD_NOTE_MAX) return { ok: false, error: `note: must be ${AD_NOTE_MAX} characters or fewer.` };
+  return { ok: true, value: trimmed };
+}
+
+/** Meta ad id for pre-register: required, DIGITS ONLY, ≤200 (the referral_source_id shape). */
+export function normalizeMetaAdId(raw: string | null | undefined): FieldResult<string> {
+  const trimmed = (raw ?? "").trim();
+  if (trimmed === "") return { ok: false, error: "id: el id del anuncio de Meta es obligatorio." };
+  if (trimmed.length > META_AD_ID_MAX || !/^\d+$/.test(trimmed)) {
+    return { ok: false, error: "id: debe ser solo dígitos (el id del anuncio en Meta)." };
+  }
+  return { ok: true, value: trimmed };
 }
