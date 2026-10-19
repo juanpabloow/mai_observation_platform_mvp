@@ -260,7 +260,9 @@ test('contacts: ONE card holds the screen, with the table recessed inside it', (
   // menu now, so the header is one clean band rather than a title row over a pill row.
   assert.ok(src.includes('<ContactsSearch'), 'the search renders in the header card');
   assert.ok(!src.includes('<FacetPills'), 'the facet-pill row is gone — filtering is the Filtrar menu');
-  assert.ok(src.includes('<ContactsFilterMenu owners={ownerOptions} />'), 'the filter control renders');
+  // AT-2 added the `campaigns` facet (origin + campaign filters), so the control now takes a
+  // second prop — match the opening tag + owners rather than the exact closing.
+  assert.ok(src.includes('<ContactsFilterMenu owners={ownerOptions}'), 'the filter control renders');
   assert.ok(
     src.indexOf('<ModuleHeader') < src.indexOf('<ContactsSearch />'),
     'and the search is a slot of that header, not floating above it',

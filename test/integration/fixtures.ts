@@ -44,7 +44,7 @@ export interface Scenario {
  * at otherClientId's site) and/or `enableCrm`.
  */
 export async function seedScenario(
-  opts: { openingHours?: WeeklyHours; enableScheduling?: boolean; enableCrm?: boolean; enableCatalog?: boolean } = {},
+  opts: { openingHours?: WeeklyHours; enableScheduling?: boolean; enableCrm?: boolean; enableCatalog?: boolean; enableCampaigns?: boolean } = {},
 ): Promise<Scenario> {
   const tenantId = randomUUID();
   await query(`INSERT INTO tenants (id, name) VALUES ($1, $2)`, [tenantId, `Test Tenant ${tenantId.slice(0, 8)}`]);
@@ -117,6 +117,11 @@ export async function seedScenario(
   if (opts.enableCatalog) {
     for (const c of [clientId, otherClientId]) {
       await setClientModuleEnabled({ tenantId, clientId: c, moduleKey: 'catalog', enabled: true });
+    }
+  }
+  if (opts.enableCampaigns) {
+    for (const c of [clientId, otherClientId]) {
+      await setClientModuleEnabled({ tenantId, clientId: c, moduleKey: 'campaigns', enabled: true });
     }
   }
 
