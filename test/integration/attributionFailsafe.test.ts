@@ -9,7 +9,9 @@ import { cleanupTenant, closeDb, seedScenario, seedWorkflow } from './fixtures.j
 /**
  * AT-1 §3 — a forced attribution failure must NEVER fail the message write. We replace the
  * attribution ingest module so ingestLiveReferral throws; the push must still store the message
- * and return 2xx, and the failure must be counted (recordAttributionFailure).
+ * and return 2xx, and the failure must be counted (recordAttributionFailure). ensureInboundOrigin
+ * is stubbed to a no-op (the referral path throws first; it is on the module surface the route
+ * imports, so the full export set must be present).
  */
 let failures = 0;
 const ingestUrl = pathToFileURL(resolvePath(process.cwd(), 'src/attribution/ingest.ts')).href;
@@ -20,6 +22,7 @@ mock.module(ingestUrl, {
         ? { present: true, ok: true, value: { sourceType: 'ad', sourceId: String(metadata.referral_source_id), sourceUrl: null, ctwaClid: null, headline: null, body: null, mediaType: null } }
         : { present: false },
     ingestLiveReferral: async () => { throw new Error('forced attribution failure'); },
+    ensureInboundOrigin: async () => ({ set: false }),
     recordAttributionFailure: () => { failures += 1; },
   },
 });

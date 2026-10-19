@@ -151,6 +151,34 @@ export function decideInboundOrigin(input: {
   return input.atOrAfterTrackingStart ? 'organic_whatsapp' : 'unknown';
 }
 
+/**
+ * Classify a contact's origin from its FACTS — the SHARED rule used by the live path AND the
+ * backfill, so a contact gets the SAME origin whether it was classified the moment its first
+ * message arrived or in a later bulk pass. No touch dependency. (decideInboundOrigin is the
+ * single-message variant; this looks at the contact's FIRST inbound message.)
+ *  - first inbound message carried a referral → meta_ad / meta_post (a DURABLE fact, independent
+ *    of any date — this is why an ad lead classifies correctly even before tracking is set);
+ *  - no referral, created via the booking page (channel 'public') → booking_page;
+ *  - no referral, first message at/after tracking_started_at → organic_whatsapp;
+ *  - otherwise → unknown — an INFERENCE that couldn't be made yet (before capture, no message
+ *    yet, tracking not started). It is PROVISIONAL: automation may revisit it when a fact
+ *    (e.g. a corrected tracking_started_at) arrives. booked_by_contact / import are produced at
+ *    creation time, never guessed here.
+ */
+export function classifyContactOrigin(row: {
+  channel: string;
+  trackingStartedAt: Date | null;
+  firstMsgAt: Date | null;
+  firstReferral: { sourceType: AdSourceType } | null;
+}): OriginKind {
+  if (row.firstReferral) return row.firstReferral.sourceType === 'post' ? 'meta_post' : 'meta_ad';
+  if (row.channel === 'public') return 'booking_page';
+  if (row.firstMsgAt && row.trackingStartedAt && row.firstMsgAt.getTime() >= row.trackingStartedAt.getTime()) {
+    return 'organic_whatsapp';
+  }
+  return 'unknown';
+}
+
 export interface SetContactOriginInput {
   tenantId: string;
   clientId: string;
@@ -168,9 +196,17 @@ export interface SetContactOriginInput {
   refCampaignId?: string | null;
   /**
    * Which existing origins this assignment may REPLACE. Default [] = only an UNSET origin
-   * (origin_kind IS NULL) — the ingestion case ("set origin if the contact is new"). The
-   * manual path passes ['unknown','import']. A CAPTURED ad origin is NEVER in this set, so it
-   * can never be overwritten.
+   * (origin_kind IS NULL). Ingestion/backfill pass ['unknown'] so they can revisit a PROVISIONAL
+   * origin (see below); the manual path passes ['unknown','import']. A CAPTURED ad origin
+   * (meta_ad/meta_post) is NEVER in any caller's set, so it can never be overwritten.
+   *
+   * AUTOMATION GUARD: a SYSTEM write (setBy === 'system') additionally never overwrites a
+   * HUMAN-set origin — it may only (re)write an unset origin or automation's OWN prior write
+   * (origin_set_by NULL or 'system'). This is what lets automation REVISIT its provisional
+   * 'unknown' ("couldn't tell yet") once a fact arrives — a corrected tracking_started_at, or
+   * the contact's first message landing after a CRM-upsert created the row — while a person's
+   * decision (a manual origin, or a human-reviewed merge) stays final. A human write (setBy =
+   * a user id) is unrestricted by this guard and still honors `overwritable`.
    */
   overwritable?: OriginKind[];
 }
@@ -183,6 +219,7 @@ export interface SetContactOriginInput {
  */
 export async function setContactOrigin(input: SetContactOriginInput, client?: PoolClient): Promise<boolean> {
   const overwritable = input.overwritable ?? [];
+  const isSystem = input.setBy === 'system';
   const exec = async (c: PoolClient): Promise<boolean> => {
     const upd = await c.query(
       `UPDATE contacts
@@ -191,9 +228,11 @@ export async function setContactOrigin(input: SetContactOriginInput, client?: Po
               origin_set_at = now(), origin_set_by = $8, updated_at = now()
         WHERE id = $3 AND tenant_id = $1 AND client_id = $2
           AND (origin_kind IS NULL OR origin_kind = ANY($9::text[]))
+          -- Automation never overwrites a human's decision (see SetContactOriginInput.overwritable).
+          AND ($10::boolean = false OR origin_set_by IS NULL OR origin_set_by = 'system')
         RETURNING id`,
       [input.tenantId, input.clientId, input.contactId, input.originKind, input.firstTouchId ?? null,
-       input.latestTouchId ?? null, input.originRefContactId ?? null, input.setBy, overwritable],
+       input.latestTouchId ?? null, input.originRefContactId ?? null, input.setBy, overwritable, isSystem],
     );
     if ((upd.rowCount ?? 0) === 0) return false; // captured origin present → never overwrite
     await recordCrmActivity(c, {

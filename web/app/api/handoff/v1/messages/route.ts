@@ -8,7 +8,7 @@ import {
 import { getOrCreateConversation, insertMessage } from "@worker/db/repositories/handoff.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { ensureContactForInboundMessage } from "@worker/db/repositories/contactIdentities.js";
-import { parseReferral, ingestLiveReferral, recordAttributionFailure } from "@worker/attribution/ingest.js";
+import { parseReferral, ingestLiveReferral, ensureInboundOrigin, recordAttributionFailure } from "@worker/attribution/ingest.js";
 import { identitiesSchema } from "@/lib/identities";
 import { isSentinelIdentifier, isQuarantinedRef } from "@worker/identity/sentinel.js";
 import { logger } from "@worker/logger.js";
@@ -132,28 +132,32 @@ export async function POST(req: Request): Promise<Response> {
       // response — neither contact resolution NOR attribution may fail the push.
       if (await isClientModuleEnabled(auth.auth.tenantId, wf.clientId, "crm")) {
         let contactId = conv.contact_id;
-        let contactWasNew = false;
         if (conv.contact_id === null || hasIdentities) {
           const resolved = await ensureContactForInboundMessage(auth.auth.tenantId, wf.clientId, conv.id, b.conversation_ref, b.identity_label ?? "conversation", b.identities);
           contactId = resolved.contactId;
-          contactWasNew = resolved.created;
         }
-        // AT-1 §3: register the ad + write the touch; set origin only for a brand-new contact.
-        // Attribution runs on its OWN transaction and is isolated here, so a failure never
-        // touches the message write (which already committed).
-        if (referral.present && referral.ok && contactId) {
-          await ingestLiveReferral({
-            tenantId: auth.auth.tenantId,
-            clientId: wf.clientId,
-            contactId,
-            contactWasNew,
-            conversationId: conv.id,
-            messageId: message.id,
-            occurredAt,
-            referral: referral.value,
-          });
-        } else if (referral.present && !referral.ok) {
-          recordAttributionFailure({ messageId: message.id, clientId: wf.clientId, reason: referral.reason });
+        if (contactId) {
+          // AT-1 §3: register the ad + write the touch for a referral message (idempotent).
+          // Each attribution step runs on its OWN transaction and is isolated here, so a failure
+          // never touches the message write (which already committed).
+          if (referral.present && referral.ok) {
+            await ingestLiveReferral({
+              tenantId: auth.auth.tenantId,
+              clientId: wf.clientId,
+              contactId,
+              conversationId: conv.id,
+              messageId: message.id,
+              occurredAt,
+              referral: referral.value,
+            });
+          } else if (referral.present && !referral.ok) {
+            recordAttributionFailure({ messageId: message.id, clientId: wf.clientId, reason: referral.reason });
+          }
+          // AT-1: set the contact's origin from its FIRST inbound message — regardless of which
+          // path created the row (a CRM /contacts/upsert "sync profile" node commonly creates the
+          // contact just before its first message, so it is already "existing" here). Self-healing
+          // + idempotent: a settled origin is left untouched.
+          await ensureInboundOrigin({ tenantId: auth.auth.tenantId, clientId: wf.clientId, contactId });
         }
       }
     } catch (err) {

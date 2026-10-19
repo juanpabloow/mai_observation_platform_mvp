@@ -1,6 +1,10 @@
 import { query, withTransaction } from '../db/client.js';
-import { setContactOrigin, type OriginKind } from '../db/repositories/attribution.js';
+import { classifyContactOrigin, setContactOrigin, type OriginKind } from '../db/repositories/attribution.js';
 import { parseReferral, registerAdAndTouch, type ReferralInput } from './ingest.js';
+
+// Re-exported for existing importers (the pure rule now lives with decideInboundOrigin in the
+// attribution repo, so the live path and the backfill share ONE definition).
+export { classifyContactOrigin };
 
 /**
  * AT-1 §3/§4 — the shared attribution ENGINE. The worker reconciliation job and the
@@ -10,11 +14,14 @@ import { parseReferral, registerAdAndTouch, type ReferralInput } from './ingest.
  * It does two things, FACTS ONLY:
  *   1. TOUCHES — every stored inbound USER message with a valid referral whose conversation has
  *      a contact and no touch yet → register/refresh the ad + write the touch.
- *   2. ORIGINS — every contact whose origin is still unset → classify from facts:
- *        - first inbound message carried a referral → meta_ad / meta_post (first_touch = its touch)
- *        - no referral, created via the booking page (channel 'public') → booking_page
- *        - no referral, first message at/after tracking_started_at → organic_whatsapp
- *        - otherwise → unknown (before capture, manual, machine-booked-for-self, import, …)
+ *   2. ORIGINS — every contact whose origin is still PROVISIONAL (unset, or an automation-set
+ *      'unknown' — "couldn't tell yet") → (re)classify from facts via the shared
+ *      classifyContactOrigin. Revisiting a provisional 'unknown' is deliberate: when a fact
+ *      arrives late — a corrected attribution_tracking_started_at, or a contact created by the
+ *      CRM /contacts/upsert "sync profile" node a moment before its first message — the earlier
+ *      'unknown' must be upgraded (e.g. → organic_whatsapp). A write is only made when the origin
+ *      actually CHANGES, so a quiet pass (and repeated reconcile runs) writes nothing and adds no
+ *      timeline churn. A HUMAN-set origin (manual, or a human-reviewed merge) is NEVER revisited.
  * booked_by_contact and import are produced at creation time, never guessed here.
  */
 
@@ -46,6 +53,7 @@ interface OriginContactRow {
   tenant_id: string;
   client_id: string;
   channel: string;
+  origin_kind: OriginKind | null;
   tracking_started_at: Date | null;
   first_msg_at: Date | null;
   first_msg_metadata: Record<string, unknown> | null;
@@ -76,12 +84,16 @@ async function loadReferralMessages(tenantId?: string): Promise<MsgRow[]> {
   return r.rows;
 }
 
-/** Contacts whose origin is still unset, with the facts needed to classify them. */
+/**
+ * Contacts whose origin is still PROVISIONAL — unset, or an automation-set 'unknown'
+ * (origin_set_by NULL or 'system') — with the facts needed to (re)classify them. A human-set
+ * origin (origin_set_by = a user id) is excluded: automation never revisits a person's decision.
+ */
 async function loadUnclassifiedContacts(tenantId?: string): Promise<OriginContactRow[]> {
   const params: unknown[] = [];
   const filter = tenantFilter(tenantId, 'ct.tenant_id', params);
   const r = await query<OriginContactRow>(
-    `SELECT ct.id, ct.tenant_id, ct.client_id, ct.channel, s.tracking_started_at,
+    `SELECT ct.id, ct.tenant_id, ct.client_id, ct.channel, ct.origin_kind, s.tracking_started_at,
             fm.occurred_at AS first_msg_at, fm.metadata AS first_msg_metadata
        FROM contacts ct
        LEFT JOIN attribution_settings s ON s.tenant_id = ct.tenant_id AND s.client_id = ct.client_id
@@ -91,25 +103,11 @@ async function loadUnclassifiedContacts(tenantId?: string): Promise<OriginContac
            JOIN conversations cv ON cv.id = m.conversation_id
           WHERE cv.contact_id = ct.id AND m.sender = 'user'
           ORDER BY m.occurred_at ASC, m.id ASC LIMIT 1) fm ON true
-      WHERE ct.origin_kind IS NULL${filter}`,
+      WHERE (ct.origin_kind IS NULL
+             OR (ct.origin_kind = 'unknown' AND (ct.origin_set_by IS NULL OR ct.origin_set_by = 'system')))${filter}`,
     params,
   );
   return r.rows;
-}
-
-/** Pure classification of a not-yet-classified contact from its facts (no touch dependency). */
-export function classifyContactOrigin(row: {
-  channel: string;
-  trackingStartedAt: Date | null;
-  firstMsgAt: Date | null;
-  firstReferral: ReferralInput | null;
-}): OriginKind {
-  if (row.firstReferral) return row.firstReferral.sourceType === 'post' ? 'meta_post' : 'meta_ad';
-  if (row.channel === 'public') return 'booking_page';
-  if (row.firstMsgAt && row.trackingStartedAt && row.firstMsgAt.getTime() >= row.trackingStartedAt.getTime()) {
-    return 'organic_whatsapp';
-  }
-  return 'unknown';
 }
 
 export async function backfillAttribution(opts: { tenantId?: string; apply: boolean }): Promise<AttributionBackfillSummary> {
@@ -148,7 +146,7 @@ export async function backfillAttribution(opts: { tenantId?: string; apply: bool
   summary.touchesWritten = toWrite.length;
   summary.byAd = [...adTally.entries()].map(([k, v]) => ({ external_id: k.split(':').slice(1).join(':'), source_type: v.source_type, is_test: v.is_test, touches: v.touches }));
 
-  // ── Plan the origins ──
+  // ── Plan the origins (only where the origin actually CHANGES) ──
   const originPlan: Array<{ row: OriginContactRow; origin: OriginKind }> = [];
   for (const ct of contacts) {
     const parsed = parseReferral(ct.first_msg_metadata);
@@ -159,6 +157,9 @@ export async function backfillAttribution(opts: { tenantId?: string; apply: bool
       firstMsgAt: ct.first_msg_at,
       firstReferral,
     });
+    // A provisional 'unknown' that still classifies 'unknown' is a no-op — don't rewrite it (that
+    // would churn the timeline on every reconcile pass). Only a genuine change counts/writes.
+    if (origin === ct.origin_kind) continue;
     originPlan.push({ row: ct, origin });
     bumpOrigin(origin);
   }
@@ -200,7 +201,9 @@ export async function backfillAttribution(opts: { tenantId?: string; apply: bool
       firstTouchId,
       latestTouchId,
       setBy: 'system',
-      overwritable: [], // only an UNSET origin — never overwrite a captured one
+      // Unset OR a provisional (automation-set) 'unknown'. A captured ad origin or a human's
+      // decision is never in reach (setContactOrigin's automation guard also protects it).
+      overwritable: ['unknown'],
     });
   }
   return summary;

@@ -175,6 +175,93 @@ test('AT-1 booking_page: a public booking creates a contact with origin booking_
   } finally { await cleanupTenant(s.tenantId); }
 });
 
+// ── CRM-upsert-then-message sequence (the Gallery flow) ──────────────────────────────────────
+// The n8n workflow creates the contact via POST /crm/v1/contacts/upsert ("sync profile") BEFORE
+// it pushes the first message, so the contact is already "existing" when the message lands. Origin
+// must still be decided by that first message, not skipped because the message didn't create the row.
+
+test('AT-1 live: a CRM-upsert contact (born before its first message) gets organic_whatsapp on an organic first message', async () => {
+  const s = await seedScenario({ enableCrm: true });
+  try {
+    await setAttributionTrackingStartedAt(s.tenantId, s.clientId, new Date('2020-01-01T00:00:00Z'));
+    const { post } = await handoff(s);
+    // The "CRM - sincronizar perfil WhatsApp" node creates the contact FIRST — origin NULL.
+    const { contact, created } = await resolveContactByIdentity({ tenantId: s.tenantId, clientId: s.clientId, channel: 'whatsapp', channelUserId: '573001234567', phone: '573001234567', name: 'Perfil' });
+    assert.equal(created, true, 'the upsert created the contact');
+    assert.equal((await one<{ origin_kind: string | null }>(`SELECT origin_kind FROM contacts WHERE id=$1`, [contact.id])).origin_kind, null, 'born with no origin');
+    // THEN the first message arrives on a new conversation for the same person (contact exists).
+    const r = await post({ conversation_ref: '573001234567', sender: 'user', text: 'hola', external_message_id: 'm1' });
+    assert.ok(r.status === 201 || r.status === 200);
+    assert.equal((await count(`SELECT count(*)::int n FROM contacts WHERE tenant_id=$1`, [s.tenantId])), 1, 'no second contact forked');
+    assert.equal((await one<{ origin_kind: string }>(`SELECT origin_kind FROM contacts WHERE id=$1`, [contact.id])).origin_kind, 'organic_whatsapp', 'origin set from the first message, not gated on who created the row');
+    assert.equal(await count(`SELECT count(*)::int n FROM crm_activity_events WHERE tenant_id=$1 AND event_type='origin_set'`, [s.tenantId]), 1);
+  } finally { await cleanupTenant(s.tenantId); }
+});
+
+test('AT-1 live: a CRM-upsert contact gets meta_ad + a touch when its first message carries a referral', async () => {
+  const s = await seedScenario({ enableCrm: true });
+  try {
+    const { post } = await handoff(s);
+    const { contact } = await resolveContactByIdentity({ tenantId: s.tenantId, clientId: s.clientId, channel: 'whatsapp', channelUserId: '573009998877', phone: '573009998877', name: 'Perfil' });
+    const r = await post({ conversation_ref: '573009998877', sender: 'user', text: 'hola', external_message_id: 'm1', metadata: { referral_source_type: 'ad', referral_source_id: '900777' } });
+    assert.ok(r.status === 201 || r.status === 200);
+    assert.equal((await count(`SELECT count(*)::int n FROM contacts WHERE tenant_id=$1`, [s.tenantId])), 1, 'no second contact forked');
+    const ct = await one<{ origin_kind: string; first_touch_id: string | null }>(`SELECT origin_kind, first_touch_id FROM contacts WHERE id=$1`, [contact.id]);
+    assert.equal(ct.origin_kind, 'meta_ad', 'the referral on the first message decides the origin even though the upsert created the row');
+    assert.ok(ct.first_touch_id, 'first_touch points at the referral touch');
+    assert.equal(await count(`SELECT count(*)::int n FROM attribution_touches WHERE contact_id=$1`, [contact.id]), 1);
+  } finally { await cleanupTenant(s.tenantId); }
+});
+
+test('AT-1 backfill: a provisional system "unknown" is upgraded to organic_whatsapp once tracking_started_at is corrected', async () => {
+  const s = await seedScenario({ enableCrm: true });
+  try {
+    const wfRef = `wf-${s.tenantId.slice(0, 8)}`;
+    await seedWorkflow(s.tenantId, s.clientId, wfRef);
+    const c = await seedContact(s.tenantId, s.clientId, { name: 'Org', channelUserId: 'wa:org' });
+    const cv = await one<{ id: string }>(`INSERT INTO conversations (tenant_id, n8n_workflow_id, conversation_ref, contact_id) VALUES ($1,$2,$3,$4) RETURNING id`, [s.tenantId, wfRef, 'c-org', c]);
+    await query(`INSERT INTO handoff_messages (tenant_id, conversation_id, sender, status, text, content_type, occurred_at) VALUES ($1,$2,'user','received','hola','text',$3)`, [s.tenantId, cv.id, '2026-06-01T10:00:00Z']);
+
+    // Tracking starts AFTER the first message (the migration-seeded default that caused the bug).
+    await setAttributionTrackingStartedAt(s.tenantId, s.clientId, new Date('2026-09-01T00:00:00Z'));
+    const first = await backfillAttribution({ tenantId: s.tenantId, apply: true });
+    assert.equal(first.byOrigin.unknown, 1, 'classified unknown — the message predates the (wrong) tracking start');
+    assert.equal((await one<{ origin_kind: string; origin_set_by: string }>(`SELECT origin_kind, origin_set_by FROM contacts WHERE id=$1`, [c])).origin_set_by, 'system', 'written by automation');
+
+    // Operator corrects tracking to BEFORE the first message — re-running must UPGRADE the origin.
+    await setAttributionTrackingStartedAt(s.tenantId, s.clientId, new Date('2026-01-01T00:00:00Z'));
+    const second = await backfillAttribution({ tenantId: s.tenantId, apply: true });
+    assert.equal(second.originsSet, 1, 'the provisional unknown is revisited');
+    assert.equal(second.byOrigin.organic_whatsapp, 1);
+    assert.equal((await one<{ origin_kind: string }>(`SELECT origin_kind FROM contacts WHERE id=$1`, [c])).origin_kind, 'organic_whatsapp');
+
+    // A third pass is a no-op (now a positive, settled origin).
+    assert.equal((await backfillAttribution({ tenantId: s.tenantId, apply: true })).originsSet, 0, 'settled origin → no rewrite');
+  } finally { await cleanupTenant(s.tenantId); }
+});
+
+test('AT-1 backfill: never reclassifies a HUMAN-set origin', async () => {
+  const s = await seedScenario({ enableCrm: true });
+  try {
+    const wfRef = `wf-${s.tenantId.slice(0, 8)}`;
+    await seedWorkflow(s.tenantId, s.clientId, wfRef);
+    await setAttributionTrackingStartedAt(s.tenantId, s.clientId, new Date('2026-01-01T00:00:00Z'));
+    const c = await seedContact(s.tenantId, s.clientId, { name: 'Human', channelUserId: 'wa:h' });
+    const cv = await one<{ id: string }>(`INSERT INTO conversations (tenant_id, n8n_workflow_id, conversation_ref, contact_id) VALUES ($1,$2,$3,$4) RETURNING id`, [s.tenantId, wfRef, 'c-h', c]);
+    await query(`INSERT INTO handoff_messages (tenant_id, conversation_id, sender, status, text, content_type, occurred_at) VALUES ($1,$2,'user','received','hola','text',$3)`, [s.tenantId, cv.id, '2026-06-01T10:00:00Z']);
+    // A PERSON set this contact to 'unknown' (the state a human-reviewed merge leaves —
+    // origin_set_by = a user id). By the facts it would classify organic_whatsapp, but automation
+    // must leave a human's call alone. (Set directly: origin_set_by is free text; using a user id
+    // through setContactOrigin would also write an origin_set event whose actor FK we aren't seeding.)
+    await query(`UPDATE contacts SET origin_kind='unknown', origin_set_by='user-7', origin_set_at=now() WHERE id=$1`, [c]);
+
+    assert.equal((await backfillAttribution({ tenantId: s.tenantId, apply: true })).originsSet, 0, 'a human-set origin is never revisited by automation');
+    assert.equal((await one<{ origin_kind: string }>(`SELECT origin_kind FROM contacts WHERE id=$1`, [c])).origin_kind, 'unknown', 'left exactly as the person set it');
+    // Defense in depth: even a DIRECT system write refuses to overwrite a human's origin.
+    assert.equal(await setContactOrigin({ tenantId: s.tenantId, clientId: s.clientId, contactId: c, originKind: 'organic_whatsapp', setBy: 'system', overwritable: ['unknown'] }), false, 'the automation guard refuses a human-set origin');
+  } finally { await cleanupTenant(s.tenantId); }
+});
+
 test('AT-1 isolation: ads, campaigns and touches are tenant + client scoped', async () => {
   const s = await seedScenario({ enableCrm: true });
   try {

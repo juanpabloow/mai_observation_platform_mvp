@@ -2,7 +2,7 @@ import type { PoolClient } from 'pg';
 import { withTransaction } from '../db/client.js';
 import { recordCrmActivity } from '../db/repositories/crmActivityEvents.js';
 import {
-  decideInboundOrigin,
+  classifyContactOrigin,
   setContactOrigin,
   type AdSourceType,
 } from '../db/repositories/attribution.js';
@@ -10,8 +10,8 @@ import { logger } from '../logger.js';
 
 /**
  * AT-1 §3 — attribution ingestion. Turns the flat referral_* keys a Meta-ad message carries in
- * its metadata into an ad row + a touch, and sets a NEW contact's origin. Generic: nothing names
- * a business or channel.
+ * its metadata into an ad row + a touch (ingestLiveReferral), and sets a contact's origin from
+ * its FIRST inbound message (ensureInboundOrigin). Generic: nothing names a business or channel.
  *
  * FAIL-SAFE: attribution is SECONDARY to the message write. The caller runs this best-effort
  * (the /messages route already stored the message and answered the bot); a failure here is
@@ -160,16 +160,16 @@ async function refreshLatestTouch(client: PoolClient, tenantId: string, clientId
 }
 
 /**
- * LIVE ingestion for one inbound user message that carried a (valid) referral. Registers the ad
- * + touch, moves latest_touch, and — only when the contact was JUST created — sets its origin to
- * meta_ad/meta_post with this touch as first_touch. An existing contact's origin never changes
- * (it only gets the touch + a moved latest_touch). Transactional.
+ * LIVE ingestion for one inbound user message that carried a (valid) referral: register the ad +
+ * insert the touch (idempotent by message_id) and move latest_touch. Does NOT set the contact's
+ * origin — that is ensureInboundOrigin's job. Origin is decided by the contact's FIRST inbound
+ * message (which may not be THIS one) and must be set regardless of which path created the contact
+ * row, so it cannot be gated on "this message created the contact." Transactional.
  */
 export async function ingestLiveReferral(input: {
   tenantId: string;
   clientId: string;
   contactId: string;
-  contactWasNew: boolean;
   conversationId: string | null;
   messageId: string;
   occurredAt: Date;
@@ -179,21 +179,95 @@ export async function ingestLiveReferral(input: {
     const { touchId } = await registerAdAndTouch(client, input);
     if (!touchId) return { touched: false }; // replay — nothing more to do
     await refreshLatestTouch(client, input.tenantId, input.clientId, input.contactId);
-    if (input.contactWasNew) {
-      await setContactOrigin(
-        {
-          tenantId: input.tenantId,
-          clientId: input.clientId,
-          contactId: input.contactId,
-          originKind: decideInboundOrigin({ hasReferral: true, sourceType: input.referral.sourceType, atOrAfterTrackingStart: true }),
-          firstTouchId: touchId,
-          latestTouchId: touchId,
-          setBy: 'system',
-          overwritable: [],
-        },
-        client,
-      );
-    }
     return { touched: true };
+  });
+}
+
+/**
+ * LIVE origin, as a FACT: ensure a contact's origin reflects its FIRST inbound user message —
+ * WHATEVER path created the row. A CRM /contacts/upsert "sync profile" node commonly creates the
+ * contact a moment BEFORE its first message arrives, so the contact is already "existing" when the
+ * message lands; gating origin on "the message created the contact" left exactly those at NULL
+ * (organic) or let a provisional 'unknown' freeze. This keys off the contact instead.
+ *
+ * Idempotent + self-healing. It only (re)writes a PROVISIONAL origin — unset, or an automation-set
+ * 'unknown' ("couldn't tell yet") — never a positive captured origin (meta_ad, organic_whatsapp,
+ * booking_page, …) and never a human's choice (setContactOrigin's automation guard also enforces
+ * this at write time, so it is race-safe). Classifies from the contact's EARLIEST inbound user
+ * message via the shared classifyContactOrigin (referral → meta_ad/meta_post with that touch as
+ * first_touch; none, at/after tracking start → organic_whatsapp; before → unknown). Safe to call on
+ * ANY inbound message — a settled origin short-circuits. Own transaction; the caller runs it
+ * best-effort (never on the message's hot path).
+ */
+export async function ensureInboundOrigin(input: {
+  tenantId: string;
+  clientId: string;
+  contactId: string;
+}): Promise<{ set: boolean }> {
+  return withTransaction(async (client) => {
+    const ctx = await client.query<{
+      channel: string;
+      origin_kind: string | null;
+      origin_set_by: string | null;
+      tracking_started_at: Date | null;
+      first_msg_at: Date | null;
+      first_msg_metadata: Record<string, unknown> | null;
+    }>(
+      `SELECT ct.channel, ct.origin_kind, ct.origin_set_by, s.tracking_started_at,
+              fm.occurred_at AS first_msg_at, fm.metadata AS first_msg_metadata
+         FROM contacts ct
+         LEFT JOIN attribution_settings s ON s.tenant_id = ct.tenant_id AND s.client_id = ct.client_id
+         LEFT JOIN LATERAL (
+           SELECT m.occurred_at, m.metadata
+             FROM handoff_messages m
+             JOIN conversations cv ON cv.id = m.conversation_id
+            WHERE cv.contact_id = ct.id AND m.sender = 'user'
+            ORDER BY m.occurred_at ASC, m.id ASC LIMIT 1) fm ON true
+        WHERE ct.id = $1 AND ct.tenant_id = $2 AND ct.client_id = $3`,
+      [input.contactId, input.tenantId, input.clientId],
+    );
+    const row = ctx.rows[0];
+    if (!row) return { set: false };
+    // Only a PROVISIONAL origin is revisited: unset, or automation's OWN 'unknown'. A positive
+    // origin or anything a person set is final (setContactOrigin would refuse it regardless).
+    const provisional =
+      row.origin_kind === null ||
+      (row.origin_kind === 'unknown' && (row.origin_set_by === null || row.origin_set_by === 'system'));
+    if (!provisional) return { set: false };
+
+    const parsed = parseReferral(row.first_msg_metadata);
+    const firstReferral = parsed.present && parsed.ok ? parsed.value : null;
+    const origin = classifyContactOrigin({
+      channel: row.channel,
+      trackingStartedAt: row.tracking_started_at,
+      firstMsgAt: row.first_msg_at,
+      firstReferral,
+    });
+    if (origin === row.origin_kind) return { set: false }; // e.g. 'unknown' → 'unknown': no churn
+
+    let firstTouchId: string | null = null;
+    let latestTouchId: string | null = null;
+    if (origin === 'meta_ad' || origin === 'meta_post') {
+      firstTouchId = (await client.query<{ id: string }>(
+        `SELECT id FROM attribution_touches WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3 ORDER BY occurred_at ASC, id ASC LIMIT 1`,
+        [input.tenantId, input.clientId, input.contactId])).rows[0]?.id ?? null;
+      latestTouchId = (await client.query<{ id: string }>(
+        `SELECT id FROM attribution_touches WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3 ORDER BY occurred_at DESC, id DESC LIMIT 1`,
+        [input.tenantId, input.clientId, input.contactId])).rows[0]?.id ?? null;
+    }
+    const set = await setContactOrigin(
+      {
+        tenantId: input.tenantId,
+        clientId: input.clientId,
+        contactId: input.contactId,
+        originKind: origin,
+        firstTouchId,
+        latestTouchId,
+        setBy: 'system',
+        overwritable: ['unknown'],
+      },
+      client,
+    );
+    return { set };
   });
 }
