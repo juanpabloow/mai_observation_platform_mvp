@@ -32,6 +32,8 @@ export interface AppointmentRow {
   site_id: string;
   contact_id: string | null;
   source_conversation_id: string | null;
+  /** PL-1: the sales opportunity this booking belongs to (linked post-commit by the pipeline). */
+  opportunity_id: string | null;
   staff_id: string;
   service_id: string;
   start_at: Date;

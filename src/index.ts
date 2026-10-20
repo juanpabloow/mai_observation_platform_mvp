@@ -4,6 +4,7 @@ import { logger } from './logger.js';
 import { startWorker, stopWorker } from './ingestion/worker.js';
 import { startAttributionReconciliation, stopAttributionReconciliation } from './attribution/reconcile.js';
 import { startCoverReconcile, stopCoverReconcile } from './attribution/coverReconcile.js';
+import { startAutoLost, stopAutoLost } from './pipeline/autoLost.js';
 
 /**
  * Mask the password embedded in a PostgreSQL connection string while keeping
@@ -42,6 +43,10 @@ startAttributionReconciliation();
 // image urls ingestion queued on ads into the public bucket, and retries transient failures. It
 // no-ops unless the public image store (R2) is configured for this process. Fail-safe like the above.
 startCoverReconcile();
+// PL-1 §2: the sales-pipeline auto-lost sweep shares THIS worker too — it loses OPEN lead/qualified
+// sales the business answered last and that went unanswered past auto_lost_after_hours. Fail-safe +
+// re-checks each candidate under its row lock. Default 15-min interval (PIPELINE_AUTOLOST_INTERVAL_SECONDS).
+startAutoLost();
 // El barrido de eliminaciones de Reuniones NO va aquí: tiene su propio
 // entrypoint (`src/maintenanceMain.ts`) y su propio servicio. Este proceso es
 // el de la ingesta de n8n, y mezclarlos haría que reiniciar uno reiniciara el
@@ -59,6 +64,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     await stopWorker();
     await stopAttributionReconciliation();
     await stopCoverReconcile();
+    stopAutoLost();
     await closePool();
   } catch (err) {
     logger.error({ err }, 'error during shutdown');

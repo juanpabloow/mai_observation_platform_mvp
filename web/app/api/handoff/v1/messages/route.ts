@@ -9,6 +9,7 @@ import { getOrCreateConversation, insertMessage } from "@worker/db/repositories/
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { ensureContactForInboundMessage } from "@worker/db/repositories/contactIdentities.js";
 import { parseReferral, ingestLiveReferral, ensureInboundOrigin, recordAttributionFailure } from "@worker/attribution/ingest.js";
+import { pipelineOnInboundMessage } from "@worker/pipeline/hooks.js";
 import { identitiesSchema } from "@/lib/identities";
 import { isSentinelIdentifier, isQuarantinedRef } from "@worker/identity/sentinel.js";
 import { logger } from "@worker/logger.js";
@@ -158,6 +159,10 @@ export async function POST(req: Request): Promise<Response> {
           // contact just before its first message, so it is already "existing" here). Self-healing
           // + idempotent: a settled origin is left untouched.
           await ensureInboundOrigin({ tenantId: auth.auth.tenantId, clientId: wf.clientId, contactId });
+          // PL-1 §2: open/reopen the contact's sale from this inbound message. Runs AFTER attribution
+          // so an ad touch on this message already exists to read. Self-contained fail-safe (never
+          // throws), so a pipeline error is counted on its own and never trips this attribution catch.
+          await pipelineOnInboundMessage({ tenantId: auth.auth.tenantId, clientId: wf.clientId, contactId, conversationId: conv.id, messageId: message.id });
         }
       }
     } catch (err) {

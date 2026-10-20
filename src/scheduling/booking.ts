@@ -25,6 +25,7 @@ import {
 } from '../db/repositories/scheduling/appointments.js';
 import { recordSchedulingEvent } from '../db/repositories/scheduling/events.js';
 import { isSchedulingBookable, isSchedulingEnabledForUpdate } from '../db/repositories/clientModules.js';
+import { pipelineOnAppointmentStatusChanged, pipelineOnBookingCreated } from '../pipeline/hooks.js';
 
 /**
  * The booking domain service — the single engine BOTH n8n and the public page use.
@@ -464,6 +465,8 @@ export async function createAppointment(
       eventType: 'appointment.created',
       payload: { appointment_id: appt.id, staff_id: appt.staff_id, start_at: appt.start_at, contact_id: appt.contact_id },
     });
+    // PL-1 §2: link the booking to its sale (fail-safe — never fails the booking, which has committed).
+    await pipelineOnBookingCreated(appt, input.createdByType, input.createdByUserId ?? null);
     return { ok: true, value: appt };
   } catch (err) {
     if (isExclusionViolation(err)) {
@@ -573,6 +576,8 @@ export async function transitionStatus(
       eventType: target === 'cancelled' ? 'appointment.cancelled' : 'appointment.status_changed',
       payload: { appointment_id: result.updated.id, status: target, staff_id: result.updated.staff_id, start_at: result.updated.start_at },
     });
+    // PL-1 §2: drive the linked sale (completed→won, no_show→lost, cancel→qualified). Fail-safe.
+    await pipelineOnAppointmentStatusChanged(result.updated, target, input.actorType, input.actorUserId ?? null);
     return { ok: true, value: result.updated };
   } catch (err) {
     throw err;
