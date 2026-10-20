@@ -1,0 +1,49 @@
+# Unit tests on every push + PR to main. NO DATABASE: this runs the pure/unit suite only
+# (`npm run test:unit` → `node --import tsx --test test/unit/*.test.ts`), so it needs no Postgres
+# and finishes in seconds. Its job is to catch the cheap-but-deploy-breaking classes of bug in CI
+# instead of in production — above all `test/unit/migrationOrder.test.ts`, which fails if two
+# migrations ever share a timestamp prefix or a known-collided pair loses its resolved order (the
+# bug that blocked a prod deploy; see DEPLOY.md → "Migration numbering"). The integration suite
+# needs a database and is NOT run here.
+#
+# Make this a REQUIRED status check so a collision can't merge:
+#   GitHub → Settings → Branches → branch protection rule for `main`
+#   → "Require status checks to pass before merging" → select "unit".
+name: unit
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same ref cancels the older in-flight run.
+concurrency:
+  group: unit-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  unit:
+    name: unit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+
+      # The unit suite imports from BOTH the worker (src, via the @worker/* alias) and the web app
+      # (web/lib + a couple of Next route/middleware tests that resolve web/node_modules), so both
+      # dependency trees must be present. `npm ci` is lockfile-exact and fails on drift.
+      - name: Install dependencies (root)
+        run: npm ci
+      - name: Install dependencies (web)
+        run: npm ci --prefix web
+
+      - name: Unit tests (no database)
+        run: npm run test:unit

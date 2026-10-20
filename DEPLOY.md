@@ -234,6 +234,39 @@ Notes / alternatives:
 - Do **not** use `npm run migrate` in prod — it loads the local `.env` and would
   target the wrong database.
 
+### Migration numbering — the rule that keeps pre-deploy green
+
+`node-pg-migrate` runs the files in `migrations/` **in order of their numeric prefix** and
+**refuses to run a pending migration dated BEFORE one already applied** (it aborts with
+`Not run migration … is preceding already run migration …`). Because that abort happens in the
+**Pre-deploy Command**, it **fails the whole deploy** (the previous version keeps serving) — the
+exact failure mode that blocked production when AT-2c shipped `1812000000000_ad-cover` next to the
+already-merged, already-applied `1812000000000_value-dashboard`.
+
+**THE RULE — when your branch adds a migration:**
+
+1. **One prefix is one migration, forever unique.** Never reuse a timestamp another branch already
+   used. Two branches cut from the same base can each add a migration; whichever **merges second**
+   must be **renumbered to sort AFTER the latest migration already on `main`**. Check before pushing:
+   ```
+   ls migrations/ | sort | tail -5
+   ```
+   If your file isn't strictly last (or ties a prefix), renumber it with `git mv` to a prefix greater
+   than the current last one, e.g. `…1813000000000_x.ts` → `…1814000000000_x.ts`.
+2. **Renumbering is safe only while the migration has NOT run anywhere** (dev/test DBs can be reset;
+   a renumber after it ran in prod would re-run it). If it already ran in prod, write a NEW migration
+   instead of renumbering.
+3. **A rebase onto `main` does not fix a prefix collision** — Git keeps both files; only renumbering does.
+4. **The guard:** `test/unit/migrationOrder.test.ts` asserts every prefix is a unique 13-digit
+   timestamp and that known-collided migrations keep their resolved order. It needs no database, so it
+   runs in **CI on every push/PR to `main`** (`.github/workflows/unit-tests.yml`) — a collision fails
+   the check, not production. Keep that check **required** on `main` (see that workflow's header).
+
+After a deploy that ships a migration, confirm it applied:
+```
+SELECT name FROM pgmigrations ORDER BY run_on DESC LIMIT 5;
+```
+
 ## Google OAuth (optional)
 
 Email/password works without Google. To enable it, set `GOOGLE_CLIENT_ID` /
