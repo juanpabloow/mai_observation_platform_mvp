@@ -21,13 +21,17 @@ import {
   createCampaign,
   endCampaign,
   getAdByExternalId,
+  getAdById,
   getCampaignById,
+  removeAdCover,
+  setAdCover,
   updateAd,
   updateCampaign,
   type UpdateCampaignInput,
 } from "@worker/db/repositories/attribution.js";
 import { getServiceById } from "@worker/db/repositories/scheduling/services.js";
 import { getPromotion } from "@worker/db/repositories/scheduling/promotions.js";
+import { deleteObjectKey, isR2Configured, uploadServiceImage } from "./r2";
 
 /**
  * CLIENT-ADMIN management for a client's CAMPAIGNS + ad→campaign assignment. Every action
@@ -274,6 +278,47 @@ export async function updateAdAction(
   }
   const row = await updateAd(auth.tenantId, clientId, adId, built);
   if (!row) return { ok: false, error: "Anuncio no encontrado." };
+  revalidateCampaigns(clientId);
+  return { ok: true, id: adId };
+}
+
+/**
+ * AT-2c: upload a MANUAL ad cover (FormData: clientId, adId, image). Same MANAGE permission as
+ * editing the ad; the permission check comes BEFORE the R2 gate. A manual cover is marked so the
+ * automatic capture never replaces it. The previous object (if any) is deleted best-effort.
+ */
+export async function uploadAdCoverAction(formData: FormData): Promise<CampaignsResult & { url?: string }> {
+  const clientId = String(formData.get("clientId") ?? "");
+  const adId = String(formData.get("adId") ?? "");
+  const file = formData.get("image");
+
+  const auth = await requireCampaignsManager(clientId);
+  if (!auth.ok) return auth;
+  if (!isUuid(adId)) return { ok: false, error: "Anuncio no encontrado." };
+  if (!isR2Configured) return { ok: false, error: "La subida de imágenes no está configurada." };
+  if (!(file instanceof File)) return { ok: false, error: "Elige una imagen." };
+  if (!(await getAdById(auth.tenantId, clientId, adId))) return { ok: false, error: "Anuncio no encontrado." };
+
+  const up = await uploadServiceImage(auth.tenantId, clientId, adId, file, "ads");
+  if (!up.ok) return { ok: false, error: up.error };
+  const set = await setAdCover(auth.tenantId, clientId, adId, up.key);
+  if (!set.ok) {
+    await deleteObjectKey(up.key).catch(() => {}); // the ad vanished mid-upload — drop the orphan
+    return { ok: false, error: "Anuncio no encontrado." };
+  }
+  if (set.previousKey && set.previousKey !== up.key) await deleteObjectKey(set.previousKey).catch(() => {});
+  revalidateCampaigns(clientId);
+  return { ok: true, id: adId, url: up.url };
+}
+
+/** AT-2c: remove an ad cover. Clears cover_source so automatic capture can resume on the next touch. */
+export async function removeAdCoverAction(clientId: string, adId: string): Promise<CampaignsResult> {
+  const auth = await requireCampaignsManager(clientId);
+  if (!auth.ok) return auth;
+  if (!isUuid(adId)) return { ok: false, error: "Anuncio no encontrado." };
+  const res = await removeAdCover(auth.tenantId, clientId, adId);
+  if (!res.ok) return { ok: false, error: "Anuncio no encontrado." };
+  if (res.previousKey) await deleteObjectKey(res.previousKey).catch(() => {});
   revalidateCampaigns(clientId);
   return { ok: true, id: adId };
 }

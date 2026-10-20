@@ -3,6 +3,7 @@ import { closePool } from './db/client.js';
 import { logger } from './logger.js';
 import { startWorker, stopWorker } from './ingestion/worker.js';
 import { startAttributionReconciliation, stopAttributionReconciliation } from './attribution/reconcile.js';
+import { startCoverReconcile, stopCoverReconcile } from './attribution/coverReconcile.js';
 
 /**
  * Mask the password embedded in a PostgreSQL connection string while keeping
@@ -37,6 +38,10 @@ startWorker();
 // interval that mops up any referral message whose live attribution didn't land. Fail-safe:
 // it never throws into the ingestion loop (see runAttributionReconcileOnce).
 startAttributionReconciliation();
+// AT-2c: ad-cover reconciliation shares THIS worker too — it downloads the signed Meta thumbnail/
+// image urls ingestion queued on ads into the public bucket, and retries transient failures. It
+// no-ops unless the public image store (R2) is configured for this process. Fail-safe like the above.
+startCoverReconcile();
 // El barrido de eliminaciones de Reuniones NO va aquí: tiene su propio
 // entrypoint (`src/maintenanceMain.ts`) y su propio servicio. Este proceso es
 // el de la ingesta de n8n, y mezclarlos haría que reiniciar uno reiniciara el
@@ -53,6 +58,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
   try {
     await stopWorker();
     await stopAttributionReconciliation();
+    await stopCoverReconcile();
     await closePool();
   } catch (err) {
     logger.error({ err }, 'error during shutdown');

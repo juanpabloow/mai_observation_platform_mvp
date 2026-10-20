@@ -26,7 +26,7 @@ mock.module(urlOf('next/headers'), { namedExports: { headers: async () => new He
 mock.module(urlOf('next/cache'), { namedExports: { revalidatePath: () => {}, revalidateTag: () => {} } });
 const asUser = (id: string) => { CURRENT = { id, email: `${id.slice(0, 8)}@test.local` }; };
 
-const { createCampaignAction, updateCampaignAction, endCampaignAction, assignAdsToCampaignAction, createAdAction, updateAdAction } = await import('../../web/lib/campaignsActions.js');
+const { createCampaignAction, updateCampaignAction, endCampaignAction, assignAdsToCampaignAction, createAdAction, updateAdAction, uploadAdCoverAction, removeAdCoverAction } = await import('../../web/lib/campaignsActions.js');
 const { setAttributionBriefWindowDaysAction } = await import('../../web/lib/attributionActions.js');
 after(closeDb);
 
@@ -150,6 +150,51 @@ test('AT-2b ads: pre-register — agency ✓, setter ✗; duplicate refused; val
     asUser(setter);
     assert.equal((await createAdAction({ clientId: s.clientId, externalId: '900997' })).ok, false);
     assert.equal((await updateAdAction(s.clientId, created.id!, { name: 'x' })).ok, false);
+  } finally { await cleanupTenant(s.tenantId); }
+});
+
+test('AT-2c ad cover: same MANAGE permission as editing — agency passes the gate, setter ✗, module off ✗, cross-client ✗', async () => {
+  const s = await seedScenario({ enableCampaigns: true });
+  try {
+    const agency = await seedMember(s.tenantId, { role: 'owner' });
+    const setter = await seedMember(s.tenantId, { role: 'member', clientId: s.clientId, clientRole: 'setter' });
+    const adId = (await one<{ id: string }>(
+      `INSERT INTO ads (tenant_id, client_id, platform, source_type, external_id) VALUES ($1,$2,'meta','ad','950') RETURNING id`,
+      [s.tenantId, s.clientId],
+    )).id;
+    const MISSING_AD = '00000000-0000-0000-0000-0000000000ad';
+    const fd = (clientId: string, id: string) => {
+      const f = new FormData();
+      f.set('clientId', clientId);
+      f.set('adId', id);
+      f.set('image', new File([new Uint8Array([0xff, 0xd8, 0xff])], 'c.jpg', { type: 'image/jpeg' }));
+      return f;
+    };
+
+    // A SETTER cannot upload or remove a cover (refused at the MANAGE gate — before any storage work).
+    asUser(setter);
+    assert.equal((await uploadAdCoverAction(fd(s.clientId, adId))).ok, false, 'setter cannot upload a cover');
+    assert.equal((await removeAdCoverAction(s.clientId, adId)).ok, false, 'setter cannot remove a cover');
+
+    // The AGENCY passes the permission gate. remove on an ad with no cover succeeds (no object to
+    // delete → no storage I/O). upload for a NON-existent ad reaches the ownership check and returns
+    // "no encontrado" — a DIFFERENT error than the permission refusal, proving the gate was passed
+    // WITHOUT touching object storage.
+    asUser(agency);
+    assert.equal((await removeAdCoverAction(s.clientId, adId)).ok, true, 'agency can remove (no cover → no-op)');
+    const up = await uploadAdCoverAction(fd(s.clientId, MISSING_AD));
+    assert.equal(up.ok, false);
+    assert.match(up.error ?? '', /no encontrado/, 'passed the gate, stopped at the ownership check');
+
+    // Module OFF and cross-client are refused.
+    const off = await seedScenario({ enableCampaigns: false });
+    try {
+      const a2 = await seedMember(off.tenantId, { role: 'owner' });
+      asUser(a2);
+      assert.equal((await removeAdCoverAction(off.clientId, MISSING_AD)).ok, false, 'module off → refused');
+    } finally { await cleanupTenant(off.tenantId); }
+    asUser(agency);
+    assert.equal((await removeAdCoverAction(s.otherClientId, adId)).ok, false, 'cross-client refused');
   } finally { await cleanupTenant(s.tenantId); }
 });
 

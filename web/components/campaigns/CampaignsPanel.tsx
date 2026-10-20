@@ -11,9 +11,12 @@ import {
   createAdAction,
   createCampaignAction,
   endCampaignAction,
+  removeAdCoverAction,
   updateAdAction,
   updateCampaignAction,
+  uploadAdCoverAction,
 } from "@/lib/campaignsActions";
+import { downscaleImage } from "@/components/scheduling/staff/StaffPhotoControl";
 
 /**
  * Per-client CAMPAÑAS manager (AT-2). Mirrors the catalog/scheduling visual language so it reads
@@ -33,6 +36,10 @@ export interface AdItem {
   body: string | null;
   media_type: string | null;
   source_url: string | null;
+  /** AT-2c: public URL of the stored cover image (built from the key), or null. */
+  cover_url: string | null;
+  /** AT-2c: a facebook.com story link to open the creative (video ads), or null. */
+  video_url: string | null;
   is_test: boolean;
   campaign_id: string | null;
   campaign_name: string | null;
@@ -350,12 +357,22 @@ function AdsTab({
       {creating ? (
         <AdModal
           mode="create"
+          clientId={clientId}
           campaigns={assignable}
           pending={pending}
           onClose={() => setCreating(false)}
-          onSubmit={(values) =>
+          onSubmit={(values, coverFile) =>
             run(async () => {
               const r = await createAdAction({ clientId, ...values });
+              // Create first, then attach the staged cover to the new ad id. A cover failure never
+              // undoes the created ad (the person can add the cover later from the edit modal).
+              if (r.ok && r.id && coverFile) {
+                const fd = new FormData();
+                fd.set("clientId", clientId);
+                fd.set("adId", r.id);
+                fd.set("image", coverFile);
+                await uploadAdCoverAction(fd);
+              }
               if (r.ok) setCreating(false);
               return r;
             })
@@ -366,6 +383,7 @@ function AdsTab({
       {editing ? (
         <AdModal
           mode="edit"
+          clientId={clientId}
           initial={editing}
           campaigns={assignable}
           pending={pending}
@@ -418,6 +436,18 @@ function AdRow({
           className="mt-1 size-4 shrink-0"
         />
       ) : null}
+      {ad.cover_url ? (
+        // eslint-disable-next-line @next/next/no-img-element -- the ad's own cover (R2 public bucket)
+        <img src={ad.cover_url} alt="" className="size-12 shrink-0 rounded-lg border border-line object-cover" />
+      ) : (
+        <span aria-hidden className="flex size-12 shrink-0 items-center justify-center rounded-lg border border-line bg-subtle text-muted">
+          <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <path d="m21 15-5-5L5 21" />
+          </svg>
+        </span>
+      )}
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-center gap-2">
           <h3 className="truncate text-sm font-semibold text-foreground">{label}</h3>
@@ -452,8 +482,8 @@ function AdRow({
           )}
           {ad.media_type ? <span>{ad.media_type}</span> : null}
           <span>Visto {fmtDate(ad.first_seen_at)} → {fmtDate(ad.last_seen_at)}</span>
-          {ad.source_url ? (
-            <a href={ad.source_url} target="_blank" rel="noreferrer noopener" className="text-accent hover:underline">
+          {ad.video_url || ad.source_url ? (
+            <a href={(ad.video_url ?? ad.source_url) as string} target="_blank" rel="noreferrer noopener" className="text-accent hover:underline">
               Ver anuncio ↗
             </a>
           ) : null}
@@ -501,6 +531,7 @@ interface AdValues {
 /** Create ("Agregar anuncio", by Meta id) or edit (name + note) an ad. */
 function AdModal({
   mode,
+  clientId,
   initial,
   campaigns,
   pending,
@@ -508,16 +539,19 @@ function AdModal({
   onSubmit,
 }: {
   mode: "create" | "edit";
+  clientId: string;
   initial?: AdItem;
   campaigns: CampaignItem[];
   pending: boolean;
   onClose: () => void;
-  onSubmit: (values: AdValues) => void;
+  onSubmit: (values: AdValues, coverFile: File | null) => void;
 }) {
   const [externalId, setExternalId] = useState(initial?.external_id ?? "");
   const [name, setName] = useState(initial?.name ?? "");
   const [note, setNote] = useState(initial?.bot_note ?? "");
   const [campaignId, setCampaignId] = useState(initial?.campaign_id ?? "");
+  // AT-2c: create stages the cover (uploaded after the ad is created); edit uploads immediately.
+  const [coverFile, setCoverFile] = useState<File | null>(null);
 
   const closeRef = useRef(onClose);
   useEffect(() => {
@@ -530,12 +564,15 @@ function AdModal({
   const idOk = mode === "edit" || /^\d+$/.test(externalId.trim());
 
   const submit = () =>
-    onSubmit({
-      externalId: externalId.trim(),
-      name: name.trim() === "" ? null : name.trim(),
-      botNote: note.trim() === "" ? null : note,
-      campaignId: campaignId === "" ? null : campaignId,
-    });
+    onSubmit(
+      {
+        externalId: externalId.trim(),
+        name: name.trim() === "" ? null : name.trim(),
+        botNote: note.trim() === "" ? null : note,
+        campaignId: campaignId === "" ? null : campaignId,
+      },
+      coverFile,
+    );
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-5">
@@ -622,6 +659,21 @@ function AdModal({
               </p>
             </div>
           </div>
+
+          <div className="mt-4">
+            <span className="mb-1.5 block text-xs font-medium text-foreground">
+              Portada <span className="font-normal text-faint">(opcional)</span>
+            </span>
+            <AdCoverControl
+              clientId={clientId}
+              adId={mode === "edit" ? initial?.id ?? null : null}
+              coverUrl={initial?.cover_url ?? null}
+              onStage={mode === "create" ? setCoverFile : undefined}
+            />
+            <p className="mt-1.5 text-[0.6875rem] text-faint">
+              JPG, PNG o WebP. Si no subes una, usamos la imagen del anuncio cuando llega el primer lead.
+            </p>
+          </div>
         </div>
 
         <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-card/50 px-4 py-3 sm:px-5">
@@ -637,6 +689,129 @@ function AdModal({
           </button>
         </footer>
       </section>
+    </div>
+  );
+}
+
+/**
+ * AT-2c: the ad's COVER uploader. Edit mode (adId present) uploads immediately like the staff photo;
+ * create mode (adId null) STAGES the downscaled file (local preview) for the parent to upload right
+ * after the ad is created. Same validation/storage as staff photos (downscaled in the browser first).
+ */
+function AdCoverControl({
+  clientId,
+  adId,
+  coverUrl,
+  onStage,
+}: {
+  clientId: string;
+  adId: string | null;
+  coverUrl: string | null;
+  onStage?: (file: File | null) => void;
+}) {
+  const input = useRef<HTMLInputElement>(null);
+  const [pending, start] = useTransition();
+  const [preview, setPreview] = useState<string | null>(coverUrl);
+  const [staged, setStaged] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const pick = (file: File) =>
+    start(async () => {
+      setError(null);
+      let small: File;
+      try {
+        small = await downscaleImage(file);
+      } catch {
+        setError("No pudimos leer esa imagen. Prueba con un JPG o PNG.");
+        return;
+      }
+      if (adId) {
+        const fd = new FormData();
+        fd.set("clientId", clientId);
+        fd.set("adId", adId);
+        fd.set("image", small);
+        const r = await uploadAdCoverAction(fd);
+        if (!r.ok) {
+          setError(r.error);
+          return;
+        }
+        setPreview(r.url ?? null);
+      } else {
+        onStage?.(small);
+        setStaged(true);
+        setPreview(URL.createObjectURL(small));
+      }
+    });
+
+  const remove = () =>
+    start(async () => {
+      setError(null);
+      if (adId && !staged) {
+        const r = await removeAdCoverAction(clientId, adId);
+        if (!r.ok) {
+          setError(r.error);
+          return;
+        }
+      }
+      onStage?.(null);
+      setStaged(false);
+      setPreview(null);
+    });
+
+  return (
+    <div className="flex items-start gap-3">
+      {preview ? (
+        // eslint-disable-next-line @next/next/no-img-element -- the business's own cover (R2 / local preview)
+        <img src={preview} alt="" className="size-16 shrink-0 rounded-xl border border-line object-cover" />
+      ) : (
+        <span aria-hidden className="flex size-16 shrink-0 items-center justify-center rounded-xl border border-line bg-subtle text-muted">
+          <svg viewBox="0 0 24 24" className="size-6" fill="none" stroke="currentColor" strokeWidth="1.5">
+            <rect x="3" y="3" width="18" height="18" rx="2" />
+            <circle cx="8.5" cy="8.5" r="1.5" />
+            <path d="m21 15-5-5L5 21" />
+          </svg>
+        </span>
+      )}
+      <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={pending}
+            onClick={() => input.current?.click()}
+            className="u-focus inline-flex min-h-[44px] items-center rounded-[12px] border border-line-strong bg-surface px-3.5 text-sm text-foreground disabled:opacity-60 md:min-h-[36px]"
+          >
+            {pending ? "Guardando…" : preview ? "Cambiar portada" : "Subir portada"}
+          </button>
+          {preview ? (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={remove}
+              className="u-focus inline-flex min-h-[44px] items-center rounded-[12px] px-3 text-sm text-muted underline underline-offset-2 disabled:opacity-60 md:min-h-[36px]"
+            >
+              Quitar
+            </button>
+          ) : null}
+        </div>
+        <input
+          ref={input}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          className="sr-only"
+          tabIndex={-1}
+          aria-hidden
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            e.target.value = "";
+            if (f) pick(f);
+          }}
+        />
+        {error ? (
+          <span role="alert" className="text-xs text-danger">
+            {error}
+          </span>
+        ) : null}
+      </div>
     </div>
   );
 }

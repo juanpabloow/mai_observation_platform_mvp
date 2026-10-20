@@ -40,6 +40,16 @@ export interface AdRow {
   source_url: string | null;
   media_type: string | null;
   campaign_id: string | null;
+  /** AT-2c: the R2 object KEY (public bucket) of the stored cover image, or null. The UI builds the URL. */
+  cover_image_key: string | null;
+  /** AT-2c: 'auto' (captured from the Meta referral) or 'manual' (person-uploaded); null = no cover. */
+  cover_source: 'auto' | 'manual' | null;
+  cover_updated_at: Date | null;
+  /** AT-2c: the signed Meta CDN url QUEUED for server-side capture (worker only); never shown. */
+  cover_fetch_url: string | null;
+  cover_fetch_seen_at: Date | null;
+  /** AT-2c: a facebook.com story link (referral_video_url). A plain link, never fetched. */
+  video_url: string | null;
   /** DERIVED (generated) from a "TEST-" external_id prefix — test ads never count by default. */
   is_test: boolean;
   first_seen_at: Date;
@@ -202,6 +212,97 @@ export async function updateAd(
     params,
   );
   return r.rows[0] ?? null;
+}
+
+// ── AT-2c: ad COVER image (person-set 'manual' + auto-captured, see src/attribution/coverCapture) ──
+
+/** Ads with a fresh queued cover url and no manual cover — the worker cover-reconcile's work list. */
+export async function listAdsNeedingCover(opts: { tenantId?: string; limit?: number; freshDays?: number }): Promise<
+  Array<{ id: string; tenant_id: string; client_id: string; cover_fetch_url: string }>
+> {
+  const params: unknown[] = [opts.freshDays ?? 2];
+  let filter = '';
+  if (opts.tenantId) { params.push(opts.tenantId); filter = ` AND tenant_id = $${params.length}`; }
+  params.push(opts.limit ?? 25);
+  const r = await query<{ id: string; tenant_id: string; client_id: string; cover_fetch_url: string }>(
+    `SELECT id, tenant_id, client_id, cover_fetch_url
+       FROM ads
+      WHERE cover_fetch_url IS NOT NULL
+        AND cover_source IS DISTINCT FROM 'manual'
+        AND cover_fetch_seen_at > now() - make_interval(days => $1::int)${filter}
+      ORDER BY cover_fetch_seen_at DESC
+      LIMIT $${params.length}`,
+    params,
+  );
+  return r.rows;
+}
+
+/**
+ * Save an AUTO-captured cover: set the key, clear the queue. Never overwrites a 'manual' cover
+ * (cover_source IS DISTINCT FROM 'manual' guard), so a race with a person-uploaded cover loses.
+ * Returns { ok:false } when the ad is gone or now manual; previousKey is the replaced auto key (if any).
+ */
+export async function saveAutoCover(
+  tenantId: string,
+  clientId: string,
+  adId: string,
+  key: string,
+): Promise<{ ok: boolean; previousKey: string | null }> {
+  const r = await query<{ previous_key: string | null }>(
+    `WITH prev AS (SELECT cover_image_key AS old_key FROM ads WHERE id = $1 AND tenant_id = $2 AND client_id = $3)
+     UPDATE ads SET cover_image_key = $4, cover_source = 'auto', cover_updated_at = now(),
+            cover_fetch_url = NULL, cover_fetch_seen_at = NULL, updated_at = now()
+      WHERE id = $1 AND tenant_id = $2 AND client_id = $3 AND cover_source IS DISTINCT FROM 'manual'
+      RETURNING (SELECT old_key FROM prev) AS previous_key`,
+    [adId, tenantId, clientId, key],
+  );
+  return r.rows[0] ? { ok: true, previousKey: r.rows[0].previous_key } : { ok: false, previousKey: null };
+}
+
+/** Clear a queued cover url (a permanent refusal, or a manual cover took over). */
+export async function clearCoverFetch(tenantId: string, clientId: string, adId: string): Promise<void> {
+  await query(
+    `UPDATE ads SET cover_fetch_url = NULL, cover_fetch_seen_at = NULL, updated_at = now()
+      WHERE id = $1 AND tenant_id = $2 AND client_id = $3`,
+    [adId, tenantId, clientId],
+  );
+}
+
+/**
+ * Set a MANUAL (person-uploaded) cover: marks cover_source='manual' (auto-capture never replaces it)
+ * and cancels any queued auto fetch. Returns the previous key for orphan cleanup; ok:false if gone.
+ */
+export async function setAdCover(
+  tenantId: string,
+  clientId: string,
+  adId: string,
+  key: string,
+): Promise<{ ok: boolean; previousKey: string | null }> {
+  const r = await query<{ previous_key: string | null }>(
+    `WITH prev AS (SELECT cover_image_key AS old_key FROM ads WHERE id = $1 AND tenant_id = $2 AND client_id = $3)
+     UPDATE ads SET cover_image_key = $4, cover_source = 'manual', cover_updated_at = now(),
+            cover_fetch_url = NULL, cover_fetch_seen_at = NULL, updated_at = now()
+      WHERE id = $1 AND tenant_id = $2 AND client_id = $3
+      RETURNING (SELECT old_key FROM prev) AS previous_key`,
+    [adId, tenantId, clientId, key],
+  );
+  return r.rows[0] ? { ok: true, previousKey: r.rows[0].previous_key } : { ok: false, previousKey: null };
+}
+
+/** Remove a cover entirely. cover_source → NULL so automatic capture can resume on the next touch. */
+export async function removeAdCover(
+  tenantId: string,
+  clientId: string,
+  adId: string,
+): Promise<{ ok: boolean; previousKey: string | null }> {
+  const r = await query<{ previous_key: string | null }>(
+    `WITH prev AS (SELECT cover_image_key AS old_key FROM ads WHERE id = $1 AND tenant_id = $2 AND client_id = $3)
+     UPDATE ads SET cover_image_key = NULL, cover_source = NULL, cover_updated_at = NULL, updated_at = now()
+      WHERE id = $1 AND tenant_id = $2 AND client_id = $3
+      RETURNING (SELECT old_key FROM prev) AS previous_key`,
+    [adId, tenantId, clientId],
+  );
+  return r.rows[0] ? { ok: true, previousKey: r.rows[0].previous_key } : { ok: false, previousKey: null };
 }
 
 /** A campaign owned by this client, or null. */

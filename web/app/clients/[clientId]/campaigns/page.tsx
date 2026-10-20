@@ -5,6 +5,7 @@ import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { listAdsWithStats, listCampaignsWithStats } from "@worker/db/repositories/attribution.js";
 import { listServices } from "@worker/db/repositories/scheduling/services.js";
 import { listPromotions } from "@worker/db/repositories/scheduling/promotions.js";
+import { publicUrlForKey } from "@/lib/r2";
 import { CampaignsPanel } from "@/components/campaigns/CampaignsPanel";
 
 /**
@@ -51,6 +52,8 @@ export default async function ClientCampaignsPage({
         body: a.body,
         media_type: a.media_type,
         source_url: a.source_url,
+        cover_url: publicUrlForKey(a.cover_image_key),
+        video_url: a.video_url,
         is_test: a.is_test,
         campaign_id: a.campaign_id,
         campaign_name: a.campaign_name,

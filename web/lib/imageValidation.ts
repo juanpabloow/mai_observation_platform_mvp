@@ -18,6 +18,8 @@ export const MAX_LOGO_BYTES = 2 * 1024 * 1024; // 2 MB
 export const MAX_STAFF_PHOTO_BYTES = 900 * 1024;
 /** A service's booking-page image. Same cap as a photo: the editor downsizes it in the browser first (Server Actions body limit, 1 MB). */
 export const MAX_SERVICE_IMAGE_BYTES = 900 * 1024;
+/** AT-2c: a person-uploaded AD COVER. Same cap as a service image; downsized in the browser first. */
+export const MAX_AD_COVER_BYTES = 900 * 1024;
 
 export type ImageType = "png" | "jpeg" | "webp";
 

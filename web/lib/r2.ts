@@ -134,7 +134,7 @@ export async function uploadServiceImage(
   clientId: string,
   serviceId: string,
   file: File,
-  kind: "services" | "promotions" = "services",
+  kind: "services" | "promotions" | "ads" = "services",
 ): Promise<UploadLogoResult> {
   if (!isR2Configured) return { ok: false, error: "Photo upload is not configured." };
 
@@ -160,6 +160,20 @@ function keyFromPublicUrl(url: string): string | null {
   if (!publicUrl) return null;
   const prefix = `${publicUrl}/`;
   return url.startsWith(prefix) ? url.slice(prefix.length) : null;
+}
+
+/**
+ * AT-2c: build the public URL for a stored object KEY (ad covers persist the key, not the URL, so
+ * the stored value is stable if the public base ever changes). Null when R2 or the key is absent.
+ */
+export function publicUrlForKey(key: string | null): string | null {
+  return key && publicUrl ? `${publicUrl}/${key}` : null;
+}
+
+/** AT-2c: best-effort delete of an object by its KEY (orphan cleanup when a cover is replaced/removed). */
+export async function deleteObjectKey(key: string): Promise<void> {
+  if (!isR2Configured) return;
+  await r2().send(new DeleteObjectCommand({ Bucket: bucket as string, Key: key }));
 }
 
 /**

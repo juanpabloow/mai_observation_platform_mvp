@@ -27,6 +27,11 @@ export const REFERRAL_KEYS = [
   'referral_headline',
   'referral_body',
   'referral_media_type',
+  // AT-2c: the creative media. thumbnail_url/image_url are SIGNED fbcdn links (copied server-side,
+  // see coverCapture); video_url is a facebook.com story link stored as a plain link, never fetched.
+  'referral_thumbnail_url',
+  'referral_image_url',
+  'referral_video_url',
 ] as const;
 
 export interface ReferralInput {
@@ -37,6 +42,12 @@ export interface ReferralInput {
   headline: string | null;
   body: string | null;
   mediaType: string | null;
+  /** AT-2c: signed fbcdn cover (small). Queued for server-side capture, never kept as a link. */
+  thumbnailUrl: string | null;
+  /** AT-2c: signed fbcdn full image (image ads). Preferred over the thumbnail for capture. */
+  imageUrl: string | null;
+  /** AT-2c: a facebook.com story link (video ads). Stored as a plain link, never fetched. */
+  videoUrl: string | null;
 }
 
 export type ParseReferralResult =
@@ -77,6 +88,10 @@ export function parseReferral(metadata: Record<string, unknown> | null | undefin
       headline: cap(str(metadata.referral_headline), 500),
       body: cap(str(metadata.referral_body), 2000),
       mediaType: cap(str(metadata.referral_media_type), 50),
+      // AT-2c: cap at 2048 (the ads.cover_fetch_url / video_url CHECK); a real signed fbcdn url fits.
+      thumbnailUrl: cap(str(metadata.referral_thumbnail_url), 2048),
+      imageUrl: cap(str(metadata.referral_image_url), 2048),
+      videoUrl: cap(str(metadata.referral_video_url), 2048),
     },
   };
 }
@@ -109,20 +124,44 @@ export async function registerAdAndTouch(
     referral: ReferralInput;
   },
 ): Promise<{ adId: string; touchId: string | null }> {
+  // AT-2c: the signed cover url to QUEUE for capture — the full image (image ads) when present, else
+  // the thumbnail (video ads). Never fetched here; the worker cover-reconcile downloads it later. The
+  // message time is stored as cover_fetch_seen_at so the reconcile skips an old (expired) backfilled url.
+  const coverFetchUrl = input.referral.imageUrl ?? input.referral.thumbnailUrl;
+  const coverFetchSeenAt = coverFetchUrl ? input.occurredAt : null;
   const ad = await client.query<{ id: string }>(
-    `INSERT INTO ads (tenant_id, client_id, platform, source_type, external_id, headline, body, source_url, media_type, first_seen_at, last_seen_at)
-       VALUES ($1, $2, 'meta', $3, $4, $5, $6, $7, $8, $9, $9)
+    `INSERT INTO ads (tenant_id, client_id, platform, source_type, external_id, headline, body, source_url, media_type,
+                      video_url, cover_fetch_url, cover_fetch_seen_at, first_seen_at, last_seen_at)
+       VALUES ($1, $2, 'meta', $3, $4, $5, $6, $7, $8, $10, $11, $12, $9, $9)
      ON CONFLICT (client_id, platform, source_type, external_id) DO UPDATE SET
        headline = COALESCE(EXCLUDED.headline, ads.headline),
        body = COALESCE(EXCLUDED.body, ads.body),
        source_url = COALESCE(EXCLUDED.source_url, ads.source_url),
        media_type = COALESCE(EXCLUDED.media_type, ads.media_type),
+       video_url = COALESCE(EXCLUDED.video_url, ads.video_url),
+       -- Queue a (re)capture only when NOT manual, a cover url arrived, and there's no fresh auto cover
+       -- yet (missing, or older than the 30-day refresh). A person-uploaded cover is never disturbed.
+       cover_fetch_url = CASE
+         WHEN ads.cover_source = 'manual' THEN ads.cover_fetch_url
+         WHEN EXCLUDED.cover_fetch_url IS NULL THEN ads.cover_fetch_url
+         WHEN ads.cover_image_key IS NULL OR ads.cover_updated_at < now() - make_interval(days => 30)
+           THEN EXCLUDED.cover_fetch_url
+         ELSE ads.cover_fetch_url
+       END,
+       cover_fetch_seen_at = CASE
+         WHEN ads.cover_source = 'manual' THEN ads.cover_fetch_seen_at
+         WHEN EXCLUDED.cover_fetch_url IS NULL THEN ads.cover_fetch_seen_at
+         WHEN ads.cover_image_key IS NULL OR ads.cover_updated_at < now() - make_interval(days => 30)
+           THEN EXCLUDED.cover_fetch_seen_at
+         ELSE ads.cover_fetch_seen_at
+       END,
        first_seen_at = LEAST(ads.first_seen_at, EXCLUDED.first_seen_at),
        last_seen_at = GREATEST(ads.last_seen_at, EXCLUDED.last_seen_at),
        updated_at = now()
      RETURNING id`,
     [input.tenantId, input.clientId, input.referral.sourceType, input.referral.sourceId,
-     input.referral.headline, input.referral.body, input.referral.sourceUrl, input.referral.mediaType, input.occurredAt],
+     input.referral.headline, input.referral.body, input.referral.sourceUrl, input.referral.mediaType, input.occurredAt,
+     input.referral.videoUrl, coverFetchUrl, coverFetchSeenAt],
   );
   const adId = ad.rows[0]!.id;
 
