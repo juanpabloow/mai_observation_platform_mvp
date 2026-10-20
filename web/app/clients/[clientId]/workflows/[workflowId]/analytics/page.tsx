@@ -11,6 +11,7 @@ import {
   getHandoffSendSummary,
 } from "@worker/db/repositories/analytics.js";
 import { handoffSendTile } from "@/lib/handoffSendMetrics";
+import { WorkflowViewTabs } from "@/components/WorkflowViewTabs";
 import {
   ConversationTurnsChart,
   ExecutionsByStatusChart,
@@ -82,6 +83,7 @@ export default async function AnalyticsPage({
       scopeLabel={workflow.name ?? workflowId}
       rangeBasePath={basePath}
       rangeCurrent={days}
+      tabs={<WorkflowViewTabs clientId={linkClientId} scope={workflowId} current="analytics" />}
     >
       {summary.allTimeTotal === 0 ? (
         <AnalyticsEmpty hint="Once this workflow runs, its execution analytics will appear here." />

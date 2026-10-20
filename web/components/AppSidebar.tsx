@@ -549,9 +549,10 @@ export function AppSidebar({
     // active split keys off whether the path is an analytics route.
     const scope = scopeFor(clientId);
     const onWorkflows = pathname.startsWith(c("/workflows"));
-    // Analytics is a /workflows/<scope>/analytics route, so it lives UNDER /workflows; the
-    // active split between the two rows keys off whether the current path is that surface.
-    const onAnalytics = /\/workflows\/[^/]+\/analytics(?:\/|$)/.test(pathname);
+    // Analytics is the client's VALUE dashboard (/clients/<c>/analytics). The technical
+    // execution analytics of the workflows (/workflows/<scope>/analytics) belong to the
+    // Workflows row, reached from its Ejecuciones | Analytics tabs.
+    const onAnalytics = pathname.startsWith(c("/analytics"));
     // WHAT THIS login may see/manage in this client context (mirrors the server; hides
     // controls the viewer can't use so no empty/broken page ever appears in the rail):
     //   canSeeGeneral  — Inbox / Contacts / Agenda: the agency, or an OWNER or SETTER of
@@ -592,14 +593,14 @@ export function AppSidebar({
             label: "Workflows",
             href: scopeHref(clientId, "executions", scope),
             icon: Icon.workflows,
-            active: onWorkflows && !onAnalytics,
+            active: onWorkflows,
           },
           {
             key: "analytics",
             label: "Analytics",
-            href: scopeHref(clientId, "analytics", scope),
+            href: c("/analytics"),
             icon: Icon.overview,
-            active: onWorkflows && onAnalytics,
+            active: onAnalytics,
           },
         );
       }
@@ -736,7 +737,7 @@ export function AppSidebar({
           ? memberModules.includes("inbox")
             ? [{ key: "inbox", label: "Inbox", href: m("/inbox"), icon: Icon.inbox, active: pathname.startsWith(m("/inbox")), countEndpoint: `/api/inbox/${memberClientId}/pending-count` }]
             : []
-          : [{ key: "analytics", label: "Analytics", href: scopeHref(memberClientId, "analytics", scopeFor(memberClientId)), icon: Icon.overview, active: false }];
+          : [{ key: "analytics", label: "Analytics", href: m("/analytics"), icon: Icon.overview, active: false }];
     if (clientRole !== "staff" && memberModules.includes("crm")) {
       items.push({ key: "contacts", label: "Contacts", href: m("/contacts"), icon: Icon.contacts, active: pathname.startsWith(m("/contacts")) });
     }
