@@ -36,7 +36,7 @@ const rail = (ctx: NavContext) => buildSections(ctx).map((s) => s.label);
 test('agency on a client with every module: the three blocks of the proposal + Módulos, each page once', () => {
   assert.deepEqual(shape(agency(ALL)), {
     inbox: ['inbox'],
-    contacts: ['contacts'],
+    contacts: ['contacts', 'pipeline'],
     agenda: ['calendar', 'team', 'hours'],
     catalog: ['services', 'products', 'promotions'],
     presence: ['booking-page', 'reviews', 'campaigns'],
@@ -60,11 +60,11 @@ test('groups vs direct links: Agenda is a group whose row opens the calendar; th
   assert.equal(by.agenda.kind, 'group');
   assert.equal(by.agenda.homeHref, `/clients/${A}/scheduling/agenda`, 'pressing «Agenda» opens Calendario');
   assert.equal(by.agenda.href, `/clients/${A}/scheduling/agenda`);
-  for (const id of ['catalog', 'presence', 'settings', 'automations']) {
+  for (const id of ['contacts', 'catalog', 'presence', 'settings', 'automations']) {
     assert.equal(by[id].kind, 'group', id);
     assert.equal(by[id].homeHref, null, `${id} has no page of its own — its row only unfolds`);
   }
-  for (const id of ['inbox', 'contacts', 'results', 'agency']) assert.equal(by[id].kind, 'link', id);
+  for (const id of ['inbox', 'results', 'agency']) assert.equal(by[id].kind, 'link', id);
   // Reception: Agenda shrinks to a direct link (one page), never a group with one child.
   const setter = Object.fromEntries(buildSections(member('setter', ALL)).map((x) => [x.id, x]));
   assert.equal(setter.agenda.kind, 'link');
@@ -127,7 +127,7 @@ test('setter (reception): operations only — no settings, roster, results or au
   const s = shape(member('setter', ALL));
   assert.deepEqual(s, {
     inbox: ['inbox'],
-    contacts: ['contacts'],
+    contacts: ['contacts', 'pipeline'],
     agenda: ['calendar'],
     catalog: ['products'],
     presence: ['campaigns'],

@@ -76,7 +76,7 @@ test('sidebar: the Inbox badge is fed by the REAL pending-count endpoint', () =>
 
 test('sidebar: Contactos is its own module-gated section — NOT under Agenda', () => {
   const model = read('lib/sectionNav.ts');
-  const contacts = model.indexOf('contacts: [general && has("crm")');
+  const contacts = model.indexOf('contacts: [');
   const agenda = model.indexOf('agenda: [');
   assert.ok(contacts > 0 && agenda > contacts, 'Contactos is a separate section, before Agenda');
   assert.ok(model.includes('general && has("crm") && { id: "contacts"'), 'Contactos only renders when the crm module is enabled');
