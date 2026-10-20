@@ -35,6 +35,7 @@ export function ServiceMenu({
   staff,
   siteServiceMap,
   bookingCategories = [],
+  showBookingCategories = true,
   onOpenBookingLink,
 }: {
   clientId: string;
@@ -43,7 +44,10 @@ export function ServiceMenu({
   staff: Staff[];
   siteServiceMap: Record<string, string[]>;
   bookingCategories?: BookingCategory[];
-  /** "Enlace de reservas" lives on each site — jump to Sedes y horarios. */
+  /** The booking-page categories panel. Off on the Servicios page, where they belong to
+   *  Página de reservas (one place to edit them). */
+  showBookingCategories?: boolean;
+  /** "Página de reservas" — the link, public info and catalogue order of each site. */
   onOpenBookingLink: () => void;
 }) {
   const router = useRouter();
@@ -116,7 +120,7 @@ export function ServiceMenu({
             </span>
           }
         >
-          <MenuButton onClick={() => { setMenu(null); onOpenBookingLink(); }}>Enlace de reservas</MenuButton>
+          <MenuButton onClick={() => { setMenu(null); onOpenBookingLink(); }}>Página de reservas</MenuButton>
           <MenuButton onClick={() => { setMenu(null); setView(view.kind === "archived" ? { kind: "all" } : { kind: "archived" }); }}>
             {view.kind === "archived" ? "Ver servicios activos" : `Ver archivados (${archived.length})`}
           </MenuButton>
@@ -127,7 +131,7 @@ export function ServiceMenu({
         </div>
       </div>
 
-      <BookingCategoriesPanel clientId={clientId} categories={bookingCategories} />
+      {showBookingCategories ? <BookingCategoriesPanel clientId={clientId} categories={bookingCategories} /> : null}
 
       {/* Search + filters. */}
       <div className={`flex flex-wrap items-center gap-2 p-3 ${CARD}`}>

@@ -1,6 +1,7 @@
 import { cache } from "react";
 import { redirect } from "next/navigation";
 import { getServerSession } from "./session";
+import { memberLandingPath } from "./landing";
 import { requireTenant } from "./requireAuth";
 import {
   getMembershipForUser,
@@ -95,6 +96,18 @@ export function canSeeWorkflowInsights(scope: AccessScope, clientId?: string): b
 }
 
 /**
+ * May this scope use REUNIONES (meetings) for this client? The agency, or this client's
+ * OWNER. Recepción (setter) has NO access — decided 2026-10-20: it was left "undecided"
+ * (scaling-todo.md), its matrix is Inbox · Contactos · Agenda, and the rail already hid
+ * it; until then the server still let a setter in by URL/API. Staff never.
+ * The ONE gate for the meetings pages and every session-authed meetings API route
+ * (meetingsAppScope.resolveAppScope); the worker routes authenticate as a machine.
+ */
+export function canAccessMeetings(scope: AccessScope, clientId: string): boolean {
+  return canSeeWorkflowInsights(scope, clientId);
+}
+
+/**
  * May this scope MANAGE this client — its scheduling settings, custom field
  * definitions, and its team (Editors/Staff)? The agency (owner/admin) may manage any
  * of their clients; a Client Owner may manage only their own. Editors and Staff never.
@@ -181,11 +194,7 @@ export function memberLandingHref(scope: AccessScope): string {
   // Staff → their agenda. SETTER → the client attention queue (inbox): they can't see
   // analytics, so the old "all/analytics" landing would 404 for them. Owner → their
   // client's Analytics (value dashboard). Agency → the Hub.
-  if (scope.memberClientId) {
-    if (scope.clientRole === "staff") return `/clients/${scope.memberClientId}/scheduling/agenda`;
-    if (scope.clientRole === "setter") return `/clients/${scope.memberClientId}/inbox`;
-    return `/clients/${scope.memberClientId}/analytics`; // owner: the value dashboard
-  }
+  if (scope.memberClientId) return memberLandingPath(scope.memberClientId, scope.clientRole);
   return "/";
 }
 

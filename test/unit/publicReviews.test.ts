@@ -148,7 +148,10 @@ test('moderation is owner/agency only and scoped to the client', () => {
   assert.ok(action.includes('moderateReview(res.context.scope.tenantId, res.context.client.id'));
   const page = read('web/app/clients/[clientId]/scheduling/reviews/page.tsx');
   assert.ok(page.includes('if (!canManageClient(scope, clientId)) notFound();'));
-  const nav = read('web/components/AppSidebar.tsx');
-  const i = nav.indexOf('key: "scheduling-reviews"');
-  assert.ok(i > nav.indexOf('if (canManageThisClient && clientId !== defaultClientId) {'), 'the nav entry sits behind the manage gate');
+  // The nav entry (Presencia y marketing → Reseñas) sits behind the same manage gate. This
+  // is the MODERATION page; importing reviews stays platform-admin only (not a nav entry).
+  const nav = read('web/lib/sectionNav.ts');
+  assert.ok(nav.includes('schedManage && { id: "reviews", label: "Reseñas", href: c("/scheduling/reviews") }'), 'the nav entry sits behind the manage gate');
+  assert.ok(nav.includes('const schedManage = manage && has("scheduling") && !isDefault;'));
+  assert.ok(!/import/i.test(nav.slice(nav.indexOf('presence: ['), nav.indexOf('results: ['))), 'no review-import entry for the business');
 });

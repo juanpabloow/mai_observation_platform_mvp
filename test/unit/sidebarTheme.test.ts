@@ -90,15 +90,11 @@ test('the DOM is never touched on the server, and only ever written from an effe
   assert.ok(menu.includes('onClick={() => setTheme(opt)}'), 'the handler only updates React state');
 });
 
-test('the dark rail is NEUTRAL near-black, and it overrides ONLY the rail tokens', () => {
+test('the dark rail is the production NEUTRAL near-black, and it overrides ONLY the rail tokens', () => {
   const css = read('app/globals.css');
-  // Just the Black RULE BODY — other token blocks follow it, and including them
-  // would make the "touches nothing else" check below meaningless.
   const blackStart = css.indexOf("[data-sidebar-theme='black']");
   const black = css.slice(blackStart, css.indexOf('}', blackStart));
-  // NEUTRAL, not cool. The rail used to be #1A1D24 — the bluest end of the old spec's
-  // range, chosen to read "cool beside the white panel"; that cast is exactly what made it
-  // look NAVY rather than black. Every value is now on the grey axis.
+  // Back to the production graphite on request (a cool «Noche» was tried and reverted).
   for (const [token, value] of [
     ['--sidebar-bg', '#1a1a1a'],
     ['--sidebar-border', '#272727'],
@@ -108,19 +104,33 @@ test('the dark rail is NEUTRAL near-black, and it overrides ONLY the rail tokens
   ] as const) {
     assert.ok(black.includes(`${token}: ${value}`), `${token} is ${value}`);
   }
-  // The GUARANTEE, checked structurally rather than by value: every colour the Black rail
-  // declares is a neutral grey (R=G=B). A hex that drifts back off the grey axis fails
-  // here, which is what "black, not navy" actually means.
+  // Every colour the Black rail declares is a neutral grey (R=G=B) — "black, not navy".
   for (const m of black.matchAll(/--sidebar-[a-z-]+:\s*#([0-9a-f]{6})\b/g)) {
     const [r, g, b] = [m[1].slice(0, 2), m[1].slice(2, 4), m[1].slice(4, 6)];
     assert.ok(r === g && g === b, `#${m[1]} is a neutral grey, not a tinted one`);
   }
-  // Hover on a dark rail is a NEUTRAL warm lift — see the dedicated case below.
   assert.ok(black.includes('--sidebar-hover: var(--sidebar-hover-dark)'), 'Black hover is the neutral token');
-  // Nothing the CONTENT uses may be redefined under the Black selector — that is
-  // the whole guarantee: only the sidebar changes.
   for (const contentToken of ['--background:', '--surface:', '--foreground:', '--muted:', '--faint:', '--line:', '--brand:']) {
     assert.ok(!black.includes(contentToken), `Black does not touch ${contentToken}`);
+  }
+});
+
+test('the light rail is «Claro» (proposal 1d), only in the light app, and only the rail tokens', () => {
+  const css = read('app/globals.css');
+  const start = css.indexOf("html:not(.dark)[data-sidebar-theme='light'] {");
+  assert.ok(start > 0, 'scoped to the light app');
+  const light = css.slice(start, css.indexOf('}', start));
+  for (const [token, value] of [
+    ['--sidebar-bg', '#f2f2f5'],
+    ['--sidebar-border', '#e0e0e6'],
+    ['--sidebar-fg', '#111113'],
+    ['--sidebar-muted', '#3a3a3c'],
+    ['--sidebar-sub', '#6e6e73'],
+  ] as const) {
+    assert.ok(light.includes(`${token}: ${value}`), `${token} is ${value}`);
+  }
+  for (const contentToken of ['--background:', '--surface:', '--foreground:', '--muted:', '--line:', '--brand:']) {
+    assert.ok(!light.includes(contentToken), `Claro does not touch ${contentToken}`);
   }
 });
 
@@ -141,80 +151,65 @@ test('the rail reads sidebar tokens only; the content never reads them', () => {
   }
 });
 
-test('a DARK rail hovers NEUTRAL — hover is a ground change, never a second red', () => {
+test('a DARK rail hovers on its own ground — hover is a ground change, never a second red', () => {
   const css = read('app/globals.css');
-  // THE CONTRACT INVERTED. Hover used to be a dark RED tint (#7f1d1d), chosen so that it
-  // and the solid-red ACTIVE row stayed tellable apart. In practice they didn't: a
-  // hovered row and the current row read as two reds of similar weight, so the rail
-  // appeared to have two "you are here" marks.
-  //
-  // The accent rule settles it — red marks the active nav item, and a colour on every row
-  // you merely sweep past is the dilution that stops it meaning anything. Hover is a
-  // change of GROUND (the design's #22262F), and the hovered label lifts to --sidebar-fg.
+  // Red marks the current page only; hover is a change of GROUND (the Noche field tone)
+  // and the hovered label lifts to --sidebar-fg.
   assert.ok(css.includes('--sidebar-hover-dark: #242424'), 'the dark-rail hover is a neutral lift');
-  // And the misleading name is gone with the value: a token called `-red` that is not red
-  // is how the next person reintroduces this.
   assert.equal(/--sidebar-hover-red\s*:/.test(css), false, 'no token still claims to be red');
   // Applied to BOTH dark rails: the app's dark theme and the Black preference.
   const darkHover = css.slice(css.indexOf('.dark {\n  --sidebar-hover'));
-  assert.ok(darkHover.startsWith('.dark {\n  --sidebar-hover: var(--sidebar-hover-dark);'), 'dark app theme hovers neutral');
+  assert.ok(darkHover.startsWith('.dark {\n  --sidebar-hover: var(--sidebar-hover-dark);'), 'dark app theme hovers on the dark token');
   const black = css.slice(css.indexOf("[data-sidebar-theme='black']"), css.indexOf('--sidebar-hover-dark:'));
-  assert.ok(black.includes('--sidebar-hover: var(--sidebar-hover-dark)'), 'the Black rail hovers neutral');
-  // A LIGHT rail in a LIGHT app keeps its own neutral lift.
+  assert.ok(black.includes('--sidebar-hover: var(--sidebar-hover-dark)'), 'the Black rail hovers on the dark token');
+  // A LIGHT rail keeps a grey lift.
   const root = css.slice(css.indexOf('--sidebar-bg: var(--sidebar)'), css.indexOf("[data-sidebar-theme='black']"));
   assert.ok(root.includes('--sidebar-hover: var(--subtle)'), 'the light rail keeps a neutral hover');
   // The ONE red in the rail is the active fill, and hover is nowhere near it.
   assert.ok(css.includes('--nav-active: #e60a2f'), 'the active fill is the only red');
 });
 
-test('Black keeps the active row red with white text/icon, and the brand white', () => {
+test('both rails keep the solid red pill with white text, and the brand in the rail foreground', () => {
   const src = read('components/AppSidebar.tsx');
-  // The active treatment is theme-independent (it is NOT a sidebar token), so it
-  // stays the same solid red in both appearances; icons inherit currentColor.
-  assert.ok(src.includes('bg-nav-active font-semibold text-white'), 'active row: solid red + white');
+  // The active treatment is theme-independent (--nav-active is NOT a sidebar token), so it
+  // stays the same solid red on the dark rail and on Claro; icons inherit currentColor.
+  assert.ok(read('components/railRow.ts').includes('"bg-nav-active font-semibold text-white"'), 'active row: solid red + white');
   assert.ok(read('app/globals.css').includes('--nav-active: #e60a2f'), 'the spec accent, fixed in both modes');
   assert.ok(src.includes('stroke="currentColor"'), 'icons inherit the row colour');
-  // The brand wordmark tracks the rail foreground, which is #F4F4F5 under Black.
   assert.ok(src.includes('tracking-tight text-sidebar-fg">MONTSERRAT_AI'), 'the wordmark uses the rail foreground');
-  const css = read('app/globals.css');
-  const black = css.slice(css.indexOf("[data-sidebar-theme='black']"), css.indexOf('@theme inline {'));
-  assert.ok(black.includes('--sidebar-fg: #f7f7f7'), 'which is near-white on the dark rail');
 });
 
-test('the account footer sits on the rail background, separated by a border', () => {
+test('the account footer sits on the rail background, as one continuous ground', () => {
   const src = read('components/AppSidebar.tsx');
-  assert.ok(src.includes('relative shrink-0 border-t border-sidebar-border'), 'footer separated by a rail border');
+  // The proposal: no box and no rule — the footer is on the rail's own ground.
+  assert.ok(!/relative shrink-0 border-t border-sidebar-border/.test(src), 'no rule above the footer');
   assert.ok(src.includes('text-sidebar-muted hover:bg-sidebar-hover'), 'footer uses rail tokens');
-  // It is the SAME ROW as the nav items above it — same inset, radius and hover, from the
-  // shared constant. It used to be a full-width `rounded-lg` block with its own padding,
-  // which made the one row that is always on screen the one row shaped differently.
+  // It is the SAME ROW as the nav items above it — same inset, radius and hover.
   assert.ok(src.includes('`${RAIL_ROW} w-[calc(100%-1.25rem)]'), 'and is shaped like every other rail row');
-  // The BRAND block above, by contrast, has no rule under it: a hairline there cut the
-  // rail into two panels and made the first section heading look like another list's.
+  // The BRAND block above has no rule under it either.
   const brand = src.slice(src.indexOf('function Brand('), src.indexOf('function Brand(') + 1200);
   assert.equal(/border-b border-sidebar-border/.test(brand), false, 'the brand carries no bottom rule');
-  // It is inside the <aside>, which carries bg-sidebar-bg — no separate fill.
   assert.ok(src.includes('bg-sidebar-bg'), 'the rail (and therefore the footer) is one surface');
 });
 
-// ────────────────── Navigation + permissions are untouched ──────────────────
-
 test('the appearance change did not alter navigation, gating or permissions', () => {
   const src = read('components/AppSidebar.tsx');
+  // The gates now live in the one section model (lib/sectionNav.ts, proven by
+  // sectionNav.test.ts) — the appearance code holds none of its own.
+  const model = read('lib/sectionNav.ts');
+  assert.ok(src.includes('buildSections({'), 'the rail is built from the section model');
   // Module gates.
-  assert.ok(src.includes('moduleKeys.includes("inbox")'), 'Inbox still module-gated');
-  assert.ok(src.includes('moduleKeys.includes("crm")'), 'CRM still module-gated');
-  assert.ok(src.includes('moduleKeys.includes("scheduling")'), 'Scheduling still module-gated');
-  // Role gates (client roles): client-admin items behind canManageThisClient; Modules
-  // stays agency-only; general surfaces behind canSeeGeneral.
-  assert.ok(src.includes('canManageThisClient'), 'client-admin items gated by role (agency or client owner)');
-  assert.ok(src.includes('canSeeGeneral'), 'general surfaces gated (staff excluded)');
-  assert.ok(src.includes('!isMember && clientId !== defaultClientId'), 'the default client still hides agency-only Modules');
-  // Structure.
-  assert.ok(src.includes('sections.push({ label: "Workspace", items: workspace })'), 'Workspace is still the first section');
-  assert.ok(src.includes('countEndpoint: `/api/inbox/${clientId}/pending-count`'), 'the real badge endpoint is intact');
+  assert.ok(model.includes('general && has("inbox")'), 'Inbox still module-gated');
+  assert.ok(model.includes('general && has("crm")'), 'CRM still module-gated');
+  assert.ok(model.includes('has("scheduling") && { id: "calendar"'), 'Scheduling still module-gated');
+  // Role gates (client roles): client-admin items behind manage; Módulos stays agency-
+  // only; general surfaces behind general (staff excluded).
+  assert.ok(model.includes('const manage = isAgency || (clientRole === "owner" && forOwnClient);'), 'client-admin items gated by role (agency or client owner)');
+  assert.ok(model.includes('const general = isAgency || ((clientRole === "owner" || clientRole === "setter") && forOwnClient);'), 'general surfaces gated (staff excluded)');
+  assert.ok(model.includes('isAgency && !isDefault && { id: "modules"'), 'the default client still hides agency-only Modules');
+  assert.ok(src.includes('countEndpoint: sec.id === "inbox" ? `/api/inbox/${clientId}/pending-count` : undefined'), 'the real badge endpoint is intact');
   // And exactly one active treatment still exists.
-  assert.equal(src.match(/bg-nav-active font-semibold text-white/g)?.length, 1, 'one active treatment in the rail');
+  assert.equal(src.match(/item\.active \? RAIL_ACTIVE : RAIL_IDLE/g)?.length, 1, 'one active treatment in the rail');
 });
 
 test('the repaint kept the stored cookie VALUE, so saved preferences still resolve', () => {

@@ -145,7 +145,10 @@ const web = (rel: string): string => readFileSync(fileURLToPath(new URL(`../../w
 test('the phone tree is mounted below md and the desktop panel is kept from md up', () => {
   const panel = web('components/scheduling/AdminPanel.tsx');
   assert.ok(panel.includes('<ConfigMobile'), 'AdminPanel renders the phone tree');
-  assert.ok(panel.includes('<main className="hidden min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)] md:flex">'), 'desktop is hidden only below md');
+  // Pages with a phone screen hide their desktop editors below md; the others (Horarios,
+  // Excepciones, Promociones, Página de reservas) render the same responsive editors.
+  assert.ok(panel.includes('<main className={`${entry ? "hidden md:flex" : "flex"} min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]`}>'), 'desktop is hidden only below md');
+  assert.ok(panel.includes('{entry ? (\n        <ConfigMobile'), 'and the phone tree is mounted only where it exists');
   const root = web('components/scheduling/mobile/config/ConfigMobile.tsx');
   assert.ok(root.includes('md:hidden'), 'the phone tree is hidden from md up');
   assert.ok(root.includes('useTheme()') && root.includes('setTheme(dark ? "light" : "dark")'), 'dark mode uses the existing next-themes mechanism');

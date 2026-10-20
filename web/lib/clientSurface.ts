@@ -20,10 +20,12 @@ const CLIENT_SURFACE_LABELS: ReadonlyArray<{ pattern: RegExp; label: string }> =
   { pattern: /^\/clients\/([^/]+)\/workflows$/, label: "Flujos" },
   { pattern: /^\/clients\/([^/]+)\/inbox(?:\/|$)/, label: "Inbox" },
   // The client's Analytics: the value dashboard (workflow analytics live under Workflows).
-  { pattern: /^\/clients\/([^/]+)\/analytics(?:\/|$)/, label: "Analytics" },
+  { pattern: /^\/clients\/([^/]+)\/analytics(?:\/|$)/, label: "Dashboard de valor" },
   // The route stays /team; only the label a person reads is "Usuarios y accesos".
   { pattern: /^\/clients\/([^/]+)\/team(?:\/|$)/, label: "Usuarios y accesos" },
   { pattern: /^\/clients\/([^/]+)\/modules(?:\/|$)/, label: "Módulos" },
+  // Before «Contactos»: the first match wins, and /contacts/fields is its own page.
+  { pattern: /^\/clients\/([^/]+)\/contacts\/fields(?:\/|$)/, label: "Campos personalizados" },
   { pattern: /^\/clients\/([^/]+)\/contacts(?:\/|$)/, label: "Contactos" },
   // Reuniones, incluida la ficha de UNA reunión (…/reuniones/<meetingId>). Faltaba, y
   // por eso el selector de cliente decía «Elige un cliente» dentro de una reunión que
@@ -38,8 +40,16 @@ const CLIENT_SURFACE_LABELS: ReadonlyArray<{ pattern: RegExp; label: string }> =
   { pattern: /^\/clients\/([^/]+)\/scheduling\/agenda(?:\/|$)/, label: "Agenda" },
   { pattern: /^\/clients\/([^/]+)\/scheduling\/staff(?:\/|$)/, label: "Equipo" },
   { pattern: /^\/clients\/([^/]+)\/scheduling\/admin(?:\/|$)/, label: "Configuración de agenda" },
+  // The scheduling settings pages that replaced «Configuración de agenda» (schedulingNav.ts).
+  { pattern: /^\/clients\/([^/]+)\/scheduling\/hours(?:\/|$)/, label: "Horarios y ausencias" },
+  { pattern: /^\/clients\/([^/]+)\/scheduling\/services(?:\/|$)/, label: "Servicios" },
+  { pattern: /^\/clients\/([^/]+)\/scheduling\/promotions(?:\/|$)/, label: "Promociones" },
+  { pattern: /^\/clients\/([^/]+)\/scheduling\/booking-page(?:\/|$)/, label: "Página de reservas" },
+  { pattern: /^\/clients\/([^/]+)\/scheduling\/sites(?:\/|$)/, label: "Sedes" },
+  { pattern: /^\/clients\/([^/]+)\/scheduling\/rules(?:\/|$)/, label: "Reglas de reserva" },
   { pattern: /^\/clients\/([^/]+)\/scheduling\/reviews(?:\/|$)/, label: "Reseñas" },
   { pattern: /^\/clients\/([^/]+)\/campaigns(?:\/|$)/, label: "Campañas" },
+  { pattern: /^\/clients\/([^/]+)\/catalog(?:\/|$)/, label: "Productos" },
 ];
 
 export interface ClientSurface {

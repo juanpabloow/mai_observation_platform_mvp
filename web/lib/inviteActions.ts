@@ -1,6 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { memberLandingPath } from "./landing";
 import { getServerSession } from "./session";
 import { getAccessScope, hasFullAccess, isClientOwner, requireFullAccessForAction, type AccessScope } from "./access";
 import { getClientById } from "@worker/db/repositories/clients.js";
@@ -296,11 +297,11 @@ export async function acceptInvitationAction(
     return { ok: false, error: "This invitation has already been used." };
   }
 
+  // The same landing the server bounce uses (lib/landing.ts): staff → agenda, setter →
+  // inbox, owner → Analytics. A setter used to land on Analytics, which 404s for them.
   const redirectTo =
     invite.role === "member" && invite.member_client_id
-      ? invite.client_role === "staff"
-        ? `/clients/${invite.member_client_id}/scheduling/agenda`
-        : `/clients/${invite.member_client_id}/analytics`
+      ? memberLandingPath(invite.member_client_id, invite.client_role ?? null)
       : "/";
   return { ok: true, redirectTo };
 }

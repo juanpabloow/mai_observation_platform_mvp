@@ -64,9 +64,12 @@ test('machine route + wrapper: catalog.read capability, module gate, identical r
 });
 
 test('sidebar shows Productos only when the module is on, to general-access roles (not Staff)', () => {
+  const model = read('web/lib/sectionNav.ts');
+  assert.match(model, /general && has\("catalog"\) && \{ id: "products", label: "Productos", href: c\("\/catalog"\) \}/);
+  // Staff never reach it (their branch returns only their agenda).
+  assert.match(model, /if \(clientRole === "staff"\) \{\s*return forOwnClient && has\("scheduling"\)/);
   const src = read('web/components/AppSidebar.tsx');
-  assert.match(src, /moduleKeys\.includes\("catalog"\) && canSeeGeneral/);
-  assert.match(src, /label: "Productos"/);
+  assert.match(src, /clientRole !== "staff" && memberModules\.includes\("catalog"\)/);
 });
 
 test('capability vocabulary: catalog.read is a known capability but NOT auto-granted to legacy tokens', () => {

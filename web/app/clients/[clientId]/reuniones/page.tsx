@@ -1,6 +1,8 @@
+import { notFound } from "next/navigation";
 import Link from "next/link";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
+import { canAccessMeetings } from "@/lib/access";
 import { PageShell } from "@/components/ui/PageShell";
 import { ModuleHeader } from "@/components/ui/ModuleHeader";
 import { EmptyState, FacetPills, Pagination } from "@/components/ui/primitives";
@@ -48,6 +50,8 @@ export default async function ClientMeetingsPage({
   await connection();
   const { clientId } = await params;
   const { scope, client } = await requireClientModulePage(clientId, "meetings");
+  // Agency or this client's owner only — recepción gets the same 404 (lib/access.ts).
+  if (!canAccessMeetings(scope, clientId)) notFound();
   const { q, facet: facetRaw, sort: sortRaw, range: rangeRaw, page: pageRaw } = await searchParams;
 
   // Every param is validated before it reaches the data layer; an unknown value

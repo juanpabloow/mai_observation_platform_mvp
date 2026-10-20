@@ -178,31 +178,31 @@
   --sidebar-border: var(--line);
   --sidebar-fg: var(--foreground);
   --sidebar-muted: var(--muted);
+  --sidebar-sub: var(--muted);
   --sidebar-section: var(--faint);
+  --sidebar-tile: var(--line);
+  --sidebar-field: var(--subtle);
   --sidebar-hover: var(--subtle);
 }
 
 [data-sidebar-theme='black'] {
   /*
-   * A NEUTRAL near-black rail. It used to be #1A1D24 — the bluest end of the old spec's
-   * range, picked deliberately to read "cool beside the white panel". In practice that
-   * cool cast is what made the rail look NAVY rather than black, and beside a neutral
-   * white content card a blue-grey rail reads as another product's chrome.
-   *
-   * Every value here is now on the neutral axis (R=G=B), so the rail is a pure value step
-   * and nothing in it competes with the one hue the rail is allowed to spend: the red
-   * active row.
+   * The production NEUTRAL near-black rail ("Grafito"). Briefly repainted «Noche» (a cool
+   * #14171c) and reverted on request (2026-10-20): every value stays on the neutral axis
+   * (R=G=B), so nothing in the rail competes with the one hue it spends — the red pill.
    *
    * The cookie VALUE stays `black` so preferences saved before this keep resolving.
-   *
-   * Contrast against the #1a1a1a fill, approximate: fg ~15.8:1, muted ~7.4:1 (AA for body
-   * text), section ~4.8:1 (AA for the 9.5px small-caps labels).
+   * Contrast against #1a1a1a, approximate: fg ~15.8:1, muted ~11.6:1, sub-pages ~6.9:1,
+   * section ~4.8:1.
    */
   --sidebar-bg: #1a1a1a;
   --sidebar-border: #272727;
   --sidebar-fg: #f7f7f7;
   --sidebar-muted: #d4d4d4; /* brighter idle nav text on the dark rail (per request) — neutral grey */
+  --sidebar-sub: #a3a3a3;
   --sidebar-section: #9a9a9a; /* brighter section labels — neutral grey (R=G=B) */
+  --sidebar-tile: #2c2c2c;
+  --sidebar-field: #242424;
   --sidebar-hover: var(--sidebar-hover-dark);
 }
 
@@ -713,6 +713,9 @@
   --color-sidebar-muted: var(--sidebar-muted);
   --color-sidebar-section: var(--sidebar-section);
   --color-sidebar-hover: var(--sidebar-hover);
+  --color-sidebar-sub: var(--sidebar-sub);
+  --color-sidebar-tile: var(--sidebar-tile);
+  --color-sidebar-field: var(--sidebar-field);
   --color-background: var(--background);
   --color-surface: var(--surface);
   --color-brand: var(--brand);
@@ -857,7 +860,17 @@ html[data-text-scale='large'] {
 /* Light app + light rail: the rail's #eef0f3 is the canvas's own value, so the panel
    would vanish into it — step the ground (and the rail on it) down a notch. */
 html:not(.dark)[data-sidebar-theme='light'] {
-  --sidebar-bg: #e3e5ea;
+  /* «Claro» (proposal 1d): the panel's own very light grey, so menu and content sit close. */
+  --sidebar-bg: #f2f2f5;
+  --sidebar-border: #e0e0e6;
+  --sidebar-fg: #111113;
+  --sidebar-muted: #3a3a3c;
+  --sidebar-sub: #6e6e73;
+  --sidebar-section: #7c7c82;
+  --sidebar-tile: #e0e0e6;
+  --sidebar-field: #e6e6eb;
+  --sidebar-hover: #e6e6eb;
+  --frame-edge: rgba(17, 17, 19, 0.06);
 }
 /* Dark app: the canvas is #101012, so a #1a1a1a ground would sit LIGHTER than the
    panel and read as a hole. Drop the ground (and the rail on it) to near-black and give
@@ -866,6 +879,7 @@ html.dark {
   --sidebar-bg: #070707;
   --sidebar-border: #1f1f1f;
   --sidebar-hover-dark: #1c1c1c;
+  --sidebar-field: #161616;
   --frame-edge: rgba(255, 255, 255, 0.08);
 }
 @media (min-width: 1280px) {
@@ -1976,3 +1990,39 @@ body {
 .u-m-st-completed { background-color: var(--m-st-completed-bg); color: var(--m-st-completed-fg); }
 .u-m-st-cancelled { background-color: var(--m-st-cancelled-bg); color: var(--m-st-cancelled-fg); }
 .u-m-st-no_show { background-color: var(--m-st-no_show-bg); color: var(--m-st-no_show-fg); }
+
+/*
+ * ── Sidebar groups (proposal "Mismo sidebar, tres bloques", 2026-10-20) ─────────────
+ * A group's pages unfold under it (one group open at a time) on a thin vertical guide,
+ * aligned with the parent's label. Open/close is a 220ms height transition and the
+ * chevron turns; both stop under prefers-reduced-motion. Collapsed rows show their label
+ * as a tooltip on hover AND keyboard focus (a native `title` never shows on focus).
+ */
+.u-rail-group { display: grid; grid-template-rows: 0fr; transition: grid-template-rows 220ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.u-rail-group[data-open="true"] { grid-template-rows: 1fr; }
+.u-rail-group > div { min-height: 0; overflow: hidden; }
+.u-rail-group-inner { opacity: 0; transition: opacity 180ms ease; }
+.u-rail-group[data-open="true"] .u-rail-group-inner { opacity: 1; }
+.u-rail-chevron { transition: transform 200ms cubic-bezier(0.2, 0.8, 0.2, 1); }
+.u-rail-chevron[data-open="true"] { transform: rotate(90deg); }
+.u-rail-tip[data-tip]:hover::after,
+.u-rail-tip[data-tip]:focus-visible::after {
+  content: attr(data-tip);
+  position: absolute;
+  left: calc(100% + 12px);
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 60;
+  white-space: nowrap;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--popover);
+  color: var(--popover-foreground);
+  font-size: 0.8125rem;
+  font-weight: 600;
+  box-shadow: var(--shadow-float);
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .u-rail-group, .u-rail-group-inner, .u-rail-chevron { transition: none; }
+}

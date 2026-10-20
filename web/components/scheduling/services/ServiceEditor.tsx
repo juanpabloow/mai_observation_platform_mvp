@@ -171,6 +171,7 @@ export function ServiceEditor({
   siteServiceMap,
   bookingCategories = [],
   allServices = [],
+  initialSection,
   onClose,
   onSaved,
 }: {
@@ -185,6 +186,8 @@ export function ServiceEditor({
   bookingCategories?: BookingCategory[];
   /** Active services of this client, for "Alternativa superior". */
   allServices?: Service[];
+  /** Open scrolled to one section — «Orden y presentación» opens on «Página de reservas». */
+  initialSection?: "basic" | "pricing" | "staff" | "sites" | "page";
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -275,6 +278,9 @@ export function ServiceEditor({
   };
 
   const jump = (id: string) => bodyRef.current?.querySelector(`#${id}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+  useEffect(() => {
+    if (initialSection) bodyRef.current?.querySelector(`#svc-${initialSection}`)?.scrollIntoView({ block: "start" });
+  }, [initialSection]);
   // Would it appear on the booking page with what is on screen now? Same rules as the server.
   const includesNow = checkIncludes(page.includes);
   const diagnosis = servicePageDiagnosis({
@@ -497,8 +503,8 @@ const AREA_LABEL: Record<FixArea, string> = {
   page: "Ir a la sección",
   staff: "Ir a Profesionales",
   sites: "Ir a Sedes",
-  categories: "Se cambia en Servicios → «Página de reservas · Categorías»",
-  team: "Se cambia en Configuración → Equipo («Recibe reservas»)",
+  categories: "Se cambia en Página de reservas → «Categorías»",
+  team: "Se cambia en Agenda → Equipo («Recibe reservas»)",
 };
 
 /** "¿Aparece en la página?" — the server's rules applied to what is on screen. Separately,
@@ -639,7 +645,7 @@ function PageSection({
         Visible en la página de reservas
       </CheckRow>
       <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
-        <Field label="Categoría en la página" hint={categories.length === 0 ? "Crea categorías en «Página de reservas · Categorías»." : undefined}>
+        <Field label="Categoría en la página" hint={categories.length === 0 ? "Crea categorías en Página de reservas → Categorías." : undefined}>
           <select value={page.categoryId} onChange={(e) => setPage({ ...page, categoryId: e.target.value })} className={INPUT}>
             <option value="">Sin categoría (Otros servicios)</option>
             {categories

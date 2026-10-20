@@ -115,12 +115,12 @@ it here; don't duplicate per-surface.
   not see billing/payments. Payments aren't built yet; when they are, the Setter defaults
   to NO access (gate on a capability like the existing `canSeeWorkflowInsights`, i.e.
   owner/agency only). Add the server gate + hide the nav the same way analytics is hidden.
-- **Meetings (Reuniones) vs Setter is undecided.** The Setter matrix lists only inbox,
-  contacts and agenda; meetings is a newer module not in that matrix. For now the Setter's
-  sidebar HIDES Reuniones (it's grouped with insights), but the meetings pages are only
-  module + `canAccessClient`-gated, so a Setter could still reach them by URL. Decide the
-  policy (likely ✓ — it's conversation content — or ✗) and gate it server-side; until then
-  treat it like billing (default ✗) if it matters for a given client.
+- **Meetings (Reuniones) vs Setter — DECIDED 2026-10-20: ✗ (no access).** The Setter
+  matrix lists only inbox, contacts and agenda. The sidebar already hid Reuniones from the
+  Setter; now the server agrees: `canAccessMeetings` (web/lib/access.ts — agency or this
+  client's owner) gates both meetings pages and every session-authed meetings API route
+  (via `resolveAppScope`), with the same indistinguishable 404. Worker routes are machine-
+  authenticated and unchanged.
 
 ## Product catalog
 

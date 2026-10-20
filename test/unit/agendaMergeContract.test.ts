@@ -305,7 +305,7 @@ test('manual booking is a three-step operator flow with one rich final confirmat
   assert.ok(src.includes('Nada se guarda hasta que confirmes.'), 'the final confirmation explains commit timing');
   assert.ok(src.includes('queda reservado para'), 'and says what creating it will reserve');
   assert.ok(src.includes('>Color de la cita<') && src.includes('Automático'), 'the automatic service colour is explained');
-  assert.ok(src.includes('Se cambia en Configuración → Servicios.'), 'and says where the family is actually edited');
+  assert.ok(src.includes('Se cambia en Catálogo → Servicios.'), 'and says where the family is actually edited');
   // The preview must use the SERVICE'S STORED CATEGORY, not a fresh guess from its
   // name, or step 3 would promise a colour the board then draws differently.
   assert.ok(

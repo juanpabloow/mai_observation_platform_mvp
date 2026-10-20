@@ -66,8 +66,8 @@ export default async function ClientAgendaPage({
           {hasFullAccess(scope) ? (
             <>
               <p className="text-sm text-muted">Aún no hay sedes para {client.name} — crea una para empezar a agendar.</p>
-              <Link href={`/clients/${client.id}/scheduling/admin`} className="text-sm text-accent hover:underline">
-                Ir a la configuración de Agenda →
+              <Link href={`/clients/${client.id}/scheduling/sites`} className="text-sm text-accent hover:underline">
+                Crear una sede en Configuración → Sedes →
               </Link>
             </>
           ) : (

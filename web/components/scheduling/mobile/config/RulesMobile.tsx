@@ -25,7 +25,7 @@ export function RulesScreen({ nav, clientId, sites, toast }: { nav: ConfigNav; c
 
   if (!site) {
     return (
-      <Screen label="Reglas de reserva" header={<SubHeader backLabel="Configuración" onBack={() => nav.back(null)} title="Reglas de reserva" />}>
+      <Screen label="Reglas de reserva" header={<SubHeader backLabel={nav.rootLabel ?? "Configuración"} onBack={() => nav.back(null)} title="Reglas de reserva" />}>
         <div className={`${CARD_M} px-[18px] py-[24px] text-[14px] text-m-tx3`}>Crea o activa una sede para configurar sus reglas de reserva.</div>
       </Screen>
     );
@@ -54,7 +54,7 @@ export function RulesScreen({ nav, clientId, sites, toast }: { nav: ConfigNav; c
   return (
     <Screen
       label="Reglas de reserva"
-      header={<SubHeader backLabel="Configuración" onBack={() => nav.back(null)} title="Reglas de reserva" sub={`${site.name} · ${tzLabel(site.timezone)}`} />}
+      header={<SubHeader backLabel={nav.rootLabel ?? "Configuración"} onBack={() => nav.back(null)} title="Reglas de reserva" sub={`${site.name} · ${tzLabel(site.timezone)}`} />}
     >
       {error && !edit ? <ErrorNote>{error}</ErrorNote> : null}
       {choices.length > 1 ? (

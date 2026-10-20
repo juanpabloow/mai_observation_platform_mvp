@@ -74,7 +74,7 @@ export function ServicesList({
       label="Servicios"
       header={
         <SubHeader
-          backLabel="Configuración"
+          backLabel={nav.rootLabel ?? "Configuración"}
           onBack={() => nav.back(null)}
           title="Servicios"
           sub={`${plural(active.length, "activo", "activos")} · ${plural(archived.length, "archivado", "archivados")}`}

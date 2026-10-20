@@ -25,7 +25,7 @@ export default async function ContactFieldsPage({ params }: { params: Promise<{ 
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 px-6 py-6">
       <ModuleHeader
-        title="Custom fields"
+        title="Campos personalizados"
         count={defs.length}
         center={
           <p className="truncate text-sm text-muted">

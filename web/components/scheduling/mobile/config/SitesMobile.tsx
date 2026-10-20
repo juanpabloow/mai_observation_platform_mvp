@@ -79,7 +79,7 @@ export function SitesList({ nav, sites, staff, schedulingEnabled }: { nav: Confi
       label="Sedes y horarios"
       header={
         <SubHeader
-          backLabel="Configuración"
+          backLabel={nav.rootLabel ?? "Configuración"}
           onBack={() => nav.back(null)}
           title="Sedes y horarios"
           sub={`${plural(sites.length, "sede", "sedes")} · zona horaria de cada sede`}

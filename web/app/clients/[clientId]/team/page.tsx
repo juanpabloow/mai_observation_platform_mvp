@@ -107,7 +107,7 @@ export default async function ClientTeamPage({
   return (
     <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-8 px-6 py-12">
       <ModuleHeader
-        title="Users & access"
+        title="Usuarios y accesos"
         status={clientLabel}
         center={<p className="truncate text-sm text-muted">Invite people and set their role at this business.</p>}
       />

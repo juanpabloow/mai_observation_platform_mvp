@@ -2,7 +2,7 @@ import 'server-only';
 import { MeetingsApiError } from '@worker/meetings/errors.js';
 import { isClientModuleEnabled } from '@worker/db/repositories/clientModules.js';
 import { getClientById } from '@worker/db/repositories/clients.js';
-import { getAccessScope, canAccessClient, type Role } from './access';
+import { getAccessScope, canAccessMeetings, type Role } from './access';
 
 /**
  * El ámbito de un llamador CON SESIÓN, con el entitlement del módulo.
@@ -32,7 +32,8 @@ export interface AppScopeResolution {
  * Cuatro condiciones, y las cuatro fallan igual — con el mismo 404:
  *
  *   1. `clientId` no es un uuid;
- *   2. la sesión no alcanza ese cliente;
+ *   2. la sesión no alcanza ese cliente, o es de recepción (`canAccessMeetings`: agencia
+ *      o el dueño de ESTE cliente);
  *   3. el cliente no existe, o es el cliente por defecto («Sin asignar», que
  *      por diseño no tiene módulos);
  *   4. el módulo `meetings` NO está habilitado para ese cliente.
@@ -56,7 +57,7 @@ export async function resolveAppScope(clientId: string): Promise<AppScopeResolut
     throw notFound();
   }
   const scope = await getAccessScope();
-  if (!canAccessClient(scope, clientId)) throw notFound();
+  if (!canAccessMeetings(scope, clientId)) throw notFound();
 
   const client = await getClientById({ tenantId: scope.tenantId, clientId });
   // `is_default` se rechaza ANTES del módulo: una fila de client_modules para el

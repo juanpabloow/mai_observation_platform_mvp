@@ -107,7 +107,7 @@ export interface Appt {
  * A card is painted by its SERVICE, in one of the four families stored on
  * `services.category` (Corte / Barba y cuidado / Color / Tratamiento destacado) —
  * a real, operator-editable column, not a derived index, so the board's colours are
- * stable across sessions and configurable in Configuración → Servicios. An
+ * stable across sessions and configurable in Catálogo → Servicios. An
  * uncategorised service falls back to keywords in its name (see lib/agendaCategory).
  *
  * `serviceCategory` is used rather than `apptCategory` ON PURPOSE: apptCategory lets
@@ -1003,7 +1003,7 @@ export function AgendaView(props: {
           {props.canManage ? (
             <p className="text-sm text-muted">
               Aún no hay personal en esta sede.{" "}
-              <Link href={`/clients/${props.clientId}/scheduling/admin`} className="text-accent hover:underline">
+              <Link href={`/clients/${props.clientId}/scheduling/staff`} className="text-accent hover:underline">
                 Agregar personal
               </Link>
               .
@@ -1604,7 +1604,7 @@ export function AgendaView(props: {
                     )}
                     {col.inactive ? (
                       <span
-                        title="Este profesional está inactivo — sus citas existentes siguen visibles aquí, pero no puede recibir nuevas reservas. Reactívalo en la configuración de Agenda."
+                        title="Este profesional está inactivo — sus citas existentes siguen visibles aquí, pero no puede recibir nuevas reservas. Reactívalo en Agenda → Equipo."
                         className="shrink-0 rounded-full border border-line-strong bg-chip px-1.5 py-0.5 text-[0.625rem] font-medium text-muted"
                       >
                         Inactivo
@@ -4704,7 +4704,7 @@ function AppointmentModal(props: {
                       <span aria-hidden className={`u-appt-swatch ${bookingToneClass} h-[28px] w-10 shrink-0 rounded-sch-event`} />
                       <p className="flex-1 text-xs leading-relaxed text-muted">
                         {bookingFamily
-                          ? <>Hereda el color de <strong className="font-medium text-foreground">{(SERVICE_FAMILY_LABEL[bookingFamily] ?? "").toLocaleLowerCase("es")}</strong>. Se cambia en Configuración → Servicios.</>
+                          ? <>Hereda el color de <strong className="font-medium text-foreground">{(SERVICE_FAMILY_LABEL[bookingFamily] ?? "").toLocaleLowerCase("es")}</strong>. Se cambia en Catálogo → Servicios.</>
                           : "Se define por la categoría del servicio."}
                       </p>
                     </div>

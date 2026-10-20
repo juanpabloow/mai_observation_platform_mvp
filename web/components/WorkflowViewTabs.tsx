@@ -47,11 +47,11 @@ export function WorkflowViewTabs({
       )}
       {current === "analytics" ? (
         <span aria-current="page" className={ACTIVE}>
-          Analytics
+          Analíticas técnicas
         </span>
       ) : (
         <Link href={`${h.analytics}${query}`} className={IDLE}>
-          Analytics
+          Analíticas técnicas
         </Link>
       )}
     </nav>

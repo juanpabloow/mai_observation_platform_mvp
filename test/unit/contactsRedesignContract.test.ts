@@ -41,42 +41,45 @@ const SIDEBAR = 'components/AppSidebar.tsx';
 
 test('sidebar: exactly ONE active treatment, and it is the solid brand fill', () => {
   const src = read(SIDEBAR);
-  // The active row is the single strongest mark in the shell.
-  assert.ok(src.includes('bg-nav-active font-semibold text-white'), 'active row uses the fixed solid red');
-  // Activity is always derived from the pathname — never from a second source that
-  // could light up two rows at once.
-  assert.ok(src.includes('active: pathname.startsWith('), 'active state derives from the pathname');
+  // The current page is the single strongest mark in the shell: the production red pill.
+  const rail = read('components/railRow.ts');
+  assert.ok(rail.includes('export const RAIL_ACTIVE = "bg-nav-active font-semibold text-white";'), 'active row uses the fixed solid red');
+  // An OPEN group is not a location: it only lifts to the rail foreground — never a pill.
+  assert.ok(rail.includes('export const RAIL_OPEN = "font-medium text-sidebar-fg hover:bg-sidebar-hover";'), 'open group ≠ current page');
+  // Activity is always derived from the pathname (via the one section model) — never from
+  // a second source that could light up two rows at once.
+  assert.ok(src.includes('active: here?.section === sec.id'), 'active state derives from the pathname');
+  // A closed group that holds the current page carries the pill instead, so there is
+  // always exactly one red mark.
+  assert.ok(src.includes('const holdsPill = group.active && !open;'), 'the pill moves to the closed parent');
   // The badge-bearing Inbox item must use the SAME active treatment, or two rows
   // could render as "current" in different styles.
   const tab = read('components/InboxTabLink.tsx');
-  assert.ok(tab.includes('bg-nav-active font-semibold text-white'), 'the Inbox item shares the active treatment');
-  // …and the same GEOMETRY. The two are separate components, so the row height is the
-  // thing that silently drifts: the Inbox row stayed 40px tall for one commit while its
-  // neighbours went to the design's 32px, which is visible as a single loose row.
-  // …and the same GEOMETRY, from ONE constant rather than three class strings. The row
-  // height is what drifts silently when each component spells it out: one of them sat at
-  // 40px for a commit while the others went to 32, which reads as a single loose row.
+  assert.ok(tab.includes('RAIL_ACTIVE'), 'the Inbox item shares the active treatment');
+  // …and the same GEOMETRY, from ONE constant rather than several class strings.
   assert.ok(src.includes('${RAIL_ROW}') && tab.includes('${RAIL_ROW}'), 'both read the shared row constant');
-  const rail = read('components/railRow.ts');
+  assert.ok(src.includes('${RAIL_H}') && tab.includes('${RAIL_H}'), 'and the shared row height');
   assert.ok(rail.includes('export const RAIL_ROW'), 'which is declared in one place');
   // Its own module, because AppSidebar imports InboxTabLink — exporting it from there and
   // importing it back would be a cycle.
   assert.equal(/import .*InboxTabLink/.test(rail), false, 'and that place has no rail imports of its own');
+  // Touch: every rail target is 44px in the drawer (below xl).
+  assert.ok(rail.includes('"min-h-[34px] max-xl:min-h-[44px]"') && rail.includes('"min-h-[30px] max-xl:min-h-[44px]"'), 'compact 34/30px on the rail, 44px in the drawer');
 });
 
 test('sidebar: the Inbox badge is fed by the REAL pending-count endpoint', () => {
   const src = read(SIDEBAR);
-  assert.ok(src.includes('countEndpoint: `/api/inbox/${clientId}/pending-count`'), 'real count endpoint');
+  assert.ok(src.includes('countEndpoint: sec.id === "inbox" ? `/api/inbox/${clientId}/pending-count` : undefined'), 'real count endpoint');
   const tab = read('components/InboxTabLink.tsx');
   assert.ok(tab.includes('payload.pendingCount'), 'the badge renders the served count, not a placeholder');
 });
 
-test('sidebar: CRM is its own module-gated section — Contacts is NOT under Scheduling', () => {
-  const src = read(SIDEBAR);
-  const crm = src.indexOf('label: "CRM"');
-  const scheduling = src.indexOf('label: "Scheduling"');
-  assert.ok(crm > 0 && scheduling > crm, 'CRM is a separate section, before Scheduling');
-  assert.ok(src.includes('moduleKeys.includes("crm")'), 'CRM only renders when the module is enabled');
+test('sidebar: Contactos is its own module-gated section — NOT under Agenda', () => {
+  const model = read('lib/sectionNav.ts');
+  const contacts = model.indexOf('contacts: [general && has("crm")');
+  const agenda = model.indexOf('agenda: [');
+  assert.ok(contacts > 0 && agenda > contacts, 'Contactos is a separate section, before Agenda');
+  assert.ok(model.includes('general && has("crm") && { id: "contacts"'), 'Contactos only renders when the crm module is enabled');
 });
 
 test('shell: chrome geometry is fixed px, so it does not ride the 90% rem scale', () => {
@@ -148,20 +151,18 @@ test('shell: the four header strips all resolve to the SAME height token', () =>
 
 test('sidebar: the footer row is a GRID, so the label cannot overlap the avatar', () => {
   const src = read('components/AppSidebar.tsx');
-  // The earlier min-w-0/overflow-hidden fix only governed truncation on the RIGHT;
-  // it could not stop the label from starting on top of the avatar. Grid tracks
-  // cannot overlap: track 2 begins after the avatar's track plus the gap.
+  // Grid tracks cannot overlap: track 2 begins after the avatar's track plus the gap.
   assert.ok(src.includes('grid grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2.5'), 'three real tracks with a gap (avatar · label · caret)');
-  // minmax(0,1fr) is what still allows the label to shrink and truncate.
   assert.ok(src.includes('minmax(0,1fr)'), 'the label track can shrink below its content');
-  assert.ok(src.includes('truncate text-[0.8125rem] font-semibold leading-tight text-sidebar-fg'), 'long names still truncate on the right');
-  // The avatar must not pick up the RED hover token as its fill.
-  assert.ok(!/bg-sidebar-hover text-xs font-semibold/.test(src), 'the avatar is not filled with the hover red');
-  // The footer avatar is a NEUTRAL squared tile with mono initials (design image), NOT an
-  // identity-coloured disc: the one person the rail names in words right beside it needs no
-  // colour to be found.
-  assert.ok(src.includes('rounded-lg border border-sidebar-border bg-sidebar-border'), 'the rail disc is a neutral squared tile');
+  assert.ok(src.includes('truncate text-[13px] font-medium leading-tight text-sidebar-fg'), 'long names still truncate on the right');
+  // The avatar must not pick up the hover token as its fill.
+  assert.ok(!/bg-sidebar-hover text-xs font-semibold/.test(src), 'the avatar is not filled with the hover');
+  // The proposal's footer: a NEUTRAL round tile with the initials (the rail tile token),
+  // NOT an identity-coloured disc — the person is named in words right beside it.
+  assert.ok(src.includes('rounded-full bg-sidebar-tile text-[11px] font-semibold text-sidebar-fg'), 'the rail disc is a neutral tile');
   assert.ok(!src.includes('avatarColor(seed)'), 'and is not hashed from an identity colour');
+  // Its second line says who this is in the business's words (Agencia / Dueño / Recepción / Profesional · cliente).
+  assert.ok(src.includes('const ACCESS_LABEL: Record<string, string> = { agency: "Agencia", owner: "Dueño", setter: "Recepción", staff: "Profesional" };'), 'access in Spanish');
 });
 
 test('contacts: the panel gutter is actually VISIBLE against the canvas', () => {

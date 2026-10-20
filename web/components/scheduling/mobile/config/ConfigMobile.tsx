@@ -1,5 +1,7 @@
 "use client";
 
+import { useMemo } from "react";
+import { useRouter } from "next/navigation";
 import { useTheme } from "next-themes";
 import type { Exception, Service, Site, Staff } from "../../AdminPanel";
 import { MToast } from "../kit";
@@ -9,7 +11,7 @@ import { RULE_KEYS, ruleLabel, plural } from "./logic";
 import { RulesScreen } from "./RulesMobile";
 import { ServiceEditorMobile, ServicesList } from "./ServicesMobile";
 import { SiteDetail, SiteEdit, SitesList } from "./SitesMobile";
-import { CARD_M, CFG_ICON, NavRow, Screen, SectionLabel, SwitchRow, TopHeader, useConfigNav, useMounted, useToast, type ConfigNav } from "./ui";
+import { CARD_M, CFG_ICON, NavRow, Screen, SectionLabel, SubHeader, SwitchRow, TopHeader, useConfigNav, useMounted, useToast, type ConfigNav, type ConfigScreen as ConfigScreenId } from "./ui";
 
 /**
  * CONFIGURACIÓN DE AGENDA · PHONE (< 768px) — reference "M_AI Scheduling Móvil v2",
@@ -30,10 +32,29 @@ export interface ConfigMobileProps {
   pastExceptions: Exception[];
   siteServiceMap: Record<string, string[]>;
   schedulingEnabled: boolean;
+  /** The screen a settings PAGE opens on (Sedes → «sedes», Servicios → «servicios»…).
+   *  With it there is no «Inicio»: the entry screen's back leaves to `exitHref`. */
+  entry?: ConfigScreenId | string | null;
+  exitHref?: string;
 }
 
-export function ConfigMobile(props: ConfigMobileProps) {
-  const nav = useConfigNav();
+export function ConfigMobile({ entry, exitHref, ...props }: ConfigMobileProps) {
+  const base = useConfigNav();
+  const router = useRouter();
+  const nav = useMemo<ConfigNav>(() => {
+    if (!entry) return base;
+    const screen = base.screen ?? (entry as ConfigScreenId);
+    // «Horarios y ausencias» is a small hub: the screens it opens go back to IT, and only
+    // the hub itself leaves to the agenda. Every other page opens straight on its screen.
+    const underHub = entry === "horarios" && screen !== "horarios";
+    return {
+      ...base,
+      screen,
+      rootLabel: underHub ? "Horarios y ausencias" : "Agenda",
+      back: (parent, parentId) =>
+        parent !== null ? base.back(parent, parentId) : underHub ? base.back("horarios") : router.push(exitHref ?? "/"),
+    };
+  }, [base, entry, exitHref, router]);
   const [toast, showToast] = useToast();
   return (
     // `relative z-0` makes this tree its own stacking context, so the toast stays under
@@ -95,10 +116,49 @@ function ConfigScreen({ nav, toast, ...p }: ConfigMobileProps & { nav: ConfigNav
       return <BlockForm key={nav.param("plantilla") ?? "blank"} nav={nav} clientId={p.clientId} sites={p.sites} staff={p.staff} template={nav.param("plantilla")} toast={toast} />;
     case "reglas":
       return <RulesScreen nav={nav} clientId={p.clientId} sites={p.sites} toast={toast} />;
+    case "horarios":
+      return <HoursHub nav={nav} {...p} />;
     default:
       break;
   }
   return <Home nav={nav} {...p} />;
+}
+
+// ── Horarios y ausencias (phone) ─────────────────────────────────────────────────
+
+/**
+ * The phone face of Agenda → Horarios y ausencias. The desktop editors are too small to
+ * use with a thumb (13px checkboxes, 35px time fields), so the phone keeps the EXISTING
+ * screens for the same jobs, reached through the rows the old «Configuración» home had:
+ * site hours in «Sedes y horarios», each professional's in «Equipo», closures and
+ * absences in «Bloqueos».
+ */
+function HoursHub({ nav, clientId, sites, staff, exceptions }: ConfigMobileProps & { nav: ConfigNav }) {
+  const activeSites = sites.filter((s) => s.active);
+  const inactiveSites = sites.length - activeSites.length;
+  const activeStaff = staff.filter((p) => p.active);
+  const inactiveStaff = staff.length - activeStaff.length;
+  const sitesSub =
+    sites.length === 0
+      ? "Ninguna todavía"
+      : [plural(activeSites.length, "activa", "activas"), inactiveSites ? plural(inactiveSites, "inactiva", "inactivas") : null].filter(Boolean).join(" · ");
+  return (
+    <Screen
+      label="Horarios y ausencias"
+      header={<SubHeader backLabel="Agenda" onBack={() => nav.back(null)} title="Horarios y ausencias" sub="Cuándo se atiende y cuándo no" />}
+    >
+      <nav aria-label="Horarios y ausencias" className={CARD_M}>
+        <NavRow icon={CFG_ICON.sede} title="Sedes y horarios" sub={sitesSub} onClick={() => nav.go("sedes")} />
+        <NavRow
+          icon={CFG_ICON.team}
+          title="Equipo"
+          sub={[plural(activeStaff.length, "profesional", "profesionales"), inactiveStaff ? plural(inactiveStaff, "inactivo", "inactivos") : null].filter(Boolean).join(" · ")}
+          href={`/clients/${clientId}/scheduling/staff`}
+        />
+        <NavRow icon={CFG_ICON.block} title="Bloqueos" sub={exceptions.length ? plural(exceptions.length, "próximo", "próximos") : "Ninguno próximo"} onClick={() => nav.go("bloqueos")} />
+      </nav>
+    </Screen>
+  );
 }
 
 // ── 4.1 Inicio ───────────────────────────────────────────────────────────────────

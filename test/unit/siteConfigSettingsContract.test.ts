@@ -12,8 +12,8 @@ import { fileURLToPath } from 'node:url';
 
 const web = (rel: string): string => readFileSync(fileURLToPath(new URL(`../../web/${rel}`, import.meta.url)), 'utf8');
 
-test('admin page passes scheduling_config to the panel', () => {
-  assert.ok(web('app/clients/[clientId]/scheduling/admin/page.tsx').includes('scheduling_config: s.scheduling_config'), 'site mapping includes scheduling_config');
+test('the settings loader passes scheduling_config to the panel', () => {
+  assert.ok(web('lib/schedulingSettingsData.ts').includes('scheduling_config: s.scheduling_config'), 'site mapping includes scheduling_config');
 });
 
 test('EditableSite shows + edits min notice, booking horizon and slot granularity in Spanish', () => {
@@ -36,16 +36,25 @@ test('the availability diagnostic names minimum notice', () => {
   assert.ok(src.includes('finding.ok ? "bg-success" : "bg-warn-rule"'), 'each finding says whether it is the problem');
 });
 
-test('settings are task-oriented and editors are progressively disclosed', () => {
+test('settings are task-oriented: one PAGE per job, no tabs inside a page (design B)', () => {
   const src = web('components/scheduling/AdminPanel.tsx');
-  for (const label of ['Resumen', 'Sedes y horarios', 'Servicios', 'Bloqueos', 'Reglas']) {
-    assert.ok(src.includes(`label: "${label}"`), `${label} tab exists`);
+  for (const [page, title] of [
+    ['sites', 'Sedes'], ['rules', 'Reglas de reserva'], ['hours', 'Horarios y ausencias'],
+    ['services', 'Servicios'], ['promotions', 'Promociones'], ['"booking-page"', 'Página de reservas'],
+  ]) {
+    assert.ok(src.includes(`  ${page}: { title: "${title}"`), `${title} is its own page`);
   }
-  assert.ok(src.includes('>Configuración de agenda</h1>'), 'the screen uses the clear Spanish name');
-  assert.ok(src.includes('border-b-2') && src.includes('border-foreground text-foreground'), 'settings use compact underline tabs');
-  // SEDES edit in place (the reference's list + detail on one surface); SERVICES edit
-  // in a wide editor OVER the menu, so a hundred-row catalogue never unfolds a form inside the list.
-  assert.ok(src.includes('aria-expanded={editing}'), 'the site editor is disclosed inside its detail pane');
+  // The production header card of «Configuración de agenda», titled by the page's job —
+  // without its tab row: the sidebar is the only menu (no tabs on top of it).
+  assert.ok(src.includes('<h1 className="truncate text-xl font-semibold tracking-[-0.025em] text-foreground">{meta.title}</h1>'), 'each page is titled by its job, in Spanish');
+  assert.ok(!src.includes('SETTINGS_TABS') && !src.includes('aria-label="Secciones de configuración"'), 'no tab row duplicating the sidebar');
+  assert.ok(!src.includes('role="tablist"'), 'no tab strip inside a settings page');
+  // Horarios y ausencias holds the production Bloqueos list as its «Ausencias» section.
+  assert.ok(src.includes('<div id={ABSENCES_ANCHOR} className="scroll-mt-4">'), 'Ausencias is a section of Horarios y ausencias');
+  // SEDES edit in place (the reference's list + detail on one surface), saying when there
+  // is something unsaved; SERVICES edit in a wide editor OVER the menu, so a hundred-row
+  // catalogue never unfolds a form inside the list.
+  assert.ok(src.includes('Cambios sin guardar'), 'the site editor says when there is something to save');
   assert.ok(src.includes('<ServiceMenu'), 'the Servicios tab is the services menu');
   const editor = web('components/scheduling/services/ServiceEditor.tsx');
   assert.ok(editor.includes('role="dialog"') && editor.includes('fixed inset-0 z-50'), 'the service editor opens over the list');
@@ -69,7 +78,7 @@ test('every settings form opens over the page, never fixed into a tab', () => {
 
 test('touch targets reach 44px below lg while desktop keeps the compact 34-36px', () => {
   const src = web('components/scheduling/AdminPanel.tsx');
-  for (const token of ['h-[44px] lg:h-[36px]', 'h-[44px] lg:h-[34px]', 'h-[44px] shrink-0 items-center gap-1.5 border-b-2']) {
+  for (const token of ['h-[44px] lg:h-[36px]', 'h-[44px] lg:h-[34px]']) {
     assert.ok(src.includes(token), `${token} control height is responsive`);
   }
   // PX, not rem: the app's root font-size is 14.4px, so Tailwind's h-11/h-9 rem steps
@@ -79,7 +88,6 @@ test('touch targets reach 44px below lg while desktop keeps the compact 34-36px'
   // backticked mentions in the comment above the constants are not false positives.
   assert.ok(!/ h-11\b/.test(src), 'no rem-scale h-11 control — it is 39.6px here, not 44px');
   assert.ok(!/ h-9\b/.test(src), 'no rem-scale h-9 control — it is 32.4px here, not 36px');
-  assert.ok(src.includes('overflow-x-auto'), 'the tab strip scrolls horizontally rather than wrapping');
 });
 
 test('blocks read soonest-first, in the timezone of the site they close', () => {

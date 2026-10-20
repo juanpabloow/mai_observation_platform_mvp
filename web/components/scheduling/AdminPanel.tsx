@@ -1,11 +1,13 @@
 "use client";
 
-import { useCallback, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { DAYS, DAY_LABELS, gridFromWeekly, HoursGrid, weeklyFromGrid, type HourGrid } from "./HoursGrid";
 import { BookingLinkCard } from "./BookingLinkCard";
 import { ServiceMenu } from "./services/ServiceMenu";
+import { BookingCategoriesPanel } from "./services/BookingCategoriesPanel";
+import { ServiceEditor } from "./services/ServiceEditor";
 import { PromotionsSection, type PromotionAdminRow } from "./promotions/PromotionsSection";
 import { ConfigMobile } from "./mobile/config/ConfigMobile";
 import {
@@ -26,6 +28,7 @@ import { checksProgress, servicesSummaryHelper, servicesSummaryTitle } from "@/l
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
 import { effectivePublicReason, PublicReasonField } from "./timeoff/PublicReasonField";
 import { PUBLIC_REASON_LABEL, type PublicAbsenceReason } from "@/lib/publicAbsenceReason";
+import { ABSENCES_ANCHOR, schedulingHref, type SchedulingPage } from "@/lib/schedulingNav";
 
 type WeeklyHours = Record<string, Array<{ start: string; end: string }>>;
 
@@ -108,37 +111,27 @@ export interface Exception {
 const INPUT = "h-[44px] lg:h-[36px] rounded-lg border border-line-strong bg-surface px-3 text-sm text-foreground outline-none transition focus:border-foreground disabled:bg-subtle disabled:text-faint";
 const BTN = "inline-flex h-[44px] lg:h-[36px] items-center justify-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background transition hover:opacity-90 disabled:opacity-50";
 const GHOST = "inline-flex h-[44px] lg:h-[34px] items-center justify-center rounded-lg border border-line px-3 lg:px-2.5 text-xs text-muted transition hover:bg-subtle hover:text-foreground";
-type SettingsTab = "overview" | "sites" | "services" | "promotions" | "blocks" | "rules";
+/** What each page is for, in the business's words (the H1 + its one-line purpose). */
+const PAGE_META: Record<SchedulingPage, { title: string; description: string }> = {
+  sites: { title: "Sedes", description: "Dónde atiendes: nombre, dirección, URL pública y zona horaria de cada sede." },
+  rules: { title: "Reglas de reserva", description: "Con cuánta anticipación y hasta cuándo se puede reservar, y cada cuánto se ofrecen horarios." },
+  hours: { title: "Horarios y ausencias", description: "Cuándo atiende cada sede y cada profesional, y los cierres o ausencias puntuales." },
+  services: { title: "Servicios", description: "Lo que se reserva: duración, precio, profesionales y sedes de cada servicio." },
+  promotions: { title: "Promociones", description: "Condiciones y beneficios de tus ofertas sobre los servicios." },
+  "booking-page": { title: "Página de reservas", description: "Lo que ve tu cliente: enlace público, datos de contacto, categorías y orden del catálogo." },
+};
 
-const SETTINGS_TABS: Array<{ id: SettingsTab; label: string }> = [
-  { id: "overview", label: "Resumen" },
-  { id: "sites", label: "Sedes y horarios" },
-  { id: "services", label: "Servicios" },
-  { id: "promotions", label: "Promociones" },
-  { id: "blocks", label: "Bloqueos" },
-  { id: "rules", label: "Reglas" },
-];
+/** The phone screen (old `?m=`) that opens each page, when the phone has one. */
+function mobileEntryFor(page: SchedulingPage): string | null {
+  if (page === "sites") return "sedes";
+  if (page === "services") return "servicios";
+  if (page === "rules") return "reglas";
+  if (page === "hours") return "horarios";
+  return null;
+}
 
-/**
- * Per-CLIENT scheduling settings (owner/admin). Every mutation carries the route's
- * `clientId`, which the server actions re-validate (tenant + client + non-default +
- * scheduling enabled + resource ownership) — there is no client selector, so this
- * panel can only ever administer the one client it was opened for. `clientName` is
- * shown for context only.
- */
-export function AdminPanel({
-  clientId,
-  clientName,
-  sites,
-  services,
-  staff,
-  exceptions,
-  pastExceptions = [],
-  siteServiceMap,
-  schedulingEnabled = true,
-  bookingCategories = [],
-  promotions = [],
-}: {
+export interface SchedulingSettingsProps {
+  page: SchedulingPage;
   clientId: string;
   clientName: string;
   sites: Site[];
@@ -156,148 +149,188 @@ export function AdminPanel({
   bookingCategories?: BookingCategory[];
   /** The business's promotions (migration 1805), as the editor opens them. */
   promotions?: PromotionAdminRow[];
-}) {
+}
+
+/**
+ * Per-CLIENT scheduling settings, ONE page per job. This used to be «Configuración de
+ * agenda» — seven tabs in React state, so nothing could link into them. Each job now has
+ * its own route (lib/schedulingNav.ts) and renders the SAME editors as before: nothing
+ * here is a second copy of a form. Every mutation carries the route's `clientId`, which
+ * the server actions re-validate (tenant + client + non-default + scheduling enabled +
+ * resource ownership); every page is gated by the same server check as the old screen.
+ */
+export function SchedulingSettings(props: SchedulingSettingsProps) {
+  const {
+    page,
+    clientId,
+    clientName,
+    sites,
+    services,
+    staff,
+    exceptions,
+    pastExceptions = [],
+    siteServiceMap,
+    schedulingEnabled = true,
+    bookingCategories = [],
+    promotions = [],
+  } = props;
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const [tab, setTab] = useState<SettingsTab>("overview");
+  const [creatingSite, setCreatingSite] = useState(false);
 
-  const run = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
+  const run: Run = (fn, onOk) => {
     setError(null);
     startTransition(async () => {
       const r = await fn();
       if (!r.ok) setError(r.error ?? "No se pudo guardar el cambio.");
-      else router.refresh();
+      else {
+        onOk?.();
+        router.refresh();
+      }
     });
   };
 
+  const meta = PAGE_META[page];
+  const entry = mobileEntryFor(page);
+
   return (
     <>
-      {/* PHONE (< 768px): its own tree — Inicio + one screen per section, in the URL
-          (?m=). The desktop/tablet panel below is untouched and hidden there. */}
-      <ConfigMobile
-        clientId={clientId}
-        clientName={clientName}
-        sites={sites}
-        services={services}
-        staff={staff}
-        exceptions={exceptions}
-        pastExceptions={pastExceptions}
-        siteServiceMap={siteServiceMap}
-        schedulingEnabled={schedulingEnabled}
-      />
-    <main className="hidden min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)] md:flex">
-      <PageShell grow={false} clip={false}>
-        <div className="px-4 pt-3 sm:px-5">
-          <div className="flex min-h-11 flex-wrap items-center justify-between gap-3">
-            <div className="min-w-0">
-              <div className="flex items-baseline gap-2.5">
-                <h1 className="truncate text-xl font-semibold tracking-[-0.025em] text-foreground">Configuración de agenda</h1>
-                <span className="truncate text-xs text-muted">{clientName}</span>
+      {/* PHONE (< 768px): pages that have a phone screen open it directly; its back goes
+          to the agenda (there is no «Inicio» of settings any more). Pages without one
+          render the same responsive desktop editors below. */}
+      {entry ? (
+        <ConfigMobile
+          clientId={clientId}
+          clientName={clientName}
+          sites={sites}
+          services={services}
+          staff={staff}
+          exceptions={exceptions}
+          pastExceptions={pastExceptions}
+          siteServiceMap={siteServiceMap}
+          schedulingEnabled={schedulingEnabled}
+          entry={entry}
+          exitHref={`/clients/${clientId}/scheduling/agenda`}
+        />
+      ) : null}
+      <main className={`${entry ? "hidden md:flex" : "flex"} min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]`}>
+        {/* The production header card of «Configuración de agenda», titled by this page's
+            job — without its tab row: the sidebar is the only menu now. */}
+        <PageShell grow={false} clip={false}>
+          <div className="px-4 py-3 sm:px-5">
+            <div className="flex min-h-11 flex-wrap items-center justify-between gap-3">
+              <div className="min-w-0">
+                <div className="flex items-baseline gap-2.5">
+                  <h1 className="truncate text-xl font-semibold tracking-[-0.025em] text-foreground">{meta.title}</h1>
+                  <span className="truncate text-xs text-muted">{clientName}</span>
+                </div>
+                <p className="mt-0.5 hidden text-xs text-muted sm:block">{meta.description}</p>
               </div>
-              <p className="mt-0.5 hidden text-xs text-muted sm:block">Sedes, servicios, equipo y reglas de reserva</p>
+              <Link href={`/clients/${clientId}/scheduling/agenda`} className="inline-flex h-[44px] items-center rounded-lg border border-line-strong px-3.5 text-sm font-medium text-foreground hover:bg-subtle lg:h-[36px]">
+                Ver agenda
+              </Link>
             </div>
-            <Link href={`/clients/${clientId}/scheduling/agenda`} className="inline-flex h-[44px] items-center rounded-lg border border-line-strong px-3.5 text-sm font-medium text-foreground hover:bg-subtle lg:h-[36px]">
-              Ver agenda
-            </Link>
           </div>
-          <nav aria-label="Secciones de configuración" className="mt-2 flex min-w-0 items-center gap-1 overflow-x-auto border-t border-line">
-            {SETTINGS_TABS.slice(0, 3).map((item) => {
-              const count = item.id === "sites" ? sites.length : item.id === "services" ? services.length : item.id === "blocks" ? exceptions.length : null;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  aria-current={tab === item.id ? "page" : undefined}
-                  onClick={() => setTab(item.id)}
-                  className={`relative flex h-[44px] shrink-0 items-center gap-1.5 border-b-2 px-3 text-xs font-medium transition lg:h-[40px] lg:px-2.5 ${
-                    tab === item.id ? "border-foreground text-foreground" : "border-transparent text-muted hover:text-foreground"
-                  }`}
+        </PageShell>
+        {error ? <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p> : null}
+        <PageShell className="overflow-y-auto" ariaLabel={meta.title}>
+          <div className="flex min-h-full w-full flex-col gap-2.5 p-3 sm:p-4">
+            {page === "sites" ? (
+              <>
+                <SettingsOverview
+                  clientId={clientId}
+                  sites={sites}
+                  services={services}
+                  staff={staff}
+                  exceptions={exceptions}
+                  siteServiceMap={siteServiceMap}
+                  onNewSite={() => setCreatingSite(true)}
+                />
+                <SitesSection
+                  clientId={clientId}
+                  sites={sites}
+                  run={run}
+                  pending={pending}
+                  schedulingEnabled={schedulingEnabled}
+                  siteServiceMap={siteServiceMap}
+                  creating={creatingSite}
+                  setCreating={setCreatingSite}
+                />
+              </>
+            ) : null}
+            {page === "rules" ? (
+              <Section title="Reglas de reserva" description="Controlan cuándo y con qué frecuencia se ofrecen horarios en cada sede.">
+                <SiteWorkbench clientId={clientId} sites={sites} run={run} pending={pending} part="rules" schedulingEnabled={schedulingEnabled} siteServiceMap={siteServiceMap} />
+              </Section>
+            ) : null}
+            {page === "hours" ? (
+              <>
+                <Section
+                  title="Horario de la sede"
+                  description="Los días y horas en que cada sede atiende. Un profesional sin horario propio trabaja en este mismo horario."
                 >
-                  {item.label}
-                  {count !== null ? <span className="u-mono rounded bg-chip px-1.5 py-0.5 text-[0.625rem] text-faint">{count}</span> : null}
-                </button>
-              );
-            })}
-            <Link href={`/clients/${clientId}/scheduling/staff`} className="relative flex h-[44px] shrink-0 items-center gap-1.5 border-b-2 border-transparent px-3 text-xs font-medium text-muted transition hover:text-foreground lg:h-[40px] lg:px-2.5">
-              Equipo <span className="u-mono rounded bg-chip px-1.5 py-0.5 text-[0.625rem] text-faint">{staff.length}</span>
-            </Link>
-            {SETTINGS_TABS.slice(3).map((item) => {
-              const count = item.id === "blocks" ? exceptions.length : null;
-              return (
-                <button
-                  key={item.id}
-                  type="button"
-                  aria-current={tab === item.id ? "page" : undefined}
-                  onClick={() => setTab(item.id)}
-                  className={`relative flex h-[44px] shrink-0 items-center gap-1.5 border-b-2 px-3 text-xs font-medium transition lg:h-[40px] lg:px-2.5 ${
-                    tab === item.id ? "border-foreground text-foreground" : "border-transparent text-muted hover:text-foreground"
-                  }`}
-                >
-                  {item.label}
-                  {count !== null ? <span className="u-mono rounded bg-chip px-1.5 py-0.5 text-[0.625rem] text-faint">{count}</span> : null}
-                </button>
-              );
-            })}
-          </nav>
-        </div>
-      </PageShell>
-      {error ? <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p> : null}
-      <PageShell className="overflow-y-auto" ariaLabel="Configuración de agenda">
-        {/* min-h-full (not h-full) is what lets the Resumen FILL the viewport without
-            capping a long tab: its grid takes flex-1 of at-least-the-viewport, so the
-            overview has no empty band under it while Servicios can still grow and
-            scroll. Full width, like the reference — a centred max-width left the
-            four metric cards floating in the middle of a wide screen. */}
-        <div className="flex min-h-full w-full flex-col gap-2.5 p-3 sm:p-4">
-          {tab === "overview" ? (
-            <SettingsOverview
-              clientId={clientId}
-              sites={sites}
-              services={services}
-              staff={staff}
-              exceptions={exceptions}
-              siteServiceMap={siteServiceMap}
-              onNavigate={setTab}
-            />
-          ) : null}
-          {tab === "sites" ? (
-            <SitesSection
-              clientId={clientId}
-              sites={sites}
-              run={run}
-              pending={pending}
-              schedulingEnabled={schedulingEnabled}
-              siteServiceMap={siteServiceMap}
-            />
-          ) : null}
-          {tab === "services" ? (
-            <ServiceMenu
-              clientId={clientId}
-              sites={sites}
-              services={services}
-              staff={staff}
-              siteServiceMap={siteServiceMap}
-              bookingCategories={bookingCategories}
-              onOpenBookingLink={() => setTab("sites")}
-            />
-          ) : null}
-          {tab === "promotions" ? (
-            <PromotionsSection
-              clientId={clientId}
-              promotions={promotions}
-              services={services.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
-              staff={staff.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name, site_id: x.site_id }))}
-              sites={sites.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
-            />
-          ) : null}
-          {tab === "blocks" ? (
-            <ExceptionsSection clientId={clientId} sites={sites} staff={staff} exceptions={exceptions} run={run} pending={pending} />
-          ) : null}
-          {tab === "rules" ? <RulesSection sites={sites} onEdit={() => setTab("sites")} /> : null}
-        </div>
-      </PageShell>
-    </main>
+                  <SiteWorkbench clientId={clientId} sites={sites} run={run} pending={pending} part="hours" schedulingEnabled={schedulingEnabled} siteServiceMap={siteServiceMap} />
+                </Section>
+                <StaffAvailability clientId={clientId} sites={sites} staff={staff} exceptions={exceptions} />
+                {/* «Ausencias» — the production «Bloqueos» list, unchanged; the old
+                    Excepciones/Bloqueos links land here (lib/schedulingNav.ts). */}
+                <div id={ABSENCES_ANCHOR} className="scroll-mt-4">
+                  <ExceptionsSection clientId={clientId} sites={sites} staff={staff} exceptions={exceptions} run={run} pending={pending} />
+                </div>
+                <WhyNothingAvailable clientId={clientId} sites={sites} staff={staff} />
+              </>
+            ) : null}
+            {page === "services" ? (
+              <ServiceMenu
+                clientId={clientId}
+                sites={sites}
+                services={services}
+                staff={staff}
+                siteServiceMap={siteServiceMap}
+                bookingCategories={bookingCategories}
+                showBookingCategories={false}
+                onOpenBookingLink={() => router.push(schedulingHref(clientId, "booking-page"))}
+              />
+            ) : null}
+            {page === "promotions" ? (
+              <PromotionsSection
+                clientId={clientId}
+                promotions={promotions}
+                services={services.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
+                staff={staff.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name, site_id: x.site_id }))}
+                sites={sites.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
+              />
+            ) : null}
+            {page === "booking-page" ? (
+              <>
+                {/* One page, three SECTIONS (not tabs): navigation stops at the page. */}
+                <div id="enlace" className="scroll-mt-4">
+                  <Section
+                    title="Enlace e información pública"
+                    description="El enlace de cada sede y los datos de contacto que ve el cliente. El nombre, la dirección y el horario salen de Sedes y Horarios: no hay otra copia."
+                  >
+                    <SiteWorkbench clientId={clientId} sites={sites} run={run} pending={pending} part="public" schedulingEnabled={schedulingEnabled} siteServiceMap={siteServiceMap} />
+                  </Section>
+                </div>
+                <div id="categorias" className="mt-4 scroll-mt-4">
+                  <BookingCategoriesPanel clientId={clientId} categories={bookingCategories} />
+                </div>
+                <div id="presentacion" className="mt-4 scroll-mt-4">
+                  <BookingPresentation
+                    clientId={clientId}
+                    sites={sites}
+                    services={services}
+                    staff={staff}
+                    siteServiceMap={siteServiceMap}
+                    bookingCategories={bookingCategories}
+                  />
+                </div>
+              </>
+            ) : null}
+          </div>
+        </PageShell>
+      </main>
     </>
   );
 }
@@ -309,7 +342,7 @@ function SettingsOverview({
   staff,
   exceptions,
   siteServiceMap,
-  onNavigate,
+  onNewSite,
 }: {
   clientId: string;
   sites: Site[];
@@ -317,8 +350,13 @@ function SettingsOverview({
   staff: Staff[];
   exceptions: Exception[];
   siteServiceMap: Record<string, string[]>;
-  onNavigate: (tab: SettingsTab) => void;
+  /** «+ Nueva sede» opens the create dialog of the Sedes list on this same page. */
+  onNewSite: () => void;
 }) {
+  const hrefSites = schedulingHref(clientId, "sites");
+  const hrefServices = schedulingHref(clientId, "services");
+  const hrefHours = schedulingHref(clientId, "hours");
+  const hrefBlocks = schedulingHref(clientId, "hours", undefined, ABSENCES_ANCHOR);
   const activeSites = sites.filter((site) => site.active);
   const activeServices = services.filter((service) => service.active);
   const activeStaff = staff.filter((member) => member.active);
@@ -329,7 +367,7 @@ function SettingsOverview({
   const nextBlock = [...exceptions].sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at))[0];
   const nextBlockSite = nextBlock ? sites.find((site) => site.id === nextBlock.site_id) : undefined;
 
-  const summaries: Array<{ label: string; value: number; helper: string; title?: string; tab?: SettingsTab; href?: string }> = [
+  const summaries: Array<{ label: string; value: number; helper: string; title?: string; href: string }> = [
     {
       label: "Sedes activas",
       value: activeSites.length,
@@ -338,7 +376,7 @@ function SettingsOverview({
         : [activeSites.slice(0, 2).map((site) => site.name).join(" · "), sites.length - activeSites.length > 0 ? `${sites.length - activeSites.length} inactiva${sites.length - activeSites.length === 1 ? "" : "s"}` : null]
             .filter(Boolean)
             .join(" · "),
-      tab: "sites",
+      href: hrefSites,
     },
     {
       label: "Servicios activos",
@@ -347,7 +385,7 @@ function SettingsOverview({
       // agenda's inferred colours and that ★ is the flag. See schedulingOverview.ts.
       helper: servicesSummaryHelper(activeServices),
       title: servicesSummaryTitle(activeServices),
-      tab: "services",
+      href: hrefServices,
     },
     {
       label: "Profesionales",
@@ -361,7 +399,7 @@ function SettingsOverview({
       helper: nextBlock
         ? `El más cercano el ${fmtBlockDay(nextBlock.starts_at, nextBlockSite?.timezone ?? "UTC")}`
         : "Sin vacaciones ni cierres",
-      tab: "blocks",
+      href: hrefBlocks,
     },
   ];
 
@@ -383,7 +421,7 @@ function SettingsOverview({
     label: string;
     helper: string;
     state: "ok" | "todo" | "warn";
-    action?: { label: string; tab?: SettingsTab; href?: string };
+    action?: { label: string; href: string };
   };
   const rows: Row[] = [
     {
@@ -392,7 +430,7 @@ function SettingsOverview({
         ? "Crea o activa una sede para recibir reservas"
         : `${activeSites.length} sede${activeSites.length === 1 ? "" : "s"} activa${activeSites.length === 1 ? "" : "s"}`,
       state: activeSites.length === 0 ? "todo" : "ok",
-      action: { label: "Revisar", tab: "sites" },
+      action: { label: "Revisar", href: hrefHours },
     },
     {
       label: "Catálogo de servicios",
@@ -400,7 +438,7 @@ function SettingsOverview({
         ? "Define al menos un servicio reservable"
         : `${activeServices.length} servicio${activeServices.length === 1 ? "" : "s"} con duración y precio`,
       state: activeServices.length === 0 ? "todo" : "ok",
-      action: { label: "Revisar", tab: "services" },
+      action: { label: "Revisar", href: hrefServices },
     },
     {
       label: "Equipo que recibe reservas",
@@ -416,7 +454,7 @@ function SettingsOverview({
       label: "Horario semanal",
       helper: `${sitesWithoutHours.map((site) => site.name).join(", ")} sin días abiertos`,
       state: "warn",
-      action: { label: "Definir", tab: "sites" },
+      action: { label: "Definir", href: hrefHours },
     });
   }
   if (staffWithoutServices.length > 0) {
@@ -432,7 +470,7 @@ function SettingsOverview({
       label: "Servicios sin sede",
       helper: `${servicesWithoutSite.length} servicio${servicesWithoutSite.length === 1 ? "" : "s"} activo${servicesWithoutSite.length === 1 ? "" : "s"} no se ofrece en ninguna sede`,
       state: "warn",
-      action: { label: "Habilitar", tab: "services" },
+      action: { label: "Habilitar", href: hrefServices },
     });
   }
   rows.push({
@@ -456,10 +494,8 @@ function SettingsOverview({
               <span title={item.title} className="mt-1 block truncate text-[0.6875rem] text-faint">{item.helper}</span>
             </>
           );
-          return item.href ? (
+          return (
             <Link key={item.label} href={item.href} className="min-w-0 rounded-xl border border-line bg-surface px-3.5 py-3 transition hover:border-line-strong hover:bg-subtle/40">{body}</Link>
-          ) : (
-            <button key={item.label} type="button" onClick={() => item.tab && onNavigate(item.tab)} className="min-w-0 rounded-xl border border-line bg-surface px-3.5 py-3 text-left transition hover:border-line-strong hover:bg-subtle/40">{body}</button>
           );
         })}
       </div>
@@ -489,11 +525,7 @@ function SettingsOverview({
                   <p className={`truncate text-[0.6875rem] ${row.state === "warn" ? "text-warn" : "text-muted"}`}>{row.helper}</p>
                 </div>
                 {row.action ? (
-                  row.action.href ? (
-                    <Link href={row.action.href} className={GHOST}>{row.action.label}</Link>
-                  ) : (
-                    <button type="button" onClick={() => row.action?.tab && onNavigate(row.action.tab)} className={GHOST}>{row.action.label}</button>
-                  )
+                  <Link href={row.action.href} className={GHOST}>{row.action.label}</Link>
                 ) : (
                   <span className="shrink-0 text-[0.6875rem] text-faint">{ready ? "Activo" : "Bloqueado"}</span>
                 )}
@@ -503,15 +535,14 @@ function SettingsOverview({
         </section>
 
         <div className="flex min-h-0 flex-col gap-2.5">
-          <WhyNothingAvailable sites={sites} staff={staff} />
           <section className="shrink-0 rounded-xl border border-line bg-surface px-4 py-3">
             <h2 className="u-th">Acciones rápidas</h2>
-            {/* Compact chips, not a stack of full-width rows: these are shortcuts into
-                the tabs above, and at row width they read as the primary content. */}
+            {/* Compact chips, not a stack of full-width rows: shortcuts into the pages
+                that own each job, and at row width they read as the primary content. */}
             <div className="mt-2.5 flex flex-wrap gap-2">
-              <button type="button" onClick={() => onNavigate("sites")} className="inline-flex h-[44px] items-center rounded-lg bg-foreground px-3 text-xs font-medium text-background transition hover:opacity-90 lg:h-[32px]">+ Nueva sede</button>
-              <button type="button" onClick={() => onNavigate("services")} className="inline-flex h-[44px] items-center rounded-lg border border-line-strong bg-surface px-3 text-xs transition hover:bg-subtle lg:h-[32px]">+ Nuevo servicio</button>
-              <button type="button" onClick={() => onNavigate("blocks")} className="inline-flex h-[44px] items-center rounded-lg border border-line-strong bg-surface px-3 text-xs transition hover:bg-subtle lg:h-[32px]">+ Nuevo bloqueo</button>
+              <button type="button" onClick={onNewSite} className="inline-flex h-[44px] items-center rounded-lg bg-foreground px-3 text-xs font-medium text-background transition hover:opacity-90 lg:h-[32px]">+ Nueva sede</button>
+              <Link href={hrefServices} className="inline-flex h-[44px] items-center rounded-lg border border-line-strong bg-surface px-3 text-xs transition hover:bg-subtle lg:h-[32px]">Servicios</Link>
+              <Link href={hrefBlocks} className="inline-flex h-[44px] items-center rounded-lg border border-line-strong bg-surface px-3 text-xs transition hover:bg-subtle lg:h-[32px]">+ Nuevo bloqueo</Link>
               <Link href={`/clients/${clientId}/scheduling/staff`} className="inline-flex h-[44px] items-center rounded-lg border border-line-strong bg-surface px-3 text-xs transition hover:bg-subtle lg:h-[32px]">Gestionar equipo</Link>
             </div>
           </section>
@@ -533,7 +564,7 @@ function fmtBlockDay(iso: string, timeZone: string): string {
  * One-off blocks are in the Exceptions section below. Turns "the bot says nothing is free"
  * into a five-second check.
  */
-function WhyNothingAvailable({ sites, staff }: { sites: Site[]; staff: Staff[] }) {
+function WhyNothingAvailable({ clientId, sites, staff }: { clientId: string; sites: Site[]; staff: Staff[] }) {
   const active = sites.filter((s) => s.active);
   const [siteId, setSiteId] = useState(active[0]?.id ?? "");
   const [dow, setDow] = useState<string>("mon");
@@ -586,7 +617,7 @@ function WhyNothingAvailable({ sites, staff }: { sites: Site[]; staff: Staff[] }
   ];
 
   return (
-    <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface">
+    <section className="flex shrink-0 flex-col overflow-hidden rounded-xl border border-line bg-surface">
       <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-line px-4 py-3">
         <h2 className="text-sm font-semibold text-foreground">Diagnóstico de disponibilidad</h2>
         <span className="flex-1" />
@@ -608,68 +639,17 @@ function WhyNothingAvailable({ sites, staff }: { sites: Site[]; staff: Staff[] }
           </div>
         ))}
         <p className="border-t border-line-soft py-2.5 text-[0.6875rem] text-faint">
-          Las vacaciones, cierres y ausencias puntuales se administran en la pestaña Bloqueos.
+          Las vacaciones, cierres y ausencias puntuales están en{" "}
+          <Link href={schedulingHref(clientId, "hours", undefined, ABSENCES_ANCHOR)} className="underline underline-offset-2 hover:text-foreground">Ausencias</Link>.
         </p>
       </div>
     </section>
   );
 }
 
-function RulesSection({ sites, onEdit }: { sites: Site[]; onEdit: () => void }) {
-  const activeSites = sites.filter((site) => site.active);
-  return (
-    <Section
-      title="Reglas de reserva"
-      description="Revisa cómo se generan los cupos en cada sede. La edición se mantiene junto al horario para evitar configuraciones contradictorias."
-      action={<button type="button" className={BTN} onClick={onEdit}>Editar en sedes y horarios</button>}
-    >
-      {activeSites.length === 0 ? (
-        <div className="rounded-xl border border-dashed border-line-strong px-5 py-10 text-center">
-          <p className="text-sm font-semibold text-foreground">No hay sedes activas</p>
-          <p className="mt-1 text-xs text-muted">Activa o crea una sede para configurar reglas de reserva.</p>
-        </div>
-      ) : (
-        <div className="grid gap-3 lg:grid-cols-2">
-          {activeSites.map((site) => {
-            const config = site.scheduling_config;
-            const notice = config.min_notice_min === 0
-              ? "Reservas inmediatas"
-              : config.min_notice_min >= 60
-                ? `${Math.floor(config.min_notice_min / 60)} h de anticipación mínima`
-                : `${config.min_notice_min} min de anticipación mínima`;
-            return (
-              <article key={site.id} className="rounded-xl border border-line bg-surface p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <h3 className="text-sm font-semibold text-foreground">{site.name}</h3>
-                    <p className="mt-0.5 text-xs text-muted">{site.timezone}</p>
-                  </div>
-                  <span className="rounded-full bg-success/10 px-2.5 py-1 text-[0.6875rem] font-medium text-success">Activa</span>
-                </div>
-                <dl className="mt-4 grid grid-cols-3 overflow-hidden rounded-xl border border-line bg-card">
-                  <div className="p-3">
-                    <dt className="text-[0.6875rem] text-muted">Anticipación</dt>
-                    <dd className="mt-1 text-xs font-semibold text-foreground">{notice}</dd>
-                  </div>
-                  <div className="border-l border-line p-3">
-                    <dt className="text-[0.6875rem] text-muted">Horizonte</dt>
-                    <dd className="mt-1 text-xs font-semibold text-foreground">{config.booking_horizon_days} días</dd>
-                  </div>
-                  <div className="border-l border-line p-3">
-                    <dt className="text-[0.6875rem] text-muted">Intervalos</dt>
-                    <dd className="mt-1 text-xs font-semibold text-foreground">Cada {config.slot_interval_min} min</dd>
-                  </div>
-                </dl>
-              </article>
-            );
-          })}
-        </div>
-      )}
-    </Section>
-  );
-}
-
-export type Run = (fn: () => Promise<{ ok: boolean; error?: string }>) => void;
+/** Runs a server action with the page's shared error banner + refresh. `onOk` runs after
+ *  a successful save (e.g. to clear a form's "unsaved" state). */
+export type Run = (fn: () => Promise<{ ok: boolean; error?: string }>, onOk?: () => void) => void;
 type ToggleKind = "site" | "service" | "staff";
 
 const DEACTIVATE: Record<ToggleKind, (clientId: string, id: string) => Promise<{ ok: boolean; error?: string }>> = {
@@ -845,28 +825,41 @@ function CopyId({ label, value }: { label: string; value: string }) {
   );
 }
 
-/** An EXISTING site's real settings — name, slug, timezone + its configured weekly hours,
- *  seeded from the stored values — in an editable form. This is the fix for the reported
- *  bug: the site's real hours are now shown (not a blank create form pretending to be
- *  them). Save persists via updateSiteAction and immediately changes availability. */
-function EditableSite({
+/** Which slice of a site a page edits. One site row, four owners — each page saves ONLY
+ *  its own keys (updateSiteAction takes a partial patch), so editing the hours on
+ *  Disponibilidad can never overwrite an address being edited on Sedes. */
+export type SitePart = "identity" | "public" | "rules" | "hours";
+
+const PART_HINT: Record<SitePart, string> = {
+  identity: "Nombre, URL pública, zona horaria y dirección.",
+  public: "Contacto que ve el cliente en la página de reservas y en la confirmación.",
+  rules: "Cuándo y con qué frecuencia se ofrecen horarios.",
+  hours: "Los días y horas en que esta sede recibe reservas.",
+};
+
+/** One site's slice in an editable form, seeded from the stored values. Save persists via
+ *  updateSiteAction with ONLY this slice's keys and immediately changes what the booking
+ *  page and the engine read. */
+function SiteForm({
   clientId,
   site,
+  part,
   run,
   pending,
-  initiallyEditing = false,
   schedulingEnabled = true,
   serviceCount = 0,
+  onDirtyChange,
 }: {
   clientId: string;
   site: Site;
+  part: SitePart;
+
   run: Run;
   pending: boolean;
-  initiallyEditing?: boolean;
   schedulingEnabled?: boolean;
   serviceCount?: number;
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
-  const [editing, setEditing] = useState(initiallyEditing);
   const [name, setName] = useState(site.name);
   const [slug, setSlug] = useState(site.slug);
   const [tz, setTz] = useState(site.timezone);
@@ -874,35 +867,64 @@ function EditableSite({
   const [whatsapp, setWhatsapp] = useState(site.public_whatsapp ?? "");
   const [mapsUrl, setMapsUrl] = useState(site.public_maps_url ?? "");
   const [grid, setGrid] = useState<HourGrid>(gridFromWeekly(site.opening_hours));
-  // Booking rules that used to be config-only — now visible + editable. min_notice is why
-  // "availability starts N minutes from now"; horizon caps how far ahead; slot is the grid.
+  // min_notice is why "availability starts N minutes from now"; horizon caps how far
+  // ahead; slot is the grid of start times.
   const [minNotice, setMinNotice] = useState(String(site.scheduling_config.min_notice_min));
   const [horizon, setHorizon] = useState(String(site.scheduling_config.booking_horizon_days));
   const [slotMin, setSlotMin] = useState(String(site.scheduling_config.slot_interval_min));
+  const [saved, setSaved] = useState(false);
   const nums = [minNotice, horizon, slotMin].map((v) => Number(v));
   const numsOk =
     nums.every((n) => Number.isFinite(n) && Number.isInteger(n)) &&
     nums[0] >= 0 && nums[1] >= 1 && nums[2] >= 1;
   const openDays = DAYS.filter((day) => (site.opening_hours?.[day]?.length ?? 0) > 0).length;
-  const save = () =>
-    run(() =>
-      updateSiteAction(clientId, site.id, {
-        name: name.trim(),
-        slug: slug.trim(),
-        timezone: tz,
-        address,
-        publicWhatsapp: whatsapp,
-        publicMapsUrl: mapsUrl,
-        openingHours: weeklyFromGrid(grid),
-        // Merge over the existing config so the buffers (not shown here) are preserved.
-        schedulingConfig: {
-          ...site.scheduling_config,
-          min_notice_min: Number(minNotice),
-          booking_horizon_days: Number(horizon),
-          slot_interval_min: Number(slotMin),
-        },
-      }),
-    );
+
+  const dirty =
+    part === "identity"
+      ? name !== site.name || slug !== site.slug || tz !== site.timezone || address !== (site.address ?? "")
+      : part === "public"
+        ? whatsapp !== (site.public_whatsapp ?? "") || mapsUrl !== (site.public_maps_url ?? "")
+        : part === "rules"
+          ? minNotice !== String(site.scheduling_config.min_notice_min) ||
+            horizon !== String(site.scheduling_config.booking_horizon_days) ||
+            slotMin !== String(site.scheduling_config.slot_interval_min)
+          : JSON.stringify(weeklyFromGrid(grid)) !== JSON.stringify(weeklyFromGrid(gridFromWeekly(site.opening_hours)));
+
+  // Report "unsaved" to the list (it asks before switching sites) and warn on reload/close.
+  const dirtyRef = useRef(onDirtyChange);
+  useEffect(() => {
+    dirtyRef.current = onDirtyChange;
+  });
+  useEffect(() => {
+    dirtyRef.current?.(dirty);
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => e.preventDefault();
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+
+  const patch = () =>
+    part === "identity"
+      ? { name: name.trim(), slug: slug.trim(), timezone: tz, address }
+      : part === "public"
+        ? { publicWhatsapp: whatsapp, publicMapsUrl: mapsUrl }
+        : part === "rules"
+          ? {
+              // Merge over the existing config so the buffers (not shown here) are preserved.
+              schedulingConfig: {
+                ...site.scheduling_config,
+                min_notice_min: Number(minNotice),
+                booking_horizon_days: Number(horizon),
+                slot_interval_min: Number(slotMin),
+              },
+            }
+          : { openingHours: weeklyFromGrid(grid) };
+  const canSave = dirty && !pending && (part !== "identity" || (name.trim() && slug.trim())) && (part !== "rules" || numsOk);
+  const save = () => {
+    setSaved(false);
+    run(() => updateSiteAction(clientId, site.id, patch()), () => setSaved(true));
+  };
+
   return (
     <article className={`overflow-hidden rounded-xl border border-line ${site.active ? "bg-surface" : "bg-subtle/40"}`}>
       <div className="flex flex-wrap items-center gap-3 px-4 py-3.5">
@@ -916,35 +938,43 @@ function EditableSite({
             {openDays} días abiertos · reservas cada {site.scheduling_config.slot_interval_min} min · hasta {site.scheduling_config.booking_horizon_days} días
           </p>
         </div>
-        <button type="button" className={GHOST} onClick={() => setEditing((open) => !open)} aria-expanded={editing}>
-          {editing ? "Cerrar" : "Editar"}
-        </button>
-        <ActiveToggle clientId={clientId} kind="site" id={site.id} name={site.name} active={site.active} run={run} pending={pending} />
+        {part === "identity" ? (
+          <ActiveToggle clientId={clientId} kind="site" id={site.id} name={site.name} active={site.active} run={run} pending={pending} />
+        ) : null}
       </div>
 
-      <BookingLinkCard slug={site.slug} siteActive={site.active} schedulingEnabled={schedulingEnabled} serviceCount={serviceCount} />
+      {part === "public" ? <BookingLinkCard slug={site.slug} siteActive={site.active} schedulingEnabled={schedulingEnabled} serviceCount={serviceCount} /> : null}
 
-      {editing ? (
-        <div className="border-t border-line bg-card/40 p-4">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
-            <p className="text-xs text-muted">Información pública, reglas de reserva y horario semanal.</p>
-            <CopyId label="ID de sede" value={site.id} />
-          </div>
-          <div className="grid gap-3 md:grid-cols-3">
+      <div className="border-t border-line bg-card/40 p-4">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-muted">{PART_HINT[part]}</p>
+          {part === "identity" ? <CopyId label="ID de sede" value={site.id} /> : null}
+        </div>
+
+        {part === "identity" ? (
+          <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <Field label="Nombre"><input value={name} onChange={(e) => setName(e.target.value)} className={`${INPUT} w-full`} /></Field>
-            <Field label="URL pública"><input value={slug} onChange={(e) => setSlug(e.target.value)} className={`${INPUT} w-full`} /></Field>
+            <Field label="URL pública" hint="Forma parte del enlace de reservas."><input value={slug} onChange={(e) => setSlug(e.target.value)} className={`${INPUT} w-full`} /></Field>
             <Field label="Zona horaria"><input value={tz} onChange={(e) => setTz(e.target.value)} className={`${INPUT} w-full`} /></Field>
+            <Field label="Dirección" hint="Tal como la escribiría el cliente en Maps.">
+              <input value={address} maxLength={200} onChange={(e) => setAddress(e.target.value)} className={`${INPUT} w-full`} />
+            </Field>
           </div>
+        ) : null}
 
-          <div className="mt-5 border-t border-line pt-4">
-            <h4 className="text-sm font-semibold text-foreground">Página de reservas</h4>
-            <p className="mt-1 text-xs text-muted">
-              Lo que ve el cliente en «Ubicación y horario» y en la confirmación. El horario es el mismo de abajo; no hay otra copia.
+        {part === "public" ? (
+          <>
+            <dl className="mb-4 grid gap-3 rounded-lg border border-line bg-surface p-3 text-xs sm:grid-cols-3">
+              <div className="min-w-0"><dt className="text-muted">Nombre de la sede</dt><dd className="mt-0.5 truncate font-medium text-foreground">{site.name}</dd></div>
+              <div className="min-w-0"><dt className="text-muted">Dirección</dt><dd className="mt-0.5 truncate font-medium text-foreground">{site.address || "Sin dirección"}</dd></div>
+              <div className="min-w-0"><dt className="text-muted">Horario</dt><dd className="mt-0.5 font-medium text-foreground">{openDays} días abiertos</dd></div>
+            </dl>
+            <p className="-mt-2 mb-4 text-[0.6875rem] text-faint">
+              El nombre y la dirección se editan en{" "}
+              <Link href={schedulingHref(clientId, "sites")} className="underline underline-offset-2 hover:text-foreground">Sedes</Link>; el horario, en{" "}
+              <Link href={schedulingHref(clientId, "hours")} className="underline underline-offset-2 hover:text-foreground">Horarios y ausencias</Link>.
             </p>
-            <div className="mt-3 grid gap-3 md:grid-cols-3">
-              <Field label="Dirección" hint="Tal como la escribiría el cliente en Maps.">
-                <input value={address} maxLength={200} onChange={(e) => setAddress(e.target.value)} className={`${INPUT} w-full`} />
-              </Field>
+            <div className="grid gap-3 md:grid-cols-2">
               <Field label="WhatsApp del negocio" hint="Con indicativo. Vacío = no se muestra.">
                 <input value={whatsapp} inputMode="tel" placeholder="+57 300 123 4567" onChange={(e) => setWhatsapp(e.target.value)} className={`${INPUT} w-full`} />
               </Field>
@@ -952,35 +982,149 @@ function EditableSite({
                 <input value={mapsUrl} inputMode="url" placeholder="https://maps.app.goo.gl/…" onChange={(e) => setMapsUrl(e.target.value)} className={`${INPUT} w-full`} />
               </Field>
             </div>
-          </div>
+          </>
+        ) : null}
 
-          <div className="mt-5 border-t border-line pt-4">
-            <h4 className="text-sm font-semibold text-foreground">Reglas de reserva</h4>
-            <p className="mt-1 text-xs text-muted">Controlan cuándo y con qué frecuencia se ofrecen horarios.</p>
-            <div className="mt-3 grid gap-3 sm:grid-cols-3">
-              <Field label="Anticipación mínima (min)" hint="Tiempo mínimo antes de una cita.">
-                <input type="number" min={0} value={minNotice} onChange={(e) => setMinNotice(e.target.value)} className={`${INPUT} w-full`} />
-              </Field>
-              <Field label="Días disponibles hacia adelante" hint="Hasta cuándo puede reservar un cliente.">
-                <input type="number" min={1} value={horizon} onChange={(e) => setHorizon(e.target.value)} className={`${INPUT} w-full`} />
-              </Field>
-              <Field label="Intervalo entre horarios (min)" hint="Separación entre horas de inicio.">
-                <input type="number" min={1} value={slotMin} onChange={(e) => setSlotMin(e.target.value)} className={`${INPUT} w-full`} />
-              </Field>
-            </div>
+        {part === "rules" ? (
+          <div className="grid gap-3 sm:grid-cols-3">
+            <Field label="Anticipación mínima (min)" hint="Tiempo mínimo antes de una cita.">
+              <input type="number" min={0} value={minNotice} onChange={(e) => setMinNotice(e.target.value)} className={`${INPUT} w-full`} />
+            </Field>
+            <Field label="Días disponibles hacia adelante" hint="Hasta cuándo puede reservar un cliente.">
+              <input type="number" min={1} value={horizon} onChange={(e) => setHorizon(e.target.value)} className={`${INPUT} w-full`} />
+            </Field>
+            <Field label="Intervalo entre horarios (min)" hint="Separación entre horas de inicio.">
+              <input type="number" min={1} value={slotMin} onChange={(e) => setSlotMin(e.target.value)} className={`${INPUT} w-full`} />
+            </Field>
           </div>
+        ) : null}
 
-          <div className="mt-5 border-t border-line pt-4">
-            <h4 className="text-sm font-semibold text-foreground">Horario semanal</h4>
-            <p className="mb-3 mt-1 text-xs text-muted">Activa los días en que esta sede recibe reservas.</p>
-            <HoursGrid grid={grid} setGrid={setGrid} />
-          </div>
-          <div className="mt-4 flex justify-end">
-            <button className={BTN} disabled={pending || !name || !slug || !numsOk} onClick={save}>Guardar cambios</button>
-          </div>
+        {part === "hours" ? <HoursGrid grid={grid} setGrid={setGrid} /> : null}
+
+        <div className="mt-4 flex flex-wrap items-center justify-end gap-3">
+          <span aria-live="polite" className="text-xs text-muted">
+            {dirty ? "Cambios sin guardar" : saved ? "Cambios guardados" : ""}
+          </span>
+          <button className={BTN} disabled={!canSave} onClick={save}>{pending ? "Guardando…" : "Guardar cambios"}</button>
         </div>
-      ) : null}
+      </div>
     </article>
+  );
+}
+
+/**
+ * The list of sites with one site's slice beside it — the layout every site-owned page
+ * shares (Sedes, Reglas de reserva, Horario de la sede, Página de reservas). Switching
+ * sites with unsaved edits asks first; it used to drop them silently.
+ */
+function SiteWorkbench({
+  clientId,
+  sites,
+  run,
+  pending,
+  part,
+  schedulingEnabled,
+  siteServiceMap,
+}: {
+  clientId: string;
+  sites: Site[];
+  run: Run;
+  pending: boolean;
+  part: SitePart;
+  schedulingEnabled: boolean;
+  siteServiceMap: Record<string, string[]>;
+}) {
+  const [query, setQuery] = useState("");
+  const [selectedId, setSelectedId] = useState(sites[0]?.id ?? "");
+  const [dirty, setDirty] = useState(false);
+  const [asking, setAsking] = useState<string | null>(null);
+  const filteredSites = sites.filter((site) => site.name.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es")));
+  const selectedSite = sites.find((site) => site.id === selectedId) ?? sites[0];
+  const pick = (id: string) => {
+    if (id === selectedSite?.id) return;
+    if (dirty) setAsking(id);
+    else setSelectedId(id);
+  };
+
+  return (
+    <div className="grid min-h-[22rem] overflow-hidden rounded-xl border border-line bg-surface lg:grid-cols-[17rem_minmax(0,1fr)]">
+      <aside className="border-b border-line bg-card/40 lg:border-b-0 lg:border-r">
+        <div className="border-b border-line p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-foreground">Sedes</h3>
+            <span className="u-mono text-xs text-faint">{sites.length}</span>
+          </div>
+          <input
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            placeholder="Buscar sede…"
+            aria-label="Buscar sede"
+            className={`${INPUT} w-full bg-subtle/60`}
+          />
+        </div>
+        <div className="flex max-h-64 flex-col gap-1 overflow-y-auto p-1.5 lg:max-h-[34rem]">
+          {filteredSites.map((site) => {
+            const openDays = DAYS.filter((day) => (site.opening_hours?.[day]?.length ?? 0) > 0).length;
+            const selected = site.id === selectedSite?.id;
+            return (
+              <button
+                key={site.id}
+                type="button"
+                aria-current={selected ? "true" : undefined}
+                onClick={() => pick(site.id)}
+                className={`rounded-lg px-3 py-2.5 text-left transition ${selected ? "bg-subtle" : "hover:bg-subtle/60"}`}
+              >
+                <span className="flex items-center gap-2">
+                  <strong className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{site.name}</strong>
+                  <span className={`size-2 rounded-full ${site.active ? "bg-success" : "bg-faintest"}`} />
+                </span>
+                <span className="mt-1 block text-xs text-muted">{openDays} días abiertos · cada {site.scheduling_config.slot_interval_min} min</span>
+              </button>
+            );
+          })}
+          {filteredSites.length === 0 ? <p className="px-3 py-8 text-center text-xs text-muted">No encontramos sedes.</p> : null}
+        </div>
+      </aside>
+      <div className="min-w-0 p-3 sm:p-4">
+        {asking ? (
+          <div role="alert" className="mb-3 flex flex-wrap items-center gap-2 rounded-lg border border-warn-rule/40 bg-warn-soft px-3 py-2 text-xs text-warn">
+            <span className="min-w-0 flex-1">Tienes cambios sin guardar en {selectedSite?.name}.</span>
+            <button type="button" className={GHOST} onClick={() => setAsking(null)}>Seguir editando</button>
+            <button
+              type="button"
+              className={GHOST}
+              onClick={() => {
+                setDirty(false);
+                setSelectedId(asking);
+                setAsking(null);
+              }}
+            >
+              Descartar y cambiar
+            </button>
+          </div>
+        ) : null}
+        {selectedSite ? (
+          <SiteForm
+            key={`${part}-${selectedSite.id}`}
+            clientId={clientId}
+            site={selectedSite}
+            part={part}
+            run={run}
+            pending={pending}
+            schedulingEnabled={schedulingEnabled}
+            serviceCount={siteServiceMap[selectedSite.id]?.length ?? 0}
+            onDirtyChange={setDirty}
+          />
+        ) : (
+          <div className="flex min-h-72 flex-col items-center justify-center text-center">
+            <p className="text-sm font-semibold text-foreground">Aún no hay sedes</p>
+            <p className="mt-1 max-w-sm text-xs text-muted">
+              Crea la primera sede en <Link href={schedulingHref(clientId, "sites")} className="underline underline-offset-2">Sedes</Link> para definir horarios y recibir reservas.
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
   );
 }
 
@@ -1002,6 +1146,8 @@ function SitesSection({
   pending,
   schedulingEnabled,
   siteServiceMap,
+  creating,
+  setCreating,
 }: {
   clientId: string;
   sites: Site[];
@@ -1009,10 +1155,9 @@ function SitesSection({
   pending: boolean;
   schedulingEnabled: boolean;
   siteServiceMap: Record<string, string[]>;
+  creating: boolean;
+  setCreating: (open: boolean) => void;
 }) {
-  const [creating, setCreating] = useState(false);
-  const [query, setQuery] = useState("");
-  const [selectedId, setSelectedId] = useState(sites[0]?.id ?? "");
   const [slug, setSlug] = useState("");
   const [name, setName] = useState("");
   const [tz, setTz] = useState("America/Bogota");
@@ -1027,76 +1172,17 @@ function SitesSection({
       return r;
     });
 
-  const filteredSites = sites.filter((site) => site.name.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es")));
-  const selectedSite = sites.find((site) => site.id === selectedId) ?? sites[0];
-
   return (
     <Section
-      title="Sedes y horarios"
-      description="Define dónde atiendes, cuándo abre cada sede y con cuánta anticipación pueden reservar."
+      title="Sedes"
+      description="Dónde atiendes. El horario está en Agenda › Horarios, las reglas en Reglas de reserva y el contacto público en Página de reservas."
       action={<button type="button" className={BTN} onClick={() => setCreating(true)}>+ Nueva sede</button>}
     >
-      <div className="grid min-h-[28rem] overflow-hidden rounded-xl border border-line bg-surface lg:grid-cols-[17rem_minmax(0,1fr)]">
-        <aside className="border-b border-line bg-card/40 lg:border-b-0 lg:border-r">
-          <div className="border-b border-line p-3">
-            <div className="mb-2 flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-foreground">Sedes</h3>
-              <span className="u-mono text-xs text-faint">{sites.length}</span>
-            </div>
-            <input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Buscar sede…"
-              aria-label="Buscar sede"
-              className={`${INPUT} w-full bg-subtle/60`}
-            />
-          </div>
-          <div className="flex max-h-64 flex-col gap-1 overflow-y-auto p-1.5 lg:max-h-[34rem]">
-            {filteredSites.map((site) => {
-              const openDays = DAYS.filter((day) => (site.opening_hours?.[day]?.length ?? 0) > 0).length;
-              const selected = site.id === selectedSite?.id;
-              return (
-                <button
-                  key={site.id}
-                  type="button"
-                  onClick={() => setSelectedId(site.id)}
-                  className={`rounded-lg px-3 py-2.5 text-left transition ${selected ? "bg-subtle" : "hover:bg-subtle/60"}`}
-                >
-                  <span className="flex items-center gap-2">
-                    <strong className="min-w-0 flex-1 truncate text-sm font-semibold text-foreground">{site.name}</strong>
-                    <span className={`size-2 rounded-full ${site.active ? "bg-success" : "bg-faintest"}`} />
-                  </span>
-                  <span className="mt-1 block text-xs text-muted">{openDays} días abiertos · cada {site.scheduling_config.slot_interval_min} min</span>
-                </button>
-              );
-            })}
-            {filteredSites.length === 0 ? <p className="px-3 py-8 text-center text-xs text-muted">No encontramos sedes.</p> : null}
-          </div>
-        </aside>
-        <div className="min-w-0 p-3 sm:p-4">
-          {selectedSite ? (
-            <EditableSite
-              key={selectedSite.id}
-              clientId={clientId}
-              site={selectedSite}
-              run={run}
-              pending={pending}
-              initiallyEditing
-              schedulingEnabled={schedulingEnabled}
-              serviceCount={siteServiceMap[selectedSite.id]?.length ?? 0}
-            />
-          ) : (
-            <div className="flex min-h-72 flex-col items-center justify-center text-center">
-              <p className="text-sm font-semibold text-foreground">Aún no hay sedes</p>
-              <p className="mt-1 max-w-sm text-xs text-muted">Crea la primera sede para definir horarios y recibir reservas.</p>
-            </div>
-          )}
-        </div>
-      </div>
+      <SiteWorkbench clientId={clientId} sites={sites} run={run} pending={pending} part="identity" schedulingEnabled={schedulingEnabled} siteServiceMap={siteServiceMap} />
       {creating ? (
         <ConfigModal
           title="Nueva sede"
-          description="Crea la sede y su horario base. Las reglas avanzadas se pueden ajustar después."
+          description="Crea la sede y su horario base. Las reglas y el contacto público se ajustan después."
           onClose={() => setCreating(false)}
           footer={<button className={BTN} disabled={pending || !slug || !name} onClick={submit}>Crear sede</button>}
         >
@@ -1159,8 +1245,8 @@ function ExceptionsSection({ clientId, sites, staff, exceptions, run, pending }:
 
   return (
     <Section
-      title="Bloqueos de agenda"
-      description="Registra vacaciones, cierres o ausencias para que esos horarios no se ofrezcan."
+      title="Excepciones"
+      description="Cierres puntuales de una sede y ausencias de un profesional: esos horarios dejan de ofrecerse. El horario habitual está en Horarios."
       action={<button type="button" className={BTN} onClick={() => setCreating(true)}>+ Nuevo bloqueo</button>}
     >
       <div>
@@ -1183,7 +1269,10 @@ function ExceptionsSection({ clientId, sites, staff, exceptions, run, pending }:
           return (
             <li key={e.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-line px-4 py-3">
               <span>
-                <strong className="font-medium text-foreground">{e.reason ?? "Bloqueo de agenda"}</strong>
+                <span className={`mb-1 inline-flex rounded-full px-2 py-0.5 text-[0.625rem] font-medium ${st ? "bg-chip text-muted" : "bg-warn-soft text-warn"}`}>
+                  {st ? "Ausencia de profesional" : "Cierre de la sede"}
+                </span>
+                <strong className="block font-medium text-foreground">{e.reason ?? "Bloqueo de agenda"}</strong>
                 <span className="mt-1 block text-xs text-muted">{fmt(e.starts_at, zone)} → {fmt(e.ends_at, zone)} · {site?.name ?? "—"} · {st ? st.name : "Toda la sede"}</span>
                 <span className="mt-0.5 block text-xs text-faint">Cliente: {e.public_reason ? PUBLIC_REASON_LABEL[e.public_reason] : "sin motivo (solo «no hay disponibilidad»)"}</span>
               </span>
@@ -1223,6 +1312,184 @@ function ExceptionsSection({ clientId, sites, staff, exceptions, run, pending }:
             </div>
           </div>
         </ConfigModal>
+      ) : null}
+    </Section>
+  );
+}
+
+/**
+ * «Horario de cada profesional» — a read view of every professional's EFFECTIVE weekly
+ * hours (own hours, or the site's when they have none) and their upcoming absences. The
+ * editor stays where it already is (the professional's drawer in Equipo, which has the
+ * split-shift editor and the conflict-aware time-off form); this page links straight into
+ * it instead of growing a second copy.
+ */
+function StaffAvailability({ clientId, sites, staff, exceptions }: { clientId: string; sites: Site[]; staff: Staff[]; exceptions: Exception[] }) {
+  const staffHref = (member: Staff, dtab: string) =>
+    `/clients/${clientId}/scheduling/staff?${new URLSearchParams({ site: member.site_id, s: member.id, dtab }).toString()}`;
+  const groups = sites
+    .map((site) => ({ site, members: staff.filter((m) => m.site_id === site.id).sort((a, b) => Number(b.active) - Number(a.active) || a.name.localeCompare(b.name, "es")) }))
+    .filter((g) => g.members.length > 0);
+  return (
+    <Section
+      title="Horario de cada profesional"
+      description="Quién trabaja cuándo. Un profesional sin horario propio atiende en el horario de su sede. Se edita en la ficha del profesional, en Equipo."
+    >
+      {groups.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-line-strong px-5 py-10 text-center">
+          <p className="text-sm font-semibold text-foreground">Aún no hay profesionales</p>
+          <p className="mt-1 text-xs text-muted">
+            Agrégalos en <Link href={`/clients/${clientId}/scheduling/staff`} className="underline underline-offset-2">Equipo</Link>.
+          </p>
+        </div>
+      ) : (
+        groups.map(({ site, members }) => (
+          <section key={site.id} aria-label={site.name} className="overflow-hidden rounded-xl border border-line bg-surface">
+            <header className="flex items-center gap-2 border-b border-line px-4 py-2.5">
+              <h3 className="text-sm font-semibold text-foreground">{site.name}</h3>
+              <span className="u-mono text-xs text-faint">{members.length}</span>
+            </header>
+            <ul>
+              {members.map((member, i) => {
+                const own = member.working_hours && Object.keys(member.working_hours).length > 0 ? member.working_hours : null;
+                const hours = own ?? site.opening_hours ?? {};
+                const absences = exceptions.filter((e) => e.staff_id === member.id).length;
+                return (
+                  <li key={member.id} className={`flex flex-wrap items-center gap-3 px-4 py-3 ${i > 0 ? "border-t border-line-soft" : ""} ${member.active ? "" : "opacity-70"}`}>
+                    <div className="min-w-[10rem] flex-1">
+                      <p className="truncate text-sm font-medium text-foreground">
+                        {member.name}
+                        {!member.active ? <span className="ml-2 rounded-full bg-chip px-2 py-0.5 text-[0.625rem] text-muted">Inactivo</span> : null}
+                      </p>
+                      <p className="mt-0.5 text-xs text-muted">
+                        {own ? "Horario propio" : "Usa el horario de la sede"}
+                        {absences > 0 ? ` · ${absences} ausencia${absences === 1 ? "" : "s"} próxima${absences === 1 ? "" : "s"}` : ""}
+                      </p>
+                    </div>
+                    <ol aria-label={`Días que trabaja ${member.name}`} className="flex gap-1">
+                      {DAYS.map((d) => {
+                        const ranges = hours[d] ?? [];
+                        const on = ranges.length > 0;
+                        const label = `${DAY_LABELS[d]}: ${on ? ranges.map((r) => `${r.start}–${r.end}`).join(", ") : "no trabaja"}`;
+                        return (
+                          <li
+                            key={d}
+                            title={label}
+                            aria-label={label}
+                            className={`flex size-7 items-center justify-center rounded-md text-[0.625rem] font-semibold ${on ? "bg-foreground text-background" : "bg-chip text-faint"}`}
+                          >
+                            {DAY_LABELS[d].slice(0, 1)}
+                          </li>
+                        );
+                      })}
+                    </ol>
+                    <div className="flex gap-2">
+                      <Link href={staffHref(member, "hours")} className={GHOST}>Editar horario</Link>
+                      <Link href={staffHref(member, "time off")} className={GHOST}>Ausencias</Link>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        ))
+      )}
+    </Section>
+  );
+}
+
+/**
+ * «Orden y presentación» — how the catalogue reads on the public page: which services
+ * show, in which category and order, and which are recommended. It is a VIEW over the one
+ * service record: the name, price and description come from Servicios, and «Editar
+ * presentación» opens the same ServiceEditor (its «Página de reservas» section), so there
+ * is no second copy of any service field.
+ */
+function BookingPresentation({
+  clientId,
+  sites,
+  services,
+  staff,
+  siteServiceMap,
+  bookingCategories,
+}: {
+  clientId: string;
+  sites: Site[];
+  services: Service[];
+  staff: Staff[];
+  siteServiceMap: Record<string, string[]>;
+  bookingCategories: BookingCategory[];
+}) {
+  const router = useRouter();
+  const [editing, setEditing] = useState<Service | null>(null);
+  const active = services.filter((s) => s.active);
+  const cats = [...bookingCategories].sort((a, b) => a.sort_order - b.sort_order);
+  const groups = [
+    ...cats.map((c) => ({ id: c.id, name: c.name, hidden: !c.visible, items: active.filter((s) => s.public_category_id === c.id) })),
+    { id: "none", name: "Sin categoría en la página", hidden: false, items: active.filter((s) => !s.public_category_id || !cats.some((c) => c.id === s.public_category_id)) },
+  ].filter((g) => g.items.length > 0 || g.id !== "none");
+  const sorted = (items: Service[]) => [...items].sort((a, b) => (a.public_sort ?? 0) - (b.public_sort ?? 0) || a.name.localeCompare(b.name, "es"));
+
+  return (
+    <Section
+      title="Orden y presentación"
+      description="Cómo se ve tu catálogo en la página de reservas. Nombre, precio y descripción vienen de Servicios: aquí solo cambia cómo se presentan."
+    >
+      <div className="flex flex-col gap-3">
+        {groups.map((g) => (
+          <section key={g.id} aria-label={g.name} className="overflow-hidden rounded-xl border border-line bg-surface">
+            <header className="flex items-center gap-2 border-b border-line px-4 py-2.5">
+              <h3 className="text-sm font-semibold text-foreground">{g.name}</h3>
+              {g.hidden ? <span className="rounded-full bg-chip px-2 py-0.5 text-[0.625rem] text-muted">Categoría oculta</span> : null}
+              <span className="u-mono text-xs text-faint">{g.items.length}</span>
+            </header>
+            {g.items.length === 0 ? (
+              <p className="px-4 py-4 text-xs text-muted">Ningún servicio en esta categoría.</p>
+            ) : (
+              <ul>
+                {sorted(g.items).map((svc, i) => {
+                  const visible = svc.public_visible !== false;
+                  return (
+                    <li key={svc.id} className={`flex flex-wrap items-center gap-3 px-4 py-3 ${i > 0 ? "border-t border-line-soft" : ""}`}>
+                      <span className="u-mono w-6 shrink-0 text-xs text-faint" title="Orden en la página">{svc.public_sort ?? 0}</span>
+                      <div className="min-w-[10rem] flex-1">
+                        <p className="truncate text-sm font-medium text-foreground">
+                          {svc.name}
+                          {svc.public_recommended ? <span className="ml-2 text-[0.6875rem] text-warn">★ Recomendado</span> : null}
+                        </p>
+                        <p className="mt-0.5 text-xs text-muted">
+                          {svc.duration_min} min · {svc.price ? `$${Number(svc.price).toLocaleString("de-DE")}` : "Precio a consultar"}
+                          {svc.public_image_url ? " · con imagen" : ""}
+                        </p>
+                      </div>
+                      <span className={`rounded-full px-2 py-0.5 text-[0.625rem] font-medium ${visible ? "bg-success/10 text-success" : "bg-chip text-muted"}`}>
+                        {visible ? "Visible" : "Oculto en la página"}
+                      </span>
+                      <button type="button" className={GHOST} onClick={() => setEditing(svc)}>Editar presentación</button>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </section>
+        ))}
+      </div>
+      {editing ? (
+        <ServiceEditor
+          clientId={clientId}
+          mode={{ kind: "edit", service: editing }}
+          sites={sites.filter((x) => x.active)}
+          staff={staff.filter((x) => x.active)}
+          siteServiceMap={siteServiceMap}
+          bookingCategories={bookingCategories}
+          allServices={active}
+          initialSection="page"
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null);
+            router.refresh();
+          }}
+        />
       ) : null}
     </Section>
   );

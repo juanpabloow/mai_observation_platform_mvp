@@ -27,10 +27,10 @@ import { SidebarProvider } from "@/components/SidebarContext";
  */
 const THEME_SCRIPT_PROPS = typeof window === "undefined" ? undefined : { type: "application/json" };
 
-export function Providers({ children }: { children: React.ReactNode }) {
+export function Providers({ children, sidebarCollapsed = false }: { children: React.ReactNode; sidebarCollapsed?: boolean }) {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange scriptProps={THEME_SCRIPT_PROPS}>
-      <SidebarProvider>{children}</SidebarProvider>
+      <SidebarProvider initialCollapsed={sidebarCollapsed}>{children}</SidebarProvider>
     </ThemeProvider>
   );
 }

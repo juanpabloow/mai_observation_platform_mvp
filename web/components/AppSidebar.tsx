@@ -1,17 +1,19 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useTrappedPanel } from "@/components/ui/Overlay";
 import { useSidebar } from "@/components/SidebarContext";
 import { useScope } from "@/components/ScopeProvider";
-import { scopeHref } from "@/lib/scopeSurface";
 import { InboxTabLink } from "@/components/InboxTabLink";
 import { AccountMenu } from "@/components/AccountMenu";
-import { RAIL_ROW } from "@/components/railRow";
+import { RAIL_ACTIVE, RAIL_H, RAIL_IDLE, RAIL_OPEN, RAIL_ROW, RAIL_SUB_H, RAIL_SUB_IDLE } from "@/components/railRow";
+import { buildSections, locate, type NavSection as ModelSection, type PageId, type SectionId } from "@/lib/sectionNav";
+import { memberLandingPath } from "@/lib/landing";
+import { hasSidebarCollapsedCookie, LEGACY_SIDEBAR_COLLAPSED_KEY } from "@/lib/sidebarCollapsed";
 
 const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password"];
-const SCHEDULING_SECTION = "Scheduling";
 
 /** The client id when inside a client (/clients/<id>/…); null at the tenant level. */
 function parseClientId(pathname: string): string | null {
@@ -26,6 +28,52 @@ function parseClientId(pathname: string): string | null {
 const iconCls = "size-[1.0625rem] shrink-0";
 
 const Icon = {
+  /* Disponibilidad — a clock: WHEN the business attends. */
+  availability: (
+    <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
+      <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M12 7.5V12l3 2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  ),
+  /* Servicios — a list with leading dots (the menu of what is booked). */
+  services: (
+    <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
+      <path d="M9 6.5h11M9 12h11M9 17.5h11" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="4.75" cy="6.5" r="1.1" fill="currentColor" />
+      <circle cx="4.75" cy="12" r="1.1" fill="currentColor" />
+      <circle cx="4.75" cy="17.5" r="1.1" fill="currentColor" />
+    </svg>
+  ),
+  /* Promociones — a percent sign. */
+  promotions: (
+    <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
+      <path d="M18 6 6 18" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="7.5" cy="7.5" r="2.25" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="16.5" cy="16.5" r="2.25" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  ),
+  /* Página de reservas — a globe: the business's public face. */
+  bookingPage: (
+    <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
+      <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.6" />
+      <path d="M3.5 12h17M12 3.5c2.3 2.4 3.4 5.2 3.4 8.5s-1.1 6.1-3.4 8.5c-2.3-2.4-3.4-5.2-3.4-8.5S9.7 5.9 12 3.5Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+    </svg>
+  ),
+  /* Sedes — a map pin. */
+  sites: (
+    <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
+      <path d="M12 21s6.5-5.6 6.5-11a6.5 6.5 0 1 0-13 0c0 5.4 6.5 11 6.5 11Z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round" />
+      <circle cx="12" cy="10" r="2.25" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  ),
+  /* Reglas de reserva — sliders. */
+  rules: (
+    <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
+      <path d="M4 7h9M17 7h3M4 17h3M11 17h9" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      <circle cx="15" cy="7" r="2" stroke="currentColor" strokeWidth="1.6" />
+      <circle cx="9" cy="17" r="2" stroke="currentColor" strokeWidth="1.6" />
+    </svg>
+  ),
   workflows: (
     <svg viewBox="0 0 24 24" className={iconCls} fill="none" aria-hidden>
       <rect x="3" y="3" width="6" height="6" rx="1.5" stroke="currentColor" strokeWidth="1.6" />
@@ -143,10 +191,78 @@ interface NavItem {
   countEndpoint?: string;
   /** A static number badge (e.g. unconfigured-ads count); rendered when > 0 in the expanded rail. */
   badge?: number;
+  /** A quiet tag after the label (Módulos → AGENCIA). */
+  tag?: string;
 }
-interface NavSection {
+/** A section with 2+ pages: its row unfolds them (one group open at a time). */
+interface NavGroup {
+  key: string;
   label: string;
-  items: NavItem[];
+  icon: ReactNode;
+  /** The current page is inside this group. */
+  active: boolean;
+  /** The row ALSO navigates (Agenda → Calendario); its chevron is a separate button. */
+  homeHref: string | null;
+  /** That home is the current page. */
+  homeActive: boolean;
+  pages: Array<{ key: string; label: string; href: string; active: boolean; badge?: number }>;
+}
+type NavEntry = ({ kind: "link" } & NavItem) | ({ kind: "group" } & NavGroup);
+interface NavSection {
+  /** The block's accessible name (Operación, Negocio, Herramientas…). */
+  label: string;
+  entries: NavEntry[];
+  /** Blocks are separated by a hairline, not titled; the tenant/member lists keep a title. */
+  divider?: boolean;
+}
+
+/** The rail icon of each section, and of the lone page a section shrinks to. */
+const SECTION_ICON: Record<SectionId, ReactNode> = {
+  inbox: Icon.inbox,
+  contacts: Icon.contacts,
+  agenda: Icon.agenda,
+  catalog: Icon.catalog,
+  presence: Icon.bookingPage,
+  results: Icon.overview,
+  settings: Icon.rules,
+  automations: Icon.workflows,
+  agency: Icon.modules,
+};
+const PAGE_ICON: Partial<Record<PageId, ReactNode>> = {
+  products: Icon.catalog,
+  services: Icon.services,
+  promotions: Icon.promotions,
+  campaigns: Icon.campaigns,
+  reviews: Icon.reviews,
+  users: Icon.team,
+  fields: Icon.modules,
+  sites: Icon.sites,
+  rules: Icon.rules,
+  hours: Icon.availability,
+  meetings: Icon.meetings,
+  team: Icon.team,
+  workflows: Icon.workflows,
+  "tech-analytics": Icon.overview,
+};
+
+const Chevron = ({ open }: { open: boolean }) => (
+  <svg viewBox="0 0 16 16" aria-hidden data-open={open} className="u-rail-chevron size-3.5 shrink-0 opacity-55" fill="none">
+    <path d="m6 4 4 4-4 4" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
+  </svg>
+);
+
+/** The small red count pill (white on the red current row, so it never vanishes into it). */
+function CountPill({ value, onActive, label }: { value: number; onActive: boolean; label: string }) {
+  return (
+    <span
+      aria-label={label}
+      className={`ml-1.5 flex h-5 min-w-5 shrink-0 items-center justify-center rounded-full px-1.5 text-[11.5px] font-semibold tabular-nums ${
+        onActive ? "bg-white text-nav-active" : "bg-nav-active text-white"
+      }`}
+    >
+      {value}
+    </span>
+  );
 }
 
 /** One static nav row (icon + label expanded, icon-only + tooltip collapsed). */
@@ -159,60 +275,224 @@ function NavLink({
   collapsed: boolean;
   onNavigate?: () => void;
 }) {
-  // The ACTIVE row is a SOLID BRAND fill with white text — the single strongest mark in
-  // the shell, so "where am I" is answered at a glance and only ever by one row.
-  // Everything else is quiet metadata grey until hovered, and hover is a change of
-  // GROUND, never a hue (see --sidebar-hover-dark in globals.css).
-  //
-  // DENSITY is the design's (`padding: 8px 18px`, no min-height, no gap between rows):
-  // ~32px per row against the 40px `min-h-10` this used to force. Eleven rows at 40px
-  // pushed Administration toward the fold on a laptop and made the rail read as a
-  // marketing menu rather than as a tool's chrome.
-  //
-  // The active row is INSET (`mx-2.5`) rather than full-bleed: a red band running edge to
-  // edge is a second border on the content, where an inset pill reads as an object in a
-  // list. The idle rows carry the same inset as transparent margin, so nothing shifts by
-  // a pixel when selection moves.
-  const base = `${RAIL_ROW} ${
-    collapsed ? "justify-center px-0 py-2.5" : "gap-3 px-2.5 py-2.5"
-  } ${
-    item.active
-      ? "bg-nav-active font-semibold text-white"
-      : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-fg"
-  }`;
+  // The CURRENT page is the production red pill. The row is INSET (mx-2) rather than
+  // full-bleed; idle rows carry the same inset as transparent margin, so nothing shifts
+  // by a pixel when selection moves. Collapsed, the label is a tooltip on hover AND
+  // keyboard focus (`.u-rail-tip`, from `data-tip`).
+  const base = `${RAIL_ROW} ${RAIL_H} ${
+    collapsed ? "u-rail-tip justify-center px-0" : "gap-2.5 pl-2.5 pr-1.5"
+  } ${item.active ? RAIL_ACTIVE : RAIL_IDLE}`;
+  const tip = item.tag ? `${item.label} · ${item.tag.toLocaleLowerCase("es")}` : item.label;
   return (
     <Link
       href={item.href}
       onClick={onNavigate}
       aria-current={item.active ? "page" : undefined}
-      aria-label={collapsed ? item.label : undefined}
-      title={collapsed ? item.label : undefined}
+      aria-label={collapsed ? tip : undefined}
+      data-tip={collapsed ? tip : undefined}
       className={base}
     >
       <span className="shrink-0" aria-hidden>
         {item.icon}
       </span>
-      {collapsed ? null : <span className="flex-1 truncate">{item.label}</span>}
+      {collapsed ? null : <span className="min-w-0 flex-1 truncate">{item.label}</span>}
+      {!collapsed && item.tag ? (
+        <span className={`shrink-0 pr-1 text-[10px] font-semibold tracking-[0.08em] ${item.active ? "text-white/80" : "text-sidebar-section"}`}>{item.tag}</span>
+      ) : null}
       {!collapsed && item.badge != null && item.badge > 0 ? (
-        <span
-          className="u-mono ml-2 shrink-0 rounded-full bg-nav-active px-1.5 py-0.5 text-[0.625rem] font-semibold leading-none text-white"
-          aria-label={`${item.badge} sin configurar`}
-          title={`${item.badge} sin configurar`}
-        >
-          {item.badge}
-        </span>
+        <CountPill value={item.badge} onActive={item.active} label={`${item.badge} anuncios sin configurar`} />
       ) : null}
     </Link>
   );
 }
 
-function SectionHeader({ label, collapsed, first }: { label: string; collapsed: boolean; first: boolean }) {
-  if (collapsed) {
-    // A hairline divider stands in for the label; the group still carries aria-label.
-    return first ? null : <div aria-hidden className="mx-2 my-2 border-t border-sidebar-border" />;
-  }
-  // 18px of side padding to line the label up with the row TEXT (a row is inset 10px and
-  // padded 8px), and the design's 6px below / 16px above the next group.
+/**
+ * A group of pages (expanded rail and phone menu). Its pages unfold beneath it, aligned
+ * with the parent's label on a thin vertical guide. Two different marks, never confused:
+ *   - the CURRENT PAGE is the red pill;
+ *   - an OPEN group only lifts to the rail foreground (its chevron turns).
+ * If the group holding the current page is closed, the pill moves to the group row, so
+ * the person never loses where they are. Agenda's row navigates (to the calendar); the
+ * chevron beside it is its own button, reachable by keyboard.
+ */
+function NavGroupRow({
+  group,
+  open,
+  onToggle,
+  onNavigate,
+}: {
+  group: NavGroup;
+  open: boolean;
+  onToggle: () => void;
+  onNavigate?: () => void;
+}) {
+  const regionId = `rail-group-${group.key}`;
+  const holdsPill = group.active && !open;
+  const state = holdsPill ? RAIL_ACTIVE : open ? RAIL_OPEN : RAIL_IDLE;
+  const hiddenBadge = !open ? group.pages.reduce((n, p) => n + (p.badge ?? 0), 0) : 0;
+  const toggleLabel = `${open ? "Ocultar" : "Mostrar"} páginas de ${group.label}`;
+  return (
+    <div className="flex flex-col">
+      {group.homeHref ? (
+        <div className={`${RAIL_ROW} ${RAIL_H} ${state}`}>
+          <Link
+            href={group.homeHref}
+            onClick={onNavigate}
+            aria-current={group.homeActive && !open ? "page" : group.active ? "true" : undefined}
+            className="flex min-w-0 flex-1 items-center gap-2.5 self-stretch rounded-[10px] pl-2.5"
+          >
+            <span className="shrink-0" aria-hidden>
+              {group.icon}
+            </span>
+            <span className="min-w-0 flex-1 truncate">{group.label}</span>
+          </Link>
+          <button
+            type="button"
+            onClick={onToggle}
+            aria-expanded={open}
+            aria-controls={regionId}
+            aria-label={toggleLabel}
+            title={toggleLabel}
+            className={`mr-1 flex size-[30px] shrink-0 items-center justify-center rounded-lg max-xl:mr-0 max-xl:size-11 ${
+              holdsPill ? "hover:bg-white/15" : "hover:bg-sidebar-hover"
+            }`}
+          >
+            <Chevron open={open} />
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={onToggle}
+          aria-expanded={open}
+          aria-controls={regionId}
+          aria-current={group.active ? "true" : undefined}
+          className={`${RAIL_ROW} ${RAIL_H} gap-2.5 pl-2.5 pr-0.5 text-left ${state}`}
+        >
+          <span className="shrink-0" aria-hidden>
+            {group.icon}
+          </span>
+          <span className="min-w-0 flex-1 truncate">{group.label}</span>
+          {hiddenBadge > 0 ? <CountPill value={hiddenBadge} onActive={holdsPill} label={`${hiddenBadge} anuncios sin configurar`} /> : null}
+          <span className="-ml-1.5 mr-0.5 flex w-3.5 shrink-0 items-center justify-center">
+            <Chevron open={open} />
+          </span>
+        </button>
+      )}
+      <div className="u-rail-group" data-open={open}>
+        <div id={regionId} role="group" aria-label={group.label} inert={!open}>
+          <div className="u-rail-group-inner relative flex flex-col gap-px pb-1 pt-px">
+            <span aria-hidden className="absolute bottom-2 left-[26px] top-1 w-px bg-sidebar-border" />
+            {group.pages.map((pg) => (
+              <Link
+                key={pg.key}
+                href={pg.href}
+                onClick={onNavigate}
+                aria-current={pg.active ? "page" : undefined}
+                className={`${RAIL_ROW} ${RAIL_SUB_H} pl-[37px] pr-1.5 ${pg.active ? RAIL_ACTIVE : RAIL_SUB_IDLE}`}
+              >
+                <span className="min-w-0 flex-1 truncate">{pg.label}</span>
+                {pg.badge ? <CountPill value={pg.badge} onActive={pg.active} label={`${pg.badge} anuncios sin configurar`} /> : null}
+              </Link>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Collapsed rail: a group is ONE icon; pressing it opens a small floating menu with the
+ * group's name and pages (Escape, an outside click or choosing a page closes it, and focus
+ * returns to the icon). The icon carries the red pill while the current page is inside.
+ */
+function CollapsedGroup({
+  group,
+  open,
+  setOpen,
+}: {
+  group: NavGroup;
+  open: boolean;
+  setOpen: (open: boolean) => void;
+}) {
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const btnRef = useRef<HTMLButtonElement>(null);
+  const panelId = `rail-fly-${group.key}`;
+  useEffect(() => {
+    if (!open) return;
+    const close = (refocus: boolean) => {
+      setOpen(false);
+      if (refocus) btnRef.current?.focus();
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.stopPropagation();
+        close(true);
+      }
+    };
+    const onDown = (e: MouseEvent) => {
+      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) close(false);
+    };
+    document.addEventListener("keydown", onKey, true);
+    document.addEventListener("mousedown", onDown);
+    return () => {
+      document.removeEventListener("keydown", onKey, true);
+      document.removeEventListener("mousedown", onDown);
+    };
+  }, [open, setOpen]);
+  return (
+    <div ref={wrapRef} className="relative">
+      <button
+        ref={btnRef}
+        type="button"
+        onClick={() => setOpen(!open)}
+        aria-expanded={open}
+        aria-controls={panelId}
+        aria-label={group.label}
+        aria-current={group.active ? "true" : undefined}
+        data-tip={open ? undefined : group.label}
+        className={`${RAIL_ROW} ${RAIL_H} u-rail-tip w-[calc(100%-1rem)] justify-center px-0 ${group.active ? RAIL_ACTIVE : open ? RAIL_OPEN : RAIL_IDLE}`}
+      >
+        <span className="shrink-0" aria-hidden>
+          {group.icon}
+        </span>
+      </button>
+      {open ? (
+        <div
+          id={panelId}
+          role="group"
+          aria-label={group.label}
+          className="absolute left-full top-0 z-50 ml-2 min-w-52 rounded-xl border border-line bg-popover p-1.5 shadow-[var(--shadow-float)]"
+        >
+          <p className="px-2.5 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted">{group.label}</p>
+          {group.pages.map((pg) => (
+            <Link
+              key={pg.key}
+              href={pg.href}
+              onClick={() => setOpen(false)}
+              aria-current={pg.active ? "page" : undefined}
+              className={`flex min-h-[34px] items-center rounded-lg px-2.5 text-[13.5px] ${
+                pg.active ? "bg-nav-active font-semibold text-white" : "text-foreground hover:bg-subtle"
+              }`}
+            >
+              <span className="min-w-0 flex-1 truncate">{pg.label}</span>
+              {pg.badge ? <CountPill value={pg.badge} onActive={pg.active} label={`${pg.badge} anuncios sin configurar`} /> : null}
+            </Link>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function BlockDivider({ collapsed }: { collapsed: boolean }) {
+  return <span aria-hidden className={`block h-px bg-sidebar-border ${collapsed ? "mx-3 my-1.5" : "mx-5 my-1.5"}`} />;
+}
+
+function SectionHeader({ label, collapsed, first, divider = false }: { label: string; collapsed: boolean; first: boolean; divider?: boolean }) {
+  if (collapsed || divider) return first ? null : <BlockDivider collapsed={collapsed} />;
+  // 18px of side padding to line the label up with the row TEXT.
   return <p className={`u-th-sidebar px-[18px] pb-1.5 ${first ? "pt-0.5" : "pt-4"}`}>{label}</p>;
 }
 
@@ -300,12 +580,15 @@ function Avatar({ initial }: { initial: string }) {
   return (
     <span
       aria-hidden
-      className="u-mono flex size-[26px] shrink-0 items-center justify-center rounded-lg border border-sidebar-border bg-sidebar-border text-[0.625rem] font-semibold text-sidebar-fg"
+      className="flex size-[30px] shrink-0 items-center justify-center rounded-full bg-sidebar-tile text-[11px] font-semibold text-sidebar-fg"
     >
       {initial}
     </span>
   );
 }
+
+/** Who is signed in, in the business's words (the footer's second line). */
+const ACCESS_LABEL: Record<string, string> = { agency: "Agencia", owner: "Dueño", setter: "Recepción", staff: "Profesional" };
 
 interface Account {
   /** Display name — the footer's primary label (an email is a fallback, not a label). */
@@ -317,22 +600,92 @@ interface Account {
   canSwitchClients: boolean;
 }
 
+/** Accent- and case-insensitive match («pagina» finds «Página de reservas»). */
+const fold = (v: string) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLocaleLowerCase("es");
+
+/**
+ * The section search (top of the rail): narrows the rail to the sections and pages whose
+ * name contains the text, unfolding every group with a match. Navigation only — it lists
+ * what the rail already shows this person (the same permission-filtered model), nothing
+ * more. Enter opens the first result; Escape clears.
+ */
+function filterSections(sections: NavSection[], agency: NavItem | null, q: string) {
+  const nq = fold(q.trim());
+  if (!nq) return { sections, agency, first: null as string | null, count: -1 };
+  let first: string | null = null;
+  let count = 0;
+  const out = sections
+    .map((sec) => ({
+      ...sec,
+      entries: sec.entries.flatMap((e): NavEntry[] => {
+        if (e.kind === "link") {
+          if (!fold(e.label).includes(nq)) return [];
+          first ??= e.href;
+          count += 1;
+          return [e];
+        }
+        const pages = fold(e.label).includes(nq) ? e.pages : e.pages.filter((pg) => fold(pg.label).includes(nq));
+        if (pages.length === 0) return [];
+        first ??= pages[0].href;
+        count += pages.length;
+        return [{ ...e, pages }];
+      }),
+    }))
+    .filter((sec) => sec.entries.length > 0);
+  const ag = agency && fold(agency.label).includes(nq) ? agency : null;
+  if (ag) {
+    first ??= ag.href;
+    count += 1;
+  }
+  return { sections: out, agency: ag, first, count };
+}
+
 /** The rail contents (nav + fixed account footer), shared by the desktop rail and
  * the mobile drawer. `collapsed` only ever true on desktop. */
 function RailBody({
   sections,
+  agency,
+  pathname,
   collapsed,
   account,
   homeHref,
   onNavigate,
+  searchable = false,
 }: {
   sections: NavSection[];
+  /** Módulos — the agency's own tool, kept apart at the bottom of the rail. */
+  agency: NavItem | null;
+  pathname: string;
   collapsed: boolean;
   account: Account;
   homeHref: string;
   onNavigate?: () => void;
+  /** Show the section search (inside a client, where the rail has groups). */
+  searchable?: boolean;
 }) {
   const [acctOpen, setAcctOpen] = useState(false);
+  const router = useRouter();
+  const { toggle } = useSidebar();
+  // The search text belongs to the page it was typed on: navigating clears it.
+  const [searchState, setSearchState] = useState<{ path: string; q: string }>({ path: pathname, q: "" });
+  const q = searchState.path === pathname ? searchState.q : "";
+  const setQ = (v: string) => setSearchState({ path: pathname, q: v });
+  const searchRef = useRef<HTMLInputElement | null>(null);
+  // Collapsed → the search icon expands the rail; the field takes focus once it mounts.
+  const focusOnMount = useRef(false);
+  const shown = filterSections(sections, agency, searchable ? q : "");
+  const searching = shown.count >= 0;
+  // ONE group open at a time. The open group FOLLOWS THE URL: arriving anywhere (also by a
+  // direct link) opens the section that holds the page; a toggle only lasts until the next
+  // navigation. Derived during render — no effect re-syncing state.
+  const activeGroup =
+    sections.flatMap((sec) => sec.entries).find((e): e is { kind: "group" } & NavGroup => e.kind === "group" && e.active)?.key ?? null;
+  const [openState, setOpenState] = useState<{ path: string; open: string | null }>({ path: pathname, open: activeGroup });
+  const openGroup = openState.path === pathname ? openState.open : activeGroup;
+  const toggleGroup = (key: string) => setOpenState({ path: pathname, open: openGroup === key ? null : key });
+  // Collapsed: which group's floating menu is showing (closes on navigation too).
+  const [flyState, setFlyState] = useState<{ path: string; key: string | null }>({ path: pathname, key: null });
+  const flyKey = flyState.path === pathname ? flyState.key : null;
   const footerRef = useRef<HTMLDivElement>(null);
 
   // Close the account popover on outside click / Escape.
@@ -355,43 +708,120 @@ function RailBody({
   const label = account.name?.trim() || account.email;
   const initial = (label.trim().slice(0, 2) || "?").toUpperCase();
 
+  const renderEntry = (entry: NavEntry) => {
+    if (entry.kind === "group") {
+      if (searching && !collapsed) {
+        return <NavGroupRow key={entry.key} group={entry} open onToggle={() => {}} onNavigate={onNavigate} />;
+      }
+      return collapsed ? (
+        <CollapsedGroup
+          key={entry.key}
+          group={entry}
+          open={flyKey === entry.key}
+          setOpen={(o) => setFlyState({ path: pathname, key: o ? entry.key : null })}
+        />
+      ) : (
+        <NavGroupRow key={entry.key} group={entry} open={openGroup === entry.key} onToggle={() => toggleGroup(entry.key)} onNavigate={onNavigate} />
+      );
+    }
+    return entry.countEndpoint ? (
+      <InboxTabLink
+        key={entry.key}
+        href={entry.href}
+        active={entry.active}
+        countEndpoint={entry.countEndpoint}
+        label={entry.label}
+        icon={entry.icon}
+        collapsed={collapsed}
+        onNavigate={onNavigate}
+      />
+    ) : (
+      <NavLink key={entry.key} item={entry} collapsed={collapsed} onNavigate={onNavigate} />
+    );
+  };
+
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <Brand homeHref={homeHref} collapsed={collapsed} onNavigate={onNavigate} />
+      {searchable && !collapsed ? (
+        <div className="shrink-0 px-2 pb-1.5">
+          <label className="u-focus flex h-8 items-center gap-2 rounded-[9px] bg-sidebar-field px-2.5 text-sidebar-section max-xl:h-11">
+            <svg viewBox="0 0 16 16" aria-hidden className="size-3.5 shrink-0" fill="none">
+              <circle cx="7" cy="7" r="4.5" stroke="currentColor" strokeWidth="1.5" />
+              <path d="m10.5 10.5 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <input
+              ref={(el) => {
+                searchRef.current = el;
+                if (el && focusOnMount.current) {
+                  focusOnMount.current = false;
+                  el.focus();
+                }
+              }}
+              type="search"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && shown.first) {
+                  e.preventDefault();
+                  setQ("");
+                  onNavigate?.();
+                  router.push(shown.first);
+                } else if (e.key === "Escape" && q) {
+                  e.stopPropagation();
+                  setQ("");
+                }
+              }}
+              placeholder="Buscar sección"
+              aria-label="Buscar sección del menú"
+              className="min-w-0 flex-1 bg-transparent text-[13px] text-sidebar-fg outline-none placeholder:text-sidebar-section [&::-webkit-search-cancel-button]:hidden"
+            />
+          </label>
+          <span role="status" className="sr-only">
+            {searching ? (shown.count === 0 ? "Sin resultados" : `${shown.count} resultados`) : ""}
+          </span>
+        </div>
+      ) : null}
       <nav
         aria-label="Primary"
-        className={`flex min-h-0 flex-1 flex-col overflow-y-auto py-4 ${collapsed ? "px-2" : "px-0"}`}
+        className={`flex min-h-0 flex-1 flex-col pb-2.5 pt-1 [scrollbar-width:none] ${collapsed ? "overflow-visible" : "overflow-y-auto"}`}
       >
-        {sections.map((section, i) => (
-          <div key={section.label} role="group" aria-label={section.label} className="flex flex-col">
-            <SectionHeader label={section.label} collapsed={collapsed} first={i === 0} />
-            {section.items.map((item) =>
-              item.countEndpoint ? (
-                <InboxTabLink
-                  key={item.key}
-                  href={item.href}
-                  active={item.active}
-                  countEndpoint={item.countEndpoint}
-                  label={item.label}
-                  icon={item.icon}
-                  collapsed={collapsed}
-                  onNavigate={onNavigate}
-                />
-              ) : (
-                <NavLink key={item.key} item={item} collapsed={collapsed} onNavigate={onNavigate} />
-              ),
-            )}
+        {searchable && collapsed ? (
+          <button
+            type="button"
+            onClick={() => {
+              focusOnMount.current = true;
+              toggle();
+            }}
+            aria-label="Buscar sección del menú"
+            data-tip="Buscar sección"
+            className={`${RAIL_ROW} ${RAIL_H} u-rail-tip mb-1 w-[calc(100%-1rem)] justify-center px-0 ${RAIL_IDLE}`}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden className="size-4 shrink-0" fill="none">
+              <circle cx="7" cy="7" r="4.5" stroke="currentColor" strokeWidth="1.5" />
+              <path d="m10.5 10.5 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+        ) : null}
+        {searching && shown.count === 0 ? <p className="px-[18px] py-2 text-[13px] text-sidebar-section">Sin resultados</p> : null}
+        {shown.sections.map((section, i) => (
+          <div key={section.label} role="group" aria-label={section.label} className="flex flex-col gap-px">
+            <SectionHeader label={section.label} collapsed={collapsed} first={i === 0} divider={section.divider} />
+            {section.entries.map(renderEntry)}
           </div>
         ))}
+        {shown.agency ? (
+          // Apart, at the foot of the nav: the agency's tool, never the business's.
+          <div role="group" aria-label="Agencia" className="mt-auto flex flex-col pt-3">
+            <NavLink item={shown.agency} collapsed={collapsed} onNavigate={onNavigate} />
+          </div>
+        ) : null}
       </nav>
 
       {/* Fixed account footer — opens the SHARED account menu (same one the header uses).
-          Flyout above when expanded, to the right when collapsed.
-
-          It KEEPS its top rule, unlike the brand above: this one separates navigation from
-          the account, which is a real boundary — above it is where you can go, below it is
-          who you are. */}
-      <div ref={footerRef} className={`relative shrink-0 border-t border-sidebar-border ${collapsed ? "p-2" : "py-2"}`}>
+          Flyout above when expanded, to the right when collapsed. No rule above it: the
+          rail is one continuous ground (proposal), the spacing is the separation. */}
+      <div ref={footerRef} className={`relative shrink-0 ${collapsed ? "p-2 pb-3" : "pb-3 pt-1"}`}>
         <button
           type="button"
           onClick={() => setAcctOpen((o) => !o)}
@@ -416,9 +846,9 @@ function RailBody({
                   render on top of the avatar. minmax(0,1fr) lets it shrink below its content
                   width, which is what makes truncate work. */}
               <span className="flex min-w-0 flex-col overflow-hidden">
-                <span className="truncate text-[0.8125rem] font-semibold leading-tight text-sidebar-fg">{label}</span>
-                <span className="u-mono truncate text-[0.625rem] uppercase leading-tight tracking-wide text-sidebar-section">
-                  {account.accessLabel ?? account.role}
+                <span className="truncate text-[13px] font-medium leading-tight text-sidebar-fg">{label}</span>
+                <span className="truncate text-[11.5px] leading-tight text-sidebar-section">
+                  {[ACCESS_LABEL[account.accessLabel ?? "agency"], account.clientLabel].filter(Boolean).join(" · ")}
                 </span>
               </span>
               {/* The disclosure caret (design) — the footer opens the account menu. */}
@@ -454,20 +884,22 @@ function RailBody({
 /**
  * Left navigation, below the full-width header.
  *
- * INSIDE A CLIENT the rail is grouped by category (final visual design):
- *   WORKSPACE     → Workflows (the client's workflow CONTEXT) then Analytics (the
- *                   scope-aware analytics surface — aggregate, or the selected workflow).
- *   CONVERSATIONS → Inbox — the client-level UNIFIED inbox with a live AGGREGATED
- *                   pending badge; never nested under a workflow.
- *   CRM           → Contacts (iff the crm module is enabled).
- *   SCHEDULING    → Agenda, Staff, Scheduling settings (iff the module is enabled).
- *   ADMINISTRATION (owner/admin only) → Team, and Modules (hidden for the real
- *                   default/"Unassigned" client, which can't have modules).
- * NO individual workflow names appear in the rail — switching workflows is the
- * header's job (the workflow switcher) and the Workflows list page.
+ * INSIDE A CLIENT (proposal "Mismo sidebar, tres bloques", lib/sectionNav.ts) — three
+ * blocks split by a hairline, no headings:
+ *   Operación     Inbox (live pending count), Contactos, Agenda ▸ Calendario · Equipo ·
+ *                 Horarios y ausencias (pressing «Agenda» opens the calendar; its chevron
+ *                 unfolds the pages)
+ *   Negocio       Catálogo ▸, Presencia y marketing ▸, Dashboard de valor
+ *   Herramientas  Configuración ▸, Automatizaciones ▸
+ *   Módulos       apart at the foot, AGENCIA — agency-only plumbing.
+ * One group open at a time; the open group follows the URL (a direct link opens its
+ * section). The current page is the red pill; if its group is closed the pill moves to
+ * the group, so "where am I" never disappears. Every row keeps its own module key and
+ * server gate, and a section with no visible page is not rendered. NO individual
+ * workflow names appear in the rail — switching workflows is the header's job.
  *
- * OUTSIDE A CLIENT: owner/admin get Hub + Clients & Workflows + Scheduling admin; a
- * member gets a link back to their client. Members never see Team.
+ * OUTSIDE A CLIENT: owner/admin get Clientes y workflows; a member gets a short list back
+ * into their client. Members never see Usuarios y accesos of another client.
  *
  * Three responsive states: full rail (≥md), collapsed icon-only rail (≥md, toggled),
  * and an off-canvas drawer (<md). A fixed footer opens the shared account menu.
@@ -502,19 +934,27 @@ export function AppSidebar({
   clientRole: "owner" | "setter" | "staff" | null;
 }) {
   const pathname = usePathname();
-  const { collapsed, mobileOpen, setMobileOpen } = useSidebar();
+  const { collapsed, mobileOpen, setMobileOpen, setCollapsed } = useSidebar();
   const { scopeFor } = useScope();
 
-  // Escape closes the mobile drawer (the listener lives in an effect; it only calls
-  // setState from an event callback, never synchronously in the effect body).
+  // ONE-TIME carry-over of a collapsed preference saved before the cookie existed
+  // (lib/sidebarCollapsed.ts). It runs HERE — in an effect of the rail itself, i.e. after
+  // the rail has hydrated against the server HTML — never during hydration, which is
+  // what used to break it. An explicit cookie always wins over the legacy value.
   useEffect(() => {
-    if (!mobileOpen) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setMobileOpen(false);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [mobileOpen, setMobileOpen]);
+    if (hasSidebarCollapsedCookie(document.cookie)) return;
+    let legacy: string | null = null;
+    try {
+      legacy = window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_KEY);
+    } catch {
+      return;
+    }
+    if (legacy === "1") setCollapsed(true);
+  }, [setCollapsed]);
+
+  // The phone/tablet menu is a modal drawer: focus moves in, Tab stays inside, Escape
+  // closes it and focus returns to the control that opened it (useTrappedPanel).
+  const drawerRef = useTrappedPanel({ active: mobileOpen, onClose: () => setMobileOpen(false) });
 
   if (AUTH_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
     return null;
@@ -522,13 +962,9 @@ export function AppSidebar({
 
   const clientId = parseClientId(pathname);
   const isMember = memberClientId !== null;
-  // Brand target: the Hub for owner/admin; a member has no Hub access, so their
-  // brand links to their own client (mirrors the header's memberLandingHref).
-  const homeHref = memberClientId
-    ? clientRole === "staff"
-      ? `/clients/${memberClientId}/scheduling/agenda`
-      : `/clients/${memberClientId}/workflows`
-    : "/";
+  // Brand target: the Hub for owner/admin; a member has no Hub access, so their brand
+  // links to their own landing — the same rule as the server bounce (lib/landing.ts).
+  const homeHref = memberClientId ? memberLandingPath(memberClientId, clientRole) : "/";
   const account: Account = {
     name,
     email,
@@ -540,206 +976,79 @@ export function AppSidebar({
 
   // Build the section model for the current context.
   let sections: NavSection[];
+  let agency: NavItem | null = null;
+  const links = (items: NavItem[]): NavEntry[] => items.map((it) => ({ kind: "link" as const, ...it }));
   if (clientId) {
-    const moduleKeys = enabledModules[clientId] ?? [];
-    const c = (p: string) => `/clients/${clientId}${p}`;
-    // Scope-aware hrefs (Phase W-1): both items point at the CURRENT workflow scope
-    // read from context — Executions/Analytics of the selected workflow, or the list/
-    // aggregate when scope is 'all'. Both sections live under /workflows/…, so the
-    // active split keys off whether the path is an analytics route.
-    const scope = scopeFor(clientId);
-    const onWorkflows = pathname.startsWith(c("/workflows"));
-    // Analytics is the client's VALUE dashboard (/clients/<c>/analytics). The technical
-    // execution analytics of the workflows (/workflows/<scope>/analytics) belong to the
-    // Workflows row, reached from its Ejecuciones | Analytics tabs.
-    const onAnalytics = pathname.startsWith(c("/analytics"));
-    // WHAT THIS login may see/manage in this client context (mirrors the server; hides
-    // controls the viewer can't use so no empty/broken page ever appears in the rail):
-    //   canSeeGeneral  — Inbox / Contacts / Agenda: the agency, or an OWNER or SETTER of
-    //                    THIS client. (Staff is handled separately: agenda only.)
-    //   canSeeInsights — Workflows / Analytics / Reuniones: the agency or the OWNER only —
-    //                    a SETTER is excluded (its job is the chats, not the numbers).
-    //   canManageThisClient — settings, roster, custom fields, team: the agency or OWNER.
-    const forOwnClient = memberClientId !== null && clientId === memberClientId;
-    const canSeeGeneral = !isMember || ((clientRole === "owner" || clientRole === "setter") && forOwnClient);
-    const canSeeInsights = !isMember || (clientRole === "owner" && forOwnClient);
-    const canManageThisClient = !isMember || (clientRole === "owner" && forOwnClient);
-    if (clientRole === "staff") {
-      // STAFF: their own agenda, and nothing else.
-      sections = [
-        {
-          label: SCHEDULING_SECTION,
-          items: [
-            {
-              key: "agenda",
-              label: "My schedule",
-              href: c("/scheduling/agenda"),
-              icon: Icon.agenda,
-              active: pathname.startsWith(c("/scheduling/agenda")),
-            },
-          ],
-        },
-      ];
-    } else {
-      sections = [];
-      // WORKSPACE — Workflows + Analytics (+ Reuniones) are INSIGHTS: agency/owner only, so
-      // a Setter never sees them. Inbox is the attention queue — shown to anyone with
-      // general access (the Setter included). The section renders only if it has items.
-      const workspace: NavItem[] = [];
-      if (canSeeInsights) {
-        workspace.push(
-          {
-            key: "workflows",
-            label: "Workflows",
-            href: scopeHref(clientId, "executions", scope),
-            icon: Icon.workflows,
-            active: onWorkflows,
-          },
-          {
-            key: "analytics",
-            label: "Analytics",
-            href: c("/analytics"),
-            icon: Icon.overview,
-            active: onAnalytics,
-          },
-        );
+    // The proposal's three blocks — Operación · Negocio · Herramientas — split by a
+    // hairline, plus Módulos apart for the agency. A section with one visible page is a
+    // direct link; with none it is not rendered. The flags inside buildSections are the
+    // ones this rail always used (general / manage / insights, the scheduling module, the
+    // default client); every page still gates itself on the server.
+    const here = locate(clientId, pathname);
+    const model = buildSections({
+      clientId,
+      modules: enabledModules[clientId] ?? [],
+      isAgency: !isMember,
+      clientRole,
+      memberClientId,
+      defaultClientId,
+      workflowScope: scopeFor(clientId),
+    });
+    const ads = adCounts[clientId] ?? 0;
+    const toEntry = (sec: ModelSection): NavEntry => {
+      if (sec.kind === "group") {
+        return {
+          kind: "group",
+          key: sec.id,
+          label: sec.label,
+          icon: SECTION_ICON[sec.id],
+          active: here?.section === sec.id,
+          homeHref: sec.homeHref,
+          homeActive: here?.section === sec.id && sec.pages.some((pg) => pg.href === sec.homeHref && pg.id === here.page),
+          pages: sec.pages.map((pg) => ({
+            key: pg.id,
+            label: pg.label,
+            href: pg.href,
+            active: here?.section === sec.id && here.page === pg.id,
+            badge: pg.id === "campaigns" ? ads : undefined,
+          })),
+        };
       }
-      if (canSeeGeneral && moduleKeys.includes("inbox")) {
-        workspace.push({
-          key: "inbox",
-          label: "Inbox",
-          href: c("/inbox"),
-          icon: Icon.inbox,
-          active: pathname.startsWith(c("/inbox")),
-          countEndpoint: `/api/inbox/${clientId}/pending-count`,
-        });
-      }
-      if (canSeeInsights && moduleKeys.includes("meetings")) {
-        workspace.push({
-          key: "meetings",
-          label: "Reuniones",
-          href: c("/reuniones"),
-          icon: Icon.meetings,
-          active: pathname.startsWith(c("/reuniones")),
-        });
-      }
-      if (workspace.length > 0) sections.push({ label: "Workspace", items: workspace });
-      // CRM — Contacts for owner/setter/agency; Custom fields only for those who can
-      // MANAGE the client (owner or agency). Field mappings/plumbing are agency-only,
-      // handled elsewhere.
-      if (moduleKeys.includes("crm") && canSeeGeneral) {
-        const onFields = pathname.startsWith(c("/contacts/fields"));
-        const crm: NavItem[] = [
-          {
-            key: "contacts",
-            label: "Contacts",
-            href: c("/contacts"),
-            icon: Icon.contacts,
-            active: pathname.startsWith(c("/contacts")) && !onFields,
-          },
-        ];
-        if (canManageThisClient) {
-          crm.push({
-            key: "contact-fields",
-            label: "Custom fields",
-            href: c("/contacts/fields"),
-            icon: Icon.modules,
-            active: onFields,
-          });
-        }
-        sections.push({ label: "CRM", items: crm });
-      }
-      // SCHEDULING — Agenda for anyone with scheduling access; the roster + settings only
-      // for those who can manage the client (owner or agency).
-      if (moduleKeys.includes("scheduling")) {
-        const scheduling: NavItem[] = [
-          { key: "agenda", label: "Agenda", href: c("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(c("/scheduling/agenda")) },
-        ];
-        if (canManageThisClient && clientId !== defaultClientId) {
-          scheduling.push({
-            key: "staff",
-            label: "Staff",
-            href: c("/scheduling/staff"),
-            icon: Icon.team,
-            active: pathname.startsWith(c("/scheduling/staff")),
-          });
-          scheduling.push({
-            key: "scheduling-reviews",
-            label: "Reseñas",
-            href: c("/scheduling/reviews"),
-            icon: Icon.reviews,
-            active: pathname.startsWith(c("/scheduling/reviews")),
-          });
-          scheduling.push({
-            key: "scheduling-settings",
-            label: "Configuración de agenda",
-            href: c("/scheduling/admin"),
-            icon: Icon.schedulingAdmin,
-            active: pathname.startsWith(c("/scheduling/admin")),
-          });
-        }
-        sections.push({ label: "Scheduling", items: scheduling });
-      }
-      // CATALOG — "Productos": what the client sells. Shown to anyone with general access
-      // (owner/setter/agency — the Setter answers customers about products), never Staff.
-      if (moduleKeys.includes("catalog") && canSeeGeneral) {
-        sections.push({
-          label: "Catálogo",
-          items: [
-            {
-              key: "catalog",
-              label: "Productos",
-              href: c("/catalog"),
-              icon: Icon.catalog,
-              active: pathname.startsWith(c("/catalog")),
-            },
-          ],
-        });
-      }
-      // CAMPAÑAS — ads + campaigns. Shown to general access (owner/setter/agency — the Setter
-      // closes the leads the bot transfers), never Staff. A badge counts the unconfigured ads.
-      if (moduleKeys.includes("campaigns") && canSeeGeneral) {
-        sections.push({
-          label: "Campañas",
-          items: [
-            {
-              key: "campaigns",
-              label: "Campañas",
-              href: c("/campaigns"),
-              icon: Icon.campaigns,
-              active: pathname.startsWith(c("/campaigns")),
-              badge: adCounts[clientId] ?? 0,
-            },
-          ],
-        });
-      }
-      // ADMINISTRATION — Users & access for the client OWNER (and the agency); Modules is
-      // AGENCY-ONLY plumbing (a client can't toggle its own modules).
-      if (canManageThisClient) {
-        const admin: NavItem[] = [
-          { key: "team", label: "Users & access", href: c("/team"), icon: Icon.team, active: pathname.startsWith(c("/team")) },
-        ];
-        if (!isMember && clientId !== defaultClientId) {
-          admin.push({ key: "modules", label: "Modules", href: c("/modules"), icon: Icon.modules, active: pathname.startsWith(c("/modules")) });
-        }
-        sections.push({ label: "Administration", items: admin });
-      }
+      const lone = sec.pages[0];
+      return {
+        kind: "link",
+        key: sec.id,
+        label: sec.label,
+        href: sec.href,
+        icon: PAGE_ICON[lone.id] ?? SECTION_ICON[sec.id],
+        active: here?.section === sec.id,
+        countEndpoint: sec.id === "inbox" ? `/api/inbox/${clientId}/pending-count` : undefined,
+        badge: lone.id === "campaigns" ? ads : undefined,
+      };
+    };
+    const BLOCK_LABEL = { 1: "Operación", 2: "Negocio", 3: "Herramientas" } as const;
+    sections = ([1, 2, 3] as const)
+      .map((block) => ({ label: BLOCK_LABEL[block], entries: model.filter((x) => x.block === block).map(toEntry), divider: true }))
+      .filter((g) => g.entries.length > 0);
+    const modules = model.find((x) => x.id === "agency");
+    if (modules) {
+      agency = { key: "modules", label: "Módulos", href: modules.href, icon: Icon.modules, active: here?.section === "agency", tag: "AGENCIA" };
     }
   } else if (isMember) {
     // A member landed OFF their client path (e.g. root) — a small stand-in until they
-    // navigate in. Staff → agenda; SETTER → inbox (never analytics); owner → analytics.
+    // navigate in. Staff → agenda; SETTER → inbox (never insights); owner → Dashboard de valor.
     const m = (p: string) => `/clients/${memberClientId}${p}`;
     const memberModules = enabledModules[memberClientId] ?? [];
     const items: NavItem[] =
       clientRole === "staff"
-        ? [{ key: "agenda", label: "My schedule", href: m("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(m("/scheduling")) }]
+        ? [{ key: "agenda", label: "Mi agenda", href: m("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(m("/scheduling")) }]
         : clientRole === "setter"
           ? memberModules.includes("inbox")
             ? [{ key: "inbox", label: "Inbox", href: m("/inbox"), icon: Icon.inbox, active: pathname.startsWith(m("/inbox")), countEndpoint: `/api/inbox/${memberClientId}/pending-count` }]
             : []
-          : [{ key: "analytics", label: "Analytics", href: m("/analytics"), icon: Icon.overview, active: false }];
+          : [{ key: "analytics", label: "Dashboard de valor", href: m("/analytics"), icon: Icon.overview, active: false }];
     if (clientRole !== "staff" && memberModules.includes("crm")) {
-      items.push({ key: "contacts", label: "Contacts", href: m("/contacts"), icon: Icon.contacts, active: pathname.startsWith(m("/contacts")) });
+      items.push({ key: "contacts", label: "Contactos", href: m("/contacts"), icon: Icon.contacts, active: pathname.startsWith(m("/contacts")) });
     }
     if (clientRole !== "staff" && memberModules.includes("scheduling")) {
       items.push({ key: "agenda", label: "Agenda", href: m("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(m("/scheduling")) });
@@ -757,23 +1066,23 @@ export function AppSidebar({
         badge: adCounts[memberClientId] ?? 0,
       });
     }
-    sections = [{ label: "Client", items }];
+    sections = [{ label: "Tu negocio", entries: links(items) }];
   } else {
     // Owner/admin tenant level (the Hub) — ONLY global surfaces. Scheduling is NOT
     // here: sites/services/staff/hours belong to a specific client and are
-    // administered inside that client's workspace (SCHEDULING → Scheduling settings).
+    // administered inside that client's workspace.
     sections = [
       {
-        label: "Workspace",
-        items: [
+        label: "Agencia",
+        entries: links([
           {
             key: "clients",
-            label: "Clients & Workflows",
+            label: "Clientes y workflows",
             href: "/clients",
             icon: Icon.clients,
             active: pathname === "/clients" || pathname.startsWith("/clients/"),
           },
-        ],
+        ]),
       },
     ];
   }
@@ -789,7 +1098,7 @@ export function AppSidebar({
           collapsed ? "w-16" : ""
         }`}
       >
-        <RailBody sections={sections} collapsed={collapsed} account={account} homeHref={homeHref} />
+        <RailBody sections={sections} agency={agency} pathname={pathname} collapsed={collapsed} account={account} homeHref={homeHref} searchable={Boolean(clientId)} />
       </aside>
 
       {/* MOBILE drawer — off-canvas, over a backdrop. Always expanded content. */}
@@ -797,16 +1106,23 @@ export function AppSidebar({
         <div className="xl:hidden">
           <button
             type="button"
-            aria-label="Close menu"
+            aria-label="Cerrar menú"
             onClick={() => setMobileOpen(false)}
             className="fixed inset-0 z-40 bg-black/40"
           />
           <aside
-            aria-label="Sidebar"
-            className="fixed inset-y-0 left-0 z-50 flex w-64 flex-col border-r border-sidebar-border bg-sidebar-bg"
+            ref={drawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Menú"
+            tabIndex={-1}
+            className="fixed inset-y-0 left-0 z-50 flex w-[min(18rem,86vw)] flex-col bg-sidebar-bg shadow-[var(--shadow-float)]"
           >
             <RailBody
               sections={sections}
+              agency={agency}
+              pathname={pathname}
+              searchable={Boolean(clientId)}
               collapsed={false}
               account={account}
               homeHref={homeHref}
