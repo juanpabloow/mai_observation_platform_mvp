@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { authenticateHandoffRequest, handoffError, moduleDisabled, resolveWorkflowOr404 } from "@/lib/handoffApi";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
-import { readConversationContext } from "@worker/db/repositories/handoffContext.js";
+import { readConversationContext, readConversationOrigin } from "@worker/db/repositories/handoffContext.js";
 import { isSentinelIdentifier, isQuarantinedRef } from "@worker/identity/sentinel.js";
 
 export const dynamic = "force-dynamic";
@@ -46,5 +46,15 @@ export async function GET(req: Request): Promise<Response> {
     conversationRef: parsed.data.conversation_ref, throughMessageId: parsed.data.through_message_id,
   });
   if (!context) return noStore(handoffError(404, "not_found", "Conversation context not found."));
-  return noStore(Response.json(context));
+  // AT-3: attach the optional `origin` block (the ad's promise + the campaign brief) when the
+  // campaigns module is on and this conversation's contact has an ad touch inside the brief
+  // window. readConversationContext already applied every fail-closed rule, so computing origin
+  // on its resolved conversation_id inherits them. Absent → the response is byte-for-byte what it
+  // was before AT-3 (we return `context` itself, never a key set to null).
+  const origin = await readConversationOrigin({
+    tenantId: auth.auth.tenantId,
+    clientId: wf.clientId,
+    conversationId: context.conversation_id,
+  });
+  return noStore(Response.json(origin ? { ...context, origin } : context));
 }

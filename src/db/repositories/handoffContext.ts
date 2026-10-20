@@ -2,7 +2,8 @@ import { query } from '../client.js';
 import { isSentinelIdentifier, isQuarantinedRef } from '../../identity/sentinel.js';
 import {
   CONTEXT_MESSAGE_CHARS, CONTEXT_MESSAGE_LIMIT,
-  projectConversationContext, type ContextSnapshot,
+  projectConversationContext, projectConversationOrigin,
+  type ContextOrigin, type ContextSnapshot, type OriginSnapshot,
 } from '../../handoff/context.js';
 
 export interface ContextReadScope {
@@ -80,4 +81,62 @@ export async function readConversationContext(scope: ContextReadScope) {
       CONTEXT_MESSAGE_LIMIT + 1],
   );
   return result.rows[0] ? projectConversationContext(result.rows[0]) : null;
+}
+
+export interface OriginReadScope {
+  tenantId: string;
+  clientId: string;
+  /** The ALREADY-RESOLVED internal conversation id (from readConversationContext). */
+  conversationId: string;
+}
+
+/**
+ * AT-3 — the `origin` block for an already-resolved conversation. The caller resolves (and fully
+ * gates) the conversation with readConversationContext FIRST and passes the resulting
+ * conversation_id here, so every /context fail-closed rule (sentinel/quarantine refused, anchor
+ * proof, workflow + inbox scope) is inherited — this never runs for a conversation that failed
+ * them. Returns the block, or null when it must be absent:
+ *   - the campaigns module is OFF for the client (an EXISTS gate in SQL), OR
+ *   - the conversation's contact has no AD TOUCH inside the brief window.
+ *
+ * Decided by the TOUCH, never by origin_kind: an existing contact who clicks an ad keeps origin
+ * unknown/organic by design, yet that conversation came from the ad and must get the brief. The
+ * window is attribution_settings.brief_window_days (default 7). A TEST ad's touch is ignored
+ * unless it happened on THIS conversation (the conversation itself came from the test ad). The
+ * MOST RECENT qualifying touch wins. ctwa_clid and every external/internal id stay in the
+ * database — the projected block carries only what the bot needs.
+ */
+export async function readConversationOrigin(scope: OriginReadScope): Promise<ContextOrigin | null> {
+  const result = await query<OriginSnapshot>(
+    `WITH win AS (
+       SELECT COALESCE(
+         (SELECT brief_window_days FROM attribution_settings WHERE tenant_id = $1 AND client_id = $2),
+         7) AS days
+     )
+     SELECT a.source_type,
+            a.name AS ad_name, a.headline AS ad_headline, a.body AS ad_body, a.bot_note AS ad_bot_note,
+            c.name AS campaign_name, c.bot_brief AS campaign_bot_brief,
+            svc.id AS service_id, svc.name AS service_name,
+            promo.name AS promo_title, promo.description AS promo_description
+       FROM conversations conv
+       JOIN attribution_touches t
+         ON t.tenant_id = conv.tenant_id AND t.contact_id = conv.contact_id
+       JOIN ads a ON a.id = t.ad_id AND a.tenant_id = conv.tenant_id
+       CROSS JOIN win
+       LEFT JOIN campaigns c ON c.id = a.campaign_id AND c.tenant_id = conv.tenant_id
+       LEFT JOIN services svc ON svc.id = c.target_service_id AND svc.tenant_id = conv.tenant_id
+       LEFT JOIN promotions promo ON promo.id = c.promotion_id AND promo.tenant_id = conv.tenant_id
+      WHERE conv.id = $3 AND conv.tenant_id = $1 AND t.client_id = $2
+        AND t.occurred_at >= now() - make_interval(days => win.days)
+        -- a test ad counts ONLY when THIS conversation itself came from it.
+        AND (a.is_test = false OR t.conversation_id = $3)
+        -- the block only exists when the campaigns module is ON for the client.
+        AND EXISTS (SELECT 1 FROM client_modules cm
+                     WHERE cm.tenant_id = $1 AND cm.client_id = $2
+                       AND cm.module_key = 'campaigns' AND cm.enabled)
+      ORDER BY t.occurred_at DESC, t.id DESC
+      LIMIT 1`,
+    [scope.tenantId, scope.clientId, scope.conversationId],
+  );
+  return result.rows[0] ? projectConversationOrigin(result.rows[0]) : null;
 }

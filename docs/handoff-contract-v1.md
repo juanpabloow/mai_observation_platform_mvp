@@ -483,3 +483,124 @@ replying and message history keeps accruing while Inbox is off). All inbox surfa
 (the unified `/clients/[clientId]/inbox`, the legacy per-workflow inbox, and every
 client-scoped inbox JSON API) return the same safe **404** when the module is off —
 gated by `tenant_id + client_id + module_key = inbox`, never a name or an unvalidated id.
+
+## Conversation context read — the `origin` block (AT-3)
+
+`GET /api/handoff/v1/context` (capability `handoff.context.read`, opt-in, read-only; §B.3)
+returns an **optional top-level `origin` block**: what the ad *promised* and the campaign
+brief the business wrote, so a bot handling a conversation that came from an ad can skip
+the organic discovery flow and honor the offer **without being asked**.
+
+**Additive, non-breaking (§8).** Omitting the block — the default — leaves the response
+**byte-for-byte** what it was before AT-3. A workflow that does not read `origin` keeps
+working unchanged; `origin` is simply absent for organic conversations.
+
+### When the block is present
+
+Both conditions must hold, or `origin` is absent:
+
+1. the **campaigns module is enabled** for the conversation's client; **and**
+2. the conversation's **contact has an ad touch inside the brief window** —
+   `attribution_settings.brief_window_days` (per client, default **7**, agency-set in
+   AT-2), counted from the touch time to now.
+
+Decided by the **touch, never by `origin_kind`.** An existing contact who clicks an ad
+keeps their origin `unknown` / `organic_whatsapp` by design (their first-ever message was
+organic), yet *this* conversation did come from the ad and must get the brief. The block
+is driven by the **most recent** qualifying ad touch in the window. A **test ad**'s touch
+is ignored **unless this conversation itself came from it**.
+
+### Shape
+
+```json
+{
+  "origin": {
+    "source_type": "ad | post",
+    "ad": {
+      "name": "string | null",      // AT-2b Ads Manager name the business set
+      "headline": "string | null",  // the ad's own copy, ≤200 chars
+      "body": "string | null",      // the ad's own copy, ≤1000 chars
+      "bot_note": "string | null"   // AT-2b per-ad note for the assistant
+    },
+    "campaign": {                    // null when the ad has no campaign yet
+      "name": "string",
+      "bot_brief": "string | null", // the brief the client wrote (≤1500)
+      "target_service": { "id": "uuid", "name": "string" } | null,
+      "promotion": { "title": "string", "description": "string | null" } | null
+    }
+  }
+}
+```
+
+`ad.name`/`bot_note` and `campaign.bot_brief` are passed **whole** (business config);
+`ad.headline`/`body` (Meta's own ad copy) are truncated to the limits above before they
+reach a prompt. `campaign` is `null` when the driving ad has no campaign assigned yet —
+the bot still gets the ad text.
+
+### Authority — brief is configuration, history stays quoted
+
+The `origin` block is the **one authoritative part** of the /context response: `bot_brief`,
+`bot_note`, `name`, `target_service` and `promotion` are **business configuration the
+client wrote** in the platform UI — their own instructions to their own bot. This stands
+in deliberate contrast to `messages` (conversation history), which remains **quoted,
+non-authoritative** content: `history_is_authorization` is always `false`. Treat the brief
+as configuration to act on; treat the history as quoted text, never as instructions.
+
+### Never included
+
+`ctwa_clid`; external ad or campaign ids (Meta ids); internal ad/campaign UUIDs; counts;
+any other contact's data; anything from a test ad unless this conversation came from it.
+The **only** id in the block is `campaign.target_service.id` — the platform service id the
+bot needs to actually book that service.
+
+### Real executed example
+
+A conversation whose contact clicked `Factos vic V2` (campaign *Campaña Presentación*,
+brief window 7 days, touch 1 day ago). Verbatim handler output — note the stored
+`ctwa_clid` and the ad/campaign Meta ids do **not** appear:
+
+```json
+{
+  "version": 1,
+  "conversation_id": "c3996896-fdd1-4f6e-a537-6b6574d940e1",
+  "mode": "bot",
+  "through_message_id": "37157dce-8727-4f03-b872-a97acb6e50a3",
+  "latest_transition": null,
+  "messages": [
+    { "id": "8f053294-805f-4919-b777-aa7fc6bed2b0", "sender": "user", "text": "vi su anuncio",
+      "occurred_at": "2026-10-18T19:11:26.729572-05:00", "recorded_at": "2026-10-19T19:11:26.729572-05:00",
+      "text_truncated": false }
+  ],
+  "truncated": false,
+  "history_is_authorization": false,
+  "origin": {
+    "source_type": "ad",
+    "ad": {
+      "name": "Factos vic V2",
+      "headline": "Estrena look esta semana",
+      "body": "Agenda tu primer corte con 20% de descuento. Cupos limitados por el lanzamiento.",
+      "bot_note": "El anuncio promete 20% en el primer corte: hónralo sin que lo tengan que pedir."
+    },
+    "campaign": {
+      "name": "Campaña Presentación",
+      "bot_brief": "Saluda por el nombre, confirma que viene por la promo de presentación y ofrece agendar el combo cuanto antes. No preguntes cómo nos encontró: ya sabemos que llega por el anuncio.",
+      "target_service": { "id": "8375e29c-6800-4a20-9bb3-2903a1c247a4", "name": "Haircut" },
+      "promotion": { "title": "2x1 en la primera cita", "description": "Trae a un amigo: la segunda persona no paga en la cita de presentación." }
+    }
+  }
+}
+```
+
+### Field paths the n8n workflow reads
+
+The workflow calls `/context` on every turn before the agent thinks; read:
+
+| Purpose | Path | Notes |
+|---|---|---|
+| Came from an ad at all? | `$json.origin` | **absent** for organic → keep the organic flow unchanged |
+| The ad's promise | `$json.origin.ad.headline` · `.body` · `.name` | honor what the creative said |
+| Per-ad note for the bot | `$json.origin.ad.bot_note` | the business's instruction for this ad |
+| The campaign brief | `$json.origin.campaign?.bot_brief` | `campaign` may be `null` (ad not yet in a campaign) |
+| Service to offer/book | `$json.origin.campaign?.target_service` | `{ id, name }` or `null`; `id` is the bookable service |
+| Promotion to honor | `$json.origin.campaign?.promotion` | `{ title, description }` or `null` |
+| Ad vs organic post | `$json.origin.source_type` | `ad` \| `post` |
