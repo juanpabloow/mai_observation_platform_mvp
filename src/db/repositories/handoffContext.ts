@@ -105,6 +105,10 @@ export interface OriginReadScope {
  * unless it happened on THIS conversation (the conversation itself came from the test ad). The
  * MOST RECENT qualifying touch wins. ctwa_clid and every external/internal id stay in the
  * database — the projected block carries only what the bot needs.
+ *
+ * The campaign's promotion is surfaced ONLY while it is on offer (published + inside its booking
+ * window, the isOnOffer rule the public page uses); otherwise the block's promotion is null even
+ * though the campaign still names one — the bot must not pitch an offer a customer can't claim.
  */
 export async function readConversationOrigin(scope: OriginReadScope): Promise<ContextOrigin | null> {
   const result = await query<OriginSnapshot>(
@@ -125,7 +129,16 @@ export async function readConversationOrigin(scope: OriginReadScope): Promise<Co
        CROSS JOIN win
        LEFT JOIN campaigns c ON c.id = a.campaign_id AND c.tenant_id = conv.tenant_id
        LEFT JOIN services svc ON svc.id = c.target_service_id AND svc.tenant_id = conv.tenant_id
+       -- AT-3 promotion filter: only surface a promotion the bot can ACTUALLY honor right now —
+       -- published AND inside its booking window (mirrors isOnOffer / the public booking page). When
+       -- the campaign's promotion is paused/draft/archived or outside [bookable_from, bookable_until),
+       -- this LEFT JOIN yields NULLs, so projectConversationOrigin emits promotion: null while the rest
+       -- of the campaign block (brief, target_service) still reaches the bot. The bot never pitches an
+       -- offer a customer can't claim.
        LEFT JOIN promotions promo ON promo.id = c.promotion_id AND promo.tenant_id = conv.tenant_id
+         AND promo.status = 'published'
+         AND (promo.bookable_from IS NULL OR promo.bookable_from <= now())
+         AND (promo.bookable_until IS NULL OR promo.bookable_until > now())
       WHERE conv.id = $3 AND conv.tenant_id = $1 AND t.client_id = $2
         AND t.occurred_at >= now() - make_interval(days => win.days)
         -- a test ad counts ONLY when THIS conversation itself came from it.

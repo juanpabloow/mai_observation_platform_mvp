@@ -62,13 +62,23 @@ async function mkCampaign(s: Fixture, opts: {
   return r.id;
 }
 
-async function mkPromotion(s: Fixture, name: string, description: string | null): Promise<string> {
+/** Defaults to a PUBLISHED, window-open (on-offer) promotion — the only kind the origin block
+ *  surfaces. Pass status / a booking window to exercise the AT-3 promotion filter. */
+async function mkPromotion(
+  s: Fixture,
+  name: string,
+  description: string | null,
+  opts: { status?: 'draft' | 'published' | 'paused' | 'archived'; bookableFrom?: string | null; bookableUntil?: string | null } = {},
+): Promise<string> {
   const r = await one<{ id: string }>(
-    `INSERT INTO promotions (tenant_id, client_id, name, description, benefit_type) VALUES ($1,$2,$3,$4,'two_for_one') RETURNING id`,
-    [s.tenantId, s.clientId, name, description],
+    `INSERT INTO promotions (tenant_id, client_id, name, description, benefit_type, status, bookable_from, bookable_until)
+       VALUES ($1,$2,$3,$4,'two_for_one',$5,$6::timestamptz,$7::timestamptz) RETURNING id`,
+    [s.tenantId, s.clientId, name, description, opts.status ?? 'published', opts.bookableFrom ?? null, opts.bookableUntil ?? null],
   );
   return r.id;
 }
+
+const daysFromNow = (n: number): string => new Date(Date.now() + n * 86400000).toISOString();
 
 /** A touch N hours ago (its own message), on this conversation unless overridden. */
 async function mkTouch(s: Fixture, opts: { adId: string; agoHours: number; conversationId?: string; contactId?: string; ctwaClid?: string }): Promise<string> {
@@ -121,6 +131,52 @@ test('AT-3: an ad touch inside the window attaches the full origin block', async
       promotion: { title: 'Lanzamiento', description: '20% off la primera cita' },
     },
   });
+});
+
+test('AT-3 promotion filter: a published promotion within an explicit open window is surfaced', async () => {
+  const s = await fixture();
+  const promo = await mkPromotion(s, 'En vigencia', 'válida ahora', { status: 'published', bookableFrom: daysFromNow(-5), bookableUntil: daysFromNow(5) });
+  const camp = await mkCampaign(s, { name: 'C', botBrief: 'b', promotionId: promo });
+  const ad = await mkAd(s, { name: 'A', campaignId: camp });
+  await mkTouch(s, { adId: ad, agoHours: 1 });
+  const body = await (await call(s, await anchor(s))).json();
+  assert.deepEqual(body.origin.campaign.promotion, { title: 'En vigencia', description: 'válida ahora' });
+});
+
+for (const status of ['draft', 'paused', 'archived'] as const) {
+  test(`AT-3 promotion filter: a ${status} promotion is NOT pitched (promotion null, campaign intact)`, async () => {
+    const s = await fixture();
+    const promo = await mkPromotion(s, 'No vigente', 'desc', { status });
+    const camp = await mkCampaign(s, { name: 'Camp', botBrief: 'brief', targetServiceId: s.serviceHaircut, promotionId: promo });
+    const ad = await mkAd(s, { name: 'A', campaignId: camp });
+    await mkTouch(s, { adId: ad, agoHours: 1 });
+    const body = await (await call(s, await anchor(s))).json();
+    assert.ok(body.origin.campaign, 'the campaign block still reaches the bot');
+    assert.equal(body.origin.campaign.promotion, null, `a ${status} promo is filtered out`);
+    assert.deepEqual(body.origin.campaign.target_service, { id: s.serviceHaircut, name: 'Haircut' }, 'the rest of the campaign is intact');
+  });
+}
+
+test('AT-3 promotion filter: a published promotion BEFORE its booking window is not pitched', async () => {
+  const s = await fixture();
+  const promo = await mkPromotion(s, 'Aún no', 'desc', { status: 'published', bookableFrom: daysFromNow(3) });
+  const camp = await mkCampaign(s, { name: 'C', botBrief: 'b', promotionId: promo });
+  const ad = await mkAd(s, { name: 'A', campaignId: camp });
+  await mkTouch(s, { adId: ad, agoHours: 1 });
+  const body = await (await call(s, await anchor(s))).json();
+  assert.ok(body.origin.campaign, 'campaign still present');
+  assert.equal(body.origin.campaign.promotion, null);
+});
+
+test('AT-3 promotion filter: a published promotion AFTER its booking window has closed is not pitched', async () => {
+  const s = await fixture();
+  const promo = await mkPromotion(s, 'Ya cerró', 'desc', { status: 'published', bookableUntil: daysFromNow(-1) });
+  const camp = await mkCampaign(s, { name: 'C', botBrief: 'b', promotionId: promo });
+  const ad = await mkAd(s, { name: 'A', campaignId: camp });
+  await mkTouch(s, { adId: ad, agoHours: 1 });
+  const body = await (await call(s, await anchor(s))).json();
+  assert.ok(body.origin.campaign, 'campaign still present');
+  assert.equal(body.origin.campaign.promotion, null);
 });
 
 test('AT-3: a touch OUTSIDE the brief window attaches nothing', async () => {

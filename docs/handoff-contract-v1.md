@@ -537,6 +537,13 @@ is ignored **unless this conversation itself came from it**.
 reach a prompt. `campaign` is `null` when the driving ad has no campaign assigned yet —
 the bot still gets the ad text.
 
+**`promotion` is filtered to what the bot can honor now.** It is included **only while the
+campaign's promotion is on offer** — `published` **and** within its booking window
+(`[bookable_from, bookable_until)`) — exactly the rule the public booking page uses. If the
+promotion is paused, draft, archived, or outside its dates, `promotion` is `null` even though
+the campaign still names one: the bot must not pitch an offer a customer cannot claim. The rest
+of the `campaign` block (`name`, `bot_brief`, `target_service`) is unaffected.
+
 ### Authority — brief is configuration, history stays quoted
 
 The `origin` block is the **one authoritative part** of the /context response: `bot_brief`,
@@ -602,5 +609,5 @@ The workflow calls `/context` on every turn before the agent thinks; read:
 | Per-ad note for the bot | `$json.origin.ad.bot_note` | the business's instruction for this ad |
 | The campaign brief | `$json.origin.campaign?.bot_brief` | `campaign` may be `null` (ad not yet in a campaign) |
 | Service to offer/book | `$json.origin.campaign?.target_service` | `{ id, name }` or `null`; `id` is the bookable service |
-| Promotion to honor | `$json.origin.campaign?.promotion` | `{ title, description }` or `null` |
+| Promotion to honor | `$json.origin.campaign?.promotion` | `{ title, description }` or `null` — only present while the promotion is published and in its booking window; otherwise `null` |
 | Ad vs organic post | `$json.origin.source_type` | `ad` \| `post` |
