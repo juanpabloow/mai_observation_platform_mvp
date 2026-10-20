@@ -30,3 +30,16 @@ test('public booking rate limit runs AFTER the RBAC client-role migrations', () 
     assert.ok(i >= 0 && i < booking, `${earlier} sorts before public-booking-rate-limit`);
   }
 });
+
+test('AT-2c ad-cover runs AFTER the value-dashboard migrations production already applied', () => {
+  // 1812 shipped twice (ad-cover beside the already-applied value-dashboard) and every
+  // pre-deploy failed; the unrun ad-cover was renumbered past the latest on main.
+  const idx = (name: string) => files.findIndex((f) => f.includes(name));
+  const cover = idx('_ad-cover');
+  assert.ok(cover >= 0, 'the ad-cover migration exists');
+  assert.ok(!files.includes('1812000000000_ad-cover.ts'), 'the colliding pre-rename name is gone');
+  for (const earlier of ['_value-dashboard.ts', '_value-dashboard-appointments-index']) {
+    const i = idx(earlier);
+    assert.ok(i >= 0 && i < cover, `${earlier} sorts before ad-cover`);
+  }
+});

@@ -4,6 +4,11 @@ import type { MigrationBuilder } from 'node-pg-migrate';
  * AT-2c — AD COVERS. Each ad can carry a cover image so the Ads tab is visual, plus the plain
  * links to open the creative on Facebook. Reversible.
  *
+ * Numbered 1814, not 1812: it first shipped as 1812000000000_ad-cover, colliding with the
+ * already-applied 1812000000000_value-dashboard, and node-pg-migrate refused to run ("Not run
+ * migration … is preceding already run migration …"), failing every pre-deploy. It never ran in
+ * production, so it was renumbered past the latest migration on main (see DEPLOY.md).
+ *
  *  cover_image_key     — the R2 object KEY (public bucket, "ads/…" prefix) of the stored cover; the
  *                        UI builds the public URL from it. NULL = no cover (a neutral placeholder).
  *  cover_source        — 'auto' (captured server-side from the Meta referral thumbnail/image) or
