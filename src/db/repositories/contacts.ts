@@ -134,6 +134,13 @@ export interface ContactListItem extends ContactRow {
   origin_ad_headline: string | null;
   origin_ad_is_test: boolean | null;
   origin_campaign_name: string | null;
+  /**
+   * PL-2: the contact's PIPELINE position — the stage + status of its open opportunity, or of its
+   * latest closed one. Batched (one LATERAL), never a per-row lookup. Null = no opportunity yet.
+   * Distinct from `stage` (the relationship lifecycle), which is untouched.
+   */
+  pipeline_stage: import('./pipeline.js').OpportunityStage | null;
+  pipeline_status: import('./pipeline.js').OpportunityStatus | null;
 }
 
 /** The Tasks facet on the contacts list. */
@@ -362,6 +369,7 @@ export async function listContacts(
             ad.headline AS origin_ad_headline,
             ad.is_test AS origin_ad_is_test,
             camp.name AS origin_campaign_name,
+            opp.stage AS pipeline_stage, opp.status AS pipeline_status,
             -- Microsecond-precise cursor key (a JS Date would drop precision; see codec).
             to_char(c.last_contact_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts
        FROM contacts c
@@ -427,6 +435,12 @@ export async function listContacts(
        LEFT JOIN attribution_touches ft ON ft.id = c.first_touch_id AND ft.tenant_id = c.tenant_id
        LEFT JOIN ads ad ON ad.id = ft.ad_id AND ad.tenant_id = c.tenant_id
        LEFT JOIN campaigns camp ON camp.id = ad.campaign_id AND camp.tenant_id = c.tenant_id
+       -- PL-2: the contact's pipeline position — its OPEN opportunity if any, else the latest closed.
+       LEFT JOIN LATERAL (
+         SELECT op.stage, op.status FROM opportunities op
+          WHERE op.tenant_id = c.tenant_id AND op.client_id = c.client_id AND op.contact_id = c.id
+          ORDER BY (op.status = 'open') DESC, op.created_at DESC, op.id DESC LIMIT 1
+       ) opp ON true
       WHERE ${where.join(' AND ')}
       ${orderBy}
       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,

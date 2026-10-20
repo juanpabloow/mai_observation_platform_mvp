@@ -5,6 +5,7 @@ import { ContactAvatar } from "@/components/contacts/ContactAvatar";
 import { Chip, ENTITY_ROW_CLS, OwnerDisc, StackedCell, StageChip, TABLE_HEADER_CLS, VisitsMeter } from "@/components/ui/primitives";
 import { channelLabel, sourceLabel } from "@/lib/contactLabels";
 import { originColumnChip, originColumnDetail } from "@/lib/originDisplay";
+import { STAGE_LABEL, STATUS_LABEL } from "@/lib/pipelineBoard";
 import type { ContactColumnKey } from "@/lib/contactColumns";
 import { formatStampFull, formatStampShort, relativeAgeShort } from "@/lib/format";
 import { CORE_TEMPLATE, TABLET_TEMPLATE, mobileRowLines, withOptionalTracks } from "@/lib/contactListLayout";
@@ -45,6 +46,7 @@ import { CORE_TEMPLATE, TABLET_TEMPLATE, mobileRowLines, withOptionalTracks } fr
 const OPTIONAL_HEAD: Record<ContactColumnKey, string> = {
   channel: "Canal",
   stage: "Etapa",
+  pipeline: "Pipeline",
   owner: "Dueño asignado",
   nextAppt: "Próxima cita",
   visits: "Visitas totales",
@@ -381,6 +383,15 @@ function OptionalCell({
       return <>{sourceLabel(c.channel)}</>;
     case "stage":
       return <StageChip stage={c.stage} />;
+    case "pipeline":
+      return c.pipeline_stage ? (
+        <span className="inline-flex w-fit items-center gap-1 rounded-full bg-chip px-2 py-0.5 text-[0.625rem] font-medium text-foreground">
+          {STAGE_LABEL[c.pipeline_stage]}
+          {c.pipeline_status && c.pipeline_status !== "open" ? <span className="font-normal text-faint">· {STATUS_LABEL[c.pipeline_status]}</span> : null}
+        </span>
+      ) : (
+        <span className="text-faint">—</span>
+      );
     case "owner":
       return <>{c.assigned_to ? ownerName.get(c.assigned_to) ?? "—" : "—"}</>;
     case "nextAppt":

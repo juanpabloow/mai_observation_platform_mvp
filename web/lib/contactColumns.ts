@@ -17,6 +17,7 @@
 export const OPTIONAL_COLUMNS = [
   { key: "channel", label: "Canal" },
   { key: "stage", label: "Etapa" },
+  { key: "pipeline", label: "Pipeline" },
   { key: "owner", label: "Dueño" },
   { key: "nextAppt", label: "Próxima cita" },
   { key: "visits", label: "Visitas" },
