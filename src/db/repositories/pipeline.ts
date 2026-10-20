@@ -300,6 +300,35 @@ export async function listContactOpportunities(tenantId: string, clientId: strin
   return r.rows;
 }
 
+/** Compact origin + pipeline position for one contact — the Inbox conversation header (§6). */
+export interface InboxContactPipeline {
+  origin_kind: OriginKind | null;
+  ad_name: string | null;
+  ad_headline: string | null;
+  ad_is_test: boolean | null;
+  campaign_name: string | null;
+  opp_stage: OpportunityStage | null;
+  opp_status: OpportunityStatus | null;
+}
+export async function getInboxContactPipeline(tenantId: string, clientId: string, contactId: string): Promise<InboxContactPipeline | null> {
+  const r = await query<InboxContactPipeline>(
+    `SELECT ct.origin_kind, ad.name AS ad_name, ad.headline AS ad_headline, ad.is_test AS ad_is_test, camp.name AS campaign_name,
+            opp.stage AS opp_stage, opp.status AS opp_status
+       FROM contacts ct
+       LEFT JOIN attribution_touches ft ON ft.id = ct.first_touch_id AND ft.tenant_id = ct.tenant_id
+       LEFT JOIN ads ad ON ad.id = ft.ad_id AND ad.tenant_id = ct.tenant_id
+       LEFT JOIN campaigns camp ON camp.id = ad.campaign_id AND camp.tenant_id = ct.tenant_id
+       LEFT JOIN LATERAL (
+         SELECT op.stage, op.status FROM opportunities op
+          WHERE op.tenant_id = ct.tenant_id AND op.client_id = ct.client_id AND op.contact_id = ct.id
+          ORDER BY (op.status = 'open') DESC, op.created_at DESC, op.id DESC LIMIT 1
+       ) opp ON true
+      WHERE ct.id = $3 AND ct.tenant_id = $1 AND ct.client_id = $2`,
+    [tenantId, clientId, contactId],
+  );
+  return r.rows[0] ?? null;
+}
+
 /** Appointments linked to an opportunity (for the contact record card). */
 export interface OpportunityAppointmentRow {
   id: string;
