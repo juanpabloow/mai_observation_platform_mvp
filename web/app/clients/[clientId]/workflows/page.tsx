@@ -6,6 +6,7 @@ import { resolveWorkflowScope } from "@/lib/workflowScope";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { ClientWorkflowsList, type ClientWorkflowRow } from "@/components/ClientWorkflowsList";
 import { ModuleHeader } from "@/components/ui/ModuleHeader";
+import { WorkflowViewTabs } from "@/components/WorkflowViewTabs";
 
 /**
  * The client's workflow list at /clients/[clientId]/workflows — the "all-workflows"
@@ -59,6 +60,7 @@ export default async function ClientWorkflowsPage({
           Pick a workflow to see its executions and analytics, or use the header switcher.
           </p>
         }
+        actions={<WorkflowViewTabs clientId={client.id} scope="all" current="executions" />}
       />
       <ClientWorkflowsList clientId={client.id} workflows={workflows} />
     </main>

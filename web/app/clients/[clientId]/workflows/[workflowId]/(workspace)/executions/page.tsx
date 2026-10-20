@@ -1,4 +1,5 @@
 import Link from "next/link";
+import { WorkflowViewTabs } from "@/components/WorkflowViewTabs";
 import { connection } from "next/server";
 import {
   getExecutionByIdForTenant,
@@ -316,6 +317,7 @@ export default async function WorkflowExecutionsPage({
     <div className="flex min-h-0 flex-1 flex-col">
       {/* ONE toolbar line: count + Filter + Add column (left) · auto-refresh (right). */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-2 pt-4">
+        <WorkflowViewTabs clientId={linkClientId} scope={workflowId} current="executions" />
         <p className="text-sm text-neutral-500">{total.toLocaleString()} matching</p>
         <FilterMenu customFields={filterableFields} />
         <ColumnsMenu workflowId={workflowId} columns={definedColumns} />

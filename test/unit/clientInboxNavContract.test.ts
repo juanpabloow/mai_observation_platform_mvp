@@ -60,9 +60,12 @@ test('sidebar: WORKSPACE is Workflows → Analytics → Inbox (Hub removed from 
   assert.ok(insights.includes('key: "workflows"'), 'Workflows is an insights item');
   assert.ok(insights.includes('scopeHref(clientId, "executions", scope)'), 'Workflows href comes from scopeHref');
   assert.ok(insights.includes('key: "analytics"'), 'Analytics is an insights item');
-  assert.ok(insights.includes('scopeHref(clientId, "analytics", scope)'), 'Analytics href is scope-aware');
+  // Analytics is the client's VALUE dashboard (/clients/<c>/analytics); the technical
+  // execution analytics of the workflows live under Workflows (its Ejecuciones | Analytics tabs).
+  assert.ok(insights.includes('href: c("/analytics")'), 'Analytics is the value dashboard');
   assert.ok(src.includes('const onWorkflows = pathname.startsWith(c("/workflows"));'), 'active across all /workflows/… routes');
-  assert.ok(src.includes('const onAnalytics ='), 'the two rows split on the analytics route so only one is active');
+  assert.ok(src.includes('const onAnalytics = pathname.startsWith(c("/analytics"));'), 'Analytics is active only on the value dashboard');
+  assert.ok(insights.includes('active: onWorkflows,'), 'workflow analytics keep the Workflows row active');
   // Inbox rides the SAME Workspace group but is gated on GENERAL access (so a Setter sees it).
   assert.ok(src.includes('canSeeGeneral && moduleKeys.includes("inbox")'), 'Inbox is gated on general access + the inbox module');
   assert.ok(src.includes('sections.push({ label: "Workspace", items: workspace })'), 'Workspace is the first section');

@@ -19,6 +19,8 @@ const CLIENT_SURFACE_LABELS: ReadonlyArray<{ pattern: RegExp; label: string }> =
   // (…/workflows/<id>/…) is a workflow route, handled by parseWorkflowRoute, not here.
   { pattern: /^\/clients\/([^/]+)\/workflows$/, label: "Flujos" },
   { pattern: /^\/clients\/([^/]+)\/inbox(?:\/|$)/, label: "Inbox" },
+  // The client's Analytics: the value dashboard (workflow analytics live under Workflows).
+  { pattern: /^\/clients\/([^/]+)\/analytics(?:\/|$)/, label: "Analytics" },
   // The route stays /team; only the label a person reads is "Usuarios y accesos".
   { pattern: /^\/clients\/([^/]+)\/team(?:\/|$)/, label: "Usuarios y accesos" },
   { pattern: /^\/clients\/([^/]+)\/modules(?:\/|$)/, label: "Módulos" },

@@ -173,19 +173,18 @@ export function canAccessSchedulingStaff(scope: AccessScope, staffId: string): b
 /**
  * A member's home / bounce target when they hit a full-access-only surface (the
  * tenant Hub `/`, the Clients & Workflows management view, settings): their ONE
- * client's aggregate ("All workflows") analytics. That URL is always valid (it
- * renders an empty state when the client has no workflows yet) and is a
- * workflow-LEVEL route, so the sidebar shows workflow nav rather than the Hub.
+ * client's Analytics — the value dashboard. That URL is always valid (it renders
+ * measured zeros when the client has no activity yet).
  * owner/admin → the Hub.
  */
 export function memberLandingHref(scope: AccessScope): string {
   // Staff → their agenda. SETTER → the client attention queue (inbox): they can't see
   // analytics, so the old "all/analytics" landing would 404 for them. Owner → their
-  // client's aggregate analytics. Agency → the Hub.
+  // client's Analytics (value dashboard). Agency → the Hub.
   if (scope.memberClientId) {
     if (scope.clientRole === "staff") return `/clients/${scope.memberClientId}/scheduling/agenda`;
     if (scope.clientRole === "setter") return `/clients/${scope.memberClientId}/inbox`;
-    return `/clients/${scope.memberClientId}/workflows/all/analytics`; // owner
+    return `/clients/${scope.memberClientId}/analytics`; // owner: the value dashboard
   }
   return "/";
 }

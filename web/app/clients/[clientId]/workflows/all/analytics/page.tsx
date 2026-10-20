@@ -13,6 +13,7 @@ import {
 } from "@worker/db/repositories/analytics.js";
 import { countPendingForClient } from "@worker/db/repositories/handoff.js";
 import { ExecutionsByStatusChart } from "@/components/WorkflowAnalyticsCharts";
+import { WorkflowViewTabs } from "@/components/WorkflowViewTabs";
 import {
   AnalyticsColumns,
   AnalyticsEmpty,
@@ -80,6 +81,7 @@ export default async function AllWorkflowsAnalyticsPage({
       rangeBasePath={basePath}
       rangeCurrent={days}
       rangeExtraQuery={fromQuery}
+      tabs={<WorkflowViewTabs clientId={clientId} scope="all" current="analytics" />}
       banner={
         pendingAcross > 0 ? (
           <p className="text-sm font-medium text-amber-700 dark:text-amber-400">

@@ -30,6 +30,7 @@ export function AnalyticsShell({
   rangeCurrent,
   rangeExtraQuery,
   banner,
+  tabs,
   children,
 }: {
   scopeLabel: string;
@@ -37,12 +38,15 @@ export function AnalyticsShell({
   rangeCurrent: number;
   rangeExtraQuery?: string;
   banner?: React.ReactNode;
+  /** The Workflows section's view tabs (Ejecuciones | Analytics). */
+  tabs?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-6 px-6 py-8">
+      {tabs}
       <ModuleHeader
-        title="Analytics"
+        title="Analytics de workflows"
         center={<p className="truncate text-sm text-muted">{scopeLabel}</p>}
         actions={<RangeSelector basePath={rangeBasePath} current={rangeCurrent} extraQuery={rangeExtraQuery} />}
       />

@@ -300,7 +300,7 @@ export async function acceptInvitationAction(
     invite.role === "member" && invite.member_client_id
       ? invite.client_role === "staff"
         ? `/clients/${invite.member_client_id}/scheduling/agenda`
-        : `/clients/${invite.member_client_id}/workflows/all/analytics`
+        : `/clients/${invite.member_client_id}/analytics`
       : "/";
   return { ok: true, redirectTo };
 }
