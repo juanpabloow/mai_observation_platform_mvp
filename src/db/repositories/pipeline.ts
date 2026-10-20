@@ -1,5 +1,6 @@
 import type { PoolClient } from 'pg';
 import { query } from '../client.js';
+import type { OriginKind } from './attribution.js';
 
 /**
  * SALES PIPELINE repository (PL-1 §1) — the DATA layer for opportunities. Tenant_id + client_id
@@ -147,6 +148,169 @@ export async function listOpportunityStageEvents(tenantId: string, opportunityId
        FROM opportunity_stage_events
       WHERE tenant_id = $1 AND opportunity_id = $2
       ORDER BY occurred_at ASC, id ASC`,
+    [tenantId, opportunityId],
+  );
+  return r.rows;
+}
+
+// ── PL-2 board / queue / contact reads ─────────────────────────────────────────────
+
+/** A board card: the opportunity + the contact, its origin (via first touch), and the conversation's
+ *  last message. All 1:1 joins + one LATERAL (no N+1). `stage_since` is the CURRENT stage's timestamp. */
+export interface BoardOpportunityRow {
+  id: string;
+  contact_id: string;
+  conversation_id: string | null;
+  status: OpportunityStatus;
+  stage: OpportunityStage;
+  created_at: Date;
+  stage_since: Date | null;
+  lost_reason: LostReason | null;
+  lost_note: string | null;
+  closed_at: Date | null;
+  contact_name: string | null;
+  contact_channel_user_id: string | null;
+  origin_kind: OriginKind | null;
+  ad_name: string | null;
+  ad_headline: string | null;
+  ad_is_test: boolean | null;
+  campaign_name: string | null;
+  last_sender: string | null;
+  last_message_at: Date | null;
+}
+
+export interface BoardFilters {
+  /** Lead-origin groups expanded to kinds (matches the contacts Origen filter). */
+  originKinds?: OriginKind[];
+  /** The campaign of the contact's origin ad. */
+  campaignId?: string;
+  /** The contact's origin ad. */
+  adId?: string;
+  /** Opened (created_at) range — ISO strings. */
+  openedFrom?: string;
+  openedTo?: string;
+  /** Narrow to one status. Default excludes 'lost' (that is the Perdidos view). */
+  status?: OpportunityStatus;
+  /** Include opportunities whose origin ad is a TEST ad (excluded by default, like everywhere). */
+  includeTest?: boolean;
+  limit?: number;
+}
+
+/** Board opportunities (default: everything NOT lost — the Pipeline columns; pass status='lost' for
+ *  the Perdidos view). Test-ad-originated opportunities are excluded unless includeTest. */
+export async function listBoardOpportunities(tenantId: string, clientId: string, filters: BoardFilters = {}): Promise<BoardOpportunityRow[]> {
+  const params: unknown[] = [tenantId, clientId];
+  const where: string[] = ['o.tenant_id = $1', 'o.client_id = $2'];
+  if (filters.status) {
+    params.push(filters.status);
+    where.push(`o.status = $${params.length}`);
+  } else {
+    where.push(`o.status <> 'lost'`);
+  }
+  if (filters.originKinds && filters.originKinds.length > 0) {
+    params.push(filters.originKinds);
+    where.push(`ct.origin_kind = ANY($${params.length}::text[])`);
+  }
+  if (filters.campaignId) {
+    params.push(filters.campaignId);
+    where.push(`ad.campaign_id = $${params.length}`);
+  }
+  if (filters.adId) {
+    params.push(filters.adId);
+    where.push(`ft.ad_id = $${params.length}`);
+  }
+  if (filters.openedFrom) {
+    params.push(filters.openedFrom);
+    where.push(`o.created_at >= $${params.length}::timestamptz`);
+  }
+  if (filters.openedTo) {
+    params.push(filters.openedTo);
+    where.push(`o.created_at < $${params.length}::timestamptz`);
+  }
+  if (!filters.includeTest) where.push(`(ad.is_test IS NOT TRUE)`);
+  params.push(Math.min(Math.max(filters.limit ?? 500, 1), 1000));
+  const limitIdx = params.length;
+  const r = await query<BoardOpportunityRow>(
+    `SELECT o.id, o.contact_id, o.conversation_id, o.status, o.stage, o.created_at, o.lost_reason, o.lost_note, o.closed_at,
+            CASE o.stage WHEN 'lead' THEN o.lead_at WHEN 'qualified' THEN o.qualified_at WHEN 'booked' THEN o.booked_at
+                         WHEN 'attended' THEN o.attended_at WHEN 'paid' THEN o.paid_at END AS stage_since,
+            ct.name AS contact_name, ct.channel_user_id AS contact_channel_user_id, ct.origin_kind,
+            ad.name AS ad_name, ad.headline AS ad_headline, ad.is_test AS ad_is_test, camp.name AS campaign_name,
+            lm.sender AS last_sender, lm.created_at AS last_message_at
+       FROM opportunities o
+       JOIN contacts ct ON ct.id = o.contact_id AND ct.tenant_id = o.tenant_id
+       LEFT JOIN attribution_touches ft ON ft.id = ct.first_touch_id AND ft.tenant_id = o.tenant_id
+       LEFT JOIN ads ad ON ad.id = ft.ad_id AND ad.tenant_id = o.tenant_id
+       LEFT JOIN campaigns camp ON camp.id = ad.campaign_id AND camp.tenant_id = o.tenant_id
+       LEFT JOIN LATERAL (
+         SELECT hm.sender, hm.created_at FROM handoff_messages hm
+          WHERE hm.tenant_id = o.tenant_id AND hm.conversation_id = o.conversation_id
+          ORDER BY hm.created_at DESC, hm.id DESC LIMIT 1
+       ) lm ON true
+      WHERE ${where.join(' AND ')}
+      ORDER BY o.created_at DESC, o.id DESC
+      LIMIT $${limitIdx}`,
+    params,
+  );
+  return r.rows;
+}
+
+/** The "sin respuesta del negocio" queue: OPEN lead/qualified opportunities whose conversation's
+ *  last message is from the CUSTOMER (PL-1 never auto-loses these). Longest wait first. */
+export interface AwaitingReplyRow {
+  id: string;
+  contact_id: string;
+  conversation_id: string | null;
+  conversation_ref: string | null;
+  stage: OpportunityStage;
+  contact_name: string | null;
+  contact_channel_user_id: string | null;
+  last_message_at: Date;
+}
+export async function listAwaitingBusinessReply(tenantId: string, clientId: string, limit = 200): Promise<AwaitingReplyRow[]> {
+  const r = await query<AwaitingReplyRow>(
+    `SELECT o.id, o.contact_id, o.conversation_id, cv.conversation_ref, o.stage,
+            ct.name AS contact_name, ct.channel_user_id AS contact_channel_user_id,
+            lm.created_at AS last_message_at
+       FROM opportunities o
+       JOIN contacts ct ON ct.id = o.contact_id AND ct.tenant_id = o.tenant_id
+       LEFT JOIN conversations cv ON cv.id = o.conversation_id AND cv.tenant_id = o.tenant_id
+       JOIN LATERAL (
+         SELECT hm.sender, hm.created_at FROM handoff_messages hm
+          WHERE hm.tenant_id = o.tenant_id AND hm.conversation_id = o.conversation_id
+          ORDER BY hm.created_at DESC, hm.id DESC LIMIT 1
+       ) lm ON true
+      WHERE o.tenant_id = $1 AND o.client_id = $2 AND o.status = 'open' AND o.stage IN ('lead','qualified')
+        AND o.conversation_id IS NOT NULL AND lm.sender = 'user'
+      ORDER BY lm.created_at ASC
+      LIMIT $3`,
+    [tenantId, clientId, Math.min(Math.max(limit, 1), 500)],
+  );
+  return r.rows;
+}
+
+/** Every opportunity for a contact, newest first — the contact record's current + past sales. */
+export async function listContactOpportunities(tenantId: string, clientId: string, contactId: string): Promise<OpportunityRow[]> {
+  const r = await query<OpportunityRow>(
+    `SELECT ${OPP_COLUMNS} FROM opportunities
+      WHERE tenant_id = $1 AND client_id = $2 AND contact_id = $3
+      ORDER BY created_at DESC, id DESC`,
+    [tenantId, clientId, contactId],
+  );
+  return r.rows;
+}
+
+/** Appointments linked to an opportunity (for the contact record card). */
+export interface OpportunityAppointmentRow {
+  id: string;
+  start_at: Date;
+  status: string;
+  service_name_snapshot: string;
+}
+export async function listOpportunityAppointments(tenantId: string, opportunityId: string): Promise<OpportunityAppointmentRow[]> {
+  const r = await query<OpportunityAppointmentRow>(
+    `SELECT id, start_at, status, service_name_snapshot FROM appointments
+      WHERE tenant_id = $1 AND opportunity_id = $2 ORDER BY start_at DESC`,
     [tenantId, opportunityId],
   );
   return r.rows;
