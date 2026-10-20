@@ -129,7 +129,8 @@ export async function createCampaignAction(input: CampaignInput): Promise<Campai
     });
     revalidateCampaigns(input.clientId);
     return { ok: true, id: row.id };
-  } catch {
+  } catch (err) {
+    console.error("createCampaignAction failed", err);
     return { ok: false, error: "No se pudo crear la campaña." };
   }
 }
@@ -191,7 +192,8 @@ export async function updateCampaignAction(
     if (!row) return { ok: false, error: "Campaña no encontrada." };
     revalidateCampaigns(clientId);
     return { ok: true, id };
-  } catch {
+  } catch (err) {
+    console.error("updateCampaignAction failed", err);
     return { ok: false, error: "No se pudo guardar la campaña." };
   }
 }
@@ -252,6 +254,7 @@ export async function createAdAction(input: {
   } catch (err) {
     // ads_unique (client, platform, source_type, external_id) — a race past the check above.
     if ((err as { code?: string })?.code === "23505") return { ok: false, error: dupMsg };
+    console.error("createAdAction failed", err);
     return { ok: false, error: "No se pudo agregar el anuncio." };
   }
 }
@@ -276,10 +279,15 @@ export async function updateAdAction(
     if (!nt.ok) return { ok: false, error: nt.error };
     built.botNote = nt.value;
   }
-  const row = await updateAd(auth.tenantId, clientId, adId, built);
-  if (!row) return { ok: false, error: "Anuncio no encontrado." };
-  revalidateCampaigns(clientId);
-  return { ok: true, id: adId };
+  try {
+    const row = await updateAd(auth.tenantId, clientId, adId, built);
+    if (!row) return { ok: false, error: "Anuncio no encontrado." };
+    revalidateCampaigns(clientId);
+    return { ok: true, id: adId };
+  } catch (err) {
+    console.error("updateAdAction failed", err);
+    return { ok: false, error: "No se pudo guardar el anuncio." };
+  }
 }
 
 /**

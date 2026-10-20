@@ -12,6 +12,7 @@ import {
   normalizeCampaignStatus,
   normalizeExternalCampaignId,
   normalizeMetaAdId,
+  toDateInputValue,
   validateDateRange,
 } from '../../web/lib/campaignsValidation.js';
 
@@ -42,11 +43,28 @@ test('normalizeCampaignStatus: closed set', () => {
   assert.equal(normalizeCampaignStatus(undefined).ok, false);
 });
 
-test('normalizeCampaignDate: optional YYYY-MM-DD', () => {
+test('normalizeCampaignDate: optional YYYY-MM-DD, accepts both forms', () => {
   assert.deepEqual(normalizeCampaignDate(''), { ok: true, value: null });
+  assert.deepEqual(normalizeCampaignDate(null), { ok: true, value: null });
   assert.equal(normalizeCampaignDate('2026-10-16').ok && normalizeCampaignDate('2026-10-16').value, '2026-10-16');
+  // a fuller ISO timestamp (e.g. a browser Date.toISOString()) normalizes to the calendar date
+  assert.equal(normalizeCampaignDate('2026-10-16T05:00:00.000Z').ok && normalizeCampaignDate('2026-10-16T05:00:00.000Z').value, '2026-10-16');
+  assert.equal(normalizeCampaignDate('2026-10-16 00:00:00').ok && normalizeCampaignDate('2026-10-16 00:00:00').value, '2026-10-16');
   assert.equal(normalizeCampaignDate('16/10/2026').ok, false);
   assert.equal(normalizeCampaignDate('2026-13-40').ok, false, 'not a real date');
+  assert.equal(normalizeCampaignDate('2026-02-31').ok, false, 'rolled-over date rejected');
+});
+
+test('toDateInputValue: every stored form → YYYY-MM-DD (or "")', () => {
+  assert.equal(toDateInputValue(null), '');
+  assert.equal(toDateInputValue(undefined), '');
+  assert.equal(toDateInputValue(''), '');
+  assert.equal(toDateInputValue('2026-10-16'), '2026-10-16');
+  assert.equal(toDateInputValue('2026-10-16T00:00:00.000Z'), '2026-10-16');
+  // a JS Date (how node-postgres parses a `date` column) → its local calendar day
+  assert.equal(toDateInputValue(new Date(2026, 9, 16)), '2026-10-16');
+  assert.equal(toDateInputValue(new Date('invalid')), '');
+  assert.equal(toDateInputValue('not a date'), '');
 });
 
 test('validateDateRange: end must not precede start', () => {

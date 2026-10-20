@@ -57,15 +57,46 @@ export function normalizeCampaignStatus(raw: string | null | undefined): FieldRe
   return { ok: false, error: "status: must be active, paused or ended." };
 }
 
-/** date: optional; blank → NULL; otherwise a YYYY-MM-DD calendar date. */
+/**
+ * date: optional; blank → NULL; otherwise a real calendar date stored as YYYY-MM-DD.
+ * Accepts BOTH forms the UI may send: a plain `YYYY-MM-DD`, or a fuller ISO timestamp
+ * (e.g. a browser `Date.toISOString()` — `YYYY-MM-DDTHH:MM:SS.sssZ`). Either normalizes to
+ * the calendar date, so a stored date re-submitted whole is never spuriously rejected.
+ */
 export function normalizeCampaignDate(raw: string | null | undefined): FieldResult<string | null> {
   if (raw === undefined || raw === null) return { ok: true, value: null };
   const trimmed = raw.trim();
   if (trimmed === "") return { ok: true, value: null };
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return { ok: false, error: "date: use YYYY-MM-DD." };
-  const d = new Date(`${trimmed}T00:00:00Z`);
-  if (Number.isNaN(d.getTime())) return { ok: false, error: "date: not a real date." };
-  return { ok: true, value: trimmed };
+  const m = /^(\d{4})-(\d{2})-(\d{2})(?:[T ].*)?$/.exec(trimmed);
+  if (!m) return { ok: false, error: "date: use YYYY-MM-DD." };
+  const ymd = `${m[1]}-${m[2]}-${m[3]}`;
+  const d = new Date(`${ymd}T00:00:00Z`);
+  // Reject both unparseable and rolled-over dates (e.g. 2026-13-40, 2026-02-31).
+  if (Number.isNaN(d.getTime()) || d.toISOString().slice(0, 10) !== ymd) {
+    return { ok: false, error: "date: not a real date." };
+  }
+  return { ok: true, value: ymd };
+}
+
+/**
+ * Normalize a stored date into the `YYYY-MM-DD` value an `<input type="date">` needs. Accepts
+ * every form the value can take by the time it reaches the modal: a `YYYY-MM-DD` string, a fuller
+ * ISO timestamp, or — because node-postgres parses a `date` column into a JS `Date` — a `Date`
+ * instance. Anything unparseable → "". Pure (no I/O), so the modal can accept BOTH forms and the
+ * server boundary can emit plain strings. Date components are read in local time, matching how the
+ * pg driver builds the Date (local midnight), so the calendar day is preserved.
+ */
+export function toDateInputValue(value: string | Date | null | undefined): string {
+  if (value === undefined || value === null) return "";
+  if (value instanceof Date) {
+    if (Number.isNaN(value.getTime())) return "";
+    const y = value.getFullYear();
+    const mo = String(value.getMonth() + 1).padStart(2, "0");
+    const d = String(value.getDate()).padStart(2, "0");
+    return `${y}-${mo}-${d}`;
+  }
+  const m = /^(\d{4}-\d{2}-\d{2})/.exec(value.trim());
+  return m ? m[1] : "";
 }
 
 /** end_date must not precede start_date (mirrors campaigns_date_range CHECK). */

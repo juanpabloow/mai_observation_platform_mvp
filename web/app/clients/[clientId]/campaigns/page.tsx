@@ -6,6 +6,7 @@ import { listAdsWithStats, listCampaignsWithStats } from "@worker/db/repositorie
 import { listServices } from "@worker/db/repositories/scheduling/services.js";
 import { listPromotions } from "@worker/db/repositories/scheduling/promotions.js";
 import { publicUrlForKey } from "@/lib/r2";
+import { toDateInputValue } from "@/lib/campaignsValidation";
 import { CampaignsPanel } from "@/components/campaigns/CampaignsPanel";
 
 /**
@@ -66,8 +67,10 @@ export default async function ClientCampaignsPage({
         id: c.id,
         name: c.name,
         status: c.status,
-        start_date: c.start_date,
-        end_date: c.end_date,
+        // The pg driver parses a `date` column into a JS Date; normalize to a plain YYYY-MM-DD
+        // string here so the client modal's <input type="date"> binds (and submits) it cleanly.
+        start_date: toDateInputValue(c.start_date) || null,
+        end_date: toDateInputValue(c.end_date) || null,
         external_campaign_id: c.external_campaign_id,
         target_service_id: c.target_service_id,
         promotion_id: c.promotion_id,

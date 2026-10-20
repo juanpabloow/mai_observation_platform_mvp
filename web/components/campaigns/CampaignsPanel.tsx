@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { PageShell } from "@/components/ui/PageShell";
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
-import { AD_NOTE_MAX, CAMPAIGN_BRIEF_MAX } from "@/lib/campaignsValidation";
+import { AD_NOTE_MAX, CAMPAIGN_BRIEF_MAX, toDateInputValue } from "@/lib/campaignsValidation";
 import {
   assignAdsToCampaignAction,
   createAdAction,
@@ -74,7 +74,8 @@ const BTN =
 const GHOST =
   "inline-flex h-[44px] lg:h-[34px] items-center justify-center rounded-lg border border-line px-3 lg:px-2.5 text-xs text-muted transition hover:bg-subtle hover:text-foreground";
 
-type Run = (fn: () => Promise<{ ok: boolean; error?: string }>) => void;
+type Result = { ok: boolean; error?: string };
+type Run = (fn: () => Promise<Result>) => void;
 type Tab = "ads" | "campaigns";
 
 const STATUS_LABEL: Record<CampaignItem["status"], string> = {
@@ -120,6 +121,10 @@ export function CampaignsPanel({
     });
   };
 
+  // Modal saves surface their OWN failure inside the modal (see CampaignModal/AdModal), not in the
+  // page-level banner above — which the modal overlay would hide. On success they close + refresh.
+  const refresh = useCallback(() => router.refresh(), [router]);
+
   const unconfigured = ads.filter((a) => !a.is_test && !a.campaign_id).length;
 
   return (
@@ -154,7 +159,7 @@ export function CampaignsPanel({
       ) : null}
 
       {tab === "ads" ? (
-        <AdsTab clientId={clientId} canManage={canManage} ads={ads} campaigns={campaigns} run={run} pending={pending} />
+        <AdsTab clientId={clientId} canManage={canManage} ads={ads} campaigns={campaigns} run={run} pending={pending} refresh={refresh} />
       ) : (
         <CampaignsTab
           clientId={clientId}
@@ -164,6 +169,7 @@ export function CampaignsPanel({
           promotions={promotions}
           run={run}
           pending={pending}
+          refresh={refresh}
         />
       )}
     </main>
@@ -210,6 +216,7 @@ function AdsTab({
   campaigns,
   run,
   pending,
+  refresh,
 }: {
   clientId: string;
   canManage: boolean;
@@ -217,6 +224,7 @@ function AdsTab({
   campaigns: CampaignItem[];
   run: Run;
   pending: boolean;
+  refresh: () => void;
 }) {
   const [showTest, setShowTest] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -359,24 +367,24 @@ function AdsTab({
           mode="create"
           clientId={clientId}
           campaigns={assignable}
-          pending={pending}
           onClose={() => setCreating(false)}
-          onSubmit={(values, coverFile) =>
-            run(async () => {
-              const r = await createAdAction({ clientId, ...values });
-              // Create first, then attach the staged cover to the new ad id. A cover failure never
-              // undoes the created ad (the person can add the cover later from the edit modal).
-              if (r.ok && r.id && coverFile) {
-                const fd = new FormData();
-                fd.set("clientId", clientId);
-                fd.set("adId", r.id);
-                fd.set("image", coverFile);
-                await uploadAdCoverAction(fd);
-              }
-              if (r.ok) setCreating(false);
-              return r;
-            })
-          }
+          onSubmit={async (values, coverFile) => {
+            const r = await createAdAction({ clientId, ...values });
+            // Create first, then attach the staged cover to the new ad id. A cover failure never
+            // undoes the created ad (the person can add the cover later from the edit modal).
+            if (r.ok && r.id && coverFile) {
+              const fd = new FormData();
+              fd.set("clientId", clientId);
+              fd.set("adId", r.id);
+              fd.set("image", coverFile);
+              await uploadAdCoverAction(fd);
+            }
+            if (r.ok) {
+              setCreating(false);
+              refresh();
+            }
+            return r;
+          }}
         />
       ) : null}
 
@@ -386,15 +394,15 @@ function AdsTab({
           clientId={clientId}
           initial={editing}
           campaigns={assignable}
-          pending={pending}
           onClose={() => setEditing(null)}
-          onSubmit={(values) =>
-            run(async () => {
-              const r = await updateAdAction(clientId, editing.id, { name: values.name, botNote: values.botNote });
-              if (r.ok) setEditing(null);
-              return r;
-            })
-          }
+          onSubmit={async (values) => {
+            const r = await updateAdAction(clientId, editing.id, { name: values.name, botNote: values.botNote });
+            if (r.ok) {
+              setEditing(null);
+              refresh();
+            }
+            return r;
+          }}
         />
       ) : null}
     </PageShell>
@@ -534,7 +542,6 @@ function AdModal({
   clientId,
   initial,
   campaigns,
-  pending,
   onClose,
   onSubmit,
 }: {
@@ -542,9 +549,8 @@ function AdModal({
   clientId: string;
   initial?: AdItem;
   campaigns: CampaignItem[];
-  pending: boolean;
   onClose: () => void;
-  onSubmit: (values: AdValues, coverFile: File | null) => void;
+  onSubmit: (values: AdValues, coverFile: File | null) => Promise<Result>;
 }) {
   const [externalId, setExternalId] = useState(initial?.external_id ?? "");
   const [name, setName] = useState(initial?.name ?? "");
@@ -552,6 +558,8 @@ function AdModal({
   const [campaignId, setCampaignId] = useState(initial?.campaign_id ?? "");
   // AT-2c: create stages the cover (uploaded after the ad is created); edit uploads immediately.
   const [coverFile, setCoverFile] = useState<File | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const closeRef = useRef(onClose);
   useEffect(() => {
@@ -563,16 +571,27 @@ function AdModal({
   const title = mode === "create" ? "Agregar anuncio" : initial?.name || initial?.headline || "Editar anuncio";
   const idOk = mode === "edit" || /^\d+$/.test(externalId.trim());
 
-  const submit = () =>
-    onSubmit(
-      {
-        externalId: externalId.trim(),
-        name: name.trim() === "" ? null : name.trim(),
-        botNote: note.trim() === "" ? null : note,
-        campaignId: campaignId === "" ? null : campaignId,
-      },
-      coverFile,
-    );
+  // Every failure is shown INSIDE the modal; on success the parent unmounts it.
+  const submit = async () => {
+    setError(null);
+    setSubmitting(true);
+    try {
+      const r = await onSubmit(
+        {
+          externalId: externalId.trim(),
+          name: name.trim() === "" ? null : name.trim(),
+          botNote: note.trim() === "" ? null : note,
+          campaignId: campaignId === "" ? null : campaignId,
+        },
+        coverFile,
+      );
+      if (!r.ok) setError(r.error ?? "No se pudo guardar. Revisa los datos e inténtalo de nuevo.");
+    } catch {
+      setError("No se pudo guardar. Inténtalo de nuevo.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-5">
@@ -676,7 +695,12 @@ function AdModal({
           </div>
         </div>
 
-        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-card/50 px-4 py-3 sm:px-5">
+        <footer className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-line bg-card/50 px-4 py-3 sm:px-5">
+          {error ? (
+            <p role="alert" className="mr-auto min-w-0 flex-1 text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
           <button
             type="button"
             onClick={close}
@@ -684,8 +708,8 @@ function AdModal({
           >
             Cancelar
           </button>
-          <button className={BTN} disabled={pending || !idOk} onClick={submit}>
-            {mode === "create" ? "Agregar anuncio" : "Guardar cambios"}
+          <button className={BTN} disabled={submitting || !idOk} onClick={submit}>
+            {submitting ? "Guardando…" : mode === "create" ? "Agregar anuncio" : "Guardar cambios"}
           </button>
         </footer>
       </section>
@@ -849,6 +873,7 @@ function CampaignsTab({
   promotions,
   run,
   pending,
+  refresh,
 }: {
   clientId: string;
   canManage: boolean;
@@ -857,6 +882,7 @@ function CampaignsTab({
   promotions: Option[];
   run: Run;
   pending: boolean;
+  refresh: () => void;
 }) {
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<CampaignItem | null>(null);
@@ -936,15 +962,15 @@ function CampaignsTab({
           title="Nueva campaña"
           services={services}
           promotions={promotions}
-          pending={pending}
           onClose={() => setCreating(false)}
-          onSubmit={(values) =>
-            run(async () => {
-              const r = await createCampaignAction({ clientId, ...values });
-              if (r.ok) setCreating(false);
-              return r;
-            })
-          }
+          onSubmit={async (values) => {
+            const r = await createCampaignAction({ clientId, ...values });
+            if (r.ok) {
+              setCreating(false);
+              refresh();
+            }
+            return r;
+          }}
         />
       ) : null}
 
@@ -954,15 +980,15 @@ function CampaignsTab({
           services={services}
           promotions={promotions}
           initial={editing}
-          pending={pending}
           onClose={() => setEditing(null)}
-          onSubmit={(values) =>
-            run(async () => {
-              const r = await updateCampaignAction(clientId, editing.id, values);
-              if (r.ok) setEditing(null);
-              return r;
-            })
-          }
+          onSubmit={async (values) => {
+            const r = await updateCampaignAction(clientId, editing.id, values);
+            if (r.ok) {
+              setEditing(null);
+              refresh();
+            }
+            return r;
+          }}
         />
       ) : null}
     </PageShell>
@@ -1025,7 +1051,6 @@ function CampaignModal({
   services,
   promotions,
   initial,
-  pending,
   onClose,
   onSubmit,
 }: {
@@ -1033,18 +1058,21 @@ function CampaignModal({
   services: Option[];
   promotions: Option[];
   initial?: CampaignItem;
-  pending: boolean;
   onClose: () => void;
-  onSubmit: (values: CampaignValues) => void;
+  onSubmit: (values: CampaignValues) => Promise<Result>;
 }) {
   const [name, setName] = useState(initial?.name ?? "");
   const [status, setStatus] = useState<string>(initial?.status ?? "active");
-  const [startDate, setStartDate] = useState(initial?.start_date ?? "");
-  const [endDate, setEndDate] = useState(initial?.end_date ?? "");
+  // Accept whatever shape the stored date arrives in (YYYY-MM-DD, full ISO, or a Date) → the
+  // YYYY-MM-DD an <input type="date"> binds to. Without this, a Date leaked `.trim is not a function`.
+  const [startDate, setStartDate] = useState(() => toDateInputValue(initial?.start_date));
+  const [endDate, setEndDate] = useState(() => toDateInputValue(initial?.end_date));
   const [externalId, setExternalId] = useState(initial?.external_campaign_id ?? "");
   const [serviceId, setServiceId] = useState(initial?.target_service_id ?? "");
   const [promotionId, setPromotionId] = useState(initial?.promotion_id ?? "");
   const [brief, setBrief] = useState(initial?.bot_brief ?? "");
+  const [error, setError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const closeRef = useRef(onClose);
   useEffect(() => {
@@ -1053,17 +1081,28 @@ function CampaignModal({
   const close = useCallback(() => closeRef.current(), []);
   const panelRef = useTrappedPanel({ active: true, onClose: close });
 
-  const submit = () =>
-    onSubmit({
-      name: name.trim(),
-      status,
-      startDate: startDate.trim() === "" ? null : startDate.trim(),
-      endDate: endDate.trim() === "" ? null : endDate.trim(),
-      externalCampaignId: externalId.trim() === "" ? null : externalId.trim(),
-      targetServiceId: serviceId === "" ? null : serviceId,
-      promotionId: promotionId === "" ? null : promotionId,
-      botBrief: brief.trim() === "" ? null : brief,
-    });
+  // Every failure is shown INSIDE the modal; on success the parent unmounts it.
+  const submit = async () => {
+    setError(null);
+    setSubmitting(true);
+    try {
+      const r = await onSubmit({
+        name: name.trim(),
+        status,
+        startDate: startDate.trim() === "" ? null : startDate.trim(),
+        endDate: endDate.trim() === "" ? null : endDate.trim(),
+        externalCampaignId: externalId.trim() === "" ? null : externalId.trim(),
+        targetServiceId: serviceId === "" ? null : serviceId,
+        promotionId: promotionId === "" ? null : promotionId,
+        botBrief: brief.trim() === "" ? null : brief,
+      });
+      if (!r.ok) setError(r.error ?? "No se pudo guardar. Revisa los datos e inténtalo de nuevo.");
+    } catch {
+      setError("No se pudo guardar. Inténtalo de nuevo.");
+    } finally {
+      setSubmitting(false);
+    }
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-5">
@@ -1159,7 +1198,12 @@ function CampaignModal({
           </div>
         </div>
 
-        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-card/50 px-4 py-3 sm:px-5">
+        <footer className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-line bg-card/50 px-4 py-3 sm:px-5">
+          {error ? (
+            <p role="alert" className="mr-auto min-w-0 flex-1 text-sm text-danger">
+              {error}
+            </p>
+          ) : null}
           <button
             type="button"
             onClick={close}
@@ -1167,8 +1211,8 @@ function CampaignModal({
           >
             Cancelar
           </button>
-          <button className={BTN} disabled={pending || !name.trim()} onClick={submit}>
-            {initial ? "Guardar cambios" : "Crear campaña"}
+          <button className={BTN} disabled={submitting || !name.trim()} onClick={submit}>
+            {submitting ? "Guardando…" : initial ? "Guardar cambios" : "Crear campaña"}
           </button>
         </footer>
       </section>
