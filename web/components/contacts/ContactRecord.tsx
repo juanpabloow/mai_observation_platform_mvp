@@ -18,6 +18,7 @@ import type { ContactReadValues } from "./form/ContactSections";
 import { ContactTimeline, type TimelineItemView } from "./ContactTimeline";
 import { ContactAssociations } from "./ContactAssociations";
 import { ContactOriginCard, type ContactOriginView } from "./ContactOriginCard";
+import { ContactOpportunityCard, type ContactPipelineView } from "./ContactOpportunityCard";
 import type { CandidateView } from "./DuplicateBanner";
 import { EditContactButton } from "./form/EditContactButton";
 import type { ContactEditPayload } from "@/lib/contactPanel";
@@ -84,6 +85,8 @@ export interface ContactRecordProps {
   canManageOrigin: boolean;
   /** This client's campaigns, for the manual-origin picker. */
   originCampaigns: { id: string; name: string }[];
+  /** PL-2 §3 — the contact's sales opportunities (current + past + event history). */
+  pipeline: ContactPipelineView;
 }
 
 export function ContactRecord(props: ContactRecordProps) {
@@ -162,6 +165,7 @@ export function ContactRecord(props: ContactRecordProps) {
             campaigns={props.originCampaigns}
           />
         ) : null}
+        <ContactOpportunityCard pipeline={props.pipeline} />
         <ContactAssociations
           clientId={props.clientId}
           contactId={props.contactId}
