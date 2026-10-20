@@ -30,6 +30,7 @@ export type SectionId = "inbox" | "contacts" | "agenda" | "catalog" | "presence"
 export type PageId =
   | "inbox"
   | "contacts"
+  | "pipeline"
   | "calendar"
   | "team"
   | "hours"
@@ -136,7 +137,10 @@ export function buildSections(ctx: NavContext): NavSection[] {
 
   const pages: Record<SectionId, Array<NavPage | false>> = {
     inbox: [general && has("inbox") && { id: "inbox", label: "Inbox", href: c("/inbox") }],
-    contacts: [general && has("crm") && { id: "contacts", label: "Contactos", href: c("/contacts") }],
+    contacts: [
+      general && has("crm") && { id: "contacts", label: "Contactos", href: c("/contacts") },
+      general && has("crm") && { id: "pipeline", label: "Pipeline", href: c("/pipeline") },
+    ],
     agenda: [
       // The calendar: the agency, or any (non-staff) member ON THEIR OWN client — the same
       // people its page admits. (The old rail also showed it to a member looking at another
@@ -199,6 +203,7 @@ export function buildSections(ctx: NavContext): NavSection[] {
 const ROUTES: Array<{ re: RegExp; section: SectionId; page: PageId }> = [
   { re: /^\/inbox(?:\/|$)/, section: "inbox", page: "inbox" },
   { re: /^\/contacts\/fields(?:\/|$)/, section: "settings", page: "fields" },
+  { re: /^\/pipeline(?:\/|$)/, section: "contacts", page: "pipeline" },
   { re: /^\/contacts(?:\/|$)/, section: "contacts", page: "contacts" },
   { re: /^\/scheduling\/agenda(?:\/|$)/, section: "agenda", page: "calendar" },
   { re: /^\/scheduling\/staff(?:\/|$)/, section: "agenda", page: "team" },

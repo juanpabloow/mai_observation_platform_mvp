@@ -229,6 +229,7 @@ const SECTION_ICON: Record<SectionId, ReactNode> = {
   agency: Icon.modules,
 };
 const PAGE_ICON: Partial<Record<PageId, ReactNode>> = {
+  pipeline: Icon.overview,
   products: Icon.catalog,
   services: Icon.services,
   promotions: Icon.promotions,
