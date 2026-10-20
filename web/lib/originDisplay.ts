@@ -87,3 +87,45 @@ export function originGroupTone(group: OriginGroupKey): string {
       return "bg-warn-soft text-warn";
   }
 }
+
+// ── Contacts-LIST "Origen" column (AT) ───────────────────────────────────────────────
+// A slightly finer DISPLAY than the 4 filter groups: the list chip splits `booking_page` out
+// as its own "Página de reservas". The Anuncio chip may carry the accent token; the rest stay
+// neutral (`bg-chip`). Sorting + filtering still use the 4 groups above, so the column stays in
+// sync with the Origen filter.
+
+/** The chip the contacts list shows for a kind: { label, tone }. */
+export function originColumnChip(kind: OriginKind | null): { label: string; tone: string } {
+  if (kind === "meta_ad" || kind === "meta_post") return { label: "Anuncio", tone: "bg-accent/10 text-accent" };
+  if (kind === "booking_page") return { label: "Página de reservas", tone: "bg-chip text-muted" };
+  if (kind === "organic_whatsapp" || kind === "booked_by_contact") return { label: "Orgánico", tone: "bg-chip text-muted" };
+  if (kind === "manual") return { label: "Asignado manualmente", tone: "bg-chip text-muted" };
+  return { label: "Desconocido", tone: "bg-chip text-muted" };
+}
+
+export interface OriginColumnSource {
+  originKind: OriginKind | null;
+  adName: string | null;
+  adHeadline: string | null;
+  adIsTest: boolean | null;
+  campaignName: string | null;
+}
+
+/**
+ * The quieter second line under the chip. Ad origins show the ad name (fallback headline) · campaign
+ * — or "Anuncio de prueba" when the driving ad is a test ad. Organic/booked/manual get a short
+ * clarifier; booking_page and unknown get none.
+ */
+export function originColumnDetail(s: OriginColumnSource): string | null {
+  const { originKind, adName, adHeadline, adIsTest, campaignName } = s;
+  if (originKind === "meta_ad" || originKind === "meta_post") {
+    if (adIsTest) return "Anuncio de prueba";
+    const ad = (adName && adName.trim()) || (adHeadline && adHeadline.trim()) || null;
+    const parts = [ad, campaignName].filter((x): x is string => !!x && x.trim() !== "");
+    return parts.length ? parts.join(" · ") : null;
+  }
+  if (originKind === "organic_whatsapp") return "WhatsApp";
+  if (originKind === "booked_by_contact") return "Reservado por otra persona";
+  if (originKind === "manual") return campaignName && campaignName.trim() ? campaignName : null;
+  return null;
+}

@@ -7,7 +7,9 @@ import {
   type ContactTaskFilter,
 } from "@worker/db/repositories/contacts.js";
 import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
-import { channelLabel, consentLabel, sourceLabel, stageLabel } from "@/lib/contactLabels";
+import { channelLabel, consentLabel, stageLabel } from "@/lib/contactLabels";
+import { isOriginGroupKey, kindsForGroup, originGroupLabel, originGroupOf } from "@/lib/originDisplay";
+import { isUuid } from "@/lib/clientModuleValidation";
 import type { PreferredChannel } from "@worker/db/repositories/contacts.js";
 
 /**
@@ -88,6 +90,15 @@ export async function GET(
   const tasksRaw = p.get("tasks");
   const ownerRaw = p.get("owner");
   const search = p.get("q")?.trim() || undefined;
+  // Origen / Campaña facets + sort — the export honors what the screen is showing (and stays in
+  // sync with the Origen column). A forged campaign id is simply no filter (client-scoped EXISTS).
+  const originRaw = p.get("origin");
+  const originGroup = isOriginGroupKey(originRaw) ? originRaw : undefined;
+  const originKinds = originGroup ? kindsForGroup(originGroup) : undefined;
+  const includeNullOrigin = originGroup === "desconocido";
+  const campaignRaw = p.get("campaign");
+  const campaignId = campaignRaw && isUuid(campaignRaw) ? campaignRaw : undefined;
+  const sort: "recent" | "origin" = p.get("sort") === "origin" ? "origin" : "recent";
 
   const members = await listMembersForTenant(scope.tenantId);
   const ownerName = new Map(members.map((m) => [m.user_id, m.name ?? m.email]));
@@ -103,6 +114,10 @@ export async function GET(
     stage: stageRaw && STAGES.has(stageRaw) ? (stageRaw as ContactStage) : undefined,
     tasks: tasksRaw && TASK_FILTERS.has(tasksRaw) ? (tasksRaw as ContactTaskFilter) : undefined,
     owner,
+    originKinds,
+    includeNullOrigin,
+    campaignId,
+    sort,
     clientId: client.id, // ALWAYS the validated client — the export stays inside it
     limit: EXPORT_LIMIT,
   });
@@ -116,6 +131,8 @@ export async function GET(
     "Email",
     "Teléfono",
     "Origen",
+    "Campaña",
+    "Anuncio",
     "Stage",
     "Canal preferido",
     "Consentimiento",
@@ -140,7 +157,9 @@ export async function GET(
         c.name ?? "",
         c.email ?? "",
         c.phone_e164 ?? "",
-        sourceLabel(c.channel),
+        originGroupLabel(originGroupOf(c.origin_kind)),
+        c.origin_campaign_name ?? "",
+        c.origin_ad_is_test ? "Anuncio de prueba" : c.origin_ad_name ?? c.origin_ad_headline ?? "",
         stageLabel(c.stage),
         c.preferred_channel ? channelLabel(c.preferred_channel as PreferredChannel) : "",
         consentLabel(c.messaging_consent),
