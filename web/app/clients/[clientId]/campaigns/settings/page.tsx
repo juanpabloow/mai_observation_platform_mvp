@@ -5,6 +5,8 @@ import { hasFullAccess } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { getAttributionSettings, countPendingAttributions } from "@worker/db/repositories/attribution.js";
 import { getAttributionFailureCount } from "@worker/attribution/ingest.js";
+import { getPipelineSettings } from "@worker/db/repositories/pipeline.js";
+import { getPipelineFailureCount } from "@worker/pipeline/failures.js";
 import { AttributionSettingsPanel } from "@/components/campaigns/AttributionSettingsPanel";
 
 /**
@@ -23,13 +25,15 @@ export default async function AttributionSettingsPage({
   const { scope, client } = await requireClientModulePage(clientId, "campaigns");
   if (!hasFullAccess(scope)) notFound(); // agency only
 
-  const [settings, pending] = await Promise.all([
+  const [settings, pending, pipelineSettings] = await Promise.all([
     getAttributionSettings(scope.tenantId, client.id),
     countPendingAttributions(scope.tenantId),
+    getPipelineSettings(scope.tenantId, client.id),
   ]);
-  // In-memory per-process counter (resets on deploy): the web process accumulates live-ingestion
-  // failures from the /messages route. A rough health signal, labelled as such.
+  // In-memory per-process counters (reset on deploy): the web process accumulates live failures from
+  // the /messages route (attribution) and from the fail-safe pipeline hooks. Rough health signals.
   const failed = getAttributionFailureCount();
+  const pipelineFailed = getPipelineFailureCount();
 
   return (
     <main className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-[var(--content-pad)] px-4 py-6 sm:px-6">
@@ -46,6 +50,9 @@ export default async function AttributionSettingsPage({
         briefWindowDays={settings.brief_window_days}
         failedAttributions={failed}
         pendingAttributions={pending}
+        autoLostAfterHours={pipelineSettings.auto_lost_after_hours}
+        reopenWindowDays={pipelineSettings.reopen_window_days}
+        pipelineFailures={pipelineFailed}
       />
     </main>
   );

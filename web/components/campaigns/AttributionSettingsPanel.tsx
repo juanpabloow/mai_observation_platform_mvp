@@ -7,6 +7,7 @@ import {
   setAttributionBriefWindowDaysAction,
   setAttributionTrackingStartedAtAction,
 } from "@/lib/attributionActions";
+import { setPipelineSettingsAction } from "@/lib/pipelineActions";
 
 /**
  * Attribution settings (AT-2 §3) — agency only (the page + the actions both enforce it). Edits
@@ -27,6 +28,9 @@ export function AttributionSettingsPanel({
   briefWindowDays,
   failedAttributions,
   pendingAttributions,
+  autoLostAfterHours,
+  reopenWindowDays,
+  pipelineFailures,
 }: {
   clientId: string;
   clientName: string;
@@ -34,6 +38,9 @@ export function AttributionSettingsPanel({
   briefWindowDays: number;
   failedAttributions: number;
   pendingAttributions: number;
+  autoLostAfterHours: number;
+  reopenWindowDays: number;
+  pipelineFailures: number;
 }) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -41,6 +48,8 @@ export function AttributionSettingsPanel({
   const [saved, setSaved] = useState(false);
   const [tracking, setTracking] = useState(trackingStartedAt);
   const [brief, setBrief] = useState(String(briefWindowDays));
+  const [autoLost, setAutoLost] = useState(String(autoLostAfterHours));
+  const [reopen, setReopen] = useState(String(reopenWindowDays));
 
   const save = () => {
     setError(null);
@@ -54,6 +63,11 @@ export function AttributionSettingsPanel({
       const b = await setAttributionBriefWindowDaysAction(clientId, Number(brief));
       if (!b.ok) {
         setError(b.error ?? "No se pudo guardar.");
+        return;
+      }
+      const p = await setPipelineSettingsAction(clientId, { autoLostAfterHours: Number(autoLost), reopenWindowDays: Number(reopen) });
+      if (!p.ok) {
+        setError(p.error ?? "No se pudo guardar.");
         return;
       }
       setSaved(true);
@@ -96,6 +110,28 @@ export function AttributionSettingsPanel({
             />
           </label>
 
+          <div className="border-t border-line pt-5">
+            <h2 className="text-sm font-semibold text-foreground">Pipeline de ventas</h2>
+            <div className="mt-4 flex flex-col gap-5">
+              <label className="flex flex-col gap-1.5">
+                <span className="text-sm font-medium text-foreground">Auto-perder sin respuesta (horas)</span>
+                <span className="text-xs text-muted">
+                  Una oportunidad en Lead o Calificado donde el negocio respondió último y el cliente no
+                  contesta en estas horas se marca perdida (no_respondio). Entre 1 y 2160.
+                </span>
+                <input type="number" min={1} max={2160} value={autoLost} onChange={(e) => setAutoLost(e.target.value)} className={`${INPUT} w-28`} />
+              </label>
+              <label className="flex flex-col gap-1.5">
+                <span className="text-sm font-medium text-foreground">Ventana de reapertura (días)</span>
+                <span className="text-xs text-muted">
+                  Cuántos días tras perderse puede reabrirse una oportunidad (por un mensaje, una reserva o a
+                  mano). Pasado ese plazo, una nueva conversación abre una oportunidad nueva. Entre 0 y 365.
+                </span>
+                <input type="number" min={0} max={365} value={reopen} onChange={(e) => setReopen(e.target.value)} className={`${INPUT} w-28`} />
+              </label>
+            </div>
+          </div>
+
           {error ? (
             <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">
               {error}
@@ -127,6 +163,13 @@ export function AttributionSettingsPanel({
               <p className="text-xs text-muted">Fallos</p>
               <p className="mt-1 text-[0.6875rem] text-faint">
                 Fallos de atribución en vivo desde el último reinicio del proceso (señal aproximada).
+              </p>
+            </div>
+            <div className="rounded-xl border border-line bg-surface p-3">
+              <p className="u-mono text-2xl font-semibold text-foreground">{pipelineFailures}</p>
+              <p className="text-xs text-muted">Fallos de pipeline</p>
+              <p className="mt-1 text-[0.6875rem] text-faint">
+                Errores de los hooks de pipeline (a prueba de fallos) desde el último reinicio. Los sana el barrido.
               </p>
             </div>
           </div>
