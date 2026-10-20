@@ -11,7 +11,7 @@ test('the bot lists only bookable services; the agenda/settings list is unchange
   const route = read('web/app/api/scheduling/v1/services/route.ts');
   assert.match(route, /listBookableServicesForSite\(auth\.auth\.tenantId, owned\.site\.id\)/);
   assert.doesNotMatch(route, /listServicesForSite\(/);
-  for (const rel of ['web/app/clients/[clientId]/scheduling/agenda/page.tsx', 'web/app/clients/[clientId]/scheduling/admin/page.tsx']) {
+  for (const rel of ['web/app/clients/[clientId]/scheduling/agenda/page.tsx', 'web/lib/schedulingSettingsData.ts']) {
     assert.match(read(rel), /listServicesForSite\(/, `${rel} keeps the full list`);
   }
 });

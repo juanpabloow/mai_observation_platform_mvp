@@ -93,9 +93,12 @@ test('team UI + sidebar speak client roles (owner/setter/staff)', () => {
   assert.match(members, /Save role/);
   assert.doesNotMatch(members, /setMemberSchedulingAccessAction/);
 
+  // The rail's role logic lives in the one section model (lib/sectionNav.ts).
   const sidebar = read('web/components/AppSidebar.tsx');
+  const model = read('web/lib/sectionNav.ts');
+  assert.match(model, /clientRole === "staff"/);
+  assert.match(model, /const manage = isAgency \|\| \(clientRole === "owner" && forOwnClient\)/);
+  assert.match(model, /const general = /);
   assert.match(sidebar, /clientRole === "staff"/);
-  assert.match(sidebar, /canManageThisClient/);
-  assert.match(sidebar, /canSeeGeneral/);
-  assert.doesNotMatch(sidebar, /schedulingAccess/);
+  assert.doesNotMatch(sidebar + model, /schedulingAccess/);
 });

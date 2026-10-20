@@ -117,7 +117,11 @@ const DUP_STAFF_NAME = "Ya existe un profesional activo con ese nombre en esta s
 const EMPLOYMENT_TYPES: readonly string[] = ["full_time", "part_time", "contractor"];
 
 function revalidateAdmin(clientId: string): void {
-  revalidatePath(`/clients/${clientId}/scheduling/admin`);
+  // «Configuración de agenda» became one page per job (lib/schedulingNav.ts); every one of
+  // them renders site/service/staff/exception data, so all are invalidated together.
+  for (const p of ["sites", "rules", "hours", "exceptions", "services", "promotions", "booking-page"]) {
+    revalidatePath(`/clients/${clientId}/scheduling/${p}`);
+  }
   revalidatePath(`/clients/${clientId}/scheduling/agenda`);
   // The roster moved to Team, so a staff edit has to invalidate that page too —
   // otherwise a saved profile keeps showing the old values until a hard reload.

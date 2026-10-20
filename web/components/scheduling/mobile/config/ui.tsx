@@ -24,7 +24,10 @@ export type ConfigScreen =
   | "servicio"
   | "bloqueos"
   | "bloqueo-nuevo"
-  | "reglas";
+  | "reglas"
+  /** Horarios y ausencias (phone): the entry to the existing «Sedes y horarios», «Equipo»
+   *  and «Bloqueos» screens — the same rows the old «Configuración» home had. */
+  | "horarios";
 
 const OWN_PARAMS = ["m", "id", "cat", "plantilla", "vista"];
 
@@ -38,6 +41,9 @@ export interface ConfigNav {
   back: (parent: ConfigScreen | null, parentId?: string | null) => void;
   /** Change a parameter of the CURRENT screen without a history entry. */
   setParam: (k: string, v: string | null) => void;
+  /** The label of the root screen's "‹" when it does not lead back to «Configuración»
+   *  (each settings page now opens on its own screen, whose back goes to the agenda). */
+  rootLabel?: string;
 }
 
 /**

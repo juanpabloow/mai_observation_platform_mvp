@@ -83,7 +83,8 @@ function toConflict(a: Awaited<ReturnType<typeof listActiveAppointmentsOverlappi
 
 function revalidate(clientId: string): void {
   revalidatePath(`/clients/${clientId}/scheduling/agenda`);
-  revalidatePath(`/clients/${clientId}/scheduling/admin`);
+  revalidatePath(`/clients/${clientId}/scheduling/hours`);
+  revalidatePath(`/clients/${clientId}/scheduling/exceptions`);
   revalidatePath(`/clients/${clientId}/scheduling/staff`);
 }
 

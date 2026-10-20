@@ -66,11 +66,15 @@ test('inbox pages are inbox-gated (unified + legacy thread); per-workflow defers
 });
 
 test('sidebar hides Conversations/Inbox (and its polling badge) when inbox is off', () => {
+  // The Inbox section exists only when the module is on (lib/sectionNav.ts — a section
+  // with no visible page is dropped), and the polling badge rides ONLY that section.
+  const model = read('web/lib/sectionNav.ts');
+  assert.ok(model.includes('inbox: [general && has("inbox") && { id: "inbox"'), 'the Inbox item is inbox-gated');
+  assert.ok(model.includes('if (visible.length === 0) return null;'), 'a section with no visible page is not rendered');
   const src = read('web/components/AppSidebar.tsx');
-  assert.ok(src.includes('moduleKeys.includes("inbox")'), 'the Inbox item is inbox-gated');
-  // The pending-count endpoint (polling) lives inside that gated block.
-  const gated = src.slice(src.indexOf('moduleKeys.includes("inbox")'));
-  assert.ok(gated.slice(0, 400).includes('/pending-count'), 'the pending badge/poll is inside the gate');
+  assert.ok(src.includes('countEndpoint: sec.id === "inbox" ? `/api/inbox/${clientId}/pending-count` : undefined'), 'the pending badge/poll is inside the gate');
+  // The off-client stand-in for a setter polls only when inbox is on.
+  assert.match(src, /memberModules\.includes\("inbox"\)\s*\? \[\{ key: "inbox"[^\n]*pending-count/);
 });
 
 test('disable policy + owner/admin-only toggle are wired in the module action', () => {

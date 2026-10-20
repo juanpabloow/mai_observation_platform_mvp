@@ -8,7 +8,7 @@ import { PUBLIC_REASON_LABEL, publicReasonPreview, publicReasonsFor, type Public
  * customer (through the assistant). A controlled list, default "No mostrar motivo"; it is
  * independent of the internal "Motivo" field and never pre-filled from it. The preview
  * shows the exact sentence the assistant may use. Used by every block form (agenda time
- * off, Equipo, Configuración → Bloqueos, desktop and phone).
+ * off, Equipo, Agenda → Horarios y ausencias, desktop and phone).
  */
 
 /** The value the form actually submits: a code the scope allows, else null. */

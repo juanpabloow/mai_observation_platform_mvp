@@ -59,8 +59,10 @@ export function HoursGrid({ grid, setGrid }: { grid: HourGrid; setGrid: (g: Hour
   return (
     <div className="flex flex-col gap-1">
       {DAYS.map((d) => (
-        <div key={d} className="flex items-center gap-2 text-xs">
-          <label className="flex w-16 items-center gap-1">
+        // On a phone the two times share the row (they no longer push past the card) and a
+        // pause note drops below them; from sm up the row reads as before.
+        <div key={d} className="flex flex-wrap items-center gap-2 text-xs sm:flex-nowrap">
+          <label className="flex w-16 shrink-0 items-center gap-1">
             <input
               type="checkbox"
               checked={grid[d].on}
@@ -73,17 +75,17 @@ export function HoursGrid({ grid, setGrid }: { grid: HourGrid; setGrid: (g: Hour
             value={grid[d].start}
             disabled={!grid[d].on}
             onChange={(e) => setGrid({ ...grid, [d]: { ...grid[d], start: e.target.value } })}
-            className={INPUT}
+            className={`${INPUT} min-w-0 flex-1 sm:flex-none`}
           />
           <input
             type="time"
             value={grid[d].end}
             disabled={!grid[d].on}
             onChange={(e) => setGrid({ ...grid, [d]: { ...grid[d], end: e.target.value } })}
-            className={INPUT}
+            className={`${INPUT} min-w-0 flex-1 sm:flex-none`}
           />
           {grid[d].on && grid[d].pauses?.length ? (
-            <span className="text-faint">{grid[d].pauses!.map((p) => `Pausa ${p.start}–${p.end}`).join(" · ")}</span>
+            <span className="basis-full pl-[4.5rem] text-faint sm:basis-auto sm:pl-0">{grid[d].pauses!.map((p) => `Pausa ${p.start}–${p.end}`).join(" · ")}</span>
           ) : null}
         </div>
       ))}

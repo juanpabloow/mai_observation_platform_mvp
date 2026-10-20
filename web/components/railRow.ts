@@ -20,4 +20,22 @@
  * icon and has no label to space against.
  */
 export const RAIL_ROW =
-  "group relative mx-2.5 flex items-center rounded-[10px] text-[0.875rem] leading-[1.25] transition-colors";
+  "group relative mx-2 flex items-center rounded-[9px] text-[13px] leading-[1.25] tracking-[-0.01em] transition-colors";
+
+/**
+ * Heights: compact on the desktop rail — 34px rows and 30px sub-pages (one step under the
+ * proposal's 36/32, on request: "más compacto"); below xl the rail is the touch drawer,
+ * where every target stays 44px.
+ */
+export const RAIL_H = "min-h-[34px] max-xl:min-h-[44px]";
+export const RAIL_SUB_H = "min-h-[30px] max-xl:min-h-[44px]";
+
+/**
+ * Row STATES. The current page is the production red pill (theme-independent, white on
+ * --nav-active is 4.8:1). A group that is merely OPEN is not a location: it only lifts to
+ * the rail foreground. Idle rows are quiet until hovered; hover is a change of ground.
+ */
+export const RAIL_ACTIVE = "bg-nav-active font-semibold text-white";
+export const RAIL_IDLE = "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-fg";
+export const RAIL_OPEN = "font-medium text-sidebar-fg hover:bg-sidebar-hover";
+export const RAIL_SUB_IDLE = "text-sidebar-sub hover:bg-sidebar-hover hover:text-sidebar-fg";

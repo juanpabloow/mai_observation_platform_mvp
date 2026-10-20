@@ -22,8 +22,9 @@ test('setter is the operational client role: canAccessClient YES, workflow insig
   assert.match(access, /export function canAccessClient[\s\S]{0,200}if \(scope\.clientRole === "staff"\) return false/);
   // canSeeWorkflowInsights is the agency/OWNER-only capability — the Setter is excluded.
   assert.match(access, /export function canSeeWorkflowInsights[\s\S]{0,320}if \(scope\.clientRole !== "owner"\) return false/);
-  // The Setter lands on the INBOX (analytics would 404 for it).
-  assert.match(access, /clientRole === "setter".{0,80}\/inbox/);
+  // The Setter lands on the INBOX (analytics would 404 for it) — one shared rule.
+  assert.match(access, /memberLandingPath\(/);
+  assert.match(read('web/lib/landing.ts'), /clientRole === "setter".{0,80}\/inbox/);
   // No FUNCTIONAL 'editor' value remains in the role model.
   assert.doesNotMatch(access, /clientRole === "editor"/);
   assert.doesNotMatch(access, /!== "editor"/);
@@ -86,11 +87,14 @@ test('the header workflow switcher (and "All workflows") is hidden from a Setter
 
 test('sidebar: Setter gets inbox/contacts/agenda, not workflows/analytics', () => {
   const src = read('web/components/AppSidebar.tsx');
-  assert.match(src, /canSeeGeneral = !isMember \|\| \(\(clientRole === "owner" \|\| clientRole === "setter"\)/);
-  assert.match(src, /canSeeInsights = !isMember \|\| \(clientRole === "owner"/);
-  // Workflows/Analytics pushed only under insights; inbox under general access.
-  assert.match(src, /if \(canSeeInsights\) \{[\s\S]{0,400}key: "workflows"/);
-  assert.match(src, /canSeeGeneral && moduleKeys\.includes\("inbox"\)/);
+  const model = read('web/lib/sectionNav.ts');
+  assert.match(model, /const general = isAgency \|\| \(\(clientRole === "owner" \|\| clientRole === "setter"\) && forOwnClient\)/);
+  assert.match(model, /const insights = isAgency \|\| \(clientRole === "owner" && forOwnClient\)/);
+  // Workflows / Analíticas técnicas / Dashboard de valor only under insights; inbox under general.
+  assert.match(model, /insights && \{ id: "workflows"/);
+  assert.match(model, /insights && \{ id: "tech-analytics"/);
+  assert.match(model, /insights && \{ id: "value"/);
+  assert.match(model, /general && has\("inbox"\)/);
   // The off-client fallback sends a Setter to the inbox, never analytics.
   assert.match(src, /clientRole === "setter"[\s\S]{0,160}key: "inbox"/);
 });

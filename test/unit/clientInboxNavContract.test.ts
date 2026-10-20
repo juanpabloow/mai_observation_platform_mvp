@@ -31,46 +31,50 @@ function slice(src: string, start: string, end: string): string {
 
 // ─────────────────────────────── Sidebar ────────────────────────────────────
 
-test('sidebar: sections are ordered Workspace → CRM → Scheduling → Administration', () => {
-  // FINAL DESIGN: the rail is grouped by PLACE, not by workflow surface. The old
-  // "Workflows / Conversations" split collapsed into one WORKSPACE group holding
-  // Hub, Workflows and Inbox — see the next test for why.
+test('sidebar: the client rail is the proposal\'s three blocks, built from ONE section model, Módulos apart', () => {
+  // Operación (Inbox · Contactos · Agenda) | Negocio (Catálogo · Presencia y marketing ·
+  // Dashboard de valor) | Herramientas (Configuración · Automatizaciones), split by a
+  // hairline with no headings, and the agency's Módulos at the foot. Order, gates and labels
+  // live in lib/sectionNav.ts; its behaviour (every role × module) is sectionNav.test.ts.
   const src = read('components/AppSidebar.tsx');
   const ctx = slice(src, 'if (clientId) {', '} else if (isMember) {');
-  const order = ['label: "Workspace"', 'label: "CRM"', 'label: "Scheduling"', 'label: "Administration"'];
+  assert.ok(ctx.includes('buildSections({'), 'the client rail comes from buildSections');
+  assert.ok(ctx.includes('const here = locate(clientId, pathname);'), 'the current page comes from locate (direct links too)');
+  assert.ok(ctx.includes('const BLOCK_LABEL = { 1: "Operación", 2: "Negocio", 3: "Herramientas" } as const;'), 'the three blocks');
+  assert.ok(ctx.includes('divider: true'), 'split by a hairline, not titled');
+  assert.ok(ctx.includes('agency = { key: "modules", label: "Módulos"') && ctx.includes('tag: "AGENCIA"'), 'Módulos is apart, tagged AGENCIA');
+  for (const gone of ['label: "Workspace"', 'label: "CRM"', 'label: "Scheduling"', 'label: "Administration"']) {
+    assert.ok(!ctx.includes(gone), `${gone} heading is gone`);
+  }
+  const model = read('lib/sectionNav.ts');
+  const order = ['inbox: [', 'contacts: [', 'agenda: [', 'catalog: [', 'presence: [', 'results: [', 'settings: [', 'automations: [', 'agency: ['];
+  const pages = slice(model, 'const pages: Record<SectionId', 'return (Object.keys(pages)');
   let prev = -1;
   for (const marker of order) {
-    const i = idx(ctx, marker);
-    assert.ok(i > prev, `section ${marker} is in the expected order`);
-    prev = i;
+    const k = idx(pages, marker);
+    assert.ok(k > prev, `section ${marker} is in the expected order`);
+    prev = k;
   }
-  assert.ok(!ctx.includes('label: "Conversations"'), 'Inbox lives in Workspace, not its own group');
+  // The section search (on request) narrows the SAME permission-filtered model — it can
+  // never list a page the rail would not show. No ⌘K shortcut (not requested).
+  assert.ok(src.includes('placeholder="Buscar sección"') && src.includes('function filterSections('), 'a section search at the top of the rail');
+  assert.ok(src.includes('const shown = filterSections(sections, agency, searchable ? q : "");'), 'it filters the already-gated sections');
+  assert.ok(!src.includes('⌘K') && !/key(\.toLowerCase\(\))? === ["']k["']/.test(src), 'no ⌘K shortcut');
 });
 
-test('sidebar: WORKSPACE is Workflows → Analytics → Inbox (Hub removed from the rail)', () => {
-  // Workflows and Analytics are the client's two SCOPE-AWARE surfaces and both ride the
-  // rail (Analytics restored per request — it was already built). Executions and the
-  // per-workflow Settings are NOT rail items: they are reached from the Workflows list
-  // and the header scope switcher.
+test('sidebar: Automatizaciones = Workflows + Analíticas técnicas + Reuniones; the Dashboard de valor is Negocio', () => {
   const src = read('components/AppSidebar.tsx');
   assert.ok(!src.includes('key: "hub"'), 'Hub is no longer a rail item — the brand wordmark links home instead');
-  // Workflows + Analytics are INSIGHTS (agency/owner) — pushed only under canSeeInsights,
-  // so a Setter never sees them.
-  const insights = slice(src, 'if (canSeeInsights) {', 'if (canSeeGeneral && moduleKeys.includes("inbox"))');
-  assert.ok(insights.includes('key: "workflows"'), 'Workflows is an insights item');
-  assert.ok(insights.includes('scopeHref(clientId, "executions", scope)'), 'Workflows href comes from scopeHref');
-  assert.ok(insights.includes('key: "analytics"'), 'Analytics is an insights item');
-  // Analytics is the client's VALUE dashboard (/clients/<c>/analytics); the technical
-  // execution analytics of the workflows live under Workflows (its Ejecuciones | Analytics tabs).
-  assert.ok(insights.includes('href: c("/analytics")'), 'Analytics is the value dashboard');
-  assert.ok(src.includes('const onWorkflows = pathname.startsWith(c("/workflows"));'), 'active across all /workflows/… routes');
-  assert.ok(src.includes('const onAnalytics = pathname.startsWith(c("/analytics"));'), 'Analytics is active only on the value dashboard');
-  assert.ok(insights.includes('active: onWorkflows,'), 'workflow analytics keep the Workflows row active');
-  // Inbox rides the SAME Workspace group but is gated on GENERAL access (so a Setter sees it).
-  assert.ok(src.includes('canSeeGeneral && moduleKeys.includes("inbox")'), 'Inbox is gated on general access + the inbox module');
-  assert.ok(src.includes('sections.push({ label: "Workspace", items: workspace })'), 'Workspace is the first section');
-
-  // Executions and per-workflow Settings are still NOT rail items.
+  const model = read('lib/sectionNav.ts');
+  // Workflows (their executions) and the value dashboard are INSIGHTS (agency/owner) —
+  // a Setter never sees them. Both workflow entries follow the remembered scope.
+  assert.ok(model.includes('const insights = isAgency || (clientRole === "owner" && forOwnClient);'), 'insights = agency or own owner');
+  assert.ok(model.includes('insights && { id: "workflows", label: "Workflows", href: wf.executions }'), 'Workflows is insights, scope-aware');
+  assert.ok(model.includes('insights && { id: "tech-analytics", label: "Analíticas técnicas", href: wf.analytics }'), 'Analíticas técnicas is insights, scope-aware');
+  assert.ok(model.includes('results: [insights && { id: "value", label: "Dashboard de valor", href: c("/analytics") }]'), 'the value dashboard is insights');
+  assert.ok(src.includes('workflowScope: scopeFor(clientId)'), 'the remembered workflow scope rides the rail link');
+  // No duplicate destination: there is no all-workflows execution screen besides Workflows.
+  assert.ok(!model.includes('label: "Ejecuciones"'), 'no second entry for the same screen');
   const ctx = slice(src, 'if (clientId) {', '} else if (isMember) {');
   for (const gone of ['key: "executions"', 'key: "settings"']) {
     assert.ok(!ctx.includes(gone), `${gone} is not a rail item`);
@@ -102,47 +106,49 @@ test('sidebar: NO full workflow list — no workflows prop, no workflow query', 
 });
 
 test('sidebar: Inbox uses the unified client-level route + aggregated pending badge', () => {
+  const model = read('lib/sectionNav.ts');
+  assert.ok(model.includes('inbox: [general && has("inbox") && { id: "inbox", label: "Inbox", href: c("/inbox") }]'), 'Inbox → the unified /clients/{id}/inbox route, inbox-gated');
   const src = read('components/AppSidebar.tsx');
-  // The Conversations section is now gated by the inbox module; the Inbox item lives
-  // inside that block.
-  const conv = slice(src, 'moduleKeys.includes("inbox")', 'moduleKeys.includes("meetings")');
-  assert.ok(conv.includes('key: "inbox"'), 'the Conversations section is the Inbox');
-  assert.ok(conv.includes('href: c("/inbox")'), 'Inbox → the unified /clients/{id}/inbox route');
   assert.ok(
-    conv.includes('countEndpoint: `/api/inbox/${clientId}/pending-count`'),
+    src.includes('countEndpoint: sec.id === "inbox" ? `/api/inbox/${clientId}/pending-count` : undefined'),
     'Inbox keeps the aggregated client-level pending badge',
   );
 });
 
 test('sidebar: modules + roles still gate the entries', () => {
-  const src = read('components/AppSidebar.tsx');
-  assert.ok(src.includes('moduleKeys.includes("crm")'), 'Contacts gated by the crm module');
-  assert.ok(src.includes('moduleKeys.includes("scheduling")'), 'Agenda gated by the scheduling module');
-  // Administration (Users & access) is behind the client-admin capability; Modules stays
-  // agency-only and hidden for the default client.
-  assert.ok(src.includes('if (canManageThisClient) {'), 'Administration gated (agency or client owner)');
-  assert.ok(src.includes('!isMember && clientId !== defaultClientId'), 'Modules is agency-only + non-default');
+  const model = read('lib/sectionNav.ts');
+  assert.ok(model.includes('general && has("crm") && { id: "contacts"'), 'Contacts gated by the crm module');
+  assert.ok(model.includes('has("scheduling") && { id: "calendar"'), 'Agenda gated by the scheduling module');
+  assert.ok(model.includes('const schedManage = manage && has("scheduling") && !isDefault;'), 'scheduling settings: manage + module + non-default');
+  // Usuarios y accesos is behind the client-admin capability; Módulos stays agency-only
+  // and hidden for the default client.
+  assert.ok(model.includes('manage && { id: "users", label: "Usuarios y accesos"'), 'Usuarios y accesos gated (agency or client owner)');
+  assert.ok(model.includes('agency: [isAgency && !isDefault && { id: "modules"'), 'Módulos is agency-only + non-default');
 });
 
-test('sidebar: collapsed mode keeps navigation accessible (aria-label + tooltip + aria-current)', () => {
+test('sidebar: collapsed mode keeps navigation accessible (aria-label + tooltip + aria-current + group menus)', () => {
   const src = read('components/AppSidebar.tsx');
-  assert.ok(src.includes('aria-label={collapsed ? item.label : undefined}'), 'collapsed NavLink exposes its name');
-  assert.ok(src.includes('title={collapsed ? item.label : undefined}'), 'collapsed NavLink has a tooltip');
+  assert.ok(src.includes('aria-label={collapsed ? tip : undefined}'), 'collapsed NavLink exposes its name');
+  // The tooltip is CSS (u-rail-tip + data-tip) so it also shows on keyboard focus.
+  assert.ok(src.includes('data-tip={collapsed ? tip : undefined}'), 'collapsed NavLink has a tooltip');
+  assert.ok(read('app/globals.css').includes('.u-rail-tip[data-tip]:focus-visible::after'), 'the tooltip also shows on focus');
   assert.ok(src.includes('aria-current={item.active ? "page" : undefined}'), 'active item is aria-current="page"');
   assert.ok(src.includes('aria-label="Primary"'), 'the nav is a labelled landmark');
+  // A collapsed GROUP is one icon that opens a floating menu; Escape closes it and focus
+  // returns to the icon.
+  const fly = slice(src, 'function CollapsedGroup(', 'function BlockDivider(');
+  assert.ok(fly.includes('aria-expanded={open}') && fly.includes('aria-controls={panelId}'), 'the icon is a disclosure button');
+  assert.ok(fly.includes('if (e.key === "Escape")') && fly.includes('btnRef.current?.focus()'), 'Escape closes and returns focus');
   // Collapsed Inbox keeps an accessible name including the pending count.
   const inbox = read('components/InboxTabLink.tsx');
-  assert.ok(
-    inbox.includes('aria-label={count > 0 ? `${label}, ${count} pending` : label}'),
-    'collapsed Inbox has an accessible name with its count',
-  );
+  assert.ok(inbox.includes('aria-label={count > 0 ? `${label}, ${count} pendientes` : label}'), 'collapsed Inbox has an accessible name with its count');
 });
 
 test('sidebar: has a fixed account footer that opens the SHARED account menu', () => {
   const src = read('components/AppSidebar.tsx');
-  // The footer sits on the rail's own surface, separated by the rail's border —
-  // so it follows the Sidebar-appearance preference with the rest of the rail.
-  assert.ok(src.includes('border-t border-sidebar-border'), 'a bottom footer area exists');
+  // The footer sits on the rail's own surface; the proposal draws no rule above it (one
+  // continuous ground), the spacing is the separation.
+  assert.ok(src.includes('<div ref={footerRef} className={`relative shrink-0 ${collapsed ? "p-2 pb-3" : "pb-3 pt-1"}`}>'), 'a bottom footer area exists');
   assert.ok(src.includes('<AccountMenu'), 'the footer opens the shared AccountMenu (no duplicated actions)');
   assert.ok(src.includes('aria-haspopup="menu"'), 'the account trigger is a menu button');
 });

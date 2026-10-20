@@ -1,26 +1,27 @@
 "use client";
 
-import { createContext, useContext, useEffect, useState } from "react";
+import { createContext, useCallback, useContext, useState } from "react";
+import { LEGACY_SIDEBAR_COLLAPSED_KEY, sidebarCollapsedCookie } from "@/lib/sidebarCollapsed";
 
 /**
  * Shared sidebar UI state. Two independent axes:
  *  - `collapsed` (DESKTOP): the rail is a narrow icon-only strip vs the full width.
- *    Persisted to localStorage; the header's toggle flips it.
+ *    Persisted in the `sidebar-collapsed` COOKIE (lib/sidebarCollapsed.ts), which the
+ *    root layout reads during SSR and passes in as `initialCollapsed` — so the server
+ *    HTML and the first client render are the same, with no effect re-syncing it after
+ *    mount (that effect is what used to break hydration of the streamed rail).
  *  - `mobileOpen` (MOBILE): the rail is off-canvas and slides in as a drawer over a
  *    backdrop. NOT persisted (always starts closed); the header's hamburger opens it,
  *    and a nav click / backdrop / Escape closes it.
  * The header's controls and the sidebar live in separate subtrees, so the state
  * lives in a client context wrapping the whole shell.
- *
- * SSR + first client render use `collapsed = false` (expanded) to avoid a hydration
- * mismatch; the stored preference is applied in an effect right after mount (so a
- * user who collapsed it sees at most a brief expanded frame, never a mismatch).
  */
-const STORAGE_KEY = "sidebarCollapsed";
 
 interface SidebarState {
   collapsed: boolean;
   toggle: () => void;
+  /** Set (and persist) the collapsed state — used once to adopt the legacy value. */
+  setCollapsed: (collapsed: boolean) => void;
   mobileOpen: boolean;
   setMobileOpen: (open: boolean) => void;
 }
@@ -28,31 +29,41 @@ interface SidebarState {
 const SidebarContext = createContext<SidebarState>({
   collapsed: false,
   toggle: () => {},
+  setCollapsed: () => {},
   mobileOpen: false,
   setMobileOpen: () => {},
 });
 
-export function SidebarProvider({ children }: { children: React.ReactNode }) {
-  const [collapsed, setCollapsed] = useState(false);
+function persist(collapsed: boolean): void {
+  document.cookie = sidebarCollapsedCookie(collapsed);
+  // Kept in sync so an older tab of the app (still reading localStorage) agrees.
+  try {
+    window.localStorage.setItem(LEGACY_SIDEBAR_COLLAPSED_KEY, collapsed ? "1" : "0");
+  } catch {
+    /* storage unavailable (private mode) — the cookie is the source of truth */
+  }
+}
+
+export function SidebarProvider({
+  children,
+  initialCollapsed = false,
+}: {
+  children: React.ReactNode;
+  /** The server-read cookie value (app/layout.tsx), so SSR and hydration agree. */
+  initialCollapsed?: boolean;
+}) {
+  const [collapsed, setCollapsedState] = useState(initialCollapsed);
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  useEffect(() => {
-    // Apply the stored preference AFTER mount (SSR/first render use false) so the
-    // localStorage read never causes a hydration mismatch — this is intentional.
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (window.localStorage.getItem(STORAGE_KEY) === "1") setCollapsed(true);
+  const setCollapsed = useCallback((next: boolean) => {
+    setCollapsedState(next);
+    persist(next);
   }, []);
-
-  const toggle = () => {
-    setCollapsed((c) => {
-      const next = !c;
-      window.localStorage.setItem(STORAGE_KEY, next ? "1" : "0");
-      return next;
-    });
-  };
+  // No side effect inside a state updater (React may call it twice): read, then set.
+  const toggle = useCallback(() => setCollapsed(!collapsed), [collapsed, setCollapsed]);
 
   return (
-    <SidebarContext.Provider value={{ collapsed, toggle, mobileOpen, setMobileOpen }}>
+    <SidebarContext.Provider value={{ collapsed, toggle, setCollapsed, mobileOpen, setMobileOpen }}>
       {children}
     </SidebarContext.Provider>
   );

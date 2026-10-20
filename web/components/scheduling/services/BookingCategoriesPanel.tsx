@@ -62,7 +62,7 @@ export function BookingCategoriesPanel({ clientId, categories }: { clientId: str
       <div className="flex flex-wrap items-start gap-3">
         <div className="min-w-0 flex-1">
           <h3 id="bp-cats-title" className="text-[15px] font-semibold">
-            Página de reservas · Categorías
+            Categorías
           </h3>
           <p className="mt-0.5 text-[13px] text-muted">
             Cómo se agrupan los servicios en la página pública, en este orden. Sin categorías, la página agrupa por tipo de servicio como hasta ahora.

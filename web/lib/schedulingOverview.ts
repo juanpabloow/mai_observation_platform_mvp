@@ -8,7 +8,7 @@ import { CATEGORY_GROUPS } from "@/components/scheduling/services/categories";
  * TWO DIFFERENT THINGS share the word "categoría" in the product, and these helpers keep
  * them apart:
  *   - the STORED category — `services.category`, chosen by the operator, NULL when unset.
- *     Configuración → Servicios groups by it ("Sin categoría" for NULL), so the Resumen,
+ *     Catálogo → Servicios groups by it ("Sin categoría" for NULL), so the Resumen,
  *     which summarises that configuration, counts it too.
  *   - the VISUAL family — `serviceCategory(name, category)`: the stored one, or for an
  *     uncategorised service one INFERRED from its name. The agenda's colour key, Nueva
@@ -24,7 +24,7 @@ type Svc = { name: string; category: string | null };
 const NAMED = new Set<string>(CATEGORY_GROUPS.map((g) => g.value).filter(Boolean));
 const storedOf = (s: Svc): string | null => (s.category && NAMED.has(s.category) ? s.category : null);
 
-/** Distinct STORED categories in use — the non-empty groups of Configuración → Servicios. */
+/** Distinct STORED categories in use — the non-empty groups of Catálogo → Servicios. */
 export function assignedCategoryCount(services: Svc[]): number {
   return new Set(services.map(storedOf).filter((c): c is string => c !== null)).size;
 }

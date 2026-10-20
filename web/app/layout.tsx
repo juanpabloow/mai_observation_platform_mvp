@@ -8,6 +8,7 @@ import { ScopeProviderServer } from "@/components/ScopeProviderServer";
 import { ScopeSync } from "@/components/ScopeSync";
 import { Providers } from "./providers";
 import { parseSidebarTheme, SIDEBAR_THEME_COOKIE } from "@/lib/sidebarTheme";
+import { parseSidebarCollapsed, SIDEBAR_COLLAPSED_COOKIE } from "@/lib/sidebarCollapsed";
 import { isChromelessPath } from "@/lib/shellChrome";
 import { parseTextScale, TEXT_SCALE_COOKIE } from "@/lib/textScale";
 import { parseTopbarPref, resolveTopbarPref, TOPBAR_COOKIE } from "@/lib/topbarPref";
@@ -39,6 +40,10 @@ export default async function RootLayout({
   // no flash, no client round-trip. An absent/unknown cookie resolves to the dark rail.
   const jar = await cookies();
   const sidebarTheme = parseSidebarTheme(jar.get(SIDEBAR_THEME_COOKIE)?.value);
+  // Collapsed rail: the same kind of cookie preference (lib/sidebarCollapsed.ts). Read here
+  // so the server draws the rail exactly as the browser's first render will — no
+  // hydration mismatch, no expand-then-collapse jump.
+  const sidebarCollapsed = parseSidebarCollapsed(jar.get(SIDEBAR_COLLAPSED_COOKIE)?.value);
   // Text size is the same kind of preference (see lib/textScale.ts): read here so the
   // very first frame is already at the chosen scale, with no resize flash.
   const textScale = parseTextScale(jar.get(TEXT_SCALE_COOKIE)?.value);
@@ -73,7 +78,7 @@ export default async function RootLayout({
           brand at its top; the header starts AFTER it and spans only the content
           column (it is no longer a full-width bar above everything). */}
       <body className="h-full overflow-hidden flex flex-col">
-        <Providers>
+        <Providers sidebarCollapsed={sidebarCollapsed}>
           {/* ScopeProviderServer seeds the client scope context (per-client "current
               workflow") from the request; ScopeSync keeps it URL-accurate across
               client-side navigation. Both wrap the header + sidebar so those read the
@@ -95,9 +100,9 @@ export default async function RootLayout({
                 fallback={
                   chromeless ? null : (
                     <div
-                      data-collapsed="false"
+                      data-collapsed={sidebarCollapsed ? "true" : "false"}
                       aria-hidden
-                      className="hidden w-[var(--sidebar-width)] shrink-0 border-r border-sidebar-border bg-sidebar-bg xl:block"
+                      className={`hidden ${sidebarCollapsed ? "w-16" : "w-[var(--sidebar-width)]"} shrink-0 border-r border-sidebar-border bg-sidebar-bg xl:block`}
                     />
                   )
                 }

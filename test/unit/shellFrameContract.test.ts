@@ -32,7 +32,9 @@ test('the frame keys on the rail being present, desktop only — never a route l
 
 test('the streaming rail placeholder is framed, and skipped on chromeless screens', () => {
   const layout = read('app/layout.tsx');
-  assert.ok(layout.includes('data-collapsed="false"'), 'the placeholder already frames the first paint');
+  // It carries data-collapsed (so the first paint is already framed) with the SERVER-read
+  // collapsed preference, so its width also matches the rail that streams in after it.
+  assert.ok(layout.includes('data-collapsed={sidebarCollapsed ? "true" : "false"}'), 'the placeholder already frames the first paint');
   assert.ok(layout.includes('chromeless ? null'), 'auth / booking never get a placeholder rail');
   for (const p of ['/login', '/signup', '/logout', '/forgot-password', '/reset-password', '/book/x']) assert.ok(isChromelessPath(p), p);
   for (const p of ['/', '/clients/x/scheduling/agenda', '/contacts', '/bookings']) assert.ok(!isChromelessPath(p), p);

@@ -104,7 +104,7 @@ export function BlocksList({
   return (
     <Screen
       label="Bloqueos"
-      header={<SubHeader backLabel="Configuración" onBack={() => nav.back(null)} title="Bloqueos" sub="Horas en las que no se aceptan citas" />}
+      header={<SubHeader backLabel={nav.rootLabel ?? "Configuración"} onBack={() => nav.back(null)} title="Bloqueos" sub="Horas en las que no se aceptan citas" />}
       footer={
         <MButton kind="primary" grow onClick={() => nav.go("bloqueo-nuevo")} disabled={sites.length === 0}>
           Nuevo bloqueo

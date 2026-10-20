@@ -1,6 +1,7 @@
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
+import { canAccessMeetings } from "@/lib/access";
 import { MeetingWorkspace } from "@/components/reuniones/MeetingWorkspace";
 import { MeetingDeletionProvider } from "@/components/reuniones/MeetingDeletion";
 import {
@@ -30,6 +31,8 @@ export default async function MeetingPage({
   await connection();
   const { clientId, meetingId } = await params;
   const { scope, client } = await requireClientModulePage(clientId, "meetings");
+  // Agency or this client's owner only — recepción gets the same 404 (lib/access.ts).
+  if (!canAccessMeetings(scope, clientId)) notFound();
 
   const meeting = await getMeeting({ tenantId: scope.tenantId, clientId: client.id }, meetingId);
   if (!meeting) notFound();

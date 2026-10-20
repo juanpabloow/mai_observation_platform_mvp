@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { RAIL_ROW } from "@/components/railRow";
+import { RAIL_ACTIVE, RAIL_H, RAIL_IDLE, RAIL_ROW } from "@/components/railRow";
 
 const POLL_MS = 5000;
 
@@ -11,10 +11,9 @@ const POLL_MS = 5000;
  * pending count). Polls on mount and every ~5s, paused while the tab is hidden.
  *
  * Renders to match the sidebar's other nav items and supports the rail's two states:
- *   - expanded: icon + label, count badge on the right;
- *   - collapsed (`collapsed`): icon only, centered, with an accessible tooltip
- *     (`title` + `aria-label` that includes the pending count) and a small dot when
- *     there are pending conversations.
+ *   - expanded: icon + label, the pending count as a small red pill on the right;
+ *   - collapsed (`collapsed`): icon only, centered, with a tooltip on hover/focus, the
+ *     count folded into the accessible name and a compact pill over the icon.
  */
 export function InboxTabLink({
   href,
@@ -81,9 +80,14 @@ export function InboxTabLink({
   // The SAME row as every other rail row, from the SAME constant — see the note on
   // RAIL_ROW in components/railRow.ts. Imported rather than re-typed: the row height is
   // exactly what drifts when two components spell it out separately.
-  const base = `${RAIL_ROW} ${
-    collapsed ? "justify-center px-0 py-2.5" : "gap-3 px-2.5 py-2.5"
-  } ${active ? "bg-nav-active font-semibold text-white" : "text-sidebar-muted hover:bg-sidebar-hover hover:text-sidebar-fg"}`;
+  const base = `${RAIL_ROW} ${RAIL_H} ${
+    collapsed ? "justify-center px-0" : "gap-2.5 pl-2.5 pr-1"
+  } ${active ? RAIL_ACTIVE : RAIL_IDLE} ${collapsed ? "u-rail-tip" : ""}`;
+  // The count itself (proposal): a small red pill; on the red active row it turns white so
+  // it never disappears into the pill.
+  const pill = `flex h-5 min-w-5 items-center justify-center rounded-full px-1.5 text-[11.5px] font-semibold tabular-nums ${
+    active ? "bg-white text-nav-active" : "bg-nav-active text-white"
+  }`;
 
   // Collapsed: icon only, tooltip + count folded into the accessible name; a small dot
   // signals pending without a number (there's no room for the badge).
@@ -93,13 +97,15 @@ export function InboxTabLink({
         href={href}
         onClick={onNavigate}
         aria-current={active ? "page" : undefined}
-        aria-label={count > 0 ? `${label}, ${count} pending` : label}
-        title={count > 0 ? `${label} · ${count} pending` : label}
+        aria-label={count > 0 ? `${label}, ${count} pendientes` : label}
+        data-tip={count > 0 ? `${label} · ${count} pendientes` : label}
         className={base}
       >
         {icon ? <span className="shrink-0" aria-hidden>{icon}</span> : <span>{label}</span>}
         {count > 0 ? (
-          <span aria-hidden className={`absolute right-1.5 top-1.5 size-2 rounded-full ${active ? "bg-white" : "bg-nav-active"}`} />
+          <span aria-hidden className={`absolute right-1 top-0.5 ${pill} h-4 min-w-4 px-1 text-[10px]`}>
+            {count > 99 ? "99+" : count}
+          </span>
         ) : null}
       </Link>
     );
@@ -115,14 +121,9 @@ export function InboxTabLink({
       {icon ? <span className="shrink-0" aria-hidden>{icon}</span> : null}
       <span className="flex-1 truncate">{label}</span>
       {count > 0 ? (
-        // A red DOT rather than a number, per the design. The count is not lost —
-        // it rides the accessible name and the tooltip.
-        <span
-          role="status"
-          aria-label={`${count} pending`}
-          title={`${count} pending`}
-          className={`ml-2 size-2 shrink-0 rounded-full ${active ? "bg-white" : "bg-nav-active"}`}
-        />
+        <span role="status" aria-label={`${count} conversaciones esperan respuesta`} className={`ml-2 shrink-0 ${pill}`}>
+          {count > 99 ? "99+" : count}
+        </span>
       ) : null}
     </Link>
   );

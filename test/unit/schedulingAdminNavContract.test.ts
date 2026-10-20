@@ -33,27 +33,55 @@ test('sidebar: the Hub (tenant level) has NO Scheduling admin', () => {
   const hub = slice(src, 'Owner/admin tenant level', 'return (');
   assert.ok(!hub.includes('/scheduling/admin'), 'no /scheduling/admin link at the Hub');
   assert.ok(!/scheduling/i.test(hub) || !hub.includes('label: "Scheduling'), 'no Scheduling section at the Hub');
-  assert.ok(hub.includes('label: "Workspace"'), 'the Hub keeps its Workspace section (Hub + Clients & Workflows)');
+  assert.ok(hub.includes('label: "Agencia"') && hub.includes('label: "Clientes y workflows"'), 'the Hub keeps its agency section (Clientes y workflows)');
 });
 
-test('sidebar: Configuración de agenda appears INSIDE a client, gated by module + role + non-default', () => {
-  const src = read('components/AppSidebar.tsx');
-  const sched = slice(src, 'if (moduleKeys.includes("scheduling")) {', 'sections.push({ label: "Scheduling"');
-  // Agenda always; Scheduling settings only for owner/admin on a non-default client.
-  assert.ok(sched.includes('key: "agenda"'), 'Agenda is in the client Scheduling section');
-  assert.ok(sched.includes('canManageThisClient && clientId !== defaultClientId'), 'settings gated: agency/owner + non-default');
-  assert.ok(sched.includes('key: "scheduling-settings"'), 'the settings item is present');
-  assert.ok(sched.includes('label: "Configuración de agenda"'), 'the user-facing name is clear and Spanish');
-  assert.ok(sched.includes('c("/scheduling/admin")'), 'settings → the per-client canonical admin route');
+// «Configuración de agenda» became one PAGE per job (lib/schedulingNav.ts), spread over
+// the Agenda, Catálogo, Presencia and Configuración sections (lib/sectionNav.ts).
+const SETTINGS_PAGES = ['sites', 'rules', 'hours', 'services', 'promotions', 'booking-page'] as const;
+
+test('sidebar: the scheduling settings appear INSIDE a client, gated by module + role + non-default', () => {
+  const model = read('lib/sectionNav.ts');
+  assert.ok(model.includes('const schedManage = manage && has("scheduling") && !isDefault;'), 'settings gated: agency/owner + module + non-default');
+  for (const [id, href] of [
+    ['team', '/scheduling/staff'],
+    ['hours', '/scheduling/hours'],
+    ['services', '/scheduling/services'],
+    ['promotions', '/scheduling/promotions'],
+    ['booking-page', '/scheduling/booking-page'],
+    ['reviews', '/scheduling/reviews'],
+    ['sites', '/scheduling/sites'],
+    ['rules', '/scheduling/rules'],
+  ] as const) {
+    assert.match(model, new RegExp(`schedManage && \\{ id: "${id}", label: "[^"]+", href: c\\("${href}"\\) \\}`), `${id} is behind the settings gate`);
+  }
+  // The calendar: agency or a member on their own client (the people its page admits).
+  assert.ok(model.includes('(isAgency || forOwnClient) && has("scheduling") && { id: "calendar", label: "Calendario", href: c("/scheduling/agenda") }'), 'Agenda → calendar');
+  assert.ok(!model.includes('/scheduling/admin"'), 'nothing links to the legacy admin route any more');
 });
 
-test('canonical page: agency/owner + scheduling-module gate, renders the client-scoped AdminPanel', () => {
-  const src = read('app/clients/[clientId]/scheduling/admin/page.tsx');
-  assert.ok(src.includes('canManageClient(scope, clientId)'), 'client-admin gate (agency or client owner; editors/staff 404)');
-  assert.ok(src.includes('requireClientModulePage(clientId, "scheduling")'), 'tenant+client+non-default+enabled gate');
-  assert.ok(src.includes('clientId: client.id'), 'sites/staff loaded with the VALIDATED client id');
-  assert.ok(src.includes('<AdminPanel'), 'renders the AdminPanel');
-  assert.ok(src.includes('clientId={client.id}'), 'AdminPanel is scoped to the route client (no selector)');
+test('canonical pages: agency/owner + scheduling-module gate, client-scoped data', () => {
+  for (const page of SETTINGS_PAGES) {
+    const src = read(`app/clients/[clientId]/scheduling/${page}/page.tsx`);
+    assert.ok(src.includes('requireClientModulePage(clientId, "scheduling")'), `${page}: tenant+client+non-default+enabled gate`);
+    assert.ok(src.includes('if (!canManageClient(scope, clientId)) notFound();'), `${page}: client-admin gate (agency or client owner; setters/staff 404)`);
+    assert.ok(src.includes('loadSchedulingSettings(scope.tenantId, client)'), `${page}: data loaded with the VALIDATED client`);
+    assert.ok(src.includes(`<SchedulingSettings page="${page}"`), `${page}: renders its own page of the shared settings`);
+  }
+  const data = read('lib/schedulingSettingsData.ts');
+  assert.ok(data.includes('clientId: client.id'), 'sites/staff loaded with the VALIDATED client id');
+  // The legacy route keeps the SAME gate before it redirects, so it never tells a refused
+  // user where the settings live.
+  const legacy = read('app/clients/[clientId]/scheduling/admin/page.tsx');
+  assert.ok(legacy.includes('requireClientModulePage(clientId, "scheduling")') && legacy.includes('if (!canManageClient(scope, clientId)) notFound();'), 'legacy admin: same gate');
+  assert.ok(legacy.includes('redirect(legacyAdminDestination(client.id, await searchParams))'), 'legacy admin → the page that owns the screen');
+  assert.ok(!legacy.includes('SchedulingSettings') && !legacy.includes('AdminPanel'), 'and renders nothing itself');
+  const avail = read('app/clients/[clientId]/scheduling/availability/page.tsx');
+  assert.ok(avail.includes('requireClientModulePage(clientId, "scheduling")') && avail.includes('canManageClient(scope, clientId)'), 'legacy availability: same gate');
+  assert.ok(avail.includes('legacyAvailabilityDestination('), 'legacy availability → Horarios y ausencias');
+  const exc = read('app/clients/[clientId]/scheduling/exceptions/page.tsx');
+  assert.ok(exc.includes('requireClientModulePage(clientId, "scheduling")') && exc.includes('if (!canManageClient(scope, clientId)) notFound();'), 'Excepciones: same gate');
+  assert.ok(exc.includes('redirect(schedulingHref(client.id, "hours", undefined, ABSENCES_ANCHOR))'), 'Excepciones → Horarios y ausencias #ausencias');
 });
 
 test('AdminPanel: no client selector — a single route client threads into every action', () => {
@@ -70,7 +98,7 @@ test('AdminPanel: no client selector — a single route client threads into ever
   // Services moved to the services menu + its editor; they thread the SAME route clientId.
   const editor = read('components/scheduling/services/ServiceEditor.tsx');
   const menu = read('components/scheduling/services/ServiceMenu.tsx');
-  assert.ok(src.includes('<ServiceMenu\n              clientId={clientId}'), 'the services menu receives the route client');
+  assert.ok(src.includes('<ServiceMenu\n                clientId={clientId}'), 'the services menu receives the route client');
   assert.ok(editor.includes('setSiteServiceAction(clientId, siteId, serviceId, on)'), 'setSiteService carries clientId');
   assert.ok(editor.includes('setStaffServiceAction(clientId, staffId, serviceId, on)'), 'setStaffService carries clientId');
   assert.ok(editor.includes('createServiceAction({ clientId,') && editor.includes('updateServiceAction(clientId,'), 'create/update service carry clientId');

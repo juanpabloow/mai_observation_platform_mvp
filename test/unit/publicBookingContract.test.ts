@@ -142,7 +142,7 @@ test('logs in the public routes never carry the phone, email, name or Turnstile 
   }
 });
 
-test('Configuración de agenda shows the booking link of each site, built from the current origin', () => {
+test('Página de reservas shows the booking link of each site, built from the current origin', () => {
   const panel = root('web/components/scheduling/AdminPanel.tsx');
   assert.ok(panel.includes('<BookingLinkCard'), 'rendered in the site detail');
   const card = root('web/components/scheduling/BookingLinkCard.tsx');
@@ -151,7 +151,7 @@ test('Configuración de agenda shows the booking link of each site, built from t
   }
   assert.ok(card.includes('window.location.origin'), 'the URL uses the current origin');
   assert.ok(!/localhost|railway\.app|up\.railway/.test(code(card)), 'no hard-coded host');
-  assert.ok(root('web/app/clients/[clientId]/scheduling/admin/page.tsx').includes('isSchedulingBookable(tenantId, client.id)'), 'status from real data');
+  assert.ok(root('web/lib/schedulingSettingsData.ts').includes('isSchedulingBookable(tenantId, client.id)'), 'status from real data');
 });
 
 test('headers: /book gets nosniff + Referrer-Policy + Permissions-Policy; no global CSP was improvised', () => {
