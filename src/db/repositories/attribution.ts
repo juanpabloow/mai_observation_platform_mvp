@@ -463,6 +463,8 @@ export interface AdWithStatsRow extends AdRow {
   campaign_name: string | null;
   leads: number;
   touches: number;
+  /** When this ad last brought a LEAD (max occurred_at over the contacts it first-touched); null if none. */
+  last_lead_at: Date | null;
 }
 
 /** A campaign plus how many ads are assigned to it. */
@@ -521,13 +523,36 @@ export async function listAdsWithStats(
                WHERE t.tenant_id = a.tenant_id AND t.client_id = a.client_id AND t.ad_id = a.id) AS touches,
             (SELECT count(*)::int FROM contacts ct
                JOIN attribution_touches ft ON ft.id = ct.first_touch_id
-              WHERE ct.tenant_id = a.tenant_id AND ct.client_id = a.client_id AND ft.ad_id = a.id) AS leads
+              WHERE ct.tenant_id = a.tenant_id AND ct.client_id = a.client_id AND ft.ad_id = a.id) AS leads,
+            (SELECT max(ft.occurred_at) FROM contacts ct
+               JOIN attribution_touches ft ON ft.id = ct.first_touch_id
+              WHERE ct.tenant_id = a.tenant_id AND ct.client_id = a.client_id AND ft.ad_id = a.id) AS last_lead_at
        FROM ads a
        LEFT JOIN campaigns c ON c.id = a.campaign_id
       WHERE a.tenant_id = $1 AND a.client_id = $2
         ${opts.includeTest ? '' : 'AND a.is_test = false'}
       ORDER BY a.last_seen_at DESC, a.id`,
     [tenantId, clientId],
+  );
+  return r.rows;
+}
+
+/** The LEADS a single ad brought: the contacts whose FIRST touch is this ad, newest lead first.
+ *  Read-only, tenant+client scoped. `name` may be null (a contact with no name yet). */
+export interface AdLeadRow {
+  id: string;
+  name: string | null;
+  occurred_at: Date;
+}
+export async function listAdLeads(tenantId: string, clientId: string, adId: string, limit = 100): Promise<AdLeadRow[]> {
+  const r = await query<AdLeadRow>(
+    `SELECT ct.id, ct.name, ft.occurred_at
+       FROM contacts ct
+       JOIN attribution_touches ft ON ft.id = ct.first_touch_id
+      WHERE ct.tenant_id = $1 AND ct.client_id = $2 AND ft.ad_id = $3
+      ORDER BY ft.occurred_at DESC, ct.id
+      LIMIT $4`,
+    [tenantId, clientId, adId, limit],
   );
   return r.rows;
 }

@@ -62,6 +62,7 @@ export default async function ClientCampaignsPage({
         touches: a.touches,
         first_seen_at: a.first_seen_at.toISOString(),
         last_seen_at: a.last_seen_at.toISOString(),
+        last_lead_at: a.last_lead_at ? a.last_lead_at.toISOString() : null,
       }))}
       campaigns={campaigns.map((c) => ({
         id: c.id,

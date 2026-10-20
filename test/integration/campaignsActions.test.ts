@@ -1,10 +1,12 @@
 import { strict as assert } from 'node:assert';
+import { randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { resolve as resolvePath } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { after, mock, test } from 'node:test';
 import { query } from '../../src/db/client.js';
-import { cleanupTenant, closeDb, seedMember, seedScenario } from './fixtures.js';
+import { getOrCreateConversation } from '../../src/db/repositories/handoff.js';
+import { cleanupTenant, closeDb, seedContact, seedMember, seedScenario, seedWorkflow } from './fixtures.js';
 
 /**
  * AT-2 §4 — the Campañas permission matrix + validation, by hitting the server ACTIONS directly
@@ -26,7 +28,7 @@ mock.module(urlOf('next/headers'), { namedExports: { headers: async () => new He
 mock.module(urlOf('next/cache'), { namedExports: { revalidatePath: () => {}, revalidateTag: () => {} } });
 const asUser = (id: string) => { CURRENT = { id, email: `${id.slice(0, 8)}@test.local` }; };
 
-const { createCampaignAction, updateCampaignAction, endCampaignAction, assignAdsToCampaignAction, createAdAction, updateAdAction, uploadAdCoverAction, removeAdCoverAction } = await import('../../web/lib/campaignsActions.js');
+const { createCampaignAction, updateCampaignAction, endCampaignAction, assignAdsToCampaignAction, createAdAction, updateAdAction, uploadAdCoverAction, removeAdCoverAction, listAdLeadsAction } = await import('../../web/lib/campaignsActions.js');
 const { setAttributionBriefWindowDaysAction } = await import('../../web/lib/attributionActions.js');
 after(closeDb);
 
@@ -66,6 +68,49 @@ test('AT-2 manage: cross-client refused', async () => {
     asUser(ownerOfA);
     assert.equal((await createCampaignAction({ clientId: s.otherClientId, name: 'B' })).ok, false, 'owner of A cannot create in B');
   } finally { await cleanupTenant(s.tenantId); }
+});
+
+test('AT-UI listAdLeadsAction: READ-tier (setter ✓), returns the ad\'s leads, cross-client + module-off refused', async () => {
+  const s = await seedScenario({ enableCampaigns: true });
+  try {
+    const setter = await seedMember(s.tenantId, { role: 'member', clientId: s.clientId, clientRole: 'setter' });
+    // Seed an ad and a contact whose FIRST touch is that ad (a lead of the ad).
+    const wfRef = `wf-${randomUUID()}`;
+    await seedWorkflow(s.tenantId, s.clientId, wfRef);
+    const ad = await one<{ id: string }>(
+      `INSERT INTO ads (tenant_id, client_id, platform, source_type, external_id) VALUES ($1,$2,'meta','ad',$3) RETURNING id`,
+      [s.tenantId, s.clientId, `ext-${randomUUID().slice(0, 10)}`],
+    );
+    const contact = await seedContact(s.tenantId, s.clientId, { name: 'Lead Uno', channelUserId: `wa:${randomUUID().slice(0, 8)}` });
+    const conv = await getOrCreateConversation(s.tenantId, wfRef, `co-${randomUUID()}`);
+    const msg = await one<{ id: string }>(
+      `INSERT INTO handoff_messages (tenant_id, conversation_id, sender, status, text, content_type, occurred_at) VALUES ($1,$2,'user','received','ref','text', now()) RETURNING id`,
+      [s.tenantId, conv.id],
+    );
+    const touch = await one<{ id: string }>(
+      `INSERT INTO attribution_touches (tenant_id, client_id, contact_id, conversation_id, message_id, ad_id, occurred_at) VALUES ($1,$2,$3,$4,$5,$6, now()) RETURNING id`,
+      [s.tenantId, s.clientId, contact, conv.id, msg.id, ad.id],
+    );
+    await query(`UPDATE contacts SET first_touch_id=$2 WHERE id=$1`, [contact, touch.id]);
+
+    asUser(setter);
+    const r = await listAdLeadsAction(s.clientId, ad.id);
+    assert.ok(r.ok, 'a setter may READ the Campañas section');
+    assert.equal(r.ok && r.leads.length, 1, 'the ad has one lead');
+    assert.equal(r.ok && r.leads[0].id, contact, 'the lead links to the contact');
+
+    // The same ad id under ANOTHER client is not found (isolation).
+    const cross = await listAdLeadsAction(s.otherClientId, ad.id);
+    assert.equal(cross.ok, false, 'cross-client read refused');
+  } finally { await cleanupTenant(s.tenantId); }
+
+  // Module OFF → refused.
+  const off = await seedScenario({ enableCampaigns: false });
+  try {
+    const owner = await seedMember(off.tenantId, { role: 'member', clientId: off.clientId, clientRole: 'owner' });
+    asUser(owner);
+    assert.equal((await listAdLeadsAction(off.clientId, randomUUID())).ok, false, 'module off → refused');
+  } finally { await cleanupTenant(off.tenantId); }
 });
 
 test('AT-2 validation: a brief over 1500 chars is refused server-side', async () => {

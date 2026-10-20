@@ -11,12 +11,15 @@ import {
   createAdAction,
   createCampaignAction,
   endCampaignAction,
+  listAdLeadsAction,
   removeAdCoverAction,
   updateAdAction,
   updateCampaignAction,
   uploadAdCoverAction,
 } from "@/lib/campaignsActions";
 import { downscaleImage } from "@/components/scheduling/staff/StaffPhotoControl";
+import { type AdGroup, groupAdsByCampaign, hasCover, shareOfGroup, tileLabel } from "@/lib/adsGallery";
+import { relativeAgeShort } from "@/lib/format";
 
 /**
  * Per-client CAMPAÑAS manager (AT-2). Mirrors the catalog/scheduling visual language so it reads
@@ -47,6 +50,8 @@ export interface AdItem {
   touches: number;
   first_seen_at: string;
   last_seen_at: string;
+  /** AT-UI: when this ad last brought a lead (relative "Último lead hace…"), or null. */
+  last_lead_at: string | null;
 }
 
 export interface CampaignItem {
@@ -227,10 +232,12 @@ function AdsTab({
   refresh: () => void;
 }) {
   const [showTest, setShowTest] = useState(false);
+  const [selectMode, setSelectMode] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<AdItem | null>(null);
+  const [detailId, setDetailId] = useState<string | null>(null);
   const hasTest = ads.some((a) => a.is_test);
   const assignable = campaigns.filter((c) => c.status !== "ended");
   const q = search.trim().toLocaleLowerCase("es");
@@ -242,7 +249,10 @@ function AdsTab({
         (a.headline ?? "").toLocaleLowerCase("es").includes(q) ||
         a.external_id.includes(q)),
   );
+  const groups = useMemo(() => groupAdsByCampaign(visible), [visible]);
   const noRealAds = ads.filter((a) => !a.is_test).length === 0;
+  // The panel reads the ad from the live list by id, so a refresh (edit / assign / cover) flows in.
+  const detailAd = detailId ? ads.find((a) => a.id === detailId) ?? null : null;
 
   const toggle = (id: string) =>
     setSelected((prev) => {
@@ -251,13 +261,17 @@ function AdsTab({
       else next.add(id);
       return next;
     });
+  const exitSelect = () => {
+    setSelectMode(false);
+    setSelected(new Set());
+  };
 
   const bulkAssign = (campaignId: string | null) => {
     const ids = [...selected];
     if (ids.length === 0) return;
     run(async () => {
       const r = await assignAdsToCampaignAction(clientId, ids, campaignId);
-      if (r.ok) setSelected(new Set());
+      if (r.ok) exitSelect();
       return r;
     });
   };
@@ -286,39 +300,11 @@ function AdsTab({
             </div>
           </div>
         ) : (
-          <div className="flex flex-col gap-3 rounded-xl border border-line bg-surface p-3 sm:p-4">
-            <div className="flex flex-wrap items-center gap-2 border-b border-line pb-3">
-              {canManage && selected.size > 0 ? (
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className="u-mono text-xs text-muted">{selected.size} seleccionado{selected.size === 1 ? "" : "s"}</span>
-                  <select
-                    aria-label="Asignar seleccionados a una campaña"
-                    disabled={pending}
-                    className={INPUT}
-                    defaultValue=""
-                    onChange={(e) => {
-                      const v = e.target.value;
-                      e.target.value = "";
-                      if (v === "") return;
-                      bulkAssign(v === "__none__" ? null : v);
-                    }}
-                  >
-                    <option value="" disabled>
-                      Asignar a…
-                    </option>
-                    {assignable.map((c) => (
-                      <option key={c.id} value={c.id}>
-                        {c.name}
-                      </option>
-                    ))}
-                    <option value="__none__">Quitar de la campaña</option>
-                  </select>
-                </div>
-              ) : (
-                <span className="shrink-0 text-xs text-muted">
-                  {visible.length} anuncio{visible.length === 1 ? "" : "s"}
-                </span>
-              )}
+          <>
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="shrink-0 text-xs text-muted">
+                {visible.length} anuncio{visible.length === 1 ? "" : "s"}
+              </span>
               <input
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -339,18 +325,46 @@ function AdsTab({
               ) : null}
             </div>
 
-            {visible.map((ad) => (
-              <AdRow
-                key={ad.id}
-                clientId={clientId}
-                ad={ad}
-                campaigns={assignable}
+            {selectMode && canManage ? (
+              <div className="sticky top-0 z-10 flex flex-wrap items-center gap-2 rounded-lg border border-line bg-card/95 px-3 py-2 shadow-sm backdrop-blur">
+                <span className="u-mono text-xs text-muted">
+                  {selected.size} seleccionado{selected.size === 1 ? "" : "s"}
+                </span>
+                <select
+                  aria-label="Asignar seleccionados a una campaña"
+                  disabled={pending || selected.size === 0}
+                  className={INPUT}
+                  defaultValue=""
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    e.target.value = "";
+                    if (v === "") return;
+                    bulkAssign(v === "__none__" ? null : v);
+                  }}
+                >
+                  <option value="" disabled>Asignar a…</option>
+                  {assignable.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                  <option value="__none__">Quitar de la campaña</option>
+                </select>
+                <button type="button" className={`${GHOST} ml-auto`} onClick={exitSelect}>
+                  Cancelar
+                </button>
+              </div>
+            ) : null}
+
+            {groups.map((group) => (
+              <AdGroupSection
+                key={group.key ?? "__none__"}
+                group={group}
                 canManage={canManage}
-                run={run}
-                pending={pending}
-                selected={selected.has(ad.id)}
-                onToggle={() => toggle(ad.id)}
-                onEdit={() => setEditing(ad)}
+                selectMode={selectMode}
+                selected={selected}
+                onToggleSelect={toggle}
+                onEnterSelect={() => setSelectMode(true)}
+                onExitSelect={exitSelect}
+                onOpenDetail={setDetailId}
               />
             ))}
             {visible.length === 0 ? (
@@ -358,7 +372,7 @@ function AdsTab({
                 <p className="text-xs text-muted">Ningún anuncio coincide con la búsqueda.</p>
               </div>
             ) : null}
-          </div>
+          </>
         )}
       </div>
 
@@ -405,127 +419,352 @@ function AdsTab({
           }}
         />
       ) : null}
+
+      {detailAd ? (
+        <AdDetailPanel
+          key={detailAd.id}
+          ad={detailAd}
+          clientId={clientId}
+          canManage={canManage}
+          campaigns={assignable}
+          run={run}
+          pending={pending}
+          refresh={refresh}
+          onClose={() => setDetailId(null)}
+          onEdit={() => {
+            const a = detailAd;
+            setDetailId(null);
+            setEditing(a);
+          }}
+        />
+      ) : null}
     </PageShell>
   );
 }
 
-function AdRow({
-  clientId,
-  ad,
-  campaigns,
+// A campaign group: header (name + totals + Seleccionar toggle; a prompt for the unassigned group)
+// and a responsive grid of cover-first tiles.
+function AdGroupSection({
+  group,
   canManage,
-  run,
-  pending,
+  selectMode,
   selected,
-  onToggle,
-  onEdit,
+  onToggleSelect,
+  onEnterSelect,
+  onExitSelect,
+  onOpenDetail,
 }: {
-  clientId: string;
-  ad: AdItem;
-  campaigns: CampaignItem[];
+  group: AdGroup<AdItem>;
   canManage: boolean;
-  run: Run;
-  pending: boolean;
-  selected: boolean;
-  onToggle: () => void;
-  onEdit: () => void;
+  selectMode: boolean;
+  selected: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onEnterSelect: () => void;
+  onExitSelect: () => void;
+  onOpenDetail: (id: string) => void;
 }) {
-  // Name is the main label when present (the Ads Manager name); the creative headline drops to the
-  // body line so both stay visible. A pre-registered ad with no touches reads "Sin leads todavía".
-  const label = ad.name || ad.headline || "(sin titular)";
+  const title = group.isUnassigned ? "Sin campaña" : group.name ?? "Campaña";
   return (
-    <article className="flex flex-wrap items-start gap-3 overflow-hidden rounded-xl border border-line bg-surface px-4 py-3.5">
-      {canManage ? (
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={onToggle}
-          aria-label={`Seleccionar anuncio ${ad.external_id}`}
-          className="mt-1 size-4 shrink-0"
-        />
-      ) : null}
-      {ad.cover_url ? (
-        // eslint-disable-next-line @next/next/no-img-element -- the ad's own cover (R2 public bucket)
-        <img src={ad.cover_url} alt="" className="size-12 shrink-0 rounded-lg border border-line object-cover" />
-      ) : (
-        <span aria-hidden className="flex size-12 shrink-0 items-center justify-center rounded-lg border border-line bg-subtle text-muted">
-          <svg viewBox="0 0 24 24" className="size-5" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <rect x="3" y="3" width="18" height="18" rx="2" />
-            <circle cx="8.5" cy="8.5" r="1.5" />
-            <path d="m21 15-5-5L5 21" />
-          </svg>
+    <section aria-label={title} className="flex flex-col gap-2.5">
+      <div className={`flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg px-3 py-2 ${group.isUnassigned ? "bg-warn-soft" : "bg-subtle/60"}`}>
+        <h2 className={`text-sm font-semibold ${group.isUnassigned ? "text-warn" : "text-foreground"}`}>{title}</h2>
+        <span className="u-mono text-[0.6875rem] text-faint">
+          {group.totalLeads} lead{group.totalLeads === 1 ? "" : "s"} · {group.adCount} anuncio{group.adCount === 1 ? "" : "s"}
         </span>
-      )}
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 className="truncate text-sm font-semibold text-foreground">{label}</h3>
-          <span className="rounded-full bg-chip px-2 py-0.5 text-[0.625rem] font-medium text-muted">
-            {ad.source_type === "post" ? "Publicación" : "Anuncio"}
-          </span>
-          {ad.is_test ? (
-            <span className="rounded-full bg-warn-soft px-2 py-0.5 text-[0.625rem] font-medium text-warn">Prueba</span>
-          ) : null}
-          {ad.campaign_name ? (
-            <span className="rounded-full bg-accent/10 px-2 py-0.5 text-[0.625rem] font-medium text-accent">{ad.campaign_name}</span>
-          ) : (
-            <span className="rounded-full bg-warn-soft px-2 py-0.5 text-[0.625rem] font-medium text-warn">Sin configurar</span>
-          )}
-          {ad.bot_note ? (
-            <span className="rounded-full bg-chip px-2 py-0.5 text-[0.625rem] font-medium text-muted" title={ad.bot_note}>
-              nota
-            </span>
-          ) : null}
-          <AdId externalId={ad.external_id} />
-        </div>
-        {ad.name && ad.headline ? <p className="mt-1 truncate text-xs text-muted">{ad.headline}</p> : null}
-        {ad.body ? <p className="mt-1 line-clamp-2 text-xs text-muted">{ad.body}</p> : null}
-        <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.6875rem] text-faint">
-          {ad.touches === 0 ? (
-            <span>Sin leads todavía</span>
-          ) : (
-            <>
-              <span className="u-mono">{ad.leads} lead{ad.leads === 1 ? "" : "s"}</span>
-              <span className="u-mono">{ad.touches} contacto{ad.touches === 1 ? "" : "s"}</span>
-            </>
-          )}
-          {ad.media_type ? <span>{ad.media_type}</span> : null}
-          <span>Visto {fmtDate(ad.first_seen_at)} → {fmtDate(ad.last_seen_at)}</span>
-          {ad.video_url || ad.source_url ? (
-            <a href={(ad.video_url ?? ad.source_url) as string} target="_blank" rel="noreferrer noopener" className="text-accent hover:underline">
-              Ver anuncio ↗
+        {canManage ? (
+          <button type="button" aria-pressed={selectMode} onClick={() => (selectMode ? onExitSelect() : onEnterSelect())} className={`${GHOST} ml-auto`}>
+            {selectMode ? "Listo" : "Seleccionar"}
+          </button>
+        ) : null}
+        {group.isUnassigned ? (
+          <p className="basis-full text-xs text-muted">Asigna estos anuncios a una campaña para que el asistente los reconozca.</p>
+        ) : null}
+      </div>
+      <div className="grid grid-cols-2 gap-3 sm:[grid-template-columns:repeat(auto-fill,minmax(180px,1fr))]">
+        {group.ads.map((ad) => (
+          <AdTile
+            key={ad.id}
+            ad={ad}
+            groupLeads={group.totalLeads}
+            groupIsUnassigned={group.isUnassigned}
+            canManage={canManage}
+            selectMode={selectMode}
+            selected={selected.has(ad.id)}
+            onToggleSelect={() => onToggleSelect(ad.id)}
+            onOpenDetail={() => onOpenDetail(ad.id)}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+// The tile: the creative cover is the dominant element (opens the creative); the body below opens
+// the detail panel. Both are reachable by keyboard and touch (no hover-only affordances).
+function AdTile({
+  ad,
+  groupLeads,
+  groupIsUnassigned,
+  canManage,
+  selectMode,
+  selected,
+  onToggleSelect,
+  onOpenDetail,
+}: {
+  ad: AdItem;
+  groupLeads: number;
+  groupIsUnassigned: boolean;
+  canManage: boolean;
+  selectMode: boolean;
+  selected: boolean;
+  onToggleSelect: () => void;
+  onOpenDetail: () => void;
+}) {
+  const label = tileLabel(ad);
+  const creativeHref = ad.video_url ?? ad.source_url;
+  const isVideo = !!ad.video_url;
+  const withCover = hasCover(ad);
+  const sharePct = Math.round(shareOfGroup(ad.leads, groupLeads) * 100);
+  const shareWhat = groupIsUnassigned ? "los anuncios sin campaña" : "la campaña";
+  return (
+    <article className="relative flex flex-col overflow-hidden rounded-xl border border-line bg-surface">
+      {selectMode && canManage ? (
+        <label className="absolute left-2 top-2 z-20 flex items-center justify-center rounded-md border border-line-strong bg-surface/90 p-1 shadow-sm">
+          <input type="checkbox" checked={selected} onChange={onToggleSelect} aria-label={`Seleccionar ${label}`} className="size-4" />
+        </label>
+      ) : null}
+
+      <div className="relative aspect-[4/5] w-full bg-subtle">
+        {withCover ? (
+          creativeHref ? (
+            <a href={creativeHref} target="_blank" rel="noreferrer noopener" aria-label={`Ver el anuncio ${label} en Facebook`} className="u-focus block size-full">
+              {/* eslint-disable-next-line @next/next/no-img-element -- the ad's own cover (R2 public bucket) */}
+              <img src={ad.cover_url!} alt={label} loading="lazy" className="size-full object-cover" />
             </a>
-          ) : null}
-        </div>
+          ) : (
+            // eslint-disable-next-line @next/next/no-img-element -- the ad's own cover (R2 public bucket)
+            <img src={ad.cover_url!} alt={label} loading="lazy" className="size-full object-cover" />
+          )
+        ) : (
+          <button type="button" onClick={onOpenDetail} className="u-focus flex size-full flex-col items-center justify-center gap-2 p-3 text-center">
+            <span className="line-clamp-4 text-sm font-medium text-foreground">{ad.headline || label}</span>
+            {canManage ? <span className="text-xs text-accent underline underline-offset-2">Subir portada</span> : null}
+          </button>
+        )}
+
+        {withCover && isVideo ? (
+          <span aria-hidden className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <span className="flex size-10 items-center justify-center rounded-full bg-black/55 text-white">
+              <svg viewBox="0 0 24 24" className="size-5" fill="currentColor"><path d="M8 5v14l11-7z" /></svg>
+            </span>
+          </span>
+        ) : null}
+
+        {ad.source_type === "post" ? (
+          <span className="absolute bottom-2 left-2 rounded-full bg-surface/90 px-2 py-0.5 text-[0.625rem] font-medium text-muted">Publicación</span>
+        ) : null}
+        {ad.is_test ? (
+          <span className="absolute bottom-2 right-2 rounded-full bg-warn-soft px-2 py-0.5 text-[0.625rem] font-medium text-warn">Prueba</span>
+        ) : null}
+        {ad.bot_note ? (
+          <span title="Tiene una nota para el asistente" aria-label="Tiene una nota para el asistente" className="absolute right-2 top-2 flex size-6 items-center justify-center rounded-full bg-surface/90 text-muted">
+            <svg viewBox="0 0 24 24" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.8"><path d="M12 20h9" /><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" /></svg>
+          </span>
+        ) : null}
       </div>
 
-      {canManage ? (
-        <div className="flex shrink-0 items-center gap-2">
-          <button type="button" className={GHOST} onClick={onEdit} aria-haspopup="dialog">
-            Editar
-          </button>
-          <label>
-            <span className="sr-only">Campaña del anuncio {ad.external_id}</span>
-            <select
-              aria-label={`Campaña del anuncio ${ad.external_id}`}
-              disabled={pending}
-              value={ad.campaign_id ?? ""}
-              onChange={(e) => {
-                const v = e.target.value;
-                run(() => assignAdsToCampaignAction(clientId, [ad.id], v === "" ? null : v));
-              }}
-              className={`${INPUT} max-w-[11rem]`}
-            >
-              <option value="">Sin campaña</option>
-              {campaigns.map((c) => (
-                <option key={c.id} value={c.id}>
-                  {c.name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-      ) : null}
+      <button type="button" onClick={onOpenDetail} aria-label={`Ver detalle de ${label}`} className="u-focus flex flex-1 flex-col items-start gap-1.5 p-2.5 text-left transition-colors hover:bg-subtle/40">
+        <span className="line-clamp-1 w-full text-sm font-medium text-foreground">{label}</span>
+        <span className="text-lg font-semibold leading-none tabular-nums text-foreground">
+          {ad.leads}
+          <span className="ml-1 text-xs font-normal text-muted">lead{ad.leads === 1 ? "" : "s"}</span>
+        </span>
+        <span role="img" aria-label={`${sharePct}% de los leads de ${shareWhat}`} className="block h-1.5 w-full overflow-hidden rounded-full bg-chip">
+          <span className="block h-full rounded-full bg-accent" style={{ width: `${sharePct}%` }} />
+        </span>
+        {ad.last_lead_at ? (
+          <time dateTime={ad.last_lead_at} title={fmtDate(ad.last_lead_at)} className="text-[0.6875rem] text-faint">Último lead {relativeAgeShort(ad.last_lead_at)}</time>
+        ) : (
+          <span className="text-[0.6875rem] text-faint">Sin leads todavía</span>
+        )}
+      </button>
     </article>
+  );
+}
+
+function Detail({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-1">
+      <span className="text-xs font-medium text-foreground">{label}</span>
+      <p className="whitespace-pre-wrap text-sm text-muted">{children}</p>
+    </div>
+  );
+}
+
+// The detail panel: large (uncropped) cover, full copy + note, campaign, Meta id (copy), lead/touch
+// explanation, the ad's leads linking to each contact, and — for editors — edit / assign / cover.
+function AdDetailPanel({
+  ad,
+  clientId,
+  canManage,
+  campaigns,
+  run,
+  pending,
+  refresh,
+  onClose,
+  onEdit,
+}: {
+  ad: AdItem;
+  clientId: string;
+  canManage: boolean;
+  campaigns: CampaignItem[];
+  run: Run;
+  pending: boolean;
+  refresh: () => void;
+  onClose: () => void;
+  onEdit: () => void;
+}) {
+  const [leads, setLeads] = useState<Array<{ id: string; name: string | null; occurredAt: string }> | null>(null);
+  const [leadsError, setLeadsError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  const closeRef = useRef(onClose);
+  useEffect(() => { closeRef.current = onClose; }, [onClose]);
+  const close = useCallback(() => closeRef.current(), []);
+  const panelRef = useTrappedPanel({ active: true, onClose: close });
+
+  // The panel is keyed by ad id, so state starts fresh per ad; the effect only fetches (no
+  // synchronous setState in the effect body — see the set-state-in-effect lint rule).
+  useEffect(() => {
+    let alive = true;
+    listAdLeadsAction(clientId, ad.id)
+      .then((r) => { if (!alive) return; if (r.ok) setLeads(r.leads); else setLeadsError(r.error); })
+      .catch(() => { if (alive) setLeadsError("No se pudieron cargar los leads."); });
+    return () => { alive = false; };
+  }, [clientId, ad.id]);
+
+  const label = tileLabel(ad);
+  const creativeHref = ad.video_url ?? ad.source_url;
+  const firstLead = leads && leads.length ? leads[leads.length - 1].occurredAt : null;
+  const lastLead = leads && leads.length ? leads[0].occurredAt : ad.last_lead_at ?? null;
+  const copyId = async () => {
+    try {
+      await navigator.clipboard.writeText(ad.external_id);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard blocked — the id is shown in full beside the button */
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-5">
+      <button type="button" aria-label={`Cerrar ${label}`} className={OVERLAY_SCRIM} onClick={close} />
+      <section ref={panelRef} role="dialog" aria-modal="true" aria-label={label} tabIndex={-1} className="relative z-50 flex max-h-[min(900px,calc(100dvh-2rem))] w-full flex-col overflow-hidden rounded-t-2xl border border-line bg-surface sm:max-w-3xl sm:rounded-2xl">
+        <header className="flex shrink-0 items-start gap-4 border-b border-line px-4 py-3.5 sm:px-5">
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-base font-semibold text-foreground">{label}</h2>
+            <p className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted">
+              <span>{ad.source_type === "post" ? "Publicación" : "Anuncio"}</span>
+              {ad.campaign_name ? <span>· {ad.campaign_name}</span> : <span className="text-warn">· Sin campaña</span>}
+              {ad.is_test ? <span className="text-warn">· Prueba</span> : null}
+            </p>
+          </div>
+          <button type="button" onClick={close} aria-label="Cerrar" className="flex size-9 shrink-0 items-center justify-center rounded-lg text-lg text-muted transition hover:bg-subtle hover:text-foreground">×</button>
+        </header>
+
+        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
+          <div className="grid gap-5 sm:grid-cols-[minmax(0,260px)_1fr]">
+            <div className="flex flex-col gap-3">
+              <div className="overflow-hidden rounded-xl border border-line bg-subtle">
+                {hasCover(ad) ? (
+                  // eslint-disable-next-line @next/next/no-img-element -- the ad's own cover (R2 public bucket)
+                  <img src={ad.cover_url!} alt={label} className="max-h-[50vh] w-full object-contain" />
+                ) : (
+                  <div className="flex aspect-[4/5] w-full items-center justify-center p-4 text-center">
+                    <span className="text-sm font-medium text-foreground">{ad.headline || label}</span>
+                  </div>
+                )}
+              </div>
+              {creativeHref ? (
+                <a href={creativeHref} target="_blank" rel="noreferrer noopener" className="u-focus inline-flex items-center gap-1 text-sm font-medium text-accent hover:underline">
+                  Ver anuncio ↗
+                </a>
+              ) : null}
+              {canManage ? <AdCoverControl clientId={clientId} adId={ad.id} coverUrl={ad.cover_url} onChanged={refresh} /> : null}
+            </div>
+
+            <div className="flex flex-col gap-4">
+              <div className="flex flex-wrap items-end gap-5">
+                <div>
+                  <div className="text-2xl font-semibold tabular-nums text-foreground">{ad.leads}</div>
+                  <div className="text-xs text-muted">lead{ad.leads === 1 ? "" : "s"}</div>
+                </div>
+                <div>
+                  <div className="text-2xl font-semibold tabular-nums text-foreground">{ad.touches}</div>
+                  <div className="text-xs text-muted">contacto{ad.touches === 1 ? "" : "s"}</div>
+                </div>
+              </div>
+              {ad.touches !== ad.leads ? (
+                <p className="text-xs text-muted">«Leads» son las personas cuyo primer contacto fue este anuncio; «contactos» cuenta cada vez que alguien escribió desde él (una misma persona puede volver).</p>
+              ) : null}
+
+              <div className="flex flex-col gap-1 text-xs text-muted">
+                <span>Primer lead: {firstLead ? fmtDate(firstLead) : leads ? "—" : "…"}</span>
+                <span>Último lead: {lastLead ? fmtDate(lastLead) : "Sin leads todavía"}</span>
+              </div>
+
+              {ad.headline ? <Detail label="Titular">{ad.headline}</Detail> : null}
+              {ad.body ? <Detail label="Texto del anuncio">{ad.body}</Detail> : null}
+              {ad.bot_note ? <Detail label="Nota para el asistente">{ad.bot_note}</Detail> : null}
+
+              {canManage ? (
+                <label className="flex flex-col gap-1.5">
+                  <span className="text-xs font-medium text-foreground">Campaña</span>
+                  <select value={ad.campaign_id ?? ""} disabled={pending} className={`${INPUT} w-full`} onChange={(e) => { const v = e.target.value; run(() => assignAdsToCampaignAction(clientId, [ad.id], v === "" ? null : v)); }}>
+                    <option value="">Sin campaña</option>
+                    {campaigns.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                  </select>
+                </label>
+              ) : null}
+
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs font-medium text-foreground">Id de Meta</span>
+                <div className="flex items-center gap-2">
+                  <code className="u-mono min-w-0 flex-1 truncate rounded-md bg-chip px-2 py-1 text-xs text-muted">{ad.external_id}</code>
+                  <button type="button" onClick={copyId} className={GHOST}>{copied ? "Copiado" : "Copiar"}</button>
+                </div>
+              </div>
+
+              <div className="flex flex-col gap-1.5">
+                <span className="text-xs font-medium text-foreground">Leads de este anuncio</span>
+                {leads === null && !leadsError ? <p className="text-xs text-muted">Cargando…</p> : null}
+                {leadsError ? <p role="alert" className="text-xs text-danger">{leadsError}</p> : null}
+                {leads && leads.length === 0 ? <p className="text-xs text-muted">Sin leads todavía.</p> : null}
+                {leads && leads.length > 0 ? (
+                  <ul className="flex flex-col divide-y divide-line overflow-hidden rounded-lg border border-line">
+                    {leads.map((l) => (
+                      <li key={l.id}>
+                        <Link href={`/clients/${clientId}/contacts/${l.id}`} className="u-focus flex items-center justify-between gap-2 px-3 py-2 text-sm hover:bg-subtle">
+                          <span className="truncate text-foreground">{l.name?.trim() || "Contacto sin nombre"}</span>
+                          <time dateTime={l.occurredAt} className="shrink-0 text-xs text-faint">{relativeAgeShort(l.occurredAt)}</time>
+                        </Link>
+                      </li>
+                    ))}
+                  </ul>
+                ) : null}
+              </div>
+
+              {canManage ? (
+                <div className="flex flex-wrap gap-2 pt-1">
+                  <button type="button" className={BTN} onClick={onEdit} aria-haspopup="dialog">Editar nombre y nota</button>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
   );
 }
 
@@ -727,11 +966,14 @@ function AdCoverControl({
   adId,
   coverUrl,
   onStage,
+  onChanged,
 }: {
   clientId: string;
   adId: string | null;
   coverUrl: string | null;
   onStage?: (file: File | null) => void;
+  /** Edit mode only: fired after a successful upload/remove so the opener can refresh the grid. */
+  onChanged?: () => void;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [pending, start] = useTransition();
@@ -760,6 +1002,7 @@ function AdCoverControl({
           return;
         }
         setPreview(r.url ?? null);
+        onChanged?.();
       } else {
         onStage?.(small);
         setStaged(true);
@@ -776,6 +1019,7 @@ function AdCoverControl({
           setError(r.error);
           return;
         }
+        onChanged?.();
       }
       onStage?.(null);
       setStaged(false);
@@ -837,30 +1081,6 @@ function AdCoverControl({
         ) : null}
       </div>
     </div>
-  );
-}
-
-/** Short Meta ad id (last 6) to tell same-headline ads apart; full id on hover + click-to-copy. */
-function AdId({ externalId }: { externalId: string }) {
-  const [copied, setCopied] = useState(false);
-  const short = externalId.length > 6 ? `…${externalId.slice(-6)}` : externalId;
-  return (
-    <button
-      type="button"
-      title={`${externalId} — clic para copiar`}
-      onClick={() => {
-        void navigator.clipboard?.writeText(externalId).then(
-          () => {
-            setCopied(true);
-            setTimeout(() => setCopied(false), 1200);
-          },
-          () => {},
-        );
-      }}
-      className="u-mono rounded bg-chip px-1.5 py-0.5 text-[0.625rem] text-faint transition hover:text-foreground"
-    >
-      {copied ? "copiado" : `id ${short}`}
-    </button>
   );
 }
 
