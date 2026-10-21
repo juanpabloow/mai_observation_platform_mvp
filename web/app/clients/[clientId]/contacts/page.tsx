@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
-import { hasFullAccess } from "@/lib/access";
+import { canReadCampaigns, hasFullAccess } from "@/lib/access";
 import {
   listContacts,
   summarizeContacts,
@@ -61,6 +61,8 @@ export default async function ClientContactsPage({
     /** AT-2 lead-origin facets: an origin GROUP key, and a campaign id. */
     origin?: string;
     campaign?: string;
+    /** Sort order for the list: `origin` groups by lead origin; anything else = recency (default). */
+    sort?: string;
     cols?: string;
     /** The contact whose panel is open, mirroring the inbox's `?c=`. */
     c?: string;
@@ -72,7 +74,7 @@ export default async function ClientContactsPage({
   await connection();
   const { clientId } = await params;
   const { scope, client } = await requireClientModulePage(clientId, "crm");
-  const { q, from, page: pageRaw, stage, owner, tasks, origin, campaign, cols, c: selectedId, edit } = await searchParams;
+  const { q, from, page: pageRaw, stage, owner, tasks, origin, campaign, sort, cols, c: selectedId, edit } = await searchParams;
 
   // Validate every facet before it reaches SQL — an unknown value is simply no
   // filter (never an error page, never an unfiltered tenant-wide read).
@@ -86,6 +88,9 @@ export default async function ClientContactsPage({
   const originGroup = isOriginGroupKey(origin) ? origin : undefined;
   const originKinds = originGroup ? kindsForGroup(originGroup) : undefined;
   const includeNullOrigin = originGroup === "desconocido";
+  // The attribution Origen column + sort have the SAME visibility as the contact's Origen card.
+  const canSeeOrigin = canReadCampaigns(scope, client.id);
+  const sortBy: "recent" | "origin" = canSeeOrigin && sort === "origin" ? "origin" : "recent";
 
   // Owner names: ONE members query + an in-memory map (never a per-row lookup). Campaigns
   // feed the "Campaña" facet (and validate the campaign filter) — a small bounded query.
@@ -123,6 +128,7 @@ export default async function ClientContactsPage({
       originKinds,
       includeNullOrigin,
       campaignId: campaignFilter,
+      sort: sortBy,
       limit: PAGE_SIZE,
       offset: (requestedPage - 1) * PAGE_SIZE,
       withTotal: true,
@@ -189,6 +195,7 @@ export default async function ClientContactsPage({
       tasks,
       origin,
       campaign,
+      sort,
       cols,
       // Page 1 is the default and stays out of the URL, so a fresh list has a clean
       // link and `?page=1` never shows up in someone's address bar.
@@ -325,6 +332,8 @@ export default async function ClientContactsPage({
                 optionalColumns={visibleColumns}
                 hrefWith={hrefWith}
                 now={now}
+                canSeeOrigin={canSeeOrigin}
+                sort={sortBy}
               />
             </div>
 

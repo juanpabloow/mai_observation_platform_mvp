@@ -1,15 +1,21 @@
-# Unit tests on every push + PR to main. NO DATABASE: this runs the pure/unit suite only
-# (`npm run test:unit` → `node --import tsx --test test/unit/*.test.ts`), so it needs no Postgres
-# and finishes in seconds. Its job is to catch the cheap-but-deploy-breaking classes of bug in CI
-# instead of in production — above all `test/unit/migrationOrder.test.ts`, which fails if two
-# migrations ever share a timestamp prefix or a known-collided pair loses its resolved order (the
-# bug that blocked a prod deploy; see DEPLOY.md → "Migration numbering"). The integration suite
-# needs a database and is NOT run here.
+# CI on every push + PR to main. Two jobs, both DATABASE-FREE:
 #
-# Make this a REQUIRED status check so a collision can't merge:
+#   unit  — the pure/unit suite (`npm run test:unit` → `node --import tsx --test test/unit/*.test.ts`).
+#           Catches cheap-but-deploy-breaking bugs, above all `test/unit/migrationOrder.test.ts`,
+#           which fails if two migrations share a timestamp prefix or a known-collided pair loses its
+#           resolved order (the bug that once blocked a prod deploy; see DEPLOY.md → "Migration numbering").
+#
+#   build — worker tsc + web tsc + a FULL `next build` of the web app. This is the deploy gate: the
+#           web build used to reach Railway and fail there (e.g. next/font/google fetching Google Fonts
+#           at build time), taking production down. Running the exact build here means a broken build
+#           fails CI first. The integration suite needs Postgres and is NOT run here.
+#
+# Turn on Railway → service → Settings → "Wait for CI" (aka "Check Status before Deploy") so Railway
+# only deploys a commit whose GitHub checks are green — a red `build` or `unit` then blocks the deploy.
+# Make BOTH required so nothing merges around them:
 #   GitHub → Settings → Branches → branch protection rule for `main`
-#   → "Require status checks to pass before merging" → select "unit".
-name: unit
+#   → "Require status checks to pass before merging" → select "unit" AND "build".
+name: ci
 
 on:
   push:
@@ -19,7 +25,7 @@ on:
 
 # A newer push to the same ref cancels the older in-flight run.
 concurrency:
-  group: unit-${{ github.ref }}
+  group: ci-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -47,3 +53,35 @@ jobs:
 
       - name: Unit tests (no database)
         run: npm run test:unit
+
+  build:
+    name: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+          cache-dependency-path: |
+            package-lock.json
+            web/package-lock.json
+
+      # Root deps are needed for the worker tsc AND for the web build (server actions resolve the
+      # worker via the @worker/* alias); web deps for the web tsc + next build.
+      - name: Install dependencies (root)
+        run: npm ci
+      - name: Install dependencies (web)
+        run: npm ci --prefix web
+
+      - name: Worker tsc
+        run: npm run typecheck
+
+      - name: Web tsc
+        run: cd web && npx tsc
+
+      # The real deploy build. Fonts are self-hosted (web/app/fonts, next/font/local), so this needs
+      # NO network — it will NOT fetch Google Fonts, which is exactly why it is safe as a CI gate.
+      - name: Web build (next build)
+        run: cd web && npm run build

@@ -483,13 +483,20 @@ export function ContactsOverflowMenu({
           );
         }
         if (view === "sort") {
+          const bySort = searchParams.get("sort") === "origin" ? "origin" : "recent";
           return (
             <>
               <Back title="Ordenar por" />
-              <MenuOption label="Última interacción (más reciente)" selected onSelect={() => {}} />
-              <p className="px-3 pb-2 pt-1 text-[0.6875rem] leading-4 text-faint">
-                Otros órdenes necesitan un cambio en el listado del servidor — el cursor de paginación se construye sobre esta columna.
-              </p>
+              <MenuOption
+                label="Última interacción (más reciente)"
+                selected={bySort === "recent"}
+                onSelect={() => { apply({ sort: "" }); close(); }}
+              />
+              <MenuOption
+                label="Origen (agrupado)"
+                selected={bySort === "origin"}
+                onSelect={() => { apply({ sort: "origin" }); close(); }}
+              />
             </>
           );
         }
@@ -502,7 +509,7 @@ export function ContactsOverflowMenu({
             </button>
             <button type="button" onClick={() => setView("sort")} className={ITEM_CLS}>
               <ItemIcon d="M4.4 3.4v9.2|M2.6 10.8l1.8 1.8 1.8-1.8|M11.6 12.6V3.4|M9.8 5.2l1.8-1.8 1.8 1.8" />
-              <span className="flex-1">Orden: última interacción</span>
+              <span className="flex-1">Orden: {searchParams.get("sort") === "origin" ? "origen" : "última interacción"}</span>
             </button>
 
             <div className="my-1 border-t border-line-row" />

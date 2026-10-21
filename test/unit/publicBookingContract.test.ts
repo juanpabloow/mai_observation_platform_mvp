@@ -116,7 +116,16 @@ test('responsive contract: 44px+ targets, sticky bar with safe area + keyboard, 
   const block = css.slice(css.indexOf('Public booking v3'), css.indexOf('SCHEDULING design system'));
   assert.ok(block.includes('--color-pb-ink: #111316') && block.includes('background: #f4f5f7'), 'neutral light-grey ground, white cards');
   for (const beige of ['#f5efe6', '#efe7da', '#e9dfcf', '#f4ede3', '#d6c3a5']) assert.ok(!block.toLowerCase().includes(beige), `no v2 beige ${beige}`);
-  assert.ok(root('web/app/book/[siteSlug]/layout.tsx').includes('Newsreader('), 'Newsreader titles (page and not-found)');
+  // Newsreader titles (page and not-found), now SELF-HOSTED via next/font/local — the layout must
+  // not reach back to next/font/google (that build-time fetch broke the Railway deploy).
+  const bookLayout = root('web/app/book/[siteSlug]/layout.tsx');
+  assert.ok(
+    bookLayout.includes('next/font/local') &&
+      /newsreader-subset\.woff2/.test(bookLayout) &&
+      bookLayout.includes('--font-pb-newsreader') &&
+      !/from\s+["']next\/font\/google["']/.test(bookLayout),
+    'Newsreader titles are self-hosted (next/font/local, --font-pb-newsreader), no Google fetch',
+  );
 });
 
 test('the public flow never touches staff actions, contact search or walk-in', () => {

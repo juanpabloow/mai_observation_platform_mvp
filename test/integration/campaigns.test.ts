@@ -169,6 +169,55 @@ test('AT-2 repo: contacts origin filter + campaign filter return exactly the rig
   } finally { await cleanupTenant(s.tenantId); }
 });
 
+test('AT-UI: contacts list batches the origin ad/campaign (incl. is_test) and sorts by origin group', async () => {
+  const s = await seedScenario({ enableCrm: true, enableCampaigns: true });
+  try {
+    const wfRef = `wf-${s.tenantId.slice(0, 8)}`;
+    await seedWorkflow(s.tenantId, s.clientId, wfRef);
+    const camp = await createCampaign({ tenantId: s.tenantId, clientId: s.clientId, name: 'Campaña Otoño' });
+    const ad = await one<{ id: string }>(
+      `INSERT INTO ads (tenant_id, client_id, platform, source_type, external_id, name, headline, campaign_id)
+         VALUES ($1,$2,'meta','ad','555','Factos V2','Agenda hoy',$3) RETURNING id`,
+      [s.tenantId, s.clientId, camp.id],
+    );
+    const testAd = await one<{ id: string }>(
+      `INSERT INTO ads (tenant_id, client_id, platform, source_type, external_id, headline) VALUES ($1,$2,'meta','ad','TEST-9','Prueba') RETURNING id`,
+      [s.tenantId, s.clientId],
+    );
+
+    const cAd = await seedContact(s.tenantId, s.clientId, { channelUserId: 'wa:ad' });
+    const cTest = await seedContact(s.tenantId, s.clientId, { channelUserId: 'wa:test' });
+    const cOrg = await seedContact(s.tenantId, s.clientId, { channelUserId: 'wa:org' });
+    const cManual = await seedContact(s.tenantId, s.clientId, { channelUserId: 'wa:man' });
+    const tAd = await insertTouch(s, wfRef, cAd, ad.id, '2026-06-01T10:00:00Z');
+    await query(`UPDATE contacts SET origin_kind='meta_ad', first_touch_id=$1 WHERE id=$2`, [tAd, cAd]);
+    const tTest = await insertTouch(s, wfRef, cTest, testAd.id, '2026-06-02T10:00:00Z');
+    await query(`UPDATE contacts SET origin_kind='meta_ad', first_touch_id=$1 WHERE id=$2`, [tTest, cTest]);
+    await query(`UPDATE contacts SET origin_kind='organic_whatsapp' WHERE id=$1`, [cOrg]);
+    await query(`UPDATE contacts SET origin_kind='manual' WHERE id=$1`, [cManual]);
+
+    const all = await listContacts(s.tenantId, { clientId: s.clientId, limit: 100 });
+    const byId = new Map(all.items.map((i) => [i.id, i]));
+    assert.equal(byId.get(cAd)!.origin_ad_name, 'Factos V2');
+    assert.equal(byId.get(cAd)!.origin_ad_headline, 'Agenda hoy');
+    assert.equal(byId.get(cAd)!.origin_campaign_name, 'Campaña Otoño');
+    assert.equal(byId.get(cAd)!.origin_ad_is_test, false);
+    assert.equal(byId.get(cTest)!.origin_ad_is_test, true, 'a test-ad origin is flagged');
+    assert.equal(byId.get(cOrg)!.origin_ad_name, null, 'an organic contact carries no ad');
+    assert.equal(byId.get(cManual)!.origin_campaign_name, null);
+
+    // Sort by origin group: anuncio(0) < organico(1) < manual(2).
+    const sorted = await listContacts(s.tenantId, { clientId: s.clientId, sort: 'origin', limit: 100 });
+    const rank = (id: string) => sorted.items.findIndex((i) => i.id === id);
+    assert.ok(rank(cAd) < rank(cOrg), 'anuncio before organico');
+    assert.ok(rank(cOrg) < rank(cManual), 'organico before manual');
+
+    // The Origen/Campaña filters still return exactly the right people with the new query.
+    const byCampaign = await listContacts(s.tenantId, { clientId: s.clientId, campaignId: camp.id });
+    assert.deepEqual(byCampaign.items.map((i) => i.id).sort(), [cAd].sort());
+  } finally { await cleanupTenant(s.tenantId); }
+});
+
 test('AT-2b: pre-register an ad, then a referral with the same id → ONE row, person-set fields untouched, touch attached', async () => {
   const s = await seedScenario({ enableCrm: true, enableCampaigns: true });
   try {

@@ -18,6 +18,9 @@ import {
   type ThreadMessageRow,
 } from "@worker/db/repositories/handoff.js";
 import { parseMessagePayload } from "./inboxView";
+import { getInboxContactPipeline } from "@worker/db/repositories/pipeline.js";
+import { originColumnChip, originColumnDetail, originGroupOf } from "./originDisplay";
+import { STAGE_LABEL } from "./pipelineBoard";
 import type {
   HistoryTurnView,
   ThreadEventView,
@@ -198,8 +201,21 @@ export async function loadScopedClientInbox(
     : loadWorkflowInboxList(tenantId, scope);
 }
 
+/**
+ * PL-2 §6 — read-only pipeline context for the conversation header: the origin chip (ONLY when the
+ * contact came from an ad, and not a test ad), the opportunity stage, and the contact id for a link
+ * to the record. Conversation-load context, kept off the mutable `header` so sends/mode-changes
+ * never clear it.
+ */
+export interface InboxThreadHeaderPipeline {
+  contactId: string | null;
+  origin: { label: string; tone: string; detail: string | null } | null;
+  oppStage: string | null;
+}
+
 export interface InboxThreadPayload {
   header: InboxHeaderView;
+  pipeline: InboxThreadHeaderPipeline;
   messages: InboxMessageView[];
   /** Pre-handoff derived turns (only when requested — for the drawer's initial load). */
   history?: HistoryTurnView[];
@@ -252,8 +268,26 @@ export async function loadInboxThread(
     }));
   }
 
+  // PL-2 §6: origin + opportunity stage for the header (read-only). The origin chip appears only for
+  // an AD-originated contact and never for a test ad; the stage pill whenever a sale exists.
+  let pipeline: InboxThreadHeaderPipeline = { contactId: conversation.contact_id, origin: null, oppStage: null };
+  if (conversation.contact_id) {
+    const p = await getInboxContactPipeline(tenantId, clientId, conversation.contact_id);
+    if (p) {
+      const origin =
+        originGroupOf(p.origin_kind) === "anuncio" && p.ad_is_test !== true
+          ? (() => {
+              const chip = originColumnChip(p.origin_kind);
+              return { label: chip.label, tone: chip.tone, detail: originColumnDetail({ originKind: p.origin_kind, adName: p.ad_name, adHeadline: p.ad_headline, adIsTest: p.ad_is_test, campaignName: p.campaign_name }) };
+            })()
+          : null;
+      pipeline = { contactId: conversation.contact_id, origin, oppStage: p.opp_stage ? STAGE_LABEL[p.opp_stage] : null };
+    }
+  }
+
   return {
     header: toHeaderView(conversation),
+    pipeline,
     messages: messages.map(toMessageView),
     events: transitions.map((t) => ({
       id: t.id,

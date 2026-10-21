@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import localFont from "next/font/local";
 import { cookies, headers } from "next/headers";
 import { Suspense } from "react";
 import { AppHeader } from "@/components/AppHeader";
@@ -16,14 +16,24 @@ import { parseTopbarPref, resolveTopbarPref, TOPBAR_COOKIE } from "@/lib/topbarP
 import { getSessionScope } from "@/lib/access";
 import "./globals.css";
 
-const geistSans = Geist({
+// Self-hosted (next/font/local) so `next build` never calls Google Fonts — that build-time
+// fetch is what broke Railway deploys and offline builds. Same families, same variable weight
+// axis, same CSS variables as the old next/font/google Geist pair. Files + provenance:
+// web/app/fonts/README.md. adjustFontFallback defaults to "Arial" — the fallback Google used.
+const geistSans = localFont({
+  src: "./fonts/geist-sans-subset.woff2",
+  weight: "100 900",
+  style: "normal",
+  display: "swap",
   variable: "--font-geist-sans",
-  subsets: ["latin"],
 });
 
-const geistMono = Geist_Mono({
+const geistMono = localFont({
+  src: "./fonts/geist-mono-subset.woff2",
+  weight: "100 900",
+  style: "normal",
+  display: "swap",
   variable: "--font-geist-mono",
-  subsets: ["latin"],
 });
 
 export const metadata: Metadata = {

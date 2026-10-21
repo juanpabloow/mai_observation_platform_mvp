@@ -4,9 +4,12 @@ import type { ContactListItem, PreferredChannel } from "@worker/db/repositories/
 import { ContactAvatar } from "@/components/contacts/ContactAvatar";
 import { Chip, ENTITY_ROW_CLS, OwnerDisc, StackedCell, StageChip, TABLE_HEADER_CLS, VisitsMeter } from "@/components/ui/primitives";
 import { channelLabel, sourceLabel } from "@/lib/contactLabels";
+import { originColumnChip, originColumnDetail } from "@/lib/originDisplay";
+import { STAGE_LABEL, STATUS_LABEL } from "@/lib/pipelineBoard";
 import type { ContactColumnKey } from "@/lib/contactColumns";
 import { formatStampFull, formatStampShort, relativeAgeShort } from "@/lib/format";
 import { CORE_TEMPLATE, TABLET_TEMPLATE, mobileRowLines, withOptionalTracks } from "@/lib/contactListLayout";
+import { displayContactName, isMeaningfulName } from "@/lib/contactName";
 
 /**
  * THE contacts table, in the redesign's shape (docs/ui-redesign-crm-inbox.md §2.3).
@@ -44,6 +47,7 @@ import { CORE_TEMPLATE, TABLET_TEMPLATE, mobileRowLines, withOptionalTracks } fr
 const OPTIONAL_HEAD: Record<ContactColumnKey, string> = {
   channel: "Canal",
   stage: "Etapa",
+  pipeline: "Pipeline",
   owner: "Dueño asignado",
   nextAppt: "Próxima cita",
   visits: "Visitas totales",
@@ -51,6 +55,33 @@ const OPTIONAL_HEAD: Record<ContactColumnKey, string> = {
   created: "Creado",
   openTasks: "Tareas",
 };
+
+/**
+ * The Origen cell: the AT-1 attribution origin as a chip (Anuncio accent, the rest neutral) over a
+ * quiet detail line (ad name · campaign; "Anuncio de prueba" for a test ad; "WhatsApp" / "Reservado
+ * por otra persona"; etc.). When the viewer can't see origin (staff), it falls back to the channel.
+ */
+function OriginCell({ c, canSeeOrigin }: { c: ContactListItem; canSeeOrigin: boolean }) {
+  if (!canSeeOrigin) {
+    return <span className="truncate text-[0.8125rem] text-muted">{sourceLabel(c.channel)}</span>;
+  }
+  const chip = originColumnChip(c.origin_kind);
+  const detail = originColumnDetail({
+    originKind: c.origin_kind,
+    adName: c.origin_ad_name,
+    adHeadline: c.origin_ad_headline,
+    adIsTest: c.origin_ad_is_test,
+    campaignName: c.origin_campaign_name,
+  });
+  return (
+    <span className="flex min-w-0 flex-col gap-0.5">
+      <span className={`inline-flex w-fit items-center rounded-full px-2 py-0.5 text-[0.625rem] font-medium ${chip.tone}`}>{chip.label}</span>
+      {detail ? (
+        <span className="truncate text-[0.6875rem] text-faint" title={detail}>{detail}</span>
+      ) : null}
+    </span>
+  );
+}
 
 export function ContactsTable({
   clientId,
@@ -60,6 +91,8 @@ export function ContactsTable({
   optionalColumns,
   hrefWith,
   now,
+  canSeeOrigin,
+  sort,
 }: {
   /** The VALIDATED client the page resolved — every link out of a row stays inside it. */
   clientId: string;
@@ -71,6 +104,11 @@ export function ContactsTable({
   /** Builds a link that preserves the whole facet set — the page owns this. */
   hrefWith: (patch: Record<string, string | undefined>) => string;
   now: Date;
+  /** Same visibility as the contact's Origen card: agency/owner/setter yes, staff no. When false
+   *  the column falls back to the free-text channel (staff never reach this list in practice). */
+  canSeeOrigin: boolean;
+  /** Active sort, for the Origen column's aria-sort. */
+  sort: "recent" | "origin";
 }) {
   // The record-link (→) column sits LAST in the core template, so the extras have to be spliced
   // in before it rather than appended — otherwise the row menu drifts into the middle
@@ -103,7 +141,7 @@ export function ContactsTable({
             key={c.id}
             className={`relative flex min-h-[72px] items-center gap-3 border-b border-line-soft py-2.5 pl-4 pr-1 last:border-b-0 ${selected ? "bg-chip" : ""}`}
           >
-            <ContactAvatar name={c.name} fallback={c.channel_user_id} size={38} />
+            <ContactAvatar name={lines.titleIsId ? null : c.name} fallback={c.channel_user_id} size={38} />
             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="flex min-w-0 items-center gap-1.5">
                 <Link
@@ -131,7 +169,7 @@ export function ContactsTable({
                 {lines.identity}
               </span>
               <span className="truncate text-xs text-faint">
-                {sourceLabel(c.channel)} ·{" "}
+                {canSeeOrigin ? originColumnChip(c.origin_kind).label : sourceLabel(c.channel)} ·{" "}
                 <span title={formatStampFull(c.last_contact_at)}>{relativeAgeShort(c.last_contact_at, now)}</span>
               </span>
             </span>
@@ -158,7 +196,7 @@ export function ContactsTable({
             which is what stops a dense table from reading as a log file. */}
         <span role="columnheader">Nombre</span>
         <span role="columnheader">Teléfono</span>
-        <span role="columnheader">Origen</span>
+        <span role="columnheader" aria-sort={sort === "origin" ? "ascending" : undefined}>Origen</span>
         <span role="columnheader" className="max-lg:hidden">Visitas</span>
         <span role="columnheader">Última interacción</span>
         <span role="columnheader">Dueño</span>
@@ -176,7 +214,9 @@ export function ContactsTable({
       {contacts.map((c) => {
         const selected = c.id === selectedId;
         const overdue = c.overdue_task_count > 0;
-        const named = Boolean(c.name?.trim());
+        const named = isMeaningfulName(c.name);
+        // The shared display name (real name → masked phone → "Sin nombre"), same as the board.
+        const display = displayContactName({ name: c.name, phoneE164: c.phone_e164, channelUserId: c.channel_user_id });
         return (
           <div
             role="row"
@@ -196,7 +236,7 @@ export function ContactsTable({
           >
             {/* ── Nombre: sphere + name over email ── */}
             <span role="cell" className="flex min-w-0 items-center gap-2.5">
-              <ContactAvatar name={c.name} fallback={c.channel_user_id} />
+              <ContactAvatar name={named ? c.name : null} fallback={c.channel_user_id} />
               <span className="flex min-w-0 flex-col gap-px">
                 <span className="flex min-w-0 items-center gap-1.5">
                   <Link
@@ -207,7 +247,7 @@ export function ContactsTable({
                       named ? "" : "u-mono"
                     }`}
                   >
-                    {c.name?.trim() || c.channel_user_id}
+                    {display}
                   </Link>
                   {/* A contact who opted out must be visible as such ANYWHERE someone
                       might decide to message them — so this rides the name, not an
@@ -262,10 +302,10 @@ export function ContactsTable({
               )}
             </span>
 
-            {/* ── Origen: how they first arrived. Plain text, no chip — the design keeps
-                   this column quiet because it is context, not state. ── */}
-            <span role="cell" className="truncate text-[0.8125rem] text-muted">
-              {sourceLabel(c.channel)}
+            {/* ── Origen: the AT-1 attribution origin (a chip + a quiet detail line), gated like
+                   the contact's Origen card. Falls back to the free-text channel when not visible. ── */}
+            <span role="cell" className="min-w-0">
+              <OriginCell c={c} canSeeOrigin={canSeeOrigin} />
             </span>
 
             {/* ── Visitas (desktop only; the record keeps the figure) ── */}
@@ -314,7 +354,7 @@ export function ContactsTable({
             <span role="cell" className="text-right">
               <Link
                 href={`/clients/${clientId}/contacts/${c.id}`}
-                aria-label={`Abrir la ficha de ${c.name?.trim() || c.channel_user_id}`}
+                aria-label={`Abrir la ficha de ${display}`}
                 title="Abrir la ficha"
                 className="relative z-10 inline-flex size-6 items-center justify-center rounded-sm text-xs text-faint no-underline transition-colors hover:bg-subtle hover:text-foreground max-lg:size-[44px] max-lg:text-sm"
               >
@@ -346,6 +386,15 @@ function OptionalCell({
       return <>{sourceLabel(c.channel)}</>;
     case "stage":
       return <StageChip stage={c.stage} />;
+    case "pipeline":
+      return c.pipeline_stage ? (
+        <span className="inline-flex w-fit items-center gap-1 rounded-full bg-chip px-2 py-0.5 text-[0.625rem] font-medium text-foreground">
+          {STAGE_LABEL[c.pipeline_stage]}
+          {c.pipeline_status && c.pipeline_status !== "open" ? <span className="font-normal text-faint">· {STATUS_LABEL[c.pipeline_status]}</span> : null}
+        </span>
+      ) : (
+        <span className="text-faint">—</span>
+      );
     case "owner":
       return <>{c.assigned_to ? ownerName.get(c.assigned_to) ?? "—" : "—"}</>;
     case "nextAppt":

@@ -6,6 +6,7 @@ import { canManageCampaigns, hasFullAccess } from "@/lib/access";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { getContactById, listContactConversations } from "@worker/db/repositories/contacts.js";
 import { getContactOriginDetail, listCampaignsWithStats } from "@worker/db/repositories/attribution.js";
+import { listContactOpportunities, listOpportunityAppointments, listOpportunityStageEvents } from "@worker/db/repositories/pipeline.js";
 import { listIdentitiesForContact, listCandidatesForContact } from "@worker/db/repositories/contactIdentities.js";
 import { listFieldDefinitions } from "@worker/db/repositories/clientFieldDefinitions.js";
 import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
@@ -47,7 +48,7 @@ export default async function ClientContactDetailPage({
   const contact = await getContactById(tenantId, contactId, client.id);
   if (!contact) notFound();
 
-  const [identities, fieldDefs, members, timeline, openTasks, attachedTags, tagCatalogue, appts, conversations, schedulingEnabled, candidates, editPayload, valueProfile, originDetail, campaigns] =
+  const [identities, fieldDefs, members, timeline, openTasks, attachedTags, tagCatalogue, appts, conversations, schedulingEnabled, candidates, editPayload, valueProfile, originDetail, campaigns, opportunities] =
     await Promise.all([
       listIdentitiesForContact(tenantId, client.id, contactId),
       listFieldDefinitions(tenantId, client.id, { enabledOnly: true }),
@@ -73,7 +74,16 @@ export default async function ClientContactDetailPage({
       // campaigns module), so it's shown here on the crm-gated record.
       getContactOriginDetail(tenantId, client.id, contactId),
       listCampaignsWithStats(tenantId, client.id),
+      // PL-2 §3 — the contact's sales opportunities (current + past). CRM-gated like origin.
+      listContactOpportunities(tenantId, client.id, contactId),
     ]);
+
+  // The "current" sale is the open one if any, else the most recent; its stage history + linked
+  // appointments are a small dependent read (two bounded queries, only when a sale exists).
+  const currentOpp = opportunities.find((o) => o.status === "open") ?? opportunities[0] ?? null;
+  const [oppEvents, oppAppointments] = currentOpp
+    ? await Promise.all([listOpportunityStageEvents(tenantId, currentOpp.id), listOpportunityAppointments(tenantId, currentOpp.id)])
+    : [[], []];
 
   const identityViews: IdentityView[] = identities.map((i) => ({ kind: i.kind, value: i.value, label: i.label }));
   const appointments = summarizeAppointments(appts);
@@ -88,6 +98,43 @@ export default async function ClientContactDetailPage({
     : null;
 
   const fromQS = from ? `?from=${encodeURIComponent(from)}` : "";
+
+  // PL-2 §3 — serializable opportunity view. Actor ids resolve to member names (system/bot stay literal).
+  const membersById = new Map(members.map((m) => [m.user_id, m.name ?? m.email]));
+  const actorLabel = (actor: string) => (actor === "system" ? "Sistema" : actor === "bot" ? "Asistente" : membersById.get(actor) ?? "Usuario");
+  const mapOpp = (o: (typeof opportunities)[number]) => ({
+    id: o.id,
+    stage: o.stage,
+    status: o.status,
+    createdAt: o.created_at.toISOString(),
+    leadAt: o.lead_at?.toISOString() ?? null,
+    qualifiedAt: o.qualified_at?.toISOString() ?? null,
+    bookedAt: o.booked_at?.toISOString() ?? null,
+    attendedAt: o.attended_at?.toISOString() ?? null,
+    paidAt: o.paid_at?.toISOString() ?? null,
+    closedAt: o.closed_at?.toISOString() ?? null,
+    qualificationService: o.qualification_service,
+    qualificationTimeframe: o.qualification_timeframe,
+    qualificationMessageId: o.qualification_message_id,
+    qualifiedBy: o.qualified_by ? actorLabel(o.qualified_by) : null,
+    qualifiedImplicitly: o.qualified_implicitly,
+    lostReason: o.lost_reason,
+    lostNote: o.lost_note,
+  });
+  const pipeline = {
+    current: currentOpp ? mapOpp(currentOpp) : null,
+    past: opportunities.filter((o) => o.id !== currentOpp?.id).map(mapOpp),
+    events: oppEvents.map((e) => ({
+      fromStage: e.from_stage,
+      toStage: e.to_stage,
+      fromStatus: e.from_status,
+      toStatus: e.to_status,
+      actor: actorLabel(e.actor),
+      reason: e.reason,
+      at: e.occurred_at.toISOString(),
+    })),
+    appointments: oppAppointments.map((a) => ({ id: a.id, at: a.start_at.toISOString(), status: a.status, service: a.service_name_snapshot })),
+  };
 
   return (
     // `relative` makes this the record's PANEL REGION: the edit drawer anchors to the
@@ -206,6 +253,7 @@ export default async function ClientContactDetailPage({
         }
         canManageOrigin={canManageCampaigns(scope, client.id)}
         originCampaigns={campaigns.map((c) => ({ id: c.id, name: c.name }))}
+        pipeline={pipeline}
       />
     </main>
   );

@@ -125,6 +125,22 @@ export interface ContactListItem extends ContactRow {
    * `channel: 'referral'` and `last_channel: 'instagram'`.
    */
   last_channel: string | null;
+  /**
+   * The ORIGIN ad + campaign for the Origen column, via the contact's FIRST (origin) touch.
+   * Batched into the list query (1:1 joins), never a per-row lookup. `origin_kind` already comes
+   * from `c.*`. All null for a contact with no ad origin (organic/manual/unknown).
+   */
+  origin_ad_name: string | null;
+  origin_ad_headline: string | null;
+  origin_ad_is_test: boolean | null;
+  origin_campaign_name: string | null;
+  /**
+   * PL-2: the contact's PIPELINE position — the stage + status of its open opportunity, or of its
+   * latest closed one. Batched (one LATERAL), never a per-row lookup. Null = no opportunity yet.
+   * Distinct from `stage` (the relationship lifecycle), which is untouched.
+   */
+  pipeline_stage: import('./pipeline.js').OpportunityStage | null;
+  pipeline_status: import('./pipeline.js').OpportunityStatus | null;
 }
 
 /** The Tasks facet on the contacts list. */
@@ -238,6 +254,10 @@ export async function listContacts(
     /** Campaign filter (AT-2): contacts whose FIRST touch (their origin ad) is on an ad
      *  assigned to this campaign — i.e. the campaign's leads. */
     campaignId?: string;
+    /** Sort order. 'recent' (default) = last_contact_at DESC; 'origin' = by origin group then
+     *  recency. 'origin' is OFFSET-only (the keyset cursor is built on recency), so a cursor is
+     *  ignored when it is set. */
+    sort?: 'recent' | 'origin';
   } = {},
 ): Promise<ListContactsResult> {
   const pageSize = Math.min(Math.max(opts.limit ?? 50, 1), 200);
@@ -294,7 +314,18 @@ export async function listContacts(
                 WHERE att.id = c.first_touch_id AND ad.campaign_id = $${params.length})`,
     );
   }
-  const cursor = decodeContactCursor(opts.cursor);
+  // 'origin' sort is OFFSET-only (the keyset cursor orders by recency), so a cursor is ignored there.
+  const sortByOrigin = opts.sort === 'origin';
+  const cursor = sortByOrigin ? null : decodeContactCursor(opts.cursor);
+  // Group rank matching the 4 origin groups (anuncio/organico/manual/desconocido), so the sort
+  // agrees with the Origen filter. Recency breaks ties and is the secondary order.
+  const orderBy = sortByOrigin
+    ? `ORDER BY (CASE
+         WHEN c.origin_kind IN ('meta_ad','meta_post') THEN 0
+         WHEN c.origin_kind IN ('organic_whatsapp','booking_page','booked_by_contact') THEN 1
+         WHEN c.origin_kind = 'manual' THEN 2
+         ELSE 3 END), c.last_contact_at DESC, c.id DESC`
+    : `ORDER BY c.last_contact_at DESC, c.id DESC`;
   // A keyset caller must never be silently re-paged by an offset it did not intend, so
   // the cursor takes precedence and the offset is dropped when both arrive.
   const offset = cursor ? 0 : Math.max(0, Math.trunc(opts.offset ?? 0));
@@ -333,6 +364,12 @@ export async function listContacts(
             -- with a preference but no identities still resolves.
             COALESCE(c.preferred_channel, ident.last_kind) AS last_channel,
             conv.last_conversation_at,
+            -- AT: the ORIGIN ad + campaign for the Origen column (origin_kind already comes via c.*).
+            ad.name AS origin_ad_name,
+            ad.headline AS origin_ad_headline,
+            ad.is_test AS origin_ad_is_test,
+            camp.name AS origin_campaign_name,
+            opp.stage AS pipeline_stage, opp.status AS pipeline_status,
             -- Microsecond-precise cursor key (a JS Date would drop precision; see codec).
             to_char(c.last_contact_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.US"Z"') AS cursor_ts
        FROM contacts c
@@ -392,15 +429,28 @@ export async function listContacts(
           WHERE co.tenant_id = $1 AND co.contact_id IS NOT NULL
           GROUP BY co.contact_id, cw.client_id
        ) conv ON conv.contact_id = c.id AND conv.client_id = c.client_id
+       -- AT: the contact's origin ad + campaign, via its FIRST (origin) touch. 1:1 joins on an
+       -- indexed PK/FK chain (first_touch_id → touch PK → ad PK → campaign PK): no row
+       -- multiplication, no N+1 — one pass feeds the Origen column for the whole page.
+       LEFT JOIN attribution_touches ft ON ft.id = c.first_touch_id AND ft.tenant_id = c.tenant_id
+       LEFT JOIN ads ad ON ad.id = ft.ad_id AND ad.tenant_id = c.tenant_id
+       LEFT JOIN campaigns camp ON camp.id = ad.campaign_id AND camp.tenant_id = c.tenant_id
+       -- PL-2: the contact's pipeline position — its OPEN opportunity if any, else the latest closed.
+       LEFT JOIN LATERAL (
+         SELECT op.stage, op.status FROM opportunities op
+          WHERE op.tenant_id = c.tenant_id AND op.client_id = c.client_id AND op.contact_id = c.id
+          ORDER BY (op.status = 'open') DESC, op.created_at DESC, op.id DESC LIMIT 1
+       ) opp ON true
       WHERE ${where.join(' AND ')}
-      ORDER BY c.last_contact_at DESC, c.id DESC
+      ${orderBy}
       LIMIT $${limitIdx} OFFSET $${offsetIdx}`,
     params,
   );
   const hasMore = r.rows.length > pageSize;
   const kept = hasMore ? r.rows.slice(0, pageSize) : r.rows;
   const last = kept[kept.length - 1];
-  const nextCursor = hasMore && last ? encodeContactCursor(last.cursor_ts, last.id) : null;
+  // No keyset cursor under 'origin' sort — the cursor orders by recency and would mis-page here.
+  const nextCursor = !sortByOrigin && hasMore && last ? encodeContactCursor(last.cursor_ts, last.id) : null;
 
   // THE TOTAL, for numbered pagination. It re-derives the same WHERE from the same
   // params rather than counting a second, hand-written predicate set — two copies of

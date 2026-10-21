@@ -391,8 +391,9 @@ export async function qualifyOpportunity(tenantId: string, clientId: string, opp
   });
 }
 
-/** Undo a qualification (qualified → lead), clearing the evidence. No-op if not an open qualified sale. */
-export async function unqualifyOpportunity(tenantId: string, clientId: string, opportunityId: string, actor: PipelineActor): Promise<OpportunityRow | null> {
+/** Undo a qualification (qualified → lead), clearing the evidence. No-op if not an open qualified
+ *  sale. An optional note is recorded as the stage-event reason. */
+export async function unqualifyOpportunity(tenantId: string, clientId: string, opportunityId: string, actor: PipelineActor, note?: string | null): Promise<OpportunityRow | null> {
   return withTransaction(async (client) => {
     const r = await client.query<OpportunityRow>(`${SELECT_LOCK} FROM opportunities WHERE id = $1 AND tenant_id = $2 AND client_id = $3 FOR UPDATE`, [opportunityId, tenantId, clientId]);
     const opp = r.rows[0];
@@ -405,7 +406,7 @@ export async function unqualifyOpportunity(tenantId: string, clientId: string, o
         RETURNING ${SELECT_LOCK.replace(/^SELECT /, '')}`,
       [opportunityId],
     );
-    await writeEvent(client, { tenantId, clientId, opportunityId, fromStage: 'qualified', toStage: 'lead', fromStatus: 'open', toStatus: 'open', actor, reason: 'unqualified' });
+    await writeEvent(client, { tenantId, clientId, opportunityId, fromStage: 'qualified', toStage: 'lead', fromStatus: 'open', toStatus: 'open', actor, reason: (note && note.trim()) || 'unqualified' });
     return u.rows[0]!;
   });
 }

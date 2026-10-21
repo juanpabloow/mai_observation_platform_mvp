@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import Link from "next/link";
 import { ThreadActions } from "./ThreadActions";
 import { Composer } from "./Composer";
 import { MessageTranscript } from "./MessageTranscript";
@@ -35,6 +36,8 @@ import { sendMessageAction, retrySendAction } from "@/lib/sendActions";
 
 interface ThreadPayload {
   header: InboxHeaderView;
+  /** PL-2 §6 — read-only origin + opportunity-stage context for the header. */
+  pipeline?: { contactId: string | null; origin: { label: string; tone: string; detail: string | null } | null; oppStage: string | null };
   messages: InboxMessageView[];
   events?: ThreadEventView[];
   /** Scheduling turning points — see MessageTranscript. Polled alongside the messages. */
@@ -297,10 +300,27 @@ export function InboxThread({
     })();
   };
 
+  const pipeline = initial.pipeline;
   const chips = (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
       <StateChip kind={who.kind}>{who.label}</StateChip>
       {chip ? <StateChip kind={chip.open ? "open" : "closed"}>{chip.label}</StateChip> : null}
+      {pipeline?.origin ? (
+        <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.6875rem] font-medium ${pipeline.origin.tone}`} title="De dónde vino este contacto">
+          {pipeline.origin.label}
+          {pipeline.origin.detail ? <span className="font-normal opacity-80">· {pipeline.origin.detail}</span> : null}
+        </span>
+      ) : null}
+      {pipeline?.oppStage ? (
+        <span className="inline-flex items-center rounded-full bg-chip px-2 py-0.5 text-[0.6875rem] font-medium text-muted" title="Etapa de la oportunidad">
+          {pipeline.oppStage}
+        </span>
+      ) : null}
+      {pipeline?.contactId ? (
+        <Link href={`/clients/${clientId}/contacts/${pipeline.contactId}`} className="u-focus text-[0.6875rem] text-accent hover:underline">
+          Ver ficha ↗
+        </Link>
+      ) : null}
     </div>
   );
 
