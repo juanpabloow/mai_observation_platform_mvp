@@ -66,7 +66,7 @@ test('no post-mount re-sync: nothing changes the collapsed state while the shell
   // streaming placeholder (so even the pre-stream frame has the right width).
   const layout = read('app/layout.tsx');
   assert.ok(layout.includes('parseSidebarCollapsed(jar.get(SIDEBAR_COLLAPSED_COOKIE)?.value)'), 'layout reads the cookie');
-  assert.ok(layout.includes('<Providers sidebarCollapsed={sidebarCollapsed}>'), 'and passes it to the provider');
+  assert.ok(layout.includes('<Providers sidebarCollapsed={sidebarCollapsed}'), 'and passes it to the provider');
   assert.ok(layout.includes('data-collapsed={sidebarCollapsed ? "true" : "false"}'), 'the placeholder matches it');
   assert.ok(read('app/providers.tsx').includes('<SidebarProvider initialCollapsed={sidebarCollapsed}>'), 'providers thread it');
   // The legacy value is adopted only from an effect of the RAIL (after it hydrated), and

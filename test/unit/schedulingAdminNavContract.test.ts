@@ -90,7 +90,8 @@ test('AdminPanel: no client selector — a single route client threads into ever
   assert.ok(!src.includes('<select value={clientId}'), 'no client <select>');
   assert.ok(src.includes('clientId: string'), 'takes a single clientId');
   // Actions all receive the clientId.
-  assert.ok(src.includes('createSiteAction({ clientId'), 'createSite carries clientId');
+  // Creating a site moved to the Sedes screen's in-page editor; it threads the SAME route client.
+  assert.ok(read('components/scheduling/settings/SitesScreen.tsx').includes('createSiteAction({ clientId'), 'createSite carries clientId');
   // Deactivate/activate now thread clientId through the shared ActiveToggle (kind → action
   // map), not a per-row inline call — the client scoping is unchanged.
   assert.ok(src.includes('DEACTIVATE[kind](clientId, id)'), 'deactivate carries clientId (via ActiveToggle)');
@@ -98,7 +99,7 @@ test('AdminPanel: no client selector — a single route client threads into ever
   // Services moved to the services menu + its editor; they thread the SAME route clientId.
   const editor = read('components/scheduling/services/ServiceEditor.tsx');
   const menu = read('components/scheduling/services/ServiceMenu.tsx');
-  assert.ok(src.includes('<ServiceMenu\n                clientId={clientId}'), 'the services menu receives the route client');
+  assert.ok(/<ServiceMenu\s+clientId=\{clientId\}/.test(src), 'the services menu receives the route client');
   assert.ok(editor.includes('setSiteServiceAction(clientId, siteId, serviceId, on)'), 'setSiteService carries clientId');
   assert.ok(editor.includes('setStaffServiceAction(clientId, staffId, serviceId, on)'), 'setStaffService carries clientId');
   assert.ok(editor.includes('createServiceAction({ clientId,') && editor.includes('updateServiceAction(clientId,'), 'create/update service carry clientId');

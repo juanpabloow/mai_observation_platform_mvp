@@ -2,6 +2,7 @@
 
 import { ThemeProvider } from "next-themes";
 import { SidebarProvider } from "@/components/SidebarContext";
+import { ModuleRailProvider } from "@/components/ui/module/ModuleRailContext";
 
 /**
  * Client providers mounted in the root layout. next-themes manages CLASS-BASED
@@ -27,10 +28,21 @@ import { SidebarProvider } from "@/components/SidebarContext";
  */
 const THEME_SCRIPT_PROPS = typeof window === "undefined" ? undefined : { type: "application/json" };
 
-export function Providers({ children, sidebarCollapsed = false }: { children: React.ReactNode; sidebarCollapsed?: boolean }) {
+export function Providers({
+  children,
+  sidebarCollapsed = false,
+  moduleRailOpen = true,
+}: {
+  children: React.ReactNode;
+  sidebarCollapsed?: boolean;
+  /** The module side menu preference (lib/moduleRail.ts), read from its cookie during SSR. */
+  moduleRailOpen?: boolean;
+}) {
   return (
     <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange scriptProps={THEME_SCRIPT_PROPS}>
-      <SidebarProvider initialCollapsed={sidebarCollapsed}>{children}</SidebarProvider>
+      <SidebarProvider initialCollapsed={sidebarCollapsed}>
+        <ModuleRailProvider initialOpen={moduleRailOpen}>{children}</ModuleRailProvider>
+      </SidebarProvider>
     </ThemeProvider>
   );
 }

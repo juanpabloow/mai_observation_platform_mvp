@@ -6,6 +6,8 @@ import { CATEGORY_NAME_MAX, CATEGORY_TAGLINE_MAX, checkCategoryInput } from "@/l
 import { deleteBookingCategoryAction, saveBookingCategoryAction } from "@/lib/schedulingAdminActions";
 import type { BookingCategory } from "../AdminPanel";
 import { Alert, Button, CARD, CheckRow, Field, INPUT } from "../ui/system";
+import { ConfirmLayer, DiscardChanges } from "@/components/ui/module/ConfirmLayer";
+import { usePageFormGuard } from "@/components/ui/module/useEditorGuard";
 
 /**
  * "Página de reservas · Categorías" — the business's own groups on the public page
@@ -23,7 +25,17 @@ const LAYOUT_LABEL: Record<BookingCategory["layout"], { label: string; hint: str
 
 type Draft = { id: string | null; name: string; tagline: string; layout: BookingCategory["layout"]; sortOrder: string; visible: boolean };
 
-export function BookingCategoriesPanel({ clientId, categories }: { clientId: string; categories: BookingCategory[] }) {
+export function BookingCategoriesPanel({
+  clientId,
+  categories,
+  embedded = false,
+}: {
+  clientId: string;
+  categories: BookingCategory[];
+  /** Inside a module editor section (Página de reservas): no card and no heading of its
+   *  own — the section already titles it. */
+  embedded?: boolean;
+}) {
   const router = useRouter();
   const [pending, start] = useTransition();
   const [draft, setDraft] = useState<Draft | null>(null);
@@ -39,6 +51,15 @@ export function BookingCategoriesPanel({ clientId, categories }: { clientId: str
     );
   };
   const checked = draft ? checkCategoryInput(draft) : null;
+  // A category being written is a draft too: leaving the page asks first.
+  const original = draft?.id ? categories.find((c) => c.id === draft.id) : null;
+  const draftDirty = Boolean(
+    draft &&
+      (draft.id
+        ? original && (draft.name !== original.name || draft.tagline !== (original.tagline ?? "") || draft.layout !== original.layout || draft.sortOrder !== String(original.sort_order) || draft.visible !== original.visible)
+        : draft.name.trim() || draft.tagline.trim()),
+  );
+  const leaveGuard = usePageFormGuard(draftDirty);
   const save = () => {
     if (!draft || !checked) return;
     if (!checked.ok) return setError(checked.error);
@@ -58,16 +79,22 @@ export function BookingCategoriesPanel({ clientId, categories }: { clientId: str
     });
 
   return (
-    <section aria-labelledby="bp-cats-title" className={`p-4 sm:p-5 ${CARD}`}>
+    <section aria-labelledby={embedded ? undefined : "bp-cats-title"} aria-label={embedded ? "Categorías públicas" : undefined} className={embedded ? "" : `p-4 sm:p-5 ${CARD}`}>
       <div className="flex flex-wrap items-start gap-3">
-        <div className="min-w-0 flex-1">
-          <h3 id="bp-cats-title" className="text-[15px] font-semibold">
-            Categorías
-          </h3>
-          <p className="mt-0.5 text-[13px] text-muted">
-            Cómo se agrupan los servicios en la página pública, en este orden. Sin categorías, la página agrupa por tipo de servicio como hasta ahora.
-          </p>
-        </div>
+        {embedded ? (
+          <span className="min-w-0 flex-1 text-[0.8125rem] text-muted">
+            {categories.length ? `${categories.length} categoría${categories.length === 1 ? "" : "s"}, en este orden.` : "Sin categorías: la página agrupa por tipo de servicio."}
+          </span>
+        ) : (
+          <div className="min-w-0 flex-1">
+            <h3 id="bp-cats-title" className="text-[0.9375rem] font-semibold">
+              Categorías
+            </h3>
+            <p className="mt-0.5 text-[0.8125rem] text-muted">
+              Cómo se agrupan los servicios en la página pública, en este orden. Sin categorías, la página agrupa por tipo de servicio como hasta ahora.
+            </p>
+          </div>
+        )}
         <Button onClick={() => open(null)} disabled={pending}>
           Añadir categoría
         </Button>
@@ -106,19 +133,15 @@ export function BookingCategoriesPanel({ clientId, categories }: { clientId: str
       ) : null}
 
       {confirmDelete ? (
-        <div role="alertdialog" aria-labelledby="bp-cat-del" className="mt-4 rounded-sch-control border border-line bg-subtle p-3.5">
-          <p id="bp-cat-del" className="text-sm text-foreground">
-            ¿Eliminar «{confirmDelete.name}»? Sus servicios siguen publicados, sin categoría.
-          </p>
-          <div className="mt-3 flex gap-2">
-            <Button size="sm" onClick={() => setConfirmDelete(null)}>
-              Cancelar
-            </Button>
-            <Button size="sm" variant="primary" onClick={() => remove(confirmDelete)} loading={pending} loadingLabel="Eliminando…">
-              Eliminar
-            </Button>
-          </div>
-        </div>
+        <ConfirmLayer
+          id="bp-cat-del"
+          title={`¿Eliminar «${confirmDelete.name}»?`}
+          body="Sus servicios siguen publicados, sin categoría («Otros servicios»). La agenda y el agente no cambian."
+          confirmLabel="Eliminar"
+          pending={pending}
+          onCancel={() => setConfirmDelete(null)}
+          onConfirm={() => remove(confirmDelete)}
+        />
       ) : null}
 
       {draft ? (
@@ -170,6 +193,7 @@ export function BookingCategoriesPanel({ clientId, categories }: { clientId: str
           </div>
         </div>
       ) : null}
+      {leaveGuard.asking ? <DiscardChanges onKeep={leaveGuard.keepEditing} onDiscard={leaveGuard.discard} body="Hay una categoría sin guardar. Si sales ahora, se pierde." /> : null}
     </section>
   );
 }

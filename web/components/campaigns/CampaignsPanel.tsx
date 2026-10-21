@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { PageShell } from "@/components/ui/PageShell";
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
 import { AD_NOTE_MAX, CAMPAIGN_BRIEF_MAX, toDateInputValue } from "@/lib/campaignsValidation";
 import {
@@ -20,11 +19,23 @@ import {
 import { downscaleImage } from "@/components/scheduling/staff/StaffPhotoControl";
 import { type AdGroup, groupAdsByCampaign, hasCover, shareOfGroup, tileLabel } from "@/lib/adsGallery";
 import { relativeAgeShort } from "@/lib/format";
+import { Alert, Button, Field as UiField, INPUT as UI_INPUT, TEXTAREA as UI_TEXTAREA, buttonClass, segmentClass, segmentShell } from "@/components/ui/controls";
+import { Menu as ActionMenu, MenuButton } from "@/components/scheduling/ui/Menu";
+import { ModuleSurface, RailToggle, SearchField, SurfaceBody, SurfaceTop } from "@/components/ui/module/ModuleSurface";
+import { FilterRail, FilterSelect, type FilterGroup } from "@/components/ui/module/FilterRail";
+import { ListFoot, ListGroup, ListRow, ListTable, MobileGroup, MobileList, MobileRow, returnFocus, type ListColumn } from "@/components/ui/module/ListTable";
+import { EmptyState, NoResults, ReadOnlyBanner } from "@/components/ui/module/States";
+import { EditorFrame, EditorHeader, EditorSection, ErrorSummary, MetaChip, SaveBar, countChanges, type SummaryError } from "@/components/ui/module/Editor";
+import { ConfirmLayer, DiscardChanges } from "@/components/ui/module/ConfirmLayer";
+import { useEditorGuard } from "@/components/ui/module/useEditorGuard";
+import { useUrlState } from "@/components/ui/module/useUrlState";
 
 /**
- * Per-client CAMPAÑAS manager (AT-2). Mirrors the catalog/scheduling visual language so it reads
- * as native. Two tabs: ANUNCIOS (detected ads + assign to a campaign) and CAMPAÑAS (create/edit/end
- * a campaign with a bot brief). `canManage` (agency/owner) gates every write control; the server
+ * Per-client CAMPAÑAS manager (AT-2), in the module surface. Two VIEWS of the same module
+ * (not sidebar destinations): ANUNCIOS (detected ads + assign to a campaign — the cover-first
+ * gallery, unchanged) and CAMPAÑAS (create / edit / end a campaign with a bot brief, filtered by
+ * its real state: active / paused / ended). Nothing here sends or schedules a message: campaigns
+ * are attribution, and the assistant only READS the brief. `canManage` (agency/owner) gates every write control; the server
  * actions re-enforce each tier, so a Setter who reaches this page sees it READ-ONLY. Test ads
  * (is_test) are hidden behind a toggle everywhere. ctwa_clid is never passed to this component.
  */
@@ -73,11 +84,11 @@ interface Option {
 }
 
 const INPUT =
-  "h-[44px] lg:h-[36px] rounded-lg border border-line-strong bg-surface px-3 text-sm text-foreground outline-none transition focus:border-foreground disabled:bg-subtle disabled:text-faint";
+  "h-[44px] lg:h-[2.25rem] rounded-lg border border-line-strong bg-surface px-3 text-sm text-foreground outline-none transition focus:border-foreground disabled:bg-subtle disabled:text-faint";
 const BTN =
-  "inline-flex h-[44px] lg:h-[36px] items-center justify-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background transition hover:opacity-90 disabled:opacity-50";
+  "inline-flex h-[44px] lg:h-[2.25rem] items-center justify-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background transition hover:opacity-90 disabled:opacity-50";
 const GHOST =
-  "inline-flex h-[44px] lg:h-[34px] items-center justify-center rounded-lg border border-line px-3 lg:px-2.5 text-xs text-muted transition hover:bg-subtle hover:text-foreground";
+  "inline-flex h-[44px] lg:h-[2.125rem] items-center justify-center rounded-lg border border-line px-3 lg:px-2.5 text-xs text-muted transition hover:bg-subtle hover:text-foreground";
 
 type Result = { ok: boolean; error?: string };
 type Run = (fn: () => Promise<Result>) => void;
@@ -113,9 +124,11 @@ export function CampaignsPanel({
   promotions: Option[];
 }) {
   const router = useRouter();
-  const [tab, setTab] = useState<Tab>("ads");
+  const [view, setView] = useUrlState("vista", "anuncios");
+  const tab: Tab = view === "campanas" ? "campaigns" : "ads";
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const [editing, setEditing] = useState<CampaignItem | "new" | null>(null);
 
   const run: Run = (fn) => {
     setError(null);
@@ -126,92 +139,87 @@ export function CampaignsPanel({
     });
   };
 
-  // Modal saves surface their OWN failure inside the modal (see CampaignModal/AdModal), not in the
-  // page-level banner above — which the modal overlay would hide. On success they close + refresh.
+  // Modal saves surface their OWN failure inside the modal (see AdModal) and the campaign
+  // editor inside the editor, not in the page-level banner. On success they close + refresh.
   const refresh = useCallback(() => router.refresh(), [router]);
 
   const unconfigured = ads.filter((a) => !a.is_test && !a.campaign_id).length;
 
+  if (editing) {
+    return (
+      <ModuleSurface label="Campañas">
+        <CampaignEditor
+          key={editing === "new" ? "new" : editing.id}
+          clientId={clientId}
+          clientName={clientName}
+          initial={editing === "new" ? null : editing}
+          services={services}
+          promotions={promotions}
+          onClose={(saved) => {
+            const key = editing === "new" ? "new" : editing.id;
+            setEditing(null);
+            if (saved) refresh();
+            returnFocus(key);
+          }}
+        />
+      </ModuleSurface>
+    );
+  }
+
   return (
-    <main className="flex min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]">
-      <PageShell grow={false} clip={false}>
-        <div className="flex min-h-11 flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
-          <div className="min-w-0">
-            <div className="flex items-baseline gap-2.5">
-              <h1 className="truncate text-xl font-semibold tracking-[-0.025em] text-foreground">Campañas</h1>
-              <span className="truncate text-xs text-muted">{clientName}</span>
-            </div>
-            <p className="mt-0.5 hidden text-xs text-muted sm:block">
-              Los anuncios que detectamos de Meta, agrupados en campañas que el asistente entiende.
-            </p>
-          </div>
-          {isAgency ? (
-            <Link href={`/clients/${clientId}/campaigns/settings`} className={GHOST}>
+    <ModuleSurface label="Campañas">
+      <SurfaceTop
+        title="Campañas"
+        summary="Los anuncios de Meta que detectamos, agrupados en campañas que el asistente entiende. Desde aquí no se envía ningún mensaje."
+        actions={
+          isAgency ? (
+            <Link href={`/clients/${clientId}/campaigns/settings`} className={buttonClass()}>
               Configuración
             </Link>
-          ) : null}
+          ) : null
+        }
+        primary={
+          canManage && tab === "campaigns" ? (
+            <Button variant="primary" data-open-key="new" onClick={() => setEditing("new")}>
+              <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M8 3v10M3 8h10" />
+              </svg>
+              Nueva campaña
+            </Button>
+          ) : null
+        }
+      >
+        <div role="group" aria-label="Vista" className={segmentShell()}>
+          <button type="button" aria-pressed={tab === "ads"} onClick={() => setView("anuncios")} className={segmentClass(tab === "ads")}>
+            Anuncios
+            {unconfigured ? (
+              <span title="Sin configurar" className="ml-1.5 rounded bg-warn-soft px-1.5 text-[0.6875rem] text-warn">
+                {unconfigured}
+              </span>
+            ) : null}
+          </button>
+          <button type="button" aria-pressed={tab === "campaigns"} onClick={() => setView("campanas")} className={segmentClass(tab === "campaigns")}>
+            Campañas · {campaigns.length}
+          </button>
         </div>
-        <nav aria-label="Secciones" className="flex items-center gap-1 overflow-x-auto border-t border-line px-2 sm:px-3">
-          <TabButton active={tab === "ads"} onClick={() => setTab("ads")} label="Anuncios" count={unconfigured || undefined} countTitle="Sin configurar" />
-          <TabButton active={tab === "campaigns"} onClick={() => setTab("campaigns")} label="Campañas" count={campaigns.length || undefined} />
-        </nav>
-      </PageShell>
+      </SurfaceTop>
 
+      {!canManage ? <ReadOnlyBanner>Puedes ver los anuncios y las campañas. Crearlos, editarlos o asignarlos lo hace la persona responsable del negocio.</ReadOnlyBanner> : null}
       {error ? (
-        <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">
-          {error}
-        </p>
+        <div className="px-4 pt-3 sm:px-6">
+          <Alert>{error}</Alert>
+        </div>
       ) : null}
 
       {tab === "ads" ? (
         <AdsTab clientId={clientId} canManage={canManage} ads={ads} campaigns={campaigns} run={run} pending={pending} refresh={refresh} />
       ) : (
-        <CampaignsTab
-          clientId={clientId}
-          canManage={canManage}
-          campaigns={campaigns}
-          services={services}
-          promotions={promotions}
-          run={run}
-          pending={pending}
-          refresh={refresh}
-        />
+        <CampaignsTab clientId={clientId} canManage={canManage} campaigns={campaigns} services={services} promotions={promotions} run={run} pending={pending} onEdit={setEditing} />
       )}
-    </main>
+    </ModuleSurface>
   );
 }
 
-function TabButton({
-  active,
-  onClick,
-  label,
-  count,
-  countTitle,
-}: {
-  active: boolean;
-  onClick: () => void;
-  label: string;
-  count?: number;
-  countTitle?: string;
-}) {
-  return (
-    <button
-      type="button"
-      aria-current={active ? "page" : undefined}
-      onClick={onClick}
-      className={`relative flex h-[44px] shrink-0 items-center gap-1.5 border-b-2 px-3 text-xs font-medium transition lg:h-[40px] lg:px-2.5 ${
-        active ? "border-foreground text-foreground" : "border-transparent text-muted hover:text-foreground"
-      }`}
-    >
-      {label}
-      {count != null ? (
-        <span title={countTitle} className="u-mono rounded bg-chip px-1.5 py-0.5 text-[0.625rem] text-faint">
-          {count}
-        </span>
-      ) : null}
-    </button>
-  );
-}
 
 // ── Ads tab ─────────────────────────────────────────────────────────────────────
 function AdsTab({
@@ -277,10 +285,10 @@ function AdsTab({
   };
 
   return (
-    <PageShell className="overflow-y-auto" ariaLabel="Anuncios detectados">
+    <div aria-label="Anuncios detectados" className="relative min-h-0 flex-1 overflow-y-auto">
       <div className="flex min-h-full w-full flex-col gap-2.5 p-3 sm:p-4">
         {noRealAds && !showTest ? (
-          <div className="flex min-h-72 flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-line bg-surface px-4 py-12 text-center">
+          <div className="flex min-h-72 flex-1 flex-col items-center justify-center px-4 py-12 text-center">
             <p className="text-sm font-semibold text-foreground">Aún no detectamos anuncios</p>
             <p className="mt-1 max-w-sm text-xs text-muted">
               Cuando alguien escriba desde un anuncio de Meta, aparecerá aquí. O agrégalo por su id para configurarlo
@@ -438,7 +446,7 @@ function AdsTab({
           }}
         />
       ) : null}
-    </PageShell>
+    </div>
   );
 }
 
@@ -943,7 +951,7 @@ function AdModal({
           <button
             type="button"
             onClick={close}
-            className="inline-flex h-[44px] items-center justify-center rounded-lg border border-line-strong px-3.5 text-sm font-medium text-foreground transition hover:bg-subtle lg:h-[36px]"
+            className="inline-flex h-[44px] items-center justify-center rounded-lg border border-line-strong px-3.5 text-sm font-medium text-foreground transition hover:bg-subtle lg:h-[2.25rem]"
           >
             Cancelar
           </button>
@@ -1046,7 +1054,7 @@ function AdCoverControl({
             type="button"
             disabled={pending}
             onClick={() => input.current?.click()}
-            className="u-focus inline-flex min-h-[44px] items-center rounded-[12px] border border-line-strong bg-surface px-3.5 text-sm text-foreground disabled:opacity-60 md:min-h-[36px]"
+            className="u-focus inline-flex min-h-[44px] items-center rounded-[12px] border border-line-strong bg-surface px-3.5 text-sm text-foreground disabled:opacity-60 md:min-h-[2.25rem]"
           >
             {pending ? "Guardando…" : preview ? "Cambiar portada" : "Subir portada"}
           </button>
@@ -1055,7 +1063,7 @@ function AdCoverControl({
               type="button"
               disabled={pending}
               onClick={remove}
-              className="u-focus inline-flex min-h-[44px] items-center rounded-[12px] px-3 text-sm text-muted underline underline-offset-2 disabled:opacity-60 md:min-h-[36px]"
+              className="u-focus inline-flex min-h-[44px] items-center rounded-[12px] px-3 text-sm text-muted underline underline-offset-2 disabled:opacity-60 md:min-h-[2.25rem]"
             >
               Quitar
             </button>
@@ -1085,6 +1093,14 @@ function AdCoverControl({
 }
 
 // ── Campaigns tab ─────────────────────────────────────────────────────────────────
+const CAMPAIGN_COLUMNS: ListColumn[] = [
+  { key: "name", label: "Campaña" },
+  { key: "ads", label: "Anuncios", className: "w-[6rem]" },
+  { key: "dates", label: "Fechas", className: "hidden w-[22%] lg:table-cell" },
+  { key: "target", label: "Objetivo", className: "hidden w-[18%] xl:table-cell" },
+  { key: "status", label: "Estado", className: "w-[7rem]" },
+];
+
 function CampaignsTab({
   clientId,
   canManage,
@@ -1093,7 +1109,7 @@ function CampaignsTab({
   promotions,
   run,
   pending,
-  refresh,
+  onEdit,
 }: {
   clientId: string;
   canManage: boolean;
@@ -1102,274 +1118,314 @@ function CampaignsTab({
   promotions: Option[];
   run: Run;
   pending: boolean;
-  refresh: () => void;
+  onEdit: (c: CampaignItem | "new") => void;
 }) {
-  const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState<CampaignItem | null>(null);
+  const [filter, setFilter] = useUrlState("estado", "");
+  const [query, setQuery] = useUrlState("q", "");
+  const [menu, setMenu] = useState<string | null>(null);
+  const [ending, setEnding] = useState<CampaignItem | null>(null);
   const serviceName = useMemo(() => new Map(services.map((s) => [s.id, s.name])), [services]);
   const promoName = useMemo(() => new Map(promotions.map((p) => [p.id, p.name])), [promotions]);
+  const st = filter === "active" || filter === "paused" || filter === "ended" ? filter : "";
+  const q = query.trim().toLocaleLowerCase("es");
+  const shown = campaigns.filter((c) => (!st || c.status === st) && (!q || c.name.toLocaleLowerCase("es").includes(q)));
+  const count = (s: CampaignItem["status"]) => campaigns.filter((c) => c.status === s).length;
+  const groups: FilterGroup[] = [
+    {
+      label: "Estado",
+      options: [
+        { value: "", label: "Todas", count: campaigns.length },
+        { value: "active", label: "Activa", count: count("active") },
+        { value: "paused", label: "En pausa", count: count("paused") },
+        { value: "ended", label: "Finalizada", count: count("ended") },
+      ],
+    },
+  ];
+  const target = (c: CampaignItem) =>
+    [c.target_service_id ? serviceName.get(c.target_service_id) : null, c.promotion_id ? promoName.get(c.promotion_id) : null].filter(Boolean).join(" · ") || "Sin objetivo";
+  const dates = (c: CampaignItem) => (c.start_date || c.end_date ? `${fmtDate(c.start_date)} → ${fmtDate(c.end_date)}` : "Sin fechas");
+
+  const rowMenu = (c: CampaignItem, at: "t" | "m") =>
+    canManage ? (
+      <ActionMenu label={`Acciones de ${c.name}`} open={menu === `${at}:${c.id}`} onToggle={() => setMenu(menu === `${at}:${c.id}` ? null : `${at}:${c.id}`)} onClose={() => setMenu(null)}>
+        <MenuButton
+          onClick={() => {
+            setMenu(null);
+            onEdit(c);
+          }}
+        >
+          Editar
+        </MenuButton>
+        {c.status !== "ended" ? (
+          <MenuButton
+            disabled={pending}
+            onClick={() => {
+              setMenu(null);
+              setEnding(c);
+            }}
+          >
+            Finalizar
+          </MenuButton>
+        ) : null}
+      </ActionMenu>
+    ) : null;
 
   return (
-    <PageShell className="overflow-y-auto" ariaLabel="Campañas">
-      <div className="flex min-h-full w-full flex-col gap-2.5 p-3 sm:p-4">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <span className="text-xs text-muted">
-            {campaigns.length} campaña{campaigns.length === 1 ? "" : "s"}
-          </span>
-          {canManage ? (
-            <button type="button" className={BTN} onClick={() => setCreating(true)}>
-              + Nueva campaña
-            </button>
-          ) : null}
-        </div>
-
-        {campaigns.length === 0 ? (
-          <div className="flex min-h-60 flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-line bg-surface px-4 py-12 text-center">
-            <p className="text-sm font-semibold text-foreground">Aún no hay campañas</p>
-            <p className="mt-1 max-w-sm text-xs text-muted">
-              Crea una campaña, escribe un brief para el asistente y asígnale los anuncios que la representan.
-            </p>
-            {canManage ? (
-              <button type="button" className={`${BTN} mt-4`} onClick={() => setCreating(true)}>
-                + Nueva campaña
-              </button>
-            ) : null}
-          </div>
-        ) : (
-          <div className="flex flex-col gap-3">
-            {campaigns.map((c) => (
-              <article key={c.id} className="flex flex-wrap items-start gap-3 rounded-xl border border-line bg-surface px-4 py-3.5">
-                <div className="min-w-0 flex-1">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <h3 className="truncate text-sm font-semibold text-foreground">{c.name}</h3>
-                    <StatusChip status={c.status} />
-                    <span className="u-mono rounded bg-chip px-1.5 py-0.5 text-[0.625rem] text-faint">
-                      {c.ad_count} anuncio{c.ad_count === 1 ? "" : "s"}
-                    </span>
-                  </div>
-                  <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[0.6875rem] text-faint">
-                    {c.start_date || c.end_date ? (
-                      <span>
-                        {fmtDate(c.start_date)} → {fmtDate(c.end_date)}
-                      </span>
-                    ) : null}
-                    {c.target_service_id && serviceName.get(c.target_service_id) ? (
-                      <span>Servicio: {serviceName.get(c.target_service_id)}</span>
-                    ) : null}
-                    {c.promotion_id && promoName.get(c.promotion_id) ? (
-                      <span>Promoción: {promoName.get(c.promotion_id)}</span>
-                    ) : null}
-                    {c.external_campaign_id ? <span className="u-mono">Meta {c.external_campaign_id}</span> : null}
-                  </div>
-                  {c.bot_brief ? <p className="mt-1.5 line-clamp-2 text-xs text-muted">{c.bot_brief}</p> : null}
-                </div>
-                {canManage ? (
-                  <div className="flex shrink-0 items-center gap-2">
-                    <button type="button" className={GHOST} onClick={() => setEditing(c)} aria-haspopup="dialog">
-                      Editar
-                    </button>
-                    {c.status !== "ended" ? <EndButton clientId={clientId} campaign={c} run={run} pending={pending} /> : null}
-                  </div>
-                ) : null}
-              </article>
-            ))}
-          </div>
-        )}
+    <>
+      <div className="flex shrink-0 flex-wrap items-center gap-2 px-4 pb-3 sm:px-6">
+        <RailToggle />
+        <SearchField value={query} onChange={setQuery} label="Buscar campaña" />
+        <FilterSelect groups={groups} value={st} onChange={setFilter} label="Estado" className="w-full sm:w-auto sm:min-w-[12rem]" />
       </div>
-
-      {creating ? (
-        <CampaignModal
-          title="Nueva campaña"
-          services={services}
-          promotions={promotions}
-          onClose={() => setCreating(false)}
-          onSubmit={async (values) => {
-            const r = await createCampaignAction({ clientId, ...values });
-            if (r.ok) {
-              setCreating(false);
-              refresh();
-            }
-            return r;
+      <SurfaceBody rail={<FilterRail groups={groups} value={st} onChange={setFilter} />} railLabel="Estado de las campañas">
+        {campaigns.length === 0 ? (
+          <EmptyState title="Aún no hay campañas" body="Crea una campaña, escribe un brief para el asistente y asígnale los anuncios que la representan.">
+            {canManage ? (
+              <Button variant="primary" onClick={() => onEdit("new")}>
+                Nueva campaña
+              </Button>
+            ) : null}
+          </EmptyState>
+        ) : shown.length === 0 ? (
+          <NoResults>
+            {q ? <Button onClick={() => setQuery("")}>Borrar búsqueda</Button> : null}
+            {st ? <Button onClick={() => setFilter("")}>Ver todas</Button> : null}
+          </NoResults>
+        ) : (
+          <>
+            <ListTable label="Campañas" columns={CAMPAIGN_COLUMNS} withMenu={canManage}>
+              <ListGroup span={CAMPAIGN_COLUMNS.length + (canManage ? 1 : 0)}>
+                {shown.map((c) => (
+                  <ListRow
+                    key={c.id}
+                    columns={CAMPAIGN_COLUMNS}
+                    name={c.name}
+                    openKey={c.id}
+                    onOpen={canManage ? () => onEdit(c) : undefined}
+                    openLabel="Editar"
+                    raised={menu === `t:${c.id}`}
+                    menu={canManage ? rowMenu(c, "t") : undefined}
+                    dimmed={c.status === "ended"}
+                    cells={[
+                      <span key="n" className="flex min-w-0 flex-col py-1.5">
+                        <span className="truncate">{c.name}</span>
+                        <span className="truncate text-[0.7812rem] font-normal text-muted">{c.bot_brief || "Sin brief para el asistente"}</span>
+                      </span>,
+                      <span key="a" className="tabular-nums">
+                        {c.ad_count} anuncio{c.ad_count === 1 ? "" : "s"}
+                      </span>,
+                      <span key="d" className="text-muted">{dates(c)}</span>,
+                      <span key="t" className="text-muted">{target(c)}</span>,
+                      <StatusChip key="s" status={c.status} />,
+                    ]}
+                  />
+                ))}
+              </ListGroup>
+            </ListTable>
+            <MobileList>
+              <MobileGroup>
+                {shown.map((c) => (
+                  <MobileRow
+                    key={c.id}
+                    title={c.name}
+                    openKey={c.id}
+                    subtitle={`${c.ad_count} anuncio${c.ad_count === 1 ? "" : "s"} · ${dates(c)}`}
+                    badges={<StatusChip status={c.status} />}
+                    onOpen={canManage ? () => onEdit(c) : undefined}
+                    openLabel="Editar"
+                    menu={rowMenu(c, "m")}
+                    dimmed={c.status === "ended"}
+                  />
+                ))}
+              </MobileGroup>
+            </MobileList>
+            <ListFoot>
+              Mostrando {shown.length} campaña{shown.length === 1 ? "" : "s"}. El asistente lee el brief cuando alguien escribe desde un anuncio de la campaña.
+            </ListFoot>
+          </>
+        )}
+      </SurfaceBody>
+      {ending ? (
+        <ConfirmLayer
+          id="campaign-end"
+          title={`¿Finalizar «${ending.name}»?`}
+          body="Pasa a «Finalizada» y, si no tenía fecha de fin, se le pone la de hoy. No se envía ningún mensaje ni se borran sus anuncios."
+          confirmLabel="Finalizar"
+          tone="primary"
+          onCancel={() => setEnding(null)}
+          onConfirm={() => {
+            const id = ending.id;
+            setEnding(null);
+            run(() => endCampaignAction(clientId, id));
           }}
         />
       ) : null}
-
-      {editing ? (
-        <CampaignModal
-          title={editing.name}
-          services={services}
-          promotions={promotions}
-          initial={editing}
-          onClose={() => setEditing(null)}
-          onSubmit={async (values) => {
-            const r = await updateCampaignAction(clientId, editing.id, values);
-            if (r.ok) {
-              setEditing(null);
-              refresh();
-            }
-            return r;
-          }}
-        />
-      ) : null}
-    </PageShell>
+    </>
   );
 }
 
 function StatusChip({ status }: { status: CampaignItem["status"] }) {
-  const cls =
-    status === "active"
-      ? "bg-success/10 text-success"
-      : status === "paused"
-        ? "bg-warn-soft text-warn"
-        : "bg-chip text-muted";
-  return <span className={`rounded-full px-2 py-0.5 text-[0.625rem] font-medium ${cls}`}>{STATUS_LABEL[status]}</span>;
+  const cls = status === "active" ? "bg-success/15 text-success" : status === "paused" ? "bg-warn-soft text-warn" : "bg-chip text-muted";
+  return <span className={`inline-flex rounded-full px-2 py-0.5 text-[0.7188rem] font-medium ${cls}`}>{STATUS_LABEL[status]}</span>;
 }
 
-function EndButton({ clientId, campaign, run, pending }: { clientId: string; campaign: CampaignItem; run: Run; pending: boolean }) {
-  const [confirming, setConfirming] = useState(false);
-  if (!confirming) {
-    return (
-      <button type="button" className={GHOST} disabled={pending} onClick={() => setConfirming(true)}>
-        Finalizar
-      </button>
-    );
-  }
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-xs text-warn">¿Finalizar la campaña?</span>
-      <button
-        type="button"
-        disabled={pending}
-        onClick={() => {
-          setConfirming(false);
-          run(() => endCampaignAction(clientId, campaign.id));
-        }}
-        className="rounded border border-warn/40 px-2 py-0.5 text-[11px] text-warn transition-colors hover:bg-warn-soft disabled:opacity-50"
-      >
-        Finalizar
-      </button>
-      <button type="button" onClick={() => setConfirming(false)} className="rounded border border-line px-2 py-0.5 text-[11px] transition-colors hover:bg-subtle">
-        Cancelar
-      </button>
-    </div>
-  );
-}
-
-interface CampaignValues {
+interface CampaignForm {
   name: string;
   status: string;
-  startDate: string | null;
-  endDate: string | null;
-  externalCampaignId: string | null;
-  targetServiceId: string | null;
-  promotionId: string | null;
-  botBrief: string | null;
+  startDate: string;
+  endDate: string;
+  externalId: string;
+  serviceId: string;
+  promotionId: string;
+  brief: string;
 }
 
-function CampaignModal({
-  title,
+/** The in-page campaign editor — the same fields and the same server validation as the
+ *  modal it replaces; every failure stays in the editor, with what was typed. */
+function CampaignEditor({
+  clientId,
+  clientName,
+  initial,
   services,
   promotions,
-  initial,
   onClose,
-  onSubmit,
 }: {
-  title: string;
+  clientId: string;
+  clientName: string;
+  initial: CampaignItem | null;
   services: Option[];
   promotions: Option[];
-  initial?: CampaignItem;
-  onClose: () => void;
-  onSubmit: (values: CampaignValues) => Promise<Result>;
+  onClose: (saved: boolean) => void;
 }) {
-  const [name, setName] = useState(initial?.name ?? "");
-  const [status, setStatus] = useState<string>(initial?.status ?? "active");
-  // Accept whatever shape the stored date arrives in (YYYY-MM-DD, full ISO, or a Date) → the
-  // YYYY-MM-DD an <input type="date"> binds to. Without this, a Date leaked `.trim is not a function`.
-  const [startDate, setStartDate] = useState(() => toDateInputValue(initial?.start_date));
-  const [endDate, setEndDate] = useState(() => toDateInputValue(initial?.end_date));
-  const [externalId, setExternalId] = useState(initial?.external_campaign_id ?? "");
-  const [serviceId, setServiceId] = useState(initial?.target_service_id ?? "");
-  const [promotionId, setPromotionId] = useState(initial?.promotion_id ?? "");
-  const [brief, setBrief] = useState(initial?.bot_brief ?? "");
+  const start = useMemo<CampaignForm>(
+    () => ({
+      name: initial?.name ?? "",
+      status: initial?.status ?? "active",
+      // Accept whatever shape the stored date arrives in (YYYY-MM-DD, full ISO, or a Date) →
+      // the YYYY-MM-DD an <input type="date"> binds to.
+      startDate: toDateInputValue(initial?.start_date),
+      endDate: toDateInputValue(initial?.end_date),
+      externalId: initial?.external_campaign_id ?? "",
+      serviceId: initial?.target_service_id ?? "",
+      promotionId: initial?.promotion_id ?? "",
+      brief: initial?.bot_brief ?? "",
+    }),
+    [initial],
+  );
+  const [f, setF] = useState<CampaignForm>(start);
+  const [attempted, setAttempted] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const saved = useRef(false);
+  const changes = countChanges(start, f);
+  const set = <K extends keyof CampaignForm>(k: K, v: CampaignForm[K]) => setF((x) => ({ ...x, [k]: v }));
+  const guard = useEditorGuard({ dirty: changes > 0 && !saving, onLeave: () => onClose(saved.current) });
+  const requestClose = () => {
+    if (!saving) guard.requestLeave();
+  };
+  const nameError = attempted && !f.name.trim() ? "Escribe el nombre de la campaña." : "";
+  const datesError = attempted && f.startDate && f.endDate && f.endDate < f.startDate ? "La fecha de fin no puede ser anterior a la de inicio." : "";
 
-  const closeRef = useRef(onClose);
-  useEffect(() => {
-    closeRef.current = onClose;
-  }, [onClose]);
-  const close = useCallback(() => closeRef.current(), []);
-  const panelRef = useTrappedPanel({ active: true, onClose: close });
-
-  // Every failure is shown INSIDE the modal; on success the parent unmounts it.
-  const submit = async () => {
+  const save = async () => {
+    setAttempted(true);
+    if (!f.name.trim() || (f.startDate && f.endDate && f.endDate < f.startDate)) return;
+    setSaving(true);
     setError(null);
-    setSubmitting(true);
+    const values = {
+      name: f.name.trim(),
+      status: f.status,
+      startDate: f.startDate.trim() === "" ? null : f.startDate.trim(),
+      endDate: f.endDate.trim() === "" ? null : f.endDate.trim(),
+      externalCampaignId: f.externalId.trim() === "" ? null : f.externalId.trim(),
+      targetServiceId: f.serviceId === "" ? null : f.serviceId,
+      promotionId: f.promotionId === "" ? null : f.promotionId,
+      botBrief: f.brief.trim() === "" ? null : f.brief,
+    };
     try {
-      const r = await onSubmit({
-        name: name.trim(),
-        status,
-        startDate: startDate.trim() === "" ? null : startDate.trim(),
-        endDate: endDate.trim() === "" ? null : endDate.trim(),
-        externalCampaignId: externalId.trim() === "" ? null : externalId.trim(),
-        targetServiceId: serviceId === "" ? null : serviceId,
-        promotionId: promotionId === "" ? null : promotionId,
-        botBrief: brief.trim() === "" ? null : brief,
-      });
-      if (!r.ok) setError(r.error ?? "No se pudo guardar. Revisa los datos e inténtalo de nuevo.");
+      const r = initial ? await updateCampaignAction(clientId, initial.id, values) : await createCampaignAction({ clientId, ...values });
+      setSaving(false);
+      if (!r.ok) {
+        setError(`${r.error ?? "No se pudo guardar. Revisa los datos e inténtalo de nuevo."} Lo que escribiste se conserva.`);
+        return;
+      }
+      saved.current = true;
+      guard.leave();
     } catch {
-      setError("No se pudo guardar. Inténtalo de nuevo.");
-    } finally {
-      setSubmitting(false);
+      setSaving(false);
+      setError("No se pudo guardar. Inténtalo de nuevo; lo que escribiste se conserva.");
     }
   };
 
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-5">
-      <button type="button" aria-label={`Cerrar ${title}`} className={OVERLAY_SCRIM} onClick={close} />
-      <section
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        tabIndex={-1}
-        className="relative z-50 flex max-h-[min(820px,calc(100dvh-2rem))] w-full flex-col overflow-hidden rounded-t-2xl border border-line bg-surface sm:max-w-2xl sm:rounded-2xl"
-      >
-        <header className="flex shrink-0 items-start gap-4 border-b border-line px-4 py-3.5 sm:px-5">
-          <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold text-foreground">{title}</h2>
-            <p className="mt-0.5 text-xs text-muted">Nombre, estado, fechas, objetivo y el brief para el asistente.</p>
-          </div>
-          <button
-            type="button"
-            onClick={close}
-            aria-label="Cerrar"
-            className="flex size-9 shrink-0 items-center justify-center rounded-lg text-lg text-muted transition hover:bg-subtle hover:text-foreground"
-          >
-            ×
-          </button>
-        </header>
+  const summary: SummaryError[] = [
+    ...(nameError ? [{ target: "cmp-f-name", message: `Nombre: ${nameError}` }] : []),
+    ...(datesError ? [{ target: "cmp-f-end", message: `Fechas: ${datesError}` }] : []),
+  ];
 
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Nombre">
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Asesoría gratis — octubre" className={`${INPUT} w-full`} />
-            </Field>
-            <Field label="Estado">
-              <select value={status} onChange={(e) => setStatus(e.target.value)} className={`${INPUT} w-full`}>
-                <option value="active">Activa</option>
-                <option value="paused">En pausa</option>
-                <option value="ended">Finalizada</option>
-              </select>
-            </Field>
-            <Field label="Inicio" hint="Opcional.">
-              <input type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} className={`${INPUT} w-full`} />
-            </Field>
-            <Field label="Fin" hint="Opcional.">
-              <input type="date" value={endDate} onChange={(e) => setEndDate(e.target.value)} className={`${INPUT} w-full`} />
-            </Field>
-            <Field label="Servicio objetivo" hint="Opcional.">
-              <select value={serviceId} onChange={(e) => setServiceId(e.target.value)} className={`${INPUT} w-full`}>
+  return (
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      onKeyDown={(e) => {
+        if (e.key !== "Escape" || e.defaultPrevented || (e.target as HTMLElement).closest("select, [role=menu]")) return;
+        e.preventDefault();
+        requestClose();
+      }}
+    >
+      <EditorHeader
+        title={initial ? initial.name : "Nueva campaña"}
+        headingId="cmp-editor-title"
+        status={initial ? <StatusChip status={initial.status} /> : null}
+        eyebrow={initial ? "Editar campaña" : `Presencia y marketing · Campañas · ${clientName}`}
+        chips={initial ? <MetaChip>{`${initial.ad_count} anuncio${initial.ad_count === 1 ? "" : "s"}`}</MetaChip> : null}
+        backLabel="Volver a Campañas"
+        onBack={requestClose}
+        changes={changes}
+        onCancel={requestClose}
+        onSave={save}
+        saveLabel={initial ? "Guardar cambios" : "Crear campaña"}
+        saving={saving}
+        canSave={initial ? changes > 0 : true}
+      />
+      <EditorFrame
+        sections={[
+          { id: "cmp-basic", label: "Información básica", dirty: start.name !== f.name || start.status !== f.status, errors: nameError ? 1 : 0 },
+          { id: "cmp-dates", label: "Fechas", dirty: start.startDate !== f.startDate || start.endDate !== f.endDate, errors: datesError ? 1 : 0 },
+          { id: "cmp-target", label: "Objetivo", dirty: start.serviceId !== f.serviceId || start.promotionId !== f.promotionId || start.externalId !== f.externalId },
+          { id: "cmp-brief", label: "Brief para el asistente", dirty: start.brief !== f.brief },
+        ]}
+        saveBar={<SaveBar changes={changes} onCancel={requestClose} onSave={save} saving={saving} saveLabel={initial ? "Guardar" : "Crear"} canSave={initial ? changes > 0 : true} />}
+      >
+        <ErrorSummary errors={summary} />
+        {error ? (
+          <div className="mb-2">
+            <Alert>{error}</Alert>
+          </div>
+        ) : null}
+        <EditorSection id="cmp-basic" title="Información básica" summary={`${f.name || "Sin nombre"} · ${STATUS_LABEL[f.status as CampaignItem["status"]] ?? f.status}`}>
+          <UiField label="Nombre" error={nameError}>
+            <input id="cmp-f-name" value={f.name} onChange={(e) => set("name", e.target.value)} placeholder="Ej. Asesoría gratis — octubre" aria-invalid={Boolean(nameError)} className={UI_INPUT} />
+          </UiField>
+          <UiField label="Estado" hint="Activa, En pausa o Finalizada. Cambiar el estado no envía mensajes.">
+            <select value={f.status} onChange={(e) => set("status", e.target.value)} className={UI_INPUT}>
+              <option value="active">Activa</option>
+              <option value="paused">En pausa</option>
+              <option value="ended">Finalizada</option>
+            </select>
+          </UiField>
+        </EditorSection>
+        <EditorSection id="cmp-dates" title="Fechas" description="Opcionales: el periodo de la campaña en Meta." summary={f.startDate || f.endDate ? `${fmtDate(f.startDate || null)} → ${fmtDate(f.endDate || null)}` : "Sin fechas"}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <UiField label="Inicio" optional>
+              <input type="date" value={f.startDate} onChange={(e) => set("startDate", e.target.value)} className={UI_INPUT} />
+            </UiField>
+            <UiField label="Fin" optional error={datesError}>
+              <input id="cmp-f-end" type="date" value={f.endDate} onChange={(e) => set("endDate", e.target.value)} aria-invalid={Boolean(datesError)} className={UI_INPUT} />
+            </UiField>
+          </div>
+        </EditorSection>
+        <EditorSection id="cmp-target" title="Objetivo" description="Qué se promociona. Opcional." summary={[services.find((s) => s.id === f.serviceId)?.name, promotions.find((p) => p.id === f.promotionId)?.name].filter(Boolean).join(" · ") || "Sin objetivo"} defaultOpen={false}>
+          <div className="grid gap-4 sm:grid-cols-2">
+            <UiField label="Servicio objetivo" optional>
+              <select value={f.serviceId} onChange={(e) => set("serviceId", e.target.value)} className={UI_INPUT}>
                 <option value="">Ninguno</option>
                 {services.map((s) => (
                   <option key={s.id} value={s.id}>
@@ -1377,9 +1433,9 @@ function CampaignModal({
                   </option>
                 ))}
               </select>
-            </Field>
-            <Field label="Promoción" hint="Opcional.">
-              <select value={promotionId} onChange={(e) => setPromotionId(e.target.value)} className={`${INPUT} w-full`}>
+            </UiField>
+            <UiField label="Promoción" optional hint="El asistente solo la menciona si está vigente.">
+              <select value={f.promotionId} onChange={(e) => set("promotionId", e.target.value)} className={UI_INPUT}>
                 <option value="">Ninguna</option>
                 {promotions.map((p) => (
                   <option key={p.id} value={p.id}>
@@ -1387,55 +1443,19 @@ function CampaignModal({
                   </option>
                 ))}
               </select>
-            </Field>
-            <Field label="Id de campaña de Meta" hint="Opcional. En Ads Manager → Campañas, agrega la columna «ID de la campaña».">
-              <input value={externalId} onChange={(e) => setExternalId(e.target.value)} placeholder="Opcional" className={`${INPUT} w-full`} />
-            </Field>
+            </UiField>
           </div>
-
-          <div className="mt-4">
-            <label className="mb-1.5 flex flex-col gap-1.5">
-              <span className="text-xs font-medium text-foreground">
-                Brief para el asistente <span className="font-normal text-faint">(opcional)</span>
-              </span>
-              <textarea
-                value={brief}
-                onChange={(e) => setBrief(e.target.value)}
-                rows={4}
-                maxLength={CAMPAIGN_BRIEF_MAX}
-                placeholder="Qué promete el anuncio, a quién va dirigido, condiciones…"
-                className="min-h-[5.5rem] w-full resize-y rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-foreground outline-none transition focus:border-foreground"
-              />
-            </label>
-            <div className="flex items-center justify-between">
-              <p className="text-[0.6875rem] text-faint">
-                Lo que escribas aquí lo lee el asistente cuando alguien escribe desde un anuncio de esta campaña.
-              </p>
-              <p className="shrink-0 pl-3 text-[0.6875rem] text-faint">
-                {brief.length}/{CAMPAIGN_BRIEF_MAX}
-              </p>
-            </div>
-          </div>
-        </div>
-
-        <footer className="flex shrink-0 flex-wrap items-center justify-end gap-2 border-t border-line bg-card/50 px-4 py-3 sm:px-5">
-          {error ? (
-            <p role="alert" className="mr-auto min-w-0 flex-1 text-sm text-danger">
-              {error}
-            </p>
-          ) : null}
-          <button
-            type="button"
-            onClick={close}
-            className="inline-flex h-[44px] items-center justify-center rounded-lg border border-line-strong px-3.5 text-sm font-medium text-foreground transition hover:bg-subtle lg:h-[36px]"
-          >
-            Cancelar
-          </button>
-          <button className={BTN} disabled={submitting || !name.trim()} onClick={submit}>
-            {submitting ? "Guardando…" : initial ? "Guardar cambios" : "Crear campaña"}
-          </button>
-        </footer>
-      </section>
+          <UiField label="Id de campaña de Meta" optional hint="En Ads Manager → Campañas, agrega la columna «ID de la campaña».">
+            <input value={f.externalId} onChange={(e) => set("externalId", e.target.value)} className={UI_INPUT} />
+          </UiField>
+        </EditorSection>
+        <EditorSection id="cmp-brief" title="Brief para el asistente" description="Lo que escribas aquí lo lee el asistente cuando alguien escribe desde un anuncio de esta campaña." summary={f.brief ? `${f.brief.length} caracteres` : "Sin brief"} defaultOpen={false}>
+          <UiField label="Brief" optional hint={`${f.brief.length}/${CAMPAIGN_BRIEF_MAX}`}>
+            <textarea value={f.brief} onChange={(e) => set("brief", e.target.value)} rows={5} maxLength={CAMPAIGN_BRIEF_MAX} placeholder="Qué promete el anuncio, a quién va dirigido, condiciones…" className={UI_TEXTAREA} />
+          </UiField>
+        </EditorSection>
+      </EditorFrame>
+      {guard.asking ? <DiscardChanges onKeep={guard.keepEditing} onDiscard={guard.discard} body="Hay cambios sin guardar en esta campaña. Si sales ahora, se pierden." /> : null}
     </div>
   );
 }

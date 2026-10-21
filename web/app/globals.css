@@ -765,6 +765,29 @@ html[data-text-scale='large'] {
 }
 
 /*
+ * MODULE SCREENS follow the text size on desktop too (components/ui/module). The shared
+ * controls fix their desktop heights in px (so other screens keep their rhythm); inside a
+ * module surface those heights become rem, so «Compacto» is denser and «Grande» roomier
+ * while «Normal» (16px root) is exactly the same 40 / 36 / 34px. Below lg nothing changes:
+ * touch targets stay at their 44px floor.
+ */
+@media (min-width: 1024px) {
+  .u-module .lg\:h-\[40px\] {
+    height: 2.5rem;
+  }
+  .u-module .lg\:h-\[36px\] {
+    height: 2.25rem;
+  }
+  .u-module .lg\:h-\[34px\] {
+    height: 2.125rem;
+  }
+  .u-module .lg\:size-\[36px\] {
+    width: 2.25rem;
+    height: 2.25rem;
+  }
+}
+
+/*
  * TOP BAR preference (lib/topbarPref.ts). Hidden only from xl up, where the rail is always
  * on screen — below that the bar holds the menu button and always stays. With the bar
  * hidden, the rail shows its own collapse control so nothing is lost.

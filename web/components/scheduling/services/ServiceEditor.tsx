@@ -1,8 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
-import { useTrappedPanel } from "@/components/ui/Overlay";
-import { apptCategoryClass, serviceCategory } from "@/lib/agendaCategory";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import Link from "next/link";
 import {
   createServiceAction,
   removeServiceImageAction,
@@ -14,16 +13,23 @@ import {
   uploadServiceImageAction,
 } from "@/lib/schedulingAdminActions";
 import { checkIncludes, INCLUDES_ITEM_MAX, INCLUDES_MAX_ITEMS, servicePageDiagnosis, type FixArea, type PageDiagnosis } from "@/lib/bookingPage";
+import { priceLabelCOP } from "@/lib/money";
 import { downscaleImage } from "../staff/StaffPhotoControl";
 import { runServiceSave, type PersistedService } from "@/lib/serviceSave";
 import { SERVICE_DESCRIPTION_MAX } from "@/lib/serviceDescription";
 import type { BookingCategory, Service, Site, Staff } from "../AdminPanel";
-import { Alert, Button, CARD, CheckRow, ConfirmDialog, Field, INPUT, TEXTAREA, buttonClass, useModalLayer } from "../ui/system";
-import { CATEGORY_CHOICES } from "./categories";
+import { Alert, Avatar, Button, Field, INPUT, TEXTAREA, buttonClass, segmentClass, segmentShell } from "../ui/system";
+import { CATEGORY_CHOICES, categoryDot } from "./categories";
+import { EditorFrame, EditorHeader, EditorSection, ErrorSummary, MetaChip, SaveBar, countChanges, type SummaryError } from "@/components/ui/module/Editor";
+import { AffixInput, CheckItem, CheckList, ChoiceChips, FieldGroup, Notice, ToggleRow } from "@/components/ui/module/FormKit";
+import { DiscardChanges } from "@/components/ui/module/ConfirmLayer";
+import { useEditorGuard } from "@/components/ui/module/useEditorGuard";
+import { scrollWithin } from "@/components/ui/module/scrollWithin";
 
 /**
- * The SERVICE EDITOR — a wide view (not a cramped modal) with section navigation and
- * persistent Cerrar / Guardar. It edits EVERY real field the catalogue stores, and only
+ * The SERVICE EDITOR — edited IN the Servicios surface (not a cramped modal, not a side
+ * panel), with the section index on the left and persistent Cancelar / Guardar
+ * (components/ui/module/Editor). It edits EVERY real field the catalogue stores, and only
  * those: name, category (= the agenda colour), description, featured, duration, price,
  * prep/clean-up buffers, which professionals perform it, and which sites offer it online.
  *
@@ -31,22 +37,15 @@ import { CATEGORY_CHOICES } from "./categories";
  * create is atomic with its initial sites (createServiceWithSites), and if a later step
  * fails (featured, a site toggle, a professional) the next Guardar RESUMES — it updates
  * the service it already created instead of creating it again. Validation shows beside
- * each field after it is touched or on a save attempt. Closing with unsaved changes asks
- * first, in a confirmation that makes everything behind it inert.
+ * each field after it is touched or on a save attempt, with a linked summary on top.
+ * Leaving with unsaved changes — Cancelar, ‹, Escape, Back, a sidebar link — asks first
+ * (useEditorGuard).
  *
  * Archiving lives on the card menu (it is the existing deactivate — appointments and
  * history are kept). There is no permanent delete: it would orphan that history.
  */
 
 export type Mode = { kind: "edit"; service: Service } | { kind: "new"; category: string | null };
-
-const SECTIONS = [
-  { id: "svc-basic", label: "Información básica" },
-  { id: "svc-pricing", label: "Precio y duración" },
-  { id: "svc-staff", label: "Profesionales" },
-  { id: "svc-sites", label: "Sedes y reserva en línea" },
-  { id: "svc-page", label: "Página de reservas" },
-] as const;
 
 /** How the service is PRESENTED on the public booking page (migration 1804). Saved after
  *  the service itself, by its own action; it never changes the agenda or the bot. */
@@ -163,6 +162,9 @@ export async function saveServiceForm(clientId: string, persisted: PersistedServ
   return out;
 }
 
+/** The phone editor's presets, shared so both editors offer the same durations. */
+const DURATIONS = [15, 30, 45, 60, 75, 90, 120];
+
 export function ServiceEditor({
   clientId,
   mode,
@@ -172,6 +174,7 @@ export function ServiceEditor({
   bookingCategories = [],
   allServices = [],
   initialSection,
+  backLabel = "Volver",
   onClose,
   onSaved,
 }: {
@@ -188,6 +191,8 @@ export function ServiceEditor({
   allServices?: Service[];
   /** Open scrolled to one section — «Orden y presentación» opens on «Página de reservas». */
   initialSection?: "basic" | "pricing" | "staff" | "sites" | "page";
+  /** Accessible name of the ‹ back control ("Volver a Servicios"). */
+  backLabel?: string;
   onClose: () => void;
   onSaved: () => void;
 }) {
@@ -202,11 +207,13 @@ export function ServiceEditor({
   const [imageError, setImageError] = useState<string | null>(null);
 
   const [form, setForm] = useState<FormState>(initial);
+  // «Precio fijo» vs «A consultar», explicit (as on the phone): an empty price is NOT the
+  // same as 0. «A consultar» stores NULL; a fixed price of 0 stores 0 and reads «$0».
+  const [priceMode, setPriceMode] = useState<"fijo" | "consultar">(initial.price === "" ? "consultar" : "fijo");
   const [touched, setTouched] = useState<Partial<Record<keyof FormState, boolean>>>({});
   const [attempted, setAttempted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [confirmClose, setConfirmClose] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   // What the SERVER holds right now (see runServiceSave).
   const persisted = useRef<PersistedService>({
@@ -215,46 +222,36 @@ export function ServiceEditor({
     staffIds: initial.staffIds,
   });
   const wrote = useRef(false);
-  // Leaving after a partial save still refreshes the list, so what was written shows.
-  const leave = () => (wrote.current ? onSaved() : onClose());
+  const savedAll = useRef(false);
 
-  const errors = validate(form, mode);
+  const effective: FormState = { ...form, price: priceMode === "consultar" ? "" : form.price };
+  const errors = validate(effective, mode);
+  if (priceMode === "fijo" && !form.price.trim()) errors.price = "Escribe el precio o elige «A consultar».";
   const includesCheck = checkIncludes(page.includes);
   const pageError = !includesCheck.ok ? includesCheck.error : !/^\d{1,3}$/.test(page.sort.trim()) ? "El orden debe ser un número entre 0 y 999." : null;
   const show = (k: keyof FormState) => ((attempted || touched[k]) && errors[k]) || "";
-  const dirty = JSON.stringify(form) !== JSON.stringify(initial) || JSON.stringify(page) !== JSON.stringify(initialPageForm);
+  const changes = countChanges(initial, effective) + countChanges(initialPageForm, page);
+  const dirty = changes > 0;
   const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setForm((f) => ({ ...f, [k]: v }));
   const touch = (k: keyof FormState) => () => setTouched((t) => ({ ...t, [k]: true }));
   const toggle = (k: "staffIds" | "siteIds", id: string) =>
     setForm((f) => ({ ...f, [k]: f[k].includes(id) ? f[k].filter((x) => x !== id) : [...f[k], id] }));
 
-  const requestClose = useCallback(() => {
-    if (saving) return;
-    if (dirty) setConfirmClose(true);
-    else if (wrote.current) onSaved();
-    else onClose();
-  }, [dirty, onClose, onSaved, saving]);
-  const latest = useRef({ confirmClose, requestClose });
-  useEffect(() => {
-    latest.current = { confirmClose, requestClose };
-  });
-  // Escape peels the confirmation first, then asks to close the editor.
-  const onEscape = useCallback(() => {
-    if (latest.current.confirmClose) setConfirmClose(false);
-    else latest.current.requestClose();
-  }, []);
-  const panelRef = useTrappedPanel({ active: true, onClose: onEscape });
-  const discard = useModalLayer(confirmClose, panelRef as RefObject<HTMLElement | null>);
+  // Leaving after a partial save still refreshes the list, so what was written shows.
+  const guard = useEditorGuard({ dirty: dirty && !saving, onLeave: () => (savedAll.current || wrote.current ? onSaved() : onClose()) });
+  const requestClose = () => {
+    if (!saving) guard.requestLeave();
+  };
 
   const save = async () => {
     setAttempted(true);
     if (Object.keys(errors).length > 0 || pageError) {
-      setError(pageError ?? "Revisa los campos marcados.");
+      setError(null);
       return;
     }
     setSaving(true);
     setError(null);
-    const out = await saveServiceForm(clientId, persisted.current, form, sites, staff);
+    const out = await saveServiceForm(clientId, persisted.current, effective, sites, staff);
     if (out.ok && persisted.current.id && JSON.stringify(page) !== JSON.stringify(initialPageForm)) {
       const pr = await updateServicePresentationAction(clientId, persisted.current.id, {
         categoryId: page.categoryId || null,
@@ -265,21 +262,32 @@ export function ServiceEditor({
         upgradeServiceId: page.upgradeId || null,
       });
       setSaving(false);
-      if (pr.ok) return onSaved();
+      if (pr.ok) {
+        savedAll.current = true;
+        return guard.leave();
+      }
       wrote.current = true;
       setError(`El servicio se guardó, pero no su presentación en la página. ${pr.error} Pulsa Guardar para reintentar.`);
       return;
     }
     setSaving(false);
-    if (out.ok) return onSaved();
+    if (out.ok) {
+      savedAll.current = true;
+      return guard.leave();
+    }
     if (out.partial) wrote.current = true;
     // Say so when part of it IS saved: Guardar again finishes the rest, it does not repeat it.
     setError(wrote.current ? `Parte de los cambios ya se guardó. ${out.error} Pulsa Guardar para completar el resto.` : out.error);
   };
 
-  const jump = (id: string) => bodyRef.current?.querySelector(`#${id}`)?.scrollIntoView({ block: "start", behavior: "smooth" });
+  const jump = (id: string) => {
+    const el = bodyRef.current?.querySelector<HTMLElement>(`#${id}`);
+    if (el) scrollWithin(el);
+  };
   useEffect(() => {
-    if (initialSection) bodyRef.current?.querySelector(`#svc-${initialSection}`)?.scrollIntoView({ block: "start" });
+    const target = initialSection ? bodyRef.current?.querySelector<HTMLElement>(`#svc-${initialSection}`) : null;
+    if (target) scrollWithin(target, { smooth: false });
+    document.getElementById("svc-editor-title")?.focus({ preventScroll: true });
   }, [initialSection]);
   // Would it appear on the booking page with what is on screen now? Same rules as the server.
   const includesNow = checkIncludes(page.includes);
@@ -290,7 +298,7 @@ export function ServiceEditor({
       description: form.description.trim() || null,
       includes: includesNow.ok ? (includesNow.value ?? []) : [],
       imageUrl: image,
-      price: form.price.trim() === "" ? null : form.price.trim(),
+      price: effective.price.trim() === "" ? null : effective.price.trim(),
       durationMin: Number(form.duration),
     },
     category: (() => {
@@ -307,186 +315,285 @@ export function ServiceEditor({
         .map((p) => ({ name: p.name, active: p.active, takesBookings: p.takes_bookings !== false, performs: form.staffIds.includes(p.id) })),
     })),
   });
-  const family = serviceCategory(form.name || "servicio", form.category || null);
   const title = mode.kind === "edit" ? mode.service.name : "Nuevo servicio";
   const staffBySite = sites.map((site) => ({ site, people: staff.filter((p) => p.site_id === site.id) })).filter((g) => g.people.length > 0);
+  const catLabel = CATEGORY_CHOICES.find((c) => c.value === form.category)?.label ?? "Sin categoría";
+  const priceText = priceMode === "consultar" ? "A consultar" : (form.price.trim() && priceLabelCOP(form.price.trim())) || "Sin precio";
+  const archived = mode.kind === "edit" && !mode.service.active;
+
+  // Which sections hold changes / errors — the index marks them.
+  const differs = (keys: (keyof FormState)[]) => keys.some((k) => JSON.stringify(initial[k]) !== JSON.stringify(effective[k]));
+  const errIn = (keys: (keyof FormState)[]) => (attempted ? keys.filter((k) => errors[k]).length : 0);
+  const sectionMeta = [
+    { id: "svc-basic", label: "Información básica", dirty: differs(["name", "category", "description", "featured"]), errors: errIn(["name", "description"]) },
+    { id: "svc-pricing", label: "Precio y duración", dirty: differs(["duration", "price", "bBefore", "bAfter"]), errors: errIn(["duration", "price", "bBefore", "bAfter"]) },
+    { id: "svc-staff", label: "Profesionales", dirty: differs(["staffIds"]) },
+    { id: "svc-sites", label: "Sedes", dirty: differs(["siteIds"]), errors: errIn(["siteIds"]) },
+    { id: "svc-page", label: "Página de reservas", dirty: countChanges(initialPageForm, page) > 0, errors: attempted && pageError ? 1 : 0 },
+  ];
+  const FIELD_TARGET: Partial<Record<keyof FormState, string>> = {
+    name: "svc-f-name",
+    description: "svc-f-description",
+    duration: "svc-f-duration",
+    price: "svc-f-price",
+    bBefore: "svc-f-bbefore",
+    bAfter: "svc-f-bafter",
+    siteIds: "svc-sites-h",
+  };
+  const summary: SummaryError[] = attempted
+    ? [
+        ...(Object.keys(errors) as (keyof FormState)[]).map((k) => ({ target: FIELD_TARGET[k] ?? "svc-basic-h", message: `${FIELD_NAME[k]}: ${errors[k]}` })),
+        ...(pageError ? [{ target: "svc-page-h", message: `Página de reservas: ${pageError}` }] : []),
+      ]
+    : [];
 
   return (
     <div
-      ref={panelRef as RefObject<HTMLDivElement>}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="svc-editor-title"
-      className="fixed inset-0 z-50 flex flex-col bg-background text-foreground"
+      className="flex min-h-0 flex-1 flex-col"
+      onKeyDown={(e) => {
+        if (e.key !== "Escape" || e.defaultPrevented) return;
+        if ((e.target as HTMLElement).closest("select, [role=menu]")) return;
+        e.preventDefault();
+        requestClose();
+      }}
     >
-      <header
-        inert={discard.inert}
-        className="flex shrink-0 items-center gap-2 border-b border-line bg-surface px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))] sm:gap-3 sm:px-6"
+      <EditorHeader
+        title={title}
+        headingId="svc-editor-title"
+        eyebrow={mode.kind === "edit" ? (archived ? "Servicio archivado" : "Editar servicio") : "Catálogo · Servicios"}
+        chips={
+          <>
+            <MetaChip dot={categoryDot(form.category)}>{catLabel}</MetaChip>
+            <MetaChip>{form.duration.trim() ? `${form.duration.trim()} min` : "Sin duración"}</MetaChip>
+            <MetaChip>{priceText}</MetaChip>
+            <MetaChip>{`${form.staffIds.length} profesional${form.staffIds.length === 1 ? "" : "es"}`}</MetaChip>
+          </>
+        }
+        backLabel={backLabel}
+        onBack={requestClose}
+        changes={changes}
+        onCancel={requestClose}
+        onSave={save}
+        saveLabel={mode.kind === "new" ? "Crear servicio" : "Guardar cambios"}
+        saving={saving}
+        canSave={mode.kind === "new" ? true : dirty}
+      />
+      <EditorFrame
+        sections={sectionMeta}
+        bodyRef={bodyRef}
+        saveBar={<SaveBar changes={changes} onCancel={requestClose} onSave={save} saving={saving} saveLabel={mode.kind === "new" ? "Crear" : "Guardar"} canSave={mode.kind === "new" ? true : dirty} />}
       >
-        <div className="min-w-0 flex-1">
-          <p className="text-xs text-muted">{mode.kind === "edit" ? "Editar servicio" : "Añadir servicio"}</p>
-          <h2 id="svc-editor-title" className="truncate text-lg font-semibold tracking-tight">
-            {title}
-          </h2>
-        </div>
-        <Button onClick={requestClose} disabled={saving}>
-          Cerrar
-        </Button>
-        <Button variant="primary" onClick={save} loading={saving} loadingLabel="Guardando…">
-          Guardar
-        </Button>
-      </header>
-
-      <div inert={discard.inert} className="mx-auto grid min-h-0 w-full max-w-5xl flex-1 lg:grid-cols-[13rem_minmax(0,1fr)] lg:gap-8 lg:px-6">
-        <nav aria-label="Secciones del servicio" className="hidden flex-col gap-1 py-6 lg:flex">
-          {SECTIONS.map((s) => (
-            <button key={s.id} type="button" onClick={() => jump(s.id)} className={buttonClass({ variant: "tertiary", size: "sm", className: "justify-start" })}>
-              {s.label}
-            </button>
-          ))}
-        </nav>
-
-        <div ref={bodyRef} className="min-h-0 overflow-y-auto px-4 py-5 pb-[max(2.5rem,env(safe-area-inset-bottom))] sm:px-6 lg:px-0 lg:py-6">
-          {error ? (
-            <div className="mb-4">
-              <Alert>{error}</Alert>
-            </div>
-          ) : null}
-
-          <div className="flex flex-col gap-5">
-            <Section id="svc-basic" title="Información básica">
-              <Field label="Nombre" error={show("name")}>
-                <input value={form.name} onChange={(e) => set("name", e.target.value)} onBlur={touch("name")} maxLength={160} placeholder="Ej. Corte clásico" aria-invalid={Boolean(show("name"))} className={INPUT} />
-              </Field>
-              <Field label="Categoría" hint="Define el color de la cita en la agenda.">
-                <span className="flex items-center gap-2.5">
-                  <span aria-hidden className={`u-appt-service ${apptCategoryClass(family)} size-[44px] shrink-0 rounded-sch-control border border-[var(--appt-edge)] bg-[var(--appt-fill)] lg:size-[40px]`} />
-                  <select value={form.category} onChange={(e) => set("category", e.target.value)} className={INPUT}>
-                    {CATEGORY_CHOICES.map((c) => (
-                      <option key={c.value} value={c.value}>
-                        {c.label}
-                      </option>
-                    ))}
-                  </select>
-                </span>
-              </Field>
-              <Field label="Descripción" optional hint="Se muestra en la reserva en línea." error={show("description")}>
-                <textarea
-                  value={form.description}
-                  onChange={(e) => set("description", e.target.value)}
-                  onBlur={touch("description")}
-                  rows={3}
-                  maxLength={SERVICE_DESCRIPTION_MAX}
-                  aria-invalid={Boolean(show("description"))}
-                  className={TEXTAREA}
-                />
-              </Field>
-              <CheckRow checked={form.featured} onChange={() => set("featured", !form.featured)} hint="Se ofrece primero cuando el cliente no especifica un servicio.">
-                Destacado
-              </CheckRow>
-            </Section>
-
-            <Section id="svc-pricing" title="Precio y duración">
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Duración (min)" error={show("duration")}>
-                  <input inputMode="numeric" value={form.duration} onChange={(e) => set("duration", e.target.value)} onBlur={touch("duration")} aria-invalid={Boolean(show("duration"))} className={INPUT} />
-                </Field>
-                <Field label="Precio" optional hint="Vacío = precio a consultar." error={show("price")}>
-                  <input inputMode="decimal" value={form.price} onChange={(e) => set("price", e.target.value)} onBlur={touch("price")} aria-invalid={Boolean(show("price"))} className={INPUT} />
-                </Field>
-                <Field label="Preparación antes (min)" error={show("bBefore")}>
-                  <input inputMode="numeric" value={form.bBefore} onChange={(e) => set("bBefore", e.target.value)} onBlur={touch("bBefore")} aria-invalid={Boolean(show("bBefore"))} className={INPUT} />
-                </Field>
-                <Field label="Tiempo después (min)" error={show("bAfter")}>
-                  <input inputMode="numeric" value={form.bAfter} onChange={(e) => set("bAfter", e.target.value)} onBlur={touch("bAfter")} aria-invalid={Boolean(show("bAfter"))} className={INPUT} />
-                </Field>
-              </div>
-            </Section>
-
-            <Section id="svc-staff" title="Profesionales" subtitle="Quién puede prestar este servicio.">
-              {staffBySite.length === 0 ? (
-                <p className="text-sm text-muted">No hay profesionales activos todavía.</p>
-              ) : (
-                staffBySite.map(({ site, people }) => (
-                  <div key={site.id} className="flex flex-col gap-0.5">
-                    {sites.length > 1 ? <p className="px-2 text-xs font-medium text-muted">{site.name}</p> : null}
-                    {people.map((p) => (
-                      <CheckRow key={p.id} checked={form.staffIds.includes(p.id)} onChange={() => toggle("staffIds", p.id)}>
-                        {p.name}
-                      </CheckRow>
-                    ))}
-                  </div>
-                ))
-              )}
-            </Section>
-
-            <PageSection
-              diagnosis={diagnosis}
-              dirty={dirty}
-              onJump={(area) => (area === "categories" || area === "team" ? undefined : jump(AREA_SECTION[area]))}
-              clientId={clientId}
-              serviceId={editId}
-              page={page}
-              setPage={setPage}
-              categories={bookingCategories}
-              others={allServices.filter((x) => x.id !== editId)}
-              image={image}
-              setImage={setImage}
-              imageBusy={imageBusy}
-              setImageBusy={setImageBusy}
-              imageError={imageError}
-              setImageError={setImageError}
-              form={form}
-              error={pageError && attempted ? pageError : null}
-            />
-
-            <Section id="svc-sites" title="Sedes y reserva en línea" subtitle="Dónde se puede reservar este servicio (agenda interna, agente y página pública)." error={show("siteIds")}>
-              {sites.length === 0 ? (
-                <p className="text-sm text-muted">No hay sedes activas.</p>
-              ) : (
-                <div className="flex flex-col gap-0.5">
-                  {sites.map((site) => (
-                    <CheckRow key={site.id} checked={form.siteIds.includes(site.id)} onChange={() => toggle("siteIds", site.id)}>
-                      {site.name}
-                    </CheckRow>
-                  ))}
-                </div>
-              )}
-            </Section>
+        <ErrorSummary errors={summary} />
+        {error ? (
+          <div className="mb-2">
+            <Alert>{error}</Alert>
           </div>
-        </div>
-      </div>
+        ) : null}
+        {archived ? (
+          <div className="mb-2">
+            <Notice>Este servicio está archivado: no se puede reservar. Puedes editarlo y reactivarlo desde el menú ⋯ del listado.</Notice>
+          </div>
+        ) : null}
 
-      {confirmClose ? (
-        <ConfirmDialog
-          layerRef={discard.layerRef}
-          id="svc-discard"
-          title="¿Descartar los cambios?"
-          body="Hay cambios sin guardar en este servicio."
-          cancelLabel="Seguir editando"
-          confirmLabel="Descartar"
-          onCancel={() => setConfirmClose(false)}
-          onConfirm={leave}
+        <EditorSection id="svc-basic" title="Información básica" summary={`${form.name || "Sin nombre"} · ${catLabel}`}>
+          <Field label="Nombre" error={show("name")}>
+            <input id="svc-f-name" value={form.name} onChange={(e) => set("name", e.target.value)} onBlur={touch("name")} maxLength={160} placeholder="Ej. Corte clásico" aria-invalid={Boolean(show("name"))} className={INPUT} />
+          </Field>
+          <FieldGroup legend="Categoría" hint="Define el color automático de sus citas en la agenda. No es la agrupación de la página de reservas.">
+            <ChoiceChips
+              name="svc-category"
+              value={form.category}
+              options={CATEGORY_CHOICES.map((c) => ({ value: c.value, label: c.label, dot: categoryDot(c.value) }))}
+              onChange={(v) => set("category", v)}
+            />
+          </FieldGroup>
+          <Field label="Descripción" optional hint="Se muestra en la reserva en línea." error={show("description")}>
+            <textarea
+              id="svc-f-description"
+              value={form.description}
+              onChange={(e) => set("description", e.target.value)}
+              onBlur={touch("description")}
+              rows={3}
+              maxLength={SERVICE_DESCRIPTION_MAX}
+              aria-invalid={Boolean(show("description"))}
+              className={TEXTAREA}
+            />
+          </Field>
+          <ToggleRow checked={form.featured} onChange={(v) => set("featured", v)} label="Destacado" hint="Se ofrece primero cuando el cliente no especifica un servicio." />
+        </EditorSection>
+
+        <EditorSection id="svc-pricing" title="Precio y duración" summary={`${form.duration || "—"} min · ${priceText}`}>
+          <FieldGroup legend="Duración" error={show("duration")}>
+            <div className="flex flex-wrap gap-1.5">
+              {DURATIONS.map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  aria-pressed={form.duration === String(m)}
+                  onClick={() => set("duration", String(m))}
+                  className={`u-focus inline-flex h-[44px] items-center rounded-sch-control border px-3 text-[0.8125rem] font-medium tabular-nums transition-colors lg:h-[2.125rem] ${
+                    form.duration === String(m) ? "border-ink bg-ink text-ink-fg" : "border-line-strong bg-surface text-foreground hover:bg-subtle"
+                  }`}
+                >
+                  {m} min
+                </button>
+              ))}
+            </div>
+            <label className="mt-1 flex max-w-[16rem] flex-col gap-1">
+              <span className="text-xs text-muted">Otra duración</span>
+              <AffixInput id="svc-f-duration" inputMode="numeric" value={form.duration} onChange={(e) => set("duration", e.target.value)} onBlur={touch("duration")} aria-invalid={Boolean(show("duration"))} suffix="minutos" />
+            </label>
+          </FieldGroup>
+          <FieldGroup
+            legend="Precio"
+            error={show("price")}
+            hint={priceMode === "consultar" ? "Se muestra «A consultar» en la reserva y en la agenda." : "Un precio de 0 se muestra como $0, no como «A consultar»."}
+          >
+            <div role="radiogroup" aria-label="Tipo de precio" className={segmentShell()}>
+              {(
+                [
+                  ["fijo", "Precio fijo"],
+                  ["consultar", "A consultar"],
+                ] as const
+              ).map(([k, label]) => (
+                <button key={k} type="button" role="radio" aria-checked={priceMode === k} onClick={() => setPriceMode(k)} className={segmentClass(priceMode === k)}>
+                  {label}
+                </button>
+              ))}
+            </div>
+            {priceMode === "fijo" ? (
+              <AffixInput
+                id="svc-f-price"
+                aria-label="Precio"
+                inputMode="decimal"
+                value={form.price}
+                onChange={(e) => set("price", e.target.value)}
+                onBlur={touch("price")}
+                aria-invalid={Boolean(show("price"))}
+                prefix="$"
+                suffix="COP"
+                className="mt-1 max-w-[16rem]"
+              />
+            ) : null}
+          </FieldGroup>
+          <div className="grid max-w-[34rem] gap-4 sm:grid-cols-2">
+            <Field label="Preparación antes" error={show("bBefore")}>
+              <AffixInput id="svc-f-bbefore" inputMode="numeric" value={form.bBefore} onChange={(e) => set("bBefore", e.target.value)} onBlur={touch("bBefore")} aria-invalid={Boolean(show("bBefore"))} suffix="min" />
+            </Field>
+            <Field label="Tiempo después" error={show("bAfter")}>
+              <AffixInput id="svc-f-bafter" inputMode="numeric" value={form.bAfter} onChange={(e) => set("bAfter", e.target.value)} onBlur={touch("bAfter")} aria-invalid={Boolean(show("bAfter"))} suffix="min" />
+            </Field>
+          </div>
+          <p className="-mt-2 text-xs text-muted">Ocupan la agenda del profesional antes y después de la cita.</p>
+        </EditorSection>
+
+        <EditorSection
+          id="svc-staff"
+          title="Profesionales"
+          description="Solo quienes estén marcados podrán recibir reservas de este servicio."
+          summary={`${form.staffIds.length} de ${staff.length} profesional${staff.length === 1 ? "" : "es"}`}
+          defaultOpen={false}
+        >
+          {staffBySite.length === 0 ? (
+            <p className="text-sm text-muted">No hay profesionales activos todavía.</p>
+          ) : (
+            staffBySite.map(({ site, people }) => (
+              <div key={site.id} className="flex flex-col gap-1.5">
+                {sites.length > 1 ? <p className="text-xs font-medium text-muted">{site.name}</p> : null}
+                <CheckList>
+                  {people.map((p) => (
+                    <CheckItem
+                      key={p.id}
+                      checked={form.staffIds.includes(p.id)}
+                      onChange={() => toggle("staffIds", p.id)}
+                      leading={<Avatar name={p.name} size="sm" />}
+                      hint={p.takes_bookings === false ? "No recibe reservas en este momento (se cambia en Agenda → Equipo)." : undefined}
+                    >
+                      {p.name}
+                    </CheckItem>
+                  ))}
+                </CheckList>
+              </div>
+            ))
+          )}
+        </EditorSection>
+
+        <EditorSection
+          id="svc-sites"
+          title="Sedes"
+          description="Dónde se puede reservar este servicio (agenda interna, agente y página pública)."
+          summary={sites.length === 1 ? (form.siteIds.length ? `Se reserva en ${sites[0].name}` : "No se reserva en ninguna sede") : `${form.siteIds.length} de ${sites.length} sedes`}
+          error={show("siteIds")}
+          defaultOpen={false}
+        >
+          {sites.length === 0 ? (
+            <p className="text-sm text-muted">No hay sedes activas.</p>
+          ) : sites.length === 1 ? (
+            <>
+              <CheckList>
+                <CheckItem checked={form.siteIds.includes(sites[0].id)} onChange={() => toggle("siteIds", sites[0].id)}>
+                  Se puede reservar en {sites[0].name}
+                </CheckItem>
+              </CheckList>
+              {!form.siteIds.includes(sites[0].id) && mode.kind === "edit" && initial.siteIds.includes(sites[0].id) ? (
+                <Notice tone="warn">Al guardar, dejará de poder reservarse: es la única sede. Sus citas se conservan.</Notice>
+              ) : null}
+            </>
+          ) : (
+            <CheckList>
+              {sites.map((site) => (
+                <CheckItem key={site.id} checked={form.siteIds.includes(site.id)} onChange={() => toggle("siteIds", site.id)}>
+                  {site.name}
+                </CheckItem>
+              ))}
+            </CheckList>
+          )}
+        </EditorSection>
+
+        <PageSection
+          diagnosis={diagnosis}
+          dirty={dirty}
+          onJump={(area) => (area === "categories" || area === "team" ? undefined : jump(AREA_SECTION[area]))}
+          clientId={clientId}
+          serviceId={editId}
+          page={page}
+          setPage={setPage}
+          categories={bookingCategories}
+          others={allServices.filter((x) => x.id !== editId)}
+          image={image}
+          setImage={setImage}
+          imageBusy={imageBusy}
+          setImageBusy={setImageBusy}
+          imageError={imageError}
+          setImageError={setImageError}
+          price={effective.price}
+          error={pageError && attempted ? pageError : null}
         />
-      ) : null}
+      </EditorFrame>
+
+      {guard.asking ? <DiscardChanges onKeep={guard.keepEditing} onDiscard={guard.discard} body="Hay cambios sin guardar en este servicio. Si sales ahora, se pierden." /> : null}
     </div>
   );
 }
 
-function Section({ id, title, subtitle, error, children }: { id: string; title: string; subtitle?: string; error?: string; children: ReactNode }) {
+const FIELD_NAME: Record<keyof FormState, string> = {
+  name: "Nombre",
+  category: "Categoría",
+  description: "Descripción",
+  featured: "Destacado",
+  duration: "Duración",
+  price: "Precio",
+  bBefore: "Preparación antes",
+  bAfter: "Tiempo después",
+  staffIds: "Profesionales",
+  siteIds: "Sedes",
+};
+
+function Section({ id, title, subtitle, error, defaultOpen = false, children }: { id: string; title: string; subtitle?: string; error?: string; defaultOpen?: boolean; children: ReactNode }) {
   return (
-    <section id={id} aria-labelledby={`${id}-title`} className={`scroll-mt-4 p-4 sm:p-5 ${CARD}`}>
-      <h3 id={`${id}-title`} className="text-[15px] font-semibold">
-        {title}
-      </h3>
-      {subtitle ? <p className="mt-0.5 text-[13px] text-muted">{subtitle}</p> : null}
-      <div className="mt-4 flex flex-col gap-4">{children}</div>
-      {error ? (
-        <p role="alert" className="mt-3 text-[13px] text-danger">
-          {error}
-        </p>
-      ) : null}
-    </section>
+    <EditorSection id={id} title={title} description={subtitle} error={error} defaultOpen={defaultOpen}>
+      {children}
+    </EditorSection>
   );
 }
 
@@ -523,9 +630,9 @@ function PageDiagnosisBox({ clientId, serviceId, diagnosis: d, dirty, onJump }: 
       : d.status === "hidden"
         ? "No aparece en la página: está oculto por configuración."
         : "No aparece en la página: falta un requisito.";
-  const tone = d.status === "visible" ? "border-success/40 bg-success/5" : d.status === "hidden" ? "border-line bg-subtle" : "border-warning/50 bg-warning/5";
+  const tone = d.status === "visible" ? "border-success/40 bg-success/5" : d.status === "hidden" ? "border-line bg-subtle" : "border-warn-rule bg-warn-soft";
   return (
-    <div role="status" aria-live="polite" className={`rounded-sch-control border p-3.5 text-[13px] ${tone}`}>
+    <div role="status" aria-live="polite" className={`rounded-sch-control border p-3.5 text-[0.8125rem] ${tone}`}>
       <p className="font-semibold text-foreground">{head}</p>
       {dirty ? <p className="mt-0.5 text-muted">Según lo que ves en pantalla; se aplica al guardar.</p> : null}
       {d.problems.length ? (
@@ -587,9 +694,11 @@ function PageSection({
   setImageBusy,
   imageError,
   setImageError,
-  form,
+  price,
   error,
+  defaultOpen = false,
 }: {
+  defaultOpen?: boolean;
   clientId: string;
   serviceId: string | null;
   page: PageForm;
@@ -602,14 +711,15 @@ function PageSection({
   setImageBusy: (b: boolean) => void;
   imageError: string | null;
   setImageError: (e: string | null) => void;
-  form: FormState;
+  /** The price on screen ("" = a consultar), for the upgrade's price difference. */
+  price: string;
   error: string | null;
   diagnosis: PageDiagnosis;
   dirty: boolean;
   onJump: (area: FixArea) => void;
 }) {
   const target = others.find((o) => o.id === page.upgradeId) ?? null;
-  const delta = target && target.price != null && form.price.trim() !== "" ? Number(target.price) - Number(form.price) : null;
+  const delta = target && target.price != null && price.trim() !== "" ? Number(target.price) - Number(price) : null;
 
   const upload = async (file: File | undefined) => {
     if (!file || !serviceId) return;
@@ -639,11 +749,9 @@ function PageSection({
   };
 
   return (
-    <Section id="svc-page" title="Página de reservas" subtitle="Cómo se presenta en la página pública. No cambia la agenda ni el agente." error={error ?? undefined}>
+    <Section id="svc-page" title="Página de reservas" subtitle="Cómo se presenta en la página pública. No cambia la agenda ni el agente." error={error ?? undefined} defaultOpen={defaultOpen}>
       <PageDiagnosisBox clientId={clientId} serviceId={serviceId} diagnosis={diagnosis} dirty={dirty} onJump={onJump} />
-      <CheckRow checked={page.visible} onChange={() => setPage({ ...page, visible: !page.visible })} hint="Si lo ocultas, sigue disponible en la agenda y para el agente.">
-        Visible en la página de reservas
-      </CheckRow>
+      <ToggleRow checked={page.visible} onChange={(v) => setPage({ ...page, visible: v })} label="Visible en la página de reservas" hint="Si lo ocultas, sigue disponible en la agenda y para el agente." />
       <div className="grid gap-4 sm:grid-cols-[1fr_8rem]">
         <Field label="Categoría en la página" hint={categories.length === 0 ? "Crea categorías en Página de reservas → Categorías." : undefined}>
           <select value={page.categoryId} onChange={(e) => setPage({ ...page, categoryId: e.target.value })} className={INPUT}>
@@ -662,9 +770,7 @@ function PageSection({
           <input inputMode="numeric" value={page.sort} onChange={(e) => setPage({ ...page, sort: e.target.value })} className={INPUT} />
         </Field>
       </div>
-      <CheckRow checked={page.recommended} onChange={() => setPage({ ...page, recommended: !page.recommended })} hint="Muestra la etiqueta «Recomendado» en la tarjeta.">
-        Recomendado
-      </CheckRow>
+      <ToggleRow checked={page.recommended} onChange={(v) => setPage({ ...page, recommended: v })} label="Recomendado" hint="Muestra la etiqueta «Recomendado» en la tarjeta." />
       <Field label="Qué incluye" optional hint={`Una línea por punto · máximo ${INCLUDES_MAX_ITEMS} líneas de ${INCLUDES_ITEM_MAX} caracteres. Solo contenido aprobado.`}>
         <textarea value={page.includes} onChange={(e) => setPage({ ...page, includes: e.target.value })} rows={4} className={TEXTAREA} />
       </Field>
@@ -716,5 +822,196 @@ function PageSection({
       </Field>
       {imageError ? <Alert>{imageError}</Alert> : null}
     </Section>
+  );
+}
+
+/**
+ * The PRESENTATION editor used by «Página de reservas»: only how a service is shown on
+ * the public page (visibility, public category, order, «Recomendado», «Qué incluye», the
+ * better alternative, the image). Name, price, duration, professionals and sites are
+ * shown read-only with a link to Servicios — the booking page never becomes a second
+ * place to edit them. Saved by updateServicePresentationAction alone; the image still
+ * uploads on its own, at once, as in the full editor.
+ */
+export function ServicePresentationEditor({
+  clientId,
+  service,
+  sites,
+  staff,
+  siteServiceMap,
+  bookingCategories,
+  allServices,
+  servicesHref,
+  onClose,
+  onSaved,
+}: {
+  clientId: string;
+  service: Service;
+  sites: Site[];
+  staff: Staff[];
+  siteServiceMap: Record<string, string[]>;
+  bookingCategories: BookingCategory[];
+  allServices: Service[];
+  /** Where name, price, duration and professionals are edited. */
+  servicesHref: string;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const mode: Mode = useMemo(() => ({ kind: "edit", service }), [service]);
+  const initialPageForm = useMemo(() => initialPage(mode), [mode]);
+  const stored = useMemo(() => initialForm(mode, sites, staff, siteServiceMap), [mode, sites, staff, siteServiceMap]);
+  const [page, setPage] = useState<PageForm>(initialPageForm);
+  const [image, setImage] = useState<string | null>(service.public_image_url ?? null);
+  const [imageBusy, setImageBusy] = useState(false);
+  const [imageError, setImageError] = useState<string | null>(null);
+  const [attempted, setAttempted] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const saved = useRef(false);
+  const imageChanged = useRef(false);
+
+  const includesCheck = checkIncludes(page.includes);
+  const pageError = !includesCheck.ok ? includesCheck.error : !/^\d{1,3}$/.test(page.sort.trim()) ? "El orden debe ser un número entre 0 y 999." : null;
+  const changes = countChanges(initialPageForm, page);
+  const guard = useEditorGuard({ dirty: changes > 0 && !saving, onLeave: () => (saved.current || imageChanged.current ? onSaved() : onClose()) });
+  const requestClose = () => {
+    if (!saving) guard.requestLeave();
+  };
+  useEffect(() => {
+    document.getElementById("svc-pres-title")?.focus({ preventScroll: true });
+  }, []);
+
+  const save = async () => {
+    setAttempted(true);
+    if (pageError) return;
+    setSaving(true);
+    setError(null);
+    const r = await updateServicePresentationAction(clientId, service.id, {
+      categoryId: page.categoryId || null,
+      visible: page.visible,
+      sort: page.sort.trim(),
+      recommended: page.recommended,
+      includes: page.includes,
+      upgradeServiceId: page.upgradeId || null,
+    });
+    setSaving(false);
+    if (!r.ok) {
+      setError(`${r.error} Lo que escribiste se conserva.`);
+      return;
+    }
+    saved.current = true;
+    guard.leave();
+  };
+
+  const includesNow = checkIncludes(page.includes);
+  const diagnosis = servicePageDiagnosis({
+    service: {
+      active: service.active,
+      visible: page.visible,
+      description: stored.description.trim() || null,
+      includes: includesNow.ok ? (includesNow.value ?? []) : [],
+      imageUrl: image,
+      price: service.price,
+      durationMin: service.duration_min,
+    },
+    category: (() => {
+      const c = bookingCategories.find((x) => x.id === page.categoryId);
+      return c ? { name: c.name, visible: c.visible, layout: c.layout } : null;
+    })(),
+    sites: sites.map((site) => ({
+      id: site.id,
+      name: site.name,
+      active: site.active,
+      enabled: stored.siteIds.includes(site.id),
+      artists: staff
+        .filter((p) => p.site_id === site.id)
+        .map((p) => ({ name: p.name, active: p.active, takesBookings: p.takes_bookings !== false, performs: stored.staffIds.includes(p.id) })),
+    })),
+  });
+  const price = priceLabelCOP(service.price) ?? "A consultar";
+
+  return (
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      onKeyDown={(e) => {
+        if (e.key !== "Escape" || e.defaultPrevented || (e.target as HTMLElement).closest("select, [role=menu]")) return;
+        e.preventDefault();
+        requestClose();
+      }}
+    >
+      <EditorHeader
+        title={service.name}
+        headingId="svc-pres-title"
+        eyebrow="Presentación en la página de reservas"
+        chips={
+          <>
+            <MetaChip>{`${service.duration_min} min`}</MetaChip>
+            <MetaChip>{price}</MetaChip>
+          </>
+        }
+        backLabel="Volver a Página de reservas"
+        onBack={requestClose}
+        changes={changes}
+        onCancel={requestClose}
+        onSave={save}
+        saving={saving}
+      />
+      <EditorFrame
+        sections={[
+          { id: "svc-pres-data", label: "Datos del servicio" },
+          { id: "svc-page", label: "Presentación", dirty: changes > 0, errors: attempted && pageError ? 1 : 0 },
+        ]}
+        saveBar={<SaveBar changes={changes} onCancel={requestClose} onSave={save} saving={saving} />}
+      >
+        {error ? (
+          <div className="mb-2">
+            <Alert>{error}</Alert>
+          </div>
+        ) : null}
+        <EditorSection id="svc-pres-data" title="Datos del servicio" description="Vienen de Servicios y se editan allí: aquí solo cambia cómo se presentan." summary={`${service.duration_min} min · ${price}`}>
+          <dl className="grid gap-3 rounded-sch-card border border-line p-4 text-[0.8438rem] sm:grid-cols-2">
+            <div className="min-w-0">
+              <dt className="text-xs text-muted">Duración</dt>
+              <dd className="mt-0.5 font-medium">{service.duration_min} min</dd>
+            </div>
+            <div className="min-w-0">
+              <dt className="text-xs text-muted">Precio</dt>
+              <dd className="mt-0.5 font-medium">{price}</dd>
+            </div>
+            <div className="min-w-0 sm:col-span-2">
+              <dt className="text-xs text-muted">Descripción</dt>
+              <dd className="mt-0.5 whitespace-pre-line">{service.description || "Sin descripción"}</dd>
+            </div>
+          </dl>
+          <Link href={servicesHref} className={buttonClass({ className: "w-fit" })}>
+            Editar en Servicios
+          </Link>
+        </EditorSection>
+        <PageSection
+          diagnosis={diagnosis}
+          dirty={changes > 0}
+          onJump={() => undefined}
+          clientId={clientId}
+          serviceId={service.id}
+          page={page}
+          setPage={setPage}
+          categories={bookingCategories}
+          others={allServices.filter((x) => x.id !== service.id)}
+          image={image}
+          setImage={(url) => {
+            imageChanged.current = true;
+            setImage(url);
+          }}
+          imageBusy={imageBusy}
+          setImageBusy={setImageBusy}
+          imageError={imageError}
+          setImageError={setImageError}
+          price={service.price == null ? "" : String(Number(service.price))}
+          error={pageError && attempted ? pageError : null}
+          defaultOpen
+        />
+      </EditorFrame>
+      {guard.asking ? <DiscardChanges onKeep={guard.keepEditing} onDiscard={guard.discard} body="Hay cambios sin guardar en la presentación de este servicio. Si sales ahora, se pierden." /> : null}
+    </div>
   );
 }
