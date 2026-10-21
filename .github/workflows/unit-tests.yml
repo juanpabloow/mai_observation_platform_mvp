@@ -15,6 +15,19 @@
 # Make BOTH required so nothing merges around them:
 #   GitHub → Settings → Branches → branch protection rule for `main`
 #   → "Require status checks to pass before merging" → select "unit" AND "build".
+#
+# CI environment. `src/runtimeEnv.ts` and `src/config.ts` validate the environment when they are
+# IMPORTED and stop the process if it is invalid — on purpose, and unchanged here. `next build`
+# imports them while collecting page data, and so do several unit files, so both jobs need values
+# that pass that validation. The values in `env:` below are SYNTHETIC and exist only on the GitHub
+# runner; nothing else reads this file (Railway builds and runs from its own service variables):
+#   - DATABASE_URL points at loopback, at a port where nothing listens. Neither job opens a
+#     connection (checked when this was added); if one ever tried, it would fail at once instead
+#     of reaching a real database. The jobs stay database-free.
+#   - ENCRYPTION_KEY is 64 zero hex digits: valid for the schema, useless as a key.
+#   - BETTER_AUTH_SECRET / BETTER_AUTH_URL are placeholders (http://127.0.0.1 is accepted outside a
+#     deployed Railway runtime, exactly as a local `next build`).
+# Never put a real credential here.
 name: ci
 
 on:
@@ -32,6 +45,12 @@ jobs:
   unit:
     name: unit
     runs-on: ubuntu-latest
+    # CI-ONLY synthetic environment — see "CI environment" at the top of this file.
+    env:
+      DATABASE_URL: postgresql://ci:ci-only-not-a-password@127.0.0.1:59999/ci_no_database
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      BETTER_AUTH_SECRET: ci-only-placeholder-not-a-secret-0000000000000000
+      BETTER_AUTH_URL: http://127.0.0.1:3000
     steps:
       - uses: actions/checkout@v4
 
@@ -57,6 +76,12 @@ jobs:
   build:
     name: build
     runs-on: ubuntu-latest
+    # The same CI-only synthetic environment as `unit` (keep the two blocks identical).
+    env:
+      DATABASE_URL: postgresql://ci:ci-only-not-a-password@127.0.0.1:59999/ci_no_database
+      ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
+      BETTER_AUTH_SECRET: ci-only-placeholder-not-a-secret-0000000000000000
+      BETTER_AUTH_URL: http://127.0.0.1:3000
     steps:
       - uses: actions/checkout@v4
 
