@@ -15,6 +15,7 @@ import {
 import type { BoardOpportunityRow } from '../../src/db/repositories/pipeline.js';
 
 const PANEL = readFileSync(new URL('../../web/components/pipeline/PipelinePanel.tsx', import.meta.url), 'utf8');
+const MENU = readFileSync(new URL('../../web/components/scheduling/ui/Menu.tsx', import.meta.url), 'utf8');
 
 const mkCard = (over: Partial<BoardCard> = {}): BoardCard => ({
   id: 'o', contactId: 'c', conversationId: null, stage: 'lead', status: 'open', name: 'n',
@@ -129,4 +130,17 @@ test('PipelinePanel board: independent per-column scroll + a slim Pagó column',
   assert.ok(PANEL.includes('overflow-y-auto'), 'columns scroll on their own');
   assert.ok(PANEL.includes('snap-x'), 'the board scroll-snaps per column when it overflows');
   assert.ok(PANEL.includes('[writing-mode:vertical-rl]') && PANEL.includes('Llega con la fase de pagos'), 'Pagó is a slim column with the note in its tooltip');
+});
+
+test('card "⋯" menu is floating (portaled) so it is never clipped by the column scroll', () => {
+  assert.ok(/<Menu\b[^>]*\bfloating\b/.test(PANEL), 'the card menu opts into the floating/portaled Menu');
+});
+
+test('Menu floating mode: portals to <body> and flips above the trigger when there is no room below', () => {
+  assert.ok(/from "react-dom"/.test(MENU) && MENU.includes('createPortal'), 'floating list is portaled with createPortal');
+  assert.ok(MENU.includes('createPortal(list, document.body)'), 'portals into <body>, outside the column scroll container');
+  assert.ok(MENU.includes('position: fixed') || /\bfixed\b/.test(MENU), 'the portaled list is position: fixed');
+  assert.ok(/const up =/.test(MENU) && MENU.includes('spaceBelow') && MENU.includes('spaceAbove'), 'flips up when there is more room above than below');
+  assert.ok(MENU.includes("querySelector<HTMLElement>('[role=\"menuitem\"]')"), 'focus moves into the portaled list on open (keyboard stays reachable)');
+  assert.ok(/if \(floating\) triggerRef\.current\?\.focus\(\)/.test(MENU), 'Escape returns focus to the trigger in floating mode');
 });

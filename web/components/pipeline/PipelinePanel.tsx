@@ -341,7 +341,7 @@ function OppCard({ clientId, card, now, pending, onQualify, onUnqualify, onLose 
         ) : (
           <span aria-hidden />
         )}
-        <Menu label="Más acciones" open={menuOpen} onToggle={() => setMenuOpen((v) => !v)} onClose={() => setMenuOpen(false)}>
+        <Menu label="Más acciones" floating open={menuOpen} onToggle={() => setMenuOpen((v) => !v)} onClose={() => setMenuOpen(false)}>
           {card.stage === "qualified" ? (
             <MenuButton onClick={() => { setMenuOpen(false); onUnqualify(); }} disabled={pending}>Quitar calificación</MenuButton>
           ) : null}
