@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { avatarColor, avatarToneStyle, staffInitials as initials } from "@/lib/avatarColor";
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
+import { staffProfileHref } from "@/lib/staffProfileUrl";
 import { ACT_PRIMARY } from "@/components/ui/panelChrome";
 import {
   addStaffCertificationAction,
@@ -239,6 +240,7 @@ export function StaffTab(
   },
 ) {
   const router = useRouter();
+  const query = useSearchParams();
   const [search, setSearch] = useState("");
   const [serviceFilter, setServiceFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -326,13 +328,8 @@ export function StaffTab(
   const counts = { withClient: facets.with_client, available: facets.available, off: facets.off_today };
 
   const selected = props.selectedId ? props.members.find((s) => s.id === props.selectedId) ?? null : null;
-  const hrefFor = (id: string | null) => {
-    const p = new URLSearchParams();
-    if (props.currentSiteId) p.set("site", props.currentSiteId);
-    if (id) p.set("s", id);
-    const qs = p.toString();
-    return qs ? `?${qs}` : "?";
-  };
+  // `?s=` — the same parameter the phone detail reads and writes (lib/staffProfileUrl).
+  const hrefFor = (id: string | null) => staffProfileHref(query.toString(), id, { siteId: props.currentSiteId });
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
@@ -572,6 +569,21 @@ function StaffCard({
   );
 }
 
+/** True once mounted on a viewport where the desktop tree shows (md and up — the
+ *  `hidden md:flex` of StaffWorkspace). False on the server and on phones, so the drawer's
+ *  trap never engages where the drawer is hidden. */
+function useDesktopTree(): boolean {
+  const [desktop, setDesktop] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const sync = () => setDesktop(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  return desktop;
+}
+
 /** The detail drawer: identity, actions, and the Performance tab. */
 function StaffDetail({
   member,
@@ -625,7 +637,11 @@ function StaffDetail({
   // explicit confirmation. NEVER auto-cancelled; deactivating only stops NEW bookings.
   const [deactivateConfirm, setDeactivateConfirm] = useState<UpcomingApptView[] | null>(null);
   const router = useRouter();
-  const panelRef = useTrappedPanel({ active: true, onClose: () => router.push(closeHref, { scroll: false }) });
+  // The phone tree reads the same `?s=`, so on a phone this drawer is mounted too — inside
+  // the desktop tree, hidden below md. Its trap (focus, Tab, Escape → close) runs only
+  // where the drawer can be seen; otherwise Escape on the phone screen would close it.
+  const desktopTree = useDesktopTree();
+  const panelRef = useTrappedPanel({ active: desktopTree, onClose: () => router.push(closeHref, { scroll: false }) });
   const dirtyDays = countDirtyDays(draft, member.workingHours);
   const dirtyFields = dirtyProfileFields(profile, member);
   const changes = dirtyDays + dirtyFields.length;

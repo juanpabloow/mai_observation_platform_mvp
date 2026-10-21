@@ -35,7 +35,8 @@ export function StaffWorkspace({
    * the same way — see rosterOrder / rosterFacetCounts in presence.ts.
    */
   staff: StaffTabProps | null;
-  /** What only the phone screens need (client name, site hours, closures, `?p=`). */
+  /** What only the phone screens need (client name, whether a professional can be added).
+   *  The open profile (`?s=`) is on `staff`, shared by both trees. */
   mobile: TeamMobileExtras | null;
 }) {
   // The screen's name, drawn inside StaffHeaderCard so the card is one box. The roster

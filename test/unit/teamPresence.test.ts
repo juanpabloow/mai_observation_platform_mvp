@@ -128,9 +128,10 @@ test('phone Equipo is its own md:hidden tree; both rosters get the same members'
   // trees list and count the same roster (staffPresenceParity.test.ts).
   assert.ok(!ws.includes('members.filter((m) => m.active)'), 'the desktop roster is not filtered to ACTIVE staff');
   assert.ok(web('components/scheduling/mobile/team/TeamMobile.tsx').includes('md:hidden'), 'the phone tree never shows on tablet/desktop');
-  // The phone detail is `?p=`, never the desktop drawer's `?s=` (whose focus trap would
-  // mount hidden and swallow Escape).
-  assert.ok(web('components/scheduling/mobile/team/TeamMobile.tsx').includes('p.set("p", id)'));
+  // The phone detail and the desktop drawer share `?s=` (lib/staffProfileUrl); the drawer
+  // mounted in the hidden desktop tree keeps its focus trap off below md, so it never
+  // swallows Escape on a phone (staffProfileUrl.test.ts pins both).
+  assert.ok(web('components/scheduling/mobile/team/TeamMobile.tsx').includes('staffProfileHref('));
 });
 
 test('phone Equipo writes only through the existing, server-checked actions', () => {
