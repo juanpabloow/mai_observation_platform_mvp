@@ -16,15 +16,16 @@ import {
 test('the vocabulary includes the opt-in context capability', () => {
   assert.deepEqual(
     [...ALL_CAPABILITIES],
-    ['handoff', 'scheduling.read', 'scheduling.write', 'crm.read', 'crm.write', 'catalog.read', 'handoff.context.read'],
+    ['handoff', 'scheduling.read', 'scheduling.write', 'crm.read', 'crm.write', 'pipeline.write', 'catalog.read', 'handoff.context.read'],
   );
 });
 
-test('LEGACY_CAPABILITIES is the pre-C-5 authority — NO crm.* and NO catalog.*', () => {
+test('LEGACY_CAPABILITIES is the pre-C-5 authority — NO crm.*, pipeline.* or catalog.*', () => {
   assert.deepEqual([...LEGACY_CAPABILITIES], ['handoff', 'scheduling.read', 'scheduling.write']);
   assert.ok(!LEGACY_CAPABILITIES.includes('crm.read' as never));
   assert.ok(!LEGACY_CAPABILITIES.includes('crm.write' as never));
   // A new API family must never be auto-granted to existing tokens.
+  assert.ok(!LEGACY_CAPABILITIES.includes('pipeline.write' as never), 'PL-3: the bot-qualify capability is opt-in, never backfilled');
   assert.ok(!LEGACY_CAPABILITIES.includes('catalog.read' as never));
   assert.ok(!LEGACY_CAPABILITIES.includes('handoff.context.read' as never));
 });

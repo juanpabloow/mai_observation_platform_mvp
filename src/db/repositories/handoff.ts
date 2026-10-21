@@ -281,6 +281,25 @@ export async function insertMessage(
 }
 
 /**
+ * The internal id of a message of THIS conversation by its external (channel) id, or null.
+ * PL-3 uses it to anchor the inbound message that carried the qualification evidence — but only
+ * when the external id really belongs to the conversation (else the ref is simply ignored).
+ */
+export async function findConversationMessageIdByExternalId(
+  tenantId: string,
+  conversationId: string,
+  externalMessageId: string,
+): Promise<string | null> {
+  const r = await query<{ id: string }>(
+    `SELECT id FROM handoff_messages
+      WHERE tenant_id = $1 AND conversation_id = $2 AND external_message_id = $3
+      LIMIT 1`,
+    [tenantId, conversationId, externalMessageId],
+  );
+  return r.rows[0]?.id ?? null;
+}
+
+/**
  * H-3 outbound delivery status update. Flips a message between 'sending' → 'sent' /
  * 'failed' after a webhook attempt. On 'sent' the external id is stored (COALESCE
  * keeps a prior value if the new one is null); failure_code/detail are set on
