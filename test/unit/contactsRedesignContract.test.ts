@@ -1588,7 +1588,7 @@ test('grammar: toolbar controls, search and list rows are consolidated across Co
   assert.ok(read('components/scheduling/staff/StaffHeaderCard.tsx').includes('<ModuleHeader'), 'Staff titles through the shared header');
 
   // The Staff surface is in Spanish, like the rest of the CRM.
-  for (const es of ['Servicio', 'Sede', 'No encontramos miembros']) {
+  for (const es of ['Servicio', 'Sede', 'No encontramos profesionales']) {
     assert.ok(staff.includes(es), `Staff copy is Spanish: ${es}`);
   }
 });

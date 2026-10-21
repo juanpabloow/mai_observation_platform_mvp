@@ -133,11 +133,12 @@ test('the primary action sits in the control band, and the roster keeps its dash
     read('web/components/contacts/form/NewContactButton.tsx').includes('TOOLBAR_PRIMARY_CLS'),
     'and Contacts spends the same one',
   );
-  assert.ok(!stripComments(read(WORKSPACE)).includes('Agregar miembro'), 'the workspace no longer owns the button');
+  assert.ok(!stripComments(read(WORKSPACE)).includes('Añadir profesional'), 'the workspace no longer owns the button');
   // BOTH entry points survive — the dashed row is the "next empty row" of the list.
   // Spanish now, like the rest of the CRM surfaces.
-  assert.equal(src.match(/Nuevo miembro/g)?.length, 1, 'one compact toolbar primary');
-  assert.equal(src.match(/\+ Agregar miembro/g)?.length, 1, 'and one dashed add row');
+  // «profesional», the phone's word for the people on this screen (not «miembro»).
+  assert.equal(src.match(/\+ Nuevo profesional/g)?.length, 1, 'one compact toolbar primary');
+  assert.equal(src.match(/\+ Añadir profesional/g)?.length, 1, 'and one dashed add row');
   assert.equal(src.match(/setCreating\(true\)/g)?.length, 2, 'and both open the same dialog');
   // The counter-and-effect handshake the moved button replaced.
   assert.ok(!src.includes('openCreate'), 'no counter prop, and so no setState in an effect');
@@ -183,7 +184,7 @@ test('the roster still shows everything it showed before', () => {
   assert.equal(/useState/.test(ws), false, 'because it holds no state');
   // The screen still names itself — as a real heading, since there is no active tab to
   // carry the name any more.
-  assert.ok(ws.includes('title: "Staff"'), 'the screen keeps its title');
+  assert.ok(ws.includes('title: "Equipo"'), 'the screen keeps its title — in Spanish, as the nav names it');
   assert.ok(read(HEADER).includes('<ModuleHeader'), 'and it uses the shared module header');
   assert.ok(read('web/components/ui/ModuleHeader.tsx').includes('<PageHeading'), 'the shared header renders a real h1');
   assert.equal(/sr-only/.test(read(HEADER)), false, 'a visible one');
@@ -330,7 +331,7 @@ test('there is ONE write path per field: the panel\'s tabs, no Edit button', () 
   assert.ok(tab.includes('value={profile.name}'), 'the Name field is bound to the draft');
   assert.ok(tab.includes('checked={profile.takesBookings}'), 'and so are the flags');
   // An empty name is refused before the round trip, and never stored as absent.
-  assert.ok(tab.includes("if (d.name.trim() === \"\") return \"A name is required.\";"), 'name is validated');
+  assert.ok(tab.includes("if (d.name.trim() === \"\") return \"El nombre es obligatorio.\";"), 'name is validated');
   assert.ok(tab.includes('out.name = d.name.trim()'), 'and never nulled');
 
   // SERVICES toggle in place. Per-pairing, so it writes immediately rather than joining

@@ -426,7 +426,7 @@ function ProfileFormBody({
       <MSection title="Contacto">
         <div className="flex flex-col gap-4">
           {text("phone", "Teléfono", { type: "tel", mode: "tel", auto: "off" })}
-          {text("email", "Email", { type: "email", mode: "email" })}
+          {text("email", "Correo", { type: "email", mode: "email" })}
           {text("emergencyContactName", "Contacto de emergencia")}
           {text("emergencyContactPhone", "Teléfono de emergencia", { type: "tel", mode: "tel" })}
         </div>
