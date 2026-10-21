@@ -15,6 +15,7 @@ import { ChoiceChips, FieldGroup, Notice, ToggleRow } from "@/components/ui/modu
 import { DiscardChanges } from "@/components/ui/module/ConfirmLayer";
 import { useEditorGuard } from "@/components/ui/module/useEditorGuard";
 import { useUrlState } from "@/components/ui/module/useUrlState";
+import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
  * «Campos personalizados» (Configuración) — the extra fields of this client's CONTACTS
@@ -102,7 +103,7 @@ export function FieldDefinitions({ clientId, defs }: { clientId: string; defs: D
     setMenu(null);
     setError(null);
     start(async () => {
-      const r = await updateFieldDefinitionAction(clientId, d.id, { enabled: on });
+      const r = await safeAction(() => updateFieldDefinitionAction(clientId, d.id, { enabled: on }));
       if (!r.ok) setError(spanish(r.error));
       else router.refresh();
     });
@@ -288,12 +289,12 @@ function FieldEditor({ clientId, def, nextPosition, onClose }: { clientId: strin
     setSaving(true);
     setError(null);
     const r = def
-      ? await updateFieldDefinitionAction(clientId, def.id, {
+      ? await safeAction(() => updateFieldDefinitionAction(clientId, def.id, {
           ...(f.label.trim() !== def.label ? { label: f.label.trim() } : {}),
           ...(def.type === "select" && added.length ? { options: allOptions } : {}),
           ...(f.enabled !== def.enabled ? { enabled: f.enabled } : {}),
-        })
-      : await createFieldDefinitionAction(clientId, { key, label: f.label.trim(), type: f.type, options: f.type === "select" ? allOptions : null, position: nextPosition });
+        }))
+      : await safeAction(() => createFieldDefinitionAction(clientId, { key, label: f.label.trim(), type: f.type, options: f.type === "select" ? allOptions : null, position: nextPosition }));
     setSaving(false);
     if (!r.ok) {
       setError(`${spanish(r.error)} Lo que escribiste se conserva.`);

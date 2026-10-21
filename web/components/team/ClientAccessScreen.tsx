@@ -5,6 +5,7 @@ import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import { changeClientRoleAction, changeMemberRoleAction, reassignMemberClientAction, removeMemberAction } from "@/lib/memberActions";
 import { createInvitationAction, revokeInvitationAction } from "@/lib/inviteActions";
+import { safeAction } from "@/components/ui/module/safeAction";
 import { canActOnMember, type ClientRole, type TeamClientOption, type TeamMemberView, type TeamSiteOption, type TeamViewer } from "@/components/TeamMembers";
 import type { TeamInviteView } from "@/components/TeamInvitations";
 import { Alert, Button, Field, INPUT, buttonClass } from "@/components/ui/controls";
@@ -281,7 +282,7 @@ export function ClientAccessScreen({
             setRevoking(null);
             setError(null);
             start(async () => {
-              const r = await revokeInvitationAction(id);
+              const r = await safeAction(() => revokeInvitationAction(id));
               if (!r.ok) setError("No se pudo revocar la invitación.");
               else router.refresh();
             });

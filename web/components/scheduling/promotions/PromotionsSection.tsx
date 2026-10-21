@@ -25,6 +25,7 @@ import { CheckItem, CheckList, FieldGroup, Notice } from "@/components/ui/module
 import { ConfirmLayer, DiscardChanges, InfoDialog } from "@/components/ui/module/ConfirmLayer";
 import { useEditorGuard } from "@/components/ui/module/useEditorGuard";
 import { useUrlState } from "@/components/ui/module/useUrlState";
+import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
  * PROMOCIONES — create, edit, duplicate, publish, pause and archive the business's
@@ -120,6 +121,24 @@ const fmtLocal = (v: string) => {
 };
 const windowText = (from: string, until: string, none: string) =>
   from && until ? `${fmtLocal(from)} → ${fmtLocal(until)}` : from ? `Desde ${fmtLocal(from)}` : until ? `Hasta ${fmtLocal(until)}` : none;
+/** WHICH APPOINTMENTS get the benefit, in one line: their dates and their days / hours
+ *  («Citas del 20 nov 2026 al 5 dic 2026 · los sábados»). The date range used to be left
+ *  out, so a promotion for late-November appointments read «Cualquier día» right beside
+ *  its booking window — as if that window were the appointment dates. */
+const appointmentsText = (f: { appointmentFrom: string; appointmentUntil: string; weekdays: number[]; timeFrom: string; timeUntil: string }, any: string) => {
+  const rule = appointmentRuleText({ appointment_weekdays: f.weekdays.length ? f.weekdays : null, appointment_time_from: f.timeFrom || null, appointment_time_until: f.timeUntil || null });
+  const dates =
+    f.appointmentFrom && f.appointmentUntil
+      ? `Citas del ${fmtLocal(f.appointmentFrom)} al ${fmtLocal(f.appointmentUntil)}`
+      : f.appointmentFrom
+        ? `Citas desde el ${fmtLocal(f.appointmentFrom)}`
+        : f.appointmentUntil
+          ? `Citas hasta el ${fmtLocal(f.appointmentUntil)}`
+          : null;
+  if (dates && rule) return `${dates} · ${rule.replace(/^Disponible para citas /, "")}`;
+  return dates ?? rule ?? any;
+};
+
 export function PromotionsSection({
   clientId,
   promotions,
@@ -182,7 +201,7 @@ export function PromotionsSection({
   const move = (p: PromotionAdminRow, to: PromotionStatus) => act(() => setPromotionStatusAction(clientId, p.id, p.version, to), () => setConfirmArchive(null));
   const openHistory = (p: PromotionAdminRow) =>
     start(async () => {
-      const r = await listPromotionHistoryAction(clientId, p.id);
+      const r = await safeAction(() => listPromotionHistoryAction(clientId, p.id));
       if (r.ok) setHistory({ name: p.form.name, events: r.events });
       else setError(r.error);
     });
@@ -199,8 +218,7 @@ export function PromotionsSection({
     returnFocus(opener.current);
   };
 
-  const rule = (p: PromotionAdminRow) =>
-    appointmentRuleText({ appointment_weekdays: p.form.weekdays.length ? p.form.weekdays : null, appointment_time_from: p.form.timeFrom || null, appointment_time_until: p.form.timeUntil || null }) ?? "Cualquier día";
+  const rule = (p: PromotionAdminRow) => appointmentsText(p.form, "Citas de cualquier día");
   const statusChip = (st: PromotionStatus) => <span className={`inline-flex rounded-full px-2 py-0.5 text-[0.7188rem] font-medium ${STATUS_TONE[st]}`}>{STATUS_LABEL[st]}</span>;
 
   const rowMenu = (p: PromotionAdminRow, at: "t" | "m") => (
@@ -520,7 +538,7 @@ function PromotionEditor({
     setSaving(true);
     setError(null);
     setStale(false);
-    const r = await savePromotionAction(clientId, row?.id ?? null, row?.version ?? null, f);
+    const r = await safeAction(() => savePromotionAction(clientId, row?.id ?? null, row?.version ?? null, f));
     setSaving(false);
     if (!r.ok) {
       setError(r.error ?? "No se pudo guardar.");
@@ -538,7 +556,7 @@ function PromotionEditor({
       fd.set("clientId", clientId);
       fd.set("promotionId", row.id);
       fd.set("image", await downscaleImage(file));
-      const r = await uploadPromotionImageAction(fd);
+      const r = await safeAction(() => uploadPromotionImageAction(fd));
       setImage({ busy: false, error: r.ok ? null : r.error });
       if (r.ok) onImageChanged();
     } catch {
@@ -548,7 +566,7 @@ function PromotionEditor({
   const removeImage = async () => {
     if (!row) return;
     setImage({ busy: true, error: null });
-    const r = await removePromotionImageAction(clientId, row.id);
+    const r = await safeAction(() => removePromotionImageAction(clientId, row.id));
     setImage({ busy: false, error: r.ok ? null : (r.error ?? "No se pudo quitar la imagen.") });
     if (r.ok) onImageChanged();
   };
@@ -687,7 +705,7 @@ function PromotionEditor({
           id="pr-window"
           title="Vigencia y citas"
           description="Dos cosas distintas: cuándo se puede hacer la reserva, y qué citas reciben el beneficio. Todo en la hora de la sede."
-          summary={`${windowText(f.bookableFrom, f.bookableUntil, "Reservas sin límite de fechas")} · ${ruleText ?? "Citas cualquier día"}`}
+          summary={`${windowText(f.bookableFrom, f.bookableUntil, "Reservas sin límite de fechas")} · ${appointmentsText(f, "Citas de cualquier día")}`}
           defaultOpen={false}
         >
           <div className="flex flex-col gap-3 rounded-sch-card border border-line p-4">

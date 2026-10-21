@@ -216,11 +216,10 @@ test('page form: Back asks, «Seguir editando» keeps the draft, «Descartar» g
   assert.deepEqual(h.state, { page: 'list' }, 'landed on the previous page, not further and not on a ghost copy');
 });
 
-test('page form guard: wired to the history marker, and drops a marker the router refresh stripped', () => {
+test('page form guard: the hook runs the behaviour-tested controller (test/unit/pageFormGuard.test.ts)', () => {
   const src = readFileSync(fileURLToPath(new URL('../../web/components/ui/module/useEditorGuard.ts', import.meta.url)), 'utf8');
   const hook = src.slice(src.indexOf('export function usePageFormGuard'));
-  assert.ok(hook.includes('createLeaveGuard({'), 'Back is guarded, not only links and reload');
-  assert.ok(hook.includes('if (why === "back") window.history.back();'), '«Descartar» completes the Back');
-  assert.ok(hook.includes('else if (why === "link") followRef.current();'), '«Descartar» completes the link');
-  assert.ok(hook.includes('window.location.pathname === armedPath) window.history.back();'), 'a clean form on the same page leaves no ghost entry');
+  assert.ok(hook.includes('createPageFormGuard({'), 'Back, links and clean-up go through lib/pageFormGuard');
+  assert.ok(hook.includes('guardRef.current?.setDirty(dirty)'), 'fed the form state on every change');
+  assert.ok(hook.includes('useNavigationGuard({'), 'links and reload are guarded too');
 });

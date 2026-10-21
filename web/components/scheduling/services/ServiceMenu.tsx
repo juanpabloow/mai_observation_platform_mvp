@@ -17,6 +17,7 @@ import { useUrlState } from "@/components/ui/module/useUrlState";
 import { CATEGORY_GROUPS, categoryDot, type CategoryGroup } from "./categories";
 import { BookingCategoriesPanel } from "./BookingCategoriesPanel";
 import { ServiceEditor } from "./ServiceEditor";
+import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
  * «Servicios» — the client's service catalogue in the module surface: title and counts,
@@ -130,7 +131,7 @@ export function ServiceMenu({
   const askArchive = (service: Service) => {
     setMenu(null);
     startCount(async () => {
-      const c = await countUpcomingAppointmentsAction(clientId, "service", service.id);
+      const c = await safeAction(() => countUpcomingAppointmentsAction(clientId, "service", service.id));
       setArchive({ service, upcoming: c.ok ? c.count : 0 });
     });
   };

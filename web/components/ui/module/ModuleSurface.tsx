@@ -183,14 +183,14 @@ export function SearchField({
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder ?? label}
         autoComplete="off"
-        className="min-w-0 flex-1 bg-transparent text-base text-foreground outline-none placeholder:text-faint lg:text-sm [&::-webkit-search-cancel-button]:hidden"
+        className="min-w-0 flex-1 self-stretch bg-transparent text-base text-foreground outline-none placeholder:text-faint lg:text-sm [&::-webkit-search-cancel-button]:hidden"
       />
       {value ? (
         <button
           type="button"
           onClick={() => onChange("")}
           aria-label="Borrar búsqueda"
-          className="-mr-1.5 inline-flex size-8 shrink-0 items-center justify-center rounded-md text-faint hover:bg-subtle hover:text-foreground"
+          className="-mr-3 inline-flex h-full w-11 shrink-0 items-center justify-center rounded-md text-faint hover:bg-subtle hover:text-foreground lg:-mr-1.5 lg:size-8"
         >
           <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6">
             <path d="M4 4l8 8M12 4l-8 8" />

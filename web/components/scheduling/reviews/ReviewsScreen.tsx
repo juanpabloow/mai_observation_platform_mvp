@@ -15,6 +15,7 @@ import { Notice } from "@/components/ui/module/FormKit";
 import { useUrlState } from "@/components/ui/module/useUrlState";
 import { usePageFormGuard } from "@/components/ui/module/useEditorGuard";
 import { DiscardChanges } from "@/components/ui/module/ConfirmLayer";
+import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
  * «Reseñas» (Presencia y marketing) — every review of the client in one list, with WHERE
@@ -166,7 +167,7 @@ export function ReviewsScreen({ clientId, own, imported, canImport }: { clientId
 
   const decide = async (id: string, decision: "approved" | "hidden") => {
     setError(null);
-    const r = await moderateReviewAction(clientId, id, decision);
+    const r = await safeAction(() => moderateReviewAction(clientId, id, decision));
     if (!r.ok) {
       setError(r.error);
       return false;
@@ -332,7 +333,7 @@ function ReviewDetail({
     start(async () => {
       if (!request) return;
       setError(null);
-      const r = await requestExternalReviewAction(clientId, row.id, request, note);
+      const r = await safeAction(() => requestExternalReviewAction(clientId, row.id, request, note));
       if (!r.ok) {
         setError(`${r.error} Tu nota se conserva.`);
         return;

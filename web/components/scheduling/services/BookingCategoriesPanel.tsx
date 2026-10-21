@@ -8,6 +8,7 @@ import type { BookingCategory } from "../AdminPanel";
 import { Alert, Button, CARD, CheckRow, Field, INPUT } from "../ui/system";
 import { ConfirmLayer, DiscardChanges } from "@/components/ui/module/ConfirmLayer";
 import { usePageFormGuard } from "@/components/ui/module/useEditorGuard";
+import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
  * "Página de reservas · Categorías" — the business's own groups on the public page
@@ -64,7 +65,7 @@ export function BookingCategoriesPanel({
     if (!draft || !checked) return;
     if (!checked.ok) return setError(checked.error);
     start(async () => {
-      const r = await saveBookingCategoryAction(clientId, draft.id, draft);
+      const r = await safeAction(() => saveBookingCategoryAction(clientId, draft.id, draft));
       if (!r.ok) return setError(r.error);
       setDraft(null);
       router.refresh();
@@ -72,7 +73,7 @@ export function BookingCategoriesPanel({
   };
   const remove = (c: BookingCategory) =>
     start(async () => {
-      const r = await deleteBookingCategoryAction(clientId, c.id);
+      const r = await safeAction(() => deleteBookingCategoryAction(clientId, c.id));
       setConfirmDelete(null);
       if (!r.ok) return setError(r.error);
       router.refresh();
@@ -121,10 +122,10 @@ export function BookingCategoriesPanel({
                   {[c.tagline, c.layout === "contact" ? null : `${c.service_count} ${c.service_count === 1 ? "servicio" : "servicios"}`].filter(Boolean).join(" · ")}
                 </span>
               </span>
-              <Button size="sm" onClick={() => open(c)} disabled={pending}>
+              <Button size="sm" onClick={() => open(c)} disabled={pending} aria-label={`Editar ${c.name}`}>
                 Editar
               </Button>
-              <Button size="sm" variant="tertiary" onClick={() => setConfirmDelete(c)} disabled={pending}>
+              <Button size="sm" variant="tertiary" onClick={() => setConfirmDelete(c)} disabled={pending} aria-label={`Eliminar ${c.name}`}>
                 Eliminar
               </Button>
             </li>

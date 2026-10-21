@@ -13,6 +13,7 @@ import { DiscardChanges } from "@/components/ui/module/ConfirmLayer";
 import { usePageFormGuard } from "@/components/ui/module/useEditorGuard";
 import { useUrlState } from "@/components/ui/module/useUrlState";
 import { SitePicker } from "./SitePicker";
+import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
  * «Reglas de reserva» (Configuración) — the three rules that exist, PER SITE
@@ -113,7 +114,7 @@ function RulesForm({ clientId, site, onDirtyChange }: { clientId: string; site: 
     if (Object.keys(errors).length) return;
     setState("saving");
     setError(null);
-    const r = await updateSiteAction(clientId, site.id, {
+    const r = await safeAction(() => updateSiteAction(clientId, site.id, {
       // Merge over the existing config so the buffers (not shown here) are preserved.
       schedulingConfig: {
         ...site.scheduling_config,
@@ -121,7 +122,7 @@ function RulesForm({ clientId, site, onDirtyChange }: { clientId: string; site: 
         booking_horizon_days: Number(f.booking_horizon_days),
         slot_interval_min: Number(f.slot_interval_min),
       },
-    });
+    }));
     if (!r.ok) {
       setState("idle");
       setError(`${r.error ?? "No se pudo guardar."} Lo que escribiste se conserva.`);

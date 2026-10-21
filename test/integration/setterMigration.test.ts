@@ -47,9 +47,14 @@ test('1795 setter-role: editor↔setter survives up→down→up with real rows (
     await client.query('BEGIN');
 
     // Rewind this txn's view to the pre-1795 state: the OLD 'editor' CHECK.
+    // NOT VALID: the shared test database holds 'setter' rows that OTHER test files commit
+    // while this one runs (the files run in parallel), and validating them against the old
+    // CHECK failed the setup at random — not the migration. NOT VALID skips only those
+    // existing rows; every INSERT/UPDATE below is still checked, so a migration that turns
+    // editor → setter before swapping the CHECK still raises 23514 here (the regression).
     for (const tbl of ['tenant_members', 'invitations']) {
       await client.query(`ALTER TABLE ${tbl} DROP CONSTRAINT IF EXISTS ${tbl}_client_role_check`);
-      await client.query(`ALTER TABLE ${tbl} ADD CONSTRAINT ${tbl}_client_role_check CHECK ${EDITOR_CHECK}`);
+      await client.query(`ALTER TABLE ${tbl} ADD CONSTRAINT ${tbl}_client_role_check CHECK ${EDITOR_CHECK} NOT VALID`);
     }
 
     // The exact rows that broke prod: one EDITOR member + one pending EDITOR invitation.

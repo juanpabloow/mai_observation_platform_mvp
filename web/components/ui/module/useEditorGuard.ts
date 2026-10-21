@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useLeaveGuard } from "@/components/ui/useLeaveGuard";
-import { createLeaveGuard, type LeaveGuard } from "@/lib/leaveGuard";
+import { createPageFormGuard, type PageFormGuard } from "@/lib/pageFormGuard";
 
 /**
  * While `dirty`: a link anywhere in the app asks first (the sidebar stays usable next to
@@ -104,24 +104,20 @@ export function useEditorGuard({ dirty, onLeave }: { dirty: boolean; onLeave: ()
 /**
  * The page-form version (the form IS the page): while `dirty`, asks before ANY way out
  * drops the draft — a link (useNavigationGuard), a reload (beforeunload) and the
- * browser / system BACK. For Back it arms the same one-entry history marker as the
- * in-page editors (lib/leaveGuard), but only while there are changes, so a clean page
- * adds nothing to the history. «Seguir editando» keeps the draft; «Descartar» finishes
- * the navigation that was asked for, exactly once (back, or the link). Render
- * <DiscardChanges> while `asking`.
+ * browser / system BACK (a one-entry history marker, only while there are changes).
+ * «Seguir editando» keeps the draft; «Descartar» finishes the navigation that was asked
+ * for, exactly once (back, or the link). Render <DiscardChanges> while `asking`.
+ *
+ * The behaviour lives in lib/pageFormGuard (unit-tested against a fake history); this
+ * hook only feeds it the form's state and the router.
  */
 export function usePageFormGuard(dirty: boolean) {
   const [asking, setAsking] = useState(false);
-  const reason = useRef<"link" | "back" | null>(null);
-  const dirtyRef = useRef(dirty);
-  useEffect(() => {
-    dirtyRef.current = dirty;
-  });
+  const guardRef = useRef<PageFormGuard | null>(null);
   const nav = useNavigationGuard({
     dirty,
     onAsk: () => {
-      reason.current = "link";
-      setAsking(true);
+      guardRef.current?.askLink();
     },
   });
   const followRef = useRef(nav.follow);
@@ -129,60 +125,34 @@ export function usePageFormGuard(dirty: boolean) {
     followRef.current = nav.follow;
   });
 
-  const left = useRef(false);
-
-  const guardRef = useRef<LeaveGuard | null>(null);
   useEffect(() => {
-    if (!dirty) return;
-    left.current = false;
-    // Where the marker was added: if we are still on this path when the guard goes (saved,
-    // reset, or the form remounted for another site), the marker entry is ours to drop.
-    const armedPath = window.location.pathname;
-    const guard = createLeaveGuard({
+    const guard = createPageFormGuard({
       history: window.history,
       events: window,
-      key: "__pageFormGuard",
-      isDirty: () => dirtyRef.current,
-      onAsk: () => {
-        reason.current = "back";
-        setAsking(true);
-      },
-      // Runs after the marker is gone: complete what the person was doing.
-      onLeave: () => {
-        left.current = true;
-        const why = reason.current;
-        reason.current = null;
-        if (why === "back") window.history.back();
-        else if (why === "link") followRef.current();
-      },
+      pathname: () => window.location.pathname,
+      onAsk: () => setAsking(true),
+      followLink: () => followRef.current(),
     });
-    guard.arm();
     guardRef.current = guard;
     return () => {
-      // Saved, reset or switched site: drop the marker entry. dispose() does it when the
-      // entry still carries our key; a save's router refresh rewrites the state and drops
-      // the key, so while we are still on the same page we pop the (same-URL) entry
-      // ourselves — otherwise the next Back would land on a ghost copy of this page. After
-      // a real navigation the path differs and the history is left alone.
-      const carriesKey = Boolean((window.history.state as Record<string, unknown> | null)?.__pageFormGuard);
       guard.dispose();
-      if (!carriesKey && !left.current && window.location.pathname === armedPath) window.history.back();
       if (guardRef.current === guard) guardRef.current = null;
     };
+  }, []);
+  useEffect(() => {
+    guardRef.current?.setDirty(dirty);
   }, [dirty]);
 
   return {
     asking,
     keepEditing: () => {
-      reason.current = null;
+      guardRef.current?.keepEditing();
       nav.forget();
       setAsking(false);
     },
     discard: () => {
       setAsking(false);
-      const guard = guardRef.current;
-      if (guard) guard.leave();
-      else if (reason.current === "link") nav.follow();
+      guardRef.current?.discard();
     },
   };
 }

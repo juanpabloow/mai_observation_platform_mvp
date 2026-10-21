@@ -25,6 +25,7 @@ import { AffixInput, CheckItem, CheckList, ChoiceChips, FieldGroup, Notice, Togg
 import { DiscardChanges } from "@/components/ui/module/ConfirmLayer";
 import { useEditorGuard } from "@/components/ui/module/useEditorGuard";
 import { scrollWithin } from "@/components/ui/module/scrollWithin";
+import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
  * The SERVICE EDITOR — edited IN the Servicios surface (not a cramped modal, not a side
@@ -251,16 +252,17 @@ export function ServiceEditor({
     }
     setSaving(true);
     setError(null);
-    const out = await saveServiceForm(clientId, persisted.current, effective, sites, staff);
-    if (out.ok && persisted.current.id && JSON.stringify(page) !== JSON.stringify(initialPageForm)) {
-      const pr = await updateServicePresentationAction(clientId, persisted.current.id, {
+    const out = await safeAction(() => saveServiceForm(clientId, persisted.current, effective, sites, staff));
+    const savedId = persisted.current.id;
+    if (out.ok && savedId && JSON.stringify(page) !== JSON.stringify(initialPageForm)) {
+      const pr = await safeAction(() => updateServicePresentationAction(clientId, savedId, {
         categoryId: page.categoryId || null,
         visible: page.visible,
         sort: page.sort.trim(),
         recommended: page.recommended,
         includes: page.includes,
         upgradeServiceId: page.upgradeId || null,
-      });
+      }));
       setSaving(false);
       if (pr.ok) {
         savedAll.current = true;
@@ -275,7 +277,7 @@ export function ServiceEditor({
       savedAll.current = true;
       return guard.leave();
     }
-    if (out.partial) wrote.current = true;
+    if ("partial" in out && out.partial) wrote.current = true;
     // Say so when part of it IS saved: Guardar again finishes the rest, it does not repeat it.
     setError(wrote.current ? `Parte de los cambios ya se guardó. ${out.error} Pulsa Guardar para completar el resto.` : out.error);
   };
@@ -621,7 +623,7 @@ function PageDiagnosisBox({ clientId, serviceId, diagnosis: d, dirty, onJump }: 
   const check = async () => {
     if (!serviceId) return;
     setUpcoming({ state: "loading", sites: [] });
-    const r = await serviceUpcomingAvailabilityAction(clientId, serviceId);
+    const r = await safeAction(() => serviceUpcomingAvailabilityAction(clientId, serviceId));
     setUpcoming(r.ok ? { state: "done", sites: r.sites } : { state: "error", sites: [] });
   };
   const head =
@@ -730,7 +732,7 @@ function PageSection({
       fd.set("clientId", clientId);
       fd.set("serviceId", serviceId);
       fd.set("image", await downscaleImage(file));
-      const r = await uploadServiceImageAction(fd);
+      const r = await safeAction(() => uploadServiceImageAction(fd));
       if (r.ok) setImage(r.url ?? null);
       else setImageError(r.error);
     } catch {
@@ -742,7 +744,7 @@ function PageSection({
   const remove = async () => {
     if (!serviceId) return;
     setImageBusy(true);
-    const r = await removeServiceImageAction(clientId, serviceId);
+    const r = await safeAction(() => removeServiceImageAction(clientId, serviceId));
     setImageBusy(false);
     if (r.ok) setImage(null);
     else setImageError(r.error);
@@ -886,14 +888,14 @@ export function ServicePresentationEditor({
     if (pageError) return;
     setSaving(true);
     setError(null);
-    const r = await updateServicePresentationAction(clientId, service.id, {
+    const r = await safeAction(() => updateServicePresentationAction(clientId, service.id, {
       categoryId: page.categoryId || null,
       visible: page.visible,
       sort: page.sort.trim(),
       recommended: page.recommended,
       includes: page.includes,
       upgradeServiceId: page.upgradeId || null,
-    });
+    }));
     setSaving(false);
     if (!r.ok) {
       setError(`${r.error} Lo que escribiste se conserva.`);

@@ -22,6 +22,7 @@ import { usePageFormGuard } from "@/components/ui/module/useEditorGuard";
 import { useUrlState } from "@/components/ui/module/useUrlState";
 import { returnFocus } from "@/components/ui/module/ListTable";
 import { SitePicker } from "./SitePicker";
+import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
  * «Página de reservas» (Presencia y marketing) — what the customer sees, managed by
@@ -239,7 +240,7 @@ function ContactForm({ clientId, site, onDirtyChange }: { clientId: string; site
   const save = async () => {
     setState("saving");
     setError(null);
-    const r = await updateSiteAction(clientId, site.id, { publicWhatsapp: whatsapp, publicMapsUrl: mapsUrl });
+    const r = await safeAction(() => updateSiteAction(clientId, site.id, { publicWhatsapp: whatsapp, publicMapsUrl: mapsUrl }));
     if (!r.ok) {
       setState("idle");
       setError(`${r.error ?? "No se pudo guardar."} Lo que escribiste se conserva.`);

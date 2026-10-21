@@ -22,6 +22,7 @@ import { AffixInput, ToggleRow } from "@/components/ui/module/FormKit";
 import { ConfirmLayer, DiscardChanges } from "@/components/ui/module/ConfirmLayer";
 import { useEditorGuard } from "@/components/ui/module/useEditorGuard";
 import { useUrlState } from "@/components/ui/module/useUrlState";
+import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
  * Per-client PRODUCT catalogue («Productos»), in the module surface. INFORM ONLY: there
@@ -437,7 +438,7 @@ function ProductEditor({
       description: form.description,
       inStock: form.inStock,
     };
-    const r = product ? await updateProductAction(clientId, product.id, values) : await createProductAction({ clientId, ...values });
+    const r = product ? await safeAction(() => updateProductAction(clientId, product.id, values)) : await safeAction(() => createProductAction({ clientId, ...values }));
     setSaving(false);
     if (!r.ok) {
       setError(r.error ?? "No se pudo guardar el producto.");

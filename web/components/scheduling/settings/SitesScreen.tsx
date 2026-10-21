@@ -19,6 +19,7 @@ import { Notice } from "@/components/ui/module/FormKit";
 import { ConfirmLayer, DiscardChanges } from "@/components/ui/module/ConfirmLayer";
 import { useEditorGuard } from "@/components/ui/module/useEditorGuard";
 import { useUrlState } from "@/components/ui/module/useUrlState";
+import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
  * «Sedes» (Configuración) — where the business attends: name, address, public URL,
@@ -101,7 +102,7 @@ export function SitesScreen({
   const askDeactivate = (site: Site) => {
     setMenu(null);
     startCount(async () => {
-      const c = await countUpcomingAppointmentsAction(clientId, "site", site.id);
+      const c = await safeAction(() => countUpcomingAppointmentsAction(clientId, "site", site.id));
       setDeactivate({ site, upcoming: c.ok ? c.count : 0 });
     });
   };
@@ -396,7 +397,7 @@ function SiteEditor({ clientId, site, onClose }: { clientId: string; site: Site 
     setError(null);
     let r: { ok: boolean; error?: string };
     if (!site) {
-      r = await createSiteAction({ clientId, slug, name: f.name.trim(), address: f.address.trim() || undefined, timezone: f.timezone, openingHours: weeklyFromGrid(f.grid) });
+      r = await safeAction(() => createSiteAction({ clientId, slug, name: f.name.trim(), address: f.address.trim() || undefined, timezone: f.timezone, openingHours: weeklyFromGrid(f.grid) }));
     } else {
       const patch: Parameters<typeof updateSiteAction>[2] = {};
       if (f.name !== initial.name) patch.name = f.name.trim();
@@ -404,7 +405,7 @@ function SiteEditor({ clientId, site, onClose }: { clientId: string; site: Site 
       if (slug !== initial.slug) patch.slug = slug;
       if (f.timezone !== initial.timezone) patch.timezone = f.timezone;
       if (JSON.stringify(weeklyFromGrid(f.grid)) !== JSON.stringify(weeklyFromGrid(initial.grid))) patch.openingHours = weeklyFromGrid(f.grid);
-      r = await updateSiteAction(clientId, site.id, patch);
+      r = await safeAction(() => updateSiteAction(clientId, site.id, patch));
     }
     setSaving(false);
     if (!r.ok) {

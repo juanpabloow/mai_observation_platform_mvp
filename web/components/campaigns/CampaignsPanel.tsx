@@ -29,6 +29,7 @@ import { EditorFrame, EditorHeader, EditorSection, ErrorSummary, MetaChip, SaveB
 import { ConfirmLayer, DiscardChanges } from "@/components/ui/module/ConfirmLayer";
 import { useEditorGuard } from "@/components/ui/module/useEditorGuard";
 import { useUrlState } from "@/components/ui/module/useUrlState";
+import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
  * Per-client CAMPAÑAS manager (AT-2), in the module surface. Two VIEWS of the same module
@@ -278,7 +279,7 @@ function AdsTab({
     const ids = [...selected];
     if (ids.length === 0) return;
     run(async () => {
-      const r = await assignAdsToCampaignAction(clientId, ids, campaignId);
+      const r = await safeAction(() => assignAdsToCampaignAction(clientId, ids, campaignId));
       if (r.ok) exitSelect();
       return r;
     });
@@ -391,7 +392,7 @@ function AdsTab({
           campaigns={assignable}
           onClose={() => setCreating(false)}
           onSubmit={async (values, coverFile) => {
-            const r = await createAdAction({ clientId, ...values });
+            const r = await safeAction(() => createAdAction({ clientId, ...values }));
             // Create first, then attach the staged cover to the new ad id. A cover failure never
             // undoes the created ad (the person can add the cover later from the edit modal).
             if (r.ok && r.id && coverFile) {
@@ -399,7 +400,7 @@ function AdsTab({
               fd.set("clientId", clientId);
               fd.set("adId", r.id);
               fd.set("image", coverFile);
-              await uploadAdCoverAction(fd);
+              await safeAction(() => uploadAdCoverAction(fd));
             }
             if (r.ok) {
               setCreating(false);
@@ -418,7 +419,7 @@ function AdsTab({
           campaigns={assignable}
           onClose={() => setEditing(null)}
           onSubmit={async (values) => {
-            const r = await updateAdAction(clientId, editing.id, { name: values.name, botNote: values.botNote });
+            const r = await safeAction(() => updateAdAction(clientId, editing.id, { name: values.name, botNote: values.botNote }));
             if (r.ok) {
               setEditing(null);
               refresh();
@@ -1004,7 +1005,7 @@ function AdCoverControl({
         fd.set("clientId", clientId);
         fd.set("adId", adId);
         fd.set("image", small);
-        const r = await uploadAdCoverAction(fd);
+        const r = await safeAction(() => uploadAdCoverAction(fd));
         if (!r.ok) {
           setError(r.error);
           return;
@@ -1022,7 +1023,7 @@ function AdCoverControl({
     start(async () => {
       setError(null);
       if (adId && !staged) {
-        const r = await removeAdCoverAction(clientId, adId);
+        const r = await safeAction(() => removeAdCoverAction(clientId, adId));
         if (!r.ok) {
           setError(r.error);
           return;
@@ -1342,7 +1343,7 @@ function CampaignEditor({
       botBrief: f.brief.trim() === "" ? null : f.brief,
     };
     try {
-      const r = initial ? await updateCampaignAction(clientId, initial.id, values) : await createCampaignAction({ clientId, ...values });
+      const r = initial ? await safeAction(() => updateCampaignAction(clientId, initial.id, values)) : await safeAction(() => createCampaignAction({ clientId, ...values }));
       setSaving(false);
       if (!r.ok) {
         setError(`${r.error ?? "No se pudo guardar. Revisa los datos e inténtalo de nuevo."} Lo que escribiste se conserva.`);
