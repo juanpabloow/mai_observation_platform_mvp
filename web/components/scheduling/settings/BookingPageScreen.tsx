@@ -216,6 +216,18 @@ export function BookingPageScreen({
   );
 }
 
+/** Stable ids of the contact fields' error messages (aria-describedby). */
+const CONTACT_ERROR_ID = { publicWhatsapp: "bp-contact-whatsapp-error", publicMapsUrl: "bp-contact-maps-error" } as const;
+
+/** A field's own error line, announced when it appears. */
+function FieldError({ id, children }: { id: string; children: React.ReactNode }) {
+  return (
+    <span id={id} role="alert" className="text-xs text-danger">
+      {children}
+    </span>
+  );
+}
+
 /** The site's public contact (WhatsApp, Google Maps), with the read-only facts that come
  *  from other modules beside it. Saves ONLY the public keys of this site. */
 function ContactForm({ clientId, site, onDirtyChange }: { clientId: string; site: Site; onDirtyChange: (dirty: boolean) => void }) {
@@ -224,6 +236,11 @@ function ContactForm({ clientId, site, onDirtyChange }: { clientId: string; site
   const [mapsUrl, setMapsUrl] = useState(site.public_maps_url ?? "");
   const [state, setState] = useState<"idle" | "saving" | "saved">("idle");
   const [error, setError] = useState<string | null>(null);
+  // Which input the server rejected: it is marked aria-invalid and points at the message
+  // (stable ids below), the value stays as written, and focus goes back to it.
+  const [invalid, setInvalid] = useState<"publicWhatsapp" | "publicMapsUrl" | null>(null);
+  const whatsappRef = useRef<HTMLInputElement>(null);
+  const mapsRef = useRef<HTMLInputElement>(null);
   const changes = Number(whatsapp !== (site.public_whatsapp ?? "")) + Number(mapsUrl !== (site.public_maps_url ?? ""));
   const dirty = changes > 0;
   // Tell the page (it asks before switching sites with unsaved contact edits).
@@ -240,12 +257,20 @@ function ContactForm({ clientId, site, onDirtyChange }: { clientId: string; site
   const save = async () => {
     setState("saving");
     setError(null);
+    setInvalid(null);
     const r = await safeAction(() => updateSiteAction(clientId, site.id, { publicWhatsapp: whatsapp, publicMapsUrl: mapsUrl }));
     if (!r.ok) {
       setState("idle");
       setError(`${r.error ?? "No se pudo guardar."} Lo que escribiste se conserva.`);
+      const field = "field" in r && (r.field === "publicWhatsapp" || r.field === "publicMapsUrl") ? r.field : null;
+      setInvalid(field);
+      (field === "publicWhatsapp" ? whatsappRef : field === "publicMapsUrl" ? mapsRef : null)?.current?.focus();
       return;
     }
+    // Show what was STORED (the server normalises: «+57 300 123 4567» → «+573001234567»),
+    // so a saved form is clean instead of keeping one «cambio sin guardar» for the spaces.
+    if (r.contact?.publicWhatsapp !== undefined) setWhatsapp(r.contact.publicWhatsapp ?? "");
+    if (r.contact?.publicMapsUrl !== undefined) setMapsUrl(r.contact.publicMapsUrl ?? "");
     setState("saved");
     router.refresh();
   };
@@ -277,13 +302,33 @@ function ContactForm({ clientId, site, onDirtyChange }: { clientId: string; site
       <Notice>El logo del negocio lo sube la agencia desde Clientes. La página no tiene foto de portada.</Notice>
       <div className="grid gap-4 sm:grid-cols-2">
         <Field label="WhatsApp del negocio" optional hint="Con indicativo. Vacío = no se muestra.">
-          <input value={whatsapp} inputMode="tel" placeholder="+57 300 123 4567" onChange={(e) => setWhatsapp(e.target.value)} className={INPUT} />
+          <input
+            ref={whatsappRef}
+            value={whatsapp}
+            inputMode="tel"
+            placeholder="+57 300 123 4567"
+            onChange={(e) => setWhatsapp(e.target.value)}
+            aria-invalid={invalid === "publicWhatsapp" || undefined}
+            aria-describedby={invalid === "publicWhatsapp" ? CONTACT_ERROR_ID.publicWhatsapp : undefined}
+            className={`${INPUT} aria-[invalid=true]:border-danger`}
+          />
+          {invalid === "publicWhatsapp" && error ? <FieldError id={CONTACT_ERROR_ID.publicWhatsapp}>{error}</FieldError> : null}
         </Field>
         <Field label="Enlace de Google Maps" optional hint="Si está vacío, se busca la dirección.">
-          <input value={mapsUrl} inputMode="url" placeholder="https://maps.app.goo.gl/…" onChange={(e) => setMapsUrl(e.target.value)} className={INPUT} />
+          <input
+            ref={mapsRef}
+            value={mapsUrl}
+            inputMode="url"
+            placeholder="https://maps.app.goo.gl/…"
+            onChange={(e) => setMapsUrl(e.target.value)}
+            aria-invalid={invalid === "publicMapsUrl" || undefined}
+            aria-describedby={invalid === "publicMapsUrl" ? CONTACT_ERROR_ID.publicMapsUrl : undefined}
+            className={`${INPUT} aria-[invalid=true]:border-danger`}
+          />
+          {invalid === "publicMapsUrl" && error ? <FieldError id={CONTACT_ERROR_ID.publicMapsUrl}>{error}</FieldError> : null}
         </Field>
       </div>
-      {error ? <Alert>{error}</Alert> : null}
+      {error && !invalid ? <Alert>{error}</Alert> : null}
       <div className="flex flex-wrap items-center justify-end gap-2">
         <span aria-live="polite" className="mr-auto text-[0.7812rem] text-muted">
           {dirty ? changesLabel(changes) : <SaveNote state={state === "saved" ? "saved" : "idle"} />}
@@ -294,6 +339,7 @@ function ContactForm({ clientId, site, onDirtyChange }: { clientId: string; site
               setWhatsapp(site.public_whatsapp ?? "");
               setMapsUrl(site.public_maps_url ?? "");
               setError(null);
+              setInvalid(null);
             }}
             disabled={state === "saving"}
           >

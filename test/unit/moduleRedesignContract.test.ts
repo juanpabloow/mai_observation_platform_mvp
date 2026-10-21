@@ -136,3 +136,27 @@ test('Campos personalizados: key and type are fixed, nothing is deleted', () => 
   // Editing a select only ADDS options: the stored ones are kept.
   assert.ok(src.includes('const allOptions = [...new Set([...f.options, ...added])];'));
 });
+
+test('shared search: the input IS the 44px target and the clear button has its own strip', () => {
+  const src = read('web/components/ui/module/ModuleSurface.tsx');
+  const field = src.slice(src.indexOf('export function SearchField'), src.indexOf('/**\n * Side menu + content.'));
+  // The input covers the whole box, border included — not a shorter field in a 44px frame.
+  assert.ok(field.includes('absolute -inset-y-px -left-px'), 'the input fills the box (tapping the edge focuses it)');
+  assert.ok(field.includes('h-[44px]'), 'a 44px box on phones');
+  assert.ok(field.includes('pointer-events-none absolute left-3'), 'the icon lets the tap through to the input');
+  // «Borrar búsqueda»: 44 wide, full height, and the input stops before it (no overlap).
+  assert.ok(field.includes('aria-label="Borrar búsqueda"') && field.includes('absolute -inset-y-px -right-px inline-flex w-11'));
+  assert.ok(field.includes('value ? "right-11 pr-1 lg:right-10" : "-right-px pr-3"'), 'the input yields the strip to the button');
+});
+
+test('Página de reservas: a rejected WhatsApp / Maps value is marked on its own input', () => {
+  const src = read('web/components/scheduling/settings/BookingPageScreen.tsx');
+  assert.ok(src.includes('aria-invalid={invalid === "publicWhatsapp" || undefined}'));
+  assert.ok(src.includes('aria-describedby={invalid === "publicWhatsapp" ? CONTACT_ERROR_ID.publicWhatsapp : undefined}'));
+  assert.ok(src.includes('publicWhatsapp: "bp-contact-whatsapp-error"'), 'a stable id for the message');
+  assert.ok(src.includes('<FieldError id={CONTACT_ERROR_ID.publicWhatsapp}>'), 'the message carries that id');
+  assert.ok(src.includes('Lo que escribiste se conserva.'), 'the value stays as written');
+  // The server names the field; the rules themselves are unchanged (siteContactValidation.test.ts).
+  const actions = read('web/lib/schedulingAdminActions.ts');
+  assert.ok(actions.includes('return { ok: false, error: contact.error, field: contact.field };'));
+});

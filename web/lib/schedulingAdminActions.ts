@@ -83,7 +83,18 @@ import { countUpcomingAppointmentsForResource, listAppointments } from "@worker/
  * (deactivate) preserves appointment history.
  */
 
-export type AdminResult = { ok: true; id?: string } | { ok: false; error: string };
+/** `field` names the input a validation error belongs to (so the form can mark it
+ *  aria-invalid and point it at the message); absent for errors of the whole request. */
+export type AdminResult =
+  | {
+      ok: true;
+      id?: string;
+      /** The public contact AS STORED (normalised: E.164 WhatsApp, canonical Maps link),
+       *  so the form shows what was saved instead of staying «dirty» with what was typed. */
+      contact?: { address?: string | null; publicWhatsapp?: string | null; publicMapsUrl?: string | null };
+    }
+  | { ok: false; error: string; field?: PublicContactField };
+export type PublicContactField = "address" | "publicWhatsapp" | "publicMapsUrl";
 
 /** Steps 1–4. Returns the validated tenantId, or a generic error (never revealing
  * which condition failed — matches the module gate's indistinguishable denials). */
@@ -182,7 +193,7 @@ export async function updateSiteAction(
   if (!auth.ok) return auth;
   if (!(await siteInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
   const contact = validatePublicContact(patch, patch.timezone ?? (await getSiteById(auth.tenantId, id))?.timezone ?? "America/Bogota");
-  if (!contact.ok) return { ok: false, error: contact.error };
+  if (!contact.ok) return { ok: false, error: contact.error, field: contact.field };
 
   // A bad scheduling_config value silently breaks availability, so validate it here.
   if (patch.schedulingConfig) {
@@ -201,7 +212,7 @@ export async function updateSiteAction(
   });
   if (!row) return { ok: false, error: "Site not found." };
   revalidateAdmin(clientId);
-  return { ok: true, id };
+  return { ok: true, id, contact: contact.value };
 }
 
 export async function deactivateSiteAction(clientId: string, id: string): Promise<AdminResult> {
@@ -725,11 +736,11 @@ function sanitizeSchedulingConfig(
 function validatePublicContact(
   patch: { address?: string; publicWhatsapp?: string; publicMapsUrl?: string },
   timezone: string,
-): { ok: true; value: { address?: string | null; publicWhatsapp?: string | null; publicMapsUrl?: string | null } } | { ok: false; error: string } {
+): { ok: true; value: { address?: string | null; publicWhatsapp?: string | null; publicMapsUrl?: string | null } } | { ok: false; error: string; field: PublicContactField } {
   const value: { address?: string | null; publicWhatsapp?: string | null; publicMapsUrl?: string | null } = {};
   if (patch.address !== undefined) {
     const a = patch.address.replace(/\s+/g, " ").trim();
-    if (a.length > 200) return { ok: false, error: "La dirección admite hasta 200 caracteres." };
+    if (a.length > 200) return { ok: false, error: "La dirección admite hasta 200 caracteres.", field: "address" };
     value.address = a || null;
   }
   if (patch.publicWhatsapp !== undefined) {
@@ -737,7 +748,7 @@ function validatePublicContact(
     if (!raw) value.publicWhatsapp = null;
     else {
       const e164 = normalizeE164(raw, { defaultRegion: dialingRegionForTimezone(timezone) });
-      if (!e164 || !E164_RE.test(e164)) return { ok: false, error: "Revisa el número de WhatsApp: escríbelo con el indicativo, por ejemplo +57 300 123 4567." };
+      if (!e164 || !E164_RE.test(e164)) return { ok: false, error: "Revisa el número de WhatsApp: escríbelo con el indicativo, por ejemplo +57 300 123 4567.", field: "publicWhatsapp" };
       value.publicWhatsapp = e164;
     }
   }
@@ -746,7 +757,7 @@ function validatePublicContact(
     if (!raw) value.publicMapsUrl = null;
     else {
       const safe = safeMapsUrl(raw);
-      if (!safe) return { ok: false, error: "El enlace de «Cómo llegar» debe ser de Google Maps (https://maps.app.goo.gl/… o https://www.google.com/maps/…)." };
+      if (!safe) return { ok: false, error: "El enlace de «Cómo llegar» debe ser de Google Maps (https://maps.app.goo.gl/… o https://www.google.com/maps/…).", field: "publicMapsUrl" };
       value.publicMapsUrl = safe;
     }
   }

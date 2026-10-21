@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, type ReactNode } from "react";
+import { useId, useRef, type ReactNode } from "react";
 import { useModuleRail } from "./ModuleRailContext";
 
 /**
@@ -152,7 +152,14 @@ export function RailToggle() {
   );
 }
 
-/** A labelled search box. 16px text on phones (no iOS zoom), a clear button when filled. */
+/**
+ * A labelled search box. 16px text on phones (no iOS zoom), a clear button when filled.
+ *
+ * TOUCH TARGETS. The input itself covers the whole box, border included (-inset-px), so
+ * the interactive element is the full 44px — tapping the icon or the edge focuses it; it
+ * is not a 42px field inside a 44px frame. «Borrar búsqueda» gets its own 44 × 44 strip at
+ * the right, and while it shows the input stops short of it, so the two never overlap.
+ */
 export function SearchField({
   value,
   onChange,
@@ -167,9 +174,10 @@ export function SearchField({
   className?: string;
 }) {
   const id = useId();
+  const inputRef = useRef<HTMLInputElement>(null);
   return (
-    <div className={`u-focus relative flex h-[44px] min-w-0 flex-1 items-center gap-2 rounded-sch-control border border-line-strong bg-surface px-3 lg:h-[2.5rem] ${className}`}>
-      <svg aria-hidden viewBox="0 0 16 16" className="size-4 shrink-0 text-faint" fill="none" stroke="currentColor" strokeWidth="1.5">
+    <div className={`u-focus relative h-[44px] min-w-0 flex-1 rounded-sch-control border border-line-strong bg-surface lg:h-[2.5rem] ${className}`}>
+      <svg aria-hidden viewBox="0 0 16 16" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint" fill="none" stroke="currentColor" strokeWidth="1.5">
         <circle cx="7" cy="7" r="4.4" />
         <path d="M10.4 10.4 13.6 13.6" />
       </svg>
@@ -177,20 +185,27 @@ export function SearchField({
         {label}
       </label>
       <input
+        ref={inputRef}
         id={id}
         type="search"
         value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder ?? label}
         autoComplete="off"
-        className="min-w-0 flex-1 self-stretch bg-transparent text-base text-foreground outline-none placeholder:text-faint lg:text-sm [&::-webkit-search-cancel-button]:hidden"
+        className={`absolute -inset-y-px -left-px min-w-0 rounded-sch-control bg-transparent pl-[2.3rem] text-base text-foreground outline-none placeholder:text-faint lg:text-sm [&::-webkit-search-cancel-button]:hidden ${
+          value ? "right-11 pr-1 lg:right-10" : "-right-px pr-3"
+        }`}
       />
       {value ? (
         <button
           type="button"
-          onClick={() => onChange("")}
+          onClick={() => {
+            onChange("");
+            // The button goes away with the text: keep focus in the search, not on <body>.
+            inputRef.current?.focus();
+          }}
           aria-label="Borrar búsqueda"
-          className="-mr-3 inline-flex h-full w-11 shrink-0 items-center justify-center rounded-md text-faint hover:bg-subtle hover:text-foreground lg:-mr-1.5 lg:size-8"
+          className="absolute -inset-y-px -right-px inline-flex w-11 items-center justify-center rounded-sch-control text-faint hover:bg-subtle hover:text-foreground lg:w-10"
         >
           <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6">
             <path d="M4 4l8 8M12 4l-8 8" />
