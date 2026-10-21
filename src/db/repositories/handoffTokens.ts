@@ -23,6 +23,7 @@ export const ALL_CAPABILITIES = [
   'scheduling.write',
   'crm.read',
   'crm.write',
+  'pipeline.write',
   'catalog.read',
   'handoff.context.read',
 ] as const;

@@ -48,7 +48,7 @@ revealing which):
 ```
 
 ### 1.3 Capabilities — deny-by-default
-Each token grants an explicit set from exactly these six, dot-separated:
+Each token grants an explicit set from exactly these seven, dot-separated:
 
 | Capability | Grants |
 |---|---|
@@ -57,7 +57,12 @@ Each token grants an explicit set from exactly these six, dot-separated:
 | `scheduling.write` | create / cancel / reschedule / confirm / complete / no-show |
 | `crm.read` | contact lookup and reads |
 | `crm.write` | contact upsert, notes, tags, field + consent writes |
+| `pipeline.write` | mark a conversation's sale qualified from the bot (PL-3, §2.5) |
 | `catalog.read` | product catalogue reads (name, price, availability) |
+
+`pipeline.write` is **not** granted to any existing token (it is absent from the legacy set the
+backfill applies); an operator turns it on per token with the **"Calificar oportunidades"**
+checkbox in **Settings → Connections**.
 
 A token grants **only** what it lists. An unknown/removed capability string is treated as
 **absent** — never a wildcard. Each route declares the ONE capability it requires; the
@@ -686,6 +691,95 @@ GET /api/catalog/v1/products   (tenant-A token, tenant-B workflow)     → 404 n
 ```
 A token scoped to client A can never list client B's products: tenant + client are derived
 from the token + workflow ref, never sent by the caller.
+
+### 2.5 Pipeline (sales) — capability `pipeline.write`
+
+**The bot qualifies.** One endpoint lets the n8n agent mark the CURRENT conversation's sale
+(the "opportunity") as **qualified**, with evidence, through the same PL-1 rules engine the
+Setter's pipeline board uses. The Setter can still correct it in the UI afterwards. Generic:
+nothing here names a channel, a vertical or a product.
+
+**Business definition (decided by the operator — guidance for the workflow author).** An
+opportunity is **qualified** when the customer has said **WHAT** service they want **and WHEN**
+— a specific day or a near range: `"hoy"`, `"mañana"`, `"el sábado"`, `"esta semana"`. Vague
+timing (`"algún día"`, `"después miro"`) does **not** qualify. The **bot decides** when this is
+true; the endpoint records it. Send the two pieces of evidence as `service` and `timeframe`.
+
+#### `POST /api/crm/v1/opportunities/qualify` — `pipeline.write`
+
+Identity is id-free, exactly like every other machine write: the token + `X-Workflow-Ref` fix
+the tenant + client; `conversation_ref` (the same value the handoff/messages push uses — the
+customer's `wa_id`, or their `user_id` when there is no phone) resolves the conversation and its
+contact. The caller **never** sends a tenant, client, contact or opportunity id.
+
+Body:
+
+| Field | Required | Rules |
+|---|---|---|
+| `conversation_ref` | yes | the conversation's ref; sentinel-guarded (a placeholder like `"undefined"` → 422) |
+| `service` | yes | what the customer wants; ≤ 120 chars; sentinel-guarded |
+| `timeframe` | yes | when: a day or near range; ≤ 120 chars; sentinel-guarded |
+| `message_ref` | no | the inbound message's external id that carried the evidence. Stored **only** when it resolves to a message of THIS conversation; otherwise silently ignored |
+| `identities` | no | extra `[{kind,value,label?}]` to attach to the contact (same shape as the other writes) |
+
+What it does (all through the engine, actor = `bot`), keyed on the contact's one open sale:
+- **open sale at `lead`** → qualify it (`lead` → `qualified`), one stage event.
+- **open sale already `qualified`/`booked`** → no change.
+- **the latest sale is won (attended)** → no change (a completed sale is terminal).
+- **no open sale** → open a NEW sale directly at `qualified` with the evidence, following PL-1's
+  opening/origin rules (origin = the contact's latest ad touch inside the brief window, if any).
+- **the latest sale was lost inside the reopen window** → reopen it (an ordinary inbound usually
+  has already) and, if it came back at `lead`, qualify — both recorded. Lost **outside** the
+  window → a new sale.
+
+It is **naturally idempotent**: a repeat writes **no** event and never overwrites the earlier
+evidence. Response is minimal — the state the bot can read back plus whether this call moved it,
+with **no internal ids**:
+
+```json
+{ "stage": "qualified", "status": "open", "changed": true }
+```
+
+It is **fail-safe**: it only ever touches opportunities, so nothing here can affect a message
+write or a booking; any failure returns the standard error (`503 pipeline_unavailable`) and the
+conversation is unaffected.
+
+Executed live (`X-Workflow-Ref: <crm wf>`, token with `pipeline.write`):
+
+```
+POST /api/crm/v1/opportunities/qualify
+{ "conversation_ref": "573001112233", "service": "Corte + barba", "timeframe": "mañana", "message_ref": "wamid.HBgLNTES" }
+→ 200
+{ "stage": "qualified", "status": "open", "changed": true }
+```
+```
+# the same call again — idempotent, no second event, evidence untouched
+POST /api/crm/v1/opportunities/qualify
+{ "conversation_ref": "573001112233", "service": "Corte + barba", "timeframe": "mañana" }
+→ 200
+{ "stage": "qualified", "status": "open", "changed": false }
+```
+```
+# a conversation with no open sale → a new one is created directly at qualified
+POST /api/crm/v1/opportunities/qualify
+{ "conversation_ref": "573009998877", "service": "Color", "timeframe": "el sábado" }
+→ 200
+{ "stage": "qualified", "status": "open", "changed": true }
+```
+```
+# a token WITHOUT pipeline.write → the same 401 as a bad token (reconnaissance-resistant, §1.3)
+POST /api/crm/v1/opportunities/qualify   (token with crm.write only)
+→ 401
+{ "error": { "code": "unauthorized", "message": "Invalid or missing credentials." } }
+```
+
+Other refusals follow §1.5 exactly: a garbage `conversation_ref` / `service` / `timeframe` →
+`422` (`invalid_conversation_ref` / `invalid_body`); a missing `X-Workflow-Ref` → `400`
+`workflow_ref_required`; a foreign/unknown workflow ref → `404 not_found`; the CRM module off
+for the client → `403 module_disabled`.
+
+**The exact fields the n8n tool sends:** `conversation_ref` (required), `service` (required),
+`timeframe` (required), and optionally `message_ref`. Nothing else — no ids, no tenant, no client.
 
 ---
 

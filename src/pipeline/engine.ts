@@ -371,23 +371,116 @@ export interface QualifyInput {
   messageId?: string | null;
   implicit?: boolean;
 }
+/** The lead → qualified write + its one event, under an already-held row lock. Caller guarantees
+ *  `opp` is an OPEN lead. Single-sourced so the person (PL-2) and bot (PL-3) paths agree exactly. */
+async function applyQualify(client: PoolClient, opp: OpportunityRow, input: QualifyInput, actor: PipelineActor): Promise<OpportunityRow> {
+  const u = await client.query<OpportunityRow>(
+    `UPDATE opportunities
+        SET stage = 'qualified', qualified_at = now(), qualified_by = $2,
+            qualification_service = $3, qualification_timeframe = $4, qualification_message_id = $5,
+            qualified_implicitly = $6, updated_at = now()
+      WHERE id = $1
+      RETURNING ${SELECT_LOCK.replace(/^SELECT /, '')}`,
+    [opp.id, actorText(actor), input.service ?? null, input.timeframe ?? null, input.messageId ?? null, input.implicit ?? false],
+  );
+  await writeEvent(client, { tenantId: opp.tenant_id, clientId: opp.client_id, opportunityId: opp.id, fromStage: 'lead', toStage: 'qualified', fromStatus: 'open', toStatus: 'open', actor, reason: 'qualified' });
+  return u.rows[0]!;
+}
+
+/** Open a NEW sale DIRECTLY at `qualified` with evidence (PL-3 bot: the customer said what + when,
+ *  no prior open sale). One opening event straight to `qualified`. ON CONFLICT with the one-open-
+ *  per-contact index → null (a concurrent open raced in). */
+async function openAtQualified(client: PoolClient, input: { tenantId: string; clientId: string; contactId: string; conversationId: string | null; originTouchId: string | null; actor: PipelineActor; evidence: QualifyInput }): Promise<OpportunityRow | null> {
+  const r = await client.query<OpportunityRow>(
+    `INSERT INTO opportunities
+       (tenant_id, client_id, contact_id, conversation_id, status, stage,
+        lead_at, qualified_at, origin_touch_id, qualified_by,
+        qualification_service, qualification_timeframe, qualification_message_id, qualified_implicitly)
+     VALUES ($1,$2,$3,$4,'open','qualified', now(), now(), $5, $6, $7, $8, $9, false)
+     ON CONFLICT (tenant_id, client_id, contact_id) WHERE status = 'open' DO NOTHING
+     RETURNING ${SELECT_LOCK.replace(/^SELECT /, '')}`,
+    [input.tenantId, input.clientId, input.contactId, input.conversationId, input.originTouchId,
+      actorText(input.actor), input.evidence.service ?? null, input.evidence.timeframe ?? null, input.evidence.messageId ?? null],
+  );
+  const created = r.rows[0];
+  if (!created) return null;
+  await writeEvent(client, {
+    tenantId: input.tenantId, clientId: input.clientId, opportunityId: created.id,
+    fromStage: null, toStage: 'qualified', fromStatus: null, toStatus: 'open',
+    actor: input.actor, reason: 'bot_qualify_new',
+  });
+  return created;
+}
+
 /** Qualify an OPEN lead (lead → qualified) with evidence + actor. No-op if not an open lead. */
 export async function qualifyOpportunity(tenantId: string, clientId: string, opportunityId: string, input: QualifyInput, actor: PipelineActor): Promise<OpportunityRow | null> {
   return withTransaction(async (client) => {
     const r = await client.query<OpportunityRow>(`${SELECT_LOCK} FROM opportunities WHERE id = $1 AND tenant_id = $2 AND client_id = $3 FOR UPDATE`, [opportunityId, tenantId, clientId]);
     const opp = r.rows[0];
     if (!opp || opp.status !== 'open' || opp.stage !== 'lead') return opp ?? null;
-    const u = await client.query<OpportunityRow>(
-      `UPDATE opportunities
-          SET stage = 'qualified', qualified_at = now(), qualified_by = $2,
-              qualification_service = $3, qualification_timeframe = $4, qualification_message_id = $5,
-              qualified_implicitly = $6, updated_at = now()
-        WHERE id = $1
-        RETURNING ${SELECT_LOCK.replace(/^SELECT /, '')}`,
-      [opportunityId, actorText(actor), input.service ?? null, input.timeframe ?? null, input.messageId ?? null, input.implicit ?? false],
-    );
-    await writeEvent(client, { tenantId, clientId, opportunityId, fromStage: 'lead', toStage: 'qualified', fromStatus: 'open', toStatus: 'open', actor, reason: 'qualified' });
-    return u.rows[0]!;
+    return applyQualify(client, opp, input, actor);
+  });
+}
+
+export interface BotQualifyResult {
+  /** The sale after the decision (the one the bot qualified, reopened, or created). */
+  opportunity: OpportunityRow;
+  /** True when this call actually moved the sale (wrote an event); false on an idempotent repeat. */
+  changed: boolean;
+}
+
+/**
+ * PL-3 — the BOT qualifies the CURRENT conversation's sale (the customer said WHAT service + WHEN),
+ * as ONE transactional decision that follows the SAME opening / reopen / origin rules as an inbound
+ * message. The bot decides WHEN this is true; this records it. actor = { kind: 'bot' }. It keys on
+ * the contact (the one-open-per-contact invariant), never on an opportunity id the caller supplies:
+ *   • open lead                          → qualify it (one event)                     → changed
+ *   • open qualified / booked            → no change (idempotent; evidence untouched) → not changed
+ *   • latest sale WON (attended/closed)  → no change — a completed sale is terminal    → not changed
+ *   • no open sale, latest LOST within the reopen window → reopen it (keep origin) and,
+ *     if it came back at lead, qualify — both recorded                                 → changed
+ *   • otherwise (never had a sale, or the latest was lost OUTSIDE the window) → open a NEW
+ *     sale DIRECTLY at qualified with the evidence (origin = the contact's latest ad touch
+ *     in the brief window, if any)                                                     → changed
+ */
+export async function qualifyFromBot(
+  tenantId: string,
+  clientId: string,
+  contactId: string,
+  conversationId: string | null,
+  input: QualifyInput,
+  actor: PipelineActor,
+): Promise<BotQualifyResult> {
+  return withTransaction(async (client) => {
+    const evidence: QualifyInput = { service: input.service ?? null, timeframe: input.timeframe ?? null, messageId: input.messageId ?? null, implicit: false };
+
+    const open = await lockOpenForContact(client, tenantId, clientId, contactId);
+    if (open) {
+      if (open.stage === 'lead') return { opportunity: await applyQualify(client, open, evidence, actor), changed: true };
+      return { opportunity: open, changed: false }; // already qualified/booked/attended → idempotent
+    }
+
+    const latest = await latestForContact(client, tenantId, clientId, contactId);
+    // A completed (won/attended) sale is terminal — never spin a NEW sale off a qualify call.
+    if (latest && latest.status === 'won') return { opportunity: latest, changed: false };
+    // A sale lost INSIDE the reopen window comes back (keeping its origin); qualify it if it
+    // returned at lead. (An ordinary inbound usually reopens it already; this covers the rest.)
+    if (latest && latest.status === 'lost' && lostWithinWindow(latest, await reopenWindowDays(client, tenantId, clientId))) {
+      const reopened = await reopen(client, latest, conversationId, actor, 'bot_qualify_reopen');
+      if (reopened.stage === 'lead') return { opportunity: await applyQualify(client, reopened, evidence, actor), changed: true };
+      return { opportunity: reopened, changed: true }; // reopened already at qualified+ (keeps prior evidence)
+    }
+
+    // Otherwise (never had a sale, or the latest was lost OUTSIDE the window) → open a NEW sale
+    // directly at qualified (origin = the contact's latest ad touch in the brief window, if any).
+    const origin = await latestAdTouchInWindow(client, tenantId, clientId, contactId);
+    const created = await openAtQualified(client, { tenantId, clientId, contactId, conversationId, originTouchId: origin, actor, evidence });
+    if (created) return { opportunity: created, changed: true };
+
+    // Lost the one-open-per-contact insert race → an open sale appeared; qualify it if it's a lead.
+    const raced = await lockOpenForContact(client, tenantId, clientId, contactId);
+    if (raced) return raced.stage === 'lead' ? { opportunity: await applyQualify(client, raced, evidence, actor), changed: true } : { opportunity: raced, changed: false };
+    throw new Error('qualifyFromBot: lost the open-insert race but found no open sale'); // unreachable
   });
 }
 

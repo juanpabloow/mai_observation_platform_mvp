@@ -1,3 +1,5 @@
+// La puerta de staging se evalúa ANTES que la capa de datos (ver stagingPreflight.ts).
+import './stagingPreflight.js';
 import { closePool, query, withTransaction } from '../db/client.js';
 import type { Queryable } from '../db/repositories/meetings/types.js';
 import {

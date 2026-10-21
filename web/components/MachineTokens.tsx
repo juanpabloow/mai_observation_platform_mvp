@@ -29,6 +29,7 @@ const CAPABILITIES: { key: string; label: string; hint: string }[] = [
   { key: "scheduling.write", label: "Book and change appointments", hint: "Create, cancel, reschedule, confirm, complete" },
   { key: "crm.read", label: "Read contacts", hint: "Look up and read contact records" },
   { key: "crm.write", label: "Create and update contacts", hint: "Upsert, notes, tags, fields, consent" },
+  { key: "pipeline.write", label: "Calificar oportunidades", hint: "Let the bot qualify a conversation's sale (lead → qualified) with evidence" },
   { key: "catalog.read", label: "Read the product catalog", hint: "List products, prices and availability" },
 ];
 const DEFAULT_CAPS = ["handoff", "scheduling.read", "scheduling.write"];
