@@ -593,14 +593,16 @@ test('contacts: the row is fully clickable via ONE real link (no duplicate tab s
   assert.ok(src.includes('hover:underline focus-visible:underline'), '…but underlines on hover AND focus');
 });
 
-test('contacts: a number without a name shows the phone, in mono so it reads as an id', () => {
+test('contacts: a number without a name shows the masked phone, in mono so it reads as an id', () => {
   const src = read(CONTACTS_TABLE);
-  assert.ok(src.includes('c.name?.trim() || c.channel_user_id'), 'falls back to the channel identifier');
-  // The "no name" chip is gone: the design's name cell is two lines, and the identifier
+  // The name falls back through the SHARED helper (real name → masked phone → "Sin nombre"), the
+  // same one the pipeline board + queue use, so a junk name like "." never shows (PL-2b §3).
+  assert.ok(src.includes('displayContactName('), 'uses the shared display-name helper');
+  // The "no name" chip is gone: the design's name cell is two lines, and the fallback
   // rendering in MONO where every other row shows a proper name in sans already says
   // "this is an id, not a person's name" — without spending a chip on it. The mono
   // fallback is the assertion that replaces it.
-  assert.ok(src.includes('named ? "" : "u-mono"'), 'an unnamed contact renders its id in mono');
+  assert.ok(src.includes('named ? "" : "u-mono"'), 'an unnamed contact renders its fallback in mono');
 });
 
 test('contacts: a late task is a CHIP on the name — it never paints the row', () => {

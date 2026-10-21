@@ -112,6 +112,19 @@ export interface OriginColumnSource {
 }
 
 /**
+ * Just the AD NAME (fallback headline) for ad origins — no campaign. The board card's one-line
+ * origin uses this ("Anuncio · <ad name>"); the campaign moves to the tooltip/detail. Returns
+ * "Anuncio de prueba" for a test ad, and null for every non-ad origin.
+ */
+export function originColumnAdName(s: OriginColumnSource): string | null {
+  if (s.originKind === "meta_ad" || s.originKind === "meta_post") {
+    if (s.adIsTest) return "Anuncio de prueba";
+    return (s.adName && s.adName.trim()) || (s.adHeadline && s.adHeadline.trim()) || null;
+  }
+  return null;
+}
+
+/**
  * The quieter second line under the chip. Ad origins show the ad name (fallback headline) · campaign
  * — or "Anuncio de prueba" when the driving ad is a test ad. Organic/booked/manual get a short
  * clarifier; booking_page and unknown get none.

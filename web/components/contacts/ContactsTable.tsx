@@ -9,6 +9,7 @@ import { STAGE_LABEL, STATUS_LABEL } from "@/lib/pipelineBoard";
 import type { ContactColumnKey } from "@/lib/contactColumns";
 import { formatStampFull, formatStampShort, relativeAgeShort } from "@/lib/format";
 import { CORE_TEMPLATE, TABLET_TEMPLATE, mobileRowLines, withOptionalTracks } from "@/lib/contactListLayout";
+import { displayContactName, isMeaningfulName } from "@/lib/contactName";
 
 /**
  * THE contacts table, in the redesign's shape (docs/ui-redesign-crm-inbox.md §2.3).
@@ -140,7 +141,7 @@ export function ContactsTable({
             key={c.id}
             className={`relative flex min-h-[72px] items-center gap-3 border-b border-line-soft py-2.5 pl-4 pr-1 last:border-b-0 ${selected ? "bg-chip" : ""}`}
           >
-            <ContactAvatar name={c.name} fallback={c.channel_user_id} size={38} />
+            <ContactAvatar name={lines.titleIsId ? null : c.name} fallback={c.channel_user_id} size={38} />
             <span className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="flex min-w-0 items-center gap-1.5">
                 <Link
@@ -213,7 +214,9 @@ export function ContactsTable({
       {contacts.map((c) => {
         const selected = c.id === selectedId;
         const overdue = c.overdue_task_count > 0;
-        const named = Boolean(c.name?.trim());
+        const named = isMeaningfulName(c.name);
+        // The shared display name (real name → masked phone → "Sin nombre"), same as the board.
+        const display = displayContactName({ name: c.name, phoneE164: c.phone_e164, channelUserId: c.channel_user_id });
         return (
           <div
             role="row"
@@ -233,7 +236,7 @@ export function ContactsTable({
           >
             {/* ── Nombre: sphere + name over email ── */}
             <span role="cell" className="flex min-w-0 items-center gap-2.5">
-              <ContactAvatar name={c.name} fallback={c.channel_user_id} />
+              <ContactAvatar name={named ? c.name : null} fallback={c.channel_user_id} />
               <span className="flex min-w-0 flex-col gap-px">
                 <span className="flex min-w-0 items-center gap-1.5">
                   <Link
@@ -244,7 +247,7 @@ export function ContactsTable({
                       named ? "" : "u-mono"
                     }`}
                   >
-                    {c.name?.trim() || c.channel_user_id}
+                    {display}
                   </Link>
                   {/* A contact who opted out must be visible as such ANYWHERE someone
                       might decide to message them — so this rides the name, not an
@@ -351,7 +354,7 @@ export function ContactsTable({
             <span role="cell" className="text-right">
               <Link
                 href={`/clients/${clientId}/contacts/${c.id}`}
-                aria-label={`Abrir la ficha de ${c.name?.trim() || c.channel_user_id}`}
+                aria-label={`Abrir la ficha de ${display}`}
                 title="Abrir la ficha"
                 className="relative z-10 inline-flex size-6 items-center justify-center rounded-sm text-xs text-faint no-underline transition-colors hover:bg-subtle hover:text-foreground max-lg:size-[44px] max-lg:text-sm"
               >

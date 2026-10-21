@@ -10,6 +10,7 @@
  *                       ~720px a 768px screen leaves without scrolling sideways;
  *   - desktop (lg+)     the design's seven columns, unchanged.
  */
+import { displayContactName, isMeaningfulName } from "./contactName";
 
 /** The seven columns the design specifies, in order (desktop, lg+). */
 export const CORE_TEMPLATE =
@@ -53,8 +54,10 @@ export interface MobileRowContact {
  * Everything else (owner, visits, columns) lives in the record.
  */
 export function mobileRowLines(c: MobileRowContact): { title: string; titleIsId: boolean; identity: string; identityKind: "phone" | "email" | "none" } {
-  const named = Boolean(c.name?.trim());
-  const title = named ? c.name!.trim() : c.channel_user_id;
+  // The SAME display name the pipeline board + queue use (shared helper): a real stored name, else
+  // the masked phone, else "Sin nombre" — never the junk name "." and never the raw channel id.
+  const named = isMeaningfulName(c.name);
+  const title = displayContactName({ name: c.name, phoneE164: c.phone_e164, channelUserId: c.channel_user_id });
   if (c.phone_e164) return { title, titleIsId: !named, identity: c.phone_e164, identityKind: "phone" };
   if (c.email) return { title, titleIsId: !named, identity: c.email, identityKind: "email" };
   return { title, titleIsId: !named, identity: "Ver datos en la ficha", identityKind: "none" };

@@ -5,9 +5,21 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PageShell } from "@/components/ui/PageShell";
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
+import { Menu, MenuButton, MenuLink, MenuSeparator } from "@/components/scheduling/ui/Menu";
 import { formatStampFull, relativeAgeShort } from "@/lib/format";
 import { ORIGIN_GROUPS } from "@/lib/originDisplay";
-import { BOARD_STAGES, LOST_REASON_LABEL, LOST_REASONS, STAGE_LABEL, groupByStage, type BoardCard } from "@/lib/pipelineBoard";
+import {
+  BOARD_STAGES,
+  LOST_REASON_LABEL,
+  LOST_REASONS,
+  STAGE_LABEL,
+  groupByStage,
+  originLineOf,
+  originTitleOf,
+  sortByActivityDesc,
+  spokeLastDisplay,
+  type BoardCard,
+} from "@/lib/pipelineBoard";
 import {
   markOpportunityLostAction,
   qualifyOpportunityAction,
@@ -36,6 +48,8 @@ const BTN =
   "inline-flex h-[36px] items-center justify-center rounded-lg bg-foreground px-3 text-xs font-medium text-background transition hover:opacity-90 disabled:opacity-50";
 const GHOST =
   "inline-flex h-[32px] items-center justify-center rounded-lg border border-line px-2.5 text-xs text-muted transition hover:bg-subtle hover:text-foreground disabled:opacity-50";
+const PRIMARY_SM =
+  "u-focus inline-flex h-[32px] items-center justify-center rounded-lg bg-foreground px-3 text-xs font-medium text-background transition hover:opacity-90 disabled:opacity-50";
 const INPUT =
   "h-[36px] rounded-lg border border-line-strong bg-surface px-2.5 text-xs text-foreground outline-none transition focus:border-foreground";
 
@@ -90,7 +104,7 @@ export function PipelinePanel({
     router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
 
-  const grouped = groupByStage(cards);
+  const grouped = groupByStage(sortByActivityDesc(cards));
   const now = new Date();
   const filtered = Boolean(filters.origin || filters.campaign || filters.ad || filters.from || filters.to || filters.status);
 
@@ -149,29 +163,47 @@ export function PipelinePanel({
             </div>
           </PageShell>
 
-          <PageShell className="overflow-auto" ariaLabel="Tablero de pipeline">
-            <div className="flex min-h-full w-full gap-3 p-3 sm:p-4" style={{ minWidth: "max-content" }}>
+          {/* The board FILLS the height below the filters and never grows the page: the row is
+              flex-1 min-h-0 and scrolls horizontally; each column stretches to full height and
+              scrolls its OWN cards (overflow-y), with its header pinned at the top. Columns keep a
+              comfortable fixed width and scroll-snap when they don't fit (narrow / phone). */}
+          <PageShell ariaLabel="Tablero de pipeline" className="overflow-hidden">
+            <div className="flex min-h-0 flex-1 snap-x snap-mandatory gap-3 overflow-x-auto p-3 sm:p-4">
               {BOARD_STAGES.map((col) => {
+                if (col.disabled) {
+                  // Pagó: a slim, always-empty column so the four live columns get the width. The
+                  // note lives in the tooltip (there are no cards to label).
+                  return (
+                    <section
+                      key={col.key}
+                      aria-label={`${col.label} — llega con la fase de pagos`}
+                      title="Llega con la fase de pagos"
+                      className="flex w-12 shrink-0 snap-start flex-col items-center justify-start gap-2 rounded-xl border border-dashed border-line bg-subtle/30 py-3 text-faint"
+                    >
+                      <span className="rotate-180 text-xs font-semibold tracking-wide [writing-mode:vertical-rl]">{col.label}</span>
+                    </section>
+                  );
+                }
                 const colCards = grouped[col.key];
                 return (
-                  <section key={col.key} aria-label={col.label} className={`flex w-[16rem] shrink-0 flex-col gap-2 rounded-xl border border-line bg-subtle/40 p-2 ${col.disabled ? "opacity-60" : ""}`}>
-                    <header className="flex items-center justify-between px-1 py-0.5">
+                  <section key={col.key} aria-label={col.label} className="flex min-h-0 w-[17rem] shrink-0 snap-start flex-col rounded-xl border border-line bg-subtle/40">
+                    <header className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-2.5 py-2">
                       <h2 className="text-xs font-semibold text-foreground">{col.label}</h2>
-                      {col.disabled ? null : <span className="u-mono rounded bg-chip px-1.5 py-0.5 text-[0.625rem] text-faint">{colCards.length}</span>}
+                      <span className="u-mono rounded bg-chip px-1.5 py-0.5 text-[0.625rem] text-faint">{colCards.length}</span>
                     </header>
-                    {col.disabled ? (
-                      <p className="px-1 py-6 text-center text-[0.6875rem] text-faint">Llega con la fase de pagos.</p>
-                    ) : colCards.length === 0 ? (
-                      <p className="px-1 py-6 text-center text-[0.6875rem] text-faint">Sin oportunidades.</p>
-                    ) : (
-                      colCards.map((c) => (
-                        <OppCard key={c.id} clientId={clientId} card={c} now={now} pending={pending}
-                          onQualify={() => setModal({ kind: "qualify", card: c })}
-                          onUnqualify={() => run(() => unqualifyOpportunityAction(clientId, c.id))}
-                          onLose={() => setModal({ kind: "lost", card: c })}
-                        />
-                      ))
-                    )}
+                    <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
+                      {colCards.length === 0 ? (
+                        <p className="px-1 py-6 text-center text-[0.6875rem] text-faint">Sin oportunidades.</p>
+                      ) : (
+                        colCards.map((c) => (
+                          <OppCard key={c.id} clientId={clientId} card={c} now={now} pending={pending}
+                            onQualify={() => setModal({ kind: "qualify", card: c })}
+                            onUnqualify={() => run(() => unqualifyOpportunityAction(clientId, c.id))}
+                            onLose={() => setModal({ kind: "lost", card: c })}
+                          />
+                        ))
+                      )}
+                    </div>
                   </section>
                 );
               })}
@@ -251,6 +283,13 @@ function OriginChip({ card }: { card: BoardCard }) {
   );
 }
 
+/**
+ * A COMPACT board card: three short, non-wrapping lines — name + time in stage, a one-line origin
+ * (campaign in the tooltip), and who spoke last + when (the customer's turn is emphasised: it needs
+ * a reply). One primary action per stage (Lead → Calificar); the rest live in a "⋯" menu (keyboard
+ * and touch, no hover-only). The whole card body is a stretched link to the contact record; the
+ * action controls sit above it. No "Ganada" chip — each column already implies the status.
+ */
 function OppCard({ clientId, card, now, pending, onQualify, onUnqualify, onLose }: {
   clientId: string;
   card: BoardCard;
@@ -260,30 +299,60 @@ function OppCard({ clientId, card, now, pending, onQualify, onUnqualify, onLose 
   onUnqualify: () => void;
   onLose: () => void;
 }) {
+  const [menuOpen, setMenuOpen] = useState(false);
+  const spoke = spokeLastDisplay(card.spokeLast);
+  const isOpen = card.status === "open";
+  const contactHref = `/clients/${clientId}/contacts/${card.contactId}`;
   return (
-    <article className="flex flex-col gap-1.5 rounded-lg border border-line bg-surface p-2.5">
-      <Link href={`/clients/${clientId}/contacts/${card.contactId}`} className="truncate text-[0.8125rem] font-medium text-foreground hover:underline">
-        {card.name}
-      </Link>
-      <OriginChip card={card} />
-      <div className="flex flex-col gap-0.5 text-[0.625rem] text-faint">
-        {card.stageSince ? <span title={formatStampFull(new Date(card.stageSince))}>En etapa {relativeAgeShort(card.stageSince, now)}</span> : null}
-        {card.lastMessageAt ? (
-          <span title={formatStampFull(new Date(card.lastMessageAt))}>
-            {card.spokeLast === "customer" ? "Cliente escribió " : card.spokeLast === "business" ? "Negocio escribió " : "Último mensaje "}
-            {relativeAgeShort(card.lastMessageAt, now)}
+    <article className="relative flex flex-col gap-1 rounded-lg border border-line bg-surface p-2.5 transition-colors hover:border-line-strong focus-within:border-line-strong">
+      {/* Line 1 — name (stretched link → the contact record) + time in stage, right-aligned. */}
+      <div className="flex items-start gap-2">
+        <Link
+          href={contactHref}
+          className="u-focus min-w-0 flex-1 truncate text-[0.8125rem] font-medium text-foreground no-underline after:absolute after:inset-0 after:rounded-lg after:content-[''] hover:underline"
+        >
+          {card.name}
+        </Link>
+        {card.stageSince ? (
+          <span className="shrink-0 text-[0.625rem] text-faint" title={`En esta etapa desde ${formatStampFull(new Date(card.stageSince))}`}>
+            {relativeAgeShort(card.stageSince, now)}
           </span>
         ) : null}
       </div>
-      {card.status === "won" ? (
-        <span className="w-fit rounded-full bg-success/10 px-2 py-0.5 text-[0.625rem] font-medium text-success">Ganada</span>
-      ) : (
-        <div className="flex flex-wrap gap-1.5 pt-0.5">
-          {card.stage === "lead" ? <button type="button" className={GHOST} disabled={pending} onClick={onQualify}>Calificar</button> : null}
-          {card.stage === "qualified" ? <button type="button" className={GHOST} disabled={pending} onClick={onUnqualify}>Quitar calif.</button> : null}
-          <button type="button" className={GHOST} disabled={pending} onClick={onLose}>Perder</button>
-        </div>
-      )}
+
+      {/* Line 2 — origin on one line, truncated (the campaign is in the tooltip + the detail). */}
+      <p className="truncate text-[0.6875rem] text-muted" title={originTitleOf(card)}>
+        {originLineOf(card)}
+      </p>
+
+      {/* Line 3 — who spoke last + when. Customer last → calm emphasis (warn), this one needs a reply. */}
+      {card.lastMessageAt ? (
+        <p className={`truncate text-[0.625rem] ${spoke?.emphasize ? "font-medium text-warn" : "text-faint"}`}>
+          {spoke?.label ?? "Mensaje"} ·{" "}
+          <span title={formatStampFull(new Date(card.lastMessageAt))}>{relativeAgeShort(card.lastMessageAt, now)}</span>
+        </p>
+      ) : null}
+
+      {/* Actions — one primary per stage + a menu for the rest. `relative z-10` keeps them above the
+          stretched link so they stay independently clickable. */}
+      <div className="relative z-10 mt-0.5 flex items-center justify-between gap-2">
+        {card.stage === "lead" ? (
+          <button type="button" className={PRIMARY_SM} disabled={pending} onClick={onQualify}>Calificar</button>
+        ) : (
+          <span aria-hidden />
+        )}
+        <Menu label="Más acciones" open={menuOpen} onToggle={() => setMenuOpen((v) => !v)} onClose={() => setMenuOpen(false)}>
+          {card.stage === "qualified" ? (
+            <MenuButton onClick={() => { setMenuOpen(false); onUnqualify(); }} disabled={pending}>Quitar calificación</MenuButton>
+          ) : null}
+          {isOpen ? (
+            <MenuButton danger onClick={() => { setMenuOpen(false); onLose(); }} disabled={pending}>Marcar perdida</MenuButton>
+          ) : null}
+          {card.stage === "qualified" || isOpen ? <MenuSeparator /> : null}
+          {card.conversationId ? <MenuLink href={`/clients/${clientId}/inbox?c=${card.conversationId}`}>Abrir conversación</MenuLink> : null}
+          <MenuLink href={contactHref}>Ver ficha</MenuLink>
+        </Menu>
+      </div>
     </article>
   );
 }

@@ -170,6 +170,7 @@ export interface BoardOpportunityRow {
   closed_at: Date | null;
   contact_name: string | null;
   contact_channel_user_id: string | null;
+  contact_phone_e164: string | null;
   origin_kind: OriginKind | null;
   ad_name: string | null;
   ad_headline: string | null;
@@ -234,7 +235,7 @@ export async function listBoardOpportunities(tenantId: string, clientId: string,
     `SELECT o.id, o.contact_id, o.conversation_id, o.status, o.stage, o.created_at, o.lost_reason, o.lost_note, o.closed_at,
             CASE o.stage WHEN 'lead' THEN o.lead_at WHEN 'qualified' THEN o.qualified_at WHEN 'booked' THEN o.booked_at
                          WHEN 'attended' THEN o.attended_at WHEN 'paid' THEN o.paid_at END AS stage_since,
-            ct.name AS contact_name, ct.channel_user_id AS contact_channel_user_id, ct.origin_kind,
+            ct.name AS contact_name, ct.channel_user_id AS contact_channel_user_id, ct.phone_e164 AS contact_phone_e164, ct.origin_kind,
             ad.name AS ad_name, ad.headline AS ad_headline, ad.is_test AS ad_is_test, camp.name AS campaign_name,
             lm.sender AS last_sender, lm.created_at AS last_message_at
        FROM opportunities o
@@ -265,12 +266,13 @@ export interface AwaitingReplyRow {
   stage: OpportunityStage;
   contact_name: string | null;
   contact_channel_user_id: string | null;
+  contact_phone_e164: string | null;
   last_message_at: Date;
 }
 export async function listAwaitingBusinessReply(tenantId: string, clientId: string, limit = 200): Promise<AwaitingReplyRow[]> {
   const r = await query<AwaitingReplyRow>(
     `SELECT o.id, o.contact_id, o.conversation_id, cv.conversation_ref, o.stage,
-            ct.name AS contact_name, ct.channel_user_id AS contact_channel_user_id,
+            ct.name AS contact_name, ct.channel_user_id AS contact_channel_user_id, ct.phone_e164 AS contact_phone_e164,
             lm.created_at AS last_message_at
        FROM opportunities o
        JOIN contacts ct ON ct.id = o.contact_id AND ct.tenant_id = o.tenant_id

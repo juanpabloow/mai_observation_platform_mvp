@@ -10,7 +10,8 @@ import {
 } from "@worker/db/repositories/pipeline.js";
 import { listAdsWithStats, listCampaignsWithStats } from "@worker/db/repositories/attribution.js";
 import { isOriginGroupKey, kindsForGroup } from "@/lib/originDisplay";
-import { contactLabel, toBoardCard } from "@/lib/pipelineBoard";
+import { displayContactName } from "@/lib/contactName";
+import { toBoardCard } from "@/lib/pipelineBoard";
 import { PipelinePanel } from "@/components/pipeline/PipelinePanel";
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -60,7 +61,7 @@ export default async function PipelinePage({
     id: q.id,
     contactId: q.contact_id,
     conversationId: q.conversation_id,
-    name: contactLabel(q.contact_name, q.contact_channel_user_id),
+    name: displayContactName({ name: q.contact_name, phoneE164: q.contact_phone_e164, channelUserId: q.contact_channel_user_id }),
     stage: q.stage,
     lastMessageAt: q.last_message_at.toISOString(),
   }));
