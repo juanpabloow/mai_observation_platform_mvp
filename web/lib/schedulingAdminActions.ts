@@ -83,7 +83,18 @@ import { countUpcomingAppointmentsForResource, listAppointments } from "@worker/
  * (deactivate) preserves appointment history.
  */
 
-export type AdminResult = { ok: true; id?: string } | { ok: false; error: string };
+/** `field` names the input a validation error belongs to (so the form can mark it
+ *  aria-invalid and point it at the message); absent for errors of the whole request. */
+export type AdminResult =
+  | {
+      ok: true;
+      id?: string;
+      /** The public contact AS STORED (normalised: E.164 WhatsApp, canonical Maps link),
+       *  so the form shows what was saved instead of staying «dirty» with what was typed. */
+      contact?: { address?: string | null; publicWhatsapp?: string | null; publicMapsUrl?: string | null };
+    }
+  | { ok: false; error: string; field?: PublicContactField };
+export type PublicContactField = "address" | "publicWhatsapp" | "publicMapsUrl";
 
 /** Steps 1–4. Returns the validated tenantId, or a generic error (never revealing
  * which condition failed — matches the module gate's indistinguishable denials). */
@@ -182,7 +193,7 @@ export async function updateSiteAction(
   if (!auth.ok) return auth;
   if (!(await siteInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
   const contact = validatePublicContact(patch, patch.timezone ?? (await getSiteById(auth.tenantId, id))?.timezone ?? "America/Bogota");
-  if (!contact.ok) return { ok: false, error: contact.error };
+  if (!contact.ok) return { ok: false, error: contact.error, field: contact.field };
 
   // A bad scheduling_config value silently breaks availability, so validate it here.
   if (patch.schedulingConfig) {
@@ -201,7 +212,7 @@ export async function updateSiteAction(
   });
   if (!row) return { ok: false, error: "Site not found." };
   revalidateAdmin(clientId);
-  return { ok: true, id };
+  return { ok: true, id, contact: contact.value };
 }
 
 export async function deactivateSiteAction(clientId: string, id: string): Promise<AdminResult> {
@@ -351,7 +362,7 @@ export async function createStaffAction(input: {
   const auth = await requireSchedulingAdmin(input.clientId);
   if (!auth.ok) return auth;
   const name = input.name.trim();
-  if (!name) return { ok: false, error: "Name is required." };
+  if (!name) return { ok: false, error: "El nombre es obligatorio." };
   if (!(await siteInClient(auth.tenantId, input.clientId, input.siteId))) return { ok: false, error: FOREIGN };
   // Display name must be unique among ACTIVE staff of the site (case-insensitive) — the bot
   // reads it to customers, so two active "Andrés" make the offer ambiguous.
@@ -364,7 +375,7 @@ export async function createStaffAction(input: {
     revalidateAdmin(input.clientId);
     return { ok: true, id: st.id };
   } catch (err) {
-    return { ok: false, error: errText(err, "Could not create staff.") };
+    return { ok: false, error: errText(err, "No se pudo crear el profesional.") };
   }
 }
 
@@ -404,25 +415,25 @@ export async function updateStaffAction(
   const publicPatch: { publicTitle?: string | null; publicBio?: string | null } = {};
   if (publicTitle !== undefined) {
     const r = checkPublicTitle(publicTitle);
-    if (!r.ok) return { ok: false, error: publicProfileMessage(r.error, "Public title", r.max, "en") };
+    if (!r.ok) return { ok: false, error: publicProfileMessage(r.error, "Título público", r.max, "es") };
     publicPatch.publicTitle = r.value;
   }
   if (publicBio !== undefined) {
     const r = checkPublicBio(publicBio);
-    if (!r.ok) return { ok: false, error: publicProfileMessage(r.error, "Public presentation", r.max, "en") };
+    if (!r.ok) return { ok: false, error: publicProfileMessage(r.error, "Presentación", r.max, "es") };
     publicPatch.publicBio = r.value;
   }
   let namePatch: { name?: string } = {};
   if (name !== undefined) {
     const trimmed = name.trim();
-    if (!trimmed) return { ok: false, error: "Name is required." };
+    if (!trimmed) return { ok: false, error: "El nombre es obligatorio." };
     namePatch = { name: trimmed };
   }
   if (employmentType !== undefined && employmentType !== null && !EMPLOYMENT_TYPES.includes(employmentType)) {
-    return { ok: false, error: "Unknown employment type." };
+    return { ok: false, error: "Tipo de contrato desconocido." };
   }
   if (weeklyHours !== undefined && weeklyHours !== null && !(Number.isInteger(weeklyHours) && weeklyHours >= 1 && weeklyHours <= 168)) {
-    return { ok: false, error: "Weekly hours must be between 1 and 168." };
+    return { ok: false, error: "Las horas semanales deben estar entre 1 y 168." };
   }
   // Uniqueness only binds ACTIVE staff: check the RESULTING name + active state (excluding
   // self), so a rename-into-a-namesake or a reactivation-into-a-namesake is refused, but a
@@ -440,7 +451,7 @@ export async function updateStaffAction(
     ...(employmentType !== undefined ? { employmentType: employmentType as EmploymentType | null } : {}),
     ...(weeklyHours !== undefined ? { weeklyHours } : {}),
   });
-  if (!row) return { ok: false, error: "Staff not found." };
+  if (!row) return { ok: false, error: "No encontramos al profesional." };
   revalidateAdmin(clientId);
   return { ok: true, id };
 }
@@ -458,14 +469,14 @@ export async function uploadStaffPhotoAction(formData: FormData): Promise<AdminR
   const file = formData.get("photo");
   const auth = await requireSchedulingAdmin(clientId);
   if (!auth.ok) return auth;
-  if (!isR2Configured) return { ok: false, error: "Photo upload is not configured." };
-  if (!(file instanceof File)) return { ok: false, error: "No image selected." };
+  if (!isR2Configured) return { ok: false, error: "La subida de fotos no está configurada." };
+  if (!(file instanceof File)) return { ok: false, error: "Elige una imagen." };
   const current = await getStaffById(auth.tenantId, staffId);
   if (!current || !(await siteInClient(auth.tenantId, clientId, current.site_id))) return { ok: false, error: FOREIGN };
   const up = await uploadStaffPhoto(auth.tenantId, clientId, staffId, file);
   if (!up.ok) return { ok: false, error: up.error };
   const row = await updateStaff(auth.tenantId, staffId, { publicPhotoUrl: up.url });
-  if (!row) return { ok: false, error: "Staff not found." };
+  if (!row) return { ok: false, error: "No encontramos al profesional." };
   if (current.public_photo_url && current.public_photo_url !== up.url) {
     try {
       await deleteLogo(current.public_photo_url);
@@ -499,7 +510,7 @@ export async function deactivateStaffAction(clientId: string, id: string): Promi
   if (!auth.ok) return auth;
   if (!(await staffInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
   const ok = await deactivateStaff(auth.tenantId, id);
-  if (!ok) return { ok: false, error: "Staff not found or already inactive." };
+  if (!ok) return { ok: false, error: "No encontramos al profesional o ya estaba inactivo." };
   revalidateAdmin(clientId);
   return { ok: true };
 }
@@ -510,7 +521,7 @@ export async function activateStaffAction(clientId: string, id: string): Promise
   if (!auth.ok) return auth;
   if (!(await staffInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
   const ok = await reactivateStaff(auth.tenantId, id);
-  if (!ok) return { ok: false, error: "Staff not found or already active." };
+  if (!ok) return { ok: false, error: "No encontramos al profesional o ya estaba activo." };
   revalidateAdmin(clientId);
   return { ok: true };
 }
@@ -537,10 +548,10 @@ export async function addStaffCertificationAction(input: {
   const auth = await requireSchedulingAdmin(input.clientId);
   if (!auth.ok) return auth;
   if (!(await staffInClient(auth.tenantId, input.clientId, input.staffId))) return { ok: false, error: FOREIGN };
-  if (!input.name.trim()) return { ok: false, error: "A certification needs a name." };
+  if (!input.name.trim()) return { ok: false, error: "La certificación necesita un nombre." };
   // The CHECK enforces this too; saying it here gives the operator a sentence.
   if (input.issuedOn && input.expiresOn && input.expiresOn < input.issuedOn) {
-    return { ok: false, error: "The expiry date can’t be before the issue date." };
+    return { ok: false, error: "La fecha de vencimiento no puede ser anterior a la de emisión." };
   }
   try {
     const row = await createStaffCertification({
@@ -554,7 +565,7 @@ export async function addStaffCertificationAction(input: {
     revalidateAdmin(input.clientId);
     return { ok: true, id: row.id };
   } catch (err) {
-    return { ok: false, error: errText(err, "Could not add the certification.") };
+    return { ok: false, error: errText(err, "No se pudo añadir la certificación.") };
   }
 }
 
@@ -567,7 +578,7 @@ export async function deleteStaffCertificationAction(
   if (!auth.ok) return auth;
   if (!(await staffInClient(auth.tenantId, clientId, staffId))) return { ok: false, error: FOREIGN };
   const ok = await deleteStaffCertification(auth.tenantId, staffId, id);
-  if (!ok) return { ok: false, error: "Certification not found." };
+  if (!ok) return { ok: false, error: "No encontramos la certificación." };
   revalidateAdmin(clientId);
   return { ok: true };
 }
@@ -725,11 +736,11 @@ function sanitizeSchedulingConfig(
 function validatePublicContact(
   patch: { address?: string; publicWhatsapp?: string; publicMapsUrl?: string },
   timezone: string,
-): { ok: true; value: { address?: string | null; publicWhatsapp?: string | null; publicMapsUrl?: string | null } } | { ok: false; error: string } {
+): { ok: true; value: { address?: string | null; publicWhatsapp?: string | null; publicMapsUrl?: string | null } } | { ok: false; error: string; field: PublicContactField } {
   const value: { address?: string | null; publicWhatsapp?: string | null; publicMapsUrl?: string | null } = {};
   if (patch.address !== undefined) {
     const a = patch.address.replace(/\s+/g, " ").trim();
-    if (a.length > 200) return { ok: false, error: "La dirección admite hasta 200 caracteres." };
+    if (a.length > 200) return { ok: false, error: "La dirección admite hasta 200 caracteres.", field: "address" };
     value.address = a || null;
   }
   if (patch.publicWhatsapp !== undefined) {
@@ -737,7 +748,7 @@ function validatePublicContact(
     if (!raw) value.publicWhatsapp = null;
     else {
       const e164 = normalizeE164(raw, { defaultRegion: dialingRegionForTimezone(timezone) });
-      if (!e164 || !E164_RE.test(e164)) return { ok: false, error: "Revisa el número de WhatsApp: escríbelo con el indicativo, por ejemplo +57 300 123 4567." };
+      if (!e164 || !E164_RE.test(e164)) return { ok: false, error: "Revisa el número de WhatsApp: escríbelo con el indicativo, por ejemplo +57 300 123 4567.", field: "publicWhatsapp" };
       value.publicWhatsapp = e164;
     }
   }
@@ -746,7 +757,7 @@ function validatePublicContact(
     if (!raw) value.publicMapsUrl = null;
     else {
       const safe = safeMapsUrl(raw);
-      if (!safe) return { ok: false, error: "El enlace de «Cómo llegar» debe ser de Google Maps (https://maps.app.goo.gl/… o https://www.google.com/maps/…)." };
+      if (!safe) return { ok: false, error: "El enlace de «Cómo llegar» debe ser de Google Maps (https://maps.app.goo.gl/… o https://www.google.com/maps/…).", field: "publicMapsUrl" };
       value.publicMapsUrl = safe;
     }
   }

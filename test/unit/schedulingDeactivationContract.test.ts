@@ -67,7 +67,7 @@ test('every deactivate has an inverse: site/service in AdminPanel, staff on the 
   assert.ok(/'takesBookings' \|\| k === 'active'|"takesBookings" \|\| k === "active"/.test(panel), 'carried by profilePatch');
   assert.ok(panel.includes('Object.assign(patch, profilePatch(profile, dirtyFields))'), 'saved through updateStaffAction');
   // Deactivation is forward-looking: the barber keeps their history and their lane.
-  assert.ok(panel.includes('keeps their history and lane'), 'the consequence is spelled out');
+  assert.ok(panel.includes('conserva su historial y su columna en la agenda, pero no recibe citas nuevas'), 'the consequence is spelled out');
   assert.ok(src.includes('countUpcomingAppointmentsAction'), 'deactivate is guarded by the upcoming-count');
 });
 

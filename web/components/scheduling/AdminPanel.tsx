@@ -6,8 +6,9 @@ import Link from "next/link";
 import { DAYS, DAY_LABELS, gridFromWeekly, HoursGrid, weeklyFromGrid, type HourGrid } from "./HoursGrid";
 import { BookingLinkCard } from "./BookingLinkCard";
 import { ServiceMenu } from "./services/ServiceMenu";
-import { BookingCategoriesPanel } from "./services/BookingCategoriesPanel";
-import { ServiceEditor } from "./services/ServiceEditor";
+import { BookingPageScreen } from "./settings/BookingPageScreen";
+import { SitesScreen } from "./settings/SitesScreen";
+import { RulesScreen } from "./settings/RulesScreen";
 import { PromotionsSection, type PromotionAdminRow } from "./promotions/PromotionsSection";
 import { ConfigMobile } from "./mobile/config/ConfigMobile";
 import {
@@ -16,7 +17,6 @@ import {
   activateStaffAction,
   countUpcomingAppointmentsAction,
   createExceptionAction,
-  createSiteAction,
   deactivateServiceAction,
   deactivateSiteAction,
   deactivateStaffAction,
@@ -177,7 +177,6 @@ export function SchedulingSettings(props: SchedulingSettingsProps) {
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const [creatingSite, setCreatingSite] = useState(false);
 
   const run: Run = (fn, onOk) => {
     setError(null);
@@ -214,6 +213,54 @@ export function SchedulingSettings(props: SchedulingSettingsProps) {
           exitHref={`/clients/${clientId}/scheduling/agenda`}
         />
       ) : null}
+      {/* Redesigned module pages draw their OWN continuous surface (components/ui/module):
+          header, toolbar, side menu and content in one card, no header card above it. */}
+      {page === "sites" || page === "rules" ? (
+        <div className={`${entry ? "hidden md:flex" : "flex"} min-h-0 w-full flex-1 flex-col`}>
+          {page === "sites" ? (
+            <SitesScreen clientId={clientId} sites={sites} services={services} staff={staff} exceptions={exceptions} siteServiceMap={siteServiceMap} />
+          ) : (
+            <RulesScreen clientId={clientId} sites={sites} />
+          )}
+        </div>
+      ) : page === "booking-page" ? (
+        <div className="flex min-h-0 w-full flex-1 flex-col">
+          <BookingPageScreen
+            clientId={clientId}
+            sites={sites}
+            services={services}
+            staff={staff}
+            siteServiceMap={siteServiceMap}
+            schedulingEnabled={schedulingEnabled}
+            bookingCategories={bookingCategories}
+            promotions={promotions}
+          />
+        </div>
+      ) : page === "promotions" ? (
+        <div className="flex min-h-0 w-full flex-1 flex-col">
+          <PromotionsSection
+            clientId={clientId}
+            promotions={promotions}
+            services={services.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
+            staff={staff.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name, site_id: x.site_id }))}
+            sites={sites.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
+          />
+        </div>
+      ) : page === "services" ? (
+        <div className={`${entry ? "hidden md:flex" : "flex"} min-h-0 w-full flex-1 flex-col`}>
+          <ServiceMenu
+            clientId={clientId}
+            sites={sites}
+            services={services}
+            staff={staff}
+            siteServiceMap={siteServiceMap}
+            bookingCategories={bookingCategories}
+            showBookingCategories={false}
+            onOpenBookingLink={() => router.push(schedulingHref(clientId, "booking-page"))}
+            agendaHref={`/clients/${clientId}/scheduling/agenda`}
+          />
+        </div>
+      ) : (
       <main className={`${entry ? "hidden md:flex" : "flex"} min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]`}>
         {/* The production header card of «Configuración de agenda», titled by this page's
             job — without its tab row: the sidebar is the only menu now. */}
@@ -236,34 +283,6 @@ export function SchedulingSettings(props: SchedulingSettingsProps) {
         {error ? <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{error}</p> : null}
         <PageShell className="overflow-y-auto" ariaLabel={meta.title}>
           <div className="flex min-h-full w-full flex-col gap-2.5 p-3 sm:p-4">
-            {page === "sites" ? (
-              <>
-                <SettingsOverview
-                  clientId={clientId}
-                  sites={sites}
-                  services={services}
-                  staff={staff}
-                  exceptions={exceptions}
-                  siteServiceMap={siteServiceMap}
-                  onNewSite={() => setCreatingSite(true)}
-                />
-                <SitesSection
-                  clientId={clientId}
-                  sites={sites}
-                  run={run}
-                  pending={pending}
-                  schedulingEnabled={schedulingEnabled}
-                  siteServiceMap={siteServiceMap}
-                  creating={creatingSite}
-                  setCreating={setCreatingSite}
-                />
-              </>
-            ) : null}
-            {page === "rules" ? (
-              <Section title="Reglas de reserva" description="Controlan cuándo y con qué frecuencia se ofrecen horarios en cada sede.">
-                <SiteWorkbench clientId={clientId} sites={sites} run={run} pending={pending} part="rules" schedulingEnabled={schedulingEnabled} siteServiceMap={siteServiceMap} />
-              </Section>
-            ) : null}
             {page === "hours" ? (
               <>
                 <Section
@@ -281,61 +300,15 @@ export function SchedulingSettings(props: SchedulingSettingsProps) {
                 <WhyNothingAvailable clientId={clientId} sites={sites} staff={staff} />
               </>
             ) : null}
-            {page === "services" ? (
-              <ServiceMenu
-                clientId={clientId}
-                sites={sites}
-                services={services}
-                staff={staff}
-                siteServiceMap={siteServiceMap}
-                bookingCategories={bookingCategories}
-                showBookingCategories={false}
-                onOpenBookingLink={() => router.push(schedulingHref(clientId, "booking-page"))}
-              />
-            ) : null}
-            {page === "promotions" ? (
-              <PromotionsSection
-                clientId={clientId}
-                promotions={promotions}
-                services={services.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
-                staff={staff.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name, site_id: x.site_id }))}
-                sites={sites.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
-              />
-            ) : null}
-            {page === "booking-page" ? (
-              <>
-                {/* One page, three SECTIONS (not tabs): navigation stops at the page. */}
-                <div id="enlace" className="scroll-mt-4">
-                  <Section
-                    title="Enlace e información pública"
-                    description="El enlace de cada sede y los datos de contacto que ve el cliente. El nombre, la dirección y el horario salen de Sedes y Horarios: no hay otra copia."
-                  >
-                    <SiteWorkbench clientId={clientId} sites={sites} run={run} pending={pending} part="public" schedulingEnabled={schedulingEnabled} siteServiceMap={siteServiceMap} />
-                  </Section>
-                </div>
-                <div id="categorias" className="mt-4 scroll-mt-4">
-                  <BookingCategoriesPanel clientId={clientId} categories={bookingCategories} />
-                </div>
-                <div id="presentacion" className="mt-4 scroll-mt-4">
-                  <BookingPresentation
-                    clientId={clientId}
-                    sites={sites}
-                    services={services}
-                    staff={staff}
-                    siteServiceMap={siteServiceMap}
-                    bookingCategories={bookingCategories}
-                  />
-                </div>
-              </>
-            ) : null}
           </div>
         </PageShell>
       </main>
+      )}
     </>
   );
 }
 
-function SettingsOverview({
+export function SettingsOverview({
   clientId,
   sites,
   services,
@@ -564,7 +537,7 @@ function fmtBlockDay(iso: string, timeZone: string): string {
  * One-off blocks are in the Exceptions section below. Turns "the bot says nothing is free"
  * into a five-second check.
  */
-function WhyNothingAvailable({ clientId, sites, staff }: { clientId: string; sites: Site[]; staff: Staff[] }) {
+export function WhyNothingAvailable({ clientId, sites, staff }: { clientId: string; sites: Site[]; staff: Staff[] }) {
   const active = sites.filter((s) => s.active);
   const [siteId, setSiteId] = useState(active[0]?.id ?? "");
   const [dow, setDow] = useState<string>("mon");
@@ -1139,68 +1112,6 @@ function Field({ label, hint, children }: { label: string; hint?: string; childr
 }
 
 
-function SitesSection({
-  clientId,
-  sites,
-  run,
-  pending,
-  schedulingEnabled,
-  siteServiceMap,
-  creating,
-  setCreating,
-}: {
-  clientId: string;
-  sites: Site[];
-  run: Run;
-  pending: boolean;
-  schedulingEnabled: boolean;
-  siteServiceMap: Record<string, string[]>;
-  creating: boolean;
-  setCreating: (open: boolean) => void;
-}) {
-  const [slug, setSlug] = useState("");
-  const [name, setName] = useState("");
-  const [tz, setTz] = useState("America/Bogota");
-  const [grid, setGrid] = useState<HourGrid>(
-    Object.fromEntries(DAYS.map((d) => [d, { on: d !== "sun", start: "09:00", end: "18:00" }])),
-  );
-
-  const submit = () =>
-    run(async () => {
-      const r = await createSiteAction({ clientId, slug: slug.trim(), name: name.trim(), timezone: tz, openingHours: weeklyFromGrid(grid) });
-      if (r.ok) { setSlug(""); setName(""); setCreating(false); }
-      return r;
-    });
-
-  return (
-    <Section
-      title="Sedes"
-      description="Dónde atiendes. El horario está en Agenda › Horarios, las reglas en Reglas de reserva y el contacto público en Página de reservas."
-      action={<button type="button" className={BTN} onClick={() => setCreating(true)}>+ Nueva sede</button>}
-    >
-      <SiteWorkbench clientId={clientId} sites={sites} run={run} pending={pending} part="identity" schedulingEnabled={schedulingEnabled} siteServiceMap={siteServiceMap} />
-      {creating ? (
-        <ConfigModal
-          title="Nueva sede"
-          description="Crea la sede y su horario base. Las reglas y el contacto público se ajustan después."
-          onClose={() => setCreating(false)}
-          footer={<button className={BTN} disabled={pending || !slug || !name} onClick={submit}>Crear sede</button>}
-        >
-          <div className="grid gap-3 md:grid-cols-3">
-            <Field label="Nombre"><input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Sede Chapinero" className={`${INPUT} w-full`} /></Field>
-            <Field label="URL pública" hint="Se usará en el enlace de reservas."><input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="sede-chapinero" className={`${INPUT} w-full`} /></Field>
-            <Field label="Zona horaria"><input value={tz} onChange={(e) => setTz(e.target.value)} placeholder="America/Bogota" className={`${INPUT} w-full`} /></Field>
-          </div>
-          <div className="mt-5 border-t border-line pt-4">
-            <p className="mb-3 text-sm font-semibold text-foreground">Horario semanal</p>
-            <HoursGrid grid={grid} setGrid={setGrid} />
-          </div>
-        </ConfigModal>
-      ) : null}
-    </Section>
-  );
-}
-
 function ExceptionsSection({ clientId, sites, staff, exceptions, run, pending }: { clientId: string; sites: Site[]; staff: Staff[]; exceptions: Exception[]; run: Run; pending: boolean }) {
   const [creating, setCreating] = useState(false);
   const [siteId, setSiteId] = useState(sites[0]?.id ?? "");
@@ -1398,99 +1309,3 @@ function StaffAvailability({ clientId, sites, staff, exceptions }: { clientId: s
   );
 }
 
-/**
- * «Orden y presentación» — how the catalogue reads on the public page: which services
- * show, in which category and order, and which are recommended. It is a VIEW over the one
- * service record: the name, price and description come from Servicios, and «Editar
- * presentación» opens the same ServiceEditor (its «Página de reservas» section), so there
- * is no second copy of any service field.
- */
-function BookingPresentation({
-  clientId,
-  sites,
-  services,
-  staff,
-  siteServiceMap,
-  bookingCategories,
-}: {
-  clientId: string;
-  sites: Site[];
-  services: Service[];
-  staff: Staff[];
-  siteServiceMap: Record<string, string[]>;
-  bookingCategories: BookingCategory[];
-}) {
-  const router = useRouter();
-  const [editing, setEditing] = useState<Service | null>(null);
-  const active = services.filter((s) => s.active);
-  const cats = [...bookingCategories].sort((a, b) => a.sort_order - b.sort_order);
-  const groups = [
-    ...cats.map((c) => ({ id: c.id, name: c.name, hidden: !c.visible, items: active.filter((s) => s.public_category_id === c.id) })),
-    { id: "none", name: "Sin categoría en la página", hidden: false, items: active.filter((s) => !s.public_category_id || !cats.some((c) => c.id === s.public_category_id)) },
-  ].filter((g) => g.items.length > 0 || g.id !== "none");
-  const sorted = (items: Service[]) => [...items].sort((a, b) => (a.public_sort ?? 0) - (b.public_sort ?? 0) || a.name.localeCompare(b.name, "es"));
-
-  return (
-    <Section
-      title="Orden y presentación"
-      description="Cómo se ve tu catálogo en la página de reservas. Nombre, precio y descripción vienen de Servicios: aquí solo cambia cómo se presentan."
-    >
-      <div className="flex flex-col gap-3">
-        {groups.map((g) => (
-          <section key={g.id} aria-label={g.name} className="overflow-hidden rounded-xl border border-line bg-surface">
-            <header className="flex items-center gap-2 border-b border-line px-4 py-2.5">
-              <h3 className="text-sm font-semibold text-foreground">{g.name}</h3>
-              {g.hidden ? <span className="rounded-full bg-chip px-2 py-0.5 text-[0.625rem] text-muted">Categoría oculta</span> : null}
-              <span className="u-mono text-xs text-faint">{g.items.length}</span>
-            </header>
-            {g.items.length === 0 ? (
-              <p className="px-4 py-4 text-xs text-muted">Ningún servicio en esta categoría.</p>
-            ) : (
-              <ul>
-                {sorted(g.items).map((svc, i) => {
-                  const visible = svc.public_visible !== false;
-                  return (
-                    <li key={svc.id} className={`flex flex-wrap items-center gap-3 px-4 py-3 ${i > 0 ? "border-t border-line-soft" : ""}`}>
-                      <span className="u-mono w-6 shrink-0 text-xs text-faint" title="Orden en la página">{svc.public_sort ?? 0}</span>
-                      <div className="min-w-[10rem] flex-1">
-                        <p className="truncate text-sm font-medium text-foreground">
-                          {svc.name}
-                          {svc.public_recommended ? <span className="ml-2 text-[0.6875rem] text-warn">★ Recomendado</span> : null}
-                        </p>
-                        <p className="mt-0.5 text-xs text-muted">
-                          {svc.duration_min} min · {svc.price ? `$${Number(svc.price).toLocaleString("de-DE")}` : "Precio a consultar"}
-                          {svc.public_image_url ? " · con imagen" : ""}
-                        </p>
-                      </div>
-                      <span className={`rounded-full px-2 py-0.5 text-[0.625rem] font-medium ${visible ? "bg-success/10 text-success" : "bg-chip text-muted"}`}>
-                        {visible ? "Visible" : "Oculto en la página"}
-                      </span>
-                      <button type="button" className={GHOST} onClick={() => setEditing(svc)}>Editar presentación</button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </section>
-        ))}
-      </div>
-      {editing ? (
-        <ServiceEditor
-          clientId={clientId}
-          mode={{ kind: "edit", service: editing }}
-          sites={sites.filter((x) => x.active)}
-          staff={staff.filter((x) => x.active)}
-          siteServiceMap={siteServiceMap}
-          bookingCategories={bookingCategories}
-          allServices={active}
-          initialSection="page"
-          onClose={() => setEditing(null)}
-          onSaved={() => {
-            setEditing(null);
-            router.refresh();
-          }}
-        />
-      ) : null}
-    </Section>
-  );
-}

@@ -51,6 +51,20 @@ export interface TeamViewer {
   canAssignOwner: boolean;
 }
 
+/**
+ * Which rows this viewer may act on (mirrors the server): the tenant owner is immutable;
+ * admins are owner-only; members are managed by the agency or the client's Owner. A
+ * Client Owner cannot act on another Owner. Shared by every team screen so the rule has
+ * ONE definition in the UI (the server actions remain the real gate).
+ */
+export function canActOnMember(member: Pick<TeamMemberView, "role" | "clientRole">, viewer: TeamViewer): boolean {
+  return member.role === "owner"
+    ? false
+    : member.role === "admin"
+      ? viewer.agency && viewer.isOwner
+      : viewer.canManageMembers && !(member.clientRole === "owner" && !viewer.agency);
+}
+
 const ROLE_BADGE: Record<MemberRole, string> = {
   owner: "bg-violet-500/15 text-violet-700 dark:text-violet-300",
   admin: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
@@ -111,16 +125,7 @@ function MemberRow({
     setStaffId(sites.find((s) => s.id === nextSiteId)?.staff[0]?.id ?? "");
   }
 
-  // Which rows this viewer may act on (mirrors the server): the tenant owner is
-  // immutable; admins are owner-only; members are managed by the agency or the client's
-  // Owner. A Client Owner cannot act on another Owner (so canManageMembers still hides
-  // owner-row controls for a non-agency viewer).
-  const manageable =
-    member.role === "owner"
-      ? false
-      : member.role === "admin"
-        ? viewer.agency && viewer.isOwner
-        : viewer.canManageMembers && !(member.clientRole === "owner" && !viewer.agency);
+  const manageable = canActOnMember(member, viewer);
 
   async function run(fn: () => Promise<{ ok: boolean; error?: string }>) {
     setBusy(true);

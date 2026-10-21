@@ -1,4 +1,4 @@
-import type { ApptCategory } from "@/lib/agendaCategory";
+import { apptCategoryClass, type ApptCategory } from "@/lib/agendaCategory";
 
 /**
  * The service CATEGORIES of the services menu. M_AI has no category table: a service
@@ -24,3 +24,11 @@ export const CATEGORY_GROUPS: CategoryGroup[] = [
 
 /** The editor's select: same set, "Sin categoría" first (it is the default). */
 export const CATEGORY_CHOICES: CategoryGroup[] = [CATEGORY_GROUPS[4], ...CATEGORY_GROUPS.slice(0, 4)];
+
+/** The dot of a category in the filters and lists: the agenda's own colour, or a dashed
+ *  ring for «Sin categoría» (whose services get a colour guessed from their name). */
+export function categoryDot(value: string): string {
+  // The same tone as the category pill of the list (--appt-rule), so the side menu, the
+  // editor chips and the column share one colour per category.
+  return value ? `${apptCategoryClass(value as ApptCategory)} bg-[var(--appt-rule)]` : "border border-dashed border-line-strong";
+}

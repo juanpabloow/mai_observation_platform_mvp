@@ -242,9 +242,9 @@ export function ClientInboxWorkspace({
   const threadReady = thread && thread.header.id === selectedId ? thread : null;
 
   return (
-    // Phone: the inbox IS the screen — out of the floating card (no gutter, border,
-    // radius or shadow). From md up it is the usual card.
-    <PageShell as="main" row ariaLabel="Inbox" className="max-md:-m-[var(--content-pad)] max-md:rounded-none max-md:border-0 max-md:shadow-none">
+    // Full-bleed at every width (like the module screens): the shell's panel IS the
+    // surface, so there is no card inside the panel.
+    <PageShell as="main" row ariaLabel="Inbox" className="-m-[var(--content-pad)] rounded-none border-0 shadow-none">
       {/* ── LIST ── */}
       <aside
         aria-label="Conversations"

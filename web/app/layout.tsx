@@ -9,6 +9,7 @@ import { ScopeSync } from "@/components/ScopeSync";
 import { Providers } from "./providers";
 import { parseSidebarTheme, SIDEBAR_THEME_COOKIE } from "@/lib/sidebarTheme";
 import { parseSidebarCollapsed, SIDEBAR_COLLAPSED_COOKIE } from "@/lib/sidebarCollapsed";
+import { MODULE_RAIL_COOKIE, parseModuleRailOpen } from "@/lib/moduleRail";
 import { isChromelessPath } from "@/lib/shellChrome";
 import { parseTextScale, TEXT_SCALE_COOKIE } from "@/lib/textScale";
 import { parseTopbarPref, resolveTopbarPref, TOPBAR_COOKIE } from "@/lib/topbarPref";
@@ -54,6 +55,9 @@ export default async function RootLayout({
   // so the server draws the rail exactly as the browser's first render will — no
   // hydration mismatch, no expand-then-collapse jump.
   const sidebarCollapsed = parseSidebarCollapsed(jar.get(SIDEBAR_COLLAPSED_COOKIE)?.value);
+  // The module screens' side menu (filters / section index), folded or open — the same
+  // kind of SSR-read cookie (lib/moduleRail.ts), for the same no-mismatch reason.
+  const moduleRailOpen = parseModuleRailOpen(jar.get(MODULE_RAIL_COOKIE)?.value);
   // Text size is the same kind of preference (see lib/textScale.ts): read here so the
   // very first frame is already at the chosen scale, with no resize flash.
   const textScale = parseTextScale(jar.get(TEXT_SCALE_COOKIE)?.value);
@@ -88,7 +92,7 @@ export default async function RootLayout({
           brand at its top; the header starts AFTER it and spans only the content
           column (it is no longer a full-width bar above everything). */}
       <body className="h-full overflow-hidden flex flex-col">
-        <Providers sidebarCollapsed={sidebarCollapsed}>
+        <Providers sidebarCollapsed={sidebarCollapsed} moduleRailOpen={moduleRailOpen}>
           {/* ScopeProviderServer seeds the client scope context (per-client "current
               workflow") from the request; ScopeSync keeps it URL-accurate across
               client-side navigation. Both wrap the header + sidebar so those read the

@@ -1,5 +1,4 @@
 import { connection } from "next/server";
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { canManageClient, getAccessScope, hasFullAccess } from "@/lib/access";
 import { getClientForTenant } from "@/lib/clientWorkflow";
@@ -10,13 +9,12 @@ import {
 } from "@worker/db/repositories/tenantMembers.js";
 import { listInvitationsForTenant } from "@worker/db/repositories/invitations.js";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
-import { InviteForm } from "@/components/InviteForm";
-import { TeamMembers, type TeamMemberView } from "@/components/TeamMembers";
-import { TeamInvitations, type TeamInviteView } from "@/components/TeamInvitations";
-import { ModuleHeader } from "@/components/ui/ModuleHeader";
+import type { TeamMemberView } from "@/components/TeamMembers";
+import type { TeamInviteView } from "@/components/TeamInvitations";
+import { ClientAccessScreen } from "@/components/team/ClientAccessScreen";
 
 function fmtDate(d: Date): string {
-  return d.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
+  return d.toLocaleDateString("es-CO", { month: "short", day: "numeric", year: "numeric" });
 }
 
 /**
@@ -105,46 +103,14 @@ export default async function ClientTeamPage({
     }));
 
   return (
-    <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-8 px-6 py-12">
-      <ModuleHeader
-        title="Usuarios y accesos"
-        status={clientLabel}
-        center={<p className="truncate text-sm text-muted">Invite people and set their role at this business.</p>}
-      />
-
-      <p className="text-sm text-muted">
-        People who work at <span className="text-foreground">{clientLabel}</span>. An{" "}
-        <span className="text-foreground">Owner</span> runs the business, a{" "}
-        <span className="text-foreground">Setter</span> works the chats, contacts and agenda, and{" "}
-        <span className="text-foreground">Staff</span> see only their own agenda. Looking for barbers? They live in{" "}
-        <Link href={`/clients/${clientId}/scheduling/staff`} className="text-accent hover:underline">
-          Scheduling &rarr; Staff
-        </Link>
-        .
-      </p>
-
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted">People</h2>
-        {memberViews.length === 0 ? (
-          <p className="rounded-2xl border border-dashed border-line px-4 py-8 text-center text-sm text-faint">
-            No one has been added to this business yet.
-          </p>
-        ) : (
-          <TeamMembers
-            members={memberViews}
-            clients={clientOptions}
-            sites={siteOptions}
-            viewer={{ agency, isOwner: scope.role === "owner", canManageMembers: true, canAssignOwner: agency }}
-          />
-        )}
-      </section>
-
-      <section className="space-y-2">
-        <h2 className="text-sm font-medium uppercase tracking-wider text-muted">Invite someone</h2>
-        <InviteForm mode="member" clientId={clientId} clientName={clientLabel} sites={siteOptions} canInviteOwner={agency} />
-      </section>
-
-      {inviteViews.length > 0 ? <TeamInvitations invites={inviteViews} /> : null}
-    </main>
+    <ClientAccessScreen
+      clientId={clientId}
+      clientLabel={clientLabel}
+      members={memberViews}
+      invites={inviteViews}
+      sites={siteOptions}
+      clients={clientOptions}
+      viewer={{ agency, isOwner: scope.role === "owner", canManageMembers: true, canAssignOwner: agency }}
+    />
   );
 }

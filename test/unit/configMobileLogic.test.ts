@@ -158,7 +158,7 @@ test('the phone tree is mounted below md and the desktop panel is kept from md u
 test('the phone screens save through the existing actions', () => {
   const services = web('components/scheduling/mobile/config/ServicesMobile.tsx');
   assert.ok(services.includes('saveServiceForm(clientId, persisted.current'), 'the service editor uses the shared runServiceSave path');
-  assert.ok(web('components/scheduling/services/ServiceEditor.tsx').includes('const out = await saveServiceForm(clientId, persisted.current, form, sites, staff);'), 'desktop uses the same save');
+  assert.ok(web('components/scheduling/services/ServiceEditor.tsx').includes('const out = await safeAction(() => saveServiceForm(clientId, persisted.current, effective, sites, staff));'), 'desktop uses the same save (through safeAction, so a dropped connection keeps the draft)');
   assert.ok(services.includes('countUpcomingAppointmentsAction(clientId, "service"') && services.includes('deactivateServiceAction') && services.includes('activateServiceAction'));
   assert.ok(services.includes('cancelLabel="Seguir editando"'), 'discard keeps "Seguir editando" as the safe option');
   const sites = web('components/scheduling/mobile/config/SitesMobile.tsx');

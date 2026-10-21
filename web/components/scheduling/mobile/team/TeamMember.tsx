@@ -295,7 +295,7 @@ export function TeamMember({
         >
           <div className={M_CARD}>
             <InfoRow label="Teléfono" value={member.phone} href={member.phone ? `tel:${member.phone.replace(/\s+/g, "")}` : undefined} />
-            <InfoRow label="Email" value={member.email} href={member.email ? `mailto:${member.email}` : undefined} />
+            <InfoRow label="Correo" value={member.email} href={member.email ? `mailto:${member.email}` : undefined} />
             <InfoRow
               label="Emergencia"
               value={[member.emergencyContactName, member.emergencyContactPhone].filter(Boolean).join(" · ") || null}

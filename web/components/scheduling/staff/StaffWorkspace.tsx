@@ -35,7 +35,8 @@ export function StaffWorkspace({
    * the same way — see rosterOrder / rosterFacetCounts in presence.ts.
    */
   staff: StaffTabProps | null;
-  /** What only the phone screens need (client name, site hours, closures, `?p=`). */
+  /** What only the phone screens need (client name, whether a professional can be added).
+   *  The open profile (`?s=`) is on `staff`, shared by both trees. */
   mobile: TeamMobileExtras | null;
 }) {
   // The screen's name, drawn inside StaffHeaderCard so the card is one box. The roster
@@ -44,7 +45,7 @@ export function StaffWorkspace({
   // NO COUNT, NO SCOPE LINE. The roster's number is the "Todos N" facet pill in the list
   // card, one row down and clickable; the client is named by the breadcrumb, which is the
   // app's answer to "whose data am I looking at" on every screen.
-  const slots: StaffHeaderSlots = { title: "Staff" };
+  const slots: StaffHeaderSlots = { title: "Equipo" };
   const desk = staff;
 
   return (

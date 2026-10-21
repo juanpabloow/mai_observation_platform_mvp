@@ -77,12 +77,12 @@ export function StaffCreateDrawer({
     start(async () => {
       const trimmed = name.trim();
       if (trimmed === "") {
-        setError("A name is required.");
+        setError("El nombre es obligatorio.");
         return;
       }
       const target = siteId ?? sites[0]?.id;
       if (!target) {
-        setError("This client has no site yet.");
+        setError("Este cliente todavía no tiene sede.");
         return;
       }
       // ONE call takes the name, the site and the service set...
@@ -118,7 +118,7 @@ export function StaffCreateDrawer({
           content underneath does have to visibly recede. */}
       <button
         type="button"
-        aria-label="Close"
+        aria-label="Cerrar"
         onClick={onClose}
         className="pointer-events-auto fixed inset-0 z-40 cursor-default bg-black/40"
       />
@@ -140,11 +140,11 @@ export function StaffCreateDrawer({
         <div className="flex shrink-0 items-start gap-2.5 border-b border-line px-4 pb-3 pt-3.5">
           <div className="flex min-w-0 flex-1 flex-col gap-0.5">
             <h2 id="staff-form-title" className="truncate text-base font-semibold tracking-tight text-foreground">
-              Add staff member
+              Nuevo profesional
             </h2>
-            <p className="truncate text-[0.6875rem] leading-4 text-faint">New barber at {siteName}</p>
+            <p className="truncate text-[0.6875rem] leading-4 text-faint">Nuevo profesional en {siteName}</p>
           </div>
-          <button type="button" onClick={onClose} aria-label="Close" className={PANEL_CLOSE_CLS}>
+          <button type="button" onClick={onClose} aria-label="Cerrar" className={PANEL_CLOSE_CLS}>
             <PanelCloseIcon />
           </button>
         </div>
@@ -158,23 +158,23 @@ export function StaffCreateDrawer({
         {/* THE only scrolling zone, and it adds no padding: each section brings its own
             and closes with a full-width rule, exactly as in the read-only panel. */}
         <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-surface">
-          <PanelSection title="Identity" icon={<IconIdentity />}>
+          <PanelSection title="Identidad" icon={<IconIdentity />}>
             <div className="flex flex-col gap-3.5">
-              <Field label="Name" htmlFor="staff-name">
+              <Field label="Nombre" htmlFor="staff-name">
                 <input
                   id="staff-name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className={INPUT}
-                  placeholder="Full name"
+                  placeholder="Nombre completo"
                 />
               </Field>
-              <Field label="Site" hint="fixed">
+              <Field label="Sede" hint="fija">
                 <input
                   disabled
                   value={siteName}
                   readOnly
-                  title="A barber belongs to one site in V1; moving them is not an update the repository supports"
+                  title="Un profesional pertenece a una sola sede; por ahora no se puede cambiar de sede."
                   className={`${INPUT} cursor-not-allowed opacity-60`}
                 />
               </Field>
@@ -183,19 +183,19 @@ export function StaffCreateDrawer({
                   they exist. Asking for it all up front is a wall; asking for none of it
                   makes the roster unusable, so this form takes only what create needs. */}
               <p className="text-[11px] text-faint">
-                Role, contact details, hours changes, skills and certifications are edited in the
-                barber&rsquo;s own panel afterwards.
+                El cargo, el contacto, los cambios de horario, las habilidades y las certificaciones
+                se editan después, en el perfil del profesional.
               </p>
             </div>
           </PanelSection>
 
           <PanelSection
-            title="Services"
+            title="Servicios"
             icon={<IconTask />}
-            trailing={activeServices.length > 0 ? `${serviceIds.length} of ${activeServices.length}` : undefined}
+            trailing={activeServices.length > 0 ? `${serviceIds.length} de ${activeServices.length}` : undefined}
           >
             {activeServices.length === 0 ? (
-              <p className="text-sm text-faint">This client has no active services yet.</p>
+              <p className="text-sm text-faint">Este cliente todavía no tiene servicios activos.</p>
             ) : (
               <div className="flex flex-wrap gap-1.5">
                 {activeServices.map((s) => {
@@ -223,9 +223,9 @@ export function StaffCreateDrawer({
             )}
           </PanelSection>
 
-          <PanelSection title="Working hours" icon={<IconCalendar />}>
+          <PanelSection title="Horario semanal" icon={<IconCalendar />}>
             <div className="flex flex-col gap-2">
-              <p className="text-[11px] text-faint">All days off = inherit the site&rsquo;s opening hours.</p>
+              <p className="text-[11px] text-faint">Todo libre = horario de la sede.</p>
               <HoursGrid grid={grid} setGrid={setGrid} />
             </div>
           </PanelSection>
@@ -236,13 +236,13 @@ export function StaffCreateDrawer({
             is) must never put its primary action below the fold. */}
         <div className="flex shrink-0 items-center gap-2 border-t border-line bg-surface px-4 py-3">
           <span className="min-w-0 flex-1 truncate text-xs text-muted">
-            {name.trim() === "" ? "A name is required" : `New barber at ${siteName}`}
+            {name.trim() === "" ? "El nombre es obligatorio" : `Nuevo profesional en ${siteName}`}
           </span>
           <button type="button" onClick={onClose} className={BTN_SECONDARY}>
-            Cancel
+            Cancelar
           </button>
           <button type="button" onClick={save} disabled={pending || name.trim() === ""} className={BTN_PRIMARY}>
-            {pending ? "Saving…" : "Add staff member"}
+            {pending ? "Guardando…" : "Añadir profesional"}
           </button>
         </div>
       </aside>

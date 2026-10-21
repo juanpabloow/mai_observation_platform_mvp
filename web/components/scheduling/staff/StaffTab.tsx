@@ -1,10 +1,11 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { avatarColor, avatarToneStyle, staffInitials as initials } from "@/lib/avatarColor";
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
+import { staffProfileHref } from "@/lib/staffProfileUrl";
 import { ACT_PRIMARY } from "@/components/ui/panelChrome";
 import {
   addStaffCertificationAction,
@@ -41,6 +42,8 @@ import { StaffPhotoControl } from "./StaffPhotoControl";
 import { PUBLIC_BIO_MAX, checkPublicBio, checkPublicTitle, publicProfileMessage } from "@/lib/staffPublicProfile";
 import { StaffHeaderCard, type StaffHeaderSlots } from "./StaffHeaderCard";
 import {
+  citas,
+  fmtHM,
   inRosterFacet,
   rosterFacetCounts,
   rosterOrder,
@@ -154,6 +157,25 @@ const WEEKDAYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"] as const;
 /** The drawer's tabs, in the reference's order. */
 const DETAIL_TABS = ["performance", "details", "services", "hours", "time off"] as const;
 type DetailTab = (typeof DETAIL_TABS)[number];
+/** What each tab is CALLED. The keys above stay as they are: they are also the `?dtab=`
+ *  values a deep link carries (AdminPanel), so they are state, not copy. */
+const DETAIL_TAB_LABEL: Record<DetailTab, string> = {
+  performance: "Rendimiento",
+  details: "Perfil",
+  services: "Servicios",
+  hours: "Horario",
+  "time off": "Ausencias",
+};
+/** Weekday keys of working_hours → the short Spanish name the Hours grid shows. */
+const DAY_SHORT: Record<(typeof WEEKDAYS)[number], string> = {
+  sun: "Dom",
+  mon: "Lun",
+  tue: "Mar",
+  wed: "Mié",
+  thu: "Jue",
+  fri: "Vie",
+  sat: "Sáb",
+};
 
 type StatusKey = RosterStatus;
 
@@ -239,6 +261,7 @@ export function StaffTab(
   },
 ) {
   const router = useRouter();
+  const query = useSearchParams();
   const [search, setSearch] = useState("");
   const [serviceFilter, setServiceFilter] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
@@ -326,13 +349,8 @@ export function StaffTab(
   const counts = { withClient: facets.with_client, available: facets.available, off: facets.off_today };
 
   const selected = props.selectedId ? props.members.find((s) => s.id === props.selectedId) ?? null : null;
-  const hrefFor = (id: string | null) => {
-    const p = new URLSearchParams();
-    if (props.currentSiteId) p.set("site", props.currentSiteId);
-    if (id) p.set("s", id);
-    const qs = p.toString();
-    return qs ? `?${qs}` : "?";
-  };
+  // `?s=` — the same parameter the phone detail reads and writes (lib/staffProfileUrl).
+  const hrefFor = (id: string | null) => staffProfileHref(query.toString(), id, { siteId: props.currentSiteId });
 
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
@@ -352,7 +370,7 @@ export function StaffTab(
         }
         actions={
             <button type="button" onClick={() => setCreating(true)} className={TOOLBAR_PRIMARY_CLS}>
-              + Nuevo miembro
+              + Nuevo profesional
             </button>
         }
       />
@@ -411,7 +429,7 @@ export function StaffTab(
           ) : (
             <div className="flex min-h-[14rem] items-center justify-center px-4 text-center">
               <div>
-                <p className="text-sm font-medium text-foreground">No encontramos miembros</p>
+                <p className="text-sm font-medium text-foreground">No encontramos profesionales</p>
                 <p className="mt-1 text-xs text-faint">Cambia la búsqueda o limpia los filtros.</p>
               </div>
             </div>
@@ -422,7 +440,7 @@ export function StaffTab(
             onClick={() => setCreating(true)}
             className="mt-3 flex min-h-[54px] w-full items-center justify-center gap-2 rounded-xl border border-dashed border-line-strong text-sm text-muted transition-colors hover:border-faint hover:bg-chip hover:text-foreground"
           >
-            + Agregar miembro
+            + Añadir profesional
           </button>
         </div>
       </PageShell>
@@ -572,6 +590,21 @@ function StaffCard({
   );
 }
 
+/** True once mounted on a viewport where the desktop tree shows (md and up — the
+ *  `hidden md:flex` of StaffWorkspace). False on the server and on phones, so the drawer's
+ *  trap never engages where the drawer is hidden. */
+function useDesktopTree(): boolean {
+  const [desktop, setDesktop] = useState(false);
+  useEffect(() => {
+    const mq = window.matchMedia("(min-width: 768px)");
+    const sync = () => setDesktop(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+  return desktop;
+}
+
 /** The detail drawer: identity, actions, and the Performance tab. */
 function StaffDetail({
   member,
@@ -625,7 +658,11 @@ function StaffDetail({
   // explicit confirmation. NEVER auto-cancelled; deactivating only stops NEW bookings.
   const [deactivateConfirm, setDeactivateConfirm] = useState<UpcomingApptView[] | null>(null);
   const router = useRouter();
-  const panelRef = useTrappedPanel({ active: true, onClose: () => router.push(closeHref, { scroll: false }) });
+  // The phone tree reads the same `?s=`, so on a phone this drawer is mounted too — inside
+  // the desktop tree, hidden below md. Its trap (focus, Tab, Escape → close) runs only
+  // where the drawer can be seen; otherwise Escape on the phone screen would close it.
+  const desktopTree = useDesktopTree();
+  const panelRef = useTrappedPanel({ active: desktopTree, onClose: () => router.push(closeHref, { scroll: false }) });
   const dirtyDays = countDirtyDays(draft, member.workingHours);
   const dirtyFields = dirtyProfileFields(profile, member);
   const changes = dirtyDays + dirtyFields.length;
@@ -723,7 +760,7 @@ function StaffDetail({
   return (
     <aside
       ref={panelRef as React.RefObject<HTMLElement>}
-      aria-label="Staff details"
+      aria-label="Perfil del profesional"
       aria-modal="true"
       role="dialog"
       tabIndex={-1}
@@ -792,7 +829,7 @@ function StaffDetail({
           <Link
             href={closeHref}
             scroll={false}
-            aria-label="Close staff details"
+            aria-label="Cerrar perfil"
             className="-mr-1 shrink-0 rounded-md p-1 text-faint transition-colors hover:bg-subtle hover:text-foreground"
           >
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
@@ -812,7 +849,7 @@ function StaffDetail({
             href={`/clients/${clientId}/scheduling/agenda?staff=${member.id}`}
             className={ACT_PRIMARY}
           >
-            View agenda
+            Ver agenda
           </Link>
         </div>
       </div>
@@ -834,7 +871,7 @@ function StaffDetail({
                 tab === t ? "border-ink font-semibold text-foreground" : "border-transparent text-muted hover:text-foreground"
               }`}
             >
-              {t}
+              {DETAIL_TAB_LABEL[t]}
               {t === "time off" && timeOff.length > 0 ? (
                 <span className="u-mono rounded bg-danger-tint/40 px-1.5 text-[9.5px] font-medium text-brand">
                   {timeOff.length}
@@ -867,7 +904,7 @@ function StaffDetail({
                 <div className="flex items-center gap-2.5 rounded-lg border border-brand/35 bg-brand-soft px-3 py-2.5">
                   <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-brand" />
                   <p className="text-xs text-foreground">
-                    Completed {completedPct}% of booked appointments over the last 30 days.
+                    Completó el {completedPct} % de sus citas reservadas en los últimos 30 días.
                   </p>
                 </div>
               </div>
@@ -878,7 +915,7 @@ function StaffDetail({
                 TRAILING slot now, not a row of standalone buttons above the chart —
                 a control that only changes this section belongs to this section. */}
             <PanelSection
-              title="Appointments per day"
+              title="Citas por día"
               icon={<IconCalendar />}
               trailing={
                 // TODO(staff): the design puts "CHAIR 3" at the right of this row. There
@@ -895,7 +932,7 @@ function StaffDetail({
                         range === r ? "bg-surface text-foreground shadow-[var(--shadow-card)]" : "text-muted hover:text-foreground"
                       }`}
                     >
-                      Last {r} days
+                      Últimos {r} días
                     </button>
                   ))}
                 </span>
@@ -904,37 +941,37 @@ function StaffDetail({
               <Sparkline series={series} />
             </PanelSection>
 
-            <PanelSection title="Last 30 days" icon={<IconTask />}>
+            <PanelSection title="Últimos 30 días" icon={<IconTask />}>
               {/* ONE divided box, not four floating cards — the same MetricBox the
                   contact panel's CITAS / ÚLTIMA / CANAL strip is built from. 2×2 because
                   "Appointments · 30d" and "Hours booked" cannot share one row at 440px. */}
               <MetricBox cols={2}>
-                <MetricCell label="Appointments · 30d" value={settled.length} />
-                <MetricCell label="Completed" value={completed} note={completedPct === null ? undefined : `${completedPct}%`} />
-                <MetricCell label="No-shows" value={noShows} tone={noShows > 0 ? "brand" : undefined} />
+                <MetricCell label="Citas · 30 d" value={settled.length} />
+                <MetricCell label="Completadas" value={completed} note={completedPct === null ? undefined : `${completedPct}%`} />
+                <MetricCell label="Inasistencias" value={noShows} tone={noShows > 0 ? "brand" : undefined} />
                 <MetricCell
-                  label="Hours booked"
+                  label="Horas reservadas"
                   value={Math.round(minutes / 60)}
-                  note={weeklyMinutes > 0 ? `of ${capacityHours} h` : "no hours set"}
+                  note={weeklyMinutes > 0 ? `de ${capacityHours} h` : "sin horario"}
                 />
               </MetricBox>
             </PanelSection>
 
             <PanelSection
-              title={`Today · ${new Intl.DateTimeFormat("en-GB", { timeZone: tz, weekday: "short", day: "numeric", month: "short" }).format(now)}`}
+              title={`Hoy · ${fmtDay(now.toISOString(), tz)}`}
               icon={<IconCalendar />}
-              trailing={status.appts.length > 0 ? `${status.appts.length} booked` : undefined}
+              trailing={status.appts.length > 0 ? citas(status.appts.length) : undefined}
             >
               <div className="flex flex-col gap-2">
                 {status.appts.length === 0 ? (
-                  <p className="text-xs text-faint">Nothing booked today.</p>
+                  <p className="text-xs text-faint">No hay citas hoy.</p>
                 ) : (
                   <div className="flex flex-col rounded-lg border border-line">
                     {status.appts.map((a) => (
                       <div key={a.id} className="flex items-center gap-2.5 border-b border-line/70 px-3 py-2 last:border-0">
                         <span aria-hidden className="h-6 w-[3px] shrink-0 rounded-sm bg-service-purple" />
                         <span className="flex min-w-0 flex-1 flex-col">
-                          <span className="truncate text-xs font-semibold text-foreground">{a.contactName ?? "Walk-in"}</span>
+                          <span className="truncate text-xs font-semibold text-foreground">{a.contactName ?? "Sin nombre"}</span>
                           <span className="truncate text-[11px] text-faint">{a.serviceName}</span>
                         </span>
                         <span className="u-mono shrink-0 text-[11px] text-muted">{fmtTime(a.startAt, tz)}</span>
@@ -946,7 +983,7 @@ function StaffDetail({
                   href={`/clients/${clientId}/scheduling/agenda?staff=${member.id}`}
                   className="self-start text-xs text-accent hover:underline"
                 >
-                  Open this day in the agenda &#8599;
+                  Abrir este día en la agenda &#8599;
                 </Link>
               </div>
             </PanelSection>
@@ -956,7 +993,7 @@ function StaffDetail({
                 service-name snapshot, so a renamed or deleted service still counts
                 under the name it was sold as. Cancelled rows are already excluded. */}
             {topServices.length > 0 ? (
-              <PanelSection title="Top services · 30d" icon={<IconTask />}>
+              <PanelSection title="Servicios más reservados · 30 d" icon={<IconTask />}>
                 <div className="flex flex-col gap-1.5">
                   {topServices.map((t) => (
                     <div key={t.name} className="flex items-center gap-2.5">
@@ -985,12 +1022,12 @@ function StaffDetail({
                 path for everything about a barber. Every field here goes through the same
                 unsaved bar at the bottom, which means one Save writes the whole person
                 instead of two forms racing over the same columns. */}
-            <DetailSection title="Identity" icon={<IconIdentity />}>
+            <DetailSection title="Identidad" icon={<IconIdentity />}>
               <FieldRow
-                label="Name"
+                label="Nombre"
                 value={profile.name}
                 onChange={(v) => setProfile((d) => ({ ...d, name: v }))}
-                placeholder="Full name"
+                placeholder="Nombre completo"
               />
               {/* SITE is read-only: a barber belongs to exactly one site in V1 and moving
                   them is not an update the repository supports. */}
@@ -1002,9 +1039,9 @@ function StaffDetail({
                 set of fields on purpose: the internal Role and the contact details below
                 are never published. The photo saves immediately; title and presentation
                 ride the unsaved bar with everything else. */}
-            <DetailSection title="Public profile" icon={<IconIdentity />}>
+            <DetailSection title="Perfil público" icon={<IconIdentity />}>
               <p className="px-4 pb-2 text-[11px] text-faint">
-                Shown on the public booking page. No phone numbers, e-mails or links.
+                Se muestra en la página de reservas. No incluyas teléfonos, correos ni enlaces.
               </p>
               <div className="px-4 pb-2">
                 <StaffPhotoControl
@@ -1013,19 +1050,19 @@ function StaffDetail({
                   name={member.name}
                   photoUrl={member.publicPhotoUrl}
                   enabled={photoUploadEnabled}
-                  lang="en"
+                  lang="es"
                   onChanged={onSaved}
                 />
               </div>
               <FieldRow
-                label="Public title"
+                label="Título público"
                 value={profile.publicTitle}
                 onChange={(v) => setProfile((d) => ({ ...d, publicTitle: v }))}
-                placeholder="e.g. Barbero profesional"
+                placeholder="Ej.: Barbero profesional"
               />
               <label className="flex min-w-0 flex-col gap-1 px-4 pb-3 pt-1">
                 <span className="flex items-baseline justify-between text-xs text-muted">
-                  Presentation
+                  Presentación
                   <span className="u-tnum text-[11px] text-faint">
                     {profile.publicBio.trim().length}/{PUBLIC_BIO_MAX}
                   </span>
@@ -1035,7 +1072,7 @@ function StaffDetail({
                   onChange={(e) => setProfile((d) => ({ ...d, publicBio: e.target.value }))}
                   rows={4}
                   maxLength={PUBLIC_BIO_MAX + 40}
-                  placeholder="A short presentation the customer reads before choosing."
+                  placeholder="Una presentación breve que el cliente lee antes de elegir."
                   className="u-focus min-h-[96px] w-full resize-y rounded-md border border-line bg-surface px-2.5 py-2 text-sm leading-relaxed placeholder:text-faint"
                 />
               </label>
@@ -1044,54 +1081,54 @@ function StaffDetail({
             {/* CONTACT — employee PII. It only reaches this component because the page
                 used listStaffAdmin behind the owner/admin gate; every other reader of
                 `staff` still gets the projection without these columns. */}
-            <DetailSection title="Contact" icon={<IconPhone />}>
+            <DetailSection title="Contacto" icon={<IconPhone />}>
               <FieldRow
-                label="Phone"
+                label="Teléfono"
                 value={profile.phone}
                 onChange={(v) => setProfile((d) => ({ ...d, phone: v }))}
-                placeholder="Add a phone number"
+                placeholder="Agrega un teléfono"
                 type="tel"
               />
               <FieldRow
-                label="Email"
+                label="Correo"
                 value={profile.email}
                 onChange={(v) => setProfile((d) => ({ ...d, email: v }))}
-                placeholder="Add an email"
+                placeholder="Agrega un correo"
                 type="email"
               />
               <p className="px-4 pb-1 text-[11px] text-faint">
-                This is a contact detail only. It does not change how — or whether — this person
-                logs in; a login is a separate account managed under Team.
+                Es solo un dato de contacto. No cambia cómo ni si esta persona inicia sesión: el
+                acceso es una cuenta aparte, que se gestiona en Usuarios y accesos.
               </p>
               <FieldRow
-                label="Emergency"
+                label="Emergencia"
                 value={profile.emergencyContactName}
                 onChange={(v) => setProfile((d) => ({ ...d, emergencyContactName: v }))}
-                placeholder="Add a contact name"
+                placeholder="Agrega un nombre de contacto"
               />
               <FieldRow
-                label="Emergency phone"
+                label="Teléfono de emergencia"
                 value={profile.emergencyContactPhone}
                 onChange={(v) => setProfile((d) => ({ ...d, emergencyContactPhone: v }))}
-                placeholder="Add a phone number"
+                placeholder="Agrega un teléfono"
                 type="tel"
               />
             </DetailSection>
 
-            <DetailSection title="Contract" icon={<IconInternal />}>
+            <DetailSection title="Contrato" icon={<IconInternal />}>
               <FieldRow
-                label="Role"
+                label="Cargo"
                 value={profile.title}
                 onChange={(v) => setProfile((d) => ({ ...d, title: v }))}
-                placeholder="e.g. Colour specialist"
+                placeholder="Ej.: Colorista"
               />
-              <FieldRow label="Employment">
+              <FieldRow label="Tipo de contrato">
                 <select
                   value={profile.employmentType}
                   onChange={(e) => setProfile((d) => ({ ...d, employmentType: e.target.value }))}
                   className={`${CELL} ${profile.employmentType ? "" : "text-faint"}`}
                 >
-                  <option value="">Not set</option>
+                  <option value="">Sin definir</option>
                   {EMPLOYMENT_TYPES.map((t) => (
                     <option key={t.value} value={t.value}>
                       {t.label}
@@ -1099,18 +1136,18 @@ function StaffDetail({
                   ))}
                 </select>
               </FieldRow>
-              <FieldRow label="Weekly hours">
+              <FieldRow label="Horas semanales">
                 <input
                   type="number"
                   min={1}
                   max={168}
                   value={profile.weeklyHours}
                   onChange={(e) => setProfile((d) => ({ ...d, weeklyHours: e.target.value }))}
-                  placeholder="Not set"
+                  placeholder="Sin definir"
                   className={CELL}
                 />
               </FieldRow>
-              <FieldRow label="Started">
+              <FieldRow label="Fecha de inicio">
                 <input
                   type="date"
                   value={profile.startDate}
@@ -1120,13 +1157,13 @@ function StaffDetail({
               </FieldRow>
               {/* SENIORITY is derived on every render from the date above — storing it
                   would guarantee it is wrong within a year. */}
-              <FieldRow label="Seniority">
+              <FieldRow label="Antigüedad">
                 <span className="px-1.5 text-sm text-muted">{seniority(profile.startDate) ?? "—"}</span>
               </FieldRow>
-              <FieldRow label="Site">
+              <FieldRow label="Sede">
                 <span
                   className="px-1.5 text-sm text-muted"
-                  title="A barber belongs to one site in V1; moving them is not an update the repository supports"
+                  title="Un profesional pertenece a una sola sede; por ahora no se puede cambiar de sede."
                 >
                   {member.siteName}
                 </span>
@@ -1136,24 +1173,24 @@ function StaffDetail({
             {/* STATUS — two DIFFERENT facts, and they used to be one checkbox in a modal.
                 Deactivating stays reversible precisely because it is this field: the same
                 control that turns it off turns it back on, through the same patch. */}
-            <DetailSection title="Status" icon={<IconAssign />}>
+            <DetailSection title="Estado" icon={<IconAssign />}>
               <div className="flex flex-col gap-2.5 px-4 pb-3.5">
                 <CheckRow
                   checked={profile.takesBookings}
                   onChange={(v) => setProfile((d) => ({ ...d, takesBookings: v }))}
-                  label="Takes bookings"
-                  hint="off for front desk or management: they work here, but hold no chair"
+                  label="Recibe citas"
+                  hint="desactívalo para recepción o administración: trabajan aquí, pero no tienen silla"
                 />
                 <CheckRow
                   checked={profile.active}
                   onChange={(v) => setProfile((d) => ({ ...d, active: v }))}
-                  label="Still works here"
-                  hint="off keeps their history and lane, but no new appointments"
+                  label="Sigue trabajando aquí"
+                  hint="desactivarlo conserva su historial y su columna en la agenda, pero no recibe citas nuevas"
                 />
               </div>
             </DetailSection>
 
-            <DetailSection title="Skills" icon={<IconTask />}>
+            <DetailSection title="Habilidades" icon={<IconTask />}>
               <div className="flex flex-wrap items-center gap-1.5 px-4 pb-3">
                 {profile.skills.map((sk) => (
                   <span
@@ -1163,7 +1200,7 @@ function StaffDetail({
                     {sk}
                     <button
                       type="button"
-                      aria-label={`Remove ${sk}`}
+                      aria-label={`Quitar ${sk}`}
                       onClick={() => setProfile((d) => ({ ...d, skills: d.skills.filter((x) => x !== sk) }))}
                       className="text-faint transition-colors hover:text-danger"
                     >
@@ -1201,10 +1238,10 @@ function StaffDetail({
 
             {/* CERTIFICATIONS are their own rows, so they save immediately rather than
                 riding the draft — adding one is a create, not a field edit. */}
-            <DetailSection title="Certifications" icon={<IconBusiness />}>
+            <DetailSection title="Certificaciones" icon={<IconBusiness />}>
               <div className="flex flex-col gap-1.5 px-4 pb-3">
                 {member.certifications.length === 0 ? (
-                  <p className="text-xs text-faint">None recorded.</p>
+                  <p className="text-xs text-faint">Ninguna registrada.</p>
                 ) : (
                   member.certifications.map((c) => (
                     <CertificationRow
@@ -1236,13 +1273,13 @@ function StaffDetail({
           </div>
         ) : tab === "services" ? (
           <PanelSection
-            title="Services performed"
+            title="Servicios que realiza"
             icon={<IconTask />}
-            trailing={`${member.serviceIds.length} of ${services.length}`}
+            trailing={`${member.serviceIds.length} de ${services.length}`}
           >
           <div className="flex flex-col gap-2">
             {services.length === 0 ? (
-              <p className="text-sm text-faint">This client has no services yet.</p>
+              <p className="text-sm text-faint">Este cliente todavía no tiene servicios.</p>
             ) : (
               services.map((sv) => {
                 const on = member.serviceIds.includes(sv.id);
@@ -1277,7 +1314,7 @@ function StaffDetail({
                     <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${on ? "bg-success" : "bg-faintest"}`} />
                     <span className="min-w-0 flex-1 truncate">{sv.name}</span>
                     <span className="u-mono shrink-0 text-[10px] uppercase tracking-wider">
-                      {on ? "performs" : "not offered"}
+                      {on ? "Lo realiza" : "No lo ofrece"}
                     </span>
                   </button>
                 );
@@ -1287,14 +1324,14 @@ function StaffDetail({
           </PanelSection>
         ) : tab === "hours" ? (
           <PanelSection
-            title="Weekly hours"
+            title="Horario semanal"
             icon={<IconCalendar />}
-            trailing={dirtyDays > 0 ? `${dirtyDays} changed` : undefined}
+            trailing={dirtyDays > 0 ? `${dirtyDays} ${dirtyDays === 1 ? "día cambiado" : "días cambiados"}` : undefined}
           >
           <div className="flex flex-col gap-3">
             <p className="text-[11px] text-faint">
-              A day with no shift = off. All days off means this barber inherits{" "}
-              {member.siteName}&rsquo;s opening hours.
+              Un día sin turno es libre. Si todos los días son libres, este profesional usa el horario
+              de {member.siteName}.
             </p>
             <div className="flex flex-col rounded-lg border border-line">
               {WEEKDAYS.map((d) => {
@@ -1312,14 +1349,14 @@ function StaffDetail({
                           onChange={(e) => setDay(e.target.checked ? [{ start: "09:00", end: "18:00" }] : [])}
                           className="size-4"
                         />
-                        <span className="u-mono text-[11px] uppercase tracking-wider text-foreground">{d}</span>
+                        <span className="u-mono text-[11px] uppercase tracking-wider text-foreground">{DAY_SHORT[d]}</span>
                       </label>
                       {on ? (
                         <span className="u-mono ml-auto text-[10px] text-faint">
                           {Math.round(ranges.reduce((n, r) => n + minutesBetween(r.start, r.end), 0) / 60)} h
                         </span>
                       ) : (
-                        <span className="ml-auto text-[11px] text-faint">Off</span>
+                        <span className="ml-auto text-[11px] text-faint">Libre</span>
                       )}
                     </div>
 
@@ -1344,7 +1381,7 @@ function StaffDetail({
                           <button
                             type="button"
                             onClick={() => setDay(ranges.filter((_, k) => k !== i))}
-                            aria-label="Remove this stretch"
+                            aria-label="Quitar este tramo"
                             className="text-xs text-faint hover:text-danger"
                           >
                             &#10005;
@@ -1360,7 +1397,7 @@ function StaffDetail({
                         onClick={() => setDay([...ranges, { start: "15:00", end: "19:00" }])}
                         className="ml-[6.5rem] w-fit text-[11px] text-accent hover:underline"
                       >
-                        + Add a stretch
+                        + Añadir un tramo
                       </button>
                     ) : null}
                   </div>
@@ -1381,11 +1418,11 @@ function StaffDetail({
               return (
                 <div className="flex items-center gap-2 text-xs text-muted">
                   {!draftHasHours ? (
-                    <span className="rounded bg-chip px-1.5 py-0.5 text-[10px] font-medium text-muted">Site hours</span>
+                    <span className="rounded bg-chip px-1.5 py-0.5 text-[10px] font-medium text-muted">Horario de la sede</span>
                   ) : null}
                   <span className="u-mono text-foreground">{totalH} H</span>
                   <span aria-hidden className="text-faintest">&middot;</span>
-                  <span className="u-mono">{days} DAYS</span>
+                  <span className="u-mono">{days} {days === 1 ? "DÍA" : "DÍAS"}</span>
                 </div>
               );
             })()}
@@ -1393,9 +1430,9 @@ function StaffDetail({
           </PanelSection>
         ) : (
           <PanelSection
-            title="Time off"
+            title="Ausencias"
             icon={<IconCalendar />}
-            trailing={timeOff.length > 0 ? `${timeOff.length} booked` : undefined}
+            trailing={timeOff.length > 0 ? `${timeOff.length} ${timeOff.length === 1 ? "registrada" : "registradas"}` : undefined}
           >
           <div className="flex flex-col gap-2">
             {toError ? <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{toError}</p> : null}
@@ -1433,12 +1470,12 @@ function StaffDetail({
                 }}
                 className="w-fit rounded-lg border border-line-strong px-3 py-1.5 text-xs font-medium text-foreground transition hover:bg-subtle"
               >
-                + Add time off
+                + Añadir ausencia
               </button>
             )}
 
             {timeOff.length === 0 && !toForm ? (
-              <p className="text-sm text-muted">No time off booked.</p>
+              <p className="text-sm text-muted">No hay ausencias registradas.</p>
             ) : (
               [...timeOff]
                 .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
@@ -1458,24 +1495,24 @@ function StaffDetail({
                       <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${past ? "bg-faintest" : "bg-timeoff-fg"}`} />
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="truncate text-xs font-semibold text-foreground">
-                          {t.reason?.trim() || "Time off"}
-                          {past ? <span className="ml-1 font-normal text-faint">· past</span> : null}
+                          {t.reason?.trim() || "Ausencia"}
+                          {past ? <span className="ml-1 font-normal text-faint">· pasada</span> : null}
                         </span>
                         <span className="u-mono truncate text-[11px] text-muted">
-                          {fmtDay(t.startsAt, tz)} &rarr; {fmtDay(t.endsAt, tz)} · {days} {days === 1 ? "day" : "days"}
+                          {fmtDay(t.startsAt, tz)} &rarr; {fmtDay(t.endsAt, tz)} · {days} {days === 1 ? "día" : "días"}
                         </span>
                       </span>
                       {/* Past blocks are history (read-only); future/current ones can be edited or removed. */}
                       {!past ? (
                         toConfirmDel === t.id ? (
                           <span className="flex shrink-0 gap-1.5">
-                            <button type="button" disabled={toBusy} onClick={() => startTo(async () => { setToError(null); const r = await deleteTimeOffAction(clientId, t.id); if (r.ok) { setToConfirmDel(null); router.refresh(); } else setToError(r.error ?? "No se pudo eliminar."); })} className="rounded border border-danger/40 px-2 py-0.5 text-[11px] text-danger hover:bg-danger/10 disabled:opacity-50">Delete</button>
-                            <button type="button" onClick={() => setToConfirmDel(null)} className="rounded border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-subtle">Keep</button>
+                            <button type="button" disabled={toBusy} onClick={() => startTo(async () => { setToError(null); const r = await deleteTimeOffAction(clientId, t.id); if (r.ok) { setToConfirmDel(null); router.refresh(); } else setToError(r.error ?? "No se pudo eliminar."); })} className="rounded border border-danger/40 px-2 py-0.5 text-[11px] text-danger hover:bg-danger/10 disabled:opacity-50">Eliminar</button>
+                            <button type="button" onClick={() => setToConfirmDel(null)} className="rounded border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-subtle">Cancelar</button>
                           </span>
                         ) : (
                           <span className="flex shrink-0 gap-1.5">
-                            <button type="button" onClick={() => { setToError(null); setToForm({ editing: t }); }} className="rounded border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-subtle">Edit</button>
-                            <button type="button" onClick={() => setToConfirmDel(t.id)} className="rounded border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-subtle">Delete</button>
+                            <button type="button" onClick={() => { setToError(null); setToForm({ editing: t }); }} className="rounded border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-subtle">Editar</button>
+                            <button type="button" onClick={() => setToConfirmDel(t.id)} className="rounded border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-subtle">Eliminar</button>
                           </span>
                         )
                       ) : null}
@@ -1497,7 +1534,7 @@ function StaffDetail({
               buttons never wrap — "Save changes" breaking onto two lines made the bar
               grow a row every time the message got long. */}
           <span className="min-w-0 flex-1 truncate text-xs text-muted">
-            {invalid ?? saveError ?? `${changes} unsaved ${changes === 1 ? "change" : "changes"}`}
+            {invalid ?? saveError ?? `${changes} ${changes === 1 ? "cambio sin guardar" : "cambios sin guardar"}`}
           </span>
           <button
             type="button"
@@ -1508,7 +1545,7 @@ function StaffDetail({
             }}
             className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md border border-line-strong bg-surface px-3 text-xs transition-colors hover:bg-hover"
           >
-            Discard
+            Descartar
           </button>
           <button
             type="button"
@@ -1516,7 +1553,7 @@ function StaffDetail({
             onClick={requestSave}
             className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md bg-ink px-3 text-xs font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50"
           >
-            {saving ? "Saving…" : "Save changes"}
+            {saving ? "Guardando…" : "Guardar cambios"}
           </button>
         </div>
       ) : null}
@@ -1526,11 +1563,11 @@ function StaffDetail({
       {deactivateConfirm ? (
         <div className="flex shrink-0 flex-col gap-2 border-t border-line bg-surface px-4 py-3">
           <p className="text-xs font-semibold text-foreground">
-            {member.name} has {deactivateConfirm.length} upcoming appointment{deactivateConfirm.length === 1 ? "" : "s"}
+            {member.name} tiene {citas(deactivateConfirm.length)} {deactivateConfirm.length === 1 ? "próxima" : "próximas"}
           </p>
           <p className="text-[11px] text-muted">
-            Deactivating stops new bookings. These are kept — nothing is cancelled. Handle them with each
-            customer if needed.
+            Al desactivar se detienen las reservas nuevas. Estas citas se conservan: no se cancela
+            ninguna. Gestiónalas con cada cliente si hace falta.
           </p>
           <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto">
             {deactivateConfirm.map((a) => (
@@ -1542,10 +1579,10 @@ function StaffDetail({
           </ul>
           <div className="flex flex-wrap justify-end gap-2">
             <button type="button" onClick={() => setDeactivateConfirm(null)} className="inline-flex h-8 items-center rounded-md border border-line-strong bg-surface px-3 text-xs hover:bg-hover">
-              Cancel
+              Cancelar
             </button>
             <button type="button" disabled={saving} onClick={commitSave} className="inline-flex h-8 items-center rounded-md border border-danger/40 px-3 text-xs text-danger hover:bg-danger/10 disabled:opacity-50">
-              Deactivate anyway
+              Desactivar de todos modos
             </button>
           </div>
         </div>
@@ -1587,9 +1624,9 @@ export interface ProfileDraft {
 
 /** The stored employment types — mirrors the staff_employment_type_valid CHECK. */
 const EMPLOYMENT_TYPES = [
-  { value: "full_time", label: "Full time" },
-  { value: "part_time", label: "Part time" },
-  { value: "contractor", label: "Contractor" },
+  { value: "full_time", label: "Tiempo completo" },
+  { value: "part_time", label: "Medio tiempo" },
+  { value: "contractor", label: "Contratista" },
 ] as const;
 
 export function profileFromMember(m: StaffMember): ProfileDraft {
@@ -1627,15 +1664,15 @@ export function dirtyProfileFields(d: ProfileDraft, m: StaffMember): ProfileKey[
 /** The same rules the CHECK constraints enforce, stated before the round trip.
  *  Returns a sentence to show in the bar, or null when the draft is storable. */
 function profileError(d: ProfileDraft): string | null {
-  if (d.name.trim() === "") return "A name is required.";
+  if (d.name.trim() === "") return "El nombre es obligatorio.";
   if (d.weeklyHours !== "") {
     const n = Number(d.weeklyHours);
-    if (!Number.isInteger(n) || n < 1 || n > 168) return "Weekly hours must be a whole number from 1 to 168.";
+    if (!Number.isInteger(n) || n < 1 || n > 168) return "Las horas semanales deben ser un número entero de 1 a 168.";
   }
   if (d.employmentType !== "" && !EMPLOYMENT_TYPES.some((t) => t.value === d.employmentType)) {
-    return "Unknown employment type.";
+    return "Tipo de contrato desconocido.";
   }
-  return publicProfileError(d, "en");
+  return publicProfileError(d, "es");
 }
 
 /** The public-profile rules (web/lib/staffPublicProfile.ts), for both editors. */
@@ -1663,21 +1700,22 @@ export function profilePatch(d: ProfileDraft, dirty: ProfileKey[]): Record<strin
   return out;
 }
 
-/** "Since Mar 2023 · 2y 5m", computed from start_date every render. */
+/** "Desde mar 2023 · 2 a 5 m" — the phone's words (seniorityEs), computed from
+ *  start_date every render. */
 function seniority(startDate: string): string | null {
   if (!startDate) return null;
   const [y, mo, day] = startDate.split("-").map(Number);
   if (!y || !mo || !day) return null;
-  const start = new Date(Date.UTC(y, mo - 1, day));
   const now = new Date();
   let months = (now.getUTCFullYear() - y) * 12 + (now.getUTCMonth() - (mo - 1));
   if (now.getUTCDate() < day) months -= 1;
-  if (months < 0) return `Starts ${start.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" })}`;
+  const since = `${MONTHS_SHORT[mo - 1]} ${y}`;
+  if (months < 0) return `Empieza en ${since}`;
   const years = Math.floor(months / 12);
   const rest = months % 12;
-  const span = years > 0 ? `${years}y ${rest}m` : `${rest}m`;
-  return `Since ${start.toLocaleDateString("en-US", { month: "short", year: "numeric", timeZone: "UTC" })} · ${span}`;
+  return `Desde ${since} · ${years > 0 ? `${years} a ${rest} m` : `${rest} m`}`;
 }
+const MONTHS_SHORT = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 
 /** Days until a certification lapses; null when it never does. */
 function daysUntil(iso: string | null, now: Date): number | null {
@@ -1740,7 +1778,7 @@ function FieldRow({
 }) {
   return (
     <label className="flex min-w-0 items-center gap-3 px-4 py-1">
-      <span className="w-[104px] shrink-0 truncate text-xs text-muted sm:w-[120px]">{label}</span>
+      <span className="w-[104px] shrink-0 truncate text-xs text-muted sm:w-[8.5rem]">{label}</span>
       {children ?? (
         <input
           type={type ?? "text"}
@@ -1762,7 +1800,7 @@ function FieldRow({
 function ReadRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex min-w-0 items-center gap-3 px-4 py-1">
-      <span className="w-[104px] shrink-0 truncate text-xs text-muted sm:w-[120px]">{label}</span>
+      <span className="w-[104px] shrink-0 truncate text-xs text-muted sm:w-[8.5rem]">{label}</span>
       <span className="min-w-0 flex-1 truncate px-1.5 py-1 text-right text-sm text-muted" title={value}>
         {value}
       </span>
@@ -1817,8 +1855,8 @@ function TagInput({ onAdd }: { onAdd: (v: string) => void }) {
         setValue("");
       }}
       onBlur={() => setValue("")}
-      placeholder="New tag"
-      aria-label="Add a skill"
+      placeholder="Nueva habilidad"
+      aria-label="Añadir una habilidad"
       className="u-focus h-7 w-[104px] rounded-md border border-dashed border-line-strong bg-transparent px-2 text-xs placeholder:text-faint"
     />
   );
@@ -1836,17 +1874,17 @@ function CertificationRow({
   const left = daysUntil(cert.expiresOn, now);
   // Expired / expiring is the whole reason these are rows with dates rather than tags.
   const state =
-    left === null ? null : left < 0 ? { label: "EXPIRED", cls: "text-brand" } : left <= 60 ? { label: `${left}D LEFT`, cls: "text-warn" } : null;
+    left === null ? null : left < 0 ? { label: "VENCIDA", cls: "text-brand", expired: true } : left <= 60 ? { label: `QUEDAN ${left} D`, cls: "text-warn", expired: false } : null;
   return (
     <div
       className={`flex items-center gap-2.5 rounded-lg border px-3 py-2 ${
-        state?.label === "EXPIRED" ? "border-danger-tint bg-danger-tint/20" : "border-line"
+        state?.expired ? "border-danger-tint bg-danger-tint/20" : "border-line"
       }`}
     >
       <span className="flex min-w-0 flex-1 flex-col">
         <span className="truncate text-xs font-semibold text-foreground">{cert.name}</span>
         <span className="u-mono truncate text-[10.5px] text-muted">
-          {[cert.issuer, cert.issuedOn ? `issued ${cert.issuedOn}` : null, cert.expiresOn ? `expires ${cert.expiresOn}` : "no expiry"]
+          {[cert.issuer, cert.issuedOn ? `emitida ${cert.issuedOn}` : null, cert.expiresOn ? `vence ${cert.expiresOn}` : "sin vencimiento"]
             .filter(Boolean)
             .join(" · ")}
         </span>
@@ -1855,7 +1893,7 @@ function CertificationRow({
       <button
         type="button"
         onClick={onDelete}
-        aria-label={`Remove ${cert.name}`}
+        aria-label={`Eliminar ${cert.name}`}
         className="shrink-0 text-xs text-faint transition-colors hover:text-danger"
       >
         &#10005;
@@ -1879,27 +1917,27 @@ function CertificationForm({
   const [issuedOn, setIssuedOn] = useState("");
   const [expiresOn, setExpiresOn] = useState("");
   // The CHECK says the same thing; saying it here avoids a round trip to be told off.
-  const bad = issuedOn && expiresOn && expiresOn < issuedOn ? "Expiry can’t be before the issue date." : null;
+  const bad = issuedOn && expiresOn && expiresOn < issuedOn ? "La fecha de vencimiento no puede ser anterior a la de emisión." : null;
 
   if (!open) {
     return (
       <button type="button" onClick={() => setOpen(true)} className="self-start text-xs text-accent hover:underline">
-        + Add certification
+        + Añadir certificación
       </button>
     );
   }
   const I = "u-focus h-8 min-w-0 rounded-md border border-line-strong bg-transparent px-2 text-xs";
   return (
     <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-line-strong p-2.5">
-      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Certification" className={I} autoFocus />
-      <input value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="Issuer (optional)" className={I} />
+      <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Certificación" className={I} autoFocus />
+      <input value={issuer} onChange={(e) => setIssuer(e.target.value)} placeholder="Entidad emisora (opcional)" className={I} />
       <div className="grid grid-cols-2 gap-1.5">
         <label className="flex flex-col gap-0.5">
-          <span className="u-th">Issued</span>
+          <span className="u-th">Emitida</span>
           <input type="date" value={issuedOn} onChange={(e) => setIssuedOn(e.target.value)} className={I} />
         </label>
         <label className="flex flex-col gap-0.5">
-          <span className="u-th">Expires</span>
+          <span className="u-th">Vence</span>
           <input type="date" value={expiresOn} onChange={(e) => setExpiresOn(e.target.value)} className={I} />
         </label>
       </div>
@@ -1910,7 +1948,7 @@ function CertificationForm({
           onClick={() => setOpen(false)}
           className="inline-flex h-7 items-center rounded-md border border-line-strong px-2.5 text-xs hover:bg-hover"
         >
-          Cancel
+          Cancelar
         </button>
         <button
           type="button"
@@ -1930,7 +1968,7 @@ function CertificationForm({
           }}
           className="inline-flex h-7 items-center rounded-md bg-ink px-2.5 text-xs font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50"
         >
-          Add
+          Añadir
         </button>
       </div>
     </div>
@@ -2006,14 +2044,15 @@ function SearchIcon() {
 }
 
 // ── helpers ──────────────────────────────────────────────────────────────────
+/** "14:30" in the site's timezone — the same 24-hour clock as the phone (presence.ts). */
 function fmtTime(iso: string, tz: string): string {
-  return new Intl.DateTimeFormat("en-US", { timeZone: tz, hour: "numeric", minute: "2-digit", hour12: true }).format(new Date(iso));
+  return fmtHM(iso, tz);
 }
-/** "Thu 6 Aug" in the site's timezone — the time-off range labels. */
+/** "jue, 6 ago" in the site's timezone — the time-off range labels, as on the phone. */
 function fmtDay(iso: string, tz: string): string {
-  return new Intl.DateTimeFormat("en-GB", { timeZone: tz, weekday: "short", day: "numeric", month: "short" }).format(
-    new Date(iso),
-  );
+  return new Intl.DateTimeFormat("es-CO", { timeZone: tz, weekday: "short", day: "numeric", month: "short" })
+    .format(new Date(iso))
+    .replace(/\./g, "");
 }
 function dayKey(d: Date, tz: string): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);

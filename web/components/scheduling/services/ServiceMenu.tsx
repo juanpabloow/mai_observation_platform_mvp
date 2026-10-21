@@ -1,32 +1,59 @@
 "use client";
 
-import { useMemo, useState, useTransition, type RefObject } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { useTrappedPanel } from "@/components/ui/Overlay";
-import { apptCategoryClass, serviceCategory } from "@/lib/agendaCategory";
 import { priceLabelCOP } from "@/lib/money";
+import { apptCategoryClass, type ApptCategory } from "@/lib/agendaCategory";
 import { activateServiceAction, countUpcomingAppointmentsAction, deactivateServiceAction } from "@/lib/schedulingAdminActions";
 import type { BookingCategory, Service, Site, Staff } from "../AdminPanel";
-import { Menu as ActionMenu, MenuButton } from "../ui/Menu";
-import { Alert, Button, CARD, ConfirmDialog, FIELD, buttonClass, useModalLayer } from "../ui/system";
-import { CATEGORY_GROUPS, type CategoryGroup } from "./categories";
+import { Menu as ActionMenu, MenuButton, MenuLink, MenuSeparator } from "../ui/Menu";
+import { Alert, Button, buttonClass } from "../ui/system";
+import { ModuleSurface, RailToggle, SearchField, SurfaceBody, SurfaceTop } from "@/components/ui/module/ModuleSurface";
+import { FilterRail, FilterSelect, type FilterGroup } from "@/components/ui/module/FilterRail";
+import { ListFoot, ListGroup, ListRow, ListTable, MobileGroup, MobileList, MobileRow, returnFocus, type ListColumn } from "@/components/ui/module/ListTable";
+import { EmptyState, NoResults } from "@/components/ui/module/States";
+import { ConfirmLayer } from "@/components/ui/module/ConfirmLayer";
+import { useUrlState } from "@/components/ui/module/useUrlState";
+import { CATEGORY_GROUPS, categoryDot, type CategoryGroup } from "./categories";
 import { BookingCategoriesPanel } from "./BookingCategoriesPanel";
 import { ServiceEditor } from "./ServiceEditor";
+import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
- * "Menú de servicios" — the client's service catalogue, laid out the way a salon reads
- * its menu: categories on the left with their counts, the services of each category on
- * the right as compact horizontal cards (colour stripe = the agenda colour, name +
- * duration + description on the left, price on the right, its own ⋯ menu).
+ * «Servicios» — the client's service catalogue in the module surface: title and counts,
+ * a fixed toolbar (search, the site filter when there is more than one site), the
+ * internal CATEGORIES as the side menu with their real counts and «Archivados» last,
+ * and one aligned table — Servicio · Descripción · Duración · Profesionales · Precio.
+ * The categories here are the agenda's colour families (services.category); the PUBLIC
+ * groupings of the booking page are a different thing, edited in Página de reservas.
  *
- * Real actions only: add / edit (the wide editor), archive (the existing deactivate —
- * appointments and history stay, and it asks first) and reactivate. Archived services
- * have their own view. Things this catalogue has no model for — packages, editable
- * categories, manual ordering, bulk edit, exports, per-service booking links,
- * duplicating, permanent delete — are simply not offered.
+ * Real actions only: add / edit (the in-page editor), archive (the existing deactivate —
+ * appointments and history stay, and it asks first) and reactivate. Things this
+ * catalogue has no model for — packages, editable categories, manual ordering, bulk
+ * edit, exports, duplicating, permanent delete — are simply not offered.
+ *
+ * Filters live in the URL (?filtro=…&q=…&sede=…) so Back, reload and a shared link
+ * keep them. Opening the editor keeps the list mounted (hidden), so closing it returns
+ * to the same scroll position and focus goes back to the row that opened it.
  */
 
-type View = { kind: "all" } | { kind: "category"; value: CategoryGroup["value"] } | { kind: "archived" };
+/** URL values of the side menu: "" (todas), a category value, «sin-categoria», «archivados». */
+const NO_CATEGORY = "sin-categoria";
+const catKey = (v: CategoryGroup["value"]) => v || NO_CATEGORY;
+
+const COLUMNS_BASE: ListColumn[] = [
+  // The name has a fixed width from xl and the description takes the flexible space, so
+  // the description sits right next to the (short) service names.
+  { key: "name", label: "Servicio", className: "xl:w-[15rem]" },
+  { key: "desc", label: "Descripción", className: "hidden xl:table-cell" },
+  { key: "dur", label: "Duración", className: "w-[6.5rem]" },
+  { key: "staff", label: "Profesionales", className: "w-[8.75rem]" },
+];
+const COL_SITES: ListColumn = { key: "sites", label: "Sedes", className: "w-[5.75rem]" };
+// The internal category, in the agenda's own colour, right before the price: the list
+// reads by colour like the calendar, and the name keeps its width (no chip beside it).
+const COL_CATEGORY: ListColumn = { key: "cat", label: "Categoría", className: "hidden w-[11.5rem] lg:table-cell" };
+const COL_PRICE: ListColumn = { key: "price", label: "Precio", align: "right", className: "w-[7.375rem]" };
 
 export function ServiceMenu({
   clientId,
@@ -37,6 +64,7 @@ export function ServiceMenu({
   bookingCategories = [],
   showBookingCategories = true,
   onOpenBookingLink,
+  agendaHref,
 }: {
   clientId: string;
   sites: Site[];
@@ -49,34 +77,48 @@ export function ServiceMenu({
   showBookingCategories?: boolean;
   /** "Página de reservas" — the link, public info and catalogue order of each site. */
   onOpenBookingLink: () => void;
+  /** «Ver agenda», kept in the Opciones menu. */
+  agendaHref?: string;
 }) {
   const router = useRouter();
   const [busy, startBusy] = useTransition();
-  const [view, setView] = useState<View>({ kind: "all" });
-  const [query, setQuery] = useState("");
-  const [siteFilter, setSiteFilter] = useState("");
+  // Counting upcoming appointments is its OWN transition: the confirmation opens at the end
+  // of it, and must not open with its buttons disabled by a still-pending `busy` (focus
+  // could not land on «Volver»).
+  const [, startCount] = useTransition();
+  const [filter, setFilter] = useUrlState("filtro", "");
+  const [query, setQuery] = useUrlState("q", "");
+  const [siteFilter, setSiteFilter] = useUrlState("sede", "");
   const [menu, setMenu] = useState<string | null>(null);
   const [editor, setEditor] = useState<{ kind: "edit"; service: Service } | { kind: "new"; category: string | null } | null>(null);
   const [archive, setArchive] = useState<{ service: Service; upcoming: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const opener = useRef<string>("new");
 
   const activeSites = sites.filter((s) => s.active);
   const activeStaff = staff.filter((p) => p.active);
+  const multiSite = activeSites.length > 1;
   const q = query.trim().toLocaleLowerCase("es");
+  const site = multiSite ? siteFilter : "";
   const matches = (s: Service) =>
     (!q || s.name.toLocaleLowerCase("es").includes(q) || (s.description ?? "").toLocaleLowerCase("es").includes(q)) &&
-    (!siteFilter || (siteServiceMap[siteFilter] ?? []).includes(s.id));
+    (!site || (siteServiceMap[site] ?? []).includes(s.id));
   const active = services.filter((s) => s.active);
   const archived = services.filter((s) => !s.active);
   const byGroup = useMemo(() => {
     const m = new Map<string, Service[]>();
     for (const g of CATEGORY_GROUPS) m.set(g.value, []);
-    for (const s of active) {
-      const bucket = m.get(s.category ?? "") ?? m.get("");
-      bucket?.push(s);
-    }
+    for (const s of active) (m.get(s.category ?? "") ?? m.get(""))?.push(s);
     return m;
   }, [active]);
+
+  const known = filter === "archivados" || filter === NO_CATEGORY || CATEGORY_GROUPS.some((g) => g.value && g.value === filter);
+  const view = known ? filter : "";
+  const pickedCat = view === "" || view === "archivados" ? null : view === NO_CATEGORY ? "" : view;
+  const groupsShown = CATEGORY_GROUPS.filter((g) => pickedCat === null || g.value === pickedCat);
+
+  const staffCount = (s: Service) => activeStaff.filter((p) => p.serviceIds.includes(s.id)).length;
+  const siteCount = (s: Service) => activeSites.filter((x) => (siteServiceMap[x.id] ?? []).includes(s.id)).length;
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
     setError(null);
@@ -86,195 +128,279 @@ export function ServiceMenu({
       else router.refresh();
     });
   };
-
   const askArchive = (service: Service) => {
     setMenu(null);
-    startBusy(async () => {
-      const c = await countUpcomingAppointmentsAction(clientId, "service", service.id);
+    startCount(async () => {
+      const c = await safeAction(() => countUpcomingAppointmentsAction(clientId, "service", service.id));
       setArchive({ service, upcoming: c.ok ? c.count : 0 });
     });
   };
+  const open = (next: NonNullable<typeof editor>) => {
+    setMenu(null);
+    opener.current = next.kind === "edit" ? next.service.id : "new";
+    setEditor(next);
+  };
+  const closeEditor = (saved: boolean) => {
+    setEditor(null);
+    if (saved) router.refresh();
+    // Back to the row (or «Añadir servicio») that opened the editor.
+    returnFocus(opener.current);
+  };
 
-  const groupsShown = CATEGORY_GROUPS.filter((g) => view.kind === "all" || (view.kind === "category" && view.value === g.value));
+  const railGroups: FilterGroup[] = [
+    {
+      label: "Categorías",
+      options: [
+        { value: "", label: "Todas las categorías", count: active.length },
+        ...CATEGORY_GROUPS.map((g) => ({ value: catKey(g.value), label: g.label, count: byGroup.get(g.value)?.length ?? 0, dot: categoryDot(g.value) })),
+      ],
+    },
+    { label: "Otros", options: [{ value: "archivados", label: "Archivados", count: archived.length }] },
+  ];
+
+  const columns = [...COLUMNS_BASE, ...(multiSite ? [COL_SITES] : []), COL_CATEGORY, COL_PRICE];
+  const span = columns.length + 1;
+  const newIn = pickedCat !== null ? pickedCat || null : null;
+
+  const rowMenu = (s: Service, at: "t" | "m" = "t") => (
+    <ActionMenu label={`Acciones de ${s.name}`} open={menu === `${at}:${s.id}`} onToggle={() => setMenu(menu === `${at}:${s.id}` ? null : `${at}:${s.id}`)} onClose={() => setMenu(null)}>
+      <MenuButton onClick={() => open({ kind: "edit", service: s })}>Editar</MenuButton>
+      {s.active ? (
+        <MenuButton disabled={busy} onClick={() => askArchive(s)}>
+          Archivar
+        </MenuButton>
+      ) : (
+        <MenuButton
+          disabled={busy}
+          onClick={() => {
+            setMenu(null);
+            run(() => activateServiceAction(clientId, s.id));
+          }}
+        >
+          Reactivar
+        </MenuButton>
+      )}
+    </ActionMenu>
+  );
+  const cells = (s: Service) => {
+    const price = priceLabelCOP(s.price);
+    const n = staffCount(s);
+    const buffers = s.buffer_before_min + s.buffer_after_min;
+    return [
+      <span key="n" className="flex min-w-0 items-center gap-2">
+        <span className="truncate">{s.name}</span>
+        {s.featured ? (
+          <span title="Destacado: se ofrece primero" className="shrink-0 text-[0.75rem] text-muted">
+            <span aria-hidden>★</span>
+            <span className="sr-only">(destacado)</span>
+          </span>
+        ) : null}
+      </span>,
+      <span key="d" className="text-muted">{s.description || "Sin descripción"}</span>,
+      <span key="t" className="inline-flex items-center gap-1.5 tabular-nums" title={buffers ? `Ocupa además ${buffers} min de preparación y tiempo después` : undefined}>
+        <ClockIcon />
+        {s.duration_min} min
+      </span>,
+      <span key="p" className={`inline-flex items-center gap-1.5 ${n === 0 ? "text-warn" : ""}`}>
+        <PeopleIcon />
+        {`${n} profesional${n === 1 ? "" : "es"}`}
+      </span>,
+      ...(multiSite ? [<span key="s" className="tabular-nums">{`${siteCount(s)} de ${activeSites.length}`}</span>] : []),
+      <CategoryChip key="c" value={s.category ?? ""} />,
+      <span key="$" className={`tabular-nums ${price ? "font-semibold" : "text-muted"}`}>{price ?? "A consultar"}</span>,
+    ];
+  };
+
+  const archivedShown = archived.filter(matches);
+  const totalShown = view === "archivados" ? archivedShown.length : groupsShown.reduce((n, g) => n + (byGroup.get(g.value) ?? []).filter(matches).length, 0);
+  const archivedHits = view !== "archivados" && q ? archived.filter(matches).length : 0;
+  const filtering = Boolean(q || site);
 
   return (
-    <section aria-labelledby="svc-menu-title" className="flex flex-col gap-4">
-      {/* Title row: what this is, and the two top-level actions. */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start">
-        <div className="min-w-0 sm:flex-1">
-          <h2 id="svc-menu-title" className="text-xl font-semibold tracking-[-0.01em]">
-            Menú de servicios
-          </h2>
-          <p className="mt-0.5 text-[13px] text-muted">Configura los servicios que se pueden reservar, su precio, duración y quién los presta.</p>
-        </div>
-        <div className="flex items-center gap-2">
-        <ActionMenu
-          label="Opciones"
-          open={menu === "options"}
-          onToggle={() => setMenu(menu === "options" ? null : "options")}
-          onClose={() => setMenu(null)}
-          trigger={
-            <span className={buttonClass({ className: "pointer-events-none" })}>
-              Opciones
-              <Chevron />
-            </span>
+    <ModuleSurface label="Servicios">
+      <div hidden={Boolean(editor)} className="flex min-h-0 flex-1 flex-col">
+        <SurfaceTop
+          title="Servicios"
+          summary={`Configura los servicios que se pueden reservar · ${active.length} activo${active.length === 1 ? "" : "s"} · ${archived.length} archivado${archived.length === 1 ? "" : "s"}`}
+          actions={
+            <ActionMenu
+              label="Opciones"
+              open={menu === "options"}
+              onToggle={() => setMenu(menu === "options" ? null : "options")}
+              onClose={() => setMenu(null)}
+              trigger={
+                <span className={buttonClass({ className: "pointer-events-none" })}>
+                  Opciones
+                  <Chevron />
+                </span>
+              }
+            >
+              <MenuButton
+                onClick={() => {
+                  setMenu(null);
+                  onOpenBookingLink();
+                }}
+              >
+                Página de reservas
+              </MenuButton>
+              <MenuButton
+                onClick={() => {
+                  setMenu(null);
+                  setFilter(view === "archivados" ? "" : "archivados");
+                }}
+              >
+                {view === "archivados" ? "Ver servicios activos" : `Ver archivados (${archived.length})`}
+              </MenuButton>
+              {agendaHref ? (
+                <>
+                  <MenuSeparator />
+                  <MenuLink href={agendaHref}>Ver agenda</MenuLink>
+                </>
+              ) : null}
+            </ActionMenu>
+          }
+          primary={
+            <Button variant="primary" data-open-key="new" onClick={() => open({ kind: "new", category: newIn })}>
+              <PlusIcon />
+              Añadir servicio
+            </Button>
           }
         >
-          <MenuButton onClick={() => { setMenu(null); onOpenBookingLink(); }}>Página de reservas</MenuButton>
-          <MenuButton onClick={() => { setMenu(null); setView(view.kind === "archived" ? { kind: "all" } : { kind: "archived" }); }}>
-            {view.kind === "archived" ? "Ver servicios activos" : `Ver archivados (${archived.length})`}
-          </MenuButton>
-        </ActionMenu>
-        <Button variant="primary" onClick={() => setEditor({ kind: "new", category: view.kind === "category" ? view.value || null : null })}>
-          Añadir servicio
-        </Button>
-        </div>
-      </div>
-
-      {showBookingCategories ? <BookingCategoriesPanel clientId={clientId} categories={bookingCategories} /> : null}
-
-      {/* Search + filters. */}
-      <div className={`flex flex-wrap items-center gap-2 p-3 ${CARD}`}>
-        <label className={`${FIELD} flex h-[44px] min-w-0 flex-1 items-center gap-2 sm:max-w-sm lg:h-[40px]`}>
-          <svg aria-hidden viewBox="0 0 16 16" className="size-4 shrink-0 text-faint" fill="none" stroke="currentColor" strokeWidth="1.5">
-            <circle cx="7" cy="7" r="4.4" />
-            <path d="M10.4 10.4 13.6 13.6" />
-          </svg>
-          <span className="sr-only">Buscar servicio</span>
-          <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Buscar servicio" className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint" />
-        </label>
-        {activeSites.length > 1 ? (
-          <select
-            value={siteFilter}
-            onChange={(e) => setSiteFilter(e.target.value)}
-            aria-label="Filtrar por sede"
-            className={`${FIELD} h-[44px] w-auto lg:h-[40px]`}
-          >
-            <option value="">Todas las sedes</option>
-            {activeSites.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        ) : null}
-        <span className="u-mono ml-auto hidden text-xs text-faint sm:inline">
-          {active.length} activo{active.length === 1 ? "" : "s"} · {archived.length} archivado{archived.length === 1 ? "" : "s"}
-        </span>
-      </div>
-
-      {error ? <Alert>{error}</Alert> : null}
-
-      <div className="grid gap-5 lg:grid-cols-[17rem_minmax(0,1fr)]">
-        {/* CATEGORIES — a list on desktop, a horizontal strip on smaller screens. */}
-        <nav aria-label="Categorías" className="min-w-0 lg:self-start">
-          <div className="flex gap-1.5 overflow-x-auto pb-1 lg:flex-col lg:gap-0.5 lg:overflow-visible lg:rounded-sch-card lg:border lg:border-line lg:bg-surface lg:p-3 lg:pb-3">
-            <h3 className="hidden px-2 pb-2 pt-1 text-[15px] font-semibold lg:block">Categorías</h3>
-            <CategoryButton label="Todas las categorías" count={active.length} on={view.kind === "all"} onClick={() => setView({ kind: "all" })} />
-            {CATEGORY_GROUPS.map((g) => (
-              <CategoryButton
-                key={g.value || "none"}
-                label={g.label}
-                count={byGroup.get(g.value)?.length ?? 0}
-                on={view.kind === "category" && view.value === g.value}
-                onClick={() => setView({ kind: "category", value: g.value })}
-              />
-            ))}
-            <span aria-hidden className="mx-2 my-1.5 hidden h-px bg-line lg:block" />
-            <CategoryButton label="Archivados" count={archived.length} on={view.kind === "archived"} onClick={() => setView({ kind: "archived" })} />
-          </div>
-        </nav>
-
-        <div className="flex min-w-0 flex-col gap-6">
-          {view.kind === "archived" ? (
-            <div className="flex flex-col gap-2.5">
-              <div>
-                <h3 className="text-[17px] font-semibold">Archivados</h3>
-                <p className="mt-0.5 text-[13px] text-muted">No se pueden reservar. Sus citas y su historial se conservan.</p>
-              </div>
-              {archived.filter(matches).length === 0 ? (
-                <EmptyState text="No hay servicios archivados." />
-              ) : (
-                archived.filter(matches).map((s) => (
-                  <ServiceCard
-                    key={s.id}
-                    service={s}
-                    siteCount={activeSites.filter((site) => (siteServiceMap[site.id] ?? []).includes(s.id)).length}
-                    menuOpen={menu === s.id}
-                    onMenu={() => setMenu(menu === s.id ? null : s.id)}
-                    onCloseMenu={() => setMenu(null)}
-                    onEdit={() => { setMenu(null); setEditor({ kind: "edit", service: s }); }}
-                    onArchive={null}
-                    onReactivate={() => { setMenu(null); run(() => activateServiceAction(clientId, s.id)); }}
-                    busy={busy}
-                  />
-                ))
-              )}
-            </div>
-          ) : (
-            groupsShown.map((g) => {
-              const list = (byGroup.get(g.value) ?? []).filter(matches);
-              const all = byGroup.get(g.value) ?? [];
-              // In "all", empty groups are skipped; a picked empty category says so.
-              if (view.kind === "all" && all.length === 0) return null;
-              return (
-                <section key={g.value || "none"} aria-labelledby={`svc-group-${g.value || "none"}`} className="flex flex-col gap-2.5">
-                  <div className="flex items-start gap-3">
-                    <span aria-hidden className={`u-appt-service ${apptCategoryClass(g.value ? g.value : "cut")} mt-1.5 size-2.5 shrink-0 rounded-full ${g.value ? "bg-[var(--appt-ink)] opacity-70" : "border border-dashed border-line-strong"}`} />
-                    <div className="min-w-0 flex-1">
-                      <h3 id={`svc-group-${g.value || "none"}`} className="text-[17px] font-semibold">
-                        {g.label}
-                      </h3>
-                      <p className="mt-0.5 text-[13px] text-muted">
-                        {g.value
-                          ? `${all.length} servicio${all.length === 1 ? "" : "s"}`
-                          : "Sin categoría: la agenda les asigna un color según el nombre."}
-                      </p>
-                    </div>
-                    <ActionMenu
-                      label={`Acciones de ${g.label}`}
-                      open={menu === `group:${g.value}`}
-                      onToggle={() => setMenu(menu === `group:${g.value}` ? null : `group:${g.value}`)}
-                      onClose={() => setMenu(null)}
-                      trigger={
-                        <span className={buttonClass({ size: "sm", className: "pointer-events-none" })}>
-                          Acciones
-                          <Chevron />
-                        </span>
-                      }
-                    >
-                      <MenuButton onClick={() => { setMenu(null); setEditor({ kind: "new", category: g.value || null }); }}>Añadir servicio</MenuButton>
-                    </ActionMenu>
-                  </div>
-                  {list.length === 0 ? (
-                    <EmptyState
-                      text={all.length === 0 ? "Esta categoría todavía no tiene servicios." : "Ningún servicio coincide con la búsqueda."}
-                      action={all.length === 0 ? { label: "Añadir servicio", onClick: () => setEditor({ kind: "new", category: g.value || null }) } : undefined}
-                    />
-                  ) : (
-                    list.map((s) => (
-                      <ServiceCard
-                        key={s.id}
-                        service={s}
-                        siteCount={activeSites.filter((site) => (siteServiceMap[site.id] ?? []).includes(s.id)).length}
-                        menuOpen={menu === s.id}
-                        onMenu={() => setMenu(menu === s.id ? null : s.id)}
-                        onCloseMenu={() => setMenu(null)}
-                        onEdit={() => { setMenu(null); setEditor({ kind: "edit", service: s }); }}
-                        onArchive={() => askArchive(s)}
-                        onReactivate={null}
-                        busy={busy}
-                      />
-                    ))
-                  )}
-                </section>
-              );
-            })
-          )}
-          {view.kind === "all" && active.length === 0 ? (
-            <EmptyState text="Todavía no hay servicios activos." action={{ label: "Añadir servicio", onClick: () => setEditor({ kind: "new", category: null }) }} />
+          <RailToggle />
+          <SearchField value={query} onChange={setQuery} label="Buscar servicio" />
+          <FilterSelect groups={railGroups} value={view} onChange={setFilter} label="Categoría" className="w-full sm:w-auto sm:min-w-[14rem]" />
+          {multiSite ? (
+            <select
+              value={site}
+              onChange={(e) => setSiteFilter(e.target.value)}
+              aria-label="Filtrar por sede"
+              className="u-focus h-[44px] w-full rounded-sch-control border border-line-strong bg-surface px-3 text-base text-foreground sm:w-auto lg:h-[2.5rem] lg:text-sm"
+            >
+              <option value="">Todas las sedes</option>
+              {activeSites.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
           ) : null}
-        </div>
+        </SurfaceTop>
+
+        <SurfaceBody rail={<FilterRail groups={railGroups} value={view} onChange={setFilter} />} railLabel="Categorías de servicios">
+          {error ? (
+            <div className="px-4 pt-3 sm:px-6">
+              <Alert>{error}</Alert>
+            </div>
+          ) : null}
+          {showBookingCategories ? (
+            <div className="px-4 pt-4 sm:px-6">
+              <BookingCategoriesPanel clientId={clientId} categories={bookingCategories} />
+            </div>
+          ) : null}
+
+          {services.length === 0 ? (
+            <EmptyState title="Todavía no hay servicios" body="Añade el primero con su duración, precio y quién lo presta. Hasta entonces no se puede reservar nada.">
+              <Button variant="primary" onClick={() => open({ kind: "new", category: null })}>
+                Añadir servicio
+              </Button>
+            </EmptyState>
+          ) : view === "archivados" ? (
+            archivedShown.length === 0 ? (
+              filtering ? (
+                <NoResults>
+                  <Button onClick={() => { setQuery(""); setSiteFilter(""); }}>Borrar filtros</Button>
+                </NoResults>
+              ) : (
+                <EmptyState title="No hay servicios archivados" body="Al archivar un servicio deja de poder reservarse; sus citas y su historial se conservan." />
+              )
+            ) : (
+              <>
+                <ListTable label="Servicios archivados" columns={columns}>
+                  <ListGroup span={span}>
+                    {archivedShown.map((s) => (
+                      <ListRow key={s.id} columns={columns} cells={cells(s)} name={s.name} onOpen={() => open({ kind: "edit", service: s })} openLabel="Editar" openKey={s.id} menu={rowMenu(s)} raised={menu === `t:${s.id}`} dimmed />
+                    ))}
+                  </ListGroup>
+                </ListTable>
+                <MobileList>
+                  <MobileGroup title="Archivados">
+                    {archivedShown.map((s) => (
+                      <MobileRow key={s.id} title={s.name} subtitle={`${s.duration_min} min`} value={priceLabelCOP(s.price) ?? "A consultar"} onOpen={() => open({ kind: "edit", service: s })} openLabel="Editar" openKey={s.id} menu={rowMenu(s, "m")} dimmed />
+                    ))}
+                  </MobileGroup>
+                </MobileList>
+                <ListFoot>Mostrando {archivedShown.length} archivado{archivedShown.length === 1 ? "" : "s"}</ListFoot>
+              </>
+            )
+          ) : pickedCat !== null && (byGroup.get(pickedCat)?.length ?? 0) === 0 ? (
+            <EmptyState title="Esta categoría todavía no tiene servicios" body="La categoría define el color de sus citas en la agenda.">
+              <Button onClick={() => open({ kind: "new", category: pickedCat || null })}>Añadir servicio</Button>
+            </EmptyState>
+          ) : totalShown === 0 && !filtering && pickedCat === null && active.length === 0 ? (
+            // Nothing searched or filtered: every service is archived.
+            <EmptyState
+              title="No hay servicios activos"
+              body={`${archived.length === 1 ? "El único servicio está archivado" : `Los ${archived.length} servicios están archivados`}: no se pueden reservar. Sus citas y su historial se conservan.`}
+            >
+              <Button variant="primary" onClick={() => open({ kind: "new", category: null })}>
+                Añadir servicio
+              </Button>
+              <Button onClick={() => setFilter("archivados")}>Ver archivados</Button>
+            </EmptyState>
+          ) : totalShown === 0 ? (
+            <NoResults body={archivedHits ? `Ningún servicio activo coincide. ${archivedHits} archivado${archivedHits === 1 ? "" : "s"} sí coincide${archivedHits === 1 ? "" : "n"}.` : undefined}>
+              {archivedHits ? <Button onClick={() => setFilter("archivados")}>Ver en Archivados</Button> : null}
+              <Button
+                onClick={() => {
+                  setQuery("");
+                  setSiteFilter("");
+                }}
+              >
+                Borrar filtros
+              </Button>
+            </NoResults>
+          ) : (
+            <>
+              {/* One continuous list, in category order: no group rows cutting the table —
+                  the side menu is how you go to a category. */}
+              <ListTable label="Servicios activos" columns={columns}>
+                <ListGroup span={span}>
+                  {groupsShown.flatMap((g) =>
+                    (byGroup.get(g.value) ?? []).filter(matches).map((s) => (
+                      <ListRow key={s.id} columns={columns} cells={cells(s)} name={s.name} onOpen={() => open({ kind: "edit", service: s })} openLabel="Editar" openKey={s.id} menu={rowMenu(s)} raised={menu === `t:${s.id}`} />
+                    )),
+                  )}
+                </ListGroup>
+              </ListTable>
+              <MobileList>
+                {groupsShown.map((g) => {
+                  const list = (byGroup.get(g.value) ?? []).filter(matches);
+                  if (list.length === 0) return null;
+                  return (
+                    <MobileGroup key={g.value || "none"} title={g.label} dot={categoryDot(g.value)} count={String(list.length)}>
+                      {list.map((s) => (
+                        <MobileRow
+                          key={s.id}
+                          title={s.name}
+                          subtitle={`${s.duration_min} min · ${staffCount(s)} profesional${staffCount(s) === 1 ? "" : "es"}`}
+                          value={priceLabelCOP(s.price) ?? "A consultar"}
+                          onOpen={() => open({ kind: "edit", service: s })}
+                          openLabel="Editar"
+                          openKey={s.id}
+                          menu={rowMenu(s, "m")}
+                        />
+                      ))}
+                    </MobileGroup>
+                  );
+                })}
+              </MobileList>
+              <ListFoot>
+                Mostrando {totalShown} servicio{totalShown === 1 ? "" : "s"}
+                {filtering ? " · con filtros" : ""}
+              </ListFoot>
+            </>
+          )}
+        </SurfaceBody>
       </div>
 
       {editor ? (
@@ -286,18 +412,23 @@ export function ServiceMenu({
           siteServiceMap={siteServiceMap}
           bookingCategories={bookingCategories}
           allServices={active}
-          onClose={() => setEditor(null)}
-          onSaved={() => {
-            setEditor(null);
-            router.refresh();
-          }}
+          backLabel="Volver a Servicios"
+          onClose={() => closeEditor(false)}
+          onSaved={() => closeEditor(true)}
         />
       ) : null}
 
       {archive ? (
-        <ArchiveConfirm
-          name={archive.service.name}
-          upcoming={archive.upcoming}
+        <ConfirmLayer
+          id="svc-archive"
+          title={`¿Archivar «${archive.service.name}»?`}
+          body={`Dejará de poder reservarse. ${
+            archive.upcoming > 0
+              ? `Tiene ${archive.upcoming} cita${archive.upcoming === 1 ? "" : "s"} próxima${archive.upcoming === 1 ? "" : "s"}: se conservan.`
+              : "Sus citas y su historial se conservan."
+          } Puedes reactivarlo cuando quieras.`}
+          confirmLabel="Archivar"
+          tone="primary"
           pending={busy}
           onCancel={() => setArchive(null)}
           onConfirm={() => {
@@ -307,106 +438,21 @@ export function ServiceMenu({
           }}
         />
       ) : null}
-    </section>
+    </ModuleSurface>
   );
 }
 
-function ServiceCard({
-  service: s,
-  siteCount,
-  menuOpen,
-  onMenu,
-  onCloseMenu,
-  onEdit,
-  onArchive,
-  onReactivate,
-  busy,
-}: {
-  service: Service;
-  siteCount: number;
-  menuOpen: boolean;
-  onMenu: () => void;
-  onCloseMenu: () => void;
-  onEdit: () => void;
-  onArchive: (() => void) | null;
-  onReactivate: (() => void) | null;
-  busy: boolean;
-}) {
-  // The stripe is the colour the AGENDA actually paints — the inferred family for an
-  // uncategorised service, so the menu never shows a colour the board doesn't.
-  const family = serviceCategory(s.name, s.category);
-  const price = priceLabelCOP(s.price);
+/** The category as a soft pill in its agenda colour («Sin categoría» stays neutral). */
+function CategoryChip({ value }: { value: string }) {
+  const group = CATEGORY_GROUPS.find((g) => g.value === value) ?? CATEGORY_GROUPS.find((g) => g.value === "");
+  if (!value) {
+    return <span className="inline-flex items-center gap-1.5 rounded-full bg-chip px-2 py-0.5 text-[0.75rem] font-medium text-muted">{group?.label}</span>;
+  }
   return (
-    // No overflow-hidden here: it would clip the ⋯ menu. The stripe rounds its own corners
-    // instead, and the open card is lifted above its siblings (an archived card's opacity
-    // would make its own stacking context — it dims the content, not the card).
-    <article
-      className={`group relative flex min-w-0 items-stretch transition-colors hover:border-line-strong ${CARD} ${menuOpen ? "z-10" : ""}`}
-    >
-      <span aria-hidden className={`u-appt-service ${apptCategoryClass(family)} w-1.5 shrink-0 rounded-l-sch-card bg-[var(--appt-ink)] opacity-70`} />
-      <button
-        type="button"
-        onClick={onEdit}
-        className={`u-focus flex min-w-0 flex-1 items-start gap-4 rounded-r-sch-card px-4 py-3.5 text-left ${s.active ? "" : "opacity-75"}`}
-      >
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-          <span className="flex flex-wrap items-center gap-2">
-            <span className="min-w-0 break-words text-[15px] font-semibold text-foreground">{s.name}</span>
-            {s.featured ? <span className="rounded-full bg-chip px-2 py-0.5 text-[11px] font-medium text-muted">Destacado</span> : null}
-            {!s.active ? <span className="rounded-full bg-chip px-2 py-0.5 text-[11px] font-medium text-muted">Archivado</span> : null}
-          </span>
-          <span className="text-[13px] text-muted">
-            {s.duration_min} min · {siteCount} sede{siteCount === 1 ? "" : "s"}
-          </span>
-          {s.description ? <span className="truncate text-[13px] text-muted">{s.description}</span> : null}
-        </span>
-        <span className="u-mono shrink-0 pt-0.5 text-[15px] font-medium text-foreground">{price ?? "A consultar"}</span>
-      </button>
-      <div className="flex shrink-0 items-start py-2.5 pr-2">
-        <ActionMenu label={`Acciones de ${s.name}`} open={menuOpen} onToggle={onMenu} onClose={onCloseMenu}>
-          <MenuButton onClick={onEdit}>Editar</MenuButton>
-          {onArchive ? (
-            <MenuButton disabled={busy} onClick={onArchive}>
-              Archivar
-            </MenuButton>
-          ) : null}
-          {onReactivate ? (
-            <MenuButton disabled={busy} onClick={onReactivate}>
-              Reactivar
-            </MenuButton>
-          ) : null}
-        </ActionMenu>
-      </div>
-    </article>
-  );
-}
-
-function CategoryButton({ label, count, on, onClick }: { label: string; count: number; on: boolean; onClick: () => void }) {
-  return (
-    <button
-      type="button"
-      aria-pressed={on}
-      onClick={onClick}
-      className={`u-focus flex h-[44px] shrink-0 items-center gap-3 rounded-sch-control border px-3.5 text-sm transition-colors lg:h-[40px] lg:border-transparent lg:px-2.5 ${
-        on ? "border-foreground bg-subtle font-medium text-foreground" : "border-line text-muted hover:bg-subtle hover:text-foreground"
-      }`}
-    >
-      <span className="truncate">{label}</span>
-      <span className="u-mono ml-auto rounded-full bg-chip px-2 py-0.5 text-[11px] text-muted">{count}</span>
-    </button>
-  );
-}
-
-function EmptyState({ text, action }: { text: string; action?: { label: string; onClick: () => void } }) {
-  return (
-    <div className="flex flex-col items-center gap-3 rounded-sch-card border border-dashed border-line px-4 py-8 text-center">
-      <p className="text-[13px] text-muted">{text}</p>
-      {action ? (
-        <Button size="sm" onClick={action.onClick}>
-          {action.label}
-        </Button>
-      ) : null}
-    </div>
+    <span className={`${apptCategoryClass(value as ApptCategory)} inline-flex max-w-full items-center gap-1.5 truncate rounded-full bg-[var(--appt-fill)] px-2 py-0.5 text-[0.75rem] font-medium text-[var(--appt-title)]`}>
+      <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-[var(--appt-rule)]" />
+      <span className="truncate">{group?.label}</span>
+    </span>
   );
 }
 
@@ -417,40 +463,27 @@ function Chevron() {
     </svg>
   );
 }
-
-/** "¿Archivar …?" — a page-level modal: focus is trapped in it, Escape cancels, and
- *  focus returns to the menu that opened it. Archiving is reversible, so the confirm is
- *  the ink primary, not the destructive red. */
-function ArchiveConfirm({
-  name,
-  upcoming,
-  pending,
-  onCancel,
-  onConfirm,
-}: {
-  name: string;
-  upcoming: number;
-  pending: boolean;
-  onCancel: () => void;
-  onConfirm: () => void;
-}) {
-  const trapRef = useTrappedPanel({ active: true, onClose: onCancel });
-  const layer = useModalLayer(true);
+function PlusIcon() {
   return (
-    <div ref={trapRef as RefObject<HTMLDivElement>} className="fixed inset-0 z-50">
-      <ConfirmDialog
-        layerRef={layer.layerRef}
-        id="svc-archive"
-        title={`¿Archivar «${name}»?`}
-        body={`Dejará de poder reservarse. ${
-          upcoming > 0 ? `Tiene ${upcoming} cita${upcoming === 1 ? "" : "s"} próxima${upcoming === 1 ? "" : "s"}: se conservan.` : "Sus citas y su historial se conservan."
-        } Puedes reactivarlo cuando quieras.`}
-        confirmLabel="Archivar"
-        tone="primary"
-        pending={pending}
-        onCancel={onCancel}
-        onConfirm={onConfirm}
-      />
-    </div>
+    <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+      <path d="M8 3v10M3 8h10" />
+    </svg>
+  );
+}
+function ClockIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 16 16" className="size-3.5 shrink-0 text-muted" fill="none" stroke="currentColor" strokeWidth="1.4">
+      <circle cx="8" cy="8" r="5.6" />
+      <path d="M8 5v3.2l2 1.3" />
+    </svg>
+  );
+}
+function PeopleIcon() {
+  return (
+    <svg aria-hidden viewBox="0 0 16 16" className="size-3.5 shrink-0 text-muted" fill="none" stroke="currentColor" strokeWidth="1.4">
+      <circle cx="6" cy="5.6" r="2.2" />
+      <path d="M2.2 13c.3-2.2 1.9-3.5 3.8-3.5s3.5 1.3 3.8 3.5" />
+      <path d="M10.6 3.6a2.1 2.1 0 0 1 0 4M12 9.7c1 .4 1.7 1.5 1.8 3.3" />
+    </svg>
   );
 }

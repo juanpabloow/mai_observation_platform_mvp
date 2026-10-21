@@ -15,8 +15,8 @@ import { listExceptions } from "@worker/db/repositories/scheduling/exceptions.js
 import { utcToZonedParts, zonedPartsToUtc } from "@worker/scheduling/timezone.js";
 import { StaffWorkspace } from "@/components/scheduling/staff/StaffWorkspace";
 import { isR2Configured } from "@/lib/r2";
+import { readStaffProfileId } from "@/lib/staffProfileUrl";
 import type { StaffTabProps } from "@/components/scheduling/staff/StaffTab";
-import type { TeamMobileExtras } from "@/components/scheduling/mobile/team/TeamMobile";
 
 /**
  * STAFF — the operational roster, a SCHEDULING surface.
@@ -41,8 +41,9 @@ export default async function ClientStaffPage({
   // No `tab`: the roster is the only view now (the Turnos/Ausencias stubs are gone —
   // see StaffWorkspace), so there is nothing for it to select. An old `?tab=shifts`
   // bookmark simply lands on the roster.
-  // `p` is the PHONE detail screen (Equipo → a professional); `s` stays the desktop drawer.
-  searchParams: Promise<{ s?: string; site?: string; dtab?: string; p?: string }>;
+  // `s` is the open profile on EVERY width (desktop drawer and phone detail); `p` is the
+  // phone's old parameter, still read so its links keep working (lib/staffProfileUrl).
+  searchParams: Promise<{ s?: string | string[]; site?: string; dtab?: string; p?: string | string[] }>;
 }) {
   await connection();
   const { clientId } = await params;
@@ -59,7 +60,6 @@ export default async function ClientStaffPage({
       mobile={
         roster
           ? {
-              ...roster.mobile,
               clientName: client.name,
               // Creating a professional is the same capability as seeing this page
               // (canManageClient above); createStaffAction re-checks it on the server.
@@ -80,8 +80,8 @@ export default async function ClientStaffPage({
 async function loadRoster(
   tenantId: string,
   clientId: string,
-  sp: { s?: string; site?: string; dtab?: string; p?: string },
-): Promise<{ staff: StaffTabProps; mobile: Omit<TeamMobileExtras, "clientName" | "canCreate"> } | null> {
+  sp: { s?: string | string[]; site?: string; dtab?: string; p?: string | string[] },
+): Promise<{ staff: StaffTabProps } | null> {
   const sites = await listSites(tenantId, { clientId, includeInactive: false });
   if (sites.length === 0) return null; // a barber belongs to a site — no site, no roster
   const site = sites.find((s) => s.id === sp.site) ?? sites[0];
@@ -169,7 +169,8 @@ async function loadRoster(
     })),
     timezone: site.timezone,
     todayIso: new Date().toISOString(),
-    selectedId: sp.s ?? null,
+    // One profile for both trees: `s`, or the old phone `p` when `s` is absent.
+    selectedId: readStaffProfileId(sp),
     detailTab: sp.dtab,
     todayAppointments: todayAppts.map((a) => ({
       id: a.id,
@@ -207,12 +208,7 @@ async function loadRoster(
     closures,
   };
 
-  return {
-    staff: staffProps,
-    mobile: {
-      selectedId: sp.p ?? null,
-    },
-  };
+  return { staff: staffProps };
 }
 
 /** A DATE column → yyyy-mm-dd, the only part of it that means anything. */

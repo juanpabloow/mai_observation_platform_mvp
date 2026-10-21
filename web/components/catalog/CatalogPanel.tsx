@@ -1,11 +1,9 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from "react";
+import { useMemo, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
-import { PageShell } from "@/components/ui/PageShell";
-import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
 import { priceLabelCOP } from "@/lib/money";
-import { PRODUCT_DESCRIPTION_MAX } from "@/lib/catalogValidation";
+import { PRODUCT_DESCRIPTION_MAX, PRODUCT_NAME_MAX } from "@/lib/catalogValidation";
 import {
   archiveProductAction,
   createProductAction,
@@ -13,17 +11,33 @@ import {
   setProductStockAction,
   updateProductAction,
 } from "@/lib/catalogActions";
+import { Alert, Button, Field, INPUT, TEXTAREA } from "@/components/ui/controls";
+import { Menu as ActionMenu, MenuButton, MenuSeparator } from "@/components/scheduling/ui/Menu";
+import { ModuleSurface, RailToggle, SearchField, SurfaceBody, SurfaceTop } from "@/components/ui/module/ModuleSurface";
+import { FilterRail, FilterSelect, type FilterGroup } from "@/components/ui/module/FilterRail";
+import { ListFoot, ListGroup, ListRow, ListTable, MobileGroup, MobileList, MobileRow, returnFocus, type ListColumn } from "@/components/ui/module/ListTable";
+import { EmptyState, NoResults, ReadOnlyBanner } from "@/components/ui/module/States";
+import { EditorFrame, EditorHeader, EditorSection, ErrorSummary, MetaChip, SaveBar, countChanges, type SummaryError } from "@/components/ui/module/Editor";
+import { AffixInput, ToggleRow } from "@/components/ui/module/FormKit";
+import { ConfirmLayer, DiscardChanges } from "@/components/ui/module/ConfirmLayer";
+import { useEditorGuard } from "@/components/ui/module/useEditorGuard";
+import { useUrlState } from "@/components/ui/module/useUrlState";
+import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
- * Per-client PRODUCT catalogue manager. It mirrors the scheduling AdminPanel's visual
- * language on purpose — a new module should read as native to the platform, not as a
- * different surface. INFORM ONLY: there is nothing here about stock quantities, orders or
- * payments; `in_stock` is a plain disponible/agotado switch.
+ * Per-client PRODUCT catalogue («Productos»), in the module surface. INFORM ONLY: there
+ * is nothing here about stock quantities, orders, payments, images or the booking page —
+ * products are what the assistant may offer (machine API), and `in_stock` is a plain
+ * Disponible / Agotado switch.
  *
- * `canManage` (agency/owner) gates create / edit / archive / restore in the UI; the server
- * actions re-enforce every tier, so this is presentation only. The availability toggle is
- * shown to everyone who can open the page (owner, setter, agency) — the Setter is the one
- * at the counter who marks a product agotado — and setProductStockAction enforces that tier.
+ * Roles (server-enforced in lib/catalogActions; this is presentation only):
+ *   - agency / owner (`canManage`)  create, edit, archive, restore, availability
+ *   - setter                        reads the list and marks Disponible / Agotado — the
+ *                                   person at the counter — and sees a «Solo lectura» note
+ *
+ * Categories are the business's own free text (no table): the side menu lists the ones in
+ * use, «Sin categoría», and «Archivados». A product's price is required and > 0 (DB CHECK),
+ * so there is no «A consultar» here, unlike services. Filters live in the URL.
  */
 
 interface Product {
@@ -36,15 +50,16 @@ interface Product {
   is_active: boolean;
 }
 
-// Responsive control sizes — identical to the scheduling settings (44px touch / 36px desktop).
-const INPUT =
-  "h-[44px] lg:h-[36px] rounded-lg border border-line-strong bg-surface px-3 text-sm text-foreground outline-none transition focus:border-foreground disabled:bg-subtle disabled:text-faint";
-const BTN =
-  "inline-flex h-[44px] lg:h-[36px] items-center justify-center rounded-lg bg-foreground px-3.5 text-sm font-medium text-background transition hover:opacity-90 disabled:opacity-50";
-const GHOST =
-  "inline-flex h-[44px] lg:h-[34px] items-center justify-center rounded-lg border border-line px-3 lg:px-2.5 text-xs text-muted transition hover:bg-subtle hover:text-foreground";
-
 type Run = (fn: () => Promise<{ ok: boolean; error?: string }>) => void;
+
+const NO_CATEGORY = "sin-categoria";
+const ARCHIVED = "archivados";
+const COLUMNS: ListColumn[] = [
+  { key: "name", label: "Producto", className: "lg:w-[15rem]" },
+  { key: "desc", label: "Descripción", className: "hidden lg:table-cell" },
+  { key: "stock", label: "Disponibilidad", className: "w-[9.375rem]" },
+  { key: "price", label: "Precio", align: "right", className: "w-[7.375rem]" },
+];
 
 export function CatalogPanel({
   clientId,
@@ -60,10 +75,12 @@ export function CatalogPanel({
   const router = useRouter();
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
-  const [query, setQuery] = useState("");
-  const [categoryFilter, setCategoryFilter] = useState("all");
-  const [creating, setCreating] = useState(false);
-  const [editing, setEditing] = useState<Product | null>(null);
+  const [query, setQuery] = useUrlState("q", "");
+  const [filter, setFilter] = useUrlState("filtro", "");
+  const [menu, setMenu] = useState<string | null>(null);
+  const [editor, setEditor] = useState<{ kind: "new" } | { kind: "edit"; product: Product } | null>(null);
+  const [archiving, setArchiving] = useState<Product | null>(null);
+  const [opener, setOpener] = useState("new");
 
   const run: Run = (fn) => {
     setError(null);
@@ -74,451 +91,447 @@ export function CatalogPanel({
     });
   };
 
-  // Distinct categories actually in use, for the filter + the create/edit datalist.
+  // Distinct categories actually in use, for the side menu + the editor's suggestions.
   const categories = useMemo(
-    () =>
-      [...new Set(products.map((p) => p.category).filter((c): c is string => !!c))].sort((a, b) =>
-        a.localeCompare(b, "es"),
-      ),
+    () => [...new Set(products.map((p) => p.category).filter((c): c is string => !!c))].sort((a, b) => a.localeCompare(b, "es")),
     [products],
   );
+  const active = products.filter((p) => p.is_active);
+  const archived = products.filter((p) => !p.is_active);
+  const q = query.trim().toLocaleLowerCase("es");
+  const matchesQuery = (p: Product) => !q || p.name.toLocaleLowerCase("es").includes(q) || (p.description ?? "").toLocaleLowerCase("es").includes(q);
+  const view = filter === ARCHIVED || filter === NO_CATEGORY || categories.includes(filter) ? filter : "";
 
-  const filtered = products.filter((p) => {
-    const matchesQuery = p.name.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es"));
-    const matchesCategory =
-      categoryFilter === "all"
-        ? true
-        : categoryFilter === "none"
-          ? !p.category
-          : p.category === categoryFilter;
-    return matchesQuery && matchesCategory;
-  });
-  const activeCount = products.filter((p) => p.is_active).length;
+  const railGroups: FilterGroup[] = [
+    {
+      label: "Categorías",
+      options: [
+        { value: "", label: "Todas las categorías", count: active.length },
+        ...categories.map((c) => ({ value: c, label: c, count: active.filter((p) => p.category === c).length })),
+        { value: NO_CATEGORY, label: "Sin categoría", count: active.filter((p) => !p.category).length },
+      ],
+    },
+    { label: "Otros", options: [{ value: ARCHIVED, label: "Archivados", count: archived.length }] },
+  ];
 
-  return (
-    <main className="flex min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]">
-      <PageShell grow={false} clip={false}>
-        <div className="flex min-h-11 flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
-          <div className="min-w-0">
-            <div className="flex items-baseline gap-2.5">
-              <h1 className="truncate text-xl font-semibold tracking-[-0.025em] text-foreground">Productos</h1>
-              <span className="truncate text-xs text-muted">{clientName}</span>
-            </div>
-            <p className="mt-0.5 hidden text-xs text-muted sm:block">
-              Lo que registres aquí es lo que el asistente puede ofrecer a tus clientes.
-            </p>
-          </div>
-          {canManage ? (
-            <button type="button" className={BTN} onClick={() => setCreating(true)}>
-              + Nuevo producto
-            </button>
-          ) : null}
-        </div>
-      </PageShell>
+  // Groups shown: archived as one group; otherwise one group per category (+ none).
+  const groups: Array<{ key: string; title: string; items: Product[] }> =
+    view === ARCHIVED
+      ? [{ key: ARCHIVED, title: "Archivados", items: archived.filter(matchesQuery) }]
+      : [
+          ...categories.map((c) => ({ key: c, title: c, items: active.filter((p) => p.category === c) })),
+          { key: NO_CATEGORY, title: "Sin categoría", items: active.filter((p) => !p.category) },
+        ]
+          .filter((g) => view === "" || g.key === view)
+          .map((g) => ({ ...g, items: g.items.filter(matchesQuery) }));
+  const shown = groups.reduce((n, g) => n + g.items.length, 0);
 
-      {error ? (
-        <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">
-          {error}
-        </p>
-      ) : null}
+  const open = (next: NonNullable<typeof editor>) => {
+    setMenu(null);
+    setOpener(next.kind === "edit" ? next.product.id : "new");
+    setEditor(next);
+  };
+  const closeEditor = (saved: boolean) => {
+    setEditor(null);
+    if (saved) router.refresh();
+    returnFocus(opener);
+  };
 
-      <PageShell className="overflow-y-auto" ariaLabel="Catálogo de productos">
-        <div className="flex min-h-full w-full flex-col gap-2.5 p-3 sm:p-4">
-          {products.length === 0 ? (
-            <EmptyState canManage={canManage} onCreate={() => setCreating(true)} />
-          ) : (
-            <div className="flex flex-col gap-3 rounded-xl border border-line bg-surface p-3 sm:p-4">
-              <div className="flex flex-wrap items-center gap-2 border-b border-line pb-3">
-                <input
-                  value={query}
-                  onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Buscar producto…"
-                  aria-label="Buscar producto"
-                  className={`${INPUT} min-w-0 flex-1 bg-subtle/60 sm:max-w-sm`}
-                />
-                <select
-                  value={categoryFilter}
-                  onChange={(e) => setCategoryFilter(e.target.value)}
-                  aria-label="Filtrar por categoría"
-                  className={INPUT}
-                >
-                  <option value="all">Todas las categorías</option>
-                  {categories.map((c) => (
-                    <option key={c} value={c}>
-                      {c}
-                    </option>
-                  ))}
-                  <option value="none">Sin categoría</option>
-                </select>
-                <span className="u-mono ml-auto text-xs text-faint">
-                  {activeCount} activo{activeCount === 1 ? "" : "s"}
-                </span>
-              </div>
-
-              {filtered.map((p) => (
-                <ProductRow
-                  key={p.id}
-                  clientId={clientId}
-                  product={p}
-                  canManage={canManage}
-                  run={run}
-                  pending={pending}
-                  onEdit={() => setEditing(p)}
-                />
-              ))}
-              {filtered.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-line px-4 py-10 text-center">
-                  <p className="text-sm font-semibold text-foreground">No encontramos productos</p>
-                  <p className="mt-1 text-xs text-muted">Cambia la búsqueda o el filtro de categoría.</p>
-                </div>
-              ) : null}
-            </div>
-          )}
-        </div>
-      </PageShell>
-
-      {creating ? (
-        <ProductModal
-          title="Nuevo producto"
-          description="Lo verá el asistente al responder qué vendes, cuánto cuesta y si está disponible."
-          categories={categories}
-          pending={pending}
-          onClose={() => setCreating(false)}
-          onSubmit={(values) =>
-            run(async () => {
-              const r = await createProductAction({ clientId, ...values });
-              if (r.ok) setCreating(false);
-              return r;
-            })
-          }
-        />
-      ) : null}
-
-      {editing ? (
-        <ProductModal
-          title={editing.name}
-          description="Nombre, precio, categoría, descripción y disponibilidad."
-          categories={categories}
-          initial={editing}
-          pending={pending}
-          onClose={() => setEditing(null)}
-          onSubmit={(values) =>
-            run(async () => {
-              const r = await updateProductAction(clientId, editing.id, values);
-              if (r.ok) setEditing(null);
-              return r;
-            })
-          }
-        />
-      ) : null}
-    </main>
-  );
-}
-
-function EmptyState({ canManage, onCreate }: { canManage: boolean; onCreate: () => void }) {
-  return (
-    <div className="flex min-h-72 flex-1 flex-col items-center justify-center rounded-xl border border-dashed border-line bg-surface px-4 py-12 text-center">
-      <p className="text-sm font-semibold text-foreground">Aún no hay productos</p>
-      <p className="mt-1 max-w-sm text-xs text-muted">
-        Lo que registres aquí es lo que el asistente puede ofrecer: nombre, precio, descripción y si está
-        disponible.
-      </p>
-      {canManage ? (
-        <button type="button" className={`${BTN} mt-4`} onClick={onCreate}>
-          + Nuevo producto
-        </button>
-      ) : null}
-    </div>
-  );
-}
-
-function ProductRow({
-  clientId,
-  product,
-  canManage,
-  run,
-  pending,
-  onEdit,
-}: {
-  clientId: string;
-  product: Product;
-  canManage: boolean;
-  run: Run;
-  pending: boolean;
-  onEdit: () => void;
-}) {
-  const archived = !product.is_active;
-  const label = priceLabelCOP(product.price) ?? "—";
-  return (
-    <article
-      className={`flex flex-wrap items-center gap-3 overflow-hidden rounded-xl border border-line px-4 py-3.5 ${
-        archived ? "bg-subtle/40" : "bg-surface"
+  const stockToggle = (p: Product) => (
+    <button
+      type="button"
+      disabled={pending}
+      onClick={() => run(() => setProductStockAction(clientId, p.id, !p.in_stock))}
+      aria-pressed={p.in_stock}
+      aria-label={`${p.name}: ${p.in_stock ? "disponible" : "agotado"}. Cambiar disponibilidad`}
+      className={`u-focus inline-flex h-[1.875rem] items-center gap-1.5 rounded-full border px-2.5 text-[0.75rem] font-medium transition-colors disabled:opacity-50 ${
+        p.in_stock ? "border-success/35 bg-success/10 text-success hover:bg-success/15" : "border-line bg-subtle text-muted hover:bg-chip"
       }`}
     >
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 className="truncate text-sm font-semibold text-foreground">{product.name}</h3>
-          {product.category ? (
-            <span className="rounded-full bg-chip px-2 py-0.5 text-[0.625rem] font-medium text-muted">
-              {product.category}
-            </span>
+      <span aria-hidden className={`size-1.5 rounded-full ${p.in_stock ? "bg-success" : "bg-faint"}`} />
+      {p.in_stock ? "Disponible" : "Agotado"}
+    </button>
+  );
+
+  const rowMenu = (p: Product, at: "t" | "m" = "t") => {
+    if (!canManage && !p.is_active) return null;
+    return (
+      <ActionMenu label={`Acciones de ${p.name}`} open={menu === `${at}:${p.id}`} onToggle={() => setMenu(menu === `${at}:${p.id}` ? null : `${at}:${p.id}`)} onClose={() => setMenu(null)}>
+        {p.is_active ? (
+          <MenuButton
+            disabled={pending}
+            onClick={() => {
+              setMenu(null);
+              run(() => setProductStockAction(clientId, p.id, !p.in_stock));
+            }}
+          >
+            {p.in_stock ? "Marcar como agotado" : "Marcar como disponible"}
+          </MenuButton>
+        ) : null}
+        {canManage ? (
+          <>
+            {p.is_active ? <MenuSeparator /> : null}
+            {p.is_active ? <MenuButton onClick={() => open({ kind: "edit", product: p })}>Editar</MenuButton> : null}
+            {p.is_active ? (
+              <MenuButton
+                disabled={pending}
+                onClick={() => {
+                  setMenu(null);
+                  setArchiving(p);
+                }}
+              >
+                Archivar
+              </MenuButton>
+            ) : (
+              <MenuButton
+                disabled={pending}
+                onClick={() => {
+                  setMenu(null);
+                  run(() => restoreProductAction(clientId, p.id));
+                }}
+              >
+                Restaurar
+              </MenuButton>
+            )}
+          </>
+        ) : null}
+      </ActionMenu>
+    );
+  };
+
+  const canOpen = (p: Product) => canManage && p.is_active;
+
+  return (
+    <ModuleSurface label="Productos">
+      <div hidden={Boolean(editor)} className="flex min-h-0 flex-1 flex-col">
+        <SurfaceTop
+          title="Productos"
+          summary={`Lo que el asistente puede ofrecer · ${active.length} activo${active.length === 1 ? "" : "s"} · ${archived.length} archivado${archived.length === 1 ? "" : "s"}`}
+          primary={
+            canManage ? (
+              <Button variant="primary" data-open-key="new" onClick={() => open({ kind: "new" })}>
+                <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                  <path d="M8 3v10M3 8h10" />
+                </svg>
+                Añadir producto
+              </Button>
+            ) : null
+          }
+        >
+          <RailToggle />
+          <SearchField value={query} onChange={setQuery} label="Buscar producto" />
+          <FilterSelect groups={railGroups} value={view} onChange={setFilter} label="Categoría" className="w-full sm:w-auto sm:min-w-[14rem]" />
+        </SurfaceTop>
+        <SurfaceBody rail={<FilterRail groups={railGroups} value={view} onChange={setFilter} />} railLabel="Categorías de productos">
+          {!canManage ? <ReadOnlyBanner>Puedes marcar productos como disponibles o agotados. Crear, editar y archivar lo hace la persona responsable del negocio.</ReadOnlyBanner> : null}
+          {error ? (
+            <div className="px-4 pt-3 sm:px-6">
+              <Alert>{error}</Alert>
+            </div>
           ) : null}
-          {archived ? (
-            <span className="rounded-full bg-chip px-2 py-0.5 text-[0.625rem] font-medium text-muted">Archivado</span>
-          ) : null}
-        </div>
-        <p className="mt-1 truncate text-xs text-muted">
-          {label}
-          {product.description ? ` · ${product.description}` : ""}
-        </p>
+
+          {products.length === 0 ? (
+            <EmptyState title="Aún no hay productos" body="Lo que registres aquí es lo que el asistente puede ofrecer: nombre, precio, descripción y si está disponible.">
+              {canManage ? (
+                <Button variant="primary" onClick={() => open({ kind: "new" })}>
+                  Añadir producto
+                </Button>
+              ) : null}
+            </EmptyState>
+          ) : shown === 0 ? (
+            view === ARCHIVED && archived.length === 0 ? (
+              <EmptyState title="No hay productos archivados" body="Un producto archivado deja de ofrecerse y se puede restaurar." />
+            ) : !q && view === "" && active.length === 0 ? (
+              // Nothing searched or filtered: every product is archived.
+              <EmptyState title="No hay productos activos" body={`${archived.length === 1 ? "El único producto está archivado" : `Los ${archived.length} productos están archivados`}: el asistente no los ofrece. Puedes restaurarlos desde «Archivados».`}>
+                {canManage ? (
+                  <Button variant="primary" onClick={() => open({ kind: "new" })}>
+                    Añadir producto
+                  </Button>
+                ) : null}
+                <Button onClick={() => setFilter(ARCHIVED)}>Ver archivados</Button>
+              </EmptyState>
+            ) : (
+              <NoResults>
+                {q ? <Button onClick={() => setQuery("")}>Borrar búsqueda</Button> : null}
+                {view ? <Button onClick={() => setFilter("")}>Ver todas las categorías</Button> : null}
+              </NoResults>
+            )
+          ) : (
+            <>
+              {/* One continuous list in category order; the side menu filters by category. */}
+              <ListTable label={view === ARCHIVED ? "Productos archivados" : "Productos"} columns={COLUMNS}>
+                <ListGroup span={COLUMNS.length + 1}>
+                  {groups.flatMap((g) =>
+                    g.items.map((p) => (
+                      <ListRow
+                          key={p.id}
+                          columns={COLUMNS}
+                          name={p.name}
+                          openKey={p.id}
+                          onOpen={canOpen(p) ? () => open({ kind: "edit", product: p }) : undefined}
+                          openLabel="Editar"
+                          dimmed={!p.is_active}
+                          raised={menu === `t:${p.id}`}
+                          menu={rowMenu(p)}
+                          cells={[
+                            <span key="n">{p.name}</span>,
+                            <span key="d" className="text-muted">{p.description || "Sin descripción"}</span>,
+                            p.is_active ? stockToggle(p) : <span key="s" className="text-muted">Archivado</span>,
+                            <span key="$" className="font-semibold tabular-nums">{priceLabelCOP(p.price) ?? "—"}</span>,
+                          ]}
+                        />
+                    )),
+                  )}
+                </ListGroup>
+              </ListTable>
+              <MobileList>
+                {groups.map((g) =>
+                  g.items.length === 0 ? null : (
+                    <MobileGroup key={g.key} title={g.title} count={String(g.items.length)}>
+                      {g.items.map((p) => (
+                        <MobileRow
+                          key={p.id}
+                          title={p.name}
+                          openKey={p.id}
+                          subtitle={p.description || "Sin descripción"}
+                          value={priceLabelCOP(p.price) ?? "—"}
+                          badges={p.is_active && !p.in_stock ? <span className="rounded-full bg-chip px-1.5 py-px text-[0.6875rem] font-medium text-muted">Agotado</span> : null}
+                          onOpen={canOpen(p) ? () => open({ kind: "edit", product: p }) : undefined}
+                          openLabel="Editar"
+                          dimmed={!p.is_active}
+                          menu={rowMenu(p, "m")}
+                        />
+                      ))}
+                    </MobileGroup>
+                  ),
+                )}
+              </MobileList>
+              <ListFoot>
+                Mostrando {shown} producto{shown === 1 ? "" : "s"}
+                {q ? " · con búsqueda" : ""}
+              </ListFoot>
+            </>
+          )}
+        </SurfaceBody>
       </div>
 
-      {/* Availability — inline, one click. Hidden for archived products (they never reach
-          the bot). Shown to every viewer; the Setter tier is enforced server-side. */}
-      {!archived ? (
-        <button
-          type="button"
-          disabled={pending}
-          onClick={() => run(() => setProductStockAction(clientId, product.id, !product.in_stock))}
-          aria-pressed={product.in_stock}
-          className={`inline-flex h-[34px] items-center gap-1.5 rounded-full border px-3 text-xs font-medium transition disabled:opacity-50 ${
-            product.in_stock
-              ? "border-success/40 bg-success/10 text-success hover:bg-success/15"
-              : "border-line bg-subtle text-muted hover:bg-subtle/70"
-          }`}
-        >
-          <span aria-hidden className={`size-2 rounded-full ${product.in_stock ? "bg-success" : "bg-faintest"}`} />
-          {product.in_stock ? "Disponible" : "Agotado"}
-        </button>
+      {editor ? (
+        <ProductEditor
+          key={editor.kind === "edit" ? editor.product.id : "new"}
+          clientId={clientId}
+          clientName={clientName}
+          product={editor.kind === "edit" ? editor.product : null}
+          categories={categories}
+          onClose={() => closeEditor(false)}
+          onSaved={() => closeEditor(true)}
+        />
       ) : null}
 
-      {canManage ? (
-        archived ? (
-          <button
-            type="button"
-            className={GHOST}
-            disabled={pending}
-            onClick={() => run(() => restoreProductAction(clientId, product.id))}
-          >
-            Restaurar
-          </button>
-        ) : (
-          <>
-            <button type="button" className={GHOST} onClick={onEdit} aria-haspopup="dialog">
-              Editar
-            </button>
-            <ArchiveButton clientId={clientId} product={product} run={run} pending={pending} />
-          </>
-        )
+      {archiving ? (
+        <ConfirmLayer
+          id="product-archive"
+          title={`¿Archivar «${archiving.name}»?`}
+          body="Se deja de ofrecer: el asistente ya no lo verá. Puedes restaurarlo cuando quieras."
+          confirmLabel="Archivar"
+          tone="primary"
+          onCancel={() => setArchiving(null)}
+          onConfirm={() => {
+            const id = archiving.id;
+            setArchiving(null);
+            run(() => archiveProductAction(clientId, id));
+          }}
+        />
       ) : null}
-    </article>
+    </ModuleSurface>
   );
 }
 
-/** Archive behind an inline confirm — it pulls the product from the bot's offer, so it's
- *  worth one deliberate beat, but it's reversible (Restaurar), so no blocking dialog. */
-function ArchiveButton({
-  clientId,
-  product,
-  run,
-  pending,
-}: {
-  clientId: string;
-  product: Product;
-  run: Run;
-  pending: boolean;
-}) {
-  const [confirming, setConfirming] = useState(false);
-  if (!confirming) {
-    return (
-      <button type="button" className={GHOST} disabled={pending} onClick={() => setConfirming(true)}>
-        Archivar
-      </button>
-    );
-  }
-  return (
-    <div className="flex flex-wrap items-center gap-2">
-      <span className="text-xs text-amber-700 dark:text-amber-400">Se deja de ofrecer. Puedes restaurarlo.</span>
-      <button
-        type="button"
-        disabled={pending}
-        onClick={() => {
-          setConfirming(false);
-          run(() => archiveProductAction(clientId, product.id));
-        }}
-        className="rounded border border-amber-500/40 px-2 py-0.5 text-[11px] text-amber-700 transition-colors hover:bg-amber-500/10 disabled:opacity-50 dark:text-amber-400"
-      >
-        Archivar
-      </button>
-      <button
-        type="button"
-        onClick={() => setConfirming(false)}
-        className="rounded border border-line px-2 py-0.5 text-[11px] transition-colors hover:bg-subtle"
-      >
-        Cancelar
-      </button>
-    </div>
-  );
-}
-
-interface ProductValues {
+interface ProductForm {
   name: string;
-  price: string;
-  category: string | null;
+  category: string;
   description: string;
+  price: string;
   inStock: boolean;
 }
 
-function ProductModal({
-  title,
-  description,
-  categories,
-  initial,
-  pending,
-  onClose,
-  onSubmit,
-}: {
-  title: string;
-  description?: string;
-  categories: string[];
-  initial?: Product;
-  pending: boolean;
-  onClose: () => void;
-  onSubmit: (values: ProductValues) => void;
-}) {
-  const [name, setName] = useState(initial?.name ?? "");
-  const [price, setPrice] = useState(initial?.price ?? "");
-  const [category, setCategory] = useState(initial?.category ?? "");
-  const [desc, setDesc] = useState(initial?.description ?? "");
-  const [inStock, setInStock] = useState(initial?.in_stock ?? true);
-
-  // Keep `close` STABLE (so useTrappedPanel's focus trap doesn't re-subscribe every render)
-  // without reading a ref during render — the latest onClose is stored in an effect.
-  const closeRef = useRef(onClose);
-  useEffect(() => {
-    closeRef.current = onClose;
-  }, [onClose]);
-  const close = useCallback(() => closeRef.current(), []);
-  const panelRef = useTrappedPanel({ active: true, onClose: close });
-
-  const priceOk = price.trim() !== "" && Number(price) > 0;
-  const submit = () =>
-    onSubmit({
-      name: name.trim(),
-      price: price.trim(),
-      category: category.trim() === "" ? null : category.trim(),
-      description: desc,
-      inStock,
-    });
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-5">
-      <button type="button" aria-label={`Cerrar ${title}`} className={OVERLAY_SCRIM} onClick={close} />
-      <section
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={title}
-        tabIndex={-1}
-        className="relative z-50 flex max-h-[min(760px,calc(100dvh-2rem))] w-full flex-col overflow-hidden rounded-t-2xl border border-line bg-surface sm:max-w-2xl sm:rounded-2xl"
-      >
-        <header className="flex shrink-0 items-start gap-4 border-b border-line px-4 py-3.5 sm:px-5">
-          <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold text-foreground">{title}</h2>
-            {description ? <p className="mt-0.5 text-xs text-muted">{description}</p> : null}
-          </div>
-          <button
-            type="button"
-            onClick={close}
-            aria-label="Cerrar"
-            className="flex size-9 shrink-0 items-center justify-center rounded-lg text-lg text-muted transition hover:bg-subtle hover:text-foreground"
-          >
-            ×
-          </button>
-        </header>
-
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <Field label="Nombre">
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Óleo para barba" className={`${INPUT} w-full`} />
-            </Field>
-            <Field label="Precio" hint="Lo que cuesta el producto.">
-              <input
-                type="number"
-                min={0}
-                step="0.01"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-                placeholder="Ej. 35000"
-                className={`${INPUT} w-full`}
-              />
-            </Field>
-            <Field label="Categoría" hint="Texto libre, opcional. Ej. «Cuidado de barba».">
-              <input
-                value={category}
-                onChange={(e) => setCategory(e.target.value)}
-                list="catalog-categories"
-                placeholder="Opcional"
-                className={`${INPUT} w-full`}
-              />
-              <datalist id="catalog-categories">
-                {categories.map((c) => (
-                  <option key={c} value={c} />
-                ))}
-              </datalist>
-            </Field>
-            <label className="flex min-w-0 flex-col gap-1.5">
-              <span className="text-xs font-medium text-foreground">Disponibilidad</span>
-              <label className="inline-flex h-[44px] items-center gap-2 text-sm text-foreground lg:h-[36px]">
-                <input type="checkbox" checked={inStock} onChange={(e) => setInStock(e.target.checked)} />
-                {inStock ? "Disponible" : "Agotado"}
-              </label>
-            </label>
-          </div>
-
-          <div className="mt-4">
-            <label className="mb-1.5 flex flex-col gap-1.5">
-              <span className="text-xs font-medium text-foreground">
-                Descripción <span className="font-normal text-faint">(opcional)</span>
-              </span>
-              <textarea
-                value={desc}
-                onChange={(e) => setDesc(e.target.value)}
-                rows={3}
-                maxLength={PRODUCT_DESCRIPTION_MAX}
-                placeholder="Qué es el producto — lo usa el bot para responder «¿qué es X?». Texto plano, sin formato."
-                className="min-h-[4.5rem] w-full resize-y rounded-lg border border-line-strong bg-surface px-3 py-2 text-sm text-foreground outline-none transition focus:border-foreground"
-              />
-            </label>
-            <p className="text-right text-[0.6875rem] text-faint">
-              {desc.length}/{PRODUCT_DESCRIPTION_MAX}
-            </p>
-          </div>
-        </div>
-
-        <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-line bg-card/50 px-4 py-3 sm:px-5">
-          <button
-            type="button"
-            onClick={close}
-            className="inline-flex h-[44px] items-center justify-center rounded-lg border border-line-strong px-3.5 text-sm font-medium text-foreground transition hover:bg-subtle lg:h-[36px]"
-          >
-            Cancelar
-          </button>
-          <button className={BTN} disabled={pending || !name.trim() || !priceOk} onClick={submit}>
-            {initial ? "Guardar cambios" : "Crear producto"}
-          </button>
-        </footer>
-      </section>
-    </div>
-  );
+function validateProduct(f: ProductForm): Partial<Record<keyof ProductForm, string>> {
+  const e: Partial<Record<keyof ProductForm, string>> = {};
+  if (!f.name.trim()) e.name = "Escribe el nombre del producto.";
+  else if (f.name.trim().length > PRODUCT_NAME_MAX) e.name = `Máximo ${PRODUCT_NAME_MAX} caracteres.`;
+  const n = Number(f.price);
+  if (!f.price.trim()) e.price = "Escribe el precio del producto.";
+  else if (!Number.isFinite(n) || n <= 0) e.price = "El precio debe ser mayor que 0.";
+  if (f.description.length > PRODUCT_DESCRIPTION_MAX) e.description = `Máximo ${PRODUCT_DESCRIPTION_MAX} caracteres.`;
+  return e;
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+const FIELD_ID: Record<keyof ProductForm, string> = {
+  name: "prd-f-name",
+  category: "prd-f-category",
+  description: "prd-f-description",
+  price: "prd-f-price",
+  inStock: "prd-f-stock",
+};
+const FIELD_LABEL: Record<keyof ProductForm, string> = {
+  name: "Nombre",
+  category: "Categoría",
+  description: "Descripción",
+  price: "Precio",
+  inStock: "Disponibilidad",
+};
+
+/** The in-page product editor: one save (create or update), errors beside each field and
+ *  linked on top, everything typed kept when the server refuses (e.g. a duplicate name). */
+function ProductEditor({
+  clientId,
+  clientName,
+  product,
+  categories,
+  onClose,
+  onSaved,
+}: {
+  clientId: string;
+  clientName: string;
+  product: Product | null;
+  categories: string[];
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const initial = useMemo<ProductForm>(
+    () => ({
+      name: product?.name ?? "",
+      category: product?.category ?? "",
+      description: product?.description ?? "",
+      // "45000.00" → "45000" so an untouched price is not a change.
+      price: product ? String(Number(product.price)) : "",
+      inStock: product?.in_stock ?? true,
+    }),
+    [product],
+  );
+  const [form, setForm] = useState<ProductForm>(initial);
+  const [touched, setTouched] = useState<Partial<Record<keyof ProductForm, boolean>>>({});
+  const [attempted, setAttempted] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const saved = useRef(false);
+
+  const errors = validateProduct(form);
+  const show = (k: keyof ProductForm) => ((attempted || touched[k]) && errors[k]) || "";
+  const changes = countChanges(initial, form);
+  const set = <K extends keyof ProductForm>(k: K, v: ProductForm[K]) => setForm((f) => ({ ...f, [k]: v }));
+  const touch = (k: keyof ProductForm) => () => setTouched((t) => ({ ...t, [k]: true }));
+  const guard = useEditorGuard({ dirty: changes > 0 && !saving, onLeave: () => (saved.current ? onSaved() : onClose()) });
+  const requestClose = () => {
+    if (!saving) guard.requestLeave();
+  };
+
+  const save = async () => {
+    setAttempted(true);
+    if (Object.keys(errors).length > 0) return;
+    setSaving(true);
+    setError(null);
+    const values = {
+      name: form.name.trim(),
+      price: form.price.trim(),
+      category: form.category.trim() === "" ? null : form.category.trim(),
+      description: form.description,
+      inStock: form.inStock,
+    };
+    const r = product ? await safeAction(() => updateProductAction(clientId, product.id, values)) : await safeAction(() => createProductAction({ clientId, ...values }));
+    setSaving(false);
+    if (!r.ok) {
+      setError(r.error ?? "No se pudo guardar el producto.");
+      return;
+    }
+    saved.current = true;
+    guard.leave();
+  };
+
+  const summary: SummaryError[] = attempted
+    ? (Object.keys(errors) as (keyof ProductForm)[]).map((k) => ({ target: FIELD_ID[k], message: `${FIELD_LABEL[k]}: ${errors[k]}` }))
+    : [];
+  const sections = [
+    { id: "prd-basic", label: "Información básica", dirty: countChanges({ a: initial.name, b: initial.category, c: initial.description }, { a: form.name, b: form.category, c: form.description }) > 0, errors: attempted ? Number(Boolean(errors.name)) + Number(Boolean(errors.description)) : 0 },
+    { id: "prd-price", label: "Precio", dirty: initial.price !== form.price, errors: attempted && errors.price ? 1 : 0 },
+    { id: "prd-stock", label: "Disponibilidad", dirty: initial.inStock !== form.inStock },
+  ];
+  const isNew = !product;
+
   return (
-    <label className="flex min-w-0 flex-col gap-1.5">
-      <span className="text-xs font-medium text-foreground">{label}</span>
-      {children}
-      {hint ? <span className="text-[0.6875rem] text-faint">{hint}</span> : null}
-    </label>
+    <div
+      className="flex min-h-0 flex-1 flex-col"
+      onKeyDown={(e) => {
+        if (e.key !== "Escape" || e.defaultPrevented || (e.target as HTMLElement).closest("select, [role=menu]")) return;
+        e.preventDefault();
+        requestClose();
+      }}
+    >
+      <EditorHeader
+        title={isNew ? "Nuevo producto" : product.name}
+        headingId="prd-editor-title"
+        eyebrow={isNew ? `Catálogo · Productos · ${clientName}` : "Editar producto"}
+        chips={
+          <>
+            {form.category.trim() ? <MetaChip>{form.category.trim()}</MetaChip> : <MetaChip>Sin categoría</MetaChip>}
+            <MetaChip>{(form.price.trim() && Number(form.price) > 0 && priceLabelCOP(form.price.trim())) || "Sin precio"}</MetaChip>
+            <MetaChip>{form.inStock ? "Disponible" : "Agotado"}</MetaChip>
+          </>
+        }
+        backLabel="Volver a Productos"
+        onBack={requestClose}
+        changes={changes}
+        onCancel={requestClose}
+        onSave={save}
+        saveLabel={isNew ? "Crear producto" : "Guardar cambios"}
+        saving={saving}
+        canSave={isNew ? true : changes > 0}
+      />
+      <EditorFrame
+        sections={sections}
+        saveBar={<SaveBar changes={changes} onCancel={requestClose} onSave={save} saving={saving} saveLabel={isNew ? "Crear" : "Guardar"} canSave={isNew ? true : changes > 0} />}
+      >
+        <ErrorSummary errors={summary} />
+        {error ? (
+          <div className="mb-2">
+            <Alert>{error} Lo que escribiste se conserva.</Alert>
+          </div>
+        ) : null}
+        <EditorSection id="prd-basic" title="Información básica" summary={`${form.name || "Sin nombre"}${form.category ? ` · ${form.category}` : ""}`}>
+          <Field label="Nombre" error={show("name")}>
+            <input id="prd-f-name" value={form.name} onChange={(e) => set("name", e.target.value)} onBlur={touch("name")} maxLength={PRODUCT_NAME_MAX + 20} placeholder="Ej. Óleo para barba" aria-invalid={Boolean(show("name"))} className={INPUT} />
+          </Field>
+          <Field label="Categoría" optional hint="Texto libre: agrupa el listado. Elige una existente o escribe una nueva.">
+            <input id="prd-f-category" value={form.category} onChange={(e) => set("category", e.target.value)} list="catalog-categories" placeholder="Ej. Cuidado de barba" className={INPUT} />
+          </Field>
+          <datalist id="catalog-categories">
+            {categories.map((c) => (
+              <option key={c} value={c} />
+            ))}
+          </datalist>
+          <Field label="Descripción" optional hint={`Qué es el producto — lo usa el asistente para responder «¿qué es X?». ${form.description.length}/${PRODUCT_DESCRIPTION_MAX}`} error={show("description")}>
+            <textarea
+              id="prd-f-description"
+              value={form.description}
+              onChange={(e) => set("description", e.target.value)}
+              onBlur={touch("description")}
+              rows={3}
+              maxLength={PRODUCT_DESCRIPTION_MAX}
+              aria-invalid={Boolean(show("description"))}
+              className={TEXTAREA}
+            />
+          </Field>
+        </EditorSection>
+        <EditorSection id="prd-price" title="Precio" summary={(form.price.trim() && priceLabelCOP(form.price.trim())) || "Sin precio"}>
+          <Field label="Precio" hint="Obligatorio y mayor que 0. Los productos no admiten «A consultar»." error={show("price")}>
+            <AffixInput id="prd-f-price" inputMode="decimal" value={form.price} onChange={(e) => set("price", e.target.value)} onBlur={touch("price")} aria-invalid={Boolean(show("price"))} prefix="$" suffix="COP" className="max-w-[16rem]" />
+          </Field>
+        </EditorSection>
+        <EditorSection id="prd-stock" title="Disponibilidad" summary={form.inStock ? "Disponible" : "Agotado"}>
+          <ToggleRow id="prd-f-stock" checked={form.inStock} onChange={(v) => set("inStock", v)} label="Disponible" hint="El asistente lo verá al responder qué vendes, cuánto cuesta y si está disponible. Sin inventario: es un sí o no." />
+        </EditorSection>
+      </EditorFrame>
+      {guard.asking ? <DiscardChanges onKeep={guard.keepEditing} onDiscard={guard.discard} body="Hay cambios sin guardar en este producto. Si sales ahora, se pierden." /> : null}
+    </div>
   );
 }

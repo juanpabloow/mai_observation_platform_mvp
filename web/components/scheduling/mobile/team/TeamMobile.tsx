@@ -1,9 +1,10 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { MToast, staffColors } from "@/components/scheduling/mobile/kit";
 import type { StaffAppointment, StaffTabProps } from "@/components/scheduling/staff/StaffTab";
+import { staffProfileHref } from "@/lib/staffProfileUrl";
 import { CreateForm } from "./forms";
 import { presenceFor, rosterOrder, todayLoad } from "./presence";
 import { TeamList, type TeamRow, type TeamSeg } from "./TeamList";
@@ -13,8 +14,6 @@ import { TeamMember } from "./TeamMember";
  *  hours and closures now live on the roster props: both widths derive presence from them). */
 export interface TeamMobileExtras {
   clientName: string;
-  /** `?p=` — the professional whose detail screen is open. */
-  selectedId: string | null;
   /** May the viewer add a professional? (The server checks again on create.) */
   canCreate: boolean;
 }
@@ -25,11 +24,14 @@ export interface TeamMobileExtras {
  * data; this tree also lists INACTIVE professionals (labelled), which the desktop roster
  * filters out as it always has.
  *
- * The detail screen is a URL (`?p=<staffId>`), distinct from the desktop drawer's `?s=`,
- * so opening one never mounts the other's focus trap in the hidden tree.
+ * The detail screen is a URL, `?s=<staffId>` — the SAME parameter as the desktop drawer
+ * (lib/staffProfileUrl), so a profile link opens the same professional at any width; the
+ * old `?p=` still opens it. The desktop drawer mounted in the hidden tree keeps its focus
+ * trap off below md (StaffTab), so sharing the parameter never traps focus on a phone.
  */
 export function TeamMobile({ clientId, staff, extras }: { clientId: string; staff: StaffTabProps; extras: TeamMobileExtras }) {
   const router = useRouter();
+  const query = useSearchParams();
   const [search, setSearch] = useState("");
   const [seg, setSeg] = useState<TeamSeg>("all");
   const [creating, setCreating] = useState(false);
@@ -91,15 +93,9 @@ export function TeamMobile({ clientId, staff, extras }: { clientId: string; staf
       return { member, presence, load };
     });
 
-  const href = (id: string | null) => {
-    const p = new URLSearchParams();
-    if (staff.currentSiteId) p.set("site", staff.currentSiteId);
-    if (id) p.set("p", id);
-    const qs = p.toString();
-    return qs ? `?${qs}` : "?";
-  };
+  const href = (id: string | null) => staffProfileHref(query.toString(), id, { siteId: staff.currentSiteId });
 
-  const selected = extras.selectedId ? rows.find((r) => r.member.id === extras.selectedId) : undefined;
+  const selected = staff.selectedId ? rows.find((r) => r.member.id === staff.selectedId) : undefined;
 
   return (
     <div className="u-sch-m -m-[var(--content-pad)] flex min-h-[calc(100%_+_var(--content-pad)_*_2)] flex-none flex-col bg-m-bg md:hidden">

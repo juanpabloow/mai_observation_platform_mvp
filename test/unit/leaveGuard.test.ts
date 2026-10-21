@@ -171,3 +171,55 @@ test('the contact forms route every exit through the guard', () => {
   assert.match(drawer, /confirmLabel="Descartar"/);
   assert.match(drawer, /inert=\{guard\?\.asking \|\| undefined\}/, 'the form is inert behind the question');
 });
+
+/*
+ * PAGE FORMS (Reglas de reserva, contacto de Página de reservas, categorías públicas):
+ * the form IS the page, so usePageFormGuard arms the marker only while dirty and, on
+ * «Descartar» after a Back, finishes that Back itself — exactly once. Modelled here with
+ * the same guard and the hook's onLeave (history.back()).
+ */
+test('page form: Back asks, «Seguir editando» keeps the draft, «Descartar» goes back exactly once', async () => {
+  const h = new FakeHistory();
+  h.pushState({ page: 'rules' }); // list → rules (the page the form lives on)
+  const log: string[] = [];
+  let reason: 'back' | null = null;
+  const g = createLeaveGuard({
+    history: h,
+    events: h,
+    key: '__pageFormGuard',
+    isDirty: () => true,
+    onAsk: () => {
+      reason = 'back';
+      log.push('ask');
+    },
+    onLeave: () => {
+      if (reason === 'back') h.back();
+    },
+  });
+  g.arm(); // the form became dirty
+  assert.equal(h.length, 3, 'one marker entry, only while dirty');
+
+  h.userBack();
+  await flush();
+  assert.deepEqual(log, ['ask'], 'Back asks instead of leaving');
+  assert.equal((h.state as { page?: string }).page, 'rules', 'still on the form (marker re-added)');
+
+  // «Seguir editando»: nothing happens to the history; Back asks again.
+  h.userBack();
+  await flush();
+  assert.deepEqual(log, ['ask', 'ask']);
+
+  // «Descartar»: drop the marker, then finish the Back — once.
+  g.leave();
+  await flush();
+  await flush();
+  assert.deepEqual(h.state, { page: 'list' }, 'landed on the previous page, not further and not on a ghost copy');
+});
+
+test('page form guard: the hook runs the behaviour-tested controller (test/unit/pageFormGuard.test.ts)', () => {
+  const src = readFileSync(fileURLToPath(new URL('../../web/components/ui/module/useEditorGuard.ts', import.meta.url)), 'utf8');
+  const hook = src.slice(src.indexOf('export function usePageFormGuard'));
+  assert.ok(hook.includes('createPageFormGuard({'), 'Back, links and clean-up go through lib/pageFormGuard');
+  assert.ok(hook.includes('guardRef.current?.setDirty(dirty)'), 'fed the form state on every change');
+  assert.ok(hook.includes('useNavigationGuard({'), 'links and reload are guarded too');
+});
