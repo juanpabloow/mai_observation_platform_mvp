@@ -116,7 +116,7 @@ const ROLE_SELECT = `
 /** The custom roles of one business, name order. */
 export async function listAccessRoles(tenantId: string, clientId: string): Promise<AccessRoleRow[]> {
   const result = await query<AccessRoleRow>(
-    `${ROLE_SELECT} WHERE r.tenant_id = $1 AND r.client_id = $2 ORDER BY lower(r.name)`,
+    `${ROLE_SELECT} WHERE r.tenant_id = $1 AND r.client_id = $2 AND r.system_key IS NULL ORDER BY lower(r.name)`,
     [tenantId, clientId],
   );
   return result.rows;
@@ -125,7 +125,7 @@ export async function listAccessRoles(tenantId: string, clientId: string): Promi
 /** One custom role of one business, or null (foreign tenant/business ids never resolve). */
 export async function getAccessRole(tenantId: string, clientId: string, roleId: string): Promise<AccessRoleRow | null> {
   const result = await query<AccessRoleRow>(
-    `${ROLE_SELECT} WHERE r.tenant_id = $1 AND r.client_id = $2 AND r.id = $3`,
+    `${ROLE_SELECT} WHERE r.tenant_id = $1 AND r.client_id = $2 AND r.id = $3 AND r.system_key IS NULL`,
     [tenantId, clientId, roleId],
   );
   return result.rows[0] ?? null;
@@ -212,7 +212,7 @@ export async function updateAccessRole(p: {
     return await inTransaction(async (db) => {
       const cur = await db.query<{ version: number; name: string; description: string }>(
         `SELECT version, name, description FROM access_roles
-          WHERE tenant_id = $1 AND client_id = $2 AND id = $3 FOR UPDATE`,
+          WHERE tenant_id = $1 AND client_id = $2 AND id = $3 AND system_key IS NULL FOR UPDATE`,
         [p.tenantId, p.clientId, p.roleId],
       );
       if (cur.rowCount === 0) return { ok: false as const, reason: 'not_found' as const };
@@ -269,7 +269,7 @@ export async function deleteAccessRole(p: {
 }): Promise<RoleWriteResult | { ok: false; reason: 'forbidden' }> {
   return inTransaction(async (db) => {
     const cur = await db.query<{ name: string }>(
-      `SELECT name FROM access_roles WHERE tenant_id = $1 AND client_id = $2 AND id = $3 FOR UPDATE`,
+      `SELECT name FROM access_roles WHERE tenant_id = $1 AND client_id = $2 AND id = $3 AND system_key IS NULL FOR UPDATE`,
       [p.tenantId, p.clientId, p.roleId],
     );
     if (cur.rowCount === 0) return { ok: false as const, reason: 'not_found' as const };
@@ -313,6 +313,147 @@ export async function deleteAccessRole(p: {
       db,
     );
     return { ok: true as const, id: p.roleId, version: 0 };
+  });
+}
+
+// ── System-role overrides (one business's adjustment of Dueño / Recepción / Profesional) ──
+
+export type SystemRoleKeyDb = 'owner' | 'setter' | 'staff';
+
+export interface SystemRoleOverrideRow {
+  system_key: SystemRoleKeyDb;
+  version: number;
+  permissions: string[];
+  updated_at: Date;
+  updated_by_email: string | null;
+}
+
+/** This business's overrides of the system roles (absent key = the code default). */
+export async function listSystemRoleOverrides(tenantId: string, clientId: string): Promise<SystemRoleOverrideRow[]> {
+  const result = await query<SystemRoleOverrideRow>(
+    `SELECT r.system_key, r.version, r.updated_at, uu.email AS updated_by_email,
+            COALESCE((SELECT array_agg(p.permission_key ORDER BY p.permission_key)
+                        FROM access_role_permissions p WHERE p.role_id = r.id), '{}') AS permissions
+       FROM access_roles r
+       LEFT JOIN "user" uu ON uu.id = r.updated_by
+      WHERE r.tenant_id = $1 AND r.client_id = $2 AND r.system_key IS NOT NULL`,
+    [tenantId, clientId],
+  );
+  return result.rows;
+}
+
+/** One system role's override in one business, or null (= the default applies). */
+export async function getSystemRoleOverride(tenantId: string, clientId: string, systemKey: SystemRoleKeyDb): Promise<string[] | null> {
+  const rows = (await listSystemRoleOverrides(tenantId, clientId)).filter((r) => r.system_key === systemKey);
+  return rows[0]?.permissions ?? null;
+}
+
+/**
+ * Save one business's permissions for a SYSTEM role (create the override on first save).
+ * Optimistic concurrency like custom roles: `expectedVersion` null = "there was no override
+ * when I opened it". The audit event commits with the change.
+ */
+export async function saveSystemRoleOverride(p: {
+  tenantId: string;
+  clientId: string;
+  systemKey: SystemRoleKeyDb;
+  label: string;
+  expectedVersion: number | null;
+  permissions: readonly string[];
+  defaultPermissions: readonly string[];
+  actorUserId: string;
+  actorEmail: string | null;
+}): Promise<{ ok: true; version: number } | { ok: false; reason: 'stale' }> {
+  try {
+    return await inTransaction(async (db) => {
+      const cur = await db.query<{ id: string; version: number }>(
+        `SELECT id, version FROM access_roles
+          WHERE tenant_id = $1 AND client_id = $2 AND system_key = $3 FOR UPDATE`,
+        [p.tenantId, p.clientId, p.systemKey],
+      );
+      const existing = cur.rows[0] ?? null;
+      if ((existing?.version ?? null) !== p.expectedVersion) return { ok: false as const, reason: 'stale' as const };
+      let roleId: string;
+      let version: number;
+      let before: string[];
+      if (existing) {
+        before = (await db.query<{ permission_key: string }>(`SELECT permission_key FROM access_role_permissions WHERE role_id = $1`, [existing.id])).rows.map((r) => r.permission_key);
+        const upd = await db.query<{ version: number }>(
+          `UPDATE access_roles SET version = version + 1, updated_by = $2, updated_at = now() WHERE id = $1 RETURNING version`,
+          [existing.id, p.actorUserId],
+        );
+        roleId = existing.id;
+        version = upd.rows[0].version;
+      } else {
+        before = [...p.defaultPermissions];
+        const ins = await db.query<{ id: string; version: number }>(
+          `INSERT INTO access_roles (tenant_id, client_id, name, system_key, created_by, updated_by)
+           VALUES ($1, $2, $3, $4, $5, $5) RETURNING id, version`,
+          [p.tenantId, p.clientId, p.label, p.systemKey, p.actorUserId],
+        );
+        roleId = ins.rows[0].id;
+        version = ins.rows[0].version;
+      }
+      await writePermissions(db, roleId, p.permissions);
+      const b = new Set(before);
+      const a = new Set(p.permissions);
+      await insertAccessAuditEvent(
+        {
+          tenantId: p.tenantId,
+          clientId: p.clientId,
+          actorUserId: p.actorUserId,
+          actorEmail: p.actorEmail,
+          action: 'role.updated',
+          targetType: 'role',
+          targetId: `system:${p.systemKey}`,
+          targetLabel: p.label,
+          changes: {
+            system: p.systemKey,
+            added: [...a].filter((k) => !b.has(k)).sort(),
+            removed: [...b].filter((k) => !a.has(k)).sort(),
+          },
+        },
+        db,
+      );
+      return { ok: true as const, version };
+    });
+  } catch (err) {
+    // Two first-saves racing: the partial unique index makes the loser stale.
+    if ((err as { code?: string }).code === '23505') return { ok: false, reason: 'stale' };
+    throw err;
+  }
+}
+
+/** Drop one business's override: the system role goes back to its default. Audited. */
+export async function resetSystemRoleOverride(p: {
+  tenantId: string;
+  clientId: string;
+  systemKey: SystemRoleKeyDb;
+  label: string;
+  actorUserId: string;
+  actorEmail: string | null;
+}): Promise<boolean> {
+  return inTransaction(async (db) => {
+    const del = await db.query<{ id: string }>(
+      `DELETE FROM access_roles WHERE tenant_id = $1 AND client_id = $2 AND system_key = $3 RETURNING id`,
+      [p.tenantId, p.clientId, p.systemKey],
+    );
+    if (del.rowCount === 0) return false;
+    await insertAccessAuditEvent(
+      {
+        tenantId: p.tenantId,
+        clientId: p.clientId,
+        actorUserId: p.actorUserId,
+        actorEmail: p.actorEmail,
+        action: 'role.updated',
+        targetType: 'role',
+        targetId: `system:${p.systemKey}`,
+        targetLabel: p.label,
+        changes: { system: p.systemKey, reset: true },
+      },
+      db,
+    );
+    return true;
   });
 }
 

@@ -4,13 +4,21 @@ import { revalidatePath } from "next/cache";
 import { getAccessScope, inClientScope } from "./access";
 import { getServerSession } from "./session";
 import { isUuid } from "./clientModuleValidation";
-import { SYSTEM_ROLE_LABEL, sanitizeBusinessPermissions, type PermissionKey } from "./permissions/catalog";
-import { canCreateRole, canEditRole, diffPermissions, validateRolePermissions } from "./permissions/delegation";
+import { SYSTEM_ROLE_LABEL, SYSTEM_ROLE_PERMISSIONS, isSystemRoleKey, sanitizeBusinessPermissions, type PermissionKey } from "./permissions/catalog";
+import { canCreateRole, canEditRole, canEditSystemRole, diffPermissions, validateRolePermissions } from "./permissions/delegation";
 import { getClientById } from "@worker/db/repositories/clients.js";
-import { createAccessRole, deleteAccessRole, updateAccessRole } from "@worker/db/repositories/accessRoles.js";
+import {
+  createAccessRole,
+  deleteAccessRole,
+  resetSystemRoleOverride,
+  saveSystemRoleOverride,
+  updateAccessRole,
+} from "@worker/db/repositories/accessRoles.js";
 
 /**
- * CUSTOM ROLES of one business — create, edit, delete. Every call, before any write:
+ * ROLES of one business — create / edit / delete custom roles (whoever holds «Gestionar
+ * roles»: the agency, the Dueño, or a custom role given it), and adjust or reset a SYSTEM role
+ * for this business only (the AGENCY alone). Every call, before any write:
  *   1. session → membership → scope (getAccessScope; the URL/browser is never trusted);
  *   2. the client is inside the scope and is a real (non-default) client of the tenant;
  *   3. the permission list is valid: known keys, business-grantable, dependency-closed;
@@ -173,4 +181,61 @@ export async function deleteRoleAction(input: { clientId: string; roleId: string
   }
   revalidate(input.clientId);
   return { ok: true, id: input.roleId, version: 0 };
+}
+
+/**
+ * Adjust a SYSTEM role (Dueño / Recepción / Profesional) for THIS business only — every
+ * member of the business with that role gets the new set on their next request; other
+ * businesses keep the default. Agency only. `version` null = no adjustment existed when the
+ * editor opened (optimistic concurrency, like custom roles).
+ */
+export async function updateSystemRoleAction(input: {
+  clientId: string;
+  systemKey: string;
+  version: number | null;
+  permissions: string[];
+}): Promise<RoleActionResult> {
+  if (!isSystemRoleKey(input.systemKey)) return { ok: false, error: UNAVAILABLE };
+  if (input.version !== null && !Number.isInteger(input.version)) return { ok: false, error: UNAVAILABLE };
+  const biz = await resolveBusiness(input.clientId);
+  if (!biz) return { ok: false, error: UNAVAILABLE };
+  const { scope } = biz;
+  const perms = validateRolePermissions(Array.isArray(input.permissions) ? input.permissions : []);
+  if (!perms.ok) return perms;
+  const allowed = canEditSystemRole(scope, input.clientId, perms.keys);
+  if (!allowed.ok) return allowed;
+  const r = await saveSystemRoleOverride({
+    tenantId: scope.tenantId,
+    clientId: input.clientId,
+    systemKey: input.systemKey,
+    label: SYSTEM_ROLE_LABEL[input.systemKey],
+    expectedVersion: input.version,
+    permissions: perms.keys,
+    defaultPermissions: [...SYSTEM_ROLE_PERMISSIONS[input.systemKey]],
+    actorUserId: scope.userId,
+    actorEmail: (await getServerSession())?.user?.email ?? null,
+  });
+  if (!r.ok) return { ok: false, error: STALE, stale: true };
+  revalidate(input.clientId);
+  return { ok: true, id: `system:${input.systemKey}`, version: r.version };
+}
+
+/** Put a SYSTEM role of this business back to its default permissions. Agency only. */
+export async function resetSystemRoleAction(input: { clientId: string; systemKey: string }): Promise<RoleActionResult> {
+  if (!isSystemRoleKey(input.systemKey)) return { ok: false, error: UNAVAILABLE };
+  const biz = await resolveBusiness(input.clientId);
+  if (!biz) return { ok: false, error: UNAVAILABLE };
+  const { scope } = biz;
+  const allowed = canEditSystemRole(scope, input.clientId, SYSTEM_ROLE_PERMISSIONS[input.systemKey]);
+  if (!allowed.ok) return allowed;
+  await resetSystemRoleOverride({
+    tenantId: scope.tenantId,
+    clientId: input.clientId,
+    systemKey: input.systemKey,
+    label: SYSTEM_ROLE_LABEL[input.systemKey],
+    actorUserId: scope.userId,
+    actorEmail: (await getServerSession())?.user?.email ?? null,
+  });
+  revalidate(input.clientId);
+  return { ok: true, id: `system:${input.systemKey}`, version: 0 };
 }
