@@ -53,9 +53,13 @@ const ROLE_TONE: Record<string, string> = {
 const INVITES = "invitaciones";
 const ROLES_TAB = "roles";
 
-/** The permissions a role choice carries (system: code; custom: the business's role). */
-function permissionsOfChoice(value: string, roles: RoleView[]): Set<PermissionKey> {
-  if (value.startsWith("sys:")) return new Set(SYSTEM_ROLE_PERMISSIONS[value.slice(4) as SystemRoleKey] ?? []);
+/** The permissions a role choice carries IN THIS BUSINESS (a system role as the agency
+ *  adjusted it here, else its default; a custom role as stored). */
+function permissionsOfChoice(value: string, roles: RoleView[], systemRoles: SystemRoleView[]): Set<PermissionKey> {
+  if (value.startsWith("sys:")) {
+    const sys = systemRoles.find((r) => `sys:${r.key}` === value);
+    return new Set((sys?.permissions ?? [...(SYSTEM_ROLE_PERMISSIONS[value.slice(4) as SystemRoleKey] ?? [])]) as PermissionKey[]);
+  }
   const r = roles.find((x) => `custom:${x.id}` === value);
   return new Set((r?.permissions ?? []) as PermissionKey[]);
 }
@@ -160,14 +164,14 @@ export function ClientAccessScreen({
   if (open === "invite") {
     return (
       <ModuleSurface label="Usuarios y accesos">
-        <InviteEditor clientId={clientId} clientLabel={clientLabel} sites={sites} viewer={viewer} roles={roles} onClose={close} />
+        <InviteEditor clientId={clientId} clientLabel={clientLabel} sites={sites} viewer={viewer} roles={roles} systemRoles={systemRoles} onClose={close} />
       </ModuleSurface>
     );
   }
   if (open) {
     return (
       <ModuleSurface label="Usuarios y accesos">
-        <MemberEditor key={open.userId} member={open} sites={sites} clients={clients} viewer={viewer} roles={roles} onClose={close} />
+        <MemberEditor key={open.userId} member={open} sites={sites} clients={clients} viewer={viewer} roles={roles} systemRoles={systemRoles} onClose={close} />
       </ModuleSurface>
     );
   }
@@ -341,6 +345,7 @@ function MemberEditor({
   clients,
   viewer,
   roles,
+  systemRoles,
   onClose,
 }: {
   member: TeamMemberView;
@@ -348,6 +353,7 @@ function MemberEditor({
   clients: TeamClientOption[];
   viewer: AccessViewer;
   roles: RoleView[];
+  systemRoles: SystemRoleView[];
   onClose: (saved: boolean) => void;
 }) {
   const manageable = canActOnMember(member, viewer);
@@ -379,8 +385,8 @@ function MemberEditor({
   const staffMissing = isStaff && (!f.siteId || !f.staffId);
   // What changes for the person — the confirmation summary when access is taken away or
   // something sensitive is given.
-  const before = permissionsOfChoice(initial.role, roles);
-  const after = permissionsOfChoice(f.role, roles);
+  const before = permissionsOfChoice(initial.role, roles, systemRoles);
+  const after = permissionsOfChoice(f.role, roles, systemRoles);
   const gained = [...after].filter((k) => !before.has(k));
   const lost = [...before].filter((k) => !after.has(k));
   const gainedSensitive = gained.filter((k) => permissionDef(k).sensitive);
@@ -609,6 +615,7 @@ function InviteEditor({
   sites,
   viewer,
   roles,
+  systemRoles,
   onClose,
 }: {
   clientId: string;
@@ -616,6 +623,7 @@ function InviteEditor({
   sites: TeamSiteOption[];
   viewer: AccessViewer;
   roles: RoleView[];
+  systemRoles: SystemRoleView[];
   onClose: (saved: boolean) => void;
 }) {
   const canInviteOwner = viewer.canAssignOwner;
@@ -623,7 +631,7 @@ function InviteEditor({
   const [email, setEmail] = useState("");
   const [role, setRole] = useState<string>(choices.find((c) => c.value === "sys:setter")?.value ?? choices[0]?.value ?? "");
   const choice = choices.find((c) => c.value === role);
-  const sensitive = [...permissionsOfChoice(role, roles)].filter((k) => permissionDef(k).sensitive);
+  const sensitive = [...permissionsOfChoice(role, roles, systemRoles)].filter((k) => permissionDef(k).sensitive);
   const [siteId, setSiteId] = useState(sites[0]?.id ?? "");
   const [staffId, setStaffId] = useState(sites[0]?.staff[0]?.id ?? "");
   const [attempted, setAttempted] = useState(false);

@@ -232,7 +232,21 @@ abierta; borrado de rol asignado; auditoría y compatibilidad tras migrar.
    **Recomendado: sí.**
 6. **Panel de contacto del Inbox con CRM desactivado.** **Sin cambios en este PR** (cambiarlo
    rompería Inbox en negocios sin CRM); se documenta.
-7. **Roles del sistema inmutables** (permisos en código, duplicables). **Recomendado: sí.**
+7. ~~Roles del sistema inmutables~~ → sustituido por §8 bis: la agencia los ajusta por negocio.
+
+## 8 bis. Ajuste posterior (2026-10-22)
+
+- **Roles protegidos editables por la agencia, por negocio.** La agencia (dueño/admins del
+  tenant) ajusta los permisos de Dueño, Recepción o Profesional **solo para ese negocio**:
+  el nombre no cambia, los demás negocios mantienen el predeterminado y «Restablecer»
+  lo devuelve. Se guarda como fila de `access_roles` con `system_key` (una por negocio y rol)
+  y se aplica en la siguiente petición de cada persona. Auditado.
+- **El Dueño** sigue creando, editando y eliminando sus roles personalizados (eliminar
+  solo cuando nadie lo tiene) y gestionando usuarios, siempre dentro de sus permisos; no
+  ajusta los protegidos.
+- **Módulos**: solo la agencia (sin cambios).
+- Un permiso nuevo del catálogo no se añade solo a un rol protegido ya ajustado: el ajuste
+  queda fijo hasta que la agencia lo cambie o lo restablezca.
 
 ## 9. Implementación
 
@@ -269,12 +283,11 @@ Correcciones incluidas (todas restringen o alinean UI con servidor):
 
 ## 10. Verificación
 
-- Unitarias: 1329/1335; los 6 fallos son los mismos que en `main` (archivos de Reuniones,
-  atribución y política de reservas, ajenos a este cambio).
-- Integración (PostgreSQL local, datos sintéticos): 687/702; los 15 fallos son idénticos a
+- Unitarias (entorno del CI): 1375/1375.
+- Integración (PostgreSQL local, datos sintéticos): 688/703; los 15 fallos son idénticos a
   `main` (scripts de Reuniones/staging, ad cover, conexiones, ingestión).
-- Nuevas: `test/unit/accessPermissions.test.ts` (10) y
-  `test/integration/accessRoles.test.ts` (9); `navigationGates` ahora incluye un rol
+- Nuevas: `test/unit/accessPermissions.test.ts` (11) y
+  `test/integration/accessRoles.test.ts` (10); `navigationGates` ahora incluye un rol
   personalizado en la matriz «visible ⇔ el servidor abre».
 - Manual en local (`:3720`, base aislada): creación de rol con dependencias y confirmación
   sensible, asignación con resumen de pérdidas, aterrizaje y navegación del rol

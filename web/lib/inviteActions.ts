@@ -5,7 +5,7 @@ import { getServerSession } from "./session";
 import { getAccessScope, hasFullAccess, requireFullAccessForAction } from "./access";
 import { canGrantRole, roleRefOf, type RoleRef } from "./permissions/delegation";
 import { SYSTEM_ROLE_LABEL, isSystemRoleKey } from "./permissions/catalog";
-import { getAccessRole } from "@worker/db/repositories/accessRoles.js";
+import { getAccessRole, getSystemRoleOverride } from "@worker/db/repositories/accessRoles.js";
 import { getClientById } from "@worker/db/repositories/clients.js";
 import {
   getMembershipForUser,
@@ -147,7 +147,8 @@ export async function createInvitationAction(input: {
       accessRoleId = row.id;
       customRoleName = row.name;
     } else {
-      grantedRole = { kind: "system", key: requestedRole };
+      // A system role as THIS business has it (the agency may have adjusted it).
+      grantedRole = roleRefOf({ client_role: requestedRole, system_override: await getSystemRoleOverride(scope.tenantId, clientId, requestedRole) });
     }
     // ESCALATION GATE: may the ACTOR grant this exact role for this exact client?
     // (Deny-by-default; nobody hands out more than they hold, only the agency mints a Dueño.)
@@ -351,7 +352,12 @@ export async function revokeInvitationAction(
       const row = await getAccessRole(scope.tenantId, target.member_client_id, target.access_role_id);
       offered = row ? roleRefOf({ client_role: "custom", access_role_id: row.id, role_permissions: row.permissions }) : null;
     } else {
-      offered = roleRefOf({ client_role: target.client_role });
+      offered = roleRefOf({
+        client_role: target.client_role,
+        system_override: target.client_role && target.client_role !== "custom"
+          ? await getSystemRoleOverride(scope.tenantId, target.member_client_id, target.client_role)
+          : null,
+      });
     }
     if (!offered || !canGrantRole(scope, target.member_client_id, offered).ok) return { ok: false };
   }

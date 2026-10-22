@@ -28,7 +28,8 @@ import {
  * PERMISSIONS come from the role, read through the catalog (./permissions/catalog.ts):
  *  - agency (tenant owner/admin) → AGENCY_PERMISSIONS on every client of the tenant;
  *  - a member with a SYSTEM role (Dueño = owner, Recepción = setter, Profesional = staff)
- *    → SYSTEM_ROLE_PERMISSIONS, defined in code;
+ *    → this business's override of that role when the agency adjusted it, else
+ *    SYSTEM_ROLE_PERMISSIONS (the code default);
  *  - a member with a CUSTOM role (client_role = 'custom') → the role's stored keys, minus
  *    anything unknown, agency-only or missing its requirement (deny by default).
  * Nothing here — or anywhere — branches on a role's NAME.
@@ -181,7 +182,10 @@ export function buildScope(userId: string, membership: MembershipScopeRow | null
     permissions = AGENCY_PERMISSIONS;
   } else if (clientRole === "owner" || clientRole === "setter" || clientRole === "staff") {
     if (accessRoleId !== null) return { ok: false };
-    permissions = SYSTEM_ROLE_PERMISSIONS[clientRole];
+    // The agency may have adjusted this system role for THIS business; otherwise the default.
+    permissions = Array.isArray(membership.system_override)
+      ? closeOverRequirements(sanitizeBusinessPermissions(membership.system_override))
+      : SYSTEM_ROLE_PERMISSIONS[clientRole];
   } else if (clientRole === "custom") {
     // The custom role must resolve (same tenant + client, enforced by the composite FK and
     // re-checked by the join in getMembershipForUser); otherwise fail closed.

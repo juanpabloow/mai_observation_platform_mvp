@@ -8,7 +8,7 @@ import {
   listSchedulingResourcesForClient,
 } from "@worker/db/repositories/tenantMembers.js";
 import { listInvitationsForTenant } from "@worker/db/repositories/invitations.js";
-import { listAccessAuditEvents, listAccessRoles, type AccessAuditRow } from "@worker/db/repositories/accessRoles.js";
+import { listAccessAuditEvents, listAccessRoles, listSystemRoleOverrides, type AccessAuditRow } from "@worker/db/repositories/accessRoles.js";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 import { listClientModules } from "@worker/db/repositories/clientModules.js";
 import {
@@ -20,7 +20,7 @@ import {
   type PermissionKey,
   type SystemRoleKey,
 } from "@/lib/permissions/catalog";
-import { canEditRole, canGrantRole, canManageMember, grantableBy, roleRefOf, type RoleRef } from "@/lib/permissions/delegation";
+import { canEditRole, canEditSystemRole, canGrantRole, canManageMember, grantableBy, roleRefOf, type RoleRef } from "@/lib/permissions/delegation";
 import type { TeamMemberView } from "@/components/TeamMembers";
 import type { TeamInviteView } from "@/components/TeamInvitations";
 import type { AccessViewer, AuditView, RoleChoice, RoleView, SystemRoleView } from "@/components/team/accessTypes";
@@ -45,13 +45,14 @@ function auditText(e: AccessAuditRow): string {
     case "role.created":
       return `Creó el rol «${e.target_label ?? ""}»${list(c.permissions) ? ` con: ${list(c.permissions)}` : " sin permisos"}.`;
     case "role.updated": {
+      if (typeof c.system === "string" && c.reset) return `Restableció «${e.target_label ?? ""}» a sus permisos predeterminados en este negocio.`;
       const parts = [
         list(c.added) ? `añadió ${list(c.added)}` : null,
         list(c.removed) ? `quitó ${list(c.removed)}` : null,
         c.name && typeof c.name === "object" ? `lo renombró a «${String((c.name as { to?: unknown }).to ?? "")}»` : null,
         c.descriptionChanged ? "cambió la descripción" : null,
       ].filter(Boolean);
-      return `Editó el rol «${e.target_label ?? ""}»${parts.length ? `: ${parts.join("; ")}` : ""}.`;
+      return `${typeof c.system === "string" ? "Ajustó para este negocio" : "Editó"} el rol «${e.target_label ?? ""}»${parts.length ? `: ${parts.join("; ")}` : ""}.`;
     }
     case "role.deleted":
       return `Eliminó el rol «${e.target_label ?? ""}».`;
@@ -99,7 +100,7 @@ export default async function ClientTeamPage({
   const agency = hasFullAccess(scope);
   const clientLabel = client.is_default ? "Unassigned" : client.name;
 
-  const [members, invites, sites, staff, allClients, roleRows, auditRows, moduleRows] = await Promise.all([
+  const [members, invites, sites, staff, allClients, roleRows, auditRows, moduleRows, overrideRows] = await Promise.all([
     listMembersForTenant(scope.tenantId),
     listInvitationsForTenant(scope.tenantId),
     listSites(scope.tenantId, { clientId }),
@@ -110,11 +111,20 @@ export default async function ClientTeamPage({
     listAccessRoles(scope.tenantId, clientId),
     listAccessAuditEvents(scope.tenantId, clientId, 30),
     listClientModules(scope.tenantId, clientId),
+    listSystemRoleOverrides(scope.tenantId, clientId),
   ]);
+  const overrides = new Map(overrideRows.map((o) => [o.system_key, o]));
 
   const rolesById = new Map(roleRows.map((r) => [r.id, r]));
+  // Roles as THIS business has them: custom ones from their rows, system ones with the
+  // agency's adjustment for this business when there is one.
   const refOf = (clientRole: string | null, accessRoleId: string | null): RoleRef | null =>
-    roleRefOf({ client_role: clientRole, access_role_id: accessRoleId, role_permissions: accessRoleId ? (rolesById.get(accessRoleId)?.permissions ?? null) : null });
+    roleRefOf({
+      client_role: clientRole,
+      access_role_id: accessRoleId,
+      role_permissions: accessRoleId ? (rolesById.get(accessRoleId)?.permissions ?? null) : null,
+      system_override: clientRole ? (overrides.get(clientRole as SystemRoleKey)?.permissions ?? null) : null,
+    });
   const labelOf = (clientRole: string | null, accessRoleId: string | null): string =>
     clientRole === "custom" ? (accessRoleId ? (rolesById.get(accessRoleId)?.name ?? "Rol eliminado") : "—") : clientRole ? (SYSTEM_ROLE_LABEL[clientRole as SystemRoleKey] ?? "—") : "—";
 
@@ -177,7 +187,7 @@ export default async function ClientTeamPage({
 
   // Roles this viewer may give (system + this business's custom roles).
   const assignable: RoleChoice[] = [
-    ...SYSTEM_KEYS.filter((k) => canGrantRole(scope, clientId, { kind: "system", key: k }).ok).map(
+    ...SYSTEM_KEYS.filter((k) => canGrantRole(scope, clientId, refOf(k, null) as RoleRef).ok).map(
       (k): RoleChoice => ({ value: `sys:${k}`, label: SYSTEM_ROLE_LABEL[k], hint: SYSTEM_ROLE_HELP[k], clientRole: k, accessRoleId: null }),
     ),
     ...roleRows
@@ -211,13 +221,23 @@ export default async function ClientTeamPage({
       lockedWhy: d.ok ? null : d.error,
     };
   });
-  const systemRoles: SystemRoleView[] = SYSTEM_KEYS.map((k) => ({
-    key: k,
-    label: SYSTEM_ROLE_LABEL[k],
-    help: SYSTEM_ROLE_HELP[k],
-    permissions: [...SYSTEM_ROLE_PERMISSIONS[k]],
-    memberCount: clientMembers.filter((m) => m.client_role === k).length,
-  }));
+  const systemRoles: SystemRoleView[] = SYSTEM_KEYS.map((k) => {
+    const o = overrides.get(k);
+    const perms = o ? [...sanitizeBusinessPermissions(o.permissions)] : [...SYSTEM_ROLE_PERMISSIONS[k]];
+    return {
+      key: k,
+      label: SYSTEM_ROLE_LABEL[k],
+      help: SYSTEM_ROLE_HELP[k],
+      permissions: perms,
+      memberCount: clientMembers.filter((m) => m.client_role === k).length,
+      overridden: Boolean(o),
+      version: o?.version ?? null,
+      editable: canEditSystemRole(scope, clientId, perms as PermissionKey[]).ok,
+      holders: clientMembers.filter((m) => m.client_role === k).map((m) => m.email),
+      updatedLabel: o ? fmtDateTime(o.updated_at) : null,
+      updatedByEmail: o?.updated_by_email ?? null,
+    };
+  });
   const audit: AuditView[] = auditRows.map((e) => ({
     id: e.id,
     when: fmtDateTime(e.created_at),
