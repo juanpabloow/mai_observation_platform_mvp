@@ -32,6 +32,8 @@ export function AffectedList(props: {
   timezone: string;
   /** "la nueva pausa" / "el bloqueo" — completes "N citas quedan dentro de …". */
   what: string;
+  /** Overrides the "N citas quedan dentro de …" sentence. */
+  lead?: (n: number) => string;
   onReschedule?: (item: AffectedItem) => void;
   onRetry?: () => void;
 }) {
@@ -60,7 +62,7 @@ export function AffectedList(props: {
     <div className={`flex flex-col gap-2 ${props.loading ? "opacity-70" : ""}`} aria-busy={props.loading || undefined}>
       <p role="status" className="rounded-[12px] border border-[var(--warn-rule)] bg-[var(--warn-soft)] px-3.5 py-3 text-[13px] text-[var(--warn)]">
         <span className="font-semibold">
-          {items.length === 1 ? "1 cita queda" : `${items.length} citas quedan`} dentro de {props.what}.
+          {props.lead ? props.lead(items.length) : `${items.length === 1 ? "1 cita queda" : `${items.length} citas quedan`} dentro de ${props.what}.`}
         </span>{" "}
         No se mueven, no se cancelan ni se avisa al cliente automáticamente.
       </p>

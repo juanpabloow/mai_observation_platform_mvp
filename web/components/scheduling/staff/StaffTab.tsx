@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { avatarColor, avatarToneStyle, staffInitials as initials } from "@/lib/avatarColor";
@@ -38,6 +38,14 @@ import {
   IconTask,
 } from "@/components/ui/icons";
 import { StaffCreateDrawer } from "./StaffCreateDrawer";
+import { StaffServicesEditor } from "./StaffServicesEditor";
+import { StaffAbsences } from "./StaffAbsences";
+import { WeeklyScheduleEditor } from "../schedule/WeeklyScheduleEditor";
+import { listScheduleSeriesAction, type SeriesView } from "@/lib/scheduleSeriesActions";
+import { useNavigationGuard } from "@/components/ui/module/useEditorGuard";
+import { DiscardChanges } from "@/components/ui/module/ConfirmLayer";
+import { AffectedReschedulePanel } from "../agenda/AffectedReschedulePanel";
+import type { AffectedItem } from "../agenda/ScheduleFormParts";
 import { StaffPhotoControl } from "./StaffPhotoControl";
 import { PUBLIC_BIO_MAX, checkPublicBio, checkPublicTitle, publicProfileMessage } from "@/lib/staffPublicProfile";
 import { StaffHeaderCard, type StaffHeaderSlots } from "./StaffHeaderCard";
@@ -160,7 +168,7 @@ type DetailTab = (typeof DETAIL_TABS)[number];
 /** What each tab is CALLED. The keys above stay as they are: they are also the `?dtab=`
  *  values a deep link carries (AdminPanel), so they are state, not copy. */
 const DETAIL_TAB_LABEL: Record<DetailTab, string> = {
-  performance: "Rendimiento",
+  performance: "Resumen",
   details: "Perfil",
   services: "Servicios",
   hours: "Horario",
@@ -352,6 +360,30 @@ export function StaffTab(
   // `?s=` — the same parameter the phone detail reads and writes (lib/staffProfileUrl).
   const hrefFor = (id: string | null) => staffProfileHref(query.toString(), id, { siteId: props.currentSiteId });
 
+  // THE FICHA is its own screen (redesign E2): it replaces the list in the same surface,
+  // the breadcrumb goes back. `?s=` stays the one parameter (phone and desktop).
+  if (selected) {
+    return (
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+        <StaffDetail
+          key={selected.id}
+          member={selected}
+          status={describe(selected)}
+          tz={tz}
+          now={now}
+          clientId={props.clientId}
+          services={props.services}
+          windowAppointments={windowAppointments.filter((a) => a.staffId === selected.id)}
+          timeOff={timeOff.filter((t) => t.staffId === selected.id)}
+          closeHref={hrefFor(null)}
+          onSaved={() => router.refresh()}
+          initialTab={props.detailTab}
+          photoUploadEnabled={props.photoUploadEnabled ?? false}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
       <StaffHeaderCard
@@ -407,25 +439,60 @@ export function StaffTab(
 
         <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
           {filtered.length > 0 ? (
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-              {filtered.map((member) => {
-                const d = describe(member);
-                return (
-                  <StaffCard
-                    key={member.id}
-                    member={member}
-                    status={d.key}
-                    suffix={d.suffix}
-                    appts={d.appts}
-                    next={d.next}
-                    tz={tz}
-                    services={props.services}
-                    href={hrefFor(member.id)}
-                    selected={member.id === props.selectedId}
-                  />
-                );
-              })}
-            </div>
+            <table className="w-full table-fixed border-separate border-spacing-0 text-[13px]">
+              <caption className="sr-only">Profesionales de la sede</caption>
+              <thead>
+                <tr className="text-left text-[12px] text-muted">
+                  <th scope="col" className="w-[28%] border-b border-line px-3 pb-2 font-medium">Profesional</th>
+                  <th scope="col" className="w-[12%] border-b border-line px-3 pb-2 font-medium">Rol</th>
+                  <th scope="col" className="w-[22%] border-b border-line px-3 pb-2 font-medium">Ahora</th>
+                  <th scope="col" className="w-[8%] border-b border-line px-3 pb-2 text-right font-medium">Citas hoy</th>
+                  <th scope="col" className="w-[8%] border-b border-line px-3 pb-2 text-right font-medium">Horas</th>
+                  <th scope="col" className="w-[8%] border-b border-line px-3 pb-2 text-right font-medium">Servicios</th>
+                  <th scope="col" className="w-[14%] border-b border-line px-3 pb-2 font-medium">Horario</th>
+                  <th scope="col" className="w-[8%] border-b border-line px-3 pb-2"><span className="sr-only">Agenda</span></th>
+                </tr>
+              </thead>
+              <tbody>
+                {filtered.map((member) => {
+                  const d = describe(member);
+                  const st = STATUS[d.key];
+                  const booked = d.appts.reduce((n, a) => n + (Date.parse(a.endAt) - Date.parse(a.startAt)) / 3_600_000, 0);
+                  return (
+                    <tr key={member.id} className={`group ${member.active ? "" : "opacity-60"}`}>
+                      <td className="border-b border-line-soft px-3 py-2.5">
+                        <Link href={hrefFor(member.id)} scroll={false} className="u-focus flex min-h-[40px] min-w-0 items-center gap-2.5 rounded font-medium hover:underline">
+                          {member.publicPhotoUrl ? (
+                            // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
+                            <img src={member.publicPhotoUrl} alt="" aria-hidden className="size-8 shrink-0 rounded-full object-cover" />
+                          ) : (
+                            <span aria-hidden className={`u-mono flex size-8 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${avatarColor(member.name)}`}>{initials(member.name)}</span>
+                          )}
+                          <span className="truncate">{member.name}</span>
+                          {!member.active ? <span className="shrink-0 rounded-full bg-chip px-1.5 text-[11px] text-muted">Inactivo</span> : null}
+                        </Link>
+                      </td>
+                      <td className="truncate border-b border-line-soft px-3 py-2.5 text-muted">{member.title ?? "—"}</td>
+                      <td className="border-b border-line-soft px-3 py-2.5">
+                        <span className={`inline-flex min-w-0 items-center gap-1.5 ${st.text}`}>
+                          <span aria-hidden className={`size-2 shrink-0 rounded-full ${st.dot}`} />
+                          <span className="truncate">{presenceChip(d.key, d.appts, now)}{d.suffix}</span>
+                        </span>
+                      </td>
+                      <td className="u-tnum border-b border-line-soft px-3 py-2.5 text-right">{d.appts.length}</td>
+                      <td className="u-tnum border-b border-line-soft px-3 py-2.5 text-right text-muted">{booked > 0 ? `${String(Math.round(booked * 10) / 10).replace(".", ",")} h` : "—"}</td>
+                      <td className="u-tnum border-b border-line-soft px-3 py-2.5 text-right">{member.serviceIds.length}</td>
+                      <td className="truncate border-b border-line-soft px-3 py-2.5 text-muted">{Object.keys(member.workingHours).length === 0 ? "Horario de la sede" : "Horario propio"}</td>
+                      <td className="border-b border-line-soft px-3 py-2.5 text-right">
+                        <Link href={`/clients/${props.clientId}/scheduling/agenda?staff=${member.id}`} className="u-focus rounded text-[13px] font-medium hover:underline">
+                          Agenda
+                        </Link>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           ) : (
             <div className="flex min-h-[14rem] items-center justify-center px-4 text-center">
               <div>
@@ -445,31 +512,6 @@ export function StaffTab(
         </div>
       </PageShell>
 
-      {selected ? (
-        <>
-          <Link href={hrefFor(null)} scroll={false} aria-label="Cerrar perfil" className={OVERLAY_SCRIM} />
-          <div className="pointer-events-none fixed inset-0 z-50 flex items-stretch justify-end sm:p-3 sm:pl-16">
-            <div className="pointer-events-auto h-full w-full sm:w-[var(--staff-panel-w)]">
-              <StaffDetail
-                key={selected.id}
-                member={selected}
-                status={describe(selected)}
-                tz={tz}
-                now={now}
-                clientId={props.clientId}
-                services={props.services}
-                windowAppointments={windowAppointments.filter((a) => a.staffId === selected.id)}
-                timeOff={timeOff.filter((t) => t.staffId === selected.id)}
-                closeHref={hrefFor(null)}
-                onSaved={() => router.refresh()}
-                initialTab={props.detailTab}
-                photoUploadEnabled={props.photoUploadEnabled ?? false}
-              />
-            </div>
-          </div>
-        </>
-      ) : null}
-
       {creating ? (
         <StaffCreateDrawer
           clientId={props.clientId}
@@ -477,8 +519,9 @@ export function StaffTab(
           services={props.services}
           sites={props.sites}
           onClose={() => setCreating(false)}
-          onSaved={() => {
+          onSaved={(id) => {
             setCreating(false);
+            if (id) router.push(hrefFor(id), { scroll: false });
             router.refresh();
           }}
         />
@@ -658,12 +701,38 @@ function StaffDetail({
   // explicit confirmation. NEVER auto-cancelled; deactivating only stops NEW bookings.
   const [deactivateConfirm, setDeactivateConfirm] = useState<UpcomingApptView[] | null>(null);
   const router = useRouter();
+  const [notice, setNotice] = useState<string | null>(null);
+  useEffect(() => {
+    if (!notice) return;
+    const t = window.setTimeout(() => setNotice(null), 2600);
+    return () => window.clearTimeout(t);
+  }, [notice]);
+  const [seriesState, setSeriesState] = useState<SeriesView[] | null | "error">(null);
+  const loadSeries = useCallback(async () => {
+    try {
+      const r = await listScheduleSeriesAction(clientId, member.siteId);
+      setSeriesState(r.ok ? r.series : "error");
+    } catch {
+      setSeriesState("error");
+    }
+  }, [clientId, member.siteId]);
+  useEffect(() => {
+    if (tab === "hours" && seriesState === null) void loadSeries();
+  }, [tab, seriesState, loadSeries]);
+  const [hoursResched, setHoursResched] = useState<AffectedItem | null>(null);
+  const [hoursRecheck, setHoursRecheck] = useState(0);
+  const [leaveAsk, setLeaveAsk] = useState(false);
+  const leaveNav = useNavigationGuard({ dirty: dirtyProfileFields(profile, member).length > 0, onAsk: () => setLeaveAsk(true) });
   // The phone tree reads the same `?s=`, so on a phone this drawer is mounted too — inside
   // the desktop tree, hidden below md. Its trap (focus, Tab, Escape → close) runs only
   // where the drawer can be seen; otherwise Escape on the phone screen would close it.
-  const desktopTree = useDesktopTree();
-  const panelRef = useTrappedPanel({ active: desktopTree, onClose: () => router.push(closeHref, { scroll: false }) });
-  const dirtyDays = countDirtyDays(draft, member.workingHours);
+  // The ficha is its OWN screen now (no overlay, no trap): leaving it with unsaved profile
+  // changes asks first — the breadcrumb, the sidebar, any link (useNavigationGuard).
+  // Weekly hours, services and absences each have their own editor and guard.
+  const dirtyDays = 0;
+  void draft;
+  void countDirtyDays;
+  void useDesktopTree;
   const dirtyFields = dirtyProfileFields(profile, member);
   const changes = dirtyDays + dirtyFields.length;
   // Mirror the CHECK constraints client-side: the schema already refuses these, this
@@ -758,12 +827,8 @@ function StaffDetail({
 
 
   return (
-    <aside
-      ref={panelRef as React.RefObject<HTMLElement>}
-      aria-label="Perfil del profesional"
-      aria-modal="true"
-      role="dialog"
-      tabIndex={-1}
+    <section
+      aria-label={`Ficha de ${member.name}`}
       // No drop shadow: in this system elevation is SURFACE CONTRAST, not a blur (see
       // the house rules in components/ui/primitives.tsx). The panel already reads as
       // "on top" from its own fill and hairline against the recessed roster behind it —
@@ -777,80 +842,49 @@ function StaffDetail({
       // which is why it read as a different KIND of object next to the two cards it
       // shares a row with. Its WIDTH comes from the wrapper (see --staff-panel-w), which
       // is what lets one element be a column here and a full-bleed overlay below `lg`.
-      className="pointer-events-auto flex h-full min-h-0 w-full max-w-full flex-col overflow-hidden bg-surface sm:rounded-xl sm:border sm:border-line sm:shadow-[var(--shadow-card)]"
+      className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]"
     >
-      {/* HEADER — the contact panel's header, applied to a barber: a faint wash in this
-          person's OWN colour, two lines (name + presence chip, then the role/seniority
-          meta), and the actions in their own row UNDERNEATH rather than crowded onto the
-          name line. That last part is the difference the two panels were reading as: a
-          red button beside the name made this header an action bar, while the contact
-          panel's header is an introduction with the actions below it.
-          Nothing here is new information — the same name, the same presence words, the
-          same role and the same "View agenda" link, in the shared arrangement. */}
-      <div
-        style={avatarToneStyle(member.name) as React.CSSProperties}
-        className="u-contact-wash flex shrink-0 flex-col gap-2.5 border-b border-line px-4 pb-3 pt-3.5"
-      >
-        <div className="flex w-full min-w-0 items-start gap-2.5">
-          <span className="relative shrink-0">
-            {member.publicPhotoUrl ? (
-              // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
-              <img src={member.publicPhotoUrl} alt="" aria-hidden className="size-[38px] rounded-full object-cover" />
-            ) : (
-              <span
-                aria-hidden
-                className={`u-mono flex size-[38px] items-center justify-center rounded-full text-[13px] font-semibold ${avatarColor(member.name)}`}
-              >
-                {initials(member.name)}
-              </span>
-            )}
-            <span aria-hidden className={`absolute -bottom-px -right-px size-[11px] rounded-full border-2 border-surface ${s.dot}`} />
-          </span>
-
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            {/* Name + presence as a CHIP on the same line — the shape the contact panel
-                uses for name + stage. Presence was a line of mono text below the name,
-                which is the same fact wearing a different costume. */}
-            <div className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
-              <h2 className="min-w-0 truncate text-base font-semibold tracking-tight text-foreground">{member.name}</h2>
-              <span
-                className={`u-mono inline-flex items-center rounded-full border border-line-strong bg-chip px-2 py-[0.1rem] text-[0.625rem] font-medium uppercase leading-4 tracking-wider ${s.text}`}
-              >
+      {/* HEADER (redesign E2): breadcrumb, the person, presence in words, where their
+          schedule comes from, and the two actions. The ficha is its own screen. */}
+      <div className="flex shrink-0 flex-col gap-4 border-b border-line px-6 pb-4 pt-4">
+        <nav aria-label="Ruta" className="flex items-center gap-1.5 text-[13px] text-muted">
+          <Link href={closeHref} scroll={false} className="u-focus inline-flex items-center gap-1 rounded hover:text-foreground">
+            <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M10 3.5L5.5 8l4.5 4.5" /></svg>
+            Equipo
+          </Link>
+          <span aria-hidden>/</span>
+          <span aria-current="page" className="truncate text-foreground">{member.name}</span>
+        </nav>
+        <div className="flex flex-wrap items-center gap-4">
+          {member.publicPhotoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
+            <img src={member.publicPhotoUrl} alt="" aria-hidden className="size-16 rounded-[14px] object-cover" />
+          ) : (
+            <span aria-hidden className={`u-mono flex size-16 items-center justify-center rounded-[14px] text-[22px] font-semibold ${avatarColor(member.name)}`}>
+              {initials(member.name)}
+            </span>
+          )}
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <h2 className="truncate text-[22px] font-semibold leading-7 tracking-tight">{member.name}</h2>
+            <p className="truncate text-[13px] text-muted">{[member.title, member.siteName, headerMeta && member.startDate ? seniority(member.startDate) : null].filter(Boolean).join(" · ")}</p>
+            <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
+              <span className={`inline-flex items-center gap-1.5 ${s.text}`}>
+                <span aria-hidden className={`size-2 rounded-full ${s.dot}`} />
                 {presenceChip(status.key, status.appts, now)}
               </span>
-            </div>
-            {/* ONE meta line. No chair: there is no chair column and deliberately never
-                will be (see the staff-fields migration). */}
-            <p className="truncate text-[0.6875rem] leading-4 text-faint" title={headerMeta}>
-              {headerMeta}
+              <span className="text-muted">{Object.keys(member.workingHours).length === 0 ? "Usa el horario de la sede" : "Horario propio"}</span>
+              <span className="text-muted">{member.serviceIds.length} {member.serviceIds.length === 1 ? "servicio" : "servicios"}</span>
+              {!member.active ? <span className="rounded-full bg-chip px-2 py-0.5 text-[11.5px] text-muted">Inactivo</span> : null}
             </p>
           </div>
-
-          <Link
-            href={closeHref}
-            scroll={false}
-            aria-label="Cerrar perfil"
-            className="-mr-1 shrink-0 rounded-md p-1 text-faint transition-colors hover:bg-subtle hover:text-foreground"
-          >
-            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
-              <path d="M6 6l12 12M18 6L6 18" />
-            </svg>
-          </Link>
-        </div>
-
-        {/* THE ACTION ROW. There is no "Edit" here any more, and that is the point: an
-            Edit button implied a SECOND place where a barber gets changed, so the same
-            columns had two owners — the drawer wrote name/services/hours/flags while the
-            tabs below wrote the profile, and whichever saved last won. Every one of those
-            fields now lives in the tabs, behind one unsaved bar. What is left is the one
-            action that is not an edit at all, so it takes the whole row. */}
-        <div className="flex items-center gap-1.5">
-          <Link
-            href={`/clients/${clientId}/scheduling/agenda?staff=${member.id}`}
-            className={ACT_PRIMARY}
-          >
-            Ver agenda
-          </Link>
+          <div className="flex shrink-0 items-center gap-2">
+            <button type="button" onClick={() => setTab("details")} className="u-focus inline-flex h-10 items-center rounded-sch-control border border-line px-4 text-[13px] font-medium hover:bg-subtle">
+              Editar perfil
+            </button>
+            <Link href={`/clients/${clientId}/scheduling/agenda?staff=${member.id}`} className={ACT_PRIMARY}>
+              Ver su agenda
+            </Link>
+          </div>
         </div>
       </div>
 
@@ -858,7 +892,7 @@ function StaffDetail({
           scrolling body. The strip used to live inside the scroll container, so scrolling
           the Hours grid carried the tabs off the top of the panel and the reader lost the
           control that got them there. */}
-      <div className="flex shrink-0 items-center gap-3.5 overflow-x-auto border-b border-line px-3 sm:px-4" role="tablist">
+      <div className="flex shrink-0 items-center gap-3.5 overflow-x-auto border-b border-line px-6" role="tablist">
         <div className="flex min-w-max items-center gap-3.5">
           {DETAIL_TABS.map((t) => (
             <button
@@ -898,7 +932,7 @@ function StaffDetail({
           // which put a second border inside a panel that already has one and broke the
           // tab into floating slabs. That is the single biggest reason the two panels
           // felt like different products with the same tabs.
-          <>
+          <div className="mx-auto grid w-full max-w-5xl content-start lg:grid-cols-2">
             {completedPct !== null && completedPct >= 90 ? (
               <div className="border-b border-line px-4 py-3">
                 <div className="flex items-center gap-2.5 rounded-lg border border-brand/35 bg-brand-soft px-3 py-2.5">
@@ -1013,9 +1047,9 @@ function StaffDetail({
                 </div>
               </PanelSection>
             ) : null}
-          </>
+          </div>
         ) : tab === "details" ? (
-          <div className="flex flex-col">
+          <div className="mx-auto flex w-full max-w-3xl flex-col">
             {/* IDENTITY — the name, and the site it belongs to. This section is why there
                 is no longer an "Edit" button above: the name was the last field that lived
                 only in a separate editor, so the panel's own tabs are now the ONE write
@@ -1272,258 +1306,78 @@ function StaffDetail({
             </DetailSection>
           </div>
         ) : tab === "services" ? (
-          <PanelSection
-            title="Servicios que realiza"
-            icon={<IconTask />}
-            trailing={`${member.serviceIds.length} de ${services.length}`}
-          >
-          <div className="flex flex-col gap-2">
-            {services.length === 0 ? (
-              <p className="text-sm text-faint">Este cliente todavía no tiene servicios.</p>
-            ) : (
-              services.map((sv) => {
-                const on = member.serviceIds.includes(sv.id);
-                return (
-                  // The ROW IS THE CONTROL. It used to be a read-only list under a
-                  // "Change services →" link that opened a separate editor — so seeing
-                  // what a barber performs and changing it were two different screens.
-                  // Toggling writes IMMEDIATELY rather than joining the unsaved bar,
-                  // because the action is per-pairing (setStaffServiceAction takes one
-                  // service and one boolean), exactly as adding a certification does in
-                  // the section below.
-                  <button
-                    key={sv.id}
-                    type="button"
-                    role="switch"
-                    aria-checked={on}
-                    disabled={saving}
-                    onClick={() =>
-                      startSave(async () => {
-                        setSaveError(null);
-                        const r = await setStaffServiceAction(clientId, member.id, sv.id, !on);
-                        if (!r.ok) setSaveError(r.error);
-                        else onSaved();
-                      })
-                    }
-                    className={`u-focus flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left text-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60 ${
-                      on
-                        ? "border-line-strong bg-surface text-foreground hover:bg-hover"
-                        : "border-line text-faint hover:border-line-strong hover:text-muted"
-                    }`}
-                  >
-                    <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${on ? "bg-success" : "bg-faintest"}`} />
-                    <span className="min-w-0 flex-1 truncate">{sv.name}</span>
-                    <span className="u-mono shrink-0 text-[10px] uppercase tracking-wider">
-                      {on ? "Lo realiza" : "No lo ofrece"}
-                    </span>
-                  </button>
-                );
-              })
-            )}
+          <div className="mx-auto w-full max-w-3xl px-6 py-5">
+            <StaffServicesEditor
+              clientId={clientId}
+              staffId={member.id}
+              staffName={member.name}
+              services={services}
+              assigned={member.serviceIds}
+              canEdit
+              onSaved={(m) => {
+                setNotice(m);
+                onSaved();
+              }}
+            />
           </div>
-          </PanelSection>
         ) : tab === "hours" ? (
-          <PanelSection
-            title="Horario semanal"
-            icon={<IconCalendar />}
-            trailing={dirtyDays > 0 ? `${dirtyDays} ${dirtyDays === 1 ? "día cambiado" : "días cambiados"}` : undefined}
-          >
-          <div className="flex flex-col gap-3">
-            <p className="text-[11px] text-faint">
-              Un día sin turno es libre. Si todos los días son libres, este profesional usa el horario
-              de {member.siteName}.
-            </p>
-            <div className="flex flex-col rounded-lg border border-line">
-              {WEEKDAYS.map((d) => {
-                const ranges = draft[d] ?? [];
-                const on = ranges.length > 0;
-                const setDay = (next: { start: string; end: string }[]) =>
-                  setDraft((prev) => ({ ...prev, [d]: next }));
-                return (
-                  <div key={d} className="flex flex-col gap-2 border-b border-line/70 px-3 py-2.5 last:border-0">
-                    <div className="flex items-center gap-2">
-                      <label className="flex w-24 shrink-0 items-center gap-2">
-                        <input
-                          type="checkbox"
-                          checked={on}
-                          onChange={(e) => setDay(e.target.checked ? [{ start: "09:00", end: "18:00" }] : [])}
-                          className="size-4"
-                        />
-                        <span className="u-mono text-[11px] uppercase tracking-wider text-foreground">{DAY_SHORT[d]}</span>
-                      </label>
-                      {on ? (
-                        <span className="u-mono ml-auto text-[10px] text-faint">
-                          {Math.round(ranges.reduce((n, r) => n + minutesBetween(r.start, r.end), 0) / 60)} h
-                        </span>
-                      ) : (
-                        <span className="ml-auto text-[11px] text-faint">Libre</span>
-                      )}
-                    </div>
-
-                    {ranges.map((r, i) => (
-                      <div key={i} className="flex items-center gap-2 pl-[6.5rem]">
-                        <input
-                          type="time"
-                          value={r.start}
-                          onChange={(e) =>
-                            setDay(ranges.map((x, k) => (k === i ? { ...x, start: e.target.value } : x)))
-                          }
-                          className="rounded-md border border-line-strong bg-transparent px-2 py-1 text-xs"
-                        />
-                        <span aria-hidden className="text-faint">&rarr;</span>
-                        <input
-                          type="time"
-                          value={r.end}
-                          onChange={(e) => setDay(ranges.map((x, k) => (k === i ? { ...x, end: e.target.value } : x)))}
-                          className="rounded-md border border-line-strong bg-transparent px-2 py-1 text-xs"
-                        />
-                        {ranges.length > 1 ? (
-                          <button
-                            type="button"
-                            onClick={() => setDay(ranges.filter((_, k) => k !== i))}
-                            aria-label="Quitar este tramo"
-                            className="text-xs text-faint hover:text-danger"
-                          >
-                            &#10005;
-                          </button>
-                        ) : null}
-                      </div>
-                    ))}
-
-                    {on ? (
-                      // SPLIT SHIFTS are storable: working_hours is an array per day.
-                      <button
-                        type="button"
-                        onClick={() => setDay([...ranges, { start: "15:00", end: "19:00" }])}
-                        className="ml-[6.5rem] w-fit text-[11px] text-accent hover:underline"
-                      >
-                        + Añadir un tramo
-                      </button>
-                    ) : null}
-                  </div>
-                );
-              })}
-            </div>
-
-            {(() => {
-              // When the barber has NO own shifts, an empty working_hours means they INHERIT
-              // the site's opening hours (availability.ts). The footer must reflect that
-              // effective schedule, not "0 H · 0 DAYS", which contradicted the inherit rule.
-              const draftHasHours = WEEKDAYS.some((d) => (draft[d] ?? []).length > 0);
-              const eff = (draftHasHours ? draft : member.siteOpeningHours) as Record<string, { start: string; end: string }[]>;
-              const totalH = Math.round(
-                WEEKDAYS.reduce((n, d) => n + (eff[d] ?? []).reduce((m, r) => m + minutesBetween(r.start, r.end), 0), 0) / 60,
-              );
-              const days = WEEKDAYS.filter((d) => (eff[d] ?? []).length > 0).length;
-              return (
-                <div className="flex items-center gap-2 text-xs text-muted">
-                  {!draftHasHours ? (
-                    <span className="rounded bg-chip px-1.5 py-0.5 text-[10px] font-medium text-muted">Horario de la sede</span>
-                  ) : null}
-                  <span className="u-mono text-foreground">{totalH} H</span>
-                  <span aria-hidden className="text-faintest">&middot;</span>
-                  <span className="u-mono">{days} {days === 1 ? "DÍA" : "DÍAS"}</span>
-                </div>
-              );
-            })()}
-          </div>
-          </PanelSection>
-        ) : (
-          <PanelSection
-            title="Ausencias"
-            icon={<IconCalendar />}
-            trailing={timeOff.length > 0 ? `${timeOff.length} ${timeOff.length === 1 ? "registrada" : "registradas"}` : undefined}
-          >
-          <div className="flex flex-col gap-2">
-            {toError ? <p role="alert" className="rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{toError}</p> : null}
-
-            {toForm ? (
-              <div className="rounded-lg border border-line bg-card/40 p-3">
-                <TimeOffForm
-                  clientId={clientId}
-                  siteId={member.siteId}
-                  staff={[{ id: member.id, name: member.name }]}
-                  fixedStaffId={member.id}
-                  canSiteClosure={false}
-                  tz={tz}
-                  edit={
-                    toForm.editing
-                      ? {
-                          id: toForm.editing.id,
-                          staffId: toForm.editing.staffId,
-                          startsAt: toForm.editing.startsAt,
-                          endsAt: toForm.editing.endsAt,
-                          reason: toForm.editing.reason,
-                        }
-                      : undefined
-                  }
-                  onDone={() => setToForm(null)}
-                  onClose={() => setToForm(null)}
-                />
-              </div>
+          <div className="mx-auto w-full max-w-4xl px-6 py-5">
+            {seriesState === "error" ? (
+              <p className="text-[13px] text-muted">No pudimos cargar las pausas. <button type="button" className="underline" onClick={() => void loadSeries()}>Reintentar</button></p>
+            ) : seriesState === null ? (
+              <div aria-busy="true" className="h-64 rounded-[14px] bg-subtle" />
             ) : (
-              <button
-                type="button"
-                onClick={() => {
-                  setToError(null);
-                  setToForm({});
+              <WeeklyScheduleEditor
+                clientId={clientId}
+                siteId={member.siteId}
+                staffId={member.id}
+                ownerLabel={member.name}
+                siteName={member.siteName}
+                timezone={tz}
+                today={dayKey(now, tz)}
+                hours={member.workingHours}
+                siteHours={member.siteOpeningHours}
+                series={seriesState.filter((x) => x.kind === "break" && x.staffId === member.id)}
+                siteSeries={seriesState.filter((x) => x.kind === "break" && x.staffId === null)}
+                canEdit
+                recheck={hoursRecheck}
+                onReschedule={(item) => setHoursResched(item)}
+                onSaved={(m) => {
+                  setNotice(m);
+                  void loadSeries();
+                  onSaved();
                 }}
-                className="w-fit rounded-lg border border-line-strong px-3 py-1.5 text-xs font-medium text-foreground transition hover:bg-subtle"
-              >
-                + Añadir ausencia
-              </button>
+              />
             )}
-
-            {timeOff.length === 0 && !toForm ? (
-              <p className="text-sm text-muted">No hay ausencias registradas.</p>
-            ) : (
-              [...timeOff]
-                .sort((a, b) => a.startsAt.localeCompare(b.startsAt))
-                .map((t) => {
-                  const days = Math.max(
-                    1,
-                    Math.round((new Date(t.endsAt).getTime() - new Date(t.startsAt).getTime()) / 86_400_000),
-                  );
-                  const past = new Date(t.endsAt).getTime() <= now.getTime();
-                  return (
-                    <div
-                      key={t.id}
-                      className={`flex items-center gap-2.5 rounded-lg border px-3 py-2.5 ${
-                        past ? "border-line bg-subtle/40 opacity-70" : "border-timeoff-edge bg-timeoff-bg/30"
-                      }`}
-                    >
-                      <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${past ? "bg-faintest" : "bg-timeoff-fg"}`} />
-                      <span className="flex min-w-0 flex-1 flex-col">
-                        <span className="truncate text-xs font-semibold text-foreground">
-                          {t.reason?.trim() || "Ausencia"}
-                          {past ? <span className="ml-1 font-normal text-faint">· pasada</span> : null}
-                        </span>
-                        <span className="u-mono truncate text-[11px] text-muted">
-                          {fmtDay(t.startsAt, tz)} &rarr; {fmtDay(t.endsAt, tz)} · {days} {days === 1 ? "día" : "días"}
-                        </span>
-                      </span>
-                      {/* Past blocks are history (read-only); future/current ones can be edited or removed. */}
-                      {!past ? (
-                        toConfirmDel === t.id ? (
-                          <span className="flex shrink-0 gap-1.5">
-                            <button type="button" disabled={toBusy} onClick={() => startTo(async () => { setToError(null); const r = await deleteTimeOffAction(clientId, t.id); if (r.ok) { setToConfirmDel(null); router.refresh(); } else setToError(r.error ?? "No se pudo eliminar."); })} className="rounded border border-danger/40 px-2 py-0.5 text-[11px] text-danger hover:bg-danger/10 disabled:opacity-50">Eliminar</button>
-                            <button type="button" onClick={() => setToConfirmDel(null)} className="rounded border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-subtle">Cancelar</button>
-                          </span>
-                        ) : (
-                          <span className="flex shrink-0 gap-1.5">
-                            <button type="button" onClick={() => { setToError(null); setToForm({ editing: t }); }} className="rounded border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-subtle">Editar</button>
-                            <button type="button" onClick={() => setToConfirmDel(t.id)} className="rounded border border-line px-2 py-0.5 text-[11px] text-muted hover:bg-subtle">Eliminar</button>
-                          </span>
-                        )
-                      ) : null}
-                    </div>
-                  );
-                })
-            )}
+            <p className="mt-4 text-[12.5px] text-muted">
+              Para cambiar la pausa de una sola fecha ábrela en el calendario: se guarda como excepción de ese día y la rutina no cambia.
+            </p>
           </div>
-          </PanelSection>
+        ) : (
+          <div className="mx-auto w-full max-w-3xl px-6 py-5">
+            <StaffAbsences
+              clientId={clientId}
+              siteId={member.siteId}
+              siteName={member.siteName}
+              timezone={tz}
+              staffId={member.id}
+              staffName={member.name}
+              timeOff={timeOff}
+              canEdit
+              onChanged={(m) => {
+                setNotice(m);
+                onSaved();
+              }}
+            />
+          </div>
         )}
       </div>
+      {notice ? (
+        <div role="status" aria-live="polite" className="fixed bottom-6 left-1/2 z-[90] flex min-h-[44px] -translate-x-1/2 items-center gap-2 rounded-sch-control bg-foreground px-4 text-sm text-background shadow-[var(--shadow-float)]">
+          <span aria-hidden>✓</span>
+          {notice}
+        </div>
+      ) : null}
 
       {/* UNSAVED CHANGES — only when there are any. It reports DAYS, which is the unit
           the editor above works in, and saves through the same updateStaffAction the
@@ -1587,7 +1441,37 @@ function StaffDetail({
           </div>
         </div>
       ) : null}
-    </aside>
+      {hoursResched ? (
+        <AffectedReschedulePanel
+          clientId={clientId}
+          siteId={member.siteId}
+          timezone={tz}
+          item={hoursResched}
+          holds={[]}
+          staff={[]}
+          openWeekdays={new Set()}
+          lockStaffId={null}
+          returnLabel="el horario"
+          onBack={() => {
+            setHoursResched(null);
+            setHoursRecheck((n) => n + 1);
+          }}
+        />
+      ) : null}
+      {leaveAsk ? (
+        <DiscardChanges
+          onKeep={() => {
+            setLeaveAsk(false);
+            leaveNav.forget();
+          }}
+          onDiscard={() => {
+            setLeaveAsk(false);
+            setProfile(profileFromMember(member));
+            leaveNav.follow();
+          }}
+        />
+      ) : null}
+    </section>
   );
 }
 

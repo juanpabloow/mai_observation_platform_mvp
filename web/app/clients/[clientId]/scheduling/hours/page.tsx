@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
+import { can } from "@/lib/access";
 import { loadSchedulingSettings } from "@/lib/schedulingSettingsData";
 import { SchedulingSettings } from "@/components/scheduling/AdminPanel";
 
@@ -21,5 +22,5 @@ export default async function SchedulingHoursPage({
   const { clientId } = await params;
   const { scope, client } = await requireClientModulePage(clientId, "scheduling", "hours.manage");
   const data = await loadSchedulingSettings(scope.tenantId, client);
-  return <SchedulingSettings page="hours" {...data} />;
+  return <SchedulingSettings page="hours" {...data} canTeam={can(scope, "team.manage", client.id)} />;
 }

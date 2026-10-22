@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState, useTransition } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
+import { HoursScreen } from "./schedule/HoursScreen";
 import { DAYS, DAY_LABELS, gridFromWeekly, HoursGrid, weeklyFromGrid, type HourGrid } from "./HoursGrid";
 import { BookingLinkCard } from "./BookingLinkCard";
 import { ServiceMenu } from "./services/ServiceMenu";
@@ -149,6 +150,8 @@ export interface SchedulingSettingsProps {
   bookingCategories?: BookingCategory[];
   /** The business's promotions (migration 1805), as the editor opens them. */
   promotions?: PromotionAdminRow[];
+  /** «Horarios y ausencias»: may open a professional's ficha (team.manage). */
+  canTeam?: boolean;
 }
 
 /**
@@ -244,6 +247,18 @@ export function SchedulingSettings(props: SchedulingSettingsProps) {
             services={services.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
             staff={staff.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name, site_id: x.site_id }))}
             sites={sites.filter((x) => x.active).map((x) => ({ id: x.id, name: x.name }))}
+          />
+        </div>
+      ) : page === "hours" ? (
+        <div className={`${entry ? "hidden md:flex" : "flex"} min-h-0 w-full flex-1 flex-col`}>
+          <HoursScreen
+            clientId={clientId}
+            sites={sites as never}
+            staff={staff as never}
+            exceptions={exceptions as never}
+            pastExceptions={(pastExceptions ?? []) as never}
+            canTeam={props.canTeam ?? false}
+            footer={<WhyNothingAvailable clientId={clientId} sites={sites} staff={staff} />}
           />
         </div>
       ) : page === "services" ? (
