@@ -1572,13 +1572,11 @@ test('grammar: toolbar controls, search and list rows are consolidated across Co
   assert.ok(declOf('MODULE_SEARCH_CLS').includes('h-[34px]'), 'module search matches Agenda at 34px');
   assert.ok(read('components/ui/ModuleHeader.tsx').includes('minmax(15rem,1fr)'), 'the shared centre never drops below 240px on desktop');
 
-  // Contacts remains a dense table. Staff deliberately uses responsive profile cards
-  // (the Staff Team reference), so it shares the control grammar but not table rows.
+  // Contacts remains a dense table; Staff is a table too since the Agenda redesign (E1).
   const contactsTable = read('components/contacts/ContactsTable.tsx');
   assert.ok(contactsTable.includes('ENTITY_ROW_CLS'), 'Contacts rows use the shared entity-row height');
   assert.ok(contactsTable.includes('TABLE_HEADER_CLS'), 'Contacts header uses the shared table-header height');
-  assert.ok(staff.includes('md:grid-cols-2 xl:grid-cols-3'), 'Staff is a responsive card grid instead');
-  assert.ok(staff.includes('function StaffCard('), 'Staff owns one card component');
+  assert.ok(staff.includes('<table className="w-full table-fixed'), 'Staff is one table of professionals (redesign E1)');
   assert.ok(primitives.includes('h-[var(--entity-row-h)]'), 'the entity row is the 56px token');
   assert.ok(
     declOf('TABLE_HEADER_CLS').includes('h-[var(--control-h)]'),

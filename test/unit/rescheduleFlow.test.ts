@@ -146,11 +146,11 @@ test('the flow asks FOR THIS appointment and the professional on screen, and sen
   assert.match(flow, /Paso \{step\} de 2/, 'two steps, not the three of creation');
 });
 
-test('the detail offers "Cambiar fecha y hora" directly, with one name, apart from the state', () => {
+test('the detail offers «Reagendar» directly, with one name, apart from the state', () => {
   const panel = read('web/components/scheduling/agenda/AppointmentPanel.tsx');
   const sheet = read('web/components/scheduling/mobile/MobileAppointmentSheet.tsx');
   for (const [name, src] of [['panel', panel], ['sheet', sheet]] as const) {
-    assert.match(src, /Cambiar fecha y hora/, name);
+    assert.match(src, /Reagendar/, name);
     assert.doesNotMatch(src, />\s*Reprogramar\s*</, `${name}: no "Reprogramar" entry`);
     assert.doesNotMatch(src, /Cambiar hora o profesional/, name);
     assert.match(src, /rescheduleBlockedReason\(/, `${name}: says why when it is not offered`);

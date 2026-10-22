@@ -89,7 +89,7 @@ export function BlockPanel(props: {
   );
   const [f, setF] = useState(initial);
   const set = <K extends keyof typeof initial>(k: K, v: (typeof initial)[K]) => setF((x) => ({ ...x, [k]: v }));
-  const [affected, setAffected] = useState<{ loading: boolean; items: AffectedItem[] | null; error: string | null }>({ loading: false, items: null, error: null });
+  const [affectedState, setAffected] = useState<{ forKey: string; loading: boolean; items: AffectedItem[] | null; error: string | null }>({ forKey: "", loading: false, items: null, error: null });
   const [error, setError] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState<{ field?: string; message: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -125,39 +125,38 @@ export function BlockPanel(props: {
   });
 
   // Affected appointments (read-only), recalculated as the form changes and after a reschedule.
+  // Each answer is tagged with the input it answers, so "loading" and a stale list are derived.
   const key = JSON.stringify([f, props.recheck]);
+  const affected = !valid
+    ? { loading: false, items: null as AffectedItem[] | null, error: null as string | null }
+    : affectedState.forKey === key
+      ? affectedState
+      : { loading: true, items: affectedState.items, error: null as string | null };
   useEffect(() => {
-    if (!valid) {
-      setAffected({ loading: false, items: null, error: null });
-      return;
-    }
+    if (!valid) return;
     let cancelled = false;
-    setAffected((a) => ({ ...a, loading: true, error: null }));
+    const done = (v: { items: AffectedItem[] | null; error: string | null }) => setAffected({ forKey: key, loading: false, ...v });
     const t = setTimeout(async () => {
       try {
         if (repeat) {
           const r = await createBlockSeriesAction({ ...seriesInput(), dryRun: true });
           if (cancelled) return;
           if (!r.ok) {
-            setAffected({ loading: false, items: null, error: null });
+            done({ items: null, error: null });
             setFieldError({ field: r.field, message: r.error });
             return;
           }
           setFieldError(null);
-          setAffected({ loading: false, items: r.affected, error: null });
+          done({ items: r.affected, error: null });
         } else {
           const r = await previewTimeOffAction({ clientId: props.clientId, siteId: props.siteId, staffId, ...timeOffInput() });
           if (cancelled) return;
-          if (!r.ok) return setAffected({ loading: false, items: null, error: r.error });
+          if (!r.ok) return done({ items: null, error: r.error });
           setFieldError(null);
-          setAffected({
-            loading: false,
-            error: null,
-            items: r.conflicts.map(conflictItem),
-          });
+          done({ error: null, items: r.conflicts.map(conflictItem) });
         }
       } catch {
-        if (!cancelled) setAffected({ loading: false, items: null, error: "x" });
+        if (!cancelled) done({ items: null, error: "x" });
       }
     }, 300);
     return () => {
@@ -190,7 +189,7 @@ export function BlockPanel(props: {
             return;
           }
           if (!r.written) {
-            setAffected({ loading: false, items: r.affected, error: null });
+            setAffected({ forKey: key, loading: false, items: r.affected, error: null });
             return;
           }
           props.onSaved("Bloqueo recurrente creado");
@@ -202,7 +201,7 @@ export function BlockPanel(props: {
           : await createTimeOffAction({ clientId: props.clientId, siteId: props.siteId, staffId, ...base });
         if (!r.ok) {
           if ("conflicts" in r) {
-            setAffected({ loading: false, error: null, items: r.conflicts.map(conflictItem) });
+            setAffected({ forKey: key, loading: false, error: null, items: r.conflicts.map(conflictItem) });
             return;
           }
           setError(r.error);

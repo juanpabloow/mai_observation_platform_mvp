@@ -98,9 +98,8 @@ test('wiring: the page reads one profile for both trees; neither tree writes `p`
   assert.ok(web('components/scheduling/AdminPanel.tsx').includes('s: member.id, dtab'));
 });
 
-test('wiring: the hidden desktop drawer never traps focus on a phone', () => {
+test('wiring: the desktop ficha is a page — it never traps focus (on any width)', () => {
   const desk = web('components/scheduling/staff/StaffTab.tsx');
-  assert.ok(desk.includes('window.matchMedia("(min-width: 768px)")'), 'gated on the md breakpoint of the desktop tree');
-  assert.ok(desk.includes('useTrappedPanel({ active: desktopTree,'), 'the trap (and its Escape) follows that gate');
+  assert.equal(desk.includes('useTrappedPanel({ active: desktopTree,'), false, 'no focus trap: the ficha is not an overlay');
   assert.ok(web('components/scheduling/staff/StaffWorkspace.tsx').includes('hidden md:flex'), 'the desktop tree is the one hidden below md');
 });

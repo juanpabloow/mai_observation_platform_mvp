@@ -229,3 +229,18 @@ test('requires review: an appointment inside the moved break, or outside the hou
   assert.deepEqual(reviewReasons({ from: new Date('2026-10-22T22:30:00Z'), until: new Date('2026-10-22T23:30:00Z') }, ctx), ['outside_hours']);
   assert.deepEqual(reviewReasons({ from: new Date('2026-10-22T18:00:00Z'), until: new Date('2026-10-22T19:00:00Z') }, ctx), []);
 });
+
+test('explanations read a usual break as off-shift (like the weekly-hours gap it replaces), never as an absence', async () => {
+  const { explainStaffStatus } = await import('../../src/scheduling/availabilityExplain.js');
+  const [day] = explainStaffStatus({
+    site: { timezone: TZ, opening_hours: { thu: [{ start: '10:00', end: '18:00' }] } },
+    staff: { id: 'maria', working_hours: {} },
+    dates: [{ year: 2026, month: 10, day: 22 }],
+    siteExceptions: [],
+    staffExceptions: [],
+    breaks: [{ from: new Date('2026-10-22T18:00:00Z'), until: new Date('2026-10-22T19:00:00Z') }],
+  });
+  assert.equal(day.status, 'working');
+  assert.ok(!day.causes.some((c) => c.code === 'absence'), 'no absence cause for a lunch');
+  assert.equal(day.shift.length, 2, 'the shift is split around the break');
+});

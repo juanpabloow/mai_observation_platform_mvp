@@ -40,21 +40,17 @@ export function StaffAbsences(props: {
   const [recheck, setRecheck] = useState(0);
   const [showPast, setShowPast] = useState(false);
 
-  const load = useCallback(async () => {
-    setLoadError(false);
-    try {
-      const r = await listScheduleSeriesAction(props.clientId, props.siteId);
-      if (r.ok) setSeries(r.series.filter((s) => s.kind === "block" && (s.staffId === props.staffId || s.staffId === null)));
-      else setLoadError(true);
-    } catch {
-      setLoadError(true);
-    }
+  const load = useCallback(() => {
+    listScheduleSeriesAction(props.clientId, props.siteId)
+      .then((r) => {
+        setLoadError(!r.ok);
+        if (r.ok) setSeries(r.series.filter((s) => s.kind === "block" && (s.staffId === props.staffId || s.staffId === null)));
+      })
+      .catch(() => setLoadError(true));
   }, [props.clientId, props.siteId, props.staffId]);
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(load, [load]);
 
-  const now = Date.now();
+  const [now] = useState(() => Date.now());
   const upcoming = props.timeOff.filter((t) => Date.parse(t.endsAt) > now).sort((a, b) => a.startsAt.localeCompare(b.startsAt));
   const past = props.timeOff.filter((t) => Date.parse(t.endsAt) <= now).sort((a, b) => b.startsAt.localeCompare(a.startsAt));
 
@@ -133,7 +129,7 @@ export function StaffAbsences(props: {
             <Button size="sm" onClick={() => void load()}>Reintentar</Button>
           </div>
         ) : series === null ? (
-          <div aria-busy="true" className="h-12 rounded-[12px] bg-subtle" />
+          <div aria-busy="true" className="h-[48px] rounded-[12px] bg-subtle" />
         ) : series.length === 0 ? (
           <p className="text-[13px] text-muted">Sin bloqueos recurrentes.</p>
         ) : (

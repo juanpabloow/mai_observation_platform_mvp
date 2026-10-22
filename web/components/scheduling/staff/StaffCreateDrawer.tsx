@@ -163,7 +163,7 @@ export function StaffCreateDrawer({
               {activeServices.map((s) => {
                 const on = serviceIds.includes(s.id);
                 return (
-                  <button key={s.id} type="button" aria-pressed={on} onClick={() => toggle(s.id)} className={`u-focus inline-flex h-11 items-center rounded-full border px-3 text-[13px] transition-colors md:h-9 ${on ? "border-foreground bg-foreground text-background" : "border-line hover:bg-subtle"}`}>
+                  <button key={s.id} type="button" aria-pressed={on} onClick={() => toggle(s.id)} className={`u-focus inline-flex h-[44px] items-center rounded-full border px-3 text-[13px] transition-colors md:h-[36px] ${on ? "border-foreground bg-foreground text-background" : "border-line hover:bg-subtle"}`}>
                     {s.name}
                   </button>
                 );

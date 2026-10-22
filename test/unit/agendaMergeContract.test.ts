@@ -68,20 +68,15 @@ test('an inactive barber is LABELLED, and their appointments stay openable', () 
 
 test('an inactive barber is NEVER offered for a new booking or a reschedule', () => {
   const src = read(VIEW);
-  // The modal's professional picker is the only staff control that creates/moves an
-  // appointment; the server refuses inactive staff too, so this keeps the operator
-  // from reaching a guaranteed error. It is now a visual chip group rather than a select.
+  // Every control that creates or moves an appointment draws from the ACTIVE roster; the
+  // server refuses inactive staff too, so this keeps the operator from a guaranteed error.
   assert.ok(src.includes('const activeStaff = props.staff.filter((staff) => staff.active)'), 'the booking roster is the ACTIVE roster');
-  // The picker's options are derived from activeStaff (now via a search filter inside
-  // the popover), so an inactive barber cannot reach the list at all.
-  assert.match(src, /activeStaff\s*\n?\s*\.filter\(\(c\) => c\.name/, 'the picker options come from activeStaff');
-  const pickerStart = src.indexOf('aria-label="Elegir profesional"');
-  const picker = src.slice(pickerStart, src.indexOf('</div>\n                        </div>', pickerStart));
-  assert.ok(picker.includes('activeStaff') && picker.includes('role="option"'), '…in the Profesional popover specifically');
-  assert.ok(!picker.includes('props.staff.map'), 'the popover never maps the unfiltered roster');
+  assert.ok(src.includes('const staffChoices = props.lockStaffId ? activeStaff.filter((s) => s.id === props.lockStaffId) : activeStaff;'), 'the booking flow picker is built from activeStaff');
+  assert.ok(src.includes('...staffChoices].map((s) =>'), 'and only those options are rendered');
+  // Reschedule (inside the detail panel and on the phone) and the walk-in panel too.
+  assert.ok(src.includes('staff: props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl })),'), 'reschedule offers only active professionals');
+  assert.ok(/<WalkInPanel[\s\S]*?staff=\{props\.staff\.filter\(\(s\) => s\.active\)/.test(src), 'the walk-in panel offers only active professionals');
 });
-
-// ─────────────── main's rules: canonical identity ───────────────
 
 test('identity is canonical — primary_identity replaced the raw phone column', () => {
   const repo = read(REPO);
@@ -98,15 +93,15 @@ test('identity is canonical — primary_identity replaced the raw phone column',
 test('the appointment detail shows canonical identity — never the internal UUID', () => {
   for (const rel of [PANEL, PREVIEW]) {
     const src = read(rel);
-    assert.ok(src.includes('appt.contact_name ?? "Atención sin cita"'), `${rel}: the name is the title`);
+    // The title is the contact's name; a walk-in without a contact shows what was typed,
+    // and only then the generic label — never a reference.
+    assert.ok(/appt\.contact_name \?\? (appt\.guest_name \?\? )?"Atención sin cita"/.test(src), `${rel}: the name is the title`);
     // The canonical identity (phone-or-email) — absent for a staff login, so only drawn when sent.
     assert.ok(src.includes('appt.primary_identity ?'), `${rel}: the canonical identity is shown when present`);
     // public_reference is still carried for other uses, but must not be shown as identity.
     assert.ok(!src.includes('public_reference'), `${rel}: the UUID/reference is not shown as identity`);
   }
 });
-
-// ─────────────── the redesign that had to survive ───────────────
 
 test('the redesigned CALENDAR survived — main\'s horizontal card list did not', () => {
   const src = read(VIEW);
@@ -210,8 +205,8 @@ test('module gating and the real lifecycle actions survived', () => {
     assert.ok(src.includes(action), `${action} is still wired`);
   }
   // Contact / conversation links only when the owning module is enabled.
-  assert.ok(src.includes('selected.contact_id && props.contactsBase'), 'contact link is CRM-gated');
-  assert.ok(src.includes('selected.source_conversation_id && props.inboxBase'), 'conversation link is inbox-gated');
+  assert.ok(src.includes('appt.contact_id && props.contactsBase'), 'contact link is CRM-gated');
+  assert.ok(src.includes('appt.source_conversation_id && props.inboxBase'), 'conversation link is inbox-gated');
   assert.ok(src.includes('listAppointmentActivityAction'), 'activity is the real read action');
 });
 
@@ -227,29 +222,30 @@ test('the TODOs explaining still-missing backend were not dropped', () => {
 
 test('selecting an appointment opens a side panel built from the shared Scheduling system', () => {
   const panel = read(PANEL);
-  assert.ok(panel.includes('fixed inset-y-0 right-0 z-50 flex w-full'), 'a right-hand panel; full width on the phone');
-  assert.ok(panel.includes('md:w-[min(34rem,calc(100vw-3rem))]'), 'one readable column from md');
-  assert.ok(panel.includes('from "../ui/system"') && panel.includes('from "../ui/Menu"'), 'it composes the shared system, not its own controls');
-  for (const own of ['function IconButton', 'function ConfirmDialog', 'rounded-[10px]', 'h-[36px]']) {
-    assert.ok(!panel.includes(own), `no panel-local "${own}"`);
-  }
-  // Reading order: when → who → what → history.
-  const at = (s: string) => panel.indexOf(s);
-  assert.ok(at('id="appt-panel-title"') < at('id="appt-panel-client"') && at('id="appt-panel-client"') < at('id="appt-panel-service"') && at('id="appt-panel-service"') < at('id="appt-panel-activity"'), 'date → client → service → activity');
-  // Each action once: "Completar" is the footer primary only; "Cambiar fecha y hora" is the header's.
-  // The rule lives in the shared plan (behaviour-tested in appointmentActionPlan.test.ts).
-  assert.ok(read('web/lib/appointmentActionPlan.ts').includes('stateMenu: transitions.filter((t) => t !== "completed")'), 'the state menu does not repeat the footer primary');
-  assert.ok(panel.includes('const stateTargets = plan.stateMenu;'), 'and the panel builds its menu from it');
-  assert.equal((panel.match(/onClick=\{props\.onReschedule\}/g) ?? []).length, 1, 'one reschedule control on the desktop panel');
-  // Below md the detail is the phone sheet (mobile/MobileAppointmentSheet), same props.
+  const frame = read('web/components/scheduling/agenda/SidePanel.tsx');
+  // ONE side-panel frame for detail, Nueva cita, walk-in and blocks: 520 px, 12 px from the
+  // top/bottom/right, the whole height; the agenda is neither darkened nor trapped.
+  assert.ok(frame.includes('fixed bottom-3 right-3 top-3 z-50 flex w-[min(520px,calc(100vw-24px))]'), '520 px floating panel with 12 px margins');
+  assert.ok(frame.includes('fixed inset-0 z-50 flex flex-col'), 'the whole screen on the phone');
+  assert.ok(!frame.includes('bg-black/'), 'no scrim: the agenda stays visible');
+  assert.ok(frame.includes('overflow-y-auto') && frame.includes('<footer'), 'the body scrolls; the actions stay visible');
+  // Unsaved changes: X, Escape, outside click and links ask «Seguir editando / Descartar cambios».
+  assert.ok(frame.includes('cancelLabel="Seguir editando"') && frame.includes('confirmLabel="Descartar cambios"'), 'the discard question');
+  assert.ok(frame.includes('useNavigationGuard'), 'links elsewhere are guarded too');
+  assert.ok(frame.includes('e.defaultPrevented') && frame.includes('[data-own-escape]'), 'Escape closes only the top layer');
+  assert.ok(frame.includes('back.isConnected') , 'focus returns to the opener');
+  assert.ok(panel.includes('<SidePanel') && panel.includes('from "../ui/system"'), 'the detail composes the shared frame and system');
+  // The state in one touch, from the shared plan (behaviour-tested in appointmentActionPlan.test.ts).
+  assert.ok(panel.includes('appointmentActionPlan({') && panel.includes('plan.transitions.includes'), 'transitions come from the shared plan');
+  assert.ok(panel.includes('DESTRUCTIVE.has(target)') && panel.includes('<ConfirmLayer'), 'cancel / no-show confirm first');
+  // Reagendar happens INSIDE the same panel and moves the same appointment.
+  assert.ok(panel.includes('<RescheduleInline') && read('web/components/scheduling/agenda/RescheduleInline.tsx').includes('rescheduleAppointmentAction('), 'reschedule inside the panel, the real move action');
   assert.ok(panel.includes('if (phone) {') && panel.includes('<MobileAppointmentSheet'), 'the phone gets its own bottom sheet');
-  assert.ok(panel.includes('useTrappedPanel') && panel.includes('const onEscape = useCallback'), 'focus trap with a stable close handler');
-  assert.ok(panel.includes('DESTRUCTIVE.has(target)') && panel.includes('<ConfirmDialog'), 'cancel / no-show confirm first');
   assert.ok(read('web/components/scheduling/agenda/status.ts').includes('NEXT_STATUSES'), 'transitions mirror the engine');
-  for (const fake of ['Añadir formulario', 'política de pagos', 'recurrencia', 'cita de grupo', 'Ver venta', 'Finalizar compra']) {
+  for (const fake of ['Añadir formulario', 'política de pagos', 'cita de grupo', 'Ver venta', 'Finalizar compra']) {
     assert.ok(!panel.toLowerCase().includes(fake.toLowerCase()), `no "${fake}" control`);
   }
-  assert.ok(read(VIEW).includes('{selected ? (\n          <AppointmentPanel'), 'the panel renders beside the grid, not instead of it');
+  assert.ok(read(VIEW).includes('<AppointmentPanel'), 'the panel renders beside the grid, not instead of it');
 });
 
 test('hovering an appointment shows an informational, viewport-clamped preview', () => {
@@ -286,45 +282,36 @@ test('the Month view is not offered as a dead disabled control', () => {
 test('the new-appointment modal explains itself — search, empty, and disabled states', () => {
   const src = read(VIEW);
   assert.ok(src.includes('Buscando…'), 'the search shows a loading label');
-  assert.ok(src.includes('No hay horarios libres para esta combinación.'), 'an empty search says so out loud');
-  assert.ok(src.includes('Elige un horario para continuar.'), 'the disabled primary explains why');
-  // It is a real dialog for assistive tech, and Escape/focus are handled.
-  assert.ok(src.includes('role="dialog"') && src.includes('aria-modal="true"'), 'the modal is a labelled dialog');
+  assert.ok(src.includes('Sin cupos este día'), 'an empty day says so out loud');
+  assert.ok(src.includes('"Elige un horario"'), 'the disabled primary explains why');
+  // A real dialog: the booking flow renders through MScreen (role="dialog", aria-modal),
+  // full screen on the phone and framed as the 520 px side panel from md up.
+  const kit = read('web/components/scheduling/mobile/kit.tsx');
+  assert.ok(kit.includes('role="dialog"') && kit.includes('aria-modal="true"'), 'the flow is a labelled dialog');
+  assert.ok(src.includes('framed={!isPhone}'), 'framed as the side panel on desktop');
 });
 
 test('manual booking is a three-step operator flow with one rich final confirmation', () => {
   const src = read(VIEW);
-  for (const label of ['Cliente y servicio', 'Profesional y hora', 'Confirmar']) {
-    assert.ok(src.includes(`label: "${label}"`), `${label} is an explicit step`);
-  }
+  assert.ok(src.includes('const stepName = step === 1 ? "Cliente y servicio" : step === 2 ? "Profesional, fecha y hora" : "Confirmar";'), 'three explicit steps');
   assert.ok(!src.includes('label: "Detalles"'), 'the low-value details screen is removed');
-  assert.ok(src.includes('className="grid min-h-0 flex-1 gap-0 lg:grid-cols-2"'), 'client and service share one balanced desktop screen');
-  assert.ok(src.includes('lg:grid-cols-[minmax(0,1fr)_22rem]'), 'the month takes the flexible column and the times a fixed rail');
-  assert.ok(!src.includes('aria-label="Resumen de la selección"'), 'intermediate screens do not repeat a persistent summary');
-  assert.equal(src.match(/aria-label="Resumen de la cita"/g)?.length, 1, 'the summary appears once, on the final confirmation screen');
-  assert.ok(src.includes('Nada se guarda hasta que confirmes.'), 'the final confirmation explains commit timing');
-  assert.ok(src.includes('queda reservado para'), 'and says what creating it will reserve');
-  assert.ok(src.includes('>Color de la cita<') && src.includes('Automático'), 'the automatic service colour is explained');
-  assert.ok(src.includes('Se cambia en Catálogo → Servicios.'), 'and says where the family is actually edited');
-  // The preview must use the SERVICE'S STORED CATEGORY, not a fresh guess from its
-  // name, or step 3 would promise a colour the board then draws differently.
-  assert.ok(
-    src.includes('serviceCategory(selectedService.name, selectedService.category)'),
-    'the colour preview reads the stored category',
-  );
-  assert.ok(src.includes('Crear cita'), 'the final action names its outcome');
+  assert.ok(src.includes('"Nada se guarda hasta que confirmes"'), 'the final confirmation explains commit timing');
+  // The colour preview uses the SERVICE'S STORED CATEGORY, not a fresh guess from its name.
+  assert.ok(src.includes('serviceCategory(selectedService.name, selectedService.category)'), 'the colour preview reads the stored category');
+  assert.ok(src.includes('"Crear cita"'), 'the final action names its outcome');
   assert.ok(src.includes('visibleSlots'), 'any-professional availability collapses duplicate clock times');
+  // «Sin cita · ahora» hands over to the one-step walk-in panel.
+  assert.ok(src.includes('Sin cita · ahora') && src.includes('onWalkIn={() => setModal({ mode: "walkin" })}'), 'walk-in from Nueva cita');
 });
 
 test('manual booking has a real selectable month with concise availability labels', () => {
   const src = read(VIEW);
   assert.ok(src.includes('function siteMidnightIso('), 'selected local days are converted in the site timezone');
   assert.ok(src.includes('function calendarDays(') && src.includes('Mes anterior') && src.includes('Mes siguiente'), 'the full month calendar is navigable');
-  assert.ok(src.includes('onClick={() => changeDate(day.key)}'), 'choosing a day refreshes the booking date');
+  assert.ok(src.includes('changeDate(day.key)'), 'choosing a day refreshes the booking date');
   assert.ok(src.includes('from: siteMidnightIso(monthStart, props.timezone)') && src.includes('to: siteMidnightIso(monthEnd, props.timezone)'), 'one real monthly availability query feeds day and professional counts');
   assert.ok(src.includes('const [serviceId, setServiceId] = useState(props.modal.mode === "reschedule" ? props.modal.appt.service_id : "")'), 'new appointments do not preselect a service');
-  assert.ok(src.includes('Hay cupos') && !src.includes('horarios libres hoy'), 'calendar and professional cards avoid noisy slot counts');
-  assert.ok(src.includes('className="u-module-modal'), 'the dialog centres against the module canvas');
+  assert.ok(!src.includes('horarios libres hoy'), 'calendar and professional cards avoid noisy slot counts');
 });
 
 test('control geometry comes from ONE Scheduling system, not per-screen strings', () => {
@@ -337,7 +324,7 @@ test('control geometry comes from ONE Scheduling system, not per-screen strings'
   }
   const src = read(VIEW);
   assert.ok(src.includes('segmentShell("sm")') && src.includes('buttonClass({ variant: "primary"'), 'the toolbar uses the shared segmented control and buttons');
-  for (const old of ['rounded-[9px]', 'rounded-[7px]', 'h-[34px]', 'className={CONTROL_CLS}', 'className={OUTLINE_CLS}']) {
+  for (const old of ['rounded-[7px]', 'h-[34px]', 'className={CONTROL_CLS}', 'className={OUTLINE_CLS}']) {
     assert.ok(!src.includes(old), `the old ad-hoc "${old}" is gone`);
   }
 });
@@ -357,12 +344,12 @@ test('control heights are absolute px, because this app scales the rem ramp', ()
 test('a confirmation inside the detail panel is modal: Tab cannot reach the panel behind it', () => {
   const panel = read(PANEL);
   const sys = SYSTEM();
-  // Everything behind the confirmation is inert while it is open (one wrapper).
-  assert.ok(panel.includes('const layer = useModalLayer(confirm !== null'), 'the panel uses the shared modal layer');
-  assert.ok(panel.includes('<div inert={layer.inert} className="flex min-h-0 flex-1 flex-col">'), 'the panel body is inert behind it');
-  // The layer focuses the SAFE choice, and restores focus to what opened it.
+  // The confirmation is a ConfirmLayer (focus trapped, Escape cancels) and the panel body
+  // is inert behind it; the panel's own Escape/outside-click stand down while it is open.
+  assert.ok(panel.includes('<ConfirmLayer'), 'the confirmation is the shared modal layer');
+  assert.ok(panel.includes('<div inert={confirm !== null} className="flex flex-col">'), 'the panel body is inert behind it');
+  assert.ok(panel.includes('covered={confirm !== null || props.covered}'), 'the panel does not close underneath it');
   assert.ok(sys.includes('querySelector<HTMLElement>("[data-autofocus]")') && sys.includes('data-autofocus>'), 'focus lands on the safe choice');
-  assert.ok(sys.includes('back.isConnected ? back : fallback?.current'), 'focus returns to the opener (or the panel)');
   const overlay = read('web/components/ui/Overlay.tsx');
   assert.ok(overlay.includes('!el.closest("[inert]")'), 'the focus trap ignores inert content');
 });

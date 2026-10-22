@@ -48,31 +48,36 @@ test('every roster card is a PageShell — no screen draws its own card twice', 
   assert.equal(/<PageShell grow=\{false\}[^>]*>\s*\{\/\* The column header/.test(read(TAB)), false, 'and is not pinned to its content');
 });
 
-test('the roster is a responsive card grid and never reserves a side lane', () => {
+test('the roster is ONE table (redesign E1) and never reserves a side lane', () => {
   const src = stripComments(read(TAB));
   assert.ok(!src.includes('lg:pr-[452px]'), 'no hand-reserved drawer lane');
-  assert.ok(src.includes('grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3'), 'phone 1, tablet 2, desktop 3');
-  assert.ok(src.includes('function StaffCard('), 'one real card component owns the layout');
-  assert.ok(src.includes('min-h-[238px]'), 'cards keep a stable scannable height');
+  assert.ok(src.includes('<table className="w-full table-fixed'), 'one row per professional');
+  for (const col of ['Profesional', 'Rol', 'Ahora', 'Citas hoy', 'Horas', 'Servicios', 'Horario']) {
+    assert.ok(src.includes(`>${col}</th>`), `column ${col}`);
+  }
+  // Presence in WORDS (with a dot), the day's load as secondary data, and «Agenda» opens
+  // the calendar filtered to that person.
+  assert.ok(src.includes('presenceChip(d.key, d.appts, now)'), 'presence is text');
+  assert.ok(src.includes('scheduling/agenda?staff=${member.id}'), '«Agenda» opens the filtered calendar');
+  assert.equal(src.includes('function StaffCard('), false, 'the card grid is gone, not left dead');
 });
 
-test('the detail panel is ONE responsive overlay and never squeezes the roster', () => {
+test('the ficha is its OWN screen: it replaces the list in the same surface', () => {
   const src = stripComments(read(TAB));
   assert.equal(src.match(/<StaffDetail/g)?.length, 1, 'rendered exactly once');
-  assert.ok(src.includes('pointer-events-none fixed inset-0 z-50'), 'always overlays the roster');
-  assert.ok(src.includes('sm:w-[var(--staff-panel-w)]'), 'phone is full width; larger screens use the token');
-  assert.ok(read('web/app/globals.css').includes('--staff-panel-w:'), 'and the token is defined');
-  assert.equal(src.includes('lg:relative'), false, 'never becomes an in-flow side column');
-  assert.ok(src.includes('className={OVERLAY_SCRIM}'), 'the background always recedes');
+  assert.ok(src.includes('if (selected) {'), 'selecting a professional swaps the surface');
+  assert.equal(src.includes('className={OVERLAY_SCRIM}'), false, 'no scrim: it is not an overlay any more');
+  assert.equal(src.includes('pointer-events-none fixed inset-0 z-50'), false, 'and nothing floats over the list');
+  assert.ok(src.includes('aria-label="Ruta"') && src.includes('href={closeHref}'), 'a breadcrumb goes back to Equipo');
 });
 
-test("the detail panel's frame is PageShell's, class for class", () => {
+test("the ficha's frame is PageShell's, class for class", () => {
   const src = read(TAB);
-  assert.ok(src.includes('sm:rounded-xl sm:border sm:border-line sm:shadow-[var(--shadow-card)]'), 'same card above phone width');
+  assert.ok(src.includes('rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]'), 'the same card as the rest of the screen');
   assert.ok(!src.includes('sm:rounded-2xl'), 'not a second radius');
   const shell = read('web/components/ui/PageShell.tsx');
   for (const cls of ['rounded-xl', 'border-line', 'shadow-[var(--shadow-card)]']) {
-    assert.ok(shell.includes(cls), `PageShell still owns ${cls} — the panel is copying a live definition`);
+    assert.ok(shell.includes(cls), `PageShell still owns ${cls} — the ficha is copying a live definition`);
   }
 });
 
@@ -252,49 +257,18 @@ test('the metric strip is ONE divided box on both screens, from one primitive', 
   assert.deepEqual(defs, [], `MetricCell is defined only in the primitives, found: ${defs.join(', ')}`);
 });
 
-test("the panel header is an introduction, not an action bar", () => {
+test("the ficha header introduces the person, then two actions", () => {
   const src = stripComments(read(TAB));
-  // Two lines (name + presence chip, then one meta line), the contact header's shape.
-  assert.ok(src.includes('text-base font-semibold tracking-tight text-foreground'), 'the name matches the contact panel');
-  assert.ok(src.includes('{headerMeta}'), 'one meta line under it');
-  // The presence fact is a CHIP on the name line now, not a mono line below it.
-  assert.ok(/rounded-full border border-line-strong bg-chip[^"]*uppercase/.test(src), 'presence reads as a chip');
-  // The per-person wash, from the SAME tone helper the avatar hashes on — two seeds
-  // would mean a teal disc on a purple header.
-  assert.ok(src.includes('u-contact-wash'), 'the header carries the tone wash');
-  // The discs became two-tone gradient SPHERES, so the wash fades the same PAIR — one
-  // stop would let the header and the avatar above it disagree.
-  assert.ok(src.includes('avatarToneStyle(member.name)'), 'and the tone is this person\'s own');
-  assert.ok(src.includes('avatarColor(member.name)'), 'the same seed as the avatar');
-  assert.equal(src.includes('bg-panel-hero'), false, 'no third fill inside a two-fill panel');
-  // Actions in their OWN row, in the contact panel's proportion: primary takes the
-  // leftover width, secondaries size to their labels.
-  // The shared header-action primary, filling the row. There is no Edit button beside it
-  // any more: see the single-write-path test below.
-  assert.ok(src.includes('className={ACT_PRIMARY}'), 'primary fills the row');
-  // ACT_PRIMARY is INK now, not brand red. The CRM rework spends red on the active nav
-  // item, `Agendar cita`, and the "a human is handling this" marker, and nothing else —
-  // see the note on --ink in globals.css. The PROPORTION this test is really about
-  // (primary takes the leftover width, secondaries size to their labels) is unchanged.
-  assert.ok(
-    read('web/components/ui/panelChrome.tsx').includes(
-      'inline-flex h-9 min-w-0 flex-1 items-center justify-center whitespace-nowrap rounded-lg bg-ink',
-    ),
-    'and ACT_PRIMARY is the proportion the roster uses',
-  );
-  // The quiet close control both panels share, in place of a bordered ✕ box. Scoped to
-  // the CLOSE control: the inline ✕ that removes a skill chip or a time range is a
-  // different affordance and keeps its own treatment.
-  assert.ok(src.includes('-mr-1 shrink-0 rounded-md p-1 text-faint'), 'the close control is the quiet one');
-  assert.equal(
-    src.includes('inline-flex size-8 shrink-0 items-center justify-center rounded-md border border-line-strong'),
-    false,
-    'the bordered glyph box is gone',
-  );
-  assert.ok(
-    stripComments(read('web/components/ui/panelChrome.tsx')).includes('-mr-1 shrink-0 rounded-md p-1 text-faint'),
-    'and it is the shared PANEL_CLOSE_CLS, not a lookalike',
-  );
+  assert.ok(src.includes('text-[22px] font-semibold'), 'the name is the screen title');
+  assert.ok(src.includes('avatarColor(member.name)'), 'the same avatar seed as everywhere');
+  // Presence in words, where the schedule comes from, and how many services — the facts
+  // a receptionist reads before opening a tab.
+  assert.ok(src.includes('presenceChip(status.key, status.appts, now)'), 'presence in words');
+  assert.ok(src.includes('"Usa el horario de la sede" : "Horario propio"'), 'inherited vs own is stated');
+  // «Editar perfil» opens the Perfil TAB — still the one write path — and «Ver su agenda»
+  // is the primary.
+  assert.ok(src.includes('onClick={() => setTab("details")}'), 'Editar perfil is the Perfil tab, not a second editor');
+  assert.ok(src.includes('className={ACT_PRIMARY}') && src.includes('Ver su agenda'), 'primary: the filtered agenda');
 });
 
 test('the icon set is neutral — scheduling does not import from contacts', () => {
@@ -334,46 +308,31 @@ test('there is ONE write path per field: the panel\'s tabs, no Edit button', () 
   assert.ok(tab.includes("if (d.name.trim() === \"\") return \"El nombre es obligatorio.\";"), 'name is validated');
   assert.ok(tab.includes('out.name = d.name.trim()'), 'and never nulled');
 
-  // SERVICES toggle in place. Per-pairing, so it writes immediately rather than joining
-  // the unsaved bar — the same way adding a certification already worked.
-  assert.ok(tab.includes('role="switch"'), 'the service row IS the control');
-  assert.ok(tab.includes('setStaffServiceAction(clientId, member.id, sv.id, !on)'), 'and it toggles the pairing');
+  // SERVICES: search, groups, «Seleccionar todos» and ONE explicit save (redesign Q3);
+  // each pairing still goes through setStaffServiceAction.
+  const svc = stripComments(read('web/components/scheduling/staff/StaffServicesEditor.tsx'));
+  assert.ok(tab.includes('<StaffServicesEditor'), 'the Services tab is the assignment editor');
+  assert.ok(svc.includes('Seleccionar todos') && svc.includes('Guardar servicios'), 'select all + explicit save');
+  assert.ok(svc.includes('setStaffServiceAction(props.clientId, props.staffId, id, true)') && svc.includes('setStaffServiceAction(props.clientId, props.staffId, id, false)'), 'and it writes each pairing');
 });
 
-test('the CREATE drawer is create-only and responsive', () => {
+test('the CREATE panel is create-only and uses the agenda side panel', () => {
   const src = stripComments(read(DRAWER));
-  // No edit branch left anywhere — that is what makes the single write path true rather
-  // than merely intended.
-  // The identifier, not the word — "Add staff member" is copy.
   for (const use of ['member?.', 'member.', '{member', 'member ?', 'member:', 'member !==']) {
-    assert.equal(src.includes(use), false, `the drawer knows nothing about an existing member (${use})`);
+    assert.equal(src.includes(use), false, `the panel knows nothing about an existing member (${use})`);
   }
   assert.ok(src.includes('export function StaffCreateDrawer'), 'and says so in its name');
   assert.equal(existsSyncWeb('components/scheduling/staff/StaffEditDialog.tsx'), false, 'no dead modal');
   assert.equal(existsSyncWeb('components/scheduling/staff/StaffEditDrawer.tsx'), false, 'and no dead edit drawer');
-  // It still writes exactly what create wrote: one call, then the hours patch.
-  assert.ok(src.includes('createStaffAction({ clientId, siteId: target, name: trimmed, serviceIds })'), 'the same create call');
-  assert.ok(src.includes('updateStaffAction(clientId, r.id, { workingHours })'), 'and the hours patch after it');
+  // One create call with the service set, then the fields create does not take.
+  assert.ok(src.includes('createStaffAction({ clientId, siteId: site, name: name.trim(), serviceIds })'), 'the same create call');
+  assert.ok(src.includes('updateStaffAction(clientId, r.id, patch)'), 'and the profile patch after it');
   assert.equal(src.includes('setStaffServiceAction'), false, 'create takes the service set in one go');
-
-  // The modal's signature, gone: a viewport-centred flex box with a max-width card.
-  assert.equal(/fixed inset-0[^"]*items-start justify-center/.test(src), false, 'nothing centres on the viewport');
-  assert.equal(src.includes('max-w-md'), false, 'no floating fixed-width card');
-  assert.equal(src.includes('bg-popover'), false, 'and it is not a popover surface');
-  assert.ok(src.includes('fixed inset-y-0 right-0'), 'it is a real overlay');
-  assert.ok(src.includes('sm:w-[var(--staff-panel-w)]'), 'full phone width, token width on tablet/desktop');
+  // The shared 520 px side panel (no scrim, guarded close, pinned actions).
+  assert.ok(src.includes('<SidePanel') && src.includes('dirty={dirty}'), 'the agenda side panel with its unsaved-changes guard');
   assert.ok(stripComments(read(TAB)).includes('{creating ?'), 'create state opens it independently');
-
-  // A FORM: transparent catcher where it has a lane, focus trap, pinned save bar.
-  assert.ok(src.includes('bg-black/40'), 'the overlay has a dismissible scrim');
-  assert.ok(src.includes('useTrappedPanel({ active: true'), 'a form always traps focus');
-  assert.ok(src.includes('flex min-h-0 flex-1 flex-col overflow-y-auto bg-surface'), 'one scrolling body');
-  assert.ok(src.includes('flex shrink-0 items-center gap-2 border-t border-line bg-surface'), 'a pinned save bar');
-  assert.ok(src.includes('className={BTN_PRIMARY}') && src.includes('className={BTN_SECONDARY}'), 'the shared footer buttons');
-  const sections = src.match(/<PanelSection/g)?.length ?? 0;
-  const icons = src.match(/icon=\{</g)?.length ?? 0;
-  assert.ok(sections >= 3, `the form is sectioned (${sections})`);
-  assert.equal(icons, sections, `every section carries an icon (${icons}/${sections})`);
+  // A professional is not a login.
+  assert.ok(src.includes('Usuarios y accesos'), 'access to the system is a separate decision');
 });
 
 test('one control band vocabulary — the roster and Contacts share the pills', () => {

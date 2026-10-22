@@ -1,5 +1,4 @@
 import { connection } from "next/server";
-import { notFound } from "next/navigation";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { can } from "@/lib/access";
 import { loadSchedulingSettings } from "@/lib/schedulingSettingsData";

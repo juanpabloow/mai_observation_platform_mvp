@@ -70,38 +70,38 @@ export function SeriesPanel(props: {
   const [endsOn, setEndsOn] = useState<string | null>(null);
   const [reason, setReason] = useState("");
   const [publicReason, setPublicReason] = useState<PublicAbsenceReason | null>(null);
-  const [preview, setPreview] = useState<{ loading: boolean; result: ScheduleWriteResult | null; error: boolean }>({ loading: false, result: null, error: false });
+  const [previewState, setPreview] = useState<{ forKey: string; loading: boolean; result: ScheduleWriteResult | null; error: boolean }>({ forKey: "", loading: false, result: null, error: false });
   const [ask, setAsk] = useState<null | "save" | "delete">(null);
   const [deleteScope, setDeleteScope] = useState<Scope>("date");
-  const [deletePreview, setDeletePreview] = useState<string[] | null>(null);
+  const [deletePreviewState, setDeletePreview] = useState<{ forKey: string; lines: string[] } | null>(null);
+  const deleteKey = `${deleteScope}`;
+  const deletePreview = deletePreviewState && deletePreviewState.forKey === deleteKey ? deletePreviewState.lines : null;
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const sending = useRef(false);
   const handle = useRef<SidePanelHandle | null>(null);
 
-  const load = useCallback(async () => {
-    setLoadError(false);
-    try {
-      const r = await listScheduleSeriesAction(props.clientId, props.siteId);
-      if (!r.ok) return setLoadError(true);
-      const s = r.series.find((x) => x.id === occ.seriesId) ?? null;
-      setSeries(s ?? "missing");
-      if (s) {
-        setWeekdays(s.weekdays);
-        setEndsOn(s.endsOn);
-        setReason(s.reason ?? "");
-        setPublicReason((s.publicReason as PublicAbsenceReason | null) ?? null);
-      }
-    } catch {
-      setLoadError(true);
-    }
+  const load = useCallback(() => {
+    listScheduleSeriesAction(props.clientId, props.siteId)
+      .then((r) => {
+        setLoadError(!r.ok);
+        if (!r.ok) return;
+        const s = r.series.find((x) => x.id === occ.seriesId) ?? null;
+        setSeries(s ?? "missing");
+        if (s) {
+          setWeekdays(s.weekdays);
+          setEndsOn(s.endsOn);
+          setReason(s.reason ?? "");
+          setPublicReason((s.publicReason as PublicAbsenceReason | null) ?? null);
+        }
+      })
+      .catch(() => setLoadError(true));
   }, [props.clientId, props.siteId, occ.seriesId]);
-  useEffect(() => {
-    void load();
-  }, [load]);
+  useEffect(load, [load]);
 
   const usual = series && series !== "missing" ? { start: series.start, end: series.end } : null;
-  const past = Date.parse(occ.startsAt) <= Date.now();
+  const [openedAt] = useState(() => Date.now());
+  const past = Date.parse(occ.startsAt) <= openedAt;
   const canWrite = props.canEdit && !past && series !== "missing";
   const dateText = dLabel(occ.date);
   const dirty =
@@ -125,20 +125,23 @@ export function SeriesPanel(props: {
     }),
     [props.clientId, occ.seriesId, occ.date, scope, start, end, scopeOnlyDate, isBreak, weekdays, endsOn, reason, publicReason],
   );
-  const reqKey = JSON.stringify(req);
+  const reqKey = JSON.stringify([req, props.recheck]);
+  const wantsPreview = canWrite && action === "move" && timesValid && Boolean(dirty);
+  // Each answer is tagged with the request it answers: "loading" and "nothing to show" are derived.
+  const preview = !wantsPreview
+    ? { loading: false, result: null as ScheduleWriteResult | null, error: false }
+    : previewState.forKey === reqKey
+      ? previewState
+      : { loading: true, result: previewState.result, error: false };
   useEffect(() => {
-    if (!canWrite || action !== "move" || !timesValid || !dirty) {
-      setPreview({ loading: false, result: null, error: false });
-      return;
-    }
+    if (!wantsPreview) return;
     let cancelled = false;
-    setPreview((p) => ({ ...p, loading: true, error: false }));
     const t = setTimeout(async () => {
       try {
         const r = await editSeriesAction({ ...req, dryRun: true });
-        if (!cancelled) setPreview({ loading: false, result: r, error: false });
+        if (!cancelled) setPreview({ forKey: reqKey, loading: false, result: r, error: false });
       } catch {
-        if (!cancelled) setPreview({ loading: false, result: null, error: true });
+        if (!cancelled) setPreview({ forKey: reqKey, loading: false, result: null, error: true });
       }
     }, 300);
     return () => {
@@ -146,7 +149,7 @@ export function SeriesPanel(props: {
       clearTimeout(t);
     };
     // props.recheck: recalculated after coming back from a reschedule.
-  }, [reqKey, canWrite, action, timesValid, dirty, props.recheck]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [reqKey, wantsPreview]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const affected: AffectedItem[] | null = preview.result && preview.result.ok ? preview.result.affected : null;
   const planError = preview.result && !preview.result.ok ? preview.result.error : null;
@@ -175,7 +178,7 @@ export function SeriesPanel(props: {
         if (!r.ok) return setError(r.error);
         if (!r.written) {
           // Appointments appeared since the preview: show them, ask again.
-          setPreview({ loading: false, result: r, error: false });
+          setPreview({ forKey: reqKey, loading: false, result: r, error: false });
           setAsk(null);
           return;
         }
@@ -209,10 +212,10 @@ export function SeriesPanel(props: {
   useEffect(() => {
     if (ask !== "delete") return;
     let cancelled = false;
-    setDeletePreview(null);
+    const key = `${deleteScope}`;
     deleteSeriesAction({ clientId: props.clientId, seriesId: occ.seriesId, date: occ.date, scope: deleteScope, dryRun: true })
-      .then((r) => !cancelled && setDeletePreview(r.ok ? r.summary?.lines ?? [] : [r.error]))
-      .catch(() => !cancelled && setDeletePreview(["No pudimos calcular el efecto. Puedes intentarlo igual."]));
+      .then((r) => !cancelled && setDeletePreview({ forKey: key, lines: r.ok ? r.summary?.lines ?? [] : [r.error] }))
+      .catch(() => !cancelled && setDeletePreview({ forKey: key, lines: ["No pudimos calcular el efecto. Puedes intentarlo igual."] }));
     return () => {
       cancelled = true;
     };
@@ -293,7 +296,7 @@ export function SeriesPanel(props: {
           </div>
         ) : series === null ? (
           <div aria-busy="true" className="flex flex-col gap-2">
-            <div className="h-16 rounded-[12px] bg-subtle" />
+            <div className="h-[64px] rounded-[12px] bg-subtle" />
             <div className="h-24 rounded-[12px] bg-subtle" />
           </div>
         ) : (
@@ -391,7 +394,7 @@ export function SeriesPanel(props: {
                       timezone={tz}
                       what={isBreak ? "la nueva pausa" : "el bloqueo"}
                       onReschedule={(item) => props.onReschedule(item, holds())}
-                      onRetry={() => setPreview({ loading: false, result: null, error: false })}
+                      onRetry={() => setPreview({ forKey: "", loading: false, result: null, error: false })}
                     />
                   )}
                   {summary && !scopeOnlyDate ? (

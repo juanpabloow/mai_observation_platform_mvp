@@ -56,8 +56,9 @@ export function HoursScreen(props: {
   const site = props.sites.find((s) => s.id === siteId) ?? props.sites[0];
   const tz = site?.timezone ?? "America/Bogota";
   const today = todayAtSite(tz);
-  const [series, setSeries] = useState<SeriesView[] | null>(null);
-  const [seriesError, setSeriesError] = useState(false);
+  const [seriesState, setSeriesState] = useState<{ siteId: string; list: SeriesView[] | null; error: boolean }>({ siteId: "", list: null, error: false });
+  const series = seriesState.siteId === siteId ? seriesState.list : null;
+  const seriesError = seriesState.siteId === siteId && seriesState.error;
   const [editingSite, setEditingSite] = useState(false);
   const [tab, setTab] = useState<"next" | "past">("next");
   const [panel, setPanel] = useState<null | { kind: "new"; title: string } | { kind: "dated"; block: DatedBlock } | { kind: "series"; occ: OccurrenceRef; owner: string | null }>(null);
@@ -70,21 +71,13 @@ export function HoursScreen(props: {
     return () => window.clearTimeout(t);
   }, [notice]);
 
-  const load = useCallback(async () => {
+  const load = useCallback(() => {
     if (!siteId) return;
-    setSeriesError(false);
-    try {
-      const r = await listScheduleSeriesAction(props.clientId, siteId);
-      if (r.ok) setSeries(r.series);
-      else setSeriesError(true);
-    } catch {
-      setSeriesError(true);
-    }
+    listScheduleSeriesAction(props.clientId, siteId)
+      .then((r) => setSeriesState({ siteId, list: r.ok ? r.series : null, error: !r.ok }))
+      .catch(() => setSeriesState({ siteId, list: null, error: true }));
   }, [props.clientId, siteId]);
-  useEffect(() => {
-    setSeries(null);
-    void load();
-  }, [load]);
+  useEffect(load, [load]);
 
   const staff = props.staff.filter((s) => s.site_id === siteId && s.active);
   const nameOf = (id: string | null) => (id ? props.staff.find((s) => s.id === id)?.name ?? "Profesional" : "Toda la sede");
@@ -135,7 +128,7 @@ export function HoursScreen(props: {
           <p className="text-[13px] text-muted">Cuándo se atiende y cuándo no · {timezoneLabel(tz)}</p>
         </div>
         {props.sites.length > 1 ? (
-          <select aria-label="Sede" value={siteId} onChange={(e) => setSiteId(e.target.value)} className="u-focus h-10 rounded-sch-control border border-line bg-surface px-3 text-[13px] font-medium">
+          <select aria-label="Sede" value={siteId} onChange={(e) => setSiteId(e.target.value)} className="u-focus h-[40px] rounded-sch-control border border-line bg-surface px-3 text-[13px] font-medium">
             {props.sites.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
@@ -245,7 +238,7 @@ export function HoursScreen(props: {
                         <tr key={s.id}>
                           <td className="border-b border-line-soft px-2 py-2.5">
                             <span className="flex items-center gap-2.5">
-                              <span aria-hidden className={`u-mono flex size-8 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${avatarColor(s.name)}`}>{staffInitials(s.name)}</span>
+                              <span aria-hidden className={`u-mono flex size-[32px] shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${avatarColor(s.name)}`}>{staffInitials(s.name)}</span>
                               <span className="font-medium">{s.name}</span>
                             </span>
                           </td>
@@ -264,7 +257,7 @@ export function HoursScreen(props: {
                           })}
                           <td className="border-b border-line-soft px-2 py-2.5 text-right">
                             {props.canTeam ? (
-                              <Link href={`/clients/${props.clientId}/scheduling/staff?site=${site.id}&s=${s.id}&dtab=hours`} className="u-focus inline-flex h-9 items-center rounded-sch-control border border-line px-3 text-[12.5px] font-medium hover:bg-subtle">
+                              <Link href={`/clients/${props.clientId}/scheduling/staff?site=${site.id}&s=${s.id}&dtab=hours`} className="u-focus inline-flex h-[36px] items-center rounded-sch-control border border-line px-3 text-[12.5px] font-medium hover:bg-subtle">
                                 Editar en Equipo
                               </Link>
                             ) : null}
@@ -287,7 +280,7 @@ export function HoursScreen(props: {
               </div>
               <div role="tablist" aria-label="Ausencias" className="flex rounded-sch-control bg-chip p-1">
                 {(["next", "past"] as const).map((t) => (
-                  <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={`u-focus h-9 rounded-[9px] px-3 text-[13px] ${tab === t ? "bg-surface font-semibold shadow-[0_1px_2px_rgba(0,0,0,0.08)]" : "text-muted"}`}>
+                  <button key={t} type="button" role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={`u-focus h-[36px] rounded-[9px] px-3 text-[13px] ${tab === t ? "bg-surface font-semibold shadow-[0_1px_2px_rgba(0,0,0,0.08)]" : "text-muted"}`}>
                     {t === "next" ? `Próximas ${upcoming.length + blockSeries.length}` : `Pasadas ${past.length}`}
                   </button>
                 ))}

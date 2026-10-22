@@ -111,8 +111,9 @@ export function AppointmentPanel(props: {
   const price = priceLabelCOP(appt.price);
   const client = appt.contact_name ?? appt.guest_name ?? "Atención sin cita";
   const timeRange = `${fmtTime(appt.start_at, tz)} – ${fmtTime(appt.service_end_at, tz)}`;
-  const started = Date.parse(appt.start_at) <= Date.now();
-  const ended = Date.parse(appt.service_end_at) <= Date.now();
+  const [now] = useState(() => Date.now());
+  const started = Date.parse(appt.start_at) <= now;
+  const ended = Date.parse(appt.service_end_at) <= now;
   const live = appt.status === "scheduled" || appt.status === "confirmed";
 
   if (phone) {
@@ -150,7 +151,7 @@ export function AppointmentPanel(props: {
     setActivity(r.ok ? { state: "ready", items: r.items } : { state: "error", error: r.error });
   };
 
-  const stripe = <span aria-hidden className={`u-appt-service ${props.toneClass} mt-1 h-10 w-1 shrink-0 rounded-full bg-[var(--appt-ink)]`} />;
+  const stripe = <span aria-hidden className={`u-appt-service ${props.toneClass} mt-1 h-[40px] w-1 shrink-0 rounded-full bg-[var(--appt-ink)]`} />;
   const subtitle = (
     <span className="u-tnum">
       {longDate(appt.start_at, tz)} · {timeRange} · {formatDuration(appt.duration_min)}
@@ -255,7 +256,7 @@ export function AppointmentPanel(props: {
                       aria-pressed={current}
                       disabled={!enabled || props.pending}
                       onClick={() => enabled && choose(s.status as Target)}
-                      className={`u-focus flex h-11 items-center justify-center gap-1.5 rounded-[9px] text-[13px] transition-colors md:h-9 ${
+                      className={`u-focus flex h-[44px] items-center justify-center gap-1.5 rounded-[9px] text-[13px] transition-colors md:h-[36px] ${
                         current ? "bg-surface font-semibold text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.08)]" : enabled ? "text-foreground hover:bg-subtle" : "text-faint"
                       }`}
                     >
@@ -334,9 +335,9 @@ export function AppointmentPanel(props: {
                   </div>
                   {props.contactHref || props.conversationHref || props.bookAgainHref ? (
                     <div className="flex flex-wrap gap-2">
-                      {props.contactHref ? <Link href={props.contactHref} className="u-focus inline-flex h-9 items-center rounded-sch-control border border-line px-3 text-[13px] font-medium hover:bg-subtle">Ver ficha</Link> : null}
-                      {props.conversationHref ? <Link href={props.conversationHref} className="u-focus inline-flex h-9 items-center rounded-sch-control border border-line px-3 text-[13px] font-medium hover:bg-subtle">Conversación</Link> : null}
-                      {props.bookAgainHref ? <Link href={props.bookAgainHref} className="u-focus inline-flex h-9 items-center rounded-sch-control px-3 text-[13px] font-medium hover:bg-subtle">Reservar de nuevo</Link> : null}
+                      {props.contactHref ? <Link href={props.contactHref} className="u-focus inline-flex h-[36px] items-center rounded-sch-control border border-line px-3 text-[13px] font-medium hover:bg-subtle">Ver ficha</Link> : null}
+                      {props.conversationHref ? <Link href={props.conversationHref} className="u-focus inline-flex h-[36px] items-center rounded-sch-control border border-line px-3 text-[13px] font-medium hover:bg-subtle">Conversación</Link> : null}
+                      {props.bookAgainHref ? <Link href={props.bookAgainHref} className="u-focus inline-flex h-[36px] items-center rounded-sch-control px-3 text-[13px] font-medium hover:bg-subtle">Reservar de nuevo</Link> : null}
                     </div>
                   ) : null}
                 </div>
@@ -377,7 +378,7 @@ export function AppointmentPanel(props: {
                 {activity.state === "loading" ? (
                   <div className="flex flex-col gap-2" aria-busy="true" aria-label="Cargando actividad">
                     {Array.from({ length: 3 }, (_, i) => (
-                      <div key={i} className="h-9 rounded-sch-control bg-subtle" />
+                      <div key={i} className="h-[36px] rounded-sch-control bg-subtle" />
                     ))}
                   </div>
                 ) : activity.state === "error" ? (

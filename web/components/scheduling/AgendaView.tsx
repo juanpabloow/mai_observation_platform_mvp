@@ -2,12 +2,12 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type RefObject } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition, type RefObject } from "react";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { PageShell } from "@/components/ui/PageShell";
 import { PageHeading } from "@/components/ui/PageTitle";
 import { dayBlocks, hourState, type AgendaBlock, type DayBlock } from "@/lib/agendaBlocks";
-import { AttentionChip, Avatar, FIELD, INPUT, POPOVER, Spinner, StatusChip, buttonClass, segmentClass, segmentShell } from "./ui/system";
+import { AttentionChip, Avatar, FIELD, INPUT, POPOVER, StatusChip, buttonClass, segmentClass, segmentShell } from "./ui/system";
 import { MobileAgenda } from "./mobile/MobileAgenda";
 import {
   Icon,
@@ -30,10 +30,8 @@ import {
 } from "./mobile/kit";
 import { OVERLAY_SCRIM, useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
 import { dayHeadline, monthTitle } from "@/lib/siteCalendar";
-import { apptCategory, apptCategoryClass, serviceCategory, type ApptCategory } from "@/lib/agendaCategory";
+import { apptCategoryClass, serviceCategory, type ApptCategory } from "@/lib/agendaCategory";
 import { priceLabelCOP } from "@/lib/money";
-import { TimeOffForm } from "@/components/scheduling/timeoff/TimeOffForm";
-import { deleteTimeOffAction } from "@/lib/timeOffActions";
 import {
   cancelAppointmentAction,
   completeAppointmentAction,
@@ -602,21 +600,14 @@ export function AgendaView(props: {
   const [desktopLayout, setDesktopLayout] = useState<"rows" | "columns">("columns");
   const searchRef = useRef<HTMLInputElement>(null);
   /** «Color de las citas»: by SERVICE (default) or by STATE — remembered on this device. */
-  const [colorBy, setColorByState] = useState<"service" | "status">("service");
-  useEffect(() => {
-    try {
-      if (window.localStorage.getItem("mai:agenda:colorBy") === "status") setColorByState("status");
-    } catch {
-      /* private mode */
-    }
-  }, []);
+  const colorBy = useSyncExternalStore(subscribeColorBy, readColorBy, () => "service" as const);
   const setColorBy = (v: "service" | "status") => {
-    setColorByState(v);
     try {
-      window.localStorage.setItem("mai:agenda:colorBy", v);
+      window.localStorage.setItem(COLOR_BY_KEY, v);
     } catch {
-      /* private mode */
+      /* private mode: the choice lasts this page only */
     }
+    colorByListeners.forEach((l) => l());
   };
   /** An affected appointment being rescheduled FROM a break/block form: the form stays
    *  mounted (hidden) with everything typed; `holds` discount its unsaved draft. */
@@ -861,7 +852,7 @@ export function AgendaView(props: {
    * They are separate sticky elements, so a single source is what keeps their bottom
    * borders on one line. Week needs the extra row for its weekday / date / count stack.
    */
-  const headClass = isWeek ? "h-14" : "h-12";
+  const headClass = isWeek ? "h-[56px]" : "h-[48px]";
   const bodyHeight = (toHour - fromHour) * rowHeight;
   const offsetTop = (mins: number) => ((mins - fromHour * 60) / 60) * rowHeight;
 
@@ -1350,7 +1341,7 @@ export function AgendaView(props: {
                         role="radio"
                         aria-checked={colorBy === m}
                         onClick={() => setColorBy(m)}
-                        className={`u-focus h-9 rounded-[9px] text-[13px] ${colorBy === m ? "bg-surface font-semibold shadow-[0_1px_2px_rgba(0,0,0,0.08)]" : "text-muted hover:text-foreground"}`}
+                        className={`u-focus h-[36px] rounded-[9px] text-[13px] ${colorBy === m ? "bg-surface font-semibold shadow-[0_1px_2px_rgba(0,0,0,0.08)]" : "text-muted hover:text-foreground"}`}
                       >
                         {m === "service" ? "Servicio" : "Estado"}
                       </button>
@@ -1559,7 +1550,7 @@ export function AgendaView(props: {
       {/* ── CALENDAR GRID + DRAWER ── (tablet + desktop; the phone has MobileAgenda) */}
       <div className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)] max-md:hidden">
         <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="hidden h-10 shrink-0 items-center gap-3 border-b border-line px-3.5 md:flex">
+          <div className="hidden h-[40px] shrink-0 items-center gap-3 border-b border-line px-3.5 md:flex">
             <span className="u-mono text-xs font-semibold text-foreground">{visible.length}</span>
             <span className="text-xs text-muted">{visible.length === 1 ? "cita" : "citas"}</span>
             {/* The colour KEY: one swatch per service family on the board. */}
@@ -1620,7 +1611,7 @@ export function AgendaView(props: {
             {listDayKeys.length === 0 ? (
               <div className="flex min-h-[22rem] items-center justify-center rounded-sch-card border border-dashed border-line-strong bg-surface">
                 <div className="max-w-xs text-center">
-                  <span aria-hidden className="mx-auto flex size-11 items-center justify-center rounded-full bg-chip text-xl text-muted">✓</span>
+                  <span aria-hidden className="mx-auto flex size-[44px] items-center justify-center rounded-full bg-chip text-xl text-muted">✓</span>
                   <p className="mt-3 text-sm font-semibold text-foreground">No hay citas en esta vista</p>
                   <p className="mt-1 text-xs leading-relaxed text-muted">Cambia la fecha, el estado o el profesional para consultar otro turno.</p>
                 </div>
@@ -1635,7 +1626,7 @@ export function AgendaView(props: {
                     <section key={dayKey} className="overflow-hidden rounded-sch-card border border-line bg-surface shadow-[var(--shadow-card)]">
                       <div className="flex items-center justify-between border-b border-line bg-canvas/50 px-4 py-3">
                         <div className="flex items-center gap-3">
-                          <span className="u-mono flex size-9 items-center justify-center rounded-sch-control border border-line bg-chip text-sm font-semibold text-foreground">{day}</span>
+                          <span className="u-mono flex size-[36px] items-center justify-center rounded-sch-control border border-line bg-chip text-sm font-semibold text-foreground">{day}</span>
                           <span>
                             <h2 className="text-sm font-semibold text-foreground">{ES_WEEKDAYS_UPPER[weekday]}</h2>
                             <span className="text-xs capitalize text-muted">{ES_MONTHS[month - 1]} {year}</span>
@@ -2300,7 +2291,7 @@ function WeekTeamBoard({
             <button key={day} type="button" onClick={() => onDay(day)}
               aria-label={`Ver agenda del ${date} de ${ES_MONTHS[month - 1]}`}
               className={`sticky top-0 z-20 flex h-[72px] items-center justify-center gap-2 border-b border-r border-line text-sm transition hover:bg-chip ${isToday ? "bg-chip" : "bg-surface"}`}>
-              <span className={`flex size-8 items-center justify-center rounded-full font-semibold ${isToday ? "bg-ink text-ink-fg" : "text-foreground"}`}>{date}</span>
+              <span className={`flex size-[32px] items-center justify-center rounded-full font-semibold ${isToday ? "bg-ink text-ink-fg" : "text-foreground"}`}>{date}</span>
               <span className={isToday ? "font-medium text-foreground" : "text-muted"}>{ES_WEEKDAYS[weekday]}</span>
             </button>
           );
@@ -2314,9 +2305,9 @@ function WeekTeamBoard({
               <div className="sticky left-0 z-10 flex flex-col items-center justify-center gap-2 border-b border-r border-line bg-surface px-2 py-4 text-center" style={{ minHeight: rowHeight }}>
                 {person.photoUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
-                  <img src={person.photoUrl} alt="" aria-hidden className="size-11 shrink-0 rounded-full border-2 border-line-strong object-cover" />
+                  <img src={person.photoUrl} alt="" aria-hidden className="size-[44px] shrink-0 rounded-full border-2 border-line-strong object-cover" />
                 ) : (
-                  <span aria-hidden className="flex size-11 shrink-0 items-center justify-center rounded-full border-2 border-line-strong bg-chip text-sm font-semibold text-foreground">
+                  <span aria-hidden className="flex size-[44px] shrink-0 items-center justify-center rounded-full border-2 border-line-strong bg-chip text-sm font-semibold text-foreground">
                     {initialsOf(person.name)}
                   </span>
                 )}
@@ -2886,106 +2877,6 @@ function Initial({ name, muted, on, photoUrl }: { name: string | null; muted?: b
  * because the block only says which hour it falls in.
  */
 /**
- * The Time Off modal — the SAME TimeOffForm as the staff tab, in the agenda's overlay chrome.
- * Opened from the header ("Bloquear horario", create) or by clicking a block (edit). Edit mode
- * also offers Delete, behind an inline confirm. All writes are server-gated regardless.
- */
-function BlockModal({
-  clientId,
-  siteId,
-  tz,
-  staff,
-  canSiteClosure,
-  canStaffTimeOff,
-  edit,
-  onClose,
-}: {
-  clientId: string;
-  siteId: string;
-  tz: string;
-  staff: { id: string; name: string }[];
-  canSiteClosure: boolean;
-  canStaffTimeOff: boolean;
-  edit?: Block;
-  onClose: () => void;
-}) {
-  const router = useRouter();
-  const [pending, startTransition] = useTransition();
-  const [delError, setDelError] = useState<string | null>(null);
-  const [confirmDel, setConfirmDel] = useState(false);
-  const closeRef = useRef(onClose);
-  useEffect(() => {
-    closeRef.current = onClose;
-  }, [onClose]);
-  const close = () => closeRef.current();
-  const panelRef = useTrappedPanel({ active: true, onClose: close });
-
-  // Delete is offered only to a viewer who may edit this KIND of block (server re-enforces).
-  const canDelete = edit ? (edit.staff_id === null ? canSiteClosure : canStaffTimeOff) : false;
-  const remove = () =>
-    startTransition(async () => {
-      if (!edit) return;
-      const r = await deleteTimeOffAction(clientId, edit.id);
-      if (r.ok) {
-        router.refresh();
-        onClose();
-      } else {
-        setDelError(r.error ?? "No se pudo eliminar el bloqueo.");
-      }
-    });
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-5">
-      <button type="button" aria-label="Cerrar" className={OVERLAY_SCRIM} onClick={close} />
-      <section
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={edit ? "Editar bloqueo" : "Bloquear horario"}
-        tabIndex={-1}
-        className="relative z-50 flex max-h-[min(720px,calc(100dvh-2rem))] w-full flex-col overflow-hidden rounded-t-2xl border border-line bg-surface sm:max-w-lg sm:rounded-2xl"
-      >
-        <header className="flex shrink-0 items-start gap-4 border-b border-line px-4 py-3.5 sm:px-5">
-          <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold text-foreground">{edit ? "Editar bloqueo" : "Bloquear horario"}</h2>
-            <p className="mt-0.5 text-xs text-muted">Quita disponibilidad sin cambiar el horario semanal.</p>
-          </div>
-          <button type="button" onClick={close} aria-label="Cerrar" className="flex size-9 shrink-0 items-center justify-center rounded-lg text-lg text-muted transition hover:bg-subtle hover:text-foreground">×</button>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
-          <TimeOffForm
-            clientId={clientId}
-            siteId={siteId}
-            staff={staff}
-            canSiteClosure={canSiteClosure}
-            tz={tz}
-            edit={edit ? { id: edit.id, staffId: edit.staff_id, startsAt: edit.starts_at, endsAt: edit.ends_at, reason: edit.reason, publicReason: edit.public_reason ?? null } : undefined}
-            onDone={onClose}
-            onClose={close}
-          />
-          {canDelete ? (
-            <div className="mt-4 border-t border-line pt-3">
-              {delError ? <p role="alert" className="mb-2 rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{delError}</p> : null}
-              {confirmDel ? (
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs text-muted">¿Eliminar este bloqueo? La disponibilidad vuelve de inmediato.</span>
-                  <span className="flex gap-2">
-                    <button type="button" onClick={() => setConfirmDel(false)} className="rounded-lg border border-line px-2.5 py-1 text-xs text-muted hover:bg-subtle">Cancelar</button>
-                    <button type="button" disabled={pending} onClick={remove} className="rounded-lg border border-danger/40 px-2.5 py-1 text-xs text-danger hover:bg-danger/10 disabled:opacity-50">Eliminar</button>
-                  </span>
-                </div>
-              ) : (
-                <button type="button" onClick={() => setConfirmDel(true)} className="text-xs text-danger hover:underline">Eliminar bloqueo</button>
-              )}
-            </div>
-          ) : null}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-/**
  * A Time Off band inside a DAY column — a warm hatched region that reads as "not bookable",
  * visually distinct from an appointment card, a free slot, and the grey "closed" wash. It
  * carries a "Fuera" label (+ the internal reason for roles allowed to see it). A site closure
@@ -3199,6 +3090,25 @@ function ApptCard({
   );
 }
 
+/** «Color de las citas» (Servicio | Estado), remembered on this device. */
+const COLOR_BY_KEY = "mai:agenda:colorBy";
+const colorByListeners = new Set<() => void>();
+function subscribeColorBy(l: () => void): () => void {
+  colorByListeners.add(l);
+  window.addEventListener("storage", l);
+  return () => {
+    colorByListeners.delete(l);
+    window.removeEventListener("storage", l);
+  };
+}
+function readColorBy(): "service" | "status" {
+  try {
+    return window.localStorage.getItem(COLOR_BY_KEY) === "status" ? "status" : "service";
+  } catch {
+    return "service";
+  }
+}
+
 /** sessionStorage key: the appointment to highlight after "Cambiar fecha y hora". */
 const FLASH_KEY = "mai:agenda:flash";
 
@@ -3243,7 +3153,7 @@ function AppointmentModal(props: {
   const [loadingSlots, setLoadingSlots] = useState(false);
   /** Whether a search has completed — the difference between "not searched yet" (show
    *  nothing) and "searched, nothing came back" (say so, out loud). */
-  const [searched, setSearched] = useState(false);
+  const [, setSearched] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -3264,18 +3174,15 @@ function AppointmentModal(props: {
   const [contactSearched, setContactSearched] = useState(false);
   const [pickedContact, setPickedContact] = useState<ContactSearchHit | null>(null);
   /** Step 1's service-catalogue filters — client-side over the services already loaded. */
-  const [serviceQuery, setServiceQuery] = useState("");
+  const [serviceQuery] = useState("");
   const [serviceFamily, setServiceFamily] = useState<"all" | ApptCategory>("all");
   /** Step 2's professional picker is a popover, so the month keeps the full column. */
-  const [staffPickerOpen, setStaffPickerOpen] = useState(false);
-  const [staffQuery, setStaffQuery] = useState("");
   const [pending, startTransition] = useTransition();
   // A modal COVERS the calendar, so it owes the reader the overlay contract: focus in
   // on open, Escape to close, focus back on close (Overlay.tsx). The backdrop click is
   // wired separately below.
   // Below md the booking is the phone's full-screen flow (its own layer), same state.
   const isPhone = useIsOverlayWidth(767.98);
-  const dialogRef = useTrappedPanel({ active: !isPhone, onClose: props.onClose });
   const [phoneSheet, setPhoneSheet] = useState<"month" | "contact" | "discard" | null>(null);
   /** "Estado inicial" (phone step 3): confirmed = create, then the real confirm. */
   const [initialStatus, setInitialStatus] = useState<"scheduled" | "confirmed">("scheduled");
@@ -3466,7 +3373,6 @@ function AppointmentModal(props: {
           : "Nueva cita";
 
   const rescheduleAppt = props.modal.mode === "reschedule" ? props.modal.appt : null;
-  const inputCls = INPUT;
   const selectedService = props.services.find((service) => service.id === (rescheduleAppt?.service_id ?? serviceId));
   const selectedSlot = slots.find((slot) => slot.start_at === slotStart);
   const effectiveStaffId = staffId || selectedSlot?.staff_id || rescheduleAppt?.staff_id || "";
@@ -3481,9 +3387,6 @@ function AppointmentModal(props: {
   const bookingFamily: ApptCategory | null = selectedService
     ? serviceCategory(selectedService.name, selectedService.category)
     : null;
-  const bookingToneClass = bookingFamily
-    ? `u-appt-service ${apptCategoryClass(bookingFamily)}`
-    : "";
 
   /**
    * WHO the booking is for, resolved from whichever of step 1's three routes is in
@@ -3526,37 +3429,18 @@ function AppointmentModal(props: {
     const [year, month, day] = selectedDate.split("-").map(Number);
     return new Date(Date.UTC(year, month - 1, day));
   })();
-  const dateHeadlineRaw = new Intl.DateTimeFormat("es-CO", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    timeZone: "UTC",
-  }).format(dateValue).replace(",", "");
-  const dateHeadline = dateHeadlineRaw.charAt(0).toUpperCase() + dateHeadlineRaw.slice(1);
   const shortDateLabel = new Intl.DateTimeFormat("es-CO", {
     weekday: "short",
     day: "numeric",
     month: "short",
     timeZone: "UTC",
   }).format(dateValue).replaceAll(".", "").replace(",", "").replaceAll(" de ", " ").replace(/\bsept\b/i, "sep");
-  const monthLabel = new Intl.DateTimeFormat("es-CO", {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${calendarMonth}-01T00:00:00Z`)).replace(" de ", " ");
   const monthDays = calendarDays(calendarMonth);
-  const selectedDaySlots = slots.filter((slot) => siteDayKey(slot.start_at, props.timezone) === selectedDate);
   const availabilityCount = (dayKey: string, forStaffId = staffId): number => {
     const daySlots = slots.filter((slot) => siteDayKey(slot.start_at, props.timezone) === dayKey);
     const eligible = forStaffId ? daySlots.filter((slot) => slot.available_staff_ids.includes(forStaffId)) : daySlots;
     return new Set(eligible.map((slot) => slot.start_at)).size;
   };
-  const staffAvailabilityCount = (candidateStaffId: string): number =>
-    new Set(
-      selectedDaySlots
-        .filter((slot) => slot.available_staff_ids.includes(candidateStaffId))
-        .map((slot) => slot.start_at),
-    ).size;
   /**
    * The day's free times, split the way a receptionist reads a day: morning and
    * afternoon. Only AVAILABLE slots appear — the availability endpoint returns exactly
@@ -3579,7 +3463,6 @@ function AppointmentModal(props: {
 
   /** How many of the roster can actually take this service on the chosen day. Real:
    *  it counts staff the availability endpoint returned at least one slot for. */
-  const staffWithRoom = activeStaff.filter((candidate) => staffAvailabilityCount(candidate.id) > 0).length;
   /**
    * A contact's date, in the SITE's timezone and the project's own three-letter month
    * abbreviations (ES_MONTHS) rather than Intl's — same reason the toolbar uses them:
@@ -3593,15 +3476,6 @@ function AppointmentModal(props: {
     return withTime ? `${date}, ${String(parts.h).padStart(2, "0")}:${String(parts.m).padStart(2, "0")}` : date;
   };
   const todayKey = todayAtSite(props.timezone);
-  const clientLabel = customer.label ?? "";
-  const originLabel = isReschedule ? "Reagendación" : props.modal.mode === "walkin" ? "Atención sin cita" : "Mostrador";
-  const phoneLabel = customer.identity ?? "—";
-  const staffInitials = initialsOf(selectedStaff?.name);
-  const stepItems = [
-    { value: 1 as const, label: "Cliente y servicio" },
-    { value: 2 as const, label: "Profesional y hora" },
-    { value: 3 as const, label: "Confirmar" },
-  ];
   /**
    * The RUNNING SUMMARY the reference keeps in the header and the footer, so what has
    * been chosen so far is legible without going back a step. Each part appears only
@@ -3613,22 +3487,7 @@ function AppointmentModal(props: {
   const timeRangeLabel = slotStart
     ? `${fmtTime(slotStart, props.timezone)}${selectedSlot ? ` – ${fmtTime(selectedSlot.service_end_at, props.timezone)}` : ""}`
     : null;
-  const footerSummary =
-    step === 1
-      ? summaryParts([selectedService ? `${selectedService.duration_min} min` : null])
-      : step === 2
-        ? [shortDateLabel, timeRangeLabel, selectedStaff?.name, selectedSite?.name].filter(Boolean).join(" · ")
-        : summaryParts([
-            slotStart ? `${shortDateLabel} ${fmtTime(slotStart, props.timezone)}` : null,
-            selectedStaff?.name ?? null,
-          ]);
   /** The header's second line: the site+day you're booking into, then the choices. */
-  const headerSubtitle =
-    step === 1
-      ? [selectedSite?.name, shortDateLabel].filter(Boolean).join(" · ")
-      : step === 3
-        ? "Revisa antes de crear · nada se guarda todavía"
-        : summaryParts([selectedService ? `${selectedService.duration_min} min` : null]) || (selectedSite?.name ?? "");
 
   const changeStaff = (nextStaffId: string) => {
     setStaffId(nextStaffId);
@@ -3915,7 +3774,7 @@ function AppointmentModal(props: {
                         }}
                         className="flex min-h-[56px] w-full items-center gap-3 border-0 border-t border-m-dv bg-transparent px-[14px] text-left text-[15px] text-m-tx first:border-t-0"
                       >
-                        <span aria-hidden className="flex size-10 flex-none items-center justify-center rounded-full border-[1.5px] border-dashed border-m-tx3 text-[18px]">
+                        <span aria-hidden className="flex size-[40px] flex-none items-center justify-center rounded-full border-[1.5px] border-dashed border-m-tx3 text-[18px]">
                           +
                         </span>
                         {contactQuery.trim().length >= 2 ? `Crear contacto «${contactQuery.trim()}»` : "Crear contacto"}
@@ -3925,7 +3784,7 @@ function AppointmentModal(props: {
                         onClick={() => (props.onWalkIn ? props.onWalkIn() : setCustomerMode("anonymous"))}
                         className="flex min-h-[56px] w-full items-center gap-3 border-0 border-t border-m-dv bg-transparent px-[14px] text-left text-[15px] text-m-tx"
                       >
-                        <span aria-hidden className="flex size-10 flex-none items-center justify-center rounded-full bg-m-sf2 text-[15px]">
+                        <span aria-hidden className="flex size-[40px] flex-none items-center justify-center rounded-full bg-m-sf2 text-[15px]">
                           →
                         </span>
                         <span className="flex flex-col">
@@ -4179,7 +4038,7 @@ function AppointmentModal(props: {
               <section className="flex flex-col gap-[10px]">
                 <h2 className="m-0 text-[15px] font-semibold">Color en la agenda</h2>
                 <div className="flex min-h-[64px] items-center gap-3 rounded-[16px] border border-m-bd bg-m-sf py-[10px] pl-[14px] pr-3">
-                  <span aria-hidden className={`${heroFamily} flex size-10 flex-none items-center justify-center rounded-full bg-[var(--m-fill)] shadow-[inset_0_0_0_1px_var(--m-bd)]`}>
+                  <span aria-hidden className={`${heroFamily} flex size-[40px] flex-none items-center justify-center rounded-full bg-[var(--m-fill)] shadow-[inset_0_0_0_1px_var(--m-bd)]`}>
                     <span className="size-3.5 rounded-full bg-[var(--m-dot)]" />
                   </span>
                   <span className="flex min-w-0 flex-1 flex-col">
@@ -4306,9 +4165,6 @@ function AppointmentModal(props: {
   }
 
 }
-
-/** Stable id linking the dialog to its heading — only one modal is ever mounted. */
-const MODAL_TITLE_ID = "agenda-appt-modal-title";
 
 /** Availability legend of the phone booking (strip + month): dot / ring / struck. */
 function Legend() {

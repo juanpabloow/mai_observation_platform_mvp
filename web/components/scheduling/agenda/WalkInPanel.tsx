@@ -42,27 +42,31 @@ export function WalkInPanel(props: {
   const today = todayAtSite(tz);
   const [serviceId, setServiceId] = useState("");
   const [query, setQuery] = useState("");
-  const [staffId, setStaffId] = useState(props.lockStaffId ?? "");
-  const [slots, setSlots] = useState<{ state: "idle" | "loading" | "ready" | "error"; list: Slot[] }>({ state: "idle", list: [] });
+  /** The professional the operator PICKED (null = the one free first). */
+  const [pickedStaff, setStaffId] = useState<string>(props.lockStaffId ?? "");
+  const [slotState, setSlots] = useState<{ forService: string; state: "ready" | "error"; list: Slot[] }>({ forService: "", state: "ready", list: [] });
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
   const [saveContact, setSaveContact] = useState(false);
   const [linkTo, setLinkTo] = useState<ContactMatch | null>(null);
-  const [matches, setMatches] = useState<ContactMatch[]>([]);
+  const [matchState, setMatches] = useState<{ forKey: string; list: ContactMatch[] }>({ forKey: "", list: [] });
   const [fieldErrors, setFieldErrors] = useState<Partial<Record<GuestField, string>>>({});
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [idemKey] = useState(() => crypto.randomUUID());
   const sending = useRef(false);
   const handle = useRef<SidePanelHandle | null>(null);
-  const dirty = Boolean(serviceId || name.trim() || phone.trim() || email.trim() || (staffId && !props.lockStaffId));
-
-  // Today's free starts for the service, every professional (engine: whole duration).
+  // Today's free starts for the service, every professional (engine: whole duration). The
+  // answer is tagged with its service, so "loading" is derived rather than set in the effect.
+  const slots: { state: "idle" | "loading" | "ready" | "error"; list: Slot[] } = !serviceId
+    ? { state: "idle", list: [] }
+    : slotState.forService === serviceId
+      ? slotState
+      : { state: "loading", list: [] };
   useEffect(() => {
-    if (!serviceId) return setSlots({ state: "idle", list: [] });
+    if (!serviceId) return;
     const ctrl = new AbortController();
-    setSlots((s) => ({ state: "loading", list: s.list }));
     const params = new URLSearchParams({
       client_id: props.clientId,
       site_id: props.siteId,
@@ -75,9 +79,9 @@ export function WalkInPanel(props: {
       .then(async (r) => {
         if (!r.ok) throw new Error(String(r.status));
         const data = (await r.json()) as { slots: Slot[] };
-        setSlots({ state: "ready", list: data.slots });
+        setSlots({ forService: serviceId, state: "ready", list: data.slots });
       })
-      .catch(() => !ctrl.signal.aborted && setSlots({ state: "error", list: [] }));
+      .catch(() => !ctrl.signal.aborted && setSlots({ forService: serviceId, state: "error", list: [] }));
     return () => ctrl.abort();
   }, [serviceId, props.clientId, props.siteId, props.lockStaffId, today, tz]);
 
@@ -95,38 +99,34 @@ export function WalkInPanel(props: {
       return fa.localeCompare(fb) || a.name.localeCompare(b.name);
     });
   }, [props.staff, props.lockStaffId, firstFree]);
-  useEffect(() => {
-    if (slots.state !== "ready" || props.lockStaffId) return;
-    if (staffId && firstFree.has(staffId)) return;
-    const first = ordered.find((s) => firstFree.has(s.id));
-    setStaffId(first?.id ?? "");
-  }, [slots.state, ordered, firstFree, staffId, props.lockStaffId]);
+  // The picked professional while they can take it, else whoever is free first.
+  const staffId = props.lockStaffId ?? (pickedStaff && firstFree.has(pickedStaff) ? pickedStaff : ordered.find((s) => firstFree.has(s.id))?.id ?? "");
+  const dirty = Boolean(serviceId || name.trim() || phone.trim() || email.trim() || (pickedStaff && !props.lockStaffId));
 
   const slot = staffId ? firstFree.get(staffId) ?? null : null;
   const service = props.services.find((s) => s.id === serviceId) ?? null;
   const visibleServices = props.services.filter((s) => s.name.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es")));
 
-  // Duplicate check while typing (read-only).
+  // Duplicate check while typing (read-only), tagged with what was typed.
+  const typedKey = `${phone.trim()}|${email.trim()}`;
+  const searchable = phone.trim().replace(/\D/g, "").length >= 7 || /@.+\./.test(email.trim());
+  const matches = searchable && matchState.forKey === typedKey ? matchState.list : [];
   useEffect(() => {
+    if (!searchable) return;
     const p = phone.trim();
     const e = email.trim();
-    if (p.replace(/\D/g, "").length < 7 && !/@.+\./.test(e)) {
-      setMatches([]);
-      setLinkTo(null);
-      return;
-    }
     let cancelled = false;
     const t = setTimeout(async () => {
       const r = await findContactMatchesAction(props.clientId, { siteId: props.siteId, phone: p || null, email: e || null });
       if (cancelled) return;
-      setMatches(r.ok ? r.matches : []);
+      setMatches({ forKey: `${p}|${e}`, list: r.ok ? r.matches : [] });
       if (!r.ok && r.fieldErrors) setFieldErrors(r.fieldErrors);
     }, 350);
     return () => {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [phone, email, props.clientId, props.siteId]);
+  }, [phone, email, searchable, props.clientId, props.siteId]);
 
   const submit = () => {
     if (!slot || !serviceId || sending.current) return;
@@ -148,7 +148,7 @@ export function WalkInPanel(props: {
         });
         if (!r.ok) {
           if (r.fieldErrors) setFieldErrors(r.fieldErrors);
-          if (r.matches) setMatches(r.matches);
+          if (r.matches) setMatches({ forKey: typedKey, list: r.matches });
           setError(r.fieldErrors ? null : r.error);
           return;
         }

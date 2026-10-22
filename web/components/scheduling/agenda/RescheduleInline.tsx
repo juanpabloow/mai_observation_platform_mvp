@@ -182,7 +182,7 @@ export function RescheduleInline(props: {
                   role="radio"
                   aria-checked={sel}
                   onClick={() => pickStaff(s.id)}
-                  className={`u-focus flex h-11 items-center gap-2 rounded-full border pl-1.5 pr-3.5 text-[13px] transition-[box-shadow,opacity] duration-150 md:h-9 ${
+                  className={`u-focus flex h-[44px] items-center gap-2 rounded-full border pl-1.5 pr-3.5 text-[13px] transition-[box-shadow,opacity] duration-150 md:h-[36px] ${
                     sel ? "border-foreground font-semibold shadow-[inset_0_0_0_1px_var(--foreground)]" : "border-line hover:bg-subtle"
                   }`}
                 >
@@ -203,10 +203,10 @@ export function RescheduleInline(props: {
       <section aria-labelledby="rs-day" className="flex flex-col gap-2">
         <div className="flex items-center gap-2">
           <h3 id="rs-day" className="min-w-0 flex-1 text-[13px] font-semibold">Día</h3>
-          <button type="button" aria-label="Semana anterior" disabled={week[0] <= today} onClick={() => pickDay(addDays(day, -7) < today ? today : addDays(day, -7))} className="u-focus grid size-9 place-items-center rounded-full text-muted hover:bg-chip disabled:opacity-40">
+          <button type="button" aria-label="Semana anterior" disabled={week[0] <= today} onClick={() => pickDay(addDays(day, -7) < today ? today : addDays(day, -7))} className="u-focus grid size-[36px] place-items-center rounded-full text-muted hover:bg-chip disabled:opacity-40">
             <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M10 3.5L5.5 8l4.5 4.5" /></svg>
           </button>
-          <button type="button" aria-label="Semana siguiente" onClick={() => pickDay(addDays(day, 7))} className="u-focus grid size-9 place-items-center rounded-full text-muted hover:bg-chip">
+          <button type="button" aria-label="Semana siguiente" onClick={() => pickDay(addDays(day, 7))} className="u-focus grid size-[36px] place-items-center rounded-full text-muted hover:bg-chip">
             <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M6 3.5L10.5 8 6 12.5" /></svg>
           </button>
         </div>
@@ -223,7 +223,7 @@ export function RescheduleInline(props: {
                 aria-label={`${dayHeadline(d)}${why ? ` · ${why}` : st === "available" ? " · con horas libres" : ""}`}
                 disabled={st === "past"}
                 onClick={() => pickDay(d)}
-                className={`u-focus flex h-14 flex-col items-center justify-center rounded-[10px] text-[12px] leading-tight transition-colors disabled:opacity-40 ${
+                className={`u-focus flex h-[56px] flex-col items-center justify-center rounded-[10px] text-[12px] leading-tight transition-colors disabled:opacity-40 ${
                   sel ? "bg-foreground text-background" : st === "available" ? "bg-chip text-foreground hover:bg-subtle" : "text-muted hover:bg-subtle"
                 }`}
               >
@@ -248,7 +248,7 @@ export function RescheduleInline(props: {
         {view.kind === "loading" ? (
           <div className="grid grid-cols-4 gap-1.5" aria-busy="true" aria-label="Buscando horas libres">
             {Array.from({ length: 8 }, (_, i) => (
-              <span key={i} className="h-10 rounded-[10px] bg-subtle" />
+              <span key={i} className="h-[40px] rounded-[10px] bg-subtle" />
             ))}
           </div>
         ) : view.kind === "error" ? (
@@ -280,7 +280,7 @@ export function RescheduleInline(props: {
                     setChoice(s.start_at);
                     setFailed(null);
                   }}
-                  className={`u-focus u-tnum h-11 rounded-[10px] border text-[13px] font-medium transition-colors md:h-10 ${
+                  className={`u-focus u-tnum h-[44px] rounded-[10px] border text-[13px] font-medium transition-colors md:h-[40px] ${
                     sel ? "border-foreground bg-foreground text-background" : "border-line hover:bg-subtle"
                   }`}
                 >

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode, type RefObject } from "react";
+import { useCallback, useEffect, useId, useImperativeHandle, useRef, useState, type ReactNode, type RefObject } from "react";
 import { ConfirmLayer } from "@/components/ui/module/ConfirmLayer";
 import { useNavigationGuard } from "@/components/ui/module/useEditorGuard";
 import { useIsOverlayWidth } from "@/components/ui/Overlay";
@@ -73,9 +73,7 @@ export function SidePanel(props: {
     else latest.current.onClose();
   }, []);
 
-  useEffect(() => {
-    if (props.handleRef) (props.handleRef as { current: SidePanelHandle | null }).current = { requestClose };
-  }, [props.handleRef, requestClose]);
+  useImperativeHandle(props.handleRef, () => ({ requestClose }), [requestClose]);
 
   // Focus in on open, back to the opener on close.
   useEffect(() => {
@@ -194,7 +192,7 @@ export function PanelIconButton({ label, onClick, children }: { label: string; o
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="u-focus -mr-1 grid size-11 shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-chip hover:text-foreground md:size-9"
+      className="u-focus -mr-1 grid size-[44px] shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-chip hover:text-foreground md:size-[36px]"
     >
       <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
         {children}

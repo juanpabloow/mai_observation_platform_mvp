@@ -91,20 +91,25 @@ export function WeeklyScheduleEditor(props: {
     [inheritsNow, props.hours, props.siteHours, props.series, props.siteSeries, props.today],
   );
   const siteWeek = useMemo(() => weekFrom(props.siteHours, props.siteSeries ?? [], props.today), [props.siteHours, props.siteSeries, props.today]);
-  const [inherit, setInherit] = useState(inheritsNow);
-  const [week, setWeek] = useState<Week>(initialWeek);
-  const [editing, setEditing] = useState(false);
+  const [draftInherit, setInherit] = useState(inheritsNow);
+  const [draftWeek, setWeek] = useState<Week>(initialWeek);
+  const [editing, setEditingState] = useState(false);
+  // Outside editing the STORED week is shown (it follows refreshes); starting an edit copies
+  // it into the draft, so nothing has to be re-synced from an effect.
+  const week = editing ? draftWeek : initialWeek;
+  const inherit = editing ? draftInherit : inheritsNow;
+  const setEditing = (v: boolean) => {
+    if (v && !editing) {
+      setWeek(initialWeek.map((d) => ({ ...d, breaks: [...d.breaks] })));
+      setInherit(inheritsNow);
+    }
+    setEditingState(v);
+  };
   const [result, setResult] = useState<ScheduleWriteResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [asking, setAsking] = useState(false);
   const [pending, startTransition] = useTransition();
   const sending = useRef(false);
-  useEffect(() => {
-    if (!editing) {
-      setWeek(initialWeek);
-      setInherit(inheritsNow);
-    }
-  }, [initialWeek, inheritsNow, editing]);
 
   const changes = useMemo(() => {
     if (inherit !== inheritsNow) return 1 + (inherit ? 0 : week.filter((d) => d.open).length);
@@ -119,7 +124,12 @@ export function WeeklyScheduleEditor(props: {
   const total = shown.reduce((a, d) => a + dayHours(d), 0);
   const setDay = (wd: number, patch: Partial<Day>) => {
     setResult(null);
-    setWeek((w) => w.map((d, i) => (i === wd ? { ...d, ...patch } : d)));
+    const base = editing ? draftWeek : initialWeek;
+    setWeek(base.map((d, i) => (i === wd ? { ...d, ...patch } : d)));
+    if (!editing) {
+      setInherit(inheritsNow);
+      setEditingState(true);
+    }
   };
   const affected = result && result.ok && !result.written ? (result.affected as AffectedItem[]) : null;
 
@@ -197,7 +207,7 @@ export function WeeklyScheduleEditor(props: {
                 setInherit(!own);
                 if (own && inheritsNow) setWeek(siteWeek.map((d) => ({ ...d, breaks: [...d.breaks] })));
               }}
-              className="u-focus h-9 rounded-sch-control border border-line bg-surface px-2 text-[13px] font-medium text-foreground"
+              className="u-focus h-[36px] rounded-sch-control border border-line bg-surface px-2 text-[13px] font-medium text-foreground"
             >
               <option value="site">el horario de la sede</option>
               <option value="own">un horario propio</option>
@@ -258,7 +268,7 @@ export function WeeklyScheduleEditor(props: {
                                 <TimeSelect label={`${NAMES[wd]}: pausa desde`} value={b.start} onChange={(v) => { setEditing(true); setDay(wd, { breaks: d.breaks.map((x, j) => (j === i ? { ...x, start: v } : x)) }); }} />
                                 <span aria-hidden>–</span>
                                 <TimeSelect label={`${NAMES[wd]}: pausa hasta`} value={b.end} onChange={(v) => { setEditing(true); setDay(wd, { breaks: d.breaks.map((x, j) => (j === i ? { ...x, end: v } : x)) }); }} />
-                                <button type="button" aria-label={`Quitar la pausa de ${b.start}`} onClick={() => { setEditing(true); setDay(wd, { breaks: d.breaks.filter((_, j) => j !== i) }); }} className="u-focus grid size-7 place-items-center rounded-full text-muted hover:bg-subtle hover:text-foreground">
+                                <button type="button" aria-label={`Quitar la pausa de ${b.start}`} onClick={() => { setEditing(true); setDay(wd, { breaks: d.breaks.filter((_, j) => j !== i) }); }} className="u-focus grid size-[28px] place-items-center rounded-full text-muted hover:bg-subtle hover:text-foreground">
                                   ×
                                 </button>
                               </>
@@ -273,7 +283,7 @@ export function WeeklyScheduleEditor(props: {
                               const mid = Math.floor((mins(d.start) + mins(d.end)) / 2 / 30) * 30;
                               setDay(wd, { breaks: [...d.breaks, { start: hm(mid), end: hm(Math.min(mid + 60, mins(d.end) - 15)) }] });
                             }}
-                            className="u-focus h-9 rounded-full px-3 text-[12.5px] font-medium text-foreground hover:bg-subtle"
+                            className="u-focus h-[36px] rounded-full px-3 text-[12.5px] font-medium text-foreground hover:bg-subtle"
                           >
                             + Pausa
                           </button>

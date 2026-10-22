@@ -47,7 +47,7 @@ export function AffectedList(props: {
     );
   }
   if (props.loading && !items) {
-    return <div aria-busy="true" aria-label="Revisando citas afectadas" className="h-12 rounded-[12px] bg-subtle" />;
+    return <div aria-busy="true" aria-label="Revisando citas afectadas" className="h-[48px] rounded-[12px] bg-subtle" />;
   }
   if (!items) return null;
   if (items.length === 0) {
@@ -155,7 +155,7 @@ export function Choice<T extends string>(props: {
               aria-checked={on}
               disabled={o.disabled}
               onClick={() => props.onChange(o.value)}
-              className={`u-focus h-11 rounded-[9px] text-[13px] transition-colors disabled:opacity-40 md:h-9 ${on ? "bg-surface font-semibold shadow-[0_1px_2px_rgba(0,0,0,0.08)]" : "text-muted hover:text-foreground"}`}
+              className={`u-focus h-[44px] rounded-[9px] text-[13px] transition-colors disabled:opacity-40 md:h-[36px] ${on ? "bg-surface font-semibold shadow-[0_1px_2px_rgba(0,0,0,0.08)]" : "text-muted hover:text-foreground"}`}
             >
               {o.label}
             </button>
@@ -191,7 +191,7 @@ export function WeekdayPicker(props: { value: number[]; onChange: (v: number[]) 
               aria-pressed={on}
               aria-label={n}
               onClick={() => props.onChange(on ? props.value.filter((x) => x !== d) : [...props.value, d])}
-              className={`u-focus grid size-11 place-items-center rounded-full border text-[13px] font-semibold transition-colors md:size-9 ${on ? "border-foreground bg-foreground text-background" : "border-line hover:bg-subtle"}`}
+              className={`u-focus grid size-[44px] place-items-center rounded-full border text-[13px] font-semibold transition-colors md:size-[36px] ${on ? "border-foreground bg-foreground text-background" : "border-line hover:bg-subtle"}`}
             >
               {l}
             </button>
@@ -231,7 +231,7 @@ export function TimeSelect(props: { id?: string; value: string; onChange: (v: st
       aria-label={props.label}
       value={props.value}
       onChange={(e) => props.onChange(e.target.value)}
-      className="u-focus u-tnum h-11 rounded-sch-control border border-line-strong bg-surface px-2.5 text-[13px] md:h-9"
+      className="u-focus u-tnum h-[44px] rounded-sch-control border border-line-strong bg-surface px-2.5 text-[13px] md:h-[36px]"
     >
       {all.map((t) => (
         <option key={t} value={t}>

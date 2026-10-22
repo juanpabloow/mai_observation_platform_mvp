@@ -3,20 +3,16 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { avatarColor, avatarToneStyle, staffInitials as initials } from "@/lib/avatarColor";
-import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
+import { avatarColor, staffInitials as initials } from "@/lib/avatarColor";
 import { staffProfileHref } from "@/lib/staffProfileUrl";
 import { ACT_PRIMARY } from "@/components/ui/panelChrome";
 import {
   addStaffCertificationAction,
   deleteStaffCertificationAction,
   listStaffUpcomingAppointmentsAction,
-  setStaffServiceAction,
   updateStaffAction,
   type UpcomingApptView,
 } from "@/lib/schedulingAdminActions";
-import { deleteTimeOffAction } from "@/lib/timeOffActions";
-import { TimeOffForm } from "@/components/scheduling/timeoff/TimeOffForm";
 import { PageShell } from "@/components/ui/PageShell";
 import {
   CONTROL_CLS,
@@ -173,16 +169,6 @@ const DETAIL_TAB_LABEL: Record<DetailTab, string> = {
   services: "Servicios",
   hours: "Horario",
   "time off": "Ausencias",
-};
-/** Weekday keys of working_hours → the short Spanish name the Hours grid shows. */
-const DAY_SHORT: Record<(typeof WEEKDAYS)[number], string> = {
-  sun: "Dom",
-  mon: "Lun",
-  tue: "Mar",
-  wed: "Mié",
-  thu: "Jue",
-  fri: "Vie",
-  sat: "Sáb",
 };
 
 type StatusKey = RosterStatus;
@@ -461,12 +447,12 @@ export function StaffTab(
                   return (
                     <tr key={member.id} className={`group ${member.active ? "" : "opacity-60"}`}>
                       <td className="border-b border-line-soft px-3 py-2.5">
-                        <Link href={hrefFor(member.id)} scroll={false} className="u-focus flex min-h-[40px] min-w-0 items-center gap-2.5 rounded font-medium hover:underline">
+                        <Link href={hrefFor(member.id)} scroll={false} aria-label={`Ver perfil de ${member.name}`} className="u-focus flex min-h-[44px] min-w-0 items-center gap-2.5 rounded font-medium hover:underline">
                           {member.publicPhotoUrl ? (
                             // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
-                            <img src={member.publicPhotoUrl} alt="" aria-hidden className="size-8 shrink-0 rounded-full object-cover" />
+                            <img src={member.publicPhotoUrl} alt="" aria-hidden className="size-[32px] shrink-0 rounded-full object-cover" />
                           ) : (
-                            <span aria-hidden className={`u-mono flex size-8 shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${avatarColor(member.name)}`}>{initials(member.name)}</span>
+                            <span aria-hidden className={`u-mono flex size-[32px] shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${avatarColor(member.name)}`}>{initials(member.name)}</span>
                           )}
                           <span className="truncate">{member.name}</span>
                           {!member.active ? <span className="shrink-0 rounded-full bg-chip px-1.5 text-[11px] text-muted">Inactivo</span> : null}
@@ -530,112 +516,6 @@ export function StaffTab(
   );
 }
 
-/**
- * The reference's roster card, backed only by real scheduling data. Desktop shows
- * three columns, tablet two, and phone one; opening the profile no longer reserves a
- * permanent side lane and therefore never squeezes these cards.
- */
-function StaffCard({
-  member,
-  status,
-  suffix,
-  appts,
-  next,
-  tz,
-  services,
-  href,
-  selected,
-}: {
-  member: StaffMember;
-  status: StatusKey;
-  suffix: string;
-  appts: StaffAppointment[];
-  next?: StaffAppointment;
-  tz: string;
-  services: StaffServiceOpt[];
-  href: string;
-  selected: boolean;
-}) {
-  const s = STATUS[status];
-  const offered = services.filter((service) => member.serviceIds.includes(service.id));
-  const bookedMinutes = appts.reduce(
-    (total, appt) => total + Math.max(0, Math.round((new Date(appt.endAt).getTime() - new Date(appt.startAt).getTime()) / 60_000)),
-    0,
-  );
-  const bookedLabel = bookedMinutes === 0 ? "0 h" : `${Math.round((bookedMinutes / 60) * 10) / 10} h`;
-  return (
-    <article className={`flex min-h-[188px] flex-col overflow-hidden rounded-xl border bg-surface transition-colors sm:min-h-[218px] xl:min-h-[238px] ${selected ? "border-foreground" : "border-line hover:border-line-strong"}`}>
-      <div className="flex flex-1 flex-col gap-2.5 p-3.5 sm:gap-3 sm:p-4">
-        <div className="flex items-start gap-3">
-          {member.publicPhotoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
-            <img src={member.publicPhotoUrl} alt="" aria-hidden className="size-11 shrink-0 rounded-xl border border-line object-cover" />
-          ) : (
-            <span
-              aria-hidden
-              style={avatarToneStyle(member.name) as React.CSSProperties}
-              className="u-staff-avatar u-mono flex size-11 shrink-0 items-center justify-center rounded-xl border text-sm font-semibold"
-            >
-              {initials(member.name)}
-            </span>
-          )}
-          <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span className="truncate text-[0.9375rem] font-semibold tracking-[-0.015em] text-foreground">{member.name}</span>
-            <span className="truncate text-xs text-muted">{member.title ?? (member.takesBookings ? "Profesional" : "Recepción")}</span>
-          </span>
-          <span className="u-mono shrink-0 text-[0.6875rem] text-faint">{appts.length} hoy</span>
-        </div>
-
-        <div className="flex items-center gap-2 text-xs text-muted">
-          <IconBusiness />
-          <span className="truncate">{member.siteName}</span>
-          {next ? <span className="ml-auto shrink-0 text-faint">Sigue {fmtTime(next.startAt, tz)}</span> : null}
-        </div>
-
-        <div className="grid grid-cols-[minmax(0,1.25fr)_minmax(7rem,0.75fr)] gap-3">
-          <div className="min-w-0">
-            <p className="u-th mb-1.5">Servicios</p>
-            <div className="flex flex-wrap gap-1.5">
-              {offered.slice(0, 3).map((service) => (
-                <span key={service.id} className="inline-flex h-6 max-w-full items-center truncate rounded-md border border-line px-2 text-[0.6875rem] text-muted">
-                  {service.name}
-                </span>
-              ))}
-              {offered.length > 3 ? <span className="px-1 py-1 text-[0.6875rem] text-faint">+{offered.length - 3}</span> : null}
-              {offered.length === 0 ? <span className="text-xs text-faint">Sin servicios asignados</span> : null}
-            </div>
-          </div>
-          <div>
-            <p className="u-th mb-1.5">Hoy</p>
-            <div className="flex flex-wrap gap-1.5">
-              <span className="inline-flex h-6 items-center rounded-md border border-line px-2 text-[0.6875rem] text-muted">
-                Citas: <strong className="u-mono ml-1 font-medium text-foreground">{status === "no_chair" ? "—" : appts.length}</strong>
-              </span>
-              <span className="inline-flex h-6 items-center rounded-md border border-line px-2 text-[0.6875rem] text-muted">
-                Horas: <strong className="u-mono ml-1 font-medium text-foreground">{status === "no_chair" ? "—" : bookedLabel}</strong>
-              </span>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <div className="flex min-h-12 items-center gap-2 border-t border-line-row bg-card px-3.5 py-2 sm:px-4 sm:py-2.5">
-        <span className={`inline-flex h-6 min-w-0 items-center gap-1.5 rounded-md border px-2 text-[0.6875rem] font-medium ${s.chip} ${s.text}`}>
-          <span aria-hidden className={`size-1.5 shrink-0 rounded-full ${s.dot}`} />
-          <span className="truncate">{s.label}</span>
-        </span>
-        <span className="min-w-0 flex-1 truncate text-[0.6875rem] text-faint">{suffix.replace(/^ · /, "") || (member.startDate ? seniority(member.startDate) : "Perfil operativo")}</span>
-        <Link href={href} scroll={false} className="inline-flex h-9 shrink-0 items-center rounded-lg bg-foreground px-3.5 text-xs font-medium text-surface transition hover:bg-foreground/90 sm:h-8 sm:px-3">
-          Ver perfil
-        </Link>
-      </div>
-    </article>
-  );
-}
-
-/** True once mounted on a viewport where the desktop tree shows (md and up — the
- *  `hidden md:flex` of StaffWorkspace). False on the server and on phones, so the drawer's
- *  trap never engages where the drawer is hidden. */
 function useDesktopTree(): boolean {
   const [desktop, setDesktop] = useState(false);
   useEffect(() => {
@@ -692,15 +572,9 @@ function StaffDetail({
   const [profile, setProfile] = useState<ProfileDraft>(() => profileFromMember(member));
   const [saving, startSave] = useTransition();
   const [saveError, setSaveError] = useState<string | null>(null);
-  // Time Off tab: an inline create/edit form + per-row delete.
-  const [toForm, setToForm] = useState<null | { editing?: StaffTimeOff }>(null);
-  const [toBusy, startTo] = useTransition();
-  const [toError, setToError] = useState<string | null>(null);
-  const [toConfirmDel, setToConfirmDel] = useState<string | null>(null);
   // Deactivation guard: the future appointments a deactivation would affect — shown for an
   // explicit confirmation. NEVER auto-cancelled; deactivating only stops NEW bookings.
   const [deactivateConfirm, setDeactivateConfirm] = useState<UpcomingApptView[] | null>(null);
-  const router = useRouter();
   const [notice, setNotice] = useState<string | null>(null);
   useEffect(() => {
     if (!notice) return;
@@ -708,17 +582,16 @@ function StaffDetail({
     return () => window.clearTimeout(t);
   }, [notice]);
   const [seriesState, setSeriesState] = useState<SeriesView[] | null | "error">(null);
-  const loadSeries = useCallback(async () => {
-    try {
-      const r = await listScheduleSeriesAction(clientId, member.siteId);
-      setSeriesState(r.ok ? r.series : "error");
-    } catch {
-      setSeriesState("error");
-    }
+  const loadSeries = useCallback(() => {
+    listScheduleSeriesAction(clientId, member.siteId)
+      .then((r) => setSeriesState(r.ok ? r.series : "error"))
+      .catch(() => setSeriesState("error"));
   }, [clientId, member.siteId]);
+  // The hours tab's data: asked when that tab is shown (a deep link may open on it).
+  const needsSeries = tab === "hours" && seriesState === null;
   useEffect(() => {
-    if (tab === "hours" && seriesState === null) void loadSeries();
-  }, [tab, seriesState, loadSeries]);
+    if (needsSeries) loadSeries();
+  }, [needsSeries, loadSeries]);
   const [hoursResched, setHoursResched] = useState<AffectedItem | null>(null);
   const [hoursRecheck, setHoursRecheck] = useState(0);
   const [leaveAsk, setLeaveAsk] = useState(false);
@@ -858,9 +731,9 @@ function StaffDetail({
         <div className="flex flex-wrap items-center gap-4">
           {member.publicPhotoUrl ? (
             // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
-            <img src={member.publicPhotoUrl} alt="" aria-hidden className="size-16 rounded-[14px] object-cover" />
+            <img src={member.publicPhotoUrl} alt="" aria-hidden className="size-[64px] rounded-[14px] object-cover" />
           ) : (
-            <span aria-hidden className={`u-mono flex size-16 items-center justify-center rounded-[14px] text-[22px] font-semibold ${avatarColor(member.name)}`}>
+            <span aria-hidden className={`u-mono flex size-[64px] items-center justify-center rounded-[14px] text-[22px] font-semibold ${avatarColor(member.name)}`}>
               {initials(member.name)}
             </span>
           )}
@@ -878,7 +751,7 @@ function StaffDetail({
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <button type="button" onClick={() => setTab("details")} className="u-focus inline-flex h-10 items-center rounded-sch-control border border-line px-4 text-[13px] font-medium hover:bg-subtle">
+            <button type="button" onClick={() => setTab("details")} className="u-focus inline-flex h-[40px] items-center rounded-sch-control border border-line px-4 text-[13px] font-medium hover:bg-subtle">
               Editar perfil
             </button>
             <Link href={`/clients/${clientId}/scheduling/agenda?staff=${member.id}`} className={ACT_PRIMARY}>
@@ -1229,7 +1102,7 @@ function StaffDetail({
                 {profile.skills.map((sk) => (
                   <span
                     key={sk}
-                    className="inline-flex h-7 items-center gap-1.5 rounded-md border border-line-strong bg-surface pl-2.5 pr-1.5 text-xs"
+                    className="inline-flex h-[28px] items-center gap-1.5 rounded-md border border-line-strong bg-surface pl-2.5 pr-1.5 text-xs"
                   >
                     {sk}
                     <button
@@ -1397,7 +1270,7 @@ function StaffDetail({
               setDraft(draftFromWeekly(member.workingHours));
               setProfile(profileFromMember(member));
             }}
-            className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md border border-line-strong bg-surface px-3 text-xs transition-colors hover:bg-hover"
+            className="inline-flex h-[32px] shrink-0 items-center whitespace-nowrap rounded-md border border-line-strong bg-surface px-3 text-xs transition-colors hover:bg-hover"
           >
             Descartar
           </button>
@@ -1405,7 +1278,7 @@ function StaffDetail({
             type="button"
             disabled={saving || changes === 0 || invalid !== null}
             onClick={requestSave}
-            className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md bg-ink px-3 text-xs font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50"
+            className="inline-flex h-[32px] shrink-0 items-center whitespace-nowrap rounded-md bg-ink px-3 text-xs font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50"
           >
             {saving ? "Guardando…" : "Guardar cambios"}
           </button>
@@ -1432,10 +1305,10 @@ function StaffDetail({
             ))}
           </ul>
           <div className="flex flex-wrap justify-end gap-2">
-            <button type="button" onClick={() => setDeactivateConfirm(null)} className="inline-flex h-8 items-center rounded-md border border-line-strong bg-surface px-3 text-xs hover:bg-hover">
+            <button type="button" onClick={() => setDeactivateConfirm(null)} className="inline-flex h-[32px] items-center rounded-md border border-line-strong bg-surface px-3 text-xs hover:bg-hover">
               Cancelar
             </button>
-            <button type="button" disabled={saving} onClick={commitSave} className="inline-flex h-8 items-center rounded-md border border-danger/40 px-3 text-xs text-danger hover:bg-danger/10 disabled:opacity-50">
+            <button type="button" disabled={saving} onClick={commitSave} className="inline-flex h-[32px] items-center rounded-md border border-danger/40 px-3 text-xs text-danger hover:bg-danger/10 disabled:opacity-50">
               Desactivar de todos modos
             </button>
           </div>
@@ -1741,7 +1614,7 @@ function TagInput({ onAdd }: { onAdd: (v: string) => void }) {
       onBlur={() => setValue("")}
       placeholder="Nueva habilidad"
       aria-label="Añadir una habilidad"
-      className="u-focus h-7 w-[104px] rounded-md border border-dashed border-line-strong bg-transparent px-2 text-xs placeholder:text-faint"
+      className="u-focus h-[28px] w-[104px] rounded-md border border-dashed border-line-strong bg-transparent px-2 text-xs placeholder:text-faint"
     />
   );
 }
@@ -1810,7 +1683,7 @@ function CertificationForm({
       </button>
     );
   }
-  const I = "u-focus h-8 min-w-0 rounded-md border border-line-strong bg-transparent px-2 text-xs";
+  const I = "u-focus h-[32px] min-w-0 rounded-md border border-line-strong bg-transparent px-2 text-xs";
   return (
     <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-line-strong p-2.5">
       <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Certificación" className={I} autoFocus />
@@ -1830,7 +1703,7 @@ function CertificationForm({
         <button
           type="button"
           onClick={() => setOpen(false)}
-          className="inline-flex h-7 items-center rounded-md border border-line-strong px-2.5 text-xs hover:bg-hover"
+          className="inline-flex h-[28px] items-center rounded-md border border-line-strong px-2.5 text-xs hover:bg-hover"
         >
           Cancelar
         </button>
@@ -1850,7 +1723,7 @@ function CertificationForm({
             setIssuedOn("");
             setExpiresOn("");
           }}
-          className="inline-flex h-7 items-center rounded-md bg-ink px-2.5 text-xs font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50"
+          className="inline-flex h-[28px] items-center rounded-md bg-ink px-2.5 text-xs font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50"
         >
           Añadir
         </button>

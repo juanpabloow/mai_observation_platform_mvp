@@ -29,7 +29,7 @@ export function GuestContact(props: {
   const [email, setEmail] = useState(props.initial.email ?? "");
   const [errors, setErrors] = useState<Partial<Record<GuestField, string>>>({});
   const [error, setError] = useState<string | null>(null);
-  const [matches, setMatches] = useState<ContactMatch[]>([]);
+  const [matchState, setMatches] = useState<{ forKey: string; list: ContactMatch[] }>({ forKey: "", list: [] });
   const [pending, startTransition] = useTransition();
   const sending = useRef(false);
 
@@ -39,24 +39,23 @@ export function GuestContact(props: {
   useEffect(() => onDirty(dirty), [dirty, onDirty]);
 
   // Duplicate check while typing (read-only, debounced): who already has this phone/email.
+  const typedKey = `${phone.trim()}|${email.trim()}`;
+  const searchable = phone.trim().replace(/\D/g, "").length >= 7 || /@.+\./.test(email.trim());
+  const matches = searchable && matchState.forKey === typedKey ? matchState.list : [];
   useEffect(() => {
-    if (!props.canModify) return;
+    if (!props.canModify || !searchable) return;
     const p = phone.trim();
     const e = email.trim();
-    if (p.replace(/\D/g, "").length < 7 && !/@.+\./.test(e)) {
-      setMatches([]);
-      return;
-    }
     let cancelled = false;
     const t = setTimeout(async () => {
       const r = await findContactMatchesAction(props.clientId, { siteId: props.siteId, phone: p || null, email: e || null });
-      if (!cancelled) setMatches(r.ok ? r.matches : []);
+      if (!cancelled) setMatches({ forKey: `${p}|${e}`, list: r.ok ? r.matches : [] });
     }, 350);
     return () => {
       cancelled = true;
       clearTimeout(t);
     };
-  }, [phone, email, props.clientId, props.siteId, props.canModify]);
+  }, [phone, email, searchable, props.clientId, props.siteId, props.canModify]);
 
   const send = (mode: "guest" | "create" | "link", contactId?: string) => {
     if (sending.current) return;
@@ -67,7 +66,7 @@ export function GuestContact(props: {
         const r = await saveAppointmentContactAction(props.clientId, props.appointmentId, { mode, name, phone, email, contactId });
         if (!r.ok) {
           setErrors(r.fieldErrors ?? {});
-          if (r.matches) setMatches(r.matches);
+          if (r.matches) setMatches({ forKey: typedKey, list: r.matches });
           setError(r.fieldErrors ? null : r.error);
           return;
         }

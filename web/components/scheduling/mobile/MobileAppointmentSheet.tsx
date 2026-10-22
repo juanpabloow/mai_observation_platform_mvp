@@ -19,7 +19,7 @@ import { Icon, ICON, MButton, MClientAvatar, MConfirm, MIconButton, MPill, MStaf
  * The appointment DETAIL on the phone (reference §02): a bottom sheet over the agenda
  * that opens part-way and expands from its handle (tap or drag). Hierarchy: when → who
  * (Llamar / WhatsApp / Ficha) → service, professional, site, origin, activity, colour →
- * "Cambiar fecha y hora" sits visible right under the time (apart from the states) →
+ * "Reagendar" sits visible right under the time (apart from the states) →
  * "Más acciones" + the ONE next valid step (Sin confirmar → Confirmar, Confirmada →
  * Completar). States and transitions are exactly the backend's; cancel and no-show
  * confirm first in their own sheet, with the safe option first and focused.
@@ -216,7 +216,7 @@ export function MobileAppointmentSheet(props: {
             {props.error}
           </p>
         ) : null}
-        {/* "Cambiar fecha y hora" — visible, apart from the state actions and cancel. */}
+        {/* "Reagendar" — visible, apart from the state actions and cancel. */}
         {canAct ? (
           <MButton
             className="mt-3 w-full gap-2"
@@ -228,7 +228,7 @@ export function MobileAppointmentSheet(props: {
             }}
           >
             <Icon d={ICON.calendar} size={18} width={1.4} />
-            Cambiar fecha y hora
+            Reagendar
           </MButton>
         ) : blocked ? (
           <p className="m-0 mt-3 text-[14px] leading-[1.45] text-m-tx3">{blocked}</p>

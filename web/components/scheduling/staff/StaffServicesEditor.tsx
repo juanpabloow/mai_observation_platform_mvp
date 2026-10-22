@@ -105,7 +105,10 @@ export function StaffServicesEditor(props: {
                   onClick={() =>
                     setSelected((prev) => {
                       const next = new Set(prev);
-                      for (const s of list) all ? next.delete(s.id) : next.add(s.id);
+                      for (const s of list) {
+                        if (all) next.delete(s.id);
+                        else next.add(s.id);
+                      }
                       return next;
                     })
                   }

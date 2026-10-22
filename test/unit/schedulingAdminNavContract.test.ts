@@ -118,8 +118,8 @@ test('AdminPanel: no client selector — a single route client threads into ever
   // clientId. Asserted at its new home so the contract follows the code instead of
   // quietly passing on a file that no longer does this.
   assert.ok(
-    read('components/scheduling/staff/StaffTab.tsx').includes('setStaffServiceAction(clientId, member.id, sv.id, !on)'),
-    'setStaffService carries clientId (now on the Staff roster panel)',
+    read('components/scheduling/staff/StaffServicesEditor.tsx').includes('setStaffServiceAction(props.clientId, props.staffId, id, true)'),
+    'setStaffService carries clientId (now in the ficha’s Servicios editor)',
   );
   assert.ok(src.includes('deleteExceptionAction(clientId'), 'deleteException carries clientId');
 });
