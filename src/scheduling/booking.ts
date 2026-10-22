@@ -24,6 +24,7 @@ import {
   type ActorType,
 } from '../db/repositories/scheduling/appointments.js';
 import { recordSchedulingEvent } from '../db/repositories/scheduling/events.js';
+import { isImmediateStart } from './immediate.js';
 import { isSchedulingBookable, isSchedulingEnabledForUpdate } from '../db/repositories/clientModules.js';
 import { pipelineOnAppointmentStatusChanged, pipelineOnBookingCreated } from '../pipeline/hooks.js';
 
@@ -49,7 +50,8 @@ export type BookingError =
   | 'invalid_phone' // customer_phone can't be normalized for the site's region (QA-3)
   | 'active_limit' // the phone already holds the max future active bookings here (public cap)
   | 'price_changed' // the price the customer was shown is no longer the price (zero writes)
-  | 'stale'; // reschedule: the appointment moved since the operator read it (agenda UI only)
+  | 'stale' // reschedule: the appointment moved since the operator read it (agenda UI only)
+  | 'not_immediate'; // immediate walk-in asked for a start outside "now" (agenda UI only)
 
 export type BookingResult<T> =
   | { ok: true; value: T; deduped?: boolean }
@@ -78,6 +80,10 @@ export interface CreateAppointmentInput {
    *  appointment (shown again on reopen), never resolved into a contact. Ignored when the
    *  booking ends up linked to a contact. */
   guest?: { name: string | null; phone: string | null; email: string | null } | null;
+  /** IMMEDIATE WALK-IN (src/scheduling/immediate.ts): waive ONLY the minimum notice, and
+   *  only for a start inside the immediate window. Set by the agenda's walk-in action for
+   *  an authorised login — never by the bot API or the public page. */
+  immediateWalkIn?: boolean;
   /** I-1: additional identities the booking declares for the appointment's contact (the
    *  attendee) — attached through the same identity chokepoint as everything else. Applies to
    *  the resolve paths (customer_phone / channel_user_id); the EXPLICIT-contact path (contactId)
@@ -200,8 +206,12 @@ export async function createAppointment(
     // start, so the extra candidates are harmless.
     to: new Date(input.startAt.getTime() + 24 * 60 * MS_PER_MIN),
     now,
+    ignoreMinNotice: input.immediateWalkIn === true,
   });
   if (!avail) return { ok: false, error: 'not_found', message: 'Service is not offered at this site.' };
+  if (input.immediateWalkIn && !isImmediateStart(input.startAt, now, avail.slotIntervalMin)) {
+    return { ok: false, error: 'not_immediate', message: 'An immediate walk-in must start now.' };
+  }
 
   const slot = avail.slots.find((s) => s.start_at.getTime() === input.startAt.getTime());
   if (!slot) return { ok: false, error: 'unavailable', message: 'That time is no longer available.' };

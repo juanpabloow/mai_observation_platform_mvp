@@ -6,6 +6,7 @@ import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
 import { loadExplainExceptions, prepareAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
 import { computeAvailability } from "@worker/scheduling/availability.js";
 import { explainAvailability } from "@worker/scheduling/availabilityExplain.js";
+import { immediateWindowMin } from "@worker/scheduling/immediate.js";
 import { getAppointmentById } from "@worker/db/repositories/scheduling/appointments.js";
 
 /**
@@ -31,6 +32,11 @@ import { getAppointmentById } from "@worker/db/repositories/scheduling/appointme
  * is about to block but has NOT saved yet (the break or block being edited while one of its
  * affected appointments is rescheduled). Holds only REMOVE slots — they can never offer a
  * time the engine did not — so a crafted hold cannot widen availability.
+ *
+ * `immediate=1` («Atención sin cita · ahora»): the starts from NOW within the immediate
+ * window, without the site's minimum notice — the one exception of src/scheduling/immediate.ts,
+ * for a login that may book (agenda.book, gated above). Every other rule still applies; the
+ * booking action re-checks the start on the server. Never offered for a reschedule.
  */
 export const dynamic = "force-dynamic";
 
@@ -84,6 +90,8 @@ export async function GET(req: Request): Promise<Response> {
     };
   }
 
+  const immediate = p.get("immediate") === "1" && !moving;
+  const now = new Date();
   const prepared = await prepareAvailability({
     tenantId: scope.tenantId,
     siteId,
@@ -91,12 +99,19 @@ export async function GET(req: Request): Promise<Response> {
     staffId: staffId ?? null,
     from,
     to,
-    now: new Date(),
+    now,
     excludeAppointmentId: moving?.id ?? null,
     timingOverride: moving?.timing ?? null,
+    ignoreMinNotice: immediate,
   });
   if (!prepared) return notFoundResponse();
-  const result = { site: prepared.site, buffers: prepared.buffers, slots: prepared.request ? computeAvailability(prepared.request) : [] };
+  const windowEnd = now.getTime() + immediateWindowMin(prepared.slotIntervalMin) * 60_000;
+  const computed = prepared.request ? computeAvailability(prepared.request) : [];
+  const result = {
+    site: prepared.site,
+    buffers: prepared.buffers,
+    slots: immediate ? computed.filter((s) => s.start_at.getTime() >= now.getTime() - 60_000 && s.start_at.getTime() <= windowEnd) : computed,
+  };
   const holds = parseHolds(p.getAll("hold"));
   if (holds === null) return Response.json({ error: "invalid hold" }, { status: 400 });
   const bufBefore = result.buffers.before_min * 60_000;

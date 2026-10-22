@@ -55,6 +55,8 @@ function messageFor(error: BookingError, fallback: string): string {
       return "Ese teléfono o correo ya pertenece a otro contacto.";
     case "invalid_phone":
       return "No pudimos leer el teléfono. Escríbelo con el indicativo del país.";
+    case "not_immediate":
+      return "Ese horario ya no es «ahora». Elige el siguiente horario disponible.";
     default:
       return fallback;
   }
@@ -182,6 +184,13 @@ export interface ManualAppointmentInput {
    * a NAME alone is always a guest — it never keys a contact.
    */
   contactMode?: Exclude<ContactMode, "link">;
+  /**
+   * «Atención sin cita · ahora» (walkIn only): the ONE exception to the site's minimum
+   * notice, for someone already here — src/scheduling/immediate.ts. Only a login with
+   * agenda.book on this site/column reaches it (the gate above); the start must be inside
+   * the immediate window, and every other availability rule is still checked by the engine.
+   */
+  immediate?: boolean;
 }
 
 /** Contacts that already carry this phone or email (read-only — never creates). */
@@ -292,6 +301,7 @@ export async function createManualAppointmentAction(
     customerEmail,
     guest,
     origin: input.walkIn ? "walk_in" : "internal",
+    immediateWalkIn: Boolean(input.walkIn && input.immediate),
     createdByType: "agent",
     createdByUserId: ctx.scope.userId,
     idempotencyKey: input.idempotencyKey ? `agenda-manual:${input.idempotencyKey}` : null,

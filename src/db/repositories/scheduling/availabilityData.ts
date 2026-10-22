@@ -39,12 +39,18 @@ export interface LoadAvailabilityParams {
    *  with the appointment's own snapshot (the interval it will actually occupy), so a later
    *  catalogue change can neither block a valid move nor let an invalid one through. */
   timingOverride?: { durationMin: number; bufferBeforeMin: number; bufferAfterMin: number } | null;
+  /** IMMEDIATE WALK-IN only (src/scheduling/immediate.ts): drop the site's minimum notice.
+   *  Every other rule stays. Only the agenda's walk-in path sets it — never the bot or the
+   *  public page. */
+  ignoreMinNotice?: boolean;
 }
 
 export interface AvailabilityResult {
   site: { id: string; tenant_id: string; client_id: string; timezone: string; slug: string; name: string };
   /** Buffers applied to every staff (service-level / site defaults). */
   buffers: { before_min: number; after_min: number };
+  /** The site's slot grid (minutes) — the immediate walk-in window is derived from it. */
+  slotIntervalMin: number;
   slots: Slot[];
 }
 
@@ -131,6 +137,7 @@ export async function resolveEffectivePrice(
 export interface PreparedAvailability {
   site: AvailabilityResult['site'];
   buffers: AvailabilityResult['buffers'];
+  slotIntervalMin: number;
   request: AvailabilityRequest | null;
 }
 
@@ -139,7 +146,7 @@ export async function loadAvailability(params: LoadAvailabilityParams): Promise<
   const prepared = await prepareAvailability(params);
   if (!prepared) return null;
   const slots = prepared.request ? computeAvailability(prepared.request) : [];
-  return { site: prepared.site, buffers: prepared.buffers, slots };
+  return { site: prepared.site, buffers: prepared.buffers, slotIntervalMin: prepared.slotIntervalMin, slots };
 }
 
 /**
@@ -182,7 +189,8 @@ export async function prepareAvailability(params: LoadAvailabilityParams): Promi
     slug: site.slug,
     name: site.name,
   };
-  if (staffRows.rows.length === 0) return { site: resultSite, buffers, request: null };
+  const slotIntervalMin = site.scheduling_config.slot_interval_min;
+  if (staffRows.rows.length === 0) return { site: resultSite, buffers, slotIntervalMin, request: null };
   const staffIds = staffRows.rows.map((s) => s.id);
 
   const busyRows = await query<{ staff_id: string; blocked_from: Date; blocked_until: Date }>(
@@ -246,7 +254,7 @@ export async function prepareAvailability(params: LoadAvailabilityParams): Promi
       id: site.id,
       timezone: site.timezone,
       opening_hours: site.opening_hours,
-      scheduling_config: site.scheduling_config,
+      scheduling_config: params.ignoreMinNotice ? { ...site.scheduling_config, min_notice_min: 0 } : site.scheduling_config,
     },
     staff,
     siteExceptions,
@@ -254,7 +262,7 @@ export async function prepareAvailability(params: LoadAvailabilityParams): Promi
     to: params.to,
     now: params.now,
   };
-  return { site: resultSite, buffers, request };
+  return { site: resultSite, buffers, slotIntervalMin, request };
 }
 
 /**

@@ -20,8 +20,12 @@ import { SidePanel, PanelSection, type SidePanelHandle } from "./SidePanel";
  * offered to LINK — never duplicated. A name alone never creates or finds a contact. An
  * email does not mean WhatsApp.
  *
- * The time is the first free start the engine offers today for that professional and the
- * whole service — the site's minimum notice applies to the agenda as everywhere else.
+ * The time. «Ahora» is the first start inside the immediate window (src/scheduling/immediate.ts):
+ * the ONE rule relaxed is the site's minimum notice, for someone who is already here — hours,
+ * breaks, absences, appointments and the whole service duration still apply, and the server
+ * re-checks all of it. With no room now the panel SAYS so and offers the next free start
+ * today (normal availability, minimum notice included); it is booked only once the operator
+ * accepts that time explicitly — never on its own.
  */
 interface Svc { id: string; name: string; duration_min: number; category: string | null; price: string | null }
 interface Slot { start_at: string; service_end_at: string; staff_id: string; available_staff_ids: string[] }
@@ -44,7 +48,11 @@ export function WalkInPanel(props: {
   const [query, setQuery] = useState("");
   /** The professional the operator PICKED (null = the one free first). */
   const [pickedStaff, setStaffId] = useState<string>(props.lockStaffId ?? "");
-  const [slotState, setSlots] = useState<{ forService: string; state: "ready" | "error"; list: Slot[] }>({ forService: "", state: "ready", list: [] });
+  const [slotState, setSlots] = useState<{ forKey: string; state: "ready" | "error"; now: Slot[]; later: Slot[] }>({ forKey: "", state: "ready", now: [], later: [] });
+  /** Bumped to re-ask the engine (a start that stopped being «ahora», a slot just taken). */
+  const [refresh, setRefresh] = useState(0);
+  /** The later start the operator ACCEPTED («staff|start_at»); nothing else books a later time. */
+  const [accepted, setAccepted] = useState("");
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -57,53 +65,62 @@ export function WalkInPanel(props: {
   const [idemKey] = useState(() => crypto.randomUUID());
   const sending = useRef(false);
   const handle = useRef<SidePanelHandle | null>(null);
-  // Today's free starts for the service, every professional (engine: whole duration). The
-  // answer is tagged with its service, so "loading" is derived rather than set in the effect.
-  const slots: { state: "idle" | "loading" | "ready" | "error"; list: Slot[] } = !serviceId
-    ? { state: "idle", list: [] }
-    : slotState.forService === serviceId
+  // Two answers from the real engine, tagged with service + refresh so "loading" is derived:
+  //   now   — immediate=1: starts within the immediate window, minimum notice waived;
+  //   later — the normal starts left today (minimum notice included), offered when «now» is full.
+  const slotKey = `${serviceId}|${refresh}`;
+  const slots: { state: "idle" | "loading" | "ready" | "error"; now: Slot[]; later: Slot[] } = !serviceId
+    ? { state: "idle", now: [], later: [] }
+    : slotState.forKey === slotKey
       ? slotState
-      : { state: "loading", list: [] };
+      : { state: "loading", now: [], later: [] };
   useEffect(() => {
     if (!serviceId) return;
     const ctrl = new AbortController();
-    const params = new URLSearchParams({
-      client_id: props.clientId,
-      site_id: props.siteId,
-      service_id: serviceId,
-      from: new Date().toISOString(),
-      to: siteMidnight(nextDay(today), tz).toISOString(),
-    });
-    if (props.lockStaffId) params.set("staff_id", props.lockStaffId);
-    fetch(`/api/scheduling/internal/availability?${params.toString()}`, { signal: ctrl.signal, cache: "no-store" })
-      .then(async (r) => {
+    const ask = (immediate: boolean) => {
+      const params = new URLSearchParams({
+        client_id: props.clientId,
+        site_id: props.siteId,
+        service_id: serviceId,
+        from: new Date().toISOString(),
+        to: siteMidnight(nextDay(today), tz).toISOString(),
+      });
+      if (immediate) params.set("immediate", "1");
+      if (props.lockStaffId) params.set("staff_id", props.lockStaffId);
+      return fetch(`/api/scheduling/internal/availability?${params.toString()}`, { signal: ctrl.signal, cache: "no-store" }).then(async (r) => {
         if (!r.ok) throw new Error(String(r.status));
-        const data = (await r.json()) as { slots: Slot[] };
-        setSlots({ forService: serviceId, state: "ready", list: data.slots });
-      })
-      .catch(() => !ctrl.signal.aborted && setSlots({ forService: serviceId, state: "error", list: [] }));
+        return ((await r.json()) as { slots: Slot[] }).slots;
+      });
+    };
+    const key = `${serviceId}|${refresh}`;
+    Promise.all([ask(true), ask(false)])
+      .then(([now, later]) => setSlots({ forKey: key, state: "ready", now, later }))
+      .catch(() => !ctrl.signal.aborted && setSlots({ forKey: key, state: "error", now: [], later: [] }));
     return () => ctrl.abort();
-  }, [serviceId, props.clientId, props.siteId, props.lockStaffId, today, tz]);
+  }, [serviceId, refresh, props.clientId, props.siteId, props.lockStaffId, today, tz]);
 
-  // First free start per professional → "Libre a las HH:MM", ordered by who is free first.
-  const firstFree = useMemo(() => {
-    const m = new Map<string, Slot>();
-    for (const s of slots.list) for (const id of s.available_staff_ids) if (!m.has(id) || m.get(id)!.start_at > s.start_at) m.set(id, s);
-    return m;
-  }, [slots.list]);
+  // First start per professional, «now» and «later»; ordered: free now, then soonest later.
+  const nowFree = useMemo(() => firstPerStaff(slots.now), [slots.now]);
+  const laterFree = useMemo(() => firstPerStaff(slots.later), [slots.later]);
   const ordered = useMemo(() => {
     const list = props.lockStaffId ? props.staff.filter((s) => s.id === props.lockStaffId) : props.staff;
-    return [...list].sort((a, b) => {
-      const fa = firstFree.get(a.id)?.start_at ?? "~";
-      const fb = firstFree.get(b.id)?.start_at ?? "~";
-      return fa.localeCompare(fb) || a.name.localeCompare(b.name);
-    });
-  }, [props.staff, props.lockStaffId, firstFree]);
+    // Numeric rank (a locale collation would put a "~" sentinel before the digits).
+    const rank = (id: string) => {
+      const n = nowFree.get(id) ?? laterFree.get(id);
+      return n ? (nowFree.has(id) ? 0 : 1e15) + Date.parse(n.start_at) : Infinity;
+    };
+    return [...list].sort((a, b) => rank(a.id) - rank(b.id) || a.name.localeCompare(b.name));
+  }, [props.staff, props.lockStaffId, nowFree, laterFree]);
+  const canTake = (id: string) => nowFree.has(id) || laterFree.has(id);
   // The picked professional while they can take it, else whoever is free first.
-  const staffId = props.lockStaffId ?? (pickedStaff && firstFree.has(pickedStaff) ? pickedStaff : ordered.find((s) => firstFree.has(s.id))?.id ?? "");
+  const staffId = props.lockStaffId ?? (pickedStaff && canTake(pickedStaff) ? pickedStaff : ordered.find((s) => canTake(s.id))?.id ?? "");
   const dirty = Boolean(serviceId || name.trim() || phone.trim() || email.trim() || (pickedStaff && !props.lockStaffId));
 
-  const slot = staffId ? firstFree.get(staffId) ?? null : null;
+  // «Ahora» when there is room now; otherwise the next start today, only once accepted.
+  const nowSlot = staffId ? nowFree.get(staffId) ?? null : null;
+  const laterSlot = !nowSlot && staffId ? laterFree.get(staffId) ?? null : null;
+  const laterAccepted = Boolean(laterSlot && accepted === `${staffId}|${laterSlot.start_at}`);
+  const slot = nowSlot ?? (laterAccepted ? laterSlot : null);
   const service = props.services.find((s) => s.id === serviceId) ?? null;
   const visibleServices = props.services.filter((s) => s.name.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es")));
 
@@ -141,6 +158,9 @@ export function WalkInPanel(props: {
           staffId: staffId || null,
           startAt: slot.start_at,
           walkIn: true,
+          // Only a start inside the immediate window waives the minimum notice; an accepted
+          // later time is a normal walk-in, checked with the site's notice like any booking.
+          immediate: slot === nowSlot,
           idempotencyKey: idemKey,
           ...(linkTo
             ? { contactId: linkTo.contactId }
@@ -150,6 +170,12 @@ export function WalkInPanel(props: {
           if (r.fieldErrors) setFieldErrors(r.fieldErrors);
           if (r.matches) setMatches({ forKey: typedKey, list: r.matches });
           setError(r.fieldErrors ? null : r.error);
+          // The time may have just stopped being free or «ahora»: re-ask the engine. What was
+          // typed stays; a later time must be accepted again.
+          if (!r.fieldErrors && !r.matches) {
+            setAccepted("");
+            setRefresh((n) => n + 1);
+          }
           return;
         }
         props.onDone({ id: r.id, dayKey: siteDayKey(slot.start_at, tz), message: "Atención registrada", warning: r.warning });
@@ -161,7 +187,7 @@ export function WalkInPanel(props: {
     });
   };
 
-  const summary = slot && service ? `Hoy · ${fmtTime(slot.start_at, tz)} – ${fmtTime(slot.service_end_at, tz)} · ${service.name} · ${props.staff.find((s) => s.id === staffId)?.name.split(" ")[0] ?? ""}` : "Hoy, sin reserva previa";
+  const summary = slot && service ? `${slot === nowSlot ? "Ahora" : "Hoy"} · ${fmtTime(slot.start_at, tz)} – ${fmtTime(slot.service_end_at, tz)} · ${service.name} · ${props.staff.find((s) => s.id === staffId)?.name.split(" ")[0] ?? ""}` : "Hoy, sin reserva previa";
 
   return (
     <SidePanel
@@ -190,7 +216,7 @@ export function WalkInPanel(props: {
             Cancelar
           </Button>
           <Button variant="primary" onClick={submit} disabled={!slot || pending || (saveContact && !linkTo && matches.length > 0)} loading={pending} loadingLabel="Registrando…">
-            {error ? "Reintentar" : "Registrar atención"}
+            {error ? "Reintentar" : slot && slot !== nowSlot ? `Registrar a las ${fmtTime(slot.start_at, tz)}` : "Registrar atención"}
           </Button>
         </div>
       }
@@ -224,15 +250,16 @@ export function WalkInPanel(props: {
           </div>
         </PanelSection>
 
-        <PanelSection title="¿Quién lo atiende?" id="wi-staff" hint={serviceId ? "Ordenado por quién queda libre antes, para la duración completa del servicio." : "Elige el servicio para ver quién queda libre antes."}>
+        <PanelSection title="¿Quién lo atiende?" id="wi-staff" hint={serviceId ? "Primero quien puede atender ahora, para la duración completa del servicio." : "Elige el servicio para ver quién puede atender ahora."}>
           {slots.state === "error" ? (
             <p className="text-[13px] text-danger">No pudimos cargar la disponibilidad de hoy.</p>
           ) : null}
           <div role="radiogroup" aria-labelledby="wi-staff" className="flex flex-col gap-1.5">
             {ordered.map((s) => {
-              const free = firstFree.get(s.id);
+              const free = nowFree.get(s.id);
+              const next = laterFree.get(s.id);
               const on = s.id === staffId;
-              const disabled = Boolean(serviceId) && slots.state === "ready" && !free;
+              const disabled = Boolean(serviceId) && slots.state === "ready" && !free && !next;
               return (
                 <button
                   key={s.id}
@@ -247,13 +274,36 @@ export function WalkInPanel(props: {
                   <span className="min-w-0">
                     <span className="block truncate text-[13px] font-medium">{s.name}</span>
                     <span className="block text-[12px] text-muted">
-                      {!serviceId ? "—" : slots.state === "loading" ? "Calculando…" : free ? `Libre a las ${fmtTime(free.start_at, tz)}` : "Sin hueco hoy para este servicio"}
+                      {!serviceId ? "—" : slots.state === "loading" ? "Calculando…" : free ? `Puede atender ahora · ${fmtTime(free.start_at, tz)}` : next ? `Ahora no · siguiente a las ${fmtTime(next.start_at, tz)}` : "Sin hueco hoy para este servicio"}
                     </span>
                   </span>
                 </button>
               );
             })}
           </div>
+          {serviceId && slots.state === "ready" && staffId && !nowSlot && laterSlot ? (
+            <div role="status" className="flex flex-col gap-2 rounded-[12px] border border-line px-3.5 py-3">
+              <p className="text-[13px] font-medium">No hay espacio ahora con {props.staff.find((s) => s.id === staffId)?.name.split(" ")[0] ?? "este profesional"}</p>
+              <p className="u-tnum text-[12.5px] text-muted">
+                El siguiente horario disponible hoy es a las {fmtTime(laterSlot.start_at, tz)} – {fmtTime(laterSlot.service_end_at, tz)}. No se reserva hasta que lo confirmes.
+              </p>
+              <label className="flex min-h-[44px] items-center gap-2.5 text-[13px] md:min-h-0">
+                <input
+                  type="checkbox"
+                  checked={laterAccepted}
+                  onChange={(e) => setAccepted(e.target.checked ? `${staffId}|${laterSlot.start_at}` : "")}
+                  className="size-4 accent-[var(--foreground)]"
+                />
+                <span className="font-medium">Usar las {fmtTime(laterSlot.start_at, tz)}</span>
+              </label>
+            </div>
+          ) : null}
+          {serviceId && slots.state === "ready" && ordered.length > 0 && !ordered.some((s) => canTake(s.id)) ? (
+            <div role="status" className="flex flex-col gap-1.5 rounded-[12px] border border-line px-3.5 py-3">
+              <p className="text-[13px] font-medium">No hay espacio hoy para este servicio</p>
+              <p className="text-[12.5px] text-muted">Puedes reservarle una cita otro día.</p>
+            </div>
+          ) : null}
         </PanelSection>
 
         <PanelSection title={<>Cliente <span className="font-normal text-muted">· opcional</span></>} id="wi-client">
@@ -320,4 +370,10 @@ function nextDay(d: string): string {
   const [y, m, day] = d.split("-").map(Number);
   const t = new Date(Date.UTC(y, m - 1, day + 1));
   return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}-${String(t.getUTCDate()).padStart(2, "0")}`;
+}
+
+function firstPerStaff(list: Slot[]): Map<string, Slot> {
+  const m = new Map<string, Slot>();
+  for (const s of list) for (const id of s.available_staff_ids) if (!m.has(id) || m.get(id)!.start_at > s.start_at) m.set(id, s);
+  return m;
 }
