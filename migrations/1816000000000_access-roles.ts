@@ -11,13 +11,6 @@ import type { MigrationBuilder } from 'node-pg-migrate';
  * is a row here, owned by ONE business (client) of ONE tenant, and a member holding it has
  * `client_role = 'custom'` + `access_role_id`.
  *
- * SYSTEM-ROLE OVERRIDES. The agency may adjust the permissions of a SYSTEM role for ONE
- * business (decision 2026-10-22): a row in access_roles with `system_key` set
- * ('owner' | 'setter' | 'staff') holds that business's set, and every member of that business
- * with that client_role resolves to it. No row = the code default. Override rows are never
- * assigned through access_role_id (the app only resolves them by system_key) and at most one
- * exists per (tenant, business, system role). Deleting it restores the default.
- *
  * THE SCOPE stays on the membership: a custom role always works on the whole business
  * (no site/staff binding — that is the Profesional system role), proven by the CHECK below.
  *
@@ -82,8 +75,6 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
       name text NOT NULL CHECK (char_length(btrim(name)) BETWEEN 1 AND 60),
       description text NOT NULL DEFAULT '' CHECK (char_length(description) <= 280),
       version integer NOT NULL DEFAULT 1 CHECK (version >= 1),
-      -- non-null = this business's override of a SYSTEM role (see header); null = custom role.
-      system_key text CHECK (system_key IN ('owner', 'setter', 'staff')),
       created_by text REFERENCES "user" (id) ON DELETE SET NULL,
       updated_by text REFERENCES "user" (id) ON DELETE SET NULL,
       created_at timestamptz NOT NULL DEFAULT now(),
@@ -95,8 +86,6 @@ export async function up(pgm: MigrationBuilder): Promise<void> {
     );
     CREATE UNIQUE INDEX access_roles_client_name_key
       ON access_roles (tenant_id, client_id, lower(btrim(name)));
-    CREATE UNIQUE INDEX access_roles_one_override_per_system_role
-      ON access_roles (tenant_id, client_id, system_key) WHERE system_key IS NOT NULL;
 
     CREATE TABLE access_role_permissions (
       role_id uuid NOT NULL REFERENCES access_roles (id) ON DELETE CASCADE,

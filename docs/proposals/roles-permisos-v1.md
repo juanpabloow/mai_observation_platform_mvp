@@ -240,7 +240,8 @@ abierta; borrado de rol asignado; auditoría y compatibilidad tras migrar.
   tenant) ajusta los permisos de Dueño, Recepción o Profesional **solo para ese negocio**:
   el nombre no cambia, los demás negocios mantienen el predeterminado y «Restablecer»
   lo devuelve. Se guarda como fila de `access_roles` con `system_key` (una por negocio y rol)
-  y se aplica en la siguiente petición de cada persona. Auditado.
+  y se aplica en la siguiente petición de cada persona. Auditado. Esquema en la migración
+  **1817** (`1817000000000_access-system-role-overrides`), aparte de la 1816 ya fusionada.
 - **El Dueño** sigue creando, editando y eliminando sus roles personalizados (eliminar
   solo cuando nadie lo tiene) y gestionando usuarios, siempre dentro de sus permisos; no
   ajusta los protegidos.
