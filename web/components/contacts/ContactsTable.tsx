@@ -92,6 +92,7 @@ export function ContactsTable({
   hrefWith,
   now,
   canSeeOrigin,
+  canEdit = true,
   sort,
 }: {
   /** The VALIDATED client the page resolved — every link out of a row stays inside it. */
@@ -107,6 +108,8 @@ export function ContactsTable({
   /** Same visibility as the contact's Origen card: agency/owner/setter yes, staff no. When false
    *  the column falls back to the free-text channel (staff never reach this list in practice). */
   canSeeOrigin: boolean;
+  /** contacts.edit — without it the «+ Agregar» prompts (which open the edit dialog) are not offered. */
+  canEdit?: boolean;
   /** Active sort, for the Origen column's aria-sort. */
   sort: "recent" | "origin";
 }) {
@@ -273,7 +276,7 @@ export function ContactsTable({
                     up — so it lifts above the row's stretched link. */}
                 {c.email ? (
                   <span className="truncate text-[0.6875rem] text-faint">{c.email}</span>
-                ) : (
+                ) : !canEdit ? null : (
                   <Link
                     href={hrefWith({ c: c.id, edit: "1" })}
                     scroll={false}
@@ -291,6 +294,8 @@ export function ContactsTable({
                 <span className="u-mono block truncate text-[0.8125rem] text-muted">
                   {c.phone_e164}
                 </span>
+              ) : !canEdit ? (
+                <span className="text-[0.75rem] text-faint">—</span>
               ) : (
                 <Link
                   href={hrefWith({ c: c.id, edit: "1" })}

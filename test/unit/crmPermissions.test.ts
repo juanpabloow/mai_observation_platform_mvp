@@ -7,19 +7,22 @@ import {
   resolveAssignee,
   type CrmActor,
 } from '../../web/lib/crmPermissions.js';
+import { AGENCY_PERMISSIONS, SYSTEM_ROLE_PERMISSIONS } from '../../web/lib/permissions/catalog.js';
 
 /**
  * Pure role rules for CRM actions. Recovered from PR #2 (C-3), adapted: canChangeOwner/
  * canChangeStage were removed — owner/stage changes go through C-2's contactActions
  * (owner/admin gated there), not crmPermissions.
  */
-const owner: CrmActor = { role: 'owner', clientRole: null, userId: 'u-owner' };
-const admin: CrmActor = { role: 'admin', clientRole: null, userId: 'u-admin' };
-// Limited members (clientRole setter/staff) keep the narrow rules.
-const memberA: CrmActor = { role: 'member', clientRole: 'setter', userId: 'u-a' };
-const memberB: CrmActor = { role: 'member', clientRole: 'staff', userId: 'u-b' };
+// The rules read PERMISSIONS (contacts.manage_others, contacts.tags) — each actor is its
+// role's permission set, exactly as getAccessScope resolves it.
+const owner: CrmActor = { userId: 'u-owner', permissions: AGENCY_PERMISSIONS };
+const admin: CrmActor = { userId: 'u-admin', permissions: AGENCY_PERMISSIONS };
+// Limited members (Recepción / Profesional) keep the narrow rules.
+const memberA: CrmActor = { userId: 'u-a', permissions: SYSTEM_ROLE_PERMISSIONS.setter };
+const memberB: CrmActor = { userId: 'u-b', permissions: SYSTEM_ROLE_PERMISSIONS.staff };
 // MF-1 item 5: a Client Owner has FULL CRM control inside their client.
-const clientOwner: CrmActor = { role: 'member', clientRole: 'owner', userId: 'u-co' };
+const clientOwner: CrmActor = { userId: 'u-co', permissions: SYSTEM_ROLE_PERMISSIONS.owner };
 
 test('notes: author edits own; another member cannot; owner/admin can', () => {
   const note = { created_by_user_id: 'u-a' };

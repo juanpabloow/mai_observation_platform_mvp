@@ -1,9 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { canManageClient } from "./access";
+import { NO_PERMISSION, canAny, type AccessScope } from "./access";
 import { writeTimeOff, deleteTimeOffAction } from "./timeOffActions";
-import { resolveClientModuleContext } from "./clientModuleAccess";
+import { resolveClientModuleContext, type PermissionRequirement } from "./clientModuleAccess";
 import { normalizeServiceDescription } from "./serviceDescription";
 import { checkPublicTitle, publicProfileMessage } from "./staffPublicProfile";
 import { deleteLogo, isR2Configured, uploadServiceImage, uploadStaffPhoto } from "./r2";
@@ -75,9 +75,10 @@ import { countUpcomingAppointmentsForResource, listAppointments } from "@worker/
  * validated in this order, before any mutation:
  *   1. tenant + client of route — resolveClientModuleContext (the URL clientId is
  *      validated against the session's tenant + access scope; non-default; module ON);
- *   2. client-admin capability  — canManageClient: the agency (owner/admin) OR this
- *      client's OWNER. An Editor or Staff login is refused (they operate the agenda but
- *      never configure it).
+ *   2. the PERMISSION of that screen (settings.sites, services.manage, team.manage,
+ *      hours.manage, settings.rules, booking_page.manage, promotions.manage) — the Dueño
+ *      and the agency hold them all; Recepción and Profesional none (they operate the
+ *      agenda but never configure it); a custom role only those it was given.
  * Then the TARGET resource (site/staff/exception) must belong to that client — a forged
  * id from another client is rejected, so there is NO cross-client admin. Soft-delete
  * (deactivate) preserves appointment history.
@@ -97,17 +98,20 @@ export type AdminResult =
 export type PublicContactField = "address" | "publicWhatsapp" | "publicMapsUrl";
 
 /** Steps 1–4. Returns the validated tenantId, or a generic error (never revealing
- * which condition failed — matches the module gate's indistinguishable denials). */
+ * which condition failed — matches the module gate's indistinguishable denials), or
+ * NO_PERMISSION when the login is in its own business but lacks the permission. */
 async function requireSchedulingAdmin(
   clientId: string,
-): Promise<{ ok: true; tenantId: string; /** who is acting — for audit trails (promotion_events) */ userId: string } | { ok: false; error: string }> {
-  const res = await resolveClientModuleContext(clientId, "scheduling");
-  // Editors/Staff can reach the scheduling module but MUST NOT configure it — only the
-  // client OWNER (or the agency) manages sites/services/staff/hours/rules.
-  if (!res.ok || !canManageClient(res.context.scope, clientId)) {
-    return { ok: false, error: "Scheduling isn’t available for this client." };
+  permission: PermissionRequirement,
+): Promise<
+  | { ok: true; tenantId: string; /** who is acting — for audit trails (promotion_events) */ userId: string; scope: AccessScope }
+  | { ok: false; error: string }
+> {
+  const res = await resolveClientModuleContext(clientId, "scheduling", permission);
+  if (!res.ok) {
+    return { ok: false, error: res.forbidden ? NO_PERMISSION : "Scheduling isn’t available for this client." };
   }
-  return { ok: true, tenantId: res.context.scope.tenantId, userId: res.context.scope.userId };
+  return { ok: true, tenantId: res.context.scope.tenantId, userId: res.context.scope.userId, scope: res.context.scope };
 }
 
 /** The target SITE must belong to this client (tenant-scoped). */
@@ -150,7 +154,7 @@ export async function createSiteAction(input: {
   openingHours: WeeklyHours;
   schedulingConfig?: Partial<SchedulingConfig>;
 }): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(input.clientId);
+  const auth = await requireSchedulingAdmin(input.clientId, "settings.sites");
   if (!auth.ok) return auth;
   if (!/^[a-z0-9](?:[a-z0-9-]{0,62}[a-z0-9])?$/.test(input.slug)) {
     return { ok: false, error: "Slug must be lowercase letters, numbers and hyphens." };
@@ -189,8 +193,21 @@ export async function updateSiteAction(
     publicMapsUrl?: string;
   },
 ): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  // One site row, several screens: each field group needs the permission of the screen
+  // that owns it, and the patch is refused unless EVERY touched group is allowed.
+  const groups: PermissionRequirement[] = [];
+  if (patch.slug !== undefined || patch.name !== undefined || patch.address !== undefined || patch.timezone !== undefined || patch.active !== undefined) {
+    groups.push("settings.sites");
+  }
+  if (patch.openingHours !== undefined) groups.push(["settings.sites", "hours.manage"]);
+  if (patch.schedulingConfig !== undefined) groups.push("settings.rules");
+  if (patch.publicWhatsapp !== undefined || patch.publicMapsUrl !== undefined) groups.push(["settings.sites", "booking_page.manage"]);
+  if (groups.length === 0) groups.push("settings.sites");
+  const auth = await requireSchedulingAdmin(clientId, groups[0]);
   if (!auth.ok) return auth;
+  for (const g of groups) {
+    if (!canAny(auth.scope, typeof g === "string" ? [g] : g, clientId)) return { ok: false, error: NO_PERMISSION };
+  }
   if (!(await siteInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
   const contact = validatePublicContact(patch, patch.timezone ?? (await getSiteById(auth.tenantId, id))?.timezone ?? "America/Bogota");
   if (!contact.ok) return { ok: false, error: contact.error, field: contact.field };
@@ -216,7 +233,7 @@ export async function updateSiteAction(
 }
 
 export async function deactivateSiteAction(clientId: string, id: string): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "settings.sites");
   if (!auth.ok) return auth;
   if (!(await siteInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
   const ok = await deactivateSite(auth.tenantId, id);
@@ -227,7 +244,7 @@ export async function deactivateSiteAction(clientId: string, id: string): Promis
 
 /** The inverse of deactivateSiteAction (3a). Owner/admin only, same client scoping. */
 export async function activateSiteAction(clientId: string, id: string): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "settings.sites");
   if (!auth.ok) return auth;
   if (!(await siteInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
   const ok = await reactivateSite(auth.tenantId, id);
@@ -252,7 +269,7 @@ export async function createServiceAction(input: {
    *  behaviour, so a bad value degrades instead of failing a save. */
   category?: string | null;
 }): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(input.clientId);
+  const auth = await requireSchedulingAdmin(input.clientId, "services.manage");
   if (!auth.ok) return auth;
   if (!input.name.trim()) return { ok: false, error: "Name is required." };
   if (!(input.durationMin > 0)) return { ok: false, error: "Duration must be positive." };
@@ -294,7 +311,7 @@ export async function updateServiceAction(
   id: string,
   patch: { name?: string; description?: string; durationMin?: number; price?: number | null; bufferBeforeMin?: number; bufferAfterMin?: number; active?: boolean; featured?: boolean; category?: string | null },
 ): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "services.manage");
   if (!auth.ok) return auth;
   // `category` and `description` are pulled OUT of the spread so raw values never reach the
   // repository unvalidated: category is narrowed to a storable family (or NULL = infer from
@@ -318,7 +335,7 @@ export async function updateServiceAction(
 }
 
 export async function deactivateServiceAction(clientId: string, id: string): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "services.manage");
   if (!auth.ok) return auth;
   const ok = await deactivateService(auth.tenantId, clientId, id);
   if (!ok) return { ok: false, error: "Service not found or already inactive." };
@@ -328,7 +345,7 @@ export async function deactivateServiceAction(clientId: string, id: string): Pro
 
 /** The inverse of deactivateServiceAction (3a). Owner/admin only, same client scoping. */
 export async function activateServiceAction(clientId: string, id: string): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "services.manage");
   if (!auth.ok) return auth;
   const ok = await reactivateService(auth.tenantId, clientId, id);
   if (!ok) return { ok: false, error: "Service not found or already active." };
@@ -342,7 +359,7 @@ export async function setSiteServiceAction(
   serviceId: string,
   active: boolean,
 ): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "services.manage");
   if (!auth.ok) return auth;
   if (!(await siteInClient(auth.tenantId, clientId, siteId))) return { ok: false, error: FOREIGN };
   await setSiteService(auth.tenantId, siteId, serviceId, { active });
@@ -359,7 +376,7 @@ export async function createStaffAction(input: {
   workingHours?: WeeklyHours;
   serviceIds?: string[];
 }): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(input.clientId);
+  const auth = await requireSchedulingAdmin(input.clientId, "team.manage");
   if (!auth.ok) return auth;
   const name = input.name.trim();
   if (!name) return { ok: false, error: "El nombre es obligatorio." };
@@ -405,7 +422,7 @@ export async function updateStaffAction(
     publicBio?: string | null;
   },
 ): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "team.manage");
   if (!auth.ok) return auth;
   const current = await getStaffById(auth.tenantId, id);
   if (!current || !(await siteInClient(auth.tenantId, clientId, current.site_id))) return { ok: false, error: FOREIGN };
@@ -467,7 +484,7 @@ export async function uploadStaffPhotoAction(formData: FormData): Promise<AdminR
   const clientId = String(formData.get("clientId") ?? "");
   const staffId = String(formData.get("staffId") ?? "");
   const file = formData.get("photo");
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "team.manage");
   if (!auth.ok) return auth;
   if (!isR2Configured) return { ok: false, error: "La subida de fotos no está configurada." };
   if (!(file instanceof File)) return { ok: false, error: "Elige una imagen." };
@@ -490,7 +507,7 @@ export async function uploadStaffPhotoAction(formData: FormData): Promise<AdminR
 
 /** Remove the public photo (the page falls back to initials). */
 export async function removeStaffPhotoAction(clientId: string, staffId: string): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "team.manage");
   if (!auth.ok) return auth;
   const current = await getStaffById(auth.tenantId, staffId);
   if (!current || !(await siteInClient(auth.tenantId, clientId, current.site_id))) return { ok: false, error: FOREIGN };
@@ -506,7 +523,7 @@ export async function removeStaffPhotoAction(clientId: string, staffId: string):
 }
 
 export async function deactivateStaffAction(clientId: string, id: string): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "team.manage");
   if (!auth.ok) return auth;
   if (!(await staffInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
   const ok = await deactivateStaff(auth.tenantId, id);
@@ -517,7 +534,7 @@ export async function deactivateStaffAction(clientId: string, id: string): Promi
 
 /** The inverse of deactivateStaffAction (3a). Owner/admin only, same client scoping. */
 export async function activateStaffAction(clientId: string, id: string): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "team.manage");
   if (!auth.ok) return auth;
   if (!(await staffInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
   const ok = await reactivateStaff(auth.tenantId, id);
@@ -545,7 +562,7 @@ export async function addStaffCertificationAction(input: {
   issuedOn?: string | null;
   expiresOn?: string | null;
 }): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(input.clientId);
+  const auth = await requireSchedulingAdmin(input.clientId, "team.manage");
   if (!auth.ok) return auth;
   if (!(await staffInClient(auth.tenantId, input.clientId, input.staffId))) return { ok: false, error: FOREIGN };
   if (!input.name.trim()) return { ok: false, error: "La certificación necesita un nombre." };
@@ -574,7 +591,7 @@ export async function deleteStaffCertificationAction(
   staffId: string,
   id: string,
 ): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "team.manage");
   if (!auth.ok) return auth;
   if (!(await staffInClient(auth.tenantId, clientId, staffId))) return { ok: false, error: FOREIGN };
   const ok = await deleteStaffCertification(auth.tenantId, staffId, id);
@@ -588,7 +605,7 @@ export async function countUpcomingAppointmentsAction(
   kind: "staff" | "service" | "site",
   id: string,
 ): Promise<UpcomingCountResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, kind === "site" ? "settings.sites" : kind === "staff" ? "team.manage" : "services.manage");
   if (!auth.ok) return auth;
   const belongs =
     kind === "site"
@@ -620,7 +637,7 @@ export async function listStaffUpcomingAppointmentsAction(
   clientId: string,
   staffId: string,
 ): Promise<UpcomingListResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "team.manage");
   if (!auth.ok) return auth;
   if (!(await staffInClient(auth.tenantId, clientId, staffId))) return { ok: true, appointments: [] };
   const rows = await listAppointments(auth.tenantId, {
@@ -647,7 +664,7 @@ export async function setStaffServiceAction(
   serviceId: string,
   enabled: boolean,
 ): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, ["team.manage", "services.manage"]);
   if (!auth.ok) return auth;
   if (!(await staffInClient(auth.tenantId, clientId, staffId))) return { ok: false, error: FOREIGN };
   // The service must belong to THIS client (per-client catalogue).
@@ -775,7 +792,7 @@ export async function saveBookingCategoryAction(
   id: string | null,
   input: { name: string; tagline: string; layout: string; sortOrder: number | string; visible: boolean },
 ): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "services.manage");
   if (!auth.ok) return auth;
   const checked = checkCategoryInput(input);
   if (!checked.ok) return { ok: false, error: checked.error };
@@ -797,7 +814,7 @@ export async function saveBookingCategoryAction(
 
 /** Delete a category: its services stay published, just ungrouped. */
 export async function deleteBookingCategoryAction(clientId: string, id: string): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "services.manage");
   if (!auth.ok) return auth;
   const ok = await deleteBookingCategory(auth.tenantId, clientId, id);
   if (!ok) return { ok: false, error: FOREIGN };
@@ -812,7 +829,7 @@ export async function updateServicePresentationAction(
   serviceId: string,
   input: { categoryId: string | null; visible: boolean; sort: number | string; recommended: boolean; includes: string; upgradeServiceId: string | null },
 ): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "services.manage");
   if (!auth.ok) return auth;
   const includes = checkIncludes(input.includes ?? "");
   if (!includes.ok) return { ok: false, error: includes.error };
@@ -841,7 +858,7 @@ export async function uploadServiceImageAction(formData: FormData): Promise<Admi
   const clientId = String(formData.get("clientId") ?? "");
   const serviceId = String(formData.get("serviceId") ?? "");
   const file = formData.get("image");
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "services.manage");
   if (!auth.ok) return auth;
   if (!isR2Configured) return { ok: false, error: "La subida de imágenes no está configurada." };
   if (!(file instanceof File)) return { ok: false, error: "Elige una imagen." };
@@ -862,7 +879,7 @@ export async function uploadServiceImageAction(formData: FormData): Promise<Admi
 }
 
 export async function removeServiceImageAction(clientId: string, serviceId: string): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "services.manage");
   if (!auth.ok) return auth;
   const set = await setServiceImage(auth.tenantId, clientId, serviceId, null);
   if (!set.ok) return { ok: false, error: FOREIGN };
@@ -971,7 +988,7 @@ async function promotionInput(tenantId: string, clientId: string, f: PromotionFo
 
 /** Create (id = null) or edit a promotion. An edit names the version it read. */
 export async function savePromotionAction(clientId: string, id: string | null, version: number | null, form: PromotionForm): Promise<AdminResult & { version?: number }> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "promotions.manage");
   if (!auth.ok) return auth;
   const input = await promotionInput(auth.tenantId, clientId, form);
   if (!input.ok) return { ok: false, error: input.error };
@@ -984,7 +1001,7 @@ export async function savePromotionAction(clientId: string, id: string | null, v
 
 /** Publish, pause, resume or archive (only allowed moves; publishing re-validates). */
 export async function setPromotionStatusAction(clientId: string, id: string, version: number, to: PromotionStatus): Promise<AdminResult & { version?: number }> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "promotions.manage");
   if (!auth.ok) return auth;
   const r = await setPromotionStatus(auth.tenantId, clientId, id, version, to, auth.userId);
   if (r.ok) revalidateAdmin(clientId);
@@ -992,7 +1009,7 @@ export async function setPromotionStatusAction(clientId: string, id: string, ver
 }
 
 export async function duplicatePromotionAction(clientId: string, id: string): Promise<AdminResult & { version?: number }> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "promotions.manage");
   if (!auth.ok) return auth;
   const r = await duplicatePromotion(auth.tenantId, clientId, id, auth.userId);
   if (r.ok) revalidateAdmin(clientId);
@@ -1004,7 +1021,7 @@ export async function listPromotionHistoryAction(
   clientId: string,
   id: string,
 ): Promise<{ ok: true; events: Array<{ type: string; actor: string | null; at: string; version: number; detail: Record<string, unknown> }> } | { ok: false; error: string }> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "promotions.manage");
   if (!auth.ok) return auth;
   const rows = await listPromotionEvents(auth.tenantId, clientId, id);
   return { ok: true, events: rows.map((e) => ({ type: e.event_type, actor: e.actor_name, at: e.created_at.toISOString(), version: e.version, detail: e.detail })) };
@@ -1014,7 +1031,7 @@ export async function uploadPromotionImageAction(formData: FormData): Promise<Ad
   const clientId = String(formData.get("clientId") ?? "");
   const promotionId = String(formData.get("promotionId") ?? "");
   const file = formData.get("image");
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "promotions.manage");
   if (!auth.ok) return auth;
   if (!isR2Configured) return { ok: false, error: "La subida de imágenes no está configurada." };
   if (!(file instanceof File)) return { ok: false, error: "Elige una imagen." };
@@ -1036,7 +1053,7 @@ export async function uploadPromotionImageAction(formData: FormData): Promise<Ad
 }
 
 export async function removePromotionImageAction(clientId: string, promotionId: string): Promise<AdminResult> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "promotions.manage");
   if (!auth.ok) return auth;
   const set = await setPromotionImage(auth.tenantId, clientId, promotionId, null);
   if (!set.ok) return { ok: false, error: FOREIGN };
@@ -1060,7 +1077,7 @@ export async function serviceUpcomingAvailabilityAction(
   clientId: string,
   serviceId: string,
 ): Promise<{ ok: true; sites: Array<{ id: string; name: string; firstDay: string | null }> } | { ok: false; error: string }> {
-  const auth = await requireSchedulingAdmin(clientId);
+  const auth = await requireSchedulingAdmin(clientId, "services.manage");
   if (!auth.ok) return auth;
   if (!(await getServiceById(auth.tenantId, clientId, serviceId))) return { ok: false, error: FOREIGN };
   const now = new Date();

@@ -199,13 +199,14 @@ test('the appearance change did not alter navigation, gating or permissions', ()
   const model = read('lib/sectionNav.ts');
   assert.ok(src.includes('buildSections({'), 'the rail is built from the section model');
   // Module gates.
-  assert.ok(model.includes('general && has("inbox")'), 'Inbox still module-gated');
-  assert.ok(model.includes('general && has("crm")'), 'CRM still module-gated');
+  assert.ok(model.includes('p("inbox.view") && has("inbox")'), 'Inbox still module-gated');
+  assert.ok(model.includes('p("contacts.view") && has("crm")'), 'CRM still module-gated');
   assert.ok(model.includes('has("scheduling") && { id: "calendar"'), 'Scheduling still module-gated');
   // Role gates (client roles): client-admin items behind manage; Módulos stays agency-
   // only; general surfaces behind general (staff excluded).
-  assert.ok(model.includes('const manage = isAgency || (clientRole === "owner" && forOwnClient);'), 'client-admin items gated by role (agency or client owner)');
-  assert.ok(model.includes('const general = isAgency || ((clientRole === "owner" || clientRole === "setter") && forOwnClient);'), 'general surfaces gated (staff excluded)');
+  // Permission gates (roles v1): every page reads the permission its own server gate checks.
+  assert.ok(model.includes('const p = (key: string) => forOwnClient && permissions.includes(key);'), 'pages gated by the login\'s permissions on its own client');
+  assert.ok(model.includes('const sched = (key: string) => p(key) && has("scheduling") && !isDefault;'), 'scheduling settings: permission + module + non-default');
   assert.ok(model.includes('isAgency && !isDefault && { id: "modules"'), 'the default client still hides agency-only Modules');
   assert.ok(src.includes('countEndpoint: sec.id === "inbox" ? `/api/inbox/${clientId}/pending-count` : undefined'), 'the real badge endpoint is intact');
   // And exactly one active treatment still exists.

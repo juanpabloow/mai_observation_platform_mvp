@@ -1,11 +1,10 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getAccessScope, canAccessClient, hasFullAccess } from "./access";
-import { toHeaderView } from "./inboxData";
+import { NO_PERMISSION, can, getAccessScope, type AccessScope } from "./access";
+import { checkInboxAccess, toHeaderView } from "./inboxData";
 import type { InboxHeaderView } from "./inboxView";
 import { getConversationForClient, transitionMode } from "@worker/db/repositories/handoff.js";
-import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 
 /**
  * Inbox agent actions (H-2): take / dismiss / return-to-bot. EVERY action:
@@ -38,8 +37,11 @@ const INBOX_DISABLED = "El inbox está desactivado para este cliente.";
  * (any role). Active human/pending conversations block a disable, so these actions
  * can't race a disable into an active-but-disabled state (the escalation path, which
  * CAN, is separately race-safe via transitionMode's inboxGate). */
-async function inboxEnabled(tenantId: string, clientId: string): Promise<boolean> {
-  return isClientModuleEnabled(tenantId, clientId, "inbox");
+/** The inbox gate for an agent action (inbox.reply), as the message to return — or null. */
+async function inboxDenied(scope: AccessScope, clientId: string): Promise<string | null> {
+  const r = await checkInboxAccess(scope, clientId, "inbox.reply");
+  if (r === "ok") return null;
+  return r === "disabled" ? INBOX_DISABLED : r === "forbidden" ? NO_PERMISSION : FORBIDDEN;
 }
 
 /** Take a bot/pending conversation into human handling (assign to the current user). */
@@ -48,8 +50,8 @@ export async function takeConversationAction(
   conversationId: string,
 ): Promise<InboxActionResult> {
   const scope = await getAccessScope();
-  if (!canAccessClient(scope, clientId)) return { ok: false, error: FORBIDDEN };
-  if (!(await inboxEnabled(scope.tenantId, clientId))) return { ok: false, error: INBOX_DISABLED };
+  const denied = await inboxDenied(scope, clientId);
+  if (denied) return { ok: false, error: denied };
 
   const conv = await getConversationForClient(scope.tenantId, clientId, conversationId);
   if (!conv) return { ok: false, error: NOT_FOUND };
@@ -87,8 +89,8 @@ export async function dismissConversationAction(
   conversationId: string,
 ): Promise<InboxActionResult> {
   const scope = await getAccessScope();
-  if (!canAccessClient(scope, clientId)) return { ok: false, error: FORBIDDEN };
-  if (!(await inboxEnabled(scope.tenantId, clientId))) return { ok: false, error: INBOX_DISABLED };
+  const denied = await inboxDenied(scope, clientId);
+  if (denied) return { ok: false, error: denied };
 
   const conv = await getConversationForClient(scope.tenantId, clientId, conversationId);
   if (!conv) return { ok: false, error: NOT_FOUND };
@@ -130,8 +132,8 @@ export async function returnConversationToBotAction(
   conversationId: string,
 ): Promise<InboxActionResult> {
   const scope = await getAccessScope();
-  if (!canAccessClient(scope, clientId)) return { ok: false, error: FORBIDDEN };
-  if (!(await inboxEnabled(scope.tenantId, clientId))) return { ok: false, error: INBOX_DISABLED };
+  const denied = await inboxDenied(scope, clientId);
+  if (denied) return { ok: false, error: denied };
 
   const conv = await getConversationForClient(scope.tenantId, clientId, conversationId);
   if (!conv) return { ok: false, error: NOT_FOUND };
@@ -145,7 +147,7 @@ export async function returnConversationToBotAction(
   }
 
   const isAssigned = conv.assigned_agent_user_id === scope.userId;
-  if (!isAssigned && !hasFullAccess(scope)) {
+  if (!isAssigned && !can(scope, "inbox.supervise", clientId)) {
     return {
       ok: false,
       error: "Solo la persona asignada o un administrador puede devolverla al bot.",

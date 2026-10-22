@@ -74,7 +74,8 @@ test('ModuleHeader: the two-row phone layout is opt-in; other modules keep their
   const toolbar = read('components/contacts/ContactsToolbar.tsx');
   assert.ok(toolbar.includes('max-lg:h-[44px]') && toolbar.includes('max-lg:size-[44px]'), 'nested filter, overflow and search controls retain touch targets through tablet');
   const page = read('app/clients/[clientId]/contacts/page.tsx');
-  assert.ok(page.includes('primary={<NewContactButton />}'), 'Contacts opts in');
+  // (roles v1: the primary is only offered with contacts.edit)
+  assert.ok(page.includes('primary={canEdit ? <NewContactButton /> : undefined}'), 'Contacts opts in');
   for (const rel of ['app/clients/[clientId]/scheduling/agenda/page.tsx', 'components/scheduling/staff/StaffHeaderCard.tsx']) {
     assert.ok(!/<ModuleHeader[^>]*\bprimary=/.test(read(rel)), `${rel} does not opt in`);
   }

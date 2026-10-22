@@ -79,7 +79,7 @@ test('sidebar: Contactos is its own module-gated section — NOT under Agenda', 
   const contacts = model.indexOf('contacts: [');
   const agenda = model.indexOf('agenda: [');
   assert.ok(contacts > 0 && agenda > contacts, 'Contactos is a separate section, before Agenda');
-  assert.ok(model.includes('general && has("crm") && { id: "contacts"'), 'Contactos only renders when the crm module is enabled');
+  assert.ok(model.includes('p("contacts.view") && has("crm") && { id: "contacts"'), 'Contactos only renders when the crm module is enabled');
 });
 
 test('shell: chrome geometry is fixed px, so it does not ride the 90% rem scale', () => {
@@ -162,7 +162,9 @@ test('sidebar: the footer row is a GRID, so the label cannot overlap the avatar'
   assert.ok(src.includes('rounded-full bg-sidebar-tile text-[11px] font-semibold text-sidebar-fg'), 'the rail disc is a neutral tile');
   assert.ok(!src.includes('avatarColor(seed)'), 'and is not hashed from an identity colour');
   // Its second line says who this is in the business's words (Agencia / Dueño / Recepción / Profesional · cliente).
-  assert.ok(src.includes('const ACCESS_LABEL: Record<string, string> = { agency: "Agencia", owner: "Dueño", setter: "Recepción", staff: "Profesional" };'), 'access in Spanish');
+  // The role name comes from the scope (system label or a custom role's name).
+  assert.ok(src.includes('const AGENCY_LABEL = "Agencia";'), 'agency in Spanish');
+  assert.ok(src.includes('{[account.accessLabel ?? AGENCY_LABEL, account.clientLabel]'), 'role name · client');
 });
 
 test('contacts: the panel gutter is actually VISIBLE against the canvas', () => {
@@ -479,7 +481,7 @@ test('contacts: every facet is validated server-side before it reaches SQL', () 
 
 test('contacts: the list, the summary and the facets all carry the VALIDATED clientId', () => {
   const src = read(CONTACTS_PAGE);
-  assert.ok(src.includes('requireClientModulePage(clientId, "crm")'), 'the crm module gate still guards the page');
+  assert.ok(src.includes('requireClientModulePage(clientId, "crm", "contacts.view")'), 'the crm module gate still guards the page');
   assert.ok(src.includes('clientId: client.id'), 'queries pass the validated client explicitly');
   assert.ok(src.includes('summarizeContacts(scope.tenantId, filters)'), 'the summary uses the SAME filter set as the list');
 });

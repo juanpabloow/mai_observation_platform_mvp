@@ -2,7 +2,7 @@ import 'server-only';
 import { MeetingsApiError } from '@worker/meetings/errors.js';
 import { isClientModuleEnabled } from '@worker/db/repositories/clientModules.js';
 import { getClientById } from '@worker/db/repositories/clients.js';
-import { getAccessScope, canAccessMeetings, type Role } from './access';
+import { getAccessScope, can, type Role } from './access';
 
 /**
  * El ámbito de un llamador CON SESIÓN, con el entitlement del módulo.
@@ -57,7 +57,7 @@ export async function resolveAppScope(clientId: string): Promise<AppScopeResolut
     throw notFound();
   }
   const scope = await getAccessScope();
-  if (!canAccessMeetings(scope, clientId)) throw notFound();
+  if (!can(scope, 'meetings.view', clientId)) throw notFound();
 
   const client = await getClientById({ tenantId: scope.tenantId, clientId });
   // `is_default` se rechaza ANTES del módulo: una fila de client_modules para el

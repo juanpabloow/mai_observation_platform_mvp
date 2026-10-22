@@ -1,7 +1,7 @@
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
-import { canAccessMeetings } from "@/lib/access";
+import { can } from "@/lib/access";
 import { MeetingWorkspace } from "@/components/reuniones/MeetingWorkspace";
 import { MeetingDeletionProvider } from "@/components/reuniones/MeetingDeletion";
 import {
@@ -30,9 +30,8 @@ export default async function MeetingPage({
 }) {
   await connection();
   const { clientId, meetingId } = await params;
-  const { scope, client } = await requireClientModulePage(clientId, "meetings");
+  const { scope, client } = await requireClientModulePage(clientId, "meetings", "meetings.view");
   // Agency or this client's owner only — recepción gets the same 404 (lib/access.ts).
-  if (!canAccessMeetings(scope, clientId)) notFound();
 
   const meeting = await getMeeting({ tenantId: scope.tenantId, clientId: client.id }, meetingId);
   if (!meeting) notFound();
@@ -73,7 +72,7 @@ export default async function MeetingPage({
     // El mismo proveedor que el listado, con el mismo diálogo dentro.
     <MeetingDeletionProvider
       clientId={client.id}
-      canDelete={scope.role === "owner" || scope.role === "admin"}
+      canDelete={can(scope, "meetings.manage", clientId)}
       // `detail`: aquí no hay fila que retirar, así que al aceptar el 202 se
       // vuelve al listado. Quedarse dejaría la pantalla mirando una reunión que
       // ya no existe, y el primer refresco la convertiría en un 404.
@@ -90,7 +89,7 @@ export default async function MeetingPage({
       // Editar y restaurar plantillas es de owner/admin. Se decide en el
       // SERVIDOR y baja como dato: ocultar los botones es cortesía, la ruta lo
       // vuelve a exigir.
-      canEditTemplates={scope.role === "owner" || scope.role === "admin"}
+      canEditTemplates={can(scope, "meetings.manage", clientId)}
       backHref={`/clients/${clientId}/reuniones`}
       audioState={audioState}
       // La URL firmada NO se resuelve en el servidor y se manda al cliente: se

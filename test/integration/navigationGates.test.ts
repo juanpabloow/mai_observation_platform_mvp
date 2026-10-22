@@ -9,6 +9,7 @@ import { query } from '../../src/db/client.js';
 import { setClientModuleEnabled } from '../../src/db/repositories/clientModules.js';
 import { cleanupTenant, closeDb, seedMember, seedScenario } from './fixtures.js';
 import { buildSections, type NavContext, type PageId } from '../../web/lib/sectionNav.js';
+import { AGENCY_PERMISSIONS, SYSTEM_ROLE_PERMISSIONS } from '../../web/lib/permissions/catalog.js';
 
 /**
  * NAVIGATION ↔ SERVER GATES, against a real local test database. Every page the sidebar
@@ -168,19 +169,27 @@ test('every role × module combination: shown ⇔ the server gate opens, and leg
   const other = await seedScenario();
   try {
     const users: Array<{ who: string; id: string; nav: Omit<NavContext, 'clientId' | 'modules' | 'defaultClientId'> }> = [
-      { who: 'agency', id: await seedMember(s.tenantId, { role: 'owner' }), nav: { isAgency: true, clientRole: null, memberClientId: null } },
-      { who: 'admin', id: await seedMember(s.tenantId, { role: 'admin' }), nav: { isAgency: true, clientRole: null, memberClientId: null } },
-      { who: 'owner', id: await seedMember(s.tenantId, { role: 'member', clientId: s.clientId, clientRole: 'owner' }), nav: { isAgency: false, clientRole: 'owner', memberClientId: s.clientId } },
-      { who: 'setter', id: await seedMember(s.tenantId, { role: 'member', clientId: s.clientId, clientRole: 'setter' }), nav: { isAgency: false, clientRole: 'setter', memberClientId: s.clientId } },
-      { who: 'owner of B', id: await seedMember(s.tenantId, { role: 'member', clientId: s.otherClientId, clientRole: 'owner' }), nav: { isAgency: false, clientRole: 'owner', memberClientId: s.otherClientId } },
+      { who: 'agency', id: await seedMember(s.tenantId, { role: 'owner' }), nav: { isAgency: true, permissions: [...AGENCY_PERMISSIONS], staffBound: false, memberClientId: null } },
+      { who: 'admin', id: await seedMember(s.tenantId, { role: 'admin' }), nav: { isAgency: true, permissions: [...AGENCY_PERMISSIONS], staffBound: false, memberClientId: null } },
+      { who: 'owner', id: await seedMember(s.tenantId, { role: 'member', clientId: s.clientId, clientRole: 'owner' }), nav: { isAgency: false, permissions: [...SYSTEM_ROLE_PERMISSIONS.owner], staffBound: false, memberClientId: s.clientId } },
+      { who: 'setter', id: await seedMember(s.tenantId, { role: 'member', clientId: s.clientId, clientRole: 'setter' }), nav: { isAgency: false, permissions: [...SYSTEM_ROLE_PERMISSIONS.setter], staffBound: false, memberClientId: s.clientId } },
+      { who: 'owner of B', id: await seedMember(s.tenantId, { role: 'member', clientId: s.otherClientId, clientRole: 'owner' }), nav: { isAgency: false, permissions: [...SYSTEM_ROLE_PERMISSIONS.owner], staffBound: false, memberClientId: s.otherClientId } },
     ];
+    // A CUSTOM role (roles v1): «Marketing y agenda» — the rail must match the server gates
+    // for it too, page by page, in every module combination.
+    const customPerms = ['campaigns.view', 'campaigns.manage', 'analytics.view', 'agenda.view', 'agenda.book', 'hours.manage', 'contacts.view', 'access.users.view'];
+    const role = (await query<{ id: string }>(`INSERT INTO access_roles (tenant_id, client_id, name) VALUES ($1, $2, 'Marketing y agenda') RETURNING id`, [s.tenantId, s.clientId])).rows[0].id;
+    await query(`INSERT INTO access_role_permissions (role_id, permission_key) SELECT $1, unnest($2::text[])`, [role, customPerms]);
+    const customUser = await seedMember(s.tenantId, { role: 'member', clientId: s.clientId, clientRole: 'setter' });
+    await query(`UPDATE tenant_members SET client_role = 'custom', access_role_id = $3 WHERE tenant_id = $1 AND user_id = $2`, [s.tenantId, customUser, role]);
+    users.push({ who: 'custom role', id: customUser, nav: { isAgency: false, permissions: customPerms, staffBound: false, memberClientId: s.clientId } });
     const staffUser = randomUUID();
     await query(`INSERT INTO "user" (id, name, email, "emailVerified") VALUES ($1, 'Staff', $2, true)`, [staffUser, `${staffUser.slice(0, 8)}@test.local`]);
     await query(
       `INSERT INTO tenant_members (tenant_id, user_id, role, member_client_id, client_role, scheduling_site_id, scheduling_staff_id) VALUES ($1, $2, 'member', $3, 'staff', $4, $5)`,
       [s.tenantId, staffUser, s.clientId, s.siteId, s.staffA],
     );
-    users.push({ who: 'staff', id: staffUser, nav: { isAgency: false, clientRole: 'staff', memberClientId: s.clientId } });
+    users.push({ who: 'staff', id: staffUser, nav: { isAgency: false, permissions: [...SYSTEM_ROLE_PERMISSIONS.staff], staffBound: true, memberClientId: s.clientId } });
     const foreignAgency = await seedMember(other.tenantId, { role: 'owner' });
 
     const mismatches: string[] = [];

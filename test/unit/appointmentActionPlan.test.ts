@@ -70,7 +70,7 @@ test('a login that cannot operate the agenda gets nothing, whatever the per-appo
 test('canModify comes from the SERVER, with exactly the predicates of the appointment gate', () => {
   const page = read('web/app/clients/[clientId]/scheduling/agenda/page.tsx');
   assert.ok(
-    page.includes('canOperateScheduling(scope) && canAccessSchedulingSite(scope, a.site_id) && canAccessSchedulingStaff(scope, a.staff_id)'),
+    page.includes('canBook && canAccessSchedulingSite(scope, a.site_id) && canAccessSchedulingStaff(scope, a.staff_id)'),
     'the page computes can_modify per appointment from the real access predicates',
   );
   const actions = read('web/lib/schedulingActions.ts');
@@ -78,9 +78,9 @@ test('canModify comes from the SERVER, with exactly the predicates of the appoin
   for (const p of ['canAccessSchedulingSite(ctx.scope, appointment.site_id)', 'canAccessSchedulingStaff(ctx.scope, appointment.staff_id)']) {
     assert.ok(gate.includes(p), `the server gate still checks ${p} — the UI flag mirrors it`);
   }
-  assert.ok(actions.includes('if (!resolved.ok || !canOperateScheduling(resolved.context.scope)) return null;'), 'and canOperateScheduling');
+  assert.ok(actions.includes('return gateClientModule(clientId, "scheduling", permission, GENERIC_GATE);'), 'and the agenda permission (agenda.book for writes)');
   // Every write and the activity read still go through that gate (the UI hides; the server decides).
-  assert.ok(/async function transition\([\s\S]*?const gated = await gateAppointment\(clientId, appointmentId\);/.test(actions), 'state changes are gated');
+  assert.ok(/async function transition\([\s\S]*?const gated = await gateAppointment\(clientId, appointmentId, "agenda\.book"\);/.test(actions), 'state changes are gated (agenda.book)');
   assert.ok(/export async function rescheduleAppointmentAction\([\s\S]*?gateAppointment\(/.test(actions), 'reschedule is gated');
   assert.ok(/export async function listAppointmentActivityAction\([\s\S]*?gateAppointment\(/.test(actions), 'the activity read is gated');
 });

@@ -1,6 +1,6 @@
 import { headers } from "next/headers";
 import { isChromelessPath } from "@/lib/shellChrome";
-import { getSessionScope } from "@/lib/access";
+import { getSessionScope, isSchedulingStaff } from "@/lib/access";
 import { getServerSession } from "@/lib/session";
 import { buildEnabledModulesMap } from "@/lib/enabledModulesMap";
 import { getClientById, getDefaultClientForTenant } from "@worker/db/repositories/clients.js";
@@ -89,7 +89,9 @@ export async function AppSidebarServer() {
       email={email}
       role={scope.role}
       clientLabel={clientLabel}
-      clientRole={scope.clientRole}
+      roleLabel={scope.roleLabel}
+      permissions={[...scope.permissions]}
+      staffBound={isSchedulingStaff(scope)}
     />
   );
 }

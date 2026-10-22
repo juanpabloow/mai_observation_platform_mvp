@@ -1,9 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { memberLandingPath } from "./landing";
 import { getServerSession } from "./session";
-import { getAccessScope, hasFullAccess, isClientOwner, requireFullAccessForAction, type AccessScope } from "./access";
+import { getAccessScope, hasFullAccess, requireFullAccessForAction } from "./access";
+import { canGrantRole, roleRefOf, type RoleRef } from "./permissions/delegation";
+import { SYSTEM_ROLE_LABEL, isSystemRoleKey } from "./permissions/catalog";
+import { getAccessRole } from "@worker/db/repositories/accessRoles.js";
 import { getClientById } from "@worker/db/repositories/clients.js";
 import {
   getMembershipForUser,
@@ -38,35 +40,13 @@ function roleLabel(
   role: InvitationRole,
   clientName: string | null,
   clientRole: ClientRole | null = null,
+  customRoleName: string | null = null,
 ): string {
   if (clientRole === "owner") return `the owner of ${clientName ?? "a client"}`;
   if (clientRole === "staff") return `staff at ${clientName ?? "a client"}`;
   if (clientRole === "setter") return `a setter at ${clientName ?? "a client"}`;
+  if (clientRole === "custom" && customRoleName) return `«${customRoleName}» at ${clientName ?? "a client"}`;
   return role === "member" ? `a member of ${clientName ?? "a client"}` : "an admin";
-}
-
-/**
- * ESCALATION GATE — may `scope` grant `clientRole` for `clientId`? The security core:
- *   - the AGENCY (tenant owner/admin) may grant any client role for any of their clients;
- *   - a CLIENT OWNER may grant editor/staff for THEIR client ONLY — never another Owner,
- *     never another client, never a tenant role. Creating a Client Owner is reserved to
- *     the agency, so an account takeover can't propagate itself.
- *   - Editors and Staff may grant nothing.
- * Deny-by-default: anything not explicitly permitted is refused.
- */
-function canGrantClientRole(
-  scope: AccessScope,
-  clientId: string,
-  clientRole: ClientRole,
-): { ok: true } | { ok: false; error: string } {
-  if (hasFullAccess(scope)) return { ok: true };
-  if (isClientOwner(scope, clientId)) {
-    if (clientRole === "owner") {
-      return { ok: false, error: "Only the agency can add another Owner to this client." };
-    }
-    return { ok: true }; // editor or staff, own client
-  }
-  return { ok: false, error: "You don't have permission to invite people to this client." };
 }
 
 function inviteEmailHtml(params: {
@@ -75,9 +55,10 @@ function inviteEmailHtml(params: {
   role: InvitationRole;
   clientName: string | null;
   clientRole?: ClientRole | null;
+  customRoleName?: string | null;
   acceptUrl: string;
 }): string {
-  const what = roleLabel(params.role, params.clientName, params.clientRole ?? null);
+  const what = roleLabel(params.role, params.clientName, params.clientRole ?? null, params.customRoleName ?? null);
   // Inline styles only (email clients strip <style>); plain, legible, no tracking.
   return `<!doctype html><html><body style="margin:0;background:#f5f5f4;padding:24px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c1917">
   <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
@@ -118,12 +99,13 @@ export async function createInvitationAction(input: {
   role: InvitationRole;
   memberClientId?: string | null;
   clientRole?: ClientRole | null;
+  accessRoleId?: string | null;
   schedulingSiteId?: string | null;
   schedulingStaffId?: string | null;
 }): Promise<{ ok: boolean; error?: string; emailSent?: boolean; acceptUrl?: string }> {
   // Any authenticated user reaches here; the capability to invite THIS role for THIS
-  // client is enforced below (agency for admins / any client role; a Client Owner for
-  // editor+staff of their own client). Never trust the surface that called us.
+  // client is enforced below (agency for admins; access.users.manage + the delegation
+  // rules of ./permissions/delegation.ts for a business role). Never trust the caller.
   const scope = await getAccessScope();
 
   const email = normalizeEmail(input.email ?? "");
@@ -142,19 +124,34 @@ export async function createInvitationAction(input: {
   let memberClientId: string | null = null;
   let clientName: string | null = null;
   let clientRole: ClientRole | null = null;
+  let accessRoleId: string | null = null;
+  let customRoleName: string | null = null;
   let schedulingSiteId: string | null = null;
   let schedulingStaffId: string | null = null;
+  let grantedRole: RoleRef | null = null;
   if (input.role === "member") {
     const clientId = input.memberClientId ?? null;
     if (!clientId) return { ok: false, error: "A member invitation must include a client." };
 
     const requestedRole = input.clientRole ?? null;
-    if (requestedRole !== "owner" && requestedRole !== "setter" && requestedRole !== "staff") {
-      return { ok: false, error: "Choose a valid role (Owner, Setter or Staff)." };
+    if (!isSystemRoleKey(requestedRole) && requestedRole !== "custom") {
+      return { ok: false, error: "Elige un rol válido." };
     }
-    // ESCALATION GATE — before any lookup: may the ACTOR grant this exact role for this
-    // exact client? (Deny-by-default; a Client Owner can't create Owners or reach other clients.)
-    const grant = canGrantClientRole(scope, clientId, requestedRole);
+    // The role being offered — a custom one re-read from THIS tenant + business (never
+    // the browser's idea of its permissions).
+    if (requestedRole === "custom") {
+      if (!input.accessRoleId) return { ok: false, error: "Elige un rol." };
+      const row = await getAccessRole(scope.tenantId, clientId, input.accessRoleId);
+      if (!row) return { ok: false, error: "Ese rol no existe en este negocio." };
+      grantedRole = roleRefOf({ client_role: "custom", access_role_id: row.id, role_permissions: row.permissions });
+      accessRoleId = row.id;
+      customRoleName = row.name;
+    } else {
+      grantedRole = { kind: "system", key: requestedRole };
+    }
+    // ESCALATION GATE: may the ACTOR grant this exact role for this exact client?
+    // (Deny-by-default; nobody hands out more than they hold, only the agency mints a Dueño.)
+    const grant = grantedRole ? canGrantRole(scope, clientId, grantedRole) : { ok: false as const, error: "Elige un rol válido." };
     if (!grant.ok) return { ok: false, error: grant.error };
 
     const client = await getClientById({ tenantId: scope.tenantId, clientId });
@@ -194,11 +191,29 @@ export async function createInvitationAction(input: {
       role: input.role,
       memberClientId,
       clientRole,
+      accessRoleId,
       schedulingSiteId,
       schedulingStaffId,
       tokenHash,
       invitedBy: scope.userId,
       expiresAt,
+      audit: {
+        tenantId: scope.tenantId,
+        clientId: memberClientId,
+        actorUserId: scope.userId,
+        actorEmail: (await getServerSession())?.user?.email ?? null,
+        action: "invitation.created",
+        targetType: "invitation",
+        targetLabel: email,
+        changes: {
+          role: input.role,
+          ...(grantedRole
+            ? grantedRole.kind === "system"
+              ? { clientRole: grantedRole.key, label: SYSTEM_ROLE_LABEL[grantedRole.key] }
+              : { clientRole: "custom", accessRoleId, label: customRoleName }
+            : {}),
+        },
+      },
     });
   } catch (error) {
     if ((error as { code?: string }).code === "23505" && schedulingStaffId) {
@@ -222,6 +237,7 @@ export async function createInvitationAction(input: {
       role: input.role,
       clientName,
       clientRole,
+      customRoleName,
       acceptUrl,
     }),
   });
@@ -299,10 +315,9 @@ export async function acceptInvitationAction(
 
   // The same landing the server bounce uses (lib/landing.ts): staff → agenda, setter →
   // inbox, owner → Analytics. A setter used to land on Analytics, which 404s for them.
-  const redirectTo =
-    invite.role === "member" && invite.member_client_id
-      ? memberLandingPath(invite.member_client_id, invite.client_role ?? null)
-      : "/";
+  // "/" bounces a member to the first page its role opens (access.ts memberLandingHref),
+  // computed from the membership just created — one rule for every role, custom included.
+  const redirectTo = "/";
   return { ok: true, redirectTo };
 }
 
@@ -322,15 +337,39 @@ export async function revokeInvitationAction(
   invitationId: string,
 ): Promise<{ ok: boolean }> {
   const scope = await getAccessScope();
+  const invites = await listInvitationsForTenant(scope.tenantId);
+  const target = invites.find((i) => i.id === invitationId);
+  if (!target) return { ok: false };
   if (!hasFullAccess(scope)) {
-    if (scope.clientRole !== "owner" || !scope.memberClientId) return { ok: false };
-    const invites = await listInvitationsForTenant(scope.tenantId);
-    const target = invites.find((i) => i.id === invitationId);
-    if (!target || target.role !== "member" || target.member_client_id !== scope.memberClientId) {
+    // A business member revokes only a member invite to ITS business, for a role it
+    // could itself grant (access.users.manage + the delegation rules).
+    if (target.role !== "member" || !target.member_client_id || target.member_client_id !== scope.memberClientId) {
       return { ok: false };
     }
+    let offered: RoleRef | null = null;
+    if (target.client_role === "custom" && target.access_role_id) {
+      const row = await getAccessRole(scope.tenantId, target.member_client_id, target.access_role_id);
+      offered = row ? roleRefOf({ client_role: "custom", access_role_id: row.id, role_permissions: row.permissions }) : null;
+    } else {
+      offered = roleRefOf({ client_role: target.client_role });
+    }
+    if (!offered || !canGrantRole(scope, target.member_client_id, offered).ok) return { ok: false };
   }
-  const ok = await revokeInvitation({ tenantId: scope.tenantId, invitationId });
+  const ok = await revokeInvitation({
+    tenantId: scope.tenantId,
+    invitationId,
+    audit: {
+      tenantId: scope.tenantId,
+      clientId: target.member_client_id,
+      actorUserId: scope.userId,
+      actorEmail: (await getServerSession())?.user?.email ?? null,
+      action: "invitation.revoked",
+      targetType: "invitation",
+      targetId: invitationId,
+      targetLabel: target.email,
+      changes: { clientRole: target.client_role, accessRoleId: target.access_role_id },
+    },
+  });
   revalidatePath("/settings/team");
   if (scope.memberClientId) revalidatePath(`/clients/${scope.memberClientId}/team`);
   return { ok };

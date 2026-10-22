@@ -589,14 +589,15 @@ function Avatar({ initial }: { initial: string }) {
 }
 
 /** Who is signed in, in the business's words (the footer's second line). */
-const ACCESS_LABEL: Record<string, string> = { agency: "Agencia", owner: "Dueño", setter: "Recepción", staff: "Profesional" };
+const AGENCY_LABEL = "Agencia";
 
 interface Account {
   /** Display name — the footer's primary label (an email is a fallback, not a label). */
   name: string | null;
   email: string;
   role: "owner" | "admin" | "member";
-  accessLabel: "owner" | "setter" | "staff" | null;
+  /** The login's role name (system or custom) — null for the agency. */
+  accessLabel: string | null;
   clientLabel: string | null;
   canSwitchClients: boolean;
 }
@@ -849,7 +850,7 @@ function RailBody({
               <span className="flex min-w-0 flex-col overflow-hidden">
                 <span className="truncate text-[13px] font-medium leading-tight text-sidebar-fg">{label}</span>
                 <span className="truncate text-[11.5px] leading-tight text-sidebar-section">
-                  {[ACCESS_LABEL[account.accessLabel ?? "agency"], account.clientLabel].filter(Boolean).join(" · ")}
+                  {[account.accessLabel ?? AGENCY_LABEL, account.clientLabel].filter(Boolean).join(" · ")}
                 </span>
               </span>
               {/* The disclosure caret (design) — the footer opens the account menu. */}
@@ -915,7 +916,9 @@ export function AppSidebar({
   email,
   role,
   clientLabel,
-  clientRole,
+  roleLabel,
+  permissions,
+  staffBound,
 }: {
   /** Display name for the account footer; falls back to the email when absent. */
   name: string | null;
@@ -931,8 +934,12 @@ export function AppSidebar({
   email: string;
   role: "owner" | "admin" | "member";
   clientLabel: string | null;
-  /** The client-level role (owner/setter/staff) for a member; null for the agency. */
-  clientRole: "owner" | "setter" | "staff" | null;
+  /** The member's role name (Dueño, Recepción, Profesional or a custom role); null for the agency. */
+  roleLabel: string | null;
+  /** The login's permission keys (server-resolved) — the rail shows only what they open. */
+  permissions: string[];
+  /** A professional login (bound to one staff resource). */
+  staffBound: boolean;
 }) {
   const pathname = usePathname();
   const { collapsed, mobileOpen, setMobileOpen, setCollapsed } = useSidebar();
@@ -965,12 +972,12 @@ export function AppSidebar({
   const isMember = memberClientId !== null;
   // Brand target: the Hub for owner/admin; a member has no Hub access, so their brand
   // links to their own landing — the same rule as the server bounce (lib/landing.ts).
-  const homeHref = memberClientId ? memberLandingPath(memberClientId, clientRole) : "/";
+  const homeHref = memberClientId ? memberLandingPath(memberClientId, { permissions, staffBound }) : "/";
   const account: Account = {
     name,
     email,
     role,
-    accessLabel: clientRole,
+    accessLabel: roleLabel,
     clientLabel,
     canSwitchClients: memberClientId === null,
   };
@@ -990,7 +997,8 @@ export function AppSidebar({
       clientId,
       modules: enabledModules[clientId] ?? [],
       isAgency: !isMember,
-      clientRole,
+      permissions,
+      staffBound,
       memberClientId,
       defaultClientId,
       workflowScope: scopeFor(clientId),
@@ -1037,35 +1045,37 @@ export function AppSidebar({
     }
   } else if (isMember) {
     // A member landed OFF their client path (e.g. root) — a small stand-in until they
-    // navigate in. Staff → agenda; SETTER → inbox (never insights); owner → Dashboard de valor.
+    // navigate in: the pages its permissions open (a professional login: its agenda only).
     const m = (p: string) => `/clients/${memberClientId}${p}`;
     const memberModules = enabledModules[memberClientId] ?? [];
-    const items: NavItem[] =
-      clientRole === "staff"
-        ? [{ key: "agenda", label: "Mi agenda", href: m("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(m("/scheduling")) }]
-        : clientRole === "setter"
-          ? memberModules.includes("inbox")
-            ? [{ key: "inbox", label: "Inbox", href: m("/inbox"), icon: Icon.inbox, active: pathname.startsWith(m("/inbox")), countEndpoint: `/api/inbox/${memberClientId}/pending-count` }]
-            : []
-          : [{ key: "analytics", label: "Dashboard de valor", href: m("/analytics"), icon: Icon.overview, active: false }];
-    if (clientRole !== "staff" && memberModules.includes("crm")) {
-      items.push({ key: "contacts", label: "Contactos", href: m("/contacts"), icon: Icon.contacts, active: pathname.startsWith(m("/contacts")) });
-    }
-    if (clientRole !== "staff" && memberModules.includes("scheduling")) {
-      items.push({ key: "agenda", label: "Agenda", href: m("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(m("/scheduling")) });
-    }
-    if (clientRole !== "staff" && memberModules.includes("catalog")) {
-      items.push({ key: "catalog", label: "Productos", href: m("/catalog"), icon: Icon.catalog, active: pathname.startsWith(m("/catalog")) });
-    }
-    if (clientRole !== "staff" && memberModules.includes("campaigns")) {
-      items.push({
-        key: "campaigns",
-        label: "Campañas",
-        href: m("/campaigns"),
-        icon: Icon.campaigns,
-        active: pathname.startsWith(m("/campaigns")),
-        badge: adCounts[memberClientId] ?? 0,
-      });
+    const may = (k: string) => permissions.includes(k);
+    const items: NavItem[] = [];
+    if (staffBound) {
+      if (may("agenda.view")) items.push({ key: "agenda", label: "Mi agenda", href: m("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(m("/scheduling")) });
+    } else {
+      if (may("analytics.view")) items.push({ key: "analytics", label: "Dashboard de valor", href: m("/analytics"), icon: Icon.overview, active: false });
+      if (may("inbox.view") && memberModules.includes("inbox")) {
+        items.push({ key: "inbox", label: "Inbox", href: m("/inbox"), icon: Icon.inbox, active: pathname.startsWith(m("/inbox")), countEndpoint: `/api/inbox/${memberClientId}/pending-count` });
+      }
+      if (may("contacts.view") && memberModules.includes("crm")) {
+        items.push({ key: "contacts", label: "Contactos", href: m("/contacts"), icon: Icon.contacts, active: pathname.startsWith(m("/contacts")) });
+      }
+      if (may("agenda.view") && memberModules.includes("scheduling")) {
+        items.push({ key: "agenda", label: "Agenda", href: m("/scheduling/agenda"), icon: Icon.agenda, active: pathname.startsWith(m("/scheduling")) });
+      }
+      if (may("products.view") && memberModules.includes("catalog")) {
+        items.push({ key: "catalog", label: "Productos", href: m("/catalog"), icon: Icon.catalog, active: pathname.startsWith(m("/catalog")) });
+      }
+      if (may("campaigns.view") && memberModules.includes("campaigns")) {
+        items.push({
+          key: "campaigns",
+          label: "Campañas",
+          href: m("/campaigns"),
+          icon: Icon.campaigns,
+          active: pathname.startsWith(m("/campaigns")),
+          badge: adCounts[memberClientId] ?? 0,
+        });
+      }
     }
     sections = [{ label: "Tu negocio", entries: links(items) }];
   } else {

@@ -1,6 +1,6 @@
 import { headers } from "next/headers";
 import { getServerSession } from "@/lib/session";
-import { canSeeWorkflowInsights, getSessionScope } from "@/lib/access";
+import { getSessionScope } from "@/lib/access";
 import { listClientsForTenant } from "@worker/db/repositories/clients.js";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { HeaderBar, type HeaderClient, type HeaderWorkflow } from "./HeaderBar";
@@ -44,9 +44,9 @@ export async function AppHeader() {
   const memberClientId = scope.memberClientId;
   const visibleClients = memberClientId ? clients.filter((c) => c.id === memberClientId) : clients;
   // Only logins that can see workflow INSIGHTS get the workflow switcher (it scopes
-  // executions/analytics and offers "All workflows"). Staff and Setter have no workflow
-  // surfaces, so their switcher is empty and "All workflows" never appears for them.
-  const visibleWorkflows = !canSeeWorkflowInsights(scope)
+  // executions/analytics and offers "All workflows"): automations.view or analytics.view.
+  // Recepción and professional logins have neither, so "All workflows" never appears.
+  const visibleWorkflows = !(scope.permissions.has("automations.view") || scope.permissions.has("analytics.view"))
     ? []
     : memberClientId
       ? workflows.filter((w) => w.client_id === memberClientId)

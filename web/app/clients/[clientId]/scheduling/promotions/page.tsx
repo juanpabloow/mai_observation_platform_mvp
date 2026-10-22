@@ -1,6 +1,5 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
-import { canManageClient } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { loadSchedulingSettings } from "@/lib/schedulingSettingsData";
 import { SchedulingSettings } from "@/components/scheduling/AdminPanel";
@@ -20,8 +19,7 @@ export default async function SchedulingPromotionsPage({
 }) {
   await connection();
   const { clientId } = await params;
-  const { scope, client } = await requireClientModulePage(clientId, "scheduling");
-  if (!canManageClient(scope, clientId)) notFound();
+  const { scope, client } = await requireClientModulePage(clientId, "scheduling", "promotions.manage");
   const data = await loadSchedulingSettings(scope.tenantId, client);
   return <SchedulingSettings page="promotions" {...data} />;
 }

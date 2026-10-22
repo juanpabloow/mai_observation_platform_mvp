@@ -1,7 +1,8 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { getAccessScope, canAccessClient } from "./access";
+import { getAccessScope, NO_PERMISSION } from "./access";
+import { checkInboxAccess } from "./inboxData";
 import { toHeaderView } from "./inboxData";
 import { sendToWebhook } from "./sendToWebhook";
 import type { InboxMessageView, SendActionResult } from "./inboxView";
@@ -14,7 +15,6 @@ import {
   type InboxConversationDetail,
 } from "@worker/db/repositories/handoff.js";
 import { getWebhookForWorkflow, setDeliveryResult } from "@worker/db/repositories/webhooks.js";
-import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 
 /**
  * The outbound SEND pipeline (composer → workflow), H-3 (contract §5 Exchange 4).
@@ -36,12 +36,14 @@ export async function sendMessageAction(
   text: string,
 ): Promise<SendActionResult> {
   const scope = await getAccessScope();
-  if (!canAccessClient(scope, clientId)) {
+  const access = await checkInboxAccess(scope, clientId, "inbox.reply");
+  if (access === "not_found") {
     return { ok: false, code: "forbidden", error: "No tienes acceso a esta conversación." };
   }
-  if (!(await isClientModuleEnabled(scope.tenantId, clientId, "inbox"))) {
+  if (access === "disabled") {
     return { ok: false, code: "disabled", error: "El inbox está desactivado para este cliente." };
   }
+  if (access === "forbidden") return { ok: false, code: "forbidden", error: NO_PERMISSION };
   if (typeof text !== "string" || text.trim().length === 0) {
     return { ok: false, code: "invalid", error: "El mensaje no puede estar vacío." };
   }
@@ -90,12 +92,14 @@ export async function retrySendAction(
   messageId: string,
 ): Promise<SendActionResult> {
   const scope = await getAccessScope();
-  if (!canAccessClient(scope, clientId)) {
+  const access = await checkInboxAccess(scope, clientId, "inbox.reply");
+  if (access === "not_found") {
     return { ok: false, code: "forbidden", error: "No tienes acceso a esta conversación." };
   }
-  if (!(await isClientModuleEnabled(scope.tenantId, clientId, "inbox"))) {
+  if (access === "disabled") {
     return { ok: false, code: "disabled", error: "El inbox está desactivado para este cliente." };
   }
+  if (access === "forbidden") return { ok: false, code: "forbidden", error: NO_PERMISSION };
 
   const conv = await getConversationForClient(scope.tenantId, clientId, conversationId);
   if (!conv) return { ok: false, code: "not_found", error: "Esta conversación ya no existe." };

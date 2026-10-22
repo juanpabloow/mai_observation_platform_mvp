@@ -2,15 +2,7 @@ import Link from "next/link";
 import { ModuleHeader } from "@/components/ui/ModuleHeader";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
-import {
-  canAccessClient,
-  canAccessSchedulingSite,
-  canAccessSchedulingStaff,
-  canOperateScheduling,
-  hasFullAccess,
-  isClientOwner,
-  isSchedulingStaff,
-} from "@/lib/access";
+import { can, canAccessSchedulingSite, canAccessSchedulingStaff, isSchedulingStaff } from "@/lib/access";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 import { listStaff } from "@worker/db/repositories/scheduling/staff.js";
 import { listServicesForSite } from "@worker/db/repositories/scheduling/services.js";
@@ -51,7 +43,8 @@ export default async function ClientAgendaPage({
 }) {
   await connection();
   const { clientId } = await params;
-  const { scope, client } = await requireClientModulePage(clientId, "scheduling");
+  const { scope, client } = await requireClientModulePage(clientId, "scheduling", "agenda.view");
+  const canBook = can(scope, "agenda.book", client.id);
   const sp = await searchParams;
   const tenantId = scope.tenantId;
 
@@ -63,7 +56,7 @@ export default async function ClientAgendaPage({
       <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 py-20">
         <ModuleHeader title="Agenda" />
         <div className="flex flex-col items-start gap-3 rounded-xl border border-dashed border-line-strong px-5 py-8">
-          {hasFullAccess(scope) ? (
+          {can(scope, "settings.sites", client.id) ? (
             <>
               <p className="text-sm text-muted">Aún no hay sedes para {client.name} — crea una para empezar a agendar.</p>
               <Link href={`/clients/${client.id}/scheduling/sites`} className="text-sm text-accent hover:underline">
@@ -86,7 +79,7 @@ export default async function ClientAgendaPage({
   let openReschedule: string | null = null;
   let forcedSiteId: string | undefined;
   let forcedDate: string | undefined;
-  if (canOperateScheduling(scope) && sp.reschedule && isUuid(sp.reschedule)) {
+  if (canBook && sp.reschedule && isUuid(sp.reschedule)) {
     const appt = await getAppointmentById(tenantId, sp.reschedule);
     if (appt && appt.client_id === client.id && (appt.status === "scheduled" || appt.status === "confirmed")) {
       openReschedule = appt.id;
@@ -194,7 +187,7 @@ export default async function ClientAgendaPage({
   // contact (locked, not typed) so staff never retype identity already on the record.
   // Only when CRM is on and the contact really belongs to this client.
   let prefillBook: { contactId: string; contactName: string } | null = null;
-  if (canOperateScheduling(scope) && sp.book && isUuid(sp.book) && crmEnabled) {
+  if (canBook && sp.book && isUuid(sp.book) && crmEnabled && can(scope, "contacts.view", client.id)) {
     const c = await getContactById(tenantId, sp.book, client.id);
     if (c) prefillBook = { contactId: c.id, contactName: c.name ?? c.channel_user_id };
   }
@@ -230,9 +223,9 @@ export default async function ClientAgendaPage({
       public_reason: b.public_reason ?? null,
     }));
   // Who may create/edit blocks (the server re-enforces): staff time off → owner/setter/agency
-  // (canAccessClient, never a staff login); site closures → owner/agency only.
-  const canBlockStaff = canAccessClient(scope, client.id);
-  const canBlockSite = hasFullAccess(scope) || isClientOwner(scope, client.id);
+  // (agenda.block); site closures → hours.manage. The time-off actions re-check both.
+  const canBlockStaff = can(scope, "agenda.block", client.id);
+  const canBlockSite = can(scope, "hours.manage", client.id);
 
   return (
     <AgendaView
@@ -242,14 +235,14 @@ export default async function ClientAgendaPage({
       initialStaffId={initialStaffId}
       initialApptId={initialApptId}
       basePath={`/clients/${client.id}/scheduling/agenda`}
-      contactsBase={crmEnabled ? `/clients/${client.id}/contacts` : null}
-      inboxBase={inboxEnabled ? `/clients/${client.id}/inbox` : null}
+      contactsBase={crmEnabled && can(scope, "contacts.view", client.id) ? `/clients/${client.id}/contacts` : null}
+      inboxBase={inboxEnabled && can(scope, "inbox.view", client.id) ? `/clients/${client.id}/inbox` : null}
       prefillBook={prefillBook}
       openReschedule={openReschedule}
       returnContactId={returnContactId}
       from={sp.from ?? null}
-      canManage={hasFullAccess(scope)}
-      canOperate={canOperateScheduling(scope)}
+      canManage={can(scope, "team.manage", client.id)}
+      canOperate={canBook}
       canBlockStaff={canBlockStaff}
       canBlockSite={canBlockSite}
       blocks={blocks}
@@ -297,7 +290,7 @@ export default async function ClientAgendaPage({
         // (lib/schedulingActions.ts) applies to every write and to the activity read.
         // Visibility is unchanged: a staff login still sees the whole site.
         can_modify:
-          canOperateScheduling(scope) && canAccessSchedulingSite(scope, a.site_id) && canAccessSchedulingStaff(scope, a.staff_id),
+          canBook && canAccessSchedulingSite(scope, a.site_id) && canAccessSchedulingStaff(scope, a.staff_id),
         source_conversation_id: a.source_conversation_id,
       }))}
     />

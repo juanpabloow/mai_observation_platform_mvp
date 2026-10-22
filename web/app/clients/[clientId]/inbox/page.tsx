@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import { getAgentSummary, isWorkflowHandoffActive } from "@worker/db/repositories/handoff.js";
-import { canSeeWorkflowInsights, hasFullAccess } from "@/lib/access";
+import { canAny, hasFullAccess } from "@/lib/access";
 import { listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { resolveWorkflowScope, validateWorkflowForClient } from "@/lib/workflowScope";
@@ -37,7 +37,7 @@ export default async function ClientInboxPage({
 }) {
   await connection();
   const { clientId } = await params;
-  const { scope, client } = await requireClientModulePage(clientId, "inbox");
+  const { scope, client } = await requireClientModulePage(clientId, "inbox", "inbox.view");
 
   // URL wins: ?workflow=<id> (validated to this client + accessible) else the cookie.
   const wfParam = first((await searchParams).workflow);
@@ -53,7 +53,8 @@ export default async function ClientInboxPage({
   const [initial, viewer, tenantWorkflows] = await Promise.all([
     loadScopedClientInbox(scope.tenantId, client.id, effective),
     getAgentSummary(scope.userId),
-    canSeeWorkflowInsights(scope, client.id) ? listWorkflowsWithClientForTenant(scope.tenantId) : Promise.resolve(null),
+    // Same logins as the header workflow switcher (automations.view or analytics.view).
+    canAny(scope, ["automations.view", "analytics.view"], client.id) ? listWorkflowsWithClientForTenant(scope.tenantId) : Promise.resolve(null),
   ]);
   // This client's workflows only (the header narrows the same way).
   const workflows = tenantWorkflows

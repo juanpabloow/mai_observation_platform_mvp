@@ -19,7 +19,7 @@ export default async function AllExecutionsRedirect({
   searchParams: Promise<SearchParams>;
 }) {
   await connection();
-  await requireWorkflowInsights(); // executions are agency/owner only — Setter 404s
+  await requireWorkflowInsights((await params).clientId, "automations.view"); // executions are agency/owner only — Setter 404s
   const { clientId } = await params;
   const from = first((await searchParams).from);
   const workflowId = await resolveRememberedWorkflow(clientId, from);

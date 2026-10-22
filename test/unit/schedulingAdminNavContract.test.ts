@@ -39,10 +39,19 @@ test('sidebar: the Hub (tenant level) has NO Scheduling admin', () => {
 // «Configuración de agenda» became one PAGE per job (lib/schedulingNav.ts), spread over
 // the Agenda, Catálogo, Presencia and Configuración sections (lib/sectionNav.ts).
 const SETTINGS_PAGES = ['sites', 'rules', 'hours', 'services', 'promotions', 'booking-page'] as const;
+/** Each settings page's own permission (roles v1) — the Dueño and the agency hold them all. */
+const PAGE_PERMISSION: Record<(typeof SETTINGS_PAGES)[number], string> = {
+  sites: 'settings.sites',
+  rules: 'settings.rules',
+  hours: 'hours.manage',
+  services: 'services.manage',
+  promotions: 'promotions.manage',
+  'booking-page': 'booking_page.manage',
+};
 
 test('sidebar: the scheduling settings appear INSIDE a client, gated by module + role + non-default', () => {
   const model = read('lib/sectionNav.ts');
-  assert.ok(model.includes('const schedManage = manage && has("scheduling") && !isDefault;'), 'settings gated: agency/owner + module + non-default');
+  assert.ok(model.includes('const sched = (key: string) => p(key) && has("scheduling") && !isDefault;'), 'settings gated: permission + module + non-default');
   for (const [id, href] of [
     ['team', '/scheduling/staff'],
     ['hours', '/scheduling/hours'],
@@ -53,18 +62,17 @@ test('sidebar: the scheduling settings appear INSIDE a client, gated by module +
     ['sites', '/scheduling/sites'],
     ['rules', '/scheduling/rules'],
   ] as const) {
-    assert.match(model, new RegExp(`schedManage && \\{ id: "${id}", label: "[^"]+", href: c\\("${href}"\\) \\}`), `${id} is behind the settings gate`);
+    assert.match(model, new RegExp(`sched\\("[a-z_.]+"\\) && \\{ id: "${id}", label: "[^"]+", href: c\\("${href}"\\) \\}`), `${id} is behind the settings gate`);
   }
-  // The calendar: agency or a member on their own client (the people its page admits).
-  assert.ok(model.includes('(isAgency || forOwnClient) && has("scheduling") && { id: "calendar", label: "Calendario", href: c("/scheduling/agenda") }'), 'Agenda → calendar');
+  // The calendar: whoever holds agenda.view on this client (the people its page admits).
+  assert.ok(model.includes('p("agenda.view") && has("scheduling") && { id: "calendar", label: "Calendario", href: c("/scheduling/agenda") }'), 'Agenda → calendar');
   assert.ok(!model.includes('/scheduling/admin"'), 'nothing links to the legacy admin route any more');
 });
 
 test('canonical pages: agency/owner + scheduling-module gate, client-scoped data', () => {
   for (const page of SETTINGS_PAGES) {
     const src = read(`app/clients/[clientId]/scheduling/${page}/page.tsx`);
-    assert.ok(src.includes('requireClientModulePage(clientId, "scheduling")'), `${page}: tenant+client+non-default+enabled gate`);
-    assert.ok(src.includes('if (!canManageClient(scope, clientId)) notFound();'), `${page}: client-admin gate (agency or client owner; setters/staff 404)`);
+    assert.ok(src.includes(`requireClientModulePage(clientId, "scheduling", "${PAGE_PERMISSION[page]}")`), `${page}: tenant+client+non-default+enabled gate + ${PAGE_PERMISSION[page]} (setters/staff 404)`);
     assert.ok(src.includes('loadSchedulingSettings(scope.tenantId, client)'), `${page}: data loaded with the VALIDATED client`);
     assert.ok(src.includes(`<SchedulingSettings page="${page}"`), `${page}: renders its own page of the shared settings`);
   }
@@ -73,14 +81,15 @@ test('canonical pages: agency/owner + scheduling-module gate, client-scoped data
   // The legacy route keeps the SAME gate before it redirects, so it never tells a refused
   // user where the settings live.
   const legacy = read('app/clients/[clientId]/scheduling/admin/page.tsx');
-  assert.ok(legacy.includes('requireClientModulePage(clientId, "scheduling")') && legacy.includes('if (!canManageClient(scope, clientId)) notFound();'), 'legacy admin: same gate');
-  assert.ok(legacy.includes('redirect(legacyAdminDestination(client.id, await searchParams))'), 'legacy admin → the page that owns the screen');
+  assert.ok(legacy.includes('requireClientModulePage(clientId, "scheduling", ["team.manage", "hours.manage"'), 'legacy admin: any settings permission');
+  assert.ok(legacy.includes('const destination = legacyAdminDestination(client.id, await searchParams);'), 'legacy admin → the page that owns the screen');
+  assert.ok(legacy.includes('if (!PAGE_PERMISSION[page] || !can(scope, PAGE_PERMISSION[page], client.id)) notFound();'), '…only when the login is admitted there');
   assert.ok(!legacy.includes('SchedulingSettings') && !legacy.includes('AdminPanel'), 'and renders nothing itself');
   const avail = read('app/clients/[clientId]/scheduling/availability/page.tsx');
-  assert.ok(avail.includes('requireClientModulePage(clientId, "scheduling")') && avail.includes('canManageClient(scope, clientId)'), 'legacy availability: same gate');
+  assert.ok(avail.includes('requireClientModulePage(clientId, "scheduling", "hours.manage")'), 'legacy availability: same gate as Horarios');
   assert.ok(avail.includes('legacyAvailabilityDestination('), 'legacy availability → Horarios y ausencias');
   const exc = read('app/clients/[clientId]/scheduling/exceptions/page.tsx');
-  assert.ok(exc.includes('requireClientModulePage(clientId, "scheduling")') && exc.includes('if (!canManageClient(scope, clientId)) notFound();'), 'Excepciones: same gate');
+  assert.ok(exc.includes('requireClientModulePage(clientId, "scheduling", "hours.manage")'), 'Excepciones: same gate as Horarios');
   assert.ok(exc.includes('redirect(schedulingHref(client.id, "hours", undefined, ABSENCES_ANCHOR))'), 'Excepciones → Horarios y ausencias #ausencias');
 });
 
@@ -128,8 +137,8 @@ test('actions: every admin action validates the route client (no cross-client ad
   const src = read('lib/schedulingAdminActions.ts');
   // The shared guard checks tenant + client + non-default + enabled, then client-admin
   // capability (agency OR this client's owner — editors/staff refused).
-  assert.ok(src.includes('canManageClient(res.context.scope, clientId)'), 'guard: agency or client owner');
-  assert.ok(src.includes('resolveClientModuleContext(clientId, "scheduling")'), 'guard: tenant+client+non-default+enabled');
+  assert.ok(src.includes('resolveClientModuleContext(clientId, "scheduling", permission)'), 'guard: the module + the action\'s permission');
+  assert.ok(src.includes('async function requireSchedulingAdmin(\n  clientId: string,\n  permission: PermissionRequirement,'), 'guard: tenant+client+non-default+enabled, and always a permission');
   // Resource-ownership helpers keep a forged id from another client from taking effect.
   assert.ok(src.includes('async function siteInClient'), 'site→client ownership helper');
   assert.ok(src.includes('async function staffInClient'), 'staff→client ownership helper');

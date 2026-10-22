@@ -1,4 +1,5 @@
 import { pool, query } from '../client.js';
+import { insertAccessAuditEvent, type AccessAuditEvent } from './accessRoles.js';
 
 /** A row linking a Better Auth user to a tenant with a role. */
 export interface TenantMemberRow {
@@ -34,6 +35,13 @@ export interface MembershipScopeRow {
   client_role: ClientRole | null;
   scheduling_site_id: string | null;
   scheduling_staff_id: string | null;
+  /** Non-null iff client_role === 'custom': the business's custom role. */
+  access_role_id: string | null;
+  /** The custom role's stored permission keys (null for system roles / agency). */
+  role_permissions: string[] | null;
+  /** The custom role's name — null for system roles, or when the role doesn't resolve in
+   *  this membership's tenant + client (the scope then fails closed). */
+  access_role_name: string | null;
 }
 
 /**
@@ -45,7 +53,10 @@ export interface MembershipScopeRow {
  *   staff  → own agenda only (sees the whole site, books its own column).
  * Only `staff` carries a scheduling_site_id + scheduling_staff_id binding.
  */
-export type ClientRole = 'owner' | 'setter' | 'staff';
+export type ClientRole = 'owner' | 'setter' | 'staff' | 'custom';
+
+/** The three protected system roles (a `custom` member's role lives in access_roles). */
+export type SystemClientRole = Exclude<ClientRole, 'custom'>;
 
 /**
  * The current user's membership with its role + per-member client scope — the
@@ -54,11 +65,23 @@ export type ClientRole = 'owner' | 'setter' | 'staff';
  */
 export async function getMembershipForUser(userId: string): Promise<MembershipScopeRow | null> {
   const result = await query<MembershipScopeRow>(
-    `SELECT tenant_id, role, member_client_id, client_role,
-            scheduling_site_id, scheduling_staff_id
-       FROM tenant_members
-      WHERE user_id = $1
-      ORDER BY created_at ASC
+    `SELECT tm.tenant_id, tm.role, tm.member_client_id, tm.client_role,
+            tm.scheduling_site_id, tm.scheduling_staff_id, tm.access_role_id,
+            CASE WHEN tm.access_role_id IS NULL THEN NULL ELSE
+              COALESCE((SELECT array_agg(p.permission_key)
+                          FROM access_roles r
+                          JOIN access_role_permissions p ON p.role_id = r.id
+                         WHERE r.id = tm.access_role_id
+                           AND r.tenant_id = tm.tenant_id
+                           AND r.client_id = tm.member_client_id), '{}')
+            END AS role_permissions,
+            (SELECT r.name FROM access_roles r
+              WHERE r.id = tm.access_role_id
+                AND r.tenant_id = tm.tenant_id
+                AND r.client_id = tm.member_client_id) AS access_role_name
+       FROM tenant_members tm
+      WHERE tm.user_id = $1
+      ORDER BY tm.created_at ASC
       LIMIT 1`,
     [userId],
   );
@@ -80,21 +103,36 @@ export async function setMembershipRole(params: {
   /** Required-ish when role === 'member' (defaults to 'setter'). Only 'owner' | 'setter'
    *  here — a 'staff' login needs a site+staff binding, set via setMemberClientRole. */
   clientRole?: 'owner' | 'setter';
+  /** Written in the same transaction as the change. */
+  audit?: AccessAuditEvent;
 }): Promise<number> {
   const memberClientId = params.role === 'member' ? (params.memberClientId ?? null) : null;
   const clientRole = params.role === 'member' ? (params.clientRole ?? 'setter') : null;
   if (params.role === 'member' && !memberClientId) {
     throw new Error("setMembershipRole: role='member' requires a memberClientId");
   }
-  const result = await query(
-    `UPDATE tenant_members
-        SET role = $3, member_client_id = $4, client_role = $5,
-            scheduling_site_id = NULL,
-            scheduling_staff_id = NULL
-      WHERE tenant_id = $1 AND user_id = $2`,
-    [params.tenantId, params.userId, params.role, memberClientId, clientRole],
-  );
-  return result.rowCount ?? 0;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `UPDATE tenant_members
+          SET role = $3, member_client_id = $4, client_role = $5,
+              scheduling_site_id = NULL,
+              scheduling_staff_id = NULL,
+              access_role_id = NULL
+        WHERE tenant_id = $1 AND user_id = $2`,
+      [params.tenantId, params.userId, params.role, memberClientId, clientRole],
+    );
+    const n = result.rowCount ?? 0;
+    if (n > 0 && params.audit) await insertAccessAuditEvent(params.audit, client);
+    await client.query('COMMIT');
+    return n;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /** How many CLIENT OWNERS a client has — the last-owner guard reads this so the final
@@ -215,6 +253,8 @@ export interface MemberWithDetails {
   scheduling_site_name: string | null;
   scheduling_staff_id: string | null;
   scheduling_staff_name: string | null;
+  access_role_id: string | null;
+  access_role_name: string | null;
   created_at: Date;
 }
 
@@ -227,12 +267,14 @@ export async function listMembersForTenant(tenantId: string): Promise<MemberWith
     `SELECT tm.user_id, u.email, u.name, tm.role, tm.member_client_id,
             c.name AS client_name, tm.client_role, tm.scheduling_site_id,
             s.name AS scheduling_site_name, tm.scheduling_staff_id,
-            st.name AS scheduling_staff_name, tm.created_at
+            st.name AS scheduling_staff_name, tm.access_role_id,
+            ar.name AS access_role_name, tm.created_at
        FROM tenant_members tm
        JOIN "user" u ON u.id = tm.user_id
        LEFT JOIN clients c ON c.id = tm.member_client_id
        LEFT JOIN sites s ON s.id = tm.scheduling_site_id AND s.tenant_id = tm.tenant_id
        LEFT JOIN staff st ON st.id = tm.scheduling_staff_id AND st.tenant_id = tm.tenant_id
+       LEFT JOIN access_roles ar ON ar.id = tm.access_role_id AND ar.tenant_id = tm.tenant_id
       WHERE tm.tenant_id = $1
       ORDER BY CASE tm.role WHEN 'owner' THEN 0 WHEN 'admin' THEN 1 ELSE 2 END, lower(u.email)`,
     [tenantId],
@@ -265,39 +307,44 @@ export async function listSchedulingResourcesForClient(
 }
 
 /** A single member's role + client scope within a tenant (for action guards). */
-export async function getMemberInTenant(
-  tenantId: string,
-  userId: string,
-): Promise<{
+export interface MemberInTenant {
   role: string;
+  email: string | null;
   member_client_id: string | null;
   client_role: ClientRole | null;
   scheduling_site_id: string | null;
   scheduling_staff_id: string | null;
-} | null> {
-  const result = await query<{
-    role: string;
-    member_client_id: string | null;
-    client_role: ClientRole | null;
-    scheduling_site_id: string | null;
-    scheduling_staff_id: string | null;
-  }>(
-    `SELECT role, member_client_id, client_role, scheduling_site_id,
-            scheduling_staff_id
-       FROM tenant_members
-      WHERE tenant_id = $1 AND user_id = $2`,
+  access_role_id: string | null;
+  /** The custom role's stored keys (null for system roles / agency). */
+  role_permissions: string[] | null;
+  access_role_name: string | null;
+}
+
+export async function getMemberInTenant(tenantId: string, userId: string): Promise<MemberInTenant | null> {
+  const result = await query<MemberInTenant>(
+    `SELECT tm.role, u.email, tm.member_client_id, tm.client_role, tm.scheduling_site_id,
+            tm.scheduling_staff_id, tm.access_role_id,
+            CASE WHEN tm.access_role_id IS NULL THEN NULL ELSE
+              COALESCE((SELECT array_agg(p.permission_key) FROM access_role_permissions p
+                         WHERE p.role_id = tm.access_role_id), '{}')
+            END AS role_permissions,
+            (SELECT r.name FROM access_roles r WHERE r.id = tm.access_role_id) AS access_role_name
+       FROM tenant_members tm
+       LEFT JOIN "user" u ON u.id = tm.user_id
+      WHERE tm.tenant_id = $1 AND tm.user_id = $2`,
     [tenantId, userId],
   );
   return result.rows[0] ?? null;
 }
 
 /**
- * Set a member's CLIENT ROLE (owner | setter | staff) within their client. `staff`
- * carries a site + staff binding (both required); owner/setter clear it (they see the
- * whole client). Composite foreign keys in the migration enforce that the site belongs
- * to the member's tenant/client and the staff to that site. Scoped to `role='member'
- * AND member_client_id=clientId`, so it can never touch an owner/admin or a member of
- * another client.
+ * Set a member's CLIENT ROLE within their client: a system role (owner | setter | staff)
+ * or a business CUSTOM role (`custom` + accessRoleId). `staff` carries a site + staff
+ * binding (both required); every other role clears it (they see the whole client).
+ * Composite foreign keys enforce that the site belongs to the member's tenant/client, the
+ * staff to that site, and a custom role to the member's tenant AND client. Scoped to
+ * `role='member' AND member_client_id=clientId`, so it can never touch an owner/admin or a
+ * member of another client. The audit event (when given) commits with the change.
  */
 export async function setMemberClientRole(params: {
   tenantId: string;
@@ -306,22 +353,41 @@ export async function setMemberClientRole(params: {
   clientRole: ClientRole;
   siteId?: string | null;
   staffId?: string | null;
+  accessRoleId?: string | null;
+  audit?: AccessAuditEvent;
 }): Promise<number> {
   const siteId = params.clientRole === 'staff' ? (params.siteId ?? null) : null;
   const staffId = params.clientRole === 'staff' ? (params.staffId ?? null) : null;
+  const accessRoleId = params.clientRole === 'custom' ? (params.accessRoleId ?? null) : null;
   if (params.clientRole === 'staff' && (!siteId || !staffId)) {
     throw new Error("setMemberClientRole: clientRole='staff' requires a site and a staff resource");
   }
-  const result = await query(
-    `UPDATE tenant_members
-        SET client_role = $4,
-            scheduling_site_id = $5,
-            scheduling_staff_id = $6
-      WHERE tenant_id = $1 AND user_id = $2
-        AND role = 'member' AND member_client_id = $3`,
-    [params.tenantId, params.userId, params.clientId, params.clientRole, siteId, staffId],
-  );
-  return result.rowCount ?? 0;
+  if (params.clientRole === 'custom' && !accessRoleId) {
+    throw new Error("setMemberClientRole: clientRole='custom' requires an accessRoleId");
+  }
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `UPDATE tenant_members
+          SET client_role = $4,
+              scheduling_site_id = $5,
+              scheduling_staff_id = $6,
+              access_role_id = $7
+        WHERE tenant_id = $1 AND user_id = $2
+          AND role = 'member' AND member_client_id = $3`,
+      [params.tenantId, params.userId, params.clientId, params.clientRole, siteId, staffId, accessRoleId],
+    );
+    const n = result.rowCount ?? 0;
+    if (n > 0 && params.audit) await insertAccessAuditEvent(params.audit, client);
+    await client.query('COMMIT');
+    return n;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -332,10 +398,23 @@ export async function setMemberClientRole(params: {
 export async function removeMemberFromTenant(params: {
   tenantId: string;
   userId: string;
+  audit?: AccessAuditEvent;
 }): Promise<boolean> {
-  const result = await query(
-    `DELETE FROM tenant_members WHERE tenant_id = $1 AND user_id = $2 AND role <> 'owner'`,
-    [params.tenantId, params.userId],
-  );
-  return (result.rowCount ?? 0) > 0;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `DELETE FROM tenant_members WHERE tenant_id = $1 AND user_id = $2 AND role <> 'owner'`,
+      [params.tenantId, params.userId],
+    );
+    const removed = (result.rowCount ?? 0) > 0;
+    if (removed && params.audit) await insertAccessAuditEvent(params.audit, client);
+    await client.query('COMMIT');
+    return removed;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }

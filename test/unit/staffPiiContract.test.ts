@@ -91,9 +91,9 @@ test('the Staff page is the ONLY page that reads staff PII, and it is client-adm
   assert.deepEqual(readers, ['clients/[clientId]/scheduling/staff/page.tsx'], 'exactly one page reads the PII');
 
   const page = root('web/app/clients/[clientId]/scheduling/staff/page.tsx');
-  // The agency OR this client's Owner (canManageClient) — editors/staff are 404'd.
-  assert.ok(page.includes('canManageClient(scope, clientId)'), 'behind the client-admin gate');
-  assert.ok(page.includes('requireClientModulePage(clientId, "scheduling")'), 'and behind the module gate');
+  // team.manage (the agency, the Dueño) — Recepción/Profesional are 404'd — behind the
+  // scheduling module gate.
+  assert.ok(page.includes('requireClientModulePage(clientId, "scheduling", "team.manage")'), 'behind the module + team.manage gate');
 
   // Team is logins and roles now — it must not read a staff row at all.
   const team = root('web/app/clients/[clientId]/team/page.tsx');

@@ -12,11 +12,17 @@
  */
 import { requireWorkflowInsights } from "@/lib/clientWorkflow";
 
-export default async function WorkspaceLayout({ children }: { children: React.ReactNode }) {
+export default async function WorkspaceLayout({
+  children,
+  params,
+}: {
+  children: React.ReactNode;
+  params: Promise<{ clientId: string; workflowId: string }>;
+}) {
   // (workspace) is the EXECUTIONS feature (table + raw execution-detail pane). It is
-  // workflow INSIGHTS — the agency and a client OWNER only; a Setter is 404'd here even
-  // though it can reach the inbox under the same workflow.
-  await requireWorkflowInsights();
+  // workflow INSIGHTS — automations.view (the agency and the Dueño); Recepción is 404'd
+  // here even though it can reach the inbox under the same workflow.
+  await requireWorkflowInsights((await params).clientId, "automations.view");
   // Cancel the app shell's universal content gutter (layout.tsx applies
   // p-[var(--content-pad)] to every page) so a full-bleed section really reaches the
   // edges. The negative margin exactly equals the padding, so it never causes overflow;

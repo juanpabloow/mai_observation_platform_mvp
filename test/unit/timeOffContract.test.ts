@@ -9,17 +9,18 @@ import { fileURLToPath } from 'node:url';
  * behaviour that CAN run lives in test/integration/timeOff.test.ts + staffEdit.test.ts).
  *
  * Matrix pinned:
- *   STAFF time off  (create/edit/delete) → canAccessClient (owner + setter + agency; NOT staff)
- *   SITE closures   (create/edit/delete) → canManageClient (owner + agency only)
+ *   STAFF time off  (create/edit/delete) → agenda.block or hours.manage (owner + setter + agency; NOT staff)
+ *   SITE closures   (create/edit/delete) → hours.manage (owner + agency only)
  *   See blocks / reason in the agenda     → all operators; a STAFF login only its own + site
  */
 
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const read = (p: string) => readFileSync(`${root}${p}`, 'utf8');
 
-test('timeOffActions: site closures gate on canManageClient, staff blocks on canAccessClient', () => {
+test('timeOffActions: site closures gate on hours.manage, staff blocks on agenda.block', () => {
   const a = read('web/lib/timeOffActions.ts');
-  assert.match(a, /const allowed = siteWide \? canManageClient\(scope, clientId\) : canAccessClient\(scope, clientId\)/);
+  assert.match(a, /const STAFF_BLOCK = \["agenda\.block", "hours\.manage"\] as const;/);
+  assert.match(a, /if \(!canAny\(scope, siteWide \? \["hours\.manage"\] : STAFF_BLOCK, clientId\)\) return \{ ok: false, error: FORBIDDEN \}/);
   // create/update/delete all funnel through the gate.
   assert.match(a, /createTimeOffAction[\s\S]{0,1400}requireTimeOff\(input\.clientId, siteWide\)/);
   assert.match(a, /updateTimeOffAction[\s\S]{0,1600}requireTimeOff\(clientId, siteWide\)/);
@@ -45,8 +46,8 @@ test('timeOffActions: past blocks are read-only history', () => {
 
 test('agenda page: block perms + a staff login sees only its own blocks (+ site closures)', () => {
   const p = read('web/app/clients/[clientId]/scheduling/agenda/page.tsx');
-  assert.match(p, /const canBlockStaff = canAccessClient\(scope, client\.id\)/);
-  assert.match(p, /const canBlockSite = hasFullAccess\(scope\) \|\| isClientOwner\(scope, client\.id\)/);
+  assert.match(p, /const canBlockStaff = can\(scope, "agenda\.block", client\.id\)/);
+  assert.match(p, /const canBlockSite = can\(scope, "hours\.manage", client\.id\)/);
   assert.match(p, /\.filter\(\(b\) => !isStaff \|\| b\.staff_id === null \|\| b\.staff_id === myStaffId\)/);
 });
 

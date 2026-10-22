@@ -42,7 +42,7 @@ test('workspace: preserves the ?c= deep link; NO in-panel workflow filter (heade
   assert.ok(src.includes('writes the SAME scope as the header switcher'), 'the selector is the header switcher\'s twin');
   assert.ok(src.includes('setScope(clientId, id)'), 'it writes the shared scope');
   const page = read('app/clients/[clientId]/inbox/page.tsx');
-  assert.ok(page.includes('canSeeWorkflowInsights(scope, client.id)'), 'offered to the same logins as the header switcher');
+  assert.ok(page.includes('canAny(scope, ["automations.view", "analytics.view"], client.id)'), 'offered to the same logins as the header switcher');
 });
 
 test('workspace: reuses the REAL chat + handoff actions (InboxThread), client-scoped fetch', () => {

@@ -1,4 +1,5 @@
-import { canAccessSchedulingSite, getSessionScope, isSchedulingStaff } from "@/lib/access";
+import { canAccessSchedulingSite, canAny, getSessionScope, isSchedulingStaff } from "@/lib/access";
+import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { latestEventSeq, listEventsSince } from "@worker/db/repositories/scheduling/events.js";
 
@@ -18,6 +19,16 @@ export async function GET(req: Request): Promise<Response> {
 
   const p = new URL(req.url).searchParams;
   const since = p.get("since");
+  // A member polls ITS client's events only if it may see the agenda or contacts there
+  // AND the scheduling module is on — otherwise there is nothing for it to refresh.
+  if (scope.memberClientId) {
+    if (!canAny(scope, ["agenda.view", "contacts.view"], scope.memberClientId)) {
+      return Response.json({ error: "forbidden" }, { status: 403 });
+    }
+    if (!(await isClientModuleEnabled(scope.tenantId, scope.memberClientId, "scheduling"))) {
+      return Response.json({ cursor: since ?? (await latestEventSeq(scope.tenantId)), events: [] });
+    }
+  }
   let siteId = p.get("site_id") ?? undefined;
   // A malformed or cross-scope site is ignored (never trusted). A staff login is then
   // pinned to its own site regardless of the param, so it can't poll another site.

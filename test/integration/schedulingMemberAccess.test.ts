@@ -42,6 +42,9 @@ test('client roles: staff/setter grants are tenant-client-site safe and invitati
       member_client_id: scenario.clientId,
       client_role: 'staff',
       scheduling_site_id: scenario.siteId,
+      access_role_id: null,
+      role_permissions: null,
+      access_role_name: null,
       scheduling_staff_id: scenario.staffA,
     });
 
@@ -58,6 +61,9 @@ test('client roles: staff/setter grants are tenant-client-site safe and invitati
       member_client_id: scenario.clientId,
       client_role: 'setter',
       scheduling_site_id: null,
+      access_role_id: null,
+      role_permissions: null,
+      access_role_name: null,
       scheduling_staff_id: null,
     });
 

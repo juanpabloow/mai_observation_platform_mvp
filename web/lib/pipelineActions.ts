@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { canReadCampaigns, requireFullAccessForAction } from "./access";
+import { NO_PERMISSION, requireFullAccessForAction } from "./access";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { getClientForTenant } from "./clientWorkflow";
 import { isUuid } from "./clientModuleValidation";
@@ -33,8 +33,8 @@ const LOST_REASONS: LostReason[] = ["precio", "horario", "no_respondio", "no_asi
 async function requirePipelineActor(
   clientId: string,
 ): Promise<{ ok: true; tenantId: string; actor: PipelineActor } | { ok: false; error: string }> {
-  const res = await resolveClientModuleContext(clientId, "crm");
-  if (!res.ok || !canReadCampaigns(res.context.scope, clientId)) return { ok: false, error: UNAVAILABLE };
+  const res = await resolveClientModuleContext(clientId, "crm", "pipeline.edit");
+  if (!res.ok) return { ok: false, error: res.forbidden ? NO_PERMISSION : UNAVAILABLE };
   return { ok: true, tenantId: res.context.scope.tenantId, actor: { kind: "user", userId: res.context.scope.userId } };
 }
 

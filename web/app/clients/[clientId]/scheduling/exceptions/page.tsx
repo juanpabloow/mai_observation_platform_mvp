@@ -1,6 +1,5 @@
 import { connection } from "next/server";
 import { notFound, redirect } from "next/navigation";
-import { canManageClient } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { ABSENCES_ANCHOR, schedulingHref } from "@/lib/schedulingNav";
 
@@ -15,7 +14,6 @@ export default async function SchedulingExceptionsPage({
 }) {
   await connection();
   const { clientId } = await params;
-  const { scope, client } = await requireClientModulePage(clientId, "scheduling");
-  if (!canManageClient(scope, clientId)) notFound();
+  const { client } = await requireClientModulePage(clientId, "scheduling", "hours.manage");
   redirect(schedulingHref(client.id, "hours", undefined, ABSENCES_ANCHOR));
 }

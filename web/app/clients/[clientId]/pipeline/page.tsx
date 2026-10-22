@@ -1,6 +1,5 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
-import { canReadCampaigns } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import {
   listAwaitingBusinessReply,
@@ -31,8 +30,7 @@ export default async function PipelinePage({
 }) {
   await connection();
   const { clientId } = await params;
-  const { scope, client } = await requireClientModulePage(clientId, "crm");
-  if (!canReadCampaigns(scope, clientId)) notFound();
+  const { scope, client } = await requireClientModulePage(clientId, "crm", "pipeline.view");
   const sp = await searchParams;
 
   const [campaigns, ads] = await Promise.all([

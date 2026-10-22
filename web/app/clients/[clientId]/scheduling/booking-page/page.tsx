@@ -1,6 +1,5 @@
 import { connection } from "next/server";
 import { notFound, redirect } from "next/navigation";
-import { canManageClient } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { loadSchedulingSettings } from "@/lib/schedulingSettingsData";
 import { bookingPageAnchor, schedulingHref } from "@/lib/schedulingNav";
@@ -23,8 +22,7 @@ export default async function SchedulingBookingPage({
 }) {
   await connection();
   const { clientId } = await params;
-  const { scope, client } = await requireClientModulePage(clientId, "scheduling");
-  if (!canManageClient(scope, clientId)) notFound();
+  const { scope, client } = await requireClientModulePage(clientId, "scheduling", "booking_page.manage");
   // The interim tabs are sections of this one page now: an old `?tab=` link lands on its
   // section (anchor) instead of a third level of navigation.
   const anchor = bookingPageAnchor((await searchParams).tab);

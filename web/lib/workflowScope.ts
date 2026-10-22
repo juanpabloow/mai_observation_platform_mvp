@@ -1,7 +1,7 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { getWorkflowByN8nId } from "@worker/db/repositories/workflows.js";
-import { canAccessClient, type AccessScope } from "./access";
+import { WORKFLOW_SURFACE_PERMISSIONS, canAny, type AccessScope } from "./access";
 import { SCOPE_COOKIE, parseScopeMap, type ScopeMap } from "./scopeCookieShared";
 
 /**
@@ -26,7 +26,7 @@ export async function readScopeMap(): Promise<ScopeMap> {
  * True iff `workflowId` still exists, is assigned to `clientId`, and `scope` may
  * access that client. This is the whole validity contract for a remembered scope; it
  * rejects a deleted/unassigned workflow (stale) and a workflow copied from another
- * client (foreign / cross-client), and — via canAccessClient — a client a member
+ * client (foreign / cross-client), and — via WORKFLOW_SURFACE_PERMISSIONS — a client a member
  * can't see. Never throws (a DB hiccup ⇒ not valid ⇒ falls back to 'all').
  */
 export async function validateWorkflowForClient(
@@ -36,7 +36,7 @@ export async function validateWorkflowForClient(
   scope: AccessScope,
 ): Promise<boolean> {
   if (!workflowId) return false;
-  if (!canAccessClient(scope, clientId)) return false;
+  if (!canAny(scope, WORKFLOW_SURFACE_PERMISSIONS, clientId)) return false;
   try {
     const wf = await getWorkflowByN8nId({ tenantId, n8nWorkflowId: workflowId });
     return Boolean(wf && wf.client_id === clientId);

@@ -35,7 +35,7 @@ export default async function ConversationSettingsPage({
   params: Promise<{ clientId: string; workflowId: string }>;
 }) {
   await connection();
-  await requireWorkflowInsights(); // workflow settings are agency/owner only — Setter 404s
+  await requireWorkflowInsights((await params).clientId, "automations.view"); // workflow settings are agency/owner only — Setter 404s
   const { clientId, workflowId } = await params;
 
   const workflow = await requireWorkflowUnderClient(
@@ -113,7 +113,13 @@ export default async function ConversationSettingsPage({
       >
         &larr; Back to inbox
       </Link>
-      <ConversationSettings workflowId={workflowId} roles={roles} />
+      {/* The role mapping is agency plumbing (conversationActions are agency-only): the
+          Dueño sees this page but never an editor the server would refuse to save. */}
+      {isFullAccess ? (
+        <ConversationSettings workflowId={workflowId} roles={roles} />
+      ) : (
+        <p className="text-sm text-muted">La configuración de esta conversación la gestiona la agencia.</p>
+      )}
       {isFullAccess ? <HandoffWebhook workflowId={workflowId} initial={webhookView} /> : null}
     </div>
   );

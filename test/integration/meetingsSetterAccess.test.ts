@@ -36,7 +36,8 @@ mock.module(urlOf('server-only'), { namedExports: {} });
 const asUser = (userId: string | null) => { CURRENT = userId ? { id: userId, email: `${userId.slice(0, 8)}@test.local` } : null; };
 
 const { resolveAppScope } = await import('../../web/lib/meetingsAppScope.js');
-const { canAccessMeetings } = await import('../../web/lib/access.js');
+const { can } = await import('../../web/lib/access.js');
+const { SYSTEM_ROLE_PERMISSIONS } = await import('../../web/lib/permissions/catalog.js');
 
 after(closeDb);
 
@@ -75,8 +76,8 @@ test('Reuniones: agency and own owner pass; recepción, staff, another owner and
       assert.equal(await outcome(s.clientId), 'not_found', `${who} is refused like a stranger`);
     }
     // The same rule, as the pure capability the pages use.
-    assert.equal(canAccessMeetings({ tenantId: s.tenantId, userId: setter, role: 'member', memberClientId: s.clientId, clientRole: 'setter' } as never, s.clientId), false);
-    assert.equal(canAccessMeetings({ tenantId: s.tenantId, userId: owner, role: 'member', memberClientId: s.clientId, clientRole: 'owner' } as never, s.clientId), true);
+    assert.equal(can({ tenantId: s.tenantId, userId: setter, role: 'member', memberClientId: s.clientId, clientRole: 'setter', permissions: SYSTEM_ROLE_PERMISSIONS.setter } as never, 'meetings.view', s.clientId), false);
+    assert.equal(can({ tenantId: s.tenantId, userId: owner, role: 'member', memberClientId: s.clientId, clientRole: 'owner', permissions: SYSTEM_ROLE_PERMISSIONS.owner } as never, 'meetings.view', s.clientId), true);
     // Module off → not_found even for the agency (unchanged).
     await setClientModuleEnabled({ tenantId: s.tenantId, clientId: s.clientId, moduleKey: 'meetings', enabled: false });
     asUser(agency);

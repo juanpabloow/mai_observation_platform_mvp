@@ -1,9 +1,4 @@
-import {
-  canAccessSchedulingSite,
-  canAccessSchedulingStaff,
-  canOperateScheduling,
-  getSessionScope,
-} from "@/lib/access";
+import { canAccessSchedulingSite, canAccessSchedulingStaff, getSessionScope } from "@/lib/access";
 import { resolveClientModuleForScope } from "@/lib/clientModuleAccess";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { parseIsoDate } from "@/lib/schedulingApi";
@@ -54,9 +49,10 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   // The SAME central gate as pages/actions (incl. is_default rejection).
-  const gate = await resolveClientModuleForScope(scope, clientId, "scheduling");
+  // Availability feeds the booking/reschedule modals → agenda.book.
+  const gate = await resolveClientModuleForScope(scope, clientId, "scheduling", "agenda.book");
   if (!gate.ok) return notFoundResponse();
-  if (!canOperateScheduling(scope) || !canAccessSchedulingSite(scope, siteId)) {
+  if (!canAccessSchedulingSite(scope, siteId)) {
     return notFoundResponse();
   }
   const site = await getSiteById(scope.tenantId, siteId);

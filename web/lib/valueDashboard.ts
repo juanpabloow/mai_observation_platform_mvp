@@ -1,12 +1,5 @@
 import "server-only";
-import {
-  canAccessClient,
-  canSeeWorkflowInsights,
-  getSessionScope,
-  hasFullAccess,
-  isClientOwner,
-  type AccessScope,
-} from "./access";
+import { can, getSessionScope, hasFullAccess, type AccessScope } from "./access";
 import { isUuid } from "./clientModuleValidation";
 import { getClientById } from "@worker/db/repositories/clients.js";
 import { getValueDashboardContext, loadValueDashboard } from "@worker/db/repositories/valueDashboard.js";
@@ -33,7 +26,7 @@ export async function resolveValueAccess(clientId: string): Promise<ValueAccess>
   const scope = await getSessionScope();
   if (!scope) return { ok: false, status: 401 };
   if (!isUuid(clientId)) return { ok: false, status: 404 };
-  if (!canAccessClient(scope, clientId) || !canSeeWorkflowInsights(scope, clientId)) return { ok: false, status: 404 };
+  if (!can(scope, "analytics.view", clientId)) return { ok: false, status: 404 };
   // The agency's scope is "all clients" — of ITS tenant. A client id from another tenant
   // must be refused here, not only by the tenant-filtered queries downstream.
   if (!(await getClientById({ tenantId: scope.tenantId, clientId }))) return { ok: false, status: 404 };
@@ -42,8 +35,9 @@ export async function resolveValueAccess(clientId: string): Promise<ValueAccess>
     ok: true,
     scope,
     viewer: agency ? "agency" : "owner",
-    canPropose: agency || isClientOwner(scope, clientId),
-    canConfirm: isClientOwner(scope, clientId),
+    canPropose: can(scope, "analytics.assumptions", clientId),
+    // Business-only: the agency never holds analytics.assumptions.confirm.
+    canConfirm: can(scope, "analytics.assumptions.confirm", clientId),
   };
 }
 

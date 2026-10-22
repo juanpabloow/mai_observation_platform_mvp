@@ -28,15 +28,18 @@ test('machine escalation is inbox-gated (race-safe) with the workflow-derived cl
 
 test('human actions (take/dismiss/return) are server-side inbox-gated', () => {
   const src = read('web/lib/inboxActions.ts');
-  const gates = src.match(/inboxEnabled\(scope\.tenantId, clientId\)/g) ?? [];
-  assert.ok(gates.length >= 3, 'all three human actions gate on the inbox module');
-  assert.ok(src.includes('isClientModuleEnabled'), 'uses the module check, not just the UI');
+  const gates = src.match(/const denied = await inboxDenied\(scope, clientId\)/g) ?? [];
+  assert.ok(gates.length >= 3, 'all three human actions gate on the inbox module + inbox.reply');
+  assert.ok(src.includes('checkInboxAccess(scope, clientId, "inbox.reply")'), 'uses the shared module + permission check, not just the UI');
+  const data = read('web/lib/inboxData.ts');
+  assert.ok(data.includes('isClientModuleEnabled(scope.tenantId, clientId, "inbox")'), 'the shared check reads the module');
+  assert.ok(data.includes('if (!client || client.is_default) return "not_found";'), 'the default client is refused too');
 });
 
 test('manual send + retry are inbox-gated', () => {
   const src = read('web/lib/sendActions.ts');
-  const gates = src.match(/isClientModuleEnabled\(scope\.tenantId, clientId, "inbox"\)/g) ?? [];
-  assert.ok(gates.length >= 2, 'both send + retry gate on the inbox module');
+  const gates = src.match(/checkInboxAccess\(scope, clientId, "inbox\.reply"\)/g) ?? [];
+  assert.ok(gates.length >= 2, 'both send + retry gate on the inbox module + inbox.reply');
 });
 
 test('inbox JSON API access resolves the inbox module (404 when off)', () => {
@@ -52,7 +55,7 @@ test('inbox JSON API access resolves the inbox module (404 when off)', () => {
 
 test('inbox pages are inbox-gated (unified + legacy thread); per-workflow defers to the target', () => {
   assert.ok(
-    read('web/app/clients/[clientId]/inbox/page.tsx').includes('requireClientModulePage(clientId, "inbox")'),
+    read('web/app/clients/[clientId]/inbox/page.tsx').includes('requireClientModulePage(clientId, "inbox", "inbox.view")'),
     'unified inbox page gated',
   );
   // W-2: the per-workflow inbox page no longer gates itself — it 307-redirects to the
@@ -69,12 +72,12 @@ test('sidebar hides Conversations/Inbox (and its polling badge) when inbox is of
   // The Inbox section exists only when the module is on (lib/sectionNav.ts — a section
   // with no visible page is dropped), and the polling badge rides ONLY that section.
   const model = read('web/lib/sectionNav.ts');
-  assert.ok(model.includes('inbox: [general && has("inbox") && { id: "inbox"'), 'the Inbox item is inbox-gated');
+  assert.ok(model.includes('inbox: [p("inbox.view") && has("inbox") && { id: "inbox"'), 'the Inbox item is inbox-gated');
   assert.ok(model.includes('if (visible.length === 0) return null;'), 'a section with no visible page is not rendered');
   const src = read('web/components/AppSidebar.tsx');
   assert.ok(src.includes('countEndpoint: sec.id === "inbox" ? `/api/inbox/${clientId}/pending-count` : undefined'), 'the pending badge/poll is inside the gate');
   // The off-client stand-in for a setter polls only when inbox is on.
-  assert.match(src, /memberModules\.includes\("inbox"\)\s*\? \[\{ key: "inbox"[^\n]*pending-count/);
+  assert.match(src, /may\("inbox\.view"\) && memberModules\.includes\("inbox"\)\) \{\s*items\.push\(\{ key: "inbox"[^\n]*pending-count/);
 });
 
 test('disable policy + owner/admin-only toggle are wired in the module action', () => {

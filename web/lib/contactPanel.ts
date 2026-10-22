@@ -153,7 +153,9 @@ export async function loadContactEditPayload(
   tenantId: string,
   clientId: string,
   contactId: string,
-  viewer: { userId: string; isFullAccess: boolean },
+  /** What the viewer may do (from its permissions): assign the contact to someone else
+   *  (contacts.manage_others), delete it (contacts.delete), create tags (contacts.tags). */
+  viewer: { userId: string; canAssignOthers: boolean; canDelete: boolean; canManageTagCatalog: boolean },
 ): Promise<ContactEditPayload | null> {
   const contact = await getContactById(tenantId, contactId, clientId);
   if (!contact) return null;
@@ -174,7 +176,7 @@ export async function loadContactEditPayload(
   // Owner options: owner/admin may assign anyone with access to this client; a member
   // only themselves. The server action re-checks this — here it only shapes the picker.
   const owners = members
-    .filter((m) => (viewer.isFullAccess ? m.member_client_id === null || m.member_client_id === clientId : m.user_id === viewer.userId))
+    .filter((m) => (viewer.canAssignOthers ? m.member_client_id === null || m.member_client_id === clientId : m.user_id === viewer.userId))
     .map((m) => ({ userId: m.user_id, label: m.name ?? m.email }));
 
   return {
@@ -209,8 +211,8 @@ export async function loadContactEditPayload(
     notes: notes.map(toNoteView),
     // Deleting a person and extending the tag catalogue are both owner/admin, matching
     // how merge and the field definitions are already gated.
-    canDelete: viewer.isFullAccess,
-    canManageTagCatalog: viewer.isFullAccess,
+    canDelete: viewer.canDelete,
+    canManageTagCatalog: viewer.canManageTagCatalog,
   };
 }
 

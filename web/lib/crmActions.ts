@@ -14,6 +14,7 @@ import {
   RenameTagInput,
   TagLinkInput,
 } from "./crmValidation";
+import { NO_PERMISSION } from "./access";
 import { canEditNote, canManageTask, canManageTagCatalog, resolveAssignee, type CrmActor } from "./crmPermissions";
 import { createNote, getNoteById, updateNote, softDeleteNote } from "@worker/db/repositories/contactNotes.js";
 import { createTask, getTaskById, updateTask, completeTask, cancelTask } from "@worker/db/repositories/crmTasks.js";
@@ -41,8 +42,8 @@ export async function loadContactTimelineAction(
   kinds: TimelineSource[],
 ): Promise<{ ok: true; page: TimelinePage } | { ok: false }> {
   if (!isUuid(contactId)) return { ok: false };
-  const g = await gate(clientId);
-  if (!g) return { ok: false };
+  const g = await gate(clientId, "contacts.view");
+  if (!g.ok) return { ok: false };
   const page = await getContactTimeline(g.tenantId, g.clientId, contactId, { cursor: cursor ?? undefined, kinds, limit: 15 });
   return { ok: true, page };
 }
@@ -50,11 +51,17 @@ const GENERIC = "Not found.";
 const INVALID = "Invalid input.";
 const DENIED = "Not allowed.";
 
-async function gate(clientId: string): Promise<{ tenantId: string; clientId: string; actor: CrmActor } | null> {
-  const resolved = await resolveClientModuleContext(clientId, "crm");
-  if (!resolved.ok) return null;
+/** The crm module + the permission (contacts.view to read, contacts.edit for every
+ *  write). A refused permission inside the login's own business comes back as
+ *  `forbidden` so the caller can say so (NO_PERMISSION) instead of "Not found". */
+async function gate(
+  clientId: string,
+  permission: "contacts.view" | "contacts.edit" = "contacts.edit",
+): Promise<{ ok: true; tenantId: string; clientId: string; actor: CrmActor } | { ok: false; error: string }> {
+  const resolved = await resolveClientModuleContext(clientId, "crm", permission);
+  if (!resolved.ok) return { ok: false, error: resolved.forbidden ? NO_PERMISSION : GENERIC };
   const { scope, client } = resolved.context;
-  return { tenantId: scope.tenantId, clientId: client.id, actor: { role: scope.role, clientRole: scope.clientRole, userId: scope.userId } };
+  return { ok: true, tenantId: scope.tenantId, clientId: client.id, actor: { userId: scope.userId, permissions: scope.permissions } };
 }
 
 /** The assignee must be a tenant member with access to THIS client (owner/admin: any;
@@ -74,7 +81,7 @@ export async function addNoteAction(clientId: string, contactId: string, body: s
   const v = parse(CreateNoteInput, { clientId, contactId, body });
   if (!v.ok) return { ok: false, error: INVALID };
   const g = await gate(clientId);
-  if (!g) return { ok: false, error: GENERIC };
+  if (!g.ok) return { ok: false, error: g.error };
   const row = await createNote({ tenantId: g.tenantId, clientId: g.clientId, contactId, body: v.value.body, createdByUserId: g.actor.userId });
   if (!row) return { ok: false, error: GENERIC };
   touch(g.clientId, contactId);
@@ -85,7 +92,7 @@ export async function editNoteAction(clientId: string, noteId: string, body: str
   const v = parse(UpdateNoteInput, { clientId, noteId, body });
   if (!v.ok) return { ok: false, error: INVALID };
   const g = await gate(clientId);
-  if (!g) return { ok: false, error: GENERIC };
+  if (!g.ok) return { ok: false, error: g.error };
   const note = await getNoteById(g.tenantId, g.clientId, noteId);
   if (!note) return { ok: false, error: GENERIC };
   if (!canEditNote(g.actor, note)) return { ok: false, error: DENIED };
@@ -99,7 +106,7 @@ export async function deleteNoteAction(clientId: string, noteId: string): Promis
   const v = parse(NoteRefInput, { clientId, noteId });
   if (!v.ok) return { ok: false, error: INVALID };
   const g = await gate(clientId);
-  if (!g) return { ok: false, error: GENERIC };
+  if (!g.ok) return { ok: false, error: g.error };
   const note = await getNoteById(g.tenantId, g.clientId, noteId);
   if (!note) return { ok: false, error: GENERIC };
   if (!canEditNote(g.actor, note)) return { ok: false, error: DENIED };
@@ -117,7 +124,7 @@ export async function createTaskAction(
   const v = parse(CreateTaskInput, { clientId, contactId, ...input });
   if (!v.ok) return { ok: false, error: INVALID };
   const g = await gate(clientId);
-  if (!g) return { ok: false, error: GENERIC };
+  if (!g.ok) return { ok: false, error: g.error };
   const decided = resolveAssignee(g.actor, v.value.assignedToUserId);
   if (!decided.ok) return { ok: false, error: DENIED };
   if (decided.assignee && !(await assigneeHasClientAccess(g.tenantId, g.clientId, decided.assignee))) {
@@ -143,7 +150,7 @@ export async function completeTaskAction(clientId: string, taskId: string): Prom
   const v = parse(TaskRefInput, { clientId, taskId });
   if (!v.ok) return { ok: false, error: INVALID };
   const g = await gate(clientId);
-  if (!g) return { ok: false, error: GENERIC };
+  if (!g.ok) return { ok: false, error: g.error };
   const task = await getTaskById(g.tenantId, g.clientId, taskId);
   if (!task) return { ok: false, error: GENERIC };
   if (!canManageTask(g.actor, task)) return { ok: false, error: DENIED };
@@ -156,7 +163,7 @@ export async function reassignTaskAction(clientId: string, taskId: string, assig
   const v = parse(UpdateTaskInput, { clientId, taskId, assignedToUserId });
   if (!v.ok) return { ok: false, error: INVALID };
   const g = await gate(clientId);
-  if (!g) return { ok: false, error: GENERIC };
+  if (!g.ok) return { ok: false, error: g.error };
   const task = await getTaskById(g.tenantId, g.clientId, taskId);
   if (!task) return { ok: false, error: GENERIC };
   if (!canManageTask(g.actor, task)) return { ok: false, error: DENIED };
@@ -174,7 +181,7 @@ export async function deleteTaskAction(clientId: string, taskId: string): Promis
   const v = parse(TaskRefInput, { clientId, taskId });
   if (!v.ok) return { ok: false, error: INVALID };
   const g = await gate(clientId);
-  if (!g) return { ok: false, error: GENERIC };
+  if (!g.ok) return { ok: false, error: g.error };
   const task = await getTaskById(g.tenantId, g.clientId, taskId);
   if (!task) return { ok: false, error: GENERIC };
   if (!canManageTask(g.actor, task)) return { ok: false, error: DENIED };
@@ -188,8 +195,8 @@ export async function createTagAction(clientId: string, name: string, color: str
   const v = parse(CreateTagInput, { clientId, name, color });
   if (!v.ok) return { ok: false, error: INVALID };
   const g = await gate(clientId);
-  if (!g) return { ok: false, error: GENERIC };
-  if (!canManageTagCatalog(g.actor)) return { ok: false, error: DENIED };
+  if (!g.ok) return { ok: false, error: g.error };
+  if (!canManageTagCatalog(g.actor)) return { ok: false, error: NO_PERMISSION };
   const r = await createTag({ tenantId: g.tenantId, clientId: g.clientId, name: v.value.name, color: v.value.color });
   if (!r.ok) return { ok: false, error: "A tag with that name already exists." };
   touch(g.clientId);
@@ -200,8 +207,8 @@ export async function renameTagAction(clientId: string, tagId: string, name?: st
   const v = parse(RenameTagInput, { clientId, tagId, ...(name !== undefined ? { name } : {}), ...(color !== undefined ? { color } : {}) });
   if (!v.ok) return { ok: false, error: INVALID };
   const g = await gate(clientId);
-  if (!g) return { ok: false, error: GENERIC };
-  if (!canManageTagCatalog(g.actor)) return { ok: false, error: DENIED };
+  if (!g.ok) return { ok: false, error: g.error };
+  if (!canManageTagCatalog(g.actor)) return { ok: false, error: NO_PERMISSION };
   const r = await renameTag({ tenantId: g.tenantId, clientId: g.clientId, tagId, name: v.value.name, color: v.value.color });
   if (!r || !r.ok) return { ok: false, error: GENERIC };
   touch(g.clientId);
@@ -212,7 +219,7 @@ export async function attachTagAction(clientId: string, contactId: string, tagId
   const v = parse(TagLinkInput, { clientId, contactId, tagId });
   if (!v.ok) return { ok: false, error: INVALID };
   const g = await gate(clientId);
-  if (!g) return { ok: false, error: GENERIC };
+  if (!g.ok) return { ok: false, error: g.error };
   const r = await attachTag({ tenantId: g.tenantId, clientId: g.clientId, contactId, tagId, actorUserId: g.actor.userId });
   if (!r.ok) return { ok: false, error: GENERIC };
   touch(g.clientId, contactId);
@@ -223,7 +230,7 @@ export async function detachTagAction(clientId: string, contactId: string, tagId
   const v = parse(TagLinkInput, { clientId, contactId, tagId });
   if (!v.ok) return { ok: false, error: INVALID };
   const g = await gate(clientId);
-  if (!g) return { ok: false, error: GENERIC };
+  if (!g.ok) return { ok: false, error: g.error };
   const r = await detachTag({ tenantId: g.tenantId, clientId: g.clientId, contactId, tagId, actorUserId: g.actor.userId });
   if (!r.ok) return { ok: false, error: GENERIC };
   touch(g.clientId, contactId);

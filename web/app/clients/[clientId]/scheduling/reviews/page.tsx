@@ -1,6 +1,5 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
-import { canManageClient } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { listReviewsForModeration } from "@worker/db/repositories/scheduling/reviews.js";
 import { listExternalReviewsForClient } from "@worker/db/repositories/scheduling/externalReviews.js";
@@ -22,8 +21,7 @@ import { ReviewsScreen, type OwnReview } from "@/components/scheduling/reviews/R
 export default async function ClientReviewsPage({ params }: { params: Promise<{ clientId: string }> }) {
   await connection();
   const { clientId } = await params;
-  const { scope, client } = await requireClientModulePage(clientId, "scheduling");
-  if (!canManageClient(scope, clientId)) notFound();
+  const { scope, client } = await requireClientModulePage(clientId, "scheduling", "reviews.moderate");
 
   const [rows, external, platform] = await Promise.all([
     listReviewsForModeration(scope.tenantId, client.id),

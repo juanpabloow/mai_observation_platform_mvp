@@ -84,7 +84,9 @@ export default async function AcceptInvitePage({
         ? `staff (${invite.scheduling_staff_name ?? "assigned schedule"}) at ${invite.client_name ?? "a client"}`
         : invite.client_role === "setter"
           ? `a setter at ${invite.client_name ?? "a client"}`
-          : invite.role === "member"
+          : invite.client_role === "custom" && invite.access_role_name
+            ? `«${invite.access_role_name}» at ${invite.client_name ?? "a client"}`
+            : invite.role === "member"
             ? `a member of ${invite.client_name ?? "a client"}`
             : "an admin";
   const session = await getServerSession();

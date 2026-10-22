@@ -2,7 +2,7 @@ import Link from "next/link";
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
-import { canManageCampaigns, hasFullAccess } from "@/lib/access";
+import { can } from "@/lib/access";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { getContactById, listContactConversations } from "@worker/db/repositories/contacts.js";
 import { getContactOriginDetail, listCampaignsWithStats } from "@worker/db/repositories/attribution.js";
@@ -40,10 +40,15 @@ export default async function ClientContactDetailPage({
   await connection();
   const { clientId, contactId } = await params;
   if (!isUuid(contactId)) notFound();
-  const { scope, client } = await requireClientModulePage(clientId, "crm");
+  const { scope, client } = await requireClientModulePage(clientId, "crm", "contacts.view");
   const { from } = await searchParams;
   const tenantId = scope.tenantId;
-  const fullAccess = hasFullAccess(scope);
+  // What this viewer may do here — from its permissions, never its role's name. The
+  // actions re-check every one of them on the server.
+  const manageOthers = can(scope, "contacts.manage_others", client.id);
+  const canDeleteContacts = can(scope, "contacts.delete", client.id);
+  const canTags = can(scope, "contacts.tags", client.id);
+  const canFields = can(scope, "contacts.fields", client.id);
 
   const contact = await getContactById(tenantId, contactId, client.id);
   if (!contact) notFound();
@@ -61,10 +66,13 @@ export default async function ClientContactDetailPage({
       listContactConversations(tenantId, contactId, client.id),
       isClientModuleEnabled(tenantId, client.id, "scheduling"),
       // The duplicate banner + merge/dismiss are owner/admin only — only they need the query.
-      fullAccess ? listCandidatesForContact(tenantId, client.id, contactId) : Promise.resolve([]),
+      canDeleteContacts ? listCandidatesForContact(tenantId, client.id, contactId) : Promise.resolve([]),
       // The whole-contact edit payload, from the SAME loader the list's customer panel
       // uses — one shape, so the two doors into editing cannot drift apart.
-      loadContactEditPayload(tenantId, client.id, contactId, { userId: scope.userId, isFullAccess: fullAccess }),
+      // No contacts.edit → no Edit button at all (the action would refuse it).
+      can(scope, "contacts.edit", client.id)
+        ? loadContactEditPayload(tenantId, client.id, contactId, { userId: scope.userId, canAssignOthers: manageOthers, canDelete: canDeleteContacts, canManageTagCatalog: canTags })
+        : Promise.resolve(null),
       // The record's "Valor del cliente" + "Preferencias" cards. Null for a contact who
       // has never completed a visit, which those cards render as their empty state — the
       // alternative would be printing "$0" at somebody who simply has not come in yet.
@@ -91,7 +99,7 @@ export default async function ClientContactDetailPage({
 
   // Owner/admin may assign to any user with client access; a member only to themselves.
   const assignableMembers = members
-    .filter((m) => (fullAccess ? m.member_client_id === null || m.member_client_id === client.id : m.user_id === scope.userId))
+    .filter((m) => (manageOthers ? m.member_client_id === null || m.member_client_id === client.id : m.user_id === scope.userId))
     .map((m) => ({ userId: m.user_id, email: m.email, name: m.name }));
   const ownerName = contact.assigned_to
     ? members.find((m) => m.user_id === contact.assigned_to)?.name ?? members.find((m) => m.user_id === contact.assigned_to)?.email ?? null
@@ -195,9 +203,9 @@ export default async function ClientContactDetailPage({
           dupName: c.dup_name,
           dupRef: c.dup_ref,
         }))}
-        canManageDuplicates={fullAccess}
-        canEditFieldDefs={fullAccess}
-        canManageTags={fullAccess}
+        canManageDuplicates={canDeleteContacts}
+        canEditFieldDefs={canFields}
+        canManageTags={canTags}
         // READ values come from the SAME payload the drawer edits, so the two modes
         // cannot show different facts about the same contact.
         properties={{
@@ -228,7 +236,7 @@ export default async function ClientContactDetailPage({
         tags={attachedTags.map((t) => ({ id: t.id, name: t.name, color: t.color }))}
         tagCatalogue={tagCatalogue.map((t) => ({ id: t.id, name: t.name, color: t.color }))}
         viewerUserId={scope.userId}
-        viewerIsFullAccess={fullAccess}
+        viewerIsFullAccess={manageOthers}
         mostRecentConversationId={conversations[0]?.id ?? null}
         schedulingEnabled={schedulingEnabled}
         edit={editPayload}
@@ -251,7 +259,7 @@ export default async function ClientContactDetailPage({
               }
             : null
         }
-        canManageOrigin={canManageCampaigns(scope, client.id)}
+        canManageOrigin={can(scope, "campaigns.manage", client.id)}
         originCampaigns={campaigns.map((c) => ({ id: c.id, name: c.name }))}
         pipeline={pipeline}
       />

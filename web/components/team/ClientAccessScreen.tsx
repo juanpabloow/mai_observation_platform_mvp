@@ -6,9 +6,12 @@ import { useRouter } from "next/navigation";
 import { changeClientRoleAction, changeMemberRoleAction, reassignMemberClientAction, removeMemberAction } from "@/lib/memberActions";
 import { createInvitationAction, revokeInvitationAction } from "@/lib/inviteActions";
 import { safeAction } from "@/components/ui/module/safeAction";
-import { canActOnMember, type ClientRole, type TeamClientOption, type TeamMemberView, type TeamSiteOption, type TeamViewer } from "@/components/TeamMembers";
+import { canActOnMember, type TeamClientOption, type TeamMemberView, type TeamSiteOption } from "@/components/TeamMembers";
 import type { TeamInviteView } from "@/components/TeamInvitations";
-import { Alert, Button, Field, INPUT, buttonClass } from "@/components/ui/controls";
+import { Alert, Button, Field, INPUT, Segmented, buttonClass } from "@/components/ui/controls";
+import { SYSTEM_ROLE_PERMISSIONS, permissionDef, type PermissionKey, type SystemRoleKey } from "@/lib/permissions/catalog";
+import { RolesPanel } from "./RolesPanel";
+import { roleChoiceValue, type AccessViewer, type AuditView, type RoleChoice, type RoleView, type SystemRoleView } from "./accessTypes";
 import { Menu as ActionMenu, MenuButton } from "@/components/scheduling/ui/Menu";
 import { Avatar } from "@/components/scheduling/ui/system";
 import { ModuleSurface, SearchField, SurfaceBody, SurfaceTop } from "@/components/ui/module/ModuleSurface";
@@ -27,29 +30,35 @@ import { useUrlState } from "@/components/ui/module/useUrlState";
  * in Agenda → Equipo): a professional only appears here when a login is explicitly LINKED
  * to its staff profile (role «Profesional»).
  *
- * Roles are the real ones (owner / setter / staff), shown with the sidebar's words:
- * Dueño, Recepción, Profesional. What the viewer may do mirrors the server
- * (canActOnMember; the member and invite actions re-check every call):
- *   - a client Owner manages Recepción / Profesional of their own client, never another
- *     Owner, and can never grant Owner, admin or anything agency-wide;
- *   - the agency may also grant Owner, move a login to another client, and — only the
- *     tenant owner — make it an admin.
+ * Roles: the three protected system roles (Dueño, Recepción, Profesional) and the
+ * business's own custom roles (tab «Roles y permisos», RolesPanel). What the viewer may do
+ * is computed on the SERVER with the delegation rules and arrives as flags and option
+ * lists (member.canManage, invite.canRevoke, viewer.assignable); the member and invite
+ * actions re-check every call:
+ *   - nobody gives a role wider than their own permissions, or acts on a wider one;
+ *   - only the agency gives, changes or removes a Dueño, moves a login to another client,
+ *     and — only the tenant owner — makes it an admin;
+ *   - nobody changes their own access.
  * There is no per-site access and no «last access» in the model, so neither is shown.
  */
 
-const ROLE_LABEL: Record<ClientRole, string> = { owner: "Dueño", setter: "Recepción", staff: "Profesional" };
-/** One tone per role — none of them the green of «Activo» or the amber of «pendiente». */
-const ROLE_TONE: Record<ClientRole, string> = {
+/** One tone per system role — none of them the green of «Activo» or the amber of «pendiente».
+ *  A custom role reads neutral: its name says what it is, not a colour. */
+const ROLE_TONE: Record<string, string> = {
   owner: "bg-violet-500/15 text-violet-700 dark:text-violet-300",
   setter: "bg-sky-500/15 text-sky-700 dark:text-sky-300",
   staff: "bg-teal-500/15 text-teal-700 dark:text-teal-300",
-};
-const ROLE_HINT: Record<ClientRole, string> = {
-  owner: "Control total de este negocio: personas, configuración y todo lo demás.",
-  setter: "Conversaciones, contactos y agenda. No ve analíticas, reuniones ni configuración.",
-  staff: "Solo su propia agenda. Sin contactos ni bandeja de entrada.",
+  custom: "bg-chip text-foreground",
 };
 const INVITES = "invitaciones";
+const ROLES_TAB = "roles";
+
+/** The permissions a role choice carries (system: code; custom: the business's role). */
+function permissionsOfChoice(value: string, roles: RoleView[]): Set<PermissionKey> {
+  if (value.startsWith("sys:")) return new Set(SYSTEM_ROLE_PERMISSIONS[value.slice(4) as SystemRoleKey] ?? []);
+  const r = roles.find((x) => `custom:${x.id}` === value);
+  return new Set((r?.permissions ?? []) as PermissionKey[]);
+}
 
 type Row = { kind: "member"; m: TeamMemberView } | { kind: "invite"; i: TeamInviteView };
 const inviteState = (i: TeamInviteView) => (i.status === "pending" && i.isExpired ? "expired" : i.status);
@@ -71,6 +80,10 @@ export function ClientAccessScreen({
   sites,
   clients,
   viewer,
+  roles,
+  systemRoles,
+  audit,
+  modules,
 }: {
   clientId: string;
   clientLabel: string;
@@ -78,9 +91,14 @@ export function ClientAccessScreen({
   invites: TeamInviteView[];
   sites: TeamSiteOption[];
   clients: TeamClientOption[];
-  viewer: TeamViewer;
+  viewer: AccessViewer;
+  roles: RoleView[];
+  systemRoles: SystemRoleView[];
+  audit: AuditView[];
+  modules: string[];
 }) {
   const router = useRouter();
+  const [tab, setTab] = useUrlState("vista", "");
   const [pending, start] = useTransition();
   const [filter, setFilter] = useUrlState("rol", "");
   const [query, setQuery] = useUrlState("q", "");
@@ -91,14 +109,18 @@ export function ClientAccessScreen({
   const opener = useRef("invite");
 
   const pendingInvites = invites.filter((i) => inviteState(i) === "pending");
-  const count = (r: ClientRole) => members.filter((m) => m.clientRole === r).length;
-  const view = filter === INVITES || filter === "owner" || filter === "setter" || filter === "staff" ? filter : "";
+  const choiceOf = (m: TeamMemberView) => roleChoiceValue(m.clientRole, m.accessRoleId ?? null);
+  const roleFilters = [
+    ...systemRoles.map((r) => ({ value: `sys:${r.key}`, label: r.label })),
+    ...roles.map((r) => ({ value: `custom:${r.id}`, label: r.name })),
+  ];
+  const view = filter === INVITES || roleFilters.some((r) => r.value === filter) ? filter : "";
   const q = query.trim().toLocaleLowerCase("es");
   const rows: Row[] =
     view === INVITES
       ? invites.map((i) => ({ kind: "invite", i }))
       : [
-          ...members.filter((m) => !view || m.clientRole === view).map((m): Row => ({ kind: "member", m })),
+          ...members.filter((m) => !view || choiceOf(m) === view).map((m): Row => ({ kind: "member", m })),
           ...(view ? [] : pendingInvites.map((i): Row => ({ kind: "invite", i }))),
         ];
   const shown = rows.filter((r) => !q || (r.kind === "member" ? r.m.email : r.i.email).toLocaleLowerCase("es").includes(q));
@@ -107,13 +129,22 @@ export function ClientAccessScreen({
       label: "Rol",
       options: [
         { value: "", label: "Todos los roles", count: members.length + pendingInvites.length },
-        { value: "owner", label: "Dueño", count: count("owner") },
-        { value: "setter", label: "Recepción", count: count("setter") },
-        { value: "staff", label: "Profesional", count: count("staff") },
+        ...roleFilters.map((r) => ({ ...r, count: members.filter((m) => choiceOf(m) === r.value).length })),
       ],
     },
     { label: "Otros", options: [{ value: INVITES, label: "Todas las invitaciones", count: invites.length }] },
   ];
+  const tabs = (
+    <Segmented
+      label="Vista"
+      value={tab === ROLES_TAB ? ROLES_TAB : ""}
+      options={[
+        { value: "", label: "Usuarios" },
+        { value: ROLES_TAB, label: "Roles y permisos" },
+      ]}
+      onChange={setTab}
+    />
+  );
 
   const go = (target: TeamMemberView | "invite") => {
     setMenu(null);
@@ -129,19 +160,24 @@ export function ClientAccessScreen({
   if (open === "invite") {
     return (
       <ModuleSurface label="Usuarios y accesos">
-        <InviteEditor clientId={clientId} clientLabel={clientLabel} sites={sites} canInviteOwner={viewer.canAssignOwner} onClose={close} />
+        <InviteEditor clientId={clientId} clientLabel={clientLabel} sites={sites} viewer={viewer} roles={roles} onClose={close} />
       </ModuleSurface>
     );
   }
   if (open) {
     return (
       <ModuleSurface label="Usuarios y accesos">
-        <MemberEditor key={open.userId} member={open} sites={sites} clients={clients} viewer={viewer} onClose={close} />
+        <MemberEditor key={open.userId} member={open} sites={sites} clients={clients} viewer={viewer} roles={roles} onClose={close} />
       </ModuleSurface>
     );
   }
+  if (tab === ROLES_TAB) {
+    return <RolesPanel clientId={clientId} roles={roles} systemRoles={systemRoles} viewer={viewer} audit={audit} modules={modules} tabs={tabs} />;
+  }
 
-  const roleChip = (r: ClientRole | null) => <span className={`rounded-full px-2 py-0.5 text-[0.75rem] font-medium ${r ? ROLE_TONE[r] : "bg-chip text-muted"}`}>{r ? ROLE_LABEL[r] : "—"}</span>;
+  const roleChip = (r: string | null, name: string | null | undefined) => (
+    <span className={`rounded-full px-2 py-0.5 text-[0.75rem] font-medium ${r ? (ROLE_TONE[r] ?? ROLE_TONE.custom) : "bg-chip text-muted"}`}>{name ?? "—"}</span>
+  );
   const stateChip = (row: Row) =>
     row.kind === "member" ? (
       <span className="rounded-full bg-success/15 px-2 py-0.5 text-[0.7188rem] font-medium text-success">Activo</span>
@@ -158,7 +194,7 @@ export function ClientAccessScreen({
         : "—";
   const keyOf = (row: Row) => (row.kind === "member" ? row.m.userId : `inv:${row.i.id}`);
   const inviteMenu = (i: TeamInviteView, at: "t" | "m") =>
-    inviteState(i) === "pending" ? (
+    inviteState(i) === "pending" && i.canRevoke !== false ? (
       <ActionMenu label={`Acciones de la invitación a ${i.email}`} open={menu === `${at}:${i.id}`} onToggle={() => setMenu(menu === `${at}:${i.id}` ? null : `${at}:${i.id}`)} onClose={() => setMenu(null)}>
         <MenuButton
           disabled={pending}
@@ -183,14 +219,17 @@ export function ClientAccessScreen({
           </Link>
         }
         primary={
-          <Button variant="primary" data-open-key="invite" onClick={() => go("invite")}>
-            <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
-              <path d="M8 3v10M3 8h10" />
-            </svg>
-            Invitar usuario
-          </Button>
+          viewer.canManageMembers && viewer.assignable.length > 0 ? (
+            <Button variant="primary" data-open-key="invite" onClick={() => go("invite")}>
+              <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.8">
+                <path d="M8 3v10M3 8h10" />
+              </svg>
+              Invitar usuario
+            </Button>
+          ) : undefined
         }
       >
+        {tabs}
         <SearchField value={query} onChange={setQuery} label="Buscar por correo" />
         <FilterSelect groups={groups} value={view} onChange={setFilter} label="Rol" always className="w-full sm:w-auto sm:min-w-[12rem]" />
       </SurfaceTop>
@@ -212,9 +251,11 @@ export function ClientAccessScreen({
         </div>
         {members.length === 0 && invites.length === 0 ? (
           <EmptyState title="Nadie más tiene acceso todavía" body="Invita a quien trabaja en el negocio y elige su rol.">
-            <Button variant="primary" onClick={() => go("invite")}>
-              Invitar usuario
-            </Button>
+            {viewer.canManageMembers && viewer.assignable.length > 0 ? (
+              <Button variant="primary" onClick={() => go("invite")}>
+                Invitar usuario
+              </Button>
+            ) : null}
           </EmptyState>
         ) : shown.length === 0 ? (
           <NoResults>
@@ -242,7 +283,7 @@ export function ClientAccessScreen({
                         <span className="truncate">{row.kind === "member" ? row.m.email : row.i.email}</span>
                         {row.kind === "member" && row.m.isYou ? <span className="shrink-0 rounded bg-chip px-1.5 text-[0.6875rem] font-normal text-muted">Tú</span> : null}
                       </span>,
-                      roleChip(row.kind === "member" ? row.m.clientRole : row.i.clientRole),
+                      roleChip(row.kind === "member" ? row.m.clientRole : row.i.clientRole, row.kind === "member" ? row.m.roleLabel : row.i.roleLabel),
                       <span key="l" className="text-muted">{link(row)}</span>,
                       stateChip(row),
                     ]}
@@ -257,7 +298,7 @@ export function ClientAccessScreen({
                     key={keyOf(row)}
                     title={row.kind === "member" ? row.m.email : row.i.email}
                     openKey={keyOf(row)}
-                    subtitle={`${(row.kind === "member" ? row.m.clientRole : row.i.clientRole) ? ROLE_LABEL[(row.kind === "member" ? row.m.clientRole : row.i.clientRole) as ClientRole] : "—"}${link(row) !== "—" ? ` · ${link(row)}` : ""}`}
+                    subtitle={`${(row.kind === "member" ? row.m.roleLabel : row.i.roleLabel) ?? "—"}${link(row) !== "—" ? ` · ${link(row)}` : ""}`}
                     badges={stateChip(row)}
                     onOpen={row.kind === "member" ? () => go(row.m) : undefined}
                     openLabel="Abrir"
@@ -299,23 +340,26 @@ function MemberEditor({
   sites,
   clients,
   viewer,
+  roles,
   onClose,
 }: {
   member: TeamMemberView;
   sites: TeamSiteOption[];
   clients: TeamClientOption[];
-  viewer: TeamViewer;
+  viewer: AccessViewer;
+  roles: RoleView[];
   onClose: (saved: boolean) => void;
 }) {
   const manageable = canActOnMember(member, viewer);
   const initial = useMemo(() => {
     const siteId = member.schedulingSiteId ?? sites[0]?.id ?? "";
-    return { role: (member.clientRole ?? "setter") as ClientRole, siteId, staffId: member.schedulingStaffId ?? sites.find((s) => s.id === siteId)?.staff[0]?.id ?? "" };
+    return { role: roleChoiceValue(member.clientRole, member.accessRoleId ?? null), siteId, staffId: member.schedulingStaffId ?? sites.find((s) => s.id === siteId)?.staff[0]?.id ?? "" };
   }, [member, sites]);
   const [f, setF] = useState(initial);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirmRemove, setConfirmRemove] = useState(false);
+  const [confirmRole, setConfirmRole] = useState(false);
   const [busy, start] = useTransition();
   const saved = useRef(false);
   const changes = manageable ? countChanges(initial, f) : 0;
@@ -324,20 +368,40 @@ function MemberEditor({
     if (!saving) guard.requestLeave();
   };
   const site = sites.find((s) => s.id === f.siteId);
-  const roleOptions = (viewer.canAssignOwner ? (["owner", "setter", "staff"] as const) : (["setter", "staff"] as const)).map((r) => ({ value: r, label: ROLE_LABEL[r] }));
-  const staffMissing = f.role === "staff" && (!f.siteId || !f.staffId);
+  // The roles this viewer may give — server-computed (delegation rules), plus the current
+  // one so the selection always shows what the person has today.
+  const choices: RoleChoice[] = viewer.assignable.some((c) => c.value === initial.role)
+    ? viewer.assignable
+    : [{ value: initial.role, label: member.roleLabel ?? "—", hint: "", clientRole: (member.clientRole ?? "setter") as RoleChoice["clientRole"], accessRoleId: member.accessRoleId ?? null }, ...viewer.assignable];
+  const choice = choices.find((c) => c.value === f.role);
+  const roleOptions = choices.map((c) => ({ value: c.value, label: c.label }));
+  const isStaff = f.role === "sys:staff";
+  const staffMissing = isStaff && (!f.siteId || !f.staffId);
+  // What changes for the person — the confirmation summary when access is taken away or
+  // something sensitive is given.
+  const before = permissionsOfChoice(initial.role, roles);
+  const after = permissionsOfChoice(f.role, roles);
+  const gained = [...after].filter((k) => !before.has(k));
+  const lost = [...before].filter((k) => !after.has(k));
+  const gainedSensitive = gained.filter((k) => permissionDef(k).sensitive);
 
   const save = async () => {
     if (!member.clientId || staffMissing) return;
+    if (f.role !== initial.role && !confirmRole && (lost.length > 0 || gainedSensitive.length > 0)) {
+      setConfirmRole(true);
+      return;
+    }
+    setConfirmRole(false);
     setSaving(true);
     setError(null);
     try {
       const r = await changeClientRoleAction({
         targetUserId: member.userId,
         clientId: member.clientId,
-        clientRole: f.role,
-        siteId: f.role === "staff" ? f.siteId : null,
-        staffId: f.role === "staff" ? f.staffId : null,
+        clientRole: choice?.clientRole ?? "setter",
+        accessRoleId: choice?.accessRoleId ?? null,
+        siteId: isStaff ? f.siteId : null,
+        staffId: isStaff ? f.staffId : null,
       });
       setSaving(false);
       if (!r.ok) {
@@ -369,7 +433,11 @@ function MemberEditor({
       ? "Es tu propia cuenta de dueño: nadie del negocio puede cambiarla; solo la agencia."
       : member.clientRole === "owner" && !viewer.agency
         ? "Solo la agencia puede cambiar o quitar el acceso de un dueño."
-        : "No tienes permiso para cambiar esta cuenta.";
+        : member.isYou
+          ? "Es tu propia cuenta: nadie puede cambiar su propio acceso."
+          : viewer.canManageMembers
+            ? "Esta cuenta tiene permisos que tú no tienes, así que no puedes cambiarla."
+            : "No tienes permiso para cambiar esta cuenta.";
 
   return (
     <div
@@ -384,7 +452,7 @@ function MemberEditor({
         title={member.email}
         headingId="member-editor-title"
         eyebrow={member.isYou ? "Tu cuenta" : "Cuenta de acceso"}
-        chips={member.clientRole ? <span className={`rounded-full px-2 py-0.5 text-[0.75rem] font-medium ${ROLE_TONE[member.clientRole]}`}>{ROLE_LABEL[member.clientRole]}</span> : <MetaChip>—</MetaChip>}
+        chips={member.clientRole ? <span className={`rounded-full px-2 py-0.5 text-[0.75rem] font-medium ${ROLE_TONE[member.clientRole] ?? ROLE_TONE.custom}`}>{member.roleLabel ?? "—"}</span> : <MetaChip>—</MetaChip>}
         backLabel="Volver a Usuarios y accesos"
         onBack={requestClose}
         changes={changes}
@@ -409,21 +477,21 @@ function MemberEditor({
             <Alert>{error}</Alert>
           </div>
         ) : null}
-        <EditorSection id="mem-role" title="Rol y acceso" summary={ROLE_LABEL[f.role]}>
+        <EditorSection id="mem-role" title="Rol y acceso" summary={choice?.label ?? "—"}>
           {!manageable ? (
             <>
               <Notice>{readOnlyWhy}</Notice>
               <p className="text-[0.8438rem]">
-                Rol: <strong className="font-semibold">{member.clientRole ? ROLE_LABEL[member.clientRole] : "—"}</strong>
+                Rol: <strong className="font-semibold">{member.roleLabel ?? "—"}</strong>
                 {member.clientRole === "staff" ? ` · ${member.schedulingStaffName ?? "—"} (${member.schedulingSiteName ?? "—"})` : ""}
               </p>
             </>
           ) : (
             <>
-              <FieldGroup legend="Rol" hint={ROLE_HINT[f.role]}>
+              <FieldGroup legend="Rol" hint={choice?.hint}>
                 <ChoiceChips name="member-role" value={f.role} options={roleOptions} onChange={(v) => setF((x) => ({ ...x, role: v }))} />
               </FieldGroup>
-              {f.role === "staff" ? (
+              {isStaff ? (
                 <div className="grid gap-4 sm:grid-cols-2">
                   <Field label="Sede">
                     <select
@@ -489,6 +557,32 @@ function MemberEditor({
           </EditorSection>
         ) : null}
       </EditorFrame>
+      {confirmRole ? (
+        <ConfirmLayer
+          id="member-role-confirm"
+          title={`¿Cambiar el rol de ${member.email} a «${choice?.label ?? "—"}»?`}
+          tone="primary"
+          confirmLabel="Cambiar rol"
+          pending={saving}
+          onCancel={() => setConfirmRole(false)}
+          onConfirm={() => void save()}
+          body={
+            <div className="flex flex-col gap-2 text-[0.8438rem]">
+              {lost.length ? (
+                <p>
+                  <strong className="font-semibold">Pierde:</strong> {lost.map((k) => permissionDef(k).label).join(", ")}.
+                </p>
+              ) : null}
+              {gainedSensitive.length ? (
+                <p>
+                  <strong className="font-semibold">Gana capacidades sensibles:</strong> {gainedSensitive.map((k) => permissionDef(k).label).join(", ")}.
+                </p>
+              ) : null}
+              <p>Se aplica en su siguiente acción, sin cerrar sesión.</p>
+            </div>
+          }
+        />
+      ) : null}
       {confirmRemove ? (
         <ConfirmLayer
           id="member-remove"
@@ -513,17 +607,23 @@ function InviteEditor({
   clientId,
   clientLabel,
   sites,
-  canInviteOwner,
+  viewer,
+  roles,
   onClose,
 }: {
   clientId: string;
   clientLabel: string;
   sites: TeamSiteOption[];
-  canInviteOwner: boolean;
+  viewer: AccessViewer;
+  roles: RoleView[];
   onClose: (saved: boolean) => void;
 }) {
+  const canInviteOwner = viewer.canAssignOwner;
+  const choices = viewer.assignable;
   const [email, setEmail] = useState("");
-  const [role, setRole] = useState<ClientRole>("setter");
+  const [role, setRole] = useState<string>(choices.find((c) => c.value === "sys:setter")?.value ?? choices[0]?.value ?? "");
+  const choice = choices.find((c) => c.value === role);
+  const sensitive = [...permissionsOfChoice(role, roles)].filter((k) => permissionDef(k).sensitive);
   const [siteId, setSiteId] = useState(sites[0]?.id ?? "");
   const [staffId, setStaffId] = useState(sites[0]?.staff[0]?.id ?? "");
   const [attempted, setAttempted] = useState(false);
@@ -537,12 +637,13 @@ function InviteEditor({
   };
   const site = sites.find((s) => s.id === siteId);
   const emailError = attempted && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) ? "Escribe un correo válido." : "";
-  const staffMissing = role === "staff" && (!siteId || !staffId);
-  const roleOptions = (canInviteOwner ? (["owner", "setter", "staff"] as const) : (["setter", "staff"] as const)).map((r) => ({ value: r, label: ROLE_LABEL[r] }));
+  const isStaff = role === "sys:staff";
+  const staffMissing = isStaff && (!siteId || !staffId);
+  const roleOptions = choices.map((c) => ({ value: c.value, label: c.label }));
 
   const send = async () => {
     setAttempted(true);
-    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) || staffMissing) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) || staffMissing || !choice) return;
     setSending(true);
     setResult(null);
     try {
@@ -550,9 +651,10 @@ function InviteEditor({
         email: email.trim(),
         role: "member",
         memberClientId: clientId,
-        clientRole: role,
-        schedulingSiteId: role === "staff" ? siteId : null,
-        schedulingStaffId: role === "staff" ? staffId : null,
+        clientRole: choice.clientRole,
+        accessRoleId: choice.accessRoleId,
+        schedulingSiteId: isStaff ? siteId : null,
+        schedulingStaffId: isStaff ? staffId : null,
       });
       setResult(r);
       if (r.ok) sent.current = true;
@@ -576,7 +678,7 @@ function InviteEditor({
         title="Invitar usuario"
         headingId="invite-editor-title"
         eyebrow={`Acceso a ${clientLabel}`}
-        chips={<MetaChip>{ROLE_LABEL[role]}</MetaChip>}
+        chips={<MetaChip>{choice?.label ?? "—"}</MetaChip>}
         backLabel="Volver a Usuarios y accesos"
         onBack={requestClose}
         changes={dirty ? 1 : 0}
@@ -619,11 +721,12 @@ function InviteEditor({
             <input id="inv-f-email" type="email" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="persona@negocio.com" aria-invalid={Boolean(emailError)} className={INPUT} autoComplete="off" />
           </Field>
         </EditorSection>
-        <EditorSection id="inv-role" title="Rol" summary={ROLE_LABEL[role]}>
-          <FieldGroup legend="Rol" hint={ROLE_HINT[role]}>
+        <EditorSection id="inv-role" title="Rol" summary={choice?.label ?? "—"}>
+          <FieldGroup legend="Rol" hint={choice?.hint}>
             <ChoiceChips name="invite-role" value={role} options={roleOptions} onChange={setRole} />
           </FieldGroup>
-          {role === "staff" ? (
+          {sensitive.length ? <Notice tone="warn">Este rol incluye capacidades sensibles: {sensitive.map((k) => permissionDef(k).label).join(", ")}.</Notice> : null}
+          {isStaff ? (
             sites.length === 0 ? (
               <Notice tone="warn">No hay sedes con profesionales activos que reciban reservas: crea uno en Agenda → Equipo.</Notice>
             ) : (

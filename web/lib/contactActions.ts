@@ -3,9 +3,8 @@
 import { revalidatePath } from "next/cache";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { isUuid } from "./clientModuleValidation";
-import { hasFullAccess } from "./access";
+import { NO_PERMISSION, can } from "./access";
 import { parseContactPatch, parseContactCreate } from "./contactActionValidation";
-import { isFullAccess as actorIsFullAccess } from "./crmPermissions";
 import { updateContact, deleteContact, type UpdateContactInput } from "@worker/db/repositories/contacts.js";
 import { getMemberInTenant } from "@worker/db/repositories/tenantMembers.js";
 import { listFieldDefinitions, validateCustomFieldValues } from "@worker/db/repositories/clientFieldDefinitions.js";
@@ -41,8 +40,8 @@ export async function updateContactAction(
   if (!isUuid(contactId)) return { ok: false, error: GENERIC };
   const parsedPatch = parseContactPatch(patch);
   if (!parsedPatch.ok) return { ok: false, error: parsedPatch.error ?? GENERIC };
-  const resolved = await resolveClientModuleContext(clientId, "crm");
-  if (!resolved.ok) return { ok: false, error: GENERIC };
+  const resolved = await resolveClientModuleContext(clientId, "crm", "contacts.edit");
+  if (!resolved.ok) return { ok: false, error: resolved.forbidden ? NO_PERMISSION : GENERIC };
   const { scope, client } = resolved.context;
 
   // Build the repo patch from validated fields; the two dynamic ones (owner, custom
@@ -118,8 +117,8 @@ export type ContactCreateResult =
 export async function createContactAction(clientId: string, input: unknown): Promise<ContactCreateResult> {
   const parsed = parseContactCreate(input);
   if (!parsed.ok) return { ok: false, error: parsed.error };
-  const resolved = await resolveClientModuleContext(clientId, "crm");
-  if (!resolved.ok) return { ok: false, error: GENERIC };
+  const resolved = await resolveClientModuleContext(clientId, "crm", "contacts.edit");
+  if (!resolved.ok) return { ok: false, error: resolved.forbidden ? NO_PERMISSION : GENERIC };
   const { scope, client } = resolved.context;
   const tenantId = scope.tenantId;
   const v = parsed.value;
@@ -201,7 +200,7 @@ export async function createContactAction(clientId: string, input: unknown): Pro
   if (wantedTags.length > 0) {
     const catalogue = await listTags(tenantId, client.id);
     const byName = new Map(catalogue.map((t) => [t.name.toLowerCase(), t.id]));
-    const mayCreate = actorIsFullAccess({ role: scope.role, clientRole: scope.clientRole, userId: scope.userId });
+    const mayCreate = can(scope, "contacts.tags", client.id);
     for (const name of wantedTags) {
       let tagId = byName.get(name.toLowerCase());
       if (!tagId) {
@@ -262,7 +261,7 @@ export async function lookupIdentityAction(
   if (typeof value !== "string" || value.trim() === "" || value.length > 256) return { ok: false };
   if (kind !== "phone" && kind !== "email") return { ok: false };
   if (excludeContactId && !isUuid(excludeContactId)) return { ok: false };
-  const resolved = await resolveClientModuleContext(clientId, "crm");
+  const resolved = await resolveClientModuleContext(clientId, "crm", "contacts.view");
   if (!resolved.ok) return { ok: false };
   const { scope, client } = resolved.context;
   const { matches, total } = await findContactMatchesByIdentity(scope.tenantId, client.id, value, {
@@ -286,16 +285,15 @@ export async function lookupIdentityAction(
 // ── Delete ─────────────────────────────────────────────────────────────────────
 
 /**
- * Delete a contact. Owner/admin only — a member may edit the people they work with but
+ * Delete a contact. contacts.delete (agency-only among the system roles) — a member may edit the people they work with but
  * not erase them, which matches how the tag catalogue and merge are already gated.
  * The repo call is client-scoped, so a forged id from another client deletes nothing.
  */
 export async function deleteContactAction(clientId: string, contactId: string): Promise<ContactActionResult> {
   if (!isUuid(contactId)) return { ok: false, error: GENERIC };
-  const resolved = await resolveClientModuleContext(clientId, "crm");
-  if (!resolved.ok) return { ok: false, error: GENERIC };
+  const resolved = await resolveClientModuleContext(clientId, "crm", "contacts.delete");
+  if (!resolved.ok) return { ok: false, error: resolved.forbidden ? NO_PERMISSION : GENERIC };
   const { scope, client } = resolved.context;
-  if (!hasFullAccess(scope)) return { ok: false, error: GENERIC };
 
   const gone = await deleteContact(scope.tenantId, client.id, contactId);
   if (!gone) return { ok: false, error: GENERIC };
@@ -310,10 +308,9 @@ export async function mergeContactsAction(
   dropId: string,
 ): Promise<ContactActionResult> {
   if (!isUuid(keepId) || !isUuid(dropId)) return { ok: false, error: GENERIC };
-  const resolved = await resolveClientModuleContext(clientId, "crm");
-  if (!resolved.ok) return { ok: false, error: GENERIC };
-  const { scope, client } = resolved.context;
-  if (!hasFullAccess(scope)) return { ok: false, error: GENERIC }; // owner/admin only
+  const resolved = await resolveClientModuleContext(clientId, "crm", "contacts.delete");
+  if (!resolved.ok) return { ok: false, error: resolved.forbidden ? NO_PERMISSION : GENERIC };
+  const { scope, client } = resolved.context; // owner/admin only
 
   const result = await mergeContacts(scope.tenantId, client.id, keepId, dropId, scope.userId);
   if (!result.ok) return { ok: false, error: GENERIC };
@@ -324,10 +321,9 @@ export async function mergeContactsAction(
 /** Dismiss a duplicate candidate (they aren't the same person). Owner/admin only. */
 export async function dismissCandidateAction(clientId: string, candidateId: string): Promise<ContactActionResult> {
   if (!isUuid(candidateId)) return { ok: false, error: GENERIC };
-  const resolved = await resolveClientModuleContext(clientId, "crm");
-  if (!resolved.ok) return { ok: false, error: GENERIC };
+  const resolved = await resolveClientModuleContext(clientId, "crm", "contacts.delete");
+  if (!resolved.ok) return { ok: false, error: resolved.forbidden ? NO_PERMISSION : GENERIC };
   const { scope, client } = resolved.context;
-  if (!hasFullAccess(scope)) return { ok: false, error: GENERIC };
 
   await dismissCandidate(scope.tenantId, client.id, candidateId);
   revalidatePath(`/clients/${client.id}/contacts`);
