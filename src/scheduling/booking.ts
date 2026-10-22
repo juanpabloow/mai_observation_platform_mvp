@@ -74,6 +74,10 @@ export interface CreateAppointmentInput {
   customerName?: string | null;
   customerPhone?: string | null;
   customerEmail?: string | null;
+  /** A walk-in the operator chose NOT to save as a contact: what they typed is kept on the
+   *  appointment (shown again on reopen), never resolved into a contact. Ignored when the
+   *  booking ends up linked to a contact. */
+  guest?: { name: string | null; phone: string | null; email: string | null } | null;
   /** I-1: additional identities the booking declares for the appointment's contact (the
    *  attendee) — attached through the same identity chokepoint as everything else. Applies to
    *  the resolve paths (customer_phone / channel_user_id); the EXPLICIT-contact path (contactId)
@@ -415,6 +419,7 @@ export async function createAppointment(
         createdByType: input.createdByType,
         createdByUserId: input.createdByUserId ?? null,
         idempotencyKey: input.idempotencyKey ?? null,
+        guest: input.guest ?? null,
       });
 
       await recordAppointmentEvent(

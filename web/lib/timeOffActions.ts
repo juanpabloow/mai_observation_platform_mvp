@@ -41,8 +41,13 @@ import { listActiveAppointmentsOverlapping } from "@worker/db/repositories/sched
 
 export interface TimeOffConflict {
   id: string;
+  staff_id: string;
   staff_name: string | null;
+  service_id: string;
   service_name: string;
+  duration_min: number;
+  status: string;
+  /** Contact name, else a walk-in's typed name (display only). */
   contact_name: string | null;
   start_at: string; // ISO UTC
   service_end_at: string; // ISO UTC
@@ -76,9 +81,13 @@ async function requireTimeOff(clientId: string, siteWide: boolean): Promise<Scop
 function toConflict(a: Awaited<ReturnType<typeof listActiveAppointmentsOverlapping>>[number]): TimeOffConflict {
   return {
     id: a.id,
+    staff_id: a.staff_id,
     staff_name: a.staff_name,
+    service_id: a.service_id,
     service_name: a.service_name,
-    contact_name: a.contact_name,
+    duration_min: a.duration_min,
+    status: a.status,
+    contact_name: a.contact_name ?? a.guest_name,
     start_at: a.start_at.toISOString(),
     service_end_at: a.service_end_at.toISOString(),
   };
@@ -263,4 +272,41 @@ export async function deleteTimeOffAction(clientId: string, id: string): Promise
   if (!ok) return { ok: false, error: FOREIGN };
   revalidate(clientId);
   return { ok: true };
+}
+
+/**
+ * READ-ONLY preview for the block form: the active appointments a dated block would leave
+ * inside it. Same gate, ownership and tz anchoring as writeTimeOff; writes nothing.
+ */
+export async function previewTimeOffAction(
+  input: { clientId: string; siteId: string; staffId?: string | null; excludeBlockId?: string | null } & TimeOffInput,
+): Promise<{ ok: true; conflicts: TimeOffConflict[] } | { ok: false; error: string }> {
+  const siteWide = !input.staffId;
+  const auth = await requireTimeOff(input.clientId, siteWide);
+  if (!auth.ok) return auth;
+  const site = await getSiteById(auth.tenantId, input.siteId);
+  if (!site || site.client_id !== input.clientId) return { ok: false, error: FOREIGN };
+  if (input.staffId) {
+    const st = await getStaffById(auth.tenantId, input.staffId);
+    if (!st || st.site_id !== input.siteId) return { ok: false, error: FOREIGN };
+  }
+  const shape = normalizeTimeOff(input);
+  if (!shape.ok) return { ok: false, error: shape.error };
+  let startsAt: Date;
+  let endsAt: Date;
+  try {
+    startsAt = localWallClockToUtc(shape.startLocal, site.timezone);
+    endsAt = localWallClockToUtc(shape.endLocal, site.timezone);
+  } catch {
+    return { ok: false, error: "Fechas inválidas." };
+  }
+  if (endsAt.getTime() <= startsAt.getTime()) return { ok: false, error: "El fin debe ser después del inicio." };
+  const overlapping = await listActiveAppointmentsOverlapping(auth.tenantId, {
+    clientId: input.clientId,
+    siteId: input.siteId,
+    staffId: input.staffId ?? null,
+    from: new Date(Math.max(startsAt.getTime(), Date.now())),
+    to: endsAt,
+  });
+  return { ok: true, conflicts: overlapping.map(toConflict) };
 }

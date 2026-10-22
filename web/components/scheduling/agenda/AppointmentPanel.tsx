@@ -1,51 +1,47 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
-import { useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
+import { useCallback, useRef, useState } from "react";
+import { useIsOverlayWidth } from "@/components/ui/Overlay";
 import { MobileAppointmentSheet } from "../mobile/MobileAppointmentSheet";
 import { appointmentActionPlan } from "@/lib/appointmentActionPlan";
 import { rescheduleBlockedReason } from "@/lib/rescheduleFlow";
 import { priceLabelCOP } from "@/lib/money";
-import { dayHeadline, fmtTime, longDate, siteDayKey } from "@/lib/siteCalendar";
+import { fmtTime, longDate } from "@/lib/siteCalendar";
 import type { AppointmentActivityItem } from "@/lib/schedulingActions";
 import { ReviewLinkCard, type ReviewLinkLoader } from "./ReviewLink";
 import type { Appt } from "../AgendaView";
-import { Menu, MenuButton } from "../ui/Menu";
-import { Alert, Avatar, Button, CARD, ConfirmDialog, IconButton, StatusChip, TEXTAREA, buttonClass, useModalLayer } from "../ui/system";
+import { Alert, Avatar, Button, StatusChip, TEXTAREA } from "../ui/system";
+import { ConfirmLayer } from "@/components/ui/module/ConfirmLayer";
 import { DESTRUCTIVE, STATUS_NAME, type AppointmentStatus } from "./status";
+import { SidePanel, PanelSection, type SidePanelHandle } from "./SidePanel";
+import { RescheduleInline } from "./RescheduleInline";
+import { GuestContact } from "./GuestContact";
+import { StatusGlyphInline } from "./StatusGlyph";
 
 /**
- * The APPOINTMENT DETAIL — a side panel over the agenda (the calendar stays visible and
- * keeps its scroll position underneath), built from the same Scheduling system as the
- * agenda itself (ui/system.tsx): the same buttons, chips, avatars, cards and type.
+ * The APPOINTMENT DETAIL — the agenda's side panel (SidePanel: 520 px, floating, the
+ * calendar stays visible and usable beside it). Phone: the existing bottom sheet.
  *
- * Reading order, top to bottom: WHEN (date, time, state) → WHO (client) → WHAT (service,
- * professional, price) → history (activity), and the one primary action in the footer.
- * Each action appears ONCE:
- *   header       Cambiar fecha y hora (its own two-step flow, apart from the state)
- *   state menu   confirm · no-show · cancel (destructive ones ask first)
- *   footer       Completar cita (the primary)
- *   client card  Ver ficha · Conversación · Reservar de nuevo
- *   activity     Ver actividad
- *   review       Enlace de reseña (completed appointments only)
- * Things this product has no model for (comments, forms, payment policy, recurrence,
- * group bookings, checkout) are not drawn at all.
+ * Reading order: WHO + WHEN (header) → state in one touch → «Requiere revisión» when the
+ * appointment conflicts with the schedule → what/who/where → the client (or, without a
+ * linked contact, the guest details with «Guardar contacto») → activity. Footer: Reagendar
+ * and the next step. Reagendar opens INSIDE this same panel (RescheduleInline) — the same
+ * appointment moves; nothing is cancelled and recreated.
  *
- * The service pastel appears ONLY as the stripe of the service card; the state has its
- * own tone (StatusChip). The panel itself stays neutral.
+ * A past appointment is never assumed completed: it keeps its state and says so.
  */
 
 type Target = Exclude<AppointmentStatus, "scheduled">;
 
 const ACTIVITY_LABEL: Record<AppointmentActivityItem["type"], string> = {
   created: "Cita creada",
-  rescheduled: "Cita reprogramada",
+  rescheduled: "Cita reagendada",
   cancelled: "Cita cancelada",
   confirmed: "Cita confirmada",
   completed: "Cita completada",
   no_show: "Marcada como inasistencia",
-  note: "Nota",
+  note: "Actualización del contacto",
   other: "Actualización",
 };
 const ACTOR_LABEL: Record<AppointmentActivityItem["actor"], string> = {
@@ -54,99 +50,70 @@ const ACTOR_LABEL: Record<AppointmentActivityItem["actor"], string> = {
   agent: "Agente de reservas",
   system: "Sistema",
 };
-const TARGET_LABEL: Record<Target, string> = {
-  confirmed: "Confirmar cita",
-  completed: "Completar cita",
-  no_show: "Marcar inasistencia",
-  cancelled: "Cancelar cita",
-};
+
+export interface ReschedulePanelConfig {
+  clientId: string;
+  siteId: string;
+  staff: Array<{ id: string; name: string; photoUrl?: string | null }>;
+  openWeekdays: Set<string>;
+  lockStaffId: string | null;
+  /** Unsaved blocks being edited (discounted from the times offered). */
+  holds?: string[];
+  onDone: (result: { dayKey: string; appointmentId: string; startAt: string }) => void;
+}
 
 export function AppointmentPanel(props: {
   appt: Appt;
   timezone: string;
-  /** The card's service pastel — used ONLY for the stripe of the service card. */
   toneClass: string;
   siteName: string;
   originLabel: string;
   canOperate: boolean;
-  /** Server-computed per appointment (gateAppointment's checks) — see lib/appointmentActionPlan. */
   canModify: boolean;
   pending: boolean;
   error: string | null;
   contactHref: string | null;
   conversationHref: string | null;
-  /** New appointment for the same contact — null when not possible (no contact / CRM off / no rights). */
   bookAgainHref: string | null;
   onClose: () => void;
   onLocate: () => void;
+  /** Phone: open the full-screen reschedule flow. Desktop reschedules inline. */
   onReschedule: () => void;
   onStatus: (target: Target, reason?: string) => void;
   loadActivity: () => Promise<{ ok: true; items: AppointmentActivityItem[] } | { ok: false; error: string }>;
   loadReviewLink: ReviewLinkLoader;
-  /** The professional's avatar colour on the phone (same as the agenda list). */
   staffColor?: string;
-  /** A layer is open ABOVE the panel ("Cambiar fecha y hora"): its Escape is the top
-   *  layer's, so the panel must not close underneath it (focus returns to this panel). */
   covered?: boolean;
+  /** Why this appointment needs review (labels), empty when it does not. */
+  review?: string[];
+  reschedule?: ReschedulePanelConfig;
+  /** Open directly in «Reagendar» (from an affected-appointments list). */
+  startInReschedule?: boolean;
+  onContactSaved?: (message: string) => void;
+  /** Where to return after a reschedule opened from a form (label for the back link). */
+  returnLabel?: string | null;
 }) {
   const { appt, timezone: tz } = props;
-  const [minimized, setMinimized] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
+  const phone = useIsOverlayWidth(767.98);
+  const [mode, setMode] = useState<"detail" | "reschedule">(props.startInReschedule ? "reschedule" : "detail");
   const [confirm, setConfirm] = useState<{ target: Target; reason: string } | null>(null);
+  const [rescheduleDirty, setRescheduleDirty] = useState(false);
+  const [contactDirty, setContactDirty] = useState(false);
   const [activity, setActivity] = useState<
     { state: "idle" } | { state: "loading" } | { state: "error"; error: string } | { state: "ready"; items: AppointmentActivityItem[] }
   >({ state: "idle" });
+  const handle = useRef<SidePanelHandle | null>(null);
+  const onRescheduleDirty = useCallback((d: boolean) => setRescheduleDirty(d), []);
+  const onContactDirty = useCallback((d: boolean) => setContactDirty(d), []);
 
-  // Per-appointment state resets because the parent REMOUNTS this panel per
-  // appointment (key={appt.id}) — a different card never inherits the previous state.
-
-  // ONE stable close handler for the focus trap (it re-runs whenever this identity
-  // changes, which would yank focus on every render). Escape peels layers in order:
-  // an open confirmation, then an open menu, then the panel itself.
-  const latest = useRef({ menuOpen, confirm, onClose: props.onClose, covered: Boolean(props.covered) });
-  useEffect(() => {
-    latest.current = { menuOpen, confirm, onClose: props.onClose, covered: Boolean(props.covered) };
-  });
-  const onEscape = useCallback(() => {
-    const l = latest.current;
-    if (l.covered) return;
-    if (l.confirm) return setConfirm(null);
-    if (l.menuOpen) return setMenuOpen(false);
-    l.onClose();
-  }, []);
-  // Below md the detail is the phone's bottom sheet (its own layer stack), not this panel.
-  const phone = useIsOverlayWidth(767.98);
-  const panelRef = useTrappedPanel({ active: !minimized && !phone, onClose: onEscape });
-  // The trap focuses the first control (it would be "Localizar", ring and all). Land on
-  // the dialog itself instead: screen readers announce its title and Tab still enters.
-  useEffect(() => {
-    if (!minimized) (panelRef.current as HTMLElement | null)?.focus({ preventScroll: true });
-  }, [minimized, panelRef]);
-  // A confirmation is modal WITHIN the panel (useModalLayer): what is behind it is inert.
-  const layer = useModalLayer(confirm !== null, panelRef as RefObject<HTMLElement | null>);
-
-  // What this login may do HERE — the server's per-appointment permission + the engine's
-  // legal transitions. "Completar" is the footer's primary; the state menu does not repeat it.
   const plan = appointmentActionPlan({ canOperate: props.canOperate, canModify: props.canModify, status: appt.status });
-  const stateTargets = plan.stateMenu;
-  // Why there is no "Cambiar fecha y hora" (terminal state, or another professional's
-  // appointment for a staff login) — said, not hidden.
   const blocked = props.canOperate ? rescheduleBlockedReason({ status: appt.status, allowed: plan.allowed, staffName: appt.staff_name }) : null;
   const price = priceLabelCOP(appt.price);
-  const client = appt.contact_name ?? "Atención sin cita";
+  const client = appt.contact_name ?? appt.guest_name ?? "Atención sin cita";
   const timeRange = `${fmtTime(appt.start_at, tz)} – ${fmtTime(appt.service_end_at, tz)}`;
-
-  const choose = (target: Target) => {
-    setMenuOpen(false);
-    if (DESTRUCTIVE.has(target)) setConfirm({ target, reason: "" });
-    else props.onStatus(target);
-  };
-
-  const showActivity = async () => {
-    setActivity({ state: "loading" });
-    const r = await props.loadActivity();
-    setActivity(r.ok ? { state: "ready", items: r.items } : { state: "error", error: r.error });
-  };
+  const started = Date.parse(appt.start_at) <= Date.now();
+  const ended = Date.parse(appt.service_end_at) <= Date.now();
+  const live = appt.status === "scheduled" || appt.status === "confirmed";
 
   if (phone) {
     return (
@@ -172,191 +139,254 @@ export function AppointmentPanel(props: {
     );
   }
 
-  if (minimized) {
+  const choose = (target: Target) => {
+    if (DESTRUCTIVE.has(target)) setConfirm({ target, reason: "" });
+    else props.onStatus(target);
+  };
+
+  const showActivity = async () => {
+    setActivity({ state: "loading" });
+    const r = await props.loadActivity();
+    setActivity(r.ok ? { state: "ready", items: r.items } : { state: "error", error: r.error });
+  };
+
+  const stripe = <span aria-hidden className={`u-appt-service ${props.toneClass} mt-1 h-10 w-1 shrink-0 rounded-full bg-[var(--appt-ink)]`} />;
+  const subtitle = (
+    <span className="u-tnum">
+      {longDate(appt.start_at, tz)} · {timeRange} · {formatDuration(appt.duration_min)}
+    </span>
+  );
+
+  if (mode === "reschedule" && props.reschedule && plan.reschedule) {
+    const cfg = props.reschedule;
     return (
-      <button
-        type="button"
-        onClick={() => setMinimized(false)}
-        className="u-focus fixed bottom-[max(1rem,env(safe-area-inset-bottom))] right-4 z-50 flex h-[48px] max-w-[min(22rem,calc(100vw-2rem))] items-center gap-2.5 rounded-full border border-line bg-popover pl-2 pr-4 text-sm shadow-[var(--shadow-float)]"
-        aria-label={`Restaurar el detalle de la cita de ${client}`}
-      >
-        <StatusChip status={appt.status} size="sm" />
-        <span className="u-mono shrink-0 text-xs text-muted">{fmtTime(appt.start_at, tz)}</span>
-        <span className="truncate font-medium">{client}</span>
-      </button>
+      <RescheduleInline
+        clientId={cfg.clientId}
+        siteId={cfg.siteId}
+        timezone={tz}
+        appt={appt}
+        staff={cfg.staff}
+        lockStaffId={cfg.lockStaffId}
+        openWeekdays={cfg.openWeekdays}
+        holds={cfg.holds}
+        onDirty={onRescheduleDirty}
+        onCancel={() => (props.startInReschedule ? props.onClose() : setMode("detail"))}
+        onDone={cfg.onDone}
+        frame={(body, footer) => (
+          <SidePanel
+            name="reschedule"
+            title={`Reagendar · ${client}`}
+            subtitle={subtitle}
+            leading={stripe}
+            aside={<StatusChip status={appt.status} size="sm" />}
+            dirty={rescheduleDirty}
+            onClose={props.onClose}
+            handleRef={handle}
+            insideSelector="[data-appt-card]"
+            footer={footer}
+          >
+            {props.returnLabel ? <p className="mb-3 text-[12.5px] text-muted">Al guardar vuelves a {props.returnLabel}, con lo que escribiste.</p> : null}
+            {body}
+          </SidePanel>
+        )}
+      />
     );
   }
 
+  // One-touch state: the three forward states, enabled only when legal for this login.
+  const segment: Array<{ status: AppointmentStatus; label: string }> = [
+    { status: "scheduled", label: "Sin confirmar" },
+    { status: "confirmed", label: "Confirmada" },
+    { status: "completed", label: "Completada" },
+  ];
+  const canTo = (s: AppointmentStatus) => s !== "scheduled" && plan.transitions.includes(s as Target) && (s !== "completed" || started);
+
   return (
     <>
-      {/* A light scrim: the agenda stays readable behind the panel. */}
-      <button type="button" aria-label="Cerrar detalle" onClick={props.onClose} className="fixed inset-0 z-40 cursor-default bg-black/15 dark:bg-black/40" />
-      <aside
-        ref={panelRef as RefObject<HTMLElement>}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="appt-panel-title"
-        tabIndex={-1}
-        className="fixed inset-y-0 right-0 z-50 flex w-full flex-col bg-background text-foreground shadow-[-12px_0_40px_rgba(18,21,27,0.14)] outline-none md:w-[min(34rem,calc(100vw-3rem))] md:border-l md:border-line"
+      <SidePanel
+        name="appointment"
+        title={client}
+        subtitle={subtitle}
+        leading={stripe}
+        aside={<StatusChip status={appt.status} size="sm" />}
+        dirty={contactDirty}
+        covered={confirm !== null || props.covered}
+        onClose={props.onClose}
+        handleRef={handle}
+        insideSelector="[data-appt-card]"
+        footer={
+          <div className="flex items-center gap-2">
+            {plan.reschedule && props.reschedule ? (
+              <Button onClick={() => setMode("reschedule")} disabled={props.pending}>
+                <CalendarGlyph />
+                Reagendar
+              </Button>
+            ) : (
+              <span className="min-w-0 flex-1 text-[12.5px] text-muted">{blocked}</span>
+            )}
+            <span className="flex-1" />
+            {plan.primary === "confirmed" ? (
+              <Button variant="primary" onClick={() => props.onStatus("confirmed")} loading={props.pending} loadingLabel="Guardando…">
+                <StatusGlyphInline status="confirmed" />
+                Confirmar
+              </Button>
+            ) : plan.primary === "completed" && started ? (
+              <Button variant="primary" onClick={() => props.onStatus("completed")} loading={props.pending} loadingLabel="Guardando…">
+                <StatusGlyphInline status="completed" />
+                Marcar completada
+              </Button>
+            ) : null}
+          </div>
+        }
       >
-        <div inert={layer.inert} className="flex min-h-0 flex-1 flex-col">
-          {/* WHEN — date, time, state, and the panel's own controls. */}
-          <header className="shrink-0 border-b border-line bg-surface px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))] sm:px-5">
-            <div className="flex items-start gap-1">
-              <div className="min-w-0 flex-1 pt-0.5">
-                <h2 id="appt-panel-title" className="truncate text-lg font-semibold tracking-tight">
-                  <span className="sm:hidden">{dayHeadline(siteDayKey(appt.start_at, tz))}</span>
-                  <span className="hidden sm:inline">{longDate(appt.start_at, tz)}</span>
-                </h2>
-                <p className="u-mono mt-0.5 text-[13px] text-muted">
-                  {timeRange} · {appt.duration_min} min
-                </p>
+        <div inert={confirm !== null} className="flex flex-col">
+          {props.error ? <div className="mb-3"><Alert>{props.error}</Alert></div> : null}
+
+          {plan.allowed && live ? (
+            <div className="mb-4 flex flex-col gap-2">
+              <div role="group" aria-label="Estado de la cita" className="grid grid-cols-3 gap-0.5 rounded-[12px] bg-chip p-1">
+                {segment.map((s) => {
+                  const current = appt.status === s.status;
+                  const enabled = !current && canTo(s.status);
+                  return (
+                    <button
+                      key={s.status}
+                      type="button"
+                      aria-pressed={current}
+                      disabled={!enabled || props.pending}
+                      onClick={() => enabled && choose(s.status as Target)}
+                      className={`u-focus flex h-11 items-center justify-center gap-1.5 rounded-[9px] text-[13px] transition-colors md:h-9 ${
+                        current ? "bg-surface font-semibold text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.08)]" : enabled ? "text-foreground hover:bg-subtle" : "text-faint"
+                      }`}
+                    >
+                      <StatusGlyphInline status={s.status} />
+                      {s.label}
+                    </button>
+                  );
+                })}
               </div>
-              <IconButton label="Localizar en el calendario" onClick={() => { setMinimized(true); props.onLocate(); }}>
-                <path d="M8 2.5v2M8 11.5v2M2.5 8h2M11.5 8h2" strokeLinecap="round" />
-                <circle cx="8" cy="8" r="3.25" />
-              </IconButton>
-              <IconButton label="Minimizar" onClick={() => setMinimized(true)}>
-                <path d="M3.5 11.5h9" strokeLinecap="round" />
-              </IconButton>
-              <IconButton label="Cerrar" onClick={props.onClose}>
-                <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
-              </IconButton>
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-2">
-              {stateTargets.length > 0 ? (
-                <Menu
-                  label={`Estado: ${STATUS_NAME[appt.status] ?? appt.status}. Cambiar estado`}
-                  open={menuOpen}
-                  onToggle={() => setMenuOpen(!menuOpen)}
-                  onClose={() => setMenuOpen(false)}
-                  align="left"
-                  disabled={props.pending}
-                  trigger={
-                    <span className="inline-flex items-center gap-1.5">
-                      <StatusChip status={appt.status} />
-                      <span className={buttonClass({ variant: "tertiary", size: "sm", className: "pointer-events-none -ml-0.5 gap-1 px-2" })}>
-                        Cambiar estado
-                        <Chevron />
-                      </span>
-                    </span>
-                  }
-                >
-                  {stateTargets.map((t) => (
-                    <MenuButton key={t} danger={DESTRUCTIVE.has(t)} disabled={props.pending} onClick={() => choose(t)}>
-                      {TARGET_LABEL[t]}
-                    </MenuButton>
-                  ))}
-                </Menu>
-              ) : (
-                <StatusChip status={appt.status} />
-              )}
-              {plan.reschedule ? (
-                <Button size="sm" className="ml-auto" onClick={props.onReschedule} disabled={props.pending}>
-                  Cambiar fecha y hora
-                </Button>
-              ) : null}
-            </div>
-            {!plan.reschedule && blocked ? <p className="mt-2 text-[13px] text-muted">{blocked}</p> : null}
-          </header>
-
-          <div className="min-h-0 flex-1 overflow-y-auto px-4 py-4 sm:px-5">
-            <div className="flex flex-col gap-3">
-              {props.error ? <Alert>{props.error}</Alert> : null}
-
-              {/* WHO */}
-              <section aria-labelledby="appt-panel-client" className={`${CARD} p-4`}>
-                <h3 id="appt-panel-client" className="sr-only">
-                  Cliente
-                </h3>
-                <div className="flex items-center gap-3">
-                  <Avatar name={appt.contact_name} size="lg" />
-                  <div className="min-w-0 flex-1">
-                    <p className="line-clamp-2 break-words text-[15px] font-semibold">{client}</p>
-                    {appt.primary_identity ? <p className="u-mono truncate text-[13px] text-muted">{appt.primary_identity}</p> : null}
-                    {!appt.contact_id ? <p className="text-[13px] text-muted">Esta cita no tiene un cliente asociado.</p> : null}
-                  </div>
-                </div>
-                <dl className="mt-3 grid grid-cols-2 gap-3 border-t border-line pt-3 text-[13px]">
-                  <div className="min-w-0">
-                    <dt className="text-xs text-muted">Origen</dt>
-                    <dd className="truncate">{props.originLabel}</dd>
-                  </div>
-                  <div className="min-w-0">
-                    <dt className="text-xs text-muted">Sede</dt>
-                    <dd className="truncate">{props.siteName}</dd>
-                  </div>
-                </dl>
-                {props.contactHref || props.conversationHref || props.bookAgainHref ? (
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    {props.contactHref ? (
-                      <Link href={props.contactHref} className={buttonClass({ size: "sm" })}>
-                        Ver ficha
-                      </Link>
-                    ) : null}
-                    {props.conversationHref ? (
-                      <Link href={props.conversationHref} className={buttonClass({ size: "sm" })}>
-                        Conversación
-                      </Link>
-                    ) : null}
-                    {props.bookAgainHref ? (
-                      <Link href={props.bookAgainHref} className={buttonClass({ variant: "tertiary", size: "sm" })}>
-                        Reservar de nuevo
-                      </Link>
-                    ) : null}
-                  </div>
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[13px]">
+                {plan.transitions.includes("no_show") ? (
+                  <button type="button" className="u-focus rounded font-medium text-foreground hover:underline" onClick={() => choose("no_show")} disabled={props.pending}>
+                    Marcar inasistencia
+                  </button>
                 ) : null}
-              </section>
+                {plan.transitions.includes("cancelled") ? (
+                  <button type="button" className="u-focus rounded font-medium text-danger hover:underline" onClick={() => choose("cancelled")} disabled={props.pending}>
+                    Cancelar cita
+                  </button>
+                ) : null}
+                {!started && plan.transitions.includes("completed") ? <span className="ml-auto text-[12.5px] text-muted">Completar se habilita al empezar la cita</span> : null}
+              </div>
+            </div>
+          ) : null}
 
-              {/* WHAT — the service card wears the service pastel as its stripe only. */}
-              <section aria-labelledby="appt-panel-service" className={`${CARD} flex items-stretch overflow-hidden`}>
-                <span aria-hidden className={`u-appt-service ${props.toneClass} w-1.5 shrink-0 bg-[var(--appt-ink)] opacity-70`} />
-                <div className="min-w-0 flex-1 p-4">
-                  <h3 id="appt-panel-service" className="sr-only">
-                    Servicio
-                  </h3>
-                  <div className="flex items-start gap-3">
-                    <p className={`min-w-0 flex-1 text-[15px] font-semibold ${appt.status === "cancelled" ? "line-through decoration-1 opacity-70" : ""}`}>{appt.service_name}</p>
-                    <p className="u-mono shrink-0 text-[15px] font-medium">{price ?? "Sin precio"}</p>
+          {props.review && props.review.length > 0 && live ? (
+            <div role="status" className="mb-4 rounded-[12px] border border-[var(--warn-rule)] bg-[var(--warn-soft)] px-3.5 py-3 text-[13px]">
+              <p className="font-semibold text-[var(--warn)]">Requiere revisión</p>
+              <p className="mt-0.5 text-foreground">{props.review.join(" · ")}.</p>
+              <p className="mt-1 text-muted">No se movió ni se canceló nada. Reagéndala o déjala como está; el aviso sigue hasta que el conflicto desaparezca.</p>
+            </div>
+          ) : null}
+
+          {live && ended ? (
+            <p className="mb-4 rounded-[12px] bg-subtle px-3.5 py-3 text-[13px] text-muted">
+              La hora ya pasó y la cita sigue «{STATUS_NAME[appt.status]}». Marca lo que pasó: una hora pasada no confirma que se atendió.
+            </p>
+          ) : null}
+
+          <dl className="grid grid-cols-[7rem_1fr] gap-x-3 gap-y-3 text-[13px]">
+            <dt className="text-muted">Servicio</dt>
+            <dd className={`flex min-w-0 items-center gap-2 ${appt.status === "cancelled" ? "line-through decoration-1 opacity-70" : ""}`}>
+              <span aria-hidden className={`u-appt-service ${props.toneClass} size-2 shrink-0 rounded-full bg-[var(--appt-ink)]`} />
+              <span className="truncate">{appt.service_name}</span>
+            </dd>
+            <dt className="text-muted">Profesional</dt>
+            <dd className="flex min-w-0 items-center gap-2">
+              <Avatar name={appt.staff_name} size="sm" />
+              <span className="truncate">{appt.staff_name ?? "Sin profesional"}</span>
+            </dd>
+            {appt.contact_id && appt.primary_identity ? (
+              <>
+                <dt className="text-muted">{appt.primary_identity.includes("@") ? "Correo" : "Teléfono"}</dt>
+                <dd className="u-mono truncate">{appt.primary_identity}</dd>
+              </>
+            ) : null}
+            <dt className="text-muted">Origen</dt>
+            <dd className="truncate">{props.originLabel}</dd>
+            <dt className="text-muted">Sede</dt>
+            <dd className="truncate">{props.siteName}</dd>
+            <dt className="text-muted">Precio</dt>
+            <dd className="u-mono">{price ?? "Sin precio"}</dd>
+          </dl>
+
+          <div className="mt-5">
+            <PanelSection
+              id="appt-client"
+              title="Cliente"
+              action={!appt.contact_id ? <span className="rounded-full bg-chip px-2 py-0.5 text-[11.5px] text-muted">Sin contacto vinculado</span> : null}
+            >
+              {appt.contact_id ? (
+                <div className="flex flex-col gap-2.5">
+                  <div className="flex items-center gap-3">
+                    <Avatar name={appt.contact_name} />
+                    <p className="min-w-0 flex-1 truncate text-[14px] font-semibold">{appt.contact_name ?? "Sin nombre"}</p>
                   </div>
-                  <p className="u-mono mt-1 text-[13px] text-muted">
-                    {timeRange} · {appt.duration_min} min
-                  </p>
-                  <p className="mt-2.5 flex items-center gap-2 text-[13px]">
-                    <Avatar name={appt.staff_name} size="sm" />
-                    <span className="truncate">{appt.staff_name ?? "Sin profesional"}</span>
-                  </p>
+                  {props.contactHref || props.conversationHref || props.bookAgainHref ? (
+                    <div className="flex flex-wrap gap-2">
+                      {props.contactHref ? <Link href={props.contactHref} className="u-focus inline-flex h-9 items-center rounded-sch-control border border-line px-3 text-[13px] font-medium hover:bg-subtle">Ver ficha</Link> : null}
+                      {props.conversationHref ? <Link href={props.conversationHref} className="u-focus inline-flex h-9 items-center rounded-sch-control border border-line px-3 text-[13px] font-medium hover:bg-subtle">Conversación</Link> : null}
+                      {props.bookAgainHref ? <Link href={props.bookAgainHref} className="u-focus inline-flex h-9 items-center rounded-sch-control px-3 text-[13px] font-medium hover:bg-subtle">Reservar de nuevo</Link> : null}
+                    </div>
+                  ) : null}
                 </div>
-              </section>
+              ) : (
+                <GuestContact
+                  clientId={props.reschedule?.clientId ?? ""}
+                  siteId={props.reschedule?.siteId ?? ""}
+                  appointmentId={appt.id}
+                  canModify={plan.allowed}
+                  initial={{ name: appt.guest_name, phone: appt.guest_phone, email: appt.guest_email }}
+                  onDirty={onContactDirty}
+                  onSaved={(m) => {
+                    setContactDirty(false);
+                    props.onContactSaved?.(m);
+                  }}
+                />
+              )}
+            </PanelSection>
 
-              {plan.reviewLink ? <ReviewLinkCard load={props.loadReviewLink} siteName={props.siteName} phone={appt.primary_identity?.includes("@") ? null : appt.primary_identity} /> : null}
+            {plan.reviewLink ? (
+              <div className="py-4">
+                <ReviewLinkCard load={props.loadReviewLink} siteName={props.siteName} phone={appt.primary_identity?.includes("@") ? null : appt.primary_identity} />
+              </div>
+            ) : null}
 
-              {/* HISTORY — read through the same appointment gate on the server. */}
-              {plan.readActivity ? (
-              <section aria-labelledby="appt-panel-activity" className={`${CARD} p-4`}>
-                <div className="flex items-center justify-between gap-2">
-                  <h3 id="appt-panel-activity" className="text-[13px] font-semibold">
-                    Actividad
-                  </h3>
-                  {activity.state === "idle" || activity.state === "error" ? (
+            {plan.readActivity ? (
+              <PanelSection
+                id="appt-activity"
+                title="Actividad"
+                action={
+                  activity.state === "idle" || activity.state === "error" ? (
                     <Button variant="tertiary" size="sm" onClick={showActivity}>
                       {activity.state === "error" ? "Reintentar" : "Ver actividad"}
                     </Button>
-                  ) : null}
-                </div>
+                  ) : null
+                }
+              >
                 {activity.state === "loading" ? (
-                  <div className="mt-3 flex flex-col gap-2" aria-busy="true" aria-label="Cargando actividad">
+                  <div className="flex flex-col gap-2" aria-busy="true" aria-label="Cargando actividad">
                     {Array.from({ length: 3 }, (_, i) => (
-                      <div key={i} className="h-10 animate-pulse rounded-sch-control bg-subtle" />
+                      <div key={i} className="h-9 rounded-sch-control bg-subtle" />
                     ))}
                   </div>
                 ) : activity.state === "error" ? (
-                  <p className="mt-2 text-[13px] text-danger">{activity.error}</p>
+                  <p className="text-[13px] text-danger">{activity.error}</p>
                 ) : activity.state === "ready" ? (
                   activity.items.length === 0 ? (
-                    <p className="mt-2 text-[13px] text-muted">Aún no hay actividad registrada.</p>
+                    <p className="text-[13px] text-muted">Aún no hay actividad registrada.</p>
                   ) : (
-                    <ol className="mt-3 flex flex-col">
+                    <ol className="flex flex-col">
                       {activity.items.map((item) => (
                         <li key={item.id} className="border-l-2 border-line py-2 pl-3.5 first:pt-0 last:pb-0">
                           <span className="block text-[13px] font-medium">{ACTIVITY_LABEL[item.type]}</span>
@@ -365,7 +395,7 @@ export function AppointmentPanel(props: {
                           </span>
                           {item.fromStart && item.toStart ? (
                             <span className="u-mono block text-xs text-muted">
-                              {fmtTime(item.fromStart, tz)} → {fmtTime(item.toStart, tz)}
+                              {longDate(item.fromStart, tz)} {fmtTime(item.fromStart, tz)} → {longDate(item.toStart, tz)} {fmtTime(item.toStart, tz)}
                             </span>
                           ) : null}
                           {item.reason ? <span className="block text-xs text-muted">Motivo: {item.reason}</span> : null}
@@ -374,42 +404,24 @@ export function AppointmentPanel(props: {
                     </ol>
                   )
                 ) : (
-                  <p className="mt-1 text-[13px] text-muted">Quién creó, confirmó o cambió esta cita.</p>
+                  <p className="text-[13px] text-muted">Quién creó, confirmó, reagendó o cambió esta cita.</p>
                 )}
-              </section>
-              ) : null}
-            </div>
+              </PanelSection>
+            ) : null}
           </div>
-
-          {/* FOOTER — the total and the one primary action, always in reach. */}
-          <footer className="flex shrink-0 items-center gap-3 border-t border-line bg-surface px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-5">
-            <div className="min-w-0 flex-1">
-              <p className="text-xs text-muted">Total</p>
-              <p className="u-mono text-base font-semibold">{price ?? "Sin precio"}</p>
-            </div>
-            {plan.complete ? (
-              <Button variant="primary" onClick={() => props.onStatus("completed")} loading={props.pending} loadingLabel="Guardando…">
-                Completar cita
-              </Button>
-            ) : (
-              <span className="text-[13px] text-muted">
-                {appt.status === "completed" ? "Cita completada" : appt.status === "cancelled" ? "Cita cancelada" : appt.status === "no_show" ? "Marcada como inasistencia" : ""}
-              </span>
-            )}
-          </footer>
         </div>
-
-        {confirm ? (
-          <ConfirmDialog
-            layerRef={layer.layerRef}
+      </SidePanel>
+      {confirm ? (
+          <ConfirmLayer
             id="appt-confirm"
             title={confirm.target === "cancelled" ? "¿Cancelar esta cita?" : "¿Marcar como inasistencia?"}
             body={
               confirm.target === "cancelled"
-                ? `Se libera el horario de ${timeRange}. Esta acción no se puede deshacer desde la agenda.`
+                ? `Se libera el horario de ${timeRange}. La cita queda en el historial como cancelada.`
                 : `${client} quedará marcado como no asistió a la cita de ${timeRange}.`
             }
             confirmLabel={confirm.target === "cancelled" ? "Cancelar cita" : "Marcar inasistencia"}
+            cancelLabel="Volver"
             pending={props.pending}
             onCancel={() => setConfirm(null)}
             onConfirm={() => {
@@ -426,17 +438,23 @@ export function AppointmentPanel(props: {
                 <textarea value={confirm.reason} onChange={(e) => setConfirm({ ...confirm, reason: e.target.value })} maxLength={500} rows={3} className={TEXTAREA} />
               </label>
             ) : null}
-          </ConfirmDialog>
-        ) : null}
-      </aside>
+          </ConfirmLayer>
+      ) : null}
     </>
   );
 }
 
-function Chevron() {
+function formatDuration(min: number): string {
+  if (min < 60) return `${min} min`;
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  return m ? `${h} h ${m} min` : `${h} h`;
+}
+
+function CalendarGlyph() {
   return (
-    <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6">
-      <path d="M4 6l4 4 4-4" />
+    <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.5">
+      <path d="M2.5 3.5h11v10h-11zM2.5 6.6h11M5.5 2v2.5M10.5 2v2.5" />
     </svg>
   );
 }

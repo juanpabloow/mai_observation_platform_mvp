@@ -86,6 +86,10 @@ export interface ExplainInput {
   /** Same spans as request.siteExceptions / staff.exceptions, WITH public reasons. */
   siteExceptions: ExplainException[];
   staffExceptions: Map<string, ExplainException[]>;
+  /** Usual breaks (migration 1818). Read as time the schedule does not work — exactly like
+   *  the gaps in weekly hours they replace — so a lunch is "off shift", never an absence. */
+  siteBreaks?: Array<{ from: Date; until: Date }>;
+  staffBreaks?: Map<string, Array<{ from: Date; until: Date }>>;
 }
 
 const MIN = 60_000;
@@ -161,7 +165,8 @@ export function explainAvailability(input: ExplainInput): DayExplanation[] {
       }
       const ownHours = Object.keys(st.working_hours).length > 0;
       const staffDay = ownHours ? normalize(hoursToSpans(st.working_hours, date, weekday, tz)) : siteDay;
-      const workDay = intersect(siteDay, staffDay);
+      const breaks = toSpans([...(input.siteBreaks ?? []), ...(input.staffBreaks?.get(staffId) ?? [])]);
+      const workDay = subtract(intersect(siteDay, staffDay), breaks);
       const work = intersect(workDay, [win]);
       const offShift = subtract(open, work);
       if (len(offShift) > 0) {
@@ -273,6 +278,8 @@ export function explainStaffStatus(input: {
   dates: Array<{ year: number; month: number; day: number }>;
   siteExceptions: ExplainException[];
   staffExceptions: ExplainException[];
+  /** Usual breaks (site + this professional) — off shift, like weekly-hours gaps. */
+  breaks?: Array<{ from: Date; until: Date }>;
 }): DayStatus[] {
   const tz = input.site.timezone;
   const siteExc = toSpans(input.siteExceptions);
@@ -296,7 +303,10 @@ export function explainStaffStatus(input: {
       return done('not_working', 'site_closed_day', []);
     }
     const own = Object.keys(input.staff.working_hours).length > 0;
-    const workDay = intersect(siteDay, own ? normalize(hoursToSpans(input.staff.working_hours, date, weekday, tz)) : siteDay);
+    const workDay = subtract(
+      intersect(siteDay, own ? normalize(hoursToSpans(input.staff.working_hours, date, weekday, tz)) : siteDay),
+      toSpans(input.breaks ?? []),
+    );
     if (len(workDay) === 0) {
       causes.push({ code: 'off_shift', coverage: 'all', minutes: 0, public_reason: null, no_shift_that_day: true });
       return done('not_working', 'off_shift', []);

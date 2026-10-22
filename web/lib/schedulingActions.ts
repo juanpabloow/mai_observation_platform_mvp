@@ -7,6 +7,9 @@ import { isUuid } from "./clientModuleValidation";
 import { createThenMaybeConfirm, type CreateOutcome, type ManualBookingResult } from "./manualBooking";
 import { can, canAccessSchedulingSite, canAccessSchedulingStaff, isSchedulingStaff } from "./access";
 import { listContacts } from "@worker/db/repositories/contacts.js";
+import { findContactMatchesByIdentity } from "@worker/db/repositories/contactIdentities.js";
+import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
+import { validateGuest, maskIdentity, type ContactMatch, type ContactMode, type GuestValue } from "./walkInContact";
 import { getAppointmentById, listAppointmentEvents } from "@worker/db/repositories/scheduling/appointments.js";
 import { ensureReviewRequest } from "@worker/db/repositories/scheduling/reviews.js";
 import { reviewLinkSecret, reviewPath, signReviewToken } from "./reviewLink";
@@ -27,7 +30,7 @@ import {
  * treats the mismatch as not-found). Errors stay generic.
  */
 
-export type ActionResult = { ok: true } | { ok: false; error: string };
+export type ActionResult = { ok: true } | { ok: false; error: string; /** The engine's code (e.g. conflict_slot) when known. */ code?: string };
 
 const GENERIC_GATE = "No disponible.";
 
@@ -170,6 +173,41 @@ export interface ManualAppointmentInput {
   idempotencyKey?: string;
   /** "Estado inicial": `confirmed` runs the real confirm transition after creating. */
   initialStatus?: "scheduled" | "confirmed";
+  /**
+   * What to do with the typed name/phone/email (web/lib/walkInContact.ts):
+   *   guest  — register WITHOUT a contact; what was typed stays on the appointment.
+   *   create — save a contact (needs a valid phone or email; an existing match is offered
+   *            to link instead — nothing is duplicated).
+   * Omitted keeps the earlier rule for a typed phone (resolve the contact by that phone);
+   * a NAME alone is always a guest — it never keys a contact.
+   */
+  contactMode?: Exclude<ContactMode, "link">;
+}
+
+/** Contacts that already carry this phone or email (read-only — never creates). */
+async function contactMatches(
+  tenantId: string,
+  clientId: string,
+  v: GuestValue,
+  revealIdentity: boolean,
+): Promise<ContactMatch[]> {
+  const out: ContactMatch[] = [];
+  const seen = new Set<string>();
+  for (const [kind, value] of [["phone", v.phone], ["email", v.email]] as const) {
+    if (!value) continue;
+    const { matches } = await findContactMatchesByIdentity(tenantId, clientId, value, { limit: 3 });
+    for (const m of matches) {
+      if (seen.has(m.contact_id)) continue;
+      seen.add(m.contact_id);
+      out.push({
+        contactId: m.contact_id,
+        name: m.name,
+        matchedBy: kind,
+        matchedValue: revealIdentity ? m.matched_value : maskIdentity(kind, value),
+      });
+    }
+  }
+  return out;
 }
 
 /** Create a manual appointment or walk-in from the agenda. A walk-in without any
@@ -206,14 +244,38 @@ export async function createManualAppointmentAction(
   if (Number.isNaN(start.getTime())) return { ok: false, error: "La hora de inicio no es válida." };
 
   // C-4.1: booking for an existing contact attaches to it directly (no typed identity).
-  // Otherwise a walk-in with a name+phone still resolves a contact (channel 'walk_in') so
-  // it shows up in the CRM; a fully anonymous walk-in has no contact.
   const bookingForContact = Boolean(input.contactId);
-  const hasIdentity = !bookingForContact && Boolean(input.channelUserId || input.customerPhone || input.customerName);
   const channel = input.channel ?? (input.walkIn ? "walk_in" : "manual");
-  const channelUserId = hasIdentity
-    ? input.channelUserId ?? (input.customerPhone || input.customerName || "").trim()
-    : undefined;
+  let guest: GuestValue | null = null;
+  let channelUserId: string | undefined;
+  let customerPhone: string | null = null;
+  let customerEmail: string | null = null;
+  if (!bookingForContact) {
+    const site = await getSiteById(ctx.scope.tenantId, input.siteId);
+    if (!site || site.client_id !== ctx.client.id) return { ok: false, error: GENERIC_GATE };
+    const mode = input.contactMode ?? (input.customerPhone?.trim() || input.channelUserId ? "create" : "guest");
+    const typed = validateGuest(
+      { name: input.customerName, phone: input.customerPhone, email: input.customerEmail },
+      { timeZone: site.timezone, requireIdentity: mode === "create" && !input.channelUserId },
+    );
+    if (!typed.ok) return { ok: false, error: "Revisa los datos del cliente.", fieldErrors: typed.fieldErrors };
+    if (mode === "create") {
+      // Explicit "Guardar contacto": an existing contact with this phone/email is OFFERED
+      // to link — never duplicated, never silently merged under a new name.
+      if (input.contactMode === "create") {
+        const reveal = !isSchedulingStaff(ctx.scope) && can(ctx.scope, "contacts.view", ctx.client.id);
+        const matches = await contactMatches(ctx.scope.tenantId, ctx.client.id, typed.value, reveal);
+        if (matches.length > 0) {
+          return { ok: false, error: "Ya existe un contacto con ese teléfono o correo. Vincúlalo en lugar de crear otro.", matches };
+        }
+      }
+      customerPhone = typed.value.phone;
+      customerEmail = typed.value.email;
+      channelUserId = input.channelUserId ?? typed.value.phone ?? typed.value.email ?? undefined;
+    } else {
+      guest = typed.value.name || typed.value.phone || typed.value.email ? typed.value : null;
+    }
+  }
 
   const create = async (): Promise<CreateOutcome> => {
   const result = await createAppointment({
@@ -225,9 +287,10 @@ export async function createManualAppointmentAction(
     contactId: input.contactId ?? null,
     channel: channelUserId ? channel : null,
     channelUserId: channelUserId || null,
-    customerName: bookingForContact ? null : input.customerName ?? null,
-    customerPhone: bookingForContact ? null : input.customerPhone ?? null,
-    customerEmail: bookingForContact ? null : input.customerEmail ?? null,
+    customerName: bookingForContact || guest ? null : input.customerName?.trim() || null,
+    customerPhone,
+    customerEmail,
+    guest,
     origin: input.walkIn ? "walk_in" : "internal",
     createdByType: "agent",
     createdByUserId: ctx.scope.userId,
@@ -326,7 +389,7 @@ export async function rescheduleAppointmentAction(
     scopeClientId: ctx.client.id,
     expected: expected && expectedStart ? { startAt: expectedStart, staffId: expected.staffId } : null,
   });
-  if (!r.ok) return { ok: false, error: RESCHEDULE_ERROR[r.error] ?? messageFor(r.error, "No se pudo reprogramar la cita.") };
+  if (!r.ok) return { ok: false, error: RESCHEDULE_ERROR[r.error] ?? messageFor(r.error, "No se pudo reprogramar la cita."), code: r.error };
   revalidatePath(agendaPath(ctx.client.id));
   return { ok: true };
 }

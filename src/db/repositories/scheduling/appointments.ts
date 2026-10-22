@@ -53,6 +53,11 @@ export interface AppointmentRow {
   version: number;
   created_at: Date;
   updated_at: Date;
+  /** Walk-in details typed WITHOUT saving a contact (migration 1818). Display only — never
+   *  an identity: they are not matched, merged nor used to message anyone. */
+  guest_name: string | null;
+  guest_phone: string | null;
+  guest_email: string | null;
 }
 
 export interface InsertAppointmentInput {
@@ -76,6 +81,8 @@ export interface InsertAppointmentInput {
   createdByType: ActorType;
   createdByUserId: string | null;
   idempotencyKey: string | null;
+  /** Only for an appointment with NO contact (a walk-in not saved as a contact). */
+  guest?: { name: string | null; phone: string | null; email: string | null } | null;
 }
 
 /** Raw insert. May throw SQLSTATE 23P01 (overlap → the anti-double-book guard) or
@@ -93,8 +100,9 @@ export async function insertAppointment(client: PoolClient, input: InsertAppoint
         start_at, service_end_at, blocked_from, blocked_until,
         service_name_snapshot, duration_min_snapshot, price_snapshot,
         buffer_before_min_snapshot, buffer_after_min_snapshot,
-        status, origin, created_by_type, created_by_user_id, idempotency_key)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'scheduled',$17,$18,$19,$20)
+        status, origin, created_by_type, created_by_user_id, idempotency_key,
+        guest_name, guest_phone, guest_email)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'scheduled',$17,$18,$19,$20,$21,$22,$23)
      RETURNING *`,
     [
       input.tenantId, input.clientId, input.siteId, input.contactId, input.sourceConversationId, input.staffId, input.serviceId,
@@ -102,6 +110,9 @@ export async function insertAppointment(client: PoolClient, input: InsertAppoint
       input.serviceNameSnapshot, input.durationMinSnapshot, input.priceSnapshot,
       input.bufferBeforeMinSnapshot, input.bufferAfterMinSnapshot,
       input.origin, input.createdByType, input.createdByUserId, input.idempotencyKey,
+      input.contactId ? null : input.guest?.name ?? null,
+      input.contactId ? null : input.guest?.phone ?? null,
+      input.contactId ? null : input.guest?.email ?? null,
     ],
   );
   return firstRowOrThrow(r, 'insertAppointment');
@@ -223,6 +234,41 @@ export async function setStatus(
     [id, tenantId, status],
   );
   return firstRowOrThrow(r, 'setStatus');
+}
+
+/** Link a contact to an appointment that has NONE yet (inside a txn, row already locked).
+ *  The typed guest details move into the contact, so they are cleared here. Refuses (null)
+ *  when the appointment already has a contact — a link is never silently replaced. */
+export async function attachAppointmentContact(
+  client: PoolClient,
+  tenantId: string,
+  id: string,
+  contactId: string,
+): Promise<AppointmentRow | null> {
+  const r = await client.query<AppointmentRow>(
+    `UPDATE appointments
+        SET contact_id = $3, guest_name = NULL, guest_phone = NULL, guest_email = NULL,
+            version = version + 1, updated_at = now()
+      WHERE id = $1 AND tenant_id = $2 AND contact_id IS NULL RETURNING *`,
+    [id, tenantId, contactId],
+  );
+  return r.rows[0] ?? null;
+}
+
+/** Replace the guest details of an appointment WITHOUT a contact (inside a txn). */
+export async function updateAppointmentGuest(
+  client: PoolClient,
+  tenantId: string,
+  id: string,
+  guest: { name: string | null; phone: string | null; email: string | null },
+): Promise<AppointmentRow | null> {
+  const r = await client.query<AppointmentRow>(
+    `UPDATE appointments
+        SET guest_name = $3, guest_phone = $4, guest_email = $5, version = version + 1, updated_at = now()
+      WHERE id = $1 AND tenant_id = $2 AND contact_id IS NULL RETURNING *`,
+    [id, tenantId, guest.name, guest.phone, guest.email],
+  );
+  return r.rows[0] ?? null;
 }
 
 /** Move the interval (+ bump version) inside a txn. Relies on the exclusion
@@ -353,6 +399,7 @@ export async function listAppointments(
             a.buffer_before_min_snapshot, a.buffer_after_min_snapshot,
             a.status, a.origin, a.created_by_type, a.created_by_user_id,
             a.idempotency_key, a.version, a.created_at, a.updated_at,
+            a.guest_name, a.guest_phone, a.guest_email,
             st.name AS staff_name, si.name AS site_name, si.timezone AS site_timezone, ct.name AS contact_name,
             pid.value AS primary_identity
        FROM appointments a
@@ -424,7 +471,11 @@ export interface OverlappingAppointment {
   service_end_at: Date;
   service_name: string;
   contact_name: string | null;
+  /** The typed name of a walk-in WITHOUT a contact (display only). */
+  guest_name: string | null;
   status: string;
+  service_id: string;
+  duration_min: number;
 }
 
 /**
@@ -445,7 +496,8 @@ export async function listActiveAppointmentsOverlapping(
   }
   const r = await query<OverlappingAppointment>(
     `SELECT a.id, a.staff_id, st.name AS staff_name, a.start_at, a.service_end_at,
-            a.service_name_snapshot AS service_name, ct.name AS contact_name, a.status
+            a.service_name_snapshot AS service_name, ct.name AS contact_name, a.guest_name, a.status,
+            a.service_id, a.duration_min_snapshot AS duration_min
        FROM appointments a
        JOIN staff st ON st.id = a.staff_id AND st.tenant_id = a.tenant_id
        LEFT JOIN contacts ct

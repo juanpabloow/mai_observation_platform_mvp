@@ -11,7 +11,16 @@
  */
 
 export type CreateOutcome = { ok: true; id: string; status: string } | { ok: false; error: string };
-export type ManualBookingResult = { ok: true; id: string; warning?: string } | { ok: false; error: string };
+export type ManualBookingResult =
+  | { ok: true; id: string; warning?: string }
+  | {
+      ok: false;
+      error: string;
+      /** Contacts that already hold the typed phone/email — offered to LINK, never duplicated. */
+      matches?: import("./walkInContact").ContactMatch[];
+      /** Per-field validation messages (the form keeps every value and shows each by its field). */
+      fieldErrors?: Partial<Record<import("./walkInContact").GuestField, string>>;
+    };
 
 export async function createThenMaybeConfirm(
   create: () => Promise<CreateOutcome>,

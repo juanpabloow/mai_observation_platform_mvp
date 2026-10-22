@@ -47,7 +47,16 @@ import {
   type ContactSearchHit,
 } from "@/lib/schedulingActions";
 import { AppointmentPanel } from "./agenda/AppointmentPanel";
+import { StatusGlyphInline } from "./agenda/StatusGlyph";
+import { useNavigationGuard } from "@/components/ui/module/useEditorGuard";
+import type { ContactMatch } from "@/lib/walkInContact";
 import { RescheduleFlow } from "./agenda/RescheduleFlow";
+import { WalkInPanel } from "./agenda/WalkInPanel";
+import { BlockPanel } from "./agenda/BlockPanel";
+import { SeriesPanel } from "./agenda/SeriesPanel";
+import { AffectedReschedulePanel } from "./agenda/AffectedReschedulePanel";
+import type { AffectedItem } from "./agenda/ScheduleFormParts";
+import { adoptLegacyBreakAction } from "@/lib/scheduleSeriesActions";
 import { AppointmentPreview } from "./agenda/AppointmentPreview";
 
 /** Serializable shapes passed from the server page. */
@@ -101,6 +110,28 @@ export interface Appt {
   source_conversation_id: string | null;
   /** Server-computed: may this login act on this appointment (gateAppointment's checks). */
   can_modify: boolean;
+  /** A walk-in WITHOUT a linked contact: what was typed (contact_id decides, never a name). */
+  guest_name: string | null;
+  guest_phone: string | null;
+  guest_email: string | null;
+  /** «Requiere revisión» reasons (server-derived, independent of status); [] = none. */
+  review: string[];
+}
+
+/** One occurrence of a usual break or a recurring block (schedule_series), drawn on the
+ *  grid. Breaks have no border (routine); blocks do. */
+export interface SeriesOcc {
+  key: string;
+  seriesId: string;
+  kind: "break" | "block";
+  staffId: string | null;
+  date: string;
+  startsAt: string;
+  endsAt: string;
+  /** This date has its own times (an exception of the series). */
+  moved: boolean;
+  reason: string | null;
+  publicReason: string | null;
 }
 
 /**
@@ -149,7 +180,12 @@ type BookingModalState =
   | { mode: "new" | "walkin"; contact?: ContactPrefill }
   | { mode: "reschedule"; appt: Appt };
 /** The agenda's modal states — the booking ones plus Time Off (create / edit a block). */
-type ModalState = BookingModalState | { mode: "block" } | { mode: "editBlock"; block: Block };
+type ModalState =
+  | BookingModalState
+  | { mode: "block"; staffId?: string | null; date?: string }
+  | { mode: "editBlock"; block: Block }
+  /** One occurrence of a usual break / recurring block (schedule_series). */
+  | { mode: "series"; occ: SeriesOcc };
 
 /** The calendar body's vertical scale. One hour = this many px. 60 is the floor
  *  at which a 45-minute card still fits its three lines (time / customer /
@@ -511,6 +547,11 @@ export function AgendaView(props: {
   canBlockStaff: boolean;
   /** May create/edit SITE closures (owner/agency only). */
   canBlockSite: boolean;
+  /** Usual breaks + recurring blocks in the visible range (schedule_series). */
+  seriesOccurrences: SeriesOcc[];
+  /** May edit a professional's breaks (team.manage) / the site's (settings.sites or hours.manage). */
+  canEditStaffBreaks: boolean;
+  canEditSiteBreaks: boolean;
   clientName: string;
   /** Appointments per site-local day of the week around `date` (phone day strip). */
   weekCounts: Record<string, number>;
@@ -519,6 +560,7 @@ export function AgendaView(props: {
   initialApptId: string | null;
 }) {
   const router = useRouter();
+  const isPhoneWidth = useIsOverlayWidth(767.98);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const isWeek = props.view === "week";
@@ -559,6 +601,28 @@ export function AgendaView(props: {
   // to see each professional's availability. The compact row list remains one click away.
   const [desktopLayout, setDesktopLayout] = useState<"rows" | "columns">("columns");
   const searchRef = useRef<HTMLInputElement>(null);
+  /** «Color de las citas»: by SERVICE (default) or by STATE — remembered on this device. */
+  const [colorBy, setColorByState] = useState<"service" | "status">("service");
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem("mai:agenda:colorBy") === "status") setColorByState("status");
+    } catch {
+      /* private mode */
+    }
+  }, []);
+  const setColorBy = (v: "service" | "status") => {
+    setColorByState(v);
+    try {
+      window.localStorage.setItem("mai:agenda:colorBy", v);
+    } catch {
+      /* private mode */
+    }
+  };
+  /** An affected appointment being rescheduled FROM a break/block form: the form stays
+   *  mounted (hidden) with everything typed; `holds` discount its unsaved draft. */
+  const [formReschedule, setFormReschedule] = useState<{ apptId: string; holds: string[]; item: AffectedItem } | null>(null);
+  /** Bumped when coming back from that reschedule → the form recalculates its conflicts. */
+  const [recheck, setRecheck] = useState(0);
   /**
    * The legend explains the CARD COLOURS, so it lists the service families actually
    * present in the visible range — showing all four when only one is booked would
@@ -584,6 +648,8 @@ export function AgendaView(props: {
   };
 
   const fromQS = props.from ? `?from=${encodeURIComponent(props.from)}` : "";
+  /** Professionals + states currently filtered — the counter on the Filtros icon. */
+  const activeFilters = (staffFilter ? 1 : 0) + (statusFilter ? 1 : 0);
   /** The site whose day is on screen — the scope line in the title band. */
   const currentSite = props.sites.find((s) => s.id === props.currentSiteId) ?? props.sites[0];
   const shiftDate = (days: number) => navigate({ date: addDays(props.date, days) });
@@ -619,19 +685,6 @@ export function AgendaView(props: {
     document.addEventListener("keydown", onSearchKey);
     return () => document.removeEventListener("keydown", onSearchKey);
   }, []);
-
-  // Escape closes the detail drawer. The OVERLAY variant (below xl) traps focus and
-  // handles Escape itself in the capture phase (stopping it before it reaches here), so
-  // this only ever fires for the INLINE desktop panel — where nothing else would close
-  // it from the keyboard.
-  useEffect(() => {
-    if (!selectedId) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setSelectedId(null);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [selectedId]);
 
   /** A short confirmation after a successful action (the phone shows it as a toast). */
   const [notice, setNotice] = useState<string | null>(null);
@@ -960,7 +1013,140 @@ export function AgendaView(props: {
     if (capacityMinutes > 0) weeklyOccupancy = Math.min(100, Math.round((bookedMinutes / capacityMinutes) * 100));
   }
 
+  /** Local minutes of an ISO instant on the grid, clamped to the operating window. */
+  const gridMin = (iso: string, dayKey: string, isEnd = false) => {
+    const p = zonedParts(iso, tz);
+    if (p.dayKey > dayKey || (isEnd && p.dayKey !== dayKey && p.h === 0 && p.m === 0)) return toHour * 60;
+    if (p.dayKey < dayKey) return fromHour * 60;
+    return Math.min(Math.max(minutesOf(p), fromHour * 60), toHour * 60);
+  };
+  const band = (sMin: number, eMin: number) => ({ top: offsetTop(sMin), height: Math.max(14, offsetTop(eMin) - offsetTop(sMin) - 1) });
+  const rangesOf = (h: WeeklyHours | undefined, wd: string) =>
+    (h?.[wd] ?? []).map((r) => ({ s: clockMinutes(r.start), e: clockMinutes(r.end) })).sort((a, b) => a.s - b.s);
+  /** Gaps between ranges of one weekday = usual breaks that still live in the weekly hours. */
+  const gapsOf = (h: WeeklyHours | undefined, wd: string) => {
+    const r = rangesOf(h, wd);
+    const out: Array<{ s: number; e: number }> = [];
+    for (let i = 1; i < r.length; i++) if (r[i].s > r[i - 1].e) out.push({ s: r[i - 1].e, e: r[i].s });
+    return out;
+  };
+  const openLegacyBreak = (ownerStaffId: string | null, dayKey: string, g: { s: number; e: number }) => {
+    const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    const wd = WEEKDAY_KEYS.indexOf(weekdayKeyOf(dayKey) as (typeof WEEKDAY_KEYS)[number]);
+    setError(null);
+    startTransition(async () => {
+      const r = await adoptLegacyBreakAction({ clientId: props.clientId, siteId: props.currentSiteId, staffId: ownerStaffId, weekday: wd, start: hm(g.s), end: hm(g.e) });
+      if (!r.ok) return setError(r.error);
+      const mid = siteMidnightIso(dayKey, tz);
+      setModal({
+        mode: "series",
+        occ: {
+          key: `${r.seriesId}:${dayKey}`,
+          seriesId: r.seriesId,
+          kind: "break",
+          staffId: ownerStaffId,
+          date: dayKey,
+          startsAt: new Date(Date.parse(mid) + g.s * 60_000).toISOString(),
+          endsAt: new Date(Date.parse(mid) + g.e * 60_000).toISOString(),
+          moved: false,
+          reason: null,
+          publicReason: null,
+        },
+      });
+      router.refresh();
+    });
+  };
+  /** Breaks, recurring blocks and out-of-hours for ONE professional's lane on ONE day. */
+  const scheduleLayer = (staffKey: string, dayKey: string, laneClosed: boolean) => {
+    if (searchQuery.trim()) return null;
+    const st = props.staff.find((x) => x.id === staffKey);
+    const wd = weekdayKeyOf(dayKey);
+    const nodes: React.ReactNode[] = [];
+    // Outside this professional's hours on a day they DO work (a fully closed lane is
+    // already washed out).
+    if (!laneClosed && st && hasAnyHours(props.openingHours)) {
+      const own = hasAnyHours(st.workingHours) ? rangesOf(st.workingHours, wd) : rangesOf(props.openingHours, wd);
+      if (own.length > 0) {
+        const first = own[0].s;
+        const last = own[own.length - 1].e;
+        if (first > fromHour * 60) nodes.push(<div key="pre" aria-hidden className="u-closed-hatch absolute inset-x-0" style={{ top: 0, height: offsetTop(Math.min(first, toHour * 60)) }} />);
+        if (last < toHour * 60) nodes.push(<div key="post" aria-hidden className="u-closed-hatch absolute inset-x-0 bottom-0" style={{ top: offsetTop(Math.max(last, fromHour * 60)) }} />);
+      }
+    }
+    // Breaks still stored as gaps in the weekly hours (site's apply to everyone).
+    const legacy = [
+      ...gapsOf(props.openingHours, wd).map((g) => ({ ...g, owner: null as string | null })),
+      ...(st && hasAnyHours(st.workingHours) ? gapsOf(st.workingHours, wd).map((g) => ({ ...g, owner: st.id as string | null })) : []),
+    ];
+    for (const g of legacy) {
+      if (g.e <= fromHour * 60 || g.s >= toHour * 60) continue;
+      const b = band(Math.max(g.s, fromHour * 60), Math.min(g.e, toHour * 60));
+      const editable = (g.owner ? props.canEditStaffBreaks : props.canEditSiteBreaks) && !laneClosed;
+      const label = `Pausa habitual · ${String(Math.floor(g.s / 60)).padStart(2, "0")}:${String(g.s % 60).padStart(2, "0")}–${String(Math.floor(g.e / 60)).padStart(2, "0")}:${String(g.e % 60).padStart(2, "0")}`;
+      nodes.push(
+        editable ? (
+          <button key={`lg-${g.owner}-${g.s}`} type="button" title={`${label} · Cambiar este día`} aria-label={`${label}. Cambiar este día`} onClick={() => openLegacyBreak(g.owner, dayKey, g)} className="u-sch-break u-focus absolute inset-x-1 overflow-hidden rounded-[8px] px-2 py-1 text-left text-[11px] font-medium" style={b}>
+            {label}
+          </button>
+        ) : (
+          <div key={`lg-${g.owner}-${g.s}`} title={label} className="u-sch-break absolute inset-x-1 overflow-hidden rounded-[8px] px-2 py-1 text-[11px] font-medium" style={b}>
+            {label}
+          </div>
+        ),
+      );
+    }
+    for (const o of props.seriesOccurrences) {
+      if (o.date !== dayKey || (o.staffId !== null && o.staffId !== staffKey)) continue;
+      const sMin = gridMin(o.startsAt, dayKey);
+      const eMin = gridMin(o.endsAt, dayKey, true);
+      if (eMin <= sMin) continue;
+      const b = band(sMin, eMin);
+      const isBreak = o.kind === "break";
+      const time = `${fmtTime(o.startsAt, tz)}–${fmtTime(o.endsAt, tz) === "00:00" ? "24:00" : fmtTime(o.endsAt, tz)}`;
+      const label = isBreak ? `Pausa habitual · ${time}` : `${o.staffId ? "Bloqueado" : "Sede cerrada"} · ${time}${o.reason ? ` · ${o.reason}` : ""}`;
+      nodes.push(
+        <button
+          key={o.key}
+          type="button"
+          title={o.moved ? `${label} · cambiado solo este día` : label}
+          aria-label={`${label}${o.moved ? ", cambiado solo este día" : ""}. Abrir`}
+          onClick={() => setModal({ mode: "series", occ: o })}
+          className={`${isBreak ? "u-sch-break" : "u-sch-block"} u-focus absolute inset-x-1 overflow-hidden rounded-[8px] px-2 py-1 text-left text-[11px] font-medium`}
+          style={b}
+        >
+          <span className="block truncate">{label}</span>
+          {o.moved ? <span className="block truncate text-[10px] font-normal">Solo este día</span> : null}
+        </button>,
+      );
+    }
+    return nodes;
+  };
   const selected = selectedId ? props.appointments.find((a) => a.id === selectedId) ?? null : null;
+  /** md+: «Reagendar» lives inside the appointment's panel; the phone keeps its flow. */
+  const deskReschedule = modal?.mode === "reschedule" && !isPhoneWidth ? modal.appt : null;
+  const openWeekdays = new Set(Object.entries(props.openingHours).filter(([, r]) => (r?.length ?? 0) > 0).map(([k]) => k));
+  const afterReschedule = (dayKey: string, appointmentId: string) => {
+    setModal(null);
+    setSelectedId(null);
+    setNotice("Cita reagendada");
+    // Highlight it once it is drawn on its new day (this page or the next one).
+    try {
+      window.sessionStorage.setItem(FLASH_KEY, appointmentId);
+    } catch {
+      /* private mode: the highlight is a nicety */
+    }
+    if (props.returnContactId) return router.push(`/clients/${props.clientId}/contacts/${props.returnContactId}`);
+    if (dayKey !== props.date) return navigate({ date: dayKey });
+    router.refresh();
+  };
+  const rescheduleConfig = () => ({
+    clientId: props.clientId,
+    siteId: props.currentSiteId,
+    staff: props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl })),
+    openWeekdays,
+    lockStaffId: props.lockStaffId,
+    onDone: ({ dayKey, appointmentId }: { dayKey: string; appointmentId: string }) => afterReschedule(dayKey, appointmentId),
+  });
   /**
    * The date label — what window is open, in Spanish. It names the WEEK, not just the
    * month: "Sept 2026" never said which of the month's weeks you were looking at, so
@@ -1148,11 +1334,47 @@ export function AgendaView(props: {
                   <svg aria-hidden viewBox="0 0 16 16" className="size-[15px]" fill="none" stroke="currentColor" strokeWidth="1.5">
                     <path d="M2.5 4.5h11M4.5 8h7M6.5 11.5h3" />
                   </svg>
-                  <span className="u-mono absolute -right-1 -top-1 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-foreground px-1 text-[9px] font-semibold text-surface">
-                    {props.staff.filter((staff) => staff.active).length}
-                  </span>
+                  {activeFilters > 0 ? (
+                    <span className="u-mono absolute -right-1 -top-1 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-foreground px-1 text-[9px] font-semibold text-surface">
+                      {activeFilters}
+                    </span>
+                  ) : null}
                 </summary>
-                <div className={`absolute right-0 top-11 z-40 w-64 p-3 ${POPOVER}`}>
+                <div className={`absolute right-0 top-11 z-40 w-72 p-3 ${POPOVER}`}>
+                  <span className="block text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-faint">Color de las citas</span>
+                  <div role="radiogroup" aria-label="Color de las citas" className="mt-1.5 grid grid-cols-2 gap-0.5 rounded-sch-control bg-chip p-1">
+                    {(["service", "status"] as const).map((m) => (
+                      <button
+                        key={m}
+                        type="button"
+                        role="radio"
+                        aria-checked={colorBy === m}
+                        onClick={() => setColorBy(m)}
+                        className={`u-focus h-9 rounded-[9px] text-[13px] ${colorBy === m ? "bg-surface font-semibold shadow-[0_1px_2px_rgba(0,0,0,0.08)]" : "text-muted hover:text-foreground"}`}
+                      >
+                        {m === "service" ? "Servicio" : "Estado"}
+                      </button>
+                    ))}
+                  </div>
+                  <ul aria-label="Leyenda" className="mt-2 flex flex-col gap-1 text-[12px] text-muted">
+                    {colorBy === "service"
+                      ? serviceLegend.map(({ family, label }) => (
+                          <li key={family} className="flex items-center gap-2">
+                            <span aria-hidden className={`u-appt-service ${apptCategoryClass(family)} u-appt2-dot size-2 rounded-full`} />
+                            {label}
+                          </li>
+                        ))
+                      : STATUSES.map((st) => (
+                          <li key={st} className="flex items-center gap-2">
+                            <span className={`u-st-ink-${st}`}><StatusGlyphInline status={st} className="size-3.5" /></span>
+                            {STATUS_LABEL[st]}
+                          </li>
+                        ))}
+                    <li className="mt-1 text-[11.5px] text-faint">
+                      {colorBy === "service" ? "El estado se lee en el icono y el texto de cada cita." : "El servicio se lee en el texto de cada cita."}
+                    </li>
+                  </ul>
+                  <hr className="my-3 border-line" />
                   <label className="block text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-faint">
                     Profesional
                     <select
@@ -1342,7 +1564,12 @@ export function AgendaView(props: {
             <span className="text-xs text-muted">{visible.length === 1 ? "cita" : "citas"}</span>
             {/* The colour KEY: one swatch per service family on the board. */}
             <div className="ml-2 flex min-w-0 items-center gap-3 overflow-hidden">
-              {serviceLegend.map(({ family, label }) => (
+              {colorBy === "status" ? STATUSES.map((st) => (
+                <span key={st} className="inline-flex shrink-0 items-center gap-1 text-[0.6875rem] text-muted">
+                  <span className={`u-st-ink-${st}`}><StatusGlyphInline status={st} className="size-3" /></span>
+                  {STATUS_LABEL[st]}
+                </span>
+              )) : serviceLegend.map(({ family, label }) => (
                 <span key={family} className="inline-flex shrink-0 items-center gap-1.5 text-[0.6875rem] text-muted">
                   <span aria-hidden className={`u-appt-swatch u-appt-service ${apptCategoryClass(family)} size-3 rounded-full`} />
                   <span className="max-w-32 truncate">{label}</span>
@@ -1715,6 +1942,10 @@ export function AgendaView(props: {
                           />
                         );
                       })}
+                    {/* USUAL BREAKS (no border — routine) and RECURRING BLOCKS (with a
+                        border), plus the time outside this professional's hours. Same
+                        reading as the availability engine; the cards stay on top. */}
+                    {scheduleLayer(col.key, shownDayKeys[0], col.closed === true)}
                     {hours.map((h) => (
                       <div
                         key={h}
@@ -1750,6 +1981,7 @@ export function AgendaView(props: {
                             conflict={conflictIds.has(a.id)}
                             selected={a.id === selectedId}
                             flash={a.id === flashId}
+                            colorBy={colorBy}
                             previewProps={previewProps(a)}
                             onOpen={() => openAppointment(a.id)}
                           />
@@ -1793,53 +2025,66 @@ export function AgendaView(props: {
           ) : null}
         </section>
 
-        {selected ? (
+        {(selected || deskReschedule) && !formReschedule ? (() => {
+          const appt = (deskReschedule ?? selected) as Appt;
+          return (
           <AppointmentPanel
-            key={selected.id}
-            appt={selected}
+            key={`${appt.id}:${deskReschedule ? "r" : "d"}`}
+            appt={appt}
             timezone={tz}
-            toneClass={appointmentToneClass(selected)}
+            toneClass={appointmentToneClass(appt)}
             siteName={currentSite?.name ?? "Sede actual"}
-            originLabel={ORIGIN_LABEL[selected.origin] ?? (selected.origin || "—")}
+            originLabel={ORIGIN_LABEL[appt.origin] ?? (appt.origin || "—")}
             canOperate={props.canOperate}
-            canModify={selected.can_modify}
-            covered={modal?.mode === "reschedule"}
+            canModify={appt.can_modify}
+            covered={false}
             pending={pending}
             error={error}
-            contactHref={selected.contact_id && props.contactsBase ? `${props.contactsBase}/${selected.contact_id}${fromQS}` : null}
+            review={appt.review}
+            startInReschedule={Boolean(deskReschedule)}
+            reschedule={rescheduleConfig()}
+            onContactSaved={(m) => {
+              setNotice(m);
+              router.refresh();
+            }}
+            contactHref={appt.contact_id && props.contactsBase ? `${props.contactsBase}/${appt.contact_id}${fromQS}` : null}
             conversationHref={
-              selected.source_conversation_id && props.inboxBase
-                ? `${props.inboxBase}?c=${encodeURIComponent(selected.source_conversation_id)}`
+              appt.source_conversation_id && props.inboxBase
+                ? `${props.inboxBase}?c=${encodeURIComponent(appt.source_conversation_id)}`
                 : null
             }
             // "Volver a reservar": the existing book-for-contact deep link (the page only
             // honours it with CRM on and the contact in this client).
             bookAgainHref={
-              props.canOperate && selected.contact_id && props.contactsBase
-                ? `${props.basePath}?site=${encodeURIComponent(props.currentSiteId)}&book=${encodeURIComponent(selected.contact_id)}`
+              props.canOperate && appt.contact_id && props.contactsBase
+                ? `${props.basePath}?site=${encodeURIComponent(props.currentSiteId)}&book=${encodeURIComponent(appt.contact_id)}`
                 : null
             }
-            onClose={() => setSelectedId(null)}
-            onLocate={() => locateAppointment(selected.id)}
-            onReschedule={() => setModal({ mode: "reschedule", appt: selected })}
+            onClose={() => {
+              setSelectedId(null);
+              if (deskReschedule) setModal(null);
+            }}
+            onLocate={() => locateAppointment(appt.id)}
+            onReschedule={() => setModal({ mode: "reschedule", appt })}
             onStatus={(target, reason) =>
               run(
                 () =>
                   target === "confirmed"
-                    ? confirmAppointmentAction(props.clientId, selected.id)
+                    ? confirmAppointmentAction(props.clientId, appt.id)
                     : target === "completed"
-                      ? completeAppointmentAction(props.clientId, selected.id)
+                      ? completeAppointmentAction(props.clientId, appt.id)
                       : target === "no_show"
-                        ? noShowAppointmentAction(props.clientId, selected.id)
-                        : cancelAppointmentAction(props.clientId, selected.id, reason),
+                        ? noShowAppointmentAction(props.clientId, appt.id)
+                        : cancelAppointmentAction(props.clientId, appt.id, reason),
                 target === "confirmed" ? "Cita confirmada" : target === "completed" ? "Cita completada" : target === "no_show" ? "Inasistencia registrada" : "Cita cancelada",
               )
             }
-            staffColor={teamColors.get(selected.staff_id)}
-            loadActivity={() => listAppointmentActivityAction(props.clientId, selected.id)}
-            loadReviewLink={() => getReviewLinkAction(props.clientId, selected.id)}
+            staffColor={teamColors.get(appt.staff_id)}
+            loadActivity={() => listAppointmentActivityAction(props.clientId, appt.id)}
+            loadReviewLink={() => getReviewLinkAction(props.clientId, appt.id)}
           />
-        ) : null}
+          );
+        })() : null}
         {preview && !selected && !modal ? (
           <AppointmentPreview
             id="appt-preview"
@@ -1853,37 +2098,24 @@ export function AgendaView(props: {
       </div>
       </PageShell>
 
-      {/* "Cambiar fecha y hora" — its own two-step flow (agenda/RescheduleFlow), not the
-          three steps of creation. */}
-      {modal && modal.mode === "reschedule" && props.canOperate ? (
+      {/* PHONE «Cambiar fecha y hora» — the full-screen two-step flow. From md up the same
+          move happens INSIDE the appointment's panel (AppointmentPanel → RescheduleInline). */}
+      {modal && modal.mode === "reschedule" && props.canOperate && isPhoneWidth ? (
         <RescheduleFlow
           clientId={props.clientId}
           siteId={props.currentSiteId}
           siteName={currentSite?.name ?? ""}
           timezone={tz}
-          openWeekdays={new Set(Object.entries(props.openingHours).filter(([, r]) => (r?.length ?? 0) > 0).map(([k]) => k))}
+          openWeekdays={openWeekdays}
           appt={modal.appt}
           staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl }))}
           lockStaffId={props.lockStaffId}
           onClose={() => setModal(null)}
-          onDone={({ dayKey, appointmentId }) => {
-            setModal(null);
-            setSelectedId(null);
-            setNotice("Cita reprogramada");
-            // Highlight it once it is drawn on its new day (this page or the next one).
-            try {
-              window.sessionStorage.setItem(FLASH_KEY, appointmentId);
-            } catch {
-              /* private mode: the highlight is a nicety */
-            }
-            if (props.returnContactId) return router.push(`/clients/${props.clientId}/contacts/${props.returnContactId}`);
-            if (dayKey !== props.date) return navigate({ date: dayKey });
-            router.refresh();
-          }}
+          onDone={({ dayKey, appointmentId }) => afterReschedule(dayKey, appointmentId)}
         />
       ) : null}
 
-      {modal && modal.mode !== "block" && modal.mode !== "editBlock" && modal.mode !== "reschedule" && props.canOperate ? (
+      {modal && modal.mode === "new" && props.canOperate ? (
         <AppointmentModal
           {...props}
           modal={modal}
@@ -1891,6 +2123,7 @@ export function AgendaView(props: {
           onError={setError}
           error={error}
           onNotice={setNotice}
+          onWalkIn={() => setModal({ mode: "walkin" })}
           onDone={(dayKey) => {
             setModal(null);
             if (dayKey && dayKey !== props.date && !props.returnContactId) return navigate({ date: dayKey });
@@ -1902,18 +2135,101 @@ export function AgendaView(props: {
         />
       ) : null}
 
-      {/* Time Off — the SAME form as the staff tab, opened from the agenda header or by
-          clicking an existing block. Gated to those who may create at least one kind. */}
-      {modal && (modal.mode === "block" || modal.mode === "editBlock") && (props.canBlockStaff || props.canBlockSite) ? (
-        <BlockModal
+      {modal && modal.mode === "walkin" && props.canOperate ? (
+        <WalkInPanel
           clientId={props.clientId}
           siteId={props.currentSiteId}
-          tz={tz}
+          siteName={currentSite?.name ?? ""}
+          timezone={tz}
+          staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl }))}
+          services={props.services}
+          lockStaffId={props.lockStaffId}
+          onClose={() => setModal(null)}
+          onSwitchToBooking={() => setModal({ mode: "new" })}
+          onDone={({ id, dayKey, message, warning }) => {
+            setModal(null);
+            setNotice(warning ?? message);
+            try {
+              window.sessionStorage.setItem(FLASH_KEY, id);
+            } catch {
+              /* nicety */
+            }
+            if (dayKey !== props.date) return navigate({ date: dayKey });
+            router.refresh();
+          }}
+        />
+      ) : null}
+
+      {/* Blocks / absences — puntual or recurring, one panel (agenda/BlockPanel). Kept
+          mounted (hidden) while one of its affected appointments is rescheduled. */}
+      {modal && (modal.mode === "block" || modal.mode === "editBlock") && (props.canBlockStaff || props.canBlockSite) ? (
+        <BlockPanel
+          clientId={props.clientId}
+          siteId={props.currentSiteId}
+          siteName={currentSite?.name ?? ""}
+          timezone={tz}
           staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name }))}
           canSiteClosure={props.canBlockSite}
           canStaffTimeOff={props.canBlockStaff}
+          fixedStaffId={modal.mode === "block" ? modal.staffId ?? (props.lockStaffId ?? null) : null}
+          initialDate={modal.mode === "block" ? modal.date ?? props.date : undefined}
           edit={modal.mode === "editBlock" ? modal.block : undefined}
+          hidden={Boolean(formReschedule)}
+          recheck={recheck}
+          onReschedule={(item, holds) => setFormReschedule({ apptId: item.id, holds, item })}
           onClose={() => setModal(null)}
+          onSaved={(m) => {
+            setModal(null);
+            setNotice(m);
+            router.refresh();
+          }}
+        />
+      ) : null}
+
+      {modal && modal.mode === "series" ? (
+        <SeriesPanel
+          key={modal.occ.key}
+          clientId={props.clientId}
+          siteId={props.currentSiteId}
+          timezone={tz}
+          occ={modal.occ}
+          ownerName={modal.occ.staffId ? staffNameById.get(modal.occ.staffId) ?? null : null}
+          canEdit={
+            modal.occ.kind === "break"
+              ? modal.occ.staffId ? props.canEditStaffBreaks : props.canEditSiteBreaks
+              : modal.occ.staffId ? props.canBlockStaff : props.canBlockSite
+          }
+          hidden={Boolean(formReschedule)}
+          recheck={recheck}
+          onReschedule={(item, holds) => setFormReschedule({ apptId: item.id, holds, item })}
+          onClose={() => setModal(null)}
+          onSaved={(m) => {
+            setModal(null);
+            setNotice(m);
+            router.refresh();
+          }}
+        />
+      ) : null}
+
+      {formReschedule ? (
+        <AffectedReschedulePanel
+          clientId={props.clientId}
+          siteId={props.currentSiteId}
+          timezone={tz}
+          item={formReschedule.item}
+          holds={formReschedule.holds}
+          staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl }))}
+          openWeekdays={openWeekdays}
+          lockStaffId={props.lockStaffId}
+          returnLabel={modal?.mode === "series" ? (modal.occ.kind === "break" ? "la pausa" : "el bloqueo") : "el bloqueo"}
+          onBack={(moved) => {
+            setFormReschedule(null);
+            setRecheck((n) => n + 1);
+            if (moved) {
+              setNotice("Cita reagendada");
+              router.refresh();
+            }
+          }}
         />
       ) : null}
 
@@ -2801,6 +3117,7 @@ function ApptCard({
   conflict,
   selected,
   flash,
+  colorBy = "service",
   previewProps,
   onOpen,
 }: {
@@ -2812,104 +3129,72 @@ function ApptCard({
   /** Its slot in an overlap cluster — absent when nothing overlaps it. */
   lane?: DayLane;
   overlapping: boolean;
-  /** Kept despite falling inside a Time Off block — flagged so it's never a silent clash. */
+  /** Kept despite falling inside a block / break / outside hours — «Requiere revisión». */
   conflict?: boolean;
   selected: boolean;
   /** Just "located" from the detail panel — a brief ring so the eye finds it. */
   flash: boolean;
+  colorBy?: "service" | "status";
   /** Hover / focus preview handlers + the data-appt-id the locate action looks for. */
   previewProps: Record<string, unknown>;
   onOpen: () => void;
 }) {
-  const unconfirmed = appt.status === "scheduled";
   const cancelled = appt.status === "cancelled";
-  const category = apptCategory(appt, { attention: overlapping });
-  const unassigned = category === "unassigned";
-  /** Everything the card says about its STATE, in words — never colour alone. */
-  const state =
-    (unassigned ? " · sin profesional" : "") +
-    (unconfirmed ? " · sin confirmar" : "") +
-    // `completed` no longer owns a colour (the family does), so it says so here —
-    // otherwise a done appointment would be indistinguishable.
-    (appt.status === "completed" ? " · completada" : "") +
-    (conflict ? " · en bloqueo" : "") +
-    (overlapping ? " · traslape" : "") +
-    (appt.status === "no_show" ? " · inasistencia" : "") +
-    (cancelled ? " · cancelada" : "");
+  const review = conflict || appt.review.length > 0;
   /**
    * The card's height IS its duration (never padded to fit text — that would lie about
-   * when the barber is free), so the CONTENT adapts to the room instead, essential
-   * first:
-   *   tiny  (< 30px, ~15 min)  one line: start · client
-   *   short (< 48px)           time range, then the client
-   *   mid   (< 70px)           + the service
-   *   tall                     + the state line
-   * The hover preview and the detail carry everything a shorter tier leaves out.
+   * when the professional is free), so the CONTENT adapts, essential first:
+   *   tiny  (< 30px)  one line: client · state glyph
+   *   short (< 48px)  client, then service
+   *   tall            + the time range
+   * The state is ALWAYS an icon + words (the icon carries an accessible name), in both
+   * colour modes; the hover preview and the detail carry everything else.
    */
-  const tier = height < 30 ? "tiny" : height < 48 ? "short" : height < 70 ? "mid" : "tall";
-  const client = appt.contact_name ?? "Sin cita";
+  const tier = height < 30 ? "tiny" : height < 48 ? "short" : "tall";
+  const client = appt.contact_name ?? appt.guest_name ?? "Atención sin cita";
+  const stateWord = STATUS_LABEL[appt.status] ?? appt.status;
   return (
     <button
       type="button"
       onClick={onOpen}
+      data-appt-card=""
       {...previewProps}
-      aria-label={`${fmtTime(appt.start_at, tz)} ${appt.contact_name ?? "Sin cita"} — ${appt.service_name} — ${STATUS_LABEL[appt.status] ?? appt.status}${overlapping ? " — solapamiento" : ""}`}
-      // leading-tight is load-bearing: at the default line-height the lines don't fit
-      // a short card and the last one gets cropped in half.
-      className={`u-appt ${toneClass} absolute flex flex-col items-stretch justify-start overflow-hidden px-2 text-left leading-tight transition-shadow hover:shadow-[0_0_0_2px_var(--foreground)] ${
-        tier === "tiny" ? "justify-center py-0" : tier === "short" ? "py-0.5" : "py-1"
-      } ${selected || flash ? "ring-2 ring-service-purple" : ""} ${flash ? "animate-pulse" : ""}`}
+      aria-label={`${fmtTime(appt.start_at, tz)} ${client} — ${appt.service_name} — ${stateWord}${review ? " — requiere revisión" : ""}${overlapping ? " — solapamiento" : ""}`}
+      className={`u-appt2 u-lift ${colorBy === "service" ? toneClass : ""} absolute flex flex-col items-stretch justify-start overflow-hidden px-2 text-left leading-tight focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-edge)] ${
+        tier === "tiny" ? "justify-center py-0" : "py-1.5"
+      } ${selected || flash ? "shadow-[0_0_0_2px_var(--foreground)]" : "hover:shadow-[var(--shadow-card)]"} ${flash ? "animate-pulse motion-reduce:animate-none" : ""}`}
+      data-status={appt.status}
+      data-mode={colorBy}
       style={{
         top,
         height,
-        // A lone card keeps the full lane; a cluster splits it evenly, leaving the 4px
-        // gutters and a 2px seam so adjacent cards read as two cards.
         left: `calc(${((lane?.lane ?? 0) / (lane?.laneCount ?? 1)) * 100}% + 4px)`,
         width: `calc(${100 / (lane?.laneCount ?? 1)}% - ${(lane?.laneCount ?? 1) > 1 ? 6 : 8}px)`,
       }}
     >
-          {conflict ? (
-            <span
-              aria-hidden
-              title="Dentro de un bloqueo — se mantuvo desde la gestión de tiempo fuera"
-              className="u-timeoff-ink absolute right-0.5 top-0.5 text-[10px] font-bold leading-none"
-            >
-              ⚠
-            </span>
-          ) : null}
-      {tier === "tiny" ? (
-        <span className="flex min-w-0 items-center gap-1.5 text-[11px]">
-          <span className="u-appt-ink u-mono shrink-0">{fmtTime(appt.start_at, tz)}</span>
-          <span className={`min-w-0 truncate font-semibold ${cancelled ? "line-through" : ""}`}>{client}</span>
-        </span>
-      ) : (
-        <>
-          <span className="flex items-start justify-between gap-1">
-            <span className="u-appt-ink u-mono truncate text-[11px]">
-              {fmtTime(appt.start_at, tz)} — {fmtTime(appt.service_end_at, tz)}
-              {tier === "short" ? state : ""}
-            </span>
-            {unassigned ? (
-              // Nobody is on this walk-in: a red "?" disc where the barber would be.
-              <span
-                aria-hidden
-                className="flex size-[1.125rem] shrink-0 items-center justify-center rounded-full bg-brand text-[0.625rem] font-semibold text-white"
-              >
-                ?
-              </span>
-            ) : (
-              <Initial name={appt.staff_name} on="card" />
-            )}
+      <span className="flex min-w-0 items-start gap-1.5">
+        <span className={`min-w-0 flex-1 truncate text-[12.5px] font-semibold ${cancelled ? "line-through decoration-1" : ""}`}>{client}</span>
+        {review ? (
+          <span title="Requiere revisión" className="shrink-0 rounded-full bg-[var(--warn-soft)] px-1.5 text-[10px] font-semibold leading-4 text-[var(--warn)]">
+            Revisar
           </span>
-          <span className={`block truncate text-[13px] font-semibold ${cancelled ? "line-through" : ""}`}>{client}</span>
-          {/* The service owns its line and the STATE owns the next one, so neither crops
-              the other in a split overlap lane. */}
-          {tier === "mid" || tier === "tall" ? <span className="u-appt-ink block truncate text-xs">{appt.service_name}</span> : null}
-          {tier === "tall" && state ? (
-            <span className="u-appt-ink block truncate text-[10px] opacity-80 first-letter:uppercase">{state.replace(/^ · /, "")}</span>
-          ) : null}
-        </>
-      )}
+        ) : null}
+        <span title={stateWord} className={`u-st-ink-${appt.status} shrink-0`}>
+          <StatusGlyphInline status={appt.status} className="size-3.5" />
+        </span>
+      </span>
+      {tier !== "tiny" ? (
+        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted">
+          {colorBy === "service" ? <span aria-hidden className={`${toneClass} u-appt2-dot size-1.5 shrink-0 rounded-full`} /> : null}
+          <span className="truncate">{appt.service_name}</span>
+        </span>
+      ) : null}
+      {tier === "tall" ? (
+        <span className="u-mono mt-0.5 truncate text-[11px] text-muted">
+          {fmtTime(appt.start_at, tz)}–{fmtTime(appt.service_end_at, tz)}
+          {cancelled ? " · cancelada" : ""}
+        </span>
+      ) : null}
     </button>
   );
 }
@@ -2941,6 +3226,8 @@ function AppointmentModal(props: {
   error?: string | null;
   /** A short confirmation for the phone's toast ("Cita creada"). */
   onNotice?: (message: string) => void;
+  /** «Sin cita · ahora»: switch to the one-step walk-in panel. */
+  onWalkIn?: () => void;
 }) {
   const isReschedule = props.modal.mode === "reschedule";
   // Booking for an existing contact (deep-link): lock identity, submit its id.
@@ -2969,6 +3256,8 @@ function AppointmentModal(props: {
    * Deep-linked bookings arrive with the contact already decided and skip all three.
    */
   const [customerMode, setCustomerMode] = useState<"search" | "new" | "anonymous">("search");
+  /** A typed phone/email that already belongs to a contact: offered to LINK (never duplicated). */
+  const [contactMatches, setContactMatches] = useState<ContactMatch[]>([]);
   const [contactQuery, setContactQuery] = useState("");
   const [contactHits, setContactHits] = useState<ContactSearchHit[]>([]);
   const [contactSearching, setContactSearching] = useState(false);
@@ -3145,12 +3434,17 @@ function AppointmentModal(props: {
                   customerName: name || undefined,
                   customerPhone: phone || undefined,
                   customerEmail: email || undefined,
+                  // A contact needs a phone or an email; a name alone stays on the cita.
+                  contactMode: phone.trim() || email.trim() ? ("create" as const) : ("guest" as const),
                 }),
           walkIn: props.modal.mode === "walkin",
           idempotencyKey: idemKey,
           initialStatus: isPhone ? initialStatus : undefined,
         });
-        if (!r.ok) return props.onError(r.error);
+        if (!r.ok) {
+          setContactMatches(r.matches ?? []);
+          return props.onError(r.fieldErrors ? Object.values(r.fieldErrors).join(" ") : r.error);
+        }
         props.onNotice?.(r.warning ?? "Cita creada");
       }
       await dropBackGuard();
@@ -3386,6 +3680,8 @@ function AppointmentModal(props: {
   };
 
   const phoneHasChoices = Boolean(customer.label || serviceId || slotStart) && !isReschedule;
+  // A link elsewhere in the app (the sidebar stays usable beside the panel) asks first.
+  const leaveNav = useNavigationGuard({ dirty: phoneHasChoices, onAsk: () => setPhoneSheet("discard") });
   useEffect(() => {
     backGuard.current.onBack = () => {
       // An open sheet (month, new contact, or the discard question itself — where Back
@@ -3407,8 +3703,9 @@ function AppointmentModal(props: {
     };
   });
 
-  // ── PHONE (< md) — the reference's 3-step flow (§03) on the SAME state and actions ──
-  if (isPhone) {
+  // ── The reference's 3-step flow (§03) on the SAME state and actions: full screen on
+  // the phone, inside the agenda's 520 px side-panel frame from md up (MScreen framed).
+  {
     const stepName = step === 1 ? "Cliente y servicio" : step === 2 ? "Profesional, fecha y hora" : "Confirmar";
     const dayState = (dayKey: string): "ok" | "full" | "closed" | "past" | "unknown" => {
       if (dayKey < todayKey) return "past";
@@ -3481,6 +3778,7 @@ function AppointmentModal(props: {
     return (
       <MScreen
         label={title}
+        framed={!isPhone}
         onEscape={() => (phoneSheet ? setPhoneSheet(null) : requestClose())}
         header={
           <div className="flex flex-col gap-[10px]">
@@ -3624,15 +3922,15 @@ function AppointmentModal(props: {
                       </button>
                       <button
                         type="button"
-                        onClick={() => setCustomerMode("anonymous")}
+                        onClick={() => (props.onWalkIn ? props.onWalkIn() : setCustomerMode("anonymous"))}
                         className="flex min-h-[56px] w-full items-center gap-3 border-0 border-t border-m-dv bg-transparent px-[14px] text-left text-[15px] text-m-tx"
                       >
                         <span aria-hidden className="flex size-10 flex-none items-center justify-center rounded-full bg-m-sf2 text-[15px]">
                           →
                         </span>
                         <span className="flex flex-col">
-                          <span>Atención sin cita</span>
-                          <span className="text-[13px] text-m-tx3">Cliente presente, sin registrar datos</span>
+                          <span>Sin cita · ahora</span>
+                          <span className="text-[13px] text-m-tx3">Alguien que llegó sin reserva: un solo paso</span>
                         </span>
                       </button>
                     </div>
@@ -3831,6 +4129,30 @@ function AppointmentModal(props: {
                   {!isReschedule ? <MStateChip status={initialStatus} /> : null}
                 </div>
               </div>
+              {contactMatches.length > 0 ? (
+                <div role="status" className="flex flex-col gap-2 rounded-[16px] border border-m-bd bg-m-sf px-[14px] py-3">
+                  <span className="text-[15px] font-semibold">Ya existe un contacto con ese teléfono o correo</span>
+                  {contactMatches.map((m) => (
+                    <div key={m.contactId} className="flex items-center gap-3">
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[15px] font-semibold">{m.name ?? "Sin nombre"}</span>
+                        <span className="u-mono block truncate text-[13px] text-m-tx3">{m.matchedValue}</span>
+                      </span>
+                      <MButton
+                        onClick={() => {
+                          setPickedContact({ id: m.contactId, name: m.name, identity: m.matchedValue, isCustomer: false, appointmentCount: 0, lastVisitAt: null, nextAppointmentAt: null });
+                          setCustomerMode("search");
+                          setContactMatches([]);
+                          props.onError(null);
+                        }}
+                      >
+                        Vincular
+                      </MButton>
+                    </div>
+                  ))}
+                  <span className="text-[13px] text-m-tx3">Vincúlalo para no crear un contacto duplicado.</span>
+                </div>
+              ) : null}
               <div className={M_CARD}>
                 {confirmRows.map(([k, v]) => (
                   <div key={k} className="flex min-h-[48px] items-start gap-3 border-t border-m-dv px-[14px] py-3 first:border-t-0">
@@ -3945,7 +4267,11 @@ function AppointmentModal(props: {
             </label>
             <input id="nc-email" type="email" inputMode="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} className="h-[48px] rounded-[12px] border border-m-bd bg-m-sf px-[14px] text-[16px] text-m-tx" />
           </div>
-          <span className="text-[13px] text-m-tx3">El contacto se crea al confirmar la cita.</span>
+          <span className="text-[13px] text-m-tx3">
+            {phone.trim() || email.trim()
+              ? "El contacto se crea al confirmar la cita. Si ya existe uno con ese teléfono o correo, te propondremos vincularlo."
+              : "Sin teléfono ni correo no se crea un contacto: el nombre queda solo en esta cita."}
+          </span>
           <div className="flex gap-2">
             <MButton onClick={() => setPhoneSheet(null)}>Cancelar</MButton>
             <MButton
@@ -3966,11 +4292,11 @@ function AppointmentModal(props: {
         <Sheet open={phoneSheet === "discard"} onClose={() => setPhoneSheet(null)} alert label="¿Descartar la cita?" bodyClassName="pb-[max(20px,env(safe-area-inset-bottom))]">
           <MConfirm title="¿Descartar la cita?" body="Se perderán el cliente, el servicio y el horario elegidos. No se ha guardado nada.">
             <div className="flex flex-col gap-2 pt-1">
-              <MButton data-autofocus className="w-full font-semibold" onClick={() => setPhoneSheet(null)}>
+              <MButton data-autofocus className="w-full font-semibold" onClick={() => { leaveNav.forget(); setPhoneSheet(null); }}>
                 Seguir editando
               </MButton>
-              <MButton kind="danger" className="w-full" onClick={props.onClose}>
-                Descartar
+              <MButton kind="danger" className="w-full" onClick={() => { const go = leaveNav.hasPending(); props.onClose(); if (go) leaveNav.follow(); }}>
+                Descartar cambios
               </MButton>
             </div>
           </MConfirm>
@@ -3979,814 +4305,6 @@ function AppointmentModal(props: {
     );
   }
 
-  return (
-    <div className="u-module-modal z-50 flex items-center justify-center bg-black/45 sm:p-4" onClick={props.onClose}>
-      <div
-        ref={dialogRef as RefObject<HTMLDivElement>}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={MODAL_TITLE_ID}
-        className="flex h-dvh w-dvw flex-col overflow-hidden bg-popover text-popover-foreground shadow-2xl sm:h-[min(640px,calc(100dvh-2rem))] sm:w-[min(992px,calc(100vw-2rem))] sm:rounded-sch-modal sm:border sm:border-line xl:h-[min(680px,calc(100dvh-2rem))] xl:w-[min(1120px,calc(100vw-2rem))]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* HEADER — one row at every width, but the step indicator changes form with
-            the room available: named pills on desktop, a three-dot progress read on
-            tablet, and a three-segment bar under the title on the phone. All three
-            state the same thing, none of them wrap. */}
-        <header className="flex min-h-16 shrink-0 flex-col gap-2.5 border-b border-line px-4 py-3 sm:min-h-16 sm:flex-row sm:items-center sm:gap-3.5 sm:px-5">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-none">
-              <h2 id={MODAL_TITLE_ID} className="truncate text-base font-semibold">
-                {title}
-                <span className="sm:hidden"> </span>
-              </h2>
-              <p className="truncate text-xs text-muted">
-                <span className="sm:hidden">Paso {step} de 3 · {stepItems[step - 1].label.toLocaleLowerCase("es")}</span>
-                <span className="hidden sm:inline">{headerSubtitle}</span>
-              </p>
-            </div>
-            {/* Phone close button lives beside the title; desktop's is at the far right. */}
-            <button
-              type="button"
-              aria-label="Cerrar"
-              onClick={props.onClose}
-              className={buttonClass({ variant: "tertiary", className: "w-[44px] px-0 text-xl sm:hidden" })}
-            >
-              <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
-              </svg>
-            </button>
-          </div>
-
-          {/* PHONE — a plain progress bar. Three named pills do not fit 390px. */}
-          <div aria-hidden className="flex items-center gap-1.5 sm:hidden">
-            {stepItems.map((item) => (
-              <span
-                key={item.value}
-                className={`h-1 flex-1 rounded-full ${item.value <= step ? "bg-foreground" : "bg-line"}`}
-              />
-            ))}
-          </div>
-
-          {/* TABLET — dots, with the current step drawn as a wider pill. */}
-          <div aria-hidden className="hidden items-center gap-1.5 sm:flex lg:hidden">
-            {stepItems.map((item) => (
-              <span
-                key={item.value}
-                className={`h-2 rounded-full ${item.value === step ? "w-5 bg-foreground" : item.value < step ? "w-2 bg-foreground/45" : "w-2 bg-line"}`}
-              />
-            ))}
-          </div>
-
-          {/* DESKTOP — named, clickable pills joined by hairlines. */}
-          <nav aria-label="Pasos para crear la cita" className="hidden min-w-0 lg:block">
-            <ol className="flex items-center gap-2">
-              {stepItems.map((item, index) => {
-                const complete = item.value < step;
-                const current = item.value === step;
-                // A step is reachable if it is already behind you, or if everything it
-                // depends on is decided. Step 3 needs a slot; step 2 needs step 1.
-                const reachable =
-                  item.value <= step || (item.value === 2 && step1Ready) || (item.value === 3 && !!slotStart);
-                return (
-                  <li key={item.value} className="flex items-center gap-2">
-                    {index > 0 ? <span aria-hidden className="h-px w-4 bg-line" /> : null}
-                    <button
-                      type="button"
-                      aria-current={current ? "step" : undefined}
-                      disabled={!reachable}
-                      onClick={() => reachable && setStep(item.value)}
-                      className={`u-focus inline-flex h-[32px] items-center gap-2 whitespace-nowrap rounded-full pl-1 pr-3 text-xs transition-colors ${
-                        current
-                          ? "bg-ink font-medium text-ink-fg"
-                          : reachable
-                            ? "text-muted hover:bg-subtle hover:text-foreground"
-                            : "cursor-default text-faint"
-                      }`}
-                    >
-                      <span
-                        className={`u-mono inline-flex size-6 items-center justify-center rounded-full text-[0.6875rem] leading-none ${
-                          complete
-                            ? "bg-success/15 text-success"
-                            : current
-                              ? "bg-ink-fg text-ink"
-                              : "bg-subtle text-faint"
-                        }`}
-                      >
-                        {complete ? "✓" : item.value}
-                      </span>
-                      {item.label}
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
-          </nav>
-
-          <span className="hidden flex-1 sm:block" />
-          <button
-            type="button"
-            aria-label="Cerrar"
-            onClick={props.onClose}
-            className={buttonClass({ variant: "tertiary", size: "sm", className: "w-[44px] px-0 text-xl max-sm:hidden lg:w-[36px]" })}
-          >
-              <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
-              </svg>
-            </button>
-        </header>
-
-        <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] overflow-y-auto lg:overflow-hidden">
-          <main className="flex min-h-0 flex-col overflow-y-auto lg:overflow-hidden">
-            {step === 1 ? (
-              /* PASO 1 — dos columnas iguales: a quién atiendes y qué le vas a hacer.
-                 Ninguna depende de la otra, así que van lado a lado y no en secuencia. */
-              <section
-                aria-labelledby="booking-client-heading"
-                className="grid min-h-0 flex-1 gap-0 lg:grid-cols-2"
-              >
-                <h3 id="booking-client-heading" className="sr-only">Cliente y servicio</h3>
-
-                {/* ── CLIENTE ── */}
-                <div className="flex min-h-0 min-w-0 flex-col border-b border-line lg:border-b-0 lg:border-r">
-                  <div className="flex shrink-0 flex-col gap-2.5 px-4 pb-3 pt-4 sm:px-5">
-                    <div className="flex items-center gap-2.5">
-                      <span className="text-sm font-semibold">Cliente</span>
-                      <span className="flex-1" />
-                      {!bookingContact && !isReschedule ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            // An anonymous walk-in: no contact is stored, so any typed
-                            // identity and any picked contact are dropped on purpose.
-                            setCustomerMode(customerMode === "anonymous" ? "search" : "anonymous");
-                            setPickedContact(null);
-                            setName("");
-                            setPhone("");
-                            setEmail("");
-                          }}
-                          className="text-xs text-muted transition-colors hover:text-foreground"
-                        >
-                          {customerMode === "anonymous" ? "Elegir un cliente" : "Atención sin cita"}
-                        </button>
-                      ) : null}
-                    </div>
-
-                    {bookingContact || isReschedule ? null : customerMode === "anonymous" ? null : customerMode === "new" ? null : (
-                      <label className={`${FIELD} flex h-[44px] items-center gap-2.5 lg:h-[40px]`}>
-                        <span className="sr-only">Buscar cliente por nombre o teléfono</span>
-                        <svg aria-hidden viewBox="0 0 16 16" className="size-3.5 shrink-0 text-faint" fill="none" stroke="currentColor" strokeWidth="1.5">
-                          <circle cx="7" cy="7" r="4.4" />
-                          <path d="M10.4 10.4 13.6 13.6" />
-                        </svg>
-                        <input
-                          value={contactQuery}
-                          onChange={(event) => setContactQuery(event.target.value)}
-                          placeholder="Nombre o teléfono"
-                          className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
-                          autoFocus
-                        />
-                        {contactSearching ? (
-                          <span className="shrink-0 text-[0.6875rem] text-faint">Buscando…</span>
-                        ) : contactSearched ? (
-                          <span className="shrink-0 text-[0.6875rem] text-faint">
-                            {contactHits.length} {contactHits.length === 1 ? "resultado" : "resultados"}
-                          </span>
-                        ) : null}
-                      </label>
-                    )}
-                  </div>
-
-                  <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 pb-4 sm:px-5">
-                    {bookingContact ? (
-                      <div className="rounded-sch-card border border-foreground bg-subtle/50 p-3.5">
-                        <span className="u-th">Cliente seleccionado</span>
-                        <p className="mt-1.5 text-sm font-semibold">{bookingContact.contactName}</p>
-                        <p className="mt-1 text-xs text-muted">La cita quedará vinculada a este contacto.</p>
-                      </div>
-                    ) : isReschedule ? (
-                      <div className="rounded-sch-card border border-line-strong bg-subtle/50 p-3.5">
-                        <span className="u-th">Cliente de la cita</span>
-                        <p className="mt-1.5 text-sm font-semibold">{clientLabel}</p>
-                      </div>
-                    ) : customerMode === "anonymous" ? (
-                      <div className="rounded-sch-card border border-dashed border-line-strong p-3.5">
-                        <p className="text-sm font-semibold">Atención sin cita</p>
-                        <p className="mt-1 text-xs leading-relaxed text-muted">
-                          No se guardará ningún contacto. Úsalo solo si el cliente no deja sus datos.
-                        </p>
-                      </div>
-                    ) : customerMode === "new" ? (
-                      <div className="flex flex-col gap-3">
-                        <div className="flex items-center gap-2">
-                          <span className="u-th">Nuevo contacto</span>
-                          <span className="flex-1" />
-                          <button
-                            type="button"
-                            onClick={() => { setCustomerMode("search"); setName(""); setPhone(""); setEmail(""); }}
-                            className="text-xs text-muted transition-colors hover:text-foreground"
-                          >
-                            Buscar uno existente
-                          </button>
-                        </div>
-                        <label className="flex flex-col gap-1.5">
-                          <span className="text-xs font-medium">Nombre</span>
-                          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Lucía Ferrer" className={inputCls} autoFocus />
-                        </label>
-                        <label className="flex flex-col gap-1.5">
-                          <span className="text-xs font-medium">Teléfono</span>
-                          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+57 300 000 0000" className={inputCls} inputMode="tel" />
-                        </label>
-                        <label className="flex flex-col gap-1.5">
-                          <span className="text-xs font-medium">Correo electrónico</span>
-                          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Opcional" className={inputCls} inputMode="email" />
-                        </label>
-                      </div>
-                    ) : pickedContact ? (
-                      <>
-                        <div className="flex items-center gap-3 rounded-sch-card border border-foreground bg-subtle/40 p-3">
-                          <span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-full bg-chip text-xs font-semibold text-foreground">
-                            {initialsOf(pickedContact.name ?? pickedContact.identity)}
-                          </span>
-                          <span className="flex min-w-0 flex-1 flex-col">
-                            <span className="truncate text-sm font-semibold">{pickedContact.name ?? "Contacto sin nombre"}</span>
-                            {pickedContact.identity ? (
-                              <span className="u-mono truncate text-xs text-muted">{pickedContact.identity}</span>
-                            ) : null}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setPickedContact(null)}
-                            className="shrink-0 text-xs text-muted transition-colors hover:text-foreground"
-                          >
-                            Cambiar
-                          </button>
-                        </div>
-                        {/* DUPLICATE GUARD. This is real: next_appointment_at comes from
-                            the same query as the row. Booking anyway is allowed — it is
-                            a warning, not a block, because two visits in a week is a
-                            normal thing a person can want. */}
-                        {pickedContact.nextAppointmentAt ? (
-                          <div className="flex items-start gap-2.5 rounded-sch-card border border-warn-rule/35 bg-warn-soft p-3">
-                            <span aria-hidden className="mt-px flex size-4 shrink-0 items-center justify-center rounded-full bg-warn-rule/20 text-[0.625rem] font-semibold text-warn">!</span>
-                            <p className="flex-1 text-xs leading-relaxed text-warn">
-                              Ya tiene una cita el{" "}
-                              <strong className="font-semibold">
-                                {contactDateLabel(pickedContact.nextAppointmentAt, true)}
-                              </strong>
-                              . Revisa si es un duplicado.
-                            </p>
-                          </div>
-                        ) : null}
-                        <dl className="grid grid-cols-2 gap-2">
-                          <div className="rounded-sch-control border border-line px-3 py-2">
-                            <dt className="text-[0.6875rem] text-muted">Citas en total</dt>
-                            <dd className="u-mono mt-0.5 text-sm font-semibold">{pickedContact.appointmentCount}</dd>
-                          </div>
-                          <div className="rounded-sch-control border border-line px-3 py-2">
-                            <dt className="text-[0.6875rem] text-muted">Última visita</dt>
-                            <dd className="mt-0.5 text-sm font-semibold">
-                              {pickedContact.lastVisitAt ? contactDateLabel(pickedContact.lastVisitAt, false) : "Sin visitas"}
-                            </dd>
-                          </div>
-                        </dl>
-                      </>
-                    ) : (
-                      <>
-                        {contactHits.map((hit) => (
-                          <button
-                            key={hit.id}
-                            type="button"
-                            onClick={() => setPickedContact(hit)}
-                            className="u-focus flex items-center gap-3 rounded-sch-control border border-line p-3 text-left transition-colors hover:bg-subtle"
-                          >
-                            <span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-full bg-chip text-xs font-semibold text-foreground">
-                              {initialsOf(hit.name ?? hit.identity)}
-                            </span>
-                            <span className="flex min-w-0 flex-1 flex-col">
-                              <span className="truncate text-sm font-semibold">{hit.name ?? "Contacto sin nombre"}</span>
-                              {hit.identity ? <span className="u-mono truncate text-xs text-muted">{hit.identity}</span> : null}
-                            </span>
-                            <span className="flex shrink-0 flex-col items-end gap-1">
-                              {hit.isCustomer ? (
-                                <span className="rounded-full bg-success/10 px-2 py-0.5 text-[0.625rem] font-medium text-success">Ya es cliente</span>
-                              ) : null}
-                              <span className="text-[0.625rem] text-faint">
-                                {hit.appointmentCount} {hit.appointmentCount === 1 ? "cita" : "citas"}
-                              </span>
-                            </span>
-                          </button>
-                        ))}
-
-                        {contactQuery.trim().length < 2 ? (
-                          <p className="px-1 py-6 text-center text-xs text-faint">
-                            Escribe al menos dos letras para buscar en tus contactos.
-                          </p>
-                        ) : contactSearched && contactHits.length === 0 ? (
-                          <p className="px-1 py-4 text-center text-xs text-muted">
-                            Nadie coincide con «{contactQuery.trim()}».
-                          </p>
-                        ) : null}
-
-                        {contactQuery.trim().length >= 2 ? (
-                          <button
-                            type="button"
-                            onClick={() => { setCustomerMode("new"); setName(contactQuery.trim()); }}
-                            className="u-focus flex items-center gap-2.5 rounded-sch-control border border-dashed border-line-strong p-3 text-left transition-colors hover:bg-subtle"
-                          >
-                            <span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-full bg-chip text-base leading-none text-foreground">+</span>
-                            <span className="flex min-w-0 flex-1 flex-col">
-                              <span className="truncate text-sm font-semibold">Crear contacto «{contactQuery.trim()}»</span>
-                              <span className="truncate text-xs text-muted">Solo nombre y teléfono; el resto se completa después</span>
-                            </span>
-                          </button>
-                        ) : null}
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {/* ── SERVICIO ── */}
-                <div className="flex min-h-0 min-w-0 flex-col">
-                  <div className="flex shrink-0 flex-col gap-2.5 px-4 pb-3 pt-4 sm:px-5">
-                    <div className="flex items-center gap-2.5">
-                      <span className="text-sm font-semibold">Servicio</span>
-                      <span className="flex-1" />
-                      <span className="truncate text-[0.6875rem] text-faint">
-                        Solo activos en {selectedSite?.name ?? "esta sede"}
-                      </span>
-                    </div>
-                    {isReschedule ? null : (
-                      <>
-                        <label className={`${FIELD} flex h-[44px] items-center gap-2.5 lg:h-[40px]`}>
-                          <span className="sr-only">Buscar servicio</span>
-                          <svg aria-hidden viewBox="0 0 16 16" className="size-3.5 shrink-0 text-faint" fill="none" stroke="currentColor" strokeWidth="1.5">
-                            <circle cx="7" cy="7" r="4.4" />
-                            <path d="M10.4 10.4 13.6 13.6" />
-                          </svg>
-                          <input
-                            value={serviceQuery}
-                            onChange={(event) => setServiceQuery(event.target.value)}
-                            placeholder="Buscar servicio…"
-                            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
-                          />
-                        </label>
-                        {serviceFamilies.length > 1 ? (
-                          <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-                            {(["all", ...serviceFamilies] as const).map((family) => {
-                              const active = serviceFamily === family;
-                              const label = family === "all" ? "Todos" : SERVICE_FAMILY_LABEL[family] ?? family;
-                              return (
-                                <button
-                                  key={family}
-                                  type="button"
-                                  aria-pressed={active}
-                                  onClick={() => setServiceFamily(family)}
-                                  className={`u-focus h-[44px] shrink-0 rounded-sch-control px-3 text-xs transition-colors lg:h-[32px] ${
-                                    active ? "bg-ink font-medium text-ink-fg" : "border border-line-strong bg-surface hover:bg-subtle"
-                                  }`}
-                                >
-                                  {label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-                      </>
-                    )}
-                  </div>
-
-                  <div className="grid min-h-0 flex-1 content-start gap-2 overflow-y-auto px-4 pb-4 sm:px-5 sm:grid-cols-2">
-                    {(isReschedule ? props.services.filter((s) => s.id === serviceId) : filteredServices).map((service) => {
-                      const selected = service.id === serviceId;
-                      const family = serviceCategory(service.name, service.category);
-                      const price = priceLabelCOP(service.price);
-                      return (
-                        <button
-                          key={service.id}
-                          type="button"
-                          aria-pressed={selected}
-                          disabled={isReschedule}
-                          onClick={() => { setServiceId(service.id); resetSlots(); }}
-                          className={`u-focus flex flex-col gap-1.5 rounded-sch-control border p-3 text-left transition-colors disabled:cursor-default ${
-                            selected ? "border-foreground bg-subtle/40" : "border-line hover:bg-subtle/60"
-                          }`}
-                        >
-                          <span className="flex items-center gap-2">
-                            {/* The card's colour bar IS the agenda colour this booking
-                                will get — the same family class the board uses. */}
-                            <span aria-hidden className={`u-appt-swatch u-appt-service ${apptCategoryClass(family)} h-5 w-1.5 shrink-0 rounded-full`} />
-                            <span className="min-w-0 flex-1 truncate text-sm font-semibold">{service.name}</span>
-                            {selected ? (
-                              <span aria-hidden className="flex size-4 shrink-0 items-center justify-center rounded-full bg-ink text-[0.625rem] text-ink-fg">✓</span>
-                            ) : null}
-                          </span>
-                          <span className="u-mono truncate text-xs text-muted">
-                            {service.duration_min} min{price ? ` · ${price}` : ""}
-                          </span>
-                        </button>
-                      );
-                    })}
-                    {!isReschedule && filteredServices.length === 0 ? (
-                      <p className="py-8 text-center text-xs text-muted sm:col-span-2">
-                        Ningún servicio coincide con ese filtro.
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-              </section>
-            ) : null}
-
-            {step === 2 ? (
-              /* PASO 2 — el mes ocupa la columna ancha y las horas viven en la
-                 estrecha. El calendario solo dice SI hay cupo; nunca lista las horas
-                 dentro de las celdas. */
-              <section
-                aria-labelledby="booking-slot-heading"
-                className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_22rem]"
-              >
-                <h3 id="booking-slot-heading" className="sr-only">Profesional, fecha y hora</h3>
-
-                {/* ── MES ── */}
-                <div className="flex min-h-0 min-w-0 flex-col gap-3 border-b border-line p-4 sm:p-5 lg:border-b-0 lg:border-r">
-                  <div className="flex shrink-0 items-center gap-2">
-                    <strong className="truncate text-sm font-semibold capitalize">{monthLabel}</strong>
-                    <span className="flex-1" />
-                    <button type="button" onClick={() => changeDate(todayKey)} className={buttonClass({ size: "sm" })}>Hoy</button>
-                    <button type="button" aria-label="Mes anterior" onClick={() => changeMonth(-1)} className={buttonClass({ size: "sm", className: "w-[44px] px-0 text-base text-muted lg:w-[36px]" })}>‹</button>
-                    <button type="button" aria-label="Mes siguiente" onClick={() => changeMonth(1)} className={buttonClass({ size: "sm", className: "w-[44px] px-0 text-base text-muted lg:w-[36px]" })}>›</button>
-                  </div>
-
-                  {/* Single-letter weekday heads: at seven columns the three-letter
-                      abbreviations were the widest thing in the cell. */}
-                  <div className="grid shrink-0 grid-cols-7 gap-1.5">
-                    {["L", "M", "M", "J", "V", "S", "D"].map((letter, index) => (
-                      <span key={`${letter}-${index}`} className={`text-center text-[0.6875rem] font-semibold ${index === 6 ? "text-faintest" : "text-faint"}`}>
-                        {letter}
-                      </span>
-                    ))}
-                  </div>
-
-                  <div className="grid min-h-0 flex-1 grid-cols-7 gap-1.5" style={{ gridTemplateRows: `repeat(${monthDays.length / 7}, minmax(2.75rem, 1fr))` }}>
-                    {monthDays.map((day) => {
-                      const freeCount = day.inMonth ? availabilityCount(day.key) : 0;
-                      const selected = selectedDate === day.key;
-                      const past = day.key < todayKey;
-                      const closed = hasAnyHours(props.openingHours) && !opensOn(props.openingHours, weekdayKeyOf(day.key));
-                      const hasRoom = freeCount > 0;
-                      const disabled = !day.inMonth || past || closed || (!loadingSlots && searched && freeCount === 0);
-                      const statusLabel = !day.inMonth ? "" : past ? "Pasado" : closed ? "Cerrado" : hasRoom ? "Hay cupos" : searched ? "Sin cupos" : "";
-                      return (
-                        <button
-                          key={day.key}
-                          type="button"
-                          aria-label={`${day.key}${statusLabel ? `, ${statusLabel.toLocaleLowerCase("es")}` : ""}`}
-                          aria-pressed={selected}
-                          disabled={disabled}
-                          onClick={() => changeDate(day.key)}
-                          className={`u-focus flex min-h-0 flex-col items-center justify-center gap-0.5 rounded-sch-control transition-colors ${
-                            selected
-                              ? "bg-ink text-ink-fg"
-                              : hasRoom
-                                ? "bg-subtle/70 hover:bg-subtle"
-                                : day.inMonth
-                                  ? "hover:bg-subtle/50"
-                                  : ""
-                          } disabled:cursor-default disabled:hover:bg-transparent`}
-                        >
-                          <span className={`text-sm tabular-nums ${selected ? "font-semibold" : hasRoom ? "font-semibold text-foreground" : day.inMonth && !disabled ? "text-foreground" : "text-faintest"}`}>
-                            {day.day}
-                          </span>
-                          {statusLabel ? (
-                            <span className={`text-[0.5625rem] leading-none ${selected ? "text-ink-fg/70" : hasRoom ? "text-success" : "text-faintest"}`}>
-                              {statusLabel}
-                            </span>
-                          ) : (
-                            <span className="h-2" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="flex shrink-0 flex-wrap items-center gap-x-3.5 gap-y-1.5">
-                    <span className="inline-flex items-center gap-1.5 text-[0.6875rem] text-muted">
-                      <span aria-hidden className="size-3 rounded-full bg-subtle" />Hay cupos
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 text-[0.6875rem] text-faint">
-                      <span aria-hidden className="size-3 rounded-full border border-line" />Sin cupos o cerrado
-                    </span>
-                    <span className="ml-auto hidden text-[0.6875rem] text-faint xl:block">
-                      No se muestra cuántos cupos hay, solo si hay disponibilidad.
-                    </span>
-                  </div>
-                </div>
-
-                {/* ── PROFESIONAL Y HORA ── */}
-                <div className="flex min-h-0 min-w-0 flex-col">
-                  <div className="relative flex shrink-0 flex-col gap-2.5 border-b border-line p-4 sm:p-5">
-                    <div className="flex items-center gap-2">
-                      <span className="u-th">Profesional</span>
-                      <span className="flex-1" />
-                      <span className="truncate text-[0.6875rem] text-faint">
-                        {staffWithRoom} de {activeStaff.length} con cupo
-                      </span>
-                    </div>
-
-                    {/* ONE selector, not a list: the roster competed with the month for
-                        the same column. The popover is where it scales to 6 or 60. */}
-                    <button
-                      type="button"
-                      aria-haspopup="listbox"
-                      aria-expanded={staffPickerOpen}
-                      onClick={() => setStaffPickerOpen((open) => !open)}
-                      className="u-focus flex h-[44px] items-center gap-2.5 rounded-sch-control border border-line-strong bg-surface px-2.5 text-left transition-colors hover:bg-subtle lg:h-[40px]"
-                    >
-                      {selectedStaff ? (
-                        <Initial name={selectedStaff.name} />
-                      ) : (
-                        <span aria-hidden className="flex size-6 shrink-0 items-center justify-center rounded-full border border-dashed border-line-strong bg-subtle text-[0.625rem] leading-none text-muted">∗</span>
-                      )}
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                        {selectedStaff?.name ?? "Cualquier profesional"}
-                      </span>
-                      <span aria-hidden className="shrink-0 text-[0.625rem] text-faint">▾</span>
-                    </button>
-
-                    {staffPickerOpen ? (
-                      <>
-                        <button type="button" aria-label="Cerrar selector" className="fixed inset-0 z-10 cursor-default" onClick={() => setStaffPickerOpen(false)} />
-                        <div
-                          role="listbox"
-                          aria-label="Elegir profesional"
-                          className="absolute left-4 right-4 top-[calc(100%-0.5rem)] z-20 flex max-h-[19rem] flex-col overflow-hidden rounded-sch-card border border-line bg-popover shadow-[var(--shadow-float)] sm:left-5 sm:right-5"
-                        >
-                          <div className="flex shrink-0 flex-col gap-2 border-b border-line p-2.5">
-                            {activeStaff.length > 8 ? (
-                              <input
-                                value={staffQuery}
-                                onChange={(event) => setStaffQuery(event.target.value)}
-                                placeholder="Buscar profesional…"
-                                aria-label="Buscar profesional"
-                                className={`${INPUT} text-xs`}
-                                autoFocus
-                              />
-                            ) : null}
-                            {/* Pinned OUTSIDE the scroller, so it is reachable at 60 staff. */}
-                            <button
-                              type="button"
-                              role="option"
-                              aria-selected={!staffId}
-                              onClick={() => { changeStaff(""); setStaffPickerOpen(false); }}
-                              className="u-focus flex h-[44px] items-center gap-2.5 rounded-sch-control border border-dashed border-line-strong px-2.5 text-left transition-colors hover:bg-subtle lg:h-[40px]"
-                            >
-                              <span aria-hidden className="flex size-6 shrink-0 items-center justify-center rounded-full bg-chip text-[0.625rem] leading-none text-muted">∗</span>
-                              <span className="flex min-w-0 flex-1 flex-col">
-                                <span className="truncate text-xs font-medium">Cualquier profesional</span>
-                                <span className="truncate text-[0.625rem] text-muted">Asigna al primero con cupo</span>
-                              </span>
-                              {!staffId ? <span aria-hidden className="shrink-0 text-xs">✓</span> : null}
-                            </button>
-                          </div>
-                          <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
-                            {activeStaff
-                              .filter((c) => c.name.toLocaleLowerCase("es").includes(staffQuery.trim().toLocaleLowerCase("es")))
-                              .map((candidate) => {
-                                const count = staffAvailabilityCount(candidate.id);
-                                const selected = staffId === candidate.id;
-                                return (
-                                  <button
-                                    key={candidate.id}
-                                    type="button"
-                                    role="option"
-                                    aria-selected={selected}
-                                    disabled={count === 0}
-                                    onClick={() => { changeStaff(candidate.id); setStaffPickerOpen(false); }}
-                                    className="u-focus flex h-[44px] w-full items-center gap-2.5 rounded-sch-control px-2.5 text-left transition-colors hover:bg-subtle lg:h-[40px] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent"
-                                  >
-                                    <Initial name={candidate.name} muted={count === 0} />
-                                    <span className="min-w-0 flex-1 truncate text-xs font-medium">{candidate.name}</span>
-                                    <span className="shrink-0 text-[0.625rem] text-faint">
-                                      {count > 0 ? "Hay cupos" : "Sin cupos"}
-                                    </span>
-                                    {selected ? <span aria-hidden className="shrink-0 text-xs">✓</span> : null}
-                                  </button>
-                                );
-                              })}
-                          </div>
-                        </div>
-                      </>
-                    ) : null}
-                  </div>
-
-                  <div className="flex shrink-0 items-end justify-between gap-3 px-4 pb-2.5 pt-3.5 sm:px-5">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold capitalize">{shortDateLabel}</p>
-                      <p className="truncate text-[0.6875rem] text-muted">
-                        {slotStart && selectedSlot
-                          ? `${timeRangeLabel} · ${selectedService?.duration_min ?? 0} min`
-                          : `${visibleSlots.length} ${visibleSlots.length === 1 ? "horario libre" : "horarios libres"}`}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-4 pb-4 sm:px-5">
-                    {loadingSlots ? (
-                      <>
-                        {Array.from({ length: 6 }, (_, index) => (
-                          <div key={index} className="h-[44px] shrink-0 animate-pulse rounded-sch-control bg-subtle" />
-                        ))}
-                        <p className="sr-only">Buscando horarios…</p>
-                      </>
-                    ) : searched && visibleSlots.length === 0 ? (
-                      <p className="rounded-sch-card border border-line bg-subtle/40 p-3 text-xs leading-relaxed text-muted">
-                        No hay horarios libres para esta combinación. Prueba otro día o
-                        cambia de profesional.
-                      </p>
-                    ) : (
-                      slotGroups.map((group) => (
-                        <div key={group.key} className="flex flex-col gap-1.5">
-                          <span className="u-th sticky top-0 bg-popover py-1">{group.label}</span>
-                          {group.slots.map((slot) => {
-                            const active = slotStart === slot.start_at;
-                            return (
-                              <button
-                                key={`${slot.start_at}-${slot.staff_id}`}
-                                type="button"
-                                aria-pressed={active}
-                                onClick={() => {
-                                  setSlotStart(slot.start_at);
-                                  // "Cualquier profesional" resolves to whoever the
-                                  // endpoint offered this exact slot for.
-                                  if (!staffId) setStaffId(slot.staff_id);
-                                }}
-                                className={`u-focus u-mono h-[44px] shrink-0 rounded-sch-control border text-sm transition-colors ${
-                                  active
-                                    ? "border-ink bg-ink font-medium text-ink-fg"
-                                    : "border-line-strong bg-surface hover:border-foreground hover:bg-subtle"
-                                }`}
-                              >
-                                {fmtTime(slot.start_at, props.timezone)}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      ))
-                    )}
-                    {!loadingSlots && !slotStart && visibleSlots.length > 0 ? (
-                      <p className="pt-1 text-[0.6875rem] text-faint">Elige un horario para continuar.</p>
-                    ) : null}
-                  </div>
-                </div>
-              </section>
-            ) : null}
-
-            {step === 3 ? (
-              /* PASO 3 — la confirmación de la referencia: una tarjeta grande con el
-                 cuándo, y debajo una lista etiqueta/valor (no una cuadrícula) para que
-                 se lea como un registro. La columna derecha explica lo que el sistema
-                 decide solo. */
-              <section
-                aria-labelledby="booking-confirm-heading"
-                aria-label="Resumen de la cita"
-                className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]"
-              >
-                <h3 id="booking-confirm-heading" className="sr-only">Confirmar la cita</h3>
-
-                <div className="flex min-h-0 min-w-0 flex-col gap-3.5 overflow-y-auto border-b border-line p-4 sm:p-5 lg:border-b-0 lg:border-r">
-                  <div className="flex shrink-0 items-center gap-3.5 rounded-sch-card border border-line bg-subtle/30 p-3.5">
-                    <span aria-hidden className={`u-appt-swatch ${bookingToneClass} h-12 w-1.5 shrink-0 rounded-full`} />
-                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                      <span className="truncate text-lg font-semibold capitalize sm:text-xl">
-                        {shortDateLabel}{slotStart ? ` · ${fmtTime(slotStart, props.timezone)}` : ""}
-                      </span>
-                      <span className="u-mono truncate text-xs text-muted">
-                        {timeRangeLabel ?? "Sin horario"} · {selectedService?.duration_min ?? 0} min
-                      </span>
-                    </div>
-                    <span className="shrink-0 rounded-full border border-line bg-surface px-2.5 py-1 text-[0.6875rem] font-medium text-muted">
-                      {isReschedule ? "Reprogramada" : "Sin confirmar"}
-                    </span>
-                  </div>
-
-                  <dl className="shrink-0 overflow-hidden rounded-sch-card border border-line">
-                    {[
-                      { label: "Cliente", value: clientLabel || "Atención sin cita" },
-                      { label: "Teléfono o correo", value: phoneLabel, mono: true },
-                      { label: "Servicio", value: [selectedService?.name, priceLabelCOP(selectedService?.price ?? null)].filter(Boolean).join(" · ") || "—" },
-                      { label: "Duración", value: `${selectedService?.duration_min ?? 0} min`, mono: true },
-                      { label: "Profesional", value: selectedStaff?.name ?? "Cualquier profesional", staff: true },
-                      { label: "Sede", value: selectedSite?.name ?? "Sede actual" },
-                      { label: "Estado inicial", value: isReschedule ? "Se conserva el estado actual" : "Sin confirmar" },
-                      { label: "Origen", value: originLabel },
-                    ].map((row, index) => (
-                      <div key={row.label} className={`flex items-center gap-3 px-3.5 py-2.5 ${index > 0 ? "border-t border-line" : ""}`}>
-                        <dt className="w-24 shrink-0 text-xs text-muted sm:w-28">{row.label}</dt>
-                        <dd className="flex min-w-0 flex-1 items-center gap-2">
-                          {row.staff && selectedStaff ? <Initial name={selectedStaff.name} /> : null}
-                          <span className={`min-w-0 truncate text-[0.8125rem] font-medium ${row.mono ? "u-mono" : ""}`}>
-                            {row.value}
-                          </span>
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
-
-                <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto p-4 sm:p-5">
-                  <div className="flex shrink-0 flex-col gap-2.5 rounded-sch-card border border-line p-3.5">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[0.8125rem] font-semibold">Color de la cita</span>
-                      <span className="flex-1" />
-                      <span className="text-[0.6875rem] text-faint">Automático</span>
-                    </div>
-                    <div className="flex items-center gap-2.5">
-                      <span aria-hidden className={`u-appt-swatch ${bookingToneClass} h-[28px] w-10 shrink-0 rounded-sch-event`} />
-                      <p className="flex-1 text-xs leading-relaxed text-muted">
-                        {bookingFamily
-                          ? <>Hereda el color de <strong className="font-medium text-foreground">{(SERVICE_FAMILY_LABEL[bookingFamily] ?? "").toLocaleLowerCase("es")}</strong>. Se cambia en Catálogo → Servicios.</>
-                          : "Se define por la categoría del servicio."}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Only what is BACKED renders. The reference also puts a WhatsApp
-                      confirmation toggle, an internal note and a manual colour picker
-                      here; appointments carry no note and no colour, and no send path
-                      is wired, so none of the three is drawn rather than drawn dead.
-                      TODO(agenda): add them as the model gains note / colour / an
-                        outbound confirmation send. */}
-                  <div className="flex shrink-0 items-start gap-2.5 rounded-sch-card border border-line bg-subtle/40 p-3">
-                    <span aria-hidden className="mt-px flex size-4 shrink-0 items-center justify-center rounded-full bg-chip text-[0.625rem] font-semibold text-muted">i</span>
-                    <p className="flex-1 text-xs leading-relaxed text-muted">
-                      Nada se guarda hasta que confirmes. Al crear la cita, el cupo de{" "}
-                      <strong className="font-medium text-foreground">{slotStart ? fmtTime(slotStart, props.timezone) : "—"}</strong>
-                      {selectedStaff ? <> queda reservado para {selectedStaff.name}</> : " queda reservado"}.
-                    </p>
-                  </div>
-                </div>
-              </section>
-            ) : null}
-          </main>
-
-          {/* FOOTER — the reference's persistent orientation strip: which step you are
-              on, and the running summary of what has been chosen. It is the same bar at
-              every width; on the phone the summary drops (the header carries the step
-              there) so the two CTAs keep their full 48px. */}
-          <footer className="flex min-h-[72px] shrink-0 items-center gap-3 border-t border-line bg-surface px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-5">
-            <div className="hidden min-w-0 flex-1 flex-col gap-0.5 sm:flex">
-              <span className="truncate text-xs text-foreground">
-                Paso {step} de 3 · {stepItems[step - 1].label.toLocaleLowerCase("es")}
-              </span>
-              <span className="truncate text-xs text-muted">
-                {footerSummary || (step === 3 ? "Nada se guarda hasta que confirmes." : "Aún no has elegido nada.")}
-              </span>
-            </div>
-            <div className="flex flex-1 items-center justify-end gap-2 sm:flex-none">
-              {step > 1 && !(isReschedule && step === 2) ? (
-                <button
-                  type="button"
-                  onClick={goBack}
-                  className={buttonClass({ className: "flex-1 sm:flex-none" })}
-                >
-                  Volver
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={props.onClose}
-                  className={buttonClass({ variant: "tertiary", className: "flex-1 border border-line-strong sm:flex-none sm:border-transparent" })}
-                >
-                  Cancelar
-                </button>
-              )}
-              {step === 3 ? (
-                <button
-                  type="button"
-                  onClick={submit}
-                  disabled={pending || !slotStart}
-                  aria-busy={pending || undefined}
-                  className={buttonClass({ variant: "primary", className: "flex-1 px-6 sm:flex-none" })}
-                >
-                  {pending ? <Spinner /> : null}
-                  {pending ? "Guardando…" : isReschedule ? "Confirmar cambio" : "Crear cita"}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={advance}
-                  disabled={(step === 1 && !step1Ready) || (step === 2 && !slotStart)}
-                  className={buttonClass({ variant: "primary", className: "flex-1 px-6 sm:flex-none" })}
-                >
-                  Continuar
-                </button>
-              )}
-            </div>
-          </footer>
-        </div>
-      </div>
-    </div>
-  );
 }
 
 /** Stable id linking the dialog to its heading — only one modal is ever mounted. */

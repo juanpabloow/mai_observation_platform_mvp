@@ -82,6 +82,8 @@ export async function GET(req: Request, { params }: { params: Promise<{ slug: st
     staffIds,
     siteExceptions: exceptions.site,
     staffExceptions: exceptions.staff,
+    siteBreaks: exceptions.siteBreaks,
+    staffBreaks: exceptions.staffBreaks,
   });
   const days = staffId && staffIds.includes(staffId) ? publicDaysForArtist(explanations, staffId) : publicDaysForAny(explanations, staffIds);
   return publicJson({ timezone: result.site.timezone, slots, days });

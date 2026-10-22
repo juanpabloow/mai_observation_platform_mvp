@@ -3,6 +3,7 @@ import { query } from '../../client.js';
 import { computeAvailability } from '../../../scheduling/availability.js';
 import type { AvailabilityRequest, SchedulingConfig, Slot, WeeklyHours } from '../../../scheduling/types.js';
 import type { ExplainException, PublicAbsenceReason } from '../../../scheduling/availabilityExplain.js';
+import { loadOccurrences } from './series.js';
 
 /**
  * Assembles the pure availability engine's input from the DB and runs it. THE
@@ -202,9 +203,22 @@ export async function prepareAvailability(params: LoadAvailabilityParams): Promi
     [params.tenantId, params.siteId, params.from, params.to, staffIds],
   );
 
-  const siteExceptions = excRows.rows
-    .filter((e) => e.staff_id === null)
-    .map((e) => ({ from: e.starts_at, until: e.ends_at }));
+  // Usual breaks and recurring blocks (schedule_series, migration 1818) are blocked time
+  // exactly like a dated block: a site row applies to every professional, a staff row to
+  // that one. Same subtraction, so agenda, bot and public page can never diverge.
+  const occurrences = await loadOccurrences({
+    tenantId: params.tenantId,
+    siteId: params.siteId,
+    timeZone: site.timezone,
+    from: params.from,
+    to: params.to,
+    staffIds,
+  });
+
+  const siteExceptions = [
+    ...excRows.rows.filter((e) => e.staff_id === null).map((e) => ({ from: e.starts_at, until: e.ends_at })),
+    ...occurrences.filter((o) => o.staff_id === null).map((o) => ({ from: o.from, until: o.until })),
+  ];
 
   const staff = staffRows.rows.map((s) => ({
     id: s.id,
@@ -221,7 +235,10 @@ export async function prepareAvailability(params: LoadAvailabilityParams): Promi
           buffer_after_min: buffers.after_min,
         },
     busy: busyRows.rows.filter((b) => b.staff_id === s.id).map((b) => ({ from: b.blocked_from, until: b.blocked_until })),
-    exceptions: excRows.rows.filter((e) => e.staff_id === s.id).map((e) => ({ from: e.starts_at, until: e.ends_at })),
+    exceptions: [
+      ...excRows.rows.filter((e) => e.staff_id === s.id).map((e) => ({ from: e.starts_at, until: e.ends_at })),
+      ...occurrences.filter((o) => o.staff_id === s.id).map((o) => ({ from: o.from, until: o.until })),
+    ],
   }));
 
   const request: AvailabilityRequest = {
@@ -252,7 +269,14 @@ export async function loadExplainExceptions(params: {
   from: Date;
   to: Date;
   staffIds: string[];
-}): Promise<{ site: ExplainException[]; staff: Map<string, ExplainException[]> }> {
+}): Promise<{
+  site: ExplainException[];
+  staff: Map<string, ExplainException[]>;
+  /** Usual breaks (schedule_series kind=break): time the schedule does not work — read like
+   *  the gaps in weekly hours they replace (off shift), never as an absence or a closure. */
+  siteBreaks: Array<{ from: Date; until: Date }>;
+  staffBreaks: Map<string, Array<{ from: Date; until: Date }>>;
+}> {
   const r = await query<{ staff_id: string | null; starts_at: Date; ends_at: Date; public_reason: PublicAbsenceReason | null }>(
     `SELECT staff_id, starts_at, ends_at, public_reason
        FROM schedule_exceptions
@@ -260,14 +284,39 @@ export async function loadExplainExceptions(params: {
         AND (staff_id IS NULL OR staff_id = ANY($5::uuid[]))`,
     [params.tenantId, params.siteId, params.from, params.to, params.staffIds],
   );
+  const tz = await query<{ timezone: string }>(`SELECT timezone FROM sites WHERE tenant_id = $1 AND id = $2`, [
+    params.tenantId,
+    params.siteId,
+  ]);
+  const occurrences = tz.rows[0]
+    ? await loadOccurrences({
+        tenantId: params.tenantId,
+        siteId: params.siteId,
+        timeZone: tz.rows[0].timezone,
+        from: params.from,
+        to: params.to,
+        staffIds: params.staffIds,
+      })
+    : [];
   const staff = new Map<string, ExplainException[]>();
   const site: ExplainException[] = [];
-  for (const e of r.rows) {
-    const x = { from: e.starts_at, until: e.ends_at, public_reason: e.public_reason };
-    if (e.staff_id === null) site.push(x);
-    else staff.set(e.staff_id, [...(staff.get(e.staff_id) ?? []), x]);
+  const push = (staffId: string | null, x: ExplainException) => {
+    if (staffId === null) site.push(x);
+    else staff.set(staffId, [...(staff.get(staffId) ?? []), x]);
+  };
+  for (const e of r.rows) push(e.staff_id, { from: e.starts_at, until: e.ends_at, public_reason: e.public_reason });
+  const siteBreaks: Array<{ from: Date; until: Date }> = [];
+  const staffBreaks = new Map<string, Array<{ from: Date; until: Date }>>();
+  for (const o of occurrences) {
+    if (o.kind === 'block') {
+      push(o.staff_id, { from: o.from, until: o.until, public_reason: o.public_reason });
+    } else if (o.staff_id === null) {
+      siteBreaks.push({ from: o.from, until: o.until });
+    } else {
+      staffBreaks.set(o.staff_id, [...(staffBreaks.get(o.staff_id) ?? []), { from: o.from, until: o.until }]);
+    }
   }
-  return { site, staff };
+  return { site, staff, siteBreaks, staffBreaks };
 }
 
 /** Whether a specific (start, staff) is currently bookable — used by the booking

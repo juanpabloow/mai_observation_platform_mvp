@@ -76,7 +76,7 @@ export async function buildExplanation(input: {
   if (!request) return { version: EXPLANATION_VERSION, staff: [], alternatives: [] };
   const staffIds = input.staffId ? [input.staffId] : request.staff.map((s) => s.id);
   const exc = await loadExplainExceptions({ tenantId: input.tenantId, siteId: input.siteId, from: input.from, to: input.to, staffIds });
-  const days = explainAvailability({ request, slots, staffIds, siteExceptions: exc.site, staffExceptions: exc.staff });
+  const days = explainAvailability({ request, slots, staffIds, siteExceptions: exc.site, staffExceptions: exc.staff, siteBreaks: exc.siteBreaks, staffBreaks: exc.staffBreaks });
 
   const staff: StaffExplanationJson[] = [];
   for (const id of staffIds) {
