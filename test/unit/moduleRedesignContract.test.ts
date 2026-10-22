@@ -127,7 +127,8 @@ test('Usuarios y accesos: one definition of who may act on a login, shared by bo
   // The page still loads no staff row (PII contract) and keeps its gate.
   const page = read(`${C}/team/page.tsx`);
   assert.ok(page.includes('if (!can(scope, "access.users.view", clientId)) notFound();'));
-  assert.ok(page.includes('canGrantRole(scope, clientId, { kind: "system", key: k }).ok'));
+  // …with each system role as THIS business has it (the agency may have adjusted it).
+  assert.ok(page.includes('canGrantRole(scope, clientId, refOf(k, null) as RoleRef).ok'));
   // Who may act on each row is decided on the SERVER with the delegation rules.
   assert.ok(page.includes('canManage: ref ? canManageMember(scope, clientId, { userId: m.user_id, role: ref }).ok : false'));
 });

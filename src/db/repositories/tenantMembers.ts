@@ -42,6 +42,9 @@ export interface MembershipScopeRow {
   /** The custom role's name — null for system roles, or when the role doesn't resolve in
    *  this membership's tenant + client (the scope then fails closed). */
   access_role_name: string | null;
+  /** A SYSTEM role adjusted for this business by the agency: its permission keys; null =
+   *  no override, the code default applies. */
+  system_override: string[] | null;
 }
 
 /**
@@ -63,6 +66,14 @@ export type SystemClientRole = Exclude<ClientRole, 'custom'>;
  * read behind the web app's getAccessScope() authority. Oldest membership first
  * (matches getTenantIdForUser, so both resolve the SAME row); null when none.
  */
+/** A system-role member's business override (array of keys) or NULL when none exists. */
+const SYSTEM_OVERRIDE_SQL = `(SELECT COALESCE(array_agg(p.permission_key) FILTER (WHERE p.permission_key IS NOT NULL), '{}')
+       FROM access_roles r
+       LEFT JOIN access_role_permissions p ON p.role_id = r.id
+      WHERE r.tenant_id = tm.tenant_id AND r.client_id = tm.member_client_id
+        AND r.system_key = tm.client_role
+      GROUP BY r.id)`;
+
 export async function getMembershipForUser(userId: string): Promise<MembershipScopeRow | null> {
   const result = await query<MembershipScopeRow>(
     `SELECT tm.tenant_id, tm.role, tm.member_client_id, tm.client_role,
@@ -73,12 +84,15 @@ export async function getMembershipForUser(userId: string): Promise<MembershipSc
                           JOIN access_role_permissions p ON p.role_id = r.id
                          WHERE r.id = tm.access_role_id
                            AND r.tenant_id = tm.tenant_id
-                           AND r.client_id = tm.member_client_id), '{}')
+                           AND r.client_id = tm.member_client_id
+                           AND r.system_key IS NULL), '{}')
             END AS role_permissions,
             (SELECT r.name FROM access_roles r
               WHERE r.id = tm.access_role_id
                 AND r.tenant_id = tm.tenant_id
-                AND r.client_id = tm.member_client_id) AS access_role_name
+                AND r.client_id = tm.member_client_id
+                AND r.system_key IS NULL) AS access_role_name,
+            ${SYSTEM_OVERRIDE_SQL} AS system_override
        FROM tenant_members tm
       WHERE tm.user_id = $1
       ORDER BY tm.created_at ASC
@@ -318,6 +332,8 @@ export interface MemberInTenant {
   /** The custom role's stored keys (null for system roles / agency). */
   role_permissions: string[] | null;
   access_role_name: string | null;
+  /** System role adjusted for this business: its keys (null = default). */
+  system_override: string[] | null;
 }
 
 export async function getMemberInTenant(tenantId: string, userId: string): Promise<MemberInTenant | null> {
@@ -328,7 +344,8 @@ export async function getMemberInTenant(tenantId: string, userId: string): Promi
               COALESCE((SELECT array_agg(p.permission_key) FROM access_role_permissions p
                          WHERE p.role_id = tm.access_role_id), '{}')
             END AS role_permissions,
-            (SELECT r.name FROM access_roles r WHERE r.id = tm.access_role_id) AS access_role_name
+            (SELECT r.name FROM access_roles r WHERE r.id = tm.access_role_id) AS access_role_name,
+            ${SYSTEM_OVERRIDE_SQL} AS system_override
        FROM tenant_members tm
        LEFT JOIN "user" u ON u.id = tm.user_id
       WHERE tm.tenant_id = $1 AND tm.user_id = $2`,

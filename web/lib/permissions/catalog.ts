@@ -115,7 +115,7 @@ export const PERMISSIONS = [
   // ── Usuarios y accesos ─────────────────────────────────────────────────────────
   { key: "access.users.view", area: "access", module: null, requires: [], label: "Ver usuarios", help: "Ver quién tiene acceso a este negocio y con qué rol." },
   { key: "access.users.manage", area: "access", module: null, requires: ["access.users.view"], sensitive: true, label: "Gestionar usuarios", help: "Invitar, cambiar el rol y quitar el acceso, solo con roles que no superen los suyos." },
-  { key: "access.roles.manage", area: "access", module: null, requires: ["access.users.view"], sensitive: true, label: "Gestionar roles", help: "Crear, editar y eliminar roles, solo con permisos que la persona ya tiene." },
+  { key: "access.roles.manage", area: "access", module: null, requires: ["access.users.view"], sensitive: true, label: "Gestionar roles", help: "Crear, editar y eliminar roles personalizados, solo con permisos que la persona ya tiene." },
   // ── Automatizaciones ───────────────────────────────────────────────────────────
   { key: "automations.view", area: "automations", module: null, requires: [], label: "Ver workflows", help: "Ver los workflows del negocio y sus ejecuciones." },
   // ── Reuniones ──────────────────────────────────────────────────────────────────
@@ -183,7 +183,9 @@ export function missingRequirements(set: ReadonlySet<PermissionKey>): Array<{ ke
 
 // ── System roles ─────────────────────────────────────────────────────────────────
 
-/** The protected roles every business has. Stored on the membership as `client_role`. */
+/** The protected roles every business has. Stored on the membership as `client_role`.
+ *  Their DEFAULT permissions are below; the agency may adjust them for ONE business (an
+ *  override row in access_roles with system_key) — the other businesses keep the default. */
 export type SystemRoleKey = "owner" | "setter" | "staff";
 
 export const SYSTEM_ROLE_LABEL: Record<SystemRoleKey, string> = { owner: "Dueño", setter: "Recepción", staff: "Profesional" };
@@ -203,7 +205,8 @@ const OWNER_EXCLUDES: ReadonlySet<PermissionKey> = new Set<PermissionKey>([
 
 /**
  * The exact translation of the pre-catalog behaviour (web/lib/access.ts before v1):
- *  - Dueño     = canManageClient + canSeeWorkflowInsights + full CRM control of their client;
+ *  - Dueño     = canManageClient + canSeeWorkflowInsights + full CRM control of their client
+ *                (incl. its own custom roles; adjusting a SYSTEM role is the agency's);
  *  - Recepción = canAccessClient: inbox, contacts (incl. export, pipeline writes), agenda
  *                incl. blocking staff time, products read + stock, campaigns read;
  *  - Profesional = canOperateScheduling only (own site; own column on writes).

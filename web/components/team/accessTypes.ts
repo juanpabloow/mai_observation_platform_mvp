@@ -37,8 +37,18 @@ export interface SystemRoleView {
   key: "owner" | "setter" | "staff";
   label: string;
   help: string;
+  /** Effective permissions in THIS business (the agency's adjustment, or the default). */
   permissions: string[];
   memberCount: number;
+  /** The agency adjusted it for this business (else the default applies). */
+  overridden: boolean;
+  /** The adjustment's version (null = no adjustment yet) — optimistic concurrency. */
+  version: number | null;
+  /** The viewer may adjust it (the agency only). */
+  editable: boolean;
+  holders: string[];
+  updatedLabel: string | null;
+  updatedByEmail: string | null;
 }
 
 export interface AuditView {

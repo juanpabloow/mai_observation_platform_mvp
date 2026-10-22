@@ -14,6 +14,8 @@ import {
 import {
   canCreateRole,
   canEditRole,
+  canEditSystemRole,
+  permissionsOfRole,
   canGrantRole,
   canManageMember,
   diffPermissions,
@@ -166,4 +168,19 @@ test('editor: checking pulls requirements, unchecking drops dependents, groups g
   const all = setArea(set(), 'inbox', true, g).next;
   assert.equal(areaState('inbox', all, g), 'all');
   assert.equal(areaState('inbox', setArea(all, 'inbox', false, g).next, g), 'none');
+});
+
+test('system roles adjusted for ONE business: the agency only; the override is what counts', () => {
+  // Only the agency adjusts a protected role — never the Dueño, whatever it holds.
+  assert.equal(canEditSystemRole(agency, A, ['inbox.view']).ok, true);
+  assert.equal(canEditSystemRole(owner, A, ['inbox.view']).ok, false, 'a Dueño edits custom roles, not the protected ones');
+  assert.equal(canEditSystemRole(agency, A, ['meetings.view', 'meetings.manage']).ok, false, 'never an agency-only key');
+  // A system role carries this business's override when there is one, else the default.
+  const adjusted = roleRefOf({ client_role: 'setter', system_override: ['inbox.view', 'inbox.reply', 'meetings.manage'] })!;
+  assert.deepEqual([...permissionsOfRole(adjusted)].sort(), ['inbox.reply', 'inbox.view'], 'agency-only keys dropped');
+  assert.deepEqual(permissionsOfRole(roleRefOf({ client_role: 'setter', system_override: null })!), SYSTEM_ROLE_PERMISSIONS.setter);
+  // Delegation reads the adjusted set: a Dueño can't give a Recepción the agency widened past it.
+  const widened = roleRefOf({ client_role: 'setter', system_override: [...SYSTEM_ROLE_PERMISSIONS.setter, 'contacts.delete'] })!;
+  assert.equal(canGrantRole(owner, A, widened).ok, false);
+  assert.equal(canGrantRole(agency, A, widened).ok, true);
 });

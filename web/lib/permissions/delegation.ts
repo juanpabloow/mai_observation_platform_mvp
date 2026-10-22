@@ -5,7 +5,8 @@
  * controls to show — so the UI never offers what the server would refuse.
  *
  *  1. The actor must hold access.roles.manage (roles) / access.users.manage (people) ON
- *     THAT BUSINESS. The agency holds both on every business of its tenant.
+ *     THAT BUSINESS. The agency holds both on every business of its tenant. Adjusting a
+ *     SYSTEM role (Dueño / Recepción / Profesional) for one business is the AGENCY's alone.
  *  2. SUBSET: nobody creates, edits, deletes or assigns a set of permissions wider than
  *     their own — before AND after the change. The agency's own set excludes what only
  *     the business may do (confirming value assumptions), so it can't hand that out either.
@@ -43,7 +44,8 @@ export interface DelegationActor {
 
 /** A role as the rules see it: one of the protected system roles, or a custom role. */
 export type RoleRef =
-  | { kind: "system"; key: SystemRoleKey }
+  /** `permissions` = this business's override (absent → the code default). */
+  | { kind: "system"; key: SystemRoleKey; permissions?: ReadonlySet<PermissionKey> }
   | { kind: "custom"; id: string; permissions: ReadonlySet<PermissionKey> };
 
 export type Decision = { ok: true } | { ok: false; error: string };
@@ -53,6 +55,7 @@ const deny = (error: string): Decision => ({ ok: false, error });
 
 export const DENY = {
   noRoleAdmin: "No tienes permiso para gestionar roles en este negocio.",
+  systemAgencyOnly: "Solo la agencia puede ajustar los roles protegidos.",
   noUserAdmin: "No tienes permiso para gestionar usuarios en este negocio.",
   wider: "No puedes conceder permisos que tú no tienes.",
   outside: "Este rol tiene permisos que tú no tienes, así que no puedes modificarlo.",
@@ -75,8 +78,14 @@ export function roleRefOf(row: {
   client_role: string | null;
   access_role_id?: string | null;
   role_permissions?: readonly string[] | null;
+  /** A system role adjusted for this business (null/absent = default). */
+  system_override?: readonly string[] | null;
 }): RoleRef | null {
-  if (isSystemRoleKey(row.client_role)) return { kind: "system", key: row.client_role };
+  if (isSystemRoleKey(row.client_role)) {
+    return Array.isArray(row.system_override)
+      ? { kind: "system", key: row.client_role, permissions: sanitizeBusinessPermissions(row.system_override) }
+      : { kind: "system", key: row.client_role };
+  }
   if (row.client_role === "custom" && row.access_role_id) {
     return { kind: "custom", id: row.access_role_id, permissions: sanitizeBusinessPermissions(row.role_permissions ?? []) };
   }
@@ -84,7 +93,7 @@ export function roleRefOf(row: {
 }
 
 export function permissionsOfRole(role: RoleRef): ReadonlySet<PermissionKey> {
-  return role.kind === "system" ? SYSTEM_ROLE_PERMISSIONS[role.key] : role.permissions;
+  return role.kind === "system" ? (role.permissions ?? SYSTEM_ROLE_PERMISSIONS[role.key]) : role.permissions;
 }
 
 /** Keys the actor may put into a business role on this client (rule 2 + rule 5). */
@@ -133,6 +142,16 @@ export function canEditRole(
   const grantable = grantableBy(actor, clientId);
   if (!isSubset(before, grantable)) return deny(DENY.outside);
   if (!isSubset(after, grantable)) return deny(DENY.wider);
+  return OK;
+}
+
+/** May the actor adjust a SYSTEM role for this business? The AGENCY only (decision
+ *  2026-10-22) — a Dueño edits its custom roles but never changes what everyone in
+ *  «Recepción» can do; never with keys a business role can't hold. */
+export function canEditSystemRole(actor: DelegationActor, clientId: string, after: Iterable<PermissionKey>): Decision {
+  if (!isAgencyActor(actor)) return deny(DENY.systemAgencyOnly);
+  if (!inBusiness(actor, clientId) || !actor.permissions.has("access.roles.manage")) return deny(DENY.noRoleAdmin);
+  if (!isSubset(after, grantableBy(actor, clientId))) return deny(DENY.wider);
   return OK;
 }
 

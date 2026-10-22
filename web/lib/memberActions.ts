@@ -6,7 +6,7 @@ import { getServerSession } from "./session";
 import { canGrantRole, canManageMember, roleRefOf, type RoleRef } from "./permissions/delegation";
 import { SYSTEM_ROLE_LABEL } from "./permissions/catalog";
 import { getClientById } from "@worker/db/repositories/clients.js";
-import { getAccessRole } from "@worker/db/repositories/accessRoles.js";
+import { getAccessRole, getSystemRoleOverride } from "@worker/db/repositories/accessRoles.js";
 import type { AccessAuditEvent } from "@worker/db/repositories/accessRoles.js";
 import { releaseAgentConversations } from "@worker/db/repositories/handoff.js";
 import {
@@ -236,7 +236,8 @@ export async function changeClientRoleAction(input: {
     next = roleRefOf({ client_role: "custom", access_role_id: row.id, role_permissions: row.permissions }) as RoleRef;
     nextName = row.name;
   } else {
-    next = { kind: "system", key: input.clientRole };
+    // A system role as THIS business has it (the agency may have adjusted it).
+    next = roleRefOf({ client_role: input.clientRole, system_override: await getSystemRoleOverride(scope.tenantId, input.clientId, input.clientRole) }) as RoleRef;
   }
   const grant = canGrantRole(scope, input.clientId, next);
   if (!grant.ok) return { ok: false, error: grant.error };

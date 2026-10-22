@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState, useTransition, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
-import { createRoleAction, deleteRoleAction, updateRoleAction } from "@/lib/roleActions";
+import { createRoleAction, deleteRoleAction, resetSystemRoleAction, updateRoleAction, updateSystemRoleAction } from "@/lib/roleActions";
 import { safeAction } from "@/components/ui/module/safeAction";
 import { PERMISSIONS, PERMISSION_AREAS, permissionDef, type PermissionArea, type PermissionKey } from "@/lib/permissions/catalog";
 import { areaState, setArea, togglePermission } from "@/lib/permissions/editorModel";
@@ -18,10 +18,12 @@ import type { AccessViewer, AuditView, RoleView, SystemRoleView } from "./access
 
 /**
  * «Usuarios y accesos» → ROLES Y PERMISOS. A role is a name, a description and a set of
- * permissions; the NAME decides nothing. The three system roles (Dueño, Recepción,
- * Profesional) are protected: read-only here, and duplicable as a starting point. A
- * business's own roles are created, edited and deleted here by whoever holds «Gestionar
- * roles» — and only with permissions they hold themselves (the server re-checks it).
+ * permissions; the NAME decides nothing. Whoever holds «Gestionar roles» (the agency, the
+ * Dueño) creates, edits and deletes the business's custom roles — only with permissions they
+ * hold, and a role is deleted only once nobody has it. The system roles (Dueño, Recepción,
+ * Profesional) are adjusted by the AGENCY alone, for THIS business only — the name stays,
+ * other businesses keep the default, and «Restablecer» brings it back. The server re-checks
+ * every save.
  *
  * The editor only ever offers what the viewer may grant (viewer.grantable). Saving is
  * always explicit; granting something sensitive, or taking access away from a role
@@ -125,9 +127,11 @@ export function RolesPanel({
         <MenuButton onClick={() => duplicate(name, perms, `role:${id}`)}>Duplicar como rol nuevo</MenuButton>
       </ActionMenu>
     ) : null;
-  const kindChip = (system: boolean) =>
+  const kindChip = (system: boolean, overridden = false) =>
     system ? (
-      <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[0.7188rem] font-medium text-violet-700 dark:text-violet-300">Protegido</span>
+      <span className="rounded-full bg-violet-500/15 px-2 py-0.5 text-[0.7188rem] font-medium text-violet-700 dark:text-violet-300">
+        {overridden ? "Protegido · ajustado" : "Protegido"}
+      </span>
     ) : (
       <span className="rounded-full bg-chip px-2 py-0.5 text-[0.7188rem] font-medium text-muted">Personalizado</span>
     );
@@ -171,7 +175,7 @@ export function RolesPanel({
                 menu={rowMenu(r.key, r.label, r.permissions, "t")}
                 cells={[
                   <span key="n" className="truncate">{r.label}</span>,
-                  kindChip(true),
+                  kindChip(true, r.overridden),
                   <span key="p" className="text-muted">{plural(r.memberCount, "usuario", "usuarios")}</span>,
                   <span key="k" className="text-muted">{plural(r.permissions.length, "permiso", "permisos")}</span>,
                 ]}
@@ -205,7 +209,7 @@ export function RolesPanel({
                 title={r.label}
                 openKey={`role:${r.key}`}
                 subtitle={`${plural(r.memberCount, "usuario", "usuarios")} · ${plural(r.permissions.length, "permiso", "permisos")}`}
-                badges={kindChip(true)}
+                badges={kindChip(true, r.overridden)}
                 onOpen={() => go({ kind: "system", role: r }, `role:${r.key}`)}
                 openLabel="Ver"
                 menu={rowMenu(r.key, r.label, r.permissions, "m")}
@@ -230,7 +234,11 @@ export function RolesPanel({
             ? viewer.canManageRoles
               ? "Aún no hay roles personalizados. Crea uno o duplica un rol protegido como punto de partida."
               : "Aún no hay roles personalizados."
-            : "Los roles protegidos no se editan; duplícalos para crear una variante."}
+            : viewer.agency
+              ? "Los roles protegidos se ajustan solo para este negocio; también puedes duplicarlos."
+              : viewer.canManageRoles
+                ? "Los roles protegidos los ajusta la agencia; duplícalos para crear una variante."
+                : "Aquí ves los roles; los asignas en «Usuarios»."}
         </ListFoot>
         <section aria-labelledby="access-history-h" className="px-4 pb-8 pt-6 sm:px-6">
           <h2 id="access-history-h" className="text-[0.9375rem] font-semibold text-foreground">
@@ -298,7 +306,7 @@ function RoleEditor({
   const isNew = open.kind === "new";
   const custom = open.kind === "custom" ? open.role : null;
   const system = open.kind === "system" ? open.role : null;
-  const readOnly = !!system || (custom ? !custom.editable : !viewer.canManageRoles);
+  const readOnly = system ? !system.editable : custom ? !custom.editable : !viewer.canManageRoles;
   const initial = useMemo(
     () => ({
       name: open.kind === "system" ? open.role.label : open.kind === "custom" ? open.role.name : open.name,
@@ -313,13 +321,15 @@ function RoleEditor({
   const [echo, setEcho] = useState<string | null>(open.kind === "new" ? open.note : null);
   const [error, setError] = useState<{ text: string; stale?: boolean } | null>(null);
   const [saving, setSaving] = useState(false);
-  const [confirm, setConfirm] = useState<null | "save" | "delete">(null);
+  const [confirm, setConfirm] = useState<null | "save" | "delete" | "reset">(null);
   const [busy, start] = useTransition();
   const saved = useRef(false);
 
   const added = [...perms].filter((k) => !initial.permissions.has(k));
   const removed = [...initial.permissions].filter((k) => !perms.has(k));
-  const changes = readOnly ? 0 : (name.trim() !== initial.name ? 1 : 0) + (description.trim() !== initial.description ? 1 : 0) + added.length + removed.length;
+  const changes = readOnly
+    ? 0
+    : (system ? 0 : (name.trim() !== initial.name ? 1 : 0) + (description.trim() !== initial.description ? 1 : 0)) + added.length + removed.length;
   const canSave = !readOnly && name.trim().length > 0 && (isNew || changes > 0);
   const guard = useEditorGuard({ dirty: changes > 0 && !saving, onLeave: () => onClose(saved.current) });
   const requestClose = () => {
@@ -358,7 +368,11 @@ function RoleEditor({
     setError(null);
     const payload = { clientId, name: name.trim(), description: description.trim(), permissions: [...perms] };
     const r = await safeAction(() =>
-      custom ? updateRoleAction({ ...payload, roleId: custom.id, version: custom.version }) : createRoleAction(payload),
+      system
+        ? updateSystemRoleAction({ clientId, systemKey: system.key, version: system.version, permissions: [...perms] })
+        : custom
+          ? updateRoleAction({ ...payload, roleId: custom.id, version: custom.version })
+          : createRoleAction(payload),
     );
     setSaving(false);
     if (!r.ok) {
@@ -372,6 +386,17 @@ function RoleEditor({
     if (!canSave) return;
     if (needsConfirm) setConfirm("save");
     else void doSave();
+  };
+  const doReset = () => {
+    if (!system) return;
+    setConfirm(null);
+    start(async () => {
+      setError(null);
+      const r = await safeAction(() => resetSystemRoleAction({ clientId, systemKey: system.key }));
+      if (!r.ok) return setError({ text: r.error ?? "No se pudo restablecer el rol." });
+      saved.current = true;
+      guard.leave();
+    });
   };
   const doDelete = () => {
     if (!custom) return;
@@ -403,7 +428,7 @@ function RoleEditor({
       <EditorHeader
         title={isNew ? name.trim() || "Nuevo rol" : initial.name}
         headingId="role-editor-title"
-        eyebrow={system ? "Rol protegido" : isNew ? "Nuevo rol" : "Rol personalizado"}
+        eyebrow={system ? (system.overridden ? "Rol protegido · ajustado para este negocio" : "Rol protegido") : isNew ? "Nuevo rol" : "Rol personalizado"}
         chips={
           <>
             <MetaChip>{plural(perms.size, "permiso", "permisos")}</MetaChip>
@@ -424,8 +449,9 @@ function RoleEditor({
         sections={[
           { id: "role-name", label: "Nombre y descripción" },
           ...areas.map((a) => ({ id: `role-area-${a.id}`, label: a.label, dirty: PERMISSIONS.some((p) => p.area === a.id && perms.has(p.key) !== initial.permissions.has(p.key)) })),
-          ...(custom ? [{ id: "role-people", label: "Usuarios afectados" }] : []),
+          ...(custom || system ? [{ id: "role-people", label: "Usuarios afectados" }] : []),
           ...(custom && !readOnly ? [{ id: "role-delete", label: "Eliminar rol" }] : []),
+          ...(system && !readOnly && system.overridden ? [{ id: "role-reset", label: "Restablecer" }] : []),
         ]}
         saveBar={readOnly ? undefined : <SaveBar changes={changes} onCancel={requestClose} onSave={save} saving={saving} saveLabel={isNew ? "Crear" : "Guardar"} canSave={canSave} />}
       >
@@ -450,17 +476,25 @@ function RoleEditor({
           <div className="mb-2">
             <Notice>
               {system
-                ? "Rol protegido del sistema: sus permisos no se editan. Duplícalo desde la lista para crear una variante."
+                ? `Rol protegido: solo la agencia puede ajustar sus permisos para este negocio.${viewer.canManageRoles ? " Duplícalo desde la lista para crear una variante." : ""}`
                 : (custom?.lockedWhy ?? "No tienes permiso para editar roles.")}
+            </Notice>
+          </div>
+        ) : system ? (
+          <div className="mb-2">
+            <Notice>
+              Rol protegido: su nombre no cambia. Los permisos que guardes aquí se aplican solo a este negocio; los demás negocios mantienen los
+              predeterminados.{system.overridden ? " Puedes restablecerlos al final." : ""}
             </Notice>
           </div>
         ) : null}
         <EditorSection id="role-name" title="Nombre y descripción" summary={name || "Sin nombre"}>
-          {readOnly ? (
+          {readOnly || system ? (
             <div className="flex flex-col gap-1 text-[0.8438rem]">
               <p className="font-semibold text-foreground">{initial.name}</p>
               {initial.description ? <p className="text-muted">{initial.description}</p> : null}
               {custom?.updatedByEmail ? <p className="text-xs text-muted">Última modificación: {custom.updatedLabel} · {custom.updatedByEmail}</p> : null}
+              {system?.updatedByEmail ? <p className="text-xs text-muted">Ajustado para este negocio: {system.updatedLabel} · {system.updatedByEmail}</p> : null}
             </div>
           ) : (
             <div className="flex flex-col gap-4">
@@ -526,9 +560,21 @@ function RoleEditor({
             <Notice>{readOnly ? "Este rol no tiene permisos: quien lo tenga no ve nada del negocio." : "No tienes permisos que puedas conceder."}</Notice>
           </div>
         ) : null}
-        {custom ? (
-          <EditorSection id="role-people" title="Usuarios afectados" description="Quienes tienen este rol reciben cualquier cambio en su siguiente acción." summary={plural(people, "usuario", "usuarios")}>
-            {custom.holders.length === 0 && custom.pendingInviteCount === 0 ? (
+        {custom || system ? (
+          <EditorSection id="role-people" title="Usuarios afectados" description="Quienes tienen este rol en este negocio reciben cualquier cambio en su siguiente acción." summary={plural(people, "usuario", "usuarios")}>
+            {system ? (
+              system.holders.length === 0 ? (
+                <p className="text-[0.8438rem] text-muted">Nadie tiene este rol en este negocio.</p>
+              ) : (
+                <ul className="flex flex-col gap-1 text-[0.8438rem]">
+                  {system.holders.map((h) => (
+                    <li key={h} className="truncate text-foreground">
+                      {h}
+                    </li>
+                  ))}
+                </ul>
+              )
+            ) : !custom ? null : custom.holders.length === 0 && custom.pendingInviteCount === 0 ? (
               <p className="text-[0.8438rem] text-muted">Nadie tiene este rol todavía.</p>
             ) : (
               <div className="flex flex-col gap-2 text-[0.8438rem]">
@@ -544,6 +590,13 @@ function RoleEditor({
                 {custom.pendingInviteCount ? <p className="text-muted">{plural(custom.pendingInviteCount, "invitación pendiente", "invitaciones pendientes")} con este rol.</p> : null}
               </div>
             )}
+          </EditorSection>
+        ) : null}
+        {system && !readOnly && system.overridden ? (
+          <EditorSection id="role-reset" title="Restablecer" defaultOpen={false} description="Vuelve a los permisos predeterminados de este rol en este negocio.">
+            <Button className="w-fit" disabled={busy} onClick={() => setConfirm("reset")}>
+              Restablecer predeterminados
+            </Button>
           </EditorSection>
         ) : null}
         {custom && !readOnly ? (
@@ -586,6 +639,18 @@ function RoleEditor({
               {!isNew && people > 0 ? <p>Afecta a {plural(people, "usuario", "usuarios")} desde su siguiente acción.</p> : null}
             </div>
           }
+        />
+      ) : null}
+      {confirm === "reset" && system ? (
+        <ConfirmLayer
+          id="role-reset-confirm"
+          title={`¿Restablecer «${system.label}» en este negocio?`}
+          tone="primary"
+          body={`Vuelve a sus permisos predeterminados. Afecta a ${plural(people, "usuario", "usuarios")} desde su siguiente acción.`}
+          confirmLabel="Restablecer"
+          pending={busy}
+          onCancel={() => setConfirm(null)}
+          onConfirm={doReset}
         />
       ) : null}
       {confirm === "delete" && custom ? (

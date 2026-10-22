@@ -342,3 +342,49 @@ test('an assigned role can\'t be deleted until its logins and invitations are re
   await roles.createRoleAction({ clientId: w.s.clientId, name: 'No', permissions: [] });
   assert.equal((await auditActions(w.s.tenantId, w.s.clientId)).length, trail.length);
 });
+
+test('the agency adjusts a protected role for ONE business; the Dueño can\'t; reset restores the default', async () => {
+  const w = await world();
+  const otherSetter = await seedMember(w.s.tenantId, { role: 'member', clientId: w.s.otherClientId, clientRole: 'setter' });
+  const before = [...SYSTEM_ROLE_PERMISSIONS.setter].sort();
+  // The Dueño edits custom roles, never the protected ones.
+  as(w.owner);
+  assert.ok(await refused(() => roles.updateSystemRoleAction({ clientId: w.s.clientId, systemKey: 'setter', version: null, permissions: ['inbox.view'] })));
+  assert.ok(await refused(() => roles.resetSystemRoleAction({ clientId: w.s.clientId, systemKey: 'setter' })));
+  // …but still creates, edits and deletes its own (unassigned) custom roles.
+  const own = await createRole(w.owner, w.s.clientId, 'Propio', ['contacts.view']);
+  assert.equal((await roles.updateRoleAction({ clientId: w.s.clientId, roleId: own.id, version: own.version, name: 'Propio', permissions: ['contacts.view', 'contacts.edit'] })).ok, true);
+  assert.equal((await roles.deleteRoleAction({ clientId: w.s.clientId, roleId: own.id })).ok, true);
+
+  // The agency removes the export from Recepción in business A only.
+  as(w.agency);
+  const adjusted = before.filter((k) => k !== 'contacts.export');
+  const r = await roles.updateSystemRoleAction({ clientId: w.s.clientId, systemKey: 'setter', version: null, permissions: adjusted });
+  assert.equal(r.ok, true);
+  assert.deepEqual(await permsOf(w.setter), adjusted, 'Recepción of A changed on its next request');
+  assert.deepEqual(await permsOf(otherSetter), before, 'Recepción of B kept the default');
+  assert.equal((await memberRow(w.s.tenantId, w.setter))?.client_role, 'setter', 'the membership itself is untouched');
+  as(w.setter);
+  const res = await exportRoute.GET(new Request(`http://x/api/crm/v1/contacts/export/${w.s.clientId}`), { params: Promise.resolve({ clientId: w.s.clientId }) });
+  assert.equal(res.status, 404, 'the export is closed for Recepción of A');
+
+  // Concurrency: an editor that opened it before the first save is stale.
+  as(w.agency);
+  const stale = await roles.updateSystemRoleAction({ clientId: w.s.clientId, systemKey: 'setter', version: null, permissions: before });
+  assert.equal(stale.ok, false);
+  // Widened past the Dueño: it can no longer hand Recepción out in A.
+  assert.equal((await roles.updateSystemRoleAction({ clientId: w.s.clientId, systemKey: 'setter', version: (r as { version: number }).version, permissions: [...before, 'contacts.delete'] })).ok, true);
+  const newbie = await seedMember(w.s.tenantId, { role: 'member', clientId: w.s.clientId, clientRole: 'setter' });
+  await members.changeClientRoleAction({ targetUserId: newbie, clientId: w.s.clientId, clientRole: 'staff', siteId: w.s.siteId, staffId: w.s.staffB });
+  as(w.owner);
+  assert.ok(await refused(() => members.changeClientRoleAction({ targetUserId: newbie, clientId: w.s.clientId, clientRole: 'setter' })), 'Recepción of A is now wider than the Dueño');
+
+  // Reset → the default again, for A.
+  as(w.agency);
+  assert.equal((await roles.resetSystemRoleAction({ clientId: w.s.clientId, systemKey: 'setter' })).ok, true);
+  assert.deepEqual(await permsOf(w.setter), before);
+  const trail = (await auditActions(w.s.tenantId, w.s.clientId)).filter((e) => (e.changes as { system?: string }).system === 'setter');
+  assert.equal(trail.length, 3, 'two adjustments + the reset are audited');
+  assert.deepEqual((trail[0].changes as { removed: string[] }).removed, ['contacts.export']);
+  assert.equal((trail[2].changes as { reset?: boolean }).reset, true);
+});
