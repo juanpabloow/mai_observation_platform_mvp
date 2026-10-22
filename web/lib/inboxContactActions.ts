@@ -26,7 +26,7 @@ const GENERIC = "No disponible.";
 
 export async function linkConversationContactAction(clientId: string, conversationId: string): Promise<LinkResult> {
   if (!isUuid(conversationId)) return { ok: false, error: GENERIC };
-  const resolved = await resolveClientModuleContext(clientId, "inbox");
+  const resolved = await resolveClientModuleContext(clientId, "inbox", "inbox.reply");
   if (!resolved.ok) return { ok: false, error: GENERIC };
   const { scope, client } = resolved.context;
 

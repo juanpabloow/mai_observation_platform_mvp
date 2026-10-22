@@ -1,6 +1,5 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
-import { canManageClient } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 // listStaffAdmin, NOT listStaff: this page is owner/admin only (both gates below), and
@@ -48,9 +47,8 @@ export default async function ClientStaffPage({
   await connection();
   const { clientId } = await params;
   const sp = await searchParams;
-  const { scope, client } = await requireClientModulePage(clientId, "scheduling");
+  const { scope, client } = await requireClientModulePage(clientId, "scheduling", "team.manage");
   // The roster is for the agency OR this client's OWNER — editors/staff are 404'd.
-  if (!canManageClient(scope, clientId)) notFound();
 
   const roster = await loadRoster(scope.tenantId, client.id, sp);
   return (

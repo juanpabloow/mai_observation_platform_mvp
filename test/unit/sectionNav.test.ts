@@ -8,6 +8,7 @@ import {
   schedulingHref,
 } from '../../web/lib/schedulingNav.js';
 import { memberLandingPath } from '../../web/lib/landing.js';
+import { AGENCY_PERMISSIONS, SYSTEM_ROLE_PERMISSIONS, type SystemRoleKey } from '../../web/lib/permissions/catalog.js';
 
 /**
  * The client navigation model behind the sidebar (proposal "Mismo sidebar, tres bloques")
@@ -22,11 +23,13 @@ const OTHER = 'bbbbbbbb-0000-4000-8000-000000000002';
 const DEF = 'dddddddd-0000-4000-8000-000000000003';
 const ALL = ['inbox', 'crm', 'scheduling', 'catalog', 'campaigns', 'meetings'];
 
+// The rail reads PERMISSIONS, never role names: a system role is just its permission set
+// (the expected shapes below are unchanged from the role-name rail — that is the point).
 const agency = (modules: string[], over: Partial<NavContext> = {}): NavContext => ({
-  clientId: A, modules, isAgency: true, clientRole: null, memberClientId: null, defaultClientId: DEF, ...over,
+  clientId: A, modules, isAgency: true, permissions: [...AGENCY_PERMISSIONS], staffBound: false, memberClientId: null, defaultClientId: DEF, ...over,
 });
-const member = (clientRole: string, modules: string[], over: Partial<NavContext> = {}): NavContext => ({
-  clientId: A, modules, isAgency: false, clientRole, memberClientId: A, defaultClientId: null, ...over,
+const member = (clientRole: SystemRoleKey, modules: string[], over: Partial<NavContext> = {}): NavContext => ({
+  clientId: A, modules, isAgency: false, permissions: [...SYSTEM_ROLE_PERMISSIONS[clientRole]], staffBound: clientRole === 'staff', memberClientId: A, defaultClientId: null, ...over,
 });
 
 /** section id → page ids, the compact shape the assertions compare. */
@@ -226,7 +229,34 @@ test('booking-page: old ?tab= links become section anchors; only known tabs map'
 });
 
 test('landing: staff → agenda, setter → inbox, owner → value dashboard', () => {
-  assert.equal(memberLandingPath(A, 'staff'), `/clients/${A}/scheduling/agenda`);
-  assert.equal(memberLandingPath(A, 'setter'), `/clients/${A}/inbox`);
-  assert.equal(memberLandingPath(A, 'owner'), `/clients/${A}/analytics`);
+  const land = (r: SystemRoleKey) => memberLandingPath(A, { permissions: SYSTEM_ROLE_PERMISSIONS[r], staffBound: r === 'staff' });
+  assert.equal(land('staff'), `/clients/${A}/scheduling/agenda`);
+  assert.equal(land('setter'), `/clients/${A}/inbox`);
+  assert.equal(land('owner'), `/clients/${A}/analytics`);
+  // A custom role lands on the first page its permissions open; none at all → /no-access.
+  assert.equal(memberLandingPath(A, { permissions: ['contacts.view'], staffBound: false }), `/clients/${A}/contacts`);
+  assert.equal(memberLandingPath(A, { permissions: ['access.users.view'], staffBound: false }), `/clients/${A}/team`);
+  assert.equal(memberLandingPath(A, { permissions: [], staffBound: false }), '/no-access');
+});
+
+test('a CUSTOM role sees exactly the pages its permissions open — the name plays no part', () => {
+  const custom = (permissions: string[], modules = ALL): NavContext => ({
+    clientId: A, modules, isAgency: false, permissions, staffBound: false, memberClientId: A, defaultClientId: null,
+  });
+  // «Marketing»: campaigns + results, nothing operational.
+  assert.deepEqual(shape(custom(['campaigns.view', 'campaigns.manage', 'analytics.view'])), {
+    presence: ['campaigns'],
+    results: ['value'],
+    automations: ['tech-analytics'],
+  });
+  // «Encargado de sede»: agenda + team + hours, no inbox/contacts/settings.
+  assert.deepEqual(shape(custom(['agenda.view', 'agenda.book', 'team.manage', 'hours.manage'])), {
+    agenda: ['calendar', 'team', 'hours'],
+  });
+  // A permission whose module is NOT contracted shows nothing.
+  assert.deepEqual(shape(custom(['inbox.view', 'products.view'], ['crm'])), {});
+  // No permissions → no rail at all (lands on /no-access).
+  assert.deepEqual(shape(custom([])), {});
+  // On ANOTHER client's path, nothing — whatever the permissions.
+  assert.deepEqual(shape({ ...custom(['contacts.view', 'analytics.view']), clientId: OTHER }), {});
 });

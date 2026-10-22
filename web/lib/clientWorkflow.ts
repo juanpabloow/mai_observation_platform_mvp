@@ -3,7 +3,7 @@ import { notFound, redirect } from "next/navigation";
 import { getWorkflowByN8nId, listWorkflowsWithClientForTenant } from "@worker/db/repositories/workflows.js";
 import { getClientById, type ClientRow } from "@worker/db/repositories/clients.js";
 import type { WorkflowRow } from "@worker/db/types.js";
-import { getAccessScope, canAccessClient, canSeeWorkflowInsights } from "./access";
+import { getAccessScope, WORKFLOW_SURFACE_PERMISSIONS, canAny, inClientScope, can } from "./access";
 
 /**
  * Resolution of a (clientId, workflowId) URL pair against the current tenant.
@@ -45,7 +45,7 @@ export const resolveWorkflowUnderClient = cache(
     // workflow's REAL client_id is what's checked — never the URL clientId — so
     // neither a forged URL segment nor a stale mismatch can widen a member's
     // access. A workflow under any other client is indistinguishable from a 404.
-    if (!canAccessClient(scope, ownerClientId)) return { kind: "not_found" };
+    if (!canAny(scope, WORKFLOW_SURFACE_PERMISSIONS, ownerClientId)) return { kind: "not_found" };
 
     if (ownerClientId === urlClientId) {
       const client = await getClientById({ tenantId, clientId: ownerClientId });
@@ -70,15 +70,19 @@ export const resolveWorkflowUnderClient = cache(
  * workflow (e.g. "executions", "conversations/settings", `conversations/<id>`).
  */
 /**
- * Chokepoint for WORKFLOW INSIGHTS — analytics, the executions list/detail, and workflow
- * internals (settings/config). The agency and a client OWNER pass; a SETTER (and staff)
- * is 404'd. A Setter still RESOLVES a workflow for its inbox (that uses canAccessClient),
- * so call THIS in addition, at the top of each insights page/layout, to refuse the
- * numbers and raw executions while leaving the inbox reachable.
+ * Chokepoint for WORKFLOW INSIGHTS of ONE client — analytics (analytics.view), the
+ * executions list/detail and workflow internals (automations.view). The agency and the
+ * Dueño pass; Recepción (and a professional login) is 404'd. Recepción still RESOLVES a
+ * workflow for its inbox (WORKFLOW_SURFACE_PERMISSIONS includes inbox.view), so call THIS
+ * in addition, at the top of each insights page/layout, to refuse the numbers and raw
+ * executions while leaving the inbox reachable. Always bound to the client in the URL.
  */
-export async function requireWorkflowInsights(): Promise<void> {
+export async function requireWorkflowInsights(
+  clientId: string,
+  permission: "automations.view" | "analytics.view",
+): Promise<void> {
   const scope = await getAccessScope();
-  if (!canSeeWorkflowInsights(scope)) notFound();
+  if (!can(scope, permission, clientId)) notFound();
 }
 
 export async function requireWorkflowUnderClient(
@@ -105,7 +109,7 @@ export async function requireWorkflowUnderClient(
  */
 export const getClientForTenant = cache(async (clientId: string): Promise<ClientRow | null> => {
   const scope = await getAccessScope();
-  if (!canAccessClient(scope, clientId)) return null; // RBAC: member → only their client
+  if (!inClientScope(scope, clientId)) return null; // RBAC: member → only their client
   return getClientById({ tenantId: scope.tenantId, clientId });
 });
 
@@ -121,7 +125,7 @@ export async function resolveRememberedWorkflow(
   from: string | undefined,
 ): Promise<string | null> {
   const scope = await getAccessScope();
-  if (!canAccessClient(scope, clientId)) return null; // RBAC: member → only their client
+  if (!canAny(scope, WORKFLOW_SURFACE_PERMISSIONS, clientId)) return null; // RBAC: member → only their client
   const tenantId = scope.tenantId;
   const client = await getClientById({ tenantId, clientId });
   if (!client) return null;

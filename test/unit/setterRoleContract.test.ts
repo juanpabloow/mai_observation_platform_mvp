@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { SYSTEM_ROLE_PERMISSIONS } from '../../web/lib/permissions/catalog.js';
 
 /**
  * SOURCE CONTRACT for the SETTER client role (replaces Editor). Setter = inbox + contacts
@@ -14,17 +15,24 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const read = (path: string) => readFileSync(`${root}${path}`, 'utf8');
 const WF = 'web/app/clients/[clientId]/workflows/';
 
-test('setter is the operational client role: canAccessClient YES, workflow insights NO', () => {
+test('setter is the operational client role: inbox/contacts/agenda YES, workflow insights NO', () => {
+  // Since roles v1 the Setter (Recepción) is a PERMISSION SET in the catalog, resolved by
+  // buildScope — no gate compares its name. Behaviour, not strings:
+  const setter = SYSTEM_ROLE_PERMISSIONS.setter;
+  for (const k of ['inbox.view', 'inbox.reply', 'contacts.view', 'contacts.edit', 'agenda.view', 'agenda.book'] as const) {
+    assert.ok(setter.has(k), `setter keeps ${k}`);
+  }
+  for (const k of ['analytics.view', 'automations.view', 'meetings.view', 'settings.sites', 'contacts.fields', 'team.manage', 'access.users.view'] as const) {
+    assert.ok(!setter.has(k), `setter never had ${k}`);
+  }
   const access = read('web/lib/access.ts');
-  // buildScope accepts setter (owner/setter/staff) and fails closed on anything else.
-  assert.match(access, /clientRole !== "owner" && clientRole !== "setter" && clientRole !== "staff"/);
-  // canAccessClient admits non-staff (owner/setter) — the Setter reaches inbox/contacts/agenda.
-  assert.match(access, /export function canAccessClient[\s\S]{0,200}if \(scope\.clientRole === "staff"\) return false/);
-  // canSeeWorkflowInsights is the agency/OWNER-only capability — the Setter is excluded.
-  assert.match(access, /export function canSeeWorkflowInsights[\s\S]{0,320}if \(scope\.clientRole !== "owner"\) return false/);
+  // buildScope accepts the three system roles + 'custom' and fails closed on anything else.
+  assert.match(access, /clientRole === "owner" \|\| clientRole === "setter" \|\| clientRole === "staff"/);
+  assert.match(access, /SYSTEM_ROLE_PERMISSIONS\[clientRole\]/);
+  assert.match(access, /return \{ ok: false \}; \/\/ unknown \/ absent client role → deny/);
   // The Setter lands on the INBOX (analytics would 404 for it) — one shared rule.
   assert.match(access, /memberLandingPath\(/);
-  assert.match(read('web/lib/landing.ts'), /clientRole === "setter".{0,80}\/inbox/);
+  assert.match(read('web/lib/landing.ts'), /has\("inbox.view"\)\) return c\("\/inbox"\)/);
   // No FUNCTIONAL 'editor' value remains in the role model.
   assert.doesNotMatch(access, /clientRole === "editor"/);
   assert.doesNotMatch(access, /!== "editor"/);
@@ -43,31 +51,31 @@ test('migration renames editor → setter (reversible)', () => {
 });
 
 test('every workflow-INSIGHTS surface is gated (Setter 404s); the inbox is NOT', () => {
-  // One shared chokepoint helper.
+  // One shared chokepoint helper, always bound to the URL client and a permission.
   const cw = read('web/lib/clientWorkflow.ts');
-  assert.match(cw, /export async function requireWorkflowInsights[\s\S]{0,220}if \(!canSeeWorkflowInsights\(scope\)\) notFound\(\)/);
+  assert.match(cw, /export async function requireWorkflowInsights\([\s\S]{0,260}if \(!can\(scope, permission, clientId\)\) notFound\(\)/);
   // Executions, analytics (per-workflow + aggregate), the all-executions redirect, the
   // workflows list, and workflow settings all gate on it.
-  for (const rel of [
-    '[workflowId]/(workspace)/layout.tsx',
-    '[workflowId]/analytics/page.tsx',
-    '[workflowId]/(padded)/conversations/settings/page.tsx',
-    'all/analytics/page.tsx',
-    'all/executions/page.tsx',
-    'page.tsx',
+  for (const [rel, perm] of [
+    ['[workflowId]/(workspace)/layout.tsx', 'automations.view'],
+    ['[workflowId]/analytics/page.tsx', 'analytics.view'],
+    ['[workflowId]/(padded)/conversations/settings/page.tsx', 'automations.view'],
+    ['all/analytics/page.tsx', 'analytics.view'],
+    ['all/executions/page.tsx', 'automations.view'],
+    ['page.tsx', 'automations.view'],
   ]) {
-    assert.match(read(WF + rel), /requireWorkflowInsights\(\)/, `${rel} gates on workflow insights`);
+    assert.match(read(WF + rel), new RegExp(`requireWorkflowInsights\\(\\(await params\\)\\.clientId, "${perm}"\\)`), `${rel} gates on ${perm}`);
   }
   // The inbox shim under a workflow + the client-level inbox do NOT gate on insights, so a
-  // Setter keeps the inbox (it still resolves a workflow via canAccessClient).
+  // Setter keeps the inbox (it still resolves a workflow via WORKFLOW_SURFACE_PERMISSIONS).
   assert.doesNotMatch(read(WF + '[workflowId]/(padded)/inbox/page.tsx'), /requireWorkflowInsights/);
   assert.doesNotMatch(read('web/app/clients/[clientId]/inbox/page.tsx'), /requireWorkflowInsights/);
+  assert.match(read('web/lib/access.ts'), /WORKFLOW_SURFACE_PERMISSIONS: readonly PermissionKey\[\] = \["inbox.view", "automations.view", "analytics.view"\]/);
 });
 
-test('inbox + contacts stay module+client gated (Setter ✓) and never leak an execution', () => {
-  // The Setter reaches these through the SAME gates as before (module + canAccessClient).
-  assert.match(read('web/app/clients/[clientId]/inbox/page.tsx'), /requireClientModulePage\(clientId, "inbox"\)/);
-  assert.match(read('web/app/clients/[clientId]/contacts/page.tsx'), /requireClientModulePage\(clientId, "crm"\)/);
+test('inbox + contacts stay module+permission gated (Setter ✓) and never leak an execution', () => {
+  assert.match(read('web/app/clients/[clientId]/inbox/page.tsx'), /requireClientModulePage\(clientId, "inbox", "inbox.view"\)/);
+  assert.match(read('web/app/clients/[clientId]/contacts/page.tsx'), /requireClientModulePage\(clientId, "crm", "contacts.view"\)/);
   // No execution/analytics link FROM an allowed surface (inbox thread, contact timeline).
   for (const rel of [
     'web/components/ClientInboxWorkspace.tsx',
@@ -82,28 +90,31 @@ test('inbox + contacts stay module+client gated (Setter ✓) and never leak an e
 
 test('the header workflow switcher (and "All workflows") is hidden from a Setter', () => {
   const header = read('web/components/AppHeader.tsx');
-  assert.match(header, /!canSeeWorkflowInsights\(scope\)[\s\S]{0,20}\?[\s\S]{0,10}\[\]/);
+  assert.match(header, /!\(scope\.permissions\.has\("automations\.view"\) \|\| scope\.permissions\.has\("analytics\.view"\)\)[\s\S]{0,20}\?[\s\S]{0,10}\[\]/);
 });
 
 test('sidebar: Setter gets inbox/contacts/agenda, not workflows/analytics', () => {
   const src = read('web/components/AppSidebar.tsx');
   const model = read('web/lib/sectionNav.ts');
-  assert.match(model, /const general = isAgency \|\| \(\(clientRole === "owner" \|\| clientRole === "setter"\) && forOwnClient\)/);
-  assert.match(model, /const insights = isAgency \|\| \(clientRole === "owner" && forOwnClient\)/);
-  // Workflows / Analíticas técnicas / Dashboard de valor only under insights; inbox under general.
-  assert.match(model, /insights && \{ id: "workflows"/);
-  assert.match(model, /insights && \{ id: "tech-analytics"/);
-  assert.match(model, /insights && \{ id: "value"/);
-  assert.match(model, /general && has\("inbox"\)/);
-  // The off-client fallback sends a Setter to the inbox, never analytics.
-  assert.match(src, /clientRole === "setter"[\s\S]{0,160}key: "inbox"/);
+  // Each page reads the permission its own gate checks (behaviour: test/unit/sectionNav.test.ts).
+  assert.match(model, /p\("automations\.view"\) && \{ id: "workflows"/);
+  assert.match(model, /p\("analytics\.view"\) && \{ id: "tech-analytics"/);
+  assert.match(model, /p\("analytics\.view"\) && \{ id: "value"/);
+  assert.match(model, /p\("inbox\.view"\) && has\("inbox"\)/);
+  assert.doesNotMatch(model, /clientRole/, 'the rail never reads a role name');
+  // The off-client fallback: Dashboard only with analytics.view; Inbox with inbox.view.
+  assert.match(src, /may\("analytics\.view"\)\) items\.push\(\{ key: "analytics"/);
+  assert.match(src, /may\("inbox\.view"\) && memberModules\.includes\("inbox"\)/);
 });
 
 test('escalation: a Client Owner may grant Setter but never Owner; Setter grants nothing', () => {
   const invite = read('web/lib/inviteActions.ts');
-  // Valid client roles are owner/setter/staff.
-  assert.match(invite, /requestedRole !== "owner" && requestedRole !== "setter" && requestedRole !== "staff"/);
-  // Only the agency mints owners (the canGrantClientRole gate is unchanged by the rename).
-  assert.match(invite, /isClientOwner\(scope, clientId\)/);
-  assert.match(invite, /Only the agency can add another Owner/);
+  // Valid client roles: the three system roles or a custom role of this business.
+  assert.match(invite, /!isSystemRoleKey\(requestedRole\) && requestedRole !== "custom"/);
+  // Only the agency mints owners — the shared delegation rule.
+  assert.match(invite, /canGrantRole\(scope, clientId, grantedRole\)/);
+  const d = read('web/lib/permissions/delegation.ts');
+  assert.match(d, /role\.kind === "system" && role\.key === "owner"\) return isAgencyActor\(actor\) \? OK : deny\(DENY\.ownerTier\)/);
+  // Recepción holds no access.* permission, so it grants nothing.
+  assert.ok(!SYSTEM_ROLE_PERMISSIONS.setter.has('access.users.manage'));
 });

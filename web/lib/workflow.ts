@@ -1,6 +1,6 @@
 import { cache } from "react";
 import { getWorkflowByN8nId } from "@worker/db/repositories/workflows.js";
-import { getAccessScope, hasFullAccess, canAccessClient } from "./access";
+import { WORKFLOW_SURFACE_PERMISSIONS, canAny, getAccessScope, hasFullAccess } from "./access";
 
 /**
  * The current user's workflow by n8n id — tenant-scoped AND access-scoped. A
@@ -17,6 +17,6 @@ export const getWorkflowForCurrentTenant = cache(async (n8nWorkflowId: string) =
   const ownerClientId = workflow.client_id;
   // Orphan with no client (pre-CL-1a defensive): only full-access users may see it.
   if (!ownerClientId) return hasFullAccess(scope) ? workflow : null;
-  if (!canAccessClient(scope, ownerClientId)) return null;
+  if (!canAny(scope, WORKFLOW_SURFACE_PERMISSIONS, ownerClientId)) return null;
   return workflow;
 });

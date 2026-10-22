@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import { notFound, redirect } from "next/navigation";
-import { getAccessScope, canAccessClient } from "@/lib/access";
+import { getAccessScope, can } from "@/lib/access";
 import { getConversationForClient } from "@worker/db/repositories/handoff.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { isUuid } from "@/lib/inboxData";
@@ -20,7 +20,7 @@ export default async function OldClientInboxThreadRedirect({
   await connection();
   const scope = await getAccessScope();
   const { clientId, conversationId } = await params;
-  if (!canAccessClient(scope, clientId)) notFound();
+  if (!can(scope, "inbox.view", clientId)) notFound();
   // Inbox module gate — a disabled client's thread is an indistinguishable 404.
   if (!(await isClientModuleEnabled(scope.tenantId, clientId, "inbox"))) notFound();
 

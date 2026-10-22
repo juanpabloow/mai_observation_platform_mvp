@@ -417,11 +417,14 @@ export function ContactsOverflowMenu({
   clientId,
   visibleColumns,
   fieldsHref,
+  canExport = true,
 }: {
   clientId: string;
   visibleColumns: ContactColumnKey[];
   /** Omitted for a member — they cannot manage the business's fields. */
   fieldsHref?: string;
+  /** contacts.export — without it the export endpoint refuses, so it isn't offered. */
+  canExport?: boolean;
 }) {
   const { searchParams, apply } = useApply();
   const [view, setView] = useState<"root" | "columns" | "sort">("root");
@@ -527,15 +530,17 @@ export function ContactsOverflowMenu({
               </span>
             </span>
 
-            <a
-              href={`/api/crm/v1/contacts/export/${clientId}${exportQs ? `?${exportQs}` : ""}`}
-              download
-              onClick={close}
-              className={ITEM_CLS}
-            >
-              <ItemIcon d="M8 2.8v6.8|M5.4 7l2.6 2.6L10.6 7|M3.2 12.4h9.6" />
-              <span className="flex-1">Exportar CSV</span>
-            </a>
+            {canExport ? (
+              <a
+                href={`/api/crm/v1/contacts/export/${clientId}${exportQs ? `?${exportQs}` : ""}`}
+                download
+                onClick={close}
+                className={ITEM_CLS}
+              >
+                <ItemIcon d="M8 2.8v6.8|M5.4 7l2.6 2.6L10.6 7|M3.2 12.4h9.6" />
+                <span className="flex-1">Exportar CSV</span>
+              </a>
+            ) : null}
 
             {fieldsHref ? (
               <>

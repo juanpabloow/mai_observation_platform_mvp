@@ -68,10 +68,10 @@ test('sidebar: Automatizaciones = Workflows + Analíticas técnicas + Reuniones;
   const model = read('lib/sectionNav.ts');
   // Workflows (their executions) and the value dashboard are INSIGHTS (agency/owner) —
   // a Setter never sees them. Both workflow entries follow the remembered scope.
-  assert.ok(model.includes('const insights = isAgency || (clientRole === "owner" && forOwnClient);'), 'insights = agency or own owner');
-  assert.ok(model.includes('insights && { id: "workflows", label: "Workflows", href: wf.executions }'), 'Workflows is insights, scope-aware');
-  assert.ok(model.includes('insights && { id: "tech-analytics", label: "Analíticas técnicas", href: wf.analytics }'), 'Analíticas técnicas is insights, scope-aware');
-  assert.ok(model.includes('results: [insights && { id: "value", label: "Dashboard de valor", href: c("/analytics") }]'), 'the value dashboard is insights');
+  assert.ok(model.includes('const p = (key: string) => forOwnClient && permissions.includes(key);'), 'pages read the login\'s permissions on its own client');
+  assert.ok(model.includes('p("automations.view") && { id: "workflows", label: "Workflows", href: wf.executions }'), 'Workflows is automations.view, scope-aware');
+  assert.ok(model.includes('p("analytics.view") && { id: "tech-analytics", label: "Analíticas técnicas", href: wf.analytics }'), 'Analíticas técnicas is analytics.view, scope-aware');
+  assert.ok(model.includes('results: [p("analytics.view") && { id: "value", label: "Dashboard de valor", href: c("/analytics") }]'), 'the value dashboard is analytics.view');
   assert.ok(src.includes('workflowScope: scopeFor(clientId)'), 'the remembered workflow scope rides the rail link');
   // No duplicate destination: there is no all-workflows execution screen besides Workflows.
   assert.ok(!model.includes('label: "Ejecuciones"'), 'no second entry for the same screen');
@@ -107,7 +107,7 @@ test('sidebar: NO full workflow list — no workflows prop, no workflow query', 
 
 test('sidebar: Inbox uses the unified client-level route + aggregated pending badge', () => {
   const model = read('lib/sectionNav.ts');
-  assert.ok(model.includes('inbox: [general && has("inbox") && { id: "inbox", label: "Inbox", href: c("/inbox") }]'), 'Inbox → the unified /clients/{id}/inbox route, inbox-gated');
+  assert.ok(model.includes('inbox: [p("inbox.view") && has("inbox") && { id: "inbox", label: "Inbox", href: c("/inbox") }]'), 'Inbox → the unified /clients/{id}/inbox route, inbox-gated');
   const src = read('components/AppSidebar.tsx');
   assert.ok(
     src.includes('countEndpoint: sec.id === "inbox" ? `/api/inbox/${clientId}/pending-count` : undefined'),
@@ -117,12 +117,12 @@ test('sidebar: Inbox uses the unified client-level route + aggregated pending ba
 
 test('sidebar: modules + roles still gate the entries', () => {
   const model = read('lib/sectionNav.ts');
-  assert.ok(model.includes('general && has("crm") && { id: "contacts"'), 'Contacts gated by the crm module');
+  assert.ok(model.includes('p("contacts.view") && has("crm") && { id: "contacts"'), 'Contacts gated by the crm module');
   assert.ok(model.includes('has("scheduling") && { id: "calendar"'), 'Agenda gated by the scheduling module');
-  assert.ok(model.includes('const schedManage = manage && has("scheduling") && !isDefault;'), 'scheduling settings: manage + module + non-default');
-  // Usuarios y accesos is behind the client-admin capability; Módulos stays agency-only
-  // and hidden for the default client.
-  assert.ok(model.includes('manage && { id: "users", label: "Usuarios y accesos"'), 'Usuarios y accesos gated (agency or client owner)');
+  assert.ok(model.includes('const sched = (key: string) => p(key) && has("scheduling") && !isDefault;'), 'scheduling settings: permission + module + non-default');
+  // Usuarios y accesos is behind access.users.view; Módulos stays agency-only and hidden
+  // for the default client.
+  assert.ok(model.includes('p("access.users.view") && { id: "users", label: "Usuarios y accesos"'), 'Usuarios y accesos gated by access.users.view');
   assert.ok(model.includes('agency: [isAgency && !isDefault && { id: "modules"'), 'Módulos is agency-only + non-default');
 });
 
@@ -248,7 +248,7 @@ test('client Inbox page (unified): inbox-gated, resolves W-2 scope, loads the sc
   const src = read('app/clients/[clientId]/inbox/page.tsx');
   // Gated by the canonical module gate (tenant + client + non-default + inbox enabled →
   // indistinguishable 404).
-  assert.ok(src.includes('requireClientModulePage(clientId, "inbox")'), 'gated by the inbox module');
+  assert.ok(src.includes('requireClientModulePage(clientId, "inbox", "inbox.view")'), 'gated by the inbox module + inbox.view');
   // W-2: the effective scope is URL-first (?workflow=, validated) else the remembered
   // cookie; the list is loaded ALREADY-SCOPED server-side (no client-side workflow
   // filtering, no flash of the full list).

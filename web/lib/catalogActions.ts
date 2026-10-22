@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { canManageCatalog, canReadCatalog } from "./access";
+import { NO_PERMISSION } from "./access";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import {
   normalizeProductCategory,
@@ -39,24 +39,24 @@ export type CatalogResult = { ok: true; id?: string } | { ok: false; error: stri
 const UNAVAILABLE = "El catálogo no está disponible para este cliente.";
 const DUPLICATE = "Ya existe un producto activo con ese nombre.";
 
-/** MANAGE tier — agency or client owner. Returns the validated tenantId or a generic error. */
+/** MANAGE tier — products.manage (agency, Dueño). Returns the validated tenantId or an error. */
 async function requireCatalogManager(
   clientId: string,
 ): Promise<{ ok: true; tenantId: string } | { ok: false; error: string }> {
-  const res = await resolveClientModuleContext(clientId, "catalog");
-  if (!res.ok || !canManageCatalog(res.context.scope, clientId)) {
-    return { ok: false, error: UNAVAILABLE };
+  const res = await resolveClientModuleContext(clientId, "catalog", "products.manage");
+  if (!res.ok) {
+    return { ok: false, error: res.forbidden ? NO_PERMISSION : UNAVAILABLE };
   }
   return { ok: true, tenantId: res.context.scope.tenantId };
 }
 
-/** READ tier — agency, owner, or setter (for the in_stock toggle). */
-async function requireCatalogReader(
+/** STOCK tier — products.stock (agency, Dueño, Recepción): the in_stock toggle. */
+async function requireCatalogStock(
   clientId: string,
 ): Promise<{ ok: true; tenantId: string } | { ok: false; error: string }> {
-  const res = await resolveClientModuleContext(clientId, "catalog");
-  if (!res.ok || !canReadCatalog(res.context.scope, clientId)) {
-    return { ok: false, error: UNAVAILABLE };
+  const res = await resolveClientModuleContext(clientId, "catalog", "products.stock");
+  if (!res.ok) {
+    return { ok: false, error: res.forbidden ? NO_PERMISSION : UNAVAILABLE };
   }
   return { ok: true, tenantId: res.context.scope.tenantId };
 }
@@ -164,7 +164,7 @@ export async function setProductStockAction(
   id: string,
   inStock: boolean,
 ): Promise<CatalogResult> {
-  const auth = await requireCatalogReader(clientId);
+  const auth = await requireCatalogStock(clientId);
   if (!auth.ok) return auth;
   const ok = await setProductStock(auth.tenantId, clientId, id, inStock);
   if (!ok) return { ok: false, error: "Producto no encontrado." };

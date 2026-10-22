@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
-import { canManageCampaigns, canReadCampaigns, hasFullAccess } from "@/lib/access";
+import { can, hasFullAccess } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { listAdsWithStats, listCampaignsWithStats } from "@worker/db/repositories/attribution.js";
 import { listServices } from "@worker/db/repositories/scheduling/services.js";
@@ -25,8 +25,7 @@ export default async function ClientCampaignsPage({
 }) {
   await connection();
   const { clientId } = await params;
-  const { scope, client } = await requireClientModulePage(clientId, "campaigns");
-  if (!canReadCampaigns(scope, clientId)) notFound();
+  const { scope, client } = await requireClientModulePage(clientId, "campaigns", "campaigns.view");
 
   const [ads, campaigns, services, promotions] = await Promise.all([
     listAdsWithStats(scope.tenantId, client.id, { includeTest: true }),
@@ -35,7 +34,7 @@ export default async function ClientCampaignsPage({
     listPromotions(scope.tenantId, client.id),
   ]);
 
-  const canManage = canManageCampaigns(scope, clientId);
+  const canManage = can(scope, "campaigns.manage", clientId);
 
   return (
     <CampaignsPanel

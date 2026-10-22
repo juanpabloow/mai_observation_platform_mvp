@@ -1,6 +1,6 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
-import { canManageCatalog, canReadCatalog } from "@/lib/access";
+import { can } from "@/lib/access";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { listProducts } from "@worker/db/repositories/catalog/products.js";
 import { CatalogPanel } from "@/components/catalog/CatalogPanel";
@@ -22,11 +22,10 @@ export default async function ClientCatalogPage({
 }) {
   await connection();
   const { clientId } = await params;
-  const { scope, client } = await requireClientModulePage(clientId, "catalog");
-  if (!canReadCatalog(scope, clientId)) notFound();
+  const { scope, client } = await requireClientModulePage(clientId, "catalog", "products.view");
 
   const products = await listProducts(scope.tenantId, client.id, true); // include archived
-  const canManage = canManageCatalog(scope, clientId);
+  const canManage = can(scope, "products.manage", clientId);
 
   return (
     <CatalogPanel

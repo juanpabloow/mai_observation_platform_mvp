@@ -73,7 +73,7 @@ test('Reseñas: the importer link is for PLATFORM admins only; imported reviews 
   const page = read(`${C}/scheduling/reviews/page.tsx`);
   assert.ok(page.includes('requirePlatformAdmin()'), 'decided by the platform allow-list');
   assert.ok(page.includes('canImport={platform !== null}'));
-  assert.ok(page.includes('if (!canManageClient(scope, clientId)) notFound();'), 'the page gate is unchanged');
+  assert.ok(page.includes('requireClientModulePage(clientId, "scheduling", "reviews.moderate")'), 'the page gate: module + reviews.moderate');
   const screen = read('web/components/scheduling/reviews/ReviewsScreen.tsx');
   assert.ok(screen.includes('canImport ? (') && screen.includes('href="/platform/reviews"'), 'only a link to the existing importer');
   assert.ok(!screen.includes('platformReviewActions'), 'the business screen never calls platform actions');
@@ -120,12 +120,16 @@ test('Usuarios y accesos: one definition of who may act on a login, shared by bo
   assert.ok(members.includes('export function canActOnMember('));
   assert.ok(members.includes('const manageable = canActOnMember(member, viewer);'));
   assert.ok(access.includes('const manageable = canActOnMember(member, viewer);'));
-  // The Owner role is offered only to whoever may grant it (the agency).
-  assert.ok(access.includes('viewer.canAssignOwner ? (["owner", "setter", "staff"] as const) : (["setter", "staff"] as const)'));
-  assert.ok(access.includes('canInviteOwner ? (["owner", "setter", "staff"] as const) : (["setter", "staff"] as const)'));
+  // The roles offered are exactly those the viewer may grant — computed on the SERVER
+  // (canGrantRole: the Dueño only for the agency), never re-derived in the browser.
+  assert.ok(access.includes('const choices = viewer.assignable;'));
+  assert.ok(access.includes('const roleOptions = choices.map((c) => ({ value: c.value, label: c.label }));'));
   // The page still loads no staff row (PII contract) and keeps its gate.
   const page = read(`${C}/team/page.tsx`);
-  assert.ok(page.includes('if (!canManageClient(scope, clientId)) notFound();'));
+  assert.ok(page.includes('if (!can(scope, "access.users.view", clientId)) notFound();'));
+  assert.ok(page.includes('canGrantRole(scope, clientId, { kind: "system", key: k }).ok'));
+  // Who may act on each row is decided on the SERVER with the delegation rules.
+  assert.ok(page.includes('canManage: ref ? canManageMember(scope, clientId, { userId: m.user_id, role: ref }).ok : false'));
 });
 
 test('Campos personalizados: key and type are fixed, nothing is deleted', () => {

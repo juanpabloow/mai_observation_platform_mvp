@@ -36,6 +36,7 @@ import {
 } from "@/components/ExecutionsTable";
 import { AutoRefresh } from "@/components/AutoRefresh";
 import { ColumnsMenu, type DefinedColumn } from "@/components/ColumnsMenu";
+import { getAccessScope, hasFullAccess } from "@/lib/access";
 import { ExecutionPane } from "@/components/ExecutionPane";
 import { ExecutionDetailPanel } from "@/components/ExecutionDetailPanel";
 
@@ -320,7 +321,8 @@ export default async function WorkflowExecutionsPage({
         <WorkflowViewTabs clientId={linkClientId} scope={workflowId} current="executions" />
         <p className="text-sm text-neutral-500">{total.toLocaleString()} matching</p>
         <FilterMenu customFields={filterableFields} />
-        <ColumnsMenu workflowId={workflowId} columns={definedColumns} />
+        {/* Column definitions are agency plumbing (columnActions are agency-only). */}
+        {hasFullAccess(await getAccessScope()) ? <ColumnsMenu workflowId={workflowId} columns={definedColumns} /> : null}
         <div className="ml-auto">
           <AutoRefresh intervalSeconds={config.POLL_INTERVAL_SECONDS} />
         </div>

@@ -1,6 +1,7 @@
 import "server-only";
 import { notFound } from "next/navigation";
-import { canAccessClient, getAccessScope, type AccessScope } from "./access";
+import { NO_PERMISSION, canAny, getAccessScope, inClientScope, type AccessScope } from "./access";
+import type { PermissionKey } from "./permissions/catalog";
 import { isUuid } from "./clientModuleValidation";
 import { getClientById, type ClientRow } from "@worker/db/repositories/clients.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
@@ -15,16 +16,22 @@ import type { ClientModuleKey } from "@worker/modules/registry.js";
  *   1. clientId must be a UUID (reuses the shared pure validator)
  *   2. session/membership resolve from the DATA layer (getAccessScope — the URL
  *      is never trusted; redirects to /login when logged out)
- *   3. canAccessClient — owner/admin: any client of THEIR tenant; member: only
- *      memberClientId
+ *   3. the client is inside the login's SCOPE — owner/admin: any client of THEIR
+ *      tenant; member: only memberClientId
  *   4. the client must exist IN THIS TENANT
  *   5. the default ("Unassigned") client can never have modules
  *   6. the module must be ENABLED for this client (no row / enabled=false deny)
+ *   7. the login holds the PERMISSION the caller names (any of, when several) — every
+ *      caller must name one: there is no "module access" without a capability.
+ *
+ *   effective access = module enabled ∧ permission ∧ scope.
  *
  * DENY-BY-DEFAULT and INDISTINGUISHABLE: malformed, foreign, missing, default,
  * and module-disabled all yield the same negative result — pages 404 via
  * requireClientModulePage, actions map it to one generic error — so probing the
- * URL/action never reveals which condition failed.
+ * URL/action never reveals which condition failed. Only step 7 is reported apart
+ * (`forbidden: true`): it is reached solely inside the login's OWN business, so saying
+ * "you no longer have permission" there reveals nothing it doesn't already know.
  */
 
 export interface ClientModuleContext {
@@ -34,7 +41,12 @@ export interface ClientModuleContext {
 
 export type ClientModuleResolution =
   | { ok: true; context: ClientModuleContext }
-  | { ok: false };
+  | { ok: false; forbidden?: true };
+
+/** One permission, or several of which any suffices. */
+export type PermissionRequirement = PermissionKey | readonly PermissionKey[];
+
+const asList = (p: PermissionRequirement): readonly PermissionKey[] => (typeof p === "string" ? [p] : p);
 
 /**
  * Core gate for an ALREADY-RESOLVED scope (session-less callers like the
@@ -47,21 +59,16 @@ export async function resolveClientModuleForScope(
   scope: AccessScope,
   clientId: string,
   moduleKey: ClientModuleKey,
+  permission: PermissionRequirement,
 ): Promise<ClientModuleResolution> {
   if (!isUuid(clientId)) return { ok: false };
-  // A STAFF login is denied by canAccessClient (it must not reach CRM/inbox/analytics),
-  // so the scheduling module admits it explicitly here. Owner/editor already pass
-  // canAccessClient, so this branch is staff-only.
-  const schedulingStaffAccess =
-    moduleKey === "scheduling" &&
-    scope.clientRole === "staff" &&
-    scope.memberClientId === clientId;
-  if (!canAccessClient(scope, clientId) && !schedulingStaffAccess) return { ok: false };
+  if (!inClientScope(scope, clientId)) return { ok: false };
   const client = await getClientById({ tenantId: scope.tenantId, clientId });
   if (!client) return { ok: false };
   if (client.is_default) return { ok: false }; // Unassigned can't have modules
   const enabled = await isClientModuleEnabled(scope.tenantId, clientId, moduleKey);
   if (!enabled) return { ok: false };
+  if (!canAny(scope, asList(permission), clientId)) return { ok: false, forbidden: true };
   return { ok: true, context: { scope, client } };
 }
 
@@ -74,10 +81,11 @@ export async function resolveClientModuleForScope(
 export async function resolveClientModuleContext(
   clientId: string,
   moduleKey: ClientModuleKey,
+  permission: PermissionRequirement,
 ): Promise<ClientModuleResolution> {
   if (!isUuid(clientId)) return { ok: false }; // before session/DB — cheap early reject
   const scope = await getAccessScope(); // session/membership; redirects if logged out
-  return resolveClientModuleForScope(scope, clientId, moduleKey);
+  return resolveClientModuleForScope(scope, clientId, moduleKey, permission);
 }
 
 /** Page variant: any failure → notFound() (a 404, indistinguishable across
@@ -85,8 +93,26 @@ export async function resolveClientModuleContext(
 export async function requireClientModulePage(
   clientId: string,
   moduleKey: ClientModuleKey,
+  permission: PermissionRequirement,
 ): Promise<ClientModuleContext> {
-  const result = await resolveClientModuleContext(clientId, moduleKey);
+  const result = await resolveClientModuleContext(clientId, moduleKey, permission);
   if (!result.ok) notFound();
   return result.context;
+}
+
+/**
+ * Server-Action convenience over resolveClientModuleContext: the approved context, or the
+ * error string to return — the caller's generic one for every indistinguishable failure,
+ * and NO_PERMISSION when the login is in its own business but lacks the permission (e.g.
+ * it was revoked while the screen was open).
+ */
+export async function gateClientModule(
+  clientId: string,
+  moduleKey: ClientModuleKey,
+  permission: PermissionRequirement,
+  fallbackError: string,
+): Promise<{ ok: true; context: ClientModuleContext } | { ok: false; error: string }> {
+  const result = await resolveClientModuleContext(clientId, moduleKey, permission);
+  if (result.ok) return result;
+  return { ok: false, error: result.forbidden ? NO_PERMISSION : fallbackError };
 }

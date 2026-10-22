@@ -1,7 +1,9 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { canManageClient, getAccessScope, requireFullAccessForAction } from "./access";
+import { NO_PERMISSION, requireFullAccessForAction } from "./access";
+import { resolveClientModuleContext } from "./clientModuleAccess";
+import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { getClientForTenant } from "./clientWorkflow";
 import { getContactById } from "@worker/db/repositories/contacts.js";
 import {
@@ -62,7 +64,7 @@ export async function setAttributionBriefWindowDaysAction(
 }
 
 /**
- * AT-1 §2 — MANUAL origin. The agency OR this client's Owner (canManageClient) may set the
+ * AT-1 §2 — MANUAL origin. campaigns.manage (the agency, the Dueño) may set the
  * origin of a contact whose current origin is `unknown` or `import` — pointing it at a
  * campaign/ad or leaving a free-text note. Recorded as `manual` with the actor. It NEVER
  * overwrites a captured ad origin (enforced in setContactOrigin: overwritable is unknown/import
@@ -74,10 +76,15 @@ export async function setContactOriginManualAction(
   input: { note?: string | null; adId?: string | null; campaignId?: string | null },
 ): Promise<{ ok: boolean; error?: string }> {
   if (!isUuid(clientId) || !isUuid(contactId)) return { ok: false, error: "Invalid input." };
-  const scope = await getAccessScope();
-  if (!canManageClient(scope, clientId)) return { ok: false, error: "No tienes permiso para esta acción." };
-  const client = await getClientForTenant(clientId); // tenant-scoped; foreign → null
-  if (!client || client.is_default) return { ok: false, error: "Unknown client." };
+  // The contact lives in the CRM module; the permission is the campaigns one. Both are
+  // required — the module gate also proves the client is in the tenant and not default.
+  const gate = await resolveClientModuleContext(clientId, "crm", "campaigns.manage");
+  if (!gate.ok) return { ok: false, error: gate.forbidden ? NO_PERMISSION : "Unknown client." };
+  const scope = gate.context.scope;
+  // Pointing the origin at an ad/campaign needs the campaigns module itself.
+  if ((input.adId || input.campaignId) && !(await isClientModuleEnabled(scope.tenantId, clientId, "campaigns"))) {
+    return { ok: false, error: "Las campañas no están disponibles para este cliente." };
+  }
 
   const contact = await getContactById(scope.tenantId, contactId, clientId);
   if (!contact) return { ok: false, error: "Contact not found." };

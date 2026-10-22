@@ -1,10 +1,11 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { resolveClientModuleContext } from "./clientModuleAccess";
+import { gateClientModule } from "./clientModuleAccess";
+import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { isUuid } from "./clientModuleValidation";
 import { createThenMaybeConfirm, type CreateOutcome, type ManualBookingResult } from "./manualBooking";
-import { canAccessSchedulingSite, canAccessSchedulingStaff, canOperateScheduling, isSchedulingStaff } from "./access";
+import { can, canAccessSchedulingSite, canAccessSchedulingStaff, isSchedulingStaff } from "./access";
 import { listContacts } from "@worker/db/repositories/contacts.js";
 import { getAppointmentById, listAppointmentEvents } from "@worker/db/repositories/scheduling/appointments.js";
 import { ensureReviewRequest } from "@worker/db/repositories/scheduling/reviews.js";
@@ -57,15 +58,16 @@ function messageFor(error: BookingError, fallback: string): string {
 }
 
 /** Shared gate: resolve the scheduling module context or fail generically. */
-async function gate(clientId: string) {
-  const resolved = await resolveClientModuleContext(clientId, "scheduling");
-  if (!resolved.ok || !canOperateScheduling(resolved.context.scope)) return null;
-  return resolved.context;
+/** Shared gate: the scheduling module + the named permission (agenda.view for reads,
+ *  agenda.book for writes), or the error to return (NO_PERMISSION when revoked). */
+async function gate(clientId: string, permission: "agenda.view" | "agenda.book") {
+  return gateClientModule(clientId, "scheduling", permission, GENERIC_GATE);
 }
 
-async function gateAppointment(clientId: string, appointmentId: string) {
-  const ctx = await gate(clientId);
-  if (!ctx) return null;
+async function gateAppointment(clientId: string, appointmentId: string, permission: "agenda.view" | "agenda.book") {
+  const g = await gate(clientId, permission);
+  if (!g.ok) return g;
+  const ctx = g.context;
   const appointment = await getAppointmentById(ctx.scope.tenantId, appointmentId);
   if (
     !appointment ||
@@ -75,9 +77,9 @@ async function gateAppointment(clientId: string, appointmentId: string) {
     // reschedule of another staff member's appointment is refused here.
     !canAccessSchedulingStaff(ctx.scope, appointment.staff_id)
   ) {
-    return null;
+    return { ok: false as const, error: GENERIC_GATE };
   }
-  return { ctx, appointment };
+  return { ok: true as const, ctx, appointment };
 }
 
 function agendaPath(clientId: string): string {
@@ -116,8 +118,12 @@ export async function searchSchedulingContactsAction(
   clientId: string,
   search: string,
 ): Promise<{ ok: true; hits: ContactSearchHit[] } | { ok: false; error: string }> {
-  const ctx = await gate(clientId);
-  if (!ctx) return { ok: false, error: GENERIC_GATE };
+  const g = await gate(clientId, "agenda.book");
+  if (!g.ok) return { ok: false, error: g.error };
+  const ctx = g.context;
+  // The customers searched here are CRM contacts: without the CRM module there is
+  // nothing to search (a professional login used to reach them regardless).
+  if (!(await isClientModuleEnabled(ctx.scope.tenantId, ctx.client.id, "crm"))) return { ok: true, hits: [] };
   const term = search.trim();
   // Below two characters every contact matches, which is a table scan rendered as a
   // useless list. The caller shows its "keep typing" hint instead.
@@ -127,7 +133,9 @@ export async function searchSchedulingContactsAction(
     clientId: ctx.client.id,
     limit: 8,
   });
-  const hideIdentity = isSchedulingStaff(ctx.scope);
+  // Names suffice to book; phone/email only for a login that may see contacts (never a
+  // professional login, which stays narrower than its permissions on the agenda).
+  const hideIdentity = isSchedulingStaff(ctx.scope) || !can(ctx.scope, "contacts.view", ctx.client.id);
   return {
     ok: true,
     hits: items.map((c) => ({
@@ -180,8 +188,9 @@ export async function createManualAppointmentAction(
   ) {
     return { ok: false, error: GENERIC_GATE };
   }
-  const ctx = await gate(clientId);
-  if (!ctx) return { ok: false, error: GENERIC_GATE };
+  const g = await gate(clientId, "agenda.book");
+  if (!g.ok) return { ok: false, error: g.error };
+  const ctx = g.context;
   if (!canAccessSchedulingSite(ctx.scope, input.siteId)) {
     return { ok: false, error: GENERIC_GATE };
   }
@@ -248,8 +257,8 @@ async function transition(
   reason?: string,
 ): Promise<ActionResult> {
   if (!isUuid(appointmentId)) return { ok: false, error: GENERIC_GATE };
-  const gated = await gateAppointment(clientId, appointmentId);
-  if (!gated) return { ok: false, error: GENERIC_GATE };
+  const gated = await gateAppointment(clientId, appointmentId, "agenda.book");
+  if (!gated.ok) return { ok: false, error: gated.error };
   const { ctx } = gated;
   const r = await transitionStatus(target, {
     tenantId: ctx.scope.tenantId,
@@ -290,8 +299,8 @@ export async function rescheduleAppointmentAction(
   expected?: { startAt: string; staffId: string } | null,
 ): Promise<ActionResult> {
   if (!isUuid(appointmentId) || (staffId && !isUuid(staffId)) || (expected && !isUuid(expected.staffId))) return { ok: false, error: GENERIC_GATE };
-  const gated = await gateAppointment(clientId, appointmentId);
-  if (!gated) return { ok: false, error: GENERIC_GATE };
+  const gated = await gateAppointment(clientId, appointmentId, "agenda.book");
+  if (!gated.ok) return { ok: false, error: gated.error };
   const { ctx, appointment } = gated;
   // A staff login can't move the appointment to ANOTHER staff member's column.
   if (isSchedulingStaff(ctx.scope) && staffId && !canAccessSchedulingStaff(ctx.scope, staffId)) {
@@ -385,8 +394,8 @@ export async function listAppointmentActivityAction(
   appointmentId: string,
 ): Promise<{ ok: true; items: AppointmentActivityItem[] } | { ok: false; error: string }> {
   if (!isUuid(appointmentId)) return { ok: false, error: GENERIC_GATE };
-  const gated = await gateAppointment(clientId, appointmentId);
-  if (!gated) return { ok: false, error: GENERIC_GATE };
+  const gated = await gateAppointment(clientId, appointmentId, "agenda.view");
+  if (!gated.ok) return { ok: false, error: gated.error };
   const events = await listAppointmentEvents(gated.ctx.scope.tenantId, appointmentId);
   return {
     ok: true,
@@ -421,8 +430,8 @@ export type ReviewLinkResult =
  */
 export async function getReviewLinkAction(clientId: string, appointmentId: string): Promise<ReviewLinkResult> {
   if (!isUuid(appointmentId)) return { ok: false, error: GENERIC_GATE };
-  const gated = await gateAppointment(clientId, appointmentId);
-  if (!gated) return { ok: false, error: GENERIC_GATE };
+  const gated = await gateAppointment(clientId, appointmentId, "agenda.view");
+  if (!gated.ok) return { ok: false, error: gated.error };
   if (gated.appointment.status !== "completed") return { ok: false, error: "Solo las citas completadas pueden recibir reseña." };
   const secret = reviewLinkSecret();
   if (!secret) return { ok: false, error: "Los enlaces de reseña no están disponibles en este momento." };

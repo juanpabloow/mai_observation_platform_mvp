@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { canAccessClient, canManageClient } from "./access";
+import { NO_PERMISSION, canAny } from "./access";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { normalizeReason, normalizeTimeOff, type TimeOffInput } from "./timeOffValidation";
 import { parsePublicReason } from "./publicAbsenceReason";
@@ -54,19 +54,22 @@ export type TimeOffResult =
   | { ok: false; conflicts: TimeOffConflict[] };
 
 const UNAVAILABLE = "La agenda no está disponible para este cliente.";
-const FORBIDDEN = "No tienes permiso para esta acción.";
+const FORBIDDEN = NO_PERMISSION;
+/** Who may block a single professional's time: from the agenda (agenda.block) or from
+ *  Equipo/Horarios (hours.manage). Site-wide closures need hours.manage. */
+const STAFF_BLOCK = ["agenda.block", "hours.manage"] as const;
 const FOREIGN = "No encontrado para este cliente.";
 
 type Scoped = { ok: true; tenantId: string } | { ok: false; error: string };
 
-/** Gate: a SITE closure needs canManageClient (agency/owner); a STAFF block needs
- *  canAccessClient (agency/owner/setter, never staff). Both require the module on. */
+/** Gate: a SITE closure needs hours.manage (Dueño/agency); a STAFF block needs
+ *  agenda.block or hours.manage (Dueño, Recepción, agency — never a professional login).
+ *  Both require the module on. */
 async function requireTimeOff(clientId: string, siteWide: boolean): Promise<Scoped> {
-  const res = await resolveClientModuleContext(clientId, "scheduling");
-  if (!res.ok) return { ok: false, error: UNAVAILABLE };
+  const res = await resolveClientModuleContext(clientId, "scheduling", siteWide ? "hours.manage" : STAFF_BLOCK);
+  if (!res.ok) return { ok: false, error: res.forbidden ? FORBIDDEN : UNAVAILABLE };
   const scope = res.context.scope;
-  const allowed = siteWide ? canManageClient(scope, clientId) : canAccessClient(scope, clientId);
-  if (!allowed) return { ok: false, error: FORBIDDEN };
+  if (!canAny(scope, siteWide ? ["hours.manage"] : STAFF_BLOCK, clientId)) return { ok: false, error: FORBIDDEN };
   return { ok: true, tenantId: scope.tenantId };
 }
 
@@ -191,8 +194,8 @@ export async function updateTimeOffAction(
 ): Promise<TimeOffResult> {
   // Resolve the block first (tenant-scoped) via the owning client's scope to learn its
   // site + staff scope, then gate by that scope.
-  const ctx = await resolveClientModuleContext(clientId, "scheduling");
-  if (!ctx.ok) return { ok: false, error: UNAVAILABLE };
+  const ctx = await resolveClientModuleContext(clientId, "scheduling", STAFF_BLOCK);
+  if (!ctx.ok) return { ok: false, error: ctx.forbidden ? FORBIDDEN : UNAVAILABLE };
   const tenantId = ctx.context.scope.tenantId;
   const block = await getExceptionById(tenantId, id);
   if (!block) return { ok: false, error: FOREIGN };
@@ -243,8 +246,8 @@ export async function updateTimeOffAction(
 }
 
 export async function deleteTimeOffAction(clientId: string, id: string): Promise<{ ok: boolean; error?: string }> {
-  const ctx = await resolveClientModuleContext(clientId, "scheduling");
-  if (!ctx.ok) return { ok: false, error: UNAVAILABLE };
+  const ctx = await resolveClientModuleContext(clientId, "scheduling", STAFF_BLOCK);
+  if (!ctx.ok) return { ok: false, error: ctx.forbidden ? FORBIDDEN : UNAVAILABLE };
   const tenantId = ctx.context.scope.tenantId;
   const block = await getExceptionById(tenantId, id);
   if (!block) return { ok: false, error: FOREIGN };

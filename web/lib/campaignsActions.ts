@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { canManageCampaigns, canReadCampaigns } from "./access";
+import { NO_PERMISSION } from "./access";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { isUuid } from "./clientModuleValidation";
 import {
@@ -52,20 +52,20 @@ const UNAVAILABLE = "Las campañas no están disponibles para este cliente.";
 async function requireCampaignsManager(
   clientId: string,
 ): Promise<{ ok: true; tenantId: string } | { ok: false; error: string }> {
-  const res = await resolveClientModuleContext(clientId, "campaigns");
-  if (!res.ok || !canManageCampaigns(res.context.scope, clientId)) {
-    return { ok: false, error: UNAVAILABLE };
+  const res = await resolveClientModuleContext(clientId, "campaigns", "campaigns.manage");
+  if (!res.ok) {
+    return { ok: false, error: res.forbidden ? NO_PERMISSION : UNAVAILABLE };
   }
   return { ok: true, tenantId: res.context.scope.tenantId };
 }
 
-/** READ-tier gate (agency, owner, or setter): the Campañas section is visible to all three. */
+/** READ-tier gate — campaigns.view (agency, Dueño, Recepción). */
 async function requireCampaignsReader(
   clientId: string,
 ): Promise<{ ok: true; tenantId: string } | { ok: false; error: string }> {
-  const res = await resolveClientModuleContext(clientId, "campaigns");
-  if (!res.ok || !canReadCampaigns(res.context.scope, clientId)) {
-    return { ok: false, error: UNAVAILABLE };
+  const res = await resolveClientModuleContext(clientId, "campaigns", "campaigns.view");
+  if (!res.ok) {
+    return { ok: false, error: res.forbidden ? NO_PERMISSION : UNAVAILABLE };
   }
   return { ok: true, tenantId: res.context.scope.tenantId };
 }

@@ -1,7 +1,7 @@
 import Link from "next/link";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
-import { canReadCampaigns, hasFullAccess } from "@/lib/access";
+import { can } from "@/lib/access";
 import {
   listContacts,
   summarizeContacts,
@@ -73,7 +73,7 @@ export default async function ClientContactsPage({
 }) {
   await connection();
   const { clientId } = await params;
-  const { scope, client } = await requireClientModulePage(clientId, "crm");
+  const { scope, client } = await requireClientModulePage(clientId, "crm", "contacts.view");
   const { q, from, page: pageRaw, stage, owner, tasks, origin, campaign, sort, cols, c: selectedId, edit } = await searchParams;
 
   // Validate every facet before it reaches SQL — an unknown value is simply no
@@ -89,7 +89,7 @@ export default async function ClientContactsPage({
   const originKinds = originGroup ? kindsForGroup(originGroup) : undefined;
   const includeNullOrigin = originGroup === "desconocido";
   // The attribution Origen column + sort have the SAME visibility as the contact's Origen card.
-  const canSeeOrigin = canReadCampaigns(scope, client.id);
+  const canSeeOrigin = can(scope, "campaigns.view", client.id);
   const sortBy: "recent" | "origin" = canSeeOrigin && sort === "origin" ? "origin" : "recent";
 
   // Owner names: ONE members query + an in-memory map (never a per-row lookup). Campaigns
@@ -118,7 +118,13 @@ export default async function ClientContactsPage({
   const requestedPage = Math.max(1, Math.trunc(Number(pageRaw)) || 1);
 
   // Duplicate merge + custom-field management are owner/admin only (server-gated too).
-  const isFullAccess = hasFullAccess(scope);
+  // What this viewer may do here — from its permissions; the actions re-check each one.
+  const manageOthers = can(scope, "contacts.manage_others", client.id);
+  const canDeleteContacts = can(scope, "contacts.delete", client.id);
+  const canTags = can(scope, "contacts.tags", client.id);
+  const canFields = can(scope, "contacts.fields", client.id);
+  const canEdit = can(scope, "contacts.edit", client.id);
+  const canExport = can(scope, "contacts.export", client.id);
   const [{ items: contacts, total: matched }, summary, candidates, formFieldDefs] = await Promise.all([
     listContacts(scope.tenantId, {
       ...filters,
@@ -134,7 +140,7 @@ export default async function ClientContactsPage({
       withTotal: true,
     }),
     summarizeContacts(scope.tenantId, filters),
-    isFullAccess ? listOpenCandidates(scope.tenantId, client.id) : Promise.resolve([]),
+    canDeleteContacts ? listOpenCandidates(scope.tenantId, client.id) : Promise.resolve([]),
     // The create drawer's "configured by the business" block. Loaded with the list (one
     // small bounded query) rather than on open, so the form has no loading state.
     listFieldDefinitions(scope.tenantId, client.id, { enabledOnly: true }),
@@ -144,7 +150,7 @@ export default async function ClientContactsPage({
   // owner/admin may pick anyone with access to this client, a member only themselves.
   // The server action re-checks it; this only shapes the picker.
   const assignableOwners = members
-    .filter((m) => (isFullAccess ? m.member_client_id === null || m.member_client_id === client.id : m.user_id === scope.userId))
+    .filter((m) => (manageOthers ? m.member_client_id === null || m.member_client_id === client.id : m.user_id === scope.userId))
     .map((m) => ({ userId: m.user_id, label: m.name ?? m.email }));
 
   // The SELECTED contact's panel. Loaded server-side alongside the list — the panel
@@ -163,10 +169,15 @@ export default async function ClientContactsPage({
         // The whole-contact edit payload, from the SAME loader the record header uses,
         // so the two doors into editing cannot disagree. Client-scoped: a `?c=` from
         // another client resolves to null and no Edit button is offered.
-        loadContactEditPayload(scope.tenantId, client.id, panelId, {
-          userId: scope.userId,
-          isFullAccess,
-        }),
+        // No contacts.edit → no Edit button at all (the action would refuse it).
+        canEdit
+          ? loadContactEditPayload(scope.tenantId, client.id, panelId, {
+              userId: scope.userId,
+              canAssignOthers: manageOthers,
+              canDelete: canDeleteContacts,
+              canManageTagCatalog: canTags,
+            })
+          : Promise.resolve(null),
       ])
     : ([null, false, null] as const);
 
@@ -235,7 +246,7 @@ export default async function ClientContactsPage({
           owners: assignableOwners,
           fieldDefs: formFieldDefs.map((d) => ({ id: d.id, key: d.key, label: d.label, type: d.type, options: d.options })),
           defaultOwnerId: assignableOwners.some((o) => o.userId === scope.userId) ? scope.userId : null,
-          canManageTagCatalog: isFullAccess,
+          canManageTagCatalog: canTags,
         }}
         ficha={
           panel && panelId ? (
@@ -249,7 +260,7 @@ export default async function ClientContactsPage({
               contactId={panelId}
               data={panel}
               viewerUserId={scope.userId}
-              viewerIsFullAccess={isFullAccess}
+              viewerIsFullAccess={manageOthers}
               schedulingEnabled={schedulingEnabled}
               openEdit={edit === "1"}
               closeHref={hrefWith({ c: undefined, edit: undefined })}
@@ -262,7 +273,7 @@ export default async function ClientContactsPage({
       {/* THE LIST COLUMN: everything that describes the whole book — the duplicate
           callout, the header card, the table card — stacked with the page's own rhythm. */}
       <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-[var(--content-pad)]">
-      {isFullAccess ? <DuplicateCandidates clientId={client.id} candidates={candidates} /> : null}
+      {canDeleteContacts ? <DuplicateCandidates clientId={client.id} candidates={candidates} /> : null}
 
       {/* HEADER CARD (design image 23, the Equipo layout): the title + count, a WIDE
           search, and the primary — its own card, SEPARATE from the table. It spans the
@@ -273,7 +284,7 @@ export default async function ClientContactsPage({
         center={<ContactsSearch />}
         // The PRIMARY rides its own slot so the phone header can give it the title row
         // (see ModuleHeader): Filtrar used to sit on top of "Contactos" at 360–390px.
-        primary={<NewContactButton />}
+        primary={canEdit ? <NewContactButton /> : undefined}
         actions={
           <>
           {/* ONE ROW, ACTIONS FOLDED (design 27a). Only Buscar, Filtrar and the
@@ -286,7 +297,8 @@ export default async function ClientContactsPage({
           <ContactsOverflowMenu
             clientId={client.id}
             visibleColumns={visibleColumns}
-            fieldsHref={isFullAccess ? `${base}/fields` : undefined}
+            fieldsHref={canFields ? `${base}/fields` : undefined}
+            canExport={canExport}
           />
           </>
         }
@@ -333,6 +345,7 @@ export default async function ClientContactsPage({
                 hrefWith={hrefWith}
                 now={now}
                 canSeeOrigin={canSeeOrigin}
+                canEdit={canEdit}
                 sort={sortBy}
               />
             </div>

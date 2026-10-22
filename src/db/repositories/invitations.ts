@@ -1,6 +1,7 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { pool, query } from '../client.js';
 import type { ClientRole } from './tenantMembers.js';
+import { insertAccessAuditEvent, type AccessAuditEvent } from './accessRoles.js';
 
 /** Roles that can be invited (never 'owner' — owner = the tenant creator). */
 export type InvitationRole = 'admin' | 'member';
@@ -16,6 +17,7 @@ export interface InvitationRow {
   client_role: ClientRole | null;
   scheduling_site_id: string | null;
   scheduling_staff_id: string | null;
+  access_role_id: string | null;
   status: InvitationStatus;
   expires_at: Date;
   created_at: Date;
@@ -34,6 +36,8 @@ export interface InvitationWithNames {
   scheduling_site_name: string | null;
   scheduling_staff_id: string | null;
   scheduling_staff_name: string | null;
+  access_role_id: string | null;
+  access_role_name: string | null;
   status: InvitationStatus;
   expires_at: Date;
   tenant_name: string;
@@ -52,6 +56,8 @@ export interface InvitationListRow {
   scheduling_site_name: string | null;
   scheduling_staff_id: string | null;
   scheduling_staff_name: string | null;
+  access_role_id: string | null;
+  access_role_name: string | null;
   status: InvitationStatus;
   expires_at: Date;
   created_at: Date;
@@ -95,16 +101,22 @@ export async function createOrReplacePendingInvitation(params: {
   clientRole?: ClientRole | null;
   schedulingSiteId?: string | null;
   schedulingStaffId?: string | null;
+  accessRoleId?: string | null;
   tokenHash: string;
   invitedBy: string;
   expiresAt: Date;
+  /** Written in the same transaction as the invitation (target_id filled in here). */
+  audit?: Omit<AccessAuditEvent, 'targetId'>;
 }): Promise<InvitationRow> {
   const email = normalizeEmail(params.email);
-  const result = await query<InvitationRow>(
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query<InvitationRow>(
     `INSERT INTO invitations
        (tenant_id, email, role, member_client_id, client_role,
-        scheduling_site_id, scheduling_staff_id, token_hash, invited_by, expires_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        scheduling_site_id, scheduling_staff_id, token_hash, invited_by, expires_at, access_role_id)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      ON CONFLICT (tenant_id, email) WHERE status = 'pending'
      DO UPDATE SET
        role = EXCLUDED.role,
@@ -112,13 +124,14 @@ export async function createOrReplacePendingInvitation(params: {
        client_role = EXCLUDED.client_role,
        scheduling_site_id = EXCLUDED.scheduling_site_id,
        scheduling_staff_id = EXCLUDED.scheduling_staff_id,
+       access_role_id = EXCLUDED.access_role_id,
        token_hash = EXCLUDED.token_hash,
        invited_by = EXCLUDED.invited_by,
        expires_at = EXCLUDED.expires_at,
        created_at = now(),
        accepted_at = NULL
      RETURNING id, tenant_id, email, role, member_client_id, client_role,
-               scheduling_site_id, scheduling_staff_id, status,
+               scheduling_site_id, scheduling_staff_id, access_role_id, status,
                expires_at, created_at, accepted_at`,
     [
       params.tenantId,
@@ -131,9 +144,19 @@ export async function createOrReplacePendingInvitation(params: {
       params.tokenHash,
       params.invitedBy,
       params.expiresAt,
+      params.role === 'member' && params.clientRole === 'custom' ? (params.accessRoleId ?? null) : null,
     ],
-  );
-  return result.rows[0];
+    );
+    const row = result.rows[0];
+    if (params.audit) await insertAccessAuditEvent({ ...params.audit, targetId: row.id }, client);
+    await client.query('COMMIT');
+    return row;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 /**
@@ -148,13 +171,15 @@ export async function getInvitationByTokenHash(
   const result = await query<InvitationWithNames>(
     `SELECT i.id, i.tenant_id, i.email, i.role, i.member_client_id,
             i.client_role, i.scheduling_site_id, s.name AS scheduling_site_name,
-            i.scheduling_staff_id, st.name AS scheduling_staff_name, i.status,
+            i.scheduling_staff_id, st.name AS scheduling_staff_name,
+            i.access_role_id, ar.name AS access_role_name, i.status,
             i.expires_at, t.name AS tenant_name, c.name AS client_name
        FROM invitations i
        JOIN tenants t ON t.id = i.tenant_id
        LEFT JOIN clients c ON c.id = i.member_client_id
        LEFT JOIN sites s ON s.id = i.scheduling_site_id AND s.tenant_id = i.tenant_id
        LEFT JOIN staff st ON st.id = i.scheduling_staff_id AND st.tenant_id = i.tenant_id
+       LEFT JOIN access_roles ar ON ar.id = i.access_role_id AND ar.tenant_id = i.tenant_id
       WHERE i.token_hash = $1`,
     [tokenHash],
   );
@@ -203,9 +228,10 @@ export async function acceptInvitation(params: {
       client_role: ClientRole | null;
       scheduling_site_id: string | null;
       scheduling_staff_id: string | null;
+      access_role_id: string | null;
     }>(
       `SELECT role, member_client_id, client_role, scheduling_site_id,
-              scheduling_staff_id
+              scheduling_staff_id, access_role_id
          FROM invitations
         WHERE id = $1 AND tenant_id = $2 AND status = 'pending' AND expires_at > now()
         FOR UPDATE`,
@@ -220,8 +246,8 @@ export async function acceptInvitation(params: {
     const ins = await client.query(
       `INSERT INTO tenant_members
          (tenant_id, user_id, role, member_client_id, client_role,
-          scheduling_site_id, scheduling_staff_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7)
+          scheduling_site_id, scheduling_staff_id, access_role_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (tenant_id, user_id) DO NOTHING`,
       [
         params.tenantId,
@@ -231,6 +257,7 @@ export async function acceptInvitation(params: {
         grant.client_role,
         grant.scheduling_site_id,
         grant.scheduling_staff_id,
+        grant.access_role_id,
       ],
     );
     await client.query(
@@ -253,12 +280,14 @@ export async function listInvitationsForTenant(tenantId: string): Promise<Invita
     `SELECT i.id, i.email, i.role, i.member_client_id, c.name AS client_name,
             i.client_role, i.scheduling_site_id, s.name AS scheduling_site_name,
             i.scheduling_staff_id, st.name AS scheduling_staff_name,
+            i.access_role_id, ar.name AS access_role_name,
             i.status, i.expires_at, i.created_at, i.accepted_at,
             iu.email AS invited_by_email
        FROM invitations i
        LEFT JOIN clients c ON c.id = i.member_client_id
        LEFT JOIN sites s ON s.id = i.scheduling_site_id AND s.tenant_id = i.tenant_id
        LEFT JOIN staff st ON st.id = i.scheduling_staff_id AND st.tenant_id = i.tenant_id
+       LEFT JOIN access_roles ar ON ar.id = i.access_role_id AND ar.tenant_id = i.tenant_id
        LEFT JOIN "user" iu ON iu.id = i.invited_by
       WHERE i.tenant_id = $1
       ORDER BY i.created_at DESC`,
@@ -275,11 +304,24 @@ export async function listInvitationsForTenant(tenantId: string): Promise<Invita
 export async function revokeInvitation(params: {
   tenantId: string;
   invitationId: string;
+  audit?: AccessAuditEvent;
 }): Promise<boolean> {
-  const result = await query(
-    `UPDATE invitations SET status = 'revoked'
-      WHERE id = $1 AND tenant_id = $2 AND status = 'pending'`,
-    [params.invitationId, params.tenantId],
-  );
-  return (result.rowCount ?? 0) > 0;
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const result = await client.query(
+      `UPDATE invitations SET status = 'revoked'
+        WHERE id = $1 AND tenant_id = $2 AND status = 'pending'`,
+      [params.invitationId, params.tenantId],
+    );
+    const revoked = (result.rowCount ?? 0) > 0;
+    if (revoked && params.audit) await insertAccessAuditEvent(params.audit, client);
+    await client.query('COMMIT');
+    return revoked;
+  } catch (err) {
+    await client.query('ROLLBACK');
+    throw err;
+  } finally {
+    client.release();
+  }
 }

@@ -96,7 +96,7 @@ test('un member no ve la acción, y el permiso se decide en el servidor', () => 
   for (const page of [LISTADO, FICHA]) {
     const src = sinComentarios(read(page));
     assert.match(
-      src, /scope\.role === "owner" \|\| scope\.role === "admin"/,
+      src, /can\(scope, "meetings\.manage", clientId\)/,
       `${page} calcula el permiso desde el ámbito del servidor, no del cliente`,
     );
   }

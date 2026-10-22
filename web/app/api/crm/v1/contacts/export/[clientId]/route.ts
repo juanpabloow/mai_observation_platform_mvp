@@ -79,7 +79,8 @@ export async function GET(
   { params }: { params: Promise<{ clientId: string }> },
 ): Promise<Response> {
   const { clientId } = await params;
-  const result = await resolveClientModuleContext(clientId, "crm");
+  // contacts.export — a refused permission is the same 404 as everything else here.
+  const result = await resolveClientModuleContext(clientId, "crm", "contacts.export");
   if (!result.ok) return new Response("Not found", { status: 404 });
   const { scope, client } = result.context;
 

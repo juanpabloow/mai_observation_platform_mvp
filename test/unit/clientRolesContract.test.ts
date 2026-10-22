@@ -18,32 +18,32 @@ test('escalation: only the AGENCY mints admins and Client Owners', () => {
   const invite = read('web/lib/inviteActions.ts');
   // Admin invites are agency + owner only (a client owner can never reach the admin tier).
   assert.match(invite, /if \(input\.role === "admin"\) \{\s*\n\s*if \(!hasFullAccess\(scope\) \|\| scope\.role !== "owner"\)/);
-  // The grant gate: agency may grant anything; a Client Owner may grant editor/staff for
-  // their OWN client only — never another Owner.
-  assert.match(invite, /function canGrantClientRole/);
-  assert.match(invite, /if \(hasFullAccess\(scope\)\) return \{ ok: true \}/);
-  assert.match(invite, /if \(isClientOwner\(scope, clientId\)\)/);
-  assert.match(invite, /clientRole === "owner"[\s\S]{0,120}Only the agency can add another Owner/);
-  // The gate runs BEFORE any client lookup (deny-by-default, no info leak).
-  assert.match(invite, /const grant = canGrantClientRole\(scope, clientId, requestedRole\)/);
+  // The grant gate is the shared delegation rule (roles v1): access.users.manage on that
+  // business, never wider than the actor, the Dueño only by the agency. Its behaviour is
+  // tested in test/unit/delegation.test.ts and test/integration/accessRoles.test.ts.
+  assert.match(invite, /const grant = grantedRole \? canGrantRole\(scope, clientId, grantedRole\)/);
+  // A custom role offered by an invitation is re-read from THIS tenant + business.
+  assert.match(invite, /getAccessRole\(scope\.tenantId, clientId, input\.accessRoleId\)/);
+  const d = read('web/lib/permissions/delegation.ts');
+  assert.match(d, /export function canGrantRole[\s\S]{0,400}access\.users\.manage[\s\S]{0,300}DENY\.ownerTier[\s\S]{0,200}DENY\.wider/);
 });
 
 test('escalation: member management enforces owner-only, last-owner and own-client', () => {
   const m = read('web/lib/memberActions.ts');
-  // Only the agency may ASSIGN the owner role.
-  assert.match(m, /input\.clientRole === "owner" && !hasFullAccess\(scope\)/);
-  // A Client Owner can't act on another Owner (which also blocks self-escalation).
-  assert.match(m, /!hasFullAccess\(scope\) && target\.client_role === "owner"/);
+  // Acting on a person and the role given both go through the delegation rules.
+  assert.match(m, /export async function changeClientRoleAction[\s\S]{0,1400}canManageMember\(scope, input\.clientId/);
+  assert.match(m, /export async function changeClientRoleAction[\s\S]{0,2600}canGrantRole\(scope, input\.clientId, next\)/);
   // The last Client Owner can't be demoted or removed.
   assert.match(m, /countClientOwners\(scope\.tenantId/);
   assert.match(m, /owners <= 1/);
   // Removal: the tenant owner is immutable; admin removal is owner-only; a client member
-  // is removed by the agency or the client's owner (canManageClient).
+  // is removed within the delegation rules.
   assert.match(m, /target\.role === "owner"[\s\S]{0,120}can't be removed/);
   assert.match(m, /target\.role === "admin"[\s\S]{0,140}scope\.role !== "owner"/);
-  assert.match(m, /canManageClient\(scope, clientId\)/);
-  // changeClientRole is gated by canManageClient (agency or this client's owner).
-  assert.match(m, /export async function changeClientRoleAction[\s\S]{0,600}canManageClient\(scope, input\.clientId\)/);
+  assert.match(m, /export async function removeMemberAction[\s\S]{0,1200}canManageMember\(scope, clientId/);
+  const d = read('web/lib/permissions/delegation.ts');
+  // Self, the Dueño tier and wider roles are refused for anyone but the agency.
+  assert.match(d, /export function canManageMember[\s\S]{0,500}DENY\.self[\s\S]{0,200}DENY\.ownerTier[\s\S]{0,200}DENY\.outside/);
 });
 
 test('the four pre-existing holes are closed server-side (resolve-then-mutate, agency-only)', () => {
@@ -66,10 +66,12 @@ test('the four pre-existing holes are closed server-side (resolve-then-mutate, a
 
 test('module gating still sits ON TOP of roles', () => {
   const gate = read('web/lib/clientModuleAccess.ts');
-  // A staff login reaches ONLY the scheduling module, and only when it's enabled.
-  assert.match(gate, /scope\.clientRole === "staff"/);
+  // effective access = module enabled ∧ permission ∧ scope — every caller names the
+  // permission; a professional login reaches scheduling because ITS permissions are
+  // agenda ones, not through a role-name exception.
   assert.match(gate, /isClientModuleEnabled/);
-  // canAccessClient denies staff for the general (crm/inbox/analytics) modules.
+  assert.match(gate, /if \(!canAny\(scope, asList\(permission\), clientId\)\) return \{ ok: false, forbidden: true \}/);
+  assert.doesNotMatch(gate, /clientRole/);
   const access = read('web/lib/access.ts');
-  assert.match(access, /export function canAccessClient[\s\S]{0,160}if \(scope\.clientRole === "staff"\) return false/);
+  assert.doesNotMatch(access, /export function canAccessClient/, 'the role-shaped predicate is gone');
 });

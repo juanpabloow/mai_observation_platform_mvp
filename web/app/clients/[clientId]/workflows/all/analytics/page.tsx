@@ -49,7 +49,7 @@ export default async function AllWorkflowsAnalyticsPage({
   searchParams: Promise<SearchParams>;
 }) {
   await connection();
-  await requireWorkflowInsights(); // aggregate analytics is agency/owner only — Setter 404s
+  await requireWorkflowInsights((await params).clientId, "analytics.view"); // aggregate analytics is agency/owner only — Setter 404s
   const { clientId } = await params;
   const sp = await searchParams;
   const days = coerceRangeDays(first(sp.range));

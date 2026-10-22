@@ -2,6 +2,7 @@ import { strict as assert } from 'node:assert';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import { fileURLToPath } from 'node:url';
+import { SYSTEM_ROLE_PERMISSIONS } from '../../web/lib/permissions/catalog.js';
 
 /**
  * SOURCE CONTRACT for the PRODUCT CATALOG permission model + capability wiring. The web
@@ -19,33 +20,34 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('../../', import.meta.url));
 const read = (path: string) => readFileSync(`${root}${path}`, 'utf8');
 
-test('access.ts: canReadCatalog delegates to canAccessClient; canManageCatalog to canManageClient', () => {
-  const access = read('web/lib/access.ts');
-  assert.match(access, /export function canReadCatalog\(scope: AccessScope, clientId: string\): boolean \{\s*return canAccessClient\(scope, clientId\);/);
-  assert.match(access, /export function canManageCatalog\(scope: AccessScope, clientId: string\): boolean \{\s*return canManageClient\(scope, clientId\);/);
+test('catalog permissions: products.view/stock for Recepción, products.manage for Dueño only', () => {
+  // Roles v1: the catalog is three permissions, never a role name.
+  assert.ok(SYSTEM_ROLE_PERMISSIONS.setter.has('products.view') && SYSTEM_ROLE_PERMISSIONS.setter.has('products.stock'));
+  assert.ok(!SYSTEM_ROLE_PERMISSIONS.setter.has('products.manage'), 'Recepción never changes prices or names');
+  assert.ok(SYSTEM_ROLE_PERMISSIONS.owner.has('products.manage'));
+  assert.ok(!SYSTEM_ROLE_PERMISSIONS.staff.has('products.view'), 'Profesional has no catalog');
 });
 
 test('catalogActions: MANAGE tier guards create/edit/archive/restore; READ tier guards in_stock toggle', () => {
   const a = read('web/lib/catalogActions.ts');
   // The two gates resolve the module FIRST, then the role predicate.
-  assert.match(a, /requireCatalogManager[\s\S]{0,260}resolveClientModuleContext\(clientId, "catalog"\)[\s\S]{0,120}canManageCatalog/);
-  assert.match(a, /requireCatalogReader[\s\S]{0,260}resolveClientModuleContext\(clientId, "catalog"\)[\s\S]{0,120}canReadCatalog/);
+  assert.match(a, /requireCatalogManager[\s\S]{0,260}resolveClientModuleContext\(clientId, "catalog", "products\.manage"\)/);
+  assert.match(a, /requireCatalogStock[\s\S]{0,260}resolveClientModuleContext\(clientId, "catalog", "products\.stock"\)/);
   // Write/name/price actions are MANAGE-gated.
   for (const fn of ['createProductAction', 'updateProductAction', 'archiveProductAction', 'restoreProductAction']) {
     assert.match(a, new RegExp(`${fn}[\\s\\S]{0,420}requireCatalogManager`), `${fn} is manage-gated`);
   }
   // The in_stock toggle is the one mutation a Setter may run.
-  assert.match(a, /setProductStockAction[\s\S]{0,320}requireCatalogReader/);
+  assert.match(a, /setProductStockAction[\s\S]{0,320}requireCatalogStock/);
   // Create writes the VALIDATED route client, never a form selector.
   assert.match(a, /clientId: input\.clientId, \/\/ the VALIDATED route client/);
 });
 
-test('catalog page gates on the module AND canReadCatalog (Staff 404s)', () => {
+test('catalog page gates on the module AND products.view (Staff 404s)', () => {
   const page = read('web/app/clients/[clientId]/catalog/page.tsx');
-  assert.match(page, /requireClientModulePage\(clientId, "catalog"\)/);
-  assert.match(page, /if \(!canReadCatalog\(scope, clientId\)\) notFound\(\)/);
+  assert.match(page, /requireClientModulePage\(clientId, "catalog", "products\.view"\)/);
   // canManage decides which controls render; it never substitutes for the server gate.
-  assert.match(page, /canManageCatalog\(scope, clientId\)/);
+  assert.match(page, /can\(scope, "products\.manage", clientId\)/);
 });
 
 test('machine route + wrapper: catalog.read capability, module gate, identical refusal shapes', () => {
@@ -65,11 +67,11 @@ test('machine route + wrapper: catalog.read capability, module gate, identical r
 
 test('sidebar shows Productos only when the module is on, to general-access roles (not Staff)', () => {
   const model = read('web/lib/sectionNav.ts');
-  assert.match(model, /general && has\("catalog"\) && \{ id: "products", label: "Productos", href: c\("\/catalog"\) \}/);
+  assert.match(model, /p\("products\.view"\) && has\("catalog"\) && \{ id: "products", label: "Productos", href: c\("\/catalog"\) \}/);
   // Staff never reach it (their branch returns only their agenda).
-  assert.match(model, /if \(clientRole === "staff"\) \{\s*return forOwnClient && has\("scheduling"\)/);
+  assert.match(model, /if \(staffBound\) \{\s*return forOwnClient && has\("scheduling"\)/);
   const src = read('web/components/AppSidebar.tsx');
-  assert.match(src, /clientRole !== "staff" && memberModules\.includes\("catalog"\)/);
+  assert.match(src, /may\("products\.view"\) && memberModules\.includes\("catalog"\)/);
 });
 
 test('capability vocabulary: catalog.read is a known capability but NOT auto-granted to legacy tokens', () => {

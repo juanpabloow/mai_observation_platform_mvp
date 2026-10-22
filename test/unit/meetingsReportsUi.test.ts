@@ -360,7 +360,7 @@ test('el POST registra el techo de coste ANTES de llamar, y sin contenido', () =
 
 test('el permiso de edición se decide en el servidor y baja como dato', () => {
   const ficha = leer(FICHA);
-  assert.match(ficha, /canEditTemplates=\{scope\.role === "owner" \|\| scope\.role === "admin"\}/);
+  assert.match(ficha, /canEditTemplates=\{can\(scope, "meetings\.manage", clientId\)\}/);
   // Y el servicio lo vuelve a exigir, que es la defensa de verdad.
   const servicio = leer(SERVICIO);
   assert.match(servicio, /function requireAdmin/);

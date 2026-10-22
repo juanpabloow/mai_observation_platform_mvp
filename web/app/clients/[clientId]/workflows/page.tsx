@@ -28,7 +28,7 @@ export default async function ClientWorkflowsPage({
   params: Promise<{ clientId: string }>;
 }) {
   await connection();
-  await requireWorkflowInsights(); // the workflows/executions list is agency/owner only — Setter 404s
+  await requireWorkflowInsights((await params).clientId, "automations.view"); // the workflows/executions list is agency/owner only — Setter 404s
   const { clientId } = await params;
 
   const scope = await getAccessScope();

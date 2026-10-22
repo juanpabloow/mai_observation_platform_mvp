@@ -22,7 +22,7 @@ export default async function AttributionSettingsPage({
 }) {
   await connection();
   const { clientId } = await params;
-  const { scope, client } = await requireClientModulePage(clientId, "campaigns");
+  const { scope, client } = await requireClientModulePage(clientId, "campaigns", "campaigns.manage");
   if (!hasFullAccess(scope)) notFound(); // agency only
 
   const [settings, pending, pipelineSettings] = await Promise.all([

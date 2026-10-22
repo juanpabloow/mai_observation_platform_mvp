@@ -1,6 +1,6 @@
 import { notFound, redirect } from "next/navigation";
 import { connection } from "next/server";
-import { getAccessScope, canAccessClient } from "@/lib/access";
+import { getAccessScope, can } from "@/lib/access";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { getContactById } from "@worker/db/repositories/contacts.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
@@ -28,7 +28,7 @@ export default async function LegacyContactDetailPage({
   // Tenant + RBAC scoping: members only resolve their own client's contacts.
   const contact = await getContactById(scope.tenantId, contactId, scope.memberClientId);
   if (!contact) notFound();
-  if (!canAccessClient(scope, contact.client_id)) notFound();
+  if (!can(scope, "contacts.view", contact.client_id)) notFound();
   if (!(await isClientModuleEnabled(scope.tenantId, contact.client_id, "crm"))) notFound();
 
   // Preserve the SAFE, known query params only (never arbitrary input).

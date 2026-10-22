@@ -1,8 +1,13 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { canManageClient, getAccessScope, hasFullAccess } from "./access";
+import { getAccessScope, hasFullAccess, type AccessScope } from "./access";
+import { getServerSession } from "./session";
+import { canGrantRole, canManageMember, roleRefOf, type RoleRef } from "./permissions/delegation";
+import { SYSTEM_ROLE_LABEL } from "./permissions/catalog";
 import { getClientById } from "@worker/db/repositories/clients.js";
+import { getAccessRole } from "@worker/db/repositories/accessRoles.js";
+import type { AccessAuditEvent } from "@worker/db/repositories/accessRoles.js";
 import { releaseAgentConversations } from "@worker/db/repositories/handoff.js";
 import {
   countClientOwners,
@@ -11,6 +16,7 @@ import {
   setMemberClientRole,
   setMembershipRole,
   type ClientRole,
+  type MemberInTenant,
 } from "@worker/db/repositories/tenantMembers.js";
 import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
 import { getStaffById } from "@worker/db/repositories/scheduling/staff.js";
@@ -40,17 +46,38 @@ async function releaseOrphanedConversations(
  *  (admin↔member) and which client a member belongs to. The OWNER row is immutable;
  *  managing an admin is owner-only.
  *
- *  CLIENT tier (a Client Owner, or the agency) manages the CLIENT ROLE of the people
- *  who work at a client — owner/editor/staff. The escalation invariants:
- *    - only the AGENCY may create/assign a Client Owner (a Client Owner can't mint
- *      Owners — that would make an account takeover self-propagating);
- *    - a Client Owner acts ONLY within their own client, and ONLY on editors/staff;
- *    - the LAST Client Owner of a client can never be demoted or removed;
- *    - no one escalates by acting on themselves (a Client Owner is an Owner, so the
- *      "can't touch an Owner" rule already blocks self-demote/removal).
+ *  CLIENT tier — anyone with access.users.manage on that business (the agency, the
+ *  Dueño, or a custom role given it) manages the ROLE of the people who work there: a
+ *  system role (Dueño / Recepción / Profesional) or one of the business's custom roles.
+ *  The rules live in ./permissions/delegation.ts:
+ *    - nobody assigns a role wider than their own permissions, nor acts on someone whose
+ *      role is wider than theirs;
+ *    - only the AGENCY assigns, changes or removes a Dueño (an account takeover can't
+ *      propagate itself);
+ *    - nobody changes or removes their own access;
+ *    - the LAST Dueño of a client can never be demoted or removed.
+ * Every change is written together with its audit event (access_audit_events).
  */
 
 type Result = { ok: boolean; error?: string };
+
+async function actorEmail(): Promise<string | null> {
+  return (await getServerSession())?.user?.email ?? null;
+}
+
+function roleAudit(role: RoleRef | null, name: string | null = null): Record<string, unknown> | null {
+  if (!role) return null;
+  return role.kind === "system"
+    ? { kind: "system", key: role.key, label: SYSTEM_ROLE_LABEL[role.key] }
+    : { kind: "custom", id: role.id, label: name };
+}
+
+function audit(scope: AccessScope, email: string | null, e: Omit<AccessAuditEvent, "tenantId" | "actorUserId" | "actorEmail">): AccessAuditEvent {
+  return { tenantId: scope.tenantId, actorUserId: scope.userId, actorEmail: email, ...e };
+}
+
+/** A member row's role, failing closed to "unknown" (null) when it doesn't resolve. */
+const targetRole = (m: MemberInTenant): RoleRef | null => roleRefOf(m);
 
 const PERMISSION_DENIED = "You don't have permission to manage members.";
 const LAST_OWNER = "This is the client's only Owner. Assign another Owner first.";
@@ -95,6 +122,14 @@ export async function changeMemberRoleAction(input: {
       role: input.newRole,
       memberClientId,
       clientRole: "setter",
+      audit: audit(scope, await actorEmail(), {
+        clientId: memberClientId ?? target.member_client_id,
+        action: "member.tenant_role_changed",
+        targetType: "member",
+        targetId: input.targetUserId,
+        targetLabel: target.email,
+        changes: { from: { role: target.role, clientRole: target.client_role }, to: { role: input.newRole, clientRole: input.newRole === "member" ? "setter" : null } },
+      }),
     });
     if (updated === 0) return { ok: false, error: "Member not found." };
   } catch {
@@ -126,6 +161,11 @@ export async function reassignMemberClientAction(input: {
   if (target.client_role === "staff") {
     return { ok: false, error: "Change a staff login's role before moving it to another client." };
   }
+  // A custom role belongs to ONE business: moving the login would leave it holding a role
+  // of another client. Give it a system role first.
+  if (target.client_role === "custom") {
+    return { ok: false, error: "Asigna primero un rol del sistema: los roles personalizados pertenecen a un solo negocio." };
+  }
   const client = await getClientById({ tenantId: scope.tenantId, clientId: input.clientId });
   if (!client) return { ok: false, error: "That client isn't in your workspace." };
   const oldClientId = target.member_client_id;
@@ -136,6 +176,14 @@ export async function reassignMemberClientAction(input: {
       role: "member",
       memberClientId: input.clientId,
       clientRole: target.client_role === "owner" ? "owner" : "setter",
+      audit: audit(scope, await actorEmail(), {
+        clientId: input.clientId,
+        action: "member.client_changed",
+        targetType: "member",
+        targetId: input.targetUserId,
+        targetLabel: target.email,
+        changes: { fromClientId: oldClientId, toClientId: input.clientId, clientRole: target.client_role === "owner" ? "owner" : "setter" },
+      }),
     });
   } catch {
     return { ok: false, error: "Could not reassign the client." };
@@ -148,38 +196,52 @@ export async function reassignMemberClientAction(input: {
 }
 
 /**
- * Set a member's CLIENT ROLE (owner | setter | staff) within their client. The agency
- * or the client's Owner may run it; only the agency may assign 'owner'; the last Owner
- * can't be demoted. `staff` requires a site + staff binding, validated here before the
- * DB's composite foreign keys enforce it again.
+ * Set a member's ROLE within their client: a system role (owner | setter | staff) or a
+ * custom role of that business (clientRole "custom" + accessRoleId). Run by anyone with
+ * access.users.manage there, within the delegation rules (./permissions/delegation.ts);
+ * the last Dueño can't be demoted. `staff` requires a site + staff binding, validated here
+ * before the DB's composite foreign keys enforce it again; a custom role must be one of
+ * THIS business's roles (re-read here, never trusted from the browser).
  */
 export async function changeClientRoleAction(input: {
   targetUserId: string;
   clientId: string;
   clientRole: ClientRole;
+  accessRoleId?: string | null;
   siteId?: string | null;
   staffId?: string | null;
 }): Promise<Result> {
   const scope = await getAccessScope();
-  if (!canManageClient(scope, input.clientId)) return { ok: false, error: PERMISSION_DENIED };
-  if (input.clientRole !== "owner" && input.clientRole !== "setter" && input.clientRole !== "staff") {
+  if (!["owner", "setter", "staff", "custom"].includes(input.clientRole)) {
     return { ok: false, error: "Invalid role." };
-  }
-  // Only the AGENCY may create/assign a Client Owner.
-  if (input.clientRole === "owner" && !hasFullAccess(scope)) {
-    return { ok: false, error: "Only the agency can make someone an Owner." };
   }
   const target = await getMemberInTenant(scope.tenantId, input.targetUserId);
   if (!target) return { ok: false, error: "Member not found." };
   if (target.role !== "member" || target.member_client_id !== input.clientId) {
     return { ok: false, error: "That person isn't a member of this client." };
   }
-  // A Client Owner may act only on editors/staff — never on another Owner (that tier is
-  // the agency's), which also blocks them acting on themselves.
-  if (!hasFullAccess(scope) && target.client_role === "owner") {
-    return { ok: false, error: "Only the agency can change an Owner." };
+  const current = targetRole(target);
+  if (!current) return { ok: false, error: PERMISSION_DENIED };
+  // May the actor touch this person at all (self, Dueño tier, wider role)?
+  const touch = canManageMember(scope, input.clientId, { userId: input.targetUserId, role: current });
+  if (!touch.ok) return { ok: false, error: touch.error };
+
+  // The new role, re-read from the DB for a custom one (same tenant + business).
+  let next: RoleRef;
+  let nextName: string | null = null;
+  if (input.clientRole === "custom") {
+    if (!input.accessRoleId) return { ok: false, error: "Elige un rol." };
+    const row = await getAccessRole(scope.tenantId, input.clientId, input.accessRoleId);
+    if (!row) return { ok: false, error: "Ese rol no existe en este negocio." };
+    next = roleRefOf({ client_role: "custom", access_role_id: row.id, role_permissions: row.permissions }) as RoleRef;
+    nextName = row.name;
+  } else {
+    next = { kind: "system", key: input.clientRole };
   }
-  // Never demote the LAST Client Owner (would leave the client with no admin).
+  const grant = canGrantRole(scope, input.clientId, next);
+  if (!grant.ok) return { ok: false, error: grant.error };
+
+  // Never demote the LAST Dueño (would leave the client with no admin).
   if (target.client_role === "owner" && input.clientRole !== "owner") {
     const owners = await countClientOwners(scope.tenantId, input.clientId);
     if (owners <= 1) return { ok: false, error: LAST_OWNER };
@@ -208,8 +270,21 @@ export async function changeClientRoleAction(input: {
       userId: input.targetUserId,
       clientId: input.clientId,
       clientRole: input.clientRole,
+      accessRoleId: input.clientRole === "custom" ? (input.accessRoleId ?? null) : null,
       siteId,
       staffId,
+      audit: audit(scope, await actorEmail(), {
+        clientId: input.clientId,
+        action: "member.role_changed",
+        targetType: "member",
+        targetId: input.targetUserId,
+        targetLabel: target.email,
+        changes: {
+          from: roleAudit(current, target.access_role_name),
+          to: roleAudit(next, nextName),
+          ...(staffId ? { staffId, siteId } : {}),
+        },
+      }),
     });
     if (updated === 0) return { ok: false, error: "Member not found." };
   } catch (error) {
@@ -222,19 +297,18 @@ export async function changeClientRoleAction(input: {
       return { ok: false, error: "That staff profile is already linked to another login." };
     }
     if (code === "23514") {
-      // A CHECK rejected the combination (e.g. a role the database doesn't allow, or a
-      // staff role missing its site/staff binding).
-      return { ok: false, error: "That role isn't allowed for this member. Pick Owner, Setter or Staff (Staff needs a site and a staff profile)." };
+      return { ok: false, error: "Ese rol no es válido para esta persona (Profesional necesita sede y perfil del equipo)." };
     }
     if (code === "23503") {
-      // A foreign key rejected the site/staff — not part of this client.
-      return { ok: false, error: "That site or staff member isn't part of this client." };
+      return { ok: false, error: "Esa sede, profesional o rol no pertenece a este negocio." };
     }
     return { ok: false, error: "Could not update the role. Please try again." };
   }
 
-  // Dropping to staff removes CRM/inbox reach — release any conversations they held here.
-  if (input.clientRole === "staff") {
+  // Losing inbox access (a professional login, or a role without inbox.view) releases
+  // the conversations they held here.
+  const nextPerms = next.kind === "system" ? null : next.permissions;
+  if (input.clientRole === "staff" || (nextPerms && !nextPerms.has("inbox.view"))) {
     await releaseOrphanedConversations(scope.tenantId, input.targetUserId, { clientId: input.clientId });
   }
   revalidatePath(`/clients/${input.clientId}/team`);
@@ -258,16 +332,30 @@ export async function removeMemberAction(input: { targetUserId: string }): Promi
   if (target.role === "admin") {
     if (scope.role !== "owner") return { ok: false, error: "Only the owner can remove an admin." };
   } else {
-    // A client member: the agency or the client's Owner may remove editors/staff.
+    // A client member: anyone with access.users.manage there, within the delegation
+    // rules (not themselves, not a Dueño unless agency, not a wider role).
     const clientId = target.member_client_id;
-    if (!clientId || !canManageClient(scope, clientId)) return { ok: false, error: PERMISSION_DENIED };
+    const current = targetRole(target);
+    if (!clientId || !current) return { ok: false, error: PERMISSION_DENIED };
+    const touch = canManageMember(scope, clientId, { userId: input.targetUserId, role: current });
+    if (!touch.ok) return { ok: false, error: touch.error };
     if (target.client_role === "owner") {
-      if (!hasFullAccess(scope)) return { ok: false, error: "Only the agency can remove an Owner." };
       const owners = await countClientOwners(scope.tenantId, clientId);
       if (owners <= 1) return { ok: false, error: LAST_OWNER };
     }
   }
-  const ok = await removeMemberFromTenant({ tenantId: scope.tenantId, userId: input.targetUserId });
+  const ok = await removeMemberFromTenant({
+    tenantId: scope.tenantId,
+    userId: input.targetUserId,
+    audit: audit(scope, await actorEmail(), {
+      clientId: target.member_client_id,
+      action: "member.removed",
+      targetType: "member",
+      targetId: input.targetUserId,
+      targetLabel: target.email,
+      changes: { role: target.role, clientRole: target.client_role, accessRoleId: target.access_role_id },
+    }),
+  });
   if (!ok) return { ok: false, error: "Could not remove the member." };
   // Orphan release (tenant-wide): the removed user can no longer act on ANY of their
   // 'human' conversations across the tenant — re-queue them all.

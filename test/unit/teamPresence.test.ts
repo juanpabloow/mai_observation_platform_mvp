@@ -157,7 +157,7 @@ test('phone Equipo writes only through the existing, server-checked actions', ()
 
 test('the staff page still reads PII only behind the admin gate, scoped to the site and client', () => {
   const page = web('app/clients/[clientId]/scheduling/staff/page.tsx');
-  assert.ok(page.includes('canManageClient(scope, clientId)'));
+  assert.ok(page.includes('requireClientModulePage(clientId, "scheduling", "team.manage")'));
   assert.ok(page.includes('listStaffAdmin(tenantId, { siteId: site.id, clientId, includeInactive: true })'));
   assert.ok(page.includes('listAppointments(tenantId, { siteId: site.id, clientId, from: dayStart, to: dayEnd })'));
 });

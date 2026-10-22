@@ -1,7 +1,6 @@
 import { notFound } from "next/navigation";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
-import { canManageClient } from "@/lib/access";
 import { listFieldDefinitions } from "@worker/db/repositories/clientFieldDefinitions.js";
 import { FieldDefinitions } from "@/components/contacts/FieldDefinitions";
 
@@ -14,8 +13,7 @@ import { FieldDefinitions } from "@/components/contacts/FieldDefinitions";
 export default async function ContactFieldsPage({ params }: { params: Promise<{ clientId: string }> }) {
   await connection();
   const { clientId } = await params;
-  const { scope, client } = await requireClientModulePage(clientId, "crm");
-  if (!canManageClient(scope, clientId)) notFound(); // agency or this client's Owner
+  const { scope, client } = await requireClientModulePage(clientId, "crm", "contacts.fields");
 
   const defs = await listFieldDefinitions(scope.tenantId, client.id);
 

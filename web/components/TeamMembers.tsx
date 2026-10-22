@@ -10,7 +10,7 @@ import {
 } from "@/lib/memberActions";
 
 export type MemberRole = "owner" | "admin" | "member";
-export type ClientRole = "owner" | "setter" | "staff";
+export type ClientRole = "owner" | "setter" | "staff" | "custom";
 
 export interface TeamMemberView {
   userId: string;
@@ -24,6 +24,12 @@ export interface TeamMemberView {
   schedulingStaffId: string | null;
   schedulingStaffName: string | null;
   isYou: boolean;
+  /** A custom role's id (clientRole "custom"). */
+  accessRoleId?: string | null;
+  /** The role's display name (system label or custom name). */
+  roleLabel?: string | null;
+  /** Server-computed: may the viewer change/remove this login (delegation rules)? */
+  canManage?: boolean;
 }
 export interface TeamClientOption {
   id: string;
@@ -57,7 +63,9 @@ export interface TeamViewer {
  * Client Owner cannot act on another Owner. Shared by every team screen so the rule has
  * ONE definition in the UI (the server actions remain the real gate).
  */
-export function canActOnMember(member: Pick<TeamMemberView, "role" | "clientRole">, viewer: TeamViewer): boolean {
+export function canActOnMember(member: Pick<TeamMemberView, "role" | "clientRole" | "canManage">, viewer: TeamViewer): boolean {
+  // A business page computes the answer on the server (delegation rules); use it.
+  if (member.role === "member" && member.canManage !== undefined) return member.canManage;
   return member.role === "owner"
     ? false
     : member.role === "admin"
@@ -75,6 +83,7 @@ const CLIENT_ROLE_LABEL: Record<ClientRole, string> = {
   owner: "Owner",
   setter: "Setter",
   staff: "Staff",
+  custom: "Custom",
 };
 
 export function TeamMembers({
@@ -157,7 +166,7 @@ function MemberRow({
           </span>
           {member.role === "member" ? (
             <span className="truncate text-xs text-muted">
-              · {member.clientRole ? CLIENT_ROLE_LABEL[member.clientRole] : "—"}
+              · {member.roleLabel ?? (member.clientRole ? CLIENT_ROLE_LABEL[member.clientRole] : "—")}
               {member.clientRole === "staff" && member.schedulingStaffName
                 ? ` · ${member.schedulingStaffName}`
                 : member.clientName

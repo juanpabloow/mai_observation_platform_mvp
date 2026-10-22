@@ -2,7 +2,7 @@ import { notFound } from "next/navigation";
 import Link from "next/link";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
-import { canAccessMeetings } from "@/lib/access";
+import { can } from "@/lib/access";
 import { PageShell } from "@/components/ui/PageShell";
 import { ModuleHeader } from "@/components/ui/ModuleHeader";
 import { EmptyState, FacetPills, Pagination } from "@/components/ui/primitives";
@@ -49,9 +49,8 @@ export default async function ClientMeetingsPage({
 }) {
   await connection();
   const { clientId } = await params;
-  const { scope, client } = await requireClientModulePage(clientId, "meetings");
-  // Agency or this client's owner only — recepción gets the same 404 (lib/access.ts).
-  if (!canAccessMeetings(scope, clientId)) notFound();
+  const { scope, client } = await requireClientModulePage(clientId, "meetings", "meetings.view");
+  // meetings.view (the agency, the Dueño) — Recepción gets the same 404 (lib/access.ts).
   const { q, facet: facetRaw, sort: sortRaw, range: rangeRaw, page: pageRaw } = await searchParams;
 
   // Every param is validated before it reaches the data layer; an unknown value
@@ -81,7 +80,7 @@ export default async function ClientMeetingsPage({
 
   // Sólo owner/admin eliminan definitivamente. Se decide en el SERVIDOR y se
   // baja como dato: ocultar el botón es cortesía, la ruta lo vuelve a exigir.
-  const puedeEliminar = scope.role === "owner" || scope.role === "admin";
+  const puedeEliminar = can(scope, "meetings.manage", clientId);
   const base = `/clients/${client.id}/reuniones`;
   const hrefWith = (patch: Record<string, string | undefined>): string => {
     const p = new URLSearchParams();

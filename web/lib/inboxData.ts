@@ -1,5 +1,5 @@
 import "server-only";
-import { getSessionScope, canAccessClient, type AccessScope } from "./access";
+import { getSessionScope, can, inClientScope, type AccessScope } from "./access";
 import { getClientById } from "@worker/db/repositories/clients.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { listTurnsForConversation } from "@worker/db/repositories/conversationTurns.js";
@@ -57,11 +57,27 @@ export type InboxAccess =
 export async function resolveInboxAccess(clientId: string): Promise<InboxAccess> {
   const scope = await getSessionScope();
   if (!scope) return { ok: false, status: 401 };
-  if (!canAccessClient(scope, clientId)) return { ok: false, status: 404 };
-  const client = await getClientById({ tenantId: scope.tenantId, clientId });
-  if (!client) return { ok: false, status: 404 };
-  if (!(await isClientModuleEnabled(scope.tenantId, clientId, "inbox"))) return { ok: false, status: 404 };
+  if ((await checkInboxAccess(scope, clientId, "inbox.view")) !== "ok") return { ok: false, status: 404 };
   return { ok: true, scope };
+}
+
+/**
+ * THE inbox gate for an already-resolved scope (pages, JSON routes, Server Actions):
+ * client in the login's scope → a real, non-default client of its tenant → `inbox`
+ * module on → the permission (inbox.view to read, inbox.reply to act). The result names
+ * the failed step so actions keep their messages; routes collapse all to a 404.
+ */
+export async function checkInboxAccess(
+  scope: AccessScope,
+  clientId: string,
+  permission: "inbox.view" | "inbox.reply",
+): Promise<"ok" | "not_found" | "disabled" | "forbidden"> {
+  if (!inClientScope(scope, clientId)) return "not_found";
+  const client = await getClientById({ tenantId: scope.tenantId, clientId });
+  if (!client || client.is_default) return "not_found";
+  if (!(await isClientModuleEnabled(scope.tenantId, clientId, "inbox"))) return "disabled";
+  if (!can(scope, permission, clientId)) return "forbidden";
+  return "ok";
 }
 
 const iso = (d: Date | null): string | null => (d ? d.toISOString() : null);

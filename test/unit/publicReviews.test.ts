@@ -144,14 +144,14 @@ test('the booking page only ever shows APPROVED reviews', () => {
 
 test('moderation is owner/agency only and scoped to the client', () => {
   const action = read('web/lib/reviewModerationActions.ts');
-  assert.ok(action.includes('canManageClient(res.context.scope, clientId)'));
+  assert.ok(action.includes('resolveClientModuleContext(clientId, "scheduling", "reviews.moderate")'));
   assert.ok(action.includes('moderateReview(res.context.scope.tenantId, res.context.client.id'));
   const page = read('web/app/clients/[clientId]/scheduling/reviews/page.tsx');
-  assert.ok(page.includes('if (!canManageClient(scope, clientId)) notFound();'));
+  assert.ok(page.includes('requireClientModulePage(clientId, "scheduling", "reviews.moderate")'));
   // The nav entry (Presencia y marketing → Reseñas) sits behind the same manage gate. This
   // is the MODERATION page; importing reviews stays platform-admin only (not a nav entry).
   const nav = read('web/lib/sectionNav.ts');
-  assert.ok(nav.includes('schedManage && { id: "reviews", label: "Reseñas", href: c("/scheduling/reviews") }'), 'the nav entry sits behind the manage gate');
-  assert.ok(nav.includes('const schedManage = manage && has("scheduling") && !isDefault;'));
+  assert.ok(nav.includes('sched("reviews.moderate") && { id: "reviews", label: "Reseñas", href: c("/scheduling/reviews") }'), 'the nav entry sits behind the same permission');
+  assert.ok(nav.includes('const sched = (key: string) => p(key) && has("scheduling") && !isDefault;'));
   assert.ok(!/import/i.test(nav.slice(nav.indexOf('presence: ['), nav.indexOf('results: ['))), 'no review-import entry for the business');
 });

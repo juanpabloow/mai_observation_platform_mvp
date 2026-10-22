@@ -17,13 +17,13 @@
  * navigation on the page: the sidebar is the only menu.
  *
  * THIS IS NOT THE GATE. Visibility mirrors each page's server check so nobody is shown a
- * link that 404s, but every page still enforces its own gate (requireClientModulePage,
- * canManageClient, canSeeWorkflowInsights…). The flags are the previous rail's:
- *   general   — agency, or this client's owner or setter
- *   manage    — agency, or this client's owner                (settings, roster, team)
- *   insights  — agency, or this client's owner                (results, workflows, meetings)
- *   scheduling-manage — manage + the scheduling module + not the default client
- *   agency    — agency only, never on the default client       (Módulos)
+ * link that 404s, but every page still enforces its own gate (requireClientModulePage +
+ * the page's permission). Every page reads the PERMISSION its gate checks
+ * (web/lib/permissions/catalog.ts), never a role name — so a custom role sees exactly the
+ * pages it was given:
+ *   p(key)     — the login holds `key` on THIS client (a member: only its own client)
+ *   sched(key) — p(key) + the scheduling module + not the default client
+ *   agency     — agency only, never on the default client       (Módulos)
  */
 
 export type SectionId = "inbox" | "contacts" | "agenda" | "catalog" | "presence" | "results" | "settings" | "automations" | "agency";
@@ -56,8 +56,11 @@ export interface NavContext {
   modules: readonly string[];
   /** owner/admin of the tenant (memberClientId === null). */
   isAgency: boolean;
-  /** owner | setter | staff for a member; null for the agency. */
-  clientRole: string | null;
+  /** The login's permission keys (web/lib/permissions/catalog.ts) — on memberClientId for
+   *  a member, on every client for the agency. The rail never reads a role's name. */
+  permissions: readonly string[];
+  /** A professional login (bound to one staff resource): only its own agenda. */
+  staffBound: boolean;
   /** The member's own client (null for the agency). */
   memberClientId: string | null;
   /** The tenant's default/"Unassigned" client id, when known. */
@@ -116,62 +119,61 @@ export function workflowScopeHrefs(clientId: string, scope: string | "all" = "al
 }
 
 export function buildSections(ctx: NavContext): NavSection[] {
-  const { clientId, modules, isAgency, clientRole, memberClientId, defaultClientId } = ctx;
+  const { clientId, modules, isAgency, permissions, staffBound, memberClientId, defaultClientId } = ctx;
   const c = (p: string) => `/clients/${clientId}${p}`;
   const has = (m: string) => modules.includes(m);
-  const forOwnClient = memberClientId !== null && clientId === memberClientId;
+  const forOwnClient = isAgency || (memberClientId !== null && clientId === memberClientId);
   const isDefault = defaultClientId !== null && clientId === defaultClientId;
+  /** May this login use `key` on the client in view? (A member, only on its own.) */
+  const p = (key: string) => forOwnClient && permissions.includes(key);
 
-  // STAFF: their own agenda and nothing else (unchanged).
-  if (clientRole === "staff") {
-    return forOwnClient && has("scheduling")
+  // A PROFESSIONAL login: their own agenda and nothing else (unchanged).
+  if (staffBound) {
+    return forOwnClient && has("scheduling") && p("agenda.view")
       ? [{ id: "agenda", label: "Mi agenda", block: 1, href: c("/scheduling/agenda"), kind: "link", homeHref: null, pages: [{ id: "calendar", label: "Mi agenda", href: c("/scheduling/agenda") }] }]
       : [];
   }
 
-  const general = isAgency || ((clientRole === "owner" || clientRole === "setter") && forOwnClient);
-  const manage = isAgency || (clientRole === "owner" && forOwnClient);
-  const insights = isAgency || (clientRole === "owner" && forOwnClient);
-  const schedManage = manage && has("scheduling") && !isDefault;
+  // A scheduling settings page exists only with the module on, never on the default client.
+  const sched = (key: string) => p(key) && has("scheduling") && !isDefault;
   const wf = workflowScopeHrefs(clientId, ctx.workflowScope ?? "all");
 
   const pages: Record<SectionId, Array<NavPage | false>> = {
-    inbox: [general && has("inbox") && { id: "inbox", label: "Inbox", href: c("/inbox") }],
+    // Each page is shown exactly when its own server gate would admit the login: the
+    // module (when it has one) + the permission that page checks.
+    inbox: [p("inbox.view") && has("inbox") && { id: "inbox", label: "Inbox", href: c("/inbox") }],
     contacts: [
-      general && has("crm") && { id: "contacts", label: "Contactos", href: c("/contacts") },
-      general && has("crm") && { id: "pipeline", label: "Pipeline", href: c("/pipeline") },
+      p("contacts.view") && has("crm") && { id: "contacts", label: "Contactos", href: c("/contacts") },
+      p("pipeline.view") && has("crm") && { id: "pipeline", label: "Pipeline", href: c("/pipeline") },
     ],
     agenda: [
-      // The calendar: the agency, or any (non-staff) member ON THEIR OWN client — the same
-      // people its page admits. (The old rail also showed it to a member looking at another
-      // client's path, where the page 404s; that dead link is gone, nothing else changed.)
-      (isAgency || forOwnClient) && has("scheduling") && { id: "calendar", label: "Calendario", href: c("/scheduling/agenda") },
-      schedManage && { id: "team", label: "Equipo", href: c("/scheduling/staff") },
-      schedManage && { id: "hours", label: "Horarios y ausencias", href: c("/scheduling/hours") },
+      p("agenda.view") && has("scheduling") && { id: "calendar", label: "Calendario", href: c("/scheduling/agenda") },
+      sched("team.manage") && { id: "team", label: "Equipo", href: c("/scheduling/staff") },
+      sched("hours.manage") && { id: "hours", label: "Horarios y ausencias", href: c("/scheduling/hours") },
     ],
     catalog: [
-      schedManage && { id: "services", label: "Servicios", href: c("/scheduling/services") },
-      general && has("catalog") && { id: "products", label: "Productos", href: c("/catalog") },
-      schedManage && { id: "promotions", label: "Promociones", href: c("/scheduling/promotions") },
+      sched("services.manage") && { id: "services", label: "Servicios", href: c("/scheduling/services") },
+      p("products.view") && has("catalog") && { id: "products", label: "Productos", href: c("/catalog") },
+      sched("promotions.manage") && { id: "promotions", label: "Promociones", href: c("/scheduling/promotions") },
     ],
     presence: [
-      schedManage && { id: "booking-page", label: "Página de reservas", href: c("/scheduling/booking-page") },
-      schedManage && { id: "reviews", label: "Reseñas", href: c("/scheduling/reviews") },
-      general && has("campaigns") && { id: "campaigns", label: "Campañas", href: c("/campaigns") },
+      sched("booking_page.manage") && { id: "booking-page", label: "Página de reservas", href: c("/scheduling/booking-page") },
+      sched("reviews.moderate") && { id: "reviews", label: "Reseñas", href: c("/scheduling/reviews") },
+      p("campaigns.view") && has("campaigns") && { id: "campaigns", label: "Campañas", href: c("/campaigns") },
     ],
-    results: [insights && { id: "value", label: "Dashboard de valor", href: c("/analytics") }],
+    results: [p("analytics.view") && { id: "value", label: "Dashboard de valor", href: c("/analytics") }],
     settings: [
-      schedManage && { id: "sites", label: "Sedes", href: c("/scheduling/sites") },
-      schedManage && { id: "rules", label: "Reglas de reserva", href: c("/scheduling/rules") },
-      general && manage && has("crm") && { id: "fields", label: "Campos personalizados", href: c("/contacts/fields") },
-      manage && { id: "users", label: "Usuarios y accesos", href: c("/team") },
+      sched("settings.sites") && { id: "sites", label: "Sedes", href: c("/scheduling/sites") },
+      sched("settings.rules") && { id: "rules", label: "Reglas de reserva", href: c("/scheduling/rules") },
+      p("contacts.fields") && has("crm") && { id: "fields", label: "Campos personalizados", href: c("/contacts/fields") },
+      p("access.users.view") && { id: "users", label: "Usuarios y accesos", href: c("/team") },
     ],
     automations: [
       // Workflows = the scope's executions (the production rail item, list + per-workflow
       // pages); there is no separate all-workflows execution screen to duplicate it with.
-      insights && { id: "workflows", label: "Workflows", href: wf.executions },
-      insights && { id: "tech-analytics", label: "Analíticas técnicas", href: wf.analytics },
-      insights && has("meetings") && { id: "meetings", label: "Reuniones", href: c("/reuniones") },
+      p("automations.view") && { id: "workflows", label: "Workflows", href: wf.executions },
+      p("analytics.view") && { id: "tech-analytics", label: "Analíticas técnicas", href: wf.analytics },
+      p("meetings.view") && has("meetings") && { id: "meetings", label: "Reuniones", href: c("/reuniones") },
     ],
     agency: [isAgency && !isDefault && { id: "modules", label: "Módulos", href: c("/modules") }],
   };
