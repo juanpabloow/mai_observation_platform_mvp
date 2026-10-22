@@ -317,10 +317,11 @@ export function RescheduleInline(props: {
   );
 
   const footer = (
-    <div className="flex items-center gap-2">
-      <p aria-live="polite" className="u-tnum min-w-0 flex-1 truncate text-[13px] text-muted">
+    <div className="flex flex-wrap items-center gap-2">
+      <p aria-live="polite" className="u-tnum w-full min-w-0 truncate text-[13px] text-muted sm:w-auto sm:flex-1">
         {comparison.after ? comparison.after.line : "Sin horario nuevo"}
       </p>
+      <span className="flex-1 sm:hidden" />
       <Button onClick={props.onCancel} disabled={pending}>
         Volver
       </Button>

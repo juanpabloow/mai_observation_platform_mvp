@@ -255,13 +255,15 @@ export function BlockPanel(props: {
         onClose={props.onClose}
         handleRef={handle}
         footer={
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {n > 0 ? <span className="w-full text-[12.5px] text-[var(--warn)] sm:hidden">{n} {n === 1 ? "cita requiere" : "citas requieren"} revisión</span> : null}
             {edit ? (
               <button type="button" className="u-focus rounded px-1 text-[13px] font-medium text-danger hover:underline" onClick={() => setConfirmDelete(true)} disabled={pending}>
                 Eliminar
               </button>
             ) : null}
-            <span className="min-w-0 flex-1 truncate text-[12.5px] text-[var(--warn)]">{n > 0 ? `${n} ${n === 1 ? "cita requiere" : "citas requieren"} revisión` : ""}</span>
+            <span className="hidden min-w-0 flex-1 truncate text-[12.5px] text-[var(--warn)] sm:block">{n > 0 ? `${n} ${n === 1 ? "cita requiere" : "citas requieren"} revisión` : ""}</span>
+            <span className="flex-1 sm:hidden" />
             <Button onClick={() => handle.current?.requestClose()} disabled={pending}>
               Cancelar
             </Button>

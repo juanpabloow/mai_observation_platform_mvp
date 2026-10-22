@@ -54,7 +54,7 @@ export function AffectedList(props: {
     return (
       <p role="status" className="flex items-center gap-2 rounded-[12px] bg-[var(--success-soft,rgba(34,87,58,0.08))] px-3.5 py-3 text-[13px] text-[var(--success,#22573a)]">
         <svg aria-hidden viewBox="0 0 16 16" className="size-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M3.5 8.5l3 3 6-7" /></svg>
-        Ninguna cita queda dentro de {props.what}.
+        Ninguna cita queda dentro {within(props.what)}.
       </p>
     );
   }
@@ -62,7 +62,7 @@ export function AffectedList(props: {
     <div className={`flex flex-col gap-2 ${props.loading ? "opacity-70" : ""}`} aria-busy={props.loading || undefined}>
       <p role="status" className="rounded-[12px] border border-[var(--warn-rule)] bg-[var(--warn-soft)] px-3.5 py-3 text-[13px] text-[var(--warn)]">
         <span className="font-semibold">
-          {props.lead ? props.lead(items.length) : `${items.length === 1 ? "1 cita queda" : `${items.length} citas quedan`} dentro de ${props.what}.`}
+          {props.lead ? props.lead(items.length) : `${items.length === 1 ? "1 cita queda" : `${items.length} citas quedan`} dentro ${within(props.what)}.`}
         </span>{" "}
         No se mueven, no se cancelan ni se avisa al cliente automáticamente.
       </p>
@@ -71,7 +71,7 @@ export function AffectedList(props: {
           <li key={a.id} className="flex items-center gap-3 px-3.5 py-2.5">
             <div className="min-w-0 flex-1">
               <p className="truncate text-[13px] font-semibold">{a.customerName ?? "Sin contacto"}</p>
-              <p className="u-tnum truncate text-[12px] text-muted">
+              <p className="u-tnum line-clamp-2 text-[12px] text-muted">
                 {longDate(a.startAt, tz)} · {fmtTime(a.startAt, tz)}–{fmtTime(a.endAt, tz)} · {a.serviceName}
                 {a.staffName ? ` · ${a.staffName}` : ""}
               </p>
@@ -86,6 +86,11 @@ export function AffectedList(props: {
       </ul>
     </div>
   );
+}
+
+/** "de la pausa" / "del bloqueo" — Spanish contracts «de el». */
+function within(what: string): string {
+  return what.startsWith("el ") ? `del ${what.slice(3)}` : `de ${what}`;
 }
 
 export type Scope = "date" | "following" | "future";

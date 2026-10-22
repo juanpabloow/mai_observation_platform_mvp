@@ -1216,7 +1216,14 @@ export function AgendaView(props: {
           view={isWeek ? "week" : "day"}
           appointments={props.appointments}
           weekCounts={isWeek ? weekCountsFromRange : props.weekCounts}
-          blocks={props.blocks}
+          blocks={[
+            ...props.blocks,
+            ...props.seriesOccurrences.map((o) => ({ id: o.key, staff_id: o.staffId, starts_at: o.startsAt, ends_at: o.endsAt, reason: o.reason, series: o.kind })),
+          ]}
+          onOpenSeries={(key) => {
+            const occ = props.seriesOccurrences.find((o) => o.key === key);
+            if (occ) setModal({ mode: "series", occ });
+          }}
           staff={props.staff}
           openingHours={props.openingHours}
           showTeam={!props.lockStaffId && props.staff.length > 1}
@@ -2054,6 +2061,12 @@ export function AgendaView(props: {
             onClose={() => {
               setSelectedId(null);
               if (deskReschedule) setModal(null);
+              // Focus goes back to the card that opened it (the panel's own opener may be gone,
+              // e.g. after «Reagendar» replaced the detail).
+              window.requestAnimationFrame(() => {
+                const card = [...document.querySelectorAll<HTMLElement>(`[data-appt-card][data-appt-id="${CSS.escape(appt.id)}"]`)].find((n) => n.getClientRects().length > 0);
+                card?.focus({ preventScroll: true });
+              });
             }}
             onLocate={() => locateAppointment(appt.id)}
             onReschedule={() => setModal({ mode: "reschedule", appt })}
@@ -3036,13 +3049,13 @@ function ApptCard({
    * The card's height IS its duration (never padded to fit text — that would lie about
    * when the professional is free), so the CONTENT adapts, essential first:
    *   tiny  (< 30px)  one line: client · state glyph
-   *   short (< 48px)  client, then service
+   *   short (< 66px)  client, then service
    *   tall            + the time range
    * The state is ALWAYS an icon + words (the icon carries an accessible name), in both
    * colour modes; the hover preview and the detail carry everything else.
    */
-  const tier = height < 30 ? "tiny" : height < 48 ? "short" : "tall";
-  const client = appt.contact_name ?? appt.guest_name ?? "Atención sin cita";
+  const tier = height < 30 ? "tiny" : height < 66 ? "short" : "tall";
+  const client = appt.contact_name ?? appt.guest_name ?? (appt.origin === "walk_in" ? "Atención sin cita" : "Sin contacto");
   const stateWord = STATUS_LABEL[appt.status] ?? appt.status;
   return (
     <button

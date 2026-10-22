@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/icons";
 import { StaffCreateDrawer } from "./StaffCreateDrawer";
 import { StaffServicesEditor } from "./StaffServicesEditor";
+import { StatusChip } from "../ui/system";
 import { StaffAbsences } from "./StaffAbsences";
 import { WeeklyScheduleEditor } from "../schedule/WeeklyScheduleEditor";
 import { listScheduleSeriesAction, type SeriesView } from "@/lib/scheduleSeriesActions";
@@ -881,6 +882,7 @@ function StaffDetail({
                           <span className="truncate text-xs font-semibold text-foreground">{a.contactName ?? "Sin nombre"}</span>
                           <span className="truncate text-[11px] text-faint">{a.serviceName}</span>
                         </span>
+                        <StatusChip status={a.status} size="sm" />
                         <span className="u-mono shrink-0 text-[11px] text-muted">{fmtTime(a.startAt, tz)}</span>
                       </div>
                     ))}

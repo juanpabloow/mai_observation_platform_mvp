@@ -100,6 +100,8 @@ export function MobileAgenda(props: {
   onNew: () => void;
   /** Only supplied to roles allowed to manage time off; server rechecks the write. */
   onBlock?: () => void;
+  /** Open one occurrence of a usual break / recurring block (its id is the occurrence key). */
+  onOpenSeries?: (id: string) => void;
 }) {
   const tz = props.timezone;
   const isDay = props.view === "day";
@@ -336,6 +338,7 @@ export function MobileAgenda(props: {
       <div className="flex-1 px-4 pb-[calc(100px+env(safe-area-inset-bottom))] pt-1.5">
         {isDay ? (
           <DayList
+            onOpenSeries={props.onOpenSeries}
             items={day!.items}
             tz={tz}
             now={now}
@@ -381,7 +384,7 @@ export function MobileAgenda(props: {
                       key={a.id}
                       type="button"
                       onClick={() => props.onOpen(a.id)}
-                      aria-label={`${fmt(a.start_at, tz)} ${a.contact_name ?? "Atención sin cita"}, ${a.service_name}, ${STATE_LABEL[a.status] ?? a.status}`}
+                      aria-label={`${fmt(a.start_at, tz)} ${a.contact_name ?? a.guest_name ?? (a.origin === "walk_in" ? "Atención sin cita" : "Sin contacto")}, ${a.service_name}, ${STATE_LABEL[a.status] ?? a.status}${a.review.length > 0 ? ", requiere revisión" : ""}`}
                       className="flex min-h-[64px] w-full items-center gap-[10px] border-0 border-t border-m-dv bg-transparent py-[10px] pl-[14px] pr-3 text-left text-m-tx first:border-t-0"
                     >
                       <span className="u-tnum w-11 flex-none text-[14px] font-semibold">{fmt(a.start_at, tz)}</span>
@@ -500,10 +503,12 @@ function DayList({
   staffById,
   colors,
   onOpen,
+  onOpenSeries,
   empty,
   onReset,
 }: {
   items: ReturnType<typeof buildDay<Appt>>["items"];
+  onOpenSeries?: (id: string) => void;
   tz: string;
   now: Date;
   staffById: Map<string, StaffOpt>;
@@ -530,18 +535,29 @@ function DayList({
         }
         if (it.kind === "block") {
           const who = it.block.staff_id ? staffById.get(it.block.staff_id)?.name ?? "Un profesional" : "Toda la sede";
+          const isBreak = it.block.series === "break";
+          const range = `${hhmm(it.from)} – ${hhmm(Math.min(it.to, 24 * 60 - 1))}`;
+          const body = (
+            // A usual break has NO border (routine); a block or absence has one.
+            <div className={`flex min-w-0 flex-1 flex-col gap-0.5 rounded-[16px] bg-m-sf2 px-[14px] py-3 text-left ${isBreak ? "" : "border border-dashed border-m-tx3"}`}>
+              <span className="text-[14px] font-semibold text-m-tx2">{isBreak ? `Pausa habitual · ${range}` : `⊘ Bloqueado · ${range}`}</span>
+              <span className="text-[14px] text-m-tx2">{[isBreak ? null : it.block.reason, who].filter(Boolean).join(" · ")}</span>
+            </div>
+          );
+          const series = it.block.series && onOpenSeries;
           return (
             <div key={`b-${it.block.id}`} className="flex gap-3">
               <div className="flex w-[52px] flex-none flex-col gap-0.5 pt-3">
                 <span className="u-tnum text-[15px] font-semibold text-m-tx2">{hhmm(it.from)}</span>
                 <span className="text-[12px] text-m-tx3">{it.to - it.from} min</span>
               </div>
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5 rounded-[16px] border border-dashed border-m-tx3 bg-m-sf2 px-[14px] py-3">
-                <span className="text-[14px] font-semibold text-m-tx2">
-                  ⊘ Bloqueado · {hhmm(it.from)} – {hhmm(Math.min(it.to, 24 * 60 - 1))}
-                </span>
-                <span className="text-[14px] text-m-tx2">{[it.block.reason, who].filter(Boolean).join(" · ")}</span>
-              </div>
+              {series ? (
+                <button type="button" onClick={() => onOpenSeries?.(it.block.id)} className="flex min-h-[44px] min-w-0 flex-1 border-0 bg-transparent p-0" aria-label={`${isBreak ? "Pausa habitual" : "Bloqueo"} ${range}, ${who}. Abrir`}>
+                  {body}
+                </button>
+              ) : (
+                body
+              )}
             </div>
           );
         }
@@ -569,7 +585,10 @@ function DayList({
               {it.isNext ? (
                 <span className="text-[12px] font-semibold uppercase tracking-[0.02em]">→ Siguiente · {untilLabel(now.getTime(), new Date(a.start_at).getTime())}</span>
               ) : null}
-              <span className={`break-words text-[16px] font-semibold leading-[1.3] ${cancelled ? "line-through" : ""}`}>{a.contact_name ?? "Atención sin cita"}</span>
+              <span className={`break-words text-[16px] font-semibold leading-[1.3] ${cancelled ? "line-through" : ""}`}>{a.contact_name ?? a.guest_name ?? (a.origin === "walk_in" ? "Atención sin cita" : "Sin contacto")}</span>
+              {a.review.length > 0 ? (
+                <span className="self-start rounded-full bg-[var(--warn-soft)] px-2 py-0.5 text-[12px] font-semibold text-[var(--warn)]">Requiere revisión</span>
+              ) : null}
               <span className="text-[14px] leading-[1.35] text-m-tx2">
                 {a.service_name} · hasta {end}
               </span>

@@ -95,7 +95,7 @@ test('the appointment detail shows canonical identity — never the internal UUI
     const src = read(rel);
     // The title is the contact's name; a walk-in without a contact shows what was typed,
     // and only then the generic label — never a reference.
-    assert.ok(/appt\.contact_name \?\? (appt\.guest_name \?\? )?"Atención sin cita"/.test(src), `${rel}: the name is the title`);
+    assert.ok(src.includes('appt.contact_name ?? appt.guest_name ?? (appt.origin === "walk_in" ? "Atención sin cita" : "Sin contacto")'), `${rel}: the name is the title`);
     // The canonical identity (phone-or-email) — absent for a staff login, so only drawn when sent.
     assert.ok(src.includes('appt.primary_identity ?'), `${rel}: the canonical identity is shown when present`);
     // public_reference is still carried for other uses, but must not be shown as identity.

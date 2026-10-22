@@ -102,7 +102,7 @@ export function SeriesPanel(props: {
   const usual = series && series !== "missing" ? { start: series.start, end: series.end } : null;
   const [openedAt] = useState(() => Date.now());
   const past = Date.parse(occ.startsAt) <= openedAt;
-  const canWrite = props.canEdit && !past && series !== "missing";
+  const canWrite = props.canEdit && !past && series !== null && series !== "missing";
   const dateText = dLabel(occ.date);
   const dirty =
     action === "remove" ||
@@ -264,11 +264,13 @@ export function SeriesPanel(props: {
         handleRef={handle}
         footer={
           canWrite ? (
-            <div className="flex items-center gap-2">
-              <button type="button" className="u-focus rounded px-1 text-[13px] font-medium text-danger hover:underline" onClick={() => setAsk("delete")} disabled={pending}>
+            <div className="flex flex-wrap items-center gap-2">
+              {n > 0 ? <span className="w-full text-[12.5px] text-[var(--warn)] sm:hidden">{n} {n === 1 ? "cita requiere" : "citas requieren"} revisión</span> : null}
+              <button type="button" className="u-focus min-h-[44px] rounded px-1 text-[13px] font-medium text-danger hover:underline md:min-h-0" onClick={() => setAsk("delete")} disabled={pending}>
                 {isBreak ? "Quitar la pausa" : "Eliminar"}
               </button>
-              <span className="min-w-0 flex-1 truncate text-[12.5px] text-[var(--warn)]">{n > 0 ? `${n} ${n === 1 ? "cita requiere" : "citas requieren"} revisión` : ""}</span>
+              <span className="hidden min-w-0 flex-1 truncate text-[12.5px] text-[var(--warn)] sm:block">{n > 0 ? `${n} ${n === 1 ? "cita requiere" : "citas requieren"} revisión` : ""}</span>
+              <span className="flex-1 sm:hidden" />
               <Button onClick={() => handle.current?.requestClose()} disabled={pending}>
                 Cancelar
               </Button>

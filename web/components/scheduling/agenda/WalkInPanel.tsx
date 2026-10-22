@@ -168,8 +168,10 @@ export function WalkInPanel(props: {
       name="walkin"
       title="Atención sin cita"
       subtitle={
-        <span className="flex flex-wrap items-center gap-x-1.5">
-          {props.siteName} · {longDate(new Date().toISOString(), tz)} ·
+        <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+          <span>
+            {props.siteName} · {longDate(new Date().toISOString(), tz)}
+          </span>
           <button type="button" onClick={props.onSwitchToBooking} className="u-focus rounded font-medium text-foreground underline underline-offset-2">
             Cambiar a cita con reserva
           </button>
@@ -179,10 +181,11 @@ export function WalkInPanel(props: {
       onClose={props.onClose}
       handleRef={handle}
       footer={
-        <div className="flex items-center gap-2">
-          <p aria-live="polite" className="u-tnum min-w-0 flex-1 truncate text-[12.5px] text-muted">
+        <div className="flex flex-wrap items-center gap-2">
+          <p aria-live="polite" className="u-tnum w-full min-w-0 truncate text-[12.5px] text-muted sm:w-auto sm:flex-1">
             {summary}
           </p>
+          <span className="flex-1 sm:hidden" />
           <Button onClick={() => handle.current?.requestClose()} disabled={pending}>
             Cancelar
           </Button>

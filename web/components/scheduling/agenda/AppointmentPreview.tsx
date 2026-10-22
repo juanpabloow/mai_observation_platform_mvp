@@ -58,7 +58,7 @@ export function AppointmentPreview({
     setPos({ left, top });
   }, [anchor]);
 
-  const client = appt.contact_name ?? "Atención sin cita";
+  const client = appt.contact_name ?? appt.guest_name ?? (appt.origin === "walk_in" ? "Atención sin cita" : "Sin contacto");
   const price = priceLabelCOP(appt.price);
   return (
     <div

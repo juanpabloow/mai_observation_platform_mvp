@@ -109,7 +109,8 @@ export function AppointmentPanel(props: {
   const plan = appointmentActionPlan({ canOperate: props.canOperate, canModify: props.canModify, status: appt.status });
   const blocked = props.canOperate ? rescheduleBlockedReason({ status: appt.status, allowed: plan.allowed, staffName: appt.staff_name }) : null;
   const price = priceLabelCOP(appt.price);
-  const client = appt.contact_name ?? appt.guest_name ?? "Atención sin cita";
+  // Whether there is a contact is contact_id; the label only names what is known.
+  const client = appt.contact_name ?? appt.guest_name ?? (appt.origin === "walk_in" ? "Atención sin cita" : "Sin contacto");
   const timeRange = `${fmtTime(appt.start_at, tz)} – ${fmtTime(appt.service_end_at, tz)}`;
   const [now] = useState(() => Date.now());
   const started = Date.parse(appt.start_at) <= now;
