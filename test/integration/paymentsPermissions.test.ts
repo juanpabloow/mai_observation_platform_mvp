@@ -44,7 +44,10 @@ type S = Awaited<ReturnType<typeof seedScenario>>;
 
 let slot = 0;
 async function seedAppt(s: S, o: { status?: string; staffId?: string; clientId?: string; siteId?: string; priceSnapshot?: string } = {}): Promise<string> {
-  const startHours = 24 + slot++ * 2;
+  // Appointments that have ALREADY STARTED: the agenda's rule «completed only once it has
+  // started» (booking.ts requireStartedToComplete) applies to every completion action,
+  // with or without a charge — a future one is refused (see paymentsAgenda.test.ts).
+  const startHours = -(2 + slot++ * 2);
   const r = await one<{ id: string }>(
     `INSERT INTO appointments (tenant_id, client_id, site_id, staff_id, service_id,
         start_at, service_end_at, blocked_from, blocked_until,

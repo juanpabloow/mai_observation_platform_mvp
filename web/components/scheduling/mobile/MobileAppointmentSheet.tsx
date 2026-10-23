@@ -83,6 +83,8 @@ export function MobileAppointmentSheet(props: {
   loadReviewLink: ReviewLinkLoader;
   /** Without a linked contact: the SAME contact actions as desktop (GuestContact). */
   contactSlot?: React.ReactNode;
+  /** PY-2 «Cobro» of a completed appointment (payments.view only). */
+  paymentSlot?: React.ReactNode;
 }) {
   const { appt, timezone: tz } = props;
   const [view, setView] = useState<View>("detail");
@@ -280,6 +282,7 @@ export function MobileAppointmentSheet(props: {
             {props.contactSlot}
           </div>
         ) : null}
+        {props.paymentSlot ? <div className="u-ag border-t border-m-dv">{props.paymentSlot}</div> : null}
       </Sheet>
 
       <Sheet open={view === "status"} onClose={() => setView("detail")} label="Acciones de la cita" bodyClassName="flex flex-col px-4 pb-[max(20px,env(safe-area-inset-bottom))]">

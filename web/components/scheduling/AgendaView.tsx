@@ -43,6 +43,8 @@ import {
   recentSchedulingContactsAction,
   type ContactSearchHit,
 } from "@/lib/schedulingActions";
+import { ChargePanel } from "./agenda/ChargePanel";
+import { PendingChargesPanel } from "./agenda/PendingChargesPanel";
 import { AppointmentPanel } from "./agenda/AppointmentPanel";
 import { useNavigationGuard } from "@/components/ui/module/useEditorGuard";
 import type { ContactMatch } from "@/lib/walkInContact";
@@ -109,6 +111,9 @@ export interface Appt {
   source_conversation_id: string | null;
   /** Server-computed: may this login act on this appointment (gateAppointment's checks). */
   can_modify: boolean;
+  /** PY-2: a completed appointment's charge — 'recorded' or 'pending' («Cobro pendiente»);
+   *  null when not tracked (history before tracking started) or the login lacks payments.view. */
+  payment_state?: "recorded" | "pending" | null;
   /** A walk-in WITHOUT a linked contact: what was typed (contact_id decides, never a name). */
   guest_name: string | null;
   guest_phone: string | null;
@@ -491,6 +496,10 @@ export function AgendaView(props: {
   canBlockStaff: boolean;
   /** May create/edit SITE closures (owner/agency only). */
   canBlockSite: boolean;
+  /** PY-2 payment permissions (catalogue keys; the server re-checks every action). */
+  canViewPayments?: boolean;
+  canRecordPayments?: boolean;
+  canVoidPayments?: boolean;
   /** Usual breaks + recurring blocks in the visible range (schedule_series). */
   seriesOccurrences: SeriesOcc[];
   /** May edit a professional's breaks (team.manage) / the site's (settings.sites or hours.manage). */
@@ -546,6 +555,9 @@ export function AgendaView(props: {
   /** «Pintar» (the brush): ONLY while it is on does pressing and dragging on the day grid
    *  mark a range to create or block — so a stray click or drag never starts one. */
   const [paint, setPaint] = useState(false);
+  /** PY-2: the charge step open for an appointment («Completar cita» / «Registrar cobro»). */
+  const [charge, setCharge] = useState<{ apptId: string; mode: "complete" | "record" } | null>(null);
+  const [pendingList, setPendingList] = useState(false);
   /**
    * CREATE / BLOCK FROM THE GRID (reference slotPop, plus drag). Press and drag on an empty
    * part of a professional's lane to select a range (15-minute steps; a plain click takes
@@ -1143,6 +1155,7 @@ export function AgendaView(props: {
       {/* PHONE (< md) — its own layout, not the grid squeezed (mobile/MobileAgenda). */}
       <div className="-m-[var(--content-pad)] md:hidden">
         <MobileAgenda
+          pendingCharges={props.canViewPayments ? { count: props.appointments.filter((x) => x.payment_state === "pending").length, onOpen: () => setPendingList(true) } : undefined}
           title={props.lockStaffId ? "Mi agenda" : "Agenda"}
           subtitle={
             props.lockStaffId
@@ -1191,6 +1204,19 @@ export function AgendaView(props: {
       <div className="md:hidden">
         <MToast message={notice} bottom={84} />
       </div>
+      {pendingList && props.canViewPayments ? (
+          <PendingChargesPanel
+            clientId={props.clientId}
+            timezone={tz}
+            onClose={() => setPendingList(false)}
+            onOpen={({ appointmentId, dayKey }) => {
+              setPendingList(false);
+              const params = new URLSearchParams({ site: props.currentSiteId, date: dayKey, appt: appointmentId });
+              router.push(`${props.basePath}?${params.toString()}`);
+            }}
+          />
+        ) : null}
+
       {/* ── DESKTOP / TABLET (md+) — the approved reference (E1–E4): ONE surface flush to the
              shell frame. The title IS the date (it opens a month picker); the tools sit on
              its right: Día | Semana, ‹ Hoy ›, «Más opciones de agenda» (filtros, bloqueos,
@@ -1314,6 +1340,7 @@ export function AgendaView(props: {
                 ? [{ label: "Bloquear horario", sub: "Puntual o recurrente", onSelect: () => setModal({ mode: "block", staffId: staffSel.length === 1 ? staffSel[0] : undefined }) }]
                 : []),
               ...(props.canOperate ? [{ label: "Atención sin cita", sub: "Alguien que llegó sin reserva", onSelect: () => setModal({ mode: "walkin" }) }] : []),
+              ...(props.canViewPayments ? [{ label: "Cobros pendientes", sub: "Citas completadas sin cobro registrado", onSelect: () => setPendingList(true) }] : []),
               { label: "Horarios y ausencias", sub: "Horario de sede y de cada profesional", onSelect: () => router.push(`/clients/${props.clientId}/scheduling/hours`) },
               { label: "Equipo", sub: "Profesionales y sus servicios", onSelect: () => router.push(`/clients/${props.clientId}/scheduling/staff`) },
               ...(props.sites.length > 1
@@ -1596,6 +1623,37 @@ export function AgendaView(props: {
 
         {(selected || deskReschedule) && !formReschedule ? (() => {
           const appt = (deskReschedule ?? selected) as Appt;
+          if (charge && charge.apptId === appt.id && !deskReschedule) {
+            return (
+              <ChargePanel
+                key={`charge:${appt.id}:${charge.mode}`}
+                clientId={props.clientId}
+                appt={appt}
+                timezone={tz}
+                mode={charge.mode}
+                onClose={() => setCharge(null)}
+                onDone={(m) => {
+                  setCharge(null);
+                  setNotice(m);
+                  // Highlight the card once the server-confirmed state is drawn.
+                  try {
+                    window.sessionStorage.setItem(FLASH_KEY, appt.id);
+                  } catch {
+                    /* nicety */
+                  }
+                  router.refresh();
+                }}
+                onCompleteWithout={
+                  charge.mode === "complete"
+                    ? () => {
+                        setCharge(null);
+                        run(() => completeAppointmentAction(props.clientId, appt.id), "Cita completada · cobro pendiente");
+                      }
+                    : undefined
+                }
+              />
+            );
+          }
           return (
           <AppointmentPanel
             key={`${appt.id}:${deskReschedule ? "r" : "d"}`}
@@ -1641,8 +1699,26 @@ export function AgendaView(props: {
             }}
             onLocate={() => locateAppointment(appt.id)}
             onReschedule={() => setModal({ mode: "reschedule", appt })}
+            payment={
+              props.canViewPayments
+                ? {
+                    clientId: props.clientId,
+                    canRecord: Boolean(props.canRecordPayments) && appt.can_modify,
+                    canVoid: Boolean(props.canVoidPayments),
+                    onRecord: () => setCharge({ apptId: appt.id, mode: "record" }),
+                    onChanged: (m) => {
+                      setNotice(m);
+                      router.refresh();
+                    },
+                  }
+                : null
+            }
             onStatus={(target, reason) =>
-              run(
+              // «Completar cita» opens the charge step for whoever may record money; anyone else
+              // completes as before (the appointment then reads «Cobro pendiente»).
+              target === "completed" && props.canRecordPayments
+                ? setCharge({ apptId: appt.id, mode: "complete" })
+                : run(
                 () =>
                   target === "confirmed"
                     ? confirmAppointmentAction(props.clientId, appt.id)
@@ -1977,7 +2053,7 @@ function WeekTeamBoard({
                           onClick={() => onOpen(c.a.id)}
                           {...previewFor(c.a)}
                           data-appt-card=""
-                          aria-label={`${fmtTime(c.a.start_at, timezone)} ${apptClientLabel(c.a)} ${STATE_WORD[c.a.status] ?? c.a.status}${c.a.review.length > 0 || conflictIds.has(c.a.id) ? ", requiere revisión" : ""}`}
+                          aria-label={`${fmtTime(c.a.start_at, timezone)} ${apptClientLabel(c.a)} ${STATE_WORD[c.a.status] ?? c.a.status}${c.a.payment_state === "pending" ? ", cobro pendiente" : ""}${c.a.review.length > 0 || conflictIds.has(c.a.id) ? ", requiere revisión" : ""}`}
                           className={`u-appt2 ${appointmentToneClass(c.a)} u-focus flex h-[32px] min-w-0 shrink-0 items-center gap-[5px] px-[7px] text-left text-[13px] transition-[background,opacity] hover:bg-[var(--subtle)] ${c.a.status === "cancelled" ? "line-through" : ""} ${selectedId === c.a.id || flashId === c.a.id ? "shadow-[0_0_0_2px_var(--foreground)]" : ""} ${flashId === c.a.id ? "u-ag-flash" : ""}`}
                           data-status={c.a.status}
                           data-selected={selectedId === c.a.id || flashId === c.a.id ? "" : undefined}
@@ -1985,6 +2061,9 @@ function WeekTeamBoard({
                         >
                           <span className="shrink-0 text-[12px] tabular-nums opacity-[0.62]">{fmtTime(c.a.start_at, timezone)}</span>
                           <span className="min-w-0 flex-1 truncate font-medium">{shortName(c.a.contact_name ?? c.a.guest_name)}</span>
+                          {c.a.payment_state === "pending" ? (
+                            <span title="Cobro pendiente" aria-hidden className="shrink-0 rounded-[4px] bg-[var(--chip)] px-1 text-[11px] font-semibold text-[var(--ag-ink2)]">$</span>
+                          ) : null}
                           {c.a.review.length > 0 || conflictIds.has(c.a.id) ? (
                             <span title="Requiere revisión" aria-hidden className="shrink-0 rounded-[4px] bg-[var(--warn-soft)] px-1 text-[11px] font-semibold text-[var(--warn)]">!</span>
                           ) : null}
@@ -2349,7 +2428,7 @@ function ApptCard({
       onClick={onOpen}
       data-appt-card=""
       {...previewProps}
-      aria-label={`${client}, ${fmtTime(appt.start_at, tz)} a ${fmtTime(appt.service_end_at, tz)}, ${appt.service_name}, ${stateWord}${review ? ", requiere revisión" : ""}${overlapping ? ", solapamiento" : ""}`}
+      aria-label={`${client}, ${fmtTime(appt.start_at, tz)} a ${fmtTime(appt.service_end_at, tz)}, ${appt.service_name}, ${stateWord}${appt.payment_state === "pending" ? ", cobro pendiente" : ""}${review ? ", requiere revisión" : ""}${overlapping ? ", solapamiento" : ""}`}
       className={`u-appt2 ${toneClass} absolute flex flex-col items-stretch gap-[3px] overflow-hidden text-left text-foreground transition-[opacity,background,box-shadow] duration-150 hover:bg-[var(--subtle)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-edge)] ${
         one ? "justify-center pl-2.5 pr-2" : "justify-start py-[7px] pl-2.5 pr-2"
       } ${selected || flash ? "shadow-[0_0_0_2px_var(--foreground)]" : ""} ${flash ? "u-ag-flash" : ""}`}
@@ -2366,6 +2445,11 @@ function ApptCard({
       <span className={`flex w-full min-w-0 items-baseline gap-2 font-medium ${one && h < 26 ? "text-[12px]" : "text-[13px]"}`}>
         <span className={`min-w-0 flex-1 truncate ${cancelled ? "text-muted line-through" : ""}`}>{client}</span>
         {one ? <span className="shrink-0 text-[12px] font-normal tabular-nums text-[var(--ag-ink2)]">{range}</span> : null}
+        {appt.payment_state === "pending" ? (
+          <span title="Cobro pendiente" className="shrink-0 self-center rounded-[6px] bg-[var(--chip)] px-1.5 text-[11px] font-medium leading-[18px] text-[var(--ag-ink2)]">
+            {one ? "$" : "Cobro pendiente"}
+          </span>
+        ) : null}
         {/* On a one-line card the review mark is the compact «!» (as on the week chips), so
             the client's name keeps its room; the word stays in the tooltip and the label. */}
         {review ? (

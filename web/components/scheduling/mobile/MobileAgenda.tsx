@@ -108,6 +108,8 @@ export function MobileAgenda(props: {
   onOpenSeries?: (id: string) => void;
   /** Open a DATED block or absence to edit it (only when this login may). */
   onOpenBlock?: (id: string) => void;
+  /** PY-2: «Cobros pendientes» (payments.view only) — count in the loaded range + open the list. */
+  pendingCharges?: { count: number; onOpen: () => void };
 }) {
   const tz = props.timezone;
   const isDay = props.view === "day";
@@ -340,6 +342,13 @@ export function MobileAgenda(props: {
 
       {/* ── LIST ── room at the bottom so "Nueva cita" never covers the last card */}
       <div className="flex-1 px-4 pb-[calc(100px+env(safe-area-inset-bottom))] pt-1.5">
+        {props.pendingCharges && props.pendingCharges.count > 0 ? (
+          <button type="button" onClick={props.pendingCharges.onOpen} className="mb-2 flex min-h-[48px] w-full items-center gap-2 rounded-[14px] border border-m-bd bg-m-sf px-[14px] text-left text-[15px] text-m-tx">
+            <span aria-hidden className="grid size-[24px] place-items-center rounded-full bg-m-sf2 text-[13px] font-semibold">$</span>
+            <span className="min-w-0 flex-1">{props.pendingCharges.count === 1 ? "1 cobro pendiente" : `${props.pendingCharges.count} cobros pendientes`}</span>
+            <span className="text-[14px] text-m-tx2">Ver</span>
+          </button>
+        ) : null}
         {isDay ? (
           <DayList
             onOpenSeries={props.onOpenSeries}
@@ -508,6 +517,21 @@ export function MobileAgenda(props: {
             ))}
           </div>
         </section>
+        {props.pendingCharges ? (
+          <section className="flex flex-col gap-2">
+            <h2 className="m-0 text-[14px] font-semibold text-m-tx2">Cobros</h2>
+            <button
+              type="button"
+              onClick={() => {
+                setFiltersOpen(false);
+                props.pendingCharges?.onOpen();
+              }}
+              className="flex min-h-[48px] items-center justify-between rounded-[12px] border border-m-bd bg-m-sf px-[14px] text-[15px] text-m-tx">
+              Cobros pendientes
+              <span className="text-[14px] text-m-tx2">Ver lista</span>
+            </button>
+          </section>
+        ) : null}
       </Sheet>
     </div>
   );
@@ -619,6 +643,7 @@ function DayList({
               {a.review.length > 0 ? (
                 <span className="self-start rounded-full bg-[var(--warn-soft)] px-2 py-0.5 text-[12px] font-semibold text-[var(--warn)]">Requiere revisión</span>
               ) : null}
+              {a.payment_state === "pending" ? <span className="self-start rounded-full bg-m-sf2 px-2 py-0.5 text-[12px] font-semibold text-m-tx2">Cobro pendiente</span> : null}
               <span className="text-[14px] leading-[1.35] text-m-tx2">
                 {a.service_name} · hasta {end}
               </span>

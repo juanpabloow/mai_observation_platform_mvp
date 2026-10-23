@@ -18,6 +18,7 @@ import { DESTRUCTIVE, STATUS_NAME, type AppointmentStatus } from "./status";
 import { SidePanel, PanelSection, type SidePanelHandle } from "./SidePanel";
 import { RescheduleInline } from "./RescheduleInline";
 import { GuestContact } from "./GuestContact";
+import { PaymentSection } from "./PaymentSection";
 import { AgAvatar, STATE_GLYPH, StateChip } from "./AgendaChrome";
 
 /**
@@ -95,6 +96,8 @@ export function AppointmentPanel(props: {
   onContactSaved?: (message: string) => void;
   /** Where to return after a reschedule opened from a form (label for the back link). */
   returnLabel?: string | null;
+  /** PY-2: the «Cobro» of a completed appointment — only with payments.view. */
+  payment?: { clientId: string; canRecord: boolean; canVoid: boolean; onRecord: () => void; onChanged: (message: string) => void } | null;
 }) {
   const { appt, timezone: tz } = props;
   const phone = useIsOverlayWidth(767.98);
@@ -123,6 +126,20 @@ export function AppointmentPanel(props: {
   const ended = Date.parse(appt.service_end_at) <= now;
   const live = appt.status === "scheduled" || appt.status === "confirmed";
 
+  const paymentSection = (compact: boolean) =>
+    props.payment && appt.status === "completed" ? (
+      <PaymentSection
+        clientId={props.payment.clientId}
+        appt={appt}
+        timezone={tz}
+        canRecord={props.payment.canRecord}
+        canVoid={props.payment.canVoid}
+        onRecord={props.payment.onRecord}
+        onChanged={props.payment.onChanged}
+        compact={compact}
+      />
+    ) : null;
+
   if (phone) {
     return (
       <MobileAppointmentSheet
@@ -143,6 +160,7 @@ export function AppointmentPanel(props: {
         onStatus={props.onStatus}
         loadActivity={props.loadActivity}
         loadReviewLink={props.loadReviewLink}
+        paymentSlot={paymentSection(true)}
         contactSlot={
           !appt.contact_id ? (
             <GuestContact
@@ -379,6 +397,8 @@ export function AppointmentPanel(props: {
               {props.originLabel}
             </KV>
           </dl>
+
+          {paymentSection(false) ? <div className="mt-2 shadow-[inset_0_1px_0_var(--line-soft)]">{paymentSection(false)}</div> : null}
 
           {props.review && props.review.length > 0 && live ? (
             <div role="status" className="mt-4 flex gap-2 rounded-[10px] bg-[var(--warn-soft)] px-3 py-2.5 text-[13px] leading-[1.45] text-[var(--warn)]">

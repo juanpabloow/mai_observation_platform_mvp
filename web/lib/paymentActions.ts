@@ -2,11 +2,16 @@
 
 import { revalidatePath } from "next/cache";
 import { gateClientModule } from "./clientModuleAccess";
-import { can } from "./access";
+import { can, canAccessSchedulingSite, canAccessSchedulingStaff, type AccessScope } from "./access";
 import { isUuid } from "./clientModuleValidation";
 import { isUniqueViolation } from "@worker/db/client.js";
+import { getAppointmentById } from "@worker/db/repositories/scheduling/appointments.js";
+import { getPaymentById } from "@worker/db/repositories/scheduling/payments.js";
+import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
+import { listActiveProducts } from "@worker/db/repositories/catalog/products.js";
 import {
   completeWithPayment,
+  getAppointmentPaymentHistory,
   getAppointmentPaymentView,
   recordPaymentForCompleted,
   voidPayment,
@@ -16,6 +21,8 @@ import {
 } from "@worker/scheduling/payments.js";
 import {
   addPaymentMethod,
+  ensureClientPaymentMethods,
+  listPaymentMethods,
   renamePaymentMethod,
   reorderPaymentMethods,
   setPaymentMethodActive,
@@ -43,6 +50,10 @@ function messageFor(error: PaymentError): string {
   switch (error) {
     case "invalid_status":
       return "Esta cita no admite ese cobro.";
+    case "not_started":
+      return "Se puede completar cuando la cita empiece.";
+    case "product_inactive":
+      return "Un producto del cobro ya no está activo. Quítalo o elige otro.";
     case "payment_exists":
       return "Esta cita ya tiene un cobro registrado.";
     case "method_inactive":
@@ -166,6 +177,20 @@ function agendaPath(clientId: string): string {
   return `/clients/${clientId}/scheduling/agenda`;
 }
 
+// ── Reach (agenda rules on every payment action) ─────────────────────────────────────
+
+/**
+ * A payment action may touch an appointment ONLY within the same reach as the agenda's own
+ * writes: this client, a site the login may access, and — for a login bound to one
+ * professional — that professional's column. Checked on the server, never by hiding buttons.
+ */
+async function appointmentInReach(scope: AccessScope, clientId: string, appointmentId: string) {
+  const appt = await getAppointmentById(scope.tenantId, appointmentId);
+  if (!appt || appt.client_id !== clientId) return null;
+  if (!canAccessSchedulingSite(scope, appt.site_id) || !canAccessSchedulingStaff(scope, appt.staff_id)) return null;
+  return appt;
+}
+
 // ── Payment actions ────────────────────────────────────────────────────────────────
 
 async function doRecord(
@@ -177,11 +202,15 @@ async function doRecord(
   if (!isUuid(appointmentId)) return { ok: false, error: GENERIC };
   const g = await gateClientModule(clientId, "scheduling", "payments.record", GENERIC);
   if (!g.ok) return { ok: false, error: g.error };
+  // Completing with a charge is still COMPLETING: it never bypasses agenda.book, the
+  // professional/site reach, or «only once it has started».
+  if (kind === "complete" && !can(g.context.scope, "agenda.book", g.context.client.id)) return { ok: false, error: GENERIC };
+  if (!(await appointmentInReach(g.context.scope, g.context.client.id, appointmentId))) return { ok: false, error: GENERIC };
   const draft = toDraft(input);
   if (!draft.ok) return { ok: false, error: "Revisa los datos del cobro." };
   const actor = { userId: g.context.scope.userId };
-  const fn = kind === "complete" ? completeWithPayment : recordPaymentForCompleted;
-  const r = await fn({ tenantId: g.context.scope.tenantId, clientId: g.context.client.id, appointmentId, draft: draft.draft, actor });
+  const base = { tenantId: g.context.scope.tenantId, clientId: g.context.client.id, appointmentId, draft: draft.draft, actor };
+  const r = kind === "complete" ? await completeWithPayment({ ...base, requireStarted: true }) : await recordPaymentForCompleted(base);
   if (!r.ok) return { ok: false, error: messageFor(r.error) };
   revalidatePath(agendaPath(g.context.client.id));
   return { ok: true, value: toDTO(r.value, can(g.context.scope, "commissions.view", g.context.client.id)) };
@@ -202,6 +231,8 @@ export async function voidPaymentAction(clientId: string, paymentId: string, rea
   if (!isUuid(paymentId)) return { ok: false, error: GENERIC };
   const g = await gateClientModule(clientId, "scheduling", "payments.void", GENERIC);
   if (!g.ok) return { ok: false, error: g.error };
+  const p = await getPaymentById(g.context.scope.tenantId, g.context.client.id, paymentId);
+  if (!p || !(await appointmentInReach(g.context.scope, g.context.client.id, p.appointment_id))) return { ok: false, error: GENERIC };
   const r = await voidPayment({ tenantId: g.context.scope.tenantId, clientId: g.context.client.id, paymentId, reason, actor: { userId: g.context.scope.userId } });
   if (!r.ok) return { ok: false, error: messageFor(r.error) };
   revalidatePath(agendaPath(g.context.client.id));
@@ -213,6 +244,7 @@ export async function getAppointmentPaymentAction(clientId: string, appointmentI
   if (!isUuid(appointmentId)) return { ok: false, error: GENERIC };
   const g = await gateClientModule(clientId, "scheduling", "payments.view", GENERIC);
   if (!g.ok) return { ok: false, error: g.error };
+  if (!(await appointmentInReach(g.context.scope, g.context.client.id, appointmentId))) return { ok: false, error: GENERIC };
   const view = await getAppointmentPaymentView(g.context.scope.tenantId, g.context.client.id, appointmentId);
   return { ok: true, value: view ? toDTO(view, can(g.context.scope, "commissions.view", g.context.client.id)) : null };
 }
@@ -230,7 +262,8 @@ export interface PendingPaymentDTO {
 export async function listPendingPaymentsAction(clientId: string): Promise<{ ok: true; items: PendingPaymentDTO[] } | { ok: false; error: string }> {
   const g = await gateClientModule(clientId, "scheduling", "payments.view", GENERIC);
   if (!g.ok) return { ok: false, error: g.error };
-  const rows = await listPendingPaymentAppointments(g.context.scope.tenantId, g.context.client.id);
+  const scope = g.context.scope;
+  const rows = (await listPendingPaymentAppointments(scope.tenantId, g.context.client.id)).filter((r) => canAccessSchedulingSite(scope, r.site_id) && canAccessSchedulingStaff(scope, r.staff_id));
   return {
     ok: true,
     items: rows.map((r) => ({
@@ -241,6 +274,48 @@ export async function listPendingPaymentsAction(clientId: string): Promise<{ ok:
       contactName: r.contact_name,
       staffName: r.staff_name,
     })),
+  };
+}
+
+/** Every payment of an appointment: the recorded one and the VOIDED history (who, when, why).
+ *  payments.view + reach; commission only with commissions.view. */
+export async function getAppointmentPaymentHistoryAction(clientId: string, appointmentId: string): Promise<{ ok: true; value: Array<PaymentDTO & { methodLabel: string }> } | { ok: false; error: string }> {
+  if (!isUuid(appointmentId)) return { ok: false, error: GENERIC };
+  const g = await gateClientModule(clientId, "scheduling", "payments.view", GENERIC);
+  if (!g.ok) return { ok: false, error: g.error };
+  if (!(await appointmentInReach(g.context.scope, g.context.client.id, appointmentId))) return { ok: false, error: GENERIC };
+  const [views, methods] = await Promise.all([
+    getAppointmentPaymentHistory(g.context.scope.tenantId, g.context.client.id, appointmentId),
+    listPaymentMethods(g.context.scope.tenantId, g.context.client.id),
+  ]);
+  const label = new Map(methods.map((m) => [m.key, m.label]));
+  const withCommission = can(g.context.scope, "commissions.view", g.context.client.id);
+  return { ok: true, value: views.map((v) => ({ ...toDTO(v, withCommission), methodLabel: label.get(v.payment.method_key) ?? v.payment.method_key })) };
+}
+
+export interface CheckoutOptions {
+  methods: Array<{ key: string; label: string }>;
+  /** Active catalogue products (empty when the business has no catalogue module). Out of
+   *  stock ones are included and flagged — there is no stock model, so they stay sellable. */
+  products: Array<{ id: string; name: string; price: string; category: string | null; inStock: boolean }>;
+}
+
+/** What the charge step offers: the business's ACTIVE payment methods and products. Gated
+ *  like recording itself (payments.record); the engine re-checks both on save. */
+export async function listCheckoutOptionsAction(clientId: string): Promise<{ ok: true; value: CheckoutOptions } | { ok: false; error: string }> {
+  const g = await gateClientModule(clientId, "scheduling", "payments.record", GENERIC);
+  if (!g.ok) return { ok: false, error: g.error };
+  const { tenantId } = g.context.scope;
+  const cid = g.context.client.id;
+  await ensureClientPaymentMethods(tenantId, cid);
+  const [methods, catalog] = await Promise.all([listPaymentMethods(tenantId, cid, { activeOnly: true }), isClientModuleEnabled(tenantId, cid, "catalog")]);
+  const products = catalog ? await listActiveProducts(tenantId, cid) : [];
+  return {
+    ok: true,
+    value: {
+      methods: methods.map((m) => ({ key: m.key, label: m.label })),
+      products: products.map((p) => ({ id: p.id, name: p.name, price: p.price, category: p.category, inStock: p.in_stock })),
+    },
   };
 }
 

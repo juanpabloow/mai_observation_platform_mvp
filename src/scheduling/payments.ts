@@ -5,6 +5,7 @@ import type { AppointmentRow } from '../db/repositories/scheduling/appointments.
 import {
   getPaymentById,
   getRecordedPaymentForAppointment,
+  listPaymentsForAppointment,
   insertPayment,
   listPaymentLines,
   setPaymentVoided,
@@ -29,6 +30,8 @@ import { pipelineOnPaymentRecorded, pipelineOnPaymentVoided } from '../pipeline/
 
 export type PaymentError =
   | 'not_found'
+  | 'not_started'
+  | 'product_inactive'
   | 'invalid_status'
   | 'payment_exists'
   | 'method_inactive'
@@ -78,9 +81,9 @@ const fail = (error: PaymentError, message: string): { ok: false; error: Payment
 const toCents = (n: number): number => Math.round(n * 100);
 const money = (cents: number): string => (cents / 100).toFixed(2);
 
-async function getClientProduct(tenantId: string, clientId: string, productId: string): Promise<{ id: string; name: string; price: string; in_stock: boolean } | null> {
-  const r = await query<{ id: string; name: string; price: string; in_stock: boolean }>(
-    `SELECT id, name, price, in_stock FROM products WHERE id = $1 AND tenant_id = $2 AND client_id = $3`,
+async function getClientProduct(tenantId: string, clientId: string, productId: string): Promise<{ id: string; name: string; price: string; in_stock: boolean; is_active: boolean } | null> {
+  const r = await query<{ id: string; name: string; price: string; in_stock: boolean; is_active: boolean }>(
+    `SELECT id, name, price, in_stock, is_active FROM products WHERE id = $1 AND tenant_id = $2 AND client_id = $3`,
     [productId, tenantId, clientId],
   );
   return r.rows[0] ?? null;
@@ -167,6 +170,8 @@ async function resolveDraft(tenantId: string, clientId: string, appt: Appointmen
     if (!Number.isFinite(p.unitCharged) || p.unitCharged < 0) return fail('invalid_amount', 'A product amount must be zero or more.');
     const prod = await getClientProduct(tenantId, clientId, p.productId);
     if (!prod) return fail('product_not_found', 'A product on this sale is not in this business catalogue.');
+    // Archived after the step was opened: refused like an inactive method (out of STOCK stays sellable).
+    if (!prod.is_active) return fail('product_inactive', 'A product on this sale is no longer active.');
     if (!prod.in_stock) outOfStock.push(prod.id);
     const pListCents = toCents(Number(prod.price));
     const pUnitCents = toCents(p.unitCharged);
@@ -208,6 +213,7 @@ async function viewOf(tenantId: string, payment: PaymentRow, outOfStock: string[
 
 function mapBookingFailure(r: Extract<BookingResult<AppointmentRow>, { ok: false }>): { ok: false; error: PaymentError; message: string } {
   if (r.error === 'invalid_transition') return fail('invalid_status', 'This appointment can no longer be completed.');
+  if (r.error === 'not_started') return fail('not_started', 'An appointment can only be completed once it has started.');
   if (r.error === 'not_found' || r.error === 'module_disabled') return fail('not_found', 'Appointment not found.');
   return fail('not_found', 'Appointment not found.');
 }
@@ -217,7 +223,17 @@ function mapBookingFailure(r: Extract<BookingResult<AppointmentRow>, { ok: false
  * draft first (nothing completes if it is invalid), then transitions to completed through the
  * existing path with the payment written inside the same transaction.
  */
-export async function completeWithPayment(input: { tenantId: string; clientId: string; appointmentId: string; draft: PaymentDraft; actor: PaymentActor }): Promise<PaymentResult> {
+export async function completeWithPayment(input: {
+  tenantId: string;
+  clientId: string;
+  appointmentId: string;
+  draft: PaymentDraft;
+  actor: PaymentActor;
+  /** The agenda's rule (booking.ts requireStartedToComplete): refuse before the start, under
+   *  the row lock. Opt-in like there, so machine callers keep their contract. */
+  requireStarted?: boolean;
+  now?: Date;
+}): Promise<PaymentResult> {
   const { tenantId, clientId, appointmentId, draft, actor } = input;
   const appt = await getAppointmentById(tenantId, appointmentId);
   if (!appt || appt.client_id !== clientId) return fail('not_found', 'Appointment not found.');
@@ -236,6 +252,8 @@ export async function completeWithPayment(input: { tenantId: string; clientId: s
       actorType: 'agent',
       actorUserId: actor.userId,
       scopeClientId: clientId,
+      requireStartedToComplete: input.requireStarted,
+      now: input.now,
       within: async (client, updated) => {
         payment = await insertPayment(client, {
           tenantId,
@@ -330,4 +348,11 @@ export async function getAppointmentPaymentView(tenantId: string, clientId: stri
   const payment = await getRecordedPaymentForAppointment(tenantId, clientId, appointmentId);
   if (!payment) return null;
   return viewOf(tenantId, payment, []);
+}
+
+/** Every payment of an appointment, newest first — the recorded one AND the voided history
+ *  (who voided it, when, why). Read side for payments.view; commission is stripped by the caller. */
+export async function getAppointmentPaymentHistory(tenantId: string, clientId: string, appointmentId: string): Promise<PaymentView[]> {
+  const rows = await listPaymentsForAppointment(tenantId, clientId, appointmentId);
+  return Promise.all(rows.map((p) => viewOf(tenantId, p, [])));
 }

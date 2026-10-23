@@ -15,6 +15,7 @@ import { utcToZonedParts, zonedPartsToUtc } from "@worker/scheduling/timezone.js
 import { AgendaView } from "@/components/scheduling/AgendaView";
 import { loadOccurrences } from "@worker/db/repositories/scheduling/series.js";
 import { reviewByAppointment, reviewLabels } from "@/lib/agendaReview";
+import { paymentStatesForAppointments } from "@worker/db/repositories/scheduling/payments.js";
 
 /**
  * Client-scoped Agenda (Phase 3A — the canonical route). Gated by the central
@@ -256,9 +257,19 @@ export default async function ClientAgendaPage({
       publicReason: o.public_reason,
     }));
 
+  // PY-2 «Cobro pendiente»: only a login with payments.view receives payment states (and
+  // only for appointments in its reach) — nobody else gets them, not even hidden.
+  const canViewPayments = can(scope, "payments.view", client.id);
+  const paymentStates = canViewPayments
+    ? await paymentStatesForAppointments(scope.tenantId, client.id, appts.filter((a) => a.status === "completed" && canAccessSchedulingSite(scope, a.site_id) && canAccessSchedulingStaff(scope, a.staff_id)).map((a) => a.id))
+    : new Map<string, "recorded" | "pending">();
+
   return (
     <AgendaView
       clientId={client.id}
+      canViewPayments={canViewPayments}
+      canRecordPayments={can(scope, "payments.record", client.id)}
+      canVoidPayments={can(scope, "payments.void", client.id)}
       clientName={client.name}
       weekCounts={weekCounts}
       initialStaffId={initialStaffId}
@@ -332,6 +343,7 @@ export default async function ClientAgendaPage({
         can_modify:
           canBook && canAccessSchedulingSite(scope, a.site_id) && canAccessSchedulingStaff(scope, a.staff_id),
         source_conversation_id: a.source_conversation_id,
+        payment_state: paymentStates.get(a.id) ?? null,
       }))}
     />
   );
