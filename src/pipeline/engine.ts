@@ -567,4 +567,39 @@ export async function reopenOpportunity(tenantId: string, clientId: string, oppo
   });
 }
 
+/**
+ * PY-1: a recorded payment advances the WON sale attended → paid (one event; status stays won).
+ * No-op unless the sale is won at attended — a paid stage is terminal and idempotent. Called
+ * fail-safe from the payment hook, never rolling back the payment.
+ */
+export async function markOpportunityPaid(tenantId: string, clientId: string, opportunityId: string, actor: PipelineActor): Promise<OpportunityRow | null> {
+  return withTransaction(async (client) => {
+    const r = await client.query<OpportunityRow>(`${SELECT_LOCK} FROM opportunities WHERE id = $1 AND tenant_id = $2 AND client_id = $3 FOR UPDATE`, [opportunityId, tenantId, clientId]);
+    const opp = r.rows[0];
+    if (!opp || opp.stage === 'paid') return opp ?? null; // idempotent: already paid
+    if (opp.status !== 'won' || opp.stage !== 'attended') return opp; // only a completed sale can be paid
+    const u = await client.query<OpportunityRow>(
+      `UPDATE opportunities SET stage = 'paid', paid_at = now(), updated_at = now() WHERE id = $1 RETURNING ${SELECT_LOCK.replace(/^SELECT /, '')}`,
+      [opportunityId],
+    );
+    await writeEvent(client, { tenantId, clientId, opportunityId, fromStage: 'attended', toStage: 'paid', fromStatus: 'won', toStatus: 'won', actor, reason: 'payment_recorded' });
+    return u.rows[0]!;
+  });
+}
+
+/** PY-1: voiding the payment reverts paid → attended (one event; still won). No-op unless paid. */
+export async function revertOpportunityPaid(tenantId: string, clientId: string, opportunityId: string, actor: PipelineActor): Promise<OpportunityRow | null> {
+  return withTransaction(async (client) => {
+    const r = await client.query<OpportunityRow>(`${SELECT_LOCK} FROM opportunities WHERE id = $1 AND tenant_id = $2 AND client_id = $3 FOR UPDATE`, [opportunityId, tenantId, clientId]);
+    const opp = r.rows[0];
+    if (!opp || opp.stage !== 'paid') return opp ?? null; // idempotent: not paid
+    const u = await client.query<OpportunityRow>(
+      `UPDATE opportunities SET stage = 'attended', paid_at = NULL, updated_at = now() WHERE id = $1 RETURNING ${SELECT_LOCK.replace(/^SELECT /, '')}`,
+      [opportunityId],
+    );
+    await writeEvent(client, { tenantId, clientId, opportunityId, fromStage: 'paid', toStage: 'attended', fromStatus: 'won', toStatus: 'won', actor, reason: 'payment_voided' });
+    return u.rows[0]!;
+  });
+}
+
 export { getOpportunityById };

@@ -41,6 +41,7 @@ export type PageId =
   | "reviews"
   | "campaigns"
   | "value"
+  | "payment-methods"
   | "sites"
   | "rules"
   | "fields"
@@ -165,6 +166,7 @@ export function buildSections(ctx: NavContext): NavSection[] {
     settings: [
       sched("settings.sites") && { id: "sites", label: "Sedes", href: c("/scheduling/sites") },
       sched("settings.rules") && { id: "rules", label: "Reglas de reserva", href: c("/scheduling/rules") },
+      sched("payments.settings") && { id: "payment-methods", label: "Métodos de pago", href: c("/scheduling/payment-methods") },
       p("contacts.fields") && has("crm") && { id: "fields", label: "Campos personalizados", href: c("/contacts/fields") },
       p("access.users.view") && { id: "users", label: "Usuarios y accesos", href: c("/team") },
     ],
@@ -219,6 +221,7 @@ const ROUTES: Array<{ re: RegExp; section: SectionId; page: PageId }> = [
   { re: /^\/analytics(?:\/|$)/, section: "results", page: "value" },
   { re: /^\/scheduling\/(?:sites|admin)(?:\/|$)/, section: "settings", page: "sites" },
   { re: /^\/scheduling\/rules(?:\/|$)/, section: "settings", page: "rules" },
+  { re: /^\/scheduling\/payment-methods(?:\/|$)/, section: "settings", page: "payment-methods" },
   { re: /^\/team(?:\/|$)/, section: "settings", page: "users" },
   { re: /^\/workflows\/[^/]+\/analytics(?:\/|$)/, section: "automations", page: "tech-analytics" },
   { re: /^\/workflows(?:\/|$)/, section: "automations", page: "workflows" },

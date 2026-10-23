@@ -1,3 +1,4 @@
+import type { PoolClient } from 'pg';
 import { isDeadlock, isExclusionViolation, isUniqueViolation, query, withTransaction } from '../db/client.js';
 import { logger } from '../logger.js';
 import { linkConversationToContactIfUnlinked, setContactConsent, type MessagingConsent } from '../db/repositories/contacts.js';
@@ -524,6 +525,11 @@ export interface TransitionInput {
   /** REQUIRED: the appointment must belong to this client, else not-found (no
    * cross-client action, no existence leak). */
   scopeClientId: string;
+  /** PY-1: extra work to run INSIDE the transition's transaction, AFTER the status + event are
+   *  written and BEFORE commit — e.g. recording the payment atomically with completion. Throwing
+   *  here rolls the whole transition back (nothing completes). The standard post-commit hooks
+   *  (realtime event + pipeline) still fire afterward on success. */
+  within?: (client: PoolClient, updated: AppointmentRow) => Promise<void>;
 }
 
 /** Apply a status transition (confirm/complete/cancel/no_show) under a row lock,
@@ -559,6 +565,8 @@ export async function transitionStatus(
         },
         client,
       );
+      // PY-1: atomic side-work (e.g. the payment). A throw here rolls back the status change.
+      if (input.within) await input.within(client, updated);
       return { kind: 'ok' as const, updated };
     });
 

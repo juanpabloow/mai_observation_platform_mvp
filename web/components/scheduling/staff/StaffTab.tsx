@@ -16,6 +16,7 @@ import {
   type UpcomingApptView,
 } from "@/lib/schedulingAdminActions";
 import { deleteTimeOffAction } from "@/lib/timeOffActions";
+import { updateStaffCommissionAction } from "@/lib/paymentActions";
 import { TimeOffForm } from "@/components/scheduling/timeoff/TimeOffForm";
 import { PageShell } from "@/components/ui/PageShell";
 import {
@@ -98,6 +99,10 @@ export interface StaffMember {
   publicTitle: string | null;
   publicBio: string | null;
   publicPhotoUrl: string | null;
+  // PY-1 per-artist commission % (numeric string, e.g. "10.00"). Loaded only for the
+  // owner/agency staff page (listStaffAdmin); shown/edited only with payments.settings.
+  commissionPctServices: string;
+  commissionPctProducts: string;
   // PII. Only this screen receives it (the page uses listStaffAdmin).
   phone: string | null;
   email: string | null;
@@ -250,6 +255,8 @@ export interface StaffTabProps {
   detailTab?: string;
   /** Object storage is configured, so a public photo can be uploaded. */
   photoUploadEnabled?: boolean;
+  /** PY-1: the viewer may see + edit per-artist commission (payments.settings). */
+  canManagePayments?: boolean;
 }
 
 export function StaffTab(
@@ -464,6 +471,7 @@ export function StaffTab(
                 onSaved={() => router.refresh()}
                 initialTab={props.detailTab}
                 photoUploadEnabled={props.photoUploadEnabled ?? false}
+                canManagePayments={props.canManagePayments ?? false}
               />
             </div>
           </div>
@@ -619,6 +627,7 @@ function StaffDetail({
   onSaved,
   initialTab,
   photoUploadEnabled,
+  canManagePayments,
 }: {
   member: StaffMember;
   status: { key: StatusKey; appts: StaffAppointment[] };
@@ -632,6 +641,7 @@ function StaffDetail({
   onSaved: () => void;
   initialTab?: string;
   photoUploadEnabled: boolean;
+  canManagePayments: boolean;
 }) {
   // FIVE tabs, and every one reads something real: the schedule answers performance,
   // the roster row answers details, `staff_services` answers services, `working_hours`
@@ -1169,6 +1179,20 @@ function StaffDetail({
                 </span>
               </FieldRow>
             </DetailSection>
+
+            {/* COMMISSION (PY-1) — the per-artist %, shown and editable only with
+                payments.settings (agency / Client Owner). It SAVES IMMEDIATELY through its own
+                action, like certifications and the photo — it never rides the profile unsaved
+                bar, because commission is money config with its own gate, not a profile field. */}
+            {canManagePayments ? (
+              <CommissionSection
+                clientId={clientId}
+                staffId={member.id}
+                services={member.commissionPctServices}
+                products={member.commissionPctProducts}
+                onSaved={onSaved}
+              />
+            ) : null}
 
             {/* STATUS — two DIFFERENT facts, and they used to be one checkbox in a modal.
                 Deactivating stays reversible precisely because it is this field: the same
@@ -1837,6 +1861,69 @@ function CheckRow({
         <span className="text-[11px] leading-4 text-faint">{hint}</span>
       </span>
     </label>
+  );
+}
+
+/**
+ * PY-1 commission editor (Details tab). Two percent inputs + an immediate Save through its OWN
+ * payments.settings-gated action — it never joins the profile unsaved bar, exactly like the
+ * certifications and the photo. Rendered only when the viewer holds payments.settings.
+ */
+function CommissionSection({
+  clientId,
+  staffId,
+  services,
+  products,
+  onSaved,
+}: {
+  clientId: string;
+  staffId: string;
+  services: string;
+  products: string;
+  onSaved: () => void;
+}) {
+  const [svc, setSvc] = useState(services);
+  const [prod, setProd] = useState(products);
+  const [saving, startSave] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const dirty = svc !== services || prod !== products;
+  const save = () => {
+    setError(null);
+    const s = Number(svc);
+    const p = Number(prod);
+    if (!Number.isFinite(s) || !Number.isFinite(p) || s < 0 || p < 0 || s > 100 || p > 100) {
+      setError("La comisión debe estar entre 0 y 100.");
+      return;
+    }
+    startSave(async () => {
+      const r = await updateStaffCommissionAction(clientId, staffId, s, p);
+      if (!r.ok) setError(r.error);
+      else onSaved();
+    });
+  };
+  return (
+    <DetailSection title="Comisiones" icon={<IconInternal />}>
+      <p className="px-4 pb-1 text-[11px] text-faint">
+        El porcentaje que gana este profesional sobre lo cobrado. La recepción nunca lo ve.
+      </p>
+      <FieldRow label="Servicios (%)">
+        <input type="number" min={0} max={100} step={0.01} value={svc} onChange={(e) => setSvc(e.target.value)} className={CELL} aria-label="Comisión de servicios (%)" />
+      </FieldRow>
+      <FieldRow label="Productos (%)">
+        <input type="number" min={0} max={100} step={0.01} value={prod} onChange={(e) => setProd(e.target.value)} className={CELL} aria-label="Comisión de productos (%)" />
+      </FieldRow>
+      <div className="flex items-center gap-2 px-4 pb-3 pt-1">
+        {error ? <span className="min-w-0 flex-1 truncate text-[11px] text-danger">{error}</span> : <span className="min-w-0 flex-1" />}
+        <button
+          type="button"
+          disabled={saving || !dirty}
+          onClick={save}
+          className="inline-flex h-8 shrink-0 items-center whitespace-nowrap rounded-md bg-ink px-3 text-xs font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50"
+        >
+          {saving ? "Guardando…" : "Guardar comisiones"}
+        </button>
+      </div>
+    </DetailSection>
   );
 }
 

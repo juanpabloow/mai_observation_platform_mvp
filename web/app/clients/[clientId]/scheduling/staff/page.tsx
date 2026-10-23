@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
+import { can } from "@/lib/access";
 import { listSites } from "@worker/db/repositories/scheduling/sites.js";
 // listStaffAdmin, NOT listStaff: this page is owner/admin only (both gates below), and
 // the roster is the one surface that shows an employee's contact details. Every other
@@ -51,6 +52,8 @@ export default async function ClientStaffPage({
   // The roster is for the agency OR this client's OWNER — editors/staff are 404'd.
 
   const roster = await loadRoster(scope.tenantId, client.id, sp);
+  // PY-1: per-artist commission is shown + editable only with payments.settings (agency / owner).
+  if (roster) roster.staff.canManagePayments = can(scope, "payments.settings", client.id);
   return (
     <StaffWorkspace
       clientId={client.id}
@@ -157,6 +160,8 @@ async function loadRoster(
       email: s.email,
       emergencyContactName: s.emergency_contact_name,
       emergencyContactPhone: s.emergency_contact_phone,
+      commissionPctServices: s.commission_pct_services,
+      commissionPctProducts: s.commission_pct_products,
       certifications: (certifications.get(s.id) ?? []).map((c) => ({
         id: c.id,
         name: c.name,
