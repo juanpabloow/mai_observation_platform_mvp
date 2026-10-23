@@ -15,7 +15,7 @@ import {
 
 /**
  * BEHAVIOUR of the phone Equipo presence (web/components/scheduling/mobile/team/presence.ts):
- * "En turno / Con cliente / Fuera de turno / Inactivo" and the line beside the chip are all
+ * "En turno / Ocupado según agenda / Fuera de turno / Inactivo" and the line beside the chip are all
  * DERIVED from working hours (site tz), appointments and exceptions. Bogotá is UTC-5 all
  * year, so 10:00 local = 15:00Z. 2026-10-09 is a Friday.
  */
@@ -57,11 +57,12 @@ test('on shift, nothing left today → "Libre hasta las <end of shift>"', () => 
   assert.equal(p.sub, 'Libre hasta las 19:00');
 });
 
-test('an appointment in progress → "Con cliente hasta …", counted as on shift', () => {
+test('an appointment whose time is now → "Ocupado según agenda", never a claim the client is in the chair (finding F)', () => {
   const p = presenceFor({ ...base, now: now('10:40'), appts: [appt('a', '10:30', '11:15')] });
   assert.equal(p.kind, 'busy');
-  assert.equal(p.chip, '◐ Con cliente');
-  assert.equal(p.sub, 'Con cliente hasta 11:15');
+  assert.equal(p.chip, '◐ Ocupado según agenda');
+  assert.equal(p.sub, 'Cita hasta las 11:15');
+  assert.ok(!/cliente|silla|atendiendo/i.test(p.chip + p.sub), 'no presence claim without an event behind it');
   assert.equal(p.onShift, true);
   // A cancelled or no-show one is not a client in the chair.
   for (const status of ['cancelled', 'no_show']) {
@@ -160,4 +161,23 @@ test('the staff page still reads PII only behind the admin gate, scoped to the s
   assert.ok(page.includes('requireClientModulePage(clientId, "scheduling", "team.manage")'));
   assert.ok(page.includes('listStaffAdmin(tenantId, { siteId: site.id, clientId, includeInactive: true })'));
   assert.ok(page.includes('listAppointments(tenantId, { siteId: site.id, clientId, from: dayStart, to: dayEnd })'));
+});
+
+// Audit 23 Oct: Camila on vacation read «Ocupado según agenda» because a booking was still on her lane.
+test('an absence or a closure in force is the state; a booking on that lane is only flagged to review', async () => {
+  const { rosterStatus } = await import('../../web/components/scheduling/mobile/team/presence.js');
+  const span = (from: string, to: string) => ({ id: 'x', staffId: 's1', startsAt: at(from), endsAt: at(to), reason: 'Vacaciones', publicReason: 'vacation' as const });
+  const booked = [appt('a', '11:00', '12:10')];
+  const away = presenceFor({ ...base, now: now('11:30'), appts: booked, timeOff: [span('00:00', '18:00')] });
+  assert.equal(away.kind, 'off', 'not «busy»');
+  assert.match(away.sub, /^Ausencia hasta /);
+  assert.match(away.sub, /cita de las 11:00 por revisar$/, 'the booking is named apart');
+  assert.equal(away.review, at('11:00'));
+  const closed = presenceFor({ ...base, now: now('11:30'), appts: booked, closures: [{ ...span('10:00', '14:00'), staffId: '' }] });
+  assert.equal(closed.kind, 'off');
+  assert.match(closed.sub, /^Sede cerrada hasta las 14:00 · cita de las 11:00 por revisar$/);
+  // No absence: the booking still reads as «Ocupado según agenda» (never «en silla»).
+  assert.equal(presenceFor({ ...base, now: now('11:30'), appts: booked }).kind, 'busy');
+  const r = rosterStatus({ ...base, takesBookings: true, now: now('11:30'), appts: booked, timeOff: [span('00:00', '18:00')] });
+  assert.equal(r.status, 'time_off', 'the roster agrees: absent, not «con cita»');
 });

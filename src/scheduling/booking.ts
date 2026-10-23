@@ -25,6 +25,7 @@ import {
   type ActorType,
 } from '../db/repositories/scheduling/appointments.js';
 import { recordSchedulingEvent } from '../db/repositories/scheduling/events.js';
+import { isImmediateStart } from './immediate.js';
 import { isSchedulingBookable, isSchedulingEnabledForUpdate } from '../db/repositories/clientModules.js';
 import { pipelineOnAppointmentStatusChanged, pipelineOnBookingCreated } from '../pipeline/hooks.js';
 
@@ -50,7 +51,9 @@ export type BookingError =
   | 'invalid_phone' // customer_phone can't be normalized for the site's region (QA-3)
   | 'active_limit' // the phone already holds the max future active bookings here (public cap)
   | 'price_changed' // the price the customer was shown is no longer the price (zero writes)
-  | 'stale'; // reschedule: the appointment moved since the operator read it (agenda UI only)
+  | 'stale' // reschedule: the appointment moved since the operator read it (agenda UI only)
+  | 'not_immediate' // immediate walk-in asked for a start outside "now" (agenda UI only)
+  | 'not_started'; // "completed" asked before the appointment starts (agenda UI only)
 
 export type BookingResult<T> =
   | { ok: true; value: T; deduped?: boolean }
@@ -75,6 +78,14 @@ export interface CreateAppointmentInput {
   customerName?: string | null;
   customerPhone?: string | null;
   customerEmail?: string | null;
+  /** A walk-in the operator chose NOT to save as a contact: what they typed is kept on the
+   *  appointment (shown again on reopen), never resolved into a contact. Ignored when the
+   *  booking ends up linked to a contact. */
+  guest?: { name: string | null; phone: string | null; email: string | null } | null;
+  /** IMMEDIATE WALK-IN (src/scheduling/immediate.ts): waive ONLY the minimum notice, and
+   *  only for a start inside the immediate window. Set by the agenda's walk-in action for
+   *  an authorised login — never by the bot API or the public page. */
+  immediateWalkIn?: boolean;
   /** I-1: additional identities the booking declares for the appointment's contact (the
    *  attendee) — attached through the same identity chokepoint as everything else. Applies to
    *  the resolve paths (customer_phone / channel_user_id); the EXPLICIT-contact path (contactId)
@@ -197,8 +208,12 @@ export async function createAppointment(
     // start, so the extra candidates are harmless.
     to: new Date(input.startAt.getTime() + 24 * 60 * MS_PER_MIN),
     now,
+    ignoreMinNotice: input.immediateWalkIn === true,
   });
   if (!avail) return { ok: false, error: 'not_found', message: 'Service is not offered at this site.' };
+  if (input.immediateWalkIn && !isImmediateStart(input.startAt, now, avail.slotIntervalMin)) {
+    return { ok: false, error: 'not_immediate', message: 'An immediate walk-in must start now.' };
+  }
 
   const slot = avail.slots.find((s) => s.start_at.getTime() === input.startAt.getTime());
   if (!slot) return { ok: false, error: 'unavailable', message: 'That time is no longer available.' };
@@ -416,6 +431,7 @@ export async function createAppointment(
         createdByType: input.createdByType,
         createdByUserId: input.createdByUserId ?? null,
         idempotencyKey: input.idempotencyKey ?? null,
+        guest: input.guest ?? null,
       });
 
       await recordAppointmentEvent(
@@ -525,6 +541,15 @@ export interface TransitionInput {
   /** REQUIRED: the appointment must belong to this client, else not-found (no
    * cross-client action, no existence leak). */
   scopeClientId: string;
+  /**
+   * The agenda's rule: an appointment is COMPLETED only once it has started (start_at ≤
+   * now, the exact start included). Checked here, under the row lock, so the desktop panel,
+   * the phone sheet and any other agenda caller get the same answer. Opt-in so the bot
+   * API's existing `POST …/complete` contract is not changed silently.
+   */
+  requireStartedToComplete?: boolean;
+  /** The clock for that check (tests); defaults to now. */
+  now?: Date;
   /** PY-1: extra work to run INSIDE the transition's transaction, AFTER the status + event are
    *  written and BEFORE commit — e.g. recording the payment atomically with completion. Throwing
    *  here rolls the whole transition back (nothing completes). The standard post-commit hooks
@@ -553,6 +578,9 @@ export async function transitionStatus(
       if (!LEGAL_STATUS[current.status].includes(target)) {
         return { kind: 'invalid' as const, from: current.status };
       }
+      if (target === 'completed' && input.requireStartedToComplete && current.start_at.getTime() > (input.now ?? new Date()).getTime()) {
+        return { kind: 'not_started' as const };
+      }
       const updated = await setStatus(client, input.tenantId, input.appointmentId, target);
       await recordAppointmentEvent(
         {
@@ -576,6 +604,9 @@ export async function transitionStatus(
     }
     if (result.kind === 'invalid') {
       return { ok: false, error: 'invalid_transition', message: `Cannot move a ${result.from} appointment to ${target}.` };
+    }
+    if (result.kind === 'not_started') {
+      return { ok: false, error: 'not_started', message: 'An appointment can only be completed once it has started.' };
     }
     await recordSchedulingEvent({
       tenantId: result.updated.tenant_id,

@@ -164,7 +164,9 @@ test('the phone screens save through the existing actions', () => {
   const sites = web('components/scheduling/mobile/config/SitesMobile.tsx');
   for (const fn of ['countUpcomingAppointmentsAction(clientId, "site"', 'deactivateSiteAction', 'activateSiteAction', 'updateSiteAction', 'createSiteAction']) assert.ok(sites.includes(fn), fn);
   const blocks = web('components/scheduling/mobile/config/BlocksMobile.tsx');
-  assert.ok(blocks.includes('createExceptionAction(') && blocks.includes('deleteExceptionAction('), 'blocks use the exception actions');
+  // Audit 23 Oct: the phone's Bloqueos lists dated blocks AND series and opens the SAME
+  // editors as the desktop (which save through the exception and series actions).
+  assert.ok(blocks.includes('listScheduleSeriesAction(clientId, id)') && blocks.includes('<BlockPanel') && blocks.includes('<SeriesPanel'), 'blocks and series through the shared editors');
   const rules = web('components/scheduling/mobile/config/RulesMobile.tsx');
   assert.ok(rules.includes('schedulingConfig: { ...cfg, [edit.key]: edit.value }'), 'a rule edit merges over the stored config (buffers preserved)');
 });

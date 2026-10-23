@@ -530,12 +530,44 @@ export function MToast({ message, bottom = 100 }: { message: string | null; bott
  * fixed header and footer and a scrolling body between them, sized to the VISUAL
  * viewport so the on-screen keyboard shrinks the body instead of covering the footer.
  */
-export function MScreen({ label, onEscape, header, footer, children }: { label: string; onEscape: () => void; header: ReactNode; footer: ReactNode; children: ReactNode }) {
+export function MScreen({
+  label,
+  onEscape,
+  header,
+  footer,
+  children,
+  framed = false,
+}: {
+  label: string;
+  onEscape: () => void;
+  header: ReactNode;
+  footer: ReactNode;
+  children: ReactNode;
+  /** Desktop: the same flow inside the agenda's side-panel frame (520 px, 12 px from the
+   *  top, bottom and right; the agenda stays visible). A click outside asks like Escape. */
+  framed?: boolean;
+}) {
   const [node, setNode] = useState<HTMLDivElement | null>(null);
   useLayer(true, node, onEscape);
   // On iOS the keyboard shrinks the VISUAL viewport but not 100dvh — follow it, so the
   // footer (Continuar / Crear cita) never ends up under the keyboard.
   const vh = useVisualViewport();
+  const latestEscape = useRef(onEscape);
+  useEffect(() => {
+    latestEscape.current = onEscape;
+  });
+  useEffect(() => {
+    if (!framed || !node) return;
+    const onDown = (e: PointerEvent) => {
+      const t = e.target as Node | null;
+      if (!t || node.contains(t)) return;
+      // A sheet/confirmation of this flow is its own top layer (portalled): not "outside".
+      if ((t as Element).closest?.("[data-m-layer]") && !(t as Element).closest?.("[data-m-layer]")?.contains(node)) return;
+      latestEscape.current();
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => document.removeEventListener("pointerdown", onDown, true);
+  }, [framed, node]);
   return (
     <Portal>
       <div className="u-sch-m">
@@ -545,12 +577,16 @@ export function MScreen({ label, onEscape, header, footer, children }: { label: 
           aria-modal="true"
           aria-label={label}
           tabIndex={-1}
-          style={{ height: vh ? `${vh.h}px` : "100dvh", top: vh ? `${vh.top}px` : 0 }}
-          className="fixed inset-x-0 z-[75] flex flex-col bg-m-bg text-m-tx focus-visible:outline-none"
+          style={framed ? undefined : { height: vh ? `${vh.h}px` : "100dvh", top: vh ? `${vh.top}px` : 0 }}
+          className={
+            framed
+              ? "u-side-panel-in fixed bottom-3 right-3 top-3 z-[75] flex w-[min(520px,calc(100vw-24px))] flex-col overflow-hidden rounded-[16px] border border-m-bd bg-m-bg text-m-tx shadow-[var(--shadow-float)] focus-visible:outline-none"
+              : "fixed inset-x-0 z-[75] flex flex-col bg-m-bg text-m-tx focus-visible:outline-none"
+          }
         >
           <header className="flex-none border-b border-m-bd bg-m-sf px-4 pb-3 pt-[max(8px,env(safe-area-inset-top))]">{header}</header>
           <div className="u-noscroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-6 pt-4">{children}</div>
-          <footer className="flex-none border-t border-m-bd bg-m-sf px-4 pb-[max(20px,env(safe-area-inset-bottom))] pt-[10px]">{footer}</footer>
+          <footer className={`flex-none border-t border-m-bd bg-m-sf px-4 pt-[10px] ${framed ? "pb-3" : "pb-[max(20px,env(safe-area-inset-bottom))]"}`}>{footer}</footer>
         </div>
       </div>
     </Portal>

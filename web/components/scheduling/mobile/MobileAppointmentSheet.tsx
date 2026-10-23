@@ -1,5 +1,6 @@
 "use client";
 
+import { apptClientLabel } from "@/lib/apptClientLabel";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { priceLabelCOP } from "@/lib/money";
@@ -19,7 +20,7 @@ import { Icon, ICON, MButton, MClientAvatar, MConfirm, MIconButton, MPill, MStaf
  * The appointment DETAIL on the phone (reference §02): a bottom sheet over the agenda
  * that opens part-way and expands from its handle (tap or drag). Hierarchy: when → who
  * (Llamar / WhatsApp / Ficha) → service, professional, site, origin, activity, colour →
- * "Cambiar fecha y hora" sits visible right under the time (apart from the states) →
+ * "Reagendar" sits visible right under the time (apart from the states) →
  * "Más acciones" + the ONE next valid step (Sin confirmar → Confirmar, Confirmada →
  * Completar). States and transitions are exactly the backend's; cancel and no-show
  * confirm first in their own sheet, with the safe option first and focused.
@@ -80,6 +81,10 @@ export function MobileAppointmentSheet(props: {
   onStatus: (target: Target, reason?: string) => void;
   loadActivity: () => Promise<{ ok: true; items: AppointmentActivityItem[] } | { ok: false; error: string }>;
   loadReviewLink: ReviewLinkLoader;
+  /** Without a linked contact: the SAME contact actions as desktop (GuestContact). */
+  contactSlot?: React.ReactNode;
+  /** PY-2 «Cobro» of a completed appointment (payments.view only). */
+  paymentSlot?: React.ReactNode;
 }) {
   const { appt, timezone: tz } = props;
   const [view, setView] = useState<View>("detail");
@@ -87,7 +92,8 @@ export function MobileAppointmentSheet(props: {
   const [otherReason, setOtherReason] = useState("");
   const [activity, setActivity] = useState<{ state: "loading" } | { state: "error" } | { state: "ready"; items: AppointmentActivityItem[] }>({ state: "loading" });
 
-  const plan = appointmentActionPlan({ canOperate: props.canOperate, canModify: props.canModify, status: appt.status });
+  const [now] = useState(() => Date.now());
+  const plan = appointmentActionPlan({ canOperate: props.canOperate, canModify: props.canModify, status: appt.status, startAt: appt.start_at, now });
   // The activity line is part of the detail (who created it, when) — loaded once, and only
   // when the server would serve it (same appointment gate as the writes).
   useEffect(() => {
@@ -109,7 +115,7 @@ export function MobileAppointmentSheet(props: {
   // "Más acciones" only when it holds something this login may do or open.
   const hasMore = plan.transitions.length > 0 || Boolean(props.bookAgainHref || props.conversationHref);
   const blocked = props.canOperate ? rescheduleBlockedReason({ status: appt.status, allowed: plan.allowed, staffName: appt.staff_name }) : null;
-  const client = appt.contact_name ?? "Atención sin cita";
+  const client = apptClientLabel(appt);
   const firstName = client.replace(/^\s*[[(][^\])]*[\])]\s*/, "").split(/\s+/)[0];
   const start = fmtTime(appt.start_at, tz);
   const end = fmtTime(appt.service_end_at, tz);
@@ -216,7 +222,7 @@ export function MobileAppointmentSheet(props: {
             {props.error}
           </p>
         ) : null}
-        {/* "Cambiar fecha y hora" — visible, apart from the state actions and cancel. */}
+        {/* "Reagendar" — visible, apart from the state actions and cancel. */}
         {canAct ? (
           <MButton
             className="mt-3 w-full gap-2"
@@ -228,7 +234,7 @@ export function MobileAppointmentSheet(props: {
             }}
           >
             <Icon d={ICON.calendar} size={18} width={1.4} />
-            Cambiar fecha y hora
+            Reagendar
           </MButton>
         ) : blocked ? (
           <p className="m-0 mt-3 text-[14px] leading-[1.45] text-m-tx3">{blocked}</p>
@@ -270,6 +276,13 @@ export function MobileAppointmentSheet(props: {
             <span className="min-w-0 flex-1 text-[15px] leading-[1.4]">{r.v}</span>
           </div>
         ))}
+        {props.contactSlot ? (
+          <div className="flex flex-col gap-2 border-t border-m-dv py-4">
+            <span className="text-[14px] font-semibold text-m-tx2">Cliente</span>
+            {props.contactSlot}
+          </div>
+        ) : null}
+        {props.paymentSlot ? <div className="u-ag border-t border-m-dv">{props.paymentSlot}</div> : null}
       </Sheet>
 
       <Sheet open={view === "status"} onClose={() => setView("detail")} label="Acciones de la cita" bodyClassName="flex flex-col px-4 pb-[max(20px,env(safe-area-inset-bottom))]">
@@ -307,7 +320,7 @@ export function MobileAppointmentSheet(props: {
                 </span>
                 <span className="flex flex-1 flex-col">
                   <span className="text-[16px]">{STATE_LABEL[s]}</span>
-                  <span className="text-[13px] text-m-tx3">{STATE_DESC[s]}</span>
+                  <span className="text-[13px] text-m-tx3">{s === "completed" && plan.completeWaitsForStart ? "Se habilita al empezar la cita" : STATE_DESC[s]}</span>
                 </span>
                 {cur ? <span className="text-[13px] font-semibold text-m-ok">Actual</span> : null}
               </button>

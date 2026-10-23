@@ -89,6 +89,7 @@ export async function GET(req: Request): Promise<Response> {
     dates,
     siteExceptions: exc.site,
     staffExceptions: exc.staff.get(member.id) ?? [],
+    breaks: [...exc.siteBreaks, ...(exc.staffBreaks.get(member.id) ?? [])],
   });
 
   return Response.json({

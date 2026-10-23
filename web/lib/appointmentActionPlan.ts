@@ -19,8 +19,12 @@ type Target = Exclude<AppointmentStatus, "scheduled">;
 export interface ActionPlan {
   /** May act on THIS appointment (operate the agenda AND the server's per-appointment gate). */
   allowed: boolean;
-  /** Every legal next state (engine's LEGAL_STATUS mirror), empty when not allowed. */
+  /** Every legal next state (engine's LEGAL_STATUS mirror), empty when not allowed.
+   *  "completed" only once the appointment has started — the server refuses it before
+   *  (transitionStatus · requireStartedToComplete), on desktop and phone alike. */
   transitions: Target[];
+  /** Live and not started yet: "Completar se habilita al empezar la cita". */
+  completeWaitsForStart: boolean;
   /** Desktop state menu: the transitions minus "completed" (that one is the footer primary). */
   stateMenu: Target[];
   /** Desktop footer primary "Completar cita". */
@@ -34,16 +38,26 @@ export interface ActionPlan {
   reviewLink: boolean;
 }
 
-export function appointmentActionPlan(input: { canOperate: boolean; canModify: boolean; status: string }): ActionPlan {
+export function appointmentActionPlan(input: {
+  canOperate: boolean;
+  canModify: boolean;
+  status: string;
+  /** The appointment's start, and the clock it is compared with. */
+  startAt: string;
+  now: number;
+}): ActionPlan {
   const allowed = input.canOperate && input.canModify;
   const live = input.status === "scheduled" || input.status === "confirmed";
-  const transitions = (allowed && live ? NEXT_STATUSES[input.status] ?? [] : []).filter((t): t is Target => t !== "scheduled");
+  const started = Date.parse(input.startAt) <= input.now;
+  const legal = (allowed && live ? NEXT_STATUSES[input.status] ?? [] : []).filter((t): t is Target => t !== "scheduled");
+  const transitions = started ? legal : legal.filter((t) => t !== "completed");
   return {
     allowed,
     transitions,
+    completeWaitsForStart: !started && legal.includes("completed"),
     stateMenu: transitions.filter((t) => t !== "completed"),
     complete: transitions.includes("completed"),
-    primary: !allowed || !live ? null : input.status === "scheduled" ? "confirmed" : "completed",
+    primary: !allowed || !live ? null : input.status === "scheduled" ? "confirmed" : started ? "completed" : null,
     reschedule: allowed && live,
     readActivity: allowed,
     reviewLink: allowed && input.status === "completed",

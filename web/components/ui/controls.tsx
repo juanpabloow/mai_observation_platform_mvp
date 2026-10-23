@@ -37,8 +37,11 @@ export const RADIUS = {
 export type ButtonVariant = "primary" | "secondary" | "tertiary" | "destructive";
 export type ButtonSize = "md" | "sm";
 
+// `u-btn u-btn-<variant>` and `u-field` are inert hooks: they carry no style of their own,
+// so a module can scope a reference's sizes to itself (Agenda's panels, `.u-ag` in
+// globals.css) without changing this component anywhere else.
 const BUTTON_BASE =
-  "u-focus inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-sch-control text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 aria-busy:cursor-progress";
+  "u-btn u-focus inline-flex shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-sch-control text-sm font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 aria-busy:cursor-progress";
 
 const BUTTON_SIZE: Record<ButtonSize, string> = {
   md: "h-[44px] px-4 lg:h-[40px]",
@@ -59,7 +62,7 @@ export function buttonClass({
   block = false,
   className = "",
 }: { variant?: ButtonVariant; size?: ButtonSize; block?: boolean; className?: string } = {}): string {
-  return `${BUTTON_BASE} ${BUTTON_SIZE[size]} ${BUTTON_VARIANT[variant]} ${block ? "w-full" : ""} ${className}`;
+  return `${BUTTON_BASE} u-btn-${variant} ${BUTTON_SIZE[size]} ${BUTTON_VARIANT[variant]} ${block ? "w-full" : ""} ${className}`;
 }
 
 export function Button({
@@ -131,7 +134,7 @@ export function IconButton({
 
 /** Text inputs, selects and textareas share one frame. */
 export const FIELD =
-  "u-focus w-full rounded-sch-control border border-line-strong bg-surface px-3 text-sm text-foreground outline-none placeholder:text-faint disabled:cursor-not-allowed disabled:opacity-50 aria-[invalid=true]:border-danger";
+  "u-field u-focus w-full rounded-sch-control border border-line-strong bg-surface px-3 text-sm text-foreground outline-none placeholder:text-faint disabled:cursor-not-allowed disabled:opacity-50 aria-[invalid=true]:border-danger";
 export const INPUT = `${FIELD} h-[44px] lg:h-[40px]`;
 export const TEXTAREA = `${FIELD} py-2.5 leading-relaxed`;
 

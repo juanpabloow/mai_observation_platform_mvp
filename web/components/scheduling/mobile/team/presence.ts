@@ -10,7 +10,9 @@
  *                     map means "inherit the site's opening hours" — the same rule the
  *                     availability engine applies (src/scheduling/availability.ts), which
  *                     also intersects with the site's opening hours, so this does too.
- *   - "Con cliente"   an appointment of theirs (scheduled/confirmed) is in progress now.
+ *   - "Ocupado según agenda"  an appointment of theirs (scheduled/confirmed) spans now. It
+ *                     says what the AGENDA holds, not that the client arrived or the
+ *                     service began — no event records that (finding F).
  *   - "Fuera de turno" anything else: outside hours, a staff time-off exception, or a
  *                     site-wide closure covering now.
  *   - "Inactivo"      `active = false` — they no longer take new bookings.
@@ -51,10 +53,12 @@ export interface Presence {
   chip: string;
   /** The state palette class the chip wears (see `.u-m-st-*` in globals.css). */
   chipClass: string;
-  /** The line beside the chip: "Siguiente a las 10:30", "Con cliente hasta 10:30"… */
+  /** The line beside the chip: "Siguiente a las 10:30", "Cita hasta las 10:30"… */
   sub: string;
   /** Counted under "En turno" (on shift or with a client). */
   onShift: boolean;
+  /** A booking still on the lane during an absence/closure — to review (its start ISO). */
+  review?: string;
 }
 
 /** "HH:MM" → minutes after midnight; NaN for anything malformed. */
@@ -177,25 +181,31 @@ export function presenceFor(input: PresenceInput): Presence {
     .filter((a) => LIVE.has(a.status))
     .sort((x, y) => Date.parse(x.startAt) - Date.parse(y.startAt));
   const inChair = live.find((a) => Date.parse(a.startAt) <= now && Date.parse(a.endAt) > now);
-  if (inChair) {
-    return {
-      kind: "busy",
-      chip: "◐ Con cliente",
-      chipClass: "u-m-st-scheduled",
-      sub: `Con cliente hasta ${fmtHM(inChair.endAt, tz)}`,
-      onShift: true,
-    };
-  }
 
+  // An ABSENCE or a site CLOSURE in force is the state (audit 23 Oct: Camila on vacation
+  // read «Ocupado según agenda» because an 11:00 booking was still on her lane). The
+  // booking is named apart, as something to review — it is not moved or cancelled, and
+  // nothing here claims anyone is physically there.
   const OFF = { kind: "off" as const, chip: "○ Fuera de turno", chipClass: "u-m-st-completed", onShift: false };
+  const clash = inChair ? ` · cita de las ${fmtHM(inChair.startAt, tz)} por revisar` : "";
   const away = input.timeOff.find((t) => covers(t, now));
   if (away) {
     const sameDay = zonedClock(Date.parse(away.endsAt), tz).day === zonedClock(now, tz).day;
     const until = sameDay ? `hasta las ${fmtHM(away.endsAt, tz)}` : `hasta el ${input.fmtDay ? input.fmtDay(away.endsAt) : zonedClock(Date.parse(away.endsAt), tz).day}`;
-    return { ...OFF, sub: `Ausencia ${until}` };
+    return { ...OFF, sub: `Ausencia ${until}${clash}`, ...(inChair ? { review: inChair.startAt } : {}) };
   }
   const closed = input.closures.find((t) => covers(t, now));
-  if (closed) return { ...OFF, sub: `Sede cerrada hasta las ${fmtHM(closed.endsAt, tz)}` };
+  if (closed) return { ...OFF, sub: `Sede cerrada hasta las ${fmtHM(closed.endsAt, tz)}${clash}`, ...(inChair ? { review: inChair.startAt } : {}) };
+
+  if (inChair) {
+    return {
+      kind: "busy",
+      chip: "◐ Ocupado según agenda",
+      chipClass: "u-m-st-scheduled",
+      sub: `Cita hasta las ${fmtHM(inChair.endAt, tz)}`,
+      onShift: true,
+    };
+  }
 
   const clock = zonedClock(now, tz);
   const spans = workSpans(input.workingHours, input.siteHours, clock.weekday);
@@ -256,8 +266,9 @@ export function rosterStatus(input: Omit<PresenceInput, "active"> & { takesBooki
   // front-desk hire still counts as on/off shift by their hours, like on the phone.
   if (!active) status = "inactive";
   else if (!input.takesBookings) status = "no_chair";
-  else if (presence.kind === "busy") status = "with_client";
+  // Absence first: a booking left on an absent person's lane is a conflict, not «con cita».
   else if (away) status = "time_off";
+  else if (presence.kind === "busy") status = "with_client";
   else if (presence.kind === "on") status = hasBookings ? "available" : "on_shift";
   else status = works ? "off_shift" : "off_today";
   return { status, presence, onShift: presence.onShift, worksToday: works, away };

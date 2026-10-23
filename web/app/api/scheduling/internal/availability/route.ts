@@ -3,7 +3,10 @@ import { resolveClientModuleForScope } from "@/lib/clientModuleAccess";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { parseIsoDate } from "@/lib/schedulingApi";
 import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
-import { loadAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
+import { loadExplainExceptions, prepareAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
+import { computeAvailability } from "@worker/scheduling/availability.js";
+import { explainAvailability } from "@worker/scheduling/availabilityExplain.js";
+import { immediateWindowMin } from "@worker/scheduling/immediate.js";
 import { getAppointmentById } from "@worker/db/repositories/scheduling/appointments.js";
 
 /**
@@ -15,8 +18,10 @@ import { getAppointmentById } from "@worker/db/repositories/scheduling/appointme
  * AND site.client_id === client.id; service/staff validity is enforced by the
  * loader's joins. Availability is never computed before the whole gate passes.
  *
- * EVERY failure is the same generic 404 — foreign, disabled, default, and
- * unknown are indistinguishable, and nothing leaks about other clients.
+ * EVERY gate failure is the same generic 404 — foreign, disabled, default, and
+ * unknown are indistinguishable, and nothing leaks about other clients. Past the gate, a
+ * service the site does not offer answers 200 with no slots and
+ * `unavailable: "service_not_offered"` (see below), so the forms can say why.
  *
  * `appointment_id` (reschedule): availability FOR MOVING THAT APPOINTMENT. It must be an
  * appointment of this client, at this site, that this login may modify (the same staff
@@ -24,6 +29,16 @@ import { getAppointmentById } from "@worker/db/repositories/scheduling/appointme
  * rescheduleAppointment — its own block is excluded from the busy set and its STORED
  * duration/buffers are used, and the service is the appointment's own. Every other
  * booking, break, time off and block still counts.
+ *
+ * `hold` (repeatable, at most 120): `<staff_id|site>~<from ISO>~<until ISO>` — time a form
+ * is about to block but has NOT saved yet (the break or block being edited while one of its
+ * affected appointments is rescheduled). Holds only REMOVE slots — they can never offer a
+ * time the engine did not — so a crafted hold cannot widen availability.
+ *
+ * `immediate=1` («Atención sin cita · ahora»): the starts from NOW within the immediate
+ * window, without the site's minimum notice — the one exception of src/scheduling/immediate.ts,
+ * for a login that may book (agenda.book, gated above). Every other rule still applies; the
+ * booking action re-checks the start on the server. Never offered for a reschedule.
  */
 export const dynamic = "force-dynamic";
 
@@ -77,25 +92,88 @@ export async function GET(req: Request): Promise<Response> {
     };
   }
 
-  const result = await loadAvailability({
+  const immediate = p.get("immediate") === "1" && !moving;
+  const now = new Date();
+  const prepared = await prepareAvailability({
     tenantId: scope.tenantId,
     siteId,
     serviceId: moving?.serviceId ?? serviceId,
     staffId: staffId ?? null,
     from,
     to,
-    now: new Date(),
+    now,
     excludeAppointmentId: moving?.id ?? null,
     timingOverride: moving?.timing ?? null,
+    ignoreMinNotice: immediate,
   });
-  if (!result) return notFoundResponse();
+  // The gate has passed (this login may book at this site of this client). A service the
+  // site does not offer — removed or deactivated after the appointment was booked, or simply
+  // unknown — is not a failure to retry: say so, with no slots. Unknown, foreign and inactive
+  // service ids all get this same answer, and the gate never depends on the service, so it
+  // reveals nothing about other clients' catalogues.
+  if (!prepared) {
+    return Response.json({ site: { id: site.id, timezone: site.timezone }, slots: [], unavailable: "service_not_offered" });
+  }
+  const windowEnd = now.getTime() + immediateWindowMin(prepared.slotIntervalMin) * 60_000;
+  const computed = prepared.request ? computeAvailability(prepared.request) : [];
+  const result = {
+    site: prepared.site,
+    buffers: prepared.buffers,
+    slots: immediate ? computed.filter((s) => s.start_at.getTime() >= now.getTime() - 60_000 && s.start_at.getTime() <= windowEnd) : computed,
+  };
+  const holds = parseHolds(p.getAll("hold"));
+  if (holds === null) return Response.json({ error: "invalid hold" }, { status: 400 });
+  const bufBefore = result.buffers.before_min * 60_000;
+  const bufAfter = result.buffers.after_min * 60_000;
+  const slots = holds.length === 0
+    ? result.slots
+    : result.slots.flatMap((s) => {
+        const ok = s.candidates.filter((c) => {
+          const a = s.start_at.getTime() - bufBefore;
+          const b = c.service_end_at.getTime() + bufAfter;
+          return !holds.some((h) => (h.staffId === null || h.staffId === c.staff_id) && h.until > a && h.from < b);
+        });
+        if (ok.length === 0) return [];
+        const chosen = ok.find((c) => c.staff_id === s.staff_id) ?? ok[0];
+        return [{ ...s, staff_id: chosen.staff_id, service_end_at: chosen.service_end_at, available_staff_ids: ok.map((c) => c.staff_id), candidates: ok }];
+      });
+  // `explain=1` with one professional: WHY a day has no free time, in the engine's own codes
+  // (closed site, off shift, absence, closure, fully booked…) — the reschedule panel says the
+  // reason instead of an empty list. Public reasons only; internal notes never leave.
+  let days: Array<{ date: string; summary: string }> | undefined;
+  if (p.get("explain") === "1" && staffId && prepared.request) {
+    const exc = await loadExplainExceptions({ tenantId: scope.tenantId, siteId, from, to, staffIds: [staffId] });
+    days = explainAvailability({
+      request: prepared.request,
+      slots: result.slots,
+      staffIds: [staffId],
+      siteExceptions: exc.site,
+      staffExceptions: exc.staff,
+      siteBreaks: exc.siteBreaks,
+      staffBreaks: exc.staffBreaks,
+    }).map((d) => ({ date: d.date, summary: d.summary }));
+  }
   return Response.json({
+    ...(days ? { days } : {}),
     site: { id: result.site.id, timezone: result.site.timezone },
-    slots: result.slots.map((s) => ({
+    slots: slots.map((s) => ({
       start_at: s.start_at,
       service_end_at: s.service_end_at,
       staff_id: s.staff_id,
       available_staff_ids: s.available_staff_ids,
     })),
   });
+}
+
+function parseHolds(raw: string[]): Array<{ staffId: string | null; from: number; until: number }> | null {
+  if (raw.length > 120) return null;
+  const out: Array<{ staffId: string | null; from: number; until: number }> = [];
+  for (const h of raw) {
+    const [who, a, b] = h.split("~");
+    const from = Date.parse(a ?? "");
+    const until = Date.parse(b ?? "");
+    if ((who !== "site" && !isUuid(who)) || Number.isNaN(from) || Number.isNaN(until) || until <= from || until - from > 86_400_000) return null;
+    out.push({ staffId: who === "site" ? null : who, from, until });
+  }
+  return out;
 }

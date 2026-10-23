@@ -13,6 +13,9 @@ import { getContactById } from "@worker/db/repositories/contacts.js";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { utcToZonedParts, zonedPartsToUtc } from "@worker/scheduling/timezone.js";
 import { AgendaView } from "@/components/scheduling/AgendaView";
+import { loadOccurrences } from "@worker/db/repositories/scheduling/series.js";
+import { reviewByAppointment, reviewLabels } from "@/lib/agendaReview";
+import { paymentStatesForAppointments } from "@worker/db/repositories/scheduling/payments.js";
 
 /**
  * Client-scoped Agenda (Phase 3A — the canonical route). Gated by the central
@@ -130,7 +133,7 @@ export default async function ClientAgendaPage({
   const prevStart = new Date(rangeStart.getTime() - rangeMs);
   const prevEnd = new Date(rangeStart.getTime());
 
-  const [allStaff, services, appts, prevAppts, crmEnabled, inboxEnabled, exceptions, weekAppts] = await Promise.all([
+  const [allStaff, services, appts, prevAppts, crmEnabled, inboxEnabled, exceptions, weekAppts, occurrences] = await Promise.all([
     // includeInactive: a deactivated barber must still get a lane IF they have
     // appointments in the VISIBLE RANGE — otherwise their (intact) appointments have
     // nowhere to render and disappear. Note the range is now day OR week, so this
@@ -152,7 +155,18 @@ export default async function ClientAgendaPage({
     listExceptions(tenantId, { siteId: site.id, from: rangeStart, to: rangeEnd }),
     // Same query, same scoping, over the week — only COUNTED (per site-local day).
     view === "week" ? Promise.resolve(null) : listAppointments(tenantId, { siteId: site.id, from: weekStart, to: weekEnd, clientId: client.id }),
+    // Usual breaks + recurring blocks (migration 1818) over the visible range — the same
+    // read the availability engine uses, so the grid draws exactly what is not bookable.
+    loadOccurrences({ tenantId, siteId: site.id, timeZone: site.timezone, from: rangeStart, to: rangeEnd, staffIds: null }),
   ]);
+  const review = reviewByAppointment({
+    timeZone: site.timezone,
+    siteHours: site.opening_hours,
+    staffHours: new Map(allStaff.map((s) => [s.id, s.working_hours])),
+    appointments: appts,
+    blocks: exceptions,
+    occurrences,
+  });
   const weekCounts: Record<string, number> = {};
   for (const a of weekAppts ?? appts) {
     if (a.status === "cancelled") continue;
@@ -226,10 +240,36 @@ export default async function ClientAgendaPage({
   // (agenda.block); site closures → hours.manage. The time-off actions re-check both.
   const canBlockStaff = can(scope, "agenda.block", client.id);
   const canBlockSite = can(scope, "hours.manage", client.id);
+  // A staff login sees its own and the site's breaks/blocks — never another
+  // professional's internal reason (same rule as dated blocks above).
+  const seriesOccurrences = occurrences
+    .filter((o) => !isStaff || o.staff_id === null || o.staff_id === myStaffId)
+    .map((o) => ({
+      key: `${o.series_id}:${o.date}`,
+      seriesId: o.series_id,
+      kind: o.kind,
+      staffId: o.staff_id,
+      date: o.date,
+      startsAt: o.from.toISOString(),
+      endsAt: o.until.toISOString(),
+      moved: o.moved,
+      reason: o.reason,
+      publicReason: o.public_reason,
+    }));
+
+  // PY-2 «Cobro pendiente»: only a login with payments.view receives payment states (and
+  // only for appointments in its reach) — nobody else gets them, not even hidden.
+  const canViewPayments = can(scope, "payments.view", client.id);
+  const paymentStates = canViewPayments
+    ? await paymentStatesForAppointments(scope.tenantId, client.id, appts.filter((a) => a.status === "completed" && canAccessSchedulingSite(scope, a.site_id) && canAccessSchedulingStaff(scope, a.staff_id)).map((a) => a.id))
+    : new Map<string, "recorded" | "pending">();
 
   return (
     <AgendaView
       clientId={client.id}
+      canViewPayments={canViewPayments}
+      canRecordPayments={can(scope, "payments.record", client.id)}
+      canVoidPayments={can(scope, "payments.void", client.id)}
       clientName={client.name}
       weekCounts={weekCounts}
       initialStaffId={initialStaffId}
@@ -246,6 +286,11 @@ export default async function ClientAgendaPage({
       canBlockStaff={canBlockStaff}
       canBlockSite={canBlockSite}
       blocks={blocks}
+      seriesOccurrences={seriesOccurrences}
+      // Breaks are part of a schedule: a professional's needs team.manage, the site's
+      // settings.sites or hours.manage (the server re-checks — scheduleSeriesActions).
+      canEditStaffBreaks={can(scope, "team.manage", client.id)}
+      canEditSiteBreaks={can(scope, "settings.sites", client.id) || can(scope, "hours.manage", client.id)}
       // A staff login books only into its OWN column — the modal locks the barber picker
       // to this id (the server enforces it regardless).
       lockStaffId={isSchedulingStaff(scope) ? scope.schedulingStaffId : null}
@@ -285,6 +330,12 @@ export default async function ClientAgendaPage({
         origin: a.origin,
         contact_id: a.contact_id,
         contact_name: a.contact_name,
+        // What was typed for a walk-in WITHOUT a contact (display only). A professional
+        // login gets the name, never the phone/email (same rule as primary_identity).
+        guest_name: a.contact_id ? null : a.guest_name,
+        guest_phone: a.contact_id || isSchedulingStaff(scope) ? null : a.guest_phone,
+        guest_email: a.contact_id || isSchedulingStaff(scope) ? null : a.guest_email,
+        review: reviewLabels(review.get(a.id)),
         primary_identity: isSchedulingStaff(scope) ? null : a.primary_identity,
         // May THIS login act on THIS appointment — the exact checks gateAppointment
         // (lib/schedulingActions.ts) applies to every write and to the activity read.
@@ -292,6 +343,7 @@ export default async function ClientAgendaPage({
         can_modify:
           canBook && canAccessSchedulingSite(scope, a.site_id) && canAccessSchedulingStaff(scope, a.staff_id),
         source_conversation_id: a.source_conversation_id,
+        payment_state: paymentStates.get(a.id) ?? null,
       }))}
     />
   );

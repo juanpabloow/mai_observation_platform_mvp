@@ -6,7 +6,7 @@ import { useTheme } from "next-themes";
 import type { Exception, Service, Site, Staff } from "../../AdminPanel";
 import { MToast } from "../kit";
 import { categoriesPhrase } from "@/lib/schedulingOverview";
-import { BlockForm, BlocksList } from "./BlocksMobile";
+import { BlocksList, useBlockSeries } from "./BlocksMobile";
 import { RULE_KEYS, ruleLabel, plural } from "./logic";
 import { RulesScreen } from "./RulesMobile";
 import { ServiceEditorMobile, ServicesList } from "./ServicesMobile";
@@ -113,7 +113,8 @@ function ConfigScreen({ nav, toast, ...p }: ConfigMobileProps & { nav: ConfigNav
     case "bloqueos":
       return <BlocksList nav={nav} clientId={p.clientId} sites={p.sites} staff={p.staff} exceptions={p.exceptions} past={p.pastExceptions} toast={toast} />;
     case "bloqueo-nuevo":
-      return <BlockForm key={nav.param("plantilla") ?? "blank"} nav={nav} clientId={p.clientId} sites={p.sites} staff={p.staff} template={nav.param("plantilla")} toast={toast} />;
+      // Old links keep working: the list, with the SAME new editor already open.
+      return <BlocksList key={nav.param("plantilla") ?? "blank"} nav={nav} clientId={p.clientId} sites={p.sites} staff={p.staff} exceptions={p.exceptions} past={p.pastExceptions} toast={toast} startNew template={nav.param("plantilla")} />;
     case "reglas":
       return <RulesScreen nav={nav} clientId={p.clientId} sites={p.sites} toast={toast} />;
     case "horarios":
@@ -133,7 +134,15 @@ function ConfigScreen({ nav, toast, ...p }: ConfigMobileProps & { nav: ConfigNav
  * site hours in «Sedes y horarios», each professional's in «Equipo», closures and
  * absences in «Bloqueos».
  */
+/** «Bloqueos · N próximos»: dated blocks AND recurring series, as the list shows them. */
+function useBlocksSub(clientId: string, sites: ConfigMobileProps["sites"], exceptions: ConfigMobileProps["exceptions"]) {
+  const { series } = useBlockSeries(clientId, sites);
+  const n = exceptions.length + (series?.length ?? 0);
+  return n ? plural(n, "próximo", "próximos") : series === null ? "Cargando…" : "Ninguno próximo";
+}
+
 function HoursHub({ nav, clientId, sites, staff, exceptions }: ConfigMobileProps & { nav: ConfigNav }) {
+  const blocksSub = useBlocksSub(clientId, sites, exceptions);
   const activeSites = sites.filter((s) => s.active);
   const inactiveSites = sites.length - activeSites.length;
   const activeStaff = staff.filter((p) => p.active);
@@ -155,7 +164,7 @@ function HoursHub({ nav, clientId, sites, staff, exceptions }: ConfigMobileProps
           sub={[plural(activeStaff.length, "profesional", "profesionales"), inactiveStaff ? plural(inactiveStaff, "inactivo", "inactivos") : null].filter(Boolean).join(" · ")}
           href={`/clients/${clientId}/scheduling/staff`}
         />
-        <NavRow icon={CFG_ICON.block} title="Bloqueos" sub={exceptions.length ? plural(exceptions.length, "próximo", "próximos") : "Ninguno próximo"} onClick={() => nav.go("bloqueos")} />
+        <NavRow icon={CFG_ICON.block} title="Bloqueos" sub={blocksSub} onClick={() => nav.go("bloqueos")} />
       </nav>
     </Screen>
   );
@@ -164,6 +173,7 @@ function HoursHub({ nav, clientId, sites, staff, exceptions }: ConfigMobileProps
 // ── 4.1 Inicio ───────────────────────────────────────────────────────────────────
 
 function Home({ nav, clientId, clientName, sites, services, staff, exceptions }: ConfigMobileProps & { nav: ConfigNav }) {
+  const blocksSub = useBlocksSub(clientId, sites, exceptions);
   const mounted = useMounted();
   const { resolvedTheme, setTheme } = useTheme();
   const dark = mounted && resolvedTheme === "dark";
@@ -208,7 +218,7 @@ function Home({ nav, clientId, clientName, sites, services, staff, exceptions }:
           sub={[plural(activeStaff.length, "profesional", "profesionales"), inactiveStaff ? plural(inactiveStaff, "inactivo", "inactivos") : null].filter(Boolean).join(" · ")}
           href={`/clients/${clientId}/scheduling/staff`}
         />
-        <NavRow icon={CFG_ICON.block} title="Bloqueos" sub={exceptions.length ? plural(exceptions.length, "próximo", "próximos") : "Ninguno próximo"} onClick={() => nav.go("bloqueos")} />
+        <NavRow icon={CFG_ICON.block} title="Bloqueos" sub={blocksSub} onClick={() => nav.go("bloqueos")} />
         <NavRow icon={CFG_ICON.rules} title="Reglas de reserva" sub={rulesSub} onClick={() => nav.go("reglas")} />
       </nav>
       <SectionLabel>Preferencias</SectionLabel>

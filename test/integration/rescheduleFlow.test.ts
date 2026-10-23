@@ -175,6 +175,39 @@ test('availability FOR an appointment is refused outside the login\'s reach or w
   assert.equal((await availability(s, { staff_id: s.staffA, appointment_id: mine })).status, 404, 'anonymous');
 });
 
+test('availability FOR an appointment whose service the site no longer offers: an explicit «not offered», not a 404 to retry', async () => {
+  // Audit 23 Oct (Reagendar «No pudimos cargar las horas libres»): the site stopped offering
+  // the appointment's service after it was booked. The engine has nothing to compute, and the
+  // route used to answer the generic 404 — the panel showed a network error with a «Reintentar»
+  // that could never succeed.
+  const s = await scenario();
+  const owner = await seedMember(s.tenantId, { role: 'owner' });
+  users.push(owner);
+  as(owner);
+  const id = await appointment(s, { start: '10:00', durationMin: 60 });
+  assert.equal((await availability(s, { staff_id: s.staffA, appointment_id: id })).status, 200, 'offered: normal answer');
+
+  await query(`UPDATE site_services SET active = false WHERE site_id = $1 AND service_id = $2`, [s.siteId, s.serviceHaircut]);
+  const p = new URLSearchParams({
+    client_id: s.clientId, site_id: s.siteId, service_id: s.serviceHaircut, staff_id: s.staffA, appointment_id: id,
+    from: at('00:00').toISOString(), to: new Date(at('00:00').getTime() + 24 * 3600_000).toISOString(),
+  });
+  const res = await availabilityGET(new Request(`http://localhost/api/scheduling/internal/availability?${p.toString()}`));
+  assert.equal(res.status, 200, 'past the gate, not a 404');
+  const body = (await res.json()) as { slots: unknown[]; unavailable?: string };
+  assert.equal(body.unavailable, 'service_not_offered');
+  assert.deepEqual(body.slots, [], 'no hours are invented');
+  assert.equal((await row(id)).start_at.toISOString(), at('10:00').toISOString(), 'the appointment is untouched');
+
+  // An unknown service id gets the SAME answer (nothing to tell apart), and the gate still 404s.
+  const unknown = new URLSearchParams({ ...Object.fromEntries(p), service_id: randomUUID() });
+  const u = await availabilityGET(new Request(`http://localhost/api/scheduling/internal/availability?${unknown.toString()}`));
+  assert.equal(u.status, 200);
+  assert.equal(((await u.json()) as { unavailable?: string }).unavailable, 'service_not_offered');
+  as(null);
+  assert.equal((await availability(s, { staff_id: s.staffA, appointment_id: id })).status, 404, 'anonymous: still the generic 404');
+});
+
 test('the move keeps the SAME appointment and records who and before/after', async () => {
   const s = await scenario();
   const owner = await seedMember(s.tenantId, { role: 'owner' });

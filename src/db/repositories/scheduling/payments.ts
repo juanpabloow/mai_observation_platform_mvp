@@ -169,3 +169,38 @@ export async function setPaymentVoided(
   );
   return r.rows[0] ?? null;
 }
+
+/** Every payment of an appointment (recorded + voided), newest first — the history a void keeps. */
+export async function listPaymentsForAppointment(tenantId: string, clientId: string, appointmentId: string): Promise<PaymentRow[]> {
+  const r = await query<PaymentRow>(
+    `SELECT * FROM payments WHERE tenant_id = $1 AND client_id = $2 AND appointment_id = $3 ORDER BY created_at DESC LIMIT 50`,
+    [tenantId, clientId, appointmentId],
+  );
+  return r.rows;
+}
+
+/**
+ * The payment STATE of completed appointments, for the agenda's «Cobro pendiente» mark:
+ * 'recorded' (a recorded payment exists) or 'pending' (completed on/after the client's
+ * tracking-start instant with no recorded payment). Anything else is absent from the map —
+ * history before tracking started is never «pending», and nothing is invented.
+ */
+export async function paymentStatesForAppointments(tenantId: string, clientId: string, appointmentIds: string[]): Promise<Map<string, 'recorded' | 'pending'>> {
+  const out = new Map<string, 'recorded' | 'pending'>();
+  if (appointmentIds.length === 0) return out;
+  const r = await query<{ id: string; state: 'recorded' | 'pending' }>(
+    `SELECT a.id,
+            CASE WHEN EXISTS (SELECT 1 FROM payments p WHERE p.tenant_id = a.tenant_id AND p.appointment_id = a.id AND p.status = 'recorded')
+                 THEN 'recorded' ELSE 'pending' END AS state
+       FROM appointments a
+       JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
+      WHERE a.tenant_id = $1 AND a.client_id = $2 AND a.id = ANY($3::uuid[]) AND a.status = 'completed'
+        AND (EXISTS (SELECT 1 FROM payments p WHERE p.tenant_id = a.tenant_id AND p.appointment_id = a.id AND p.status = 'recorded')
+             OR a.start_at >= COALESCE(
+                  (SELECT ps.payments_tracking_started_at FROM payment_settings ps WHERE ps.tenant_id = a.tenant_id AND ps.client_id = a.client_id),
+                  c.created_at))`,
+    [tenantId, clientId, appointmentIds],
+  );
+  for (const row of r.rows) out.set(row.id, row.state);
+  return out;
+}

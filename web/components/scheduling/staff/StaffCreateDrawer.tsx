@@ -1,47 +1,23 @@
 "use client";
 
-import { useState, useTransition } from "react";
-import { useTrappedPanel } from "@/components/ui/Overlay";
-import { PanelSection } from "@/components/ui/primitives";
-import { IconCalendar, IconIdentity, IconTask } from "@/components/ui/icons";
-import {
-  BTN_PRIMARY,
-  BTN_SECONDARY,
-  PANEL_CLOSE_CLS,
-  PANEL_SURFACE,
-  PanelBanner,
-  PanelCloseIcon,
-} from "@/components/ui/panelChrome";
+import { useRef, useState, useTransition } from "react";
 import { createStaffAction, updateStaffAction } from "@/lib/schedulingAdminActions";
-import { gridFromWeekly, HoursGrid, weeklyFromGrid, type HourGrid } from "@/components/scheduling/HoursGrid";
+import { PUBLIC_BIO_MAX, checkPublicBio, publicProfileMessage } from "@/lib/staffPublicProfile";
+import { Button, INPUT } from "../ui/system";
+import { SidePanel, type SidePanelHandle } from "../agenda/SidePanel";
 import type { StaffServiceOpt, StaffSiteOpt } from "./StaffTab";
 
 /**
- * ADD a barber — the name, the site, the services they can perform, and their hours.
+ * NUEVO PROFESIONAL — the minimum a professional needs to exist: name, site, role, whether
+ * they take bookings, optional work contact and the services they perform. They start on
+ * the site's hours (inherited); hours, breaks, profile, certifications and absences are
+ * edited afterwards in their ficha, which opens right after creating.
  *
- * CREATE ONLY, and that is the whole design. A barber who EXISTS is changed in the tabs
- * of their own detail panel, where every field sits behind one unsaved bar. This drawer
- * exists for the one case that cannot work that way: a barber who does not exist yet has
- * no panel to be edited in. It was previously an edit form as well, which meant name,
- * services, hours and the two status flags had two owners — this drawer and the panel's
- * tabs — and whichever saved last won.
+ * A professional is a BOOKABLE RESOURCE, not a login: giving someone access to the system
+ * is «Usuarios y accesos», a separate decision (and a separate permission).
  *
- * THE GEOMETRY. It used to be a centred modal on a dark scrim floating over the middle of
- * the screen. It now opens in the panel column's own box: same top edge, same bottom edge,
- * same right edge, same width as the detail panel, so the roster simply grows a lane
- * instead of the whole window going dark.
- *
- * It writes through the SAME server actions the Scheduling settings form has always used
- * (`createStaffAction`, then `updateStaffAction` for the hours, which create does not
- * take), so client scoping, the owner/admin gate and the "service must belong to this
- * client" check are unchanged. Nothing new was invented at the data layer.
- *
- * The STATUS flags are absent on purpose: both are true for a new hire, so asking is
- * noise. They are edited afterwards in the panel's Details tab.
- *
- * TODO(staff): moving a barber between SITES is not an update the repo supports
- *   (site_id is set at creation and staff belong to exactly one site in V1), so the
- *   site field is read-only here.
+ * Same server actions as always (createStaffAction, then updateStaffAction for the fields
+ * create does not take), behind the same gate (team.manage) and client scoping.
  */
 export function StaffCreateDrawer({
   clientId,
@@ -56,224 +32,123 @@ export function StaffCreateDrawer({
   services: StaffServiceOpt[];
   sites: StaffSiteOpt[];
   onClose: () => void;
-  onSaved: () => void;
+  onSaved: (id?: string) => void;
 }) {
   const [name, setName] = useState("");
-  const [serviceIds, setServiceIds] = useState<string[]>([]);
-  const [grid, setGrid] = useState<HourGrid>(gridFromWeekly({} as never));
+  const [title, setTitle] = useState("");
+  const [site, setSite] = useState(siteId ?? sites[0]?.id ?? "");
+  const [takesBookings, setTakesBookings] = useState(true);
+  const [bio, setBio] = useState("");
+  const [touched, setTouched] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
-  // A FORM is exactly the case where the focus trap earns its keep — tabbing out of a
-  // half-filled barber into the roster behind loses the operator's place invisibly. It
-  // is active here at every width, unlike the read-only panel's, which only traps while
-  // it covers the content.
-  const panelRef = useTrappedPanel({ active: true, onClose });
-
-  const toggle = (id: string) =>
-    setServiceIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const sending = useRef(false);
+  const handle = useRef<SidePanelHandle | null>(null);
+  const dirty = Boolean(name.trim() || title.trim() || bio.trim() || !takesBookings);
+  const nameError = touched && !name.trim() ? "Escribe el nombre." : null;
+  const bioCheck = checkPublicBio(bio);
+  const bioError = bioCheck.ok ? null : publicProfileMessage(bioCheck.error, "Presentación", PUBLIC_BIO_MAX);
+  void services;
 
   const save = () => {
+    setTouched(true);
+    if (!name.trim() || bioError || !site || sending.current) return;
+    sending.current = true;
     setError(null);
     start(async () => {
-      const trimmed = name.trim();
-      if (trimmed === "") {
-        setError("El nombre es obligatorio.");
-        return;
-      }
-      const target = siteId ?? sites[0]?.id;
-      if (!target) {
-        setError("Este cliente todavía no tiene sede.");
-        return;
-      }
-      // ONE call takes the name, the site and the service set...
-      const r = await createStaffAction({ clientId, siteId: target, name: trimmed, serviceIds });
-      if (!r.ok) {
-        setError(r.error);
-        return;
-      }
-      // ...and the hours are a separate patch, because createStaffAction takes no schedule.
-      const workingHours = weeklyFromGrid(grid);
-      if (Object.keys(workingHours).length > 0 && r.id) {
-        const h = await updateStaffAction(clientId, r.id, { workingHours });
-        if (!h.ok) {
-          setError(h.error);
+      try {
+        const r = await createStaffAction({ clientId, siteId: site, name: name.trim(), serviceIds: [] });
+        if (!r.ok) {
+          setError(r.error);
           return;
         }
+        const patch: Parameters<typeof updateStaffAction>[2] = {};
+        if (title.trim()) patch.title = title.trim();
+        if (!takesBookings) patch.takesBookings = false;
+        if (bio.trim()) patch.publicBio = bio.trim();
+        if (r.id && Object.keys(patch).length > 0) {
+          const u = await updateStaffAction(clientId, r.id, patch);
+          if (!u.ok) {
+            // The person exists; say what did not save instead of inviting a duplicate.
+            setError(`Se creó ${name.trim()}, pero no se guardó el resto: ${u.error} Complétalo en su ficha.`);
+            onSaved(r.id);
+            return;
+          }
+        }
+        onSaved(r.id);
+      } catch {
+        setError("No se pudo crear. Tus datos siguen aquí; vuelve a intentarlo.");
+      } finally {
+        sending.current = false;
       }
-      onSaved();
     });
   };
 
-  const siteName = sites.find((s) => s.id === siteId)?.name ?? sites[0]?.name ?? "—";
-  const activeServices = services.filter((s) => s.active);
-
   return (
-    <>
-      {/* A TRANSPARENT catcher, not a scrim, wherever the drawer has a lane of its own.
-          The dark overlay is gone by design: the editor opens on exactly the box the
-          detail panel occupied, so darkening the whole window to announce a panel that
-          does not move was noise. What the layer still buys is worth keeping — a click
-          outside dismisses, and a stray click on a roster row cannot navigate away from
-          unsaved edits. Below `lg` the drawer genuinely COVERS the roster, and there the
-          content underneath does have to visibly recede. */}
-      <button
-        type="button"
-        aria-label="Cerrar"
-        onClick={onClose}
-        className="pointer-events-auto fixed inset-0 z-40 cursor-default bg-black/40"
-      />
-      <aside
-        ref={panelRef as React.RefObject<HTMLElement>}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="staff-form-title"
-        // FIXED while covering, ABSOLUTE once it has a lane — and the lane is the panel
-        // column's own box, which is why the frame does not move when Edit is pressed.
-        // FULL-BLEED below `lg` (no radius, no border — it is the whole screen there),
-        // a card from `lg` up. pointer-events-auto because the region it renders into is
-        // pointer-events-none while it spans the viewport.
-        className={`u-panel-in pointer-events-auto fixed inset-y-0 right-0 z-50 w-full max-w-full sm:inset-y-3 sm:right-3 sm:w-[var(--staff-panel-w)] sm:rounded-xl sm:border sm:border-line sm:shadow-[var(--shadow-card)] ${PANEL_SURFACE}`}
-      >
-        {/* HEADER — the panel's header shape, minus the person: no tone wash and no avatar
-            disc, because there is nobody yet to be the colour of. The quiet close and the
-            two-line title/meta are the panel's own. */}
-        <div className="flex shrink-0 items-start gap-2.5 border-b border-line px-4 pb-3 pt-3.5">
-          <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-            <h2 id="staff-form-title" className="truncate text-base font-semibold tracking-tight text-foreground">
-              Nuevo profesional
-            </h2>
-            <p className="truncate text-[0.6875rem] leading-4 text-faint">Nuevo profesional en {siteName}</p>
-          </div>
-          <button type="button" onClick={onClose} aria-label="Cerrar" className={PANEL_CLOSE_CLS}>
-            <PanelCloseIcon />
-          </button>
-        </div>
-
-        {error ? (
-          <div className="shrink-0 bg-surface px-4 pt-3">
-            <PanelBanner tone="danger">{error}</PanelBanner>
-          </div>
-        ) : null}
-
-        {/* THE only scrolling zone, and it adds no padding: each section brings its own
-            and closes with a full-width rule, exactly as in the read-only panel. */}
-        <div className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-surface">
-          <PanelSection title="Identidad" icon={<IconIdentity />}>
-            <div className="flex flex-col gap-3.5">
-              <Field label="Nombre" htmlFor="staff-name">
-                <input
-                  id="staff-name"
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className={INPUT}
-                  placeholder="Nombre completo"
-                />
-              </Field>
-              <Field label="Sede" hint="fija">
-                <input
-                  disabled
-                  value={siteName}
-                  readOnly
-                  title="Un profesional pertenece a una sola sede; por ahora no se puede cambiar de sede."
-                  className={`${INPUT} cursor-not-allowed opacity-60`}
-                />
-              </Field>
-              {/* Everything else about a barber — role, contact details, skills,
-                  certifications, and the two status flags — is edited in their panel once
-                  they exist. Asking for it all up front is a wall; asking for none of it
-                  makes the roster unusable, so this form takes only what create needs. */}
-              <p className="text-[11px] text-faint">
-                El cargo, el contacto, los cambios de horario, las habilidades y las certificaciones
-                se editan después, en el perfil del profesional.
-              </p>
-            </div>
-          </PanelSection>
-
-          <PanelSection
-            title="Servicios"
-            icon={<IconTask />}
-            trailing={activeServices.length > 0 ? `${serviceIds.length} de ${activeServices.length}` : undefined}
-          >
-            {activeServices.length === 0 ? (
-              <p className="text-sm text-faint">Este cliente todavía no tiene servicios activos.</p>
-            ) : (
-              <div className="flex flex-wrap gap-1.5">
-                {activeServices.map((s) => {
-                  const on = serviceIds.includes(s.id);
-                  return (
-                    <button
-                      key={s.id}
-                      type="button"
-                      onClick={() => toggle(s.id)}
-                      aria-pressed={on}
-                      // rounded-md — the shape the contact form's selectable chips use.
-                      // A full pill here would make a togglable service look like the
-                      // read-only status chips in the panel's header.
-                      className={`inline-flex h-8 items-center whitespace-nowrap rounded-md border px-2.5 text-xs transition-colors ${
-                        on
-                          ? "border-transparent bg-foreground text-background"
-                          : "border-line-strong text-muted hover:bg-hover"
-                      }`}
-                    >
-                      {s.name}
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-          </PanelSection>
-
-          <PanelSection title="Horario semanal" icon={<IconCalendar />}>
-            <div className="flex flex-col gap-2">
-              <p className="text-[11px] text-faint">Todo libre = horario de la sede.</p>
-              <HoursGrid grid={grid} setGrid={setGrid} />
-            </div>
-          </PanelSection>
-
-        </div>
-
-        {/* THE SAVE BAR — always present, pinned. A form long enough to scroll (this one
-            is) must never put its primary action below the fold. */}
-        <div className="flex shrink-0 items-center gap-2 border-t border-line bg-surface px-4 py-3">
-          <span className="min-w-0 flex-1 truncate text-xs text-muted">
-            {name.trim() === "" ? "El nombre es obligatorio" : `Nuevo profesional en ${siteName}`}
-          </span>
-          <button type="button" onClick={onClose} className={BTN_SECONDARY}>
+    <SidePanel
+      name="staff-create"
+      title="Nuevo profesional"
+      subtitle={sites.find((x) => x.id === site)?.name ?? ""}
+      dirty={dirty}
+      onClose={onClose}
+      handleRef={handle}
+      footer={
+        <div className="flex items-center gap-2">
+          <span className="min-w-0 flex-1 text-[12.5px] leading-[1.35] text-muted">Servicios y horario se ajustan después en su ficha</span>
+          <Button onClick={() => handle.current?.requestClose()} disabled={pending}>
             Cancelar
-          </button>
-          <button type="button" onClick={save} disabled={pending || name.trim() === ""} className={BTN_PRIMARY}>
-            {pending ? "Guardando…" : "Añadir profesional"}
-          </button>
+          </Button>
+          <Button variant="primary" onClick={save} disabled={pending} loading={pending} loadingLabel="Creando…">
+            {error ? "Reintentar" : "Crear profesional"}
+          </Button>
         </div>
-      </aside>
-    </>
-  );
-}
-
-const INPUT =
-  "u-focus h-9 w-full rounded-md border border-line-strong bg-transparent px-2.5 text-sm transition-colors";
-
-/** A labelled field. `hint` is the right-aligned marker the contact form uses. */
-function Field({
-  label,
-  hint,
-  htmlFor,
-  children,
-}: {
-  label: string;
-  hint?: string;
-  htmlFor?: string;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-baseline justify-between gap-2">
-        <label htmlFor={htmlFor} className="text-xs font-medium text-muted">
-          {label}
+      }
+    >
+      <div className="flex flex-col gap-[18px]">
+        <div className="flex items-center gap-4">
+          <span aria-hidden className="flex size-[64px] shrink-0 items-center justify-center rounded-[14px] bg-[var(--chip)] text-[20px] text-muted">+</span>
+          <p className="text-[12.5px] leading-[1.45] text-muted">La foto (cuadrada, mínimo 400 px) se sube desde su ficha, una vez creado. Se ve en la reserva pública.</p>
+        </div>
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[13px] font-medium">Nombre completo</span>
+          <input data-autofocus className={INPUT} value={name} onChange={(e) => setName(e.target.value)} onBlur={() => setTouched(true)} aria-invalid={Boolean(nameError)} aria-describedby={nameError ? "sc-name-err" : undefined} />
+          {nameError ? <span id="sc-name-err" role="alert" className="text-[12.5px] font-medium text-danger">{nameError}</span> : null}
         </label>
-        {hint ? <span className="text-[11px] text-faintest">{hint}</span> : null}
+        <div className="grid grid-cols-2 gap-2.5">
+          <label className="flex min-w-0 flex-col gap-1.5">
+            <span className="text-[13px] font-medium">Cargo</span>
+            <input className={INPUT} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ej. Barbero" maxLength={80} />
+          </label>
+          <label className="flex min-w-0 flex-col gap-1.5">
+            <span className="text-[13px] font-medium">Sede</span>
+            <select className={INPUT} value={site} disabled={sites.length < 2} onChange={(e) => setSite(e.target.value)}>
+              {sites.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[13px] font-medium">
+            Presentación pública <span className="font-normal text-muted">(opcional)</span>
+          </span>
+          <textarea className={`${INPUT} h-auto min-h-[84px] py-2.5`} rows={3} value={bio} onChange={(e) => setBio(e.target.value)} placeholder="Una o dos frases sobre su estilo" aria-invalid={Boolean(bioError)} />
+          {bioError ? <span role="alert" className="text-[12.5px] font-medium text-danger">{bioError}</span> : null}
+        </label>
+        <label className="flex min-h-[44px] cursor-pointer items-start gap-3">
+          <input type="checkbox" role="switch" checked={takesBookings} onChange={(e) => setTakesBookings(e.target.checked)} className="u-ag-switch mt-0.5" />
+          <span className="flex flex-col">
+            <span className="text-[14px]">Recibe citas</span>
+            <span className="text-[12.5px] leading-[1.45] text-muted">Si está apagado, aparece en Equipo pero no en la agenda ni en la reserva.</span>
+          </span>
+        </label>
+        <p className="rounded-[10px] bg-[var(--chip)] px-3 py-2.5 text-[13px] leading-[1.45] text-[var(--ag-ink2)]">
+          Empieza con el horario de la sede y sin servicios asignados. Los ajustas en su ficha después de crearlo. Un profesional no es una cuenta de usuario: los accesos se gestionan en Usuarios y accesos.
+        </p>
+        {error ? <p role="alert" className="text-[13px] text-danger">{error}</p> : null}
       </div>
-      {children}
-    </div>
+    </SidePanel>
   );
 }

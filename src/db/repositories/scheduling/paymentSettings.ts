@@ -32,6 +32,7 @@ export interface PendingPaymentRow {
   start_at: Date;
   service_name: string;
   price_snapshot: string | null;
+  site_id: string;
   staff_id: string;
   staff_name: string | null;
   contact_id: string | null;
@@ -46,7 +47,7 @@ export interface PendingPaymentRow {
 export async function listPendingPaymentAppointments(tenantId: string, clientId: string): Promise<PendingPaymentRow[]> {
   const r = await query<PendingPaymentRow>(
     `SELECT a.id AS appointment_id, a.start_at, a.service_name_snapshot AS service_name,
-            a.price_snapshot, a.staff_id, st.name AS staff_name, a.contact_id, ct.name AS contact_name
+            a.price_snapshot, a.site_id, a.staff_id, st.name AS staff_name, a.contact_id, ct.name AS contact_name
        FROM appointments a
        JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
        LEFT JOIN staff st ON st.id = a.staff_id

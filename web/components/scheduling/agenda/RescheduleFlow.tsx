@@ -1,5 +1,6 @@
 "use client";
 
+import { apptClientLabel } from "@/lib/apptClientLabel";
 import { useEffect, useReducer, useRef, useState, useTransition, type RefObject } from "react";
 import { useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
 import { rescheduleAppointmentAction } from "@/lib/schedulingActions";
@@ -234,7 +235,7 @@ export function RescheduleFlow(props: {
   const dialogRef = useTrappedPanel({ active: !isPhone, onClose: props.onClose });
 
   const stepName = step === 1 ? "Nuevo horario" : "Confirmar cambio";
-  const keep = `${appt.contact_name ?? "Atención sin cita"} · ${appt.service_name} · ${appt.duration_min} min`;
+  const keep = `${apptClientLabel(appt)} · ${appt.service_name} · ${appt.duration_min} min`;
 
   // ── Shared pieces ────────────────────────────────────────────────────────────────
   const timesBlock = (phone: boolean) => (
@@ -285,7 +286,7 @@ export function RescheduleFlow(props: {
     const team = staffColors(props.staff.map((s) => s.id));
     return (
       <MScreen
-        label="Cambiar fecha y hora"
+        label="Reagendar"
         onEscape={() => (monthSheet ? setMonthSheet(false) : step === 2 ? setStep(1) : props.onClose())}
         header={
           <div className="flex flex-col gap-[10px]">
@@ -295,7 +296,7 @@ export function RescheduleFlow(props: {
               </MIconButton>
               <div className="-ml-1 flex min-w-0 flex-1 flex-col">
                 <h2 id={TITLE_ID} className="m-0 truncate text-[17px] font-semibold leading-[1.25]">
-                  Cambiar fecha y hora
+                  Reagendar
                 </h2>
                 <span className="text-[13px] text-m-tx3">
                   Paso {step} de 2 · {stepName}

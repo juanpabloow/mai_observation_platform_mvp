@@ -898,6 +898,34 @@ html:not(.dark)[data-sidebar-theme='light'] {
 /* Dark app: the canvas is #101012, so a #1a1a1a ground would sit LIGHTER than the
    panel and read as a hole. Drop the ground (and the rail on it) to near-black and give
    the panel a hairline so it lifts. Neutral greys only (R=G=B), like the black rail. */
+/*
+ * «Claro» with the default dark rail (2026-10-23 spec): the rail and the ground behind the
+ * content are GRAPHITE (#1A1A1A), and the content is a white card on top — 8px from the
+ * top, right and bottom, 16px radius, a 1px #E0E2E7 inner edge. The rail draws no border
+ * of its own. Light mode only: dark mode («Grafito») keeps its near-black values below,
+ * and whoever chose the Light rail keeps it.
+ * Contrast on #1A1A1A: #F5F5F7 ~16:1 · items #C7C7CC ~10.9:1 · sub-pages #A1A1A6 ~6.8:1 ·
+ * section labels #8E8E93 ~5.3:1 (all AA for text). Focus: the #2F6BE4 ring with an offset
+ * (~3.4:1 against the rail, AA for a non-text indicator).
+ */
+html:not(.dark)[data-sidebar-theme='black'] {
+  --sidebar-bg: #1a1a1a;
+  --sidebar-border: #2c2c2e;
+  --sidebar-fg: #f5f5f7;
+  --sidebar-muted: #c7c7cc;
+  --sidebar-sub: #a1a1a6;
+  --sidebar-section: #8e8e93;
+  --sidebar-tile: #2c2c2e;
+  --sidebar-field: #232325;
+  --sidebar-hover: #232325;
+  --frame-edge: #e0e2e7;
+}
+html:not(.dark)[data-sidebar-theme='black'] [data-collapsed] {
+  --focus-edge: #2f6be4;
+}
+html:not(.dark)[data-sidebar-theme='black'] [data-collapsed] :where(a, button, input, [tabindex]):focus-visible {
+  outline-offset: 2px;
+}
 html.dark {
   --sidebar-bg: #070707;
   --sidebar-border: #1f1f1f;
@@ -936,6 +964,22 @@ html.dark {
   body:has(aside[data-collapsed='true']) .u-module-modal {
     left: 64px;
   }
+}
+
+/*
+ * THE PAGE TITLE (2026-10-23, «mismo tamaño y posición de los títulos en todo»): every
+ * screen's title — Agenda, Equipo, Horarios, Servicios, Productos, Promociones, Contactos,
+ * Inbox… — is the same 24px / 600 / 30px line in the platform UI face, in PIXELS (the app
+ * runs a 90% root, so rem titles drifted to 23.4px). A phone keeps each screen's own
+ * smaller title; the face is shared at every size.
+ */
+.u-page-title {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+@media (min-width: 768px) {
+  .u-page-title { font-size: 24px; line-height: 30px; }
 }
 
 body {
@@ -2048,4 +2092,325 @@ body {
 }
 @media (prefers-reduced-motion: reduce) {
   .u-rail-group, .u-rail-group-inner, .u-rail-chevron { transition: none; }
+}
+
+/*
+ * ── Agenda side panel + schedule editors (Calendario · Equipo · Horarios, 2026-10-22) ──
+ * The floating 520px panel slides in 28px with opacity (200ms); the phone bottom sheet
+ * 40px (220ms); cards lift 1px on hover. Curve cubic-bezier(.2,.7,.2,1). Under
+ * prefers-reduced-motion every one of these is off and nothing waits on an animation.
+ * Usual breaks are drawn WITHOUT a border (routine), blocks/absences WITH one.
+ */
+@keyframes u-side-panel-in { from { opacity: 0; transform: translateX(28px); } to { opacity: 1; transform: none; } }
+@keyframes u-sheet-in { from { opacity: 0; transform: translateY(40px); } to { opacity: 1; transform: none; } }
+.u-side-panel-in { animation: u-side-panel-in 200ms cubic-bezier(0.2, 0.7, 0.2, 1); }
+.u-sheet-in { animation: u-sheet-in 220ms cubic-bezier(0.2, 0.7, 0.2, 1); }
+.u-lift { transition: transform 150ms cubic-bezier(0.2, 0.7, 0.2, 1), box-shadow 150ms ease; }
+.u-lift:hover { transform: translateY(-1px); }
+.u-sch-break {
+  background: repeating-linear-gradient(135deg, var(--chip) 0 6px, transparent 6px 12px), var(--subtle);
+  color: var(--muted);
+}
+.u-sch-block { background: var(--subtle); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.u-sch-review { box-shadow: inset 0 0 0 1.5px var(--warn-rule); }
+@media (prefers-reduced-motion: reduce) {
+  .u-side-panel-in, .u-sheet-in { animation: none; }
+  .u-lift, .u-lift:hover { transition: none; transform: none; }
+}
+
+/* Calendar card (redesign): white card, the SERVICE family's colour on its 1.5px edge. The
+   state is always also an icon + words on the card. Unconfirmed = dashed edge; cancelled =
+   grey, struck through. (Agenda's own model is in the `.u-ag` block below.) */
+.u-appt2 {
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--foreground);
+  border: 1.5px solid var(--appt-rule, var(--line-strong));
+}
+.u-appt2[data-status="scheduled"] { border-style: dashed; }
+.u-appt2[data-status="cancelled"] { border-color: var(--line-strong); background: var(--subtle); color: var(--muted); }
+.u-appt2-dot { background: var(--appt-rule, var(--faint)); }
+.u-st-ink-scheduled { color: var(--status-scheduled-fg); }
+.u-st-ink-confirmed { color: var(--status-confirmed-fg); }
+.u-st-ink-completed { color: var(--status-completed-fg); }
+.u-st-ink-no_show { color: var(--status-no_show-fg); }
+.u-st-ink-cancelled { color: var(--status-cancelled-fg); }
+.u-st-edge-scheduled { border-color: var(--status-scheduled-fg); }
+.u-st-edge-confirmed { border-color: var(--status-confirmed-fg); }
+.u-st-edge-completed { border-color: var(--status-completed-fg); }
+.u-st-edge-no_show { border-color: var(--status-no_show-fg); }
+.u-st-edge-cancelled { border-color: var(--status-cancelled-fg); }
+
+/*
+ * ── AGENDA · the approved «M_AI Agenda» reference, scoped ───────────────────────────
+ * Calendario, Equipo and Horarios y ausencias (and every panel they open — SidePanel
+ * renders inline, inside this scope) wear the reference's OWN tokens: its type face, its
+ * neutrals, its four service families and its state chips, in Claro and Grafito. Scoped
+ * to `.u-ag` on purpose: the rest of the platform keeps its tokens untouched, so this is
+ * not a global redesign. Values are the reference's (TH.claro / TH.grafito, PALS.contorno).
+ */
+.u-ag {
+  --background: #ffffff;
+  --surface: #ffffff;
+  --popover: #ffffff;
+  --chip: #f1f2f5;          /* soft */
+  --foreground: #111316;    /* ink */
+  --ag-ink2: #3a3d42;
+  --muted: #5e636b;
+  --faint: #5e636b;
+  --faintest: #80858d;
+  --line: #e4e6ea;
+  --line-strong: #d3d6dc;   /* fieldLine */
+  --line-soft: rgba(17, 19, 22, 0.06); /* line2 */
+  --line-row: rgba(17, 19, 22, 0.06);
+  --subtle: #f6f7f9;        /* hover */
+  --card: #f6f7f9;
+  --ink: #111316;
+  --ink-hover: #2a2d32;
+  --ink-fg: #ffffff;
+  --ag-seg: #ebedf0;
+  --ag-seg-on: #ffffff;
+  --ag-off: #f4f5f7;        /* offBg: blocks, "No trabaja", closed days */
+  --ag-break: rgba(17, 19, 22, 0.025);
+  --ag-prim-dis: #e6e8eb;
+  --ag-prim-dis-ink: #80858d;
+  --ag-pend-bg: #f4f1fb;
+  --ag-pend-ink: #4a3b78;
+  --danger: #c0262d;
+  --ag-danger-ink: #8e1b21;
+  --ag-danger-soft: #fcebeb;
+  --warn: #7a4a00;
+  --warn-soft: #fff4e0;
+  --success: #22573a;
+  --success-soft: #e5f1e9;
+  --closed-bg: #f4f5f7;
+  --closed-fg: #5e636b;
+  --shadow-card: none;
+  /* Service families (PALS.contorno): the 1.5px card edge and the 6px swatch. */
+  --appt-cut-rule: #2f5fd0;
+  --appt-grooming-rule: #b4561f;
+  --appt-color-rule: #8a3db0;
+  --appt-feature-rule: #18785d;
+  --appt-cut-edge: #2f5fd0;
+  --appt-grooming-edge: #b4561f;
+  --appt-color-edge: #8a3db0;
+  --appt-feature-edge: #18785d;
+  /* State chips (stChip): Sin confirmar amber · Confirmada grey · Completada green ·
+     Inasistencia red · Cancelada outlined. */
+  --status-scheduled-bg: #fff4e0;
+  --status-scheduled-fg: #7a4a00;
+  --status-confirmed-bg: #f1f2f5;
+  --status-confirmed-fg: #3a3d42;
+  --status-completed-bg: #e5f1e9;
+  --status-completed-fg: #22573a;
+  --status-no_show-bg: #fcebeb;
+  --status-no_show-fg: #8e1b21;
+  --status-cancelled-bg: transparent;
+  --status-cancelled-fg: #5e636b;
+  /* Avatars: the reference's four pastels, dark initials. */
+  --ag-av-1: #c9d3ee;
+  --ag-av-2: #e6d9c3;
+  --ag-av-3: #e3d6f0;
+  --ag-av-4: #d5e6da;
+  --ag-av-ink: #2b2d31;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  color: var(--foreground);
+}
+.dark .u-ag {
+  --background: #1c1c1e;
+  --surface: #1c1c1e;
+  --popover: #1c1c1e;
+  --chip: #2a2a2c;
+  --foreground: #f5f5f7;
+  --ag-ink2: #d1d1d6;
+  --muted: #a1a1a6;
+  --faint: #a1a1a6;
+  --faintest: #86868b;
+  --line: #2c2c2e;
+  --line-strong: #3a3a3c;
+  --line-soft: rgba(255, 255, 255, 0.06);
+  --line-row: rgba(255, 255, 255, 0.06);
+  --subtle: #242426;
+  --card: #242426;
+  --ink: #f5f5f7;
+  --ink-hover: #ffffff;
+  --ink-fg: #111113;
+  --ag-seg: #141416;
+  --ag-seg-on: #3a3a3c;
+  --ag-off: #202022;
+  --ag-break: rgba(255, 255, 255, 0.03);
+  --ag-prim-dis: #2c2c2e;
+  --ag-prim-dis-ink: #86868b;
+  --ag-pend-bg: rgba(155, 135, 201, 0.16);
+  --ag-pend-ink: #cdbef0;
+  --danger: #ff8a8a;
+  --ag-danger-ink: #ffb3b3;
+  --ag-danger-soft: rgba(229, 72, 77, 0.15);
+  --warn: #f2c46e;
+  --warn-soft: rgba(245, 180, 70, 0.14);
+  --success: #9ad7b0;
+  --success-soft: rgba(110, 190, 140, 0.15);
+  --closed-bg: #202022;
+  --closed-fg: #a1a1a6;
+  --appt-cut-rule: #7fa2f0;
+  --appt-grooming-rule: #e59466;
+  --appt-color-rule: #c58be3;
+  --appt-feature-rule: #5cc4a2;
+  --appt-cut-edge: #7fa2f0;
+  --appt-grooming-edge: #e59466;
+  --appt-color-edge: #c58be3;
+  --appt-feature-edge: #5cc4a2;
+  --status-scheduled-bg: rgba(245, 180, 70, 0.14);
+  --status-scheduled-fg: #f2c46e;
+  --status-confirmed-bg: #2a2a2c;
+  --status-confirmed-fg: #d1d1d6;
+  --status-completed-bg: rgba(110, 190, 140, 0.15);
+  --status-completed-fg: #9ad7b0;
+  --status-no_show-bg: rgba(229, 72, 77, 0.15);
+  --status-no_show-fg: #ffb3b3;
+  --status-cancelled-bg: transparent;
+  --status-cancelled-fg: #a1a1a6;
+  --ag-av-1: rgba(255, 255, 255, 0.12);
+  --ag-av-2: rgba(255, 255, 255, 0.12);
+  --ag-av-3: rgba(255, 255, 255, 0.12);
+  --ag-av-4: rgba(255, 255, 255, 0.12);
+  --ag-av-ink: #f5f5f7;
+}
+/* Times and counts read in the reference's face with tabular figures, not a mono. */
+.u-ag .u-mono { font-family: inherit; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.u-ag .u-status-cancelled { box-shadow: inset 0 0 0 1px var(--line); }
+/* The reference's avatar: pastel, initials at 36% of the size, weight 500. */
+.u-ag-av { display: inline-flex; flex: none; align-items: center; justify-content: center; font-weight: 500; letter-spacing: 0.02em; color: var(--ag-av-ink); background: var(--ag-av-1); }
+.u-ag-av[data-tint="2"] { background: var(--ag-av-2); }
+.u-ag-av[data-tint="3"] { background: var(--ag-av-3); }
+.u-ag-av[data-tint="4"] { background: var(--ag-av-4); }
+/* Usual break: routine, full lane width, no edge. Block: off fill with a hairline. */
+/* Unavailable time is HATCHED (audit 23 Oct: flat fills read like the rest of the grid in
+   Grafito). Three levels, so they are told apart without colour alone:
+     pausa        the faintest diagonal, no edge
+     ausencia / bloqueo de UNA persona   a firmer diagonal + hairline (only in her lane)
+     sede cerrada a crosshatch + hairline (in every lane: it closes the site for everyone)
+   Appointments sit on top (opaque); labels avoid them (tileLabel in AgendaView). */
+.u-ag { --ag-hatch-soft: rgba(17, 19, 22, 0.06); --ag-hatch: rgba(17, 19, 22, 0.09); }
+.dark .u-ag { --ag-hatch-soft: rgba(255, 255, 255, 0.06); --ag-hatch: rgba(255, 255, 255, 0.09); }
+.u-ag .u-sch-break { background: repeating-linear-gradient(135deg, var(--ag-hatch-soft) 0 1px, transparent 1px 8px), var(--ag-break); color: var(--muted); }
+.u-ag .u-sch-block { background: repeating-linear-gradient(135deg, var(--ag-hatch) 0 1px, transparent 1px 7px), var(--ag-off); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
+.u-ag .u-sch-closed { background: repeating-linear-gradient(135deg, var(--ag-hatch) 0 1px, transparent 1px 7px), repeating-linear-gradient(45deg, var(--ag-hatch) 0 1px, transparent 1px 7px), var(--ag-off); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-strong); }
+/* ONE colour model (2026-10-23, «los colores según el tipo de servicio»): the colour is
+   ALWAYS the service family; the state is how the card wears it —
+     Confirmada    contour only (1.5px service edge on white)
+     Sin confirmar the same contour, dashed
+     Completada    filled with the service colour (16 %, 22 % on hover; Grafito 22 / 28 %)
+     Cancelada     1px dashed field line, transparent, struck through (unchanged)
+   The ○ / ✓ / ✓✓ icon and the word stay on every card: colour is never the only signal.
+   Day cards and week chips share it. There is no «Servicio | Estado» switch any more. */
+.u-ag .u-appt2 { border-radius: 10px; background: var(--surface); border: 1.5px solid var(--appt-rule, var(--line-strong)); }
+.u-ag .u-appt2[data-status="scheduled"] { border-style: dashed; }
+.u-ag .u-appt2[data-status="cancelled"] { border: 1px dashed var(--line-strong); background: var(--surface); color: var(--muted); }
+/* Every card is OPAQUE (audit 23 Oct): a pause or block under it must never read through
+   its text. Grafito's lift is mixed into the surface instead of a translucent white. */
+.dark .u-ag .u-appt2 { background: color-mix(in srgb, #ffffff 3%, var(--surface)); }
+.dark .u-ag .u-appt2[data-status="cancelled"] { background: var(--surface); }
+.u-ag .u-appt2:where(:not([data-status="cancelled"])):hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 6%, var(--surface)); }
+.u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 16%, var(--surface)); }
+.u-ag .u-appt2[data-status="completed"]:hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 22%, var(--surface)); }
+.dark .u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 22%, var(--surface)); }
+.dark .u-ag .u-appt2[data-status="completed"]:hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 28%, var(--surface)); }
+.u-ag .u-appt2-dot { border-radius: 2px; }
+/* A completed appointment's state chip fills with its service colour (as the card does),
+   never the generic green; with no service in context (legend, filters) it is neutral grey.
+   The ✓✓ and the word stay. */
+.u-ag .u-ag-done-chip { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 18%, var(--surface)); color: var(--foreground); border-color: transparent; }
+.dark .u-ag .u-ag-done-chip { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 28%, transparent); }
+/* Selected: a 2px ink ring that wins over hover (doubled attribute = one notch more specific). */
+.u-ag .u-appt2[data-selected][data-selected] { box-shadow: 0 0 0 2px var(--foreground); }
+.u-ag { --ag-segact-bg: #111316; --ag-segact-fg: #ffffff; --ag-today: #fafbfc; }
+.dark .u-ag { --ag-segact-bg: #3a3d43; --ag-segact-fg: #f5f5f7; --ag-today: rgba(255, 255, 255, 0.02); }
+/* Agenda panels (reference LS.drawer): 520px, 12px from the frame, 18px radius, a hairline
+   ring and a soft lift; header 20/16/16/20, body 4/20/20, actions bar 12/20. Buttons are the
+   reference's btn1/btn2, one step compact (32px · 9px · 13/500) and fields 34px · 9px · 13px; on a phone
+   48px · 12px · 15–16px. Focus is the reference's blue ring. */
+.u-ag { --focus-edge: #2f6be4; --ag-panel-line: #e0e2e7; --ag-panel-shadow: 0 18px 48px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.05); }
+.dark .u-ag { --focus-edge: #8ab4ff; --ag-panel-line: #2a2a2c; --ag-panel-shadow: 0 18px 48px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3); }
+@media (min-width: 768px) {
+  .u-ag [data-side-panel] .u-btn { height: 32px; border-radius: 9px; font-size: 13px; font-weight: 500; padding-left: 14px; padding-right: 14px; }
+  .u-ag [data-side-panel] .u-btn-secondary { padding-left: 12px; padding-right: 12px; }
+  .u-ag [data-side-panel] input.u-field:not([type="checkbox"]):not([type="radio"]),
+  .u-ag [data-side-panel] select.u-field { height: 34px; border-radius: 9px; font-size: 13px; padding-left: 11px; padding-right: 11px; }
+  .u-ag [data-side-panel] textarea.u-field { border-radius: 9px; font-size: 13px; }
+}
+/*
+ * COMPACT DESKTOP DENSITY (on request, 2026-10-22: «todo está muy grande y la sidebar muy
+ * compacta»). The agenda steps down ONE size to the rail's rhythm (13px text, 32–34px rows):
+ * body 14→13, 15→14, 13.5→13; controls 40→34, 36→32, 38→34; 20px titles of a section → 18.
+ * Scoped to `.u-ag` from 768px, so a phone keeps its 44–48px targets and 15–16px text, and
+ * nothing outside Agenda changes. Remove this block to return to the reference's sizes.
+ */
+@media (min-width: 768px) {
+  .u-ag .text-\[15px\] { font-size: 14px; }
+  .u-ag .text-\[14px\] { font-size: 13px; }
+  .u-ag .text-\[13\.5px\] { font-size: 13px; }
+  .u-ag .text-\[20px\] { font-size: 18px; line-height: 24px; }
+  .u-ag .h-\[40px\] { height: 34px; }
+  .u-ag .size-\[40px\] { width: 34px; height: 34px; }
+  .u-ag .h-\[38px\] { height: 34px; }
+  .u-ag .h-\[36px\] { height: 32px; }
+  .u-ag .min-h-\[40px\] { min-height: 34px; }
+  .u-ag .min-h-\[48px\] { min-height: 40px; }
+  /* The shared Button (40/36px on desktop) joins the toolbar: 32px, 13px. */
+  .u-ag .u-btn { height: 32px; border-radius: 9px; font-size: 13px; }
+}
+@media (max-width: 767.98px) {
+  .u-ag [data-side-panel] .u-btn { height: 48px; border-radius: 12px; font-size: 15px; font-weight: 500; }
+  .u-ag [data-side-panel] input.u-field:not([type="checkbox"]):not([type="radio"]),
+  .u-ag [data-side-panel] select.u-field { height: 48px; border-radius: 10px; font-size: 16px; }
+}
+.u-ag { --ag-done-bar: #7dbf93; }
+.dark .u-ag { --ag-done-bar: #6ebe8c; }
+.u-ag [data-side-panel] .u-btn-primary:disabled { background: var(--ag-prim-dis); color: var(--ag-prim-dis-ink); opacity: 1; }
+.u-ag .u-btn-primary { font-weight: 500; }
+/* Weekly timeline (reference HK.blanco): dark bar, white range text, light handles; a
+   break is hatched over the bar. */
+.u-ag { --ag-bar: #3a3d42; --ag-bar-ink: #ffffff; --ag-bar-handle: rgba(255, 255, 255, 0.5); }
+.dark .u-ag { --ag-bar: #c9cdd3; --ag-bar-ink: #111316; --ag-bar-handle: rgba(0, 0, 0, 0.35); }
+.u-ag-hatch { background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.85) 0 3px, rgba(255, 255, 255, 0.25) 3px 6px); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6); }
+.dark .u-ag-hatch { background: repeating-linear-gradient(135deg, rgba(17, 19, 22, 0.7) 0 3px, rgba(17, 19, 22, 0.2) 3px 6px); box-shadow: inset 0 0 0 1px rgba(17, 19, 22, 0.5); }
+/* The reference's switch (sw/knob): 36×22 desktop, 48×28 on a phone; ink when on. */
+.u-ag-switch { appearance: none; position: relative; flex: none; width: 36px; height: 22px; border-radius: 999px; background: var(--line-strong); cursor: pointer; transition: background 160ms; }
+.u-ag-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left 160ms; }
+.u-ag-switch:checked { background: var(--ink); }
+.u-ag-switch:checked::after { left: 17px; background: var(--ink-fg); }
+.u-ag-switch:focus-visible { outline: 2px solid var(--focus-edge); outline-offset: 2px; }
+@media (max-width: 767.98px) { .u-ag-switch { width: 48px; height: 28px; } .u-ag-switch::after { width: 22px; height: 22px; } .u-ag-switch:checked::after { left: 23px; } }
+@media (prefers-reduced-motion: reduce) { .u-ag-switch, .u-ag-switch::after { transition: none; } }
+/* Grid selection feedback: the box follows the pointer smoothly and breathes while live;
+   the menu pops in; the booking draft fades in. All still under reduced motion. */
+@keyframes u-pop-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes u-select-live { 0%, 100% { box-shadow: 0 0 0 0 rgba(17, 19, 22, 0.08); } 50% { box-shadow: 0 0 0 4px rgba(17, 19, 22, 0.06); } }
+.u-pop-in { animation: u-pop-in 150ms cubic-bezier(0.2, 0.7, 0.2, 1); transform-origin: top left; }
+.u-ag-select { transition: top 70ms ease-out, height 70ms ease-out; }
+.u-ag-select-live { animation: u-select-live 1.2s ease-in-out infinite; }
+.u-ag-ghost { animation: u-pop-in 180ms cubic-bezier(0.2, 0.7, 0.2, 1); transition: top 120ms ease-out, height 160ms ease-out; }
+/* FEEDBACK (2026-10-23). Short, only on the person's own action — never on the background
+   refresh, which re-renders without remounting anything:
+   · u-ag-flash: an appointment the server has just CONFIRMED saved/moved — a halo that fades
+     once (≈1.4 s). It replaces a blinking pulse: the calendar must not flicker.
+   · u-ag-busy-dot: «recalculando…» next to the words that say it.
+   · Menus open with u-pop-in (150 ms); panels with u-side-panel-in (200 ms). */
+@keyframes u-ag-flash { 0% { box-shadow: 0 0 0 2px var(--foreground), 0 0 0 6px color-mix(in srgb, var(--foreground) 18%, transparent); } 70% { box-shadow: 0 0 0 2px var(--foreground), 0 0 0 10px transparent; } 100% { box-shadow: 0 0 0 2px var(--foreground), 0 0 0 10px transparent; } }
+.u-ag .u-ag-flash { animation: u-ag-flash 1400ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes u-ag-busy { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+.u-ag-busy-dot { animation: u-ag-busy 1.1s ease-in-out infinite; }
+@media (prefers-reduced-motion: reduce) {
+  .u-pop-in, .u-ag-ghost, .u-ag-select-live, .u-ag-busy-dot { animation: none; }
+  /* Reduced motion: the confirmation is a still ring for the same moment, no halo. */
+  .u-ag .u-ag-flash { animation: none; box-shadow: 0 0 0 2px var(--foreground); }
+  .u-ag .animate-pulse { animation: none; }
+  .u-ag-select, .u-ag-ghost { transition: none; }
+}
+
+/* Phone: a screen whose own header carries the menu (MobileMenuButton) needs no top strip. */
+@media (max-width: 767.98px) {
+  body:has([data-integrated-nav]) .u-topbar { display: none; }
 }

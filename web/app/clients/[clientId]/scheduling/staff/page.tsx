@@ -12,6 +12,7 @@ import { listStaffCertifications } from "@worker/db/repositories/scheduling/staf
 import { listServices, listStaffServiceIds } from "@worker/db/repositories/scheduling/services.js";
 import { listAppointments } from "@worker/db/repositories/scheduling/appointments.js";
 import { listExceptions } from "@worker/db/repositories/scheduling/exceptions.js";
+import { loadOccurrences } from "@worker/db/repositories/scheduling/series.js";
 import { utcToZonedParts, zonedPartsToUtc } from "@worker/scheduling/timezone.js";
 import { StaffWorkspace } from "@/components/scheduling/staff/StaffWorkspace";
 import { isR2Configured } from "@/lib/r2";
@@ -95,7 +96,7 @@ async function loadRoster(
   const windowStart = new Date(dayStart.getTime() - 30 * 86400_000);
   const windowEnd = new Date(dayStart.getTime() + 30 * 86400_000);
 
-  const [staff, services, todayAppts, windowAppts, exceptions] = await Promise.all([
+  const [staff, services, todayAppts, windowAppts, exceptions, todayOccurrences] = await Promise.all([
     // includeInactive: the PHONE roster lists inactive professionals (labelled), and the
     // site's avatar colours are built over every staff id, as on the agenda. The desktop
     // roster still receives the ACTIVE ones only (StaffWorkspace filters), as before.
@@ -105,6 +106,9 @@ async function loadRoster(
     listAppointments(tenantId, { siteId: site.id, clientId, from: windowStart, to: windowEnd, limit: 1000 }),
     // Time Off tab shows PAST + upcoming blocks, so the window reaches back too.
     listExceptions(tenantId, { siteId: site.id, from: windowStart, to: windowEnd }),
+    // Today's RECURRING blocks — for «who is away now» only (the Ausencias tab lists the
+    // series themselves). Breaks are not absences.
+    loadOccurrences({ tenantId, siteId: site.id, timeZone: site.timezone, from: dayStart, to: dayEnd, staffIds: null }),
   ]);
 
   // One grouped query each instead of one per barber — the roster is the only place
@@ -117,9 +121,20 @@ async function loadRoster(
 
   const openingHours = (site.opening_hours ?? {}) as Record<string, { start: string; end: string }[]>;
   // Site-wide closures (no staff named): nobody is "en turno" during one — on any width.
-  const closures = exceptions
-    .filter((e) => !e.staff_id)
-    .map((e) => ({ id: e.id, staffId: "", startsAt: e.starts_at.toISOString(), endsAt: e.ends_at.toISOString(), reason: e.reason, publicReason: e.public_reason ?? null }));
+  const todayBlocks = todayOccurrences.filter((o) => o.kind === "block");
+  const closures = [
+    ...exceptions
+      .filter((e) => !e.staff_id)
+      .map((e) => ({ id: e.id, staffId: "", startsAt: e.starts_at.toISOString(), endsAt: e.ends_at.toISOString(), reason: e.reason, publicReason: e.public_reason ?? null })),
+    // A recurring site-wide block happening today closes the site too.
+    ...todayBlocks
+      .filter((o) => o.staff_id === null)
+      .map((o) => ({ id: `${o.series_id}:${o.date}`, staffId: "", startsAt: o.from.toISOString(), endsAt: o.until.toISOString(), reason: o.reason, publicReason: o.public_reason ?? null })),
+  ];
+  /** Recurring blocks of one professional happening today: «away now» for presence only. */
+  const presenceBlocks = todayBlocks
+    .filter((o) => o.staff_id !== null)
+    .map((o) => ({ id: `${o.series_id}:${o.date}`, staffId: o.staff_id as string, startsAt: o.from.toISOString(), endsAt: o.until.toISOString(), reason: o.reason, publicReason: o.public_reason ?? null }));
 
   const staffProps: StaffTabProps = {
     // A public photo can be uploaded only where object storage is configured.
@@ -209,6 +224,7 @@ async function loadRoster(
       })),
     openingHours,
     closures,
+    presenceBlocks,
   };
 
   return { staff: staffProps };

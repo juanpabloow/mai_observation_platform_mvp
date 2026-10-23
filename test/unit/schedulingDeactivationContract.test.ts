@@ -32,7 +32,7 @@ test('AgendaView shows an inactive lane chip but offers only active staff for ne
   assert.ok(/const activeStaff\s*=\s*props\.staff\.filter\(\(staff\)\s*=>\s*staff\.active\)/.test(src), 'the booking picker filters to active staff');
   // The popover filters activeStaff by the search term before mapping, so the
   // inactive roster still never reaches a selectable option.
-  assert.match(src, /activeStaff\s*\n?\s*\.filter\(\(c\) => c\.name/, 'only the active roster is rendered in the booking picker');
+  assert.ok(src.includes('const staffChoices = props.lockStaffId ? activeStaff.filter((s) => s.id === props.lockStaffId) : activeStaff;'), 'only the active roster is rendered in the booking picker');
 });
 
 test('every deactivate has an inverse: site/service in AdminPanel, staff on the Staff roster', () => {

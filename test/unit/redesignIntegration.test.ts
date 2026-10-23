@@ -27,13 +27,14 @@ test('service creation keeps normalized descriptions AND transactional site link
   assert.match(read('web/components/scheduling/services/ServiceEditor.tsx'), /description.trim\(\).length > SERVICE_DESCRIPTION_MAX/);
 });
 
-test('week cards retain preview, two-card overflow AND kept-appointment block warnings', () => {
+test('week chips retain preview, the +N overflow AND kept-appointment block warnings', () => {
   const agenda = read('web/components/scheduling/AgendaView.tsx');
-  const cards = agenda.slice(agenda.indexOf('{shown.map((appt)'), agenda.indexOf('{rest.length > 0', agenda.indexOf('{shown.map((appt)')));
-  assert.match(cards, /conflict=\{conflictIds.has\(appt.id\)\}/);
-  assert.match(cards, /previewProps=\{previewProps\(appt\)\}/);
-  assert.match(cards, /onOpen=\{\(\) => openAppointment\(appt.id\)\}/);
-  assert.match(agenda, /const \[lead, second, ...rest\] = block.appointments/);
+  const board = agenda.slice(agenda.indexOf('function WeekTeamBoard('), agenda.indexOf('function WeekOverflowDialog('));
+  assert.match(board, /c\.a\.review\.length > 0 \|\| conflictIds\.has\(c\.a\.id\)/);
+  assert.match(board, /requiere revisión/);
+  assert.match(board, /\{\.\.\.previewFor\(c\.a\)\}/);
+  assert.match(board, /onClick=\{\(\) => onOpen\(c\.a\.id\)\}/);
+  assert.match(board, /\+\{rest\.length\} más/);
   assert.match(agenda, /<BlockBand[\s\S]{0,650}mode: "editBlock"/);
 });
 

@@ -135,6 +135,8 @@ export function TeamMember({
   return (
     <>
       <header className="sticky top-[calc(var(--content-pad)*-1)] z-10 flex-none border-b border-m-bd bg-m-sf px-2 pb-[14px] pt-[6px]">
+        {/* A sub-screen with its own «‹ back»: the phone's top strip is redundant here (globals.css). */}
+        <span hidden data-integrated-nav="" />
         <div className="flex min-h-[44px] items-center">
           <Link
             href={listHref}

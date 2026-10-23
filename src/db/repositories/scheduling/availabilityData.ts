@@ -3,6 +3,7 @@ import { query } from '../../client.js';
 import { computeAvailability } from '../../../scheduling/availability.js';
 import type { AvailabilityRequest, SchedulingConfig, Slot, WeeklyHours } from '../../../scheduling/types.js';
 import type { ExplainException, PublicAbsenceReason } from '../../../scheduling/availabilityExplain.js';
+import { loadOccurrences } from './series.js';
 
 /**
  * Assembles the pure availability engine's input from the DB and runs it. THE
@@ -38,12 +39,18 @@ export interface LoadAvailabilityParams {
    *  with the appointment's own snapshot (the interval it will actually occupy), so a later
    *  catalogue change can neither block a valid move nor let an invalid one through. */
   timingOverride?: { durationMin: number; bufferBeforeMin: number; bufferAfterMin: number } | null;
+  /** IMMEDIATE WALK-IN only (src/scheduling/immediate.ts): drop the site's minimum notice.
+   *  Every other rule stays. Only the agenda's walk-in path sets it — never the bot or the
+   *  public page. */
+  ignoreMinNotice?: boolean;
 }
 
 export interface AvailabilityResult {
   site: { id: string; tenant_id: string; client_id: string; timezone: string; slug: string; name: string };
   /** Buffers applied to every staff (service-level / site defaults). */
   buffers: { before_min: number; after_min: number };
+  /** The site's slot grid (minutes) — the immediate walk-in window is derived from it. */
+  slotIntervalMin: number;
   slots: Slot[];
 }
 
@@ -130,6 +137,7 @@ export async function resolveEffectivePrice(
 export interface PreparedAvailability {
   site: AvailabilityResult['site'];
   buffers: AvailabilityResult['buffers'];
+  slotIntervalMin: number;
   request: AvailabilityRequest | null;
 }
 
@@ -138,7 +146,7 @@ export async function loadAvailability(params: LoadAvailabilityParams): Promise<
   const prepared = await prepareAvailability(params);
   if (!prepared) return null;
   const slots = prepared.request ? computeAvailability(prepared.request) : [];
-  return { site: prepared.site, buffers: prepared.buffers, slots };
+  return { site: prepared.site, buffers: prepared.buffers, slotIntervalMin: prepared.slotIntervalMin, slots };
 }
 
 /**
@@ -181,7 +189,8 @@ export async function prepareAvailability(params: LoadAvailabilityParams): Promi
     slug: site.slug,
     name: site.name,
   };
-  if (staffRows.rows.length === 0) return { site: resultSite, buffers, request: null };
+  const slotIntervalMin = site.scheduling_config.slot_interval_min;
+  if (staffRows.rows.length === 0) return { site: resultSite, buffers, slotIntervalMin, request: null };
   const staffIds = staffRows.rows.map((s) => s.id);
 
   const busyRows = await query<{ staff_id: string; blocked_from: Date; blocked_until: Date }>(
@@ -202,9 +211,22 @@ export async function prepareAvailability(params: LoadAvailabilityParams): Promi
     [params.tenantId, params.siteId, params.from, params.to, staffIds],
   );
 
-  const siteExceptions = excRows.rows
-    .filter((e) => e.staff_id === null)
-    .map((e) => ({ from: e.starts_at, until: e.ends_at }));
+  // Usual breaks and recurring blocks (schedule_series, migration 1819) are blocked time
+  // exactly like a dated block: a site row applies to every professional, a staff row to
+  // that one. Same subtraction, so agenda, bot and public page can never diverge.
+  const occurrences = await loadOccurrences({
+    tenantId: params.tenantId,
+    siteId: params.siteId,
+    timeZone: site.timezone,
+    from: params.from,
+    to: params.to,
+    staffIds,
+  });
+
+  const siteExceptions = [
+    ...excRows.rows.filter((e) => e.staff_id === null).map((e) => ({ from: e.starts_at, until: e.ends_at })),
+    ...occurrences.filter((o) => o.staff_id === null).map((o) => ({ from: o.from, until: o.until })),
+  ];
 
   const staff = staffRows.rows.map((s) => ({
     id: s.id,
@@ -221,7 +243,10 @@ export async function prepareAvailability(params: LoadAvailabilityParams): Promi
           buffer_after_min: buffers.after_min,
         },
     busy: busyRows.rows.filter((b) => b.staff_id === s.id).map((b) => ({ from: b.blocked_from, until: b.blocked_until })),
-    exceptions: excRows.rows.filter((e) => e.staff_id === s.id).map((e) => ({ from: e.starts_at, until: e.ends_at })),
+    exceptions: [
+      ...excRows.rows.filter((e) => e.staff_id === s.id).map((e) => ({ from: e.starts_at, until: e.ends_at })),
+      ...occurrences.filter((o) => o.staff_id === s.id).map((o) => ({ from: o.from, until: o.until })),
+    ],
   }));
 
   const request: AvailabilityRequest = {
@@ -229,7 +254,7 @@ export async function prepareAvailability(params: LoadAvailabilityParams): Promi
       id: site.id,
       timezone: site.timezone,
       opening_hours: site.opening_hours,
-      scheduling_config: site.scheduling_config,
+      scheduling_config: params.ignoreMinNotice ? { ...site.scheduling_config, min_notice_min: 0 } : site.scheduling_config,
     },
     staff,
     siteExceptions,
@@ -237,7 +262,7 @@ export async function prepareAvailability(params: LoadAvailabilityParams): Promi
     to: params.to,
     now: params.now,
   };
-  return { site: resultSite, buffers, request };
+  return { site: resultSite, buffers, slotIntervalMin, request };
 }
 
 /**
@@ -252,7 +277,14 @@ export async function loadExplainExceptions(params: {
   from: Date;
   to: Date;
   staffIds: string[];
-}): Promise<{ site: ExplainException[]; staff: Map<string, ExplainException[]> }> {
+}): Promise<{
+  site: ExplainException[];
+  staff: Map<string, ExplainException[]>;
+  /** Usual breaks (schedule_series kind=break): time the schedule does not work — read like
+   *  the gaps in weekly hours they replace (off shift), never as an absence or a closure. */
+  siteBreaks: Array<{ from: Date; until: Date }>;
+  staffBreaks: Map<string, Array<{ from: Date; until: Date }>>;
+}> {
   const r = await query<{ staff_id: string | null; starts_at: Date; ends_at: Date; public_reason: PublicAbsenceReason | null }>(
     `SELECT staff_id, starts_at, ends_at, public_reason
        FROM schedule_exceptions
@@ -260,14 +292,39 @@ export async function loadExplainExceptions(params: {
         AND (staff_id IS NULL OR staff_id = ANY($5::uuid[]))`,
     [params.tenantId, params.siteId, params.from, params.to, params.staffIds],
   );
+  const tz = await query<{ timezone: string }>(`SELECT timezone FROM sites WHERE tenant_id = $1 AND id = $2`, [
+    params.tenantId,
+    params.siteId,
+  ]);
+  const occurrences = tz.rows[0]
+    ? await loadOccurrences({
+        tenantId: params.tenantId,
+        siteId: params.siteId,
+        timeZone: tz.rows[0].timezone,
+        from: params.from,
+        to: params.to,
+        staffIds: params.staffIds,
+      })
+    : [];
   const staff = new Map<string, ExplainException[]>();
   const site: ExplainException[] = [];
-  for (const e of r.rows) {
-    const x = { from: e.starts_at, until: e.ends_at, public_reason: e.public_reason };
-    if (e.staff_id === null) site.push(x);
-    else staff.set(e.staff_id, [...(staff.get(e.staff_id) ?? []), x]);
+  const push = (staffId: string | null, x: ExplainException) => {
+    if (staffId === null) site.push(x);
+    else staff.set(staffId, [...(staff.get(staffId) ?? []), x]);
+  };
+  for (const e of r.rows) push(e.staff_id, { from: e.starts_at, until: e.ends_at, public_reason: e.public_reason });
+  const siteBreaks: Array<{ from: Date; until: Date }> = [];
+  const staffBreaks = new Map<string, Array<{ from: Date; until: Date }>>();
+  for (const o of occurrences) {
+    if (o.kind === 'block') {
+      push(o.staff_id, { from: o.from, until: o.until, public_reason: o.public_reason });
+    } else if (o.staff_id === null) {
+      siteBreaks.push({ from: o.from, until: o.until });
+    } else {
+      staffBreaks.set(o.staff_id, [...(staffBreaks.get(o.staff_id) ?? []), { from: o.from, until: o.until }]);
+    }
   }
-  return { site, staff };
+  return { site, staff, siteBreaks, staffBreaks };
 }
 
 /** Whether a specific (start, staff) is currently bookable — used by the booking

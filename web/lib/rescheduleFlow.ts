@@ -200,3 +200,35 @@ export function rescheduleBlockedReason(input: { status: string; allowed: boolea
   if (!input.allowed) return `Esta cita es de ${input.staffName ? staffFirstName(input.staffName) : "otro profesional"}: solo esa persona o quien administra la agenda puede cambiarla.`;
   return null;
 }
+
+// ── Why a day offers nothing, and what is close by ───────────────────────────────
+
+/** The engine's per-day summary (internal availability `explain=1`) in the words of the
+ *  agenda. Distinguishes a closed SITE from ONE professional's absence: a person's
+ *  vacation never reads as "Sede cerrada". */
+export function dayReasonLabel(summary: string | null | undefined): string | null {
+  switch (summary) {
+    case undefined:
+    case null:
+    case "available":
+      return null;
+    case "site_closed_day":
+    case "outside_site_hours":
+    case "site_closure":
+      return "Sede cerrada";
+    case "absence":
+      return "Profesional ausente";
+    case "off_shift":
+      return "No trabaja este día";
+    default:
+      return "Sin horas disponibles";
+  }
+}
+
+/** After "ese horario acaba de ocuparse": the free times closest to the one wanted. */
+export function nearestAlternatives(times: RescheduleSlot[], wanted: string | null, n = 3): RescheduleSlot[] {
+  if (!wanted) return times.slice(0, n);
+  const w = Date.parse(wanted);
+  return [...times].sort((a, b) => Math.abs(Date.parse(a.start_at) - w) - Math.abs(Date.parse(b.start_at) - w)).slice(0, n)
+    .sort((a, b) => a.start_at.localeCompare(b.start_at));
+}

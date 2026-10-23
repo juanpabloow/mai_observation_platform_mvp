@@ -21,6 +21,8 @@ export interface MBlock {
   starts_at: string;
   ends_at: string;
   reason: string | null;
+  /** An occurrence of a usual break / recurring block (schedule_series), not a dated block. */
+  series?: "break" | "block";
 }
 
 export type DayItem<A extends MAppt> =

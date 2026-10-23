@@ -2,12 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition, type RefObject } from "react";
 import { AutoRefresh } from "@/components/AutoRefresh";
-import { PageShell } from "@/components/ui/PageShell";
-import { PageHeading } from "@/components/ui/PageTitle";
-import { dayBlocks, hourState, type AgendaBlock, type DayBlock } from "@/lib/agendaBlocks";
-import { AttentionChip, Avatar, FIELD, INPUT, POPOVER, Spinner, StatusChip, buttonClass, segmentClass, segmentShell } from "./ui/system";
+import { AttentionChip, Avatar, Button, INPUT, buttonClass } from "./ui/system";
 import { MobileAgenda } from "./mobile/MobileAgenda";
 import {
   Icon,
@@ -29,11 +26,10 @@ import {
   staffColors,
 } from "./mobile/kit";
 import { OVERLAY_SCRIM, useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
-import { dayHeadline, monthTitle } from "@/lib/siteCalendar";
-import { apptCategory, apptCategoryClass, serviceCategory, type ApptCategory } from "@/lib/agendaCategory";
+import { blockSpanLabel, dayHeadline, monthTitle } from "@/lib/siteCalendar";
+import { apptCategoryClass, serviceCategory, type ApptCategory } from "@/lib/agendaCategory";
+import { apptClientLabel } from "@/lib/apptClientLabel";
 import { priceLabelCOP } from "@/lib/money";
-import { TimeOffForm } from "@/components/scheduling/timeoff/TimeOffForm";
-import { deleteTimeOffAction } from "@/lib/timeOffActions";
 import {
   cancelAppointmentAction,
   completeAppointmentAction,
@@ -44,11 +40,25 @@ import {
   getReviewLinkAction,
   rescheduleAppointmentAction,
   searchSchedulingContactsAction,
+  recentSchedulingContactsAction,
   type ContactSearchHit,
 } from "@/lib/schedulingActions";
+import { ChargePanel } from "./agenda/ChargePanel";
+import { PendingChargesPanel } from "./agenda/PendingChargesPanel";
 import { AppointmentPanel } from "./agenda/AppointmentPanel";
+import { useNavigationGuard } from "@/components/ui/module/useEditorGuard";
+import type { ContactMatch } from "@/lib/walkInContact";
 import { RescheduleFlow } from "./agenda/RescheduleFlow";
+import { WalkInPanel } from "./agenda/WalkInPanel";
+import { BlockPanel } from "./agenda/BlockPanel";
+import { SeriesPanel } from "./agenda/SeriesPanel";
+import { BreakWeekPanel } from "./agenda/BreakWeekPanel";
+import { AffectedReschedulePanel } from "./agenda/AffectedReschedulePanel";
+import type { AffectedItem } from "./agenda/ScheduleFormParts";
+import { adoptLegacyBreakAction } from "@/lib/scheduleSeriesActions";
 import { AppointmentPreview } from "./agenda/AppointmentPreview";
+import { SidePanel, PanelSection, type SidePanelHandle } from "./agenda/SidePanel";
+import { AG_HEAD_CAL, AgAvatar, agTintAt, ALL_STATES, DateTitle, FiltersPopover, GearMenu, STATE_GLYPH, STATE_WORD, StateChip, TB_ICON, TB_PRIMARY, agendaTitle } from "./agenda/AgendaChrome";
 
 /** Serializable shapes passed from the server page. */
 interface SiteOpt { id: string; name: string; timezone: string }
@@ -101,6 +111,31 @@ export interface Appt {
   source_conversation_id: string | null;
   /** Server-computed: may this login act on this appointment (gateAppointment's checks). */
   can_modify: boolean;
+  /** PY-2: a completed appointment's charge — 'recorded' or 'pending' («Cobro pendiente»);
+   *  null when not tracked (history before tracking started) or the login lacks payments.view. */
+  payment_state?: "recorded" | "pending" | null;
+  /** A walk-in WITHOUT a linked contact: what was typed (contact_id decides, never a name). */
+  guest_name: string | null;
+  guest_phone: string | null;
+  guest_email: string | null;
+  /** «Requiere revisión» reasons (server-derived, independent of status); [] = none. */
+  review: string[];
+}
+
+/** One occurrence of a usual break or a recurring block (schedule_series), drawn on the
+ *  grid. Breaks have no border (routine); blocks do. */
+export interface SeriesOcc {
+  key: string;
+  seriesId: string;
+  kind: "break" | "block";
+  staffId: string | null;
+  date: string;
+  startsAt: string;
+  endsAt: string;
+  /** This date has its own times (an exception of the series). */
+  moved: boolean;
+  reason: string | null;
+  publicReason: string | null;
 }
 
 /**
@@ -129,8 +164,6 @@ function appointmentToneClass(appt: Appt): string {
   return `u-appt-service ${apptCategoryClass(serviceCategory(appt.service_name, appt.service_category))}`;
 }
 interface Slot { start_at: string; service_end_at: string; staff_id: string; available_staff_ids: string[] }
-/** Blocked time (schedule_exceptions). staff_id NULL = the whole site is blocked. */
-type BlockOpt = AgendaBlock;
 /** When booking for an existing contact (C-4.1 deep-link), the modal locks the identity
  *  to this contact and submits its id — staff never retype what's on the record. */
 interface ContactPrefill { contactId: string; contactName: string }
@@ -146,22 +179,27 @@ interface Block {
   public_reason?: "vacation" | "unavailable" | "site_closed" | null;
 }
 type BookingModalState =
-  | { mode: "new" | "walkin"; contact?: ContactPrefill }
+  | { mode: "new" | "walkin"; contact?: ContactPrefill; staffId?: string; startAt?: string; spanMin?: number }
   | { mode: "reschedule"; appt: Appt };
 /** The agenda's modal states — the booking ones plus Time Off (create / edit a block). */
-type ModalState = BookingModalState | { mode: "block" } | { mode: "editBlock"; block: Block };
+type ModalState =
+  | BookingModalState
+  | { mode: "block"; staffId?: string | null; date?: string; start?: string; end?: string }
+  | { mode: "editBlock"; block: Block }
+  /** One occurrence of a usual break / recurring block (schedule_series). */
+  | { mode: "series"; occ: SeriesOcc };
 
 /** The calendar body's vertical scale. One hour = this many px. 60 is the floor
  *  at which a 45-minute card still fits its three lines (time / customer /
  *  service) without cropping the last one. */
-const HOUR_PX = 120;
+const HOUR_PX = 72;
 /**
  * WEEK's vertical scale. The reference week is a BLOCK grid, not a proportional one:
  * seven narrow columns can't carry proportional heights and stay readable, so one hour
  * is one fixed cell that holds AT MOST TWO cards plus a "+N más" chip. 96px is the
  * floor at which two one-line cards and a 20px chip all fit uncropped.
  */
-const WEEK_HOUR_PX = 96;
+const WEEK_HOUR_PX = 80;
 /**
  * The grid's OPERATING WINDOW. Fixed on purpose: deriving it from the data meant a
  * single stray early booking stretched the grid to 3 AM and pushed the real working
@@ -195,14 +233,6 @@ const SERVICE_FAMILY_LABEL: Partial<Record<ApptCategory, string>> = {
   feature: "Tratamiento destacado",
 };
 
-const STATUSES = ["scheduled", "confirmed", "completed", "cancelled", "no_show"] as const;
-const STATUS_LABEL: Record<string, string> = {
-  scheduled: "Sin confirmar",
-  confirmed: "Confirmada",
-  completed: "Completada",
-  cancelled: "Cancelada",
-  no_show: "Inasistencia",
-};
 
 // Spanish date vocabulary, spelled out here rather than pulled from Intl("es") for
 // two reasons: it is DETERMINISTIC (no "sept."/"sep" locale-data drift between the
@@ -210,7 +240,6 @@ const STATUS_LABEL: Record<string, string> = {
 // is what keeps the date label a stable width so the steppers beside it never slide.
 const ES_MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 const ES_WEEKDAYS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
-const ES_WEEKDAYS_UPPER = ["DOM", "LUN", "MAR", "MIÉ", "JUE", "VIE", "SÁB"];
 
 // ── Timezone helpers. Every hour/minute below is the SITE's local time, never the
 // browser's — the agenda of a shop in Bogota must not shift for a viewer elsewhere.
@@ -384,50 +413,6 @@ function layoutDayLanes(appointments: Appt[]): Map<string, DayLane> {
   return lanes;
 }
 
-/** One hour of one day column in the WEEK grid — the reference's unit of reading. */
-interface WeekBlock {
-  /** The site-local hour the block covers: 9 means 09:00–09:59. */
-  hour: number;
-  /** Every appointment starting inside the hour, earliest first. */
-  appointments: Appt[];
-}
-
-/**
- * WEEK groups by HOUR BLOCK instead of laying appointments out proportionally.
- *
- * Seven narrow day columns cannot carry proportional heights and stay legible — a
- * 30-minute booking became a 2-line card cropped to one, and two simultaneous ones
- * became two unreadable half-width slivers. So the reference model applies: one hour
- * is one cell, the earliest appointment in it keeps a full-size card, and the rest
- * collapse into a "+N citas" chip that is a FLEX CHILD of the same cell. That is what
- * keeps the indicator inside its own block instead of floating over its neighbours.
- *
- * DAY view is untouched and still positions every appointment proportionally, because
- * its professional columns are substantially wider.
- */
-function bucketWeekAppointments(
-  appointments: Appt[],
-  tz: string,
-  fromHour: number,
-  toHour: number,
-): WeekBlock[] {
-  const byHour = new Map<number, Appt[]>();
-  for (const appt of appointments) {
-    // Clamp into the window's edge block: an out-of-hours booking moves, it never
-    // disappears (the same invariant the day grid's clamp keeps).
-    const hour = Math.min(Math.max(zonedParts(appt.start_at, tz).h, fromHour), toHour - 1);
-    const bucket = byHour.get(hour);
-    if (bucket) bucket.push(appt);
-    else byHour.set(hour, [appt]);
-  }
-  return Array.from({ length: toHour - fromHour }, (_, index) => {
-    const hour = fromHour + index;
-    return {
-      hour,
-      appointments: (byHour.get(hour) ?? []).sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at)),
-    };
-  });
-}
 
 /**
  * The Agenda: a real time-grid calendar over the EXISTING appointment model.
@@ -511,6 +496,15 @@ export function AgendaView(props: {
   canBlockStaff: boolean;
   /** May create/edit SITE closures (owner/agency only). */
   canBlockSite: boolean;
+  /** PY-2 payment permissions (catalogue keys; the server re-checks every action). */
+  canViewPayments?: boolean;
+  canRecordPayments?: boolean;
+  canVoidPayments?: boolean;
+  /** Usual breaks + recurring blocks in the visible range (schedule_series). */
+  seriesOccurrences: SeriesOcc[];
+  /** May edit a professional's breaks (team.manage) / the site's (settings.sites or hours.manage). */
+  canEditStaffBreaks: boolean;
+  canEditSiteBreaks: boolean;
   clientName: string;
   /** Appointments per site-local day of the week around `date` (phone day strip). */
   weekCounts: Record<string, number>;
@@ -519,6 +513,7 @@ export function AgendaView(props: {
   initialApptId: string | null;
 }) {
   const router = useRouter();
+  const isPhoneWidth = useIsOverlayWidth(767.98);
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const isWeek = props.view === "week";
@@ -550,15 +545,90 @@ export function AgendaView(props: {
   /** Appointments intentionally collapsed behind a weekly "+N más" indicator. */
   const [weekOverflow, setWeekOverflow] = useState<Appt[] | null>(null);
   const [weekOverflowTitle, setWeekOverflowTitle] = useState<string | undefined>();
-  const [weeklyLayout, setWeeklyLayout] = useState<"team" | "hours">("team");
-  /** Client-side facets over the ALREADY loaded range. */
-  const [statusFilter, setStatusFilter] = useState("");
-  const [staffFilter, setStaffFilter] = useState(props.initialStaffId ?? "");
+  /** Client-side facets over the ALREADY loaded range (reference: «Filtrar»). Professionals
+   *  pick the COLUMNS shown; unticked states and a search DIM the cards — the time they
+   *  hold is still taken, so nothing disappears from the board. */
+  const [staffSel, setStaffSel] = useState<string[]>(props.initialStaffId ? [props.initialStaffId] : []);
+  const [statesOn, setStatesOn] = useState<string[]>([...ALL_STATES]);
   const [searchQuery, setSearchQuery] = useState("");
-  // Day view opens in the staff-column layout: it is the fastest way for reception
-  // to see each professional's availability. The compact row list remains one click away.
-  const [desktopLayout, setDesktopLayout] = useState<"rows" | "columns">("columns");
+  const [searchOpen, setSearchOpen] = useState(false);
+  /** «Pintar» (the brush): ONLY while it is on does pressing and dragging on the day grid
+   *  mark a range to create or block — so a stray click or drag never starts one. */
+  const [paint, setPaint] = useState(false);
+  /** PY-2: the charge step open for an appointment («Completar cita» / «Registrar cobro»). */
+  const [charge, setCharge] = useState<{ apptId: string; mode: "complete" | "record" } | null>(null);
+  const [pendingList, setPendingList] = useState(false);
+  /**
+   * CREATE / BLOCK FROM THE GRID (reference slotPop, plus drag). Press and drag on an empty
+   * part of a professional's lane to select a range (15-minute steps; a plain click takes
+   * one hour); on a touch screen a long press starts it, so the grid still scrolls. On
+   * release a menu offers what this login may do:
+   *   Bloquear    the EXACT range selected — a block has any length;
+   *   Nueva cita  the START and the professional only — an appointment lasts what its
+   *               service lasts. The range is a hint (services that fit are listed first)
+   *               and the grid then shows the real size of the draft as it is chosen.
+   * Nothing is created until the panel is saved.
+   */
+  const [slotPop, setSlotPop] = useState<{ staffId: string; from: number; to: number; last: boolean; dragging: boolean; dragged: boolean } | null>(null);
+  const dragRef = useRef<{ staffId: string; anchor: number; x: number; y: number; timer: number | null; live: boolean; moved: boolean; el: HTMLElement; touch: boolean; last: boolean; pointerId: number } | null>(null);
+  useEffect(() => {
+    if (!slotPop || slotPop.dragging) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setSlotPop(null);
+    const onDown = (e: PointerEvent) => {
+      if (!(e.target as Element | null)?.closest?.("[data-slot-menu]")) setSlotPop(null);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onDown, true);
+    };
+  }, [slotPop]);
+  // While a long-pressed selection is live the finger draws, it does not scroll — a native,
+  // non-passive listener (React's touch handlers are passive and cannot prevent it).
+  useEffect(() => {
+    const f = (e: TouchEvent) => {
+      if (dragRef.current?.live) e.preventDefault();
+    };
+    document.addEventListener("touchmove", f, { passive: false });
+    return () => document.removeEventListener("touchmove", f);
+  }, []);
+  /** The draft the booking panel is building — drawn on the grid at its real size. */
+  const [bookingGhost, setBookingGhost] = useState<{ staffId: string; startAt: string; durationMin: number; label: string } | null>(null);
+  // Bring the draft into view beside the panel (the panel overlays the right of the grid).
+  const ghostKey = bookingGhost ? `${bookingGhost.staffId}|${bookingGhost.startAt}` : "";
+  useEffect(() => {
+    if (!ghostKey) return;
+    const t = window.setTimeout(() => {
+      const el = document.querySelector<HTMLElement>("[data-booking-ghost]");
+      const grid = el?.closest<HTMLElement>("[aria-label='Agenda del día por profesional']");
+      if (!el || !grid) return;
+      const panelW = 532;
+      const r = el.getBoundingClientRect();
+      const g = grid.getBoundingClientRect();
+      const visibleRight = g.right - panelW;
+      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (r.right > visibleRight) grid.scrollBy({ left: r.right - visibleRight + 16, behavior: reduce ? "auto" : "smooth" });
+      if (r.top < g.top + 50 || r.bottom > g.bottom) grid.scrollBy({ top: r.top - g.top - 120, behavior: reduce ? "auto" : "smooth" });
+    }, 60);
+    return () => window.clearTimeout(t);
+  }, [ghostKey]);
   const searchRef = useRef<HTMLInputElement>(null);
+  // Esc leaves «Pintar» — unless a grid menu or a panel is open: Esc closes THAT first.
+  useEffect(() => {
+    if (!paint) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !slotPop && !modal && !e.defaultPrevented) setPaint(false);
+    };
+    // Capture phase: read what is open BEFORE the menu's or panel's own Esc closes it.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [paint, slotPop, modal]);
+  /** An affected appointment being rescheduled FROM a break/block form: the form stays
+   *  mounted (hidden) with everything typed; `holds` discount its unsaved draft. */
+  const [formReschedule, setFormReschedule] = useState<{ apptId: string; holds: string[]; item: AffectedItem } | null>(null);
+  /** Bumped when coming back from that reschedule → the form recalculates its conflicts. */
+  const [recheck, setRecheck] = useState(0);
   /**
    * The legend explains the CARD COLOURS, so it lists the service families actually
    * present in the visible range — showing all four when only one is booked would
@@ -584,6 +654,8 @@ export function AgendaView(props: {
   };
 
   const fromQS = props.from ? `?from=${encodeURIComponent(props.from)}` : "";
+  /** Professionals + states currently filtered — the counter on the Filtros icon. */
+  const activeFilters = (staffSel.length > 0 ? 1 : 0) + (statesOn.length < ALL_STATES.length ? 1 : 0);
   /** The site whose day is on screen — the scope line in the title band. */
   const currentSite = props.sites.find((s) => s.id === props.currentSiteId) ?? props.sites[0];
   const shiftDate = (days: number) => navigate({ date: addDays(props.date, days) });
@@ -613,25 +685,15 @@ export function AgendaView(props: {
     const onSearchKey = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "f") return;
       event.preventDefault();
-      searchRef.current?.focus();
-      searchRef.current?.select();
+      setSearchOpen(true);
+      window.requestAnimationFrame(() => {
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      });
     };
     document.addEventListener("keydown", onSearchKey);
     return () => document.removeEventListener("keydown", onSearchKey);
   }, []);
-
-  // Escape closes the detail drawer. The OVERLAY variant (below xl) traps focus and
-  // handles Escape itself in the capture phase (stopping it before it reaches here), so
-  // this only ever fires for the INLINE desktop panel — where nothing else would close
-  // it from the keyboard.
-  useEffect(() => {
-    if (!selectedId) return;
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setSelectedId(null);
-    };
-    document.addEventListener("keydown", onKey);
-    return () => document.removeEventListener("keydown", onKey);
-  }, [selectedId]);
 
   /** A short confirmation after a successful action (the phone shows it as a toast). */
   const [notice, setNotice] = useState<string | null>(null);
@@ -744,37 +806,18 @@ export function AgendaView(props: {
 
   // ── Derived, all from the loaded range ──────────────────────────────────────
   const visible = useMemo(
-    () => {
-      const query = searchQuery.trim().toLocaleLowerCase("es");
-      return props.appointments.filter((a) => {
-        if (statusFilter && a.status !== statusFilter) return false;
-        if (staffFilter && a.staff_id !== staffFilter) return false;
-        if (!query) return true;
-        return [a.contact_name, a.primary_identity, a.service_name, a.staff_name, a.public_reference]
-          .filter((value): value is string => Boolean(value))
-          .some((value) => value.toLocaleLowerCase("es").includes(query));
-      });
-    },
-    [props.appointments, searchQuery, statusFilter, staffFilter],
+    () => (staffSel.length === 0 ? props.appointments : props.appointments.filter((a) => staffSel.includes(a.staff_id))),
+    [props.appointments, staffSel],
   );
-  const mobileRows = useMemo(
-    () => [...visible].sort((a, b) => a.start_at.localeCompare(b.start_at)),
-    [visible],
-  );
-  const mobileDayKeys = useMemo(
-    () => Array.from(new Set(mobileRows.map((appt) => zonedParts(appt.start_at, tz).dayKey))),
-    [mobileRows, tz],
-  );
-  const nextMobileAppointment = useMemo(() => {
-    return mobileRows.find(
-      (appt) => (appt.status === "scheduled" || appt.status === "confirmed")
-        && new Date(appt.start_at).getTime() >= Date.now(),
-    ) ?? null;
-  }, [mobileRows]);
-  const kpis = props.kpis;
-  const prev = props.previousKpis;
-  const rangeCaption = isWeek ? "Esta semana" : "Hoy";
-  const vsCaption = isWeek ? "vs. semana anterior" : "vs. ayer";
+  const searchKey = searchQuery.trim().toLocaleLowerCase("es");
+  /** Dimmed, never hidden: an unticked state, or not what the search asks for. */
+  const isDimmed = (a: Appt): boolean => {
+    if (!statesOn.includes(a.status)) return true;
+    if (!searchKey) return false;
+    return ![a.contact_name, a.guest_name, a.primary_identity, a.service_name, a.staff_name, a.public_reference]
+      .filter((value): value is string => Boolean(value))
+      .some((value) => value.toLocaleLowerCase("es").includes(searchKey));
+  };
 
   /** Same barber, overlapping service windows — a real conflict, derived not stored. */
   const overlapIds = useMemo(() => {
@@ -798,17 +841,32 @@ export function AgendaView(props: {
     return out;
   }, [props.appointments]);
 
-  const fromHour = GRID_FROM_HOUR;
-  const toHour = GRID_TO_HOUR;
+  // The grid's window: the site's hours (the reference's 10:00–20:00 for a 10–20 site),
+  // widened to every professional's own hours and to any appointment booked outside them,
+  // so nothing is ever drawn off the grid.
+  const { fromHour, toHour } = useMemo(() => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    const take = (h: WeeklyHours | undefined) => {
+      for (const ranges of Object.values(h ?? {})) for (const r of ranges ?? []) {
+        lo = Math.min(lo, clockMinutes(r.start));
+        hi = Math.max(hi, clockMinutes(r.end));
+      }
+    };
+    take(props.openingHours);
+    for (const st of props.staff) take(st.workingHours);
+    for (const a of props.appointments) {
+      const s = zonedParts(a.start_at, tz);
+      const e = zonedParts(a.service_end_at, tz);
+      lo = Math.min(lo, s.h * 60 + s.m);
+      hi = Math.max(hi, e.dayKey === s.dayKey ? e.h * 60 + e.m : 24 * 60);
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return { fromHour: GRID_FROM_HOUR, toHour: GRID_TO_HOUR };
+    return { fromHour: Math.max(0, Math.floor(lo / 60)), toHour: Math.min(24, Math.ceil(hi / 60)) };
+  }, [props.openingHours, props.staff, props.appointments, tz]);
   const hours = Array.from({ length: toHour - fromHour }, (_, i) => fromHour + i);
   /** Week reads in fixed hour BLOCKS, day in proportional minutes — one scale each. */
   const rowHeight = isWeek ? WEEK_HOUR_PX : HOUR_PX;
-  /**
-   * The column header's height, shared by the time rail, every lane and the empty tail.
-   * They are separate sticky elements, so a single source is what keeps their bottom
-   * borders on one line. Week needs the extra row for its weekday / date / count stack.
-   */
-  const headClass = isWeek ? "h-14" : "h-12";
   const bodyHeight = (toHour - fromHour) * rowHeight;
   const offsetTop = (mins: number) => ((mins - fromHour * 60) / 60) * rowHeight;
 
@@ -866,30 +924,31 @@ export function AgendaView(props: {
     weekCountsFromRange[k] = (weekCountsFromRange[k] ?? 0) + 1;
   }
 
-  // BLOCKED time for the layouts that list or stack days (phone, tablet, desktop "por
-  // hora", week by hours). A barber filter keeps that barber's blocks and the site-wide
-  // ones; a text search is about appointments, so blocks step aside while it is active.
-  const staffNameById = new Map(props.staff.map((s) => [s.id, s.name]));
-  const blocksOn = (dayKey: string, lo = 0, hi = 24 * 60): DayBlock[] =>
-    searchQuery.trim() ? [] : dayBlocks(props.blocks, dayKey, tz, { staffFilter, staffNames: staffNameById, lo, hi });
-  // Days the phone/tablet lists show: every day with an appointment AND every day with
-  // a block — a blocked day with nothing booked must still say it is blocked.
-  const listDayKeys = Array.from(
-    new Set([...mobileDayKeys, ...shownDayKeys.filter((dk) => blocksOn(dk).length > 0)]),
-  ).sort();
 
   // Picking a barber in the "Todo el equipo" facet collapses the grid to that column —
   // the job the removed chips used to do, using a control that already existed.
-  const shownStaff = staffFilter ? props.staff.filter((s) => s.id === staffFilter) : props.staff;
+  const staffNameById = new Map(props.staff.map((s) => [s.id, s.name]));
+  // The reference's avatar pastel follows the roster order (same order on every screen).
+  const rosterIndex = new Map([...props.staff].sort((a, b) => a.name.localeCompare(b.name, "es")).map((s, i) => [s.id, i]));
+  const tintOf = (id: string) => agTintAt(rosterIndex.get(id) ?? 0);
+  /** The lane minute under a pointer on the 15-minute grid: the quarter it is in, or
+   *  (`nearest`) the closest quarter-hour line — used for the edge being dragged. */
+  const minuteAt = (el: HTMLElement, clientY: number, nearest = false) => {
+    const y = clientY - el.getBoundingClientRect().top;
+    const q = ((y / HOUR_PX) * 60) / 15;
+    const raw = fromHour * 60 + (nearest ? Math.round(q) : Math.floor(q)) * 15;
+    return Math.min(Math.max(raw, fromHour * 60), toHour * 60 - (nearest ? 0 : 15));
+  };
+  const hmOf = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  // The grid menu offers only what this login may do; a staff login, its own lane only.
+  const canSlotMenu = (staffKey: string) =>
+    (props.canOperate || props.canBlockStaff) && (!props.lockStaffId || props.lockStaffId === staffKey);
+  const canPaint = props.canOperate || props.canBlockStaff;
+  const painting = paint && canPaint && !isWeek;
+  const shownStaff = staffSel.length > 0 ? props.staff.filter((s) => staffSel.includes(s.id)) : props.staff;
   /** The site-local day a DAY view is showing — the weekday every barber lane is
    *  checked against. */
   const dayWeekday = weekdayKeyOf(zonedParts(props.dayStartIso, tz).dayKey);
-  // Who could take a booking in a DAY view's hour row: the filtered barber, or every
-  // active barber who works that weekday. Blocks only close an hour when they cover it
-  // for ALL of them (lib/agendaBlocks.hourState); the engine decides the real slots.
-  const bookableStaffIds = (staffFilter ? props.staff.filter((st) => st.id === staffFilter) : props.staff)
-    .filter((st) => st.active && staffWorksOn(st.workingHours, props.openingHours, dayWeekday))
-    .map((st) => st.id);
   const columns: {
     key: string;
     label: string;
@@ -901,31 +960,17 @@ export function AgendaView(props: {
     /** The shop doesn't open (week) / this barber doesn't work (day) — the lane is
      *  hatched out and its header greys, so it can't read as bookable whitespace. */
     closed?: boolean;
-  }[] = isWeek
-    ? weekDays.map((dk) => {
-        const n = visible.filter((a) => zonedParts(a.start_at, tz).dayKey === dk).length;
-        const [yy, mm, dd] = dk.split("-").map(Number);
-        const wd = new Date(Date.UTC(yy, mm - 1, dd)).getUTCDay();
-        const closed = hasAnyHours(props.openingHours) && !opensOn(props.openingHours, WEEKDAY_KEYS[wd]);
-        return {
-          key: dk,
-          label: ES_WEEKDAYS_UPPER[wd],
-          sub: closed
-            ? "Cerrado"
-            : `${n} cita${n === 1 ? "" : "s"}${blocksOn(dk).length > 0 ? ` · ${blocksOn(dk).length} bloqueo${blocksOn(dk).length === 1 ? "" : "s"}` : ""}`,
-          dayNum: String(dd),
-          isToday: dk === nowParts.dayKey,
-          closed,
-        };
-      })
-    : shownStaff.map((st) => {
+  }[] = shownStaff.map((st) => {
         // Avatar + name + TODAY'S LOAD, which is what the reference's professional
         // column header carries and what a receptionist scans the board for. The avatar
         // is the professional's public photo when Equipo has one, else the initials.
         // An INACTIVE barber still gets a lane (the server only includes them when
         // they have appointments in range) so their history stays reachable.
         const closed = !staffWorksOn(st.workingHours, props.openingHours, dayWeekday);
-        const n = visible.filter((a) => a.staff_id === st.id).length;
+        const n = visible.filter((a) => a.staff_id === st.id && a.status !== "cancelled").length;
+        const dS = Date.parse(props.dayStartIso);
+        const dE = Date.parse(props.dayEndIso);
+        const away = props.blocks.some((b) => b.staff_id === st.id && Date.parse(b.starts_at) <= dS && Date.parse(b.ends_at) >= dE);
         return {
           key: st.id,
           label: st.name,
@@ -933,68 +978,152 @@ export function AgendaView(props: {
           photoUrl: st.photoUrl ?? null,
           inactive: !st.active,
           closed,
-          sub: closed ? "Cerrado" : `${n} cita${n === 1 ? "" : "s"}`,
+          sub: away ? "Ausencia" : closed ? "No trabaja" : `${n} cita${n === 1 ? "" : "s"}`,
         };
-      });
+  });
 
   const inColumn = (a: Appt, colKey: string) =>
     isWeek ? zonedParts(a.start_at, tz).dayKey === colKey : a.staff_id === colKey;
 
-  let weeklyOccupancy: number | null = null;
-  if (isWeek && hasAnyHours(props.openingHours)) {
-    const capacityMinutes = shownStaff
-      .filter((staff) => staff.active)
-      .reduce((total, staff) => {
-        const schedule = hasAnyHours(staff.workingHours) ? staff.workingHours : props.openingHours;
-        return total + weekDays.reduce((dayTotal, dayKey) => {
-          const ranges = schedule[weekdayKeyOf(dayKey)] ?? [];
-          return dayTotal + ranges.reduce(
-            (rangeTotal, range) => rangeTotal + Math.max(0, clockMinutes(range.end) - clockMinutes(range.start)),
-            0,
-          );
-        }, 0);
-      }, 0);
-    const bookedMinutes = visible
-      .filter((appt) => appt.status !== "cancelled")
-      .reduce((total, appt) => total + appt.duration_min, 0);
-    if (capacityMinutes > 0) weeklyOccupancy = Math.min(100, Math.round((bookedMinutes / capacityMinutes) * 100));
-  }
 
-  const selected = selectedId ? props.appointments.find((a) => a.id === selectedId) ?? null : null;
-  /**
-   * The date label — what window is open, in Spanish. It names the WEEK, not just the
-   * month: "Sept 2026" never said which of the month's weeks you were looking at, so
-   * the week view now reads "31 ago – 6 sep 2026" and the day view "sáb, 5 sep 2026".
-   *
-   * It is NAVIGATION TEXT, not a heading — the screen's one heading is "Agenda" (see the
-   * title band). A STABLE width keeps the steppers from sliding on each step: the
-   * three-character weekday/month abbreviations (ES_WEEKDAYS/ES_MONTHS) barely vary,
-   * tabular figures make 1 and 30 the same width, and a per-view min-width on the block
-   * (see the markup) absorbs the rest.
-   */
-  let dateMain: string;
-  let yearLabel: string | null;
-  if (isWeek && weekDays.length === 7) {
-    const [ya, ma, da] = weekDays[0].split("-").map(Number);
-    const [yb, mb, db] = weekDays[6].split("-").map(Number);
-    if (ya === yb && ma === mb) {
-      dateMain = `${da} – ${db} ${ES_MONTHS[mb - 1]}`;
-      yearLabel = String(yb);
-    } else if (ya === yb) {
-      dateMain = `${da} ${ES_MONTHS[ma - 1]} – ${db} ${ES_MONTHS[mb - 1]}`;
-      yearLabel = String(yb);
-    } else {
-      // A week that straddles New Year prints both years; the muted trailing one is
-      // then already inside the label, so nothing is appended after it.
-      dateMain = `${da} ${ES_MONTHS[ma - 1]} ${ya} – ${db} ${ES_MONTHS[mb - 1]} ${yb}`;
-      yearLabel = null;
+  /** Local minutes of an ISO instant on the grid, clamped to the operating window. */
+  const gridMin = (iso: string, dayKey: string, isEnd = false) => {
+    const p = zonedParts(iso, tz);
+    if (p.dayKey > dayKey || (isEnd && p.dayKey !== dayKey && p.h === 0 && p.m === 0)) return toHour * 60;
+    if (p.dayKey < dayKey) return fromHour * 60;
+    return Math.min(Math.max(minutesOf(p), fromHour * 60), toHour * 60);
+  };
+  const band = (sMin: number, eMin: number) => ({ top: offsetTop(sMin) + 1, height: Math.max(14, offsetTop(eMin) - offsetTop(sMin) - 2) });
+  /** The pixel ranges the lane's appointment cards cover (as ApptCard draws them). */
+  const cardRanges = (appts: Appt[]): Array<[number, number]> =>
+    appts.map((x) => {
+      const lo = fromHour * 60;
+      const hi = toHour * 60;
+      const sm = Math.min(Math.max(minutesOf(zonedParts(x.start_at, tz)), lo), hi);
+      const em = Math.min(Math.max(minutesOf(zonedParts(x.service_end_at, tz)), sm), hi);
+      const t = offsetTop(sm);
+      return [t, t + Math.max(22, ((em - sm) / 60) * HOUR_PX)] as [number, number];
+    });
+  const rangesOf = (h: WeeklyHours | undefined, wd: string) =>
+    (h?.[wd] ?? []).map((r) => ({ s: clockMinutes(r.start), e: clockMinutes(r.end) })).sort((a, b) => a.s - b.s);
+  /** Gaps between ranges of one weekday = usual breaks that still live in the weekly hours. */
+  const gapsOf = (h: WeeklyHours | undefined, wd: string) => {
+    const r = rangesOf(h, wd);
+    const out: Array<{ s: number; e: number }> = [];
+    for (let i = 1; i < r.length; i++) if (r[i].s > r[i - 1].e) out.push({ s: r[i - 1].e, e: r[i].s });
+    return out;
+  };
+  const openLegacyBreak = (ownerStaffId: string | null, dayKey: string, g: { s: number; e: number }) => {
+    const hm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+    const wd = WEEKDAY_KEYS.indexOf(weekdayKeyOf(dayKey) as (typeof WEEKDAY_KEYS)[number]);
+    setError(null);
+    startTransition(async () => {
+      const r = await adoptLegacyBreakAction({ clientId: props.clientId, siteId: props.currentSiteId, staffId: ownerStaffId, weekday: wd, start: hm(g.s), end: hm(g.e) });
+      if (!r.ok) return setError(r.error);
+      const mid = siteMidnightIso(dayKey, tz);
+      setModal({
+        mode: "series",
+        occ: {
+          key: `${r.seriesId}:${dayKey}`,
+          seriesId: r.seriesId,
+          kind: "break",
+          staffId: ownerStaffId,
+          date: dayKey,
+          startsAt: new Date(Date.parse(mid) + g.s * 60_000).toISOString(),
+          endsAt: new Date(Date.parse(mid) + g.e * 60_000).toISOString(),
+          moved: false,
+          reason: null,
+          publicReason: null,
+        },
+      });
+      router.refresh();
+    });
+  };
+  /** Breaks, recurring blocks and out-of-hours for ONE professional's lane on ONE day. */
+  const scheduleLayer = (staffKey: string, dayKey: string, laneClosed: boolean, cards: Array<[number, number]> = []) => {
+    if (searchQuery.trim()) return null;
+    const st = props.staff.find((x) => x.id === staffKey);
+    const wd = weekdayKeyOf(dayKey);
+    const nodes: React.ReactNode[] = [];
+    // Outside this professional's hours the reference draws nothing (the lane is simply
+    // not booked there); a day they don't work at all is one «No trabaja» tile (above).
+    void laneClosed;
+    // Breaks still stored as gaps in the weekly hours (site's apply to everyone).
+    const legacy = [
+      ...gapsOf(props.openingHours, wd).map((g) => ({ ...g, owner: null as string | null })),
+      ...(st && hasAnyHours(st.workingHours) ? gapsOf(st.workingHours, wd).map((g) => ({ ...g, owner: st.id as string | null })) : []),
+    ];
+    for (const g of legacy) {
+      if (g.e <= fromHour * 60 || g.s >= toHour * 60) continue;
+      const b = band(Math.max(g.s, fromHour * 60), Math.min(g.e, toHour * 60));
+      const editable = (g.owner ? props.canEditStaffBreaks : props.canEditSiteBreaks) && !laneClosed;
+      const time = `${String(Math.floor(g.s / 60)).padStart(2, "0")}:${String(g.s % 60).padStart(2, "0")}–${String(Math.floor(g.e / 60)).padStart(2, "0")}:${String(g.e % 60).padStart(2, "0")}`;
+      const label = `Pausa habitual · ${time}`;
+      const body = <TimeTile title="Pausa habitual" time={time} top={b.top} height={b.height} cards={cards} />;
+      nodes.push(
+        editable ? (
+          <button key={`lg-${g.owner}-${g.s}`} type="button" title={`${label} · Cambiar este día`} aria-label={`${label}. Cambiar este día`} onClick={() => openLegacyBreak(g.owner, dayKey, g)} className={`${TILE_BREAK} u-focus cursor-pointer hover:text-[var(--ag-ink2)]`} style={b}>
+            {body}
+          </button>
+        ) : (
+          <div key={`lg-${g.owner}-${g.s}`} title={label} className={TILE_BREAK} style={b}>
+            {body}
+          </div>
+        ),
+      );
     }
-  } else {
-    const [y, m, d] = props.date.split("-").map(Number);
-    const wd = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
-    dateMain = `${ES_WEEKDAYS[wd]}, ${d} ${ES_MONTHS[m - 1]}`;
-    yearLabel = String(y);
-  }
+    for (const o of props.seriesOccurrences) {
+      if (o.date !== dayKey || (o.staffId !== null && o.staffId !== staffKey)) continue;
+      const sMin = gridMin(o.startsAt, dayKey);
+      const eMin = gridMin(o.endsAt, dayKey, true);
+      if (eMin <= sMin) continue;
+      const b = band(sMin, eMin);
+      const isBreak = o.kind === "break";
+      const time = `${fmtTime(o.startsAt, tz)}–${fmtTime(o.endsAt, tz) === "00:00" ? "24:00" : fmtTime(o.endsAt, tz)}`;
+      const title = isBreak ? "Pausa habitual" : `${o.staffId ? "Bloqueado" : "Sede cerrada"}${o.reason ? ` · ${o.reason}` : ""}`;
+      const label = `${title} · ${time}`;
+      nodes.push(
+        <button
+          key={o.key}
+          type="button"
+          title={o.moved ? `${label} · cambiado solo este día` : label}
+          aria-label={`${label}${o.moved ? ", cambiado solo este día" : ""}. Abrir`}
+          onClick={() => setModal({ mode: "series", occ: o })}
+          className={`${isBreak ? TILE_BREAK : o.staffId ? TILE_BLOCK : TILE_BLOCK.replace("u-sch-block", "u-sch-closed")} u-focus cursor-pointer hover:text-[var(--ag-ink2)]`}
+          style={b}
+        >
+          <TimeTile title={title} time={o.moved ? `${time} · solo este día` : time} top={b.top} height={b.height} cards={cards} />
+        </button>,
+      );
+    }
+    return nodes;
+  };
+  const selected = selectedId ? props.appointments.find((a) => a.id === selectedId) ?? null : null;
+  /** md+: «Reagendar» lives inside the appointment's panel; the phone keeps its flow. */
+  const deskReschedule = modal?.mode === "reschedule" && !isPhoneWidth ? modal.appt : null;
+  const openWeekdays = new Set(Object.entries(props.openingHours).filter(([, r]) => (r?.length ?? 0) > 0).map(([k]) => k));
+  const afterReschedule = (dayKey: string, appointmentId: string) => {
+    setModal(null);
+    setSelectedId(null);
+    setNotice("Cita reagendada");
+    // Highlight it once it is drawn on its new day (this page or the next one).
+    try {
+      window.sessionStorage.setItem(FLASH_KEY, appointmentId);
+    } catch {
+      /* private mode: the highlight is a nicety */
+    }
+    if (props.returnContactId) return router.push(`/clients/${props.clientId}/contacts/${props.returnContactId}`);
+    if (dayKey !== props.date) return navigate({ date: dayKey });
+    router.refresh();
+  };
+  const rescheduleConfig = () => ({
+    clientId: props.clientId,
+    siteId: props.currentSiteId,
+    staff: props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl, tint: tintOf(s.id) })),
+    openWeekdays,
+    lockStaffId: props.lockStaffId,
+    onDone: ({ dayKey, appointmentId }: { dayKey: string; appointmentId: string }) => afterReschedule(dayKey, appointmentId),
+  });
 
   if (props.staff.length === 0) {
     return (
@@ -1022,10 +1151,11 @@ export function AgendaView(props: {
     // ONE continuous surface. Every region below is a band inside the same white
     // card, separated by hairlines — not a row of independent boxes floating on the
     // canvas, which made the screen read as five unrelated widgets.
-    <main className="flex min-h-0 flex-1 flex-col">
+    <main className="u-ag flex min-h-0 flex-1 flex-col">
       {/* PHONE (< md) — its own layout, not the grid squeezed (mobile/MobileAgenda). */}
       <div className="-m-[var(--content-pad)] md:hidden">
         <MobileAgenda
+          pendingCharges={props.canViewPayments ? { count: props.appointments.filter((x) => x.payment_state === "pending").length, onOpen: () => setPendingList(true) } : undefined}
           title={props.lockStaffId ? "Mi agenda" : "Agenda"}
           subtitle={
             props.lockStaffId
@@ -1039,7 +1169,18 @@ export function AgendaView(props: {
           view={isWeek ? "week" : "day"}
           appointments={props.appointments}
           weekCounts={isWeek ? weekCountsFromRange : props.weekCounts}
-          blocks={props.blocks}
+          blocks={[
+            ...props.blocks,
+            ...props.seriesOccurrences.map((o) => ({ id: o.key, staff_id: o.staffId, starts_at: o.startsAt, ends_at: o.endsAt, reason: o.reason, series: o.kind })),
+          ]}
+          onOpenSeries={(key) => {
+            const occ = props.seriesOccurrences.find((o) => o.key === key);
+            if (occ) setModal({ mode: "series", occ });
+          }}
+          onOpenBlock={(id) => {
+            const b = props.blocks.find((x) => x.id === id);
+            if (b && (b.staff_id ? props.canBlockStaff : props.canBlockSite)) setModal({ mode: "editBlock", block: b });
+          }}
           staff={props.staff}
           openingHours={props.openingHours}
           showTeam={!props.lockStaffId && props.staff.length > 1}
@@ -1063,783 +1204,539 @@ export function AgendaView(props: {
       <div className="md:hidden">
         <MToast message={notice} bottom={84} />
       </div>
-      <PageShell surface="canvas" className="gap-3 max-md:hidden">
-      {/* ── PAGE TITLE ── the same band Customers renders, now carrying the screen's
-             two ACTIONS on its right. The Agenda used to spend a whole row on a title
-             with nothing but empty space beside it, and a SECOND row whose only real
-             weight was the two buttons pushed to the far edge — so the actions come up
-             here where the title's white space already was, and the row below becomes
-             purely the tools that STEER the calendar. */}
-      {/* No hairline under the title / control bar / KPI strip: the top of the Agenda
-          is ONE object (name it, steer it, read its numbers), and three rules across
-          it chopped that into four slabs. The grid below still gets its own rule —
-          that seam is real, it separates chrome from the canvas. */}
-      <div className="rounded-sch-card border border-line bg-surface shadow-[var(--shadow-card)] max-md:hidden">
-        <div className="px-[var(--panel-pad)] pt-3 xl:p-[14px]">
-          <div className="flex items-start justify-between gap-3 md:items-center xl:gap-[14px]">
-            <div className="min-w-0 shrink-0 md:flex md:items-center md:gap-2">
-              <div className="mt-0.5 [&_h1]:text-[1.55rem] [&_h1]:font-semibold [&_h1]:leading-tight [&_h1]:tracking-[-0.03em] md:mt-0 md:[&_h1]:text-[19px]">
-                <PageHeading title="Agenda" />
-              </div>
-              <span className="hidden text-xs text-muted md:inline xl:hidden">
-                {`${currentSite?.name ?? ""}${props.sites.length > 1 ? ` · ${props.sites.length} sedes` : " · 1 sede"}`}
-              </span>
-            </div>
-            <label className={`${FIELD} relative hidden h-[36px] min-w-[14rem] flex-1 items-center gap-2 xl:flex`}>
-              <span className="sr-only">Buscar en la agenda</span>
-              <svg aria-hidden viewBox="0 0 24 24" fill="none" className="pointer-events-none size-4 shrink-0 text-faint">
-                <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.6" />
-                <path d="m16 16 4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-              </svg>
-              <input
-                ref={searchRef}
-                value={searchQuery}
-                onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Buscar cliente, servicio o profesional…"
-                className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-faint"
-              />
-              <kbd className="u-mono pointer-events-none ml-auto shrink-0 rounded-md border border-line bg-surface px-1.5 py-0.5 text-[0.625rem] text-faint">
-                ⌘F
-              </kbd>
-            </label>
-            {props.canOperate ? (
-              <div className="ml-auto hidden items-center gap-2 md:flex xl:hidden">
-                {props.canBlockStaff || props.canBlockSite ? (
-                  <button type="button" onClick={() => setModal({ mode: "block" })} className={buttonClass()}>
-                    Bloquear horario
-                  </button>
-                ) : null}
-                <button type="button" onClick={() => setModal({ mode: "walkin" })} className={buttonClass()}>
-                  Atención sin cita
-                </button>
-                <button type="button" onClick={() => setModal({ mode: "new" })} className={buttonClass({ variant: "primary" })}>
-                  Agendar cita
-                  <kbd className="u-mono rounded bg-white/20 px-1 text-[0.625rem] font-normal">&#8984;A</kbd>
-                </button>
-              </div>
-            ) : null}
-            <div className="hidden shrink-0 items-center gap-2 xl:flex">
-              <button
-                type="button"
-                onClick={() => navigate({ date: nowParts.dayKey })}
-                className={buttonClass({ size: "sm" })}
-              >Hoy</button>
-              <div role="group" aria-label="Vista" className={segmentShell("sm")}>
-                <DesktopSeg active={!isWeek} onClick={() => navigate({ view: "day" })}>Día</DesktopSeg>
-                <DesktopSeg active={isWeek} onClick={() => navigate({ view: "week" })}>Semana</DesktopSeg>
-              </div>
-              <div className="flex h-[36px] items-center rounded-sch-control border border-line-strong bg-surface p-0.5">
-                <DesktopStep label="Anterior" onClick={() => shiftDate(isWeek ? -7 : -1)} direction="left" />
-                <button
-                  type="button"
-                  onClick={() => navigate({ date: zonedParts(new Date().toISOString(), tz).dayKey })}
-                  className="u-focus h-full min-w-[7.5rem] rounded-[calc(var(--sch-radius-control)-3px)] px-2 text-[13px] font-semibold tabular-nums text-foreground hover:bg-subtle"
-                >
-                  {dateMain}{yearLabel ? <span className="ml-1 font-normal text-faint">{yearLabel}</span> : null}
-                </button>
-                <DesktopStep label="Siguiente" onClick={() => shiftDate(isWeek ? 7 : 1)} direction="right" />
-              </div>
-              <details className="group relative">
-                <summary
-                  aria-label="Filtrar agenda"
-                  title="Filtros de profesional y estado"
-                  className="u-focus relative flex size-[36px] cursor-pointer list-none items-center justify-center rounded-sch-control border border-line-strong bg-surface text-muted transition-colors hover:bg-subtle hover:text-foreground [&::-webkit-details-marker]:hidden"
-                >
-                  <svg aria-hidden viewBox="0 0 16 16" className="size-[15px]" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <path d="M2.5 4.5h11M4.5 8h7M6.5 11.5h3" />
-                  </svg>
-                  <span className="u-mono absolute -right-1 -top-1 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-foreground px-1 text-[9px] font-semibold text-surface">
-                    {props.staff.filter((staff) => staff.active).length}
-                  </span>
-                </summary>
-                <div className={`absolute right-0 top-11 z-40 w-64 p-3 ${POPOVER}`}>
-                  <label className="block text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-faint">
-                    Profesional
-                    <select
-                      value={staffFilter}
-                      onChange={(event) => setStaffFilter(event.target.value)}
-                      className={`mt-1.5 normal-case tracking-normal ${INPUT}`}
-                    >
-                      <option value="">Todo el equipo</option>
-                      {props.staff.map((staff) => <option key={staff.id} value={staff.id}>{staff.name}</option>)}
-                    </select>
-                  </label>
-                  <label className="mt-3 block text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-faint">
-                    Estado
-                    <select
-                      value={statusFilter}
-                      onChange={(event) => setStatusFilter(event.target.value)}
-                      className={`mt-1.5 normal-case tracking-normal ${INPUT}`}
-                    >
-                      <option value="">Todos los estados</option>
-                      {STATUSES.map((status) => <option key={status} value={status}>{STATUS_LABEL[status]}</option>)}
-                    </select>
-                  </label>
-                </div>
-              </details>
-              {props.canBlockStaff || props.canBlockSite ? (
-                <button type="button" onClick={() => setModal({ mode: "block" })} className={buttonClass({ size: "sm" })}>
-                  Bloquear horario
-                </button>
-              ) : null}
-              {props.canOperate ? (
-                <button
-                  type="button"
-                  onClick={() => setModal({ mode: "new" })}
-                  className={buttonClass({ variant: "primary", size: "sm" })}
-                >
-                  <span aria-hidden className="text-[15px] font-normal">＋</span>
-                  Nueva cita
-                </button>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ── CONTROL BAR ── the tools that steer the calendar: where you are (date +
-             steppers), what you see (Día/Semana), and the two facets. It wraps as one
-             deliberate second band on intermediate widths rather than compressing. */}
-      <div className="hidden flex-wrap items-center gap-2 rounded-sch-card border border-line bg-surface px-[var(--panel-pad)] py-2.5 shadow-[var(--shadow-card)] md:flex xl:hidden">
-        <label className="relative order-first w-full lg:w-auto lg:min-w-[17rem] lg:flex-1">
-          <span className="sr-only">Buscar en la agenda</span>
-          <svg aria-hidden viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint">
-            <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.6" />
-            <path d="m16 16 4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-          </svg>
-          <input
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Buscar cliente, servicio o profesional…"
-            className={`${INPUT} pl-9`}
-          />
-        </label>
-        <button
-          type="button"
-          onClick={() => navigate({ date: zonedParts(new Date().toISOString(), tz).dayKey })}
-          className={buttonClass()}
-        >
-          Hoy
-        </button>
-        {/* Hoy → DATE → steppers. The steppers sit after the label because it has a
-            RESERVED width (per view), so a day-step never drags them sideways. */}
-        <div
-          className={`ml-1 text-sm font-semibold tracking-tight tabular-nums text-foreground ${
-            isWeek ? "min-w-[10rem]" : "min-w-[8.5rem]"
-          }`}
-        >
-          <span>{dateMain}</span>
-          {yearLabel ? <span className="ml-1 font-normal text-faint">{yearLabel}</span> : null}
-        </div>
-        <div className="flex items-center gap-1">
-          <IconBtn label="Anterior" onClick={() => shiftDate(isWeek ? -7 : -1)}>&lsaquo;</IconBtn>
-          <IconBtn label="Siguiente" onClick={() => shiftDate(isWeek ? 7 : 1)}>&rsaquo;</IconBtn>
-        </div>
-
-        {/* Hairline separator, as in the reference — it also visually pins the start
-            of the view controls so the eye has a fixed edge to return to. */}
-        <span aria-hidden className="mx-1 hidden h-5 w-px bg-line sm:block" />
-
-        {/* Segmented view toggle: a recessed grey track (control height, 11px radius)
-            with a RAISED WHITE pill (9px) on the active item — the pill reads as
-            "lifted out" of the track, which is why it needs no drop shadow (a hairline
-            does the same job). Month is NOT offered — see the TODO above; a permanently
-            disabled control only promises something the product can't do. */}
-        <div role="group" aria-label="Vista" className={`ml-1 ${segmentShell()}`}>
-          <Seg active={!isWeek} onClick={() => navigate({ view: "day" })}>Día</Seg>
-          <Seg active={isWeek} onClick={() => navigate({ view: "week" })}>Semana</Seg>
-        </div>
-
-        <Facet
-          icon={<StatusIcon />}
-          label="Todos los estados"
-          value={statusFilter}
-          onChange={setStatusFilter}
-          options={[{ value: "", label: "Todos los estados" }, ...STATUSES.map((s) => ({ value: s, label: STATUS_LABEL[s] }))]}
-        />
-        <Facet
-          icon={<StaffIcon />}
-          label="Todo el equipo"
-          value={staffFilter}
-          onChange={setStaffFilter}
-          options={[{ value: "", label: "Todo el equipo" }, ...props.staff.map((s) => ({ value: s.id, label: s.name }))]}
-        />
-        {props.sites.length > 1 ? (
-          <Facet
-            label="Sede"
-            value={props.currentSiteId}
-            onChange={(v) => navigate({ site: v })}
-            options={props.sites.map((s) => ({ value: s.id, label: s.name }))}
+      {pendingList && props.canViewPayments ? (
+          <PendingChargesPanel
+            clientId={props.clientId}
+            timezone={tz}
+            onClose={() => setPendingList(false)}
+            onOpen={({ appointmentId, dayKey }) => {
+              setPendingList(false);
+              const params = new URLSearchParams({ site: props.currentSiteId, date: dayKey, appt: appointmentId });
+              router.push(`${props.basePath}?${params.toString()}`);
+            }}
           />
         ) : null}
 
-        {/* The refresh indicator is secondary chrome, not an action — it rides the far
-            end of the tool row, well clear of the red "Agendar cita" above it. */}
-        <div className="ml-auto flex items-center">
-          <AutoRefresh intervalSeconds={20} />
-        </div>
-      </div>
-
-      {error ? (
-        <p role="alert" className="rounded-sch-control bg-danger/10 px-[var(--panel-pad)] py-2.5 text-sm text-danger">
-          {error}
-        </p>
-      ) : null}
-
-      {/* ── KPI STRIP — three REAL metrics over the loaded range. The design's
-             "Avg waitlist time" card and the "vs last week" deltas are omitted
-             (no waitlist model, no previous-period query).
-
-             The four cards go in ONE row as soon as the content is ~1024px wide
-             (grid-cols-2 lg:grid-cols-4), so on a 1159px screen they stop stacking
-             2×2 and pushing the calendar — the page's real work — below the fold.
-             Below that they fall back to 2×2. The vertical padding is deliberately
-             tight for the same reason: give the grid the height. ── */}
-      <div className="hidden">
-        <Kpi
-          label="Total de citas"
-          unit="%"
-          caption={rangeCaption}
-          value={String(kpis.total)}
-          delta={ratioDelta(kpis.total, prev.total)}
-          vs={vsCaption}
-        />
-        <Kpi
-          label="Citas completadas"
-          unit="pp"
-          caption={rangeCaption}
-          value={kpis.completedPct === null ? "—" : `${kpis.completedPct}%`}
-          delta={pointDelta(kpis.completedPct, prev.completedPct)}
-          vs={vsCaption}
-        />
-        <Kpi
-          label="Inasistencias"
-          unit="pp"
-          caption={rangeCaption}
-          value={kpis.noShowPct === null ? "—" : `${kpis.noShowPct}%`}
-          delta={pointDelta(kpis.noShowPct, prev.noShowPct)}
-          // More no-shows is WORSE, so the delta's colour has to invert.
-          higherIsBetter={false}
-          vs={vsCaption}
-        />
-        {/* Replaces the design's "Avg. waitlist time" — no waitlist model exists, and
-            this is a number the data can actually answer. */}
-        <Kpi
-          label="Ingresos reservados"
-          unit="%"
-          caption={`${rangeCaption} · sin canceladas`}
-          value={priceLabelCOP(kpis.revenue) ?? "—"}
-          delta={ratioDelta(kpis.revenue, prev.revenue)}
-          vs={vsCaption}
-        />
-      </div>
-
-      {/* ── CALENDAR GRID + DRAWER ── (tablet + desktop; the phone has MobileAgenda) */}
-      <div className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)] max-md:hidden">
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="hidden h-10 shrink-0 items-center gap-3 border-b border-line px-3.5 md:flex">
-            <span className="u-mono text-xs font-semibold text-foreground">{visible.length}</span>
-            <span className="text-xs text-muted">{visible.length === 1 ? "cita" : "citas"}</span>
-            {/* The colour KEY: one swatch per service family on the board. */}
-            <div className="ml-2 flex min-w-0 items-center gap-3 overflow-hidden">
-              {serviceLegend.map(({ family, label }) => (
-                <span key={family} className="inline-flex shrink-0 items-center gap-1.5 text-[0.6875rem] text-muted">
-                  <span aria-hidden className={`u-appt-swatch u-appt-service ${apptCategoryClass(family)} size-3 rounded-full`} />
-                  <span className="max-w-32 truncate">{label}</span>
-                </span>
-              ))}
-            </div>
-            <span className="ml-auto text-[0.6875rem] text-faint">
-              {isWeek && weeklyOccupancy !== null ? `Ocupación semanal ${weeklyOccupancy}% · ` : ""}
-              {overlapIds.size > 0 ? `${overlapIds.size} citas con solapamiento` : "Sin solapamientos"}
-            </span>
-            {isWeek ? (
-              <div role="group" className={segmentShell("sm")} aria-label="Distribución semanal">
-                <button type="button" onClick={() => setWeeklyLayout("team")} aria-pressed={weeklyLayout === "team"}
-                  className={segmentClass(weeklyLayout === "team")}>Equipo</button>
-                <button type="button" onClick={() => setWeeklyLayout("hours")} aria-pressed={weeklyLayout === "hours"}
-                  className={segmentClass(weeklyLayout === "hours")}>Horas</button>
-              </div>
-            ) : (
-              <div role="group" aria-label="Distribución del día" className={`max-xl:hidden ${segmentShell("sm")}`}>
-                <button
-                  type="button"
-                  onClick={() => setDesktopLayout("rows")}
-                  aria-pressed={desktopLayout === "rows"}
-                  aria-label="Agrupar por hora"
-                  className={`${segmentClass(desktopLayout === "rows")} aspect-square justify-center px-0`}
-                >
-                  <RowsIcon />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDesktopLayout("columns")}
-                  aria-pressed={desktopLayout === "columns"}
-                  aria-label="Una columna por profesional"
-                  className={`${segmentClass(desktopLayout === "columns")} aspect-square justify-center px-0`}
-                >
-                  <ColumnsIcon />
-                </button>
-              </div>
-            )}
-          </div>
-          {/* TABLET — a touch-first board. It deliberately is neither the phone
-              timeline stretched wide nor the dense desktop hour grid squeezed into
-              an iPad. Cards keep a 44px+ target and use the same real appointment
-              data/detail drawer as both neighbouring layouts. In the week "Equipo"
-              view the team board (md+) replaces it, so it is not rendered at all. */}
-          {isWeek && weeklyLayout === "team" ? null : (
-          <div className="hidden min-h-0 flex-1 overflow-y-auto bg-canvas p-4 md:block xl:hidden">
-            {listDayKeys.length === 0 ? (
-              <div className="flex min-h-[22rem] items-center justify-center rounded-sch-card border border-dashed border-line-strong bg-surface">
-                <div className="max-w-xs text-center">
-                  <span aria-hidden className="mx-auto flex size-11 items-center justify-center rounded-full bg-chip text-xl text-muted">✓</span>
-                  <p className="mt-3 text-sm font-semibold text-foreground">No hay citas en esta vista</p>
-                  <p className="mt-1 text-xs leading-relaxed text-muted">Cambia la fecha, el estado o el profesional para consultar otro turno.</p>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-5">
-                {listDayKeys.map((dayKey) => {
-                  const [year, month, day] = dayKey.split("-").map(Number);
-                  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
-                  const dayAppointments = mobileRows.filter((appt) => zonedParts(appt.start_at, tz).dayKey === dayKey);
-                  return (
-                    <section key={dayKey} className="overflow-hidden rounded-sch-card border border-line bg-surface shadow-[var(--shadow-card)]">
-                      <div className="flex items-center justify-between border-b border-line bg-canvas/50 px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <span className="u-mono flex size-9 items-center justify-center rounded-sch-control border border-line bg-chip text-sm font-semibold text-foreground">{day}</span>
-                          <span>
-                            <h2 className="text-sm font-semibold text-foreground">{ES_WEEKDAYS_UPPER[weekday]}</h2>
-                            <span className="text-xs capitalize text-muted">{ES_MONTHS[month - 1]} {year}</span>
-                          </span>
-                        </div>
-                        <span className="u-mono rounded-full bg-chip px-2.5 py-1 text-[0.6875rem] text-muted">
-                          {dayAppointments.length} {dayAppointments.length === 1 ? "cita" : "citas"}
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2.5 p-3">
-                        {blocksOn(dayKey).map((b) => (
-                          <BlockRow key={b.id} block={b} className="col-span-2" />
-                        ))}
-                        {dayAppointments.map((appt) => {
-                          const isNext = nextMobileAppointment?.id === appt.id;
-                          return (
-                            <MobileAppointmentCard
-                              key={appt.id}
-                              appt={appt}
-                              toneClass={appointmentToneClass(appt)}
-                              timezone={tz}
-                              attention={overlapIds.has(appt.id)}
-                              next={isNext}
-                              showStaff={props.canOperate}
-                              roomy
-                              flash={appt.id === flashId}
-                              onOpen={() => setSelectedId(appt.id)}
-                            />
-                          );
-                        })}
-                      </div>
-                    </section>
-                  );
-                })}
-                <div className="flex items-center justify-center gap-2 py-1 text-[0.6875rem] text-faint">
-                  <span className="size-1.5 rounded-full bg-success" />
-                  Actualización automática cada 20 segundos
-                </div>
-              </div>
-            )}
-          </div>
+      {/* ── DESKTOP / TABLET (md+) — the approved reference (E1–E4): ONE surface flush to the
+             shell frame. The title IS the date (it opens a month picker); the tools sit on
+             its right: Día | Semana, ‹ Hoy ›, «Más opciones de agenda» (filtros, bloqueos,
+             ausencias, horarios, equipo) and + Nueva cita. Below, the grid by professional
+             (day) or the week board by professional (week). */}
+      <div className="u-ag -m-[var(--content-pad)] flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--surface)] max-md:hidden">
+        <div className={`${AG_HEAD_CAL} relative z-30`}>
+          <DateTitle
+            label={agendaTitle(isWeek ? "week" : "day", props.date, weekDays[0])}
+            date={props.date}
+            today={nowParts.dayKey}
+            onPick={(d) => navigate({ date: d })}
+          />
+          <span className="min-w-0 flex-1" />
+          {searchOpen || searchQuery ? (
+            <label className="flex h-[32px] w-[240px] min-w-[44px] shrink items-center gap-2 rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] px-3 text-muted">
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6">
+                <circle cx="7" cy="7" r="4.6" />
+                <path d="M10.4 10.4L14 14" />
+              </svg>
+              <input
+                ref={searchRef}
+                type="search"
+                aria-label="Buscar cliente o servicio"
+                placeholder="Cliente o servicio"
+                value={searchQuery}
+                autoFocus={searchOpen && !searchQuery}
+                onChange={(event) => setSearchQuery(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setSearchQuery("");
+                    setSearchOpen(false);
+                  }
+                }}
+                onBlur={() => {
+                  if (!searchQuery) setSearchOpen(false);
+                }}
+                className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted"
+              />
+            </label>
+          ) : (
+            <button type="button" aria-label="Buscar cliente o servicio" title="Buscar (⌘F)" onClick={() => setSearchOpen(true)} className={TB_ICON}>
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[15px]" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <circle cx="7" cy="7" r="4.6" />
+                <path d="M10.4 10.4L14 14" />
+              </svg>
+            </button>
           )}
-
-          {!isWeek && desktopLayout === "rows" ? (
-            <DesktopHourRows
-              appointments={mobileRows}
-              blocks={blocksOn(shownDayKeys[0])}
-              bookableStaffIds={bookableStaffIds}
-              hours={hours}
-              timezone={tz}
-              overlapIds={overlapIds}
-              canOperate={props.canOperate}
-              onOpen={setSelectedId}
-              onBook={() => setModal({ mode: "new" })}
-            />
-          ) : null}
-
-          {isWeek && weeklyLayout === "team" ? (
-            <WeekTeamBoard
-              days={weekDays}
-              staff={shownStaff}
-              appointments={visible}
-              openingHours={props.openingHours}
-              timezone={tz}
-              today={nowParts.dayKey}
-              overlapIds={overlapIds}
-              selectedId={selectedId}
-              flashId={flashId}
-              blocks={props.blocks}
-              previewFor={previewProps}
-              onOpen={openAppointment}
-              onDay={(date) => navigate({ date, view: "day" })}
-              onMore={(appointments, title) => {
-                setWeekOverflowTitle(title);
-                setWeekOverflow(appointments);
+          {canPaint && !isWeek ? (
+            <button
+              type="button"
+              aria-pressed={paint}
+              aria-label={paint ? "Dejar de pintar en la agenda" : "Pintar en la agenda: arrastra para crear una cita o bloquear horario"}
+              title={paint ? "Dejar de pintar (Esc)" : "Pintar: arrastra en la agenda para crear o bloquear"}
+              onClick={() => {
+                setPaint((v) => !v);
+                setSlotPop(null);
               }}
-            />
+              className={`${TB_ICON} ${paint ? "!border-[var(--ink)] !bg-[var(--ink)] !text-[var(--ink-fg)]" : ""}`}
+            >
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[15px]" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M13.6 2.4a1.2 1.2 0 0 0-1.7 0L7.2 7.1l1.7 1.7 4.7-4.7a1.2 1.2 0 0 0 0-1.7z" />
+                <path d="M6.6 8.1c-1.3 0-2.3 1-2.3 2.3 0 1.2-.8 2-1.9 2.2 .7 1 1.8 1.4 3 1.4 1.9 0 3.3-1.4 3.3-3.3L6.6 8.1z" />
+              </svg>
+            </button>
           ) : null}
-
-          {(isWeek && weeklyLayout === "hours") || (!isWeek && desktopLayout === "columns") ? (
-          <div className="hidden min-h-0 flex-1 overflow-auto xl:block">
-            {/* min-w-full (NOT min-w-max) is what lets the lanes BREATHE: the row is
-                at least as wide as the viewport, the lanes divide it evenly, and
-                only their own min-width can push the row past it — at which point
-                this scroller takes over horizontally. */}
-            <div className="flex min-w-full">
-              {/* ONE time rail, on the LEFT, in both views — the reference puts the
-                  hours at the leading edge of the grid so the eye lands on them before
-                  it reads a card, and a right-hand rail made the week read as a table
-                  with a trailing column. */}
-              <div className="sticky left-0 z-20 w-14 shrink-0 border-r border-line bg-surface">
-                <div className={`flex ${headClass} items-end justify-center border-b border-line pb-1`}>
-                  <span className="u-mono text-[0.625rem] text-faintest">{gmtLabel(tz)}</span>
-                </div>
-                <div className="relative" style={{ height: bodyHeight }}>
-                  {/* WEEK labels a BLOCK, so the hour sits inside the top of its own row
-                      — centring it on the row's border half-clipped the first one
-                      against the top of the scroller and read as if it belonged between
-                      two rows. DAY labels an INSTANT, so there the hour straddles its
-                      gridline, which is what lines it up with a card's start edge. */}
-                  {hours.map((h) => (
-                    <div
-                      key={h}
-                      className={
-                        isWeek
-                          ? "flex items-start justify-end pr-2 pt-1.5"
-                          : "absolute right-2 -translate-y-1/2"
-                      }
-                      style={isWeek ? { height: rowHeight } : { top: offsetTop(h * 60) }}
-                    >
-                      <span className="u-mono text-[0.625rem] text-faint">
-                        {/* `h` is already the site's LOCAL hour (see zonedParts/nowParts),
-                            so it prints directly as 24-hour HH:00 — no Intl reshift into
-                            the browser's zone, and no AM/PM to mix with the cards. */}
-                        {`${String(h).padStart(2, "0")}:00`}
-                      </span>
-                    </div>
-                  ))}
-                  {nowVisible ? (
-                    <div
-                      aria-hidden
-                      className="absolute right-0 -translate-y-1/2 rounded-l bg-brand px-1 py-px"
-                      style={{ top: offsetTop(minutesOf(nowParts)) }}
-                    >
-                      <span className="u-mono text-[0.5625rem] font-semibold text-white">
-                        {String(nowParts.h).padStart(2, "0")}:{String(nowParts.m).padStart(2, "0")}
-                      </span>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              {/* Columns */}
-              {columns.map((col) => {
-                const columnAppointments = visible.filter((appt) => inColumn(appt, col.key));
-                const weekBlocks = isWeek ? bucketWeekAppointments(columnAppointments, tz, fromHour, toHour) : null;
-                const dayLanes = isWeek ? null : layoutDayLanes(columnAppointments);
-                return (
-                <div
-                  key={col.key}
-                  // GROW to fill, but never past a comfortable reading width and
-                  // never below the min — three barbers spread across the panel,
-                  // twelve fall back to the min and scroll. Day lanes carry a
-                  // customer name + service so they need more floor than week's.
-                  // grow-[999] (vs the tail's grow-1) is what makes the max-width
-                  // behave: the lanes take everything up to their cap, and only the
-                  // slack they refuse falls through to the empty tail.
-                  className={`grow-[999] border-r border-line ${
-                    // The week floor is what stops a 7-column grid from shrinking into
-                    // slivers: at 9.5rem the card's service + client lines still read,
-                    // and seven of them plus the rail fit a 1280 viewport unscrolled.
-                    isWeek ? "min-w-[9.5rem] max-w-[20rem]" : "min-w-[13rem] max-w-[34rem]"
-                  }`}
+          <div role="group" aria-label="Vista" className="flex h-[32px] shrink-0 gap-0.5 rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] p-[2px]">
+            {(
+              [
+                ["day", "D", "Día"],
+                ["week", "S", "Semana"],
+              ] as const
+            ).map(([k, letter, full]) => {
+              const on = (k === "week") === isWeek;
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  aria-label={full}
+                  title={full}
+                  aria-pressed={on}
+                  onClick={() => navigate({ view: k })}
+                  className={`u-focus h-full w-[34px] rounded-[6px] text-[13px] transition-colors ${on ? "bg-[var(--ag-segact-bg)] font-medium text-[var(--ag-segact-fg)]" : "text-[var(--ag-ink2)] hover:bg-[var(--subtle)]"}`}
                 >
-                  <div
-                    className={`sticky top-0 z-10 flex ${headClass} items-center border-b border-line px-2 ${
-                      col.closed ? "bg-closed-bg" : col.isToday && isWeek ? "bg-[color-mix(in_srgb,var(--chip)_70%,var(--surface))]" : "bg-surface"
-                    } ${isWeek ? "justify-center" : "gap-2"}`}
-                  >
-                    {isWeek && col.dayNum ? (
-                      <span className="flex min-w-0 flex-col items-center justify-center leading-none">
-                        <span className={`text-[0.6875rem] font-medium capitalize ${col.closed ? "text-closed-fg" : "text-muted"}`}>
-                          {col.label.toLocaleLowerCase("es")}
+                  {letter}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex h-[32px] shrink-0 items-center overflow-hidden rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)]">
+            <button type="button" aria-label={isWeek ? "Semana anterior" : "Día anterior"} onClick={() => shiftDate(isWeek ? -7 : -1)} className="u-focus inline-flex h-full w-[32px] items-center justify-center text-[var(--ag-ink2)] hover:bg-[var(--subtle)]">
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M10 3.5L5.5 8l4.5 4.5" /></svg>
+            </button>
+            <button type="button" onClick={() => navigate({ date: nowParts.dayKey })} className="u-focus h-full px-2.5 text-[13px] text-foreground hover:bg-[var(--subtle)]">
+              Hoy
+            </button>
+            <button type="button" aria-label={isWeek ? "Semana siguiente" : "Día siguiente"} onClick={() => shiftDate(isWeek ? 7 : 1)} className="u-focus inline-flex h-full w-[32px] items-center justify-center text-[var(--ag-ink2)] hover:bg-[var(--subtle)]">
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M6 3.5L10.5 8 6 12.5" /></svg>
+            </button>
+          </div>
+          <GearMenu
+            badge={activeFilters > 0}
+            filters={{
+              label: activeFilters > 0 ? `Filtros · ${activeFilters} activos` : "Filtrar",
+              sub: "Profesionales y estados",
+              content: (
+                <FiltersPopover
+                  value={{ staff: staffSel, states: statesOn }}
+                  families={serviceLegend}
+                  people={props.staff.map((st) => ({ id: st.id, name: st.name, photoUrl: st.photoUrl ?? null }))}
+                  tintOf={tintOf}
+                  onChange={(v) => {
+                    setStaffSel(v.staff);
+                    setStatesOn(v.states);
+                  }}
+                />
+              ),
+            }}
+            items={[
+              ...(props.canBlockStaff || props.canBlockSite
+                ? [{ label: "Bloquear horario", sub: "Puntual o recurrente", onSelect: () => setModal({ mode: "block", staffId: staffSel.length === 1 ? staffSel[0] : undefined }) }]
+                : []),
+              ...(props.canOperate ? [{ label: "Atención sin cita", sub: "Alguien que llegó sin reserva", onSelect: () => setModal({ mode: "walkin" }) }] : []),
+              ...(props.canViewPayments ? [{ label: "Cobros pendientes", sub: "Citas completadas sin cobro registrado", onSelect: () => setPendingList(true) }] : []),
+              { label: "Horarios y ausencias", sub: "Horario de sede y de cada profesional", onSelect: () => router.push(`/clients/${props.clientId}/scheduling/hours`) },
+              { label: "Equipo", sub: "Profesionales y sus servicios", onSelect: () => router.push(`/clients/${props.clientId}/scheduling/staff`) },
+              ...(props.sites.length > 1
+                ? props.sites
+                    .filter((st) => st.id !== props.currentSiteId)
+                    .map((st) => ({ label: `Ver ${st.name}`, sub: "Cambiar de sede", onSelect: () => navigate({ site: st.id }) }))
+                : []),
+            ]}
+          />
+          {props.canOperate ? (
+            <button type="button" onClick={() => setModal({ mode: "new" })} className={TB_PRIMARY}>
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M8 3v10M3 8h10" /></svg>
+              Nueva cita
+            </button>
+          ) : null}
+        </div>
+        {error ? (
+          <p role="alert" className="mx-6 mb-3 rounded-[10px] bg-[var(--ag-danger-soft)] px-3 py-2.5 text-[13px] text-[var(--ag-danger-ink)]">
+            {error}
+          </p>
+        ) : null}
+        {/* The grid sits in its OWN frame (8px from the surface, hairline, 12px radius): that
+            frame — not a rule under the bar — separates the tools from the calendar. Día clips
+            to the frame; Semana does not (its board scrolls, and rounds its own corners). */}
+        <div className={`relative mx-2 mb-2 flex min-h-0 flex-1 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] ${isWeek ? "" : "overflow-hidden"}`}>
+          {/* «Pintar» hint: floats over the grid's header row, so turning the brush on moves
+              nothing on screen (no reflow, no scroll change). */}
+          {painting ? (
+            <span role="status" aria-live="polite" className="u-pop-in pointer-events-none absolute left-1/2 top-[7px] z-[30] -translate-x-1/2 whitespace-nowrap rounded-[8px] bg-[var(--ink)] px-3 py-1.5 text-[13px] text-[var(--ink-fg)] shadow-[0_6px_18px_rgba(0,0,0,0.16)]">
+              Arrastra sobre la agenda para crear una cita o bloquear horario · Esc para salir
+            </span>
+          ) : null}
+          <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[11px]">
+            {isWeek ? (
+              <WeekTeamBoard
+                days={weekDays}
+                staff={shownStaff}
+                appointments={visible}
+                openingHours={props.openingHours}
+                timezone={tz}
+                today={nowParts.dayKey}
+                selectedId={selectedId}
+                flashId={flashId}
+                blocks={props.blocks}
+                seriesOccurrences={props.seriesOccurrences}
+                dimmed={isDimmed}
+                conflictIds={conflictIds}
+                tintOf={tintOf}
+                previewFor={previewProps}
+                onOpen={openAppointment}
+                onDay={(date) => navigate({ date, view: "day" })}
+                onMore={(appointments, title) => {
+                  setWeekOverflowTitle(title);
+                  setWeekOverflow(appointments);
+                }}
+              />
+            ) : (
+              <div className="min-h-0 flex-1 overflow-auto" aria-label="Agenda del día por profesional">
+                <div className="flex min-w-full">
+                  <div className="sticky left-0 z-20 w-[60px] shrink-0 bg-[var(--surface)]">
+                    <div className="sticky top-0 z-10 flex h-[44px] items-end justify-end border-b border-[var(--line)] bg-[var(--surface)] pb-2.5 pr-2.5">
+                      <span className="text-[10.5px] text-muted">{gmtLabel(tz)}</span>
+                    </div>
+                    <div className="relative" style={{ height: bodyHeight }}>
+                      {hours.map((h) => (
+                        <span key={h} className="absolute right-2.5 text-[11px] tabular-nums text-muted" style={{ top: offsetTop(h * 60) + 6 }}>
+                          {`${String(h).padStart(2, "0")}:00`}
                         </span>
-                        <span
-                          className={`u-mono mt-0.5 flex h-5 min-w-5 items-center justify-center rounded-md px-1 text-sm font-semibold ${
-                            col.isToday ? "bg-foreground text-surface" : col.closed ? "text-closed-fg" : "text-foreground"
-                          }`}
-                        >
-                          {col.dayNum}
-                        </span>
-                        {col.sub ? (
-                          <span className={`mt-0.5 truncate text-[0.625rem] ${col.closed ? "text-closed-fg" : "text-faint"}`}>
-                            {col.sub}
-                          </span>
-                        ) : null}
-                      </span>
-                    ) : (
-                      <>
-                        {col.initial ? <Initial name={col.initial} muted={col.closed} photoUrl={(col as { photoUrl?: string | null }).photoUrl ?? null} /> : null}
-                        <span className="flex min-w-0 flex-col leading-tight">
-                          <span className={`truncate text-xs font-semibold ${col.closed ? "text-closed-fg" : "text-foreground"}`}>
-                            {col.label}
-                          </span>
-                          {col.sub ? (
-                            <span className={`truncate text-[0.625rem] ${col.closed ? "text-closed-fg" : "text-faint"}`}>
-                              {col.sub}
-                            </span>
-                          ) : null}
-                        </span>
-                      </>
-                    )}
-                    {col.inactive ? (
-                      <span
-                        title="Este profesional está inactivo — sus citas existentes siguen visibles aquí, pero no puede recibir nuevas reservas. Reactívalo en Agenda → Equipo."
-                        className="shrink-0 rounded-full border border-line-strong bg-chip px-1.5 py-0.5 text-[0.625rem] font-medium text-muted"
-                      >
-                        Inactivo
-                      </span>
-                    ) : null}
-                  </div>
-                  {weekBlocks ? (
-                    /* WEEK — a column of fixed HOUR BLOCKS. The card and its "+N citas"
-                       chip are siblings inside the same block, so the chip can never
-                       cover the hour above or below it. */
-                    <div className={`relative ${col.closed ? "u-closed-hatch" : ""}`} style={{ height: bodyHeight }}>
-                      {/* BLOCKED time — under the cards, on the same hour scale. */}
-                      {blocksOn(col.key, fromHour * 60, toHour * 60).map((b) => (
-                        <div
-                          key={b.id}
-                          title={`${b.label} · ${b.when}`}
-                          className={`${b.staffId === null ? "u-timeoff-hatch-site" : "u-timeoff-hatch"} absolute inset-x-1 overflow-hidden rounded-sch-event border border-dashed border-timeoff-edge px-2 py-1`}
-                          style={{ top: offsetTop(b.sMin), height: Math.max(18, ((b.eMin - b.sMin) / 60) * rowHeight - 2) }}
-                        >
-                          <span className="block truncate text-[11px] font-medium text-muted">{b.label}</span>
-                        </div>
                       ))}
-                      {/* …and an edge marker ABOVE them, so an hour whose cards cover the
-                          block still reads as blocked. */}
-                      {blocksOn(col.key, fromHour * 60, toHour * 60).map((b) => (
-                        <span
-                          key={`${b.id}-edge`}
-                          title={`${b.label} · ${b.when}`}
-                          className="absolute right-0.5 z-[1] w-1 rounded-full bg-[repeating-linear-gradient(180deg,var(--faint)_0_4px,transparent_4px_7px)]"
-                          style={{ top: offsetTop(b.sMin), height: Math.max(18, ((b.eMin - b.sMin) / 60) * rowHeight - 2) }}
-                        />
-                      ))}
-                      {weekBlocks.map((block) => {
-                        // At most TWO cards per hour block; everything else is counted in
-                        // the in-flow "+N más" chip, which opens EVERY appointment of the
-                        // block (nothing is hidden for good, nothing is left out of the count).
-                        const [lead, second, ...rest] = block.appointments;
-                        const shown = [lead, second].filter((x): x is Appt => Boolean(x));
-                        return (
-                          <div
-                            key={block.hour}
-                            // `relative` lifts the in-flow hour cell above the absolutely
-                            // positioned block overlay drawn before it.
-                            className="relative flex flex-col gap-1 border-b border-line-soft p-1"
-                            style={{ height: rowHeight }}
-                          >
-                            {shown.map((appt) => (
-                              <WeekBlockCard
-                                key={appt.id}
-                                appt={appt}
-                                toneClass={appointmentToneClass(appt)}
-                                tz={tz}
-                                overlapping={overlapIds.has(appt.id)}
-                                conflict={conflictIds.has(appt.id)}
-                                selected={appt.id === selectedId || appt.id === flashId}
-                                crowded={shown.length > 1 || rest.length > 0}
-                                previewProps={previewProps(appt)}
-                                onOpen={() => openAppointment(appt.id)}
-                              />
-                            ))}
-                            {rest.length > 0 ? (
-                              <button
-                                type="button"
-                                aria-label={`Ver las ${block.appointments.length} citas de las ${String(block.hour).padStart(2, "0")}:00 (${rest.length} más)`}
-                                onClick={() => setWeekOverflow(block.appointments)}
-                                className="flex h-5 shrink-0 items-center justify-center rounded-md border border-line bg-chip text-[0.625rem] font-medium text-foreground transition hover:border-foreground hover:bg-foreground hover:text-background"
-                              >
-                                +{rest.length} más
-                              </button>
-                            ) : null}
-                          </div>
-                        );
-                      })}
                       {nowVisible ? (
-                        <div
-                          aria-hidden
-                          className="pointer-events-none absolute inset-x-0 z-10 border-t-2 border-brand"
-                          style={{ top: offsetTop(minutesOf(nowParts)) }}
-                        />
+                        <>
+                          <span aria-hidden className="absolute right-0 left-[52px] z-[6] h-0 shadow-[0_0_0_1px_var(--foreground)]" style={{ top: offsetTop(minutesOf(nowParts)) }} />
+                          <span aria-hidden className="absolute left-1 z-[7] flex h-[18px] items-center rounded-[5px] bg-[var(--foreground)] px-[5px] text-[10.5px] tabular-nums text-[var(--surface)]" style={{ top: offsetTop(minutesOf(nowParts)) - 9 }}>
+                            {`${String(nowParts.h).padStart(2, "0")}:${String(nowParts.m).padStart(2, "0")}`}
+                          </span>
+                        </>
                       ) : null}
                     </div>
-                  ) : (
-                  <div className="relative" style={{ height: bodyHeight }}>
-                    {/* CLOSED wash — under the hour lines and under any card, so an
-                        appointment booked into a closed day stays fully readable
-                        (it exists; it just shouldn't look bookable around it). */}
-                    {col.closed ? <div aria-hidden className="u-closed-hatch absolute inset-0" /> : null}
-                    {/* TIME OFF bands for THIS staff column (+ site closures, which apply to
-                        everyone). Painted over the closed wash, under the cards — a kept
-                        conflicting appointment still reads clearly on top. */}
-                    {props.blocks
-                      .filter((b) => b.staff_id === col.key || b.staff_id === null)
-                      .map((b) => {
-                        const band = bandForDay(b, props.dayStartIso, props.dayEndIso);
-                        if (!band) return null;
-                        const siteWide = b.staff_id === null;
-                        const editable = siteWide ? props.canBlockSite : props.canBlockStaff;
-                        return (
-                          <BlockBand
-                            key={b.id}
-                            top={band.top}
-                            height={band.height}
-                            siteWide={siteWide}
-                            fullDay={band.fullDay}
-                            reason={b.reason}
-                            editable={editable}
-                            onOpen={() => setModal({ mode: "editBlock", block: b })}
-                          />
-                        );
-                      })}
-                    {hours.map((h) => (
-                      <div
-                        key={h}
-                        aria-hidden
-                        className="absolute inset-x-0 border-t border-line/70"
-                        style={{ top: offsetTop(h * 60) }}
-                      />
-                    ))}
-                    {nowVisible ? (
-                      <div
-                        aria-hidden
-                        className="absolute inset-x-0 z-10 border-t-2 border-brand"
-                        style={{ top: offsetTop(minutesOf(nowParts)) }}
-                      />
-                    ) : null}
-                    {columnAppointments.map((a) => {
-                        // Clamp to the operating window so an out-of-hours booking
-                        // still renders (at the edge) instead of drawing off-grid.
-                        const lo = fromHour * 60;
-                        const hi = toHour * 60;
-                        const startMin = Math.min(Math.max(minutesOf(zonedParts(a.start_at, tz)), lo), hi);
-                        const endMin = Math.min(Math.max(minutesOf(zonedParts(a.service_end_at, tz)), startMin), hi);
-                        return (
-                          <ApptCard
-                            key={a.id}
-                            appt={a}
-                            toneClass={appointmentToneClass(a)}
-                            tz={tz}
-                            top={offsetTop(startMin)}
-                            height={Math.max(22, ((endMin - startMin) / 60) * HOUR_PX - 2)}
-                            lane={dayLanes?.get(a.id)}
-                            overlapping={overlapIds.has(a.id)}
-                            conflict={conflictIds.has(a.id)}
-                            selected={a.id === selectedId}
-                            flash={a.id === flashId}
-                            previewProps={previewProps(a)}
-                            onOpen={() => openAppointment(a.id)}
-                          />
-                        );
-                      })}
                   </div>
-                  )}
-                </div>
-                );
-              })}
-
-              {/* EMPTY TAIL. With one or two barbers the lanes hit their max-width
-                  and leave slack; this carries the hour lines across it so the
-                  remainder reads as empty calendar rather than a torn-off grid. It
-                  takes ONLY what the lanes refuse (grow 1 against their 999). */}
-              <div aria-hidden className="min-w-0 grow">
-                <div className={`sticky top-0 z-10 ${headClass} border-b border-line bg-surface`} />
-                <div className="relative" style={{ height: bodyHeight }}>
-                  {/* The tail carries the SAME rhythm as the lanes: block borders in
-                      week, hairlines on the hour in day. */}
-                  {hours.map((h) => (
-                    <div
-                      key={h}
-                      className={isWeek ? "border-b border-line-soft" : "absolute inset-x-0 border-t border-line/70"}
-                      style={isWeek ? { height: rowHeight } : { top: offsetTop(h * 60) }}
-                    />
-                  ))}
-                  {/* The now-line runs to the edge of the grid, not to the edge of
-                      the last lane — otherwise it stops mid-panel. */}
-                  {nowVisible ? (
-                    <div
-                      className="absolute inset-x-0 z-10 border-t-2 border-brand"
-                      style={{ top: offsetTop(minutesOf(nowParts)) }}
-                    />
-                  ) : null}
+                  {columns.map((col) => {
+                    const columnAppointments = visible.filter((appt) => inColumn(appt, col.key));
+                    const dayLanes = layoutDayLanes(columnAppointments);
+                    const laneCards = cardRanges(columnAppointments);
+                    return (
+                      <div key={col.key} className="min-w-[12.5rem] flex-1 border-l border-[var(--line)]">
+                        <div className="sticky top-0 z-10 flex h-[44px] items-center gap-2 border-b border-[var(--line)] bg-[var(--surface)] px-3">
+                          <AgAvatar name={col.label} id={col.key} size={24} tint={tintOf(col.key)} photoUrl={(col as { photoUrl?: string | null }).photoUrl ?? null} />
+                          <span className="flex min-w-0 flex-col leading-tight">
+                            <span className="truncate text-[13.5px] font-medium text-foreground">{col.label}</span>
+                            <span className="truncate text-[12px] text-muted">{col.sub}</span>
+                          </span>
+                          {col.inactive ? (
+                            <span
+                              title="Este profesional está inactivo — sus citas existentes siguen visibles aquí, pero no puede recibir nuevas reservas. Reactívalo en Agenda → Equipo."
+                              className="ml-auto shrink-0 rounded-[6px] bg-[var(--chip)] px-2 py-0.5 text-[11.5px] text-[var(--ag-ink2)]"
+                            >
+                              Inactivo
+                            </span>
+                          ) : null}
+                        </div>
+                        <div
+                          className={`relative select-none ${painting && canSlotMenu(col.key) ? "cursor-crosshair" : ""}`}
+                          style={{ height: bodyHeight }}
+                          onPointerDown={(e) => {
+                            if (e.button !== 0 || !painting || !canSlotMenu(col.key) || (e.target as Element).closest("button,a,[data-slot-menu]")) return;
+                            const el = e.currentTarget;
+                            const touch = e.pointerType !== "mouse";
+                            const anchor = minuteAt(el, e.clientY);
+                            const last = col.key === columns[columns.length - 1]?.key;
+                            const begin = () => {
+                              const d = dragRef.current;
+                              if (!d) return;
+                              d.live = true;
+                              try {
+                                d.el.setPointerCapture(d.pointerId);
+                              } catch {
+                                /* the pointer is already gone */
+                              }
+                              if (d.touch) {
+                                try {
+                                  navigator.vibrate?.(12);
+                                } catch {
+                                  /* no haptics */
+                                }
+                              }
+                              setSlotPop({ staffId: d.staffId, from: d.anchor, to: d.anchor + 15, last: d.last, dragging: true, dragged: false });
+                            };
+                            dragRef.current = { staffId: col.key, anchor, x: e.clientX, y: e.clientY, timer: null, live: false, moved: false, el, touch, last, pointerId: e.pointerId };
+                            if (touch) dragRef.current.timer = window.setTimeout(begin, 350);
+                            else begin();
+                          }}
+                          onPointerMove={(e) => {
+                            const d = dragRef.current;
+                            if (!d) return;
+                            const far = Math.abs(e.clientY - d.y) > 6 || Math.abs(e.clientX - d.x) > 6;
+                            if (!d.live) {
+                              // A touch that moves before the long press is a scroll, not a selection.
+                              if (far && d.timer) {
+                                window.clearTimeout(d.timer);
+                                dragRef.current = null;
+                              }
+                              return;
+                            }
+                            if (far) d.moved = true;
+                            // The far edge follows the pointer to the NEAREST quarter hour, never
+                            // shorter than the 15 minutes pressed: 15 min is the shortest selection.
+                            const m = minuteAt(d.el, e.clientY);
+                            const exact = minuteAt(d.el, e.clientY, true);
+                            const from = Math.min(d.anchor, m);
+                            const to = Math.min(toHour * 60, m < d.anchor ? d.anchor + 15 : Math.max(d.anchor + 15, exact));
+                            setSlotPop((cur) => (cur && cur.dragging && (cur.from !== from || cur.to !== to) ? { ...cur, from, to, dragged: d.moved } : cur));
+                          }}
+                          onPointerUp={() => {
+                            const d = dragRef.current;
+                            dragRef.current = null;
+                            if (!d) return;
+                            if (d.timer) window.clearTimeout(d.timer);
+                            if (!d.live) return;
+                            // A click marks the quarter hour pressed (15 min); a drag marks what it covers.
+                            setSlotPop((cur) => (cur ? { ...cur, dragging: false, dragged: d.moved } : cur));
+                          }}
+                          onPointerCancel={() => {
+                            const d = dragRef.current;
+                            if (d?.timer) window.clearTimeout(d.timer);
+                            dragRef.current = null;
+                            setSlotPop((cur) => (cur?.dragging ? null : cur));
+                          }}
+                        >
+                          {bookingGhost && bookingGhost.staffId === col.key && siteDayKey(bookingGhost.startAt, tz) === shownDayKeys[0] ? (() => {
+                            const p = zonedParts(bookingGhost.startAt, tz);
+                            const m0 = p.h * 60 + p.m;
+                            const clash = columnAppointments.some((a) => a.status !== "cancelled" && Date.parse(a.start_at) < Date.parse(bookingGhost.startAt) + bookingGhost.durationMin * 60_000 && Date.parse(a.service_end_at) > Date.parse(bookingGhost.startAt));
+                            return (
+                              <div aria-hidden data-booking-ghost="" className={`u-ag-ghost pointer-events-none absolute inset-x-[3px] z-[7] flex flex-col gap-0.5 overflow-hidden rounded-[10px] border-[1.5px] border-dashed px-3 py-2 text-[12.5px] ${clash ? "border-[var(--danger)] bg-[var(--ag-danger-soft)] text-[var(--ag-danger-ink)]" : "border-[var(--foreground)] bg-[var(--ag-break)] text-foreground"}`} style={{ top: offsetTop(m0) + 1.5, height: Math.max(22, (bookingGhost.durationMin / 60) * HOUR_PX - 3) }}>
+                                <span className="truncate font-medium">{bookingGhost.label}</span>
+                                <span className="tabular-nums">{hmOf(m0)}–{hmOf(m0 + bookingGhost.durationMin)}{clash ? " · se cruza con otra cita" : ""}</span>
+                              </div>
+                            );
+                          })() : null}
+                          {slotPop && slotPop.staffId === col.key ? (
+                            <SlotMenu
+                              top={offsetTop(slotPop.from)}
+                              height={((slotPop.to - slotPop.from) / 60) * HOUR_PX}
+                              dragging={slotPop.dragging}
+                              alignRight={slotPop.last && columns.length > 1}
+                              label={`${hmOf(slotPop.from)} – ${hmOf(slotPop.to)} · ${slotPop.to - slotPop.from} min`}
+                              from={hmOf(slotPop.from)}
+                              to={hmOf(slotPop.to)}
+                              onNew={
+                                props.canOperate
+                                  ? () => {
+                                      const at = new Date(Date.parse(siteMidnightIso(shownDayKeys[0], tz)) + slotPop.from * 60_000).toISOString();
+                                      const span = slotPop.dragged ? slotPop.to - slotPop.from : undefined;
+                                      setSlotPop(null);
+                                      setModal({ mode: "new", staffId: col.key, startAt: at, spanMin: span });
+                                    }
+                                  : null
+                              }
+                              onBlock={
+                                props.canBlockStaff
+                                  ? () => {
+                                      setSlotPop(null);
+                                      setModal({ mode: "block", staffId: col.key, date: shownDayKeys[0], start: hmOf(slotPop.from), end: hmOf(slotPop.to) });
+                                    }
+                                  : null
+                              }
+                              onClose={() => setSlotPop(null)}
+                            />
+                          ) : null}
+                          {hours.map((h) => (
+                            <Fragment key={h}>
+                              {h > fromHour ? <div aria-hidden className="absolute inset-x-0 border-t border-[var(--line-soft)]" style={{ top: offsetTop(h * 60) }} /> : null}
+                              <div aria-hidden className="absolute inset-x-0 border-t border-[var(--line-soft)]" style={{ top: offsetTop(h * 60 + 30) }} />
+                            </Fragment>
+                          ))}
+                          {col.closed ? (
+                            <div className={`${hasAnyHours(props.openingHours) && !opensOn(props.openingHours, dayWeekday) ? "u-sch-closed" : "u-sch-block"} absolute inset-[3px] rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium`}>
+                              {hasAnyHours(props.openingHours) && !opensOn(props.openingHours, dayWeekday) ? "Sede cerrada" : "No trabaja"}
+                            </div>
+                          ) : null}
+                          {props.blocks
+                            .filter((b) => b.staff_id === col.key || b.staff_id === null)
+                            .map((b) => {
+                              const bd = bandForDay(b, props.dayStartIso, props.dayEndIso);
+                              if (!bd) return null;
+                              const siteWide = b.staff_id === null;
+                              return (
+                                <BlockBand
+                                  key={b.id}
+                                  top={bd.top}
+                                  height={bd.height}
+                                  siteWide={siteWide}
+                                  fullDay={bd.fullDay}
+                                  time={blockSpanLabel(b.starts_at, b.ends_at, tz).text}
+                                  reason={b.reason}
+                                  editable={siteWide ? props.canBlockSite : props.canBlockStaff}
+                                  cards={laneCards}
+                                  onOpen={() => setModal({ mode: "editBlock", block: b })}
+                                />
+                              );
+                            })}
+                          {scheduleLayer(col.key, shownDayKeys[0], col.closed === true, laneCards)}
+                          {nowVisible ? (
+                            <div aria-hidden className="pointer-events-none absolute inset-x-0 z-[5] h-0 shadow-[0_0_0_1px_var(--foreground)]" style={{ top: offsetTop(minutesOf(nowParts)) }} />
+                          ) : null}
+                          {columnAppointments.map((a) => {
+                            const lo = fromHour * 60;
+                            const hi = toHour * 60;
+                            const startMin = Math.min(Math.max(minutesOf(zonedParts(a.start_at, tz)), lo), hi);
+                            const endMin = Math.min(Math.max(minutesOf(zonedParts(a.service_end_at, tz)), startMin), hi);
+                            return (
+                              <ApptCard
+                                key={a.id}
+                                appt={a}
+                                toneClass={appointmentToneClass(a)}
+                                tz={tz}
+                                top={offsetTop(startMin)}
+                                height={Math.max(22, ((endMin - startMin) / 60) * HOUR_PX)}
+                                lane={dayLanes.get(a.id)}
+                                overlapping={overlapIds.has(a.id)}
+                                conflict={conflictIds.has(a.id)}
+                                selected={a.id === selectedId}
+                                flash={a.id === flashId}
+                                dim={isDimmed(a)}
+                                previewProps={previewProps(a)}
+                                onOpen={() => openAppointment(a.id)}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  {/* Room for the booking panel: the draft's lane can slide into view beside it. */}
+                  {bookingGhost && modal?.mode === "new" ? <div aria-hidden className="w-[532px] shrink-0" /> : null}
                 </div>
               </div>
+            )}
+          </section>
 
-            </div>
-          </div>
-          ) : null}
-        </section>
-
-        {selected ? (
+        {(selected || deskReschedule) && !formReschedule ? (() => {
+          const appt = (deskReschedule ?? selected) as Appt;
+          if (charge && charge.apptId === appt.id && !deskReschedule) {
+            return (
+              <ChargePanel
+                key={`charge:${appt.id}:${charge.mode}`}
+                clientId={props.clientId}
+                appt={appt}
+                timezone={tz}
+                mode={charge.mode}
+                onClose={() => setCharge(null)}
+                onDone={(m) => {
+                  setCharge(null);
+                  setNotice(m);
+                  // Highlight the card once the server-confirmed state is drawn.
+                  try {
+                    window.sessionStorage.setItem(FLASH_KEY, appt.id);
+                  } catch {
+                    /* nicety */
+                  }
+                  router.refresh();
+                }}
+                onCompleteWithout={
+                  charge.mode === "complete"
+                    ? () => {
+                        setCharge(null);
+                        run(() => completeAppointmentAction(props.clientId, appt.id), "Cita completada · cobro pendiente");
+                      }
+                    : undefined
+                }
+              />
+            );
+          }
+          return (
           <AppointmentPanel
-            key={selected.id}
-            appt={selected}
+            key={`${appt.id}:${deskReschedule ? "r" : "d"}`}
+            appt={appt}
             timezone={tz}
-            toneClass={appointmentToneClass(selected)}
+            toneClass={appointmentToneClass(appt)}
             siteName={currentSite?.name ?? "Sede actual"}
-            originLabel={ORIGIN_LABEL[selected.origin] ?? (selected.origin || "—")}
+            originLabel={ORIGIN_LABEL[appt.origin] ?? (appt.origin || "—")}
             canOperate={props.canOperate}
-            canModify={selected.can_modify}
-            covered={modal?.mode === "reschedule"}
+            canModify={appt.can_modify}
+            covered={false}
             pending={pending}
             error={error}
-            contactHref={selected.contact_id && props.contactsBase ? `${props.contactsBase}/${selected.contact_id}${fromQS}` : null}
+            review={appt.review}
+            startInReschedule={Boolean(deskReschedule)}
+            reschedule={rescheduleConfig()}
+            onContactSaved={(m) => {
+              setNotice(m);
+              router.refresh();
+            }}
+            contactHref={appt.contact_id && props.contactsBase ? `${props.contactsBase}/${appt.contact_id}${fromQS}` : null}
             conversationHref={
-              selected.source_conversation_id && props.inboxBase
-                ? `${props.inboxBase}?c=${encodeURIComponent(selected.source_conversation_id)}`
+              appt.source_conversation_id && props.inboxBase
+                ? `${props.inboxBase}?c=${encodeURIComponent(appt.source_conversation_id)}`
                 : null
             }
             // "Volver a reservar": the existing book-for-contact deep link (the page only
             // honours it with CRM on and the contact in this client).
             bookAgainHref={
-              props.canOperate && selected.contact_id && props.contactsBase
-                ? `${props.basePath}?site=${encodeURIComponent(props.currentSiteId)}&book=${encodeURIComponent(selected.contact_id)}`
+              props.canOperate && appt.contact_id && props.contactsBase
+                ? `${props.basePath}?site=${encodeURIComponent(props.currentSiteId)}&book=${encodeURIComponent(appt.contact_id)}`
                 : null
             }
-            onClose={() => setSelectedId(null)}
-            onLocate={() => locateAppointment(selected.id)}
-            onReschedule={() => setModal({ mode: "reschedule", appt: selected })}
+            onClose={() => {
+              setSelectedId(null);
+              if (deskReschedule) setModal(null);
+              // Focus goes back to the card that opened it (the panel's own opener may be gone,
+              // e.g. after «Reagendar» replaced the detail).
+              window.requestAnimationFrame(() => {
+                const card = [...document.querySelectorAll<HTMLElement>(`[data-appt-card][data-appt-id="${CSS.escape(appt.id)}"]`)].find((n) => n.getClientRects().length > 0);
+                card?.focus({ preventScroll: true });
+              });
+            }}
+            onLocate={() => locateAppointment(appt.id)}
+            onReschedule={() => setModal({ mode: "reschedule", appt })}
+            payment={
+              props.canViewPayments
+                ? {
+                    clientId: props.clientId,
+                    canRecord: Boolean(props.canRecordPayments) && appt.can_modify,
+                    canVoid: Boolean(props.canVoidPayments),
+                    onRecord: () => setCharge({ apptId: appt.id, mode: "record" }),
+                    onChanged: (m) => {
+                      setNotice(m);
+                      router.refresh();
+                    },
+                  }
+                : null
+            }
             onStatus={(target, reason) =>
-              run(
+              // «Completar cita» opens the charge step for whoever may record money; anyone else
+              // completes as before (the appointment then reads «Cobro pendiente»).
+              target === "completed" && props.canRecordPayments
+                ? setCharge({ apptId: appt.id, mode: "complete" })
+                : run(
                 () =>
                   target === "confirmed"
-                    ? confirmAppointmentAction(props.clientId, selected.id)
+                    ? confirmAppointmentAction(props.clientId, appt.id)
                     : target === "completed"
-                      ? completeAppointmentAction(props.clientId, selected.id)
+                      ? completeAppointmentAction(props.clientId, appt.id)
                       : target === "no_show"
-                        ? noShowAppointmentAction(props.clientId, selected.id)
-                        : cancelAppointmentAction(props.clientId, selected.id, reason),
+                        ? noShowAppointmentAction(props.clientId, appt.id)
+                        : cancelAppointmentAction(props.clientId, appt.id, reason),
                 target === "confirmed" ? "Cita confirmada" : target === "completed" ? "Cita completada" : target === "no_show" ? "Inasistencia registrada" : "Cita cancelada",
               )
             }
-            staffColor={teamColors.get(selected.staff_id)}
-            loadActivity={() => listAppointmentActivityAction(props.clientId, selected.id)}
-            loadReviewLink={() => getReviewLinkAction(props.clientId, selected.id)}
+            staffColor={teamColors.get(appt.staff_id)}
+            staffTint={tintOf(appt.staff_id)}
+            loadActivity={() => listAppointmentActivityAction(props.clientId, appt.id)}
+            loadReviewLink={() => getReviewLinkAction(props.clientId, appt.id)}
           />
-        ) : null}
+          );
+        })() : null}
         {preview && !selected && !modal ? (
           <AppointmentPreview
             id="appt-preview"
@@ -1851,39 +1748,30 @@ export function AgendaView(props: {
           />
         ) : null}
       </div>
-      </PageShell>
+        {/* The 20-second refresh keeps running; the reference shows no indicator for it. */}
+        <div className="sr-only">
+          <AutoRefresh intervalSeconds={20} />
+        </div>
+      </div>
 
-      {/* "Cambiar fecha y hora" — its own two-step flow (agenda/RescheduleFlow), not the
-          three steps of creation. */}
-      {modal && modal.mode === "reschedule" && props.canOperate ? (
+      {/* PHONE «Cambiar fecha y hora» — the full-screen two-step flow. From md up the same
+          move happens INSIDE the appointment's panel (AppointmentPanel → RescheduleInline). */}
+      {modal && modal.mode === "reschedule" && props.canOperate && isPhoneWidth ? (
         <RescheduleFlow
           clientId={props.clientId}
           siteId={props.currentSiteId}
           siteName={currentSite?.name ?? ""}
           timezone={tz}
-          openWeekdays={new Set(Object.entries(props.openingHours).filter(([, r]) => (r?.length ?? 0) > 0).map(([k]) => k))}
+          openWeekdays={openWeekdays}
           appt={modal.appt}
-          staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl }))}
+          staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl, tint: tintOf(s.id) }))}
           lockStaffId={props.lockStaffId}
           onClose={() => setModal(null)}
-          onDone={({ dayKey, appointmentId }) => {
-            setModal(null);
-            setSelectedId(null);
-            setNotice("Cita reprogramada");
-            // Highlight it once it is drawn on its new day (this page or the next one).
-            try {
-              window.sessionStorage.setItem(FLASH_KEY, appointmentId);
-            } catch {
-              /* private mode: the highlight is a nicety */
-            }
-            if (props.returnContactId) return router.push(`/clients/${props.clientId}/contacts/${props.returnContactId}`);
-            if (dayKey !== props.date) return navigate({ date: dayKey });
-            router.refresh();
-          }}
+          onDone={({ dayKey, appointmentId }) => afterReschedule(dayKey, appointmentId)}
         />
       ) : null}
 
-      {modal && modal.mode !== "block" && modal.mode !== "editBlock" && modal.mode !== "reschedule" && props.canOperate ? (
+      {modal && modal.mode === "new" && props.canOperate ? (
         <AppointmentModal
           {...props}
           modal={modal}
@@ -1891,8 +1779,17 @@ export function AgendaView(props: {
           onError={setError}
           error={error}
           onNotice={setNotice}
-          onDone={(dayKey) => {
+          onWalkIn={() => setModal({ mode: "walkin" })}
+          onDraft={setBookingGhost}
+          onDone={(dayKey, createdId) => {
             setModal(null);
+            if (createdId) {
+              try {
+                window.sessionStorage.setItem(FLASH_KEY, createdId);
+              } catch {
+                /* private mode: the highlight is a nicety */
+              }
+            }
             if (dayKey && dayKey !== props.date && !props.returnContactId) return navigate({ date: dayKey });
             // Deep-linked from a contact record → return there so the new/moved
             // appointment is visible in context; otherwise just refresh the agenda.
@@ -1902,18 +1799,117 @@ export function AgendaView(props: {
         />
       ) : null}
 
-      {/* Time Off — the SAME form as the staff tab, opened from the agenda header or by
-          clicking an existing block. Gated to those who may create at least one kind. */}
-      {modal && (modal.mode === "block" || modal.mode === "editBlock") && (props.canBlockStaff || props.canBlockSite) ? (
-        <BlockModal
+      {modal && modal.mode === "walkin" && props.canOperate ? (
+        <WalkInPanel
           clientId={props.clientId}
           siteId={props.currentSiteId}
-          tz={tz}
+          siteName={currentSite?.name ?? ""}
+          timezone={tz}
+          staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl, tint: tintOf(s.id) }))}
+          services={props.services}
+          lockStaffId={props.lockStaffId}
+          onClose={() => setModal(null)}
+          onSwitchToBooking={() => setModal({ mode: "new" })}
+          onDone={({ id, dayKey, message, warning }) => {
+            setModal(null);
+            setNotice(warning ?? message);
+            try {
+              window.sessionStorage.setItem(FLASH_KEY, id);
+            } catch {
+              /* nicety */
+            }
+            if (dayKey !== props.date) return navigate({ date: dayKey });
+            router.refresh();
+          }}
+        />
+      ) : null}
+
+      {/* Blocks / absences — puntual or recurring, one panel (agenda/BlockPanel). Kept
+          mounted (hidden) while one of its affected appointments is rescheduled. */}
+      {modal && (modal.mode === "block" || modal.mode === "editBlock") && (props.canBlockStaff || props.canBlockSite) ? (
+        <BlockPanel
+          clientId={props.clientId}
+          siteId={props.currentSiteId}
+          siteName={currentSite?.name ?? ""}
+          timezone={tz}
           staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name }))}
           canSiteClosure={props.canBlockSite}
           canStaffTimeOff={props.canBlockStaff}
+          fixedStaffId={modal.mode === "block" ? props.lockStaffId ?? null : null}
+          initialStaffId={modal.mode === "block" ? modal.staffId ?? null : null}
+          initialDate={modal.mode === "block" ? modal.date ?? props.date : undefined}
+          initialStart={modal.mode === "block" ? modal.start : undefined}
+          initialEnd={modal.mode === "block" ? modal.end : undefined}
           edit={modal.mode === "editBlock" ? modal.block : undefined}
+          hidden={Boolean(formReschedule)}
+          recheck={recheck}
+          onReschedule={(item, holds) => setFormReschedule({ apptId: item.id, holds, item })}
           onClose={() => setModal(null)}
+          onSaved={(m) => {
+            setModal(null);
+            setNotice(m);
+            router.refresh();
+          }}
+        />
+      ) : null}
+
+      {modal && modal.mode === "series" && modal.occ.kind === "break" ? (
+        <BreakWeekPanel
+          key={modal.occ.key}
+          clientId={props.clientId}
+          siteId={props.currentSiteId}
+          timezone={tz}
+          occ={modal.occ}
+          ownerName={modal.occ.staffId ? staffNameById.get(modal.occ.staffId) ?? null : null}
+          ownerNote={modal.occ.staffId ? `${staffNameById.get(modal.occ.staffId) ?? "Profesional"} · ${hasAnyHours(props.staff.find((x) => x.id === modal.occ.staffId)?.workingHours) ? "horario propio" : "horario de la sede"}` : `${currentSite?.name ?? "La sede"} · toda la sede`}
+          canEdit={modal.occ.staffId ? props.canEditStaffBreaks : props.canEditSiteBreaks}
+          hidden={Boolean(formReschedule)}
+          recheck={recheck}
+          onReschedule={(item, holds) => setFormReschedule({ apptId: item.id, holds, item })}
+          onClose={() => setModal(null)}
+          onChanged={() => router.refresh()}
+        />
+      ) : null}
+      {modal && modal.mode === "series" && modal.occ.kind !== "break" ? (
+        <SeriesPanel
+          key={modal.occ.key}
+          clientId={props.clientId}
+          siteId={props.currentSiteId}
+          timezone={tz}
+          occ={modal.occ}
+          ownerName={modal.occ.staffId ? staffNameById.get(modal.occ.staffId) ?? null : null}
+          canEdit={modal.occ.staffId ? props.canBlockStaff : props.canBlockSite}
+          hidden={Boolean(formReschedule)}
+          recheck={recheck}
+          onReschedule={(item, holds) => setFormReschedule({ apptId: item.id, holds, item })}
+          onClose={() => setModal(null)}
+          onSaved={(m) => {
+            setModal(null);
+            setNotice(m);
+            router.refresh();
+          }}
+        />
+      ) : null}
+
+      {formReschedule ? (
+        <AffectedReschedulePanel
+          clientId={props.clientId}
+          siteId={props.currentSiteId}
+          timezone={tz}
+          item={formReschedule.item}
+          holds={formReschedule.holds}
+          staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl, tint: tintOf(s.id) }))}
+          openWeekdays={openWeekdays}
+          lockStaffId={props.lockStaffId}
+          returnLabel={modal?.mode === "series" ? (modal.occ.kind === "break" ? "la pausa" : "el bloqueo") : "el bloqueo"}
+          onBack={(moved) => {
+            setFormReschedule(null);
+            setRecheck((n) => n + 1);
+            if (moved) {
+              setNotice("Cita reagendada");
+              router.refresh();
+            }
+          }}
         />
       ) : null}
 
@@ -1935,12 +1931,18 @@ export function AgendaView(props: {
   );
 }
 
-// ── Small presentational pieces ───────────────────────────────────────────────
 
-/** Weekly overview: each professional has one row, with bookings ordered inside
- * each local day. Overflow opens the existing accessible appointment chooser. */
+/**
+ * A weekly day never shrinks beyond two readable lanes. Extra simultaneous
+ * appointments live here: the "+N más" marker opens this compact chooser and a
+ * choice continues into the ordinary appointment drawer.
+ */
+/** WEEK (reference E3): one row per professional, one cell per day. A cell lists its
+ *  appointments as 32px chips (time · client · state glyph) edged in the service family;
+ *  blocks are off-white chips; a day the professional doesn't work — or the site is closed,
+ *  or a whole-day absence — is an off-white cell that says so. Clicking a day opens it. */
 function WeekTeamBoard({
-  days, staff, appointments, openingHours, timezone, today, overlapIds, selectedId, flashId, blocks, previewFor,
+  days, staff, appointments, openingHours, timezone, today, selectedId, flashId, blocks, seriesOccurrences, dimmed, conflictIds, tintOf, previewFor,
   onOpen, onDay, onMore,
 }: {
   days: string[];
@@ -1949,10 +1951,14 @@ function WeekTeamBoard({
   openingHours: WeeklyHours;
   timezone: string;
   today: string;
-  overlapIds: Set<string>;
   selectedId: string | null;
   flashId: string | null;
-  blocks: BlockOpt[];
+  blocks: Block[];
+  seriesOccurrences: SeriesOcc[];
+  dimmed: (a: Appt) => boolean;
+  /** Kept inside a block / absence — flagged on the chip, never silent. */
+  conflictIds: Set<string>;
+  tintOf: (id: string) => "1" | "2" | "3" | "4";
   previewFor: (appt: Appt) => Record<string, unknown>;
   onOpen: (id: string) => void;
   onDay: (date: string) => void;
@@ -1971,90 +1977,110 @@ function WeekTeamBoard({
       knownStaff.add(appt.staff_id);
     }
   }
-
+  const shortName = (name: string | null) => {
+    const w = (name ?? "").trim().split(/\s+/).filter(Boolean);
+    return w.length > 1 ? `${w[0]} ${w[1].slice(0, 1)}.` : w[0] ?? "Sin contacto";
+  };
+  const GRID = "grid grid-cols-[112px_repeat(7,minmax(0,1fr))]";
   return (
-    <div className="hidden min-h-0 flex-1 overflow-auto md:block" aria-label="Semana por profesional">
-      <div className="grid min-h-full min-w-[1050px] grid-cols-[112px_repeat(7,minmax(134px,1fr))] content-start">
-        <div className="sticky left-0 top-0 z-30 flex h-[72px] items-center border-b border-r border-line bg-surface px-3 text-xs font-medium text-muted">Equipo</div>
-        {days.map((day) => {
-          const [year, month, date] = day.split("-").map(Number);
-          const weekday = new Date(Date.UTC(year, month - 1, date)).getUTCDay();
-          const isToday = day === today;
-          return (
-            <button key={day} type="button" onClick={() => onDay(day)}
-              aria-label={`Ver agenda del ${date} de ${ES_MONTHS[month - 1]}`}
-              className={`sticky top-0 z-20 flex h-[72px] items-center justify-center gap-2 border-b border-r border-line text-sm transition hover:bg-chip ${isToday ? "bg-chip" : "bg-surface"}`}>
-              <span className={`flex size-8 items-center justify-center rounded-full font-semibold ${isToday ? "bg-ink text-ink-fg" : "text-foreground"}`}>{date}</span>
-              <span className={isToday ? "font-medium text-foreground" : "text-muted"}>{ES_WEEKDAYS[weekday]}</span>
-            </button>
-          );
-        })}
+    <div className="min-h-0 flex-1 overflow-auto rounded-[11px]" aria-label="Semana por profesional">
+      <div className="min-w-[1000px]">
+        <div className={`${GRID} sticky top-0 z-20 bg-[var(--surface)] shadow-[inset_0_-1px_0_var(--line)]`}>
+          <div className="flex items-center px-4 text-[12.5px] text-muted">Equipo</div>
+          {days.map((day) => {
+            const [year, month, date] = day.split("-").map(Number);
+            const weekday = new Date(Date.UTC(year, month - 1, date)).getUTCDay();
+            const isToday = day === today;
+            return (
+              <button
+                key={day}
+                type="button"
+                title="Ver el día"
+                onClick={() => onDay(day)}
+                aria-label={`Ver el ${ES_WEEKDAYS[weekday]} ${date} de ${ES_MONTHS[month - 1]}`}
+                className={`u-focus flex h-[52px] items-center justify-center gap-2 px-3 text-[14px] shadow-[inset_1px_0_0_var(--line)] hover:bg-[var(--subtle)] ${isToday ? "bg-[var(--subtle)] text-foreground" : "text-muted"}`}
+              >
+                <span className={`inline-flex h-[30px] min-w-[30px] items-center justify-center rounded-full text-[15px] font-medium tabular-nums ${isToday ? "bg-[var(--ink)] text-[var(--ink-fg)]" : "text-foreground"}`}>{date}</span>
+                <span className="capitalize">{ES_WEEKDAYS[weekday]}</span>
+              </button>
+            );
+          })}
+        </div>
         {rows.map((person) => {
-          const maxCount = Math.max(0, ...days.map((day) => (byCell.get(`${person.id}/${day}`) ?? []).length));
-          const rowHeight = Math.max(172, Math.min(maxCount, 5) * 37 + 46);
-          const total = days.reduce((count, day) => count + (byCell.get(`${person.id}/${day}`) ?? []).length, 0);
+          const total = days.reduce((count, day) => count + (byCell.get(`${person.id}/${day}`) ?? []).filter((a) => a.status !== "cancelled").length, 0);
           return (
-            <div key={person.id} className="contents">
-              <div className="sticky left-0 z-10 flex flex-col items-center justify-center gap-2 border-b border-r border-line bg-surface px-2 py-4 text-center" style={{ minHeight: rowHeight }}>
-                {person.photoUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
-                  <img src={person.photoUrl} alt="" aria-hidden className="size-11 shrink-0 rounded-full border-2 border-line-strong object-cover" />
-                ) : (
-                  <span aria-hidden className="flex size-11 shrink-0 items-center justify-center rounded-full border-2 border-line-strong bg-chip text-sm font-semibold text-foreground">
-                    {initialsOf(person.name)}
-                  </span>
-                )}
-                <span className="line-clamp-2 text-xs font-semibold leading-snug text-foreground">{person.name}</span>
-                <span className="text-[11px] text-faint">{person.active ? `${total} citas` : "Inactivo"}</span>
+            <div key={person.id} className={GRID}>
+              <div className="flex flex-col items-center justify-center gap-2 px-2.5 py-4 text-center shadow-[inset_0_-1px_0_var(--line)]">
+                <AgAvatar name={person.name} id={person.id} size={36} tint={tintOf(person.id)} photoUrl={person.photoUrl ?? null} className="shadow-[0_0_0_2px_var(--surface),0_0_0_3px_var(--line)]" />
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="text-[14px] font-medium text-foreground [overflow-wrap:anywhere]">{person.name.split(" ")[0]}</span>
+                  <span className="text-[12.5px] text-muted">{person.active ? `${total} ${total === 1 ? "cita" : "citas"}` : "Inactivo"}</span>
+                </span>
               </div>
               {days.map((day) => {
                 const cell = byCell.get(`${person.id}/${day}`) ?? [];
-                const shown = cell.slice(0, 5);
-                const rest = cell.slice(5);
-                const closed = !staffWorksOn(person.workingHours, openingHours, weekdayKeyOf(day));
-                const dayBlocks = blocks.filter(
-                  (b) =>
-                    (b.staff_id === null || b.staff_id === person.id) &&
-                    zonedParts(b.starts_at, timezone).dayKey <= day &&
-                    zonedParts(new Date(Date.parse(b.ends_at) - 1).toISOString(), timezone).dayKey >= day,
-                );
+                const siteClosed = hasAnyHours(openingHours) && !opensOn(openingHours, weekdayKeyOf(day));
+                const off = !staffWorksOn(person.workingHours, openingHours, weekdayKeyOf(day));
+                const dayStart = Date.parse(siteMidnightIso(day, timezone));
+                const dayEnd = Date.parse(siteMidnightIso(addDays(day, 1), timezone));
+                const dayBlocksHere = blocks.filter((b) => (b.staff_id === null || b.staff_id === person.id) && Date.parse(b.starts_at) < dayEnd && Date.parse(b.ends_at) > dayStart);
+                const allDay = dayBlocksHere.find((b) => Date.parse(b.starts_at) <= dayStart && Date.parse(b.ends_at) >= dayEnd);
+                const series = seriesOccurrences.filter((o) => o.kind === "block" && o.date === day && (o.staffId === null || o.staffId === person.id));
+                const note = siteClosed ? "Sede cerrada" : allDay ? (allDay.staff_id === null ? "Sede cerrada" : "Ausencia") : off ? "No trabaja" : null;
+                const chips = [
+                  ...(note ? [] : dayBlocksHere.map((b) => ({ key: b.id, at: b.starts_at, kind: "block" as const }))),
+                  ...(note ? [] : series.map((o) => ({ key: o.key, at: o.startsAt, kind: "block" as const }))),
+                  ...cell.map((a) => ({ key: a.id, at: a.start_at, kind: "appt" as const, a })),
+                ].sort((x, y) => x.at.localeCompare(y.at));
+                const shown = chips.slice(0, 6);
+                const rest = chips.slice(6).filter((c) => c.kind === "appt");
                 return (
-                  <div key={day} className={`flex min-w-0 flex-col justify-center gap-1 border-b border-r border-line px-1.5 py-3 ${closed ? "u-closed-hatch" : day === today ? "bg-chip/25" : "bg-surface"}`} style={{ minHeight: rowHeight }}>
-                    {dayBlocks.length > 0 ? (
-                      <span
-                        title={dayBlocks.map((b) => `Bloqueado ${fmtTime(b.starts_at, timezone)}–${fmtTime(b.ends_at, timezone)}${b.reason ? ` · ${b.reason}` : ""}`).join("\n")}
-                        className="u-closed-hatch flex h-6 min-w-0 items-center rounded-sch-event border border-dashed border-line-strong px-2 text-[11px] font-medium text-muted"
-                      >
-                        <span className="truncate">
-                          Bloqueado{dayBlocks[0].reason ? ` · ${dayBlocks[0].reason}` : ""}
+                  <div
+                    key={day}
+                    className={`flex min-h-[150px] min-w-0 flex-col justify-center gap-1.5 px-1.5 py-3 shadow-[inset_1px_0_0_var(--line),inset_0_-1px_0_var(--line)] ${note ? "bg-[var(--ag-off)]" : day === today ? "bg-[var(--ag-today)]" : ""}`}
+                  >
+                    {note ? <span className="text-center text-[13px] text-muted">{note}</span> : null}
+                    {shown.map((c) =>
+                      c.kind === "block" ? (
+                        <span key={c.key} className="flex h-[32px] min-w-0 shrink-0 items-center gap-[5px] rounded-[9px] bg-[var(--ag-off)] px-[7px] text-[13px] text-muted shadow-[inset_0_0_0_1px_var(--line)]">
+                          <span className="shrink-0 text-[12px] tabular-nums opacity-[0.62]">{fmtTime(c.at, timezone)}</span>
+                          <span className="min-w-0 flex-1 truncate font-medium">Bloqueado</span>
                         </span>
-                      </span>
-                    ) : null}
-                    {shown.map((appt) => {
-                      const attention = overlapIds.has(appt.id);
-                      const client = appt.contact_name ?? "Atención sin cita";
-                      const state = STATUS_LABEL[appt.status] ?? appt.status;
-                      return (
-                        <button key={appt.id} type="button" onClick={() => onOpen(appt.id)}
-                          {...previewFor(appt)}
-                          aria-label={`${fmtTime(appt.start_at, timezone)} ${client} — ${appt.service_name} — ${state}${attention ? " — solapamiento" : ""}`}
-                          className={`u-appt ${appointmentToneClass(appt)} flex h-[32px] min-w-0 items-center gap-1.5 rounded-md px-2 text-left transition-shadow hover:shadow-[0_0_0_2px_var(--foreground)] ${selectedId === appt.id || flashId === appt.id ? "ring-2 ring-service-purple" : ""}`}>
-                          <span className="u-appt-ink u-mono shrink-0 text-[11px]">{fmtTime(appt.start_at, timezone)}</span>
-                          <strong className={`min-w-0 flex-1 truncate text-xs font-semibold ${appt.status === "cancelled" ? "line-through opacity-60" : ""}`}>{client}</strong>
-                          {attention || appt.status !== "confirmed" ? (
-                            <span aria-hidden className="shrink-0 text-[11px] font-semibold">
-                              {attention ? "!" : appt.status === "completed" ? "✓" : appt.status === "cancelled" ? "×" : appt.status === "no_show" ? "!" : "○"}
-                            </span>
+                      ) : (
+                        <button
+                          key={c.key}
+                          type="button"
+                          onClick={() => onOpen(c.a.id)}
+                          {...previewFor(c.a)}
+                          data-appt-card=""
+                          aria-label={`${fmtTime(c.a.start_at, timezone)} ${apptClientLabel(c.a)} ${STATE_WORD[c.a.status] ?? c.a.status}${c.a.payment_state === "pending" ? ", cobro pendiente" : ""}${c.a.review.length > 0 || conflictIds.has(c.a.id) ? ", requiere revisión" : ""}`}
+                          className={`u-appt2 ${appointmentToneClass(c.a)} u-focus flex h-[32px] min-w-0 shrink-0 items-center gap-[5px] px-[7px] text-left text-[13px] transition-[background,opacity] hover:bg-[var(--subtle)] ${c.a.status === "cancelled" ? "line-through" : ""} ${selectedId === c.a.id || flashId === c.a.id ? "shadow-[0_0_0_2px_var(--foreground)]" : ""} ${flashId === c.a.id ? "u-ag-flash" : ""}`}
+                          data-status={c.a.status}
+                          data-selected={selectedId === c.a.id || flashId === c.a.id ? "" : undefined}
+                          style={{ opacity: dimmed(c.a) ? 0.28 : 1, borderRadius: 9 }}
+                        >
+                          <span className="shrink-0 text-[12px] tabular-nums opacity-[0.62]">{fmtTime(c.a.start_at, timezone)}</span>
+                          <span className="min-w-0 flex-1 truncate font-medium">{shortName(c.a.contact_name ?? c.a.guest_name)}</span>
+                          {c.a.payment_state === "pending" ? (
+                            <span title="Cobro pendiente" aria-hidden className="shrink-0 rounded-[4px] bg-[var(--chip)] px-1 text-[11px] font-semibold text-[var(--ag-ink2)]">$</span>
                           ) : null}
+                          {c.a.review.length > 0 || conflictIds.has(c.a.id) ? (
+                            <span title="Requiere revisión" aria-hidden className="shrink-0 rounded-[4px] bg-[var(--warn-soft)] px-1 text-[11px] font-semibold text-[var(--warn)]">!</span>
+                          ) : null}
+                          <span aria-hidden className="shrink-0 text-[11px] opacity-70">{STATE_GLYPH[c.a.status] ?? ""}</span>
                         </button>
-                      );
-                    })}
+                      ),
+                    )}
                     {rest.length > 0 ? (
-                      <button type="button" onClick={() => onMore(cell, `${person.name} · ${Number(day.slice(-2))} ${ES_MONTHS[Number(day.slice(5, 7)) - 1]}`)}
+                      <button
+                        type="button"
+                        onClick={() => onMore(cell, `${person.name} · ${Number(day.slice(-2))} ${ES_MONTHS[Number(day.slice(5, 7)) - 1]}`)}
                         aria-label={`Ver las ${cell.length} citas de ${person.name} el ${day} (${rest.length} más)`}
-                        className="min-h-7 rounded-md text-xs font-medium text-muted transition hover:bg-chip hover:text-foreground">+{rest.length} más</button>
+                        className="u-focus min-h-[28px] rounded-[8px] text-[12.5px] text-[var(--ag-ink2)] hover:bg-[var(--subtle)]"
+                      >
+                        +{rest.length} más
+                      </button>
                     ) : null}
-                    {cell.length === 0 ? <span className="text-center text-xs text-faintest">{closed ? "No disponible" : "—"}</span> : null}
                   </div>
                 );
               })}
@@ -2066,124 +2092,6 @@ function WeekTeamBoard({
   );
 }
 
-function DesktopHourRows({
-  appointments,
-  blocks,
-  bookableStaffIds,
-  hours,
-  timezone,
-  overlapIds,
-  canOperate,
-  onOpen,
-  onBook,
-}: {
-  appointments: Appt[];
-  blocks: DayBlock[];
-  bookableStaffIds: string[];
-  hours: number[];
-  timezone: string;
-  overlapIds: Set<string>;
-  canOperate: boolean;
-  onOpen: (id: string) => void;
-  onBook: () => void;
-}) {
-  return (
-    <div className="hidden min-h-0 flex-1 overflow-y-auto bg-surface xl:block">
-      {hours.map((hour) => {
-        const inHour = appointments.filter((appt) => zonedParts(appt.start_at, timezone).h === hour);
-        // A block is listed in the hour it STARTS (or the first hour shown, if earlier).
-        // The row stops offering "Agendar en esta hora" ONLY when the hour is blocked for
-        // every barber who could take it, for all of its 60 minutes — one barber's block
-        // or a 15-minute block keeps the offer (the engine then shows the real slots).
-        const startsHere = blocks.filter((b) => Math.max(Math.floor(b.sMin / 60), hours[0]) === hour);
-        const covered = hourState(blocks, hour, bookableStaffIds) === "blocked";
-        return (
-          <div key={hour} className="grid min-h-[6.1rem] grid-cols-[minmax(0,1fr)_4.75rem] border-b border-line last:border-b-0">
-            <div className="flex min-w-0 flex-col gap-2 p-2.5">
-              {startsHere.map((b) => (
-                <BlockRow key={b.id} block={b} />
-              ))}
-              {inHour.length > 0 ? (
-                <div className="grid h-full grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] gap-2">
-                  {inHour.map((appt) => {
-                    const overlapping = overlapIds.has(appt.id);
-                    return (
-                      <button
-                        key={appt.id}
-                        type="button"
-                        onClick={() => onOpen(appt.id)}
-                        className={`u-appt ${appointmentToneClass(appt)} group flex min-h-[4.9rem] min-w-0 items-stretch overflow-hidden rounded-lg text-left transition hover:-translate-y-px hover:shadow-sm ${
-                          appt.status === "cancelled" ? "opacity-75" : ""
-                        }`}
-                      >
-                        <span className="flex min-w-0 flex-1 flex-col justify-center px-3 py-2.5">
-                          <span className="flex items-center gap-2">
-                            <Initial name={appt.staff_name} on="card" />
-                            <span className="truncate text-sm font-semibold text-foreground">
-                              {appt.contact_name ?? "Atención sin cita"}
-                            </span>
-                            <span className="u-mono ml-auto shrink-0 text-[0.6875rem] tabular-nums text-muted">
-                              {fmtTime(appt.start_at, timezone)}
-                            </span>
-                          </span>
-                          <span className="u-appt-ink mt-1 truncate text-xs">
-                            {appt.service_name} · {appt.duration_min} min
-                          </span>
-                          <span className="mt-1 flex items-center gap-2">
-                            <span className="truncate text-[0.6875rem] text-muted">{appt.staff_name ?? "Sin profesional"}</span>
-                            <span className="ml-auto"><MobileStatus status={appt.status} attention={overlapping} /></span>
-                          </span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : covered ? (
-                startsHere.length > 0 ? null : <div className="flex h-full min-h-[4.9rem] items-center px-3 text-xs text-faint">Horario bloqueado</div>
-              ) : canOperate ? (
-                <button
-                  type="button"
-                  onClick={onBook}
-                  className="u-focus flex h-full min-h-[4.9rem] w-full items-center justify-center gap-2 rounded-sch-event border border-dashed border-line text-xs text-faint transition hover:border-line-strong hover:bg-canvas/50 hover:text-foreground"
-                >
-                  <span aria-hidden className="text-base">＋</span>
-                  Agendar en esta hora
-                </button>
-              ) : (
-                <div className="flex h-full min-h-[4.9rem] items-center px-3 text-xs text-faint">Sin citas en esta hora</div>
-              )}
-            </div>
-            <div className="u-mono flex items-start justify-center border-l border-line pt-3 text-[0.6875rem] tabular-nums text-faint">
-              {String(hour).padStart(2, "0")}:00
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function RowsIcon() {
-  return (
-    <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
-    </svg>
-  );
-}
-
-function ColumnsIcon() {
-  return (
-    <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <path d="M4 2.5v11M8 2.5v11M12 2.5v11" />
-    </svg>
-  );
-}
-
-/**
- * A weekly day never shrinks beyond two readable lanes. Extra simultaneous
- * appointments live here: the "+N más" marker opens this compact chooser and a
- * choice continues into the ordinary appointment drawer.
- */
 function WeekOverflowDialog({
   appointments,
   title: customTitle,
@@ -2244,11 +2152,11 @@ function WeekOverflowDialog({
                 <Initial name={appt.staff_name} on="card" />
                 <span className="min-w-0 flex-1">
                   <strong className="block truncate text-sm font-semibold text-foreground">{appt.service_name}</strong>
-                  <span className="block truncate text-xs text-muted">{appt.contact_name ?? "Atención sin cita"}</span>
+                  <span className="block truncate text-xs text-muted">{apptClientLabel(appt)}</span>
                 </span>
                 <span className="shrink-0 text-right">
                   <span className="u-mono block text-xs font-semibold text-foreground">{fmtTime(appt.start_at, timezone)}</span>
-                  <span className="mt-0.5 block">{overlapping ? <AttentionChip size="sm" /> : <StatusChip status={appt.status} size="sm" />}</span>
+                  <span className="mt-0.5 block">{overlapping ? <AttentionChip size="sm" /> : <StateChip status={appt.status} size="sm" toneClass={appointmentToneClass(appt)} />}</span>
                 </span>
               </button>
             );
@@ -2258,271 +2166,8 @@ function WeekOverflowDialog({
     </>
   );
 }
-
-/** A block as a ROW in the list layouts — hatched like the grids, never clickable. */
-function BlockRow({ block, className = "" }: { block: DayBlock; className?: string }) {
-  return (
-    <div className={`u-closed-hatch flex min-h-[44px] items-center gap-3 rounded-sch-event border border-dashed border-line-strong px-3 py-2 ${className}`}>
-      <span className="u-mono shrink-0 text-xs font-semibold tabular-nums text-foreground">{block.when}</span>
-      <span className="min-w-0 truncate text-xs font-medium text-muted">{block.label}</span>
-    </div>
-  );
-}
-
-/**
- * Phone and tablet deliberately share the desktop appointment grammar: the same
- * professional pastel, hairline, avatar, typography and lifecycle chip. Only the
- * density changes. That keeps a barber oriented when moving between a front-desk
- * tablet and their own phone instead of teaching them a second visual language.
- */
-function MobileAppointmentCard({
-  appt,
-  toneClass,
-  timezone,
-  attention,
-  next,
-  showStaff,
-  roomy = false,
-  flash = false,
-  onOpen,
-}: {
-  appt: Appt;
-  toneClass: string;
-  timezone: string;
-  attention: boolean;
-  next: boolean;
-  showStaff: boolean;
-  roomy?: boolean;
-  flash?: boolean;
-  onOpen: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      data-appt-id={appt.id}
-      onClick={onOpen}
-      aria-current={next ? "step" : undefined}
-      className={`u-appt ${toneClass} relative flex w-full items-stretch overflow-hidden rounded-lg text-left transition active:scale-[0.995] ${
-        roomy ? "min-h-[6.75rem]" : "min-h-[5.75rem]"
-      } ${flash ? "animate-pulse ring-2 ring-service-purple" : next ? "ring-2 ring-brand/20" : ""} ${appt.status === "cancelled" ? "opacity-65" : ""}`}
-    >
-      <span className={`u-mono flex w-[4.4rem] shrink-0 flex-col border-r border-current/10 px-3 ${roomy ? "py-3.5" : "py-3"}`}>
-        <strong className="text-sm font-semibold tabular-nums text-foreground">{fmtTime(appt.start_at, timezone)}</strong>
-        <span className="mt-0.5 text-[0.625rem] tabular-nums text-muted">{fmtTime(appt.service_end_at, timezone)}</span>
-        <span className="mt-auto text-[0.625rem] text-faint">{appt.duration_min} min</span>
-      </span>
-
-      <span className={`flex min-w-0 flex-1 flex-col ${roomy ? "px-3.5 py-3.5" : "px-3 py-3"}`}>
-        <span className="flex min-w-0 items-center gap-2">
-          <Initial name={appt.staff_name} on="card" />
-          <strong className="min-w-0 flex-1 truncate text-[0.875rem] font-semibold text-foreground">
-            {appt.contact_name ?? "Atención sin cita"}
-          </strong>
-          <span aria-hidden className="shrink-0 text-sm text-muted">›</span>
-        </span>
-        <span className="u-appt-ink mt-1 truncate text-xs">{appt.service_name}</span>
-        <span className="mt-auto flex min-w-0 items-center gap-2 pt-2">
-          {showStaff ? <span className="min-w-0 flex-1 truncate text-[0.6875rem] text-muted">{appt.staff_name ?? "Sin asignar"}</span> : <span className="flex-1" />}
-          <MobileStatus status={appt.status} attention={attention} />
-        </span>
-        {next ? (
-          <span className="mt-2 border-t border-current/10 pt-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.1em] text-brand">
-            Próxima cita
-          </span>
-        ) : null}
-      </span>
-    </button>
-  );
-}
-
-/** The lifecycle chip of the list layouts — the shared StatusChip (or the conflict
- *  marker), so a state looks the same in every layout and in the detail panel. */
-function MobileStatus({ status, attention }: { status: string; attention: boolean }) {
-  return attention ? <AttentionChip size="sm" /> : <StatusChip status={status} size="sm" />;
-}
-
-function DesktopSeg({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button type="button" onClick={onClick} aria-pressed={active} className={segmentClass(active)}>
-      {children}
-    </button>
-  );
-}
-
-function DesktopStep({
-  label,
-  onClick,
-  direction,
-}: {
-  label: string;
-  onClick: () => void;
-  direction: "left" | "right";
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      className="u-focus flex aspect-square h-full items-center justify-center rounded-[calc(var(--sch-radius-control)-3px)] text-muted transition-colors hover:bg-subtle hover:text-foreground"
-    >
-      <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-        <path d={direction === "left" ? "M9.8 3.5 5.3 8l4.5 4.5" : "M6.2 3.5 10.7 8l-4.5 4.5"} />
-      </svg>
-    </button>
-  );
-}
-
-/** The tablet bar's square steppers — a secondary control at the shared height. */
-function IconBtn({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button type="button" onClick={onClick} aria-label={label} className={buttonClass({ className: "w-[44px] px-0 text-lg leading-none text-muted lg:w-[40px]" })}>
-      {children}
-    </button>
-  );
-}
-
-function Seg({
-  active,
-  disabled,
-  title,
-  onClick,
-  children,
-}: {
-  active?: boolean;
-  disabled?: boolean;
-  title?: string;
-  onClick?: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button type="button" onClick={onClick} disabled={disabled} aria-pressed={active} title={title} className={segmentClass(Boolean(active))}>
-      {children}
-    </button>
-  );
-}
-
-/** A native <select> under a styled shell — full keyboard/AT behaviour, no portal. */
-function Facet({
-  label,
-  value,
-  options,
-  onChange,
-  icon,
-}: {
-  label: string;
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (v: string) => void;
-  icon?: React.ReactNode;
-}) {
-  const current = options.find((o) => o.value === value);
-  return (
-    <div className={buttonClass({ className: "u-focus relative font-normal" })}>
-      {icon ? <span className="pointer-events-none shrink-0 text-faint">{icon}</span> : null}
-      <span className="pointer-events-none whitespace-nowrap">{current?.label ?? label}</span>
-      <span aria-hidden className="pointer-events-none text-faint">&#9662;</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-label={label}
-        className="absolute inset-0 cursor-pointer opacity-0"
-      >
-        {options.map((o) => (
-          <option key={o.value || "any"} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
-
-/** Check-in-circle — the "status" facet. */
-function StatusIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-4" fill="none" aria-hidden>
-      <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.6" />
-      <path d="m8.5 12 2.5 2.5 4.5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-/** Person — the "staff" facet. */
-function StaffIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-4" fill="none" aria-hidden>
-      <circle cx="12" cy="8" r="3.25" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M5.5 19a6.5 6.5 0 0 1 13 0" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-/** Percent CHANGE, for counts and money. null when there is no base to compare to. */
-function ratioDelta(now: number, before: number): number | null {
-  if (!before) return null; // 0 → n has no meaningful percentage
-  return Math.round(((now - before) / before) * 100);
-}
 /** Percentage-POINT difference, for rates. Comparing 85% to 80% is +5 points, not
  *  +6% — reporting it as a percent change would overstate the move. */
-function pointDelta(now: number | null, before: number | null): number | null {
-  if (now === null || before === null) return null;
-  return now - before;
-}
-
-/**
- * One headline metric: title, the window it covers, the number, and how it moved
- * against the preceding equivalent window. The delta is a real comparison (the page
- * queries the previous range) — never a decorative figure. `higherIsBetter` flips
- * the colour for metrics where up is bad, e.g. no-shows.
- */
-function Kpi({
-  label,
-  caption,
-  value,
-  delta,
-  vs,
-  unit,
-  higherIsBetter = true,
-}: {
-  label: string;
-  caption: string;
-  value: string;
-  delta: number | null;
-  vs: string;
-  /** "%" for counts/money (percent change), "pp" for rates (point difference). */
-  unit: "%" | "pp";
-  higherIsBetter?: boolean;
-}) {
-  const good = delta === null || delta === 0 ? null : higherIsBetter ? delta > 0 : delta < 0;
-  return (
-    <div className="rounded-lg border border-line px-3.5 py-2.5">
-      <p className="text-sm font-semibold text-foreground">{label}</p>
-      <p className="mt-0.5 text-xs text-faint">{caption}</p>
-      <div className="mt-1.5 flex flex-wrap items-baseline gap-2">
-        <span className="u-mono text-2xl font-medium leading-none text-foreground">{value}</span>
-        {delta !== null ? (
-          <>
-            <span
-              className={`rounded-full px-1.5 py-0.5 text-[0.6875rem] font-medium ${
-                good === null
-                  ? "bg-chip text-muted"
-                  : good
-                    ? "bg-success/12 text-success"
-                    : "bg-brand-soft text-brand"
-              }`}
-            >
-              {delta > 0 ? "+" : ""}
-              {delta}
-              {unit}
-            </span>
-            <span className="text-xs text-faint">{vs}</span>
-          </>
-        ) : (
-          <span className="text-xs text-faintest">sin datos anteriores</span>
-        )}
-      </div>
-    </div>
-  );
-}
 
 /**
  * The staff disc. `on="card"` makes it ride an appointment card, where it takes
@@ -2570,216 +2215,158 @@ function Initial({ name, muted, on, photoUrl }: { name: string | null; muted?: b
  * because the block only says which hour it falls in.
  */
 /**
- * The Time Off modal — the SAME TimeOffForm as the staff tab, in the agenda's overlay chrome.
- * Opened from the header ("Bloquear horario", create) or by clicking a block (edit). Edit mode
- * also offers Delete, behind an inline confirm. All writes are server-gated regardless.
- */
-function BlockModal({
-  clientId,
-  siteId,
-  tz,
-  staff,
-  canSiteClosure,
-  canStaffTimeOff,
-  edit,
-  onClose,
-}: {
-  clientId: string;
-  siteId: string;
-  tz: string;
-  staff: { id: string; name: string }[];
-  canSiteClosure: boolean;
-  canStaffTimeOff: boolean;
-  edit?: Block;
-  onClose: () => void;
-}) {
-  const router = useRouter();
-  const [pending, startTransition] = useTransition();
-  const [delError, setDelError] = useState<string | null>(null);
-  const [confirmDel, setConfirmDel] = useState(false);
-  const closeRef = useRef(onClose);
-  useEffect(() => {
-    closeRef.current = onClose;
-  }, [onClose]);
-  const close = () => closeRef.current();
-  const panelRef = useTrappedPanel({ active: true, onClose: close });
-
-  // Delete is offered only to a viewer who may edit this KIND of block (server re-enforces).
-  const canDelete = edit ? (edit.staff_id === null ? canSiteClosure : canStaffTimeOff) : false;
-  const remove = () =>
-    startTransition(async () => {
-      if (!edit) return;
-      const r = await deleteTimeOffAction(clientId, edit.id);
-      if (r.ok) {
-        router.refresh();
-        onClose();
-      } else {
-        setDelError(r.error ?? "No se pudo eliminar el bloqueo.");
-      }
-    });
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-end justify-center sm:items-center sm:p-5">
-      <button type="button" aria-label="Cerrar" className={OVERLAY_SCRIM} onClick={close} />
-      <section
-        ref={panelRef}
-        role="dialog"
-        aria-modal="true"
-        aria-label={edit ? "Editar bloqueo" : "Bloquear horario"}
-        tabIndex={-1}
-        className="relative z-50 flex max-h-[min(720px,calc(100dvh-2rem))] w-full flex-col overflow-hidden rounded-t-2xl border border-line bg-surface sm:max-w-lg sm:rounded-2xl"
-      >
-        <header className="flex shrink-0 items-start gap-4 border-b border-line px-4 py-3.5 sm:px-5">
-          <div className="min-w-0 flex-1">
-            <h2 className="text-base font-semibold text-foreground">{edit ? "Editar bloqueo" : "Bloquear horario"}</h2>
-            <p className="mt-0.5 text-xs text-muted">Quita disponibilidad sin cambiar el horario semanal.</p>
-          </div>
-          <button type="button" onClick={close} aria-label="Cerrar" className="flex size-9 shrink-0 items-center justify-center rounded-lg text-lg text-muted transition hover:bg-subtle hover:text-foreground">×</button>
-        </header>
-        <div className="min-h-0 flex-1 overflow-y-auto p-4 sm:p-5">
-          <TimeOffForm
-            clientId={clientId}
-            siteId={siteId}
-            staff={staff}
-            canSiteClosure={canSiteClosure}
-            tz={tz}
-            edit={edit ? { id: edit.id, staffId: edit.staff_id, startsAt: edit.starts_at, endsAt: edit.ends_at, reason: edit.reason, publicReason: edit.public_reason ?? null } : undefined}
-            onDone={onClose}
-            onClose={close}
-          />
-          {canDelete ? (
-            <div className="mt-4 border-t border-line pt-3">
-              {delError ? <p role="alert" className="mb-2 rounded-lg bg-danger/10 px-3 py-2 text-sm text-danger">{delError}</p> : null}
-              {confirmDel ? (
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <span className="text-xs text-muted">¿Eliminar este bloqueo? La disponibilidad vuelve de inmediato.</span>
-                  <span className="flex gap-2">
-                    <button type="button" onClick={() => setConfirmDel(false)} className="rounded-lg border border-line px-2.5 py-1 text-xs text-muted hover:bg-subtle">Cancelar</button>
-                    <button type="button" disabled={pending} onClick={remove} className="rounded-lg border border-danger/40 px-2.5 py-1 text-xs text-danger hover:bg-danger/10 disabled:opacity-50">Eliminar</button>
-                  </span>
-                </div>
-              ) : (
-                <button type="button" onClick={() => setConfirmDel(true)} className="text-xs text-danger hover:underline">Eliminar bloqueo</button>
-              )}
-            </div>
-          ) : null}
-        </div>
-      </section>
-    </div>
-  );
-}
-
-/**
  * A Time Off band inside a DAY column — a warm hatched region that reads as "not bookable",
  * visually distinct from an appointment card, a free slot, and the grey "closed" wash. It
  * carries a "Fuera" label (+ the internal reason for roles allowed to see it). A site closure
  * uses the stronger hatch. Clickable to edit/delete when the viewer may; otherwise a read-only
  * marker. Rendered under the cards so a kept conflicting appointment stays legible on top.
  */
+/** The reference's slot popover: the dashed selection with its live time, then a menu. */
+function SlotMenu(props: { top: number; height: number; dragging: boolean; alignRight: boolean; label: string; from: string; to: string; onNew: (() => void) | null; onBlock: (() => void) | null; onClose: () => void }) {
+  // The MENU takes focus when it opens (not its first item): a pointer user sees no focus
+  // ring, a keyboard user goes on with ↓/↑ (or Tab) to the items, Escape closes.
+  const menu = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!props.dragging) menu.current?.focus({ preventScroll: true });
+  }, [props.dragging]);
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") return props.onClose();
+    const items = [...(menu.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]") ?? [])];
+    if (items.length === 0 || !["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    e.preventDefault();
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : e.key === "ArrowDown" ? (at + 1) % items.length : at <= 0 ? items.length - 1 : at - 1;
+    items[next].focus();
+  };
+  const item = "u-focus flex min-h-[48px] w-full items-center justify-between gap-2.5 rounded-[8px] px-3 py-1.5 text-left hover:bg-[var(--subtle)]";
+  return (
+    <>
+      <div
+        aria-hidden
+        className={`u-ag-select pointer-events-none absolute inset-x-[3px] z-[8] rounded-[10px] border-[1.5px] border-dashed border-[var(--ag-ink2)] bg-[var(--ag-break)] ${props.dragging ? "u-ag-select-live" : ""}`}
+        style={{ top: props.top + 1.5, height: Math.max(18, props.height - 3) }}
+      >
+        <span className="absolute -top-3 left-2 flex h-[22px] items-center rounded-[6px] bg-[var(--ink)] px-2 text-[12px] tabular-nums text-[var(--ink-fg)]">{props.label}</span>
+      </div>
+      {!props.dragging ? (
+        <div
+          ref={menu}
+          tabIndex={-1}
+          data-slot-menu=""
+          role="menu"
+          aria-label={`Horario ${props.label}`}
+          className={`u-pop-in absolute z-[9] flex w-[296px] flex-col outline-none rounded-[12px] bg-[var(--surface)] p-1.5 shadow-[0_0_0_1px_var(--line),0_14px_36px_rgba(0,0,0,0.14)] ${props.alignRight ? "right-2" : "left-[3px]"}`}
+          style={{ top: props.top + Math.max(18, props.height) + 6 }}
+          onKeyDown={onKeyDown}
+        >
+          {props.onNew ? (
+            <button type="button" role="menuitem" onClick={props.onNew} className={item}>
+              <span className="flex flex-col">
+                <span className="text-[14px] text-foreground">Nueva cita</span>
+                <span className="text-[12px] text-muted">Desde las {props.from} · dura lo que dure el servicio</span>
+              </span>
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 3v10M3 8h10" /></svg>
+            </button>
+          ) : null}
+          {props.onBlock ? (
+            <button type="button" role="menuitem" onClick={props.onBlock} className={item}>
+              <span className="flex flex-col">
+                <span className="text-[14px] text-foreground">Bloquear horario</span>
+                <span className="text-[12px] tabular-nums text-muted">{props.from} – {props.to}, tal como lo marcaste</span>
+              </span>
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="5.5" /><path d="M4.2 11.8l7.6-7.6" /></svg>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/** The reference's break (pausa: the lane's full width, no edge) and block (inset 3px,
+ *  off-white with a hairline) tiles; title then time, the time only where it fits. */
+const TILE_BREAK = "u-sch-break absolute inset-x-0 flex flex-col items-start gap-0.5 overflow-hidden px-2.5 py-1.5 text-left";
+const TILE_BLOCK = "u-sch-block absolute inset-x-[3px] flex flex-col items-start gap-0.5 overflow-hidden rounded-[8px] px-2.5 py-1.5 text-left";
+/**
+ * Where a pause / block tile can print its label when appointment cards sit on top of it
+ * (audit 23 Oct: «Pausa habitual» and a 15-min «Valoración» shared the same 19px). The label
+ * moves to the FIRST stretch of the tile no card covers — never under a card — and shows its
+ * time only where both lines fit. With no room left the tile has no visible label (its title
+ * and accessible name still say it); its HATCH still shows wherever no card covers it.
+ * Nothing is lengthened to make room.
+ */
+function tileLabel(top: number, height: number, cards: Array<[number, number]>): { offset: number; lines: 0 | 1 | 2; covered: boolean } {
+  const end = top + height;
+  const over = cards.filter(([a, b]) => b > top && a < end).sort((x, y) => x[0] - y[0]);
+  if (over.length === 0) return { offset: 0, lines: height >= 34 ? 2 : 1, covered: false };
+  let cursor = top;
+  for (const [a, b] of [...over, [end, end] as [number, number]]) {
+    const gap = Math.min(a, end) - cursor;
+    if (gap >= 20) return { offset: cursor - top, lines: gap >= 36 ? 2 : 1, covered: true };
+    cursor = Math.max(cursor, b);
+    if (cursor >= end) break;
+  }
+  return { offset: 0, lines: 0, covered: true };
+}
+function TimeTile({ title, time, top, height, cards = [] }: { title: string; time: string; top: number; height: number; cards?: Array<[number, number]> }) {
+  const at = tileLabel(top, height, cards);
+  return (
+    <>
+      {at.lines > 0 ? <span className="w-full truncate text-[12px] font-medium" style={at.offset ? { marginTop: at.offset } : undefined}>{title}</span> : null}
+      {at.lines === 2 ? <span className="w-full truncate text-[12px] tabular-nums">{time}</span> : null}
+    </>
+  );
+}
+
 function BlockBand({
   top,
   height,
   siteWide,
   fullDay,
+  time,
   reason,
   editable,
+  cards = [],
   onOpen,
 }: {
   top: number;
   height: number;
   siteWide: boolean;
   fullDay: boolean;
+  time: string;
   reason: string | null;
   editable: boolean;
+  /** The lane's appointment cards (pixel ranges): the label avoids them. */
+  cards?: Array<[number, number]>;
   onOpen: () => void;
 }) {
-  const base = siteWide ? "Cerrado" : fullDay ? "Fuera · todo el día" : "Fuera";
+  // The reference's block (blockItem): an off-white tile with a hairline, inset 3px —
+  // "Bloqueado" / "Sede cerrada" and its time; a whole day reads «Ausencia · todo el día».
+  const base = siteWide ? (fullDay ? "Sede cerrada · todo el día" : "Sede cerrada") : fullDay ? "Ausencia · todo el día" : "Bloqueado";
   const label = reason?.trim() ? `${base} · ${reason.trim()}` : base;
-  const cls = `absolute inset-x-0 overflow-hidden border-y border-timeoff-edge ${siteWide ? "u-timeoff-hatch-site" : "u-timeoff-hatch"}`;
+  // «Todo el día» is already in the label; keep only the dates of a several-day absence.
+  const when = time.startsWith("Todo el día") ? time.replace(/^Todo el día(?: · )?/, "") : time;
+  const named = when ? `${label} · ${when}` : label;
+  const cls = `${siteWide ? "u-sch-closed" : "u-sch-block"} absolute inset-x-[3px] flex flex-col items-start gap-0.5 overflow-hidden rounded-[8px] px-2.5 py-1.5 text-left`;
+  const style = { top: top + 1, height: Math.max(18, height - 2) };
+  const at = tileLabel(style.top, style.height, cards);
   const inner = (
-    <span className="u-timeoff-ink pointer-events-none absolute left-1 right-1 top-0.5 truncate text-[0.625rem] font-semibold">
-      {label}
-    </span>
+    <>
+      {at.lines > 0 ? <span className="w-full truncate text-[12px] font-medium" style={at.offset ? { marginTop: at.offset } : undefined}>{label}</span> : null}
+      {!fullDay && at.lines === 2 ? <span className="text-[12px] tabular-nums">{time}</span> : null}
+    </>
   );
   return editable ? (
-    <button type="button" onClick={onOpen} title={label} aria-label={label} className={`${cls} cursor-pointer text-left`} style={{ top, height }}>
+    <button type="button" onClick={onOpen} title={named} aria-label={`${named}. Abrir`} className={`${cls} u-focus cursor-pointer hover:text-[var(--ag-ink2)]`} style={style}>
       {inner}
     </button>
   ) : (
-    <div aria-hidden title={label} className={cls} style={{ top, height }}>
+    <div title={named} className={cls} style={style}>
       {inner}
     </div>
   );
 }
 
-function WeekBlockCard({
-  appt,
-  toneClass,
-  tz,
-  overlapping,
-  conflict,
-  selected,
-  crowded,
-  previewProps,
-  onOpen,
-}: {
-  appt: Appt;
-  toneClass: string;
-  tz: string;
-  overlapping: boolean;
-  /** Kept despite falling inside a Time Off block — flagged so it's never a silent clash. */
-  conflict?: boolean;
-  selected: boolean;
-  /** The block holds a second card or a "+N más" chip, so this card gets ONE line. */
-  crowded: boolean;
-  previewProps: Record<string, unknown>;
-  onOpen: () => void;
-}) {
-  const cancelled = appt.status === "cancelled";
-  /**
-   * Only the states that need ACTING ON get a line of their own here; "Completada" is
-   * in the preview and the detail. The client name owns its line so it is never pushed
-   * out of a narrow column.
-   */
-  const state = cancelled
-    ? "Cancelada"
-    : conflict
-      ? "En bloqueo"
-      : appt.status === "no_show"
-        ? "Inasistencia"
-        : overlapping
-          ? "Traslape"
-          : appt.status === "scheduled"
-            ? "Sin confirmar"
-            : "";
-  const client = appt.contact_name ?? "Atención sin cita";
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      {...previewProps}
-      aria-label={`${fmtTime(appt.start_at, tz)} ${client} — ${appt.service_name} — ${STATUS_LABEL[appt.status] ?? appt.status}${overlapping ? " — solapamiento" : ""}`}
-      className={`u-appt ${toneClass} flex min-h-0 flex-1 flex-col justify-center overflow-hidden px-2 py-0.5 text-left leading-tight transition-shadow hover:shadow-[0_0_0_2px_var(--foreground)] ${
-        selected ? "ring-2 ring-service-purple" : ""
-      }`}
-    >
-      {crowded ? (
-        <span className="flex min-w-0 items-center gap-1.5 text-[11px]">
-          <span className="u-appt-ink u-mono shrink-0">{fmtTime(appt.start_at, tz)}</span>
-          <strong className={`min-w-0 truncate font-semibold ${cancelled ? "line-through" : ""}`}>{client}</strong>
-        </span>
-      ) : (
-        <>
-          <strong className={`block truncate text-[11.5px] font-semibold ${cancelled ? "line-through" : ""}`}>{appt.service_name}</strong>
-          <span className="u-appt-ink block truncate text-[10.5px]">
-            <span className="u-mono">{fmtTime(appt.start_at, tz)}</span> · {client}
-          </span>
-          {state ? <span className="u-appt-ink block truncate text-[10px] opacity-80">{state}</span> : null}
-        </>
-      )}
-    </button>
-  );
-}
 
 /**
  * One appointment in the DAY grid, positioned and sized by its real duration, painted
@@ -2801,6 +2388,7 @@ function ApptCard({
   conflict,
   selected,
   flash,
+  dim = false,
   previewProps,
   onOpen,
 }: {
@@ -2812,104 +2400,74 @@ function ApptCard({
   /** Its slot in an overlap cluster — absent when nothing overlaps it. */
   lane?: DayLane;
   overlapping: boolean;
-  /** Kept despite falling inside a Time Off block — flagged so it's never a silent clash. */
+  /** Kept despite falling inside a block / break / outside hours — «Requiere revisión». */
   conflict?: boolean;
   selected: boolean;
   /** Just "located" from the detail panel — a brief ring so the eye finds it. */
   flash: boolean;
+  /** Filtered out by state or search: still drawn (the time is taken), faded. */
+  dim?: boolean;
   /** Hover / focus preview handlers + the data-appt-id the locate action looks for. */
   previewProps: Record<string, unknown>;
   onOpen: () => void;
 }) {
-  const unconfirmed = appt.status === "scheduled";
   const cancelled = appt.status === "cancelled";
-  const category = apptCategory(appt, { attention: overlapping });
-  const unassigned = category === "unassigned";
-  /** Everything the card says about its STATE, in words — never colour alone. */
-  const state =
-    (unassigned ? " · sin profesional" : "") +
-    (unconfirmed ? " · sin confirmar" : "") +
-    // `completed` no longer owns a colour (the family does), so it says so here —
-    // otherwise a done appointment would be indistinguishable.
-    (appt.status === "completed" ? " · completada" : "") +
-    (conflict ? " · en bloqueo" : "") +
-    (overlapping ? " · traslape" : "") +
-    (appt.status === "no_show" ? " · inasistencia" : "") +
-    (cancelled ? " · cancelada" : "");
-  /**
-   * The card's height IS its duration (never padded to fit text — that would lie about
-   * when the barber is free), so the CONTENT adapts to the room instead, essential
-   * first:
-   *   tiny  (< 30px, ~15 min)  one line: start · client
-   *   short (< 48px)           time range, then the client
-   *   mid   (< 70px)           + the service
-   *   tall                     + the state line
-   * The hover preview and the detail carry everything a shorter tier leaves out.
-   */
-  const tier = height < 30 ? "tiny" : height < 48 ? "short" : height < 70 ? "mid" : "tall";
-  const client = appt.contact_name ?? "Sin cita";
+  const review = conflict || appt.review.length > 0;
+  // The reference's card (apptItem): its height IS its duration, so the content adapts —
+  // under 50px one line (client + time), else client / service, and the time from 66px
+  // (at 72px an hour: 45 min shows two lines, an hour shows three).
+  const h = height - 3;
+  const one = h < 50;
+  const client = apptClientLabel(appt);
+  const stateWord = STATE_WORD[appt.status] ?? appt.status;
+  const range = `${fmtTime(appt.start_at, tz)}–${fmtTime(appt.service_end_at, tz)}`;
+  const n = lane?.laneCount ?? 1;
   return (
     <button
       type="button"
       onClick={onOpen}
+      data-appt-card=""
       {...previewProps}
-      aria-label={`${fmtTime(appt.start_at, tz)} ${appt.contact_name ?? "Sin cita"} — ${appt.service_name} — ${STATUS_LABEL[appt.status] ?? appt.status}${overlapping ? " — solapamiento" : ""}`}
-      // leading-tight is load-bearing: at the default line-height the lines don't fit
-      // a short card and the last one gets cropped in half.
-      className={`u-appt ${toneClass} absolute flex flex-col items-stretch justify-start overflow-hidden px-2 text-left leading-tight transition-shadow hover:shadow-[0_0_0_2px_var(--foreground)] ${
-        tier === "tiny" ? "justify-center py-0" : tier === "short" ? "py-0.5" : "py-1"
-      } ${selected || flash ? "ring-2 ring-service-purple" : ""} ${flash ? "animate-pulse" : ""}`}
+      aria-label={`${client}, ${fmtTime(appt.start_at, tz)} a ${fmtTime(appt.service_end_at, tz)}, ${appt.service_name}, ${stateWord}${appt.payment_state === "pending" ? ", cobro pendiente" : ""}${review ? ", requiere revisión" : ""}${overlapping ? ", solapamiento" : ""}`}
+      className={`u-appt2 ${toneClass} absolute flex flex-col items-stretch gap-[3px] overflow-hidden text-left text-foreground transition-[opacity,background,box-shadow] duration-150 hover:bg-[var(--subtle)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-edge)] ${
+        one ? "justify-center pl-2.5 pr-2" : "justify-start py-[7px] pl-2.5 pr-2"
+      } ${selected || flash ? "shadow-[0_0_0_2px_var(--foreground)]" : ""} ${flash ? "u-ag-flash" : ""}`}
+      data-status={appt.status}
+      data-selected={selected || flash ? "" : undefined}
       style={{
-        top,
-        height,
-        // A lone card keeps the full lane; a cluster splits it evenly, leaving the 4px
-        // gutters and a 2px seam so adjacent cards read as two cards.
-        left: `calc(${((lane?.lane ?? 0) / (lane?.laneCount ?? 1)) * 100}% + 4px)`,
-        width: `calc(${100 / (lane?.laneCount ?? 1)}% - ${(lane?.laneCount ?? 1) > 1 ? 6 : 8}px)`,
+        top: top + 1.5,
+        height: h,
+        left: `calc(${((lane?.lane ?? 0) / n) * 100}% + 3px)`,
+        width: `calc(${100 / n}% - 6px)`,
+        opacity: dim ? 0.28 : 1,
       }}
     >
-          {conflict ? (
-            <span
-              aria-hidden
-              title="Dentro de un bloqueo — se mantuvo desde la gestión de tiempo fuera"
-              className="u-timeoff-ink absolute right-0.5 top-0.5 text-[10px] font-bold leading-none"
-            >
-              ⚠
-            </span>
-          ) : null}
-      {tier === "tiny" ? (
-        <span className="flex min-w-0 items-center gap-1.5 text-[11px]">
-          <span className="u-appt-ink u-mono shrink-0">{fmtTime(appt.start_at, tz)}</span>
-          <span className={`min-w-0 truncate font-semibold ${cancelled ? "line-through" : ""}`}>{client}</span>
-        </span>
-      ) : (
-        <>
-          <span className="flex items-start justify-between gap-1">
-            <span className="u-appt-ink u-mono truncate text-[11px]">
-              {fmtTime(appt.start_at, tz)} — {fmtTime(appt.service_end_at, tz)}
-              {tier === "short" ? state : ""}
-            </span>
-            {unassigned ? (
-              // Nobody is on this walk-in: a red "?" disc where the barber would be.
-              <span
-                aria-hidden
-                className="flex size-[1.125rem] shrink-0 items-center justify-center rounded-full bg-brand text-[0.625rem] font-semibold text-white"
-              >
-                ?
-              </span>
-            ) : (
-              <Initial name={appt.staff_name} on="card" />
-            )}
+      <span className={`flex w-full min-w-0 items-baseline gap-2 font-medium ${one && h < 26 ? "text-[12px]" : "text-[13px]"}`}>
+        <span className={`min-w-0 flex-1 truncate ${cancelled ? "text-muted line-through" : ""}`}>{client}</span>
+        {one ? <span className="shrink-0 text-[12px] font-normal tabular-nums text-[var(--ag-ink2)]">{range}</span> : null}
+        {appt.payment_state === "pending" ? (
+          <span title="Cobro pendiente" className="shrink-0 self-center rounded-[6px] bg-[var(--chip)] px-1.5 text-[11px] font-medium leading-[18px] text-[var(--ag-ink2)]">
+            {one ? "$" : "Cobro pendiente"}
           </span>
-          <span className={`block truncate text-[13px] font-semibold ${cancelled ? "line-through" : ""}`}>{client}</span>
-          {/* The service owns its line and the STATE owns the next one, so neither crops
-              the other in a split overlap lane. */}
-          {tier === "mid" || tier === "tall" ? <span className="u-appt-ink block truncate text-xs">{appt.service_name}</span> : null}
-          {tier === "tall" && state ? (
-            <span className="u-appt-ink block truncate text-[10px] opacity-80 first-letter:uppercase">{state.replace(/^ · /, "")}</span>
-          ) : null}
-        </>
-      )}
+        ) : null}
+        {/* On a one-line card the review mark is the compact «!» (as on the week chips), so
+            the client's name keeps its room; the word stays in the tooltip and the label. */}
+        {review ? (
+          <span title="Requiere revisión" className="shrink-0 self-center rounded-[6px] bg-[var(--warn-soft)] px-1.5 text-[11px] font-medium leading-[18px] text-[var(--warn)]">
+            {one ? "!" : "Revisar"}
+          </span>
+        ) : null}
+        <span title={stateWord} className="shrink-0 text-[12px] font-normal text-[var(--ag-ink2)]">
+          <span aria-hidden>{STATE_GLYPH[appt.status] ?? ""}</span>
+        </span>
+      </span>
+      {!one ? (
+        <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-[var(--ag-ink2)]">
+          <span aria-hidden className={`${toneClass} u-appt2-dot size-[6px] shrink-0`} />
+          <span className="truncate">{appt.service_name}</span>
+        </span>
+      ) : null}
+      {!one && h >= 66 ? <span className="truncate text-[12px] tabular-nums text-[var(--ag-ink2)]">{range}</span> : null}
     </button>
   );
 }
@@ -2936,27 +2494,38 @@ function AppointmentModal(props: {
   onClose: () => void;
   onError: (e: string | null) => void;
   /** `dayKey` = the site day the appointment landed on (phone returns to it). */
-  onDone: (dayKey?: string) => void;
+  /** After the server confirmed: the day to show and, for a new booking, its id (highlighted). */
+  onDone: (dayKey?: string, createdId?: string) => void;
   /** The current error (the phone flow shows it in its own footer). */
   error?: string | null;
   /** A short confirmation for the phone's toast ("Cita creada"). */
   onNotice?: (message: string) => void;
+  /** «Sin cita · ahora»: switch to the one-step walk-in panel. */
+  onWalkIn?: () => void;
+  /** The draft (professional, start, real duration) — the calendar draws it at its size. */
+  onDraft?: (d: { staffId: string; startAt: string; durationMin: number; label: string } | null) => void;
 }) {
   const isReschedule = props.modal.mode === "reschedule";
   // Booking for an existing contact (deep-link): lock identity, submit its id.
   const bookingContact = props.modal.mode !== "reschedule" ? props.modal.contact ?? null : null;
   const [serviceId, setServiceId] = useState(props.modal.mode === "reschedule" ? props.modal.appt.service_id : "");
   // A staff login starts (and stays) on its own column; the server refuses any other.
-  const [staffId, setStaffId] = useState<string>(props.lockStaffId ?? "");
+  const presetStaff = props.modal.mode !== "reschedule" ? props.modal.staffId : undefined;
+  const presetStart = useRef(props.modal.mode !== "reschedule" ? props.modal.startAt ?? null : null);
+  const presetStartAt = props.modal.mode !== "reschedule" ? props.modal.startAt ?? null : null;
+  /** The range dragged on the grid: a HINT for the service (an appointment lasts what its
+   *  service lasts), never a duration. */
+  const spanMin = props.modal.mode !== "reschedule" ? props.modal.spanMin ?? null : null;
+  const [staffId, setStaffId] = useState<string>(props.lockStaffId ?? presetStaff ?? "");
   const [step, setStep] = useState<1 | 2 | 3>(isReschedule ? 2 : 1);
-  const [selectedDate, setSelectedDate] = useState(props.date);
+  const [selectedDate, setSelectedDate] = useState(props.modal.mode !== "reschedule" && props.modal.startAt ? siteDayKey(props.modal.startAt, props.timezone) : props.date);
   const [calendarMonth, setCalendarMonth] = useState(props.date.slice(0, 7));
   const [slots, setSlots] = useState<Slot[]>([]);
   const [slotStart, setSlotStart] = useState<string>("");
   const [loadingSlots, setLoadingSlots] = useState(false);
   /** Whether a search has completed — the difference between "not searched yet" (show
    *  nothing) and "searched, nothing came back" (say so, out loud). */
-  const [searched, setSearched] = useState(false);
+  const [, setSearched] = useState(false);
   const [name, setName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -2969,6 +2538,8 @@ function AppointmentModal(props: {
    * Deep-linked bookings arrive with the contact already decided and skip all three.
    */
   const [customerMode, setCustomerMode] = useState<"search" | "new" | "anonymous">("search");
+  /** A typed phone/email that already belongs to a contact: offered to LINK (never duplicated). */
+  const [contactMatches, setContactMatches] = useState<ContactMatch[]>([]);
   const [contactQuery, setContactQuery] = useState("");
   const [contactHits, setContactHits] = useState<ContactSearchHit[]>([]);
   const [contactSearching, setContactSearching] = useState(false);
@@ -2976,17 +2547,18 @@ function AppointmentModal(props: {
   const [pickedContact, setPickedContact] = useState<ContactSearchHit | null>(null);
   /** Step 1's service-catalogue filters — client-side over the services already loaded. */
   const [serviceQuery, setServiceQuery] = useState("");
+  /** «Recientes» (reference E4): the client's latest contacts, asked once on open. */
+  const [recents, setRecents] = useState<ContactSearchHit[] | null>(null);
+  const deskPanel = useRef<SidePanelHandle | null>(null);
+  const rosterTint = (id: string) => agTintAt([...props.staff].sort((a, b) => a.name.localeCompare(b.name, "es")).findIndex((x) => x.id === id));
   const [serviceFamily, setServiceFamily] = useState<"all" | ApptCategory>("all");
   /** Step 2's professional picker is a popover, so the month keeps the full column. */
-  const [staffPickerOpen, setStaffPickerOpen] = useState(false);
-  const [staffQuery, setStaffQuery] = useState("");
   const [pending, startTransition] = useTransition();
   // A modal COVERS the calendar, so it owes the reader the overlay contract: focus in
   // on open, Escape to close, focus back on close (Overlay.tsx). The backdrop click is
   // wired separately below.
   // Below md the booking is the phone's full-screen flow (its own layer), same state.
   const isPhone = useIsOverlayWidth(767.98);
-  const dialogRef = useTrappedPanel({ active: !isPhone, onClose: props.onClose });
   const [phoneSheet, setPhoneSheet] = useState<"month" | "contact" | "discard" | null>(null);
   /** "Estado inicial" (phone step 3): confirmed = create, then the real confirm. */
   const [initialStatus, setInitialStatus] = useState<"scheduled" | "confirmed">("scheduled");
@@ -3098,6 +2670,10 @@ function AppointmentModal(props: {
       }
       const data = (await res.json()) as { slots: Slot[] };
       setSlots(data.slots);
+      // A click on the calendar grid preset this time: take it if it is still free.
+      const want = presetStart.current;
+      presetStart.current = null;
+      if (want && data.slots.some((sl) => sl.start_at === want && (!staffId || sl.available_staff_ids.includes(staffId)))) setSlotStart(want);
       // A completed search — now an empty result can say "nothing available" rather
       // than staying silent and looking broken.
       setSearched(true);
@@ -3116,6 +2692,7 @@ function AppointmentModal(props: {
       // A thrown action (offline, server unreachable) must not escape the transition:
       // that unmounts the form and loses every choice. Say so and keep the form as is —
       // the idempotency key makes the retry safe even if the first request did land.
+      let createdId: string | undefined;
       try {
       if (isReschedule) {
         const r = await rescheduleAppointmentAction(
@@ -3145,16 +2722,23 @@ function AppointmentModal(props: {
                   customerName: name || undefined,
                   customerPhone: phone || undefined,
                   customerEmail: email || undefined,
+                  // A contact needs a phone or an email; a name alone stays on the cita.
+                  contactMode: phone.trim() || email.trim() ? ("create" as const) : ("guest" as const),
                 }),
           walkIn: props.modal.mode === "walkin",
           idempotencyKey: idemKey,
           initialStatus: isPhone ? initialStatus : undefined,
         });
-        if (!r.ok) return props.onError(r.error);
+        if (!r.ok) {
+          setContactMatches(r.matches ?? []);
+          return props.onError(r.fieldErrors ? Object.values(r.fieldErrors).join(" ") : r.error);
+        }
         props.onNotice?.(r.warning ?? "Cita creada");
+        createdId = r.id;
       }
       await dropBackGuard();
-      props.onDone(isPhone ? siteDayKey(slotStart, props.timezone) : undefined);
+      // Only after the server confirmed it: go to its day and highlight it once drawn.
+      props.onDone(siteDayKey(slotStart, props.timezone), createdId);
       } catch {
         props.onError("No se pudo guardar: revisa la conexión e inténtalo de nuevo. Tus datos se conservan.");
       }
@@ -3172,7 +2756,6 @@ function AppointmentModal(props: {
           : "Nueva cita";
 
   const rescheduleAppt = props.modal.mode === "reschedule" ? props.modal.appt : null;
-  const inputCls = INPUT;
   const selectedService = props.services.find((service) => service.id === (rescheduleAppt?.service_id ?? serviceId));
   const selectedSlot = slots.find((slot) => slot.start_at === slotStart);
   const effectiveStaffId = staffId || selectedSlot?.staff_id || rescheduleAppt?.staff_id || "";
@@ -3184,12 +2767,18 @@ function AppointmentModal(props: {
    * so the preview in step 3 matches the card that gets drawn. Before a service is
    * picked there is no colour to promise, hence the null.
    */
+  const draftStaff = staffId || presetStaff || "";
+  const draftStart = slotStart || presetStartAt;
+  const draftMin = selectedService?.duration_min ?? spanMin ?? null;
+  const onDraft = props.onDraft;
+  useEffect(() => {
+    if (!onDraft) return;
+    onDraft(draftStaff && draftStart && draftMin ? { staffId: draftStaff, startAt: draftStart, durationMin: draftMin, label: selectedService ? `Nueva cita · ${selectedService.name}` : "Nueva cita · elige el servicio" } : null);
+  }, [onDraft, draftStaff, draftStart, draftMin, selectedService]);
+  useEffect(() => () => onDraft?.(null), [onDraft]);
   const bookingFamily: ApptCategory | null = selectedService
     ? serviceCategory(selectedService.name, selectedService.category)
     : null;
-  const bookingToneClass = bookingFamily
-    ? `u-appt-service ${apptCategoryClass(bookingFamily)}`
-    : "";
 
   /**
    * WHO the booking is for, resolved from whichever of step 1's three routes is in
@@ -3201,7 +2790,7 @@ function AppointmentModal(props: {
     bookingContact
       ? { contactId: bookingContact.contactId, label: bookingContact.contactName, identity: null }
       : isReschedule
-        ? { contactId: null, label: rescheduleAppt?.contact_name ?? "Atención sin cita", identity: rescheduleAppt?.primary_identity ?? null }
+        ? { contactId: null, label: rescheduleAppt ? apptClientLabel(rescheduleAppt) : "Sin contacto", identity: rescheduleAppt?.primary_identity ?? null }
         : customerMode === "anonymous"
           ? { contactId: null, label: "Atención sin cita", identity: null }
           : pickedContact
@@ -3232,37 +2821,18 @@ function AppointmentModal(props: {
     const [year, month, day] = selectedDate.split("-").map(Number);
     return new Date(Date.UTC(year, month - 1, day));
   })();
-  const dateHeadlineRaw = new Intl.DateTimeFormat("es-CO", {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    timeZone: "UTC",
-  }).format(dateValue).replace(",", "");
-  const dateHeadline = dateHeadlineRaw.charAt(0).toUpperCase() + dateHeadlineRaw.slice(1);
   const shortDateLabel = new Intl.DateTimeFormat("es-CO", {
     weekday: "short",
     day: "numeric",
     month: "short",
     timeZone: "UTC",
   }).format(dateValue).replaceAll(".", "").replace(",", "").replaceAll(" de ", " ").replace(/\bsept\b/i, "sep");
-  const monthLabel = new Intl.DateTimeFormat("es-CO", {
-    month: "long",
-    year: "numeric",
-    timeZone: "UTC",
-  }).format(new Date(`${calendarMonth}-01T00:00:00Z`)).replace(" de ", " ");
   const monthDays = calendarDays(calendarMonth);
-  const selectedDaySlots = slots.filter((slot) => siteDayKey(slot.start_at, props.timezone) === selectedDate);
   const availabilityCount = (dayKey: string, forStaffId = staffId): number => {
     const daySlots = slots.filter((slot) => siteDayKey(slot.start_at, props.timezone) === dayKey);
     const eligible = forStaffId ? daySlots.filter((slot) => slot.available_staff_ids.includes(forStaffId)) : daySlots;
     return new Set(eligible.map((slot) => slot.start_at)).size;
   };
-  const staffAvailabilityCount = (candidateStaffId: string): number =>
-    new Set(
-      selectedDaySlots
-        .filter((slot) => slot.available_staff_ids.includes(candidateStaffId))
-        .map((slot) => slot.start_at),
-    ).size;
   /**
    * The day's free times, split the way a receptionist reads a day: morning and
    * afternoon. Only AVAILABLE slots appear — the availability endpoint returns exactly
@@ -3285,7 +2855,6 @@ function AppointmentModal(props: {
 
   /** How many of the roster can actually take this service on the chosen day. Real:
    *  it counts staff the availability endpoint returned at least one slot for. */
-  const staffWithRoom = activeStaff.filter((candidate) => staffAvailabilityCount(candidate.id) > 0).length;
   /**
    * A contact's date, in the SITE's timezone and the project's own three-letter month
    * abbreviations (ES_MONTHS) rather than Intl's — same reason the toolbar uses them:
@@ -3299,15 +2868,6 @@ function AppointmentModal(props: {
     return withTime ? `${date}, ${String(parts.h).padStart(2, "0")}:${String(parts.m).padStart(2, "0")}` : date;
   };
   const todayKey = todayAtSite(props.timezone);
-  const clientLabel = customer.label ?? "";
-  const originLabel = isReschedule ? "Reagendación" : props.modal.mode === "walkin" ? "Atención sin cita" : "Mostrador";
-  const phoneLabel = customer.identity ?? "—";
-  const staffInitials = initialsOf(selectedStaff?.name);
-  const stepItems = [
-    { value: 1 as const, label: "Cliente y servicio" },
-    { value: 2 as const, label: "Profesional y hora" },
-    { value: 3 as const, label: "Confirmar" },
-  ];
   /**
    * The RUNNING SUMMARY the reference keeps in the header and the footer, so what has
    * been chosen so far is legible without going back a step. Each part appears only
@@ -3319,22 +2879,7 @@ function AppointmentModal(props: {
   const timeRangeLabel = slotStart
     ? `${fmtTime(slotStart, props.timezone)}${selectedSlot ? ` – ${fmtTime(selectedSlot.service_end_at, props.timezone)}` : ""}`
     : null;
-  const footerSummary =
-    step === 1
-      ? summaryParts([selectedService ? `${selectedService.duration_min} min` : null])
-      : step === 2
-        ? [shortDateLabel, timeRangeLabel, selectedStaff?.name, selectedSite?.name].filter(Boolean).join(" · ")
-        : summaryParts([
-            slotStart ? `${shortDateLabel} ${fmtTime(slotStart, props.timezone)}` : null,
-            selectedStaff?.name ?? null,
-          ]);
   /** The header's second line: the site+day you're booking into, then the choices. */
-  const headerSubtitle =
-    step === 1
-      ? [selectedSite?.name, shortDateLabel].filter(Boolean).join(" · ")
-      : step === 3
-        ? "Revisa antes de crear · nada se guarda todavía"
-        : summaryParts([selectedService ? `${selectedService.duration_min} min` : null]) || (selectedSite?.name ?? "");
 
   const changeStaff = (nextStaffId: string) => {
     setStaffId(nextStaffId);
@@ -3386,6 +2931,20 @@ function AppointmentModal(props: {
   };
 
   const phoneHasChoices = Boolean(customer.label || serviceId || slotStart) && !isReschedule;
+  // A link elsewhere in the app (the sidebar stays usable beside the panel) asks first.
+  // Phone only: from md up the SidePanel guards its own links / X / Escape (one dialog).
+  const leaveNav = useNavigationGuard({ dirty: phoneHasChoices && isPhone, onAsk: () => setPhoneSheet("discard") });
+  const wantRecents = !isPhone && !bookingContact && !isReschedule;
+  useEffect(() => {
+    if (!wantRecents) return;
+    let alive = true;
+    recentSchedulingContactsAction(props.clientId)
+      .then((r) => alive && setRecents(r.ok ? r.hits : []))
+      .catch(() => alive && setRecents([]));
+    return () => {
+      alive = false;
+    };
+  }, [wantRecents, props.clientId]);
   useEffect(() => {
     backGuard.current.onBack = () => {
       // An open sheet (month, new contact, or the discard question itself — where Back
@@ -3407,8 +2966,9 @@ function AppointmentModal(props: {
     };
   });
 
-  // ── PHONE (< md) — the reference's 3-step flow (§03) on the SAME state and actions ──
-  if (isPhone) {
+  // ── The reference's 3-step flow (§03) on the SAME state and actions: full screen on
+  // the phone, inside the agenda's 520 px side-panel frame from md up (MScreen framed).
+  {
     const stepName = step === 1 ? "Cliente y servicio" : step === 2 ? "Profesional, fecha y hora" : "Confirmar";
     const dayState = (dayKey: string): "ok" | "full" | "closed" | "past" | "unknown" => {
       if (dayKey < todayKey) return "past";
@@ -3478,9 +3038,369 @@ function AppointmentModal(props: {
     const newPhoneDigits = phone.replace(/\D/g, "").length;
     const newContactValid = name.trim().length > 0 && (phone.trim() === "" || newPhoneDigits >= 7);
 
+    if (!isPhone) {
+      // ── DESKTOP (reference E4): the same three steps inside the agenda's side panel —
+      // never the phone screen framed. Steps 2 and 3 keep V2's content, in this panel's
+      // language. Same state, same actions, same guard.
+      const stepsRow = (
+        <ol aria-label="Pasos" className="flex flex-wrap items-center gap-2 text-[13px]">
+          {(["Cliente y servicio", "Profesional y hora", "Confirmar"] as const).map((label, i) => {
+            const n = (i + 1) as 1 | 2 | 3;
+            const on = n === step;
+            return (
+              <li key={label} className="flex items-center gap-2" aria-current={on ? "step" : undefined}>
+                {i > 0 ? <span aria-hidden className="text-muted">—</span> : null}
+                <span className={`inline-flex size-[20px] items-center justify-center rounded-full text-[11.5px] tabular-nums ${on ? "bg-[var(--ink)] font-medium text-[var(--ink-fg)]" : n < step ? "bg-[var(--chip)] text-foreground" : "text-muted"}`}>
+                  {n < step ? "✓" : n}
+                </span>
+                <span className={on ? "text-foreground" : "text-[var(--ag-ink2)]"}>{label}</span>
+              </li>
+            );
+          })}
+        </ol>
+      );
+      const SEARCH = "flex h-[38px] items-center gap-2 rounded-[10px] bg-[var(--chip)] px-3 text-muted";
+      const SMALL = "u-focus inline-flex h-[32px] items-center gap-1.5 whitespace-nowrap rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] px-3 text-[13px] text-foreground hover:bg-[var(--subtle)]";
+      const personRow = (hit: ContactSearchHit, onPick: () => void, sub?: string) => (
+        <button key={hit.id} type="button" onClick={onPick} className="u-focus flex min-h-[48px] w-full items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left hover:bg-[var(--subtle)] max-md:min-h-[56px]">
+          <span aria-hidden className="inline-flex size-[30px] shrink-0 items-center justify-center rounded-full bg-[var(--chip)] text-[12px] font-medium text-[var(--ag-ink2)]">{initialsOf(hit.name)}</span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-[14px] text-foreground">{hit.name ?? "Contacto sin nombre"}</span>
+            {hit.phone ? <span className="truncate text-[12.5px] tabular-nums text-muted">{hit.phone}</span> : null}
+            {hit.email ? <span className="truncate text-[12.5px] text-muted">{hit.email}</span> : null}
+            {!hit.phone && !hit.email && hit.identity ? <span className="truncate text-[12.5px] text-muted">{hit.identity}</span> : null}
+            {sub ? <span className="truncate text-[12.5px] text-muted">{sub}</span> : null}
+          </span>
+        </button>
+      );
+      const visibleServices = filteredServices
+        .filter((sv) => !serviceQuery.trim() || sv.name.toLocaleLowerCase("es").includes(serviceQuery.trim().toLocaleLowerCase("es")))
+        // A range dragged on the grid: what fits in it first (stable otherwise).
+        .map((sv, i) => ({ sv, i, fits: spanMin === null || sv.duration_min <= spanMin }))
+        .sort((x, y) => (x.fits === y.fits ? x.i - y.i : x.fits ? -1 : 1))
+        .map((x) => x.sv);
+      const footer = (
+        <div className="flex items-center gap-2">
+          <div aria-live="polite" className="flex min-w-0 flex-1 flex-col">
+            <span className="text-[12.5px] text-muted">Paso {step} de 3</span>
+            <span className="truncate text-[14px] font-medium text-foreground">{step === 1 && !step1Ready && !customer.label && !serviceId ? "Aún no has elegido nada" : summary}</span>
+          </div>
+          {step > 1 && !(isReschedule && step === 2) ? (
+            <Button onClick={goBack}>Volver</Button>
+          ) : (
+            <Button onClick={() => deskPanel.current?.requestClose()}>Cancelar</Button>
+          )}
+          {step === 3 ? (
+            <Button variant="primary" disabled={!slotStart} loading={pending} loadingLabel={isReschedule ? "Guardando…" : "Creando…"} onClick={submit}>
+              {isReschedule ? "Confirmar cambio" : "Crear cita"}
+            </Button>
+          ) : (
+            <Button variant="primary" disabled={(step === 1 && !step1Ready) || (step === 2 && !slotStart)} onClick={advance}>
+              Continuar
+            </Button>
+          )}
+        </div>
+      );
+      return (
+        <SidePanel
+          name="booking"
+          title={isReschedule ? "Reprogramar cita" : "Nueva cita"}
+          subtitle={`${selectedSite?.name ?? ""} · ${shortDateLabel}`}
+          headerRule={false}
+          headerBelow={stepsRow}
+          dirty={hasChoices}
+          onClose={props.onClose}
+          handleRef={deskPanel}
+          footer={footer}
+        >
+          {props.error ? (
+            <p role="alert" className="mb-3 rounded-[10px] bg-[var(--ag-danger-soft)] px-3 py-2.5 text-[13px] text-[var(--ag-danger-ink)]">
+              {props.error}
+            </p>
+          ) : null}
+          {step === 1 ? (
+            <>
+              <PanelSection title="Cliente" id="nv-client" size="lg">
+                {customer.label ? (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-3 rounded-[12px] px-3 py-2.5 shadow-[inset_0_0_0_1.5px_var(--foreground)]">
+                      <span aria-hidden className="inline-flex size-[36px] shrink-0 items-center justify-center rounded-full bg-[var(--chip)] text-[12px] font-medium text-[var(--ag-ink2)]">{initialsOf(customer.label)}</span>
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate text-[14px] font-medium">{customer.label}</span>
+                        <span className="truncate text-[12.5px] tabular-nums text-muted">
+                          {customer.identity ?? (customerMode === "new" && !pickedContact ? "Contacto nuevo · se crea al confirmar la cita" : "")}
+                        </span>
+                      </span>
+                      {!bookingContact ? (
+                        <button
+                          type="button"
+                          className={SMALL}
+                          onClick={() => {
+                            setPickedContact(null);
+                            setCustomerMode("search");
+                            setName("");
+                            setPhone("");
+                            setEmail("");
+                          }}
+                        >
+                          Cambiar
+                        </button>
+                      ) : null}
+                    </div>
+                    {pickedContact?.nextAppointmentAt ? (
+                      <p role="status" className="flex gap-2 rounded-[10px] bg-[var(--warn-soft)] px-3 py-2.5 text-[13px] leading-[1.45] text-[var(--warn)]">
+                        <span aria-hidden>!</span>Ya tiene cita el {contactDateLabel(pickedContact.nextAppointmentAt, true)}. Revisa que no sea un duplicado.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : customerMode === "new" ? (
+                  <div className="flex flex-col gap-2.5">
+                    <label className="flex flex-col gap-1.5">
+                      <span className="text-[13px] font-medium">Nombre</span>
+                      <input className={INPUT} value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" maxLength={120} />
+                    </label>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <label className="flex min-w-0 flex-col gap-1.5">
+                        <span className="text-[13px] font-medium">Teléfono</span>
+                        <input className={INPUT} type="tel" inputMode="tel" placeholder="+57 300 000 0000" value={phone} onChange={(e) => setPhone(e.target.value)} autoComplete="off" />
+                      </label>
+                      <label className="flex min-w-0 flex-col gap-1.5">
+                        <span className="text-[13px] font-medium">Correo</span>
+                        <input className={INPUT} type="email" inputMode="email" placeholder="nombre@correo.com" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" />
+                      </label>
+                    </div>
+                    <p className="text-[12.5px] text-muted">Para guardar el contacto basta un teléfono o un correo; con solo el nombre queda en esta cita, sin contacto.</p>
+                    <button type="button" className="u-focus self-start text-[13px] text-[var(--ag-ink2)] underline underline-offset-2" onClick={() => setCustomerMode("search")}>
+                      Buscar un contacto existente
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <label className={SEARCH}>
+                      <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="7" cy="7" r="4.6" /><path d="M10.4 10.4L14 14" /></svg>
+                      <input type="search" aria-label="Buscar cliente" placeholder="Nombre o teléfono" value={contactQuery} onChange={(e) => setContactQuery(e.target.value)} className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted" />
+                    </label>
+                    {contactQuery.trim().length < 2 ? (
+                      <>
+                        {recents && recents.length > 0 ? <span className="pt-1 text-[12.5px] text-muted">Recientes</span> : null}
+                        {recents === null ? <div aria-busy="true" aria-label="Cargando recientes" className="h-[48px] rounded-[10px] bg-[var(--chip)]" /> : null}
+                        <div className="flex flex-col">{(recents ?? []).map((h) => personRow(h, () => setPickedContact(h)))}</div>
+                      </>
+                    ) : (
+                      <div className="flex flex-col">
+                        <span className="text-[12.5px] text-muted">{resultsLabel}</span>
+                        {contactHits.map((h) => personRow(h, () => { setPickedContact(h); setContactQuery(""); }, hitHint(h)))}
+                        {contactSearched && contactHits.length === 0 ? <p className="px-2.5 py-2 text-[13px] text-muted">Sin resultados para «{contactQuery.trim()}».</p> : null}
+                      </div>
+                    )}
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 pt-1 text-[13px]">
+                      <button
+                        type="button"
+                        className="u-focus text-[var(--ag-ink2)] underline underline-offset-2"
+                        onClick={() => {
+                          if (/^[+\d\s()-]{7,}$/.test(contactQuery.trim())) setPhone(contactQuery.trim());
+                          else if (contactQuery.trim()) setName(contactQuery.trim());
+                          setCustomerMode("new");
+                        }}
+                      >
+                        {contactQuery.trim().length >= 2 ? `Nuevo cliente «${contactQuery.trim()}»` : "Nuevo cliente"}
+                      </button>
+                      {props.onWalkIn ? (
+                        <button type="button" className="u-focus text-[var(--ag-ink2)] underline underline-offset-2" onClick={props.onWalkIn}>
+                          ¿Llegó sin cita? Registrar ahora
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+                {contactMatches.length > 0 ? (
+                  <div role="alert" className="flex flex-col gap-2 rounded-[10px] bg-[var(--warn-soft)] px-3 py-2.5 text-[13px] text-[var(--warn)]">
+                    <span>Ya existe un contacto con ese teléfono o correo. Vincúlalo en lugar de crear otro.</span>
+                    {contactMatches.map((m) => (
+                      <button
+                        key={m.contactId}
+                        type="button"
+                        className={`${SMALL} self-start`}
+                        onClick={() => {
+                          setPickedContact({ id: m.contactId, name: m.name, identity: m.matchedValue, phone: null, email: null, isCustomer: false, appointmentCount: 0, lastVisitAt: null, nextAppointmentAt: null });
+                          setCustomerMode("search");
+                          setContactMatches([]);
+                          props.onError(null);
+                        }}
+                      >
+                        Vincular a {m.name ?? m.matchedValue}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </PanelSection>
+              <PanelSection title="Servicio" id="nv-service" size="lg">
+                {spanMin !== null && presetStartAt ? (
+                  <p className="-mt-1 rounded-[10px] bg-[var(--chip)] px-3 py-2 text-[12.5px] leading-[1.45] text-[var(--ag-ink2)]">
+                    Marcaste {fmtTime(presetStartAt, props.timezone)} – {fmtTime(new Date(Date.parse(presetStartAt) + spanMin * 60_000).toISOString(), props.timezone)} ({spanMin} min). La cita dura lo que dure el servicio: primero van los que caben.
+                  </p>
+                ) : null}
+                <label className={SEARCH}>
+                  <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="7" cy="7" r="4.6" /><path d="M10.4 10.4L14 14" /></svg>
+                  <input type="search" aria-label="Buscar servicio" placeholder="Buscar servicio" value={serviceQuery} onChange={(e) => setServiceQuery(e.target.value)} className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted" />
+                </label>
+                <div role="radiogroup" aria-labelledby="nv-service" className="grid grid-cols-2 gap-2">
+                  {visibleServices.map((service) => {
+                    const sel = service.id === serviceId;
+                    const family = serviceCategory(service.name, service.category);
+                    return (
+                      <button
+                        key={service.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={sel}
+                        onClick={() => {
+                          setServiceId(service.id);
+                          resetSlots();
+                        }}
+                        className={`u-focus flex min-h-[56px] items-start gap-2.5 rounded-[10px] px-3 py-2.5 text-left transition-shadow ${sel ? "shadow-[inset_0_0_0_1.5px_var(--foreground)]" : "shadow-[inset_0_0_0_1px_var(--line-strong)] hover:bg-[var(--subtle)]"}`}
+                      >
+                        <span aria-hidden className={`u-appt-service ${apptCategoryClass(family)} mt-[6px] size-2 shrink-0 rounded-full bg-[var(--appt-rule)]`} />
+                        <span className="min-w-0">
+                          <span className="block truncate text-[14px]">{service.name}</span>
+                          <span className="block text-[12.5px] tabular-nums text-muted">
+                            {service.duration_min} min{priceLabelCOP(service.price) ? ` · ${priceLabelCOP(service.price)}` : ""}
+                          </span>
+                          {spanMin !== null ? (
+                            <span className={`mt-1 inline-flex h-[20px] items-center rounded-[6px] px-1.5 text-[11.5px] ${service.duration_min <= spanMin ? "bg-[var(--success-soft)] text-[var(--success)]" : "bg-[var(--warn-soft)] text-[var(--warn)]"}`}>
+                              {service.duration_min <= spanMin ? "Cabe" : `Dura ${service.duration_min} min`}
+                            </span>
+                          ) : null}
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {visibleServices.length === 0 ? <p className="col-span-2 text-[13px] text-muted">Ningún servicio coincide con «{serviceQuery.trim()}».</p> : null}
+                </div>
+              </PanelSection>
+            </>
+          ) : null}
+          {step === 2 ? (
+            <>
+              <PanelSection title="Profesional" id="nv-staff">
+                <div role="radiogroup" aria-labelledby="nv-staff" className="flex flex-wrap gap-1.5">
+                  {[...(props.lockStaffId ? [] : [{ id: "", name: "Cualquiera" }]), ...staffChoices].map((st) => {
+                    const sel = staffId === st.id;
+                    return (
+                      <button
+                        key={st.id || "any"}
+                        type="button"
+                        role="radio"
+                        aria-checked={sel}
+                        onClick={() => changeStaff(st.id)}
+                        className={`u-focus inline-flex h-[36px] items-center gap-2 rounded-full pl-1.5 pr-3.5 text-[13.5px] ${sel ? "font-medium shadow-[inset_0_0_0_1.5px_var(--foreground)]" : "shadow-[inset_0_0_0_1px_var(--line-strong)] hover:bg-[var(--subtle)]"}`}
+                      >
+                        {st.id ? <AgAvatar name={st.name} id={st.id} size={24} tint={rosterTint(st.id)} /> : <span aria-hidden className="inline-flex size-[24px] items-center justify-center rounded-full bg-[var(--chip)] text-[11px]">∗</span>}
+                        {st.id ? st.name.split(" ")[0] : "Cualquiera"}
+                      </button>
+                    );
+                  })}
+                </div>
+              </PanelSection>
+              <PanelSection
+                title="Día"
+                id="nv-day"
+                action={
+                  <span className="flex items-center gap-1">
+                    <span className="mr-1 text-[12.5px] capitalize text-muted">{monthTitle(calendarMonth)}</span>
+                    <button type="button" aria-label="Semana anterior" onClick={() => changeDate(addDays(selectedDate, -7) < todayKey ? todayKey : addDays(selectedDate, -7))} className="u-focus inline-flex size-[32px] items-center justify-center rounded-[9px] text-[var(--ag-ink2)] hover:bg-[var(--subtle)]">‹</button>
+                    <button type="button" aria-label="Semana siguiente" onClick={() => changeDate(addDays(selectedDate, 7))} className="u-focus inline-flex size-[32px] items-center justify-center rounded-[9px] text-[var(--ag-ink2)] hover:bg-[var(--subtle)]">›</button>
+                  </span>
+                }
+              >
+                <div role="group" aria-labelledby="nv-day" className="grid grid-cols-7 gap-1">
+                  {strip.map((d) => {
+                    const sel = d === selectedDate;
+                    const av = dayState(d);
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        aria-pressed={sel}
+                        aria-label={`${wdShort(d)} ${Number(d.slice(8))} · ${({ ok: "con horas libres", full: "sin horas libres", closed: "cerrado", past: "pasado", unknown: "sin datos" } as const)[av]}`}
+                        disabled={av === "past"}
+                        onClick={() => changeDate(d)}
+                        className={`u-focus flex h-[52px] flex-col items-center justify-center gap-0.5 rounded-[10px] ${sel ? "bg-[var(--ink)] text-[var(--ink-fg)]" : av === "ok" || av === "unknown" ? "bg-[var(--chip)] text-foreground hover:bg-[var(--subtle)]" : "text-muted"} disabled:opacity-50`}
+                      >
+                        <span className="text-[11.5px] opacity-80">{wdShort(d)}</span>
+                        <span className={`text-[15px] font-medium ${av === "closed" ? "line-through" : ""}`}>{Number(d.slice(8))}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </PanelSection>
+              <PanelSection title={<>Hora libre <span className="font-normal text-muted">· {selectedService ? `${selectedService.duration_min} min` : ""}</span></>} id="nv-time">
+                {loadingSlots ? (
+                  <div role="status" aria-live="polite" className="flex flex-col gap-2">
+                    <p className="flex items-center gap-2 text-[13px] text-muted">
+                      <span aria-hidden className="u-ag-busy-dot size-[7px] rounded-full bg-[var(--ag-ink2)]" />
+                      Buscando horas libres…
+                    </p>
+                    <div aria-hidden className="grid grid-cols-6 gap-1.5">
+                      {Array.from({ length: 12 }, (_, i) => <span key={i} className="h-[36px] animate-pulse rounded-[10px] bg-[var(--chip)]" />)}
+                    </div>
+                  </div>
+                ) : visibleSlots.length === 0 ? (
+                  <div className="flex flex-col gap-2 rounded-[10px] bg-[var(--chip)] px-3 py-2.5 text-[13px] text-[var(--ag-ink2)]">
+                    <span>
+                      {selState === "closed" ? `${selectedSite?.name ?? "La sede"} no abre este día.` : selState === "past" ? "Esa fecha ya pasó." : staffId && selectedStaff ? `No quedan horas libres con ${selectedStaff.name.split(" ")[0]} este día.` : "No quedan horas libres este día."}
+                    </span>
+                    {nextOk ? (
+                      <button type="button" className={`${SMALL} self-start`} onClick={() => changeDate(nextOk)}>
+                        Próximo con horas libres: {wdShort(nextOk).toLowerCase()} {Number(nextOk.slice(8))}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div role="radiogroup" aria-labelledby="nv-time" className="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-1.5">
+                    {visibleSlots.map((slot) => {
+                      const sel = slot.start_at === slotStart;
+                      return (
+                        <button
+                          key={slot.start_at}
+                          type="button"
+                          role="radio"
+                          aria-checked={sel}
+                          onClick={() => {
+                            setSlotStart(slot.start_at);
+                            if (!staffId) setStaffId(slot.staff_id);
+                          }}
+                          className={`u-focus h-[36px] rounded-[10px] text-[14px] tabular-nums ${sel ? "bg-[var(--ink)] font-medium text-[var(--ink-fg)]" : "shadow-[inset_0_0_0_1px_var(--line-strong)] hover:bg-[var(--subtle)]"}`}
+                        >
+                          {fmtTime(slot.start_at, props.timezone)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="text-[12.5px] text-muted">{tzLabel}</p>
+              </PanelSection>
+            </>
+          ) : null}
+          {step === 3 ? (
+            <div className="flex flex-col">
+              {[...confirmRows.slice(0, 3), ["Fecha", dayHeadline(selectedDate)] as [string, string], ["Hora", timeRangeLabel ?? "—"] as [string, string], ...confirmRows.slice(3)].map(([k, v], i, all) => (
+                <div key={k} className={`grid grid-cols-[170px_minmax(0,1fr)] gap-3 py-[11px] text-[13.5px] ${i < all.length - 1 ? "shadow-[inset_0_-1px_0_var(--line-soft)]" : ""}`}>
+                  <span className="text-muted">{k}</span>
+                  <span className="min-w-0 tabular-nums [overflow-wrap:anywhere]">{v}</span>
+                </div>
+              ))}
+              <p className="mt-3 rounded-[10px] bg-[var(--chip)] px-3 py-2.5 text-[13px] text-[var(--ag-ink2)]">Nada se guarda hasta que confirmes. No se avisa al cliente automáticamente.</p>
+            </div>
+          ) : null}
+        </SidePanel>
+      );
+    }
+
     return (
       <MScreen
         label={title}
+        framed={!isPhone}
         onEscape={() => (phoneSheet ? setPhoneSheet(null) : requestClose())}
         header={
           <div className="flex flex-col gap-[10px]">
@@ -3617,22 +3537,22 @@ function AppointmentModal(props: {
                         }}
                         className="flex min-h-[56px] w-full items-center gap-3 border-0 border-t border-m-dv bg-transparent px-[14px] text-left text-[15px] text-m-tx first:border-t-0"
                       >
-                        <span aria-hidden className="flex size-10 flex-none items-center justify-center rounded-full border-[1.5px] border-dashed border-m-tx3 text-[18px]">
+                        <span aria-hidden className="flex size-[40px] flex-none items-center justify-center rounded-full border-[1.5px] border-dashed border-m-tx3 text-[18px]">
                           +
                         </span>
                         {contactQuery.trim().length >= 2 ? `Crear contacto «${contactQuery.trim()}»` : "Crear contacto"}
                       </button>
                       <button
                         type="button"
-                        onClick={() => setCustomerMode("anonymous")}
+                        onClick={() => (props.onWalkIn ? props.onWalkIn() : setCustomerMode("anonymous"))}
                         className="flex min-h-[56px] w-full items-center gap-3 border-0 border-t border-m-dv bg-transparent px-[14px] text-left text-[15px] text-m-tx"
                       >
-                        <span aria-hidden className="flex size-10 flex-none items-center justify-center rounded-full bg-m-sf2 text-[15px]">
+                        <span aria-hidden className="flex size-[40px] flex-none items-center justify-center rounded-full bg-m-sf2 text-[15px]">
                           →
                         </span>
                         <span className="flex flex-col">
-                          <span>Atención sin cita</span>
-                          <span className="text-[13px] text-m-tx3">Cliente presente, sin registrar datos</span>
+                          <span>Sin cita · ahora</span>
+                          <span className="text-[13px] text-m-tx3">Alguien que llegó sin reserva: un solo paso</span>
                         </span>
                       </button>
                     </div>
@@ -3831,6 +3751,30 @@ function AppointmentModal(props: {
                   {!isReschedule ? <MStateChip status={initialStatus} /> : null}
                 </div>
               </div>
+              {contactMatches.length > 0 ? (
+                <div role="status" className="flex flex-col gap-2 rounded-[16px] border border-m-bd bg-m-sf px-[14px] py-3">
+                  <span className="text-[15px] font-semibold">Ya existe un contacto con ese teléfono o correo</span>
+                  {contactMatches.map((m) => (
+                    <div key={m.contactId} className="flex items-center gap-3">
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[15px] font-semibold">{m.name ?? "Sin nombre"}</span>
+                        <span className="u-mono block truncate text-[13px] text-m-tx3">{m.matchedValue}</span>
+                      </span>
+                      <MButton
+                        onClick={() => {
+                          setPickedContact({ id: m.contactId, name: m.name, identity: m.matchedValue, phone: null, email: null, isCustomer: false, appointmentCount: 0, lastVisitAt: null, nextAppointmentAt: null });
+                          setCustomerMode("search");
+                          setContactMatches([]);
+                          props.onError(null);
+                        }}
+                      >
+                        Vincular
+                      </MButton>
+                    </div>
+                  ))}
+                  <span className="text-[13px] text-m-tx3">Vincúlalo para no crear un contacto duplicado.</span>
+                </div>
+              ) : null}
               <div className={M_CARD}>
                 {confirmRows.map(([k, v]) => (
                   <div key={k} className="flex min-h-[48px] items-start gap-3 border-t border-m-dv px-[14px] py-3 first:border-t-0">
@@ -3857,7 +3801,7 @@ function AppointmentModal(props: {
               <section className="flex flex-col gap-[10px]">
                 <h2 className="m-0 text-[15px] font-semibold">Color en la agenda</h2>
                 <div className="flex min-h-[64px] items-center gap-3 rounded-[16px] border border-m-bd bg-m-sf py-[10px] pl-[14px] pr-3">
-                  <span aria-hidden className={`${heroFamily} flex size-10 flex-none items-center justify-center rounded-full bg-[var(--m-fill)] shadow-[inset_0_0_0_1px_var(--m-bd)]`}>
+                  <span aria-hidden className={`${heroFamily} flex size-[40px] flex-none items-center justify-center rounded-full bg-[var(--m-fill)] shadow-[inset_0_0_0_1px_var(--m-bd)]`}>
                     <span className="size-3.5 rounded-full bg-[var(--m-dot)]" />
                   </span>
                   <span className="flex min-w-0 flex-1 flex-col">
@@ -3945,7 +3889,11 @@ function AppointmentModal(props: {
             </label>
             <input id="nc-email" type="email" inputMode="email" autoComplete="email" value={email} onChange={(e) => setEmail(e.target.value)} className="h-[48px] rounded-[12px] border border-m-bd bg-m-sf px-[14px] text-[16px] text-m-tx" />
           </div>
-          <span className="text-[13px] text-m-tx3">El contacto se crea al confirmar la cita.</span>
+          <span className="text-[13px] text-m-tx3">
+            {phone.trim() || email.trim()
+              ? "El contacto se crea al confirmar la cita. Si ya existe uno con ese teléfono o correo, te propondremos vincularlo."
+              : "Sin teléfono ni correo no se crea un contacto: el nombre queda solo en esta cita."}
+          </span>
           <div className="flex gap-2">
             <MButton onClick={() => setPhoneSheet(null)}>Cancelar</MButton>
             <MButton
@@ -3966,11 +3914,11 @@ function AppointmentModal(props: {
         <Sheet open={phoneSheet === "discard"} onClose={() => setPhoneSheet(null)} alert label="¿Descartar la cita?" bodyClassName="pb-[max(20px,env(safe-area-inset-bottom))]">
           <MConfirm title="¿Descartar la cita?" body="Se perderán el cliente, el servicio y el horario elegidos. No se ha guardado nada.">
             <div className="flex flex-col gap-2 pt-1">
-              <MButton data-autofocus className="w-full font-semibold" onClick={() => setPhoneSheet(null)}>
+              <MButton data-autofocus className="w-full font-semibold" onClick={() => { leaveNav.forget(); setPhoneSheet(null); }}>
                 Seguir editando
               </MButton>
-              <MButton kind="danger" className="w-full" onClick={props.onClose}>
-                Descartar
+              <MButton kind="danger" className="w-full" onClick={() => { const go = leaveNav.hasPending(); props.onClose(); if (go) leaveNav.follow(); }}>
+                Descartar cambios
               </MButton>
             </div>
           </MConfirm>
@@ -3979,818 +3927,7 @@ function AppointmentModal(props: {
     );
   }
 
-  return (
-    <div className="u-module-modal z-50 flex items-center justify-center bg-black/45 sm:p-4" onClick={props.onClose}>
-      <div
-        ref={dialogRef as RefObject<HTMLDivElement>}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={MODAL_TITLE_ID}
-        className="flex h-dvh w-dvw flex-col overflow-hidden bg-popover text-popover-foreground shadow-2xl sm:h-[min(640px,calc(100dvh-2rem))] sm:w-[min(992px,calc(100vw-2rem))] sm:rounded-sch-modal sm:border sm:border-line xl:h-[min(680px,calc(100dvh-2rem))] xl:w-[min(1120px,calc(100vw-2rem))]"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* HEADER — one row at every width, but the step indicator changes form with
-            the room available: named pills on desktop, a three-dot progress read on
-            tablet, and a three-segment bar under the title on the phone. All three
-            state the same thing, none of them wrap. */}
-        <header className="flex min-h-16 shrink-0 flex-col gap-2.5 border-b border-line px-4 py-3 sm:min-h-16 sm:flex-row sm:items-center sm:gap-3.5 sm:px-5">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5 sm:flex-none">
-              <h2 id={MODAL_TITLE_ID} className="truncate text-base font-semibold">
-                {title}
-                <span className="sm:hidden"> </span>
-              </h2>
-              <p className="truncate text-xs text-muted">
-                <span className="sm:hidden">Paso {step} de 3 · {stepItems[step - 1].label.toLocaleLowerCase("es")}</span>
-                <span className="hidden sm:inline">{headerSubtitle}</span>
-              </p>
-            </div>
-            {/* Phone close button lives beside the title; desktop's is at the far right. */}
-            <button
-              type="button"
-              aria-label="Cerrar"
-              onClick={props.onClose}
-              className={buttonClass({ variant: "tertiary", className: "w-[44px] px-0 text-xl sm:hidden" })}
-            >
-              <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
-              </svg>
-            </button>
-          </div>
-
-          {/* PHONE — a plain progress bar. Three named pills do not fit 390px. */}
-          <div aria-hidden className="flex items-center gap-1.5 sm:hidden">
-            {stepItems.map((item) => (
-              <span
-                key={item.value}
-                className={`h-1 flex-1 rounded-full ${item.value <= step ? "bg-foreground" : "bg-line"}`}
-              />
-            ))}
-          </div>
-
-          {/* TABLET — dots, with the current step drawn as a wider pill. */}
-          <div aria-hidden className="hidden items-center gap-1.5 sm:flex lg:hidden">
-            {stepItems.map((item) => (
-              <span
-                key={item.value}
-                className={`h-2 rounded-full ${item.value === step ? "w-5 bg-foreground" : item.value < step ? "w-2 bg-foreground/45" : "w-2 bg-line"}`}
-              />
-            ))}
-          </div>
-
-          {/* DESKTOP — named, clickable pills joined by hairlines. */}
-          <nav aria-label="Pasos para crear la cita" className="hidden min-w-0 lg:block">
-            <ol className="flex items-center gap-2">
-              {stepItems.map((item, index) => {
-                const complete = item.value < step;
-                const current = item.value === step;
-                // A step is reachable if it is already behind you, or if everything it
-                // depends on is decided. Step 3 needs a slot; step 2 needs step 1.
-                const reachable =
-                  item.value <= step || (item.value === 2 && step1Ready) || (item.value === 3 && !!slotStart);
-                return (
-                  <li key={item.value} className="flex items-center gap-2">
-                    {index > 0 ? <span aria-hidden className="h-px w-4 bg-line" /> : null}
-                    <button
-                      type="button"
-                      aria-current={current ? "step" : undefined}
-                      disabled={!reachable}
-                      onClick={() => reachable && setStep(item.value)}
-                      className={`u-focus inline-flex h-[32px] items-center gap-2 whitespace-nowrap rounded-full pl-1 pr-3 text-xs transition-colors ${
-                        current
-                          ? "bg-ink font-medium text-ink-fg"
-                          : reachable
-                            ? "text-muted hover:bg-subtle hover:text-foreground"
-                            : "cursor-default text-faint"
-                      }`}
-                    >
-                      <span
-                        className={`u-mono inline-flex size-6 items-center justify-center rounded-full text-[0.6875rem] leading-none ${
-                          complete
-                            ? "bg-success/15 text-success"
-                            : current
-                              ? "bg-ink-fg text-ink"
-                              : "bg-subtle text-faint"
-                        }`}
-                      >
-                        {complete ? "✓" : item.value}
-                      </span>
-                      {item.label}
-                    </button>
-                  </li>
-                );
-              })}
-            </ol>
-          </nav>
-
-          <span className="hidden flex-1 sm:block" />
-          <button
-            type="button"
-            aria-label="Cerrar"
-            onClick={props.onClose}
-            className={buttonClass({ variant: "tertiary", size: "sm", className: "w-[44px] px-0 text-xl max-sm:hidden lg:w-[36px]" })}
-          >
-              <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M4 4l8 8M12 4l-8 8" strokeLinecap="round" />
-              </svg>
-            </button>
-        </header>
-
-        <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,1fr)_auto] overflow-y-auto lg:overflow-hidden">
-          <main className="flex min-h-0 flex-col overflow-y-auto lg:overflow-hidden">
-            {step === 1 ? (
-              /* PASO 1 — dos columnas iguales: a quién atiendes y qué le vas a hacer.
-                 Ninguna depende de la otra, así que van lado a lado y no en secuencia. */
-              <section
-                aria-labelledby="booking-client-heading"
-                className="grid min-h-0 flex-1 gap-0 lg:grid-cols-2"
-              >
-                <h3 id="booking-client-heading" className="sr-only">Cliente y servicio</h3>
-
-                {/* ── CLIENTE ── */}
-                <div className="flex min-h-0 min-w-0 flex-col border-b border-line lg:border-b-0 lg:border-r">
-                  <div className="flex shrink-0 flex-col gap-2.5 px-4 pb-3 pt-4 sm:px-5">
-                    <div className="flex items-center gap-2.5">
-                      <span className="text-sm font-semibold">Cliente</span>
-                      <span className="flex-1" />
-                      {!bookingContact && !isReschedule ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            // An anonymous walk-in: no contact is stored, so any typed
-                            // identity and any picked contact are dropped on purpose.
-                            setCustomerMode(customerMode === "anonymous" ? "search" : "anonymous");
-                            setPickedContact(null);
-                            setName("");
-                            setPhone("");
-                            setEmail("");
-                          }}
-                          className="text-xs text-muted transition-colors hover:text-foreground"
-                        >
-                          {customerMode === "anonymous" ? "Elegir un cliente" : "Atención sin cita"}
-                        </button>
-                      ) : null}
-                    </div>
-
-                    {bookingContact || isReschedule ? null : customerMode === "anonymous" ? null : customerMode === "new" ? null : (
-                      <label className={`${FIELD} flex h-[44px] items-center gap-2.5 lg:h-[40px]`}>
-                        <span className="sr-only">Buscar cliente por nombre o teléfono</span>
-                        <svg aria-hidden viewBox="0 0 16 16" className="size-3.5 shrink-0 text-faint" fill="none" stroke="currentColor" strokeWidth="1.5">
-                          <circle cx="7" cy="7" r="4.4" />
-                          <path d="M10.4 10.4 13.6 13.6" />
-                        </svg>
-                        <input
-                          value={contactQuery}
-                          onChange={(event) => setContactQuery(event.target.value)}
-                          placeholder="Nombre o teléfono"
-                          className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
-                          autoFocus
-                        />
-                        {contactSearching ? (
-                          <span className="shrink-0 text-[0.6875rem] text-faint">Buscando…</span>
-                        ) : contactSearched ? (
-                          <span className="shrink-0 text-[0.6875rem] text-faint">
-                            {contactHits.length} {contactHits.length === 1 ? "resultado" : "resultados"}
-                          </span>
-                        ) : null}
-                      </label>
-                    )}
-                  </div>
-
-                  <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-4 pb-4 sm:px-5">
-                    {bookingContact ? (
-                      <div className="rounded-sch-card border border-foreground bg-subtle/50 p-3.5">
-                        <span className="u-th">Cliente seleccionado</span>
-                        <p className="mt-1.5 text-sm font-semibold">{bookingContact.contactName}</p>
-                        <p className="mt-1 text-xs text-muted">La cita quedará vinculada a este contacto.</p>
-                      </div>
-                    ) : isReschedule ? (
-                      <div className="rounded-sch-card border border-line-strong bg-subtle/50 p-3.5">
-                        <span className="u-th">Cliente de la cita</span>
-                        <p className="mt-1.5 text-sm font-semibold">{clientLabel}</p>
-                      </div>
-                    ) : customerMode === "anonymous" ? (
-                      <div className="rounded-sch-card border border-dashed border-line-strong p-3.5">
-                        <p className="text-sm font-semibold">Atención sin cita</p>
-                        <p className="mt-1 text-xs leading-relaxed text-muted">
-                          No se guardará ningún contacto. Úsalo solo si el cliente no deja sus datos.
-                        </p>
-                      </div>
-                    ) : customerMode === "new" ? (
-                      <div className="flex flex-col gap-3">
-                        <div className="flex items-center gap-2">
-                          <span className="u-th">Nuevo contacto</span>
-                          <span className="flex-1" />
-                          <button
-                            type="button"
-                            onClick={() => { setCustomerMode("search"); setName(""); setPhone(""); setEmail(""); }}
-                            className="text-xs text-muted transition-colors hover:text-foreground"
-                          >
-                            Buscar uno existente
-                          </button>
-                        </div>
-                        <label className="flex flex-col gap-1.5">
-                          <span className="text-xs font-medium">Nombre</span>
-                          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Ej. Lucía Ferrer" className={inputCls} autoFocus />
-                        </label>
-                        <label className="flex flex-col gap-1.5">
-                          <span className="text-xs font-medium">Teléfono</span>
-                          <input value={phone} onChange={(e) => setPhone(e.target.value)} placeholder="+57 300 000 0000" className={inputCls} inputMode="tel" />
-                        </label>
-                        <label className="flex flex-col gap-1.5">
-                          <span className="text-xs font-medium">Correo electrónico</span>
-                          <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Opcional" className={inputCls} inputMode="email" />
-                        </label>
-                      </div>
-                    ) : pickedContact ? (
-                      <>
-                        <div className="flex items-center gap-3 rounded-sch-card border border-foreground bg-subtle/40 p-3">
-                          <span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-full bg-chip text-xs font-semibold text-foreground">
-                            {initialsOf(pickedContact.name ?? pickedContact.identity)}
-                          </span>
-                          <span className="flex min-w-0 flex-1 flex-col">
-                            <span className="truncate text-sm font-semibold">{pickedContact.name ?? "Contacto sin nombre"}</span>
-                            {pickedContact.identity ? (
-                              <span className="u-mono truncate text-xs text-muted">{pickedContact.identity}</span>
-                            ) : null}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => setPickedContact(null)}
-                            className="shrink-0 text-xs text-muted transition-colors hover:text-foreground"
-                          >
-                            Cambiar
-                          </button>
-                        </div>
-                        {/* DUPLICATE GUARD. This is real: next_appointment_at comes from
-                            the same query as the row. Booking anyway is allowed — it is
-                            a warning, not a block, because two visits in a week is a
-                            normal thing a person can want. */}
-                        {pickedContact.nextAppointmentAt ? (
-                          <div className="flex items-start gap-2.5 rounded-sch-card border border-warn-rule/35 bg-warn-soft p-3">
-                            <span aria-hidden className="mt-px flex size-4 shrink-0 items-center justify-center rounded-full bg-warn-rule/20 text-[0.625rem] font-semibold text-warn">!</span>
-                            <p className="flex-1 text-xs leading-relaxed text-warn">
-                              Ya tiene una cita el{" "}
-                              <strong className="font-semibold">
-                                {contactDateLabel(pickedContact.nextAppointmentAt, true)}
-                              </strong>
-                              . Revisa si es un duplicado.
-                            </p>
-                          </div>
-                        ) : null}
-                        <dl className="grid grid-cols-2 gap-2">
-                          <div className="rounded-sch-control border border-line px-3 py-2">
-                            <dt className="text-[0.6875rem] text-muted">Citas en total</dt>
-                            <dd className="u-mono mt-0.5 text-sm font-semibold">{pickedContact.appointmentCount}</dd>
-                          </div>
-                          <div className="rounded-sch-control border border-line px-3 py-2">
-                            <dt className="text-[0.6875rem] text-muted">Última visita</dt>
-                            <dd className="mt-0.5 text-sm font-semibold">
-                              {pickedContact.lastVisitAt ? contactDateLabel(pickedContact.lastVisitAt, false) : "Sin visitas"}
-                            </dd>
-                          </div>
-                        </dl>
-                      </>
-                    ) : (
-                      <>
-                        {contactHits.map((hit) => (
-                          <button
-                            key={hit.id}
-                            type="button"
-                            onClick={() => setPickedContact(hit)}
-                            className="u-focus flex items-center gap-3 rounded-sch-control border border-line p-3 text-left transition-colors hover:bg-subtle"
-                          >
-                            <span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-full bg-chip text-xs font-semibold text-foreground">
-                              {initialsOf(hit.name ?? hit.identity)}
-                            </span>
-                            <span className="flex min-w-0 flex-1 flex-col">
-                              <span className="truncate text-sm font-semibold">{hit.name ?? "Contacto sin nombre"}</span>
-                              {hit.identity ? <span className="u-mono truncate text-xs text-muted">{hit.identity}</span> : null}
-                            </span>
-                            <span className="flex shrink-0 flex-col items-end gap-1">
-                              {hit.isCustomer ? (
-                                <span className="rounded-full bg-success/10 px-2 py-0.5 text-[0.625rem] font-medium text-success">Ya es cliente</span>
-                              ) : null}
-                              <span className="text-[0.625rem] text-faint">
-                                {hit.appointmentCount} {hit.appointmentCount === 1 ? "cita" : "citas"}
-                              </span>
-                            </span>
-                          </button>
-                        ))}
-
-                        {contactQuery.trim().length < 2 ? (
-                          <p className="px-1 py-6 text-center text-xs text-faint">
-                            Escribe al menos dos letras para buscar en tus contactos.
-                          </p>
-                        ) : contactSearched && contactHits.length === 0 ? (
-                          <p className="px-1 py-4 text-center text-xs text-muted">
-                            Nadie coincide con «{contactQuery.trim()}».
-                          </p>
-                        ) : null}
-
-                        {contactQuery.trim().length >= 2 ? (
-                          <button
-                            type="button"
-                            onClick={() => { setCustomerMode("new"); setName(contactQuery.trim()); }}
-                            className="u-focus flex items-center gap-2.5 rounded-sch-control border border-dashed border-line-strong p-3 text-left transition-colors hover:bg-subtle"
-                          >
-                            <span aria-hidden className="flex size-9 shrink-0 items-center justify-center rounded-full bg-chip text-base leading-none text-foreground">+</span>
-                            <span className="flex min-w-0 flex-1 flex-col">
-                              <span className="truncate text-sm font-semibold">Crear contacto «{contactQuery.trim()}»</span>
-                              <span className="truncate text-xs text-muted">Solo nombre y teléfono; el resto se completa después</span>
-                            </span>
-                          </button>
-                        ) : null}
-                      </>
-                    )}
-                  </div>
-                </div>
-
-                {/* ── SERVICIO ── */}
-                <div className="flex min-h-0 min-w-0 flex-col">
-                  <div className="flex shrink-0 flex-col gap-2.5 px-4 pb-3 pt-4 sm:px-5">
-                    <div className="flex items-center gap-2.5">
-                      <span className="text-sm font-semibold">Servicio</span>
-                      <span className="flex-1" />
-                      <span className="truncate text-[0.6875rem] text-faint">
-                        Solo activos en {selectedSite?.name ?? "esta sede"}
-                      </span>
-                    </div>
-                    {isReschedule ? null : (
-                      <>
-                        <label className={`${FIELD} flex h-[44px] items-center gap-2.5 lg:h-[40px]`}>
-                          <span className="sr-only">Buscar servicio</span>
-                          <svg aria-hidden viewBox="0 0 16 16" className="size-3.5 shrink-0 text-faint" fill="none" stroke="currentColor" strokeWidth="1.5">
-                            <circle cx="7" cy="7" r="4.4" />
-                            <path d="M10.4 10.4 13.6 13.6" />
-                          </svg>
-                          <input
-                            value={serviceQuery}
-                            onChange={(event) => setServiceQuery(event.target.value)}
-                            placeholder="Buscar servicio…"
-                            className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-faint"
-                          />
-                        </label>
-                        {serviceFamilies.length > 1 ? (
-                          <div className="flex gap-1.5 overflow-x-auto pb-0.5">
-                            {(["all", ...serviceFamilies] as const).map((family) => {
-                              const active = serviceFamily === family;
-                              const label = family === "all" ? "Todos" : SERVICE_FAMILY_LABEL[family] ?? family;
-                              return (
-                                <button
-                                  key={family}
-                                  type="button"
-                                  aria-pressed={active}
-                                  onClick={() => setServiceFamily(family)}
-                                  className={`u-focus h-[44px] shrink-0 rounded-sch-control px-3 text-xs transition-colors lg:h-[32px] ${
-                                    active ? "bg-ink font-medium text-ink-fg" : "border border-line-strong bg-surface hover:bg-subtle"
-                                  }`}
-                                >
-                                  {label}
-                                </button>
-                              );
-                            })}
-                          </div>
-                        ) : null}
-                      </>
-                    )}
-                  </div>
-
-                  <div className="grid min-h-0 flex-1 content-start gap-2 overflow-y-auto px-4 pb-4 sm:px-5 sm:grid-cols-2">
-                    {(isReschedule ? props.services.filter((s) => s.id === serviceId) : filteredServices).map((service) => {
-                      const selected = service.id === serviceId;
-                      const family = serviceCategory(service.name, service.category);
-                      const price = priceLabelCOP(service.price);
-                      return (
-                        <button
-                          key={service.id}
-                          type="button"
-                          aria-pressed={selected}
-                          disabled={isReschedule}
-                          onClick={() => { setServiceId(service.id); resetSlots(); }}
-                          className={`u-focus flex flex-col gap-1.5 rounded-sch-control border p-3 text-left transition-colors disabled:cursor-default ${
-                            selected ? "border-foreground bg-subtle/40" : "border-line hover:bg-subtle/60"
-                          }`}
-                        >
-                          <span className="flex items-center gap-2">
-                            {/* The card's colour bar IS the agenda colour this booking
-                                will get — the same family class the board uses. */}
-                            <span aria-hidden className={`u-appt-swatch u-appt-service ${apptCategoryClass(family)} h-5 w-1.5 shrink-0 rounded-full`} />
-                            <span className="min-w-0 flex-1 truncate text-sm font-semibold">{service.name}</span>
-                            {selected ? (
-                              <span aria-hidden className="flex size-4 shrink-0 items-center justify-center rounded-full bg-ink text-[0.625rem] text-ink-fg">✓</span>
-                            ) : null}
-                          </span>
-                          <span className="u-mono truncate text-xs text-muted">
-                            {service.duration_min} min{price ? ` · ${price}` : ""}
-                          </span>
-                        </button>
-                      );
-                    })}
-                    {!isReschedule && filteredServices.length === 0 ? (
-                      <p className="py-8 text-center text-xs text-muted sm:col-span-2">
-                        Ningún servicio coincide con ese filtro.
-                      </p>
-                    ) : null}
-                  </div>
-                </div>
-              </section>
-            ) : null}
-
-            {step === 2 ? (
-              /* PASO 2 — el mes ocupa la columna ancha y las horas viven en la
-                 estrecha. El calendario solo dice SI hay cupo; nunca lista las horas
-                 dentro de las celdas. */
-              <section
-                aria-labelledby="booking-slot-heading"
-                className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1fr)_22rem]"
-              >
-                <h3 id="booking-slot-heading" className="sr-only">Profesional, fecha y hora</h3>
-
-                {/* ── MES ── */}
-                <div className="flex min-h-0 min-w-0 flex-col gap-3 border-b border-line p-4 sm:p-5 lg:border-b-0 lg:border-r">
-                  <div className="flex shrink-0 items-center gap-2">
-                    <strong className="truncate text-sm font-semibold capitalize">{monthLabel}</strong>
-                    <span className="flex-1" />
-                    <button type="button" onClick={() => changeDate(todayKey)} className={buttonClass({ size: "sm" })}>Hoy</button>
-                    <button type="button" aria-label="Mes anterior" onClick={() => changeMonth(-1)} className={buttonClass({ size: "sm", className: "w-[44px] px-0 text-base text-muted lg:w-[36px]" })}>‹</button>
-                    <button type="button" aria-label="Mes siguiente" onClick={() => changeMonth(1)} className={buttonClass({ size: "sm", className: "w-[44px] px-0 text-base text-muted lg:w-[36px]" })}>›</button>
-                  </div>
-
-                  {/* Single-letter weekday heads: at seven columns the three-letter
-                      abbreviations were the widest thing in the cell. */}
-                  <div className="grid shrink-0 grid-cols-7 gap-1.5">
-                    {["L", "M", "M", "J", "V", "S", "D"].map((letter, index) => (
-                      <span key={`${letter}-${index}`} className={`text-center text-[0.6875rem] font-semibold ${index === 6 ? "text-faintest" : "text-faint"}`}>
-                        {letter}
-                      </span>
-                    ))}
-                  </div>
-
-                  <div className="grid min-h-0 flex-1 grid-cols-7 gap-1.5" style={{ gridTemplateRows: `repeat(${monthDays.length / 7}, minmax(2.75rem, 1fr))` }}>
-                    {monthDays.map((day) => {
-                      const freeCount = day.inMonth ? availabilityCount(day.key) : 0;
-                      const selected = selectedDate === day.key;
-                      const past = day.key < todayKey;
-                      const closed = hasAnyHours(props.openingHours) && !opensOn(props.openingHours, weekdayKeyOf(day.key));
-                      const hasRoom = freeCount > 0;
-                      const disabled = !day.inMonth || past || closed || (!loadingSlots && searched && freeCount === 0);
-                      const statusLabel = !day.inMonth ? "" : past ? "Pasado" : closed ? "Cerrado" : hasRoom ? "Hay cupos" : searched ? "Sin cupos" : "";
-                      return (
-                        <button
-                          key={day.key}
-                          type="button"
-                          aria-label={`${day.key}${statusLabel ? `, ${statusLabel.toLocaleLowerCase("es")}` : ""}`}
-                          aria-pressed={selected}
-                          disabled={disabled}
-                          onClick={() => changeDate(day.key)}
-                          className={`u-focus flex min-h-0 flex-col items-center justify-center gap-0.5 rounded-sch-control transition-colors ${
-                            selected
-                              ? "bg-ink text-ink-fg"
-                              : hasRoom
-                                ? "bg-subtle/70 hover:bg-subtle"
-                                : day.inMonth
-                                  ? "hover:bg-subtle/50"
-                                  : ""
-                          } disabled:cursor-default disabled:hover:bg-transparent`}
-                        >
-                          <span className={`text-sm tabular-nums ${selected ? "font-semibold" : hasRoom ? "font-semibold text-foreground" : day.inMonth && !disabled ? "text-foreground" : "text-faintest"}`}>
-                            {day.day}
-                          </span>
-                          {statusLabel ? (
-                            <span className={`text-[0.5625rem] leading-none ${selected ? "text-ink-fg/70" : hasRoom ? "text-success" : "text-faintest"}`}>
-                              {statusLabel}
-                            </span>
-                          ) : (
-                            <span className="h-2" />
-                          )}
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  <div className="flex shrink-0 flex-wrap items-center gap-x-3.5 gap-y-1.5">
-                    <span className="inline-flex items-center gap-1.5 text-[0.6875rem] text-muted">
-                      <span aria-hidden className="size-3 rounded-full bg-subtle" />Hay cupos
-                    </span>
-                    <span className="inline-flex items-center gap-1.5 text-[0.6875rem] text-faint">
-                      <span aria-hidden className="size-3 rounded-full border border-line" />Sin cupos o cerrado
-                    </span>
-                    <span className="ml-auto hidden text-[0.6875rem] text-faint xl:block">
-                      No se muestra cuántos cupos hay, solo si hay disponibilidad.
-                    </span>
-                  </div>
-                </div>
-
-                {/* ── PROFESIONAL Y HORA ── */}
-                <div className="flex min-h-0 min-w-0 flex-col">
-                  <div className="relative flex shrink-0 flex-col gap-2.5 border-b border-line p-4 sm:p-5">
-                    <div className="flex items-center gap-2">
-                      <span className="u-th">Profesional</span>
-                      <span className="flex-1" />
-                      <span className="truncate text-[0.6875rem] text-faint">
-                        {staffWithRoom} de {activeStaff.length} con cupo
-                      </span>
-                    </div>
-
-                    {/* ONE selector, not a list: the roster competed with the month for
-                        the same column. The popover is where it scales to 6 or 60. */}
-                    <button
-                      type="button"
-                      aria-haspopup="listbox"
-                      aria-expanded={staffPickerOpen}
-                      onClick={() => setStaffPickerOpen((open) => !open)}
-                      className="u-focus flex h-[44px] items-center gap-2.5 rounded-sch-control border border-line-strong bg-surface px-2.5 text-left transition-colors hover:bg-subtle lg:h-[40px]"
-                    >
-                      {selectedStaff ? (
-                        <Initial name={selectedStaff.name} />
-                      ) : (
-                        <span aria-hidden className="flex size-6 shrink-0 items-center justify-center rounded-full border border-dashed border-line-strong bg-subtle text-[0.625rem] leading-none text-muted">∗</span>
-                      )}
-                      <span className="min-w-0 flex-1 truncate text-sm font-medium">
-                        {selectedStaff?.name ?? "Cualquier profesional"}
-                      </span>
-                      <span aria-hidden className="shrink-0 text-[0.625rem] text-faint">▾</span>
-                    </button>
-
-                    {staffPickerOpen ? (
-                      <>
-                        <button type="button" aria-label="Cerrar selector" className="fixed inset-0 z-10 cursor-default" onClick={() => setStaffPickerOpen(false)} />
-                        <div
-                          role="listbox"
-                          aria-label="Elegir profesional"
-                          className="absolute left-4 right-4 top-[calc(100%-0.5rem)] z-20 flex max-h-[19rem] flex-col overflow-hidden rounded-sch-card border border-line bg-popover shadow-[var(--shadow-float)] sm:left-5 sm:right-5"
-                        >
-                          <div className="flex shrink-0 flex-col gap-2 border-b border-line p-2.5">
-                            {activeStaff.length > 8 ? (
-                              <input
-                                value={staffQuery}
-                                onChange={(event) => setStaffQuery(event.target.value)}
-                                placeholder="Buscar profesional…"
-                                aria-label="Buscar profesional"
-                                className={`${INPUT} text-xs`}
-                                autoFocus
-                              />
-                            ) : null}
-                            {/* Pinned OUTSIDE the scroller, so it is reachable at 60 staff. */}
-                            <button
-                              type="button"
-                              role="option"
-                              aria-selected={!staffId}
-                              onClick={() => { changeStaff(""); setStaffPickerOpen(false); }}
-                              className="u-focus flex h-[44px] items-center gap-2.5 rounded-sch-control border border-dashed border-line-strong px-2.5 text-left transition-colors hover:bg-subtle lg:h-[40px]"
-                            >
-                              <span aria-hidden className="flex size-6 shrink-0 items-center justify-center rounded-full bg-chip text-[0.625rem] leading-none text-muted">∗</span>
-                              <span className="flex min-w-0 flex-1 flex-col">
-                                <span className="truncate text-xs font-medium">Cualquier profesional</span>
-                                <span className="truncate text-[0.625rem] text-muted">Asigna al primero con cupo</span>
-                              </span>
-                              {!staffId ? <span aria-hidden className="shrink-0 text-xs">✓</span> : null}
-                            </button>
-                          </div>
-                          <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
-                            {activeStaff
-                              .filter((c) => c.name.toLocaleLowerCase("es").includes(staffQuery.trim().toLocaleLowerCase("es")))
-                              .map((candidate) => {
-                                const count = staffAvailabilityCount(candidate.id);
-                                const selected = staffId === candidate.id;
-                                return (
-                                  <button
-                                    key={candidate.id}
-                                    type="button"
-                                    role="option"
-                                    aria-selected={selected}
-                                    disabled={count === 0}
-                                    onClick={() => { changeStaff(candidate.id); setStaffPickerOpen(false); }}
-                                    className="u-focus flex h-[44px] w-full items-center gap-2.5 rounded-sch-control px-2.5 text-left transition-colors hover:bg-subtle lg:h-[40px] disabled:cursor-not-allowed disabled:opacity-45 disabled:hover:bg-transparent"
-                                  >
-                                    <Initial name={candidate.name} muted={count === 0} />
-                                    <span className="min-w-0 flex-1 truncate text-xs font-medium">{candidate.name}</span>
-                                    <span className="shrink-0 text-[0.625rem] text-faint">
-                                      {count > 0 ? "Hay cupos" : "Sin cupos"}
-                                    </span>
-                                    {selected ? <span aria-hidden className="shrink-0 text-xs">✓</span> : null}
-                                  </button>
-                                );
-                              })}
-                          </div>
-                        </div>
-                      </>
-                    ) : null}
-                  </div>
-
-                  <div className="flex shrink-0 items-end justify-between gap-3 px-4 pb-2.5 pt-3.5 sm:px-5">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold capitalize">{shortDateLabel}</p>
-                      <p className="truncate text-[0.6875rem] text-muted">
-                        {slotStart && selectedSlot
-                          ? `${timeRangeLabel} · ${selectedService?.duration_min ?? 0} min`
-                          : `${visibleSlots.length} ${visibleSlots.length === 1 ? "horario libre" : "horarios libres"}`}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto px-4 pb-4 sm:px-5">
-                    {loadingSlots ? (
-                      <>
-                        {Array.from({ length: 6 }, (_, index) => (
-                          <div key={index} className="h-[44px] shrink-0 animate-pulse rounded-sch-control bg-subtle" />
-                        ))}
-                        <p className="sr-only">Buscando horarios…</p>
-                      </>
-                    ) : searched && visibleSlots.length === 0 ? (
-                      <p className="rounded-sch-card border border-line bg-subtle/40 p-3 text-xs leading-relaxed text-muted">
-                        No hay horarios libres para esta combinación. Prueba otro día o
-                        cambia de profesional.
-                      </p>
-                    ) : (
-                      slotGroups.map((group) => (
-                        <div key={group.key} className="flex flex-col gap-1.5">
-                          <span className="u-th sticky top-0 bg-popover py-1">{group.label}</span>
-                          {group.slots.map((slot) => {
-                            const active = slotStart === slot.start_at;
-                            return (
-                              <button
-                                key={`${slot.start_at}-${slot.staff_id}`}
-                                type="button"
-                                aria-pressed={active}
-                                onClick={() => {
-                                  setSlotStart(slot.start_at);
-                                  // "Cualquier profesional" resolves to whoever the
-                                  // endpoint offered this exact slot for.
-                                  if (!staffId) setStaffId(slot.staff_id);
-                                }}
-                                className={`u-focus u-mono h-[44px] shrink-0 rounded-sch-control border text-sm transition-colors ${
-                                  active
-                                    ? "border-ink bg-ink font-medium text-ink-fg"
-                                    : "border-line-strong bg-surface hover:border-foreground hover:bg-subtle"
-                                }`}
-                              >
-                                {fmtTime(slot.start_at, props.timezone)}
-                              </button>
-                            );
-                          })}
-                        </div>
-                      ))
-                    )}
-                    {!loadingSlots && !slotStart && visibleSlots.length > 0 ? (
-                      <p className="pt-1 text-[0.6875rem] text-faint">Elige un horario para continuar.</p>
-                    ) : null}
-                  </div>
-                </div>
-              </section>
-            ) : null}
-
-            {step === 3 ? (
-              /* PASO 3 — la confirmación de la referencia: una tarjeta grande con el
-                 cuándo, y debajo una lista etiqueta/valor (no una cuadrícula) para que
-                 se lea como un registro. La columna derecha explica lo que el sistema
-                 decide solo. */
-              <section
-                aria-labelledby="booking-confirm-heading"
-                aria-label="Resumen de la cita"
-                className="grid min-h-0 flex-1 lg:grid-cols-[minmax(0,1.3fr)_minmax(0,1fr)]"
-              >
-                <h3 id="booking-confirm-heading" className="sr-only">Confirmar la cita</h3>
-
-                <div className="flex min-h-0 min-w-0 flex-col gap-3.5 overflow-y-auto border-b border-line p-4 sm:p-5 lg:border-b-0 lg:border-r">
-                  <div className="flex shrink-0 items-center gap-3.5 rounded-sch-card border border-line bg-subtle/30 p-3.5">
-                    <span aria-hidden className={`u-appt-swatch ${bookingToneClass} h-12 w-1.5 shrink-0 rounded-full`} />
-                    <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                      <span className="truncate text-lg font-semibold capitalize sm:text-xl">
-                        {shortDateLabel}{slotStart ? ` · ${fmtTime(slotStart, props.timezone)}` : ""}
-                      </span>
-                      <span className="u-mono truncate text-xs text-muted">
-                        {timeRangeLabel ?? "Sin horario"} · {selectedService?.duration_min ?? 0} min
-                      </span>
-                    </div>
-                    <span className="shrink-0 rounded-full border border-line bg-surface px-2.5 py-1 text-[0.6875rem] font-medium text-muted">
-                      {isReschedule ? "Reprogramada" : "Sin confirmar"}
-                    </span>
-                  </div>
-
-                  <dl className="shrink-0 overflow-hidden rounded-sch-card border border-line">
-                    {[
-                      { label: "Cliente", value: clientLabel || "Atención sin cita" },
-                      { label: "Teléfono o correo", value: phoneLabel, mono: true },
-                      { label: "Servicio", value: [selectedService?.name, priceLabelCOP(selectedService?.price ?? null)].filter(Boolean).join(" · ") || "—" },
-                      { label: "Duración", value: `${selectedService?.duration_min ?? 0} min`, mono: true },
-                      { label: "Profesional", value: selectedStaff?.name ?? "Cualquier profesional", staff: true },
-                      { label: "Sede", value: selectedSite?.name ?? "Sede actual" },
-                      { label: "Estado inicial", value: isReschedule ? "Se conserva el estado actual" : "Sin confirmar" },
-                      { label: "Origen", value: originLabel },
-                    ].map((row, index) => (
-                      <div key={row.label} className={`flex items-center gap-3 px-3.5 py-2.5 ${index > 0 ? "border-t border-line" : ""}`}>
-                        <dt className="w-24 shrink-0 text-xs text-muted sm:w-28">{row.label}</dt>
-                        <dd className="flex min-w-0 flex-1 items-center gap-2">
-                          {row.staff && selectedStaff ? <Initial name={selectedStaff.name} /> : null}
-                          <span className={`min-w-0 truncate text-[0.8125rem] font-medium ${row.mono ? "u-mono" : ""}`}>
-                            {row.value}
-                          </span>
-                        </dd>
-                      </div>
-                    ))}
-                  </dl>
-                </div>
-
-                <div className="flex min-h-0 min-w-0 flex-col gap-3 overflow-y-auto p-4 sm:p-5">
-                  <div className="flex shrink-0 flex-col gap-2.5 rounded-sch-card border border-line p-3.5">
-                    <div className="flex items-center gap-2">
-                      <span className="text-[0.8125rem] font-semibold">Color de la cita</span>
-                      <span className="flex-1" />
-                      <span className="text-[0.6875rem] text-faint">Automático</span>
-                    </div>
-                    <div className="flex items-center gap-2.5">
-                      <span aria-hidden className={`u-appt-swatch ${bookingToneClass} h-[28px] w-10 shrink-0 rounded-sch-event`} />
-                      <p className="flex-1 text-xs leading-relaxed text-muted">
-                        {bookingFamily
-                          ? <>Hereda el color de <strong className="font-medium text-foreground">{(SERVICE_FAMILY_LABEL[bookingFamily] ?? "").toLocaleLowerCase("es")}</strong>. Se cambia en Catálogo → Servicios.</>
-                          : "Se define por la categoría del servicio."}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Only what is BACKED renders. The reference also puts a WhatsApp
-                      confirmation toggle, an internal note and a manual colour picker
-                      here; appointments carry no note and no colour, and no send path
-                      is wired, so none of the three is drawn rather than drawn dead.
-                      TODO(agenda): add them as the model gains note / colour / an
-                        outbound confirmation send. */}
-                  <div className="flex shrink-0 items-start gap-2.5 rounded-sch-card border border-line bg-subtle/40 p-3">
-                    <span aria-hidden className="mt-px flex size-4 shrink-0 items-center justify-center rounded-full bg-chip text-[0.625rem] font-semibold text-muted">i</span>
-                    <p className="flex-1 text-xs leading-relaxed text-muted">
-                      Nada se guarda hasta que confirmes. Al crear la cita, el cupo de{" "}
-                      <strong className="font-medium text-foreground">{slotStart ? fmtTime(slotStart, props.timezone) : "—"}</strong>
-                      {selectedStaff ? <> queda reservado para {selectedStaff.name}</> : " queda reservado"}.
-                    </p>
-                  </div>
-                </div>
-              </section>
-            ) : null}
-          </main>
-
-          {/* FOOTER — the reference's persistent orientation strip: which step you are
-              on, and the running summary of what has been chosen. It is the same bar at
-              every width; on the phone the summary drops (the header carries the step
-              there) so the two CTAs keep their full 48px. */}
-          <footer className="flex min-h-[72px] shrink-0 items-center gap-3 border-t border-line bg-surface px-4 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-3 sm:px-5">
-            <div className="hidden min-w-0 flex-1 flex-col gap-0.5 sm:flex">
-              <span className="truncate text-xs text-foreground">
-                Paso {step} de 3 · {stepItems[step - 1].label.toLocaleLowerCase("es")}
-              </span>
-              <span className="truncate text-xs text-muted">
-                {footerSummary || (step === 3 ? "Nada se guarda hasta que confirmes." : "Aún no has elegido nada.")}
-              </span>
-            </div>
-            <div className="flex flex-1 items-center justify-end gap-2 sm:flex-none">
-              {step > 1 && !(isReschedule && step === 2) ? (
-                <button
-                  type="button"
-                  onClick={goBack}
-                  className={buttonClass({ className: "flex-1 sm:flex-none" })}
-                >
-                  Volver
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={props.onClose}
-                  className={buttonClass({ variant: "tertiary", className: "flex-1 border border-line-strong sm:flex-none sm:border-transparent" })}
-                >
-                  Cancelar
-                </button>
-              )}
-              {step === 3 ? (
-                <button
-                  type="button"
-                  onClick={submit}
-                  disabled={pending || !slotStart}
-                  aria-busy={pending || undefined}
-                  className={buttonClass({ variant: "primary", className: "flex-1 px-6 sm:flex-none" })}
-                >
-                  {pending ? <Spinner /> : null}
-                  {pending ? "Guardando…" : isReschedule ? "Confirmar cambio" : "Crear cita"}
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={advance}
-                  disabled={(step === 1 && !step1Ready) || (step === 2 && !slotStart)}
-                  className={buttonClass({ variant: "primary", className: "flex-1 px-6 sm:flex-none" })}
-                >
-                  Continuar
-                </button>
-              )}
-            </div>
-          </footer>
-        </div>
-      </div>
-    </div>
-  );
 }
-
-/** Stable id linking the dialog to its heading — only one modal is ever mounted. */
-const MODAL_TITLE_ID = "agenda-appt-modal-title";
 
 /** Availability legend of the phone booking (strip + month): dot / ring / struck. */
 function Legend() {
