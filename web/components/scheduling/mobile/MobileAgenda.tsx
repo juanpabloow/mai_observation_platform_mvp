@@ -2,7 +2,9 @@
 
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { serviceCategory, type ApptCategory } from "@/lib/agendaCategory";
+import { apptClientLabel } from "@/lib/apptClientLabel";
 import { buildDay, groupWeek, hhmm, untilLabel, zoned, type MBlock } from "@/lib/mobileAgenda";
+import { blockSpanLabel } from "@/lib/siteCalendar";
 import type { Appt } from "../AgendaView";
 import { Icon, ICON, M_CARD, MButton, MCheck, MIconButton, MPill, MSegmented, MStaffAvatar, MStateChip, Sheet, STATE_ICON, STATE_LABEL, staffColors } from "./kit";
 
@@ -104,9 +106,6 @@ export function MobileAgenda(props: {
   onOpenSeries?: (id: string) => void;
   /** Open a DATED block or absence to edit it (only when this login may). */
   onOpenBlock?: (id: string) => void;
-  /** «Color de las citas» — the same choice (and storage) as the desktop. */
-  colorBy?: "service" | "status";
-  onColorBy?: (v: "service" | "status") => void;
 }) {
   const tz = props.timezone;
   const isDay = props.view === "day";
@@ -345,7 +344,6 @@ export function MobileAgenda(props: {
           <DayList
             onOpenSeries={props.onOpenSeries}
             onOpenBlock={props.onOpenBlock}
-            colorBy={props.colorBy ?? "service"}
             items={day!.items}
             tz={tz}
             now={now}
@@ -391,13 +389,13 @@ export function MobileAgenda(props: {
                       key={a.id}
                       type="button"
                       onClick={() => props.onOpen(a.id)}
-                      aria-label={`${fmt(a.start_at, tz)} ${a.contact_name ?? a.guest_name ?? (a.origin === "walk_in" ? "Atención sin cita" : "Sin contacto")}, ${a.service_name}, ${STATE_LABEL[a.status] ?? a.status}${a.review.length > 0 ? ", requiere revisión" : ""}`}
+                      aria-label={`${fmt(a.start_at, tz)} ${apptClientLabel(a)}, ${a.service_name}, ${STATE_LABEL[a.status] ?? a.status}${a.review.length > 0 ? ", requiere revisión" : ""}`}
                       className="flex min-h-[64px] w-full items-center gap-[10px] border-0 border-t border-m-dv bg-transparent py-[10px] pl-[14px] pr-3 text-left text-m-tx first:border-t-0"
                     >
                       <span className="u-tnum w-11 flex-none text-[14px] font-semibold">{fmt(a.start_at, tz)}</span>
                       <span aria-hidden className={`${mFamilyClass(a)} size-[10px] flex-none rounded-full bg-[var(--m-dot)]`} />
                       <span className="flex min-w-0 flex-1 flex-col gap-px">
-                        <span className={`text-[15px] font-semibold leading-[1.3] ${a.status === "cancelled" ? "line-through" : ""}`}>{a.contact_name ?? "Atención sin cita"}</span>
+                        <span className={`text-[15px] font-semibold leading-[1.3] ${a.status === "cancelled" ? "line-through" : ""}`}>{apptClientLabel(a)}</span>
                         <span className="text-[13px] leading-[1.3] text-m-tx3">
                           {a.service_name} · {firstName(a.staff_name)}
                         </span>
@@ -486,39 +484,20 @@ export function MobileAgenda(props: {
             </div>
           </section>
         ) : null}
-        {props.onColorBy ? (
-          <section className="flex flex-col gap-2">
-            <h2 className="m-0 text-[14px] font-semibold text-m-tx2">Color de las citas</h2>
-            <MSegmented
-              label="Color de las citas"
-              stretch
-              value={props.colorBy ?? "service"}
-              options={[
-                { value: "service", label: "Servicio" },
-                { value: "status", label: "Estado" },
-              ]}
-              onChange={(v) => props.onColorBy?.(v)}
-            />
-            <ul aria-label="Leyenda" className="flex flex-wrap gap-x-3 gap-y-1.5 text-[14px] text-m-tx2">
-              {(props.colorBy ?? "service") === "service"
-                ? (["cut", "grooming", "color", "feature"] as const).map((f) => (
-                    <li key={f} className="flex items-center gap-1.5">
-                      <span aria-hidden className={`${FAMILY_CLASS[f]} size-3 rounded-[4px] bg-[var(--m-fill)] shadow-[inset_0_0_0_1.5px_var(--m-dot)]`} />
-                      {{ cut: "Corte", grooming: "Barba y cuidado", color: "Color", feature: "Tratamiento" }[f]}
-                    </li>
-                  ))
-                : (["scheduled", "confirmed", "completed", "cancelled", "no_show"] as const).map((st) => (
-                    <li key={st} className="flex items-center gap-1.5">
-                      <span aria-hidden className={`u-m-st-${st} inline-flex h-[22px] items-center rounded-[6px] px-1.5 text-[12px]`}>{STATE_ICON[st]}</span>
-                      {STATE_LABEL[st]}
-                    </li>
-                  ))}
-            </ul>
-            <p className="m-0 text-[13px] leading-[1.45] text-m-tx3">
-              {(props.colorBy ?? "service") === "service" ? "El color es la categoría del servicio; el estado se lee en el icono y el texto de cada cita." : "El color es el estado; el servicio se lee en el texto de cada cita."}
-            </p>
-          </section>
-        ) : null}
+        <section className="flex flex-col gap-2">
+          <h2 className="m-0 text-[14px] font-semibold text-m-tx2">Color de las citas · por servicio</h2>
+          <ul aria-label="Leyenda" className="flex flex-wrap gap-x-3 gap-y-1.5 text-[14px] text-m-tx2">
+            {(["cut", "grooming", "color", "feature"] as const).map((f) => (
+              <li key={f} className="flex items-center gap-1.5">
+                <span aria-hidden className={`${FAMILY_CLASS[f]} size-3 rounded-[4px] bg-m-sf shadow-[inset_0_0_0_1.5px_var(--m-dot)]`} />
+                {{ cut: "Corte", grooming: "Barba y cuidado", color: "Color", feature: "Tratamiento" }[f]}
+              </li>
+            ))}
+          </ul>
+          <p className="m-0 text-[13px] leading-[1.45] text-m-tx3">
+            El color es el servicio. Contorno: confirmada · punteado: sin confirmar · relleno: completada. El icono y el texto de cada cita repiten el estado.
+          </p>
+        </section>
         <section className="flex flex-col gap-2">
           <h2 className="m-0 text-[14px] font-semibold text-m-tx2">Estado</h2>
           <div className="flex flex-wrap gap-2">
@@ -545,14 +524,12 @@ function DayList({
   onOpen,
   onOpenSeries,
   onOpenBlock,
-  colorBy,
   empty,
   onReset,
 }: {
   items: ReturnType<typeof buildDay<Appt>>["items"];
   onOpenSeries?: (id: string) => void;
   onOpenBlock?: (id: string) => void;
-  colorBy: "service" | "status";
   tz: string;
   now: Date;
   staffById: Map<string, StaffOpt>;
@@ -566,8 +543,10 @@ function DayList({
       {items.map((it) => {
         if (it.kind === "now") {
           return (
-            <div key="now" role="separator" aria-label={`Hora actual ${hhmm(it.at)}`} className="flex items-center gap-2 py-0.5">
-              <span className="u-tnum w-[52px] flex-none text-[12px] font-semibold leading-tight">
+            // The server and the browser read the clock seconds apart: across a minute change
+            // the time legitimately differs at hydration (it is refreshed every minute anyway).
+            <div key="now" role="separator" aria-label={`Hora actual ${hhmm(it.at)}`} suppressHydrationWarning className="flex items-center gap-2 py-0.5">
+              <span suppressHydrationWarning className="u-tnum w-[52px] flex-none text-[12px] font-semibold leading-tight">
                 Ahora
                 <br />
                 {hhmm(it.at)}
@@ -580,7 +559,10 @@ function DayList({
         if (it.kind === "block") {
           const who = it.block.staff_id ? staffById.get(it.block.staff_id)?.name ?? "Un profesional" : "Toda la sede";
           const isBreak = it.block.series === "break";
-          const range = `${hhmm(it.from)} – ${hhmm(Math.min(it.to, 24 * 60 - 1))}`;
+          // A whole day (or several) reads «Todo el día», with its dates — not 00:00–23:59.
+          const span = blockSpanLabel(it.block.starts_at, it.block.ends_at, tz);
+          const wholeDay = span.allDay || (it.from === 0 && it.to >= 24 * 60);
+          const range = wholeDay ? (span.allDay ? span.text : "Todo el día") : `${hhmm(it.from)} – ${hhmm(Math.min(it.to, 24 * 60 - 1))}`;
           const body = (
             // A usual break has NO border (routine); a block or absence has one.
             <div className={`flex min-w-0 flex-1 flex-col gap-0.5 rounded-[16px] bg-m-sf2 px-[14px] py-3 text-left ${isBreak ? "" : "border border-dashed border-m-tx3"}`}>
@@ -593,8 +575,8 @@ function DayList({
           return (
             <div key={`b-${it.block.id}`} className="flex gap-3">
               <div className="flex w-[52px] flex-none flex-col gap-0.5 pt-3">
-                <span className="u-tnum text-[15px] font-semibold text-m-tx2">{hhmm(it.from)}</span>
-                <span className="text-[12px] text-m-tx3">{it.to - it.from} min</span>
+                <span className="u-tnum text-[15px] font-semibold text-m-tx2">{wholeDay ? "Todo" : hhmm(it.from)}</span>
+                <span className="text-[12px] text-m-tx3">{wholeDay ? "el día" : `${it.to - it.from} min`}</span>
               </div>
               {series ? (
                 <button type="button" onClick={() => open?.(it.block.id)} className="flex min-h-[44px] min-w-0 flex-1 border-0 bg-transparent p-0" aria-label={`${isBreak ? "Pausa habitual" : "Bloqueo"} ${range}, ${who}. Abrir`}>
@@ -615,23 +597,25 @@ function DayList({
             type="button"
             data-appt-id={a.id}
             onClick={() => onOpen(a.id)}
-            aria-label={`${fmt(a.start_at, tz)} ${a.contact_name ?? "Atención sin cita"}, ${a.service_name}, ${STATE_LABEL[a.status] ?? a.status}`}
+            aria-label={`${fmt(a.start_at, tz)} ${apptClientLabel(a)}, ${a.service_name}, ${STATE_LABEL[a.status] ?? a.status}`}
             className="flex w-full gap-3 border-0 bg-transparent p-0 text-left text-m-tx"
           >
             <div className="flex w-[52px] flex-none flex-col gap-0.5 pt-3">
               <span className="u-tnum text-[15px] font-semibold">{fmt(a.start_at, tz)}</span>
               <span className="text-[12px] text-m-tx3">{a.duration_min} min</span>
             </div>
+            {/* The colour is the service; the state is how the card wears it (as on the desktop):
+                contour = confirmada, dashed = sin confirmar, filled = completada; a cancelled
+                one is a grey dashed outline. «Siguiente» keeps its ink edge. */}
             <div
-              style={colorBy === "status" ? { background: `var(--m-st-${a.status}-bg)` } : undefined}
-              className={`${mFamilyClass(a)} flex min-w-0 flex-1 flex-col gap-0.5 rounded-[16px] bg-[var(--m-fill)] px-[14px] py-3 ${
-                it.isNext ? "border-[1.5px] border-m-tx" : "border border-transparent"
-              }`}
+              className={`${mFamilyClass(a)} flex min-w-0 flex-1 flex-col gap-0.5 rounded-[16px] border-[1.5px] px-[14px] py-3 ${
+                cancelled ? "border-dashed border-m-bd bg-transparent" : a.status === "completed" ? "bg-[var(--m-fill)]" : "bg-m-sf"
+              } ${it.isNext ? "border-m-tx" : cancelled ? "" : "border-[var(--m-dot)]"} ${a.status === "scheduled" ? "border-dashed" : ""}`}
             >
               {it.isNext ? (
                 <span className="text-[12px] font-semibold uppercase tracking-[0.02em]">→ Siguiente · {untilLabel(now.getTime(), new Date(a.start_at).getTime())}</span>
               ) : null}
-              <span className={`break-words text-[16px] font-semibold leading-[1.3] ${cancelled ? "line-through" : ""}`}>{a.contact_name ?? a.guest_name ?? (a.origin === "walk_in" ? "Atención sin cita" : "Sin contacto")}</span>
+              <span className={`break-words text-[16px] font-semibold leading-[1.3] ${cancelled ? "line-through" : ""}`}>{apptClientLabel(a)}</span>
               {a.review.length > 0 ? (
                 <span className="self-start rounded-full bg-[var(--warn-soft)] px-2 py-0.5 text-[12px] font-semibold text-[var(--warn)]">Requiere revisión</span>
               ) : null}

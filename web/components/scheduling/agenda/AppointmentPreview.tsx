@@ -1,12 +1,14 @@
 "use client";
 
-import { AgAvatar } from "./AgendaChrome";
+import { apptClientLabel } from "@/lib/apptClientLabel";
+import { AgAvatar, StateChip } from "./AgendaChrome";
+import { apptCategoryClass, serviceCategory } from "@/lib/agendaCategory";
 
 import { useLayoutEffect, useRef, useState } from "react";
 import { priceLabelCOP } from "@/lib/money";
 import { fmtTime } from "@/lib/siteCalendar";
 import type { Appt } from "../AgendaView";
-import { POPOVER, StatusChip } from "../ui/system";
+import { POPOVER } from "../ui/system";
 
 /**
  * The HOVER PREVIEW of an appointment — an informational card anchored beside the
@@ -20,7 +22,7 @@ import { POPOVER, StatusChip } from "../ui/system";
  * The pointer may travel from the card INTO the preview without it closing (the
  * parent delays the hide and `onPointerEnter` here cancels it) — no flicker.
  *
- * Built from the same pieces as the detail panel (POPOVER card, StatusChip, Avatar), so
+ * Built from the same pieces as the detail panel (POPOVER card, StateChip, Avatar), so
  * hover → click reads as one object getting bigger. The state wears its own tone, never
  * the card's service pastel.
  * Only what the server already sent is shown: a staff login receives no
@@ -60,7 +62,7 @@ export function AppointmentPreview({
     setPos({ left, top });
   }, [anchor]);
 
-  const client = appt.contact_name ?? appt.guest_name ?? (appt.origin === "walk_in" ? "Atención sin cita" : "Sin contacto");
+  const client = apptClientLabel(appt);
   const price = priceLabelCOP(appt.price);
   return (
     <div
@@ -76,7 +78,7 @@ export function AppointmentPreview({
         <span className="u-mono text-[13px] font-semibold">
           {fmtTime(appt.start_at, timezone)} – {fmtTime(appt.service_end_at, timezone)}
         </span>
-        <StatusChip status={appt.status} size="sm" />
+        <StateChip status={appt.status} size="sm" toneClass={`u-appt-service ${apptCategoryClass(serviceCategory(appt.service_name, appt.service_category))}`} />
       </div>
       <div className="flex items-center gap-3 px-4 py-3">
         <AgAvatar name={appt.contact_name} size={32} />

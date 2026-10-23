@@ -2,9 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useTransition, type RefObject } from "react";
 import { AutoRefresh } from "@/components/AutoRefresh";
-import { AttentionChip, Avatar, Button, INPUT, StatusChip, buttonClass } from "./ui/system";
+import { AttentionChip, Avatar, Button, INPUT, buttonClass } from "./ui/system";
 import { MobileAgenda } from "./mobile/MobileAgenda";
 import {
   Icon,
@@ -26,8 +26,9 @@ import {
   staffColors,
 } from "./mobile/kit";
 import { OVERLAY_SCRIM, useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
-import { dayHeadline, monthTitle } from "@/lib/siteCalendar";
+import { blockSpanLabel, dayHeadline, monthTitle } from "@/lib/siteCalendar";
 import { apptCategoryClass, serviceCategory, type ApptCategory } from "@/lib/agendaCategory";
+import { apptClientLabel } from "@/lib/apptClientLabel";
 import { priceLabelCOP } from "@/lib/money";
 import {
   cancelAppointmentAction,
@@ -55,7 +56,7 @@ import type { AffectedItem } from "./agenda/ScheduleFormParts";
 import { adoptLegacyBreakAction } from "@/lib/scheduleSeriesActions";
 import { AppointmentPreview } from "./agenda/AppointmentPreview";
 import { SidePanel, PanelSection, type SidePanelHandle } from "./agenda/SidePanel";
-import { AG_HEAD, AgAvatar, agTintAt, ALL_STATES, DateTitle, FiltersPopover, GearMenu, STATE_GLYPH, STATE_WORD, TB_ICON, TB_PRIMARY, agendaTitle } from "./agenda/AgendaChrome";
+import { AG_HEAD_CAL, AgAvatar, agTintAt, ALL_STATES, DateTitle, FiltersPopover, GearMenu, STATE_GLYPH, STATE_WORD, StateChip, TB_ICON, TB_PRIMARY, agendaTitle } from "./agenda/AgendaChrome";
 
 /** Serializable shapes passed from the server page. */
 interface SiteOpt { id: string; name: string; timezone: string }
@@ -542,6 +543,9 @@ export function AgendaView(props: {
   const [statesOn, setStatesOn] = useState<string[]>([...ALL_STATES]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
+  /** «Pintar» (the brush): ONLY while it is on does pressing and dragging on the day grid
+   *  mark a range to create or block — so a stray click or drag never starts one. */
+  const [paint, setPaint] = useState(false);
   /**
    * CREATE / BLOCK FROM THE GRID (reference slotPop, plus drag). Press and drag on an empty
    * part of a professional's lane to select a range (15-minute steps; a plain click takes
@@ -598,16 +602,16 @@ export function AgendaView(props: {
     return () => window.clearTimeout(t);
   }, [ghostKey]);
   const searchRef = useRef<HTMLInputElement>(null);
-  /** «Color de las citas»: by SERVICE (default) or by STATE — remembered on this device. */
-  const colorBy = useSyncExternalStore(subscribeColorBy, readColorBy, () => "service" as const);
-  const setColorBy = (v: "service" | "status") => {
-    try {
-      window.localStorage.setItem(COLOR_BY_KEY, v);
-    } catch {
-      /* private mode: the choice lasts this page only */
-    }
-    colorByListeners.forEach((l) => l());
-  };
+  // Esc leaves «Pintar» — unless a grid menu or a panel is open: Esc closes THAT first.
+  useEffect(() => {
+    if (!paint) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && !slotPop && !modal && !e.defaultPrevented) setPaint(false);
+    };
+    // Capture phase: read what is open BEFORE the menu's or panel's own Esc closes it.
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [paint, slotPop, modal]);
   /** An affected appointment being rescheduled FROM a break/block form: the form stays
    *  mounted (hidden) with everything typed; `holds` discount its unsaved draft. */
   const [formReschedule, setFormReschedule] = useState<{ apptId: string; holds: string[]; item: AffectedItem } | null>(null);
@@ -927,6 +931,8 @@ export function AgendaView(props: {
   // The grid menu offers only what this login may do; a staff login, its own lane only.
   const canSlotMenu = (staffKey: string) =>
     (props.canOperate || props.canBlockStaff) && (!props.lockStaffId || props.lockStaffId === staffKey);
+  const canPaint = props.canOperate || props.canBlockStaff;
+  const painting = paint && canPaint && !isWeek;
   const shownStaff = staffSel.length > 0 ? props.staff.filter((s) => staffSel.includes(s.id)) : props.staff;
   /** The site-local day a DAY view is showing — the weekday every barber lane is
    *  checked against. */
@@ -976,6 +982,16 @@ export function AgendaView(props: {
     return Math.min(Math.max(minutesOf(p), fromHour * 60), toHour * 60);
   };
   const band = (sMin: number, eMin: number) => ({ top: offsetTop(sMin) + 1, height: Math.max(14, offsetTop(eMin) - offsetTop(sMin) - 2) });
+  /** The pixel ranges the lane's appointment cards cover (as ApptCard draws them). */
+  const cardRanges = (appts: Appt[]): Array<[number, number]> =>
+    appts.map((x) => {
+      const lo = fromHour * 60;
+      const hi = toHour * 60;
+      const sm = Math.min(Math.max(minutesOf(zonedParts(x.start_at, tz)), lo), hi);
+      const em = Math.min(Math.max(minutesOf(zonedParts(x.service_end_at, tz)), sm), hi);
+      const t = offsetTop(sm);
+      return [t, t + Math.max(22, ((em - sm) / 60) * HOUR_PX)] as [number, number];
+    });
   const rangesOf = (h: WeeklyHours | undefined, wd: string) =>
     (h?.[wd] ?? []).map((r) => ({ s: clockMinutes(r.start), e: clockMinutes(r.end) })).sort((a, b) => a.s - b.s);
   /** Gaps between ranges of one weekday = usual breaks that still live in the weekly hours. */
@@ -1012,7 +1028,7 @@ export function AgendaView(props: {
     });
   };
   /** Breaks, recurring blocks and out-of-hours for ONE professional's lane on ONE day. */
-  const scheduleLayer = (staffKey: string, dayKey: string, laneClosed: boolean) => {
+  const scheduleLayer = (staffKey: string, dayKey: string, laneClosed: boolean, cards: Array<[number, number]> = []) => {
     if (searchQuery.trim()) return null;
     const st = props.staff.find((x) => x.id === staffKey);
     const wd = weekdayKeyOf(dayKey);
@@ -1031,7 +1047,7 @@ export function AgendaView(props: {
       const editable = (g.owner ? props.canEditStaffBreaks : props.canEditSiteBreaks) && !laneClosed;
       const time = `${String(Math.floor(g.s / 60)).padStart(2, "0")}:${String(g.s % 60).padStart(2, "0")}–${String(Math.floor(g.e / 60)).padStart(2, "0")}:${String(g.e % 60).padStart(2, "0")}`;
       const label = `Pausa habitual · ${time}`;
-      const body = <TimeTile title="Pausa habitual" time={time} height={b.height} />;
+      const body = <TimeTile title="Pausa habitual" time={time} top={b.top} height={b.height} cards={cards} />;
       nodes.push(
         editable ? (
           <button key={`lg-${g.owner}-${g.s}`} type="button" title={`${label} · Cambiar este día`} aria-label={`${label}. Cambiar este día`} onClick={() => openLegacyBreak(g.owner, dayKey, g)} className={`${TILE_BREAK} u-focus cursor-pointer hover:text-[var(--ag-ink2)]`} style={b}>
@@ -1061,10 +1077,10 @@ export function AgendaView(props: {
           title={o.moved ? `${label} · cambiado solo este día` : label}
           aria-label={`${label}${o.moved ? ", cambiado solo este día" : ""}. Abrir`}
           onClick={() => setModal({ mode: "series", occ: o })}
-          className={`${isBreak ? TILE_BREAK : TILE_BLOCK} u-focus cursor-pointer hover:text-[var(--ag-ink2)]`}
+          className={`${isBreak ? TILE_BREAK : o.staffId ? TILE_BLOCK : TILE_BLOCK.replace("u-sch-block", "u-sch-closed")} u-focus cursor-pointer hover:text-[var(--ag-ink2)]`}
           style={b}
         >
-          <TimeTile title={title} time={o.moved ? `${time} · solo este día` : time} height={b.height} />
+          <TimeTile title={title} time={o.moved ? `${time} · solo este día` : time} top={b.top} height={b.height} cards={cards} />
         </button>,
       );
     }
@@ -1152,8 +1168,6 @@ export function AgendaView(props: {
             const b = props.blocks.find((x) => x.id === id);
             if (b && (b.staff_id ? props.canBlockStaff : props.canBlockSite)) setModal({ mode: "editBlock", block: b });
           }}
-          colorBy={colorBy}
-          onColorBy={setColorBy}
           staff={props.staff}
           openingHours={props.openingHours}
           showTeam={!props.lockStaffId && props.staff.length > 1}
@@ -1183,7 +1197,7 @@ export function AgendaView(props: {
              ausencias, horarios, equipo) and + Nueva cita. Below, the grid by professional
              (day) or the week board by professional (week). */}
       <div className="u-ag -m-[var(--content-pad)] flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--surface)] max-md:hidden">
-        <div className={`${AG_HEAD} relative z-30`}>
+        <div className={`${AG_HEAD_CAL} relative z-30`}>
           <DateTitle
             label={agendaTitle(isWeek ? "week" : "day", props.date, weekDays[0])}
             date={props.date}
@@ -1192,7 +1206,7 @@ export function AgendaView(props: {
           />
           <span className="min-w-0 flex-1" />
           {searchOpen || searchQuery ? (
-            <label className="flex h-[40px] w-[240px] min-w-[44px] shrink items-center gap-2.5 rounded-[12px] border border-[var(--line-strong)] bg-[var(--surface)] px-3.5 text-muted">
+            <label className="flex h-[32px] w-[240px] min-w-[44px] shrink items-center gap-2 rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] px-3 text-muted">
               <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6">
                 <circle cx="7" cy="7" r="4.6" />
                 <path d="M10.4 10.4L14 14" />
@@ -1225,7 +1239,25 @@ export function AgendaView(props: {
               </svg>
             </button>
           )}
-          <div role="group" aria-label="Vista" className="flex h-[40px] shrink-0 gap-0.5 rounded-[12px] bg-[var(--ag-seg)] p-[3px]">
+          {canPaint && !isWeek ? (
+            <button
+              type="button"
+              aria-pressed={paint}
+              aria-label={paint ? "Dejar de pintar en la agenda" : "Pintar en la agenda: arrastra para crear una cita o bloquear horario"}
+              title={paint ? "Dejar de pintar (Esc)" : "Pintar: arrastra en la agenda para crear o bloquear"}
+              onClick={() => {
+                setPaint((v) => !v);
+                setSlotPop(null);
+              }}
+              className={`${TB_ICON} ${paint ? "!border-[var(--ink)] !bg-[var(--ink)] !text-[var(--ink-fg)]" : ""}`}
+            >
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[15px]" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M13.6 2.4a1.2 1.2 0 0 0-1.7 0L7.2 7.1l1.7 1.7 4.7-4.7a1.2 1.2 0 0 0 0-1.7z" />
+                <path d="M6.6 8.1c-1.3 0-2.3 1-2.3 2.3 0 1.2-.8 2-1.9 2.2 .7 1 1.8 1.4 3 1.4 1.9 0 3.3-1.4 3.3-3.3L6.6 8.1z" />
+              </svg>
+            </button>
+          ) : null}
+          <div role="group" aria-label="Vista" className="flex h-[32px] shrink-0 gap-0.5 rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] p-[2px]">
             {(
               [
                 ["day", "D", "Día"],
@@ -1241,21 +1273,21 @@ export function AgendaView(props: {
                   title={full}
                   aria-pressed={on}
                   onClick={() => navigate({ view: k })}
-                  className={`u-focus h-[34px] w-[38px] rounded-[9px] text-[14px] transition-colors ${on ? "bg-[var(--ag-segact-bg)] font-medium text-[var(--ag-segact-fg)]" : "text-[var(--ag-ink2)]"}`}
+                  className={`u-focus h-full w-[34px] rounded-[6px] text-[13px] transition-colors ${on ? "bg-[var(--ag-segact-bg)] font-medium text-[var(--ag-segact-fg)]" : "text-[var(--ag-ink2)] hover:bg-[var(--subtle)]"}`}
                 >
                   {letter}
                 </button>
               );
             })}
           </div>
-          <div className="flex h-[40px] shrink-0 items-center overflow-hidden rounded-[12px] border border-[var(--line-strong)] bg-[var(--surface)]">
-            <button type="button" aria-label={isWeek ? "Semana anterior" : "Día anterior"} onClick={() => shiftDate(isWeek ? -7 : -1)} className="u-focus inline-flex h-full w-[38px] items-center justify-center text-[var(--ag-ink2)] hover:bg-[var(--subtle)]">
+          <div className="flex h-[32px] shrink-0 items-center overflow-hidden rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)]">
+            <button type="button" aria-label={isWeek ? "Semana anterior" : "Día anterior"} onClick={() => shiftDate(isWeek ? -7 : -1)} className="u-focus inline-flex h-full w-[32px] items-center justify-center text-[var(--ag-ink2)] hover:bg-[var(--subtle)]">
               <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M10 3.5L5.5 8l4.5 4.5" /></svg>
             </button>
-            <button type="button" onClick={() => navigate({ date: nowParts.dayKey })} className="u-focus h-[34px] rounded-[9px] px-3 text-[14px] text-foreground hover:bg-[var(--subtle)]">
+            <button type="button" onClick={() => navigate({ date: nowParts.dayKey })} className="u-focus h-full px-2.5 text-[13px] text-foreground hover:bg-[var(--subtle)]">
               Hoy
             </button>
-            <button type="button" aria-label={isWeek ? "Semana siguiente" : "Día siguiente"} onClick={() => shiftDate(isWeek ? 7 : 1)} className="u-focus inline-flex h-full w-[38px] items-center justify-center text-[var(--ag-ink2)] hover:bg-[var(--subtle)]">
+            <button type="button" aria-label={isWeek ? "Semana siguiente" : "Día siguiente"} onClick={() => shiftDate(isWeek ? 7 : 1)} className="u-focus inline-flex h-full w-[32px] items-center justify-center text-[var(--ag-ink2)] hover:bg-[var(--subtle)]">
               <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M6 3.5L10.5 8 6 12.5" /></svg>
             </button>
           </div>
@@ -1266,12 +1298,11 @@ export function AgendaView(props: {
               sub: "Profesionales y estados",
               content: (
                 <FiltersPopover
-                  value={{ colorBy, staff: staffSel, states: statesOn }}
+                  value={{ staff: staffSel, states: statesOn }}
                   families={serviceLegend}
                   people={props.staff.map((st) => ({ id: st.id, name: st.name, photoUrl: st.photoUrl ?? null }))}
                   tintOf={tintOf}
                   onChange={(v) => {
-                    if (v.colorBy !== colorBy) setColorBy(v.colorBy);
                     setStaffSel(v.staff);
                     setStatesOn(v.states);
                   }}
@@ -1304,8 +1335,18 @@ export function AgendaView(props: {
             {error}
           </p>
         ) : null}
-        <div className="relative flex min-h-0 flex-1 border-t border-[var(--line)]">
-          <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+        {/* The grid sits in its OWN frame (8px from the surface, hairline, 12px radius): that
+            frame — not a rule under the bar — separates the tools from the calendar. Día clips
+            to the frame; Semana does not (its board scrolls, and rounds its own corners). */}
+        <div className={`relative mx-2 mb-2 flex min-h-0 flex-1 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] ${isWeek ? "" : "overflow-hidden"}`}>
+          {/* «Pintar» hint: floats over the grid's header row, so turning the brush on moves
+              nothing on screen (no reflow, no scroll change). */}
+          {painting ? (
+            <span role="status" aria-live="polite" className="u-pop-in pointer-events-none absolute left-1/2 top-[7px] z-[30] -translate-x-1/2 whitespace-nowrap rounded-[8px] bg-[var(--ink)] px-3 py-1.5 text-[13px] text-[var(--ink-fg)] shadow-[0_6px_18px_rgba(0,0,0,0.16)]">
+              Arrastra sobre la agenda para crear una cita o bloquear horario · Esc para salir
+            </span>
+          ) : null}
+          <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden rounded-[11px]">
             {isWeek ? (
               <WeekTeamBoard
                 days={weekDays}
@@ -1355,6 +1396,7 @@ export function AgendaView(props: {
                   {columns.map((col) => {
                     const columnAppointments = visible.filter((appt) => inColumn(appt, col.key));
                     const dayLanes = layoutDayLanes(columnAppointments);
+                    const laneCards = cardRanges(columnAppointments);
                     return (
                       <div key={col.key} className="min-w-[12.5rem] flex-1 border-l border-[var(--line)]">
                         <div className="sticky top-0 z-10 flex h-[44px] items-center gap-2 border-b border-[var(--line)] bg-[var(--surface)] px-3">
@@ -1373,10 +1415,10 @@ export function AgendaView(props: {
                           ) : null}
                         </div>
                         <div
-                          className={`relative select-none ${canSlotMenu(col.key) ? "cursor-cell" : ""}`}
+                          className={`relative select-none ${painting && canSlotMenu(col.key) ? "cursor-crosshair" : ""}`}
                           style={{ height: bodyHeight }}
                           onPointerDown={(e) => {
-                            if (e.button !== 0 || !canSlotMenu(col.key) || (e.target as Element).closest("button,a,[data-slot-menu]")) return;
+                            if (e.button !== 0 || !painting || !canSlotMenu(col.key) || (e.target as Element).closest("button,a,[data-slot-menu]")) return;
                             const el = e.currentTarget;
                             const touch = e.pointerType !== "mouse";
                             const anchor = minuteAt(el, e.clientY);
@@ -1430,15 +1472,8 @@ export function AgendaView(props: {
                             if (!d) return;
                             if (d.timer) window.clearTimeout(d.timer);
                             if (!d.live) return;
-                            setSlotPop((cur) => {
-                              if (!cur) return cur;
-                              // A click (no drag): one hour, the reference's default box.
-                              if (!d.moved) {
-                                const from = Math.min(cur.from, toHour * 60 - 60);
-                                return { ...cur, from, to: from + 60, dragging: false, dragged: false };
-                              }
-                              return { ...cur, dragging: false, dragged: true };
-                            });
+                            // A click marks the quarter hour pressed (15 min); a drag marks what it covers.
+                            setSlotPop((cur) => (cur ? { ...cur, dragging: false, dragged: d.moved } : cur));
                           }}
                           onPointerCancel={() => {
                             const d = dragRef.current;
@@ -1495,7 +1530,7 @@ export function AgendaView(props: {
                             </Fragment>
                           ))}
                           {col.closed ? (
-                            <div className="absolute inset-[3px] rounded-[8px] bg-[var(--ag-off)] px-2.5 py-1.5 text-[12px] font-medium text-muted shadow-[inset_0_0_0_1px_var(--line)]">
+                            <div className={`${hasAnyHours(props.openingHours) && !opensOn(props.openingHours, dayWeekday) ? "u-sch-closed" : "u-sch-block"} absolute inset-[3px] rounded-[8px] px-2.5 py-1.5 text-[12px] font-medium`}>
                               {hasAnyHours(props.openingHours) && !opensOn(props.openingHours, dayWeekday) ? "Sede cerrada" : "No trabaja"}
                             </div>
                           ) : null}
@@ -1512,14 +1547,15 @@ export function AgendaView(props: {
                                   height={bd.height}
                                   siteWide={siteWide}
                                   fullDay={bd.fullDay}
-                                  time={`${fmtTime(b.starts_at, tz)}–${fmtTime(b.ends_at, tz)}`}
+                                  time={blockSpanLabel(b.starts_at, b.ends_at, tz).text}
                                   reason={b.reason}
                                   editable={siteWide ? props.canBlockSite : props.canBlockStaff}
+                                  cards={laneCards}
                                   onOpen={() => setModal({ mode: "editBlock", block: b })}
                                 />
                               );
                             })}
-                          {scheduleLayer(col.key, shownDayKeys[0], col.closed === true)}
+                          {scheduleLayer(col.key, shownDayKeys[0], col.closed === true, laneCards)}
                           {nowVisible ? (
                             <div aria-hidden className="pointer-events-none absolute inset-x-0 z-[5] h-0 shadow-[0_0_0_1px_var(--foreground)]" style={{ top: offsetTop(minutesOf(nowParts)) }} />
                           ) : null}
@@ -1542,7 +1578,6 @@ export function AgendaView(props: {
                                 selected={a.id === selectedId}
                                 flash={a.id === flashId}
                                 dim={isDimmed(a)}
-                                colorBy={colorBy}
                                 previewProps={previewProps(a)}
                                 onOpen={() => openAppointment(a.id)}
                               />
@@ -1670,8 +1705,15 @@ export function AgendaView(props: {
           onNotice={setNotice}
           onWalkIn={() => setModal({ mode: "walkin" })}
           onDraft={setBookingGhost}
-          onDone={(dayKey) => {
+          onDone={(dayKey, createdId) => {
             setModal(null);
+            if (createdId) {
+              try {
+                window.sessionStorage.setItem(FLASH_KEY, createdId);
+              } catch {
+                /* private mode: the highlight is a nicety */
+              }
+            }
             if (dayKey && dayKey !== props.date && !props.returnContactId) return navigate({ date: dayKey });
             // Deep-linked from a contact record → return there so the new/moved
             // appointment is visible in context; otherwise just refresh the agenda.
@@ -1865,7 +1907,7 @@ function WeekTeamBoard({
   };
   const GRID = "grid grid-cols-[112px_repeat(7,minmax(0,1fr))]";
   return (
-    <div className="min-h-0 flex-1 overflow-auto" aria-label="Semana por profesional">
+    <div className="min-h-0 flex-1 overflow-auto rounded-[11px]" aria-label="Semana por profesional">
       <div className="min-w-[1000px]">
         <div className={`${GRID} sticky top-0 z-20 bg-[var(--surface)] shadow-[inset_0_-1px_0_var(--line)]`}>
           <div className="flex items-center px-4 text-[12.5px] text-muted">Equipo</div>
@@ -1935,9 +1977,10 @@ function WeekTeamBoard({
                           onClick={() => onOpen(c.a.id)}
                           {...previewFor(c.a)}
                           data-appt-card=""
-                          aria-label={`${fmtTime(c.a.start_at, timezone)} ${c.a.contact_name ?? c.a.guest_name ?? "Sin contacto"} ${STATE_WORD[c.a.status] ?? c.a.status}${c.a.review.length > 0 || conflictIds.has(c.a.id) ? ", requiere revisión" : ""}`}
-                          className={`u-appt2 ${appointmentToneClass(c.a)} u-focus flex h-[32px] min-w-0 shrink-0 items-center gap-[5px] px-[7px] text-left text-[13px] transition-[background,opacity] hover:bg-[var(--subtle)] ${c.a.status === "cancelled" ? "line-through" : ""} ${selectedId === c.a.id || flashId === c.a.id ? "shadow-[0_0_0_2px_var(--foreground)]" : ""}`}
+                          aria-label={`${fmtTime(c.a.start_at, timezone)} ${apptClientLabel(c.a)} ${STATE_WORD[c.a.status] ?? c.a.status}${c.a.review.length > 0 || conflictIds.has(c.a.id) ? ", requiere revisión" : ""}`}
+                          className={`u-appt2 ${appointmentToneClass(c.a)} u-focus flex h-[32px] min-w-0 shrink-0 items-center gap-[5px] px-[7px] text-left text-[13px] transition-[background,opacity] hover:bg-[var(--subtle)] ${c.a.status === "cancelled" ? "line-through" : ""} ${selectedId === c.a.id || flashId === c.a.id ? "shadow-[0_0_0_2px_var(--foreground)]" : ""} ${flashId === c.a.id ? "u-ag-flash" : ""}`}
                           data-status={c.a.status}
+                          data-selected={selectedId === c.a.id || flashId === c.a.id ? "" : undefined}
                           style={{ opacity: dimmed(c.a) ? 0.28 : 1, borderRadius: 9 }}
                         >
                           <span className="shrink-0 text-[12px] tabular-nums opacity-[0.62]">{fmtTime(c.a.start_at, timezone)}</span>
@@ -2030,11 +2073,11 @@ function WeekOverflowDialog({
                 <Initial name={appt.staff_name} on="card" />
                 <span className="min-w-0 flex-1">
                   <strong className="block truncate text-sm font-semibold text-foreground">{appt.service_name}</strong>
-                  <span className="block truncate text-xs text-muted">{appt.contact_name ?? "Atención sin cita"}</span>
+                  <span className="block truncate text-xs text-muted">{apptClientLabel(appt)}</span>
                 </span>
                 <span className="shrink-0 text-right">
                   <span className="u-mono block text-xs font-semibold text-foreground">{fmtTime(appt.start_at, timezone)}</span>
-                  <span className="mt-0.5 block">{overlapping ? <AttentionChip size="sm" /> : <StatusChip status={appt.status} size="sm" />}</span>
+                  <span className="mt-0.5 block">{overlapping ? <AttentionChip size="sm" /> : <StateChip status={appt.status} size="sm" toneClass={appointmentToneClass(appt)} />}</span>
                 </span>
               </button>
             );
@@ -2101,10 +2144,21 @@ function Initial({ name, muted, on, photoUrl }: { name: string | null; muted?: b
  */
 /** The reference's slot popover: the dashed selection with its live time, then a menu. */
 function SlotMenu(props: { top: number; height: number; dragging: boolean; alignRight: boolean; label: string; from: string; to: string; onNew: (() => void) | null; onBlock: (() => void) | null; onClose: () => void }) {
-  const first = useRef<HTMLButtonElement | null>(null);
+  // The MENU takes focus when it opens (not its first item): a pointer user sees no focus
+  // ring, a keyboard user goes on with ↓/↑ (or Tab) to the items, Escape closes.
+  const menu = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
-    if (!props.dragging) first.current?.focus({ preventScroll: true });
+    if (!props.dragging) menu.current?.focus({ preventScroll: true });
   }, [props.dragging]);
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key === "Escape") return props.onClose();
+    const items = [...(menu.current?.querySelectorAll<HTMLButtonElement>("[role=menuitem]") ?? [])];
+    if (items.length === 0 || !["ArrowDown", "ArrowUp", "Home", "End"].includes(e.key)) return;
+    e.preventDefault();
+    const at = items.indexOf(document.activeElement as HTMLButtonElement);
+    const next = e.key === "Home" ? 0 : e.key === "End" ? items.length - 1 : e.key === "ArrowDown" ? (at + 1) % items.length : at <= 0 ? items.length - 1 : at - 1;
+    items[next].focus();
+  };
   const item = "u-focus flex min-h-[48px] w-full items-center justify-between gap-2.5 rounded-[8px] px-3 py-1.5 text-left hover:bg-[var(--subtle)]";
   return (
     <>
@@ -2117,15 +2171,17 @@ function SlotMenu(props: { top: number; height: number; dragging: boolean; align
       </div>
       {!props.dragging ? (
         <div
+          ref={menu}
+          tabIndex={-1}
           data-slot-menu=""
           role="menu"
           aria-label={`Horario ${props.label}`}
-          className={`u-pop-in absolute z-[9] flex w-[256px] flex-col rounded-[12px] bg-[var(--surface)] p-1.5 shadow-[0_0_0_1px_var(--line),0_14px_36px_rgba(0,0,0,0.14)] ${props.alignRight ? "right-2" : "left-[3px]"}`}
+          className={`u-pop-in absolute z-[9] flex w-[296px] flex-col outline-none rounded-[12px] bg-[var(--surface)] p-1.5 shadow-[0_0_0_1px_var(--line),0_14px_36px_rgba(0,0,0,0.14)] ${props.alignRight ? "right-2" : "left-[3px]"}`}
           style={{ top: props.top + Math.max(18, props.height) + 6 }}
-          onKeyDown={(e) => e.key === "Escape" && props.onClose()}
+          onKeyDown={onKeyDown}
         >
           {props.onNew ? (
-            <button ref={first} type="button" role="menuitem" onClick={props.onNew} className={item}>
+            <button type="button" role="menuitem" onClick={props.onNew} className={item}>
               <span className="flex flex-col">
                 <span className="text-[14px] text-foreground">Nueva cita</span>
                 <span className="text-[12px] text-muted">Desde las {props.from} · dura lo que dure el servicio</span>
@@ -2134,7 +2190,7 @@ function SlotMenu(props: { top: number; height: number; dragging: boolean; align
             </button>
           ) : null}
           {props.onBlock ? (
-            <button ref={props.onNew ? undefined : first} type="button" role="menuitem" onClick={props.onBlock} className={item}>
+            <button type="button" role="menuitem" onClick={props.onBlock} className={item}>
               <span className="flex flex-col">
                 <span className="text-[14px] text-foreground">Bloquear horario</span>
                 <span className="text-[12px] tabular-nums text-muted">{props.from} – {props.to}, tal como lo marcaste</span>
@@ -2152,11 +2208,33 @@ function SlotMenu(props: { top: number; height: number; dragging: boolean; align
  *  off-white with a hairline) tiles; title then time, the time only where it fits. */
 const TILE_BREAK = "u-sch-break absolute inset-x-0 flex flex-col items-start gap-0.5 overflow-hidden px-2.5 py-1.5 text-left";
 const TILE_BLOCK = "u-sch-block absolute inset-x-[3px] flex flex-col items-start gap-0.5 overflow-hidden rounded-[8px] px-2.5 py-1.5 text-left";
-function TimeTile({ title, time, height }: { title: string; time: string; height: number }) {
+/**
+ * Where a pause / block tile can print its label when appointment cards sit on top of it
+ * (audit 23 Oct: «Pausa habitual» and a 15-min «Valoración» shared the same 19px). The label
+ * moves to the FIRST stretch of the tile no card covers — never under a card — and shows its
+ * time only where both lines fit. With no room left the tile has no visible label (its title
+ * and accessible name still say it); its HATCH still shows wherever no card covers it.
+ * Nothing is lengthened to make room.
+ */
+function tileLabel(top: number, height: number, cards: Array<[number, number]>): { offset: number; lines: 0 | 1 | 2; covered: boolean } {
+  const end = top + height;
+  const over = cards.filter(([a, b]) => b > top && a < end).sort((x, y) => x[0] - y[0]);
+  if (over.length === 0) return { offset: 0, lines: height >= 34 ? 2 : 1, covered: false };
+  let cursor = top;
+  for (const [a, b] of [...over, [end, end] as [number, number]]) {
+    const gap = Math.min(a, end) - cursor;
+    if (gap >= 20) return { offset: cursor - top, lines: gap >= 36 ? 2 : 1, covered: true };
+    cursor = Math.max(cursor, b);
+    if (cursor >= end) break;
+  }
+  return { offset: 0, lines: 0, covered: true };
+}
+function TimeTile({ title, time, top, height, cards = [] }: { title: string; time: string; top: number; height: number; cards?: Array<[number, number]> }) {
+  const at = tileLabel(top, height, cards);
   return (
     <>
-      <span className="w-full truncate text-[12px] font-medium">{title}</span>
-      {height >= 34 ? <span className="w-full truncate text-[12px] tabular-nums">{time}</span> : null}
+      {at.lines > 0 ? <span className="w-full truncate text-[12px] font-medium" style={at.offset ? { marginTop: at.offset } : undefined}>{title}</span> : null}
+      {at.lines === 2 ? <span className="w-full truncate text-[12px] tabular-nums">{time}</span> : null}
     </>
   );
 }
@@ -2169,6 +2247,7 @@ function BlockBand({
   time,
   reason,
   editable,
+  cards = [],
   onOpen,
 }: {
   top: number;
@@ -2178,26 +2257,32 @@ function BlockBand({
   time: string;
   reason: string | null;
   editable: boolean;
+  /** The lane's appointment cards (pixel ranges): the label avoids them. */
+  cards?: Array<[number, number]>;
   onOpen: () => void;
 }) {
   // The reference's block (blockItem): an off-white tile with a hairline, inset 3px —
   // "Bloqueado" / "Sede cerrada" and its time; a whole day reads «Ausencia · todo el día».
   const base = siteWide ? (fullDay ? "Sede cerrada · todo el día" : "Sede cerrada") : fullDay ? "Ausencia · todo el día" : "Bloqueado";
   const label = reason?.trim() ? `${base} · ${reason.trim()}` : base;
-  const cls = "u-sch-block absolute inset-x-[3px] flex flex-col items-start gap-0.5 overflow-hidden rounded-[8px] px-2.5 py-1.5 text-left";
+  // «Todo el día» is already in the label; keep only the dates of a several-day absence.
+  const when = time.startsWith("Todo el día") ? time.replace(/^Todo el día(?: · )?/, "") : time;
+  const named = when ? `${label} · ${when}` : label;
+  const cls = `${siteWide ? "u-sch-closed" : "u-sch-block"} absolute inset-x-[3px] flex flex-col items-start gap-0.5 overflow-hidden rounded-[8px] px-2.5 py-1.5 text-left`;
+  const style = { top: top + 1, height: Math.max(18, height - 2) };
+  const at = tileLabel(style.top, style.height, cards);
   const inner = (
     <>
-      <span className="w-full truncate text-[12px] font-medium">{label}</span>
-      {!fullDay && height - 2 >= 34 ? <span className="text-[12px] tabular-nums">{time}</span> : null}
+      {at.lines > 0 ? <span className="w-full truncate text-[12px] font-medium" style={at.offset ? { marginTop: at.offset } : undefined}>{label}</span> : null}
+      {!fullDay && at.lines === 2 ? <span className="text-[12px] tabular-nums">{time}</span> : null}
     </>
   );
-  const style = { top: top + 1, height: Math.max(18, height - 2) };
   return editable ? (
-    <button type="button" onClick={onOpen} title={`${label} · ${time}`} aria-label={`${label}, ${time}. Abrir`} className={`${cls} u-focus cursor-pointer hover:text-[var(--ag-ink2)]`} style={style}>
+    <button type="button" onClick={onOpen} title={named} aria-label={`${named}. Abrir`} className={`${cls} u-focus cursor-pointer hover:text-[var(--ag-ink2)]`} style={style}>
       {inner}
     </button>
   ) : (
-    <div title={`${label} · ${time}`} className={cls} style={style}>
+    <div title={named} className={cls} style={style}>
       {inner}
     </div>
   );
@@ -2225,7 +2310,6 @@ function ApptCard({
   selected,
   flash,
   dim = false,
-  colorBy = "service",
   previewProps,
   onOpen,
 }: {
@@ -2244,7 +2328,6 @@ function ApptCard({
   flash: boolean;
   /** Filtered out by state or search: still drawn (the time is taken), faded. */
   dim?: boolean;
-  colorBy?: "service" | "status";
   /** Hover / focus preview handlers + the data-appt-id the locate action looks for. */
   previewProps: Record<string, unknown>;
   onOpen: () => void;
@@ -2256,7 +2339,7 @@ function ApptCard({
   // (at 72px an hour: 45 min shows two lines, an hour shows three).
   const h = height - 3;
   const one = h < 50;
-  const client = appt.contact_name ?? appt.guest_name ?? (appt.origin === "walk_in" ? "Atención sin cita" : "Sin contacto");
+  const client = apptClientLabel(appt);
   const stateWord = STATE_WORD[appt.status] ?? appt.status;
   const range = `${fmtTime(appt.start_at, tz)}–${fmtTime(appt.service_end_at, tz)}`;
   const n = lane?.laneCount ?? 1;
@@ -2269,9 +2352,9 @@ function ApptCard({
       aria-label={`${client}, ${fmtTime(appt.start_at, tz)} a ${fmtTime(appt.service_end_at, tz)}, ${appt.service_name}, ${stateWord}${review ? ", requiere revisión" : ""}${overlapping ? ", solapamiento" : ""}`}
       className={`u-appt2 ${toneClass} absolute flex flex-col items-stretch gap-[3px] overflow-hidden text-left text-foreground transition-[opacity,background,box-shadow] duration-150 hover:bg-[var(--subtle)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-edge)] ${
         one ? "justify-center pl-2.5 pr-2" : "justify-start py-[7px] pl-2.5 pr-2"
-      } ${selected || flash ? "shadow-[0_0_0_2px_var(--foreground)]" : ""} ${flash ? "animate-pulse motion-reduce:animate-none" : ""}`}
+      } ${selected || flash ? "shadow-[0_0_0_2px_var(--foreground)]" : ""} ${flash ? "u-ag-flash" : ""}`}
       data-status={appt.status}
-      data-mode={colorBy}
+      data-selected={selected || flash ? "" : undefined}
       style={{
         top: top + 1.5,
         height: h,
@@ -2283,9 +2366,11 @@ function ApptCard({
       <span className={`flex w-full min-w-0 items-baseline gap-2 font-medium ${one && h < 26 ? "text-[12px]" : "text-[13px]"}`}>
         <span className={`min-w-0 flex-1 truncate ${cancelled ? "text-muted line-through" : ""}`}>{client}</span>
         {one ? <span className="shrink-0 text-[12px] font-normal tabular-nums text-[var(--ag-ink2)]">{range}</span> : null}
+        {/* On a one-line card the review mark is the compact «!» (as on the week chips), so
+            the client's name keeps its room; the word stays in the tooltip and the label. */}
         {review ? (
           <span title="Requiere revisión" className="shrink-0 self-center rounded-[6px] bg-[var(--warn-soft)] px-1.5 text-[11px] font-medium leading-[18px] text-[var(--warn)]">
-            Revisar
+            {one ? "!" : "Revisar"}
           </span>
         ) : null}
         <span title={stateWord} className="shrink-0 text-[12px] font-normal text-[var(--ag-ink2)]">
@@ -2301,25 +2386,6 @@ function ApptCard({
       {!one && h >= 66 ? <span className="truncate text-[12px] tabular-nums text-[var(--ag-ink2)]">{range}</span> : null}
     </button>
   );
-}
-
-/** «Color de las citas» (Servicio | Estado), remembered on this device. */
-const COLOR_BY_KEY = "mai:agenda:colorBy";
-const colorByListeners = new Set<() => void>();
-function subscribeColorBy(l: () => void): () => void {
-  colorByListeners.add(l);
-  window.addEventListener("storage", l);
-  return () => {
-    colorByListeners.delete(l);
-    window.removeEventListener("storage", l);
-  };
-}
-function readColorBy(): "service" | "status" {
-  try {
-    return window.localStorage.getItem(COLOR_BY_KEY) === "status" ? "status" : "service";
-  } catch {
-    return "service";
-  }
 }
 
 /** sessionStorage key: the appointment to highlight after "Cambiar fecha y hora". */
@@ -2344,7 +2410,8 @@ function AppointmentModal(props: {
   onClose: () => void;
   onError: (e: string | null) => void;
   /** `dayKey` = the site day the appointment landed on (phone returns to it). */
-  onDone: (dayKey?: string) => void;
+  /** After the server confirmed: the day to show and, for a new booking, its id (highlighted). */
+  onDone: (dayKey?: string, createdId?: string) => void;
   /** The current error (the phone flow shows it in its own footer). */
   error?: string | null;
   /** A short confirmation for the phone's toast ("Cita creada"). */
@@ -2541,6 +2608,7 @@ function AppointmentModal(props: {
       // A thrown action (offline, server unreachable) must not escape the transition:
       // that unmounts the form and loses every choice. Say so and keep the form as is —
       // the idempotency key makes the retry safe even if the first request did land.
+      let createdId: string | undefined;
       try {
       if (isReschedule) {
         const r = await rescheduleAppointmentAction(
@@ -2582,9 +2650,11 @@ function AppointmentModal(props: {
           return props.onError(r.fieldErrors ? Object.values(r.fieldErrors).join(" ") : r.error);
         }
         props.onNotice?.(r.warning ?? "Cita creada");
+        createdId = r.id;
       }
       await dropBackGuard();
-      props.onDone(isPhone ? siteDayKey(slotStart, props.timezone) : undefined);
+      // Only after the server confirmed it: go to its day and highlight it once drawn.
+      props.onDone(siteDayKey(slotStart, props.timezone), createdId);
       } catch {
         props.onError("No se pudo guardar: revisa la conexión e inténtalo de nuevo. Tus datos se conservan.");
       }
@@ -2636,7 +2706,7 @@ function AppointmentModal(props: {
     bookingContact
       ? { contactId: bookingContact.contactId, label: bookingContact.contactName, identity: null }
       : isReschedule
-        ? { contactId: null, label: rescheduleAppt?.contact_name ?? "Atención sin cita", identity: rescheduleAppt?.primary_identity ?? null }
+        ? { contactId: null, label: rescheduleAppt ? apptClientLabel(rescheduleAppt) : "Sin contacto", identity: rescheduleAppt?.primary_identity ?? null }
         : customerMode === "anonymous"
           ? { contactId: null, label: "Atención sin cita", identity: null }
           : pickedContact
@@ -3182,8 +3252,14 @@ function AppointmentModal(props: {
               </PanelSection>
               <PanelSection title={<>Hora libre <span className="font-normal text-muted">· {selectedService ? `${selectedService.duration_min} min` : ""}</span></>} id="nv-time">
                 {loadingSlots ? (
-                  <div role="status" aria-label="Cargando disponibilidad" className="grid grid-cols-6 gap-1.5">
-                    {Array.from({ length: 12 }, (_, i) => <span key={i} className="h-[36px] animate-pulse rounded-[10px] bg-[var(--chip)]" />)}
+                  <div role="status" aria-live="polite" className="flex flex-col gap-2">
+                    <p className="flex items-center gap-2 text-[13px] text-muted">
+                      <span aria-hidden className="u-ag-busy-dot size-[7px] rounded-full bg-[var(--ag-ink2)]" />
+                      Buscando horas libres…
+                    </p>
+                    <div aria-hidden className="grid grid-cols-6 gap-1.5">
+                      {Array.from({ length: 12 }, (_, i) => <span key={i} className="h-[36px] animate-pulse rounded-[10px] bg-[var(--chip)]" />)}
+                    </div>
                   </div>
                 ) : visibleSlots.length === 0 ? (
                   <div className="flex flex-col gap-2 rounded-[10px] bg-[var(--chip)] px-3 py-2.5 text-[13px] text-[var(--ag-ink2)]">

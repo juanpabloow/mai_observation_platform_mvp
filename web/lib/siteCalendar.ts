@@ -187,3 +187,17 @@ export function timezoneLabel(timeZone: string, now: Date = new Date()): string 
   const offset = gmtLabel(timeZone, now);
   return offset ? `${pretty} (${offset})` : pretty;
 }
+
+/**
+ * How a block or absence reads for a PERSON (audit 23 Oct: an all-day absence showed
+ * «00:00 · 1440 min · 00:00–23:59» and «00:00–00:00»). Midnight-to-midnight at the site is
+ * «Todo el día», with the real dates when it spans several days; anything else is its
+ * hours. Display only — the block's own instants never change.
+ */
+export function blockSpanLabel(startsAt: string, endsAt: string, timeZone: string): { allDay: boolean; text: string } {
+  const allDay = fmtTime(startsAt, timeZone) === "00:00" && fmtTime(endsAt, timeZone) === "00:00" && Date.parse(endsAt) > Date.parse(startsAt);
+  if (!allDay) return { allDay: false, text: `${fmtTime(startsAt, timeZone)}–${fmtTime(endsAt, timeZone)}` };
+  const first = siteDayKey(startsAt, timeZone);
+  const last = siteDayKey(new Date(Date.parse(endsAt) - 1).toISOString(), timeZone);
+  return { allDay: true, text: first === last ? "Todo el día" : `Todo el día · ${dayShort(first)} → ${dayShort(last)}` };
+}

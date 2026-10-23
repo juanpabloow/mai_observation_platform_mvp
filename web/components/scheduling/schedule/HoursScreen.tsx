@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { listScheduleSeriesAction, type SeriesView } from "@/lib/scheduleSeriesActions";
-import { expandSeries } from "@worker/scheduling/series.js";
+import { nextOccurrence, seriesWhen } from "@/lib/seriesOccurrence";
 import { PUBLIC_REASON_LABEL, type PublicAbsenceReason } from "@/lib/publicAbsenceReason";
 import { fmtTime, longDate, todayAtSite, timezoneLabel } from "@/lib/siteCalendar";
 import { Button } from "../ui/system";
@@ -32,7 +32,6 @@ interface Exc { id: string; site_id: string; staff_id: string | null; starts_at:
 
 const KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const;
 const SHORT = ["Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"];
-const WD = ["domingo", "lunes", "martes", "miércoles", "jueves", "viernes", "sábado"];
 const span = (h: Hours, k: string) => {
   const r = [...(h[k] ?? [])].sort((a, b) => a.start.localeCompare(b.start));
   return r.length ? { start: r[0].start, end: r[r.length - 1].end } : null;
@@ -65,6 +64,8 @@ export function HoursScreen(props: {
   const [resched, setResched] = useState<{ item: AffectedItem; holds: string[] } | null>(null);
   const [recheck, setRecheck] = useState(0);
   const [notice, setNotice] = useState<string | null>(null);
+  // Read once (render stays pure): which occurrence is «next».
+  const [nowMs] = useState(() => Date.now());
   useEffect(() => {
     if (!notice) return;
     const t = window.setTimeout(() => setNotice(null), 2600);
@@ -92,16 +93,7 @@ export function HoursScreen(props: {
     router.refresh();
   };
 
-  const nextOcc = (s: SeriesView): OccurrenceRef | null => {
-    const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
-    const row = { id: s.id, site_id: siteId, staff_id: s.staffId, kind: s.kind, weekdays: s.weekdays, start_min: toMin(s.start), end_min: toMin(s.end), starts_on: s.startsOn, ends_on: s.endsOn, reason: s.reason, public_reason: null };
-    const ov = s.overrides.map((o) => ({ series_id: s.id, occurrence_date: o.date, action: o.action, start_min: o.start ? toMin(o.start) : null, end_min: o.end ? toMin(o.end) : null }));
-    const [y, m, d] = today.split("-").map(Number);
-    const t = new Date(Date.UTC(y, m - 1, d + 120));
-    const until = `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, "0")}-${String(t.getUTCDate()).padStart(2, "0")}`;
-    const o = expandSeries([row], ov, today, until, tz).find((x) => x.from.getTime() > Date.now());
-    return o ? { seriesId: s.id, kind: s.kind, staffId: s.staffId, date: o.date, startsAt: o.from.toISOString(), endsAt: o.until.toISOString(), moved: o.moved } : null;
-  };
+  const nextOcc = (s: SeriesView): OccurrenceRef | null => nextOccurrence(s, siteId, today, tz, nowMs);
 
   const whenOf = (e: Exc) => {
     const allDay = fmtTime(e.starts_at, tz) === "00:00" && fmtTime(e.ends_at, tz) === "00:00";
@@ -306,8 +298,7 @@ export function HoursScreen(props: {
                             <td className="border-b border-line-soft px-2 py-2.5 font-medium">{nameOf(s.staffId)}</td>
                             <td className="border-b border-line-soft px-2 py-2.5">
                               <span className="mr-1.5 rounded-full bg-chip px-1.5 py-0.5 text-[11.5px]">Se repite</span>
-                              Cada {s.weekdays.map((d) => WD[d]).join(", ")} · {s.start === "00:00" && s.end === "24:00" ? "todo el día" : `${s.start}–${s.end}`}
-                              {s.endsOn ? ` · hasta ${s.endsOn.split("-").reverse().join("/")}` : ""}
+                              {seriesWhen(s)}
                             </td>
                             <td className="border-b border-line-soft px-2 py-2.5 text-muted">{s.staffId ? "Su disponibilidad" : "Toda la sede"}</td>
                             <td className="border-b border-line-soft px-2 py-2.5 text-muted">{s.publicReason ? PUBLIC_REASON_LABEL[s.publicReason as PublicAbsenceReason] : "Sin motivo"}</td>

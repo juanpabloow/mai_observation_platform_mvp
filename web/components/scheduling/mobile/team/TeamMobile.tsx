@@ -83,7 +83,7 @@ export function TeamMobile({ clientId, staff, extras }: { clientId: string; staf
         workingHours: member.workingHours,
         siteHours: staff.openingHours,
         appts,
-        timeOff: staff.timeOff.filter((t) => t.staffId === member.id),
+        timeOff: [...staff.timeOff, ...(staff.presenceBlocks ?? [])].filter((t) => t.staffId === member.id),
         closures: staff.closures,
         now,
         tz,

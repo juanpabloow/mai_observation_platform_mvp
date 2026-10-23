@@ -59,6 +59,10 @@ export function BlockPanel(props: {
   initialStaffId?: string | null;
   initialStart?: string;
   initialEnd?: string;
+  /** A template's starting values (the phone's «Almuerzo», «Vacaciones»…): it only fills
+   *  the form — nothing is saved until the person confirms, and no template sets what the
+   *  client is told. */
+  prefill?: { reason?: string; who?: "site" | "staff"; date?: string; endDate?: string; allDay?: boolean; start?: string; end?: string };
   edit?: DatedBlock;
   title?: string;
   onClose: () => void;
@@ -71,21 +75,23 @@ export function BlockPanel(props: {
   const today = todayAtSite(tz);
   const edit = props.edit;
   const editAllDay = edit ? fmtTime(edit.starts_at, tz) === "00:00" && fmtTime(edit.ends_at, tz) === "00:00" : false;
+  const pre = edit ? undefined : props.prefill;
+  const preWho = pre?.who === "site" && props.canSiteClosure ? "site" : pre?.who === "staff" && props.canStaffTimeOff ? "staff" : undefined;
   const initial = useMemo(
     () => ({
-      who: (edit ? (edit.staff_id ? "staff" : "site") : props.canStaffTimeOff ? "staff" : "site") as "staff" | "site",
+      who: (edit ? (edit.staff_id ? "staff" : "site") : preWho ?? (props.canStaffTimeOff ? "staff" : "site")) as "staff" | "site",
       staffId: edit?.staff_id ?? props.fixedStaffId ?? props.initialStaffId ?? props.staff[0]?.id ?? "",
       freq: "once" as "once" | "repeat",
-      date: edit ? siteDayKey(edit.starts_at, tz) : props.initialDate && props.initialDate >= today ? props.initialDate : today,
-      endDate: edit ? siteDayKey(new Date(Date.parse(edit.ends_at) - 1).toISOString(), tz) : props.initialDate && props.initialDate >= today ? props.initialDate : today,
-      allDay: edit ? editAllDay : false,
-      start: edit && !editAllDay ? fmtTime(edit.starts_at, tz) : props.initialStart ?? "14:00",
-      end: edit && !editAllDay ? (fmtTime(edit.ends_at, tz) === "00:00" ? "24:00" : fmtTime(edit.ends_at, tz)) : props.initialEnd ?? "15:00",
+      date: edit ? siteDayKey(edit.starts_at, tz) : pre?.date && pre.date >= today ? pre.date : props.initialDate && props.initialDate >= today ? props.initialDate : today,
+      endDate: edit ? siteDayKey(new Date(Date.parse(edit.ends_at) - 1).toISOString(), tz) : pre?.endDate && pre.endDate >= today ? pre.endDate : props.initialDate && props.initialDate >= today ? props.initialDate : today,
+      allDay: edit ? editAllDay : pre?.allDay ?? false,
+      start: edit && !editAllDay ? fmtTime(edit.starts_at, tz) : pre?.start ?? props.initialStart ?? "14:00",
+      end: edit && !editAllDay ? (fmtTime(edit.ends_at, tz) === "00:00" ? "24:00" : fmtTime(edit.ends_at, tz)) : pre?.end ?? props.initialEnd ?? "15:00",
       weekdays: [] as number[],
       endKind: "never" as "never" | "on" | "after",
       endsOn: "",
       count: "8",
-      reason: edit?.reason ?? "",
+      reason: edit?.reason ?? pre?.reason ?? "",
       publicReason: (edit?.public_reason ?? null) as PublicAbsenceReason | null,
     }),
     // The form is mounted per open; its initial values are fixed for that open.

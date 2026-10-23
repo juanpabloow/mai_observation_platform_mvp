@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/icons";
 import { StaffCreateDrawer } from "./StaffCreateDrawer";
 import { AgAvatar, AgPageHeader, agTintAt, StateChip, usePopover } from "../agenda/AgendaChrome";
+import { apptCategoryClass, serviceCategory } from "@/lib/agendaCategory";
 import { SidePanel } from "../agenda/SidePanel";
 import { BreakWeekPanel } from "../agenda/BreakWeekPanel";
 import type { OccurrenceRef } from "../agenda/SeriesPanel";
@@ -225,6 +226,8 @@ export interface StaffTabProps {
   openingHours: Weekly;
   /** Site-wide closures (exceptions naming no staff) — nobody is on shift during one. */
   closures: StaffTimeOff[];
+  /** Recurring blocks of a professional happening today — «away now» for presence only. */
+  presenceBlocks?: StaffTimeOff[];
   /** Which drawer tab to open on — `?dtab=` makes a barber's hours or services a
    *  link you can send someone, not a place they have to click to. */
   detailTab?: string;
@@ -285,7 +288,7 @@ export function StaffTab(
       workingHours: s.workingHours,
       siteHours: props.openingHours,
       appts,
-      timeOff: timeOff.filter((t) => t.staffId === s.id),
+      timeOff: [...timeOff, ...(props.presenceBlocks ?? [])].filter((t) => t.staffId === s.id),
       closures: props.closures ?? [],
       now: now.getTime(),
       tz,
@@ -296,6 +299,8 @@ export function StaffTab(
     if (key === "time_off" && off) {
       const days = Math.max(1, Math.round((new Date(off.endsAt).getTime() - new Date(off.startsAt).getTime()) / 86_400_000));
       suffix = ` · ${days} ${days === 1 ? "día" : "días"}`;
+      // A booking still on her lane is named APART, to review — never as «con cita».
+      if (r.presence.review) suffix += ` · cita de las ${fmtTime(r.presence.review, tz)} por revisar`;
     } else if (key === "off_shift" || key === "inactive") {
       // "Entra a las 09:00", "Terminó a las 19:00", "Sede cerrada hasta las …" — the
       // phone's words for why a professional who works today is not on shift now.
@@ -754,7 +759,7 @@ function StaffDetail({
                         <span className="truncate text-[14px]">{x.contactName ?? "Sin contacto"}</span>
                         <span className="truncate text-[12.5px] text-muted">{x.serviceName}</span>
                       </span>
-                      <StateChip status={x.status} size="sm" />
+                      <StateChip status={x.status} size="sm" toneClass={`u-appt-service ${apptCategoryClass(serviceCategory(x.serviceName, services.find((sv) => sv.id === x.serviceId)?.category))}`} />
                     </li>
                   ))}
                 </ul>
@@ -1721,7 +1726,7 @@ function TeamOptions(props: {
         <svg aria-hidden viewBox="0 0 16 16" className="size-[11px]" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M4 6l4 4 4-4" /></svg>
       </button>
       {open ? (
-        <div ref={panelRef} role="menu" aria-label="Filtrar el equipo" className="absolute right-0 top-[46px] z-20 flex min-w-[220px] flex-col rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.10)]">
+        <div ref={panelRef} role="menu" aria-label="Filtrar el equipo" className="u-pop-in absolute right-0 top-[46px] z-20 flex min-w-[220px] flex-col rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.10)]">
           <span className="px-2.5 pb-1 pt-1.5 text-[12px] text-muted">Presencia</span>
           {props.presence.map((p) => (
             <button

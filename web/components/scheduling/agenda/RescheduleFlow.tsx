@@ -1,5 +1,6 @@
 "use client";
 
+import { apptClientLabel } from "@/lib/apptClientLabel";
 import { useEffect, useReducer, useRef, useState, useTransition, type RefObject } from "react";
 import { useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
 import { rescheduleAppointmentAction } from "@/lib/schedulingActions";
@@ -234,7 +235,7 @@ export function RescheduleFlow(props: {
   const dialogRef = useTrappedPanel({ active: !isPhone, onClose: props.onClose });
 
   const stepName = step === 1 ? "Nuevo horario" : "Confirmar cambio";
-  const keep = `${appt.contact_name ?? "Atención sin cita"} · ${appt.service_name} · ${appt.duration_min} min`;
+  const keep = `${apptClientLabel(appt)} · ${appt.service_name} · ${appt.duration_min} min`;
 
   // ── Shared pieces ────────────────────────────────────────────────────────────────
   const timesBlock = (phone: boolean) => (

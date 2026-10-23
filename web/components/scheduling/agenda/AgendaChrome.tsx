@@ -11,7 +11,7 @@ import { addDays, calendarDays, shiftMonth } from "@/lib/siteCalendar";
  *   usePopover     one popover behaviour: Escape closes and returns focus to its trigger,
  *                  a click outside closes, the first control takes focus on open
  *   GearMenu       «Más opciones de agenda» — the reference's toolbar menu
- *   FiltersPopover «Color de las citas» (Servicio | Estado) + legend, professionals, states
+ *   FiltersPopover the colour legend (always by service; contour · dashed · fill = state), professionals, states
  *   DateTitle      the date as the page title, opening a month picker
  * Nothing here decides a permission or a rule: callers pass only what the login may do.
  */
@@ -22,8 +22,13 @@ import { addDays, calendarDays, shiftMonth } from "@/lib/siteCalendar";
  * the title box 40px tall (the toolbar's height) so a title with a subtitle, a title next
  * to the calendar's tools and a bare title all start at the SAME place on every screen.
  */
-export const AG_HEAD = "flex shrink-0 flex-wrap items-start gap-2 px-5 pb-2.5 pt-3";
-export const AG_H1 = "py-[3px] text-[20px] font-semibold leading-[26px] tracking-[-0.015em] text-foreground";
+export const AG_HEAD = "flex shrink-0 flex-wrap items-start gap-2 px-5 py-2.5";
+/** Calendario's bar: 10px above and below, 20px at the sides, no rule or ground of its own —
+ *  the framed grid under it does the separating. The same box as AG_HEAD, so the title sits
+ *  at the same place and size on Calendario, Equipo and Horarios (24px, a 32px box that lines
+ *  up with the 32px tools). */
+export const AG_HEAD_CAL = AG_HEAD;
+export const AG_H1 = "u-page-title py-px text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground";
 export const AG_SUB = "-mt-1 text-[13px] text-muted";
 
 export function AgPageHeader(props: { title: ReactNode; subtitle?: ReactNode; id?: string; children?: ReactNode }) {
@@ -86,9 +91,13 @@ export const STATE_WORD: Record<string, string> = {
   no_show: "Inasistencia",
 };
 
-export function StateChip({ status, size = "md" }: { status: string; size?: "sm" | "md" }) {
+/** A COMPLETED chip is never the generic green: it fills with the appointment's service
+ *  colour (`toneClass`, the same fill the card takes), or a neutral grey where there is no
+ *  appointment in context (legend, state filter). */
+export function StateChip({ status, size = "md", toneClass }: { status: string; size?: "sm" | "md"; toneClass?: string }) {
+  const done = status === "completed" ? `${toneClass ?? ""} u-ag-done-chip` : "";
   return (
-    <span className={`u-status-${status} inline-flex shrink-0 items-center gap-[5px] whitespace-nowrap rounded-[6px] px-2 ${size === "sm" ? "h-[22px] text-[12px]" : "h-[26px] text-[13px]"}`}>
+    <span className={`u-status-${status} ${done} inline-flex shrink-0 items-center gap-[5px] whitespace-nowrap rounded-[6px] px-2 ${size === "sm" ? "h-[22px] text-[12px]" : "h-[26px] text-[13px]"}`}>
       <span aria-hidden>{STATE_GLYPH[status] ?? "·"}</span>
       {STATE_WORD[status] ?? status}
     </span>
@@ -131,7 +140,7 @@ export function usePopover() {
   return { open, setOpen, close, triggerRef, panelRef, toggle: () => setOpen((o) => !o) };
 }
 
-const POP = "absolute right-0 top-[calc(100%+8px)] z-40 flex flex-col rounded-[12px] bg-[var(--surface)] shadow-[0_0_0_1px_var(--line),0_14px_36px_rgba(0,0,0,0.14)]";
+const POP = "u-pop-in absolute right-0 top-[calc(100%+8px)] z-40 flex flex-col rounded-[12px] bg-[var(--surface)] shadow-[0_0_0_1px_var(--line),0_14px_36px_rgba(0,0,0,0.14)]";
 export const TB_ICON =
   "u-focus relative inline-flex size-[32px] shrink-0 items-center justify-center rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] text-foreground transition-colors hover:bg-[var(--subtle)]";
 export const TB_BTN =
@@ -223,7 +232,6 @@ const FAMILY_EDGE: Record<string, string> = {
 };
 
 export interface FiltersValue {
-  colorBy: "service" | "status";
   /** Professionals shown (empty = everyone). */
   staff: string[];
   /** States shown in full; the rest are dimmed (never hidden — the time is still taken). */
@@ -253,39 +261,36 @@ export function FiltersPopover(props: {
   };
   return (
     <>
-      <p className="text-[13px] text-muted">Color de las citas</p>
-      <div role="radiogroup" aria-label="Color de las citas" className="mt-2 grid grid-cols-2 gap-0.5 rounded-[10px] bg-[var(--ag-seg)] p-[3px]">
-        {(["service", "status"] as const).map((m) => (
-          <button
-            key={m}
-            type="button"
-            role="radio"
-            aria-checked={v.colorBy === m}
-            onClick={() => props.onChange({ ...v, colorBy: m })}
-            className={`u-focus h-[30px] rounded-[8px] text-[13px] ${v.colorBy === m ? "bg-[var(--surface)] text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.08),inset_0_0_0_1px_var(--line)]" : "text-[var(--ag-ink2)]"}`}
-          >
-            {m === "service" ? "Servicio" : "Estado"}
-          </button>
+      {/* ONE colour model (2026-10-23): the colour is always the SERVICE; the state is how
+          the card wears it — contour = confirmada, dashed = sin confirmar, filled = completada
+          (plus the ✓ / ✓✓ / ○ icon and the word, so colour is never the only signal). */}
+      <p className="text-[13px] text-muted">Color de las citas · por servicio</p>
+      <ul aria-label="Leyenda de servicios" className="mt-2 flex flex-wrap gap-x-3 gap-y-1.5 text-[13px] text-[var(--ag-ink2)]">
+        {props.families.map((f) => (
+          <li key={f.family} className="flex items-center gap-1.5">
+            <span aria-hidden className="size-[14px] rounded-[4px] border-[1.5px] bg-[var(--surface)]" style={{ borderColor: FAMILY_EDGE[f.family] ?? "var(--line-strong)" }} />
+            {f.label}
+          </li>
         ))}
-      </div>
-      <ul aria-label="Leyenda" className="mt-2.5 flex flex-wrap gap-x-3 gap-y-1.5 text-[13px] text-[var(--ag-ink2)]">
-        {v.colorBy === "service"
-          ? props.families.map((f) => (
-              <li key={f.family} className="flex items-center gap-1.5">
-                <span aria-hidden className="size-[14px] rounded-[4px] border-[1.5px] bg-[var(--surface)]" style={{ borderColor: FAMILY_EDGE[f.family] ?? "var(--line-strong)" }} />
-                {f.label}
-              </li>
-            ))
-          : ALL_STATES.map((s) => (
-              <li key={s} className="flex items-center gap-1.5">
-                <StateChip status={s} size="sm" />
-              </li>
-            ))}
+      </ul>
+      <ul aria-label="Leyenda de estados" className="mt-2.5 flex flex-wrap gap-x-3 gap-y-1.5 text-[13px] text-[var(--ag-ink2)]">
+        {([
+          ["solid", "Confirmada"],
+          ["dashed", "Sin confirmar"],
+          ["fill", "Completada"],
+        ] as const).map(([k, label]) => (
+          <li key={k} className="flex items-center gap-1.5">
+            <span
+              aria-hidden
+              className="size-[14px] rounded-[4px] border-[1.5px]"
+              style={{ borderColor: "var(--ag-ink2)", borderStyle: k === "dashed" ? "dashed" : "solid", background: k === "fill" ? "color-mix(in srgb, var(--ag-ink2) 18%, var(--surface))" : "var(--surface)" }}
+            />
+            {label}
+          </li>
+        ))}
       </ul>
       <p className="mt-2 text-[12.5px] leading-[1.45] text-muted">
-        {v.colorBy === "service"
-          ? "El color es la categoría del servicio. El estado se lee en el icono y el texto de cada cita (✓ confirmada · ✓✓ completada)."
-          : "El color es el estado. El servicio se lee en el texto de cada cita."}
+        El color es el servicio. Contorno: confirmada · punteado: sin confirmar · relleno: completada. El icono y el texto de cada cita repiten el estado.
       </p>
       {props.people.length > 1 ? (
         <fieldset className="mt-3 border-t border-[var(--line)] pt-3">
@@ -312,7 +317,7 @@ export function FiltersPopover(props: {
       </fieldset>
       <button
         type="button"
-        onClick={() => props.onChange({ colorBy: v.colorBy, staff: [], states: [...ALL_STATES] })}
+        onClick={() => props.onChange({ staff: [], states: [...ALL_STATES] })}
         className="u-focus mt-2 h-[32px] self-start rounded-[8px] px-0 text-[13px] text-[var(--ag-ink2)] underline-offset-2 hover:underline"
       >
         Restablecer filtros

@@ -66,9 +66,12 @@ export function AffectedList(props: {
     );
   }
   if (props.loading && !items) {
-    return <div aria-busy="true" aria-label="Revisando citas afectadas" className="h-[48px] rounded-[12px] bg-subtle" />;
+    return <Recalc first />;
   }
   if (!items) return null;
+  // Recalculating after a change: say so, and never show the PREVIOUS «all clear» as if it
+  // were the answer for what is on screen now.
+  if (props.loading && items.length === 0) return <Recalc />;
   if (items.length === 0) {
     return (
       <div className="flex flex-col gap-2">
@@ -81,8 +84,9 @@ export function AffectedList(props: {
     );
   }
   return (
-    <div className={`flex flex-col gap-2 ${props.loading ? "opacity-70" : ""}`} aria-busy={props.loading || undefined}>
-      <p role="status" className="rounded-[12px] border border-[var(--warn-rule)] bg-[var(--warn-soft)] px-3.5 py-3 text-[13px] text-[var(--warn)]">
+    <div className="flex flex-col gap-2" aria-busy={props.loading || undefined}>
+      {props.loading ? <Recalc /> : null}
+      <p role="status" style={props.loading ? { opacity: 0.6 } : undefined} className="rounded-[12px] border border-[var(--warn-rule)] bg-[var(--warn-soft)] px-3.5 py-3 text-[13px] text-[var(--warn)]">
         <span className="font-semibold">
           {props.lead ? props.lead(items.length) : `${items.length === 1 ? "1 cita queda" : `${items.length} citas quedan`} dentro ${within(props.what)}.`}
         </span>{" "}
@@ -95,6 +99,17 @@ export function AffectedList(props: {
       </ul>
       {before}
     </div>
+  );
+}
+
+/** «Revisando / Recalculando citas afectadas…» — visible text (not only a grey bar) and a
+ *  polite announcement; the dot breathes unless the person prefers reduced motion. */
+function Recalc({ first = false }: { first?: boolean }) {
+  return (
+    <p role="status" aria-live="polite" className="flex min-h-[44px] items-center gap-2 rounded-[12px] bg-subtle px-3.5 py-2.5 text-[13px] text-muted">
+      <span aria-hidden className="u-ag-busy-dot size-[7px] shrink-0 rounded-full bg-[var(--ag-ink2,currentColor)]" />
+      {first ? "Revisando citas afectadas…" : "Recalculando citas afectadas con el cambio…"}
+    </p>
   );
 }
 

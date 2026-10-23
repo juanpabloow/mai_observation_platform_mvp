@@ -879,8 +879,6 @@ html[data-text-scale='large'] {
   --frame-radius: 16px;
   --frame-ground: var(--sidebar-bg);
   --frame-edge: transparent;
-  /* A soft lift so the content panel reads as one sheet ABOVE the rail, not cut into it. */
-  --frame-shadow: -1px 0 0 rgba(17, 17, 19, 0.02), -4px 0 14px -6px rgba(17, 17, 19, 0.1), 0 6px 22px -10px rgba(17, 17, 19, 0.12);
 }
 /* Light app + light rail: the rail's #eef0f3 is the canvas's own value, so the panel
    would vanish into it — step the ground (and the rail on it) down a notch. */
@@ -900,13 +898,40 @@ html:not(.dark)[data-sidebar-theme='light'] {
 /* Dark app: the canvas is #101012, so a #1a1a1a ground would sit LIGHTER than the
    panel and read as a hole. Drop the ground (and the rail on it) to near-black and give
    the panel a hairline so it lifts. Neutral greys only (R=G=B), like the black rail. */
+/*
+ * «Claro» with the default dark rail (2026-10-23 spec): the rail and the ground behind the
+ * content are GRAPHITE (#1A1A1A), and the content is a white card on top — 8px from the
+ * top, right and bottom, 16px radius, a 1px #E0E2E7 inner edge. The rail draws no border
+ * of its own. Light mode only: dark mode («Grafito») keeps its near-black values below,
+ * and whoever chose the Light rail keeps it.
+ * Contrast on #1A1A1A: #F5F5F7 ~16:1 · items #C7C7CC ~10.9:1 · sub-pages #A1A1A6 ~6.8:1 ·
+ * section labels #8E8E93 ~5.3:1 (all AA for text). Focus: the #2F6BE4 ring with an offset
+ * (~3.4:1 against the rail, AA for a non-text indicator).
+ */
+html:not(.dark)[data-sidebar-theme='black'] {
+  --sidebar-bg: #1a1a1a;
+  --sidebar-border: #2c2c2e;
+  --sidebar-fg: #f5f5f7;
+  --sidebar-muted: #c7c7cc;
+  --sidebar-sub: #a1a1a6;
+  --sidebar-section: #8e8e93;
+  --sidebar-tile: #2c2c2e;
+  --sidebar-field: #232325;
+  --sidebar-hover: #232325;
+  --frame-edge: #e0e2e7;
+}
+html:not(.dark)[data-sidebar-theme='black'] [data-collapsed] {
+  --focus-edge: #2f6be4;
+}
+html:not(.dark)[data-sidebar-theme='black'] [data-collapsed] :where(a, button, input, [tabindex]):focus-visible {
+  outline-offset: 2px;
+}
 html.dark {
   --sidebar-bg: #070707;
   --sidebar-border: #1f1f1f;
   --sidebar-hover-dark: #1c1c1c;
   --sidebar-field: #161616;
   --frame-edge: rgba(255, 255, 255, 0.08);
-  --frame-shadow: -6px 0 18px -6px rgba(0, 0, 0, 0.55), 0 8px 26px -10px rgba(0, 0, 0, 0.6);
 }
 @media (min-width: 1280px) {
   body:has([data-collapsed]) {
@@ -921,7 +946,6 @@ html.dark {
     border: 1px solid var(--frame-edge);
     border-radius: var(--frame-radius);
     background: var(--background);
-    box-shadow: var(--frame-shadow);
     overflow: hidden;
   }
 }
@@ -940,6 +964,22 @@ html.dark {
   body:has(aside[data-collapsed='true']) .u-module-modal {
     left: 64px;
   }
+}
+
+/*
+ * THE PAGE TITLE (2026-10-23, «mismo tamaño y posición de los títulos en todo»): every
+ * screen's title — Agenda, Equipo, Horarios, Servicios, Productos, Promociones, Contactos,
+ * Inbox… — is the same 24px / 600 / 30px line in the platform UI face, in PIXELS (the app
+ * runs a 90% root, so rem titles drifted to 23.4px). A phone keeps each screen's own
+ * smaller title; the face is shared at every size.
+ */
+.u-page-title {
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Display", "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+@media (min-width: 768px) {
+  .u-page-title { font-size: 24px; line-height: 30px; }
 }
 
 body {
@@ -2078,9 +2118,9 @@ body {
   .u-lift, .u-lift:hover { transition: none; transform: none; }
 }
 
-/* Calendar card (redesign): white card, the colour on its 1.5px edge — the SERVICE family
-   by default («Servicio»), or the STATE («Estado»). The state is always also an icon +
-   words on the card. Unconfirmed = dashed edge; cancelled = grey, struck through. */
+/* Calendar card (redesign): white card, the SERVICE family's colour on its 1.5px edge. The
+   state is always also an icon + words on the card. Unconfirmed = dashed edge; cancelled =
+   grey, struck through. (Agenda's own model is in the `.u-ag` block below.) */
 .u-appt2 {
   border-radius: 10px;
   background: var(--surface);
@@ -2089,10 +2129,6 @@ body {
 }
 .u-appt2[data-status="scheduled"] { border-style: dashed; }
 .u-appt2[data-status="cancelled"] { border-color: var(--line-strong); background: var(--subtle); color: var(--muted); }
-.u-appt2[data-mode="status"][data-status="scheduled"] { border-color: var(--status-scheduled-fg); }
-.u-appt2[data-mode="status"][data-status="confirmed"] { border-color: var(--status-confirmed-fg); }
-.u-appt2[data-mode="status"][data-status="completed"] { border-color: var(--status-completed-fg); }
-.u-appt2[data-mode="status"][data-status="no_show"] { border-color: var(--status-no_show-fg); }
 .u-appt2-dot { background: var(--appt-rule, var(--faint)); }
 .u-st-ink-scheduled { color: var(--status-scheduled-fg); }
 .u-st-ink-confirmed { color: var(--status-confirmed-fg); }
@@ -2250,21 +2286,45 @@ body {
 .u-ag-av[data-tint="3"] { background: var(--ag-av-3); }
 .u-ag-av[data-tint="4"] { background: var(--ag-av-4); }
 /* Usual break: routine, full lane width, no edge. Block: off fill with a hairline. */
-.u-ag .u-sch-break { background: var(--ag-break); color: var(--muted); }
-.u-ag .u-sch-block { background: var(--ag-off); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
-/* Card (apptItem · contorno): white, 1.5px family edge; unconfirmed dashed; cancelled
-   1px dashed field line, transparent, struck through. «Estado»: the state's own look. */
+/* Unavailable time is HATCHED (audit 23 Oct: flat fills read like the rest of the grid in
+   Grafito). Three levels, so they are told apart without colour alone:
+     pausa        the faintest diagonal, no edge
+     ausencia / bloqueo de UNA persona   a firmer diagonal + hairline (only in her lane)
+     sede cerrada a crosshatch + hairline (in every lane: it closes the site for everyone)
+   Appointments sit on top (opaque); labels avoid them (tileLabel in AgendaView). */
+.u-ag { --ag-hatch-soft: rgba(17, 19, 22, 0.06); --ag-hatch: rgba(17, 19, 22, 0.09); }
+.dark .u-ag { --ag-hatch-soft: rgba(255, 255, 255, 0.06); --ag-hatch: rgba(255, 255, 255, 0.09); }
+.u-ag .u-sch-break { background: repeating-linear-gradient(135deg, var(--ag-hatch-soft) 0 1px, transparent 1px 8px), var(--ag-break); color: var(--muted); }
+.u-ag .u-sch-block { background: repeating-linear-gradient(135deg, var(--ag-hatch) 0 1px, transparent 1px 7px), var(--ag-off); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
+.u-ag .u-sch-closed { background: repeating-linear-gradient(135deg, var(--ag-hatch) 0 1px, transparent 1px 7px), repeating-linear-gradient(45deg, var(--ag-hatch) 0 1px, transparent 1px 7px), var(--ag-off); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-strong); }
+/* ONE colour model (2026-10-23, «los colores según el tipo de servicio»): the colour is
+   ALWAYS the service family; the state is how the card wears it —
+     Confirmada    contour only (1.5px service edge on white)
+     Sin confirmar the same contour, dashed
+     Completada    filled with the service colour (16 %, 22 % on hover; Grafito 22 / 28 %)
+     Cancelada     1px dashed field line, transparent, struck through (unchanged)
+   The ○ / ✓ / ✓✓ icon and the word stay on every card: colour is never the only signal.
+   Day cards and week chips share it. There is no «Servicio | Estado» switch any more. */
 .u-ag .u-appt2 { border-radius: 10px; background: var(--surface); border: 1.5px solid var(--appt-rule, var(--line-strong)); }
 .u-ag .u-appt2[data-status="scheduled"] { border-style: dashed; }
-.u-ag .u-appt2[data-status="cancelled"] { border: 1px dashed var(--line-strong); background: transparent; color: var(--muted); }
-.u-ag .u-appt2[data-mode="status"][data-status="scheduled"] { border-color: var(--appt-rule, var(--line-strong)); }
-.u-ag .u-appt2[data-mode="status"][data-status="confirmed"] { border-color: var(--appt-rule, var(--line-strong)); }
-.u-ag .u-appt2[data-mode="status"][data-status="completed"] { border: 1px solid #bfdfc9; background: #e6f3ea; }
-.u-ag .u-appt2[data-mode="status"][data-status="no_show"] { border: 1px solid #f1c6c8; background: #fbeded; }
-.dark .u-ag .u-appt2[data-mode="status"][data-status="completed"] { border-color: rgba(110, 190, 140, 0.38); background: rgba(110, 190, 140, 0.16); }
-.dark .u-ag .u-appt2[data-mode="status"][data-status="no_show"] { border-color: rgba(229, 72, 77, 0.38); background: rgba(229, 72, 77, 0.14); }
-.dark .u-ag .u-appt2 { background: rgba(255, 255, 255, 0.03); }
+.u-ag .u-appt2[data-status="cancelled"] { border: 1px dashed var(--line-strong); background: var(--surface); color: var(--muted); }
+/* Every card is OPAQUE (audit 23 Oct): a pause or block under it must never read through
+   its text. Grafito's lift is mixed into the surface instead of a translucent white. */
+.dark .u-ag .u-appt2 { background: color-mix(in srgb, #ffffff 3%, var(--surface)); }
+.dark .u-ag .u-appt2[data-status="cancelled"] { background: var(--surface); }
+.u-ag .u-appt2:where(:not([data-status="cancelled"])):hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 6%, var(--surface)); }
+.u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 16%, var(--surface)); }
+.u-ag .u-appt2[data-status="completed"]:hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 22%, var(--surface)); }
+.dark .u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 22%, var(--surface)); }
+.dark .u-ag .u-appt2[data-status="completed"]:hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 28%, var(--surface)); }
 .u-ag .u-appt2-dot { border-radius: 2px; }
+/* A completed appointment's state chip fills with its service colour (as the card does),
+   never the generic green; with no service in context (legend, filters) it is neutral grey.
+   The ✓✓ and the word stay. */
+.u-ag .u-ag-done-chip { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 18%, var(--surface)); color: var(--foreground); border-color: transparent; }
+.dark .u-ag .u-ag-done-chip { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 28%, transparent); }
+/* Selected: a 2px ink ring that wins over hover (doubled attribute = one notch more specific). */
+.u-ag .u-appt2[data-selected][data-selected] { box-shadow: 0 0 0 2px var(--foreground); }
 .u-ag { --ag-segact-bg: #111316; --ag-segact-fg: #ffffff; --ag-today: #fafbfc; }
 .dark .u-ag { --ag-segact-bg: #3a3d43; --ag-segact-fg: #f5f5f7; --ag-today: rgba(255, 255, 255, 0.02); }
 /* Agenda panels (reference LS.drawer): 520px, 12px from the frame, 18px radius, a hairline
@@ -2332,7 +2392,20 @@ body {
 .u-ag-select { transition: top 70ms ease-out, height 70ms ease-out; }
 .u-ag-select-live { animation: u-select-live 1.2s ease-in-out infinite; }
 .u-ag-ghost { animation: u-pop-in 180ms cubic-bezier(0.2, 0.7, 0.2, 1); transition: top 120ms ease-out, height 160ms ease-out; }
+/* FEEDBACK (2026-10-23). Short, only on the person's own action — never on the background
+   refresh, which re-renders without remounting anything:
+   · u-ag-flash: an appointment the server has just CONFIRMED saved/moved — a halo that fades
+     once (≈1.4 s). It replaces a blinking pulse: the calendar must not flicker.
+   · u-ag-busy-dot: «recalculando…» next to the words that say it.
+   · Menus open with u-pop-in (150 ms); panels with u-side-panel-in (200 ms). */
+@keyframes u-ag-flash { 0% { box-shadow: 0 0 0 2px var(--foreground), 0 0 0 6px color-mix(in srgb, var(--foreground) 18%, transparent); } 70% { box-shadow: 0 0 0 2px var(--foreground), 0 0 0 10px transparent; } 100% { box-shadow: 0 0 0 2px var(--foreground), 0 0 0 10px transparent; } }
+.u-ag .u-ag-flash { animation: u-ag-flash 1400ms cubic-bezier(0.2, 0.7, 0.2, 1) both; }
+@keyframes u-ag-busy { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+.u-ag-busy-dot { animation: u-ag-busy 1.1s ease-in-out infinite; }
 @media (prefers-reduced-motion: reduce) {
-  .u-pop-in, .u-ag-ghost, .u-ag-select-live { animation: none; }
+  .u-pop-in, .u-ag-ghost, .u-ag-select-live, .u-ag-busy-dot { animation: none; }
+  /* Reduced motion: the confirmation is a still ring for the same moment, no halo. */
+  .u-ag .u-ag-flash { animation: none; box-shadow: 0 0 0 2px var(--foreground); }
+  .u-ag .animate-pulse { animation: none; }
   .u-ag-select, .u-ag-ghost { transition: none; }
 }

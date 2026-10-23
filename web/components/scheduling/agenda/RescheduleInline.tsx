@@ -62,6 +62,9 @@ export function RescheduleInline(props: {
   const [taken, setTaken] = useState<string | null>(null);
   const [failed, setFailed] = useState<string | null>(null);
   const [reasons, setReasons] = useState<Record<string, string>>({});
+  /** The site no longer offers this appointment's service: no hours to move it to — and
+   *  not a network failure to retry. */
+  const [notOffered, setNotOffered] = useState(false);
   const [pending, startTransition] = useTransition();
   const sending = useRef(false);
   const view = availabilityView(model);
@@ -85,7 +88,8 @@ export function RescheduleInline(props: {
     fetch(`/api/scheduling/internal/availability?${params.toString()}`, { signal: ctrl.signal, cache: "no-store" })
       .then(async (res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const data = (await res.json()) as { slots: RescheduleSlot[]; days?: Array<{ date: string; summary: string }> };
+        const data = (await res.json()) as { slots: RescheduleSlot[]; days?: Array<{ date: string; summary: string }>; unavailable?: string };
+        setNotOffered(data.unavailable === "service_not_offered");
         setReasons(Object.fromEntries((data.days ?? []).map((d) => [d.date, d.summary])));
         dispatch({ type: "loaded", requestId: q.id, slots: data.slots });
       })
@@ -248,11 +252,21 @@ export function RescheduleInline(props: {
           </div>
         ) : null}
         {view.kind === "loading" ? (
-          <div className="grid grid-cols-4 gap-1.5" aria-busy="true" aria-label="Buscando horas libres">
+          <div className="flex flex-col gap-2" role="status" aria-live="polite">
+          <p className="flex items-center gap-2 text-[13px] text-muted">
+            <span aria-hidden className="u-ag-busy-dot size-[7px] rounded-full bg-[var(--ag-ink2,currentColor)]" />
+            Buscando horas libres…
+          </p>
+          <div className="grid grid-cols-4 gap-1.5" aria-hidden>
             {Array.from({ length: 8 }, (_, i) => (
               <span key={i} className="h-[40px] rounded-[10px] bg-subtle" />
             ))}
           </div>
+          </div>
+        ) : notOffered ? (
+          <p role="status" className="rounded-[10px] bg-subtle px-3 py-2.5 text-[13px] leading-[1.45] text-muted">
+            {appt.service_name} ya no se ofrece en esta sede, así que no hay horas para moverla. La cita sigue como está; para moverla, vuelve a ofrecer el servicio en esta sede desde Catálogo.
+          </p>
         ) : view.kind === "error" ? (
           <div className="flex items-center gap-3 text-[13px] text-muted">
             No pudimos cargar las horas libres.

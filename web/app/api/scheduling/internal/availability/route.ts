@@ -18,8 +18,10 @@ import { getAppointmentById } from "@worker/db/repositories/scheduling/appointme
  * AND site.client_id === client.id; service/staff validity is enforced by the
  * loader's joins. Availability is never computed before the whole gate passes.
  *
- * EVERY failure is the same generic 404 — foreign, disabled, default, and
- * unknown are indistinguishable, and nothing leaks about other clients.
+ * EVERY gate failure is the same generic 404 — foreign, disabled, default, and
+ * unknown are indistinguishable, and nothing leaks about other clients. Past the gate, a
+ * service the site does not offer answers 200 with no slots and
+ * `unavailable: "service_not_offered"` (see below), so the forms can say why.
  *
  * `appointment_id` (reschedule): availability FOR MOVING THAT APPOINTMENT. It must be an
  * appointment of this client, at this site, that this login may modify (the same staff
@@ -104,7 +106,14 @@ export async function GET(req: Request): Promise<Response> {
     timingOverride: moving?.timing ?? null,
     ignoreMinNotice: immediate,
   });
-  if (!prepared) return notFoundResponse();
+  // The gate has passed (this login may book at this site of this client). A service the
+  // site does not offer — removed or deactivated after the appointment was booked, or simply
+  // unknown — is not a failure to retry: say so, with no slots. Unknown, foreign and inactive
+  // service ids all get this same answer, and the gate never depends on the service, so it
+  // reveals nothing about other clients' catalogues.
+  if (!prepared) {
+    return Response.json({ site: { id: site.id, timezone: site.timezone }, slots: [], unavailable: "service_not_offered" });
+  }
   const windowEnd = now.getTime() + immediateWindowMin(prepared.slotIntervalMin) * 60_000;
   const computed = prepared.request ? computeAvailability(prepared.request) : [];
   const result = {

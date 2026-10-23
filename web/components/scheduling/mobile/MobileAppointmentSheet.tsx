@@ -1,5 +1,6 @@
 "use client";
 
+import { apptClientLabel } from "@/lib/apptClientLabel";
 import Link from "next/link";
 import { useEffect, useState } from "react";
 import { priceLabelCOP } from "@/lib/money";
@@ -112,7 +113,7 @@ export function MobileAppointmentSheet(props: {
   // "Más acciones" only when it holds something this login may do or open.
   const hasMore = plan.transitions.length > 0 || Boolean(props.bookAgainHref || props.conversationHref);
   const blocked = props.canOperate ? rescheduleBlockedReason({ status: appt.status, allowed: plan.allowed, staffName: appt.staff_name }) : null;
-  const client = appt.contact_name ?? "Atención sin cita";
+  const client = apptClientLabel(appt);
   const firstName = client.replace(/^\s*[[(][^\])]*[\])]\s*/, "").split(/\s+/)[0];
   const start = fmtTime(appt.start_at, tz);
   const end = fmtTime(appt.service_end_at, tz);

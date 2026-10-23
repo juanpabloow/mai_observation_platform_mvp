@@ -1,5 +1,6 @@
 "use client";
 
+import { apptClientLabel } from "@/lib/apptClientLabel";
 import Link from "next/link";
 import { useCallback, useRef, useState } from "react";
 import { useIsOverlayWidth } from "@/components/ui/Overlay";
@@ -109,11 +110,14 @@ export function AppointmentPanel(props: {
   const onContactDirty = useCallback((d: boolean) => setContactDirty(d), []);
 
   const [now] = useState(() => Date.now());
+  // Which state is being saved — the segment says «Guardando…» on THAT option (and the
+  // live region announces it) until the server answers; the chip changes only then.
+  const [savingTo, setSavingTo] = useState<Target | null>(null);
   const plan = appointmentActionPlan({ canOperate: props.canOperate, canModify: props.canModify, status: appt.status, startAt: appt.start_at, now });
   const blocked = props.canOperate ? rescheduleBlockedReason({ status: appt.status, allowed: plan.allowed, staffName: appt.staff_name }) : null;
   const price = priceLabelCOP(appt.price);
   // Whether there is a contact is contact_id; the label only names what is known.
-  const client = appt.contact_name ?? appt.guest_name ?? (appt.origin === "walk_in" ? "Atención sin cita" : "Sin contacto");
+  const client = apptClientLabel(appt);
   const timeRange = `${fmtTime(appt.start_at, tz)} – ${fmtTime(appt.service_end_at, tz)}`;
   const started = Date.parse(appt.start_at) <= now;
   const ended = Date.parse(appt.service_end_at) <= now;
@@ -159,9 +163,13 @@ export function AppointmentPanel(props: {
     );
   }
 
+  const shownSaving = props.pending ? savingTo : null;
   const choose = (target: Target) => {
     if (DESTRUCTIVE.has(target)) setConfirm({ target, reason: "" });
-    else props.onStatus(target);
+    else {
+      setSavingTo(target);
+      props.onStatus(target);
+    }
   };
 
   const showActivity = async () => {
@@ -170,10 +178,11 @@ export function AppointmentPanel(props: {
     setActivity(r.ok ? { state: "ready", items: r.items } : { state: "error", error: r.error });
   };
 
-  // Reference (A.dotL): a 6px bar in the service family — the state's colour once it is
-  // completed / a no-show / cancelled. Subtitle: "jueves 22 oct · 14:30 – 15:15 · 45 min".
+  // Reference (A.dotL): a 6px bar in the service family — it stays the service's colour when
+  // the appointment is completed (completion FILLS the chip and the card with it, no green);
+  // a no-show / cancelled take their state's colour. Subtitle: "jueves 22 oct · 14:30 – 15:15 · 45 min".
   const barColor =
-    appt.status === "completed" ? "var(--ag-done-bar)" : appt.status === "no_show" ? "var(--danger)" : appt.status === "cancelled" ? "var(--line-strong)" : "var(--appt-rule, var(--line-strong))";
+    appt.status === "no_show" ? "var(--danger)" : appt.status === "cancelled" ? "var(--line-strong)" : "var(--appt-rule, var(--line-strong))";
   const stripe = <span aria-hidden className={`${props.toneClass} min-h-[44px] w-[6px] shrink-0 self-stretch rounded-[3px]`} style={{ background: barColor }} />;
   const subtitle = (
     <span className="tabular-nums">
@@ -205,7 +214,7 @@ export function AppointmentPanel(props: {
             bodyClassName="px-5 pb-5 pt-1"
             subtitle={subtitle}
             leading={stripe}
-            aside={<StateChip status={appt.status} />}
+            aside={<StateChip status={appt.status} toneClass={props.toneClass} />}
             dirty={rescheduleDirty}
             onClose={props.onClose}
             handleRef={handle}
@@ -238,7 +247,7 @@ export function AppointmentPanel(props: {
         bodyClassName="px-5 pb-5 pt-1"
         subtitle={subtitle}
         leading={stripe}
-        aside={<StateChip status={appt.status} />}
+        aside={<StateChip status={appt.status} toneClass={props.toneClass} />}
         dirty={contactDirty}
         covered={confirm !== null || props.covered}
         onClose={props.onClose}
@@ -295,12 +304,24 @@ export function AppointmentPanel(props: {
                             : "cursor-not-allowed text-[var(--ag-prim-dis-ink)]"
                       }`}
                     >
-                      <span aria-hidden>{STATE_GLYPH[s.status]}</span>
-                      {s.label}
+                      {shownSaving === s.status ? (
+                        <>
+                          <span aria-hidden className="u-ag-busy-dot size-[6px] rounded-full bg-current" />
+                          Guardando…
+                        </>
+                      ) : (
+                        <>
+                          <span aria-hidden>{STATE_GLYPH[s.status]}</span>
+                          {s.label}
+                        </>
+                      )}
                     </button>
                   );
                 })}
               </div>
+              <span role="status" aria-live="polite" className="sr-only">
+                {shownSaving ? `Guardando: ${segment.find((x) => x.status === shownSaving)?.label ?? ""}` : ""}
+              </span>
               <div className="flex flex-wrap items-center gap-1">
                 {plan.transitions.includes("no_show") ? (
                   <button type="button" className="u-focus h-[32px] rounded-[8px] px-2 text-[13px] text-[var(--ag-ink2)] hover:bg-[var(--subtle)]" onClick={() => choose("no_show")} disabled={props.pending}>

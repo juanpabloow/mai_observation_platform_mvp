@@ -1,29 +1,18 @@
 "use client";
 
-import { useMemo, useState, useTransition } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createExceptionAction, deleteExceptionAction } from "@/lib/schedulingAdminActions";
+import { listScheduleSeriesAction, type SeriesView } from "@/lib/scheduleSeriesActions";
+import { nextOccurrence, seriesWhen } from "@/lib/seriesOccurrence";
 import { PUBLIC_REASON_LABEL } from "@/lib/publicAbsenceReason";
-import { effectivePublicReason, PublicReasonField } from "../../timeoff/PublicReasonField";
 import type { Exception, Site, Staff } from "../../AdminPanel";
+import { BlockPanel, type DatedBlock } from "../../agenda/BlockPanel";
+import { SeriesPanel, type OccurrenceRef } from "../../agenda/SeriesPanel";
+import { AffectedReschedulePanel } from "../../agenda/AffectedReschedulePanel";
+import type { AffectedItem } from "../../agenda/ScheduleFormParts";
 import { MButton, MSegmented, MStaffAvatar, Sheet } from "../kit";
-import { BLOCK_TEMPLATES, blockDraft, blockPayload, blockWhen, dayLabel, tzLabel, zonedParts, type BlockDraft } from "./logic";
-import {
-  CARD_M,
-  Chevron,
-  ConfirmSheet,
-  ErrorNote,
-  Field,
-  INPUT_M,
-  LABEL_M,
-  ROW_M,
-  SELECT_M,
-  Screen,
-  SubHeader,
-  SwitchRow,
-  siteStaffColors,
-  type ConfigNav,
-} from "./ui";
+import { BLOCK_TEMPLATES, blockDraft, blockWhen, zonedParts } from "./logic";
+import { CARD_M, Chevron, ErrorNote, ROW_M, Screen, SubHeader, siteStaffColors, type ConfigNav } from "./ui";
 
 const todayIn = (tz: string) => zonedParts(new Date(), tz).key;
 
@@ -39,8 +28,42 @@ function TemplatePills({ onPick }: { onPick: (t: string) => void }) {
   );
 }
 
+/**
+ * The recurring BLOCKS of every site (audit 23 Oct: the phone listed only dated
+ * exceptions, so a series created from the calendar had no entry here). The SAME action
+ * as the desktop's Horarios y ausencias; breaks are not blocks and stay in each schedule.
+ */
+export function useBlockSeries(clientId: string, sites: Site[]) {
+  const siteKey = sites.map((s) => s.id).join("|");
+  const [state, setState] = useState<{ key: string; list: Array<SeriesView & { siteId: string }> | null; error: boolean }>({ key: "", list: null, error: false });
+  const load = useCallback(() => {
+    const ids = siteKey ? siteKey.split("|") : [];
+    Promise.all(ids.map((id) => listScheduleSeriesAction(clientId, id).then((r) => ({ id, r }))))
+      .then((rs) => {
+        const failed = rs.some((x) => !x.r.ok);
+        const list = rs.flatMap((x) => (x.r.ok ? x.r.series.filter((s) => s.kind === "block").map((s) => ({ ...s, siteId: x.id })) : []));
+        setState({ key: siteKey, list: failed ? null : list, error: failed });
+      })
+      .catch(() => setState({ key: siteKey, list: null, error: true }));
+  }, [clientId, siteKey]);
+  useEffect(load, [load]);
+  const fresh = state.key === siteKey;
+  return { series: fresh ? state.list : null, error: fresh && state.error, reload: load };
+}
+
+type Panel =
+  | { kind: "new"; siteId: string; template: string | null }
+  | { kind: "dated"; siteId: string; block: DatedBlock }
+  | { kind: "series"; siteId: string; occ: OccurrenceRef; owner: string | null };
+
 // ── 4.10 Bloqueos · 4.11 vacío ───────────────────────────────────────────────────
 
+/**
+ * ONE list of what takes time away — dated blocks AND recurring series — opening the SAME
+ * editors as the desktop (BlockPanel, SeriesPanel, full screen on a phone), with the
+ * affected appointments and «Reagendar». «Nuevo bloqueo» (and `?m=bloqueo-nuevo`, kept for
+ * old links) opens BlockPanel, which also creates recurring blocks. Past blocks are history.
+ */
 export function BlocksList({
   nav,
   clientId,
@@ -49,6 +72,8 @@ export function BlocksList({
   exceptions,
   past,
   toast,
+  startNew = false,
+  template = null,
 }: {
   nav: ConfigNav;
   clientId: string;
@@ -58,67 +83,85 @@ export function BlocksList({
   /** Ended in the last 90 days (read-only history). */
   past: Exception[];
   toast: (m: string) => void;
+  /** Open «Nuevo bloqueo» right away (the old `?m=bloqueo-nuevo` link). */
+  startNew?: boolean;
+  template?: string | null;
 }) {
   const router = useRouter();
-  const [open, setOpen] = useState<Exception | null>(null);
-  const [confirm, setConfirm] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, startBusy] = useTransition();
-  // Soonest first (the page loads per site; see the desktop list).
-  const upcoming = useMemo(() => [...exceptions].sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at)), [exceptions]);
-  // Pasados: most recent first.
-  const ended = useMemo(() => [...past].sort((a, b) => Date.parse(b.starts_at) - Date.parse(a.starts_at)), [past]);
+  const activeSites = sites.filter((s) => s.active);
+  const [siteId, setSiteId] = useState(activeSites[0]?.id ?? sites[0]?.id ?? "");
+  const site = sites.find((s) => s.id === siteId) ?? sites[0];
+  const { series, error: seriesError, reload } = useBlockSeries(clientId, sites);
+  const validTemplate = template && (BLOCK_TEMPLATES as readonly string[]).includes(template) ? template : null;
+  const [panel, setPanel] = useState<Panel | null>(() => (startNew && site ? { kind: "new", siteId: site.id, template: validTemplate } : null));
+  const [resched, setResched] = useState<{ item: AffectedItem; holds: string[] } | null>(null);
+  const [recheck, setRecheck] = useState(0);
+  const [history, setHistory] = useState<Exception | null>(null);
   const [tab, setTab] = useState<"next" | "past">("next");
-  // Read once (render must stay pure): what has already ended is history.
   const [nowMs] = useState(() => Date.now());
-  const list = tab === "next" ? upcoming : ended;
   const multiSite = sites.length > 1;
+  const inSite = <T extends { site_id: string }>(xs: T[]) => (multiSite ? xs.filter((x) => x.site_id === siteId) : xs);
+  const upcoming = useMemo(() => [...inSite(exceptions)].sort((a, b) => Date.parse(a.starts_at) - Date.parse(b.starts_at)), [exceptions, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const ended = useMemo(() => [...inSite(past)].sort((a, b) => Date.parse(b.starts_at) - Date.parse(a.starts_at)), [past, siteId]); // eslint-disable-line react-hooks/exhaustive-deps
+  const siteSeries = (series ?? []).filter((x) => !multiSite || x.siteId === siteId);
+  const nameOf = (id: string | null) => (id ? staff.find((p) => p.id === id)?.name ?? "Profesional" : "Toda la sede");
+  const colors = siteStaffColors(staff, siteId);
+  const tz = site?.timezone ?? "UTC";
 
-  const describe = (e: Exception) => {
-    const site = sites.find((s) => s.id === e.site_id);
-    const tz = site?.timezone ?? "UTC";
-    const member = e.staff_id ? staff.find((p) => p.id === e.staff_id) : undefined;
-    return {
-      site,
-      member,
-      when: blockWhen(e, tz, todayIn(tz)),
-      colors: siteStaffColors(staff, e.site_id),
-    };
+  const done = (message: string) => {
+    setPanel(null);
+    toast(message);
+    reload();
+    router.refresh();
   };
+  const panelSite = panel ? sites.find((s) => s.id === panel.siteId) ?? site : null;
+  const panelStaff = panelSite ? staff.filter((p) => p.site_id === panelSite.id && p.active).map((p) => ({ id: p.id, name: p.name })) : [];
+  const openNew = (tpl: string | null = null) => site && setPanel({ kind: "new", siteId: site.id, template: tpl });
+  const prefill = (tpl: string | null) => {
+    if (!tpl || !panelSite) return undefined;
+    const d = blockDraft(panelSite.id, todayIn(panelSite.timezone), tpl);
+    return { reason: d.reason, who: d.scope, date: d.from, endDate: d.to, allDay: d.allDay, start: d.h1, end: d.h2 };
+  };
+  const count = upcoming.length + siteSeries.length;
 
-  const remove = () =>
-    startBusy(async () => {
-      if (!open) return;
-      setError(null);
-      const r = await deleteExceptionAction(clientId, open.id);
-      setConfirm(false);
-      setOpen(null);
-      if (!r.ok) setError(r.error ?? "No se pudo eliminar el bloqueo.");
-      else {
-        toast("Bloqueo eliminado");
-        router.refresh();
-      }
-    });
-
-  const sel = open ? describe(open) : null;
   return (
     <Screen
       label="Bloqueos"
       header={<SubHeader backLabel={nav.rootLabel ?? "Configuración"} onBack={() => nav.back(null)} title="Bloqueos" sub="Horas en las que no se aceptan citas" />}
       footer={
-        <MButton kind="primary" grow onClick={() => nav.go("bloqueo-nuevo")} disabled={sites.length === 0}>
+        <MButton kind="primary" grow onClick={() => openNew()} disabled={sites.length === 0}>
           Nuevo bloqueo
         </MButton>
       }
     >
-      {error ? <ErrorNote>{error}</ErrorNote> : null}
+      {seriesError ? (
+        <ErrorNote>
+          No pudimos cargar los bloqueos recurrentes.{" "}
+          <button type="button" className="underline" onClick={reload}>
+            Reintentar
+          </button>
+        </ErrorNote>
+      ) : null}
+      {multiSite ? (
+        <label className="flex flex-col gap-[6px] text-[14px] text-m-tx2">
+          Sede
+          <select value={siteId} onChange={(e) => setSiteId(e.target.value)} className="min-h-[48px] rounded-[12px] border border-m-bd bg-m-sf px-[12px] text-[16px] text-m-tx">
+            {sites.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+                {s.active ? "" : " (inactiva)"}
+              </option>
+            ))}
+          </select>
+        </label>
+      ) : null}
       {sites.length > 0 ? (
         <MSegmented
           label="Bloqueos"
           stretch
           value={tab}
           options={[
-            { value: "next", label: `Próximos ${upcoming.length}` },
+            { value: "next", label: `Próximos ${series === null && !seriesError ? upcoming.length : count}` },
             { value: "past", label: `Pasados ${ended.length}` },
           ]}
           onChange={setTab}
@@ -126,55 +169,95 @@ export function BlocksList({
       ) : null}
       {sites.length === 0 ? (
         <div className={`${CARD_M} px-[18px] py-[24px] text-[14px] text-m-tx3`}>Crea una sede para poder bloquear horarios.</div>
-      ) : tab === "past" && ended.length === 0 ? (
-        <div className={`${CARD_M} px-[18px] py-[24px] text-[14px] text-m-tx3`}>Todavía no hay bloqueos pasados.</div>
-      ) : list.length === 0 ? (
+      ) : tab === "past" ? (
+        ended.length === 0 ? (
+          <div className={`${CARD_M} px-[18px] py-[24px] text-[14px] text-m-tx3`}>Todavía no hay bloqueos pasados.</div>
+        ) : (
+          <div className={CARD_M}>
+            {ended.map((e) => (
+              <button key={e.id} type="button" onClick={() => setHistory(e)} className={`${ROW_M} min-h-[76px] text-m-tx2`}>
+                <span className="flex min-w-0 flex-1 flex-col gap-[4px]">
+                  <span className="text-[16px] font-semibold [overflow-wrap:anywhere]">{e.reason || "Bloqueo de agenda"}</span>
+                  <span className="u-tnum text-[14px]">{blockWhen(e, tz, todayIn(tz))}</span>
+                  <span className="truncate text-[13px] text-m-tx3">{nameOf(e.staff_id)}</span>
+                </span>
+                <Chevron />
+              </button>
+            ))}
+          </div>
+        )
+      ) : count === 0 && series !== null ? (
         <div className={`${CARD_M} flex flex-col gap-[14px] px-[18px] py-[24px]`}>
           <div className="flex flex-col gap-[4px]">
             <span className="text-[16px] font-semibold">No hay bloqueos próximos</span>
             <span className="text-[14px] leading-[1.45] text-m-tx3">Empieza con una plantilla. Solo rellena el formulario: nada se guarda hasta que lo confirmes.</span>
           </div>
-          <TemplatePills onPick={(t) => nav.go("bloqueo-nuevo", null, { plantilla: t })} />
+          <TemplatePills onPick={(t) => openNew(t)} />
         </div>
       ) : (
         <section className="flex flex-col gap-[8px]">
-          <h2 className="sr-only">{tab === "next" ? "Próximos" : "Pasados"}</h2>
-          <div className={CARD_M}>
-            {list.map((e) => {
-              const d = describe(e);
+          <h2 className="sr-only">Próximos</h2>
+          <div className={CARD_M} aria-busy={series === null && !seriesError ? true : undefined}>
+            {siteSeries.map((sv) => {
+              const occ = nextOccurrence(sv, sv.siteId, todayIn(tz), tz, nowMs);
+              const member = sv.staffId ? staff.find((p) => p.id === sv.staffId) : undefined;
               return (
-                <button key={e.id} type="button" onClick={() => setOpen(e)} className={`${ROW_M} min-h-[76px]`}>
+                <button
+                  key={sv.id}
+                  type="button"
+                  disabled={!occ}
+                  onClick={() => occ && setPanel({ kind: "series", siteId: sv.siteId, occ, owner: sv.staffId })}
+                  className={`${ROW_M} min-h-[76px] disabled:opacity-60`}
+                >
                   <span className="flex min-w-0 flex-1 flex-col gap-[4px]">
-                    <span className="text-[16px] font-semibold [overflow-wrap:anywhere]">{e.reason || "Bloqueo de agenda"}</span>
-                    <span className="u-tnum text-[14px] text-m-tx2">{d.when}</span>
+                    <span className="flex min-w-0 items-center gap-[8px]">
+                      <span className="truncate text-[16px] font-semibold">{sv.reason || "Bloqueo recurrente"}</span>
+                      <span className="flex-none rounded-full bg-m-sf2 px-[8px] py-[2px] text-[12px] text-m-tx2">Se repite</span>
+                    </span>
+                    <span className="u-tnum text-[14px] text-m-tx2">{seriesWhen(sv)}</span>
                     <span className="flex min-w-0 items-center gap-[6px] text-[13px] text-m-tx3">
-                      {d.member ? <MStaffAvatar id={d.member.id} name={d.member.name} size={28} color={d.colors.get(d.member.id)} /> : <span aria-hidden>⌂</span>}
-                      <span className="truncate">
-                        {d.member ? d.member.name : "Toda la sede"}
-                        {multiSite && d.site ? ` · ${d.site.name}` : ""}
-                      </span>
+                      {member ? <MStaffAvatar id={member.id} name={member.name} size={28} color={colors.get(member.id)} /> : <span aria-hidden>⌂</span>}
+                      <span className="truncate">{nameOf(sv.staffId)}{sv.publicReason ? ` · El cliente ve: ${PUBLIC_REASON_LABEL[sv.publicReason as keyof typeof PUBLIC_REASON_LABEL] ?? "—"}` : ""}</span>
                     </span>
                   </span>
                   <Chevron />
                 </button>
               );
             })}
+            {upcoming.map((e) => {
+              const member = e.staff_id ? staff.find((p) => p.id === e.staff_id) : undefined;
+              return (
+                <button key={e.id} type="button" onClick={() => setPanel({ kind: "dated", siteId: e.site_id, block: e })} className={`${ROW_M} min-h-[76px]`}>
+                  <span className="flex min-w-0 flex-1 flex-col gap-[4px]">
+                    <span className="text-[16px] font-semibold [overflow-wrap:anywhere]">{e.reason || "Bloqueo de agenda"}</span>
+                    <span className="u-tnum text-[14px] text-m-tx2">{blockWhen(e, tz, todayIn(tz))}</span>
+                    <span className="flex min-w-0 items-center gap-[6px] text-[13px] text-m-tx3">
+                      {member ? <MStaffAvatar id={member.id} name={member.name} size={28} color={colors.get(member.id)} /> : <span aria-hidden>⌂</span>}
+                      <span className="truncate">{nameOf(e.staff_id)}</span>
+                    </span>
+                  </span>
+                  <Chevron />
+                </button>
+              );
+            })}
+            {series === null && !seriesError ? <p className="px-[14px] py-[12px] text-[14px] text-m-tx3">Cargando bloqueos recurrentes…</p> : null}
           </div>
         </section>
       )}
 
-      <Sheet open={open !== null} onClose={() => setOpen(null)} label={open?.reason || "Bloqueo de agenda"}>
-        {open && sel ? (
+      {/* A past block is history: shown, not edited or deleted. */}
+      <Sheet open={history !== null} onClose={() => setHistory(null)} label={history?.reason || "Bloqueo de agenda"}>
+        {history ? (
           <div className="flex flex-col gap-[14px] px-[16px] pb-[max(20px,env(safe-area-inset-bottom))]">
             <div className="flex flex-col gap-[4px]">
-              <span className="text-[18px] font-semibold [overflow-wrap:anywhere]">{open.reason || "Bloqueo de agenda"}</span>
-              <span className="u-tnum text-[15px] text-m-tx2">{sel.when}</span>
+              <span className="text-[18px] font-semibold [overflow-wrap:anywhere]">{history.reason || "Bloqueo de agenda"}</span>
+              <span className="u-tnum text-[15px] text-m-tx2">{blockWhen(history, tz, todayIn(tz))}</span>
             </div>
             <div className={CARD_M}>
               {[
-                ["Alcance", sel.member ? sel.member.name : "Toda la sede"],
-                ["Sede", sel.site?.name ?? "—"],
-                ["Cliente", open.public_reason ? PUBLIC_REASON_LABEL[open.public_reason] : "Sin motivo"],
+                ["Alcance", nameOf(history.staff_id)],
+                ["Sede", sites.find((s) => s.id === history.site_id)?.name ?? "—"],
+                ["Cliente", history.public_reason ? PUBLIC_REASON_LABEL[history.public_reason] : "Sin motivo"],
               ].map(([k, v], i) => (
                 <div key={k} className={`flex min-h-[48px] items-center gap-[12px] px-[14px] py-[10px] ${i ? "border-t border-m-dv" : ""}`}>
                   <span className="w-[90px] flex-none text-[14px] text-m-tx3">{k}</span>
@@ -182,244 +265,69 @@ export function BlocksList({
                 </div>
               ))}
             </div>
-            <span className="text-[13px] leading-[1.4] text-m-tx3">Mientras dure, esas horas no se ofrecen en la agenda, el asistente ni la reserva en línea.</span>
-            <div className="flex flex-col gap-[8px]">
-              {/* A past block is history: it is shown, not deleted. */}
-              {Date.parse(open.ends_at) > nowMs ? (
-                <button type="button" onClick={() => setConfirm(true)} className="flex h-[52px] items-center justify-center rounded-[12px] border border-m-dnbd bg-transparent text-[16px] text-m-dn">
-                  Eliminar bloqueo
-                </button>
-              ) : null}
-              <MButton kind="soft" className="w-full" onClick={() => setOpen(null)}>
-                Cerrar
-              </MButton>
-            </div>
+            <MButton kind="soft" className="w-full" onClick={() => setHistory(null)}>
+              Cerrar
+            </MButton>
+            {Date.parse(history.ends_at) > nowMs ? null : <span className="text-[13px] text-m-tx3">Ya terminó: queda como historial.</span>}
           </div>
         ) : null}
       </Sheet>
-      <ConfirmSheet
-        open={confirm}
-        title="¿Eliminar este bloqueo?"
-        body="Esas horas vuelven a ofrecerse para reservas. No se puede deshacer; si lo necesitas otra vez, crea uno nuevo."
-        cancelLabel="Volver"
-        okLabel="Eliminar bloqueo"
-        busy={busy}
-        busyLabel="Eliminando…"
-        onCancel={() => setConfirm(false)}
-        onOk={remove}
-      />
-    </Screen>
-  );
-}
 
-// ── 4.12 Nuevo bloqueo (desde plantilla) ─────────────────────────────────────────
-
-export function BlockForm({
-  nav,
-  clientId,
-  sites,
-  staff,
-  template,
-  toast,
-}: {
-  nav: ConfigNav;
-  clientId: string;
-  sites: Site[];
-  staff: Staff[];
-  template: string | null;
-  toast: (m: string) => void;
-}) {
-  const router = useRouter();
-  const firstSite = sites.find((s) => s.active) ?? sites[0];
-  const initial = useMemo(
-    () => blockDraft(firstSite?.id ?? "", todayIn(firstSite?.timezone ?? "UTC"), template && (BLOCK_TEMPLATES as readonly string[]).includes(template) ? template : null),
-    [firstSite, template],
-  );
-  const [d, setD] = useState<BlockDraft>(initial);
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [discard, setDiscard] = useState(false);
-  const site = sites.find((s) => s.id === d.siteId);
-  const tz = site?.timezone ?? "UTC";
-  const today = todayIn(tz);
-  const people = staff.filter((p) => p.site_id === d.siteId && p.active);
-  const colors = siteStaffColors(staff, d.siteId);
-  const payload = blockPayload(d);
-  const dirty = JSON.stringify(d) !== JSON.stringify(initial);
-  const set = (patch: Partial<BlockDraft>) => setD((x) => ({ ...x, ...patch }));
-  const leave = () => nav.back("bloqueos");
-  const requestLeave = () => (dirty && !saving ? setDiscard(true) : leave());
-
-  const save = async () => {
-    if (!payload.ok) return;
-    setSaving(true);
-    setError(null);
-    const r = await createExceptionAction({
-      clientId,
-      siteId: d.siteId,
-      staffId: d.scope === "staff" ? d.staffId : null,
-      startsAt: payload.startsAt,
-      endsAt: payload.endsAt,
-      reason: d.reason.trim() || undefined,
-      publicReason: effectivePublicReason(d.publicReason, d.scope),
-    });
-    setSaving(false);
-    if (!r.ok) {
-      setError(r.error ?? "No se pudo guardar el bloqueo.");
-      return;
-    }
-    toast("Bloqueo guardado");
-    router.refresh();
-    leave();
-  };
-
-  const err = (f: string) => (!payload.ok && payload.field === f ? payload.error : null);
-  // A timed block over several days is ONE continuous block — say so in words.
-  const spanNote =
-    !d.allDay && payload.ok && d.from !== d.to ? `Un solo bloqueo continuo: del ${dayLabel(d.from, today).toLowerCase()} a las ${d.h1} al ${dayLabel(d.to, today).toLowerCase()} a las ${d.h2}.` : null;
-
-  return (
-    <Screen
-      label="Nuevo bloqueo"
-      header={<SubHeader backLabel="Bloqueos" onBack={requestLeave} title="Nuevo bloqueo" />}
-      footer={
-        <>
-          <MButton kind="secondary" onClick={requestLeave} disabled={saving}>
-            Cancelar
-          </MButton>
-          <MButton kind="primary" grow onClick={save} disabled={!payload.ok} loading={saving} loadingLabel="Guardando…">
-            Guardar bloqueo
-          </MButton>
-        </>
-      }
-    >
-      {error ? <ErrorNote>{error}</ErrorNote> : null}
-      {d.tpl ? (
-        <div role="status" className="rounded-[12px] bg-m-sf2 px-[14px] py-[12px] text-[14px] leading-[1.45] text-m-tx2">
-          Plantilla «{d.tpl}» aplicada. Revisa los datos: nada se guarda hasta pulsar Guardar.
-        </div>
-      ) : !dirty ? (
-        <section className="flex flex-col gap-[8px]">
-          <h2 className={`m-0 ${LABEL_M}`}>Empezar con una plantilla</h2>
-          <TemplatePills onPick={(t) => setD(blockDraft(d.siteId, today, t))} />
-        </section>
-      ) : null}
-
-      <Field id="bf-s" label="Sede" error={err("site")}>
-        <select id="bf-s" value={d.siteId} onChange={(e) => set({ siteId: e.target.value, staffId: "" })} className={SELECT_M}>
-          {sites.map((s) => (
-            <option key={s.id} value={s.id}>
-              {s.name}
-              {s.active ? "" : " (inactiva)"}
-            </option>
-          ))}
-        </select>
-      </Field>
-
-      <section className="flex flex-col gap-[8px]">
-        <h2 className={`m-0 ${LABEL_M}`}>Alcance</h2>
-        <MSegmented
-          label="Alcance"
-          stretch
-          value={d.scope}
-          onChange={(v) => set({ scope: v })}
-          options={[
-            { value: "site", label: "Toda la sede" },
-            { value: "staff", label: "Un profesional" },
-          ]}
-        />
-        {d.scope === "staff" ? (
-          people.length === 0 ? (
-            <span className="text-[14px] text-m-tx3">Esta sede no tiene profesionales activos.</span>
-          ) : (
-            <div role="radiogroup" aria-label="Profesional" className="grid grid-cols-3 gap-[8px]">
-              {people.map((p) => {
-                const on = d.staffId === p.id;
-                return (
-                  <button
-                    key={p.id}
-                    type="button"
-                    role="radio"
-                    aria-checked={on}
-                    onClick={() => set({ staffId: p.id })}
-                    className={`flex min-h-[76px] min-w-0 flex-col items-center justify-center gap-[6px] rounded-[12px] border bg-m-sf px-[2px] py-[6px] text-m-tx ${
-                      on ? "border-m-tx shadow-[inset_0_0_0_1px_var(--m-tx)]" : "border-m-bd"
-                    }`}
-                  >
-                    <MStaffAvatar id={p.id} name={p.name} size={40} color={colors.get(p.id)} />
-                    <span className={`max-w-full truncate px-[4px] text-[13px] ${on ? "font-semibold" : ""}`}>{p.name.replace(/^\s*\[[^\]]*\]\s*/, "").split(/\s+/)[0]}</span>
-                  </button>
-                );
-              })}
-            </div>
-          )
+      {/* The desktop's editors, in the agenda's tokens; full screen on a phone. */}
+      <div className="u-ag">
+        {panel && panelSite && (panel.kind === "new" || panel.kind === "dated") ? (
+          <BlockPanel
+            clientId={clientId}
+            siteId={panelSite.id}
+            siteName={panelSite.name}
+            timezone={panelSite.timezone}
+            staff={panelStaff}
+            canSiteClosure
+            canStaffTimeOff
+            title={panel.kind === "new" ? "Nuevo bloqueo" : undefined}
+            prefill={panel.kind === "new" ? prefill(panel.template) : undefined}
+            edit={panel.kind === "dated" ? panel.block : undefined}
+            hidden={Boolean(resched)}
+            recheck={recheck}
+            onReschedule={(item, holds) => setResched({ item, holds })}
+            onClose={() => setPanel(null)}
+            onSaved={done}
+          />
         ) : null}
-        {err("staff") && d.scope === "staff" && people.length > 0 ? <span className="text-[13px] text-m-tx3">Elige a quién afecta.</span> : null}
-      </section>
-
-      <section className="flex flex-col gap-[8px]">
-        <h2 className={`m-0 ${LABEL_M}`}>Fechas</h2>
-        <div className="grid grid-cols-2 gap-[8px]">
-          <label className="flex min-w-0 flex-col gap-[4px] text-[13px] text-m-tx3">
-            Desde
-            <input type="date" value={d.from} min={today} onChange={(e) => set({ from: e.target.value, to: e.target.value > d.to ? e.target.value : d.to })} className={`${INPUT_M} px-[10px]`} />
-          </label>
-          <label className="flex min-w-0 flex-col gap-[4px] text-[13px] text-m-tx3">
-            Hasta
-            <input type="date" value={d.to} min={d.from} onChange={(e) => set({ to: e.target.value })} aria-invalid={Boolean(err("dates"))} className={`${INPUT_M} px-[10px]`} />
-          </label>
-        </div>
-        {err("dates") ? (
-          <span role="alert" className="text-[13px] text-m-dn">
-            {err("dates")}
-          </span>
+        {panel && panelSite && panel.kind === "series" ? (
+          <SeriesPanel
+            clientId={clientId}
+            siteId={panelSite.id}
+            timezone={panelSite.timezone}
+            occ={panel.occ}
+            ownerName={panel.owner ? nameOf(panel.owner) : null}
+            canEdit
+            hidden={Boolean(resched)}
+            recheck={recheck}
+            onReschedule={(item, holds) => setResched({ item, holds })}
+            onClose={() => setPanel(null)}
+            onSaved={done}
+          />
         ) : null}
-        <SwitchRow checked={d.allDay} onChange={() => set({ allDay: !d.allDay })} label="Todo el día" className="min-h-[56px] rounded-[12px] py-[6px]" />
-        {!d.allDay ? (
-          <div className="grid grid-cols-2 gap-[8px]">
-            <label className="flex min-w-0 flex-col gap-[4px] text-[13px] text-m-tx3">
-              Hora inicio
-              <input type="time" value={d.h1} onChange={(e) => set({ h1: e.target.value })} className={`${INPUT_M} u-tnum px-[10px]`} />
-            </label>
-            <label className="flex min-w-0 flex-col gap-[4px] text-[13px] text-m-tx3">
-              Hora fin
-              <input type="time" value={d.h2} onChange={(e) => set({ h2: e.target.value })} aria-invalid={Boolean(err("hours"))} className={`${INPUT_M} u-tnum px-[10px]`} />
-            </label>
-          </div>
+        {resched && panelSite ? (
+          <AffectedReschedulePanel
+            clientId={clientId}
+            siteId={panelSite.id}
+            timezone={panelSite.timezone}
+            item={resched.item}
+            holds={resched.holds}
+            staff={panelStaff}
+            openWeekdays={new Set(Object.entries(panelSite.opening_hours).filter(([, r]) => r.length > 0).map(([k]) => k))}
+            lockStaffId={null}
+            returnLabel={panel?.kind === "series" ? "el bloqueo" : "la ausencia"}
+            onBack={(moved) => {
+              setResched(null);
+              setRecheck((n) => n + 1);
+              if (moved) router.refresh();
+            }}
+          />
         ) : null}
-        {err("hours") ? (
-          <span role="alert" className="text-[13px] text-m-dn">
-            {err("hours")}
-          </span>
-        ) : null}
-        {spanNote ? <span className="text-[13px] leading-[1.4] text-m-tx3">{spanNote}</span> : null}
-        <span className="text-[13px] text-m-tx3">Fechas y horas en la zona de la sede · {tzLabel(tz)}</span>
-      </section>
-
-      <Field id="bf-r" label="Motivo" optional hint="Lo ve el equipo en la agenda; no se muestra a los clientes.">
-        <input id="bf-r" value={d.reason} onChange={(e) => set({ reason: e.target.value })} placeholder="Ej.: Vacaciones" maxLength={200} className={INPUT_M} />
-      </Field>
-
-      <PublicReasonField
-        variant="mobile"
-        scope={d.scope}
-        value={d.publicReason}
-        onChange={(v) => set({ publicReason: v })}
-        who={people.find((p) => p.id === d.staffId)?.name ?? null}
-      />
-
-      <ConfirmSheet
-        open={discard}
-        title="¿Descartar el bloqueo?"
-        body="No se ha guardado nada todavía. Si sales, se pierden los datos del formulario."
-        cancelLabel="Seguir editando"
-        okLabel="Descartar"
-        onCancel={() => setDiscard(false)}
-        onOk={() => {
-          setDiscard(false);
-          leave();
-        }}
-      />
+      </div>
     </Screen>
   );
 }
