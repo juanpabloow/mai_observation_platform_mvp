@@ -64,9 +64,10 @@ const NEAR_BOTTOM_PX = 90;
  *            "Ficha"; a second row with WHO ANSWERS and the 24 h WINDOW. On the phone the
  *            first row is only back · identity · ficha — the state and the action move to
  *            the second row, so nothing is clipped at 360 px.
- *   THREAD   opens at the last message; what came BEFORE the latest escalation is folded
- *            under "Historial antes del escalado · N mensajes" and opens on demand.
- *            "Ir al último mensaje" appears when you scroll up — it never forces the scroll.
+ *   THREAD   opens at the last message with the WHOLE conversation above it — nothing is
+ *            folded behind a button (on request, 2026-10-23); the pre-handoff history, when
+ *            there is one, reads inline at the top. "Ir al último mensaje" appears when you
+ *            scroll up — it never forces the scroll.
  *   COMPOSER in flow, with a draft per conversation (see Composer).
  *
  * Optimistic sends + the ~4 s poll (paused while the tab is hidden) are unchanged. Take /
@@ -108,7 +109,6 @@ export function InboxThread({
   const [announce, setAnnounce] = useState("");
   const [confirm, setConfirm] = useState<ThreadActionKind | null>(null);
   const [busy, startTransition] = useTransition();
-  const [showEarlier, setShowEarlier] = useState(false);
   const [showJump, setShowJump] = useState(false);
   const history = initial.history ?? [];
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -178,15 +178,9 @@ export function InboxThread({
     return t !== 0 ? t : a.id.localeCompare(b.id);
   });
 
-  // What came before the LATEST escalation is folded while someone has to act on it.
-  const lastEscalation = header.mode === "bot" ? null : [...events].reverse().find((e) => e.toMode === "pending") ?? null;
-  const earlier = lastEscalation ? merged.filter((m) => m.occurredAt < lastEscalation.at) : [];
-  // Fold only when something remains to read after the escalation — folding everything
-  // would leave an empty thread with the context hidden behind a button.
-  const afterCount = merged.length - earlier.length;
-  const folded = earlier.length > 0 && afterCount > 0 && !showEarlier;
-  const visible = folded ? merged.filter((m) => m.occurredAt >= lastEscalation!.at) : merged;
-  const visibleEvents = folded ? events.filter((e) => e.at >= lastEscalation!.at) : events;
+  // The whole conversation is always shown — nothing folded behind a button.
+  const visible = merged;
+  const visibleEvents = events;
 
   // Auto-scroll: forced on open / own send; otherwise only if the reader was near the bottom.
   const renderedCount = visible.length;
@@ -397,17 +391,7 @@ export function InboxThread({
 
       <div className="relative min-h-0 flex-1">
         <div ref={scrollRef} onScroll={onScroll} className="h-full overflow-y-auto bg-[var(--thread-bg)] px-3 pb-3 pt-4 md:px-5 md:pt-3">
-          {history.length > 0 ? <HistoryDisclosure turns={history} /> : null}
-          {folded ? (
-            <button
-              type="button"
-              onClick={() => setShowEarlier(true)}
-              data-ib-history=""
-              className="mb-3 flex min-h-[44px] w-full items-center justify-center rounded-xl border border-line bg-surface px-3 text-sm text-muted transition-colors hover:text-foreground md:min-h-8 md:text-[0.8125rem]"
-            >
-              Historial antes del escalado · {earlier.length} {earlier.length === 1 ? "mensaje" : "mensajes"}
-            </button>
-          ) : null}
+          {history.length > 0 ? <HistoryInline turns={history} /> : null}
           <MessageTranscript
             messages={visible}
             now={now}
@@ -455,15 +439,13 @@ export function InboxThread({
   );
 }
 
-/** Reconstructed pre-handoff history (executions before live handoff was wired), read-only. */
-function HistoryDisclosure({ turns }: { turns: HistoryTurnView[] }) {
+/** Reconstructed pre-handoff history (executions before live handoff was wired), read-only.
+ *  Shown inline at the top of the thread — no disclosure to open. */
+function HistoryInline({ turns }: { turns: HistoryTurnView[] }) {
   return (
-    <details className="mb-3 rounded-xl border border-line bg-surface">
-      <summary className="flex min-h-[44px] cursor-pointer items-center justify-center px-3 text-sm text-muted hover:text-foreground md:min-h-8 md:text-[0.8125rem]">
-        Historial anterior · {turns.length} {turns.length === 1 ? "turno" : "turnos"}
-      </summary>
-      <div className="flex flex-col gap-2 border-t border-line px-3 py-3">
-        <p className="text-xs text-faint">Reconstruido a partir de ejecuciones anteriores al handoff (solo lectura).</p>
+    <section aria-label="Historial anterior" className="mb-3">
+      <div className="flex flex-col gap-2">
+        <p className="text-center text-xs text-faint">Historial anterior · reconstruido a partir de ejecuciones anteriores al handoff (solo lectura)</p>
         {turns.map((t) => (
           <div key={t.id} className="flex flex-col gap-1">
             {t.userText ? (
@@ -479,6 +461,6 @@ function HistoryDisclosure({ turns }: { turns: HistoryTurnView[] }) {
           </div>
         ))}
       </div>
-    </details>
+    </section>
   );
 }

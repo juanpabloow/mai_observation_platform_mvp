@@ -109,4 +109,3 @@
 /* Composer: the field on #1F2125, the template pill dashed (templates are not connected). */
 .dark .u-ib [data-ib-field] { border-color: #2a2c31; border-radius: 14px; background: #1f2125; }
 .dark .u-ib [data-ib-template] { height: 32px; border-radius: 16px; border: 1px dashed #3a3d43; background: transparent; color: #8e8e96; opacity: 1; }
-.dark .u-ib [data-ib-history] { border-radius: 9999px; border-color: #2a2c31; background: #16171a; }

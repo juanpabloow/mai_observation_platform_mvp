@@ -40,7 +40,9 @@ export function ModuleSurface({ children, label }: { children: ReactNode; label?
 }
 
 /** Title band of a list / settings screen. On a phone the primary action stays on the
- *  title row (a 44px target) and the secondary actions wrap below it. */
+ *  title row (a 44px target) and the secondary actions wrap below it. From md up the band
+ *  is Agenda's (20px sides, 10px top) and the title is `u-page-title`, so a title sits at
+ *  the same place and size on every screen of the platform. */
 export function SurfaceHeader({
   title,
   summary,
@@ -59,12 +61,12 @@ export function SurfaceHeader({
   primary?: ReactNode;
 }) {
   return (
-    <header className="flex shrink-0 flex-wrap items-start gap-x-3 gap-y-3 px-4 pb-3 pt-4 sm:px-6 sm:pt-5">
+    <header className="flex shrink-0 flex-wrap items-start gap-x-3 gap-y-3 px-4 pb-3 pt-4 md:px-[20px] md:pt-[10px]">
       {/* The title keeps at least ~18rem: when the actions would squeeze it (phones), they
           wrap to their own row instead of leaving the summary in a narrow column. */}
       <div className="min-w-[min(100%,18rem)] flex-1">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
-          <h1 className="min-w-0 text-[1.375rem] font-semibold leading-tight tracking-[-0.02em] text-foreground sm:text-[1.625rem]">{title}</h1>
+          <h1 className="u-page-title min-w-0 text-[1.375rem] font-semibold leading-tight tracking-[-0.02em] text-foreground md:py-px">{title}</h1>
           {status}
         </div>
         {summary ? <p className="mt-1 text-[0.8125rem] text-muted">{summary}</p> : null}
@@ -104,10 +106,10 @@ export function SurfaceTop({
   children?: ReactNode;
 }) {
   return (
-    <header className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-3 px-4 pb-3 pt-4 sm:px-6 sm:pt-5">
+    <header className="flex shrink-0 flex-wrap items-center gap-x-2 gap-y-3 px-4 pb-3 pt-4 md:px-[20px] md:pt-[10px]">
       <div className="order-1 min-w-0 flex-1 md:basis-full">
         <div className="flex min-w-0 flex-wrap items-center gap-x-2.5 gap-y-1">
-          <h1 className="min-w-0 text-[1.375rem] font-semibold leading-tight tracking-[-0.02em] text-foreground sm:text-[1.625rem]">{title}</h1>
+          <h1 className="u-page-title min-w-0 text-[1.375rem] font-semibold leading-tight tracking-[-0.02em] text-foreground md:py-px">{title}</h1>
           {status}
         </div>
         {summary ? <p className="mt-1 text-[0.8125rem] text-muted">{summary}</p> : null}
@@ -125,7 +127,7 @@ export function SurfaceTop({
  *  It stays put while the content scrolls (it sits outside the scrolling region). */
 export function SurfaceToolbar({ children }: { children: ReactNode }) {
   // No rule under it: the list's own column header draws the only line (as in the design).
-  return <div className="flex shrink-0 flex-wrap items-center gap-2 px-4 pb-3 sm:px-6">{children}</div>;
+  return <div className="flex shrink-0 flex-wrap items-center gap-2 px-4 pb-3 md:px-[20px]">{children}</div>;
 }
 
 const RAIL_ID = "module-side-menu";

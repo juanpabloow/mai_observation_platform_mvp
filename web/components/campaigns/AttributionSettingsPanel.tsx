@@ -79,7 +79,7 @@ export function AttributionSettingsPanel({
     <div className="flex flex-col gap-[var(--content-pad)]">
       <PageShell grow={false} clip={false}>
         <div className="flex min-h-11 flex-wrap items-center gap-2.5 px-4 py-3 sm:px-5">
-          <h1 className="text-xl font-semibold tracking-[-0.025em] text-foreground">Configuración de atribución</h1>
+          <h1 className="u-page-title text-[19px] font-semibold tracking-[-0.025em] text-foreground">Configuración de atribución</h1>
           <span className="truncate text-xs text-muted">{clientName}</span>
         </div>
       </PageShell>

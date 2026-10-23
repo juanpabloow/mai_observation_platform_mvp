@@ -46,7 +46,7 @@ test('settings are task-oriented: one PAGE per job, no tabs inside a page (desig
   }
   // The production header card of «Configuración de agenda», titled by the page's job —
   // without its tab row: the sidebar is the only menu (no tabs on top of it).
-  assert.ok(src.includes('<h1 className="truncate text-xl font-semibold tracking-[-0.025em] text-foreground">{meta.title}</h1>'), 'each page is titled by its job, in Spanish');
+  assert.ok(src.includes('<h1 className="u-page-title truncate text-[19px] font-semibold tracking-[-0.025em] text-foreground">{meta.title}</h1>'), 'each page is titled by its job, in Spanish, as THE page title');
   assert.ok(!src.includes('SETTINGS_TABS') && !src.includes('aria-label="Secciones de configuración"'), 'no tab row duplicating the sidebar');
   assert.ok(!src.includes('role="tablist"'), 'no tab strip inside a settings page');
   // Horarios y ausencias holds the production Bloqueos list as its «Ausencias» section.

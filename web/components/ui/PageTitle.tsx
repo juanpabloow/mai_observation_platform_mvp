@@ -51,8 +51,9 @@ export function PageTitle({
  * Agenda, and the PageTitle band above) renders through this, so size, weight, line-height
  * and the count chip cannot drift between screens the way three hand-copied `text-[…]` did.
  *
- * 19px, in PIXELS on purpose: this app runs a 90% root (see globals.css), so `text-xl`
- * landed a notch small — the shell geometry tokens take the same exemption.
+ * `u-page-title` (globals.css) makes it THE page title of the whole platform: 24px / 600 /
+ * 30px in the platform UI face from md up, in PIXELS (this app runs a 90% root, so rem
+ * sizes land a notch small). 19px stays as the phone size.
  *
  * The Inbox queue keeps a distinct, smaller PANE LABEL (it labels one column of a workspace,
  * not the screen) — that is a separate semantic role, not this one.
@@ -68,7 +69,7 @@ export function PageHeading({
 }) {
   return (
     <div className={`flex shrink-0 items-baseline gap-2 ${className}`}>
-      <h1 className="text-[19px] font-semibold tracking-tight text-foreground">{title}</h1>
+      <h1 className="u-page-title text-[19px] font-semibold tracking-tight text-foreground">{title}</h1>
       {count !== undefined ? (
         <span className="u-mono rounded-full bg-chip px-2 py-0.5 text-[0.6875rem] font-medium text-muted">
           {count}

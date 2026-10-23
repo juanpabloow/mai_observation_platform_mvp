@@ -63,10 +63,13 @@ test('composer: in flow, a draft per conversation, Enter rules, honest template 
   assert.ok(thread.includes('key={header.id}') && thread.includes('conversationId={header.id}'), 'one composer (and draft) per conversation');
 });
 
-test('the thread folds what came before the latest escalation, and never forces the scroll', () => {
+test('the thread shows the WHOLE conversation (no history button), and never forces the scroll', () => {
   const thread = read('components/InboxThread.tsx');
-  assert.ok(thread.includes('Historial antes del escalado'), 'the fold');
-  assert.ok(thread.includes('afterCount > 0'), 'never folds everything away');
+  // On request (2026-10-23): nothing is folded behind «Historial antes del escalado» or a
+  // «Historial anterior» disclosure — the whole thread reads top to bottom.
+  assert.ok(!thread.includes('Historial antes del escalado') && !thread.includes('setShowEarlier'), 'no fold');
+  assert.ok(thread.includes('const visible = merged;') && thread.includes('const visibleEvents = events;'), 'every message and event');
+  assert.ok(thread.includes('function HistoryInline(') && !thread.includes('<details'), 'the pre-handoff history reads inline');
   assert.ok(thread.includes('Ir al último mensaje'), 'the jump appears on scroll-up');
   assert.ok(thread.includes('behavior: "smooth"') && thread.includes('onScroll={onScroll}'), 'it is the reader who scrolls');
 });
