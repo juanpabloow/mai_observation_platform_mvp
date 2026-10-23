@@ -104,6 +104,11 @@ export default async function AcceptInvitePage({
           {roleText}. Sign in or create an account with <strong className="text-foreground">{invite.email}</strong> to
           accept.
         </p>
+        <p className="text-sm text-muted">
+          Easiest: <strong className="text-foreground">Continue with Google</strong> using this email. Or create a
+          password — you&rsquo;ll confirm your email with a verification link before you can log in. Either way, accepting
+          this invitation confirms the address, so you won&rsquo;t be asked again.
+        </p>
         <div className="flex gap-3 pt-1">
           <Link
             href={`/signup?${q}`}

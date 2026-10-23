@@ -9,6 +9,7 @@ import { getAccessRole, getSystemRoleOverride } from "@worker/db/repositories/ac
 import { getClientById } from "@worker/db/repositories/clients.js";
 import {
   getMembershipForUser,
+  setAuthUserEmailVerified,
   type ClientRole,
 } from "@worker/db/repositories/tenantMembers.js";
 import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
@@ -71,7 +72,10 @@ function inviteEmailHtml(params: {
           <strong>${escapeHtml(params.tenantName)}</strong> as ${escapeHtml(what)}.
         </p>
         <a href="${params.acceptUrl}" style="display:inline-block;background:#059669;color:#fff;text-decoration:none;font-size:15px;font-weight:600;padding:11px 22px;border-radius:9px">Accept invitation</a>
-        <p style="margin:24px 0 0;font-size:13px;line-height:1.5;color:#78716c">
+        <p style="margin:20px 0 0;font-size:14px;line-height:1.55;color:#44403c">
+          Sign in with <strong>this email address</strong> — continue with Google, or create a password for it — then accept. (If you create a password, confirm your email with the verification link first.)
+        </p>
+        <p style="margin:16px 0 0;font-size:13px;line-height:1.5;color:#78716c">
           This invitation expires in ${INVITE_TTL_DAYS} days. If you weren't expecting it, you can safely ignore this email.
         </p>
       </td></tr>
@@ -312,6 +316,19 @@ export async function acceptInvitationAction(
   }
   if (result === "already_used") {
     return { ok: false, error: "This invitation has already been used." };
+  }
+
+  // FIX-1: accepting a valid invitation PROVES the user owns this email — the single-use
+  // token was delivered only to that inbox AND the signed-in email equals the invited email
+  // (both re-checked above). So mark the account email-verified, which lifts an invited
+  // email/password user out of the unverified-sign-in limbo. Safe: it is token-gated (never
+  // at signup), and verifying the email grants nothing toward Google linking (implicit
+  // linking stays OFF), so it does not reopen pre-hijacking. Best-effort — a failure here
+  // must not undo the membership that was just created.
+  try {
+    await setAuthUserEmailVerified(session.user.id);
+  } catch {
+    // Non-fatal: the user is a member; verification can still be completed via the email link.
   }
 
   // The same landing the server bounce uses (lib/landing.ts): staff → agenda, setter →

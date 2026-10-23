@@ -5,8 +5,11 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { authClient } from "@/lib/auth-client";
 import {
+  EMAIL_NOT_VERIFIED_CODE,
+  EMAIL_NOT_VERIFIED_NOTICE,
   EMAIL_VERIFIED_NOTICE,
   PASSWORD_RESET_DONE_NOTICE,
+  VERIFICATION_RESENT_NOTICE,
   mapAuthErrorParam,
   mapClientAuthError,
 } from "@/lib/auth-errors";
@@ -48,6 +51,10 @@ export function AuthForm({
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  // EMAIL_NOT_VERIFIED is NOT a dead end: when a sign-in is refused for it, we hold the
+  // email and offer a one-click "resend verification link" instead of a generic failure.
+  const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null);
+  const [resend, setResend] = useState<"idle" | "sending" | "sent">("idle");
   // Banner derived from redirects back to /login: OAuth callback errors
   // (?error=account_not_linked via errorCallbackURL, allowlist-mapped), the
   // email-verification link outcome (?verified=1 / ?error=TOKEN_EXPIRED), and
@@ -64,6 +71,8 @@ export function AuthForm({
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setUnverifiedEmail(null);
+    setResend("idle");
     setBusy(true);
     try {
       const result = isSignup
@@ -79,6 +88,12 @@ export function AuthForm({
         : await authClient.signIn.email({ email, password });
 
       if (result.error) {
+        // A sign-in refused ONLY because the email isn't verified is a KNOWN,
+        // actionable cause — offer a resend instead of the generic failure.
+        if (!isSignup && result.error.code === EMAIL_NOT_VERIFIED_CODE) {
+          setUnverifiedEmail(email);
+          return;
+        }
         // Allowlist-mapped — raw server messages are never rendered.
         setError(
           mapClientAuthError(
@@ -94,6 +109,20 @@ export function AuthForm({
       setError("Unexpected error. Please try again.");
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function onResendVerification() {
+    if (!unverifiedEmail || resend === "sending") return;
+    setResend("sending");
+    try {
+      // Better Auth's /send-verification-email (rate-limited 3/min, see auth.ts). The
+      // response is deliberately generic (never reveals whether the account exists).
+      await authClient.sendVerificationEmail({ email: unverifiedEmail, callbackURL: VERIFIED_LOGIN_CALLBACK });
+    } catch {
+      // Swallow — the public response is generic either way.
+    } finally {
+      setResend("sent");
     }
   }
 
@@ -169,6 +198,24 @@ export function AuthForm({
           <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-danger">
             {error}
           </p>
+        ) : null}
+
+        {unverifiedEmail ? (
+          <div className="flex flex-col gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm">
+            <span>{EMAIL_NOT_VERIFIED_NOTICE}</span>
+            {resend === "sent" ? (
+              <span className="text-xs text-muted">{VERIFICATION_RESENT_NOTICE}</span>
+            ) : (
+              <button
+                type="button"
+                onClick={onResendVerification}
+                disabled={resend === "sending"}
+                className="self-start rounded-md border border-amber-500/40 px-2.5 py-1 text-xs font-medium transition-colors hover:bg-amber-500/15 disabled:opacity-50"
+              >
+                {resend === "sending" ? "Sending…" : "Resend verification link"}
+              </button>
+            )}
+          </div>
         ) : null}
 
         <button

@@ -21,6 +21,17 @@ export const EMAIL_VERIFIED_NOTICE = "Email verified. You can now log in.";
 
 export const RATE_LIMITED_NOTICE = "Too many requests — wait a minute and try again.";
 
+/** The Better Auth code for a sign-in refused because the email isn't verified
+ *  (FORBIDDEN/403). The login form special-cases it to offer a "resend" action
+ *  rather than the generic failure. */
+export const EMAIL_NOT_VERIFIED_CODE = "EMAIL_NOT_VERIFIED";
+
+export const EMAIL_NOT_VERIFIED_NOTICE =
+  "Your email isn't verified yet. Open the verification link we emailed you, then log in — or resend it below.";
+
+export const VERIFICATION_RESENT_NOTICE =
+  "If that account needs verifying, a fresh link is on its way. Check your inbox (and spam folder).";
+
 const RECOVER_HINT =
   "Log in with your password, or use “Forgot password?” to recover access. Once logged in, you can connect Google from Settings → Sign-in & security.";
 
@@ -53,7 +64,12 @@ const CLIENT_MESSAGES: Record<string, string> = {
   LINKING_DIFFERENT_EMAILS_NOT_ALLOWED:
     "You can only connect a Google account that uses the same email address.",
   SOCIAL_ACCOUNT_ALREADY_LINKED: "That Google account is already connected.",
-  INVALID_EMAIL_OR_PASSWORD: "Invalid email or password.",
+  // Covers both a wrong password AND a Google-only account with no password set
+  // (Better Auth returns the same code for both, so we never reveal which) — the
+  // hint steers a Google-only user without enumerating accounts.
+  INVALID_EMAIL_OR_PASSWORD:
+    "Invalid email or password. If you created your account with Google, use “Continue with Google” above.",
+  EMAIL_NOT_VERIFIED: EMAIL_NOT_VERIFIED_NOTICE,
   USER_ALREADY_EXISTS: "An account with this email already exists.",
 };
 

@@ -44,6 +44,64 @@ export const ACCOUNT_LINKING_POLICY = {
   allowDifferentEmails: false,
 } as const;
 
+/**
+ * FIX-2 — Google TAKEOVER of an UNVERIFIED local account.
+ *
+ * Implicit linking stays OFF (ACCOUNT_LINKING_POLICY), so by default a Google sign-in whose
+ * email matches an existing local user is refused with `account_not_linked`. That is correct for
+ * a VERIFIED local account (someone proved they own it; Google must be connected explicitly from
+ * an authenticated session). But an UNVERIFIED local account has had its ownership proven by
+ * NOBODY — it is exactly the attacker's-pre-registration shape. A Google sign-in carries a
+ * Google-VERIFIED email, which proves the signer controls that inbox. So for the unverified case
+ * the Google owner safely TAKES OVER: mark the row verified, delete the untrusted password
+ * credential, revoke any pre-existing (attacker-era) sessions, and link Google — then let the
+ * sign-in succeed. It is the same anti-hijack principle as the password-reset recovery path,
+ * reached from the OAuth side.
+ *
+ * SEAM: this runs as Google's `mapProfileToUser` (the only in-request hook that has the verified
+ * Google profile BEFORE Better Auth's link/refuse decision). After it pre-links the account,
+ * Better Auth's `findOAuthUser` sees the linked Google row and takes the "already linked" success
+ * path, bypassing the `disableImplicitLinking` refusal — WITHOUT re-enabling implicit linking for
+ * verified accounts (we touch nothing when the local row is verified).
+ */
+export type TakeoverProfile = { email?: string | null; email_verified?: boolean; sub?: string | null };
+interface TakeoverAdapter {
+  findUserByEmail(
+    email: string,
+    opts?: { includeAccounts?: boolean },
+  ): Promise<{ user: { id: string; emailVerified: boolean }; accounts: Array<{ id: string; providerId: string }> } | null>;
+  updateUser(userId: string, data: { emailVerified: boolean }): Promise<unknown>;
+  deleteAccount(id: string): Promise<void>;
+  deleteUserSessions(userId: string): Promise<void>;
+  linkAccount(account: { providerId: string; accountId: string; userId: string }): Promise<unknown>;
+}
+export interface TakeoverContext {
+  internalAdapter: TakeoverAdapter;
+}
+
+export async function applyGoogleAccountTakeover(ctx: TakeoverContext, profile: TakeoverProfile): Promise<Record<string, never>> {
+  const email = profile.email?.toLowerCase();
+  // Ownership is proven ONLY by a Google-verified email. Without it, change nothing.
+  if (!email || profile.email_verified !== true || !profile.sub) return {};
+  const found = await ctx.internalAdapter.findUserByEmail(email, { includeAccounts: true });
+  if (!found) return {}; // no local account → Better Auth creates a fresh Google user, unchanged
+  if (found.user.emailVerified) return {}; // VERIFIED local → keep today's rule (account_not_linked)
+  const accounts = found.accounts ?? [];
+  if (accounts.some((a) => a.providerId === "google")) return {}; // already linked → normal path
+
+  // TAKEOVER. The local account is unverified → no one proved they own it; the Google-verified
+  // owner wins. Order matters: revoke sessions BEFORE the new one is minted (post-hook).
+  await ctx.internalAdapter.updateUser(found.user.id, { emailVerified: true });
+  for (const a of accounts) {
+    if (a.providerId === "credential") await ctx.internalAdapter.deleteAccount(a.id);
+  }
+  await ctx.internalAdapter.deleteUserSessions(found.user.id);
+  await ctx.internalAdapter.linkAccount({ providerId: "google", accountId: String(profile.sub), userId: found.user.id });
+  // Server-side, PII-free: records the real reason a takeover (not a refusal) occurred.
+  console.info("[auth] google-takeover: linked Google to an unverified local account; invalidated its password credential and sessions");
+  return {};
+}
+
 /** Where the email-verification link drops the user (success banner). */
 export const VERIFIED_LOGIN_CALLBACK = "/login?verified=1";
 
@@ -130,13 +188,13 @@ async function deliver(send: SendEmailFn, kind: string, params: Parameters<SendE
 }
 
 /**
- * Better Auth `emailVerification` options. Verification exists for hygiene
- * (offered to fresh signups via sendOnSignUp) — it is NOT an account-recovery
- * mechanism (that's buildPasswordReset below) and, with implicit linking
- * disabled, it grants nothing towards Google linking either. Note
- * sendOnSignUp alone does NOT prevent unverified accounts from existing:
- * users can ignore the email and keep signing in, because
- * `requireEmailVerification` is not enabled (see the debt note in auth.ts).
+ * Better Auth `emailVerification` options. Verification is REQUIRED to sign in
+ * with a password (`requireEmailVerification: true` in auth.ts), and — with
+ * implicit linking disabled — it grants nothing towards Google linking (that is
+ * buildPasswordReset / the explicit linkSocial flow). sendOnSignUp delivers the
+ * first link at signup; an invited user who can't reach that email either resends
+ * it from the login form (FIX-3) or is verified on accepting the invitation
+ * (FIX-1), and a Google-verified owner can take over an unverified row (FIX-2).
  */
 export function buildEmailVerification(send: SendEmailFn) {
   return {

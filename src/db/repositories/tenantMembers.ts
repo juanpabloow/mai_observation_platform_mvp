@@ -239,6 +239,18 @@ export async function deleteAuthUserById(userId: string): Promise<void> {
   await query(`DELETE FROM "user" WHERE id = $1`, [userId]);
 }
 
+/**
+ * Mark a Better Auth user's email verified. Called when accepting a valid invitation
+ * (the single-use token was delivered to that inbox, so acceptance PROVES the user owns
+ * the address — equivalent to clicking a verification link). Idempotent. Safe because it
+ * is gated by the token + the signed-in-email check in acceptInvitationAction, and because
+ * verifying the email grants nothing toward Google linking (implicit linking stays off).
+ */
+export async function setAuthUserEmailVerified(userId: string): Promise<void> {
+  // Mirrors the grandfather migration's write (migrations/1806000000000) — just emailVerified.
+  await query(`UPDATE "user" SET "emailVerified" = true WHERE id = $1 AND "emailVerified" = false`, [userId]);
+}
+
 /** Look up a Better Auth user id by email (for the founder-link CLI). */
 export async function findUserIdByEmail(email: string): Promise<string | null> {
   const result = await query<{ id: string }>(`SELECT id FROM "user" WHERE email = $1`, [email]);

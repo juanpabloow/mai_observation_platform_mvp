@@ -1,4 +1,5 @@
 import { betterAuth } from "better-auth";
+import { createAuthMiddleware } from "better-auth/api";
 import { nextCookies } from "better-auth/next-js";
 import { Pool } from "pg";
 import {
@@ -10,9 +11,12 @@ import { hasValidPendingInvitationForEmail } from "@worker/db/repositories/invit
 import { sendEmail, isEmailConfigured } from "./email";
 import {
   ACCOUNT_LINKING_POLICY,
+  applyGoogleAccountTakeover,
   buildEmailVerification,
   buildPasswordReset,
   validateBetterAuthUrl,
+  type TakeoverContext,
+  type TakeoverProfile,
 } from "./auth-verification";
 
 /**
@@ -75,6 +79,13 @@ if (isDeployedProduction && !isEmailConfigured) {
   );
 }
 
+// Reaches the Better Auth context from inside the Google mapProfileToUser (FIX-2) without
+// referencing `auth` in its own initializer (which would make auth's type un-inferrable). The
+// resolver is wired immediately after `auth` is created.
+const takeoverCtx: { resolve: () => Promise<TakeoverContext> } = {
+  resolve: () => Promise.reject(new Error("auth context not initialised")),
+};
+
 export const auth = betterAuth({
   database: authPool,
   baseURL,
@@ -135,6 +146,14 @@ export const auth = betterAuth({
         google: {
           clientId: process.env.GOOGLE_CLIENT_ID as string,
           clientSecret: process.env.GOOGLE_CLIENT_SECRET as string,
+          // FIX-2: before Better Auth's link/refuse decision, let a Google-verified owner TAKE
+          // OVER an UNVERIFIED local account (mark verified, drop the untrusted password credential
+          // + sessions, pre-link Google). A VERIFIED local account is left untouched → still
+          // account_not_linked. See applyGoogleAccountTakeover for the full rationale. The context
+          // is reached via a getter assigned AFTER `auth` (referencing auth.$context inline here
+          // would make auth's own type un-inferrable).
+          mapProfileToUser: async (profile: TakeoverProfile): Promise<Record<string, never>> =>
+            applyGoogleAccountTakeover(await takeoverCtx.resolve(), profile),
         },
       }
     : {},
@@ -170,7 +189,21 @@ export const auth = betterAuth({
       },
     },
   },
+  // FIX-3: record server-side the REAL reason a sign-in was refused, so a cause that now shows the
+  // user a SPECIFIC message (no longer the generic one) is also logged for ops — code only, no PII,
+  // never throws. Runs after the handler; a hook that returns nothing leaves the response untouched.
+  hooks: {
+    after: createAuthMiddleware(async (ctx) => {
+      const returned = ctx.context.returned as { body?: { code?: string } } | undefined;
+      if (returned?.body?.code === "EMAIL_NOT_VERIFIED" && ctx.path === "/sign-in/email") {
+        console.info("[auth] sign-in refused: EMAIL_NOT_VERIFIED (unverified email/password account)");
+      }
+    }),
+  },
   // Honors Set-Cookie from server-side auth calls in the Next App Router
   // (server actions / RSC). Must be the last plugin.
   plugins: [nextCookies()],
 });
+
+// Now that `auth` exists, wire the FIX-2 context resolver (see above).
+takeoverCtx.resolve = async () => (await auth.$context) as unknown as TakeoverContext;
