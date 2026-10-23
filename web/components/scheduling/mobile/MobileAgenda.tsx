@@ -1,5 +1,7 @@
 "use client";
 
+import { MobileMenuButton } from "@/components/MobileMenuButton";
+
 import { useEffect, useState, useSyncExternalStore } from "react";
 import { serviceCategory, type ApptCategory } from "@/lib/agendaCategory";
 import { apptClientLabel } from "@/lib/apptClientLabel";
@@ -194,9 +196,7 @@ export function MobileAgenda(props: {
           </div>
         ) : (
           <div className="flex min-h-[44px] items-center gap-[10px]">
-            <span aria-hidden className="flex size-9 flex-none items-center justify-center rounded-full bg-m-pri text-[12px] font-semibold text-m-onpri">
-              {props.badge}
-            </span>
+            <MobileMenuButton />
             <div className="flex min-w-0 flex-1 flex-col">
               <h1 className="m-0 truncate text-[21px] font-semibold leading-[1.2] tracking-[-0.01em]">{props.title}</h1>
               <span className="truncate text-[13px] leading-[1.3] text-m-tx3">{props.subtitle}</span>

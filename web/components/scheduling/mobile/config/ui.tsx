@@ -1,9 +1,10 @@
 "use client";
 
+import { MobileMenuButton } from "@/components/MobileMenuButton";
+
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
-import { initialsOf } from "@/lib/staffTone";
 import { MButton, MConfirm, MToggle, Sheet, staffColors } from "../kit";
 
 /**
@@ -174,13 +175,12 @@ export const META_M = "text-[13px] text-m-tx3";
 // ── Frame ────────────────────────────────────────────────────────────────────────
 
 /** The top-level header (Inicio): client avatar, 21px title, sub. */
-export function TopHeader({ name, title, sub }: { name: string; title: string; sub: string }) {
+/** `name` (the business) is kept for callers; the menu button now takes the badge's place. */
+export function TopHeader({ title, sub }: { name: string; title: string; sub: string }) {
   return (
     <header className="flex-none border-b border-m-bd bg-m-sf px-[16px] pb-[12px] pt-[10px]">
       <div className="flex min-h-[44px] items-center gap-[10px]">
-        <span aria-hidden className="flex size-[36px] flex-none items-center justify-center rounded-full bg-m-pri text-[12px] font-semibold text-m-onpri">
-          {initialsOf(name)}
-        </span>
+        <MobileMenuButton />
         <div className="flex min-w-0 flex-1 flex-col">
           <h1 className="m-0 truncate text-[21px] font-semibold leading-[1.2] tracking-[-0.01em]">{title}</h1>
           <span className="truncate text-[13px] leading-[1.3] text-m-tx3">{sub}</span>
@@ -206,6 +206,8 @@ export function SubHeader({
 }) {
   return (
     <header className="flex-none border-b border-m-bd bg-m-sf px-[8px] pb-[14px] pt-[6px]">
+      {/* A sub-screen with its own «‹ back»: the phone's top strip is redundant here (globals.css). */}
+      <span hidden data-integrated-nav="" />
       <div className="flex min-h-[44px] items-center">
         <button
           type="button"

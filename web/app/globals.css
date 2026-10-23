@@ -2409,3 +2409,8 @@ body {
   .u-ag .animate-pulse { animation: none; }
   .u-ag-select, .u-ag-ghost { transition: none; }
 }
+
+/* Phone: a screen whose own header carries the menu (MobileMenuButton) needs no top strip. */
+@media (max-width: 767.98px) {
+  body:has([data-integrated-nav]) .u-topbar { display: none; }
+}
