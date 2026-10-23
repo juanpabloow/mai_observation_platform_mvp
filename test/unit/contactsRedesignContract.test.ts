@@ -142,7 +142,13 @@ test('shell: the four header strips all resolve to the SAME height token', () =>
   assert.ok(!read('components/ClientInboxWorkspace.tsx').includes('<ModuleHeader'), 'inbox does not gain a second page-wide header');
   assert.ok(read('components/scheduling/staff/StaffHeaderCard.tsx').includes('<ModuleHeader'), 'staff too');
   assert.ok(read('app/clients/[clientId]/reuniones/page.tsx').includes('<ModuleHeader'), 'meetings too');
-  assert.ok(read('components/scheduling/AgendaView.tsx').includes('<PageHeading title="Agenda"'), 'the agenda too');
+  // Agenda (Calendario · Equipo · Horarios) follows its approved reference: ONE header
+  // shared by its three screens (AgPageHeader / AG_HEAD + AG_H1), same place and size.
+  const chrome = read('components/scheduling/agenda/AgendaChrome.tsx');
+  assert.ok(chrome.includes('export const AG_HEAD =') && chrome.includes('export const AG_H1 ='), 'the agenda header is one definition');
+  assert.ok(read('components/scheduling/AgendaView.tsx').includes('AG_HEAD'), 'the calendar uses it');
+  assert.ok(read('components/scheduling/staff/StaffTab.tsx').includes('<AgPageHeader title="Equipo"'), 'Equipo uses it');
+  assert.ok(read('components/scheduling/schedule/HoursScreen.tsx').includes('<AgPageHeader'), 'Horarios uses it');
   assert.ok(
     read('components/ui/PageTitle.tsx').includes('export function PageHeading('),
     'and PageHeading is exported from PageTitle — one definition, not three hand-styled titles',
@@ -205,7 +211,8 @@ test('page shell: ONE component owns the floating card, and all three screens us
   assert.ok(shell.includes('rounded-xl border border-line bg-surface'), 'the default surface is a card: fill + hairline + radius');
   assert.ok(shell.includes('clip = true') && /clip \? "overflow-hidden"/.test(shell), 'and it clips its children unless told not to');
   assert.ok(shell.includes('surface === "card"'), 'the card chrome is what the surface prop switches');
-  for (const f of [CONTACTS_PAGE, 'components/scheduling/AgendaView.tsx', 'components/ClientInboxWorkspace.tsx']) {
+  // Agenda is one surface flush to the shell frame (its approved reference), not a card.
+  for (const f of [CONTACTS_PAGE, 'components/ClientInboxWorkspace.tsx']) {
     assert.ok(read(f).includes('from "@/components/ui/PageShell"'), `${f} imports the shared shell`);
     assert.ok(read(f).includes('<PageShell'), `${f} renders it`);
   }
@@ -1566,9 +1573,9 @@ test('grammar: toolbar controls, search and list rows are consolidated across Co
   // centre track owns the 240px floor, so individual modules cannot drift.
   const contactsToolbar = read('components/contacts/ContactsToolbar.tsx');
   const staff = read('components/scheduling/staff/StaffTab.tsx');
-  for (const [src, who] of [[contactsToolbar, 'Contacts'], [staff, 'Staff']] as const) {
-    assert.ok(src.includes('MODULE_SEARCH_CLS'), `${who} search is the shared module-header shell`);
-  }
+  assert.ok(contactsToolbar.includes('MODULE_SEARCH_CLS'), 'Contacts search is the shared module-header shell');
+  // Equipo's search is its reference's (40px soft field, full width beside «Opciones»).
+  assert.ok(staff.includes('aria-label="Buscar profesional"'), 'Equipo keeps a search');
   assert.ok(declOf('MODULE_SEARCH_CLS').includes('h-[34px]'), 'module search matches Agenda at 34px');
   assert.ok(read('components/ui/ModuleHeader.tsx').includes('minmax(15rem,1fr)'), 'the shared centre never drops below 240px on desktop');
 
@@ -1576,7 +1583,7 @@ test('grammar: toolbar controls, search and list rows are consolidated across Co
   const contactsTable = read('components/contacts/ContactsTable.tsx');
   assert.ok(contactsTable.includes('ENTITY_ROW_CLS'), 'Contacts rows use the shared entity-row height');
   assert.ok(contactsTable.includes('TABLE_HEADER_CLS'), 'Contacts header uses the shared table-header height');
-  assert.ok(staff.includes('<table className="w-full table-fixed'), 'Staff is one table of professionals (redesign E1)');
+  assert.ok(staff.includes('role="table" aria-label="Profesionales de la sede"'), 'Staff is one table of professionals (redesign E1)');
   assert.ok(primitives.includes('h-[var(--entity-row-h)]'), 'the entity row is the 56px token');
   assert.ok(
     declOf('TABLE_HEADER_CLS').includes('h-[var(--control-h)]'),
@@ -1590,7 +1597,7 @@ test('grammar: toolbar controls, search and list rows are consolidated across Co
   assert.ok(read('components/scheduling/staff/StaffHeaderCard.tsx').includes('<ModuleHeader'), 'Staff titles through the shared header');
 
   // The Staff surface is in Spanish, like the rest of the CRM.
-  for (const es of ['Servicio', 'Sede', 'No encontramos profesionales']) {
+  for (const es of ['Servicio', 'Sede', 'Ningún profesional coincide con la búsqueda o el filtro.']) {
     assert.ok(staff.includes(es), `Staff copy is Spanish: ${es}`);
   }
 });

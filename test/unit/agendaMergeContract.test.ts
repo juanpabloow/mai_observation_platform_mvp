@@ -50,31 +50,21 @@ test('an INACTIVE barber still gets a lane when they have appointments in range'
 
 test('an inactive barber is LABELLED, and their appointments stay openable', () => {
   const src = read(VIEW);
-  // The shape has grown (workingHours drives the "closed" lanes), so match the
-  // FIELD rather than the whole declaration — the contract is `active`, not the
-  // exact list of siblings it travels with.
   assert.ok(/interface StaffOpt \{[^}]*active: boolean/.test(src), 'StaffOpt carries active');
   assert.ok(src.includes('inactive: !st.active'), 'the column knows the barber is inactive');
-  // The chip reads "Inactivo" now (the surface is in Spanish); the CONTRACT is that an
-  // inactive lane is still labelled in words, not the exact string.
-  assert.ok(src.includes('>\n                        Inactivo\n                      </span>'), 'the header shows an Inactivo chip');
-  // Accessible: the chip explains itself rather than relying on colour/'!'.
-  const chip = src.slice(src.indexOf('col.inactive ? ('), src.indexOf('Inactivo\n'));
+  // An inactive lane is labelled in WORDS, and the chip explains the consequence.
+  const chip = src.slice(src.indexOf('{col.inactive ? ('), src.indexOf('{col.inactive ? (') + 600);
+  assert.ok(/Inactivo/.test(chip), 'the header shows an Inactivo chip');
   assert.ok(/title="[^"]*nuevas reservas/i.test(chip), 'the chip explains the consequence on hover');
-  // Nothing filters cards out by staff.active — their history renders and the card
-  // is the same <button> that opens the drawer.
   assert.ok(!/\.filter\([^)]*staff[^)]*\.active[^)]*\)[^;]*appointments/i.test(src), 'appointments are not filtered by active');
 });
 
 test('an inactive barber is NEVER offered for a new booking or a reschedule', () => {
   const src = read(VIEW);
-  // Every control that creates or moves an appointment draws from the ACTIVE roster; the
-  // server refuses inactive staff too, so this keeps the operator from a guaranteed error.
   assert.ok(src.includes('const activeStaff = props.staff.filter((staff) => staff.active)'), 'the booking roster is the ACTIVE roster');
   assert.ok(src.includes('const staffChoices = props.lockStaffId ? activeStaff.filter((s) => s.id === props.lockStaffId) : activeStaff;'), 'the booking flow picker is built from activeStaff');
-  assert.ok(src.includes('...staffChoices].map((s) =>'), 'and only those options are rendered');
-  // Reschedule (inside the detail panel and on the phone) and the walk-in panel too.
-  assert.ok(src.includes('staff: props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl })),'), 'reschedule offers only active professionals');
+  assert.ok(src.includes('...staffChoices].map((st) =>') && src.includes('...staffChoices].map((s) =>'), 'desktop and phone render only those options');
+  assert.ok(src.includes('staff: props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl, tint: tintOf(s.id) })),'), 'reschedule offers only active professionals');
   assert.ok(/<WalkInPanel[\s\S]*?staff=\{props\.staff\.filter\(\(s\) => s\.active\)/.test(src), 'the walk-in panel offers only active professionals');
 });
 
@@ -105,68 +95,52 @@ test('the appointment detail shows canonical identity — never the internal UUI
 
 test('the redesigned CALENDAR survived — main\'s horizontal card list did not', () => {
   const src = read(VIEW);
-  for (const marker of ['── CONTROL BAR ──', '── KPI STRIP', '── CALENDAR GRID + DRAWER ──']) {
-    assert.ok(src.includes(marker), `${marker} is still present`);
+  // The approved reference (E1–E4): one surface, the date as title, the tools beside it.
+  for (const marker of ['DESKTOP / TABLET (md+) — the approved reference', '<DateTitle', '<GearMenu', '<WeekTeamBoard']) {
+    assert.ok(src.includes(marker), `${marker} is present`);
   }
   assert.ok(src.includes('HOUR_PX'), 'the vertical time grid is intact');
-  assert.ok(src.includes('GRID_FROM_HOUR') && src.includes('GRID_TO_HOUR'), 'the operating window is intact');
+  assert.ok(src.includes('GRID_FROM_HOUR') && src.includes('GRID_TO_HOUR'), 'the operating window has a fallback');
   assert.ok(src.includes('<AppointmentPanel'), 'the detail side panel is wired');
-  // The pre-merge layout was a row of fixed-width per-staff card columns.
   assert.ok(!src.includes('flex min-h-0 flex-1 gap-3 overflow-x-auto'), 'the old card list is gone');
   assert.ok(!src.includes('function ActBtn('), 'the old inline action buttons are gone');
 });
 
-test('Day/Week and the KPI comparison survived the merge', () => {
+test('Day/Week survived the merge; the reference draws no KPI strip', () => {
   const page = read(PAGE);
   assert.ok(page.includes('const view = sp.view === "week" ? "week" : "day"'), 'the day/week switch');
   assert.ok(page.includes('const rangeStart =') && page.includes('const rangeEnd ='), 'the visible range');
-  assert.ok(page.includes('const prevStart =') && page.includes('const prevEnd ='), 'the previous window');
-  assert.ok(page.includes('from: prevStart, to: prevEnd'), 'the second query really runs');
-  assert.ok(page.includes('kpis={summarise(appts)}') && page.includes('previousKpis={summarise(prevAppts)}'), 'both summaries');
-  // One shared summariser, so current and previous can never drift apart.
-  assert.equal(page.match(/const summarise =/g)?.length, 1, 'a single summarise() covers both windows');
-
   const src = read(VIEW);
-  assert.ok(src.includes('function ratioDelta(') && src.includes('function pointDelta('), 'delta maths intact');
-  assert.ok(src.includes('higherIsBetter={false}'), 'no-show delta still inverts its colour');
+  // The strip was already hidden; the approved calendar has none, so the view does not
+  // carry its maths any more (the page's summaries stay available to other screens).
+  assert.ok(!src.includes('function Kpi(') && !src.includes('── KPI STRIP'), 'no KPI strip in the calendar');
 });
 
-test('Week groups by hour block: at most two cards, the rest behind an in-flow +N', () => {
+test('Week is ONE row per professional with in-flow chips and a +N that opens the whole day', () => {
   const src = read(VIEW);
-  assert.ok(src.includes('function bucketWeekAppointments('), 'week groups appointments into hour blocks');
-  assert.ok(src.includes('const WEEK_HOUR_PX = 96'), 'week has its own block scale, separate from the day grid');
-  assert.ok(
-    src.includes('Math.min(Math.max(zonedParts(appt.start_at, tz).h, fromHour), toHour - 1)'),
-    'an out-of-hours booking is clamped into an edge block, never dropped',
-  );
-  assert.ok(src.includes('const [lead, second, ...rest] = block.appointments'), 'the two earliest appointments in a block keep a card');
-  // The +N chip opens EVERY appointment of the block — nothing is hidden for good.
-  assert.ok(src.includes('onClick={() => setWeekOverflow(block.appointments)}'), 'the overflow opens the whole block');
-  // The whole point of the block model: the "+N" chip is a SIBLING of the cards
-  // inside the cell, so it can never be absolutely positioned over another card.
-  const chip = src.slice(src.indexOf('onClick={() => setWeekOverflow(block.appointments)}'));
-  assert.ok(!chip.slice(0, 600).includes('absolute'), 'the +N indicator is in flow, not floating over neighbours');
-  assert.ok(chip.includes('h-5 shrink-0'), 'the +N indicator is a fixed-height flex child of its block');
-  assert.ok(src.includes('function WeekBlockCard('), 'week has its own card geometry');
+  const board = src.slice(src.indexOf('function WeekTeamBoard('), src.indexOf('function WeekOverflowDialog('));
+  assert.ok(board.includes('grid-cols-[112px_repeat(7,minmax(0,1fr))]'), 'professional column + seven days (reference E3)');
+  assert.ok(board.includes('h-[32px]'), 'appointments are 32px chips');
+  assert.ok(board.includes('onClick={() => onMore(cell,'), 'the +N opens EVERY appointment of that day');
+  assert.ok(!board.slice(board.indexOf('+{rest.length} más') - 400, board.indexOf('+{rest.length} más')).includes('absolute'), 'the +N is in flow, never over a chip');
+  assert.ok(board.includes('onClick={() => onDay(day)}'), 'a day header opens that day');
 });
 
 test('Week view matches the weekly reading model without changing Day view', () => {
   const src = read(VIEW);
-  assert.ok(src.includes('Ocupación semanal'), 'the weekly summary reports occupancy');
-  assert.ok(src.includes('u-appt-swatch'), 'the weekly legend uses the professional pastel colours');
-  assert.ok(src.includes('sticky left-0 z-20 w-14'), 'the hour rail leads the grid in both views');
-  assert.ok(!src.includes('sticky right-0 z-20'), 'no trailing rail — that made week read as a table');
+  assert.ok(src.includes('sticky left-0 z-20 w-[60px]'), 'the hour rail leads the day grid');
+  assert.ok(!src.includes('sticky right-0 z-20'), 'no trailing rail');
   assert.ok(src.includes('+{rest.length} más'), 'overflow is a compact +N marker');
-  assert.ok(src.includes('onClick={() => onMore(cell,'), 'the team view\'s +N opens the whole cell too');
   assert.ok(src.includes('function WeekOverflowDialog('), 'the marker opens an accessible appointment chooser');
   // Day keeps the proportional grid: a 90-minute booking stays twice a 45-minute one.
-  assert.ok(src.includes('height={Math.max(22, ((endMin - startMin) / 60) * HOUR_PX - 2)}'), 'day cards keep real duration heights');
+  assert.ok(src.includes('height={Math.max(22, ((endMin - startMin) / 60) * HOUR_PX)}'), 'day cards keep real duration heights');
 });
 
 test('closed columns and professional load are stated, not left to colour alone', () => {
   const src = read(VIEW);
-  assert.ok(src.includes('u-closed-hatch'), 'a closed day/lane gets the neutral striped surface');
-  assert.ok(src.includes('sub: closed ? "Cerrado" : `${n} cita${n === 1 ? "" : "s"}`'), 'a column header carries its own load');
+  assert.ok(src.includes('sub: away ? "Ausencia" : closed ? "No trabaja" : `${n} cita${n === 1 ? "" : "s"}`'), 'a column header carries its own load or why it has none');
+  assert.ok(src.includes('"Sede cerrada" : "No trabaja"'), 'a closed lane says so in words');
+  assert.ok(src.includes('note = siteClosed ? "Sede cerrada"'), 'the week says it too');
 });
 
 test('avatar initials survive an environment-tagged seed name', () => {
@@ -177,11 +151,11 @@ test('avatar initials survive an environment-tagged seed name', () => {
   assert.ok(src.includes('.slice(0, 2)'), 'two words make the initials, as the reference writes them');
 });
 
-test('Day view opens in professional columns while keeping the row toggle available', () => {
+test('Day view is one lane per professional; week is the board by professional', () => {
   const src = read(VIEW);
-  assert.ok(src.includes('useState<"rows" | "columns">("columns")'), 'professional columns are the day default');
-  assert.ok(src.includes('setDesktopLayout("rows")'), 'the compact row layout remains available');
-  assert.ok(src.includes('setDesktopLayout("columns")'), 'the column toggle remains explicit');
+  assert.ok(src.includes('aria-label="Agenda del día por profesional"'), 'professional lanes are the day');
+  assert.ok(src.includes('aria-label="Semana por profesional"'), 'the week board');
+  assert.ok(!src.includes('setDesktopLayout('), 'the reference has no row/column toggle');
 });
 
 test('the calendar reads the SITE timezone, never the browser', () => {
@@ -264,17 +238,19 @@ test('the calendar speaks 24-hour time, never AM/PM', () => {
   assert.ok(!/hour12:\s*true/.test(src), 'no AM/PM formatting remains');
 });
 
-test('the screen has ONE h1 (Agenda) — the date is navigation text, not a heading', () => {
+test('the screen has ONE h1 — the date IS the title (reference), and it opens a month picker', () => {
   const src = read(VIEW);
-  // The title comes from the shared PageHeading; the view itself defines no <h1> of its
-  // own (the date stepper used to be one).
-  assert.ok(src.includes('<PageHeading title="Agenda"'), 'the title is the shared heading');
-  assert.ok(!src.includes('<h1'), 'the view renders no raw <h1> (so the date is not a second one)');
+  assert.ok(src.includes('<DateTitle'), 'the date title comes from the shared chrome');
+  assert.ok(!src.includes('<h1'), 'the view itself renders no second <h1>');
+  const chrome = read('web/components/scheduling/agenda/AgendaChrome.tsx');
+  const title = chrome.slice(chrome.indexOf('export function DateTitle('));
+  assert.equal((title.match(/<h1/g) ?? []).length, 1, 'exactly one h1');
+  assert.ok(title.includes('aria-label="Elegir fecha"'), 'it opens a date picker');
 });
 
 test('the Month view is not offered as a dead disabled control', () => {
   const src = read(VIEW);
-  assert.ok(src.includes('>Día<') && src.includes('>Semana<'), 'Día/Semana are the toggle');
+  assert.ok(src.includes('["day", "D", "Día"]') && src.includes('["week", "S", "Semana"]'), 'D/S, each with its full name as label');
   assert.ok(!/>\s*Month\s*</.test(src) && !/>\s*Mes\s*</.test(src), 'Month/Mes is hidden until it exists');
   assert.ok(!src.includes('Seg disabled'), 'no permanently-disabled segment remains');
 });
@@ -322,9 +298,10 @@ test('control geometry comes from ONE Scheduling system, not per-screen strings'
   for (const [k, px] of [['control', 12], ['card', 16], ['modal', 24], ['event', 8]] as const) {
     assert.ok(css.includes(`--sch-radius-${k}: ${px}px`), `radius token ${k} = ${px}px`);
   }
+  // The calendar's toolbar is the reference's (40px, 12px radius) from ONE place.
   const src = read(VIEW);
-  assert.ok(src.includes('segmentShell("sm")') && src.includes('buttonClass({ variant: "primary"'), 'the toolbar uses the shared segmented control and buttons');
-  for (const old of ['rounded-[7px]', 'h-[34px]', 'className={CONTROL_CLS}', 'className={OUTLINE_CLS}']) {
+  assert.ok(src.includes('className={TB_ICON}') && src.includes('className={TB_PRIMARY}'), 'the toolbar uses the shared agenda chrome');
+  for (const old of ['rounded-[7px]', 'className={CONTROL_CLS}', 'className={OUTLINE_CLS}']) {
     assert.ok(!src.includes(old), `the old ad-hoc "${old}" is gone`);
   }
 });
@@ -355,19 +332,25 @@ test('a confirmation inside the detail panel is modal: Tab cannot reach the pane
 });
 
 test('blocked time shows in EVERY agenda layout, not only the day columns', () => {
-  // The coverage RULES are behaviour-tested in test/unit/agendaBlocks.test.ts.
   const src = read(VIEW);
-  assert.ok(src.includes('from "@/lib/agendaBlocks"'), 'one shared helper module');
-  assert.equal((src.match(/\{blocksOn\(dayKey\)\.map\(\(b\) => \(/g) ?? []).length, 1, 'the tablet board draws block rows');
-  // The phone's list (mobile/MobileAgenda) draws them through lib/mobileAgenda.buildDay,
-  // whose behaviour (site-wide + the professional in view, clipped per day) is unit-tested.
+  // Day lanes: dated blocks / absences (BlockBand) and series (scheduleLayer).
+  assert.ok(src.includes('<BlockBand') && src.includes('{scheduleLayer(col.key, shownDayKeys[0], col.closed === true)}'), 'the day lanes draw blocks, breaks and series');
+  // Week: a whole-day absence is a cell that says so; a partial block is a chip.
+  assert.ok(src.includes('allDay.staff_id === null ? "Sede cerrada" : "Ausencia"'), 'week says Ausencia / Sede cerrada');
+  assert.ok(src.includes('min-w-0 flex-1 truncate font-medium">Bloqueado</span>'), 'week draws partial blocks as chips');
+  // The phone's list draws them through lib/mobileAgenda.buildDay (unit-tested).
   const phone = read('web/components/scheduling/mobile/MobileAgenda.tsx');
   assert.ok(phone.includes('buildDay(visible, props.blocks, props.date, tz, now, { staffInView })'), 'the phone list includes blocks');
   assert.ok(phone.includes('⊘ Bloqueado ·'), 'and draws them as blocks');
-  assert.ok(src.includes('...shownDayKeys.filter((dk) => blocksOn(dk).length > 0)'), 'a blocked day without appointments still appears');
-  assert.equal((src.match(/\{listDayKeys\.length === 0 \? \(/g) ?? []).length, 1, 'the tablet empty state accounts for blocks');
-  assert.ok(src.includes('blocks={blocksOn(shownDayKeys[0])}') && src.includes('bookableStaffIds={bookableStaffIds}'), 'the hour rows know the blocks AND who could take a booking');
-  assert.ok(src.includes('const covered = hourState(blocks, hour, bookableStaffIds) === "blocked";'), 'only a fully blocked hour stops offering a booking');
-  assert.ok(src.includes('blocksOn(col.key, fromHour * 60, toHour * 60).map('), 'week by hours draws blocks');
-  assert.ok(src.includes('className="relative flex flex-col gap-1 border-b border-line-soft p-1"'), 'week hour cells paint ABOVE the block overlay');
+  assert.ok(phone.includes('const open = it.block.series ? onOpenSeries : onOpenBlock;'), 'and every block opens on the phone too');
+});
+
+test('drag selections go down to 15 minutes: grid range, working span and pauses', () => {
+  const agenda = readFileSync(fileURLToPath(new URL('../../web/components/scheduling/AgendaView.tsx', import.meta.url)), 'utf8');
+  assert.ok(agenda.includes('const minuteAt = (el: HTMLElement, clientY: number, nearest = false) => {'), 'the dragged edge snaps to the nearest quarter hour');
+  assert.ok(agenda.includes('m < d.anchor ? d.anchor + 15 : Math.max(d.anchor + 15, exact)'), 'never shorter than the 15 minutes pressed');
+  const editor = readFileSync(fileURLToPath(new URL('../../web/components/scheduling/schedule/WeeklyScheduleEditor.tsx', import.meta.url)), 'utf8');
+  assert.ok(editor.includes('const minLen = STEP;') && editor.includes('const STEP = 15;'), 'a working span can be 15 min');
+  assert.ok(editor.includes('const resizeBreak = (i: number, edge: "start" | "end", delta: number) => {'), 'a pause is resized by its edges');
+  assert.ok(editor.includes('Math.min(bs + delta, be - STEP)') && editor.includes('Math.max(be + delta, bs + STEP)'), 'a pause is at least 15 min');
 });

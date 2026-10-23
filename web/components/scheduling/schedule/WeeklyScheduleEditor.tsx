@@ -451,8 +451,9 @@ export function WeeklyScheduleEditor(props: {
 /**
  * One day on the reference's 07–22 track (HK.blanco): the working span is the dark bar
  * (its range written inside), the breaks are hatched. Pointer: drag an edge to resize, the
- * bar to move it, a break to move it — all in 15-minute steps, kept inside 07–22 and with
- * the breaks inside the day. Keyboard: each edge, the bar and each break is a slider
+ * bar to move it, a break to move it or its edges to resize it — all in 15-minute steps
+ * (15 min is the shortest span or pause), kept inside 07–22 and with the breaks inside the
+ * day, never over each other. Keyboard: each edge, the bar and each break is a slider
  * (← → = 15 min, Shift = 1 h; on a break Supr removes it).
  */
 const LO = 7 * 60;
@@ -463,7 +464,7 @@ function TimelineDay({ day, name, editable, onChange }: { day: Day; name: string
   const s0 = mins(day.start);
   const e0 = mins(day.end);
   const clampSpan = (s: number, e: number) => {
-    const minLen = 30;
+    const minLen = STEP;
     let a = Math.round(s / STEP) * STEP;
     let b = Math.round(e / STEP) * STEP;
     a = Math.max(LO, Math.min(a, HI - minLen));
@@ -482,6 +483,16 @@ function TimelineDay({ day, name, editable, onChange }: { day: Day; name: string
     const len = be - bs;
     const ns = Math.max(s0 + STEP, Math.min(bs + delta, e0 - STEP - len));
     onChange({ breaks: day.breaks.map((x, j) => (j === i ? { start: hm(ns), end: hm(ns + len) } : x)) });
+  };
+  /** Resize one edge of a break: at least 15 min long, inside the day, not over a neighbour. */
+  const resizeBreak = (i: number, edge: "start" | "end", delta: number) => {
+    const bs = mins(day.breaks[i].start);
+    const be = mins(day.breaks[i].end);
+    const others = day.breaks.filter((_, j) => j !== i).map((x) => [mins(x.start), mins(x.end)] as const);
+    const floor = Math.max(s0 + STEP, ...others.filter(([, oe]) => oe <= bs).map(([, oe]) => oe));
+    const ceil = Math.min(e0 - STEP, ...others.filter(([os]) => os >= be).map(([os]) => os));
+    const next = edge === "start" ? { start: Math.max(floor, Math.min(bs + delta, be - STEP)), end: be } : { start: bs, end: Math.min(ceil, Math.max(be + delta, bs + STEP)) };
+    onChange({ breaks: day.breaks.map((x, j) => (j === i ? { start: hm(next.start), end: hm(next.end) } : x)) });
   };
   const drag = (e: React.PointerEvent, onDelta: (deltaMin: number) => void) => {
     const track = (e.currentTarget as HTMLElement).closest<HTMLElement>("[data-track]");
@@ -562,9 +573,30 @@ function TimelineDay({ day, name, editable, onChange }: { day: Day; name: string
           title={`Pausa ${b.start}–${b.end}`}
           onPointerDown={(e) => drag(e, (d) => moveBreak(i, d))}
           onKeyDown={(e) => keys(e, (d) => moveBreak(i, d), () => onChange({ breaks: day.breaks.filter((_, j) => j !== i) }))}
-          className={`u-focus u-ag-hatch absolute inset-y-[4px] z-[3] rounded-[4px] ${editable ? "cursor-grab" : ""}`}
+          className={`u-focus u-ag-hatch absolute inset-y-[4px] z-[5] rounded-[4px] ${editable ? "cursor-grab" : ""}`}
           style={{ left: `${pct(mins(b.start))}%`, width: `${pct(mins(b.end)) - pct(mins(b.start))}%` }}
-        />
+        >
+          {editable
+            ? (["start", "end"] as const).map((edge) => (
+                <span
+                  key={edge}
+                  role="slider"
+                  tabIndex={0}
+                  aria-label={`${name}: pausa, ${edge === "start" ? "inicio" : "fin"}`}
+                  aria-valuemin={LO}
+                  aria-valuemax={HI}
+                  aria-valuenow={mins(edge === "start" ? b.start : b.end)}
+                  aria-valuetext={edge === "start" ? b.start : b.end}
+                  onPointerDown={(e) => drag(e, (d) => resizeBreak(i, edge, d))}
+                  onKeyDown={(e) => {
+                    e.stopPropagation();
+                    keys(e, (d) => resizeBreak(i, edge, d));
+                  }}
+                  className={`u-focus absolute inset-y-0 z-[6] w-[8px] cursor-ew-resize ${edge === "start" ? "-left-[3px]" : "-right-[3px]"}`}
+                />
+              ))
+            : null}
+        </span>
       ))}
     </div>
   );

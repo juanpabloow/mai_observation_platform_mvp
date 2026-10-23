@@ -279,7 +279,7 @@ test('the desktop roster no longer filters inactive professionals out', () => {
   assert.match(tab, /rosterOrder\(props\.members\)/);
   assert.match(tab, /active: s\.active,/);
   assert.match(tab, /inactive: \{ label: "Inactivo"/);
-  assert.match(tab, /key: "all", label: "Todos", count: props\.members\.length/);
+  assert.match(tab, /key: "", label: "Todos", n: props\.members\.length/);
   const phone = read('components/scheduling/mobile/team/TeamMobile.tsx');
   assert.match(phone, /rosterOrder\(staff\.members\)/);
   assert.match(read('components/scheduling/mobile/team/TeamList.tsx'), /presenceSegCounts\(/);

@@ -879,6 +879,8 @@ html[data-text-scale='large'] {
   --frame-radius: 16px;
   --frame-ground: var(--sidebar-bg);
   --frame-edge: transparent;
+  /* A soft lift so the content panel reads as one sheet ABOVE the rail, not cut into it. */
+  --frame-shadow: -1px 0 0 rgba(17, 17, 19, 0.02), -4px 0 14px -6px rgba(17, 17, 19, 0.1), 0 6px 22px -10px rgba(17, 17, 19, 0.12);
 }
 /* Light app + light rail: the rail's #eef0f3 is the canvas's own value, so the panel
    would vanish into it — step the ground (and the rail on it) down a notch. */
@@ -904,6 +906,7 @@ html.dark {
   --sidebar-hover-dark: #1c1c1c;
   --sidebar-field: #161616;
   --frame-edge: rgba(255, 255, 255, 0.08);
+  --frame-shadow: -6px 0 18px -6px rgba(0, 0, 0, 0.55), 0 8px 26px -10px rgba(0, 0, 0, 0.6);
 }
 @media (min-width: 1280px) {
   body:has([data-collapsed]) {
@@ -918,6 +921,7 @@ html.dark {
     border: 1px solid var(--frame-edge);
     border-radius: var(--frame-radius);
     background: var(--background);
+    box-shadow: var(--frame-shadow);
     overflow: hidden;
   }
 }

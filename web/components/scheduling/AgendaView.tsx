@@ -915,11 +915,13 @@ export function AgendaView(props: {
   // The reference's avatar pastel follows the roster order (same order on every screen).
   const rosterIndex = new Map([...props.staff].sort((a, b) => a.name.localeCompare(b.name, "es")).map((s, i) => [s.id, i]));
   const tintOf = (id: string) => agTintAt(rosterIndex.get(id) ?? 0);
-  /** The lane minute under a pointer, on the 15-minute grid. */
-  const minuteAt = (el: HTMLElement, clientY: number) => {
+  /** The lane minute under a pointer on the 15-minute grid: the quarter it is in, or
+   *  (`nearest`) the closest quarter-hour line — used for the edge being dragged. */
+  const minuteAt = (el: HTMLElement, clientY: number, nearest = false) => {
     const y = clientY - el.getBoundingClientRect().top;
-    const raw = fromHour * 60 + Math.floor(((y / HOUR_PX) * 60) / 15) * 15;
-    return Math.min(Math.max(raw, fromHour * 60), toHour * 60 - 15);
+    const q = ((y / HOUR_PX) * 60) / 15;
+    const raw = fromHour * 60 + (nearest ? Math.round(q) : Math.floor(q)) * 15;
+    return Math.min(Math.max(raw, fromHour * 60), toHour * 60 - (nearest ? 0 : 15));
   };
   const hmOf = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
   // The grid menu offers only what this login may do; a staff login, its own lane only.
@@ -1317,6 +1319,7 @@ export function AgendaView(props: {
                 blocks={props.blocks}
                 seriesOccurrences={props.seriesOccurrences}
                 dimmed={isDimmed}
+                conflictIds={conflictIds}
                 tintOf={tintOf}
                 previewFor={previewProps}
                 onOpen={openAppointment}
@@ -1413,9 +1416,12 @@ export function AgendaView(props: {
                               return;
                             }
                             if (far) d.moved = true;
+                            // The far edge follows the pointer to the NEAREST quarter hour, never
+                            // shorter than the 15 minutes pressed: 15 min is the shortest selection.
                             const m = minuteAt(d.el, e.clientY);
+                            const exact = minuteAt(d.el, e.clientY, true);
                             const from = Math.min(d.anchor, m);
-                            const to = Math.min(toHour * 60, Math.max(d.anchor, m) + 15);
+                            const to = Math.min(toHour * 60, m < d.anchor ? d.anchor + 15 : Math.max(d.anchor + 15, exact));
                             setSlotPop((cur) => (cur && cur.dragging && (cur.from !== from || cur.to !== to) ? { ...cur, from, to, dragged: d.moved } : cur));
                           }}
                           onPointerUp={() => {
@@ -1818,7 +1824,7 @@ export function AgendaView(props: {
  *  blocks are off-white chips; a day the professional doesn't work — or the site is closed,
  *  or a whole-day absence — is an off-white cell that says so. Clicking a day opens it. */
 function WeekTeamBoard({
-  days, staff, appointments, openingHours, timezone, today, selectedId, flashId, blocks, seriesOccurrences, dimmed, tintOf, previewFor,
+  days, staff, appointments, openingHours, timezone, today, selectedId, flashId, blocks, seriesOccurrences, dimmed, conflictIds, tintOf, previewFor,
   onOpen, onDay, onMore,
 }: {
   days: string[];
@@ -1832,6 +1838,8 @@ function WeekTeamBoard({
   blocks: Block[];
   seriesOccurrences: SeriesOcc[];
   dimmed: (a: Appt) => boolean;
+  /** Kept inside a block / absence — flagged on the chip, never silent. */
+  conflictIds: Set<string>;
   tintOf: (id: string) => "1" | "2" | "3" | "4";
   previewFor: (appt: Appt) => Record<string, unknown>;
   onOpen: (id: string) => void;
@@ -1927,13 +1935,16 @@ function WeekTeamBoard({
                           onClick={() => onOpen(c.a.id)}
                           {...previewFor(c.a)}
                           data-appt-card=""
-                          aria-label={`${fmtTime(c.a.start_at, timezone)} ${c.a.contact_name ?? c.a.guest_name ?? "Sin contacto"} ${STATE_WORD[c.a.status] ?? c.a.status}`}
+                          aria-label={`${fmtTime(c.a.start_at, timezone)} ${c.a.contact_name ?? c.a.guest_name ?? "Sin contacto"} ${STATE_WORD[c.a.status] ?? c.a.status}${c.a.review.length > 0 || conflictIds.has(c.a.id) ? ", requiere revisión" : ""}`}
                           className={`u-appt2 ${appointmentToneClass(c.a)} u-focus flex h-[32px] min-w-0 shrink-0 items-center gap-[5px] px-[7px] text-left text-[13px] transition-[background,opacity] hover:bg-[var(--subtle)] ${c.a.status === "cancelled" ? "line-through" : ""} ${selectedId === c.a.id || flashId === c.a.id ? "shadow-[0_0_0_2px_var(--foreground)]" : ""}`}
                           data-status={c.a.status}
                           style={{ opacity: dimmed(c.a) ? 0.28 : 1, borderRadius: 9 }}
                         >
                           <span className="shrink-0 text-[12px] tabular-nums opacity-[0.62]">{fmtTime(c.a.start_at, timezone)}</span>
                           <span className="min-w-0 flex-1 truncate font-medium">{shortName(c.a.contact_name ?? c.a.guest_name)}</span>
+                          {c.a.review.length > 0 || conflictIds.has(c.a.id) ? (
+                            <span title="Requiere revisión" aria-hidden className="shrink-0 rounded-[4px] bg-[var(--warn-soft)] px-1 text-[11px] font-semibold text-[var(--warn)]">!</span>
+                          ) : null}
                           <span aria-hidden className="shrink-0 text-[11px] opacity-70">{STATE_GLYPH[c.a.status] ?? ""}</span>
                         </button>
                       ),
