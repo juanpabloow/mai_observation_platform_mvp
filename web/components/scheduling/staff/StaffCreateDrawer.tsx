@@ -2,8 +2,9 @@
 
 import { useRef, useState, useTransition } from "react";
 import { createStaffAction, updateStaffAction } from "@/lib/schedulingAdminActions";
+import { PUBLIC_BIO_MAX, checkPublicBio, publicProfileMessage } from "@/lib/staffPublicProfile";
 import { Button, INPUT } from "../ui/system";
-import { SidePanel, PanelSection, type SidePanelHandle } from "../agenda/SidePanel";
+import { SidePanel, type SidePanelHandle } from "../agenda/SidePanel";
 import type { StaffServiceOpt, StaffSiteOpt } from "./StaffTab";
 
 /**
@@ -37,28 +38,26 @@ export function StaffCreateDrawer({
   const [title, setTitle] = useState("");
   const [site, setSite] = useState(siteId ?? sites[0]?.id ?? "");
   const [takesBookings, setTakesBookings] = useState(true);
-  const [phone, setPhone] = useState("");
-  const [email, setEmail] = useState("");
-  const [serviceIds, setServiceIds] = useState<string[]>([]);
+  const [bio, setBio] = useState("");
   const [touched, setTouched] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [pending, start] = useTransition();
   const sending = useRef(false);
   const handle = useRef<SidePanelHandle | null>(null);
-  const dirty = Boolean(name.trim() || title.trim() || phone.trim() || email.trim() || serviceIds.length || !takesBookings);
+  const dirty = Boolean(name.trim() || title.trim() || bio.trim() || !takesBookings);
   const nameError = touched && !name.trim() ? "Escribe el nombre." : null;
-  const emailError = email.trim() && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) ? "Revisa el correo." : null;
-  const activeServices = services.filter((s) => s.active);
-  const toggle = (id: string) => setServiceIds((prev) => (prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]));
+  const bioCheck = checkPublicBio(bio);
+  const bioError = bioCheck.ok ? null : publicProfileMessage(bioCheck.error, "Presentación", PUBLIC_BIO_MAX);
+  void services;
 
   const save = () => {
     setTouched(true);
-    if (!name.trim() || emailError || !site || sending.current) return;
+    if (!name.trim() || bioError || !site || sending.current) return;
     sending.current = true;
     setError(null);
     start(async () => {
       try {
-        const r = await createStaffAction({ clientId, siteId: site, name: name.trim(), serviceIds });
+        const r = await createStaffAction({ clientId, siteId: site, name: name.trim(), serviceIds: [] });
         if (!r.ok) {
           setError(r.error);
           return;
@@ -66,8 +65,7 @@ export function StaffCreateDrawer({
         const patch: Parameters<typeof updateStaffAction>[2] = {};
         if (title.trim()) patch.title = title.trim();
         if (!takesBookings) patch.takesBookings = false;
-        if (phone.trim()) patch.phone = phone.trim();
-        if (email.trim()) patch.email = email.trim();
+        if (bio.trim()) patch.publicBio = bio.trim();
         if (r.id && Object.keys(patch).length > 0) {
           const u = await updateStaffAction(clientId, r.id, patch);
           if (!u.ok) {
@@ -90,13 +88,13 @@ export function StaffCreateDrawer({
     <SidePanel
       name="staff-create"
       title="Nuevo profesional"
-      subtitle="Servicios y horario se ajustan después en su ficha."
+      subtitle={sites.find((x) => x.id === site)?.name ?? ""}
       dirty={dirty}
       onClose={onClose}
       handleRef={handle}
       footer={
         <div className="flex items-center gap-2">
-          <span className="min-w-0 flex-1 truncate text-[12.5px] text-muted">{name.trim() ? `Atiende con el horario de la sede` : "El nombre es obligatorio"}</span>
+          <span className="min-w-0 flex-1 text-[12.5px] leading-[1.35] text-muted">Servicios y horario se ajustan después en su ficha</span>
           <Button onClick={() => handle.current?.requestClose()} disabled={pending}>
             Cancelar
           </Button>
@@ -106,72 +104,50 @@ export function StaffCreateDrawer({
         </div>
       }
     >
-      <div className="flex flex-col">
-        <PanelSection title="Identidad" id="sc-id">
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[13px] font-medium">Nombre</span>
-            <input data-autofocus className={INPUT} value={name} onChange={(e) => setName(e.target.value)} onBlur={() => setTouched(true)} placeholder="Nombre completo" aria-invalid={Boolean(nameError)} aria-describedby={nameError ? "sc-name-err" : undefined} />
-            {nameError ? <span id="sc-name-err" className="text-[12.5px] text-danger">{nameError}</span> : null}
+      <div className="flex flex-col gap-[18px]">
+        <div className="flex items-center gap-4">
+          <span aria-hidden className="flex size-[64px] shrink-0 items-center justify-center rounded-[14px] bg-[var(--chip)] text-[20px] text-muted">+</span>
+          <p className="text-[12.5px] leading-[1.45] text-muted">La foto (cuadrada, mínimo 400 px) se sube desde su ficha, una vez creado. Se ve en la reserva pública.</p>
+        </div>
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[13px] font-medium">Nombre completo</span>
+          <input data-autofocus className={INPUT} value={name} onChange={(e) => setName(e.target.value)} onBlur={() => setTouched(true)} aria-invalid={Boolean(nameError)} aria-describedby={nameError ? "sc-name-err" : undefined} />
+          {nameError ? <span id="sc-name-err" role="alert" className="text-[12.5px] font-medium text-danger">{nameError}</span> : null}
+        </label>
+        <div className="grid grid-cols-2 gap-2.5">
+          <label className="flex min-w-0 flex-col gap-1.5">
+            <span className="text-[13px] font-medium">Cargo</span>
+            <input className={INPUT} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ej. Barbero" maxLength={80} />
           </label>
-          <label className="flex flex-col gap-1.5">
-            <span className="text-[13px] font-medium">Rol <span className="font-normal text-muted">· opcional</span></span>
-            <input className={INPUT} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Ej. Barbero, Colorista" maxLength={80} />
+          <label className="flex min-w-0 flex-col gap-1.5">
+            <span className="text-[13px] font-medium">Sede</span>
+            <select className={INPUT} value={site} disabled={sites.length < 2} onChange={(e) => setSite(e.target.value)}>
+              {sites.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
           </label>
-          {sites.length > 1 ? (
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[13px] font-medium">Sede</span>
-              <select className={INPUT} value={site} onChange={(e) => setSite(e.target.value)}>
-                {sites.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.name}
-                  </option>
-                ))}
-              </select>
-              <span className="text-[12.5px] text-muted">Un profesional pertenece a una sola sede.</span>
-            </label>
-          ) : (
-            <p className="text-[13px] text-muted">Sede: {sites[0]?.name ?? "—"}</p>
-          )}
-          <label className="flex min-h-[44px] items-start gap-2.5 text-[13px]">
-            <input type="checkbox" checked={takesBookings} onChange={(e) => setTakesBookings(e.target.checked)} className="mt-0.5 size-4 accent-[var(--foreground)]" />
-            <span>
-              <span className="font-medium">Recibe citas</span>
-              <span className="block text-[12.5px] text-muted">Aparece en la agenda y se le pueden asignar reservas.</span>
-            </span>
-          </label>
-        </PanelSection>
-
-        <PanelSection title={<>Contacto de trabajo <span className="font-normal text-muted">· opcional</span></>} id="sc-contact" hint="Solo lo ve el equipo administrador. No le da acceso al sistema: eso se hace en Usuarios y accesos.">
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[13px] font-medium">Teléfono</span>
-              <input className={INPUT} value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" />
-            </label>
-            <label className="flex flex-col gap-1.5">
-              <span className="text-[13px] font-medium">Correo</span>
-              <input className={INPUT} value={email} onChange={(e) => setEmail(e.target.value)} inputMode="email" aria-invalid={Boolean(emailError)} />
-              {emailError ? <span className="text-[12.5px] text-danger">{emailError}</span> : null}
-            </label>
-          </div>
-        </PanelSection>
-
-        <PanelSection title="Servicios" id="sc-services" hint={`${serviceIds.length} de ${activeServices.length}`}>
-          {activeServices.length === 0 ? (
-            <p className="text-[13px] text-muted">Este negocio todavía no tiene servicios activos.</p>
-          ) : (
-            <div className="flex flex-wrap gap-1.5">
-              {activeServices.map((s) => {
-                const on = serviceIds.includes(s.id);
-                return (
-                  <button key={s.id} type="button" aria-pressed={on} onClick={() => toggle(s.id)} className={`u-focus inline-flex h-[44px] items-center rounded-full border px-3 text-[13px] transition-colors md:h-[36px] ${on ? "border-foreground bg-foreground text-background" : "border-line hover:bg-subtle"}`}>
-                    {s.name}
-                  </button>
-                );
-              })}
-            </div>
-          )}
-        </PanelSection>
-        {error ? <p role="alert" className="mt-3 text-[13px] text-danger">{error}</p> : null}
+        </div>
+        <label className="flex flex-col gap-1.5">
+          <span className="text-[13px] font-medium">
+            Presentación pública <span className="font-normal text-muted">(opcional)</span>
+          </span>
+          <textarea className={`${INPUT} h-auto min-h-[84px] py-2.5`} rows={3} value={bio} onChange={(e) => setBio(e.target.value)} placeholder="Una o dos frases sobre su estilo" aria-invalid={Boolean(bioError)} />
+          {bioError ? <span role="alert" className="text-[12.5px] font-medium text-danger">{bioError}</span> : null}
+        </label>
+        <label className="flex min-h-[44px] cursor-pointer items-start gap-3">
+          <input type="checkbox" role="switch" checked={takesBookings} onChange={(e) => setTakesBookings(e.target.checked)} className="u-ag-switch mt-0.5" />
+          <span className="flex flex-col">
+            <span className="text-[14px]">Recibe citas</span>
+            <span className="text-[12.5px] leading-[1.45] text-muted">Si está apagado, aparece en Equipo pero no en la agenda ni en la reserva.</span>
+          </span>
+        </label>
+        <p className="rounded-[10px] bg-[var(--chip)] px-3 py-2.5 text-[13px] leading-[1.45] text-[var(--ag-ink2)]">
+          Empieza con el horario de la sede y sin servicios asignados. Los ajustas en su ficha después de crearlo. Un profesional no es una cuenta de usuario: los accesos se gestionan en Usuarios y accesos.
+        </p>
+        {error ? <p role="alert" className="text-[13px] text-danger">{error}</p> : null}
       </div>
     </SidePanel>
   );

@@ -80,6 +80,8 @@ export function MobileAppointmentSheet(props: {
   onStatus: (target: Target, reason?: string) => void;
   loadActivity: () => Promise<{ ok: true; items: AppointmentActivityItem[] } | { ok: false; error: string }>;
   loadReviewLink: ReviewLinkLoader;
+  /** Without a linked contact: the SAME contact actions as desktop (GuestContact). */
+  contactSlot?: React.ReactNode;
 }) {
   const { appt, timezone: tz } = props;
   const [view, setView] = useState<View>("detail");
@@ -271,6 +273,12 @@ export function MobileAppointmentSheet(props: {
             <span className="min-w-0 flex-1 text-[15px] leading-[1.4]">{r.v}</span>
           </div>
         ))}
+        {props.contactSlot ? (
+          <div className="flex flex-col gap-2 border-t border-m-dv py-4">
+            <span className="text-[14px] font-semibold text-m-tx2">Cliente</span>
+            {props.contactSlot}
+          </div>
+        ) : null}
       </Sheet>
 
       <Sheet open={view === "status"} onClose={() => setView("detail")} label="Acciones de la cita" bodyClassName="flex flex-col px-4 pb-[max(20px,env(safe-area-inset-bottom))]">

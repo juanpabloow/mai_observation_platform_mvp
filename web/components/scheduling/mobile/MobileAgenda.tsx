@@ -102,6 +102,11 @@ export function MobileAgenda(props: {
   onBlock?: () => void;
   /** Open one occurrence of a usual break / recurring block (its id is the occurrence key). */
   onOpenSeries?: (id: string) => void;
+  /** Open a DATED block or absence to edit it (only when this login may). */
+  onOpenBlock?: (id: string) => void;
+  /** «Color de las citas» — the same choice (and storage) as the desktop. */
+  colorBy?: "service" | "status";
+  onColorBy?: (v: "service" | "status") => void;
 }) {
   const tz = props.timezone;
   const isDay = props.view === "day";
@@ -339,6 +344,8 @@ export function MobileAgenda(props: {
         {isDay ? (
           <DayList
             onOpenSeries={props.onOpenSeries}
+            onOpenBlock={props.onOpenBlock}
+            colorBy={props.colorBy ?? "service"}
             items={day!.items}
             tz={tz}
             now={now}
@@ -479,6 +486,39 @@ export function MobileAgenda(props: {
             </div>
           </section>
         ) : null}
+        {props.onColorBy ? (
+          <section className="flex flex-col gap-2">
+            <h2 className="m-0 text-[14px] font-semibold text-m-tx2">Color de las citas</h2>
+            <MSegmented
+              label="Color de las citas"
+              stretch
+              value={props.colorBy ?? "service"}
+              options={[
+                { value: "service", label: "Servicio" },
+                { value: "status", label: "Estado" },
+              ]}
+              onChange={(v) => props.onColorBy?.(v)}
+            />
+            <ul aria-label="Leyenda" className="flex flex-wrap gap-x-3 gap-y-1.5 text-[14px] text-m-tx2">
+              {(props.colorBy ?? "service") === "service"
+                ? (["cut", "grooming", "color", "feature"] as const).map((f) => (
+                    <li key={f} className="flex items-center gap-1.5">
+                      <span aria-hidden className={`${FAMILY_CLASS[f]} size-3 rounded-[4px] bg-[var(--m-fill)] shadow-[inset_0_0_0_1.5px_var(--m-dot)]`} />
+                      {{ cut: "Corte", grooming: "Barba y cuidado", color: "Color", feature: "Tratamiento" }[f]}
+                    </li>
+                  ))
+                : (["scheduled", "confirmed", "completed", "cancelled", "no_show"] as const).map((st) => (
+                    <li key={st} className="flex items-center gap-1.5">
+                      <span aria-hidden className={`u-m-st-${st} inline-flex h-[22px] items-center rounded-[6px] px-1.5 text-[12px]`}>{STATE_ICON[st]}</span>
+                      {STATE_LABEL[st]}
+                    </li>
+                  ))}
+            </ul>
+            <p className="m-0 text-[13px] leading-[1.45] text-m-tx3">
+              {(props.colorBy ?? "service") === "service" ? "El color es la categoría del servicio; el estado se lee en el icono y el texto de cada cita." : "El color es el estado; el servicio se lee en el texto de cada cita."}
+            </p>
+          </section>
+        ) : null}
         <section className="flex flex-col gap-2">
           <h2 className="m-0 text-[14px] font-semibold text-m-tx2">Estado</h2>
           <div className="flex flex-wrap gap-2">
@@ -504,11 +544,15 @@ function DayList({
   colors,
   onOpen,
   onOpenSeries,
+  onOpenBlock,
+  colorBy,
   empty,
   onReset,
 }: {
   items: ReturnType<typeof buildDay<Appt>>["items"];
   onOpenSeries?: (id: string) => void;
+  onOpenBlock?: (id: string) => void;
+  colorBy: "service" | "status";
   tz: string;
   now: Date;
   staffById: Map<string, StaffOpt>;
@@ -544,7 +588,8 @@ function DayList({
               <span className="text-[14px] text-m-tx2">{[isBreak ? null : it.block.reason, who].filter(Boolean).join(" · ")}</span>
             </div>
           );
-          const series = it.block.series && onOpenSeries;
+          const open = it.block.series ? onOpenSeries : onOpenBlock;
+          const series = Boolean(open);
           return (
             <div key={`b-${it.block.id}`} className="flex gap-3">
               <div className="flex w-[52px] flex-none flex-col gap-0.5 pt-3">
@@ -552,7 +597,7 @@ function DayList({
                 <span className="text-[12px] text-m-tx3">{it.to - it.from} min</span>
               </div>
               {series ? (
-                <button type="button" onClick={() => onOpenSeries?.(it.block.id)} className="flex min-h-[44px] min-w-0 flex-1 border-0 bg-transparent p-0" aria-label={`${isBreak ? "Pausa habitual" : "Bloqueo"} ${range}, ${who}. Abrir`}>
+                <button type="button" onClick={() => open?.(it.block.id)} className="flex min-h-[44px] min-w-0 flex-1 border-0 bg-transparent p-0" aria-label={`${isBreak ? "Pausa habitual" : "Bloqueo"} ${range}, ${who}. Abrir`}>
                   {body}
                 </button>
               ) : (
@@ -578,6 +623,7 @@ function DayList({
               <span className="text-[12px] text-m-tx3">{a.duration_min} min</span>
             </div>
             <div
+              style={colorBy === "status" ? { background: `var(--m-st-${a.status}-bg)` } : undefined}
               className={`${mFamilyClass(a)} flex min-w-0 flex-1 flex-col gap-0.5 rounded-[16px] bg-[var(--m-fill)] px-[14px] py-3 ${
                 it.isNext ? "border-[1.5px] border-m-tx" : "border border-transparent"
               }`}

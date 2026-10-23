@@ -27,7 +27,7 @@ import { BreakWeekPanel } from "../agenda/BreakWeekPanel";
 import type { OccurrenceRef } from "../agenda/SeriesPanel";
 import { expandSeries } from "@worker/scheduling/series.js";
 import { Button } from "../ui/system";
-import { StaffServicesEditor } from "./StaffServicesEditor";
+import { StaffServicesEditor, StaffServicesList } from "./StaffServicesEditor";
 import { StaffAbsences } from "./StaffAbsences";
 import { WeeklyScheduleEditor } from "../schedule/WeeklyScheduleEditor";
 import { listScheduleSeriesAction, type SeriesView } from "@/lib/scheduleSeriesActions";
@@ -578,7 +578,6 @@ function StaffDetail({
   const [tabDirty, setTabDirtyState] = useState<{ tab: DetailTab; dirty: boolean }>({ tab, dirty: false });
   const editorDirty = tabDirty.tab === tab && tabDirty.dirty;
   const reportHoursDirty = useCallback((d: boolean) => setTabDirtyState({ tab: "hours", dirty: d }), []);
-  const reportServicesDirty = useCallback((d: boolean) => setTabDirtyState({ tab: "services", dirty: d }), []);
   const [tabAsk, setTabAsk] = useState<DetailTab | null>(null);
   const requestTab = (t: DetailTab) => {
     if (t === tab) return;
@@ -648,6 +647,7 @@ function StaffDetail({
   const presGlyph = status.key === "with_client" ? "◐" : status.key === "available" || status.key === "on_shift" ? "●" : "○";
   const presInk = status.key === "with_client" ? "text-[var(--warn)]" : status.key === "available" || status.key === "on_shift" ? "text-[var(--success)]" : "text-muted";
   const [editingProfile, setEditingProfile] = useState(false);
+  const [editingServices, setEditingServices] = useState(false);
   /** «Cambiar la pausa de una fecha»: the next break of this professional, on its week. */
   const [oneDate, setOneDate] = useState<OccurrenceRef | null>(null);
   const nextBreak = (): OccurrenceRef | null => {
@@ -828,19 +828,7 @@ function StaffDetail({
           <ProfileView member={member} onEdit={() => setEditingProfile(true)} />
         ) : tab === "services" ? (
           <div className="w-full px-6 py-5">
-            <StaffServicesEditor
-              clientId={clientId}
-              staffId={member.id}
-              staffName={member.name}
-              services={services}
-              assigned={member.serviceIds}
-              canEdit
-              onDirtyChange={reportServicesDirty}
-              onSaved={(m) => {
-                setNotice(m);
-                onSaved();
-              }}
-            />
+            <StaffServicesList services={services} assigned={member.serviceIds} canEdit onEdit={() => setEditingServices(true)} />
           </div>
         ) : tab === "hours" ? (
           <div className="w-full px-6 py-5">
@@ -893,6 +881,22 @@ function StaffDetail({
           </div>
         )}
       </div>
+      {editingServices ? (
+        <StaffServicesEditor
+          clientId={clientId}
+          staffId={member.id}
+          staffName={member.name}
+          services={services}
+          assigned={member.serviceIds}
+          canEdit
+          onClose={() => setEditingServices(false)}
+          onSaved={(m) => {
+            setEditingServices(false);
+            setNotice(m);
+            onSaved();
+          }}
+        />
+      ) : null}
       {oneDate ? (
         <BreakWeekPanel
           clientId={clientId}

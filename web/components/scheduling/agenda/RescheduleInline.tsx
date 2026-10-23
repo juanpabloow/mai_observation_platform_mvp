@@ -18,7 +18,7 @@ import {
   type RescheduleSlot,
 } from "@/lib/rescheduleFlow";
 import { addDays, dayHeadline, fmtTime, shiftMonth, siteDayKey, siteMidnight, todayAtSite } from "@/lib/siteCalendar";
-import { Avatar, Button } from "../ui/system";
+import { Button } from "../ui/system";
 import type { RescheduleAppt } from "./RescheduleFlow";
 
 /**
@@ -196,7 +196,7 @@ export function RescheduleInline(props: {
           </div>
         ) : (
           <p className="flex items-center gap-2 text-[13px]">
-            <Avatar name={staffName} size="sm" />
+            <AgAvatar name={staffName} size={24} />
             {staffName ?? "Sin profesional"}
           </p>
         )}

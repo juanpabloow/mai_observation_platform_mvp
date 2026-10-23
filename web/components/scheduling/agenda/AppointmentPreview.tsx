@@ -1,10 +1,12 @@
 "use client";
 
+import { AgAvatar } from "./AgendaChrome";
+
 import { useLayoutEffect, useRef, useState } from "react";
 import { priceLabelCOP } from "@/lib/money";
 import { fmtTime } from "@/lib/siteCalendar";
 import type { Appt } from "../AgendaView";
-import { Avatar, POPOVER, StatusChip } from "../ui/system";
+import { POPOVER, StatusChip } from "../ui/system";
 
 /**
  * The HOVER PREVIEW of an appointment — an informational card anchored beside the
@@ -77,7 +79,7 @@ export function AppointmentPreview({
         <StatusChip status={appt.status} size="sm" />
       </div>
       <div className="flex items-center gap-3 px-4 py-3">
-        <Avatar name={appt.contact_name} size="md" />
+        <AgAvatar name={appt.contact_name} size={32} />
         <span className="flex min-w-0 flex-col">
           <span className="truncate text-sm font-semibold">{client}</span>
           {appt.primary_identity ? <span className="u-mono truncate text-xs text-muted">{appt.primary_identity}</span> : null}
@@ -90,7 +92,7 @@ export function AppointmentPreview({
         </p>
         <p className="flex items-center justify-between gap-3 text-muted">
           <span className="flex min-w-0 items-center gap-2">
-            <Avatar name={appt.staff_name} size="xs" />
+            <AgAvatar name={appt.staff_name} id={appt.staff_id} size={20} />
             <span className="truncate">{appt.staff_name ?? "Sin profesional"}</span>
           </span>
           <span className="u-mono shrink-0">{appt.duration_min} min</span>

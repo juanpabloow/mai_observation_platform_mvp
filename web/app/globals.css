@@ -2291,3 +2291,23 @@ body {
 .dark .u-ag { --ag-bar: #c9cdd3; --ag-bar-ink: #111316; --ag-bar-handle: rgba(0, 0, 0, 0.35); }
 .u-ag-hatch { background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.85) 0 3px, rgba(255, 255, 255, 0.25) 3px 6px); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6); }
 .dark .u-ag-hatch { background: repeating-linear-gradient(135deg, rgba(17, 19, 22, 0.7) 0 3px, rgba(17, 19, 22, 0.2) 3px 6px); box-shadow: inset 0 0 0 1px rgba(17, 19, 22, 0.5); }
+/* The reference's switch (sw/knob): 36×22 desktop, 48×28 on a phone; ink when on. */
+.u-ag-switch { appearance: none; position: relative; flex: none; width: 36px; height: 22px; border-radius: 999px; background: var(--line-strong); cursor: pointer; transition: background 160ms; }
+.u-ag-switch::after { content: ""; position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: left 160ms; }
+.u-ag-switch:checked { background: var(--ink); }
+.u-ag-switch:checked::after { left: 17px; background: var(--ink-fg); }
+.u-ag-switch:focus-visible { outline: 2px solid var(--focus-edge); outline-offset: 2px; }
+@media (max-width: 767.98px) { .u-ag-switch { width: 48px; height: 28px; } .u-ag-switch::after { width: 22px; height: 22px; } .u-ag-switch:checked::after { left: 23px; } }
+@media (prefers-reduced-motion: reduce) { .u-ag-switch, .u-ag-switch::after { transition: none; } }
+/* Grid selection feedback: the box follows the pointer smoothly and breathes while live;
+   the menu pops in; the booking draft fades in. All still under reduced motion. */
+@keyframes u-pop-in { from { opacity: 0; transform: translateY(-4px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes u-select-live { 0%, 100% { box-shadow: 0 0 0 0 rgba(17, 19, 22, 0.08); } 50% { box-shadow: 0 0 0 4px rgba(17, 19, 22, 0.06); } }
+.u-pop-in { animation: u-pop-in 150ms cubic-bezier(0.2, 0.7, 0.2, 1); transform-origin: top left; }
+.u-ag-select { transition: top 70ms ease-out, height 70ms ease-out; }
+.u-ag-select-live { animation: u-select-live 1.2s ease-in-out infinite; }
+.u-ag-ghost { animation: u-pop-in 180ms cubic-bezier(0.2, 0.7, 0.2, 1); transition: top 120ms ease-out, height 160ms ease-out; }
+@media (prefers-reduced-motion: reduce) {
+  .u-pop-in, .u-ag-ghost, .u-ag-select-live { animation: none; }
+  .u-ag-select, .u-ag-ghost { transition: none; }
+}

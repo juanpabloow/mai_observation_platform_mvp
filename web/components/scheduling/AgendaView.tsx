@@ -173,7 +173,7 @@ interface Block {
   public_reason?: "vacation" | "unavailable" | "site_closed" | null;
 }
 type BookingModalState =
-  | { mode: "new" | "walkin"; contact?: ContactPrefill; staffId?: string; startAt?: string }
+  | { mode: "new" | "walkin"; contact?: ContactPrefill; staffId?: string; startAt?: string; spanMin?: number }
   | { mode: "reschedule"; appt: Appt };
 /** The agenda's modal states — the booking ones plus Time Off (create / edit a block). */
 type ModalState =
@@ -542,12 +542,21 @@ export function AgendaView(props: {
   const [statesOn, setStatesOn] = useState<string[]>([...ALL_STATES]);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
-  /** A click on an empty part of a professional's lane (reference slotPop): one hour from
-   *  the clicked quarter, and a menu — «Nueva cita» / «Bloquear horario» — for what this
-   *  login may do. Nothing is created until the panel is saved. */
-  const [slotPop, setSlotPop] = useState<{ staffId: string; min: number; last: boolean } | null>(null);
+  /**
+   * CREATE / BLOCK FROM THE GRID (reference slotPop, plus drag). Press and drag on an empty
+   * part of a professional's lane to select a range (15-minute steps; a plain click takes
+   * one hour); on a touch screen a long press starts it, so the grid still scrolls. On
+   * release a menu offers what this login may do:
+   *   Bloquear    the EXACT range selected — a block has any length;
+   *   Nueva cita  the START and the professional only — an appointment lasts what its
+   *               service lasts. The range is a hint (services that fit are listed first)
+   *               and the grid then shows the real size of the draft as it is chosen.
+   * Nothing is created until the panel is saved.
+   */
+  const [slotPop, setSlotPop] = useState<{ staffId: string; from: number; to: number; last: boolean; dragging: boolean; dragged: boolean } | null>(null);
+  const dragRef = useRef<{ staffId: string; anchor: number; x: number; y: number; timer: number | null; live: boolean; moved: boolean; el: HTMLElement; touch: boolean; last: boolean; pointerId: number } | null>(null);
   useEffect(() => {
-    if (!slotPop) return;
+    if (!slotPop || slotPop.dragging) return;
     const onKey = (e: KeyboardEvent) => e.key === "Escape" && setSlotPop(null);
     const onDown = (e: PointerEvent) => {
       if (!(e.target as Element | null)?.closest?.("[data-slot-menu]")) setSlotPop(null);
@@ -559,6 +568,35 @@ export function AgendaView(props: {
       document.removeEventListener("pointerdown", onDown, true);
     };
   }, [slotPop]);
+  // While a long-pressed selection is live the finger draws, it does not scroll — a native,
+  // non-passive listener (React's touch handlers are passive and cannot prevent it).
+  useEffect(() => {
+    const f = (e: TouchEvent) => {
+      if (dragRef.current?.live) e.preventDefault();
+    };
+    document.addEventListener("touchmove", f, { passive: false });
+    return () => document.removeEventListener("touchmove", f);
+  }, []);
+  /** The draft the booking panel is building — drawn on the grid at its real size. */
+  const [bookingGhost, setBookingGhost] = useState<{ staffId: string; startAt: string; durationMin: number; label: string } | null>(null);
+  // Bring the draft into view beside the panel (the panel overlays the right of the grid).
+  const ghostKey = bookingGhost ? `${bookingGhost.staffId}|${bookingGhost.startAt}` : "";
+  useEffect(() => {
+    if (!ghostKey) return;
+    const t = window.setTimeout(() => {
+      const el = document.querySelector<HTMLElement>("[data-booking-ghost]");
+      const grid = el?.closest<HTMLElement>("[aria-label='Agenda del día por profesional']");
+      if (!el || !grid) return;
+      const panelW = 532;
+      const r = el.getBoundingClientRect();
+      const g = grid.getBoundingClientRect();
+      const visibleRight = g.right - panelW;
+      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+      if (r.right > visibleRight) grid.scrollBy({ left: r.right - visibleRight + 16, behavior: reduce ? "auto" : "smooth" });
+      if (r.top < g.top + 50 || r.bottom > g.bottom) grid.scrollBy({ top: r.top - g.top - 120, behavior: reduce ? "auto" : "smooth" });
+    }, 60);
+    return () => window.clearTimeout(t);
+  }, [ghostKey]);
   const searchRef = useRef<HTMLInputElement>(null);
   /** «Color de las citas»: by SERVICE (default) or by STATE — remembered on this device. */
   const colorBy = useSyncExternalStore(subscribeColorBy, readColorBy, () => "service" as const);
@@ -877,6 +915,12 @@ export function AgendaView(props: {
   // The reference's avatar pastel follows the roster order (same order on every screen).
   const rosterIndex = new Map([...props.staff].sort((a, b) => a.name.localeCompare(b.name, "es")).map((s, i) => [s.id, i]));
   const tintOf = (id: string) => agTintAt(rosterIndex.get(id) ?? 0);
+  /** The lane minute under a pointer, on the 15-minute grid. */
+  const minuteAt = (el: HTMLElement, clientY: number) => {
+    const y = clientY - el.getBoundingClientRect().top;
+    const raw = fromHour * 60 + Math.floor(((y / HOUR_PX) * 60) / 15) * 15;
+    return Math.min(Math.max(raw, fromHour * 60), toHour * 60 - 15);
+  };
   const hmOf = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
   // The grid menu offers only what this login may do; a staff login, its own lane only.
   const canSlotMenu = (staffKey: string) =>
@@ -1102,6 +1146,12 @@ export function AgendaView(props: {
             const occ = props.seriesOccurrences.find((o) => o.key === key);
             if (occ) setModal({ mode: "series", occ });
           }}
+          onOpenBlock={(id) => {
+            const b = props.blocks.find((x) => x.id === id);
+            if (b && (b.staff_id ? props.canBlockStaff : props.canBlockSite)) setModal({ mode: "editBlock", block: b });
+          }}
+          colorBy={colorBy}
+          onColorBy={setColorBy}
           staff={props.staff}
           openingHours={props.openingHours}
           showTeam={!props.lockStaffId && props.staff.length > 1}
@@ -1320,28 +1370,104 @@ export function AgendaView(props: {
                           ) : null}
                         </div>
                         <div
-                          className={`relative ${canSlotMenu(col.key) ? "cursor-cell" : ""}`}
+                          className={`relative select-none ${canSlotMenu(col.key) ? "cursor-cell" : ""}`}
                           style={{ height: bodyHeight }}
-                          onClick={(e) => {
-                            if (!canSlotMenu(col.key) || (e.target as Element).closest("button,a,[data-slot-menu]")) return;
-                            const y = e.clientY - e.currentTarget.getBoundingClientRect().top;
-                            const raw = fromHour * 60 + Math.floor(((y / HOUR_PX) * 60) / 15) * 15;
-                            const min = Math.min(Math.max(raw, fromHour * 60), toHour * 60 - 60);
-                            setSlotPop({ staffId: col.key, min, last: col.key === columns[columns.length - 1]?.key });
+                          onPointerDown={(e) => {
+                            if (e.button !== 0 || !canSlotMenu(col.key) || (e.target as Element).closest("button,a,[data-slot-menu]")) return;
+                            const el = e.currentTarget;
+                            const touch = e.pointerType !== "mouse";
+                            const anchor = minuteAt(el, e.clientY);
+                            const last = col.key === columns[columns.length - 1]?.key;
+                            const begin = () => {
+                              const d = dragRef.current;
+                              if (!d) return;
+                              d.live = true;
+                              try {
+                                d.el.setPointerCapture(d.pointerId);
+                              } catch {
+                                /* the pointer is already gone */
+                              }
+                              if (d.touch) {
+                                try {
+                                  navigator.vibrate?.(12);
+                                } catch {
+                                  /* no haptics */
+                                }
+                              }
+                              setSlotPop({ staffId: d.staffId, from: d.anchor, to: d.anchor + 15, last: d.last, dragging: true, dragged: false });
+                            };
+                            dragRef.current = { staffId: col.key, anchor, x: e.clientX, y: e.clientY, timer: null, live: false, moved: false, el, touch, last, pointerId: e.pointerId };
+                            if (touch) dragRef.current.timer = window.setTimeout(begin, 350);
+                            else begin();
+                          }}
+                          onPointerMove={(e) => {
+                            const d = dragRef.current;
+                            if (!d) return;
+                            const far = Math.abs(e.clientY - d.y) > 6 || Math.abs(e.clientX - d.x) > 6;
+                            if (!d.live) {
+                              // A touch that moves before the long press is a scroll, not a selection.
+                              if (far && d.timer) {
+                                window.clearTimeout(d.timer);
+                                dragRef.current = null;
+                              }
+                              return;
+                            }
+                            if (far) d.moved = true;
+                            const m = minuteAt(d.el, e.clientY);
+                            const from = Math.min(d.anchor, m);
+                            const to = Math.min(toHour * 60, Math.max(d.anchor, m) + 15);
+                            setSlotPop((cur) => (cur && cur.dragging && (cur.from !== from || cur.to !== to) ? { ...cur, from, to, dragged: d.moved } : cur));
+                          }}
+                          onPointerUp={() => {
+                            const d = dragRef.current;
+                            dragRef.current = null;
+                            if (!d) return;
+                            if (d.timer) window.clearTimeout(d.timer);
+                            if (!d.live) return;
+                            setSlotPop((cur) => {
+                              if (!cur) return cur;
+                              // A click (no drag): one hour, the reference's default box.
+                              if (!d.moved) {
+                                const from = Math.min(cur.from, toHour * 60 - 60);
+                                return { ...cur, from, to: from + 60, dragging: false, dragged: false };
+                              }
+                              return { ...cur, dragging: false, dragged: true };
+                            });
+                          }}
+                          onPointerCancel={() => {
+                            const d = dragRef.current;
+                            if (d?.timer) window.clearTimeout(d.timer);
+                            dragRef.current = null;
+                            setSlotPop((cur) => (cur?.dragging ? null : cur));
                           }}
                         >
+                          {bookingGhost && bookingGhost.staffId === col.key && siteDayKey(bookingGhost.startAt, tz) === shownDayKeys[0] ? (() => {
+                            const p = zonedParts(bookingGhost.startAt, tz);
+                            const m0 = p.h * 60 + p.m;
+                            const clash = columnAppointments.some((a) => a.status !== "cancelled" && Date.parse(a.start_at) < Date.parse(bookingGhost.startAt) + bookingGhost.durationMin * 60_000 && Date.parse(a.service_end_at) > Date.parse(bookingGhost.startAt));
+                            return (
+                              <div aria-hidden data-booking-ghost="" className={`u-ag-ghost pointer-events-none absolute inset-x-[3px] z-[7] flex flex-col gap-0.5 overflow-hidden rounded-[10px] border-[1.5px] border-dashed px-3 py-2 text-[12.5px] ${clash ? "border-[var(--danger)] bg-[var(--ag-danger-soft)] text-[var(--ag-danger-ink)]" : "border-[var(--foreground)] bg-[var(--ag-break)] text-foreground"}`} style={{ top: offsetTop(m0) + 1.5, height: Math.max(22, (bookingGhost.durationMin / 60) * HOUR_PX - 3) }}>
+                                <span className="truncate font-medium">{bookingGhost.label}</span>
+                                <span className="tabular-nums">{hmOf(m0)}–{hmOf(m0 + bookingGhost.durationMin)}{clash ? " · se cruza con otra cita" : ""}</span>
+                              </div>
+                            );
+                          })() : null}
                           {slotPop && slotPop.staffId === col.key ? (
                             <SlotMenu
-                              top={offsetTop(slotPop.min)}
-                              height={HOUR_PX}
+                              top={offsetTop(slotPop.from)}
+                              height={((slotPop.to - slotPop.from) / 60) * HOUR_PX}
+                              dragging={slotPop.dragging}
                               alignRight={slotPop.last && columns.length > 1}
-                              label={`${hmOf(slotPop.min)} – ${hmOf(slotPop.min + 60)}`}
+                              label={`${hmOf(slotPop.from)} – ${hmOf(slotPop.to)} · ${slotPop.to - slotPop.from} min`}
+                              from={hmOf(slotPop.from)}
+                              to={hmOf(slotPop.to)}
                               onNew={
                                 props.canOperate
                                   ? () => {
-                                      const at = new Date(Date.parse(siteMidnightIso(shownDayKeys[0], tz)) + slotPop.min * 60_000).toISOString();
+                                      const at = new Date(Date.parse(siteMidnightIso(shownDayKeys[0], tz)) + slotPop.from * 60_000).toISOString();
+                                      const span = slotPop.dragged ? slotPop.to - slotPop.from : undefined;
                                       setSlotPop(null);
-                                      setModal({ mode: "new", staffId: col.key, startAt: at });
+                                      setModal({ mode: "new", staffId: col.key, startAt: at, spanMin: span });
                                     }
                                   : null
                               }
@@ -1349,7 +1475,7 @@ export function AgendaView(props: {
                                 props.canBlockStaff
                                   ? () => {
                                       setSlotPop(null);
-                                      setModal({ mode: "block", staffId: col.key, date: shownDayKeys[0], start: hmOf(slotPop.min), end: hmOf(slotPop.min + 60) });
+                                      setModal({ mode: "block", staffId: col.key, date: shownDayKeys[0], start: hmOf(slotPop.from), end: hmOf(slotPop.to) });
                                     }
                                   : null
                               }
@@ -1420,6 +1546,8 @@ export function AgendaView(props: {
                       </div>
                     );
                   })}
+                  {/* Room for the booking panel: the draft's lane can slide into view beside it. */}
+                  {bookingGhost && modal?.mode === "new" ? <div aria-hidden className="w-[532px] shrink-0" /> : null}
                 </div>
               </div>
             )}
@@ -1535,6 +1663,7 @@ export function AgendaView(props: {
           error={error}
           onNotice={setNotice}
           onWalkIn={() => setModal({ mode: "walkin" })}
+          onDraft={setBookingGhost}
           onDone={(dayKey) => {
             setModal(null);
             if (dayKey && dayKey !== props.date && !props.returnContactId) return navigate({ date: dayKey });
@@ -1959,37 +2088,51 @@ function Initial({ name, muted, on, photoUrl }: { name: string | null; muted?: b
  * uses the stronger hatch. Clickable to edit/delete when the viewer may; otherwise a read-only
  * marker. Rendered under the cards so a kept conflicting appointment stays legible on top.
  */
-/** The reference's slot popover: a dashed one-hour box with its time, and a small menu. */
-function SlotMenu(props: { top: number; height: number; alignRight: boolean; label: string; onNew: (() => void) | null; onBlock: (() => void) | null; onClose: () => void }) {
+/** The reference's slot popover: the dashed selection with its live time, then a menu. */
+function SlotMenu(props: { top: number; height: number; dragging: boolean; alignRight: boolean; label: string; from: string; to: string; onNew: (() => void) | null; onBlock: (() => void) | null; onClose: () => void }) {
   const first = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => first.current?.focus({ preventScroll: true }), []);
-  const item = "u-focus flex h-[40px] w-full items-center justify-between gap-2.5 rounded-[8px] px-3 text-left text-[14px] text-foreground hover:bg-[var(--subtle)]";
+  useEffect(() => {
+    if (!props.dragging) first.current?.focus({ preventScroll: true });
+  }, [props.dragging]);
+  const item = "u-focus flex min-h-[48px] w-full items-center justify-between gap-2.5 rounded-[8px] px-3 py-1.5 text-left hover:bg-[var(--subtle)]";
   return (
     <>
-      <div aria-hidden className="pointer-events-none absolute inset-x-[3px] z-[8] rounded-[10px] border-[1.5px] border-dashed border-[var(--ag-ink2)] bg-[var(--ag-break)]" style={{ top: props.top + 1.5, height: props.height - 3 }}>
+      <div
+        aria-hidden
+        className={`u-ag-select pointer-events-none absolute inset-x-[3px] z-[8] rounded-[10px] border-[1.5px] border-dashed border-[var(--ag-ink2)] bg-[var(--ag-break)] ${props.dragging ? "u-ag-select-live" : ""}`}
+        style={{ top: props.top + 1.5, height: Math.max(18, props.height - 3) }}
+      >
         <span className="absolute -top-3 left-2 flex h-[22px] items-center rounded-[6px] bg-[var(--ink)] px-2 text-[12px] tabular-nums text-[var(--ink-fg)]">{props.label}</span>
       </div>
-      <div
-        data-slot-menu=""
-        role="menu"
-        aria-label={`Horario ${props.label}`}
-        className={`absolute z-[9] flex w-[236px] flex-col rounded-[12px] bg-[var(--surface)] p-1.5 shadow-[0_0_0_1px_var(--line),0_14px_36px_rgba(0,0,0,0.14)] ${props.alignRight ? "right-2" : "left-[3px]"}`}
-        style={{ top: props.top + props.height + 6 }}
-        onKeyDown={(e) => e.key === "Escape" && props.onClose()}
-      >
-        {props.onNew ? (
-          <button ref={first} type="button" role="menuitem" onClick={props.onNew} className={item}>
-            Nueva cita
-            <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 3v10M3 8h10" /></svg>
-          </button>
-        ) : null}
-        {props.onBlock ? (
-          <button ref={props.onNew ? undefined : first} type="button" role="menuitem" onClick={props.onBlock} className={item}>
-            Bloquear horario
-            <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="5.5" /><path d="M4.2 11.8l7.6-7.6" /></svg>
-          </button>
-        ) : null}
-      </div>
+      {!props.dragging ? (
+        <div
+          data-slot-menu=""
+          role="menu"
+          aria-label={`Horario ${props.label}`}
+          className={`u-pop-in absolute z-[9] flex w-[256px] flex-col rounded-[12px] bg-[var(--surface)] p-1.5 shadow-[0_0_0_1px_var(--line),0_14px_36px_rgba(0,0,0,0.14)] ${props.alignRight ? "right-2" : "left-[3px]"}`}
+          style={{ top: props.top + Math.max(18, props.height) + 6 }}
+          onKeyDown={(e) => e.key === "Escape" && props.onClose()}
+        >
+          {props.onNew ? (
+            <button ref={first} type="button" role="menuitem" onClick={props.onNew} className={item}>
+              <span className="flex flex-col">
+                <span className="text-[14px] text-foreground">Nueva cita</span>
+                <span className="text-[12px] text-muted">Desde las {props.from} · dura lo que dure el servicio</span>
+              </span>
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 3v10M3 8h10" /></svg>
+            </button>
+          ) : null}
+          {props.onBlock ? (
+            <button ref={props.onNew ? undefined : first} type="button" role="menuitem" onClick={props.onBlock} className={item}>
+              <span className="flex flex-col">
+                <span className="text-[14px] text-foreground">Bloquear horario</span>
+                <span className="text-[12px] tabular-nums text-muted">{props.from} – {props.to}, tal como lo marcaste</span>
+              </span>
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="5.5" /><path d="M4.2 11.8l7.6-7.6" /></svg>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </>
   );
 }
@@ -2196,6 +2339,8 @@ function AppointmentModal(props: {
   onNotice?: (message: string) => void;
   /** «Sin cita · ahora»: switch to the one-step walk-in panel. */
   onWalkIn?: () => void;
+  /** The draft (professional, start, real duration) — the calendar draws it at its size. */
+  onDraft?: (d: { staffId: string; startAt: string; durationMin: number; label: string } | null) => void;
 }) {
   const isReschedule = props.modal.mode === "reschedule";
   // Booking for an existing contact (deep-link): lock identity, submit its id.
@@ -2204,6 +2349,10 @@ function AppointmentModal(props: {
   // A staff login starts (and stays) on its own column; the server refuses any other.
   const presetStaff = props.modal.mode !== "reschedule" ? props.modal.staffId : undefined;
   const presetStart = useRef(props.modal.mode !== "reschedule" ? props.modal.startAt ?? null : null);
+  const presetStartAt = props.modal.mode !== "reschedule" ? props.modal.startAt ?? null : null;
+  /** The range dragged on the grid: a HINT for the service (an appointment lasts what its
+   *  service lasts), never a duration. */
+  const spanMin = props.modal.mode !== "reschedule" ? props.modal.spanMin ?? null : null;
   const [staffId, setStaffId] = useState<string>(props.lockStaffId ?? presetStaff ?? "");
   const [step, setStep] = useState<1 | 2 | 3>(isReschedule ? 2 : 1);
   const [selectedDate, setSelectedDate] = useState(props.modal.mode !== "reschedule" && props.modal.startAt ? siteDayKey(props.modal.startAt, props.timezone) : props.date);
@@ -2452,6 +2601,15 @@ function AppointmentModal(props: {
    * so the preview in step 3 matches the card that gets drawn. Before a service is
    * picked there is no colour to promise, hence the null.
    */
+  const draftStaff = staffId || presetStaff || "";
+  const draftStart = slotStart || presetStartAt;
+  const draftMin = selectedService?.duration_min ?? spanMin ?? null;
+  const onDraft = props.onDraft;
+  useEffect(() => {
+    if (!onDraft) return;
+    onDraft(draftStaff && draftStart && draftMin ? { staffId: draftStaff, startAt: draftStart, durationMin: draftMin, label: selectedService ? `Nueva cita · ${selectedService.name}` : "Nueva cita · elige el servicio" } : null);
+  }, [onDraft, draftStaff, draftStart, draftMin, selectedService]);
+  useEffect(() => () => onDraft?.(null), [onDraft]);
   const bookingFamily: ApptCategory | null = selectedService
     ? serviceCategory(selectedService.name, selectedService.category)
     : null;
@@ -2749,7 +2907,12 @@ function AppointmentModal(props: {
           </span>
         </button>
       );
-      const visibleServices = filteredServices.filter((sv) => !serviceQuery.trim() || sv.name.toLocaleLowerCase("es").includes(serviceQuery.trim().toLocaleLowerCase("es")));
+      const visibleServices = filteredServices
+        .filter((sv) => !serviceQuery.trim() || sv.name.toLocaleLowerCase("es").includes(serviceQuery.trim().toLocaleLowerCase("es")))
+        // A range dragged on the grid: what fits in it first (stable otherwise).
+        .map((sv, i) => ({ sv, i, fits: spanMin === null || sv.duration_min <= spanMin }))
+        .sort((x, y) => (x.fits === y.fits ? x.i - y.i : x.fits ? -1 : 1))
+        .map((x) => x.sv);
       const footer = (
         <div className="flex items-center gap-2">
           <div aria-live="polite" className="flex min-w-0 flex-1 flex-col">
@@ -2906,6 +3069,11 @@ function AppointmentModal(props: {
                 ) : null}
               </PanelSection>
               <PanelSection title="Servicio" id="nv-service" size="lg">
+                {spanMin !== null && presetStartAt ? (
+                  <p className="-mt-1 rounded-[10px] bg-[var(--chip)] px-3 py-2 text-[12.5px] leading-[1.45] text-[var(--ag-ink2)]">
+                    Marcaste {fmtTime(presetStartAt, props.timezone)} – {fmtTime(new Date(Date.parse(presetStartAt) + spanMin * 60_000).toISOString(), props.timezone)} ({spanMin} min). La cita dura lo que dure el servicio: primero van los que caben.
+                  </p>
+                ) : null}
                 <label className={SEARCH}>
                   <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="7" cy="7" r="4.6" /><path d="M10.4 10.4L14 14" /></svg>
                   <input type="search" aria-label="Buscar servicio" placeholder="Buscar servicio" value={serviceQuery} onChange={(e) => setServiceQuery(e.target.value)} className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted" />
@@ -2932,6 +3100,11 @@ function AppointmentModal(props: {
                           <span className="block text-[12.5px] tabular-nums text-muted">
                             {service.duration_min} min{priceLabelCOP(service.price) ? ` · ${priceLabelCOP(service.price)}` : ""}
                           </span>
+                          {spanMin !== null ? (
+                            <span className={`mt-1 inline-flex h-[20px] items-center rounded-[6px] px-1.5 text-[11.5px] ${service.duration_min <= spanMin ? "bg-[var(--success-soft)] text-[var(--success)]" : "bg-[var(--warn-soft)] text-[var(--warn)]"}`}>
+                              {service.duration_min <= spanMin ? "Cabe" : `Dura ${service.duration_min} min`}
+                            </span>
+                          ) : null}
                         </span>
                       </button>
                     );

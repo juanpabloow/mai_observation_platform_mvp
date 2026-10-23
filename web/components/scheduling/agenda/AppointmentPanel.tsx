@@ -139,6 +139,22 @@ export function AppointmentPanel(props: {
         onStatus={props.onStatus}
         loadActivity={props.loadActivity}
         loadReviewLink={props.loadReviewLink}
+        contactSlot={
+          !appt.contact_id ? (
+            <GuestContact
+              clientId={props.reschedule?.clientId ?? ""}
+              siteId={props.reschedule?.siteId ?? ""}
+              appointmentId={appt.id}
+              canModify={plan.allowed}
+              initial={{ name: appt.guest_name, phone: appt.guest_phone, email: appt.guest_email }}
+              onDirty={onContactDirty}
+              onSaved={(m) => {
+                setContactDirty(false);
+                props.onContactSaved?.(m);
+              }}
+            />
+          ) : null
+        }
       />
     );
   }

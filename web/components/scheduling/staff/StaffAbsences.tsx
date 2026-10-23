@@ -5,7 +5,6 @@ import { listScheduleSeriesAction, type SeriesView } from "@/lib/scheduleSeriesA
 import { expandSeries } from "@worker/scheduling/series.js";
 import { fmtTime, longDate, todayAtSite } from "@/lib/siteCalendar";
 import { PUBLIC_REASON_LABEL, type PublicAbsenceReason } from "@/lib/publicAbsenceReason";
-import { Button } from "../ui/system";
 import { BlockPanel } from "../agenda/BlockPanel";
 import { SeriesPanel, type OccurrenceRef } from "../agenda/SeriesPanel";
 import { AffectedReschedulePanel } from "../agenda/AffectedReschedulePanel";
@@ -73,101 +72,112 @@ export function StaffAbsences(props: {
     props.onChanged(m);
   };
 
+  const DW = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+  const MO = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+  const shortD = (iso: string) => {
+    const k = new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date(iso));
+    const [y, m, d] = k.split("-").map(Number);
+    return `${DW[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]} ${d} ${MO[m - 1]}`;
+  };
+  const EDIT = "u-focus inline-flex h-[32px] shrink-0 items-center rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] px-3 text-[13px] hover:bg-[var(--subtle)]";
+  const TAG = "inline-flex h-[22px] shrink-0 items-center rounded-[6px] bg-[var(--chip)] px-2 text-[12px] text-[var(--ag-ink2)]";
+  // Reference f15: date range, then what is withdrawn, then what the client / the team see.
   const row = (t: StaffTimeOff, isPast: boolean) => {
     const allDay = fmtTime(t.startsAt, tz) === "00:00" && fmtTime(t.endsAt, tz) === "00:00";
     const last = new Date(Date.parse(t.endsAt) - 1).toISOString();
-    const when = allDay
-      ? longDate(t.startsAt, tz) === longDate(last, tz)
-        ? `${longDate(t.startsAt, tz)} · todo el día`
-        : `${longDate(t.startsAt, tz)} → ${longDate(last, tz)} · todo el día`
-      : `${longDate(t.startsAt, tz)} · ${fmtTime(t.startsAt, tz)}–${fmtTime(t.endsAt, tz)}`;
+    const same = longDate(t.startsAt, tz) === longDate(last, tz);
+    const days = Math.max(1, Math.round((Date.parse(t.endsAt) - Date.parse(t.startsAt)) / 86_400_000));
     return (
-      <li key={t.id} className={`flex items-center gap-3 px-4 py-3 ${isPast ? "opacity-70" : ""}`}>
-        <div className="min-w-0 flex-1">
-          <p className="truncate text-[13px] font-semibold">{t.reason?.trim() || "Ausencia"}</p>
-          <p className="u-tnum truncate text-[12.5px] text-muted">
-            {when}
-            {t.publicReason ? ` · El cliente ve «${PUBLIC_REASON_LABEL[t.publicReason as PublicAbsenceReason]}»` : ""}
+      <li key={t.id} className="flex items-start gap-3 py-3 shadow-[inset_0_-1px_0_var(--line-soft)]">
+        <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+          <p className="text-[14px] tabular-nums">{same ? shortD(t.startsAt) : `${shortD(t.startsAt)} – ${shortD(last)}`}</p>
+          <p className="text-[13px] tabular-nums text-[var(--ag-ink2)]">
+            {allDay ? `Todo el día · se ${days === 1 ? "retira 1 día completo" : `retiran ${days} días completos`}` : `${fmtTime(t.startsAt, tz)}–${fmtTime(t.endsAt, tz)}`}
+          </p>
+          <p className="text-[12.5px] text-muted">
+            Cliente: {t.publicReason ? PUBLIC_REASON_LABEL[t.publicReason as PublicAbsenceReason] : "sin motivo"} · Equipo: {t.reason?.trim() || "sin motivo"}
           </p>
         </div>
+        <span className={TAG}>Ausencia</span>
         {!isPast && props.canEdit ? (
-          <Button size="sm" onClick={() => setPanel({ kind: "dated", block: t })}>
+          <button type="button" className={EDIT} onClick={() => setPanel({ kind: "dated", block: t })}>
             Editar
-          </Button>
-        ) : isPast ? (
-          <span className="text-[12px] text-muted">Pasada</span>
+          </button>
         ) : null}
       </li>
     );
   };
+  const tabBtn = (on: boolean) => `u-focus h-[28px] rounded-[8px] px-3 text-[13.5px] ${on ? "bg-[var(--ag-seg-on)] font-medium text-foreground shadow-[0_1px_2px_rgba(0,0,0,0.08)]" : "text-[var(--ag-ink2)]"}`;
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex flex-col gap-3">
       <div className="flex items-center gap-3">
-        <p className="min-w-0 flex-1 text-[13px] text-muted">Las vacaciones de {props.staffName} retiran solo su disponibilidad: la sede sigue abierta.</p>
+        <div role="tablist" aria-label="Ausencias" className="flex gap-0.5 rounded-[10px] bg-[var(--ag-seg)] p-[3px]">
+          <button type="button" role="tab" aria-selected={!showPast} onClick={() => setShowPast(false)} className={tabBtn(!showPast)}>
+            Próximas
+          </button>
+          <button type="button" role="tab" aria-selected={showPast} onClick={() => setShowPast(true)} className={tabBtn(showPast)}>
+            Pasadas
+          </button>
+        </div>
+        <span className="min-w-0 flex-1" />
         {props.canEdit ? (
-          <Button variant="primary" onClick={() => setPanel({ kind: "new" })}>
-            Nueva ausencia
-          </Button>
+          <button type="button" className="u-focus inline-flex h-[36px] items-center rounded-[10px] border border-[var(--line-strong)] bg-[var(--surface)] px-3.5 text-[13.5px] font-medium hover:bg-[var(--subtle)]" onClick={() => setPanel({ kind: "new" })}>
+            + Nueva ausencia
+          </button>
         ) : null}
       </div>
+      <p className="text-[12.5px] text-muted">Las vacaciones de {props.staffName} retiran solo su disponibilidad: la sede sigue abierta.</p>
 
-      <section aria-labelledby="abs-upcoming" className="flex flex-col gap-2">
-        <h4 id="abs-upcoming" className="text-[13px] font-semibold">Próximas</h4>
-        {upcoming.length === 0 ? (
-          <p className="rounded-[12px] border border-dashed border-line-strong px-4 py-4 text-[13px] text-muted">No hay ausencias próximas.</p>
+      {showPast ? (
+        past.length === 0 ? (
+          <p className="rounded-[10px] bg-[var(--chip)] px-3 py-2.5 text-[13px] text-[var(--ag-ink2)]">No hay ausencias pasadas.</p>
         ) : (
-          <ul className="divide-y divide-line-soft rounded-[12px] border border-line">{upcoming.map((t) => row(t, false))}</ul>
-        )}
-      </section>
-
-      <section aria-labelledby="abs-series" className="flex flex-col gap-2">
-        <h4 id="abs-series" className="text-[13px] font-semibold">Se repiten</h4>
-        {loadError ? (
-          <div className="flex items-center gap-3 text-[13px] text-muted">
-            No pudimos cargar los bloqueos recurrentes.
-            <Button size="sm" onClick={() => void load()}>Reintentar</Button>
-          </div>
-        ) : series === null ? (
-          <div aria-busy="true" className="h-[48px] rounded-[12px] bg-subtle" />
-        ) : series.length === 0 ? (
-          <p className="text-[13px] text-muted">Sin bloqueos recurrentes.</p>
-        ) : (
-          <ul className="divide-y divide-line-soft rounded-[12px] border border-line">
-            {series.map((s) => {
+          <ul className="flex flex-col">{past.map((t) => row(t, true))}</ul>
+        )
+      ) : (
+        <ul className="flex flex-col">
+          {upcoming.map((t) => row(t, false))}
+          {loadError ? (
+            <li className="flex items-center gap-3 py-3 text-[13px] text-muted">
+              No pudimos cargar los bloqueos recurrentes.
+              <button type="button" className={EDIT} onClick={() => void load()}>
+                Reintentar
+              </button>
+            </li>
+          ) : series === null ? (
+            <li aria-busy="true" className="my-2 h-[48px] rounded-[10px] bg-[var(--chip)]" />
+          ) : (
+            series.map((s) => {
               const occ = nextOccurrence(s);
               return (
-                <li key={s.id} className="flex items-center gap-3 px-4 py-3">
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-[13px] font-semibold">
-                      {s.reason?.trim() || "Bloqueo"}
-                      {s.staffId === null ? <span className="ml-1.5 font-normal text-muted">· toda la sede</span> : null}
+                <li key={s.id} className="flex items-start gap-3 py-3 shadow-[inset_0_-1px_0_var(--line-soft)]">
+                  <div className="flex min-w-0 flex-1 flex-col gap-0.5">
+                    <p className="text-[14px]">
+                      Cada {s.weekdays.map((d) => WD[d]).join(", ")} · <span className="tabular-nums">{s.start}–{s.end}</span>
                     </p>
-                    <p className="truncate text-[12.5px] text-muted">
-                      Cada {s.weekdays.map((d) => WD[d]).join(", ")} · {s.start}–{s.end} · {s.endsOn ? `hasta el ${s.endsOn.split("-").reverse().join("/")}` : "sin fecha de fin"}
+                    <p className="text-[13px] text-[var(--ag-ink2)]">
+                      {s.endsOn ? `Hasta el ${s.endsOn.split("-").reverse().join("/")}` : "Sin fecha de fin"}
                       {s.overrides.length ? ` · ${s.overrides.length} ${s.overrides.length === 1 ? "excepción" : "excepciones"}` : ""}
+                      {s.staffId === null ? " · toda la sede" : ""}
                     </p>
+                    <p className="text-[12.5px] text-muted">Equipo: {s.reason?.trim() || "sin motivo"}</p>
                   </div>
+                  <span className={TAG}>Serie</span>
                   {occ && props.canEdit && s.staffId === props.staffId ? (
-                    <Button size="sm" onClick={() => setPanel({ kind: "series", occ })}>
-                      Editar
-                    </Button>
+                    <button type="button" className={EDIT} onClick={() => setPanel({ kind: "series", occ })}>
+                      Editar serie
+                    </button>
                   ) : null}
                 </li>
               );
-            })}
-          </ul>
-        )}
-      </section>
-
-      {past.length > 0 ? (
-        <section className="flex flex-col gap-2">
-          <button type="button" onClick={() => setShowPast((v) => !v)} className="u-focus self-start rounded text-[13px] font-medium hover:underline" aria-expanded={showPast}>
-            {showPast ? "Ocultar pasadas" : `Ver pasadas (${past.length})`}
-          </button>
-          {showPast ? <ul className="divide-y divide-line-soft rounded-[12px] border border-line">{past.map((t) => row(t, true))}</ul> : null}
-        </section>
-      ) : null}
+            })
+          )}
+          {upcoming.length === 0 && Array.isArray(series) && series.length === 0 ? (
+            <li className="rounded-[10px] bg-[var(--chip)] px-3 py-2.5 text-[13px] text-[var(--ag-ink2)]">No hay ausencias próximas.</li>
+          ) : null}
+        </ul>
+      )}
 
       {panel?.kind === "new" || panel?.kind === "dated" ? (
         <BlockPanel
