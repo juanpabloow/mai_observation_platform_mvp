@@ -44,7 +44,7 @@ test('agency on a client with every module: the three blocks of the proposal + M
     catalog: ['services', 'products', 'promotions'],
     presence: ['booking-page', 'reviews', 'campaigns'],
     results: ['value'],
-    settings: ['sites', 'rules', 'fields', 'users'],
+    settings: ['sites', 'rules', 'payment-methods', 'fields', 'users'],
     automations: ['workflows', 'tech-analytics', 'meetings'],
     agency: ['modules'],
   });
@@ -78,7 +78,7 @@ test('groups vs direct links: Agenda is a group whose row opens the calendar; th
 test('owner of their own client: everything but Módulos (agency-only)', () => {
   const s = shape(member('owner', ALL));
   assert.equal(s.agency, undefined, 'Módulos is never shown to a business');
-  assert.deepEqual(s.settings, ['sites', 'rules', 'fields', 'users']);
+  assert.deepEqual(s.settings, ['sites', 'rules', 'payment-methods', 'fields', 'users']);
   assert.deepEqual(s.automations, ['workflows', 'tech-analytics', 'meetings']);
   assert.deepEqual(s.results, ['value']);
 });

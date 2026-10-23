@@ -52,7 +52,7 @@ import type { WeeklyHours } from "@worker/scheduling/types.js";
 
 /**
  * RECURRING SCHEDULE — usual breaks, recurring blocks and the weekly hours they live in.
- * The ONE writer of schedule_series (migration 1818); the rules are the pure engine's
+ * The ONE writer of schedule_series (migration 1819); the rules are the pure engine's
  * (src/scheduling/series.ts) and the conflict reading is effectiveSchedule.ts, shared with
  * the calendar, availability (every surface) and the "requires review" flag.
  *

@@ -39,6 +39,9 @@ const STAFF_COLS = `s.id, s.tenant_id, s.site_id, s.name, s.working_hours, s.act
 const STAFF_COLS_BARE = STAFF_COLS.replace(/\bs\./g, '');
 /** Appended to STAFF_COLS by the admin reads only. */
 const STAFF_PII_COLS = `s.phone, s.email, s.emergency_contact_name, s.emergency_contact_phone`;
+/** PY-1 commission — money config, kept OUT of STAFF_COLS (public/machine/setter), appended only
+ *  by the admin reads (owner/agency gate), like the PII columns. */
+const STAFF_COMMISSION_COLS = `s.commission_pct_services, s.commission_pct_products`;
 
 export interface StaffRow {
   id: string;
@@ -83,6 +86,9 @@ export interface StaffAdminRow extends StaffRow {
   email: string | null;
   emergency_contact_name: string | null;
   emergency_contact_phone: string | null;
+  /** PY-1 per-artist commission % (numeric(5,2) → string). Admin-only, like the PII above. */
+  commission_pct_services: string;
+  commission_pct_products: string;
 }
 
 export async function listStaff(
@@ -143,7 +149,7 @@ export async function listStaffAdmin(
   }
   if (!opts.includeInactive) where.push('s.active = true');
   const r = await query<StaffAdminRow>(
-    `SELECT ${STAFF_COLS}, ${STAFF_PII_COLS} FROM staff s JOIN sites si ON si.id = s.site_id
+    `SELECT ${STAFF_COLS}, ${STAFF_PII_COLS}, ${STAFF_COMMISSION_COLS} FROM staff s JOIN sites si ON si.id = s.site_id
       WHERE ${where.join(' AND ')} ORDER BY s.name`,
     params,
   );
@@ -153,10 +159,50 @@ export async function listStaffAdmin(
 /** getStaffById, plus the employee's personal data. Owner/admin surfaces only. */
 export async function getStaffByIdAdmin(tenantId: string, id: string): Promise<StaffAdminRow | null> {
   const r = await query<StaffAdminRow>(
-    `SELECT ${STAFF_COLS}, ${STAFF_PII_COLS} FROM staff s WHERE s.id = $1 AND s.tenant_id = $2`,
+    `SELECT ${STAFF_COLS}, ${STAFF_PII_COLS}, ${STAFF_COMMISSION_COLS} FROM staff s WHERE s.id = $1 AND s.tenant_id = $2`,
     [id, tenantId],
   );
   return r.rows[0] ?? null;
+}
+
+// ── PY-1 COMMISSION (per-artist %) ──────────────────────────────────────────────
+// Kept OUT of StaffRow / STAFF_COLS on purpose: commission is money data, and the default
+// projection feeds the public booking page, the machine API and the Recepción. It is read/written
+// only behind the payments.settings / commissions.view permission (the caller's gate).
+
+export interface StaffCommission {
+  commission_pct_services: string;
+  commission_pct_products: string;
+}
+
+/** The artist's commission percentages (numeric(5,2) → string). CLIENT-scoped (through the staff's
+ *  site) so one client can never read another's. Null if the staff isn't this client's. */
+export async function getStaffCommission(tenantId: string, clientId: string, staffId: string): Promise<StaffCommission | null> {
+  const r = await query<StaffCommission>(
+    `SELECT s.commission_pct_services, s.commission_pct_products
+       FROM staff s JOIN sites si ON si.id = s.site_id
+      WHERE s.id = $1 AND s.tenant_id = $2 AND si.client_id = $3`,
+    [staffId, tenantId, clientId],
+  );
+  return r.rows[0] ?? null;
+}
+
+/** Set the artist's commission percentages (0–100; the DB CHECK is the backstop). CLIENT-scoped,
+ *  so an owner can never edit another client's staff. The caller validates the range + gate
+ *  (payments.settings). Returns false if the staff isn't this client's. */
+export async function updateStaffCommission(
+  tenantId: string,
+  clientId: string,
+  staffId: string,
+  pct: { services: number; products: number },
+): Promise<boolean> {
+  const r = await query(
+    `UPDATE staff s SET commission_pct_services = $4, commission_pct_products = $5, updated_at = now()
+       FROM sites si
+      WHERE s.id = $1 AND s.tenant_id = $2 AND si.id = s.site_id AND si.client_id = $3`,
+    [staffId, tenantId, clientId, pct.services, pct.products],
+  );
+  return (r.rowCount ?? 0) > 0;
 }
 
 /** Active staff at a site who can perform a service. Hardened: requires a VALID

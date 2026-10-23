@@ -11,7 +11,7 @@ import { addDays, localToday, weekdayOf } from '../../src/scheduling/series.js';
 import { cleanupTenant, closeDb, seedMember, seedScenario } from './fixtures.js';
 
 /**
- * RECURRING SCHEDULE + RESCHEDULE + WALK-IN CONTACTS (migration 1818) — behavioural, through
+ * RECURRING SCHEDULE + RESCHEDULE + WALK-IN CONTACTS (migration 1819) — behavioural, through
  * the REAL server actions and the REAL availability loader on the local test database. Only
  * the session read and the Next request boundaries are stubbed (same harness as
  * timeOffPermissions.test.ts). Dates are computed from the real clock so "the past" is

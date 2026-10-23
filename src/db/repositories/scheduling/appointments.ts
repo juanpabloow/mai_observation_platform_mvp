@@ -53,7 +53,7 @@ export interface AppointmentRow {
   version: number;
   created_at: Date;
   updated_at: Date;
-  /** Walk-in details typed WITHOUT saving a contact (migration 1818). Display only — never
+  /** Walk-in details typed WITHOUT saving a contact (migration 1819). Display only — never
    *  an identity: they are not matched, merged nor used to message anyone. */
   guest_name: string | null;
   guest_phone: string | null;

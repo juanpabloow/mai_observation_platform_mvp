@@ -70,7 +70,7 @@ test('system roles translate the previous behaviour exactly (no permission added
   // Recepción: the canAccessClient audience.
   assert.deepEqual([...SYSTEM_ROLE_PERMISSIONS.setter].sort(), [
     'agenda.block', 'agenda.book', 'agenda.view', 'campaigns.view', 'contacts.edit', 'contacts.export', 'contacts.view',
-    'inbox.reply', 'inbox.view', 'pipeline.edit', 'pipeline.view', 'products.stock', 'products.view',
+    'inbox.reply', 'inbox.view', 'payments.record', 'payments.view', 'pipeline.edit', 'pipeline.view', 'products.stock', 'products.view',
   ]);
   // Profesional: the agenda only.
   assert.deepEqual([...SYSTEM_ROLE_PERMISSIONS.staff].sort(), ['agenda.book', 'agenda.view']);

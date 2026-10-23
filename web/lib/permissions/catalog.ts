@@ -29,6 +29,7 @@ export type PermissionArea =
   | "inbox"
   | "contacts"
   | "agenda"
+  | "payments"
   | "team"
   | "catalog"
   | "presence"
@@ -62,6 +63,7 @@ export const PERMISSION_AREAS: ReadonlyArray<{ id: PermissionArea; label: string
   { id: "inbox", label: "Inbox", help: "Conversaciones que el bot pasa a una persona." },
   { id: "contacts", label: "Contactos", help: "Fichas de clientes, notas, tareas, etiquetas y pipeline." },
   { id: "agenda", label: "Agenda", help: "Citas del negocio." },
+  { id: "payments", label: "Cobros y comisiones", help: "Cobros al completar una cita y comisiones por profesional." },
   { id: "team", label: "Equipo, horarios y ausencias", help: "Profesionales y cuándo atiende cada sede." },
   { id: "catalog", label: "Servicios, productos y promociones", help: "Lo que vende el negocio." },
   { id: "presence", label: "Página de reservas, reseñas y campañas", help: "Lo que ve el público y de dónde llegan los clientes." },
@@ -91,6 +93,12 @@ export const PERMISSIONS = [
   { key: "agenda.view", area: "agenda", module: "scheduling", requires: [], label: "Ver agenda", help: "Ver las citas. Una cuenta de profesional solo ve su sede." },
   { key: "agenda.book", area: "agenda", module: "scheduling", requires: ["agenda.view"], label: "Gestionar citas", help: "Reservar, reprogramar, confirmar, cancelar, completar y marcar inasistencias. Una cuenta de profesional solo en su propia columna." },
   { key: "agenda.block", area: "agenda", module: "scheduling", requires: ["agenda.view"], label: "Bloquear tiempo de profesionales", help: "Crear, editar y quitar ausencias de cualquier profesional desde la agenda." },
+  // ── Cobros y comisiones ────────────────────────────────────────────────────────
+  { key: "payments.view", area: "payments", module: "scheduling", requires: ["agenda.view"], label: "Ver cobros", help: "Ver el cobro de una cita (monto y método) y la lista de cobros pendientes." },
+  { key: "payments.record", area: "payments", module: "scheduling", requires: ["payments.view", "agenda.book"], label: "Registrar cobros", help: "Cobrar al completar una cita y registrar el cobro de una cita pendiente." },
+  { key: "payments.void", area: "payments", module: "scheduling", requires: ["payments.view"], sensitive: true, label: "Anular cobros", help: "Anular un cobro registrado; queda en el historial y la cita vuelve a cobro pendiente." },
+  { key: "commissions.view", area: "payments", module: "scheduling", requires: ["payments.view"], label: "Ver comisiones", help: "Ver los montos de comisión por profesional en los cobros." },
+  { key: "payments.settings", area: "payments", module: "scheduling", requires: [], sensitive: true, label: "Configurar cobros y comisiones", help: "Gestionar los métodos de pago y el porcentaje de comisión de cada profesional." },
   // ── Equipo, horarios y ausencias ───────────────────────────────────────────────
   { key: "team.manage", area: "team", module: "scheduling", requires: [], label: "Gestionar profesionales", help: "Dar de alta y editar profesionales: foto, certificaciones, servicios que ofrecen y baja." },
   { key: "hours.manage", area: "team", module: "scheduling", requires: [], label: "Horarios y cierres de sede", help: "Cambiar el horario de cada sede y programar cierres y excepciones." },
@@ -225,6 +233,8 @@ export const SYSTEM_ROLE_PERMISSIONS: Record<SystemRoleKey, ReadonlySet<Permissi
     "agenda.view",
     "agenda.book",
     "agenda.block",
+    "payments.view",
+    "payments.record",
     "products.view",
     "products.stock",
     "campaigns.view",

@@ -21,7 +21,7 @@ import { reviewReasons } from '../../src/scheduling/effectiveSchedule.js';
 import { DEFAULT_SCHEDULING_CONFIG } from '../../src/scheduling/types.js';
 
 /**
- * Recurring schedule engine (migration 1818). Business clock: Bogotá (UTC−5, no DST).
+ * Recurring schedule engine (migration 1819). Business clock: Bogotá (UTC−5, no DST).
  * "Now" = Wed 21 Oct 2026, 16:40 local = 21:40Z — the prototype's reference moment.
  */
 const TZ = 'America/Bogota';

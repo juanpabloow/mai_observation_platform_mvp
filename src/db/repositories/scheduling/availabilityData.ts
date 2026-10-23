@@ -211,7 +211,7 @@ export async function prepareAvailability(params: LoadAvailabilityParams): Promi
     [params.tenantId, params.siteId, params.from, params.to, staffIds],
   );
 
-  // Usual breaks and recurring blocks (schedule_series, migration 1818) are blocked time
+  // Usual breaks and recurring blocks (schedule_series, migration 1819) are blocked time
   // exactly like a dated block: a site row applies to every professional, a staff row to
   // that one. Same subtraction, so agenda, bot and public page can never diverge.
   const occurrences = await loadOccurrences({

@@ -23,6 +23,7 @@ import {
 import { StaffCreateDrawer } from "./StaffCreateDrawer";
 import { AgAvatar, AgPageHeader, agTintAt, StateChip, usePopover } from "../agenda/AgendaChrome";
 import { apptCategoryClass, serviceCategory } from "@/lib/agendaCategory";
+import { updateStaffCommissionAction } from "@/lib/paymentActions";
 import { SidePanel } from "../agenda/SidePanel";
 import { BreakWeekPanel } from "../agenda/BreakWeekPanel";
 import type { OccurrenceRef } from "../agenda/SeriesPanel";
@@ -96,6 +97,10 @@ export interface StaffMember {
   publicTitle: string | null;
   publicBio: string | null;
   publicPhotoUrl: string | null;
+  // PY-1 per-artist commission % (numeric string, e.g. "10.00"). Loaded only for the
+  // owner/agency staff page (listStaffAdmin); shown/edited only with payments.settings.
+  commissionPctServices: string;
+  commissionPctProducts: string;
   // PII. Only this screen receives it (the page uses listStaffAdmin).
   phone: string | null;
   email: string | null;
@@ -233,6 +238,8 @@ export interface StaffTabProps {
   detailTab?: string;
   /** Object storage is configured, so a public photo can be uploaded. */
   photoUploadEnabled?: boolean;
+  /** PY-1: the viewer may see + edit per-artist commission (payments.settings). */
+  canManagePayments?: boolean;
 }
 
 export function StaffTab(
@@ -355,6 +362,7 @@ export function StaffTab(
           onSaved={() => router.refresh()}
           initialTab={props.detailTab}
           photoUploadEnabled={props.photoUploadEnabled ?? false}
+          canManagePayments={props.canManagePayments ?? false}
           tintFor={tintOf}
         />
       </div>
@@ -522,6 +530,7 @@ function StaffDetail({
   onSaved,
   initialTab,
   photoUploadEnabled,
+  canManagePayments,
   tintFor,
 }: {
   member: StaffMember;
@@ -536,6 +545,7 @@ function StaffDetail({
   onSaved: () => void;
   initialTab?: string;
   photoUploadEnabled: boolean;
+  canManagePayments: boolean;
   tintFor: (id: string) => "1" | "2" | "3" | "4";
 }) {
   // FIVE tabs, and every one reads something real: the schedule answers performance,
@@ -830,7 +840,10 @@ function StaffDetail({
             </section>
           </div>
         ) : tab === "details" ? (
-          <ProfileView member={member} onEdit={() => setEditingProfile(true)} />
+          <>
+            <ProfileView member={member} onEdit={() => setEditingProfile(true)} />
+            {canManagePayments ? <CommissionBlock clientId={clientId} member={member} onSaved={onSaved} /> : null}
+          </>
         ) : tab === "services" ? (
           <div className="w-full px-6 py-5">
             <StaffServicesList services={services} assigned={member.serviceIds} canEdit onEdit={() => setEditingServices(true)} />
@@ -1785,6 +1798,68 @@ function fmtDayLong(iso: string, tz: string): string {
  * Editing happens in the «Editar perfil» panel (same fields). Contact and emergency data
  * are internal: never on the booking page. A professional is NOT a user account.
  */
+/**
+ * PY-1 COMMISSIONS (main's data + action, in the redesign's ficha). The per-artist % over what
+ * is CHARGED — shown and editable only with payments.settings. It saves on its own through
+ * updateStaffCommissionAction (gated server-side), never through the profile panel: it is money
+ * configuration with its own permission. A change applies to FUTURE charges only — every
+ * recorded payment line keeps the commission it was charged with.
+ */
+function CommissionBlock({ clientId, member, onSaved }: { clientId: string; member: StaffMember; onSaved: () => void }) {
+  const [svc, setSvc] = useState(member.commissionPctServices);
+  const [prod, setProd] = useState(member.commissionPctProducts);
+  const [saving, startSave] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const dirty = Number(svc) !== Number(member.commissionPctServices) || Number(prod) !== Number(member.commissionPctProducts);
+  const save = () => {
+    if (saving) return;
+    setError(null);
+    setSaved(false);
+    const s = Number(svc);
+    const p = Number(prod);
+    if (svc.trim() === "" || prod.trim() === "" || !Number.isFinite(s) || !Number.isFinite(p) || s < 0 || p < 0 || s > 100 || p > 100) {
+      setError("La comisión debe estar entre 0 y 100.");
+      return;
+    }
+    startSave(async () => {
+      try {
+        const r = await updateStaffCommissionAction(clientId, member.id, s, p);
+        if (!r.ok) setError(r.error);
+        else {
+          setSaved(true);
+          onSaved();
+        }
+      } catch {
+        setError("No se pudo guardar: revisa la conexión. Tus valores se conservan.");
+      }
+    });
+  };
+  const field = (label: string, value: string, set: (v: string) => void) => (
+    <label className="grid grid-cols-[170px_minmax(0,140px)_auto] items-center gap-3 py-[9px] text-[13.5px] shadow-[inset_0_-1px_0_var(--line-soft)]">
+      <span className="text-muted">{label}</span>
+      <input type="number" inputMode="decimal" min={0} max={100} step={0.01} value={value} onChange={(e) => { set(e.target.value); setSaved(false); }} aria-label={`Comisión de ${label.toLowerCase()} (%)`} className="u-focus h-[34px] rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] px-2.5 text-right tabular-nums" />
+      <span className="text-muted">%</span>
+    </label>
+  );
+  return (
+    <section aria-labelledby="commission-title" className="flex w-full flex-col px-6 pb-6">
+      <h3 id="commission-title" className="pb-1 text-[15px] font-medium">Comisiones</h3>
+      <p className="pb-1 text-[12.5px] text-muted">Porcentaje sobre lo cobrado. Solo lo ven quienes gestionan pagos. Un cambio aplica a los cobros nuevos: los ya registrados conservan su comisión.</p>
+      {field("Servicios", svc, setSvc)}
+      {field("Productos", prod, setProd)}
+      <div className="flex items-center gap-3 pt-3">
+        <span role="status" aria-live="polite" className={`min-w-0 flex-1 text-[13px] ${error ? "text-danger" : "text-muted"}`}>
+          {error ?? (saving ? "Guardando…" : saved ? "Comisiones guardadas" : dirty ? "Cambios sin guardar" : "")}
+        </span>
+        <Button variant="primary" onClick={save} disabled={!dirty || saving} loading={saving} loadingLabel="Guardando…">
+          Guardar comisiones
+        </Button>
+      </div>
+    </section>
+  );
+}
+
 function ProfileView({ member, onEdit }: { member: StaffMember; onEdit: () => void }) {
   const NONE = "Sin registrar";
   const employment = EMPLOYMENT_TYPES.find((t) => t.value === member.employmentType)?.label ?? NONE;

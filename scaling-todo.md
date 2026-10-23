@@ -202,3 +202,40 @@ payments). Deferred, in rough dependency order:
 - **New-client tracking start.** A client created after this phase has no `attribution_settings`
   row, so its no-referral contacts are `unknown` until the agency sets `tracking_started_at`.
   Consider seeding a row at client creation (tracking from creation time).
+
+## Payments (PY-1 → beyond)
+
+PY-1 records ONE payment per completed appointment (service + optional products), with a
+per-line commission snapshot, through the completion step. Deferred, on purpose:
+
+- **Split payments.** One payment, one `method_key` today. A real "efectivo 20.000 + tarjeta
+  30.000" split needs payment-level method lines (or a `payment_tenders` child table). The
+  `payments`/`payment_lines` shape leaves room; the engine + UI assume a single method for now.
+- **Tips (propinas).** Explicitly out of PY-1. A tip is neither service nor product revenue and
+  usually routes 100% to the artist — it would be its own line `kind='tip'` (no list price) with
+  its own commission rule, not a discount/adjustment.
+- **Standalone product sales.** A payment is always anchored to an appointment
+  (`payments.appointment_id NOT NULL`). Selling products with no appointment (a walk-in buying
+  wax) needs an appointment-less sale — relax the FK or add a `sales` parent.
+- **Refunds.** Today a mistake is VOIDED (whole payment). A partial refund (return one product,
+  keep the service) needs refund lines against a recorded payment, not an all-or-nothing void.
+- **Stock quantities.** `products.in_stock` is a manual boolean; a product line never decrements
+  stock. Real inventory (quantity on hand, decrement on sale, low-stock) is a separate model.
+- **POS / gateway / accounting import.** `payments.source` is not modelled yet (every row is
+  manual). Importing settled payments from Wompi / Bold / a POS or accounting system (instead of
+  manual entry) would add a `source` + external id and a reconcile path; the tables were designed
+  so an imported payment looks like a manual one.
+- **Conversions API "Purchase".** With payments, a completed+paid opportunity carrying
+  `attribution_touches.ctwa_clid` can send a Meta CAPI "Purchase" with the real `total` (not just
+  list price) — the first event with actual revenue. Ties into the attribution CAPI item above.
+- **Editing a completed appointment.** `completed` is still terminal (PY-1 unchanged): amount,
+  service and staff on a completed appointment have no edit path. Correcting the SALE goes through
+  void + re-record; correcting the APPOINTMENT itself (wrong service/staff/time after completion)
+  is a separate, audited un-complete/edit flow not built here.
+- **Mobile commission editor.** PY-1 added the per-artist commission fields to the DESKTOP staff
+  Details form only; the mobile staff detail (`mobile/team/forms.tsx`, an unsaved-bar modal) needs
+  its own "Comisiones" layer (like HoursForm/CertForm) — the payment-methods settings screen itself
+  is already responsive. `canManagePayments` is already threaded into the mobile tree.
+- **New-client seeding.** A client created after PY-1 gets its payment methods seeded lazily on
+  first list (ensureClientPaymentMethods) and its `payments_tracking_started_at` falls back to the
+  client's `created_at`; consider seeding both at client creation (same note as attribution).

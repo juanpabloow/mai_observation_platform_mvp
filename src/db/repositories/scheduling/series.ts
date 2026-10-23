@@ -11,7 +11,7 @@ import {
 } from '../../../scheduling/series.js';
 
 /**
- * schedule_series / schedule_series_overrides repository (migration 1818). Tenant + site
+ * schedule_series / schedule_series_overrides repository (migration 1819). Tenant + site
  * scoped on every read; dates travel as local "YYYY-MM-DD" strings (never JS Dates), exactly
  * the shape the pure engine (src/scheduling/series.ts) works in.
  */

@@ -1,6 +1,6 @@
 import type { ActorType, AppointmentRow, AppointmentStatus } from '../db/repositories/scheduling/appointments.js';
 import { recordPipelineFailure } from './failures.js';
-import { bookingActor, onAppointmentStatusChanged, onBookingCreated, openOnInbound } from './engine.js';
+import { bookingActor, markOpportunityPaid, onAppointmentStatusChanged, onBookingCreated, openOnInbound, revertOpportunityPaid } from './engine.js';
 
 /**
  * FAIL-SAFE pipeline hooks. Each wraps an engine operation in try/catch so a pipeline error NEVER
@@ -33,5 +33,26 @@ export async function pipelineOnAppointmentStatusChanged(appt: AppointmentRow, t
     await onAppointmentStatusChanged(appt, target, bookingActor(actorType, actorUserId));
   } catch (err) {
     recordPipelineFailure({ hook: 'appointment_status', clientId: appt.client_id, appointmentId: appt.id, target }, err);
+  }
+}
+
+/** PY-1: a payment was recorded → advance its sale attended → paid (actor = the person).
+ *  Post-commit, fail-safe (never rolls back the payment). No-op when the appointment has no sale. */
+export async function pipelineOnPaymentRecorded(appt: AppointmentRow, actorUserId: string | null): Promise<void> {
+  if (!appt.opportunity_id) return;
+  try {
+    await markOpportunityPaid(appt.tenant_id, appt.client_id, appt.opportunity_id, { kind: 'user', userId: actorUserId });
+  } catch (err) {
+    recordPipelineFailure({ hook: 'payment_recorded', clientId: appt.client_id, appointmentId: appt.id }, err);
+  }
+}
+
+/** PY-1: a payment was voided → revert its sale paid → attended. Post-commit, fail-safe. */
+export async function pipelineOnPaymentVoided(appt: AppointmentRow, actorUserId: string | null): Promise<void> {
+  if (!appt.opportunity_id) return;
+  try {
+    await revertOpportunityPaid(appt.tenant_id, appt.client_id, appt.opportunity_id, { kind: 'user', userId: actorUserId });
+  } catch (err) {
+    recordPipelineFailure({ hook: 'payment_voided', clientId: appt.client_id, appointmentId: appt.id }, err);
   }
 }

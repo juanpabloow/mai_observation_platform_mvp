@@ -86,7 +86,7 @@ export interface ExplainInput {
   /** Same spans as request.siteExceptions / staff.exceptions, WITH public reasons. */
   siteExceptions: ExplainException[];
   staffExceptions: Map<string, ExplainException[]>;
-  /** Usual breaks (migration 1818). Read as time the schedule does not work — exactly like
+  /** Usual breaks (migration 1819). Read as time the schedule does not work — exactly like
    *  the gaps in weekly hours they replace — so a lunch is "off shift", never an absence. */
   siteBreaks?: Array<{ from: Date; until: Date }>;
   staffBreaks?: Map<string, Array<{ from: Date; until: Date }>>;
