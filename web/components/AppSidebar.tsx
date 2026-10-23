@@ -347,6 +347,8 @@ function NavGroupRow({
             </span>
             <span className="min-w-0 flex-1 truncate">{group.label}</span>
           </Link>
+          {/* The chevron sits on the same vertical as the other groups' (right edge − 11px);
+              the 30px target grows leftwards so the glyph never moves. */}
           <button
             type="button"
             onClick={onToggle}
@@ -354,7 +356,7 @@ function NavGroupRow({
             aria-controls={regionId}
             aria-label={toggleLabel}
             title={toggleLabel}
-            className={`mr-1 flex size-[30px] shrink-0 items-center justify-center rounded-lg max-xl:mr-0 max-xl:size-11 ${
+            className={`mr-0.5 flex size-[30px] shrink-0 items-center justify-end rounded-lg pr-0.5 max-xl:size-11 ${
               holdsPill ? "hover:bg-white/15" : "hover:bg-sidebar-hover"
             }`}
           >

@@ -2269,16 +2269,37 @@ body {
 .dark .u-ag { --ag-segact-bg: #3a3d43; --ag-segact-fg: #f5f5f7; --ag-today: rgba(255, 255, 255, 0.02); }
 /* Agenda panels (reference LS.drawer): 520px, 12px from the frame, 18px radius, a hairline
    ring and a soft lift; header 20/16/16/20, body 4/20/20, actions bar 12/20. Buttons are the
-   reference's btn1/btn2 (36px · 10px · 13.5/500) and fields 38px · 10px · 14px; on a phone
+   reference's btn1/btn2, one step compact (32px · 9px · 13/500) and fields 34px · 9px · 13px; on a phone
    48px · 12px · 15–16px. Focus is the reference's blue ring. */
 .u-ag { --focus-edge: #2f6be4; --ag-panel-line: #e0e2e7; --ag-panel-shadow: 0 18px 48px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.05); }
 .dark .u-ag { --focus-edge: #8ab4ff; --ag-panel-line: #2a2a2c; --ag-panel-shadow: 0 18px 48px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3); }
 @media (min-width: 768px) {
-  .u-ag [data-side-panel] .u-btn { height: 36px; border-radius: 10px; font-size: 13.5px; font-weight: 500; padding-left: 16px; padding-right: 16px; }
-  .u-ag [data-side-panel] .u-btn-secondary { padding-left: 14px; padding-right: 14px; }
+  .u-ag [data-side-panel] .u-btn { height: 32px; border-radius: 9px; font-size: 13px; font-weight: 500; padding-left: 14px; padding-right: 14px; }
+  .u-ag [data-side-panel] .u-btn-secondary { padding-left: 12px; padding-right: 12px; }
   .u-ag [data-side-panel] input.u-field:not([type="checkbox"]):not([type="radio"]),
-  .u-ag [data-side-panel] select.u-field { height: 38px; border-radius: 10px; font-size: 14px; padding-left: 12px; padding-right: 12px; }
-  .u-ag [data-side-panel] textarea.u-field { border-radius: 10px; font-size: 14px; }
+  .u-ag [data-side-panel] select.u-field { height: 34px; border-radius: 9px; font-size: 13px; padding-left: 11px; padding-right: 11px; }
+  .u-ag [data-side-panel] textarea.u-field { border-radius: 9px; font-size: 13px; }
+}
+/*
+ * COMPACT DESKTOP DENSITY (on request, 2026-10-22: «todo está muy grande y la sidebar muy
+ * compacta»). The agenda steps down ONE size to the rail's rhythm (13px text, 32–34px rows):
+ * body 14→13, 15→14, 13.5→13; controls 40→34, 36→32, 38→34; 20px titles of a section → 18.
+ * Scoped to `.u-ag` from 768px, so a phone keeps its 44–48px targets and 15–16px text, and
+ * nothing outside Agenda changes. Remove this block to return to the reference's sizes.
+ */
+@media (min-width: 768px) {
+  .u-ag .text-\[15px\] { font-size: 14px; }
+  .u-ag .text-\[14px\] { font-size: 13px; }
+  .u-ag .text-\[13\.5px\] { font-size: 13px; }
+  .u-ag .text-\[20px\] { font-size: 18px; line-height: 24px; }
+  .u-ag .h-\[40px\] { height: 34px; }
+  .u-ag .size-\[40px\] { width: 34px; height: 34px; }
+  .u-ag .h-\[38px\] { height: 34px; }
+  .u-ag .h-\[36px\] { height: 32px; }
+  .u-ag .min-h-\[40px\] { min-height: 34px; }
+  .u-ag .min-h-\[48px\] { min-height: 40px; }
+  /* The shared Button (40/36px on desktop) joins the toolbar: 32px, 13px. */
+  .u-ag .u-btn { height: 32px; border-radius: 9px; font-size: 13px; }
 }
 @media (max-width: 767.98px) {
   .u-ag [data-side-panel] .u-btn { height: 48px; border-radius: 12px; font-size: 15px; font-weight: 500; }

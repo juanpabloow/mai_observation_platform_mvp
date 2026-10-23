@@ -186,14 +186,14 @@ type ModalState =
 /** The calendar body's vertical scale. One hour = this many px. 60 is the floor
  *  at which a 45-minute card still fits its three lines (time / customer /
  *  service) without cropping the last one. */
-const HOUR_PX = 88;
+const HOUR_PX = 72;
 /**
  * WEEK's vertical scale. The reference week is a BLOCK grid, not a proportional one:
  * seven narrow columns can't carry proportional heights and stay readable, so one hour
  * is one fixed cell that holds AT MOST TWO cards plus a "+N más" chip. 96px is the
  * floor at which two one-line cards and a 20px chip all fit uncropped.
  */
-const WEEK_HOUR_PX = 96;
+const WEEK_HOUR_PX = 80;
 /**
  * The grid's OPERATING WINDOW. Fixed on purpose: deriving it from the data meant a
  * single stray early booking stretched the grid to 3 AM and pushed the real working
@@ -1333,7 +1333,7 @@ export function AgendaView(props: {
               <div className="min-h-0 flex-1 overflow-auto" aria-label="Agenda del día por profesional">
                 <div className="flex min-w-full">
                   <div className="sticky left-0 z-20 w-[60px] shrink-0 bg-[var(--surface)]">
-                    <div className="sticky top-0 z-10 flex h-[50px] items-end justify-end border-b border-[var(--line)] bg-[var(--surface)] pb-2.5 pr-2.5">
+                    <div className="sticky top-0 z-10 flex h-[44px] items-end justify-end border-b border-[var(--line)] bg-[var(--surface)] pb-2.5 pr-2.5">
                       <span className="text-[10.5px] text-muted">{gmtLabel(tz)}</span>
                     </div>
                     <div className="relative" style={{ height: bodyHeight }}>
@@ -1357,7 +1357,7 @@ export function AgendaView(props: {
                     const dayLanes = layoutDayLanes(columnAppointments);
                     return (
                       <div key={col.key} className="min-w-[12.5rem] flex-1 border-l border-[var(--line)]">
-                        <div className="sticky top-0 z-10 flex h-[50px] items-center gap-2 border-b border-[var(--line)] bg-[var(--surface)] px-3">
+                        <div className="sticky top-0 z-10 flex h-[44px] items-center gap-2 border-b border-[var(--line)] bg-[var(--surface)] px-3">
                           <AgAvatar name={col.label} id={col.key} size={24} tint={tintOf(col.key)} photoUrl={(col as { photoUrl?: string | null }).photoUrl ?? null} />
                           <span className="flex min-w-0 flex-col leading-tight">
                             <span className="truncate text-[13.5px] font-medium text-foreground">{col.label}</span>
@@ -1893,7 +1893,7 @@ function WeekTeamBoard({
           return (
             <div key={person.id} className={GRID}>
               <div className="flex flex-col items-center justify-center gap-2 px-2.5 py-4 text-center shadow-[inset_0_-1px_0_var(--line)]">
-                <AgAvatar name={person.name} id={person.id} size={48} tint={tintOf(person.id)} photoUrl={person.photoUrl ?? null} className="shadow-[0_0_0_2px_var(--surface),0_0_0_3px_var(--line)]" />
+                <AgAvatar name={person.name} id={person.id} size={36} tint={tintOf(person.id)} photoUrl={person.photoUrl ?? null} className="shadow-[0_0_0_2px_var(--surface),0_0_0_3px_var(--line)]" />
                 <span className="flex min-w-0 flex-col gap-0.5">
                   <span className="text-[14px] font-medium text-foreground [overflow-wrap:anywhere]">{person.name.split(" ")[0]}</span>
                   <span className="text-[12.5px] text-muted">{person.active ? `${total} ${total === 1 ? "cita" : "citas"}` : "Inactivo"}</span>
@@ -2252,9 +2252,10 @@ function ApptCard({
   const cancelled = appt.status === "cancelled";
   const review = conflict || appt.review.length > 0;
   // The reference's card (apptItem): its height IS its duration, so the content adapts —
-  // under 56px one line (client + time), else client / service, and the time from 68px.
+  // under 50px one line (client + time), else client / service, and the time from 66px
+  // (at 72px an hour: 45 min shows two lines, an hour shows three).
   const h = height - 3;
-  const one = h < 53;
+  const one = h < 50;
   const client = appt.contact_name ?? appt.guest_name ?? (appt.origin === "walk_in" ? "Atención sin cita" : "Sin contacto");
   const stateWord = STATE_WORD[appt.status] ?? appt.status;
   const range = `${fmtTime(appt.start_at, tz)}–${fmtTime(appt.service_end_at, tz)}`;
@@ -2267,7 +2268,7 @@ function ApptCard({
       {...previewProps}
       aria-label={`${client}, ${fmtTime(appt.start_at, tz)} a ${fmtTime(appt.service_end_at, tz)}, ${appt.service_name}, ${stateWord}${review ? ", requiere revisión" : ""}${overlapping ? ", solapamiento" : ""}`}
       className={`u-appt2 ${toneClass} absolute flex flex-col items-stretch gap-[3px] overflow-hidden text-left text-foreground transition-[opacity,background,box-shadow] duration-150 hover:bg-[var(--subtle)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-edge)] ${
-        one ? "justify-center pl-3 pr-2.5" : "justify-start py-2.5 pl-3 pr-2.5"
+        one ? "justify-center pl-2.5 pr-2" : "justify-start py-[7px] pl-2.5 pr-2"
       } ${selected || flash ? "shadow-[0_0_0_2px_var(--foreground)]" : ""} ${flash ? "animate-pulse motion-reduce:animate-none" : ""}`}
       data-status={appt.status}
       data-mode={colorBy}
@@ -2279,9 +2280,9 @@ function ApptCard({
         opacity: dim ? 0.28 : 1,
       }}
     >
-      <span className={`flex w-full min-w-0 items-baseline gap-2 font-medium ${one && h < 30 ? "text-[12.5px]" : "text-[14px]"}`}>
+      <span className={`flex w-full min-w-0 items-baseline gap-2 font-medium ${one && h < 26 ? "text-[12px]" : "text-[13px]"}`}>
         <span className={`min-w-0 flex-1 truncate ${cancelled ? "text-muted line-through" : ""}`}>{client}</span>
-        {one ? <span className="shrink-0 text-[12.5px] font-normal tabular-nums text-[var(--ag-ink2)]">{range}</span> : null}
+        {one ? <span className="shrink-0 text-[12px] font-normal tabular-nums text-[var(--ag-ink2)]">{range}</span> : null}
         {review ? (
           <span title="Requiere revisión" className="shrink-0 self-center rounded-[6px] bg-[var(--warn-soft)] px-1.5 text-[11px] font-medium leading-[18px] text-[var(--warn)]">
             Revisar
@@ -2292,12 +2293,12 @@ function ApptCard({
         </span>
       </span>
       {!one ? (
-        <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] text-[var(--ag-ink2)]">
+        <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-[var(--ag-ink2)]">
           <span aria-hidden className={`${toneClass} u-appt2-dot size-[6px] shrink-0`} />
           <span className="truncate">{appt.service_name}</span>
         </span>
       ) : null}
-      {!one && h >= 68 ? <span className="truncate text-[12.5px] tabular-nums text-[var(--ag-ink2)]">{range}</span> : null}
+      {!one && h >= 66 ? <span className="truncate text-[12px] tabular-nums text-[var(--ag-ink2)]">{range}</span> : null}
     </button>
   );
 }
@@ -2907,8 +2908,8 @@ function AppointmentModal(props: {
       const SEARCH = "flex h-[38px] items-center gap-2 rounded-[10px] bg-[var(--chip)] px-3 text-muted";
       const SMALL = "u-focus inline-flex h-[32px] items-center gap-1.5 whitespace-nowrap rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] px-3 text-[13px] text-foreground hover:bg-[var(--subtle)]";
       const personRow = (hit: ContactSearchHit, onPick: () => void, sub?: string) => (
-        <button key={hit.id} type="button" onClick={onPick} className="u-focus flex min-h-[64px] w-full items-center gap-3 rounded-[12px] px-2.5 py-2 text-left hover:bg-[var(--subtle)]">
-          <span aria-hidden className="inline-flex size-[36px] shrink-0 items-center justify-center rounded-full bg-[var(--chip)] text-[12px] font-medium text-[var(--ag-ink2)]">{initialsOf(hit.name)}</span>
+        <button key={hit.id} type="button" onClick={onPick} className="u-focus flex min-h-[48px] w-full items-center gap-2.5 rounded-[10px] px-2 py-1.5 text-left hover:bg-[var(--subtle)] max-md:min-h-[56px]">
+          <span aria-hidden className="inline-flex size-[30px] shrink-0 items-center justify-center rounded-full bg-[var(--chip)] text-[12px] font-medium text-[var(--ag-ink2)]">{initialsOf(hit.name)}</span>
           <span className="flex min-w-0 flex-1 flex-col">
             <span className="truncate text-[14px] text-foreground">{hit.name ?? "Contacto sin nombre"}</span>
             {hit.phone ? <span className="truncate text-[12.5px] tabular-nums text-muted">{hit.phone}</span> : null}
@@ -3028,7 +3029,7 @@ function AppointmentModal(props: {
                     {contactQuery.trim().length < 2 ? (
                       <>
                         {recents && recents.length > 0 ? <span className="pt-1 text-[12.5px] text-muted">Recientes</span> : null}
-                        {recents === null ? <div aria-busy="true" aria-label="Cargando recientes" className="h-[64px] rounded-[12px] bg-[var(--chip)]" /> : null}
+                        {recents === null ? <div aria-busy="true" aria-label="Cargando recientes" className="h-[48px] rounded-[10px] bg-[var(--chip)]" /> : null}
                         <div className="flex flex-col">{(recents ?? []).map((h) => personRow(h, () => setPickedContact(h)))}</div>
                       </>
                     ) : (

@@ -429,6 +429,7 @@ export function WeeklyScheduleEditor(props: {
       )}
       {asking ? (
         <DiscardChanges
+          confirmLabel="Descartar cambios"
           onKeep={() => {
             setAsking(false);
             nav.forget();

@@ -61,9 +61,9 @@ test('the ficha is its OWN screen: it replaces the list in the same surface', ()
   assert.ok(src.includes('aria-label="Ruta"') && src.includes('href={closeHref}'), 'a breadcrumb goes back to Equipo');
 });
 
-test('the ficha header introduces the person (88px tile), then two actions; the tabs stay fixed', () => {
+test('the ficha header introduces the person (72px tile, compact density), then two actions; the tabs stay fixed', () => {
   const src = read(TAB);
-  assert.ok(src.includes('size={88} radius={18}'), 'the reference tile');
+  assert.ok(src.includes('size={72} radius={16}'), 'the reference tile');
   assert.ok(src.includes('Editar perfil') && src.includes('Ver su agenda'), 'the two actions');
   assert.ok(src.includes('role="tablist"') && src.includes('<div key={tab} className="min-h-0 flex-1 overflow-y-auto'), 'tabs outside the one scrolling body');
 });

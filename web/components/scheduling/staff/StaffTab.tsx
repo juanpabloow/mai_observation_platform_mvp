@@ -683,9 +683,9 @@ function StaffDetail({
           <span aria-current="page" className="truncate text-foreground">{member.name}</span>
         </nav>
         <div className="flex flex-wrap items-center gap-5">
-          <AgAvatar name={member.name} id={member.id} size={88} radius={18} tint={tint} photoUrl={member.publicPhotoUrl ?? null} />
+          <AgAvatar name={member.name} id={member.id} size={72} radius={16} tint={tint} photoUrl={member.publicPhotoUrl ?? null} />
           <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <h2 className="truncate text-[22px] font-semibold tracking-[-0.01em]">{member.name}</h2>
+            <h2 className="truncate text-[20px] font-semibold leading-[26px] tracking-[-0.015em]">{member.name}</h2>
             <p className="truncate text-[14px] text-[var(--ag-ink2)]">{[member.title, member.siteName].filter(Boolean).join(" · ")}</p>
             <p className="flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[13px]">
               <span className={`inline-flex items-center gap-1.5 ${presInk}`}>
@@ -771,7 +771,7 @@ function StaffDetail({
                 ] as const).map(([k, v], i) => (
                   <div key={k} className={`flex flex-col gap-0.5 px-3.5 py-3 ${i % 2 ? "shadow-[inset_1px_0_0_var(--line)]" : ""} ${i > 1 ? "border-t border-[var(--line)]" : ""}`}>
                     <dt className="text-[13px] text-muted">{k}</dt>
-                    <dd className="text-[22px] font-medium tabular-nums">{v}</dd>
+                    <dd className="text-[19px] font-medium tabular-nums">{v}</dd>
                   </div>
                 ))}
               </dl>
@@ -1252,6 +1252,7 @@ function StaffDetail({
       ) : null}
       {tabAsk ? (
         <DiscardChanges
+          confirmLabel="Descartar cambios"
           onKeep={() => setTabAsk(null)}
           onDiscard={() => {
             const next = tabAsk;
@@ -1263,6 +1264,7 @@ function StaffDetail({
       ) : null}
       {leaveAsk ? (
         <DiscardChanges
+          confirmLabel="Descartar cambios"
           onKeep={() => {
             setLeaveAsk(false);
             leaveNav.forget();

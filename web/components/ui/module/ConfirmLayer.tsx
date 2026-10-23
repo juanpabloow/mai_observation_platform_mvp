@@ -20,15 +20,16 @@ export function ConfirmLayer(props: Omit<ComponentProps<typeof ConfirmDialog>, "
   );
 }
 
-/** «¿Descartar los cambios?» — one wording for every editor. */
-export function DiscardChanges({ onKeep, onDiscard, body }: { onKeep: () => void; onDiscard: () => void; body?: string }) {
+/** «¿Descartar los cambios?» — one wording for every editor. Agenda passes its reference's
+ *  «Descartar cambios» as `confirmLabel`; everywhere else keeps «Descartar». */
+export function DiscardChanges({ onKeep, onDiscard, body, confirmLabel }: { onKeep: () => void; onDiscard: () => void; body?: string; confirmLabel?: string }) {
   return (
     <ConfirmLayer
       id="discard-changes"
       title="¿Descartar los cambios?"
       body={body ?? "Hay cambios sin guardar. Si sales ahora, se pierden."}
       cancelLabel="Seguir editando"
-      confirmLabel="Descartar"
+      confirmLabel={confirmLabel ?? "Descartar"}
       onCancel={onKeep}
       onConfirm={onDiscard}
     />

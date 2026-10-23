@@ -22,8 +22,8 @@ import { addDays, calendarDays, shiftMonth } from "@/lib/siteCalendar";
  * the title box 40px tall (the toolbar's height) so a title with a subtitle, a title next
  * to the calendar's tools and a bare title all start at the SAME place on every screen.
  */
-export const AG_HEAD = "flex shrink-0 flex-wrap items-start gap-2.5 px-6 pb-3.5 pt-4";
-export const AG_H1 = "py-[5px] text-[24px] font-semibold leading-[30px] tracking-[-0.02em] text-foreground";
+export const AG_HEAD = "flex shrink-0 flex-wrap items-start gap-2 px-5 pb-2.5 pt-3";
+export const AG_H1 = "py-[3px] text-[20px] font-semibold leading-[26px] tracking-[-0.015em] text-foreground";
 export const AG_SUB = "-mt-1 text-[13px] text-muted";
 
 export function AgPageHeader(props: { title: ReactNode; subtitle?: ReactNode; id?: string; children?: ReactNode }) {
@@ -133,11 +133,11 @@ export function usePopover() {
 
 const POP = "absolute right-0 top-[calc(100%+8px)] z-40 flex flex-col rounded-[12px] bg-[var(--surface)] shadow-[0_0_0_1px_var(--line),0_14px_36px_rgba(0,0,0,0.14)]";
 export const TB_ICON =
-  "u-focus relative inline-flex size-[40px] shrink-0 items-center justify-center rounded-[12px] border border-[var(--line-strong)] bg-[var(--surface)] text-foreground transition-colors hover:bg-[var(--subtle)]";
+  "u-focus relative inline-flex size-[32px] shrink-0 items-center justify-center rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] text-foreground transition-colors hover:bg-[var(--subtle)]";
 export const TB_BTN =
-  "u-focus inline-flex h-[40px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[12px] border border-[var(--line-strong)] bg-[var(--surface)] px-4 text-[14px] font-medium text-foreground transition-colors hover:bg-[var(--subtle)]";
+  "u-focus inline-flex h-[32px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] px-3 text-[13px] font-medium text-foreground transition-colors hover:bg-[var(--subtle)]";
 export const TB_PRIMARY =
-  "u-focus inline-flex h-[40px] shrink-0 items-center gap-2 whitespace-nowrap rounded-[12px] bg-[var(--ink)] px-4 text-[14px] font-medium text-[var(--ink-fg)] transition-colors hover:bg-[var(--ink-hover)] disabled:bg-[var(--ag-prim-dis)] disabled:text-[var(--ag-prim-dis-ink)]";
+  "u-focus inline-flex h-[32px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-[9px] bg-[var(--ink)] px-3 text-[13px] font-medium text-[var(--ink-fg)] transition-colors hover:bg-[var(--ink-hover)] disabled:bg-[var(--ag-prim-dis)] disabled:text-[var(--ag-prim-dis-ink)]";
 
 // ── «Más opciones de agenda» ──────────────────────────────────────────────────
 
