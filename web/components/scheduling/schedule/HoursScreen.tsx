@@ -7,9 +7,9 @@ import { listScheduleSeriesAction, type SeriesView } from "@/lib/scheduleSeriesA
 import { expandSeries } from "@worker/scheduling/series.js";
 import { PUBLIC_REASON_LABEL, type PublicAbsenceReason } from "@/lib/publicAbsenceReason";
 import { fmtTime, longDate, todayAtSite, timezoneLabel } from "@/lib/siteCalendar";
-import { avatarColor, staffInitials } from "@/lib/avatarColor";
 import { Button } from "../ui/system";
 import { WeeklyScheduleEditor } from "./WeeklyScheduleEditor";
+import { AgAvatar, AgPageHeader, agTintAt, TB_BTN, TB_PRIMARY } from "../agenda/AgendaChrome";
 import { BlockPanel, type DatedBlock } from "../agenda/BlockPanel";
 import { SeriesPanel, type OccurrenceRef } from "../agenda/SeriesPanel";
 import { AffectedReschedulePanel } from "../agenda/AffectedReschedulePanel";
@@ -121,14 +121,10 @@ export function HoursScreen(props: {
   }
 
   return (
-    <section aria-labelledby="hours-title" className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]">
-      <header className="flex shrink-0 flex-wrap items-center gap-3 border-b border-line px-6 py-4">
-        <div className="min-w-0 flex-1">
-          <h1 id="hours-title" className="text-[22px] font-semibold leading-7 tracking-tight">Horarios y ausencias</h1>
-          <p className="text-[13px] text-muted">Cuándo se atiende y cuándo no · {timezoneLabel(tz)}</p>
-        </div>
+    <section aria-labelledby="hours-title" className="u-ag -m-[var(--content-pad)] flex min-h-0 flex-1 flex-col self-stretch overflow-hidden bg-[var(--surface)]">
+      <AgPageHeader id="hours-title" title="Horarios y ausencias" subtitle={`Cuándo se atiende y cuándo no · ${timezoneLabel(tz)}`}>
         {props.sites.length > 1 ? (
-          <select aria-label="Sede" value={siteId} onChange={(e) => setSiteId(e.target.value)} className="u-focus h-[40px] rounded-sch-control border border-line bg-surface px-3 text-[13px] font-medium">
+          <select aria-label="Sede" value={siteId} onChange={(e) => setSiteId(e.target.value)} className="u-focus h-[40px] rounded-[10px] border border-[var(--line-strong)] bg-[var(--surface)] px-3 text-[14px]">
             {props.sites.map((s) => (
               <option key={s.id} value={s.id}>
                 {s.name}
@@ -137,14 +133,17 @@ export function HoursScreen(props: {
             ))}
           </select>
         ) : null}
-        <Button onClick={() => setPanel({ kind: "new", title: "Nuevo bloqueo" })}>Nuevo bloqueo</Button>
-        <Button variant="primary" onClick={() => setPanel({ kind: "new", title: "Nueva ausencia o cierre" })}>
-          + Nueva ausencia o cierre
-        </Button>
-      </header>
+        <button type="button" onClick={() => setPanel({ kind: "new", title: "Nuevo bloqueo" })} className={TB_BTN}>
+          Nuevo bloqueo
+        </button>
+        <button type="button" onClick={() => setPanel({ kind: "new", title: "Nueva ausencia o cierre" })} className={TB_PRIMARY}>
+          <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M8 3v10M3 8h10" /></svg>
+          Nueva ausencia o cierre
+        </button>
+      </AgPageHeader>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-8">
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-6 pt-1">
+        <div className="flex w-full flex-col gap-8">
           {/* 1 · SITE HOURS */}
           <section aria-labelledby="site-hours" className="flex flex-col gap-3">
             <div className="flex flex-wrap items-end gap-3">
@@ -177,14 +176,13 @@ export function HoursScreen(props: {
                     canEdit
                     recheck={recheck}
                     onReschedule={(item) => setResched({ item, holds: [] })}
+                    autoEdit
+                    onCancel={() => setEditingSite(false)}
                     onSaved={(m) => {
                       setEditingSite(false);
                       done(m);
                     }}
                   />
-                  <button type="button" onClick={() => setEditingSite(false)} className="u-focus self-start rounded text-[13px] text-muted hover:underline">
-                    Cerrar el editor
-                  </button>
                 </div>
               )
             ) : (
@@ -192,10 +190,10 @@ export function HoursScreen(props: {
                 {KEYS.map((k, i) => {
                   const sp = siteWeek[i];
                   return (
-                    <li key={k} className={`flex min-h-[72px] flex-col gap-0.5 rounded-[12px] px-3 py-2.5 ${sp ? "bg-subtle" : "border border-dashed border-line-strong"}`}>
+                    <li key={k} className={`flex min-h-[70px] flex-col gap-0.5 rounded-[10px] px-3 py-2.5 ${sp ? "bg-[var(--chip)]" : "shadow-[inset_0_0_0_1px_var(--line)]"}`}>
                       <span className="text-[12px] text-muted">{SHORT[i]}</span>
                       {sp ? (
-                        <span className="u-tnum text-[13px] font-semibold leading-5">
+                        <span className="text-[14px] leading-[18px] tabular-nums">
                           {sp.start}
                           <br />
                           {sp.end}
@@ -238,7 +236,7 @@ export function HoursScreen(props: {
                         <tr key={s.id}>
                           <td className="border-b border-line-soft px-2 py-2.5">
                             <span className="flex items-center gap-2.5">
-                              <span aria-hidden className={`u-mono flex size-[32px] shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${avatarColor(s.name)}`}>{staffInitials(s.name)}</span>
+                              <AgAvatar name={s.name} id={s.id} size={32} tint={agTintAt([...props.staff].sort((a, b) => a.name.localeCompare(b.name, "es")).findIndex((x) => x.id === s.id))} />
                               <span className="font-medium">{s.name}</span>
                             </span>
                           </td>

@@ -51,7 +51,8 @@ export type BookingError =
   | 'active_limit' // the phone already holds the max future active bookings here (public cap)
   | 'price_changed' // the price the customer was shown is no longer the price (zero writes)
   | 'stale' // reschedule: the appointment moved since the operator read it (agenda UI only)
-  | 'not_immediate'; // immediate walk-in asked for a start outside "now" (agenda UI only)
+  | 'not_immediate' // immediate walk-in asked for a start outside "now" (agenda UI only)
+  | 'not_started'; // "completed" asked before the appointment starts (agenda UI only)
 
 export type BookingResult<T> =
   | { ok: true; value: T; deduped?: boolean }
@@ -539,6 +540,15 @@ export interface TransitionInput {
   /** REQUIRED: the appointment must belong to this client, else not-found (no
    * cross-client action, no existence leak). */
   scopeClientId: string;
+  /**
+   * The agenda's rule: an appointment is COMPLETED only once it has started (start_at ≤
+   * now, the exact start included). Checked here, under the row lock, so the desktop panel,
+   * the phone sheet and any other agenda caller get the same answer. Opt-in so the bot
+   * API's existing `POST …/complete` contract is not changed silently.
+   */
+  requireStartedToComplete?: boolean;
+  /** The clock for that check (tests); defaults to now. */
+  now?: Date;
 }
 
 /** Apply a status transition (confirm/complete/cancel/no_show) under a row lock,
@@ -562,6 +572,9 @@ export async function transitionStatus(
       if (!LEGAL_STATUS[current.status].includes(target)) {
         return { kind: 'invalid' as const, from: current.status };
       }
+      if (target === 'completed' && input.requireStartedToComplete && current.start_at.getTime() > (input.now ?? new Date()).getTime()) {
+        return { kind: 'not_started' as const };
+      }
       const updated = await setStatus(client, input.tenantId, input.appointmentId, target);
       await recordAppointmentEvent(
         {
@@ -583,6 +596,9 @@ export async function transitionStatus(
     }
     if (result.kind === 'invalid') {
       return { ok: false, error: 'invalid_transition', message: `Cannot move a ${result.from} appointment to ${target}.` };
+    }
+    if (result.kind === 'not_started') {
+      return { ok: false, error: 'not_started', message: 'An appointment can only be completed once it has started.' };
     }
     await recordSchedulingEvent({
       tenantId: result.updated.tenant_id,

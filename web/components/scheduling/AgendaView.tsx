@@ -2,12 +2,9 @@
 
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition, type RefObject } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore, useTransition, type RefObject } from "react";
 import { AutoRefresh } from "@/components/AutoRefresh";
-import { PageShell } from "@/components/ui/PageShell";
-import { PageHeading } from "@/components/ui/PageTitle";
-import { dayBlocks, hourState, type AgendaBlock, type DayBlock } from "@/lib/agendaBlocks";
-import { AttentionChip, Avatar, FIELD, INPUT, POPOVER, StatusChip, buttonClass, segmentClass, segmentShell } from "./ui/system";
+import { AttentionChip, Avatar, Button, INPUT, StatusChip, buttonClass } from "./ui/system";
 import { MobileAgenda } from "./mobile/MobileAgenda";
 import {
   Icon,
@@ -42,20 +39,23 @@ import {
   getReviewLinkAction,
   rescheduleAppointmentAction,
   searchSchedulingContactsAction,
+  recentSchedulingContactsAction,
   type ContactSearchHit,
 } from "@/lib/schedulingActions";
 import { AppointmentPanel } from "./agenda/AppointmentPanel";
-import { StatusGlyphInline } from "./agenda/StatusGlyph";
 import { useNavigationGuard } from "@/components/ui/module/useEditorGuard";
 import type { ContactMatch } from "@/lib/walkInContact";
 import { RescheduleFlow } from "./agenda/RescheduleFlow";
 import { WalkInPanel } from "./agenda/WalkInPanel";
 import { BlockPanel } from "./agenda/BlockPanel";
 import { SeriesPanel } from "./agenda/SeriesPanel";
+import { BreakWeekPanel } from "./agenda/BreakWeekPanel";
 import { AffectedReschedulePanel } from "./agenda/AffectedReschedulePanel";
 import type { AffectedItem } from "./agenda/ScheduleFormParts";
 import { adoptLegacyBreakAction } from "@/lib/scheduleSeriesActions";
 import { AppointmentPreview } from "./agenda/AppointmentPreview";
+import { SidePanel, PanelSection, type SidePanelHandle } from "./agenda/SidePanel";
+import { AG_HEAD, AgAvatar, agTintAt, ALL_STATES, DateTitle, FiltersPopover, GearMenu, STATE_GLYPH, STATE_WORD, TB_ICON, TB_PRIMARY, agendaTitle } from "./agenda/AgendaChrome";
 
 /** Serializable shapes passed from the server page. */
 interface SiteOpt { id: string; name: string; timezone: string }
@@ -158,8 +158,6 @@ function appointmentToneClass(appt: Appt): string {
   return `u-appt-service ${apptCategoryClass(serviceCategory(appt.service_name, appt.service_category))}`;
 }
 interface Slot { start_at: string; service_end_at: string; staff_id: string; available_staff_ids: string[] }
-/** Blocked time (schedule_exceptions). staff_id NULL = the whole site is blocked. */
-type BlockOpt = AgendaBlock;
 /** When booking for an existing contact (C-4.1 deep-link), the modal locks the identity
  *  to this contact and submits its id — staff never retype what's on the record. */
 interface ContactPrefill { contactId: string; contactName: string }
@@ -175,12 +173,12 @@ interface Block {
   public_reason?: "vacation" | "unavailable" | "site_closed" | null;
 }
 type BookingModalState =
-  | { mode: "new" | "walkin"; contact?: ContactPrefill }
+  | { mode: "new" | "walkin"; contact?: ContactPrefill; staffId?: string; startAt?: string }
   | { mode: "reschedule"; appt: Appt };
 /** The agenda's modal states — the booking ones plus Time Off (create / edit a block). */
 type ModalState =
   | BookingModalState
-  | { mode: "block"; staffId?: string | null; date?: string }
+  | { mode: "block"; staffId?: string | null; date?: string; start?: string; end?: string }
   | { mode: "editBlock"; block: Block }
   /** One occurrence of a usual break / recurring block (schedule_series). */
   | { mode: "series"; occ: SeriesOcc };
@@ -188,7 +186,7 @@ type ModalState =
 /** The calendar body's vertical scale. One hour = this many px. 60 is the floor
  *  at which a 45-minute card still fits its three lines (time / customer /
  *  service) without cropping the last one. */
-const HOUR_PX = 120;
+const HOUR_PX = 88;
 /**
  * WEEK's vertical scale. The reference week is a BLOCK grid, not a proportional one:
  * seven narrow columns can't carry proportional heights and stay readable, so one hour
@@ -229,14 +227,6 @@ const SERVICE_FAMILY_LABEL: Partial<Record<ApptCategory, string>> = {
   feature: "Tratamiento destacado",
 };
 
-const STATUSES = ["scheduled", "confirmed", "completed", "cancelled", "no_show"] as const;
-const STATUS_LABEL: Record<string, string> = {
-  scheduled: "Sin confirmar",
-  confirmed: "Confirmada",
-  completed: "Completada",
-  cancelled: "Cancelada",
-  no_show: "Inasistencia",
-};
 
 // Spanish date vocabulary, spelled out here rather than pulled from Intl("es") for
 // two reasons: it is DETERMINISTIC (no "sept."/"sep" locale-data drift between the
@@ -244,7 +234,6 @@ const STATUS_LABEL: Record<string, string> = {
 // is what keeps the date label a stable width so the steppers beside it never slide.
 const ES_MONTHS = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
 const ES_WEEKDAYS = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
-const ES_WEEKDAYS_UPPER = ["DOM", "LUN", "MAR", "MIÉ", "JUE", "VIE", "SÁB"];
 
 // ── Timezone helpers. Every hour/minute below is the SITE's local time, never the
 // browser's — the agenda of a shop in Bogota must not shift for a viewer elsewhere.
@@ -418,50 +407,6 @@ function layoutDayLanes(appointments: Appt[]): Map<string, DayLane> {
   return lanes;
 }
 
-/** One hour of one day column in the WEEK grid — the reference's unit of reading. */
-interface WeekBlock {
-  /** The site-local hour the block covers: 9 means 09:00–09:59. */
-  hour: number;
-  /** Every appointment starting inside the hour, earliest first. */
-  appointments: Appt[];
-}
-
-/**
- * WEEK groups by HOUR BLOCK instead of laying appointments out proportionally.
- *
- * Seven narrow day columns cannot carry proportional heights and stay legible — a
- * 30-minute booking became a 2-line card cropped to one, and two simultaneous ones
- * became two unreadable half-width slivers. So the reference model applies: one hour
- * is one cell, the earliest appointment in it keeps a full-size card, and the rest
- * collapse into a "+N citas" chip that is a FLEX CHILD of the same cell. That is what
- * keeps the indicator inside its own block instead of floating over its neighbours.
- *
- * DAY view is untouched and still positions every appointment proportionally, because
- * its professional columns are substantially wider.
- */
-function bucketWeekAppointments(
-  appointments: Appt[],
-  tz: string,
-  fromHour: number,
-  toHour: number,
-): WeekBlock[] {
-  const byHour = new Map<number, Appt[]>();
-  for (const appt of appointments) {
-    // Clamp into the window's edge block: an out-of-hours booking moves, it never
-    // disappears (the same invariant the day grid's clamp keeps).
-    const hour = Math.min(Math.max(zonedParts(appt.start_at, tz).h, fromHour), toHour - 1);
-    const bucket = byHour.get(hour);
-    if (bucket) bucket.push(appt);
-    else byHour.set(hour, [appt]);
-  }
-  return Array.from({ length: toHour - fromHour }, (_, index) => {
-    const hour = fromHour + index;
-    return {
-      hour,
-      appointments: (byHour.get(hour) ?? []).sort((a, b) => Date.parse(a.start_at) - Date.parse(b.start_at)),
-    };
-  });
-}
 
 /**
  * The Agenda: a real time-grid calendar over the EXISTING appointment model.
@@ -590,14 +535,30 @@ export function AgendaView(props: {
   /** Appointments intentionally collapsed behind a weekly "+N más" indicator. */
   const [weekOverflow, setWeekOverflow] = useState<Appt[] | null>(null);
   const [weekOverflowTitle, setWeekOverflowTitle] = useState<string | undefined>();
-  const [weeklyLayout, setWeeklyLayout] = useState<"team" | "hours">("team");
-  /** Client-side facets over the ALREADY loaded range. */
-  const [statusFilter, setStatusFilter] = useState("");
-  const [staffFilter, setStaffFilter] = useState(props.initialStaffId ?? "");
+  /** Client-side facets over the ALREADY loaded range (reference: «Filtrar»). Professionals
+   *  pick the COLUMNS shown; unticked states and a search DIM the cards — the time they
+   *  hold is still taken, so nothing disappears from the board. */
+  const [staffSel, setStaffSel] = useState<string[]>(props.initialStaffId ? [props.initialStaffId] : []);
+  const [statesOn, setStatesOn] = useState<string[]>([...ALL_STATES]);
   const [searchQuery, setSearchQuery] = useState("");
-  // Day view opens in the staff-column layout: it is the fastest way for reception
-  // to see each professional's availability. The compact row list remains one click away.
-  const [desktopLayout, setDesktopLayout] = useState<"rows" | "columns">("columns");
+  const [searchOpen, setSearchOpen] = useState(false);
+  /** A click on an empty part of a professional's lane (reference slotPop): one hour from
+   *  the clicked quarter, and a menu — «Nueva cita» / «Bloquear horario» — for what this
+   *  login may do. Nothing is created until the panel is saved. */
+  const [slotPop, setSlotPop] = useState<{ staffId: string; min: number; last: boolean } | null>(null);
+  useEffect(() => {
+    if (!slotPop) return;
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && setSlotPop(null);
+    const onDown = (e: PointerEvent) => {
+      if (!(e.target as Element | null)?.closest?.("[data-slot-menu]")) setSlotPop(null);
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onDown, true);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onDown, true);
+    };
+  }, [slotPop]);
   const searchRef = useRef<HTMLInputElement>(null);
   /** «Color de las citas»: by SERVICE (default) or by STATE — remembered on this device. */
   const colorBy = useSyncExternalStore(subscribeColorBy, readColorBy, () => "service" as const);
@@ -640,7 +601,7 @@ export function AgendaView(props: {
 
   const fromQS = props.from ? `?from=${encodeURIComponent(props.from)}` : "";
   /** Professionals + states currently filtered — the counter on the Filtros icon. */
-  const activeFilters = (staffFilter ? 1 : 0) + (statusFilter ? 1 : 0);
+  const activeFilters = (staffSel.length > 0 ? 1 : 0) + (statesOn.length < ALL_STATES.length ? 1 : 0);
   /** The site whose day is on screen — the scope line in the title band. */
   const currentSite = props.sites.find((s) => s.id === props.currentSiteId) ?? props.sites[0];
   const shiftDate = (days: number) => navigate({ date: addDays(props.date, days) });
@@ -670,8 +631,11 @@ export function AgendaView(props: {
     const onSearchKey = (event: KeyboardEvent) => {
       if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "f") return;
       event.preventDefault();
-      searchRef.current?.focus();
-      searchRef.current?.select();
+      setSearchOpen(true);
+      window.requestAnimationFrame(() => {
+        searchRef.current?.focus();
+        searchRef.current?.select();
+      });
     };
     document.addEventListener("keydown", onSearchKey);
     return () => document.removeEventListener("keydown", onSearchKey);
@@ -788,37 +752,18 @@ export function AgendaView(props: {
 
   // ── Derived, all from the loaded range ──────────────────────────────────────
   const visible = useMemo(
-    () => {
-      const query = searchQuery.trim().toLocaleLowerCase("es");
-      return props.appointments.filter((a) => {
-        if (statusFilter && a.status !== statusFilter) return false;
-        if (staffFilter && a.staff_id !== staffFilter) return false;
-        if (!query) return true;
-        return [a.contact_name, a.primary_identity, a.service_name, a.staff_name, a.public_reference]
-          .filter((value): value is string => Boolean(value))
-          .some((value) => value.toLocaleLowerCase("es").includes(query));
-      });
-    },
-    [props.appointments, searchQuery, statusFilter, staffFilter],
+    () => (staffSel.length === 0 ? props.appointments : props.appointments.filter((a) => staffSel.includes(a.staff_id))),
+    [props.appointments, staffSel],
   );
-  const mobileRows = useMemo(
-    () => [...visible].sort((a, b) => a.start_at.localeCompare(b.start_at)),
-    [visible],
-  );
-  const mobileDayKeys = useMemo(
-    () => Array.from(new Set(mobileRows.map((appt) => zonedParts(appt.start_at, tz).dayKey))),
-    [mobileRows, tz],
-  );
-  const nextMobileAppointment = useMemo(() => {
-    return mobileRows.find(
-      (appt) => (appt.status === "scheduled" || appt.status === "confirmed")
-        && new Date(appt.start_at).getTime() >= Date.now(),
-    ) ?? null;
-  }, [mobileRows]);
-  const kpis = props.kpis;
-  const prev = props.previousKpis;
-  const rangeCaption = isWeek ? "Esta semana" : "Hoy";
-  const vsCaption = isWeek ? "vs. semana anterior" : "vs. ayer";
+  const searchKey = searchQuery.trim().toLocaleLowerCase("es");
+  /** Dimmed, never hidden: an unticked state, or not what the search asks for. */
+  const isDimmed = (a: Appt): boolean => {
+    if (!statesOn.includes(a.status)) return true;
+    if (!searchKey) return false;
+    return ![a.contact_name, a.guest_name, a.primary_identity, a.service_name, a.staff_name, a.public_reference]
+      .filter((value): value is string => Boolean(value))
+      .some((value) => value.toLocaleLowerCase("es").includes(searchKey));
+  };
 
   /** Same barber, overlapping service windows — a real conflict, derived not stored. */
   const overlapIds = useMemo(() => {
@@ -842,17 +787,32 @@ export function AgendaView(props: {
     return out;
   }, [props.appointments]);
 
-  const fromHour = GRID_FROM_HOUR;
-  const toHour = GRID_TO_HOUR;
+  // The grid's window: the site's hours (the reference's 10:00–20:00 for a 10–20 site),
+  // widened to every professional's own hours and to any appointment booked outside them,
+  // so nothing is ever drawn off the grid.
+  const { fromHour, toHour } = useMemo(() => {
+    let lo = Infinity;
+    let hi = -Infinity;
+    const take = (h: WeeklyHours | undefined) => {
+      for (const ranges of Object.values(h ?? {})) for (const r of ranges ?? []) {
+        lo = Math.min(lo, clockMinutes(r.start));
+        hi = Math.max(hi, clockMinutes(r.end));
+      }
+    };
+    take(props.openingHours);
+    for (const st of props.staff) take(st.workingHours);
+    for (const a of props.appointments) {
+      const s = zonedParts(a.start_at, tz);
+      const e = zonedParts(a.service_end_at, tz);
+      lo = Math.min(lo, s.h * 60 + s.m);
+      hi = Math.max(hi, e.dayKey === s.dayKey ? e.h * 60 + e.m : 24 * 60);
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi) || hi <= lo) return { fromHour: GRID_FROM_HOUR, toHour: GRID_TO_HOUR };
+    return { fromHour: Math.max(0, Math.floor(lo / 60)), toHour: Math.min(24, Math.ceil(hi / 60)) };
+  }, [props.openingHours, props.staff, props.appointments, tz]);
   const hours = Array.from({ length: toHour - fromHour }, (_, i) => fromHour + i);
   /** Week reads in fixed hour BLOCKS, day in proportional minutes — one scale each. */
   const rowHeight = isWeek ? WEEK_HOUR_PX : HOUR_PX;
-  /**
-   * The column header's height, shared by the time rail, every lane and the empty tail.
-   * They are separate sticky elements, so a single source is what keeps their bottom
-   * borders on one line. Week needs the extra row for its weekday / date / count stack.
-   */
-  const headClass = isWeek ? "h-[56px]" : "h-[48px]";
   const bodyHeight = (toHour - fromHour) * rowHeight;
   const offsetTop = (mins: number) => ((mins - fromHour * 60) / 60) * rowHeight;
 
@@ -910,30 +870,21 @@ export function AgendaView(props: {
     weekCountsFromRange[k] = (weekCountsFromRange[k] ?? 0) + 1;
   }
 
-  // BLOCKED time for the layouts that list or stack days (phone, tablet, desktop "por
-  // hora", week by hours). A barber filter keeps that barber's blocks and the site-wide
-  // ones; a text search is about appointments, so blocks step aside while it is active.
-  const staffNameById = new Map(props.staff.map((s) => [s.id, s.name]));
-  const blocksOn = (dayKey: string, lo = 0, hi = 24 * 60): DayBlock[] =>
-    searchQuery.trim() ? [] : dayBlocks(props.blocks, dayKey, tz, { staffFilter, staffNames: staffNameById, lo, hi });
-  // Days the phone/tablet lists show: every day with an appointment AND every day with
-  // a block — a blocked day with nothing booked must still say it is blocked.
-  const listDayKeys = Array.from(
-    new Set([...mobileDayKeys, ...shownDayKeys.filter((dk) => blocksOn(dk).length > 0)]),
-  ).sort();
 
   // Picking a barber in the "Todo el equipo" facet collapses the grid to that column —
   // the job the removed chips used to do, using a control that already existed.
-  const shownStaff = staffFilter ? props.staff.filter((s) => s.id === staffFilter) : props.staff;
+  const staffNameById = new Map(props.staff.map((s) => [s.id, s.name]));
+  // The reference's avatar pastel follows the roster order (same order on every screen).
+  const rosterIndex = new Map([...props.staff].sort((a, b) => a.name.localeCompare(b.name, "es")).map((s, i) => [s.id, i]));
+  const tintOf = (id: string) => agTintAt(rosterIndex.get(id) ?? 0);
+  const hmOf = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  // The grid menu offers only what this login may do; a staff login, its own lane only.
+  const canSlotMenu = (staffKey: string) =>
+    (props.canOperate || props.canBlockStaff) && (!props.lockStaffId || props.lockStaffId === staffKey);
+  const shownStaff = staffSel.length > 0 ? props.staff.filter((s) => staffSel.includes(s.id)) : props.staff;
   /** The site-local day a DAY view is showing — the weekday every barber lane is
    *  checked against. */
   const dayWeekday = weekdayKeyOf(zonedParts(props.dayStartIso, tz).dayKey);
-  // Who could take a booking in a DAY view's hour row: the filtered barber, or every
-  // active barber who works that weekday. Blocks only close an hour when they cover it
-  // for ALL of them (lib/agendaBlocks.hourState); the engine decides the real slots.
-  const bookableStaffIds = (staffFilter ? props.staff.filter((st) => st.id === staffFilter) : props.staff)
-    .filter((st) => st.active && staffWorksOn(st.workingHours, props.openingHours, dayWeekday))
-    .map((st) => st.id);
   const columns: {
     key: string;
     label: string;
@@ -945,31 +896,17 @@ export function AgendaView(props: {
     /** The shop doesn't open (week) / this barber doesn't work (day) — the lane is
      *  hatched out and its header greys, so it can't read as bookable whitespace. */
     closed?: boolean;
-  }[] = isWeek
-    ? weekDays.map((dk) => {
-        const n = visible.filter((a) => zonedParts(a.start_at, tz).dayKey === dk).length;
-        const [yy, mm, dd] = dk.split("-").map(Number);
-        const wd = new Date(Date.UTC(yy, mm - 1, dd)).getUTCDay();
-        const closed = hasAnyHours(props.openingHours) && !opensOn(props.openingHours, WEEKDAY_KEYS[wd]);
-        return {
-          key: dk,
-          label: ES_WEEKDAYS_UPPER[wd],
-          sub: closed
-            ? "Cerrado"
-            : `${n} cita${n === 1 ? "" : "s"}${blocksOn(dk).length > 0 ? ` · ${blocksOn(dk).length} bloqueo${blocksOn(dk).length === 1 ? "" : "s"}` : ""}`,
-          dayNum: String(dd),
-          isToday: dk === nowParts.dayKey,
-          closed,
-        };
-      })
-    : shownStaff.map((st) => {
+  }[] = shownStaff.map((st) => {
         // Avatar + name + TODAY'S LOAD, which is what the reference's professional
         // column header carries and what a receptionist scans the board for. The avatar
         // is the professional's public photo when Equipo has one, else the initials.
         // An INACTIVE barber still gets a lane (the server only includes them when
         // they have appointments in range) so their history stays reachable.
         const closed = !staffWorksOn(st.workingHours, props.openingHours, dayWeekday);
-        const n = visible.filter((a) => a.staff_id === st.id).length;
+        const n = visible.filter((a) => a.staff_id === st.id && a.status !== "cancelled").length;
+        const dS = Date.parse(props.dayStartIso);
+        const dE = Date.parse(props.dayEndIso);
+        const away = props.blocks.some((b) => b.staff_id === st.id && Date.parse(b.starts_at) <= dS && Date.parse(b.ends_at) >= dE);
         return {
           key: st.id,
           label: st.name,
@@ -977,32 +914,13 @@ export function AgendaView(props: {
           photoUrl: st.photoUrl ?? null,
           inactive: !st.active,
           closed,
-          sub: closed ? "Cerrado" : `${n} cita${n === 1 ? "" : "s"}`,
+          sub: away ? "Ausencia" : closed ? "No trabaja" : `${n} cita${n === 1 ? "" : "s"}`,
         };
-      });
+  });
 
   const inColumn = (a: Appt, colKey: string) =>
     isWeek ? zonedParts(a.start_at, tz).dayKey === colKey : a.staff_id === colKey;
 
-  let weeklyOccupancy: number | null = null;
-  if (isWeek && hasAnyHours(props.openingHours)) {
-    const capacityMinutes = shownStaff
-      .filter((staff) => staff.active)
-      .reduce((total, staff) => {
-        const schedule = hasAnyHours(staff.workingHours) ? staff.workingHours : props.openingHours;
-        return total + weekDays.reduce((dayTotal, dayKey) => {
-          const ranges = schedule[weekdayKeyOf(dayKey)] ?? [];
-          return dayTotal + ranges.reduce(
-            (rangeTotal, range) => rangeTotal + Math.max(0, clockMinutes(range.end) - clockMinutes(range.start)),
-            0,
-          );
-        }, 0);
-      }, 0);
-    const bookedMinutes = visible
-      .filter((appt) => appt.status !== "cancelled")
-      .reduce((total, appt) => total + appt.duration_min, 0);
-    if (capacityMinutes > 0) weeklyOccupancy = Math.min(100, Math.round((bookedMinutes / capacityMinutes) * 100));
-  }
 
   /** Local minutes of an ISO instant on the grid, clamped to the operating window. */
   const gridMin = (iso: string, dayKey: string, isEnd = false) => {
@@ -1011,7 +929,7 @@ export function AgendaView(props: {
     if (p.dayKey < dayKey) return fromHour * 60;
     return Math.min(Math.max(minutesOf(p), fromHour * 60), toHour * 60);
   };
-  const band = (sMin: number, eMin: number) => ({ top: offsetTop(sMin), height: Math.max(14, offsetTop(eMin) - offsetTop(sMin) - 1) });
+  const band = (sMin: number, eMin: number) => ({ top: offsetTop(sMin) + 1, height: Math.max(14, offsetTop(eMin) - offsetTop(sMin) - 2) });
   const rangesOf = (h: WeeklyHours | undefined, wd: string) =>
     (h?.[wd] ?? []).map((r) => ({ s: clockMinutes(r.start), e: clockMinutes(r.end) })).sort((a, b) => a.s - b.s);
   /** Gaps between ranges of one weekday = usual breaks that still live in the weekly hours. */
@@ -1053,17 +971,9 @@ export function AgendaView(props: {
     const st = props.staff.find((x) => x.id === staffKey);
     const wd = weekdayKeyOf(dayKey);
     const nodes: React.ReactNode[] = [];
-    // Outside this professional's hours on a day they DO work (a fully closed lane is
-    // already washed out).
-    if (!laneClosed && st && hasAnyHours(props.openingHours)) {
-      const own = hasAnyHours(st.workingHours) ? rangesOf(st.workingHours, wd) : rangesOf(props.openingHours, wd);
-      if (own.length > 0) {
-        const first = own[0].s;
-        const last = own[own.length - 1].e;
-        if (first > fromHour * 60) nodes.push(<div key="pre" aria-hidden className="u-closed-hatch absolute inset-x-0" style={{ top: 0, height: offsetTop(Math.min(first, toHour * 60)) }} />);
-        if (last < toHour * 60) nodes.push(<div key="post" aria-hidden className="u-closed-hatch absolute inset-x-0 bottom-0" style={{ top: offsetTop(Math.max(last, fromHour * 60)) }} />);
-      }
-    }
+    // Outside this professional's hours the reference draws nothing (the lane is simply
+    // not booked there); a day they don't work at all is one «No trabaja» tile (above).
+    void laneClosed;
     // Breaks still stored as gaps in the weekly hours (site's apply to everyone).
     const legacy = [
       ...gapsOf(props.openingHours, wd).map((g) => ({ ...g, owner: null as string | null })),
@@ -1073,15 +983,17 @@ export function AgendaView(props: {
       if (g.e <= fromHour * 60 || g.s >= toHour * 60) continue;
       const b = band(Math.max(g.s, fromHour * 60), Math.min(g.e, toHour * 60));
       const editable = (g.owner ? props.canEditStaffBreaks : props.canEditSiteBreaks) && !laneClosed;
-      const label = `Pausa habitual · ${String(Math.floor(g.s / 60)).padStart(2, "0")}:${String(g.s % 60).padStart(2, "0")}–${String(Math.floor(g.e / 60)).padStart(2, "0")}:${String(g.e % 60).padStart(2, "0")}`;
+      const time = `${String(Math.floor(g.s / 60)).padStart(2, "0")}:${String(g.s % 60).padStart(2, "0")}–${String(Math.floor(g.e / 60)).padStart(2, "0")}:${String(g.e % 60).padStart(2, "0")}`;
+      const label = `Pausa habitual · ${time}`;
+      const body = <TimeTile title="Pausa habitual" time={time} height={b.height} />;
       nodes.push(
         editable ? (
-          <button key={`lg-${g.owner}-${g.s}`} type="button" title={`${label} · Cambiar este día`} aria-label={`${label}. Cambiar este día`} onClick={() => openLegacyBreak(g.owner, dayKey, g)} className="u-sch-break u-focus absolute inset-x-1 overflow-hidden rounded-[8px] px-2 py-1 text-left text-[11px] font-medium" style={b}>
-            {label}
+          <button key={`lg-${g.owner}-${g.s}`} type="button" title={`${label} · Cambiar este día`} aria-label={`${label}. Cambiar este día`} onClick={() => openLegacyBreak(g.owner, dayKey, g)} className={`${TILE_BREAK} u-focus cursor-pointer hover:text-[var(--ag-ink2)]`} style={b}>
+            {body}
           </button>
         ) : (
-          <div key={`lg-${g.owner}-${g.s}`} title={label} className="u-sch-break absolute inset-x-1 overflow-hidden rounded-[8px] px-2 py-1 text-[11px] font-medium" style={b}>
-            {label}
+          <div key={`lg-${g.owner}-${g.s}`} title={label} className={TILE_BREAK} style={b}>
+            {body}
           </div>
         ),
       );
@@ -1094,7 +1006,8 @@ export function AgendaView(props: {
       const b = band(sMin, eMin);
       const isBreak = o.kind === "break";
       const time = `${fmtTime(o.startsAt, tz)}–${fmtTime(o.endsAt, tz) === "00:00" ? "24:00" : fmtTime(o.endsAt, tz)}`;
-      const label = isBreak ? `Pausa habitual · ${time}` : `${o.staffId ? "Bloqueado" : "Sede cerrada"} · ${time}${o.reason ? ` · ${o.reason}` : ""}`;
+      const title = isBreak ? "Pausa habitual" : `${o.staffId ? "Bloqueado" : "Sede cerrada"}${o.reason ? ` · ${o.reason}` : ""}`;
+      const label = `${title} · ${time}`;
       nodes.push(
         <button
           key={o.key}
@@ -1102,11 +1015,10 @@ export function AgendaView(props: {
           title={o.moved ? `${label} · cambiado solo este día` : label}
           aria-label={`${label}${o.moved ? ", cambiado solo este día" : ""}. Abrir`}
           onClick={() => setModal({ mode: "series", occ: o })}
-          className={`${isBreak ? "u-sch-break" : "u-sch-block"} u-focus absolute inset-x-1 overflow-hidden rounded-[8px] px-2 py-1 text-left text-[11px] font-medium`}
+          className={`${isBreak ? TILE_BREAK : TILE_BLOCK} u-focus cursor-pointer hover:text-[var(--ag-ink2)]`}
           style={b}
         >
-          <span className="block truncate">{label}</span>
-          {o.moved ? <span className="block truncate text-[10px] font-normal">Solo este día</span> : null}
+          <TimeTile title={title} time={o.moved ? `${time} · solo este día` : time} height={b.height} />
         </button>,
       );
     }
@@ -1133,45 +1045,11 @@ export function AgendaView(props: {
   const rescheduleConfig = () => ({
     clientId: props.clientId,
     siteId: props.currentSiteId,
-    staff: props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl })),
+    staff: props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl, tint: tintOf(s.id) })),
     openWeekdays,
     lockStaffId: props.lockStaffId,
     onDone: ({ dayKey, appointmentId }: { dayKey: string; appointmentId: string }) => afterReschedule(dayKey, appointmentId),
   });
-  /**
-   * The date label — what window is open, in Spanish. It names the WEEK, not just the
-   * month: "Sept 2026" never said which of the month's weeks you were looking at, so
-   * the week view now reads "31 ago – 6 sep 2026" and the day view "sáb, 5 sep 2026".
-   *
-   * It is NAVIGATION TEXT, not a heading — the screen's one heading is "Agenda" (see the
-   * title band). A STABLE width keeps the steppers from sliding on each step: the
-   * three-character weekday/month abbreviations (ES_WEEKDAYS/ES_MONTHS) barely vary,
-   * tabular figures make 1 and 30 the same width, and a per-view min-width on the block
-   * (see the markup) absorbs the rest.
-   */
-  let dateMain: string;
-  let yearLabel: string | null;
-  if (isWeek && weekDays.length === 7) {
-    const [ya, ma, da] = weekDays[0].split("-").map(Number);
-    const [yb, mb, db] = weekDays[6].split("-").map(Number);
-    if (ya === yb && ma === mb) {
-      dateMain = `${da} – ${db} ${ES_MONTHS[mb - 1]}`;
-      yearLabel = String(yb);
-    } else if (ya === yb) {
-      dateMain = `${da} ${ES_MONTHS[ma - 1]} – ${db} ${ES_MONTHS[mb - 1]}`;
-      yearLabel = String(yb);
-    } else {
-      // A week that straddles New Year prints both years; the muted trailing one is
-      // then already inside the label, so nothing is appended after it.
-      dateMain = `${da} ${ES_MONTHS[ma - 1]} ${ya} – ${db} ${ES_MONTHS[mb - 1]} ${yb}`;
-      yearLabel = null;
-    }
-  } else {
-    const [y, m, d] = props.date.split("-").map(Number);
-    const wd = new Date(Date.UTC(y, m - 1, d)).getUTCDay();
-    dateMain = `${ES_WEEKDAYS[wd]}, ${d} ${ES_MONTHS[m - 1]}`;
-    yearLabel = String(y);
-  }
 
   if (props.staff.length === 0) {
     return (
@@ -1199,7 +1077,7 @@ export function AgendaView(props: {
     // ONE continuous surface. Every region below is a band inside the same white
     // card, separated by hairlines — not a row of independent boxes floating on the
     // canvas, which made the screen read as five unrelated widgets.
-    <main className="flex min-h-0 flex-1 flex-col">
+    <main className="u-ag flex min-h-0 flex-1 flex-col">
       {/* PHONE (< md) — its own layout, not the grid squeezed (mobile/MobileAgenda). */}
       <div className="-m-[var(--content-pad)] md:hidden">
         <MobileAgenda
@@ -1247,781 +1125,305 @@ export function AgendaView(props: {
       <div className="md:hidden">
         <MToast message={notice} bottom={84} />
       </div>
-      <PageShell surface="canvas" className="gap-3 max-md:hidden">
-      {/* ── PAGE TITLE ── the same band Customers renders, now carrying the screen's
-             two ACTIONS on its right. The Agenda used to spend a whole row on a title
-             with nothing but empty space beside it, and a SECOND row whose only real
-             weight was the two buttons pushed to the far edge — so the actions come up
-             here where the title's white space already was, and the row below becomes
-             purely the tools that STEER the calendar. */}
-      {/* No hairline under the title / control bar / KPI strip: the top of the Agenda
-          is ONE object (name it, steer it, read its numbers), and three rules across
-          it chopped that into four slabs. The grid below still gets its own rule —
-          that seam is real, it separates chrome from the canvas. */}
-      <div className="rounded-sch-card border border-line bg-surface shadow-[var(--shadow-card)] max-md:hidden">
-        <div className="px-[var(--panel-pad)] pt-3 xl:p-[14px]">
-          <div className="flex items-start justify-between gap-3 md:items-center xl:gap-[14px]">
-            <div className="min-w-0 shrink-0 md:flex md:items-center md:gap-2">
-              <div className="mt-0.5 [&_h1]:text-[1.55rem] [&_h1]:font-semibold [&_h1]:leading-tight [&_h1]:tracking-[-0.03em] md:mt-0 md:[&_h1]:text-[19px]">
-                <PageHeading title="Agenda" />
-              </div>
-              <span className="hidden text-xs text-muted md:inline xl:hidden">
-                {`${currentSite?.name ?? ""}${props.sites.length > 1 ? ` · ${props.sites.length} sedes` : " · 1 sede"}`}
-              </span>
-            </div>
-            <label className={`${FIELD} relative hidden h-[36px] min-w-[14rem] flex-1 items-center gap-2 xl:flex`}>
-              <span className="sr-only">Buscar en la agenda</span>
-              <svg aria-hidden viewBox="0 0 24 24" fill="none" className="pointer-events-none size-4 shrink-0 text-faint">
-                <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.6" />
-                <path d="m16 16 4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+      {/* ── DESKTOP / TABLET (md+) — the approved reference (E1–E4): ONE surface flush to the
+             shell frame. The title IS the date (it opens a month picker); the tools sit on
+             its right: Día | Semana, ‹ Hoy ›, «Más opciones de agenda» (filtros, bloqueos,
+             ausencias, horarios, equipo) and + Nueva cita. Below, the grid by professional
+             (day) or the week board by professional (week). */}
+      <div className="u-ag -m-[var(--content-pad)] flex min-h-0 flex-1 flex-col overflow-hidden bg-[var(--surface)] max-md:hidden">
+        <div className={`${AG_HEAD} relative z-30`}>
+          <DateTitle
+            label={agendaTitle(isWeek ? "week" : "day", props.date, weekDays[0])}
+            date={props.date}
+            today={nowParts.dayKey}
+            onPick={(d) => navigate({ date: d })}
+          />
+          <span className="min-w-0 flex-1" />
+          {searchOpen || searchQuery ? (
+            <label className="flex h-[40px] w-[240px] min-w-[44px] shrink items-center gap-2.5 rounded-[12px] border border-[var(--line-strong)] bg-[var(--surface)] px-3.5 text-muted">
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6">
+                <circle cx="7" cy="7" r="4.6" />
+                <path d="M10.4 10.4L14 14" />
               </svg>
               <input
                 ref={searchRef}
+                type="search"
+                aria-label="Buscar cliente o servicio"
+                placeholder="Cliente o servicio"
                 value={searchQuery}
+                autoFocus={searchOpen && !searchQuery}
                 onChange={(event) => setSearchQuery(event.target.value)}
-                placeholder="Buscar cliente, servicio o profesional…"
-                className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-faint"
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    setSearchQuery("");
+                    setSearchOpen(false);
+                  }
+                }}
+                onBlur={() => {
+                  if (!searchQuery) setSearchOpen(false);
+                }}
+                className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted"
               />
-              <kbd className="u-mono pointer-events-none ml-auto shrink-0 rounded-md border border-line bg-surface px-1.5 py-0.5 text-[0.625rem] text-faint">
-                ⌘F
-              </kbd>
             </label>
-            {props.canOperate ? (
-              <div className="ml-auto hidden items-center gap-2 md:flex xl:hidden">
-                {props.canBlockStaff || props.canBlockSite ? (
-                  <button type="button" onClick={() => setModal({ mode: "block" })} className={buttonClass()}>
-                    Bloquear horario
-                  </button>
-                ) : null}
-                <button type="button" onClick={() => setModal({ mode: "walkin" })} className={buttonClass()}>
-                  Atención sin cita
-                </button>
-                <button type="button" onClick={() => setModal({ mode: "new" })} className={buttonClass({ variant: "primary" })}>
-                  Agendar cita
-                  <kbd className="u-mono rounded bg-white/20 px-1 text-[0.625rem] font-normal">&#8984;A</kbd>
-                </button>
-              </div>
-            ) : null}
-            <div className="hidden shrink-0 items-center gap-2 xl:flex">
-              <button
-                type="button"
-                onClick={() => navigate({ date: nowParts.dayKey })}
-                className={buttonClass({ size: "sm" })}
-              >Hoy</button>
-              <div role="group" aria-label="Vista" className={segmentShell("sm")}>
-                <DesktopSeg active={!isWeek} onClick={() => navigate({ view: "day" })}>Día</DesktopSeg>
-                <DesktopSeg active={isWeek} onClick={() => navigate({ view: "week" })}>Semana</DesktopSeg>
-              </div>
-              <div className="flex h-[36px] items-center rounded-sch-control border border-line-strong bg-surface p-0.5">
-                <DesktopStep label="Anterior" onClick={() => shiftDate(isWeek ? -7 : -1)} direction="left" />
-                <button
-                  type="button"
-                  onClick={() => navigate({ date: zonedParts(new Date().toISOString(), tz).dayKey })}
-                  className="u-focus h-full min-w-[7.5rem] rounded-[calc(var(--sch-radius-control)-3px)] px-2 text-[13px] font-semibold tabular-nums text-foreground hover:bg-subtle"
-                >
-                  {dateMain}{yearLabel ? <span className="ml-1 font-normal text-faint">{yearLabel}</span> : null}
-                </button>
-                <DesktopStep label="Siguiente" onClick={() => shiftDate(isWeek ? 7 : 1)} direction="right" />
-              </div>
-              <details className="group relative">
-                <summary
-                  aria-label="Filtrar agenda"
-                  title="Filtros de profesional y estado"
-                  className="u-focus relative flex size-[36px] cursor-pointer list-none items-center justify-center rounded-sch-control border border-line-strong bg-surface text-muted transition-colors hover:bg-subtle hover:text-foreground [&::-webkit-details-marker]:hidden"
-                >
-                  <svg aria-hidden viewBox="0 0 16 16" className="size-[15px]" fill="none" stroke="currentColor" strokeWidth="1.5">
-                    <path d="M2.5 4.5h11M4.5 8h7M6.5 11.5h3" />
-                  </svg>
-                  {activeFilters > 0 ? (
-                    <span className="u-mono absolute -right-1 -top-1 flex h-[15px] min-w-[15px] items-center justify-center rounded-full bg-foreground px-1 text-[9px] font-semibold text-surface">
-                      {activeFilters}
-                    </span>
-                  ) : null}
-                </summary>
-                <div className={`absolute right-0 top-11 z-40 w-72 p-3 ${POPOVER}`}>
-                  <span className="block text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-faint">Color de las citas</span>
-                  <div role="radiogroup" aria-label="Color de las citas" className="mt-1.5 grid grid-cols-2 gap-0.5 rounded-sch-control bg-chip p-1">
-                    {(["service", "status"] as const).map((m) => (
-                      <button
-                        key={m}
-                        type="button"
-                        role="radio"
-                        aria-checked={colorBy === m}
-                        onClick={() => setColorBy(m)}
-                        className={`u-focus h-[36px] rounded-[9px] text-[13px] ${colorBy === m ? "bg-surface font-semibold shadow-[0_1px_2px_rgba(0,0,0,0.08)]" : "text-muted hover:text-foreground"}`}
-                      >
-                        {m === "service" ? "Servicio" : "Estado"}
-                      </button>
-                    ))}
-                  </div>
-                  <ul aria-label="Leyenda" className="mt-2 flex flex-col gap-1 text-[12px] text-muted">
-                    {colorBy === "service"
-                      ? serviceLegend.map(({ family, label }) => (
-                          <li key={family} className="flex items-center gap-2">
-                            <span aria-hidden className={`u-appt-service ${apptCategoryClass(family)} u-appt2-dot size-2 rounded-full`} />
-                            {label}
-                          </li>
-                        ))
-                      : STATUSES.map((st) => (
-                          <li key={st} className="flex items-center gap-2">
-                            <span className={`u-st-ink-${st}`}><StatusGlyphInline status={st} className="size-3.5" /></span>
-                            {STATUS_LABEL[st]}
-                          </li>
-                        ))}
-                    <li className="mt-1 text-[11.5px] text-faint">
-                      {colorBy === "service" ? "El estado se lee en el icono y el texto de cada cita." : "El servicio se lee en el texto de cada cita."}
-                    </li>
-                  </ul>
-                  <hr className="my-3 border-line" />
-                  <label className="block text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-faint">
-                    Profesional
-                    <select
-                      value={staffFilter}
-                      onChange={(event) => setStaffFilter(event.target.value)}
-                      className={`mt-1.5 normal-case tracking-normal ${INPUT}`}
-                    >
-                      <option value="">Todo el equipo</option>
-                      {props.staff.map((staff) => <option key={staff.id} value={staff.id}>{staff.name}</option>)}
-                    </select>
-                  </label>
-                  <label className="mt-3 block text-[0.6875rem] font-semibold uppercase tracking-[0.08em] text-faint">
-                    Estado
-                    <select
-                      value={statusFilter}
-                      onChange={(event) => setStatusFilter(event.target.value)}
-                      className={`mt-1.5 normal-case tracking-normal ${INPUT}`}
-                    >
-                      <option value="">Todos los estados</option>
-                      {STATUSES.map((status) => <option key={status} value={status}>{STATUS_LABEL[status]}</option>)}
-                    </select>
-                  </label>
-                </div>
-              </details>
-              {props.canBlockStaff || props.canBlockSite ? (
-                <button type="button" onClick={() => setModal({ mode: "block" })} className={buttonClass({ size: "sm" })}>
-                  Bloquear horario
-                </button>
-              ) : null}
-              {props.canOperate ? (
-                <button
-                  type="button"
-                  onClick={() => setModal({ mode: "new" })}
-                  className={buttonClass({ variant: "primary", size: "sm" })}
-                >
-                  <span aria-hidden className="text-[15px] font-normal">＋</span>
-                  Nueva cita
-                </button>
-              ) : null}
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* ── CONTROL BAR ── the tools that steer the calendar: where you are (date +
-             steppers), what you see (Día/Semana), and the two facets. It wraps as one
-             deliberate second band on intermediate widths rather than compressing. */}
-      <div className="hidden flex-wrap items-center gap-2 rounded-sch-card border border-line bg-surface px-[var(--panel-pad)] py-2.5 shadow-[var(--shadow-card)] md:flex xl:hidden">
-        <label className="relative order-first w-full lg:w-auto lg:min-w-[17rem] lg:flex-1">
-          <span className="sr-only">Buscar en la agenda</span>
-          <svg aria-hidden viewBox="0 0 24 24" fill="none" className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-faint">
-            <circle cx="11" cy="11" r="6.5" stroke="currentColor" strokeWidth="1.6" />
-            <path d="m16 16 4 4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-          </svg>
-          <input
-            value={searchQuery}
-            onChange={(event) => setSearchQuery(event.target.value)}
-            placeholder="Buscar cliente, servicio o profesional…"
-            className={`${INPUT} pl-9`}
-          />
-        </label>
-        <button
-          type="button"
-          onClick={() => navigate({ date: zonedParts(new Date().toISOString(), tz).dayKey })}
-          className={buttonClass()}
-        >
-          Hoy
-        </button>
-        {/* Hoy → DATE → steppers. The steppers sit after the label because it has a
-            RESERVED width (per view), so a day-step never drags them sideways. */}
-        <div
-          className={`ml-1 text-sm font-semibold tracking-tight tabular-nums text-foreground ${
-            isWeek ? "min-w-[10rem]" : "min-w-[8.5rem]"
-          }`}
-        >
-          <span>{dateMain}</span>
-          {yearLabel ? <span className="ml-1 font-normal text-faint">{yearLabel}</span> : null}
-        </div>
-        <div className="flex items-center gap-1">
-          <IconBtn label="Anterior" onClick={() => shiftDate(isWeek ? -7 : -1)}>&lsaquo;</IconBtn>
-          <IconBtn label="Siguiente" onClick={() => shiftDate(isWeek ? 7 : 1)}>&rsaquo;</IconBtn>
-        </div>
-
-        {/* Hairline separator, as in the reference — it also visually pins the start
-            of the view controls so the eye has a fixed edge to return to. */}
-        <span aria-hidden className="mx-1 hidden h-5 w-px bg-line sm:block" />
-
-        {/* Segmented view toggle: a recessed grey track (control height, 11px radius)
-            with a RAISED WHITE pill (9px) on the active item — the pill reads as
-            "lifted out" of the track, which is why it needs no drop shadow (a hairline
-            does the same job). Month is NOT offered — see the TODO above; a permanently
-            disabled control only promises something the product can't do. */}
-        <div role="group" aria-label="Vista" className={`ml-1 ${segmentShell()}`}>
-          <Seg active={!isWeek} onClick={() => navigate({ view: "day" })}>Día</Seg>
-          <Seg active={isWeek} onClick={() => navigate({ view: "week" })}>Semana</Seg>
-        </div>
-
-        <Facet
-          icon={<StatusIcon />}
-          label="Todos los estados"
-          value={statusFilter}
-          onChange={setStatusFilter}
-          options={[{ value: "", label: "Todos los estados" }, ...STATUSES.map((s) => ({ value: s, label: STATUS_LABEL[s] }))]}
-        />
-        <Facet
-          icon={<StaffIcon />}
-          label="Todo el equipo"
-          value={staffFilter}
-          onChange={setStaffFilter}
-          options={[{ value: "", label: "Todo el equipo" }, ...props.staff.map((s) => ({ value: s.id, label: s.name }))]}
-        />
-        {props.sites.length > 1 ? (
-          <Facet
-            label="Sede"
-            value={props.currentSiteId}
-            onChange={(v) => navigate({ site: v })}
-            options={props.sites.map((s) => ({ value: s.id, label: s.name }))}
-          />
-        ) : null}
-
-        {/* The refresh indicator is secondary chrome, not an action — it rides the far
-            end of the tool row, well clear of the red "Agendar cita" above it. */}
-        <div className="ml-auto flex items-center">
-          <AutoRefresh intervalSeconds={20} />
-        </div>
-      </div>
-
-      {error ? (
-        <p role="alert" className="rounded-sch-control bg-danger/10 px-[var(--panel-pad)] py-2.5 text-sm text-danger">
-          {error}
-        </p>
-      ) : null}
-
-      {/* ── KPI STRIP — three REAL metrics over the loaded range. The design's
-             "Avg waitlist time" card and the "vs last week" deltas are omitted
-             (no waitlist model, no previous-period query).
-
-             The four cards go in ONE row as soon as the content is ~1024px wide
-             (grid-cols-2 lg:grid-cols-4), so on a 1159px screen they stop stacking
-             2×2 and pushing the calendar — the page's real work — below the fold.
-             Below that they fall back to 2×2. The vertical padding is deliberately
-             tight for the same reason: give the grid the height. ── */}
-      <div className="hidden">
-        <Kpi
-          label="Total de citas"
-          unit="%"
-          caption={rangeCaption}
-          value={String(kpis.total)}
-          delta={ratioDelta(kpis.total, prev.total)}
-          vs={vsCaption}
-        />
-        <Kpi
-          label="Citas completadas"
-          unit="pp"
-          caption={rangeCaption}
-          value={kpis.completedPct === null ? "—" : `${kpis.completedPct}%`}
-          delta={pointDelta(kpis.completedPct, prev.completedPct)}
-          vs={vsCaption}
-        />
-        <Kpi
-          label="Inasistencias"
-          unit="pp"
-          caption={rangeCaption}
-          value={kpis.noShowPct === null ? "—" : `${kpis.noShowPct}%`}
-          delta={pointDelta(kpis.noShowPct, prev.noShowPct)}
-          // More no-shows is WORSE, so the delta's colour has to invert.
-          higherIsBetter={false}
-          vs={vsCaption}
-        />
-        {/* Replaces the design's "Avg. waitlist time" — no waitlist model exists, and
-            this is a number the data can actually answer. */}
-        <Kpi
-          label="Ingresos reservados"
-          unit="%"
-          caption={`${rangeCaption} · sin canceladas`}
-          value={priceLabelCOP(kpis.revenue) ?? "—"}
-          delta={ratioDelta(kpis.revenue, prev.revenue)}
-          vs={vsCaption}
-        />
-      </div>
-
-      {/* ── CALENDAR GRID + DRAWER ── (tablet + desktop; the phone has MobileAgenda) */}
-      <div className="flex min-h-0 flex-1 overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)] max-md:hidden">
-        <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
-          <div className="hidden h-[40px] shrink-0 items-center gap-3 border-b border-line px-3.5 md:flex">
-            <span className="u-mono text-xs font-semibold text-foreground">{visible.length}</span>
-            <span className="text-xs text-muted">{visible.length === 1 ? "cita" : "citas"}</span>
-            {/* The colour KEY: one swatch per service family on the board. */}
-            <div className="ml-2 flex min-w-0 items-center gap-3 overflow-hidden">
-              {colorBy === "status" ? STATUSES.map((st) => (
-                <span key={st} className="inline-flex shrink-0 items-center gap-1 text-[0.6875rem] text-muted">
-                  <span className={`u-st-ink-${st}`}><StatusGlyphInline status={st} className="size-3" /></span>
-                  {STATUS_LABEL[st]}
-                </span>
-              )) : serviceLegend.map(({ family, label }) => (
-                <span key={family} className="inline-flex shrink-0 items-center gap-1.5 text-[0.6875rem] text-muted">
-                  <span aria-hidden className={`u-appt-swatch u-appt-service ${apptCategoryClass(family)} size-3 rounded-full`} />
-                  <span className="max-w-32 truncate">{label}</span>
-                </span>
-              ))}
-            </div>
-            <span className="ml-auto text-[0.6875rem] text-faint">
-              {isWeek && weeklyOccupancy !== null ? `Ocupación semanal ${weeklyOccupancy}% · ` : ""}
-              {overlapIds.size > 0 ? `${overlapIds.size} citas con solapamiento` : "Sin solapamientos"}
-            </span>
-            {isWeek ? (
-              <div role="group" className={segmentShell("sm")} aria-label="Distribución semanal">
-                <button type="button" onClick={() => setWeeklyLayout("team")} aria-pressed={weeklyLayout === "team"}
-                  className={segmentClass(weeklyLayout === "team")}>Equipo</button>
-                <button type="button" onClick={() => setWeeklyLayout("hours")} aria-pressed={weeklyLayout === "hours"}
-                  className={segmentClass(weeklyLayout === "hours")}>Horas</button>
-              </div>
-            ) : (
-              <div role="group" aria-label="Distribución del día" className={`max-xl:hidden ${segmentShell("sm")}`}>
-                <button
-                  type="button"
-                  onClick={() => setDesktopLayout("rows")}
-                  aria-pressed={desktopLayout === "rows"}
-                  aria-label="Agrupar por hora"
-                  className={`${segmentClass(desktopLayout === "rows")} aspect-square justify-center px-0`}
-                >
-                  <RowsIcon />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setDesktopLayout("columns")}
-                  aria-pressed={desktopLayout === "columns"}
-                  aria-label="Una columna por profesional"
-                  className={`${segmentClass(desktopLayout === "columns")} aspect-square justify-center px-0`}
-                >
-                  <ColumnsIcon />
-                </button>
-              </div>
-            )}
-          </div>
-          {/* TABLET — a touch-first board. It deliberately is neither the phone
-              timeline stretched wide nor the dense desktop hour grid squeezed into
-              an iPad. Cards keep a 44px+ target and use the same real appointment
-              data/detail drawer as both neighbouring layouts. In the week "Equipo"
-              view the team board (md+) replaces it, so it is not rendered at all. */}
-          {isWeek && weeklyLayout === "team" ? null : (
-          <div className="hidden min-h-0 flex-1 overflow-y-auto bg-canvas p-4 md:block xl:hidden">
-            {listDayKeys.length === 0 ? (
-              <div className="flex min-h-[22rem] items-center justify-center rounded-sch-card border border-dashed border-line-strong bg-surface">
-                <div className="max-w-xs text-center">
-                  <span aria-hidden className="mx-auto flex size-[44px] items-center justify-center rounded-full bg-chip text-xl text-muted">✓</span>
-                  <p className="mt-3 text-sm font-semibold text-foreground">No hay citas en esta vista</p>
-                  <p className="mt-1 text-xs leading-relaxed text-muted">Cambia la fecha, el estado o el profesional para consultar otro turno.</p>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-5">
-                {listDayKeys.map((dayKey) => {
-                  const [year, month, day] = dayKey.split("-").map(Number);
-                  const weekday = new Date(Date.UTC(year, month - 1, day)).getUTCDay();
-                  const dayAppointments = mobileRows.filter((appt) => zonedParts(appt.start_at, tz).dayKey === dayKey);
-                  return (
-                    <section key={dayKey} className="overflow-hidden rounded-sch-card border border-line bg-surface shadow-[var(--shadow-card)]">
-                      <div className="flex items-center justify-between border-b border-line bg-canvas/50 px-4 py-3">
-                        <div className="flex items-center gap-3">
-                          <span className="u-mono flex size-[36px] items-center justify-center rounded-sch-control border border-line bg-chip text-sm font-semibold text-foreground">{day}</span>
-                          <span>
-                            <h2 className="text-sm font-semibold text-foreground">{ES_WEEKDAYS_UPPER[weekday]}</h2>
-                            <span className="text-xs capitalize text-muted">{ES_MONTHS[month - 1]} {year}</span>
-                          </span>
-                        </div>
-                        <span className="u-mono rounded-full bg-chip px-2.5 py-1 text-[0.6875rem] text-muted">
-                          {dayAppointments.length} {dayAppointments.length === 1 ? "cita" : "citas"}
-                        </span>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-2.5 p-3">
-                        {blocksOn(dayKey).map((b) => (
-                          <BlockRow key={b.id} block={b} className="col-span-2" />
-                        ))}
-                        {dayAppointments.map((appt) => {
-                          const isNext = nextMobileAppointment?.id === appt.id;
-                          return (
-                            <MobileAppointmentCard
-                              key={appt.id}
-                              appt={appt}
-                              toneClass={appointmentToneClass(appt)}
-                              timezone={tz}
-                              attention={overlapIds.has(appt.id)}
-                              next={isNext}
-                              showStaff={props.canOperate}
-                              roomy
-                              flash={appt.id === flashId}
-                              onOpen={() => setSelectedId(appt.id)}
-                            />
-                          );
-                        })}
-                      </div>
-                    </section>
-                  );
-                })}
-                <div className="flex items-center justify-center gap-2 py-1 text-[0.6875rem] text-faint">
-                  <span className="size-1.5 rounded-full bg-success" />
-                  Actualización automática cada 20 segundos
-                </div>
-              </div>
-            )}
-          </div>
+          ) : (
+            <button type="button" aria-label="Buscar cliente o servicio" title="Buscar (⌘F)" onClick={() => setSearchOpen(true)} className={TB_ICON}>
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[15px]" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <circle cx="7" cy="7" r="4.6" />
+                <path d="M10.4 10.4L14 14" />
+              </svg>
+            </button>
           )}
-
-          {!isWeek && desktopLayout === "rows" ? (
-            <DesktopHourRows
-              appointments={mobileRows}
-              blocks={blocksOn(shownDayKeys[0])}
-              bookableStaffIds={bookableStaffIds}
-              hours={hours}
-              timezone={tz}
-              overlapIds={overlapIds}
-              canOperate={props.canOperate}
-              onOpen={setSelectedId}
-              onBook={() => setModal({ mode: "new" })}
-            />
-          ) : null}
-
-          {isWeek && weeklyLayout === "team" ? (
-            <WeekTeamBoard
-              days={weekDays}
-              staff={shownStaff}
-              appointments={visible}
-              openingHours={props.openingHours}
-              timezone={tz}
-              today={nowParts.dayKey}
-              overlapIds={overlapIds}
-              selectedId={selectedId}
-              flashId={flashId}
-              blocks={props.blocks}
-              previewFor={previewProps}
-              onOpen={openAppointment}
-              onDay={(date) => navigate({ date, view: "day" })}
-              onMore={(appointments, title) => {
-                setWeekOverflowTitle(title);
-                setWeekOverflow(appointments);
-              }}
-            />
-          ) : null}
-
-          {(isWeek && weeklyLayout === "hours") || (!isWeek && desktopLayout === "columns") ? (
-          <div className="hidden min-h-0 flex-1 overflow-auto xl:block">
-            {/* min-w-full (NOT min-w-max) is what lets the lanes BREATHE: the row is
-                at least as wide as the viewport, the lanes divide it evenly, and
-                only their own min-width can push the row past it — at which point
-                this scroller takes over horizontally. */}
-            <div className="flex min-w-full">
-              {/* ONE time rail, on the LEFT, in both views — the reference puts the
-                  hours at the leading edge of the grid so the eye lands on them before
-                  it reads a card, and a right-hand rail made the week read as a table
-                  with a trailing column. */}
-              <div className="sticky left-0 z-20 w-14 shrink-0 border-r border-line bg-surface">
-                <div className={`flex ${headClass} items-end justify-center border-b border-line pb-1`}>
-                  <span className="u-mono text-[0.625rem] text-faintest">{gmtLabel(tz)}</span>
-                </div>
-                <div className="relative" style={{ height: bodyHeight }}>
-                  {/* WEEK labels a BLOCK, so the hour sits inside the top of its own row
-                      — centring it on the row's border half-clipped the first one
-                      against the top of the scroller and read as if it belonged between
-                      two rows. DAY labels an INSTANT, so there the hour straddles its
-                      gridline, which is what lines it up with a card's start edge. */}
-                  {hours.map((h) => (
-                    <div
-                      key={h}
-                      className={
-                        isWeek
-                          ? "flex items-start justify-end pr-2 pt-1.5"
-                          : "absolute right-2 -translate-y-1/2"
-                      }
-                      style={isWeek ? { height: rowHeight } : { top: offsetTop(h * 60) }}
-                    >
-                      <span className="u-mono text-[0.625rem] text-faint">
-                        {/* `h` is already the site's LOCAL hour (see zonedParts/nowParts),
-                            so it prints directly as 24-hour HH:00 — no Intl reshift into
-                            the browser's zone, and no AM/PM to mix with the cards. */}
-                        {`${String(h).padStart(2, "0")}:00`}
-                      </span>
-                    </div>
-                  ))}
-                  {nowVisible ? (
-                    <div
-                      aria-hidden
-                      className="absolute right-0 -translate-y-1/2 rounded-l bg-brand px-1 py-px"
-                      style={{ top: offsetTop(minutesOf(nowParts)) }}
-                    >
-                      <span className="u-mono text-[0.5625rem] font-semibold text-white">
-                        {String(nowParts.h).padStart(2, "0")}:{String(nowParts.m).padStart(2, "0")}
-                      </span>
-                    </div>
-                  ) : null}
-                </div>
-              </div>
-
-              {/* Columns */}
-              {columns.map((col) => {
-                const columnAppointments = visible.filter((appt) => inColumn(appt, col.key));
-                const weekBlocks = isWeek ? bucketWeekAppointments(columnAppointments, tz, fromHour, toHour) : null;
-                const dayLanes = isWeek ? null : layoutDayLanes(columnAppointments);
-                return (
-                <div
-                  key={col.key}
-                  // GROW to fill, but never past a comfortable reading width and
-                  // never below the min — three barbers spread across the panel,
-                  // twelve fall back to the min and scroll. Day lanes carry a
-                  // customer name + service so they need more floor than week's.
-                  // grow-[999] (vs the tail's grow-1) is what makes the max-width
-                  // behave: the lanes take everything up to their cap, and only the
-                  // slack they refuse falls through to the empty tail.
-                  className={`grow-[999] border-r border-line ${
-                    // The week floor is what stops a 7-column grid from shrinking into
-                    // slivers: at 9.5rem the card's service + client lines still read,
-                    // and seven of them plus the rail fit a 1280 viewport unscrolled.
-                    isWeek ? "min-w-[9.5rem] max-w-[20rem]" : "min-w-[13rem] max-w-[34rem]"
-                  }`}
+          <div role="group" aria-label="Vista" className="flex h-[40px] shrink-0 gap-0.5 rounded-[12px] bg-[var(--ag-seg)] p-[3px]">
+            {(
+              [
+                ["day", "D", "Día"],
+                ["week", "S", "Semana"],
+              ] as const
+            ).map(([k, letter, full]) => {
+              const on = (k === "week") === isWeek;
+              return (
+                <button
+                  key={k}
+                  type="button"
+                  aria-label={full}
+                  title={full}
+                  aria-pressed={on}
+                  onClick={() => navigate({ view: k })}
+                  className={`u-focus h-[34px] w-[38px] rounded-[9px] text-[14px] transition-colors ${on ? "bg-[var(--ag-segact-bg)] font-medium text-[var(--ag-segact-fg)]" : "text-[var(--ag-ink2)]"}`}
                 >
-                  <div
-                    className={`sticky top-0 z-10 flex ${headClass} items-center border-b border-line px-2 ${
-                      col.closed ? "bg-closed-bg" : col.isToday && isWeek ? "bg-[color-mix(in_srgb,var(--chip)_70%,var(--surface))]" : "bg-surface"
-                    } ${isWeek ? "justify-center" : "gap-2"}`}
-                  >
-                    {isWeek && col.dayNum ? (
-                      <span className="flex min-w-0 flex-col items-center justify-center leading-none">
-                        <span className={`text-[0.6875rem] font-medium capitalize ${col.closed ? "text-closed-fg" : "text-muted"}`}>
-                          {col.label.toLocaleLowerCase("es")}
+                  {letter}
+                </button>
+              );
+            })}
+          </div>
+          <div className="flex h-[40px] shrink-0 items-center overflow-hidden rounded-[12px] border border-[var(--line-strong)] bg-[var(--surface)]">
+            <button type="button" aria-label={isWeek ? "Semana anterior" : "Día anterior"} onClick={() => shiftDate(isWeek ? -7 : -1)} className="u-focus inline-flex h-full w-[38px] items-center justify-center text-[var(--ag-ink2)] hover:bg-[var(--subtle)]">
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M10 3.5L5.5 8l4.5 4.5" /></svg>
+            </button>
+            <button type="button" onClick={() => navigate({ date: nowParts.dayKey })} className="u-focus h-[34px] rounded-[9px] px-3 text-[14px] text-foreground hover:bg-[var(--subtle)]">
+              Hoy
+            </button>
+            <button type="button" aria-label={isWeek ? "Semana siguiente" : "Día siguiente"} onClick={() => shiftDate(isWeek ? 7 : 1)} className="u-focus inline-flex h-full w-[38px] items-center justify-center text-[var(--ag-ink2)] hover:bg-[var(--subtle)]">
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M6 3.5L10.5 8 6 12.5" /></svg>
+            </button>
+          </div>
+          <GearMenu
+            badge={activeFilters > 0}
+            filters={{
+              label: activeFilters > 0 ? `Filtros · ${activeFilters} activos` : "Filtrar",
+              sub: "Profesionales y estados",
+              content: (
+                <FiltersPopover
+                  value={{ colorBy, staff: staffSel, states: statesOn }}
+                  families={serviceLegend}
+                  people={props.staff.map((st) => ({ id: st.id, name: st.name, photoUrl: st.photoUrl ?? null }))}
+                  tintOf={tintOf}
+                  onChange={(v) => {
+                    if (v.colorBy !== colorBy) setColorBy(v.colorBy);
+                    setStaffSel(v.staff);
+                    setStatesOn(v.states);
+                  }}
+                />
+              ),
+            }}
+            items={[
+              ...(props.canBlockStaff || props.canBlockSite
+                ? [{ label: "Bloquear horario", sub: "Puntual o recurrente", onSelect: () => setModal({ mode: "block", staffId: staffSel.length === 1 ? staffSel[0] : undefined }) }]
+                : []),
+              ...(props.canOperate ? [{ label: "Atención sin cita", sub: "Alguien que llegó sin reserva", onSelect: () => setModal({ mode: "walkin" }) }] : []),
+              { label: "Horarios y ausencias", sub: "Horario de sede y de cada profesional", onSelect: () => router.push(`/clients/${props.clientId}/scheduling/hours`) },
+              { label: "Equipo", sub: "Profesionales y sus servicios", onSelect: () => router.push(`/clients/${props.clientId}/scheduling/staff`) },
+              ...(props.sites.length > 1
+                ? props.sites
+                    .filter((st) => st.id !== props.currentSiteId)
+                    .map((st) => ({ label: `Ver ${st.name}`, sub: "Cambiar de sede", onSelect: () => navigate({ site: st.id }) }))
+                : []),
+            ]}
+          />
+          {props.canOperate ? (
+            <button type="button" onClick={() => setModal({ mode: "new" })} className={TB_PRIMARY}>
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round"><path d="M8 3v10M3 8h10" /></svg>
+              Nueva cita
+            </button>
+          ) : null}
+        </div>
+        {error ? (
+          <p role="alert" className="mx-6 mb-3 rounded-[10px] bg-[var(--ag-danger-soft)] px-3 py-2.5 text-[13px] text-[var(--ag-danger-ink)]">
+            {error}
+          </p>
+        ) : null}
+        <div className="relative flex min-h-0 flex-1 border-t border-[var(--line)]">
+          <section className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+            {isWeek ? (
+              <WeekTeamBoard
+                days={weekDays}
+                staff={shownStaff}
+                appointments={visible}
+                openingHours={props.openingHours}
+                timezone={tz}
+                today={nowParts.dayKey}
+                selectedId={selectedId}
+                flashId={flashId}
+                blocks={props.blocks}
+                seriesOccurrences={props.seriesOccurrences}
+                dimmed={isDimmed}
+                tintOf={tintOf}
+                previewFor={previewProps}
+                onOpen={openAppointment}
+                onDay={(date) => navigate({ date, view: "day" })}
+                onMore={(appointments, title) => {
+                  setWeekOverflowTitle(title);
+                  setWeekOverflow(appointments);
+                }}
+              />
+            ) : (
+              <div className="min-h-0 flex-1 overflow-auto" aria-label="Agenda del día por profesional">
+                <div className="flex min-w-full">
+                  <div className="sticky left-0 z-20 w-[60px] shrink-0 bg-[var(--surface)]">
+                    <div className="sticky top-0 z-10 flex h-[50px] items-end justify-end border-b border-[var(--line)] bg-[var(--surface)] pb-2.5 pr-2.5">
+                      <span className="text-[10.5px] text-muted">{gmtLabel(tz)}</span>
+                    </div>
+                    <div className="relative" style={{ height: bodyHeight }}>
+                      {hours.map((h) => (
+                        <span key={h} className="absolute right-2.5 text-[11px] tabular-nums text-muted" style={{ top: offsetTop(h * 60) + 6 }}>
+                          {`${String(h).padStart(2, "0")}:00`}
                         </span>
-                        <span
-                          className={`u-mono mt-0.5 flex h-5 min-w-5 items-center justify-center rounded-md px-1 text-sm font-semibold ${
-                            col.isToday ? "bg-foreground text-surface" : col.closed ? "text-closed-fg" : "text-foreground"
-                          }`}
-                        >
-                          {col.dayNum}
-                        </span>
-                        {col.sub ? (
-                          <span className={`mt-0.5 truncate text-[0.625rem] ${col.closed ? "text-closed-fg" : "text-faint"}`}>
-                            {col.sub}
-                          </span>
-                        ) : null}
-                      </span>
-                    ) : (
-                      <>
-                        {col.initial ? <Initial name={col.initial} muted={col.closed} photoUrl={(col as { photoUrl?: string | null }).photoUrl ?? null} /> : null}
-                        <span className="flex min-w-0 flex-col leading-tight">
-                          <span className={`truncate text-xs font-semibold ${col.closed ? "text-closed-fg" : "text-foreground"}`}>
-                            {col.label}
-                          </span>
-                          {col.sub ? (
-                            <span className={`truncate text-[0.625rem] ${col.closed ? "text-closed-fg" : "text-faint"}`}>
-                              {col.sub}
-                            </span>
-                          ) : null}
-                        </span>
-                      </>
-                    )}
-                    {col.inactive ? (
-                      <span
-                        title="Este profesional está inactivo — sus citas existentes siguen visibles aquí, pero no puede recibir nuevas reservas. Reactívalo en Agenda → Equipo."
-                        className="shrink-0 rounded-full border border-line-strong bg-chip px-1.5 py-0.5 text-[0.625rem] font-medium text-muted"
-                      >
-                        Inactivo
-                      </span>
-                    ) : null}
-                  </div>
-                  {weekBlocks ? (
-                    /* WEEK — a column of fixed HOUR BLOCKS. The card and its "+N citas"
-                       chip are siblings inside the same block, so the chip can never
-                       cover the hour above or below it. */
-                    <div className={`relative ${col.closed ? "u-closed-hatch" : ""}`} style={{ height: bodyHeight }}>
-                      {/* BLOCKED time — under the cards, on the same hour scale. */}
-                      {blocksOn(col.key, fromHour * 60, toHour * 60).map((b) => (
-                        <div
-                          key={b.id}
-                          title={`${b.label} · ${b.when}`}
-                          className={`${b.staffId === null ? "u-timeoff-hatch-site" : "u-timeoff-hatch"} absolute inset-x-1 overflow-hidden rounded-sch-event border border-dashed border-timeoff-edge px-2 py-1`}
-                          style={{ top: offsetTop(b.sMin), height: Math.max(18, ((b.eMin - b.sMin) / 60) * rowHeight - 2) }}
-                        >
-                          <span className="block truncate text-[11px] font-medium text-muted">{b.label}</span>
-                        </div>
                       ))}
-                      {/* …and an edge marker ABOVE them, so an hour whose cards cover the
-                          block still reads as blocked. */}
-                      {blocksOn(col.key, fromHour * 60, toHour * 60).map((b) => (
-                        <span
-                          key={`${b.id}-edge`}
-                          title={`${b.label} · ${b.when}`}
-                          className="absolute right-0.5 z-[1] w-1 rounded-full bg-[repeating-linear-gradient(180deg,var(--faint)_0_4px,transparent_4px_7px)]"
-                          style={{ top: offsetTop(b.sMin), height: Math.max(18, ((b.eMin - b.sMin) / 60) * rowHeight - 2) }}
-                        />
-                      ))}
-                      {weekBlocks.map((block) => {
-                        // At most TWO cards per hour block; everything else is counted in
-                        // the in-flow "+N más" chip, which opens EVERY appointment of the
-                        // block (nothing is hidden for good, nothing is left out of the count).
-                        const [lead, second, ...rest] = block.appointments;
-                        const shown = [lead, second].filter((x): x is Appt => Boolean(x));
-                        return (
-                          <div
-                            key={block.hour}
-                            // `relative` lifts the in-flow hour cell above the absolutely
-                            // positioned block overlay drawn before it.
-                            className="relative flex flex-col gap-1 border-b border-line-soft p-1"
-                            style={{ height: rowHeight }}
-                          >
-                            {shown.map((appt) => (
-                              <WeekBlockCard
-                                key={appt.id}
-                                appt={appt}
-                                toneClass={appointmentToneClass(appt)}
-                                tz={tz}
-                                overlapping={overlapIds.has(appt.id)}
-                                conflict={conflictIds.has(appt.id)}
-                                selected={appt.id === selectedId || appt.id === flashId}
-                                crowded={shown.length > 1 || rest.length > 0}
-                                previewProps={previewProps(appt)}
-                                onOpen={() => openAppointment(appt.id)}
-                              />
-                            ))}
-                            {rest.length > 0 ? (
-                              <button
-                                type="button"
-                                aria-label={`Ver las ${block.appointments.length} citas de las ${String(block.hour).padStart(2, "0")}:00 (${rest.length} más)`}
-                                onClick={() => setWeekOverflow(block.appointments)}
-                                className="flex h-5 shrink-0 items-center justify-center rounded-md border border-line bg-chip text-[0.625rem] font-medium text-foreground transition hover:border-foreground hover:bg-foreground hover:text-background"
-                              >
-                                +{rest.length} más
-                              </button>
-                            ) : null}
-                          </div>
-                        );
-                      })}
                       {nowVisible ? (
-                        <div
-                          aria-hidden
-                          className="pointer-events-none absolute inset-x-0 z-10 border-t-2 border-brand"
-                          style={{ top: offsetTop(minutesOf(nowParts)) }}
-                        />
+                        <>
+                          <span aria-hidden className="absolute right-0 left-[52px] z-[6] h-0 shadow-[0_0_0_1px_var(--foreground)]" style={{ top: offsetTop(minutesOf(nowParts)) }} />
+                          <span aria-hidden className="absolute left-1 z-[7] flex h-[18px] items-center rounded-[5px] bg-[var(--foreground)] px-[5px] text-[10.5px] tabular-nums text-[var(--surface)]" style={{ top: offsetTop(minutesOf(nowParts)) - 9 }}>
+                            {`${String(nowParts.h).padStart(2, "0")}:${String(nowParts.m).padStart(2, "0")}`}
+                          </span>
+                        </>
                       ) : null}
                     </div>
-                  ) : (
-                  <div className="relative" style={{ height: bodyHeight }}>
-                    {/* CLOSED wash — under the hour lines and under any card, so an
-                        appointment booked into a closed day stays fully readable
-                        (it exists; it just shouldn't look bookable around it). */}
-                    {col.closed ? <div aria-hidden className="u-closed-hatch absolute inset-0" /> : null}
-                    {/* TIME OFF bands for THIS staff column (+ site closures, which apply to
-                        everyone). Painted over the closed wash, under the cards — a kept
-                        conflicting appointment still reads clearly on top. */}
-                    {props.blocks
-                      .filter((b) => b.staff_id === col.key || b.staff_id === null)
-                      .map((b) => {
-                        const band = bandForDay(b, props.dayStartIso, props.dayEndIso);
-                        if (!band) return null;
-                        const siteWide = b.staff_id === null;
-                        const editable = siteWide ? props.canBlockSite : props.canBlockStaff;
-                        return (
-                          <BlockBand
-                            key={b.id}
-                            top={band.top}
-                            height={band.height}
-                            siteWide={siteWide}
-                            fullDay={band.fullDay}
-                            reason={b.reason}
-                            editable={editable}
-                            onOpen={() => setModal({ mode: "editBlock", block: b })}
-                          />
-                        );
-                      })}
-                    {/* USUAL BREAKS (no border — routine) and RECURRING BLOCKS (with a
-                        border), plus the time outside this professional's hours. Same
-                        reading as the availability engine; the cards stay on top. */}
-                    {scheduleLayer(col.key, shownDayKeys[0], col.closed === true)}
-                    {hours.map((h) => (
-                      <div
-                        key={h}
-                        aria-hidden
-                        className="absolute inset-x-0 border-t border-line/70"
-                        style={{ top: offsetTop(h * 60) }}
-                      />
-                    ))}
-                    {nowVisible ? (
-                      <div
-                        aria-hidden
-                        className="absolute inset-x-0 z-10 border-t-2 border-brand"
-                        style={{ top: offsetTop(minutesOf(nowParts)) }}
-                      />
-                    ) : null}
-                    {columnAppointments.map((a) => {
-                        // Clamp to the operating window so an out-of-hours booking
-                        // still renders (at the edge) instead of drawing off-grid.
-                        const lo = fromHour * 60;
-                        const hi = toHour * 60;
-                        const startMin = Math.min(Math.max(minutesOf(zonedParts(a.start_at, tz)), lo), hi);
-                        const endMin = Math.min(Math.max(minutesOf(zonedParts(a.service_end_at, tz)), startMin), hi);
-                        return (
-                          <ApptCard
-                            key={a.id}
-                            appt={a}
-                            toneClass={appointmentToneClass(a)}
-                            tz={tz}
-                            top={offsetTop(startMin)}
-                            height={Math.max(22, ((endMin - startMin) / 60) * HOUR_PX - 2)}
-                            lane={dayLanes?.get(a.id)}
-                            overlapping={overlapIds.has(a.id)}
-                            conflict={conflictIds.has(a.id)}
-                            selected={a.id === selectedId}
-                            flash={a.id === flashId}
-                            colorBy={colorBy}
-                            previewProps={previewProps(a)}
-                            onOpen={() => openAppointment(a.id)}
-                          />
-                        );
-                      })}
                   </div>
-                  )}
-                </div>
-                );
-              })}
-
-              {/* EMPTY TAIL. With one or two barbers the lanes hit their max-width
-                  and leave slack; this carries the hour lines across it so the
-                  remainder reads as empty calendar rather than a torn-off grid. It
-                  takes ONLY what the lanes refuse (grow 1 against their 999). */}
-              <div aria-hidden className="min-w-0 grow">
-                <div className={`sticky top-0 z-10 ${headClass} border-b border-line bg-surface`} />
-                <div className="relative" style={{ height: bodyHeight }}>
-                  {/* The tail carries the SAME rhythm as the lanes: block borders in
-                      week, hairlines on the hour in day. */}
-                  {hours.map((h) => (
-                    <div
-                      key={h}
-                      className={isWeek ? "border-b border-line-soft" : "absolute inset-x-0 border-t border-line/70"}
-                      style={isWeek ? { height: rowHeight } : { top: offsetTop(h * 60) }}
-                    />
-                  ))}
-                  {/* The now-line runs to the edge of the grid, not to the edge of
-                      the last lane — otherwise it stops mid-panel. */}
-                  {nowVisible ? (
-                    <div
-                      className="absolute inset-x-0 z-10 border-t-2 border-brand"
-                      style={{ top: offsetTop(minutesOf(nowParts)) }}
-                    />
-                  ) : null}
+                  {columns.map((col) => {
+                    const columnAppointments = visible.filter((appt) => inColumn(appt, col.key));
+                    const dayLanes = layoutDayLanes(columnAppointments);
+                    return (
+                      <div key={col.key} className="min-w-[12.5rem] flex-1 border-l border-[var(--line)]">
+                        <div className="sticky top-0 z-10 flex h-[50px] items-center gap-2 border-b border-[var(--line)] bg-[var(--surface)] px-3">
+                          <AgAvatar name={col.label} id={col.key} size={24} tint={tintOf(col.key)} photoUrl={(col as { photoUrl?: string | null }).photoUrl ?? null} />
+                          <span className="flex min-w-0 flex-col leading-tight">
+                            <span className="truncate text-[13.5px] font-medium text-foreground">{col.label}</span>
+                            <span className="truncate text-[12px] text-muted">{col.sub}</span>
+                          </span>
+                          {col.inactive ? (
+                            <span
+                              title="Este profesional está inactivo — sus citas existentes siguen visibles aquí, pero no puede recibir nuevas reservas. Reactívalo en Agenda → Equipo."
+                              className="ml-auto shrink-0 rounded-[6px] bg-[var(--chip)] px-2 py-0.5 text-[11.5px] text-[var(--ag-ink2)]"
+                            >
+                              Inactivo
+                            </span>
+                          ) : null}
+                        </div>
+                        <div
+                          className={`relative ${canSlotMenu(col.key) ? "cursor-cell" : ""}`}
+                          style={{ height: bodyHeight }}
+                          onClick={(e) => {
+                            if (!canSlotMenu(col.key) || (e.target as Element).closest("button,a,[data-slot-menu]")) return;
+                            const y = e.clientY - e.currentTarget.getBoundingClientRect().top;
+                            const raw = fromHour * 60 + Math.floor(((y / HOUR_PX) * 60) / 15) * 15;
+                            const min = Math.min(Math.max(raw, fromHour * 60), toHour * 60 - 60);
+                            setSlotPop({ staffId: col.key, min, last: col.key === columns[columns.length - 1]?.key });
+                          }}
+                        >
+                          {slotPop && slotPop.staffId === col.key ? (
+                            <SlotMenu
+                              top={offsetTop(slotPop.min)}
+                              height={HOUR_PX}
+                              alignRight={slotPop.last && columns.length > 1}
+                              label={`${hmOf(slotPop.min)} – ${hmOf(slotPop.min + 60)}`}
+                              onNew={
+                                props.canOperate
+                                  ? () => {
+                                      const at = new Date(Date.parse(siteMidnightIso(shownDayKeys[0], tz)) + slotPop.min * 60_000).toISOString();
+                                      setSlotPop(null);
+                                      setModal({ mode: "new", staffId: col.key, startAt: at });
+                                    }
+                                  : null
+                              }
+                              onBlock={
+                                props.canBlockStaff
+                                  ? () => {
+                                      setSlotPop(null);
+                                      setModal({ mode: "block", staffId: col.key, date: shownDayKeys[0], start: hmOf(slotPop.min), end: hmOf(slotPop.min + 60) });
+                                    }
+                                  : null
+                              }
+                              onClose={() => setSlotPop(null)}
+                            />
+                          ) : null}
+                          {hours.map((h) => (
+                            <Fragment key={h}>
+                              {h > fromHour ? <div aria-hidden className="absolute inset-x-0 border-t border-[var(--line-soft)]" style={{ top: offsetTop(h * 60) }} /> : null}
+                              <div aria-hidden className="absolute inset-x-0 border-t border-[var(--line-soft)]" style={{ top: offsetTop(h * 60 + 30) }} />
+                            </Fragment>
+                          ))}
+                          {col.closed ? (
+                            <div className="absolute inset-[3px] rounded-[8px] bg-[var(--ag-off)] px-2.5 py-1.5 text-[12px] font-medium text-muted shadow-[inset_0_0_0_1px_var(--line)]">
+                              {hasAnyHours(props.openingHours) && !opensOn(props.openingHours, dayWeekday) ? "Sede cerrada" : "No trabaja"}
+                            </div>
+                          ) : null}
+                          {props.blocks
+                            .filter((b) => b.staff_id === col.key || b.staff_id === null)
+                            .map((b) => {
+                              const bd = bandForDay(b, props.dayStartIso, props.dayEndIso);
+                              if (!bd) return null;
+                              const siteWide = b.staff_id === null;
+                              return (
+                                <BlockBand
+                                  key={b.id}
+                                  top={bd.top}
+                                  height={bd.height}
+                                  siteWide={siteWide}
+                                  fullDay={bd.fullDay}
+                                  time={`${fmtTime(b.starts_at, tz)}–${fmtTime(b.ends_at, tz)}`}
+                                  reason={b.reason}
+                                  editable={siteWide ? props.canBlockSite : props.canBlockStaff}
+                                  onOpen={() => setModal({ mode: "editBlock", block: b })}
+                                />
+                              );
+                            })}
+                          {scheduleLayer(col.key, shownDayKeys[0], col.closed === true)}
+                          {nowVisible ? (
+                            <div aria-hidden className="pointer-events-none absolute inset-x-0 z-[5] h-0 shadow-[0_0_0_1px_var(--foreground)]" style={{ top: offsetTop(minutesOf(nowParts)) }} />
+                          ) : null}
+                          {columnAppointments.map((a) => {
+                            const lo = fromHour * 60;
+                            const hi = toHour * 60;
+                            const startMin = Math.min(Math.max(minutesOf(zonedParts(a.start_at, tz)), lo), hi);
+                            const endMin = Math.min(Math.max(minutesOf(zonedParts(a.service_end_at, tz)), startMin), hi);
+                            return (
+                              <ApptCard
+                                key={a.id}
+                                appt={a}
+                                toneClass={appointmentToneClass(a)}
+                                tz={tz}
+                                top={offsetTop(startMin)}
+                                height={Math.max(22, ((endMin - startMin) / 60) * HOUR_PX)}
+                                lane={dayLanes.get(a.id)}
+                                overlapping={overlapIds.has(a.id)}
+                                conflict={conflictIds.has(a.id)}
+                                selected={a.id === selectedId}
+                                flash={a.id === flashId}
+                                dim={isDimmed(a)}
+                                colorBy={colorBy}
+                                previewProps={previewProps(a)}
+                                onOpen={() => openAppointment(a.id)}
+                              />
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
               </div>
-
-            </div>
-          </div>
-          ) : null}
-        </section>
+            )}
+          </section>
 
         {(selected || deskReschedule) && !formReschedule ? (() => {
           const appt = (deskReschedule ?? selected) as Appt;
@@ -2084,6 +1486,7 @@ export function AgendaView(props: {
               )
             }
             staffColor={teamColors.get(appt.staff_id)}
+            staffTint={tintOf(appt.staff_id)}
             loadActivity={() => listAppointmentActivityAction(props.clientId, appt.id)}
             loadReviewLink={() => getReviewLinkAction(props.clientId, appt.id)}
           />
@@ -2100,7 +1503,11 @@ export function AgendaView(props: {
           />
         ) : null}
       </div>
-      </PageShell>
+        {/* The 20-second refresh keeps running; the reference shows no indicator for it. */}
+        <div className="sr-only">
+          <AutoRefresh intervalSeconds={20} />
+        </div>
+      </div>
 
       {/* PHONE «Cambiar fecha y hora» — the full-screen two-step flow. From md up the same
           move happens INSIDE the appointment's panel (AppointmentPanel → RescheduleInline). */}
@@ -2112,7 +1519,7 @@ export function AgendaView(props: {
           timezone={tz}
           openWeekdays={openWeekdays}
           appt={modal.appt}
-          staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl }))}
+          staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl, tint: tintOf(s.id) }))}
           lockStaffId={props.lockStaffId}
           onClose={() => setModal(null)}
           onDone={({ dayKey, appointmentId }) => afterReschedule(dayKey, appointmentId)}
@@ -2145,7 +1552,7 @@ export function AgendaView(props: {
           siteId={props.currentSiteId}
           siteName={currentSite?.name ?? ""}
           timezone={tz}
-          staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl }))}
+          staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl, tint: tintOf(s.id) }))}
           services={props.services}
           lockStaffId={props.lockStaffId}
           onClose={() => setModal(null)}
@@ -2175,8 +1582,11 @@ export function AgendaView(props: {
           staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name }))}
           canSiteClosure={props.canBlockSite}
           canStaffTimeOff={props.canBlockStaff}
-          fixedStaffId={modal.mode === "block" ? modal.staffId ?? (props.lockStaffId ?? null) : null}
+          fixedStaffId={modal.mode === "block" ? props.lockStaffId ?? null : null}
+          initialStaffId={modal.mode === "block" ? modal.staffId ?? null : null}
           initialDate={modal.mode === "block" ? modal.date ?? props.date : undefined}
+          initialStart={modal.mode === "block" ? modal.start : undefined}
+          initialEnd={modal.mode === "block" ? modal.end : undefined}
           edit={modal.mode === "editBlock" ? modal.block : undefined}
           hidden={Boolean(formReschedule)}
           recheck={recheck}
@@ -2190,7 +1600,24 @@ export function AgendaView(props: {
         />
       ) : null}
 
-      {modal && modal.mode === "series" ? (
+      {modal && modal.mode === "series" && modal.occ.kind === "break" ? (
+        <BreakWeekPanel
+          key={modal.occ.key}
+          clientId={props.clientId}
+          siteId={props.currentSiteId}
+          timezone={tz}
+          occ={modal.occ}
+          ownerName={modal.occ.staffId ? staffNameById.get(modal.occ.staffId) ?? null : null}
+          ownerNote={modal.occ.staffId ? `${staffNameById.get(modal.occ.staffId) ?? "Profesional"} · ${hasAnyHours(props.staff.find((x) => x.id === modal.occ.staffId)?.workingHours) ? "horario propio" : "horario de la sede"}` : `${currentSite?.name ?? "La sede"} · toda la sede`}
+          canEdit={modal.occ.staffId ? props.canEditStaffBreaks : props.canEditSiteBreaks}
+          hidden={Boolean(formReschedule)}
+          recheck={recheck}
+          onReschedule={(item, holds) => setFormReschedule({ apptId: item.id, holds, item })}
+          onClose={() => setModal(null)}
+          onChanged={() => router.refresh()}
+        />
+      ) : null}
+      {modal && modal.mode === "series" && modal.occ.kind !== "break" ? (
         <SeriesPanel
           key={modal.occ.key}
           clientId={props.clientId}
@@ -2198,11 +1625,7 @@ export function AgendaView(props: {
           timezone={tz}
           occ={modal.occ}
           ownerName={modal.occ.staffId ? staffNameById.get(modal.occ.staffId) ?? null : null}
-          canEdit={
-            modal.occ.kind === "break"
-              ? modal.occ.staffId ? props.canEditStaffBreaks : props.canEditSiteBreaks
-              : modal.occ.staffId ? props.canBlockStaff : props.canBlockSite
-          }
+          canEdit={modal.occ.staffId ? props.canBlockStaff : props.canBlockSite}
           hidden={Boolean(formReschedule)}
           recheck={recheck}
           onReschedule={(item, holds) => setFormReschedule({ apptId: item.id, holds, item })}
@@ -2222,7 +1645,7 @@ export function AgendaView(props: {
           timezone={tz}
           item={formReschedule.item}
           holds={formReschedule.holds}
-          staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl }))}
+          staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl, tint: tintOf(s.id) }))}
           openWeekdays={openWeekdays}
           lockStaffId={props.lockStaffId}
           returnLabel={modal?.mode === "series" ? (modal.occ.kind === "break" ? "la pausa" : "el bloqueo") : "el bloqueo"}
@@ -2255,12 +1678,18 @@ export function AgendaView(props: {
   );
 }
 
-// ── Small presentational pieces ───────────────────────────────────────────────
 
-/** Weekly overview: each professional has one row, with bookings ordered inside
- * each local day. Overflow opens the existing accessible appointment chooser. */
+/**
+ * A weekly day never shrinks beyond two readable lanes. Extra simultaneous
+ * appointments live here: the "+N más" marker opens this compact chooser and a
+ * choice continues into the ordinary appointment drawer.
+ */
+/** WEEK (reference E3): one row per professional, one cell per day. A cell lists its
+ *  appointments as 32px chips (time · client · state glyph) edged in the service family;
+ *  blocks are off-white chips; a day the professional doesn't work — or the site is closed,
+ *  or a whole-day absence — is an off-white cell that says so. Clicking a day opens it. */
 function WeekTeamBoard({
-  days, staff, appointments, openingHours, timezone, today, overlapIds, selectedId, flashId, blocks, previewFor,
+  days, staff, appointments, openingHours, timezone, today, selectedId, flashId, blocks, seriesOccurrences, dimmed, tintOf, previewFor,
   onOpen, onDay, onMore,
 }: {
   days: string[];
@@ -2269,10 +1698,12 @@ function WeekTeamBoard({
   openingHours: WeeklyHours;
   timezone: string;
   today: string;
-  overlapIds: Set<string>;
   selectedId: string | null;
   flashId: string | null;
-  blocks: BlockOpt[];
+  blocks: Block[];
+  seriesOccurrences: SeriesOcc[];
+  dimmed: (a: Appt) => boolean;
+  tintOf: (id: string) => "1" | "2" | "3" | "4";
   previewFor: (appt: Appt) => Record<string, unknown>;
   onOpen: (id: string) => void;
   onDay: (date: string) => void;
@@ -2291,90 +1722,103 @@ function WeekTeamBoard({
       knownStaff.add(appt.staff_id);
     }
   }
-
+  const shortName = (name: string | null) => {
+    const w = (name ?? "").trim().split(/\s+/).filter(Boolean);
+    return w.length > 1 ? `${w[0]} ${w[1].slice(0, 1)}.` : w[0] ?? "Sin contacto";
+  };
+  const GRID = "grid grid-cols-[112px_repeat(7,minmax(0,1fr))]";
   return (
-    <div className="hidden min-h-0 flex-1 overflow-auto md:block" aria-label="Semana por profesional">
-      <div className="grid min-h-full min-w-[1050px] grid-cols-[112px_repeat(7,minmax(134px,1fr))] content-start">
-        <div className="sticky left-0 top-0 z-30 flex h-[72px] items-center border-b border-r border-line bg-surface px-3 text-xs font-medium text-muted">Equipo</div>
-        {days.map((day) => {
-          const [year, month, date] = day.split("-").map(Number);
-          const weekday = new Date(Date.UTC(year, month - 1, date)).getUTCDay();
-          const isToday = day === today;
-          return (
-            <button key={day} type="button" onClick={() => onDay(day)}
-              aria-label={`Ver agenda del ${date} de ${ES_MONTHS[month - 1]}`}
-              className={`sticky top-0 z-20 flex h-[72px] items-center justify-center gap-2 border-b border-r border-line text-sm transition hover:bg-chip ${isToday ? "bg-chip" : "bg-surface"}`}>
-              <span className={`flex size-[32px] items-center justify-center rounded-full font-semibold ${isToday ? "bg-ink text-ink-fg" : "text-foreground"}`}>{date}</span>
-              <span className={isToday ? "font-medium text-foreground" : "text-muted"}>{ES_WEEKDAYS[weekday]}</span>
-            </button>
-          );
-        })}
+    <div className="min-h-0 flex-1 overflow-auto" aria-label="Semana por profesional">
+      <div className="min-w-[1000px]">
+        <div className={`${GRID} sticky top-0 z-20 bg-[var(--surface)] shadow-[inset_0_-1px_0_var(--line)]`}>
+          <div className="flex items-center px-4 text-[12.5px] text-muted">Equipo</div>
+          {days.map((day) => {
+            const [year, month, date] = day.split("-").map(Number);
+            const weekday = new Date(Date.UTC(year, month - 1, date)).getUTCDay();
+            const isToday = day === today;
+            return (
+              <button
+                key={day}
+                type="button"
+                title="Ver el día"
+                onClick={() => onDay(day)}
+                aria-label={`Ver el ${ES_WEEKDAYS[weekday]} ${date} de ${ES_MONTHS[month - 1]}`}
+                className={`u-focus flex h-[52px] items-center justify-center gap-2 px-3 text-[14px] shadow-[inset_1px_0_0_var(--line)] hover:bg-[var(--subtle)] ${isToday ? "bg-[var(--subtle)] text-foreground" : "text-muted"}`}
+              >
+                <span className={`inline-flex h-[30px] min-w-[30px] items-center justify-center rounded-full text-[15px] font-medium tabular-nums ${isToday ? "bg-[var(--ink)] text-[var(--ink-fg)]" : "text-foreground"}`}>{date}</span>
+                <span className="capitalize">{ES_WEEKDAYS[weekday]}</span>
+              </button>
+            );
+          })}
+        </div>
         {rows.map((person) => {
-          const maxCount = Math.max(0, ...days.map((day) => (byCell.get(`${person.id}/${day}`) ?? []).length));
-          const rowHeight = Math.max(172, Math.min(maxCount, 5) * 37 + 46);
-          const total = days.reduce((count, day) => count + (byCell.get(`${person.id}/${day}`) ?? []).length, 0);
+          const total = days.reduce((count, day) => count + (byCell.get(`${person.id}/${day}`) ?? []).filter((a) => a.status !== "cancelled").length, 0);
           return (
-            <div key={person.id} className="contents">
-              <div className="sticky left-0 z-10 flex flex-col items-center justify-center gap-2 border-b border-r border-line bg-surface px-2 py-4 text-center" style={{ minHeight: rowHeight }}>
-                {person.photoUrl ? (
-                  // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
-                  <img src={person.photoUrl} alt="" aria-hidden className="size-[44px] shrink-0 rounded-full border-2 border-line-strong object-cover" />
-                ) : (
-                  <span aria-hidden className="flex size-[44px] shrink-0 items-center justify-center rounded-full border-2 border-line-strong bg-chip text-sm font-semibold text-foreground">
-                    {initialsOf(person.name)}
-                  </span>
-                )}
-                <span className="line-clamp-2 text-xs font-semibold leading-snug text-foreground">{person.name}</span>
-                <span className="text-[11px] text-faint">{person.active ? `${total} citas` : "Inactivo"}</span>
+            <div key={person.id} className={GRID}>
+              <div className="flex flex-col items-center justify-center gap-2 px-2.5 py-4 text-center shadow-[inset_0_-1px_0_var(--line)]">
+                <AgAvatar name={person.name} id={person.id} size={48} tint={tintOf(person.id)} photoUrl={person.photoUrl ?? null} className="shadow-[0_0_0_2px_var(--surface),0_0_0_3px_var(--line)]" />
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="text-[14px] font-medium text-foreground [overflow-wrap:anywhere]">{person.name.split(" ")[0]}</span>
+                  <span className="text-[12.5px] text-muted">{person.active ? `${total} ${total === 1 ? "cita" : "citas"}` : "Inactivo"}</span>
+                </span>
               </div>
               {days.map((day) => {
                 const cell = byCell.get(`${person.id}/${day}`) ?? [];
-                const shown = cell.slice(0, 5);
-                const rest = cell.slice(5);
-                const closed = !staffWorksOn(person.workingHours, openingHours, weekdayKeyOf(day));
-                const dayBlocks = blocks.filter(
-                  (b) =>
-                    (b.staff_id === null || b.staff_id === person.id) &&
-                    zonedParts(b.starts_at, timezone).dayKey <= day &&
-                    zonedParts(new Date(Date.parse(b.ends_at) - 1).toISOString(), timezone).dayKey >= day,
-                );
+                const siteClosed = hasAnyHours(openingHours) && !opensOn(openingHours, weekdayKeyOf(day));
+                const off = !staffWorksOn(person.workingHours, openingHours, weekdayKeyOf(day));
+                const dayStart = Date.parse(siteMidnightIso(day, timezone));
+                const dayEnd = Date.parse(siteMidnightIso(addDays(day, 1), timezone));
+                const dayBlocksHere = blocks.filter((b) => (b.staff_id === null || b.staff_id === person.id) && Date.parse(b.starts_at) < dayEnd && Date.parse(b.ends_at) > dayStart);
+                const allDay = dayBlocksHere.find((b) => Date.parse(b.starts_at) <= dayStart && Date.parse(b.ends_at) >= dayEnd);
+                const series = seriesOccurrences.filter((o) => o.kind === "block" && o.date === day && (o.staffId === null || o.staffId === person.id));
+                const note = siteClosed ? "Sede cerrada" : allDay ? (allDay.staff_id === null ? "Sede cerrada" : "Ausencia") : off ? "No trabaja" : null;
+                const chips = [
+                  ...(note ? [] : dayBlocksHere.map((b) => ({ key: b.id, at: b.starts_at, kind: "block" as const }))),
+                  ...(note ? [] : series.map((o) => ({ key: o.key, at: o.startsAt, kind: "block" as const }))),
+                  ...cell.map((a) => ({ key: a.id, at: a.start_at, kind: "appt" as const, a })),
+                ].sort((x, y) => x.at.localeCompare(y.at));
+                const shown = chips.slice(0, 6);
+                const rest = chips.slice(6).filter((c) => c.kind === "appt");
                 return (
-                  <div key={day} className={`flex min-w-0 flex-col justify-center gap-1 border-b border-r border-line px-1.5 py-3 ${closed ? "u-closed-hatch" : day === today ? "bg-chip/25" : "bg-surface"}`} style={{ minHeight: rowHeight }}>
-                    {dayBlocks.length > 0 ? (
-                      <span
-                        title={dayBlocks.map((b) => `Bloqueado ${fmtTime(b.starts_at, timezone)}–${fmtTime(b.ends_at, timezone)}${b.reason ? ` · ${b.reason}` : ""}`).join("\n")}
-                        className="u-closed-hatch flex h-6 min-w-0 items-center rounded-sch-event border border-dashed border-line-strong px-2 text-[11px] font-medium text-muted"
-                      >
-                        <span className="truncate">
-                          Bloqueado{dayBlocks[0].reason ? ` · ${dayBlocks[0].reason}` : ""}
+                  <div
+                    key={day}
+                    className={`flex min-h-[150px] min-w-0 flex-col justify-center gap-1.5 px-1.5 py-3 shadow-[inset_1px_0_0_var(--line),inset_0_-1px_0_var(--line)] ${note ? "bg-[var(--ag-off)]" : day === today ? "bg-[var(--ag-today)]" : ""}`}
+                  >
+                    {note ? <span className="text-center text-[13px] text-muted">{note}</span> : null}
+                    {shown.map((c) =>
+                      c.kind === "block" ? (
+                        <span key={c.key} className="flex h-[32px] min-w-0 shrink-0 items-center gap-[5px] rounded-[9px] bg-[var(--ag-off)] px-[7px] text-[13px] text-muted shadow-[inset_0_0_0_1px_var(--line)]">
+                          <span className="shrink-0 text-[12px] tabular-nums opacity-[0.62]">{fmtTime(c.at, timezone)}</span>
+                          <span className="min-w-0 flex-1 truncate font-medium">Bloqueado</span>
                         </span>
-                      </span>
-                    ) : null}
-                    {shown.map((appt) => {
-                      const attention = overlapIds.has(appt.id);
-                      const client = appt.contact_name ?? "Atención sin cita";
-                      const state = STATUS_LABEL[appt.status] ?? appt.status;
-                      return (
-                        <button key={appt.id} type="button" onClick={() => onOpen(appt.id)}
-                          {...previewFor(appt)}
-                          aria-label={`${fmtTime(appt.start_at, timezone)} ${client} — ${appt.service_name} — ${state}${attention ? " — solapamiento" : ""}`}
-                          className={`u-appt ${appointmentToneClass(appt)} flex h-[32px] min-w-0 items-center gap-1.5 rounded-md px-2 text-left transition-shadow hover:shadow-[0_0_0_2px_var(--foreground)] ${selectedId === appt.id || flashId === appt.id ? "ring-2 ring-service-purple" : ""}`}>
-                          <span className="u-appt-ink u-mono shrink-0 text-[11px]">{fmtTime(appt.start_at, timezone)}</span>
-                          <strong className={`min-w-0 flex-1 truncate text-xs font-semibold ${appt.status === "cancelled" ? "line-through opacity-60" : ""}`}>{client}</strong>
-                          {attention || appt.status !== "confirmed" ? (
-                            <span aria-hidden className="shrink-0 text-[11px] font-semibold">
-                              {attention ? "!" : appt.status === "completed" ? "✓" : appt.status === "cancelled" ? "×" : appt.status === "no_show" ? "!" : "○"}
-                            </span>
-                          ) : null}
+                      ) : (
+                        <button
+                          key={c.key}
+                          type="button"
+                          onClick={() => onOpen(c.a.id)}
+                          {...previewFor(c.a)}
+                          data-appt-card=""
+                          aria-label={`${fmtTime(c.a.start_at, timezone)} ${c.a.contact_name ?? c.a.guest_name ?? "Sin contacto"} ${STATE_WORD[c.a.status] ?? c.a.status}`}
+                          className={`u-appt2 ${appointmentToneClass(c.a)} u-focus flex h-[32px] min-w-0 shrink-0 items-center gap-[5px] px-[7px] text-left text-[13px] transition-[background,opacity] hover:bg-[var(--subtle)] ${c.a.status === "cancelled" ? "line-through" : ""} ${selectedId === c.a.id || flashId === c.a.id ? "shadow-[0_0_0_2px_var(--foreground)]" : ""}`}
+                          data-status={c.a.status}
+                          style={{ opacity: dimmed(c.a) ? 0.28 : 1, borderRadius: 9 }}
+                        >
+                          <span className="shrink-0 text-[12px] tabular-nums opacity-[0.62]">{fmtTime(c.a.start_at, timezone)}</span>
+                          <span className="min-w-0 flex-1 truncate font-medium">{shortName(c.a.contact_name ?? c.a.guest_name)}</span>
+                          <span aria-hidden className="shrink-0 text-[11px] opacity-70">{STATE_GLYPH[c.a.status] ?? ""}</span>
                         </button>
-                      );
-                    })}
+                      ),
+                    )}
                     {rest.length > 0 ? (
-                      <button type="button" onClick={() => onMore(cell, `${person.name} · ${Number(day.slice(-2))} ${ES_MONTHS[Number(day.slice(5, 7)) - 1]}`)}
+                      <button
+                        type="button"
+                        onClick={() => onMore(cell, `${person.name} · ${Number(day.slice(-2))} ${ES_MONTHS[Number(day.slice(5, 7)) - 1]}`)}
                         aria-label={`Ver las ${cell.length} citas de ${person.name} el ${day} (${rest.length} más)`}
-                        className="min-h-7 rounded-md text-xs font-medium text-muted transition hover:bg-chip hover:text-foreground">+{rest.length} más</button>
+                        className="u-focus min-h-[28px] rounded-[8px] text-[12.5px] text-[var(--ag-ink2)] hover:bg-[var(--subtle)]"
+                      >
+                        +{rest.length} más
+                      </button>
                     ) : null}
-                    {cell.length === 0 ? <span className="text-center text-xs text-faintest">{closed ? "No disponible" : "—"}</span> : null}
                   </div>
                 );
               })}
@@ -2386,124 +1830,6 @@ function WeekTeamBoard({
   );
 }
 
-function DesktopHourRows({
-  appointments,
-  blocks,
-  bookableStaffIds,
-  hours,
-  timezone,
-  overlapIds,
-  canOperate,
-  onOpen,
-  onBook,
-}: {
-  appointments: Appt[];
-  blocks: DayBlock[];
-  bookableStaffIds: string[];
-  hours: number[];
-  timezone: string;
-  overlapIds: Set<string>;
-  canOperate: boolean;
-  onOpen: (id: string) => void;
-  onBook: () => void;
-}) {
-  return (
-    <div className="hidden min-h-0 flex-1 overflow-y-auto bg-surface xl:block">
-      {hours.map((hour) => {
-        const inHour = appointments.filter((appt) => zonedParts(appt.start_at, timezone).h === hour);
-        // A block is listed in the hour it STARTS (or the first hour shown, if earlier).
-        // The row stops offering "Agendar en esta hora" ONLY when the hour is blocked for
-        // every barber who could take it, for all of its 60 minutes — one barber's block
-        // or a 15-minute block keeps the offer (the engine then shows the real slots).
-        const startsHere = blocks.filter((b) => Math.max(Math.floor(b.sMin / 60), hours[0]) === hour);
-        const covered = hourState(blocks, hour, bookableStaffIds) === "blocked";
-        return (
-          <div key={hour} className="grid min-h-[6.1rem] grid-cols-[minmax(0,1fr)_4.75rem] border-b border-line last:border-b-0">
-            <div className="flex min-w-0 flex-col gap-2 p-2.5">
-              {startsHere.map((b) => (
-                <BlockRow key={b.id} block={b} />
-              ))}
-              {inHour.length > 0 ? (
-                <div className="grid h-full grid-cols-[repeat(auto-fit,minmax(13rem,1fr))] gap-2">
-                  {inHour.map((appt) => {
-                    const overlapping = overlapIds.has(appt.id);
-                    return (
-                      <button
-                        key={appt.id}
-                        type="button"
-                        onClick={() => onOpen(appt.id)}
-                        className={`u-appt ${appointmentToneClass(appt)} group flex min-h-[4.9rem] min-w-0 items-stretch overflow-hidden rounded-lg text-left transition hover:-translate-y-px hover:shadow-sm ${
-                          appt.status === "cancelled" ? "opacity-75" : ""
-                        }`}
-                      >
-                        <span className="flex min-w-0 flex-1 flex-col justify-center px-3 py-2.5">
-                          <span className="flex items-center gap-2">
-                            <Initial name={appt.staff_name} on="card" />
-                            <span className="truncate text-sm font-semibold text-foreground">
-                              {appt.contact_name ?? "Atención sin cita"}
-                            </span>
-                            <span className="u-mono ml-auto shrink-0 text-[0.6875rem] tabular-nums text-muted">
-                              {fmtTime(appt.start_at, timezone)}
-                            </span>
-                          </span>
-                          <span className="u-appt-ink mt-1 truncate text-xs">
-                            {appt.service_name} · {appt.duration_min} min
-                          </span>
-                          <span className="mt-1 flex items-center gap-2">
-                            <span className="truncate text-[0.6875rem] text-muted">{appt.staff_name ?? "Sin profesional"}</span>
-                            <span className="ml-auto"><MobileStatus status={appt.status} attention={overlapping} /></span>
-                          </span>
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-              ) : covered ? (
-                startsHere.length > 0 ? null : <div className="flex h-full min-h-[4.9rem] items-center px-3 text-xs text-faint">Horario bloqueado</div>
-              ) : canOperate ? (
-                <button
-                  type="button"
-                  onClick={onBook}
-                  className="u-focus flex h-full min-h-[4.9rem] w-full items-center justify-center gap-2 rounded-sch-event border border-dashed border-line text-xs text-faint transition hover:border-line-strong hover:bg-canvas/50 hover:text-foreground"
-                >
-                  <span aria-hidden className="text-base">＋</span>
-                  Agendar en esta hora
-                </button>
-              ) : (
-                <div className="flex h-full min-h-[4.9rem] items-center px-3 text-xs text-faint">Sin citas en esta hora</div>
-              )}
-            </div>
-            <div className="u-mono flex items-start justify-center border-l border-line pt-3 text-[0.6875rem] tabular-nums text-faint">
-              {String(hour).padStart(2, "0")}:00
-            </div>
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
-function RowsIcon() {
-  return (
-    <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <path d="M2.5 4h11M2.5 8h11M2.5 12h11" />
-    </svg>
-  );
-}
-
-function ColumnsIcon() {
-  return (
-    <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.5">
-      <path d="M4 2.5v11M8 2.5v11M12 2.5v11" />
-    </svg>
-  );
-}
-
-/**
- * A weekly day never shrinks beyond two readable lanes. Extra simultaneous
- * appointments live here: the "+N más" marker opens this compact chooser and a
- * choice continues into the ordinary appointment drawer.
- */
 function WeekOverflowDialog({
   appointments,
   title: customTitle,
@@ -2578,271 +1904,8 @@ function WeekOverflowDialog({
     </>
   );
 }
-
-/** A block as a ROW in the list layouts — hatched like the grids, never clickable. */
-function BlockRow({ block, className = "" }: { block: DayBlock; className?: string }) {
-  return (
-    <div className={`u-closed-hatch flex min-h-[44px] items-center gap-3 rounded-sch-event border border-dashed border-line-strong px-3 py-2 ${className}`}>
-      <span className="u-mono shrink-0 text-xs font-semibold tabular-nums text-foreground">{block.when}</span>
-      <span className="min-w-0 truncate text-xs font-medium text-muted">{block.label}</span>
-    </div>
-  );
-}
-
-/**
- * Phone and tablet deliberately share the desktop appointment grammar: the same
- * professional pastel, hairline, avatar, typography and lifecycle chip. Only the
- * density changes. That keeps a barber oriented when moving between a front-desk
- * tablet and their own phone instead of teaching them a second visual language.
- */
-function MobileAppointmentCard({
-  appt,
-  toneClass,
-  timezone,
-  attention,
-  next,
-  showStaff,
-  roomy = false,
-  flash = false,
-  onOpen,
-}: {
-  appt: Appt;
-  toneClass: string;
-  timezone: string;
-  attention: boolean;
-  next: boolean;
-  showStaff: boolean;
-  roomy?: boolean;
-  flash?: boolean;
-  onOpen: () => void;
-}) {
-  return (
-    <button
-      type="button"
-      data-appt-id={appt.id}
-      onClick={onOpen}
-      aria-current={next ? "step" : undefined}
-      className={`u-appt ${toneClass} relative flex w-full items-stretch overflow-hidden rounded-lg text-left transition active:scale-[0.995] ${
-        roomy ? "min-h-[6.75rem]" : "min-h-[5.75rem]"
-      } ${flash ? "animate-pulse ring-2 ring-service-purple" : next ? "ring-2 ring-brand/20" : ""} ${appt.status === "cancelled" ? "opacity-65" : ""}`}
-    >
-      <span className={`u-mono flex w-[4.4rem] shrink-0 flex-col border-r border-current/10 px-3 ${roomy ? "py-3.5" : "py-3"}`}>
-        <strong className="text-sm font-semibold tabular-nums text-foreground">{fmtTime(appt.start_at, timezone)}</strong>
-        <span className="mt-0.5 text-[0.625rem] tabular-nums text-muted">{fmtTime(appt.service_end_at, timezone)}</span>
-        <span className="mt-auto text-[0.625rem] text-faint">{appt.duration_min} min</span>
-      </span>
-
-      <span className={`flex min-w-0 flex-1 flex-col ${roomy ? "px-3.5 py-3.5" : "px-3 py-3"}`}>
-        <span className="flex min-w-0 items-center gap-2">
-          <Initial name={appt.staff_name} on="card" />
-          <strong className="min-w-0 flex-1 truncate text-[0.875rem] font-semibold text-foreground">
-            {appt.contact_name ?? "Atención sin cita"}
-          </strong>
-          <span aria-hidden className="shrink-0 text-sm text-muted">›</span>
-        </span>
-        <span className="u-appt-ink mt-1 truncate text-xs">{appt.service_name}</span>
-        <span className="mt-auto flex min-w-0 items-center gap-2 pt-2">
-          {showStaff ? <span className="min-w-0 flex-1 truncate text-[0.6875rem] text-muted">{appt.staff_name ?? "Sin asignar"}</span> : <span className="flex-1" />}
-          <MobileStatus status={appt.status} attention={attention} />
-        </span>
-        {next ? (
-          <span className="mt-2 border-t border-current/10 pt-1.5 text-[0.625rem] font-semibold uppercase tracking-[0.1em] text-brand">
-            Próxima cita
-          </span>
-        ) : null}
-      </span>
-    </button>
-  );
-}
-
-/** The lifecycle chip of the list layouts — the shared StatusChip (or the conflict
- *  marker), so a state looks the same in every layout and in the detail panel. */
-function MobileStatus({ status, attention }: { status: string; attention: boolean }) {
-  return attention ? <AttentionChip size="sm" /> : <StatusChip status={status} size="sm" />;
-}
-
-function DesktopSeg({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button type="button" onClick={onClick} aria-pressed={active} className={segmentClass(active)}>
-      {children}
-    </button>
-  );
-}
-
-function DesktopStep({
-  label,
-  onClick,
-  direction,
-}: {
-  label: string;
-  onClick: () => void;
-  direction: "left" | "right";
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-label={label}
-      className="u-focus flex aspect-square h-full items-center justify-center rounded-[calc(var(--sch-radius-control)-3px)] text-muted transition-colors hover:bg-subtle hover:text-foreground"
-    >
-      <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round">
-        <path d={direction === "left" ? "M9.8 3.5 5.3 8l4.5 4.5" : "M6.2 3.5 10.7 8l-4.5 4.5"} />
-      </svg>
-    </button>
-  );
-}
-
-/** The tablet bar's square steppers — a secondary control at the shared height. */
-function IconBtn({ label, onClick, children }: { label: string; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button type="button" onClick={onClick} aria-label={label} className={buttonClass({ className: "w-[44px] px-0 text-lg leading-none text-muted lg:w-[40px]" })}>
-      {children}
-    </button>
-  );
-}
-
-function Seg({
-  active,
-  disabled,
-  title,
-  onClick,
-  children,
-}: {
-  active?: boolean;
-  disabled?: boolean;
-  title?: string;
-  onClick?: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button type="button" onClick={onClick} disabled={disabled} aria-pressed={active} title={title} className={segmentClass(Boolean(active))}>
-      {children}
-    </button>
-  );
-}
-
-/** A native <select> under a styled shell — full keyboard/AT behaviour, no portal. */
-function Facet({
-  label,
-  value,
-  options,
-  onChange,
-  icon,
-}: {
-  label: string;
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (v: string) => void;
-  icon?: React.ReactNode;
-}) {
-  const current = options.find((o) => o.value === value);
-  return (
-    <div className={buttonClass({ className: "u-focus relative font-normal" })}>
-      {icon ? <span className="pointer-events-none shrink-0 text-faint">{icon}</span> : null}
-      <span className="pointer-events-none whitespace-nowrap">{current?.label ?? label}</span>
-      <span aria-hidden className="pointer-events-none text-faint">&#9662;</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-label={label}
-        className="absolute inset-0 cursor-pointer opacity-0"
-      >
-        {options.map((o) => (
-          <option key={o.value || "any"} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
-
-/** Check-in-circle — the "status" facet. */
-function StatusIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-4" fill="none" aria-hidden>
-      <circle cx="12" cy="12" r="8.5" stroke="currentColor" strokeWidth="1.6" />
-      <path d="m8.5 12 2.5 2.5 4.5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
-    </svg>
-  );
-}
-/** Person — the "staff" facet. */
-function StaffIcon() {
-  return (
-    <svg viewBox="0 0 24 24" className="size-4" fill="none" aria-hidden>
-      <circle cx="12" cy="8" r="3.25" stroke="currentColor" strokeWidth="1.6" />
-      <path d="M5.5 19a6.5 6.5 0 0 1 13 0" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
-    </svg>
-  );
-}
-
-/** Percent CHANGE, for counts and money. null when there is no base to compare to. */
-function ratioDelta(now: number, before: number): number | null {
-  if (!before) return null; // 0 → n has no meaningful percentage
-  return Math.round(((now - before) / before) * 100);
-}
 /** Percentage-POINT difference, for rates. Comparing 85% to 80% is +5 points, not
  *  +6% — reporting it as a percent change would overstate the move. */
-function pointDelta(now: number | null, before: number | null): number | null {
-  if (now === null || before === null) return null;
-  return now - before;
-}
-
-/**
- * One headline metric: title, the window it covers, the number, and how it moved
- * against the preceding equivalent window. The delta is a real comparison (the page
- * queries the previous range) — never a decorative figure. `higherIsBetter` flips
- * the colour for metrics where up is bad, e.g. no-shows.
- */
-function Kpi({
-  label,
-  caption,
-  value,
-  delta,
-  vs,
-  unit,
-  higherIsBetter = true,
-}: {
-  label: string;
-  caption: string;
-  value: string;
-  delta: number | null;
-  vs: string;
-  /** "%" for counts/money (percent change), "pp" for rates (point difference). */
-  unit: "%" | "pp";
-  higherIsBetter?: boolean;
-}) {
-  const good = delta === null || delta === 0 ? null : higherIsBetter ? delta > 0 : delta < 0;
-  return (
-    <div className="rounded-lg border border-line px-3.5 py-2.5">
-      <p className="text-sm font-semibold text-foreground">{label}</p>
-      <p className="mt-0.5 text-xs text-faint">{caption}</p>
-      <div className="mt-1.5 flex flex-wrap items-baseline gap-2">
-        <span className="u-mono text-2xl font-medium leading-none text-foreground">{value}</span>
-        {delta !== null ? (
-          <>
-            <span
-              className={`rounded-full px-1.5 py-0.5 text-[0.6875rem] font-medium ${
-                good === null
-                  ? "bg-chip text-muted"
-                  : good
-                    ? "bg-success/12 text-success"
-                    : "bg-brand-soft text-brand"
-              }`}
-            >
-              {delta > 0 ? "+" : ""}
-              {delta}
-              {unit}
-            </span>
-            <span className="text-xs text-faint">{vs}</span>
-          </>
-        ) : (
-          <span className="text-xs text-faintest">sin datos anteriores</span>
-        )}
-      </div>
-    </div>
-  );
-}
 
 /**
  * The staff disc. `on="card"` makes it ride an appointment card, where it takes
@@ -2896,11 +1959,60 @@ function Initial({ name, muted, on, photoUrl }: { name: string | null; muted?: b
  * uses the stronger hatch. Clickable to edit/delete when the viewer may; otherwise a read-only
  * marker. Rendered under the cards so a kept conflicting appointment stays legible on top.
  */
+/** The reference's slot popover: a dashed one-hour box with its time, and a small menu. */
+function SlotMenu(props: { top: number; height: number; alignRight: boolean; label: string; onNew: (() => void) | null; onBlock: (() => void) | null; onClose: () => void }) {
+  const first = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => first.current?.focus({ preventScroll: true }), []);
+  const item = "u-focus flex h-[40px] w-full items-center justify-between gap-2.5 rounded-[8px] px-3 text-left text-[14px] text-foreground hover:bg-[var(--subtle)]";
+  return (
+    <>
+      <div aria-hidden className="pointer-events-none absolute inset-x-[3px] z-[8] rounded-[10px] border-[1.5px] border-dashed border-[var(--ag-ink2)] bg-[var(--ag-break)]" style={{ top: props.top + 1.5, height: props.height - 3 }}>
+        <span className="absolute -top-3 left-2 flex h-[22px] items-center rounded-[6px] bg-[var(--ink)] px-2 text-[12px] tabular-nums text-[var(--ink-fg)]">{props.label}</span>
+      </div>
+      <div
+        data-slot-menu=""
+        role="menu"
+        aria-label={`Horario ${props.label}`}
+        className={`absolute z-[9] flex w-[236px] flex-col rounded-[12px] bg-[var(--surface)] p-1.5 shadow-[0_0_0_1px_var(--line),0_14px_36px_rgba(0,0,0,0.14)] ${props.alignRight ? "right-2" : "left-[3px]"}`}
+        style={{ top: props.top + props.height + 6 }}
+        onKeyDown={(e) => e.key === "Escape" && props.onClose()}
+      >
+        {props.onNew ? (
+          <button ref={first} type="button" role="menuitem" onClick={props.onNew} className={item}>
+            Nueva cita
+            <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 3v10M3 8h10" /></svg>
+          </button>
+        ) : null}
+        {props.onBlock ? (
+          <button ref={props.onNew ? undefined : first} type="button" role="menuitem" onClick={props.onBlock} className={item}>
+            Bloquear horario
+            <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="8" r="5.5" /><path d="M4.2 11.8l7.6-7.6" /></svg>
+          </button>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
+/** The reference's break (pausa: the lane's full width, no edge) and block (inset 3px,
+ *  off-white with a hairline) tiles; title then time, the time only where it fits. */
+const TILE_BREAK = "u-sch-break absolute inset-x-0 flex flex-col items-start gap-0.5 overflow-hidden px-2.5 py-1.5 text-left";
+const TILE_BLOCK = "u-sch-block absolute inset-x-[3px] flex flex-col items-start gap-0.5 overflow-hidden rounded-[8px] px-2.5 py-1.5 text-left";
+function TimeTile({ title, time, height }: { title: string; time: string; height: number }) {
+  return (
+    <>
+      <span className="w-full truncate text-[12px] font-medium">{title}</span>
+      {height >= 34 ? <span className="w-full truncate text-[12px] tabular-nums">{time}</span> : null}
+    </>
+  );
+}
+
 function BlockBand({
   top,
   height,
   siteWide,
   fullDay,
+  time,
   reason,
   editable,
   onOpen,
@@ -2909,97 +2021,34 @@ function BlockBand({
   height: number;
   siteWide: boolean;
   fullDay: boolean;
+  time: string;
   reason: string | null;
   editable: boolean;
   onOpen: () => void;
 }) {
-  const base = siteWide ? "Cerrado" : fullDay ? "Fuera · todo el día" : "Fuera";
+  // The reference's block (blockItem): an off-white tile with a hairline, inset 3px —
+  // "Bloqueado" / "Sede cerrada" and its time; a whole day reads «Ausencia · todo el día».
+  const base = siteWide ? (fullDay ? "Sede cerrada · todo el día" : "Sede cerrada") : fullDay ? "Ausencia · todo el día" : "Bloqueado";
   const label = reason?.trim() ? `${base} · ${reason.trim()}` : base;
-  const cls = `absolute inset-x-0 overflow-hidden border-y border-timeoff-edge ${siteWide ? "u-timeoff-hatch-site" : "u-timeoff-hatch"}`;
+  const cls = "u-sch-block absolute inset-x-[3px] flex flex-col items-start gap-0.5 overflow-hidden rounded-[8px] px-2.5 py-1.5 text-left";
   const inner = (
-    <span className="u-timeoff-ink pointer-events-none absolute left-1 right-1 top-0.5 truncate text-[0.625rem] font-semibold">
-      {label}
-    </span>
+    <>
+      <span className="w-full truncate text-[12px] font-medium">{label}</span>
+      {!fullDay && height - 2 >= 34 ? <span className="text-[12px] tabular-nums">{time}</span> : null}
+    </>
   );
+  const style = { top: top + 1, height: Math.max(18, height - 2) };
   return editable ? (
-    <button type="button" onClick={onOpen} title={label} aria-label={label} className={`${cls} cursor-pointer text-left`} style={{ top, height }}>
+    <button type="button" onClick={onOpen} title={`${label} · ${time}`} aria-label={`${label}, ${time}. Abrir`} className={`${cls} u-focus cursor-pointer hover:text-[var(--ag-ink2)]`} style={style}>
       {inner}
     </button>
   ) : (
-    <div aria-hidden title={label} className={cls} style={{ top, height }}>
+    <div title={`${label} · ${time}`} className={cls} style={style}>
       {inner}
     </div>
   );
 }
 
-function WeekBlockCard({
-  appt,
-  toneClass,
-  tz,
-  overlapping,
-  conflict,
-  selected,
-  crowded,
-  previewProps,
-  onOpen,
-}: {
-  appt: Appt;
-  toneClass: string;
-  tz: string;
-  overlapping: boolean;
-  /** Kept despite falling inside a Time Off block — flagged so it's never a silent clash. */
-  conflict?: boolean;
-  selected: boolean;
-  /** The block holds a second card or a "+N más" chip, so this card gets ONE line. */
-  crowded: boolean;
-  previewProps: Record<string, unknown>;
-  onOpen: () => void;
-}) {
-  const cancelled = appt.status === "cancelled";
-  /**
-   * Only the states that need ACTING ON get a line of their own here; "Completada" is
-   * in the preview and the detail. The client name owns its line so it is never pushed
-   * out of a narrow column.
-   */
-  const state = cancelled
-    ? "Cancelada"
-    : conflict
-      ? "En bloqueo"
-      : appt.status === "no_show"
-        ? "Inasistencia"
-        : overlapping
-          ? "Traslape"
-          : appt.status === "scheduled"
-            ? "Sin confirmar"
-            : "";
-  const client = appt.contact_name ?? "Atención sin cita";
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      {...previewProps}
-      aria-label={`${fmtTime(appt.start_at, tz)} ${client} — ${appt.service_name} — ${STATUS_LABEL[appt.status] ?? appt.status}${overlapping ? " — solapamiento" : ""}`}
-      className={`u-appt ${toneClass} flex min-h-0 flex-1 flex-col justify-center overflow-hidden px-2 py-0.5 text-left leading-tight transition-shadow hover:shadow-[0_0_0_2px_var(--foreground)] ${
-        selected ? "ring-2 ring-service-purple" : ""
-      }`}
-    >
-      {crowded ? (
-        <span className="flex min-w-0 items-center gap-1.5 text-[11px]">
-          <span className="u-appt-ink u-mono shrink-0">{fmtTime(appt.start_at, tz)}</span>
-          <strong className={`min-w-0 truncate font-semibold ${cancelled ? "line-through" : ""}`}>{client}</strong>
-        </span>
-      ) : (
-        <>
-          <strong className={`block truncate text-[11.5px] font-semibold ${cancelled ? "line-through" : ""}`}>{appt.service_name}</strong>
-          <span className="u-appt-ink block truncate text-[10.5px]">
-            <span className="u-mono">{fmtTime(appt.start_at, tz)}</span> · {client}
-          </span>
-          {state ? <span className="u-appt-ink block truncate text-[10px] opacity-80">{state}</span> : null}
-        </>
-      )}
-    </button>
-  );
-}
 
 /**
  * One appointment in the DAY grid, positioned and sized by its real duration, painted
@@ -3021,6 +2070,7 @@ function ApptCard({
   conflict,
   selected,
   flash,
+  dim = false,
   colorBy = "service",
   previewProps,
   onOpen,
@@ -3038,6 +2088,8 @@ function ApptCard({
   selected: boolean;
   /** Just "located" from the detail panel — a brief ring so the eye finds it. */
   flash: boolean;
+  /** Filtered out by state or search: still drawn (the time is taken), faded. */
+  dim?: boolean;
   colorBy?: "service" | "status";
   /** Hover / focus preview handlers + the data-appt-id the locate action looks for. */
   previewProps: Record<string, unknown>;
@@ -3045,60 +2097,53 @@ function ApptCard({
 }) {
   const cancelled = appt.status === "cancelled";
   const review = conflict || appt.review.length > 0;
-  /**
-   * The card's height IS its duration (never padded to fit text — that would lie about
-   * when the professional is free), so the CONTENT adapts, essential first:
-   *   tiny  (< 30px)  one line: client · state glyph
-   *   short (< 66px)  client, then service
-   *   tall            + the time range
-   * The state is ALWAYS an icon + words (the icon carries an accessible name), in both
-   * colour modes; the hover preview and the detail carry everything else.
-   */
-  const tier = height < 30 ? "tiny" : height < 66 ? "short" : "tall";
+  // The reference's card (apptItem): its height IS its duration, so the content adapts —
+  // under 56px one line (client + time), else client / service, and the time from 68px.
+  const h = height - 3;
+  const one = h < 53;
   const client = appt.contact_name ?? appt.guest_name ?? (appt.origin === "walk_in" ? "Atención sin cita" : "Sin contacto");
-  const stateWord = STATUS_LABEL[appt.status] ?? appt.status;
+  const stateWord = STATE_WORD[appt.status] ?? appt.status;
+  const range = `${fmtTime(appt.start_at, tz)}–${fmtTime(appt.service_end_at, tz)}`;
+  const n = lane?.laneCount ?? 1;
   return (
     <button
       type="button"
       onClick={onOpen}
       data-appt-card=""
       {...previewProps}
-      aria-label={`${fmtTime(appt.start_at, tz)} ${client} — ${appt.service_name} — ${stateWord}${review ? " — requiere revisión" : ""}${overlapping ? " — solapamiento" : ""}`}
-      className={`u-appt2 u-lift ${colorBy === "service" ? toneClass : ""} absolute flex flex-col items-stretch justify-start overflow-hidden px-2 text-left leading-tight focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-edge)] ${
-        tier === "tiny" ? "justify-center py-0" : "py-1.5"
-      } ${selected || flash ? "shadow-[0_0_0_2px_var(--foreground)]" : "hover:shadow-[var(--shadow-card)]"} ${flash ? "animate-pulse motion-reduce:animate-none" : ""}`}
+      aria-label={`${client}, ${fmtTime(appt.start_at, tz)} a ${fmtTime(appt.service_end_at, tz)}, ${appt.service_name}, ${stateWord}${review ? ", requiere revisión" : ""}${overlapping ? ", solapamiento" : ""}`}
+      className={`u-appt2 ${toneClass} absolute flex flex-col items-stretch gap-[3px] overflow-hidden text-left text-foreground transition-[opacity,background,box-shadow] duration-150 hover:bg-[var(--subtle)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-edge)] ${
+        one ? "justify-center pl-3 pr-2.5" : "justify-start py-2.5 pl-3 pr-2.5"
+      } ${selected || flash ? "shadow-[0_0_0_2px_var(--foreground)]" : ""} ${flash ? "animate-pulse motion-reduce:animate-none" : ""}`}
       data-status={appt.status}
       data-mode={colorBy}
       style={{
-        top,
-        height,
-        left: `calc(${((lane?.lane ?? 0) / (lane?.laneCount ?? 1)) * 100}% + 4px)`,
-        width: `calc(${100 / (lane?.laneCount ?? 1)}% - ${(lane?.laneCount ?? 1) > 1 ? 6 : 8}px)`,
+        top: top + 1.5,
+        height: h,
+        left: `calc(${((lane?.lane ?? 0) / n) * 100}% + 3px)`,
+        width: `calc(${100 / n}% - 6px)`,
+        opacity: dim ? 0.28 : 1,
       }}
     >
-      <span className="flex min-w-0 items-start gap-1.5">
-        <span className={`min-w-0 flex-1 truncate text-[12.5px] font-semibold ${cancelled ? "line-through decoration-1" : ""}`}>{client}</span>
+      <span className={`flex w-full min-w-0 items-baseline gap-2 font-medium ${one && h < 30 ? "text-[12.5px]" : "text-[14px]"}`}>
+        <span className={`min-w-0 flex-1 truncate ${cancelled ? "text-muted line-through" : ""}`}>{client}</span>
+        {one ? <span className="shrink-0 text-[12.5px] font-normal tabular-nums text-[var(--ag-ink2)]">{range}</span> : null}
         {review ? (
-          <span title="Requiere revisión" className="shrink-0 rounded-full bg-[var(--warn-soft)] px-1.5 text-[10px] font-semibold leading-4 text-[var(--warn)]">
+          <span title="Requiere revisión" className="shrink-0 self-center rounded-[6px] bg-[var(--warn-soft)] px-1.5 text-[11px] font-medium leading-[18px] text-[var(--warn)]">
             Revisar
           </span>
         ) : null}
-        <span title={stateWord} className={`u-st-ink-${appt.status} shrink-0`}>
-          <StatusGlyphInline status={appt.status} className="size-3.5" />
+        <span title={stateWord} className="shrink-0 text-[12px] font-normal text-[var(--ag-ink2)]">
+          <span aria-hidden>{STATE_GLYPH[appt.status] ?? ""}</span>
         </span>
       </span>
-      {tier !== "tiny" ? (
-        <span className="mt-0.5 flex min-w-0 items-center gap-1.5 text-[11.5px] text-muted">
-          {colorBy === "service" ? <span aria-hidden className={`${toneClass} u-appt2-dot size-1.5 shrink-0 rounded-full`} /> : null}
+      {!one ? (
+        <span className="flex min-w-0 items-center gap-1.5 text-[12.5px] text-[var(--ag-ink2)]">
+          <span aria-hidden className={`${toneClass} u-appt2-dot size-[6px] shrink-0`} />
           <span className="truncate">{appt.service_name}</span>
         </span>
       ) : null}
-      {tier === "tall" ? (
-        <span className="u-mono mt-0.5 truncate text-[11px] text-muted">
-          {fmtTime(appt.start_at, tz)}–{fmtTime(appt.service_end_at, tz)}
-          {cancelled ? " · cancelada" : ""}
-        </span>
-      ) : null}
+      {!one && h >= 68 ? <span className="truncate text-[12.5px] tabular-nums text-[var(--ag-ink2)]">{range}</span> : null}
     </button>
   );
 }
@@ -3157,9 +2202,11 @@ function AppointmentModal(props: {
   const bookingContact = props.modal.mode !== "reschedule" ? props.modal.contact ?? null : null;
   const [serviceId, setServiceId] = useState(props.modal.mode === "reschedule" ? props.modal.appt.service_id : "");
   // A staff login starts (and stays) on its own column; the server refuses any other.
-  const [staffId, setStaffId] = useState<string>(props.lockStaffId ?? "");
+  const presetStaff = props.modal.mode !== "reschedule" ? props.modal.staffId : undefined;
+  const presetStart = useRef(props.modal.mode !== "reschedule" ? props.modal.startAt ?? null : null);
+  const [staffId, setStaffId] = useState<string>(props.lockStaffId ?? presetStaff ?? "");
   const [step, setStep] = useState<1 | 2 | 3>(isReschedule ? 2 : 1);
-  const [selectedDate, setSelectedDate] = useState(props.date);
+  const [selectedDate, setSelectedDate] = useState(props.modal.mode !== "reschedule" && props.modal.startAt ? siteDayKey(props.modal.startAt, props.timezone) : props.date);
   const [calendarMonth, setCalendarMonth] = useState(props.date.slice(0, 7));
   const [slots, setSlots] = useState<Slot[]>([]);
   const [slotStart, setSlotStart] = useState<string>("");
@@ -3187,7 +2234,11 @@ function AppointmentModal(props: {
   const [contactSearched, setContactSearched] = useState(false);
   const [pickedContact, setPickedContact] = useState<ContactSearchHit | null>(null);
   /** Step 1's service-catalogue filters — client-side over the services already loaded. */
-  const [serviceQuery] = useState("");
+  const [serviceQuery, setServiceQuery] = useState("");
+  /** «Recientes» (reference E4): the client's latest contacts, asked once on open. */
+  const [recents, setRecents] = useState<ContactSearchHit[] | null>(null);
+  const deskPanel = useRef<SidePanelHandle | null>(null);
+  const rosterTint = (id: string) => agTintAt([...props.staff].sort((a, b) => a.name.localeCompare(b.name, "es")).findIndex((x) => x.id === id));
   const [serviceFamily, setServiceFamily] = useState<"all" | ApptCategory>("all");
   /** Step 2's professional picker is a popover, so the month keeps the full column. */
   const [pending, startTransition] = useTransition();
@@ -3307,6 +2358,10 @@ function AppointmentModal(props: {
       }
       const data = (await res.json()) as { slots: Slot[] };
       setSlots(data.slots);
+      // A click on the calendar grid preset this time: take it if it is still free.
+      const want = presetStart.current;
+      presetStart.current = null;
+      if (want && data.slots.some((sl) => sl.start_at === want && (!staffId || sl.available_staff_ids.includes(staffId)))) setSlotStart(want);
       // A completed search — now an empty result can say "nothing available" rather
       // than staying silent and looking broken.
       setSearched(true);
@@ -3553,7 +2608,19 @@ function AppointmentModal(props: {
 
   const phoneHasChoices = Boolean(customer.label || serviceId || slotStart) && !isReschedule;
   // A link elsewhere in the app (the sidebar stays usable beside the panel) asks first.
-  const leaveNav = useNavigationGuard({ dirty: phoneHasChoices, onAsk: () => setPhoneSheet("discard") });
+  // Phone only: from md up the SidePanel guards its own links / X / Escape (one dialog).
+  const leaveNav = useNavigationGuard({ dirty: phoneHasChoices && isPhone, onAsk: () => setPhoneSheet("discard") });
+  const wantRecents = !isPhone && !bookingContact && !isReschedule;
+  useEffect(() => {
+    if (!wantRecents) return;
+    let alive = true;
+    recentSchedulingContactsAction(props.clientId)
+      .then((r) => alive && setRecents(r.ok ? r.hits : []))
+      .catch(() => alive && setRecents([]));
+    return () => {
+      alive = false;
+    };
+  }, [wantRecents, props.clientId]);
   useEffect(() => {
     backGuard.current.onBack = () => {
       // An open sheet (month, new contact, or the discard question itself — where Back
@@ -3646,6 +2713,344 @@ function AppointmentModal(props: {
           : "Sin citas próximas";
     const newPhoneDigits = phone.replace(/\D/g, "").length;
     const newContactValid = name.trim().length > 0 && (phone.trim() === "" || newPhoneDigits >= 7);
+
+    if (!isPhone) {
+      // ── DESKTOP (reference E4): the same three steps inside the agenda's side panel —
+      // never the phone screen framed. Steps 2 and 3 keep V2's content, in this panel's
+      // language. Same state, same actions, same guard.
+      const stepsRow = (
+        <ol aria-label="Pasos" className="flex flex-wrap items-center gap-2 text-[13px]">
+          {(["Cliente y servicio", "Profesional y hora", "Confirmar"] as const).map((label, i) => {
+            const n = (i + 1) as 1 | 2 | 3;
+            const on = n === step;
+            return (
+              <li key={label} className="flex items-center gap-2" aria-current={on ? "step" : undefined}>
+                {i > 0 ? <span aria-hidden className="text-muted">—</span> : null}
+                <span className={`inline-flex size-[20px] items-center justify-center rounded-full text-[11.5px] tabular-nums ${on ? "bg-[var(--ink)] font-medium text-[var(--ink-fg)]" : n < step ? "bg-[var(--chip)] text-foreground" : "text-muted"}`}>
+                  {n < step ? "✓" : n}
+                </span>
+                <span className={on ? "text-foreground" : "text-[var(--ag-ink2)]"}>{label}</span>
+              </li>
+            );
+          })}
+        </ol>
+      );
+      const SEARCH = "flex h-[38px] items-center gap-2 rounded-[10px] bg-[var(--chip)] px-3 text-muted";
+      const SMALL = "u-focus inline-flex h-[32px] items-center gap-1.5 whitespace-nowrap rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] px-3 text-[13px] text-foreground hover:bg-[var(--subtle)]";
+      const personRow = (hit: ContactSearchHit, onPick: () => void, sub?: string) => (
+        <button key={hit.id} type="button" onClick={onPick} className="u-focus flex min-h-[64px] w-full items-center gap-3 rounded-[12px] px-2.5 py-2 text-left hover:bg-[var(--subtle)]">
+          <span aria-hidden className="inline-flex size-[36px] shrink-0 items-center justify-center rounded-full bg-[var(--chip)] text-[12px] font-medium text-[var(--ag-ink2)]">{initialsOf(hit.name)}</span>
+          <span className="flex min-w-0 flex-1 flex-col">
+            <span className="truncate text-[14px] text-foreground">{hit.name ?? "Contacto sin nombre"}</span>
+            {hit.phone ? <span className="truncate text-[12.5px] tabular-nums text-muted">{hit.phone}</span> : null}
+            {hit.email ? <span className="truncate text-[12.5px] text-muted">{hit.email}</span> : null}
+            {!hit.phone && !hit.email && hit.identity ? <span className="truncate text-[12.5px] text-muted">{hit.identity}</span> : null}
+            {sub ? <span className="truncate text-[12.5px] text-muted">{sub}</span> : null}
+          </span>
+        </button>
+      );
+      const visibleServices = filteredServices.filter((sv) => !serviceQuery.trim() || sv.name.toLocaleLowerCase("es").includes(serviceQuery.trim().toLocaleLowerCase("es")));
+      const footer = (
+        <div className="flex items-center gap-2">
+          <div aria-live="polite" className="flex min-w-0 flex-1 flex-col">
+            <span className="text-[12.5px] text-muted">Paso {step} de 3</span>
+            <span className="truncate text-[14px] font-medium text-foreground">{step === 1 && !step1Ready && !customer.label && !serviceId ? "Aún no has elegido nada" : summary}</span>
+          </div>
+          {step > 1 && !(isReschedule && step === 2) ? (
+            <Button onClick={goBack}>Volver</Button>
+          ) : (
+            <Button onClick={() => deskPanel.current?.requestClose()}>Cancelar</Button>
+          )}
+          {step === 3 ? (
+            <Button variant="primary" disabled={!slotStart} loading={pending} loadingLabel={isReschedule ? "Guardando…" : "Creando…"} onClick={submit}>
+              {isReschedule ? "Confirmar cambio" : "Crear cita"}
+            </Button>
+          ) : (
+            <Button variant="primary" disabled={(step === 1 && !step1Ready) || (step === 2 && !slotStart)} onClick={advance}>
+              Continuar
+            </Button>
+          )}
+        </div>
+      );
+      return (
+        <SidePanel
+          name="booking"
+          title={isReschedule ? "Reprogramar cita" : "Nueva cita"}
+          subtitle={`${selectedSite?.name ?? ""} · ${shortDateLabel}`}
+          headerRule={false}
+          headerBelow={stepsRow}
+          dirty={hasChoices}
+          onClose={props.onClose}
+          handleRef={deskPanel}
+          footer={footer}
+        >
+          {props.error ? (
+            <p role="alert" className="mb-3 rounded-[10px] bg-[var(--ag-danger-soft)] px-3 py-2.5 text-[13px] text-[var(--ag-danger-ink)]">
+              {props.error}
+            </p>
+          ) : null}
+          {step === 1 ? (
+            <>
+              <PanelSection title="Cliente" id="nv-client" size="lg">
+                {customer.label ? (
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-3 rounded-[12px] px-3 py-2.5 shadow-[inset_0_0_0_1.5px_var(--foreground)]">
+                      <span aria-hidden className="inline-flex size-[36px] shrink-0 items-center justify-center rounded-full bg-[var(--chip)] text-[12px] font-medium text-[var(--ag-ink2)]">{initialsOf(customer.label)}</span>
+                      <span className="flex min-w-0 flex-1 flex-col">
+                        <span className="truncate text-[14px] font-medium">{customer.label}</span>
+                        <span className="truncate text-[12.5px] tabular-nums text-muted">
+                          {customer.identity ?? (customerMode === "new" && !pickedContact ? "Contacto nuevo · se crea al confirmar la cita" : "")}
+                        </span>
+                      </span>
+                      {!bookingContact ? (
+                        <button
+                          type="button"
+                          className={SMALL}
+                          onClick={() => {
+                            setPickedContact(null);
+                            setCustomerMode("search");
+                            setName("");
+                            setPhone("");
+                            setEmail("");
+                          }}
+                        >
+                          Cambiar
+                        </button>
+                      ) : null}
+                    </div>
+                    {pickedContact?.nextAppointmentAt ? (
+                      <p role="status" className="flex gap-2 rounded-[10px] bg-[var(--warn-soft)] px-3 py-2.5 text-[13px] leading-[1.45] text-[var(--warn)]">
+                        <span aria-hidden>!</span>Ya tiene cita el {contactDateLabel(pickedContact.nextAppointmentAt, true)}. Revisa que no sea un duplicado.
+                      </p>
+                    ) : null}
+                  </div>
+                ) : customerMode === "new" ? (
+                  <div className="flex flex-col gap-2.5">
+                    <label className="flex flex-col gap-1.5">
+                      <span className="text-[13px] font-medium">Nombre</span>
+                      <input className={INPUT} value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" maxLength={120} />
+                    </label>
+                    <div className="grid grid-cols-2 gap-2.5">
+                      <label className="flex min-w-0 flex-col gap-1.5">
+                        <span className="text-[13px] font-medium">Teléfono</span>
+                        <input className={INPUT} type="tel" inputMode="tel" placeholder="+57 300 000 0000" value={phone} onChange={(e) => setPhone(e.target.value)} autoComplete="off" />
+                      </label>
+                      <label className="flex min-w-0 flex-col gap-1.5">
+                        <span className="text-[13px] font-medium">Correo</span>
+                        <input className={INPUT} type="email" inputMode="email" placeholder="nombre@correo.com" value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="off" />
+                      </label>
+                    </div>
+                    <p className="text-[12.5px] text-muted">Para guardar el contacto basta un teléfono o un correo; con solo el nombre queda en esta cita, sin contacto.</p>
+                    <button type="button" className="u-focus self-start text-[13px] text-[var(--ag-ink2)] underline underline-offset-2" onClick={() => setCustomerMode("search")}>
+                      Buscar un contacto existente
+                    </button>
+                  </div>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    <label className={SEARCH}>
+                      <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="7" cy="7" r="4.6" /><path d="M10.4 10.4L14 14" /></svg>
+                      <input type="search" aria-label="Buscar cliente" placeholder="Nombre o teléfono" value={contactQuery} onChange={(e) => setContactQuery(e.target.value)} className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted" />
+                    </label>
+                    {contactQuery.trim().length < 2 ? (
+                      <>
+                        {recents && recents.length > 0 ? <span className="pt-1 text-[12.5px] text-muted">Recientes</span> : null}
+                        {recents === null ? <div aria-busy="true" aria-label="Cargando recientes" className="h-[64px] rounded-[12px] bg-[var(--chip)]" /> : null}
+                        <div className="flex flex-col">{(recents ?? []).map((h) => personRow(h, () => setPickedContact(h)))}</div>
+                      </>
+                    ) : (
+                      <div className="flex flex-col">
+                        <span className="text-[12.5px] text-muted">{resultsLabel}</span>
+                        {contactHits.map((h) => personRow(h, () => { setPickedContact(h); setContactQuery(""); }, hitHint(h)))}
+                        {contactSearched && contactHits.length === 0 ? <p className="px-2.5 py-2 text-[13px] text-muted">Sin resultados para «{contactQuery.trim()}».</p> : null}
+                      </div>
+                    )}
+                    <div className="flex flex-wrap items-center gap-x-4 gap-y-1 px-1 pt-1 text-[13px]">
+                      <button
+                        type="button"
+                        className="u-focus text-[var(--ag-ink2)] underline underline-offset-2"
+                        onClick={() => {
+                          if (/^[+\d\s()-]{7,}$/.test(contactQuery.trim())) setPhone(contactQuery.trim());
+                          else if (contactQuery.trim()) setName(contactQuery.trim());
+                          setCustomerMode("new");
+                        }}
+                      >
+                        {contactQuery.trim().length >= 2 ? `Nuevo cliente «${contactQuery.trim()}»` : "Nuevo cliente"}
+                      </button>
+                      {props.onWalkIn ? (
+                        <button type="button" className="u-focus text-[var(--ag-ink2)] underline underline-offset-2" onClick={props.onWalkIn}>
+                          ¿Llegó sin cita? Registrar ahora
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                )}
+                {contactMatches.length > 0 ? (
+                  <div role="alert" className="flex flex-col gap-2 rounded-[10px] bg-[var(--warn-soft)] px-3 py-2.5 text-[13px] text-[var(--warn)]">
+                    <span>Ya existe un contacto con ese teléfono o correo. Vincúlalo en lugar de crear otro.</span>
+                    {contactMatches.map((m) => (
+                      <button
+                        key={m.contactId}
+                        type="button"
+                        className={`${SMALL} self-start`}
+                        onClick={() => {
+                          setPickedContact({ id: m.contactId, name: m.name, identity: m.matchedValue, phone: null, email: null, isCustomer: false, appointmentCount: 0, lastVisitAt: null, nextAppointmentAt: null });
+                          setCustomerMode("search");
+                          setContactMatches([]);
+                          props.onError(null);
+                        }}
+                      >
+                        Vincular a {m.name ?? m.matchedValue}
+                      </button>
+                    ))}
+                  </div>
+                ) : null}
+              </PanelSection>
+              <PanelSection title="Servicio" id="nv-service" size="lg">
+                <label className={SEARCH}>
+                  <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="7" cy="7" r="4.6" /><path d="M10.4 10.4L14 14" /></svg>
+                  <input type="search" aria-label="Buscar servicio" placeholder="Buscar servicio" value={serviceQuery} onChange={(e) => setServiceQuery(e.target.value)} className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted" />
+                </label>
+                <div role="radiogroup" aria-labelledby="nv-service" className="grid grid-cols-2 gap-2">
+                  {visibleServices.map((service) => {
+                    const sel = service.id === serviceId;
+                    const family = serviceCategory(service.name, service.category);
+                    return (
+                      <button
+                        key={service.id}
+                        type="button"
+                        role="radio"
+                        aria-checked={sel}
+                        onClick={() => {
+                          setServiceId(service.id);
+                          resetSlots();
+                        }}
+                        className={`u-focus flex min-h-[56px] items-start gap-2.5 rounded-[10px] px-3 py-2.5 text-left transition-shadow ${sel ? "shadow-[inset_0_0_0_1.5px_var(--foreground)]" : "shadow-[inset_0_0_0_1px_var(--line-strong)] hover:bg-[var(--subtle)]"}`}
+                      >
+                        <span aria-hidden className={`u-appt-service ${apptCategoryClass(family)} mt-[6px] size-2 shrink-0 rounded-full bg-[var(--appt-rule)]`} />
+                        <span className="min-w-0">
+                          <span className="block truncate text-[14px]">{service.name}</span>
+                          <span className="block text-[12.5px] tabular-nums text-muted">
+                            {service.duration_min} min{priceLabelCOP(service.price) ? ` · ${priceLabelCOP(service.price)}` : ""}
+                          </span>
+                        </span>
+                      </button>
+                    );
+                  })}
+                  {visibleServices.length === 0 ? <p className="col-span-2 text-[13px] text-muted">Ningún servicio coincide con «{serviceQuery.trim()}».</p> : null}
+                </div>
+              </PanelSection>
+            </>
+          ) : null}
+          {step === 2 ? (
+            <>
+              <PanelSection title="Profesional" id="nv-staff">
+                <div role="radiogroup" aria-labelledby="nv-staff" className="flex flex-wrap gap-1.5">
+                  {[...(props.lockStaffId ? [] : [{ id: "", name: "Cualquiera" }]), ...staffChoices].map((st) => {
+                    const sel = staffId === st.id;
+                    return (
+                      <button
+                        key={st.id || "any"}
+                        type="button"
+                        role="radio"
+                        aria-checked={sel}
+                        onClick={() => changeStaff(st.id)}
+                        className={`u-focus inline-flex h-[36px] items-center gap-2 rounded-full pl-1.5 pr-3.5 text-[13.5px] ${sel ? "font-medium shadow-[inset_0_0_0_1.5px_var(--foreground)]" : "shadow-[inset_0_0_0_1px_var(--line-strong)] hover:bg-[var(--subtle)]"}`}
+                      >
+                        {st.id ? <AgAvatar name={st.name} id={st.id} size={24} tint={rosterTint(st.id)} /> : <span aria-hidden className="inline-flex size-[24px] items-center justify-center rounded-full bg-[var(--chip)] text-[11px]">∗</span>}
+                        {st.id ? st.name.split(" ")[0] : "Cualquiera"}
+                      </button>
+                    );
+                  })}
+                </div>
+              </PanelSection>
+              <PanelSection
+                title="Día"
+                id="nv-day"
+                action={
+                  <span className="flex items-center gap-1">
+                    <span className="mr-1 text-[12.5px] capitalize text-muted">{monthTitle(calendarMonth)}</span>
+                    <button type="button" aria-label="Semana anterior" onClick={() => changeDate(addDays(selectedDate, -7) < todayKey ? todayKey : addDays(selectedDate, -7))} className="u-focus inline-flex size-[32px] items-center justify-center rounded-[9px] text-[var(--ag-ink2)] hover:bg-[var(--subtle)]">‹</button>
+                    <button type="button" aria-label="Semana siguiente" onClick={() => changeDate(addDays(selectedDate, 7))} className="u-focus inline-flex size-[32px] items-center justify-center rounded-[9px] text-[var(--ag-ink2)] hover:bg-[var(--subtle)]">›</button>
+                  </span>
+                }
+              >
+                <div role="group" aria-labelledby="nv-day" className="grid grid-cols-7 gap-1">
+                  {strip.map((d) => {
+                    const sel = d === selectedDate;
+                    const av = dayState(d);
+                    return (
+                      <button
+                        key={d}
+                        type="button"
+                        aria-pressed={sel}
+                        aria-label={`${wdShort(d)} ${Number(d.slice(8))} · ${({ ok: "con horas libres", full: "sin horas libres", closed: "cerrado", past: "pasado", unknown: "sin datos" } as const)[av]}`}
+                        disabled={av === "past"}
+                        onClick={() => changeDate(d)}
+                        className={`u-focus flex h-[52px] flex-col items-center justify-center gap-0.5 rounded-[10px] ${sel ? "bg-[var(--ink)] text-[var(--ink-fg)]" : av === "ok" || av === "unknown" ? "bg-[var(--chip)] text-foreground hover:bg-[var(--subtle)]" : "text-muted"} disabled:opacity-50`}
+                      >
+                        <span className="text-[11.5px] opacity-80">{wdShort(d)}</span>
+                        <span className={`text-[15px] font-medium ${av === "closed" ? "line-through" : ""}`}>{Number(d.slice(8))}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </PanelSection>
+              <PanelSection title={<>Hora libre <span className="font-normal text-muted">· {selectedService ? `${selectedService.duration_min} min` : ""}</span></>} id="nv-time">
+                {loadingSlots ? (
+                  <div role="status" aria-label="Cargando disponibilidad" className="grid grid-cols-6 gap-1.5">
+                    {Array.from({ length: 12 }, (_, i) => <span key={i} className="h-[36px] animate-pulse rounded-[10px] bg-[var(--chip)]" />)}
+                  </div>
+                ) : visibleSlots.length === 0 ? (
+                  <div className="flex flex-col gap-2 rounded-[10px] bg-[var(--chip)] px-3 py-2.5 text-[13px] text-[var(--ag-ink2)]">
+                    <span>
+                      {selState === "closed" ? `${selectedSite?.name ?? "La sede"} no abre este día.` : selState === "past" ? "Esa fecha ya pasó." : staffId && selectedStaff ? `No quedan horas libres con ${selectedStaff.name.split(" ")[0]} este día.` : "No quedan horas libres este día."}
+                    </span>
+                    {nextOk ? (
+                      <button type="button" className={`${SMALL} self-start`} onClick={() => changeDate(nextOk)}>
+                        Próximo con horas libres: {wdShort(nextOk).toLowerCase()} {Number(nextOk.slice(8))}
+                      </button>
+                    ) : null}
+                  </div>
+                ) : (
+                  <div role="radiogroup" aria-labelledby="nv-time" className="grid grid-cols-[repeat(auto-fill,minmax(72px,1fr))] gap-1.5">
+                    {visibleSlots.map((slot) => {
+                      const sel = slot.start_at === slotStart;
+                      return (
+                        <button
+                          key={slot.start_at}
+                          type="button"
+                          role="radio"
+                          aria-checked={sel}
+                          onClick={() => {
+                            setSlotStart(slot.start_at);
+                            if (!staffId) setStaffId(slot.staff_id);
+                          }}
+                          className={`u-focus h-[36px] rounded-[10px] text-[14px] tabular-nums ${sel ? "bg-[var(--ink)] font-medium text-[var(--ink-fg)]" : "shadow-[inset_0_0_0_1px_var(--line-strong)] hover:bg-[var(--subtle)]"}`}
+                        >
+                          {fmtTime(slot.start_at, props.timezone)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <p className="text-[12.5px] text-muted">{tzLabel}</p>
+              </PanelSection>
+            </>
+          ) : null}
+          {step === 3 ? (
+            <div className="flex flex-col">
+              {[...confirmRows.slice(0, 3), ["Fecha", dayHeadline(selectedDate)] as [string, string], ["Hora", timeRangeLabel ?? "—"] as [string, string], ...confirmRows.slice(3)].map(([k, v], i, all) => (
+                <div key={k} className={`grid grid-cols-[170px_minmax(0,1fr)] gap-3 py-[11px] text-[13.5px] ${i < all.length - 1 ? "shadow-[inset_0_-1px_0_var(--line-soft)]" : ""}`}>
+                  <span className="text-muted">{k}</span>
+                  <span className="min-w-0 tabular-nums [overflow-wrap:anywhere]">{v}</span>
+                </div>
+              ))}
+              <p className="mt-3 rounded-[10px] bg-[var(--chip)] px-3 py-2.5 text-[13px] text-[var(--ag-ink2)]">Nada se guarda hasta que confirmes. No se avisa al cliente automáticamente.</p>
+            </div>
+          ) : null}
+        </SidePanel>
+      );
+    }
 
     return (
       <MScreen
@@ -4012,7 +3417,7 @@ function AppointmentModal(props: {
                       </span>
                       <MButton
                         onClick={() => {
-                          setPickedContact({ id: m.contactId, name: m.name, identity: m.matchedValue, isCustomer: false, appointmentCount: 0, lastVisitAt: null, nextAppointmentAt: null });
+                          setPickedContact({ id: m.contactId, name: m.name, identity: m.matchedValue, phone: null, email: null, isCustomer: false, appointmentCount: 0, lastVisitAt: null, nextAppointmentAt: null });
                           setCustomerMode("search");
                           setContactMatches([]);
                           props.onError(null);

@@ -38,7 +38,7 @@ export function TeamMobile({ clientId, staff, extras }: { clientId: string; staf
   const [toast, setToast] = useState<string | null>(null);
   const toastTimer = useRef<number | undefined>(undefined);
   // "Now" is the server's instant on first paint (so SSR and hydration agree), then a
-  // one-minute tick keeps "En turno / Con cliente" honest while the screen stays open.
+  // one-minute tick keeps "En turno / Ocupado según agenda" honest while the screen stays open.
   const [tick, setTick] = useState<number | null>(null);
   useEffect(() => {
     const t = window.setInterval(() => setTick(Date.now()), 60_000);

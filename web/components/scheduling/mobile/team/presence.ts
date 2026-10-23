@@ -10,7 +10,9 @@
  *                     map means "inherit the site's opening hours" — the same rule the
  *                     availability engine applies (src/scheduling/availability.ts), which
  *                     also intersects with the site's opening hours, so this does too.
- *   - "Con cliente"   an appointment of theirs (scheduled/confirmed) is in progress now.
+ *   - "Ocupado según agenda"  an appointment of theirs (scheduled/confirmed) spans now. It
+ *                     says what the AGENDA holds, not that the client arrived or the
+ *                     service began — no event records that (finding F).
  *   - "Fuera de turno" anything else: outside hours, a staff time-off exception, or a
  *                     site-wide closure covering now.
  *   - "Inactivo"      `active = false` — they no longer take new bookings.
@@ -51,7 +53,7 @@ export interface Presence {
   chip: string;
   /** The state palette class the chip wears (see `.u-m-st-*` in globals.css). */
   chipClass: string;
-  /** The line beside the chip: "Siguiente a las 10:30", "Con cliente hasta 10:30"… */
+  /** The line beside the chip: "Siguiente a las 10:30", "Cita hasta las 10:30"… */
   sub: string;
   /** Counted under "En turno" (on shift or with a client). */
   onShift: boolean;
@@ -180,9 +182,9 @@ export function presenceFor(input: PresenceInput): Presence {
   if (inChair) {
     return {
       kind: "busy",
-      chip: "◐ Con cliente",
+      chip: "◐ Ocupado según agenda",
       chipClass: "u-m-st-scheduled",
-      sub: `Con cliente hasta ${fmtHM(inChair.endAt, tz)}`,
+      sub: `Cita hasta las ${fmtHM(inChair.endAt, tz)}`,
       onShift: true,
     };
   }

@@ -54,6 +54,14 @@ export function SidePanel(props: {
   backLabel?: string;
   /** data-attribute hook for tests/QA. */
   name?: string;
+  /** "lg" = the appointment detail's 20px name (reference); default 17px. */
+  titleSize?: "md" | "lg";
+  /** A hairline under the header (forms with a steps row); the detail has none. */
+  headerRule?: boolean;
+  /** Body padding override (the detail starts 4px under its header). */
+  bodyClassName?: string;
+  /** A row under the title inside the header (Nueva cita's steps). */
+  headerBelow?: ReactNode;
 }) {
   const autoId = useId();
   const titleId = props.labelledById ?? `${autoId}-title`;
@@ -130,31 +138,34 @@ export function SidePanel(props: {
         data-side-panel={props.name ?? ""}
         className={
           phone
-            ? "u-side-panel-in fixed inset-0 z-50 flex flex-col bg-background text-foreground outline-none"
-            : "u-side-panel-in fixed bottom-3 right-3 top-3 z-50 flex w-[min(520px,calc(100vw-24px))] flex-col overflow-hidden rounded-[16px] border border-line bg-popover text-popover-foreground shadow-[var(--shadow-float)] outline-none"
+            ? "u-side-panel-in fixed inset-0 z-50 flex flex-col bg-[var(--surface)] text-foreground outline-none"
+            : "u-side-panel-in fixed bottom-3 right-3 top-3 z-50 flex w-[min(520px,calc(100vw-24px))] flex-col overflow-hidden rounded-[18px] bg-[var(--surface)] text-foreground shadow-[inset_0_0_0_1px_var(--ag-panel-line,var(--line)),var(--ag-panel-shadow,var(--shadow-float))] outline-none"
         }
       >
-        <header className={`flex shrink-0 items-start gap-3 border-b border-line px-5 pb-3.5 ${phone ? "pt-[max(0.875rem,env(safe-area-inset-top))]" : "pt-4"}`}>
+        <header
+          className={`flex shrink-0 items-start gap-3 pb-4 pl-5 pr-4 ${props.headerRule === false ? "" : "border-b border-[var(--line)]"} ${phone ? "pt-[max(0.875rem,env(safe-area-inset-top))]" : "pt-5"}`}
+        >
           {phone && props.onBack ? (
             <PanelIconButton label={props.backLabel ?? "Volver"} onClick={props.onBack}>
               <path d="M10 3.5L5.5 8l4.5 4.5" />
             </PanelIconButton>
           ) : null}
           {props.leading}
-          <div className="min-w-0 flex-1">
-            <h2 id={titleId} className="truncate text-[17px] font-semibold leading-6 tracking-tight">
+          <div className="flex min-w-0 flex-1 flex-col gap-1">
+            <h2 id={titleId} className={`truncate font-semibold ${props.titleSize === "lg" ? "text-[20px] leading-[26px] tracking-[-0.01em]" : "text-[17px] leading-6 tracking-[-0.01em]"}`}>
               {props.title}
             </h2>
-            {props.subtitle ? <div className="mt-0.5 text-[13px] leading-5 text-muted">{props.subtitle}</div> : null}
+            {props.subtitle ? <div className={`tabular-nums text-[var(--ag-ink2,var(--muted))] ${props.titleSize === "lg" ? "text-[14px]" : "text-[13px] leading-5"}`}>{props.subtitle}</div> : null}
           </div>
           {props.aside}
           <PanelIconButton label="Cerrar" onClick={requestClose}>
             <path d="M4 4l8 8M12 4l-8 8" />
           </PanelIconButton>
         </header>
-        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">{props.children}</div>
+        {props.headerBelow ? <div className="shrink-0 border-b border-[var(--line)] px-5 pb-3.5">{props.headerBelow}</div> : null}
+        <div className={`min-h-0 flex-1 overflow-y-auto overscroll-contain ${props.bodyClassName ?? "px-5 py-4"}`}>{props.children}</div>
         {props.footer ? (
-          <footer className={`shrink-0 border-t border-line bg-inherit px-5 pt-3 ${phone ? "pb-[max(0.75rem,env(safe-area-inset-bottom))]" : "pb-3"}`}>
+          <footer className={`shrink-0 border-t border-[var(--line)] bg-inherit px-5 pt-3 ${phone ? "pb-[max(0.75rem,env(safe-area-inset-bottom))]" : "pb-3"}`}>
             {props.footer}
           </footer>
         ) : null}
@@ -192,9 +203,9 @@ export function PanelIconButton({ label, onClick, children }: { label: string; o
       aria-label={label}
       title={label}
       onClick={onClick}
-      className="u-focus -mr-1 grid size-[44px] shrink-0 place-items-center rounded-full text-muted transition-colors hover:bg-chip hover:text-foreground md:size-[36px]"
+      className="u-focus grid size-[44px] shrink-0 place-items-center rounded-[9px] text-[var(--ag-ink2,var(--muted))] transition-colors hover:bg-[var(--subtle)] hover:text-foreground md:size-[32px]"
     >
-      <svg aria-hidden viewBox="0 0 16 16" className="size-4" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
         {children}
       </svg>
     </button>
@@ -202,16 +213,32 @@ export function PanelIconButton({ label, onClick, children }: { label: string; o
 }
 
 /** A section inside a panel: a small heading and its content, no card. */
-export function PanelSection({ title, hint, children, id, action }: { title: ReactNode; hint?: ReactNode; children: ReactNode; id?: string; action?: ReactNode }) {
+export function PanelSection({
+  title,
+  hint,
+  children,
+  id,
+  action,
+  size = "md",
+}: {
+  title: ReactNode;
+  hint?: ReactNode;
+  children: ReactNode;
+  id?: string;
+  action?: ReactNode;
+  /** "lg" = the reference's section title (secT, 15/500: Nueva cita, Atención sin cita);
+   *  "md" = its field label (13/500: blocks, breaks, absences). */
+  size?: "md" | "lg";
+}) {
   return (
-    <section aria-labelledby={id} className="flex flex-col gap-2.5 border-b border-line-soft py-4 first:pt-0 last:border-b-0 last:pb-0">
+    <section aria-labelledby={id} className={`flex flex-col ${size === "lg" ? "gap-3 py-[18px]" : "gap-2 py-[11px]"} first:pt-0 last:pb-0`}>
       <div className="flex items-baseline gap-2">
-        <h3 id={id} className="min-w-0 flex-1 text-[13px] font-semibold text-foreground">
+        <h3 id={id} className={`min-w-0 flex-1 font-medium text-foreground ${size === "lg" ? "text-[15px]" : "text-[13px]"}`}>
           {title}
         </h3>
         {action}
       </div>
-      {hint ? <p className="-mt-1.5 text-[12.5px] leading-5 text-muted">{hint}</p> : null}
+      {hint ? <p className="-mt-1.5 text-[12.5px] leading-[1.45] text-muted">{hint}</p> : null}
       {children}
     </section>
   );

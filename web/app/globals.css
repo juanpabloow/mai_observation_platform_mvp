@@ -2100,3 +2100,194 @@ body {
 .u-st-edge-completed { border-color: var(--status-completed-fg); }
 .u-st-edge-no_show { border-color: var(--status-no_show-fg); }
 .u-st-edge-cancelled { border-color: var(--status-cancelled-fg); }
+
+/*
+ * ── AGENDA · the approved «M_AI Agenda» reference, scoped ───────────────────────────
+ * Calendario, Equipo and Horarios y ausencias (and every panel they open — SidePanel
+ * renders inline, inside this scope) wear the reference's OWN tokens: its type face, its
+ * neutrals, its four service families and its state chips, in Claro and Grafito. Scoped
+ * to `.u-ag` on purpose: the rest of the platform keeps its tokens untouched, so this is
+ * not a global redesign. Values are the reference's (TH.claro / TH.grafito, PALS.contorno).
+ */
+.u-ag {
+  --background: #ffffff;
+  --surface: #ffffff;
+  --popover: #ffffff;
+  --chip: #f1f2f5;          /* soft */
+  --foreground: #111316;    /* ink */
+  --ag-ink2: #3a3d42;
+  --muted: #5e636b;
+  --faint: #5e636b;
+  --faintest: #80858d;
+  --line: #e4e6ea;
+  --line-strong: #d3d6dc;   /* fieldLine */
+  --line-soft: rgba(17, 19, 22, 0.06); /* line2 */
+  --line-row: rgba(17, 19, 22, 0.06);
+  --subtle: #f6f7f9;        /* hover */
+  --card: #f6f7f9;
+  --ink: #111316;
+  --ink-hover: #2a2d32;
+  --ink-fg: #ffffff;
+  --ag-seg: #ebedf0;
+  --ag-seg-on: #ffffff;
+  --ag-off: #f4f5f7;        /* offBg: blocks, "No trabaja", closed days */
+  --ag-break: rgba(17, 19, 22, 0.025);
+  --ag-prim-dis: #e6e8eb;
+  --ag-prim-dis-ink: #80858d;
+  --ag-pend-bg: #f4f1fb;
+  --ag-pend-ink: #4a3b78;
+  --danger: #c0262d;
+  --ag-danger-ink: #8e1b21;
+  --ag-danger-soft: #fcebeb;
+  --warn: #7a4a00;
+  --warn-soft: #fff4e0;
+  --success: #22573a;
+  --success-soft: #e5f1e9;
+  --closed-bg: #f4f5f7;
+  --closed-fg: #5e636b;
+  --shadow-card: none;
+  /* Service families (PALS.contorno): the 1.5px card edge and the 6px swatch. */
+  --appt-cut-rule: #2f5fd0;
+  --appt-grooming-rule: #b4561f;
+  --appt-color-rule: #8a3db0;
+  --appt-feature-rule: #18785d;
+  --appt-cut-edge: #2f5fd0;
+  --appt-grooming-edge: #b4561f;
+  --appt-color-edge: #8a3db0;
+  --appt-feature-edge: #18785d;
+  /* State chips (stChip): Sin confirmar amber · Confirmada grey · Completada green ·
+     Inasistencia red · Cancelada outlined. */
+  --status-scheduled-bg: #fff4e0;
+  --status-scheduled-fg: #7a4a00;
+  --status-confirmed-bg: #f1f2f5;
+  --status-confirmed-fg: #3a3d42;
+  --status-completed-bg: #e5f1e9;
+  --status-completed-fg: #22573a;
+  --status-no_show-bg: #fcebeb;
+  --status-no_show-fg: #8e1b21;
+  --status-cancelled-bg: transparent;
+  --status-cancelled-fg: #5e636b;
+  /* Avatars: the reference's four pastels, dark initials. */
+  --ag-av-1: #c9d3ee;
+  --ag-av-2: #e6d9c3;
+  --ag-av-3: #e3d6f0;
+  --ag-av-4: #d5e6da;
+  --ag-av-ink: #2b2d31;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  color: var(--foreground);
+}
+.dark .u-ag {
+  --background: #1c1c1e;
+  --surface: #1c1c1e;
+  --popover: #1c1c1e;
+  --chip: #2a2a2c;
+  --foreground: #f5f5f7;
+  --ag-ink2: #d1d1d6;
+  --muted: #a1a1a6;
+  --faint: #a1a1a6;
+  --faintest: #86868b;
+  --line: #2c2c2e;
+  --line-strong: #3a3a3c;
+  --line-soft: rgba(255, 255, 255, 0.06);
+  --line-row: rgba(255, 255, 255, 0.06);
+  --subtle: #242426;
+  --card: #242426;
+  --ink: #f5f5f7;
+  --ink-hover: #ffffff;
+  --ink-fg: #111113;
+  --ag-seg: #141416;
+  --ag-seg-on: #3a3a3c;
+  --ag-off: #202022;
+  --ag-break: rgba(255, 255, 255, 0.03);
+  --ag-prim-dis: #2c2c2e;
+  --ag-prim-dis-ink: #86868b;
+  --ag-pend-bg: rgba(155, 135, 201, 0.16);
+  --ag-pend-ink: #cdbef0;
+  --danger: #ff8a8a;
+  --ag-danger-ink: #ffb3b3;
+  --ag-danger-soft: rgba(229, 72, 77, 0.15);
+  --warn: #f2c46e;
+  --warn-soft: rgba(245, 180, 70, 0.14);
+  --success: #9ad7b0;
+  --success-soft: rgba(110, 190, 140, 0.15);
+  --closed-bg: #202022;
+  --closed-fg: #a1a1a6;
+  --appt-cut-rule: #7fa2f0;
+  --appt-grooming-rule: #e59466;
+  --appt-color-rule: #c58be3;
+  --appt-feature-rule: #5cc4a2;
+  --appt-cut-edge: #7fa2f0;
+  --appt-grooming-edge: #e59466;
+  --appt-color-edge: #c58be3;
+  --appt-feature-edge: #5cc4a2;
+  --status-scheduled-bg: rgba(245, 180, 70, 0.14);
+  --status-scheduled-fg: #f2c46e;
+  --status-confirmed-bg: #2a2a2c;
+  --status-confirmed-fg: #d1d1d6;
+  --status-completed-bg: rgba(110, 190, 140, 0.15);
+  --status-completed-fg: #9ad7b0;
+  --status-no_show-bg: rgba(229, 72, 77, 0.15);
+  --status-no_show-fg: #ffb3b3;
+  --status-cancelled-bg: transparent;
+  --status-cancelled-fg: #a1a1a6;
+  --ag-av-1: rgba(255, 255, 255, 0.12);
+  --ag-av-2: rgba(255, 255, 255, 0.12);
+  --ag-av-3: rgba(255, 255, 255, 0.12);
+  --ag-av-4: rgba(255, 255, 255, 0.12);
+  --ag-av-ink: #f5f5f7;
+}
+/* Times and counts read in the reference's face with tabular figures, not a mono. */
+.u-ag .u-mono { font-family: inherit; font-variant-numeric: tabular-nums; letter-spacing: 0; }
+.u-ag .u-status-cancelled { box-shadow: inset 0 0 0 1px var(--line); }
+/* The reference's avatar: pastel, initials at 36% of the size, weight 500. */
+.u-ag-av { display: inline-flex; flex: none; align-items: center; justify-content: center; font-weight: 500; letter-spacing: 0.02em; color: var(--ag-av-ink); background: var(--ag-av-1); }
+.u-ag-av[data-tint="2"] { background: var(--ag-av-2); }
+.u-ag-av[data-tint="3"] { background: var(--ag-av-3); }
+.u-ag-av[data-tint="4"] { background: var(--ag-av-4); }
+/* Usual break: routine, full lane width, no edge. Block: off fill with a hairline. */
+.u-ag .u-sch-break { background: var(--ag-break); color: var(--muted); }
+.u-ag .u-sch-block { background: var(--ag-off); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
+/* Card (apptItem · contorno): white, 1.5px family edge; unconfirmed dashed; cancelled
+   1px dashed field line, transparent, struck through. «Estado»: the state's own look. */
+.u-ag .u-appt2 { border-radius: 10px; background: var(--surface); border: 1.5px solid var(--appt-rule, var(--line-strong)); }
+.u-ag .u-appt2[data-status="scheduled"] { border-style: dashed; }
+.u-ag .u-appt2[data-status="cancelled"] { border: 1px dashed var(--line-strong); background: transparent; color: var(--muted); }
+.u-ag .u-appt2[data-mode="status"][data-status="scheduled"] { border-color: var(--appt-rule, var(--line-strong)); }
+.u-ag .u-appt2[data-mode="status"][data-status="confirmed"] { border-color: var(--appt-rule, var(--line-strong)); }
+.u-ag .u-appt2[data-mode="status"][data-status="completed"] { border: 1px solid #bfdfc9; background: #e6f3ea; }
+.u-ag .u-appt2[data-mode="status"][data-status="no_show"] { border: 1px solid #f1c6c8; background: #fbeded; }
+.dark .u-ag .u-appt2[data-mode="status"][data-status="completed"] { border-color: rgba(110, 190, 140, 0.38); background: rgba(110, 190, 140, 0.16); }
+.dark .u-ag .u-appt2[data-mode="status"][data-status="no_show"] { border-color: rgba(229, 72, 77, 0.38); background: rgba(229, 72, 77, 0.14); }
+.dark .u-ag .u-appt2 { background: rgba(255, 255, 255, 0.03); }
+.u-ag .u-appt2-dot { border-radius: 2px; }
+.u-ag { --ag-segact-bg: #111316; --ag-segact-fg: #ffffff; --ag-today: #fafbfc; }
+.dark .u-ag { --ag-segact-bg: #3a3d43; --ag-segact-fg: #f5f5f7; --ag-today: rgba(255, 255, 255, 0.02); }
+/* Agenda panels (reference LS.drawer): 520px, 12px from the frame, 18px radius, a hairline
+   ring and a soft lift; header 20/16/16/20, body 4/20/20, actions bar 12/20. Buttons are the
+   reference's btn1/btn2 (36px · 10px · 13.5/500) and fields 38px · 10px · 14px; on a phone
+   48px · 12px · 15–16px. Focus is the reference's blue ring. */
+.u-ag { --focus-edge: #2f6be4; --ag-panel-line: #e0e2e7; --ag-panel-shadow: 0 18px 48px rgba(0, 0, 0, 0.14), 0 2px 6px rgba(0, 0, 0, 0.05); }
+.dark .u-ag { --focus-edge: #8ab4ff; --ag-panel-line: #2a2a2c; --ag-panel-shadow: 0 18px 48px rgba(0, 0, 0, 0.45), 0 2px 6px rgba(0, 0, 0, 0.3); }
+@media (min-width: 768px) {
+  .u-ag [data-side-panel] .u-btn { height: 36px; border-radius: 10px; font-size: 13.5px; font-weight: 500; padding-left: 16px; padding-right: 16px; }
+  .u-ag [data-side-panel] .u-btn-secondary { padding-left: 14px; padding-right: 14px; }
+  .u-ag [data-side-panel] input.u-field:not([type="checkbox"]):not([type="radio"]),
+  .u-ag [data-side-panel] select.u-field { height: 38px; border-radius: 10px; font-size: 14px; padding-left: 12px; padding-right: 12px; }
+  .u-ag [data-side-panel] textarea.u-field { border-radius: 10px; font-size: 14px; }
+}
+@media (max-width: 767.98px) {
+  .u-ag [data-side-panel] .u-btn { height: 48px; border-radius: 12px; font-size: 15px; font-weight: 500; }
+  .u-ag [data-side-panel] input.u-field:not([type="checkbox"]):not([type="radio"]),
+  .u-ag [data-side-panel] select.u-field { height: 48px; border-radius: 10px; font-size: 16px; }
+}
+.u-ag { --ag-done-bar: #7dbf93; }
+.dark .u-ag { --ag-done-bar: #6ebe8c; }
+.u-ag [data-side-panel] .u-btn-primary:disabled { background: var(--ag-prim-dis); color: var(--ag-prim-dis-ink); opacity: 1; }
+.u-ag .u-btn-primary { font-weight: 500; }
+/* Weekly timeline (reference HK.blanco): dark bar, white range text, light handles; a
+   break is hatched over the bar. */
+.u-ag { --ag-bar: #3a3d42; --ag-bar-ink: #ffffff; --ag-bar-handle: rgba(255, 255, 255, 0.5); }
+.dark .u-ag { --ag-bar: #c9cdd3; --ag-bar-ink: #111316; --ag-bar-handle: rgba(0, 0, 0, 0.35); }
+.u-ag-hatch { background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.85) 0 3px, rgba(255, 255, 255, 0.25) 3px 6px); box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6); }
+.dark .u-ag-hatch { background: repeating-linear-gradient(135deg, rgba(17, 19, 22, 0.7) 0 3px, rgba(17, 19, 22, 0.2) 3px 6px); box-shadow: inset 0 0 0 1px rgba(17, 19, 22, 0.5); }

@@ -55,6 +55,10 @@ export function BlockPanel(props: {
   /** Prefill: a professional (Equipo) and/or a date (calendar). */
   fixedStaffId?: string | null;
   initialDate?: string;
+  /** Preset from a click on the calendar grid (still editable). */
+  initialStaffId?: string | null;
+  initialStart?: string;
+  initialEnd?: string;
   edit?: DatedBlock;
   title?: string;
   onClose: () => void;
@@ -70,13 +74,13 @@ export function BlockPanel(props: {
   const initial = useMemo(
     () => ({
       who: (edit ? (edit.staff_id ? "staff" : "site") : props.canStaffTimeOff ? "staff" : "site") as "staff" | "site",
-      staffId: edit?.staff_id ?? props.fixedStaffId ?? props.staff[0]?.id ?? "",
+      staffId: edit?.staff_id ?? props.fixedStaffId ?? props.initialStaffId ?? props.staff[0]?.id ?? "",
       freq: "once" as "once" | "repeat",
       date: edit ? siteDayKey(edit.starts_at, tz) : props.initialDate && props.initialDate >= today ? props.initialDate : today,
       endDate: edit ? siteDayKey(new Date(Date.parse(edit.ends_at) - 1).toISOString(), tz) : props.initialDate && props.initialDate >= today ? props.initialDate : today,
       allDay: edit ? editAllDay : false,
-      start: edit && !editAllDay ? fmtTime(edit.starts_at, tz) : "14:00",
-      end: edit && !editAllDay ? (fmtTime(edit.ends_at, tz) === "00:00" ? "24:00" : fmtTime(edit.ends_at, tz)) : "15:00",
+      start: edit && !editAllDay ? fmtTime(edit.starts_at, tz) : props.initialStart ?? "14:00",
+      end: edit && !editAllDay ? (fmtTime(edit.ends_at, tz) === "00:00" ? "24:00" : fmtTime(edit.ends_at, tz)) : props.initialEnd ?? "15:00",
       weekdays: [] as number[],
       endKind: "never" as "never" | "on" | "after",
       endsOn: "",
@@ -89,7 +93,7 @@ export function BlockPanel(props: {
   );
   const [f, setF] = useState(initial);
   const set = <K extends keyof typeof initial>(k: K, v: (typeof initial)[K]) => setF((x) => ({ ...x, [k]: v }));
-  const [affectedState, setAffected] = useState<{ forKey: string; loading: boolean; items: AffectedItem[] | null; error: string | null }>({ forKey: "", loading: false, items: null, error: null });
+  const [affectedState, setAffected] = useState<{ forKey: string; loading: boolean; items: AffectedItem[] | null; error: string | null; pre?: AffectedItem[] }>({ forKey: "", loading: false, items: null, error: null });
   const [error, setError] = useState<string | null>(null);
   const [fieldError, setFieldError] = useState<{ field?: string; message: string } | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -135,7 +139,7 @@ export function BlockPanel(props: {
   useEffect(() => {
     if (!valid) return;
     let cancelled = false;
-    const done = (v: { items: AffectedItem[] | null; error: string | null }) => setAffected({ forKey: key, loading: false, ...v });
+    const done = (v: { items: AffectedItem[] | null; error: string | null; pre?: AffectedItem[] }) => setAffected({ forKey: key, loading: false, ...v });
     const t = setTimeout(async () => {
       try {
         if (repeat) {
@@ -147,7 +151,7 @@ export function BlockPanel(props: {
             return;
           }
           setFieldError(null);
-          done({ items: r.affected, error: null });
+          done({ items: r.affected, error: null, pre: r.preexisting });
         } else {
           const r = await previewTimeOffAction({ clientId: props.clientId, siteId: props.siteId, staffId, ...timeOffInput() });
           if (cancelled) return;
@@ -189,7 +193,7 @@ export function BlockPanel(props: {
             return;
           }
           if (!r.written) {
-            setAffected({ forKey: key, loading: false, items: r.affected, error: null });
+            setAffected({ forKey: key, loading: false, items: r.affected, error: null, pre: r.preexisting });
             return;
           }
           props.onSaved("Bloqueo recurrente creado");
@@ -398,6 +402,7 @@ export function BlockPanel(props: {
             {valid ? (
               <AffectedList
                 items={affected.items}
+                preexisting={"pre" in affected ? affected.pre ?? null : null}
                 loading={affected.loading}
                 error={affected.error}
                 timezone={tz}

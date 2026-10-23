@@ -3,9 +3,7 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { avatarColor, staffInitials as initials } from "@/lib/avatarColor";
 import { staffProfileHref } from "@/lib/staffProfileUrl";
-import { ACT_PRIMARY } from "@/components/ui/panelChrome";
 import {
   addStaffCertificationAction,
   deleteStaffCertificationAction,
@@ -13,29 +11,23 @@ import {
   updateStaffAction,
   type UpcomingApptView,
 } from "@/lib/schedulingAdminActions";
-import { PageShell } from "@/components/ui/PageShell";
-import {
-  CONTROL_CLS,
-  MetricBox,
-  MetricCell,
-  PanelSection,
-  MODULE_SEARCH_CLS,
-  SectionHeading,
-  FacetPills,
-  TOOLBAR_PRIMARY_CLS,
-} from "@/components/ui/primitives";
+import { SectionHeading } from "@/components/ui/primitives";
 import {
   IconAssign,
   IconBusiness,
-  IconCalendar,
   IconIdentity,
   IconInternal,
   IconPhone,
   IconTask,
 } from "@/components/ui/icons";
 import { StaffCreateDrawer } from "./StaffCreateDrawer";
+import { AgAvatar, AgPageHeader, agTintAt, StateChip, usePopover } from "../agenda/AgendaChrome";
+import { SidePanel } from "../agenda/SidePanel";
+import { BreakWeekPanel } from "../agenda/BreakWeekPanel";
+import type { OccurrenceRef } from "../agenda/SeriesPanel";
+import { expandSeries } from "@worker/scheduling/series.js";
+import { Button } from "../ui/system";
 import { StaffServicesEditor } from "./StaffServicesEditor";
-import { StatusChip } from "../ui/system";
 import { StaffAbsences } from "./StaffAbsences";
 import { WeeklyScheduleEditor } from "../schedule/WeeklyScheduleEditor";
 import { listScheduleSeriesAction, type SeriesView } from "@/lib/scheduleSeriesActions";
@@ -45,7 +37,7 @@ import { AffectedReschedulePanel } from "../agenda/AffectedReschedulePanel";
 import type { AffectedItem } from "../agenda/ScheduleFormParts";
 import { StaffPhotoControl } from "./StaffPhotoControl";
 import { PUBLIC_BIO_MAX, checkPublicBio, checkPublicTitle, publicProfileMessage } from "@/lib/staffPublicProfile";
-import { StaffHeaderCard, type StaffHeaderSlots } from "./StaffHeaderCard";
+import { type StaffHeaderSlots } from "./StaffHeaderCard";
 import {
   citas,
   fmtHM,
@@ -187,24 +179,17 @@ function draftFromWeekly(w: Record<string, { start: string; end: string }[]>): H
 function countDirtyDays(draft: HourDraft, stored: Record<string, { start: string; end: string }[]>): number {
   return WEEKDAYS.filter((d) => JSON.stringify(draft[d] ?? []) !== JSON.stringify(stored[d] ?? [])).length;
 }
-function minutesBetween(start: string, end: string): number {
-  const [sh, sm] = start.split(":").map(Number);
-  const [eh, em] = end.split(":").map(Number);
-  return Math.max(0, eh * 60 + em - (sh * 60 + sm));
-}
 
 /**
- * The presence line in the drawer header. For a barber mid-appointment it reports how
- * long they have BEEN in the chair rather than when they get out: on a card you are
- * planning around, "23 min in" is the number that tells you whether to interrupt.
- * The roster row keeps "UNTIL 12:30", which is the number you scan a column for.
+ * The presence words. They describe the AGENDA, not the room: nothing records that a client
+ * arrived or that a service began (there is no such event), so an appointment whose time is
+ * now reads «Ocupado según agenda · hasta 12:30» — never a claim that the client is seated
+ * (finding F). The header and the roster row say the same thing.
  */
-function presenceChip(key: StatusKey, appts: StaffAppointment[], now: Date): string {
+function presenceChip(key: StatusKey, appts: StaffAppointment[], now: Date, tz: string): string {
   if (key !== "with_client") return STATUS[key].label;
   const current = appts.find((a) => new Date(a.startAt) <= now && new Date(a.endAt) > now);
-  if (!current) return STATUS[key].label;
-  const mins = Math.max(0, Math.round((now.getTime() - new Date(current.startAt).getTime()) / 60_000));
-  return `${mins} min en silla`;
+  return current ? `${STATUS[key].label} · hasta ${fmtTime(current.endAt, tz)}` : STATUS[key].label;
 }
 
 /*
@@ -214,7 +199,7 @@ function presenceChip(key: StatusKey, appts: StaffAppointment[], now: Date): str
  * and the facet pills both key off them.
  */
 const STATUS: Record<StatusKey, { label: string; dot: string; text: string; chip: string }> = {
-  with_client: { label: "Con cliente", dot: "bg-service-purple", text: "text-service-purple", chip: "border-service-purple/20 bg-service-purple/8" },
+  with_client: { label: "Ocupado según agenda", dot: "bg-service-purple", text: "text-service-purple", chip: "border-service-purple/20 bg-service-purple/8" },
   available: { label: "Disponible", dot: "bg-success", text: "text-success", chip: "border-success/25 bg-success/8" },
   on_shift: { label: "En turno", dot: "bg-success/60", text: "text-success", chip: "border-success/25 bg-success/8" },
   off_shift: { label: "Fuera de turno", dot: "bg-faintest", text: "text-faint", chip: "border-line bg-chip" },
@@ -262,8 +247,10 @@ export function StaffTab(
   const [statusFilter, setStatusFilter] = useState("");
   const [creating, setCreating] = useState(false);
 
-  const { header } = props;
   const tz = props.timezone;
+  // The reference's avatar pastel follows the roster order — the same order the calendar uses.
+  const rosterIdx = new Map([...props.members].sort((a, b) => a.name.localeCompare(b.name, "es")).map((m, i) => [m.id, i]));
+  const tintOf = (id: string) => agTintAt(rosterIdx.get(id) ?? 0);
   const now = new Date(props.todayIso);
   const windowAppointments = props.windowAppointments ?? [];
   const timeOff = props.timeOff ?? [];
@@ -309,9 +296,6 @@ export function StaffTab(
     if (key === "time_off" && off) {
       const days = Math.max(1, Math.round((new Date(off.endsAt).getTime() - new Date(off.startsAt).getTime()) / 86_400_000));
       suffix = ` · ${days} ${days === 1 ? "día" : "días"}`;
-    } else if (key === "with_client") {
-      const inChair = appts.find((a) => new Date(a.startAt) <= now && new Date(a.endAt) > now);
-      if (inChair) suffix = ` · hasta ${fmtTime(inChair.endAt, tz)}`;
     } else if (key === "off_shift" || key === "inactive") {
       // "Entra a las 09:00", "Terminó a las 19:00", "Sede cerrada hasta las …" — the
       // phone's words for why a professional who works today is not on shift now.
@@ -366,138 +350,128 @@ export function StaffTab(
           onSaved={() => router.refresh()}
           initialTab={props.detailTab}
           photoUploadEnabled={props.photoUploadEnabled ?? false}
+          tintFor={tintOf}
         />
       </div>
     );
   }
 
+  const PRES: Record<StatusKey, { glyph: string; ink: string }> = {
+    with_client: { glyph: "◐", ink: "text-[var(--warn)]" },
+    available: { glyph: "●", ink: "text-[var(--success)]" },
+    on_shift: { glyph: "●", ink: "text-[var(--success)]" },
+    off_shift: { glyph: "○", ink: "text-muted" },
+    off_today: { glyph: "○", ink: "text-muted" },
+    time_off: { glyph: "○", ink: "text-muted" },
+    no_chair: { glyph: "○", ink: "text-muted" },
+    inactive: { glyph: "⊘", ink: "text-muted" },
+  };
+  const COLS = "grid grid-cols-[minmax(0,1.5fr)_96px_minmax(0,1.5fr)_76px_64px_76px_128px_76px] items-center";
+  const presence = [
+    { key: "", label: "Todos", n: props.members.length },
+    { key: "with_client", label: "Con cita ahora", n: counts.withClient },
+    { key: "available", label: "En turno", n: counts.available },
+    { key: "off_today", label: "Fuera", n: counts.off },
+  ];
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3">
-      <StaffHeaderCard
-        slots={header}
-        center={
-            <div className={`${MODULE_SEARCH_CLS} w-full min-w-0`}>
-              <SearchIcon />
-              <input
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Buscar por nombre, servicio o sede…"
-                aria-label="Buscar en el equipo"
-                className="min-w-0 flex-1 bg-transparent text-[13px] text-foreground outline-none placeholder:text-faint"
-              />
-            </div>
-        }
-        actions={
-            <button type="button" onClick={() => setCreating(true)} className={TOOLBAR_PRIMARY_CLS}>
-              + Nuevo profesional
-            </button>
-        }
-      />
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+      {/* Reference E1 (Equipo): the title, then ONE tool row — search, «Opciones» (presence,
+          service, site) and «Añadir» — then the table, flush. Presence words describe the
+          agenda (finding F). */}
+      <AgPageHeader title="Equipo" />
+      <div className="relative flex shrink-0 items-center gap-2.5 px-6 pb-3.5">
+        <label className="flex h-[40px] min-w-0 flex-1 items-center gap-2 rounded-[9px] bg-[var(--chip)] px-2.5 text-muted">
+          <SearchIcon />
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Buscar profesional"
+            aria-label="Buscar profesional"
+            className="min-w-0 flex-1 bg-transparent text-[13.5px] text-foreground outline-none placeholder:text-muted"
+          />
+        </label>
+        <TeamOptions
+          presence={presence}
+          statusFilter={statusFilter}
+          onStatus={setStatusFilter}
+          services={props.services.filter((sv) => sv.active).map((sv) => ({ id: sv.id, name: sv.name }))}
+          serviceFilter={serviceFilter}
+          onService={setServiceFilter}
+          sites={props.sites}
+          siteId={props.currentSiteId ?? ""}
+          onSite={(v) => router.push(`?site=${v}`)}
+        />
+        <button type="button" onClick={() => setCreating(true)} className="u-focus inline-flex h-[40px] shrink-0 items-center gap-2 whitespace-nowrap rounded-[10px] bg-[var(--ink)] px-4 text-[14px] font-medium text-[var(--ink-fg)] hover:bg-[var(--ink-hover)]">
+          Añadir
+          <svg aria-hidden viewBox="0 0 16 16" className="size-[11px]" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M4 6l4 4 4-4" /></svg>
+        </button>
+      </div>
 
-      <PageShell clip={false}>
-        <div className="flex shrink-0 flex-col gap-2 border-b border-line-row px-3 py-2.5 sm:flex-row sm:flex-wrap sm:items-center sm:px-4">
-          <div className="min-w-0 overflow-x-auto pb-0.5 sm:pb-0">
-            <FacetPills
-              label="Filtrar el equipo por presencia"
-              items={[
-                { key: "all", label: "Todos", count: props.members.length, active: statusFilter === "" },
-                { key: "with_client", label: "Con cliente", count: counts.withClient, active: statusFilter === "with_client" },
-                { key: "available", label: "En turno", count: counts.available, active: statusFilter === "available" },
-                { key: "off_today", label: "Fuera", count: counts.off, active: statusFilter === "off_today" },
-              ]}
-              onPick={(key: string) => setStatusFilter(key === "all" ? "" : key)}
-            />
+      <div role="table" aria-label="Profesionales de la sede" className="min-h-0 flex-1 overflow-y-auto">
+        <div role="row" className={`${COLS} sticky top-0 z-[1] h-[34px] bg-[var(--surface)] px-6 text-[12px] text-muted shadow-[inset_0_-1px_0_var(--line)]`}>
+          <span role="columnheader" className="pr-3">Profesional</span>
+          <span role="columnheader" className="px-3 shadow-[inset_1px_0_0_var(--line-soft)]">Rol</span>
+          <span role="columnheader" className="px-3 shadow-[inset_1px_0_0_var(--line-soft)]">Ahora</span>
+          <span role="columnheader" className="px-3 text-right shadow-[inset_1px_0_0_var(--line-soft)]">Citas hoy</span>
+          <span role="columnheader" className="px-3 text-right shadow-[inset_1px_0_0_var(--line-soft)]">Horas</span>
+          <span role="columnheader" className="px-3 text-right shadow-[inset_1px_0_0_var(--line-soft)]">Servicios</span>
+          <span role="columnheader" className="px-3 shadow-[inset_1px_0_0_var(--line-soft)]">Horario</span>
+          <span role="columnheader" className="sr-only">Agenda</span>
+        </div>
+        {filtered.map((member) => {
+          const d = describe(member);
+          const pr = PRES[d.key];
+          const booked = d.appts.reduce((n, a) => n + (Date.parse(a.endAt) - Date.parse(a.startAt)) / 3_600_000, 0);
+          const n = d.appts.length;
+          return (
+            <div
+              key={member.id}
+              role="row"
+              tabIndex={0}
+              aria-label={`Abrir ficha de ${member.name}`}
+              onClick={() => router.push(hrefFor(member.id), { scroll: false })}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  router.push(hrefFor(member.id), { scroll: false });
+                }
+              }}
+              className={`${COLS} u-focus h-[44px] cursor-pointer px-6 text-left shadow-[inset_0_-1px_0_var(--line-soft)] hover:bg-[var(--subtle)] ${member.active ? "" : "opacity-60"}`}
+            >
+              <span role="cell" className="flex min-w-0 items-center gap-2.5 pr-3">
+                <AgAvatar name={member.name} id={member.id} size={28} radius={8} tint={tintOf(member.id)} photoUrl={member.publicPhotoUrl ?? null} />
+                <span className="truncate text-[13.5px]" title={member.name}>{member.name}</span>
+                {!member.active ? <span className="shrink-0 rounded-[6px] bg-[var(--chip)] px-1.5 text-[11.5px] text-muted">Inactivo</span> : null}
+              </span>
+              <span role="cell" className="truncate px-3 text-[13px] text-[var(--ag-ink2)]">{member.title ?? "—"}</span>
+              <span role="cell" className={`flex min-w-0 items-center gap-1.5 whitespace-nowrap px-3 text-[13px] ${pr.ink}`}>
+                <span aria-hidden>{pr.glyph}</span>
+                <span className="truncate">{presenceChip(d.key, d.appts, now, tz)}{d.suffix}</span>
+              </span>
+              <span role="cell" className={`px-3 text-right text-[13px] tabular-nums ${n ? "text-foreground" : "text-muted"}`}>{n}</span>
+              <span role="cell" className="px-3 text-right text-[13px] tabular-nums text-[var(--ag-ink2)]">{booked > 0 ? `${String(Math.round(booked * 10) / 10).replace(".", ",")} h` : "—"}</span>
+              <span role="cell" className="px-3 text-right text-[13px] tabular-nums text-[var(--ag-ink2)]">{member.serviceIds.length}</span>
+              <span role="cell" className="truncate px-3 text-[13px] text-[var(--ag-ink2)]">{Object.keys(member.workingHours).length === 0 ? "Horario de la sede" : "Horario propio"}</span>
+              <span role="cell" className="flex justify-end">
+                <Link
+                  href={`/clients/${props.clientId}/scheduling/agenda?staff=${member.id}`}
+                  onClick={(e) => e.stopPropagation()}
+                  className="u-focus inline-flex h-[28px] items-center rounded-[6px] px-2.5 text-[13px] text-foreground underline decoration-[var(--line)] underline-offset-[3px] hover:bg-[var(--chip)]"
+                >
+                  Agenda
+                </Link>
+              </span>
+            </div>
+          );
+        })}
+        {filtered.length === 0 ? (
+          <div className="flex flex-col items-center gap-1.5 px-6 py-12 text-center">
+            <span className="text-[15px] font-medium">Sin resultados</span>
+            <span className="text-[12.5px] text-muted">Ningún profesional coincide con la búsqueda o el filtro.</span>
           </div>
-          <span className="flex w-full items-center gap-1.5 sm:ml-auto sm:w-auto sm:shrink-0">
-            <Facet
-              label="Servicio"
-              value={serviceFilter}
-              onChange={setServiceFilter}
-              options={[{ value: "", label: "Servicio" }, ...props.services.filter((s) => s.active).map((s) => ({ value: s.id, label: s.name }))]}
-            />
-            <Facet
-              label="Sede"
-              value={props.currentSiteId ?? ""}
-              onChange={(v) => router.push(`?site=${v}`)}
-              options={props.sites.map((s) => ({ value: s.id, label: s.name }))}
-            />
-          </span>
-        </div>
-
-        <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
-          {filtered.length > 0 ? (
-            <table className="w-full table-fixed border-separate border-spacing-0 text-[13px]">
-              <caption className="sr-only">Profesionales de la sede</caption>
-              <thead>
-                <tr className="text-left text-[12px] text-muted">
-                  <th scope="col" className="w-[28%] border-b border-line px-3 pb-2 font-medium">Profesional</th>
-                  <th scope="col" className="w-[12%] border-b border-line px-3 pb-2 font-medium">Rol</th>
-                  <th scope="col" className="w-[22%] border-b border-line px-3 pb-2 font-medium">Ahora</th>
-                  <th scope="col" className="w-[8%] border-b border-line px-3 pb-2 text-right font-medium">Citas hoy</th>
-                  <th scope="col" className="w-[8%] border-b border-line px-3 pb-2 text-right font-medium">Horas</th>
-                  <th scope="col" className="w-[8%] border-b border-line px-3 pb-2 text-right font-medium">Servicios</th>
-                  <th scope="col" className="w-[14%] border-b border-line px-3 pb-2 font-medium">Horario</th>
-                  <th scope="col" className="w-[8%] border-b border-line px-3 pb-2"><span className="sr-only">Agenda</span></th>
-                </tr>
-              </thead>
-              <tbody>
-                {filtered.map((member) => {
-                  const d = describe(member);
-                  const st = STATUS[d.key];
-                  const booked = d.appts.reduce((n, a) => n + (Date.parse(a.endAt) - Date.parse(a.startAt)) / 3_600_000, 0);
-                  return (
-                    <tr key={member.id} className={`group ${member.active ? "" : "opacity-60"}`}>
-                      <td className="border-b border-line-soft px-3 py-2.5">
-                        <Link href={hrefFor(member.id)} scroll={false} aria-label={`Ver perfil de ${member.name}`} className="u-focus flex min-h-[44px] min-w-0 items-center gap-2.5 rounded font-medium hover:underline">
-                          {member.publicPhotoUrl ? (
-                            // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
-                            <img src={member.publicPhotoUrl} alt="" aria-hidden className="size-[32px] shrink-0 rounded-full object-cover" />
-                          ) : (
-                            <span aria-hidden className={`u-mono flex size-[32px] shrink-0 items-center justify-center rounded-full text-[11px] font-semibold ${avatarColor(member.name)}`}>{initials(member.name)}</span>
-                          )}
-                          <span className="truncate">{member.name}</span>
-                          {!member.active ? <span className="shrink-0 rounded-full bg-chip px-1.5 text-[11px] text-muted">Inactivo</span> : null}
-                        </Link>
-                      </td>
-                      <td className="truncate border-b border-line-soft px-3 py-2.5 text-muted">{member.title ?? "—"}</td>
-                      <td className="border-b border-line-soft px-3 py-2.5">
-                        <span className={`inline-flex min-w-0 items-center gap-1.5 ${st.text}`}>
-                          <span aria-hidden className={`size-2 shrink-0 rounded-full ${st.dot}`} />
-                          <span className="truncate">{presenceChip(d.key, d.appts, now)}{d.suffix}</span>
-                        </span>
-                      </td>
-                      <td className="u-tnum border-b border-line-soft px-3 py-2.5 text-right">{d.appts.length}</td>
-                      <td className="u-tnum border-b border-line-soft px-3 py-2.5 text-right text-muted">{booked > 0 ? `${String(Math.round(booked * 10) / 10).replace(".", ",")} h` : "—"}</td>
-                      <td className="u-tnum border-b border-line-soft px-3 py-2.5 text-right">{member.serviceIds.length}</td>
-                      <td className="truncate border-b border-line-soft px-3 py-2.5 text-muted">{Object.keys(member.workingHours).length === 0 ? "Horario de la sede" : "Horario propio"}</td>
-                      <td className="border-b border-line-soft px-3 py-2.5 text-right">
-                        <Link href={`/clients/${props.clientId}/scheduling/agenda?staff=${member.id}`} className="u-focus rounded text-[13px] font-medium hover:underline">
-                          Agenda
-                        </Link>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          ) : (
-            <div className="flex min-h-[14rem] items-center justify-center px-4 text-center">
-              <div>
-                <p className="text-sm font-medium text-foreground">No encontramos profesionales</p>
-                <p className="mt-1 text-xs text-faint">Cambia la búsqueda o limpia los filtros.</p>
-              </div>
-            </div>
-          )}
-
-          <button
-            type="button"
-            onClick={() => setCreating(true)}
-            className="mt-3 flex min-h-[54px] w-full items-center justify-center gap-2 rounded-xl border border-dashed border-line-strong text-sm text-muted transition-colors hover:border-faint hover:bg-chip hover:text-foreground"
-          >
-            + Añadir profesional
-          </button>
-        </div>
-      </PageShell>
+        ) : null}
+      </div>
 
       {creating ? (
         <StaffCreateDrawer
@@ -543,6 +517,7 @@ function StaffDetail({
   onSaved,
   initialTab,
   photoUploadEnabled,
+  tintFor,
 }: {
   member: StaffMember;
   status: { key: StatusKey; appts: StaffAppointment[] };
@@ -556,6 +531,7 @@ function StaffDetail({
   onSaved: () => void;
   initialTab?: string;
   photoUploadEnabled: boolean;
+  tintFor: (id: string) => "1" | "2" | "3" | "4";
 }) {
   // FIVE tabs, and every one reads something real: the schedule answers performance,
   // the roster row answers details, `staff_services` answers services, `working_hours`
@@ -565,9 +541,8 @@ function StaffDetail({
   const [tab, setTab] = useState<DetailTab>(
     (DETAIL_TABS.find((t) => t === initialTab) ?? "performance") as DetailTab,
   );
-  const [range, setRange] = useState<14 | 30>(14);
   // HOURS DRAFT — the Hours tab edits a local copy; the unsaved bar commits it.
-  const [draft, setDraft] = useState<HourDraft>(() => draftFromWeekly(member.workingHours));
+  const [draft] = useState<HourDraft>(() => draftFromWeekly(member.workingHours));
   // PROFILE DRAFT — the Details tab edits a local copy through the same unsaved bar as
   // Hours, so one Save writes the whole panel rather than each field racing the others.
   const [profile, setProfile] = useState<ProfileDraft>(() => profileFromMember(member));
@@ -596,6 +571,20 @@ function StaffDetail({
   const [hoursResched, setHoursResched] = useState<AffectedItem | null>(null);
   const [hoursRecheck, setHoursRecheck] = useState(0);
   const [leaveAsk, setLeaveAsk] = useState(false);
+  // TAB GUARD (finding C): Horario and Servicios keep their draft inside the tab, so
+  // leaving the tab would drop it. They report it here, and a tab change asks first
+  // («Seguir editando / Descartar cambios»). Perfil's draft lives in this component and
+  // survives a tab change, so it never needs to ask. Nothing is saved on its own.
+  const [tabDirty, setTabDirtyState] = useState<{ tab: DetailTab; dirty: boolean }>({ tab, dirty: false });
+  const editorDirty = tabDirty.tab === tab && tabDirty.dirty;
+  const reportHoursDirty = useCallback((d: boolean) => setTabDirtyState({ tab: "hours", dirty: d }), []);
+  const reportServicesDirty = useCallback((d: boolean) => setTabDirtyState({ tab: "services", dirty: d }), []);
+  const [tabAsk, setTabAsk] = useState<DetailTab | null>(null);
+  const requestTab = (t: DetailTab) => {
+    if (t === tab) return;
+    if (editorDirty) setTabAsk(t);
+    else setTab(t);
+  };
   const leaveNav = useNavigationGuard({ dirty: dirtyProfileFields(profile, member).length > 0, onAsk: () => setLeaveAsk(true) });
   // The phone tree reads the same `?s=`, so on a phone this drawer is mounted too — inside
   // the desktop tree, hidden below md. Its trap (focus, Tab, Escape → close) runs only
@@ -608,7 +597,6 @@ function StaffDetail({
   void countDirtyDays;
   void useDesktopTree;
   const dirtyFields = dirtyProfileFields(profile, member);
-  const changes = dirtyDays + dirtyFields.length;
   // Mirror the CHECK constraints client-side: the schema already refuses these, this
   // just says so before the round trip.
   const invalid = profileError(profile);
@@ -629,7 +617,11 @@ function StaffDetail({
       Object.assign(patch, profilePatch(profile, dirtyFields));
       const r = await updateStaffAction(clientId, member.id, patch);
       if (!r.ok) setSaveError(r.error);
-      else onSaved();
+      else {
+        setEditingProfile(false);
+        setNotice("Perfil guardado");
+        onSaved();
+      }
     });
   };
 
@@ -651,148 +643,88 @@ function StaffDetail({
   };
 
   const s = STATUS[status.key];
-  // The header's ONE meta line, the contact panel's "identity · contacto desde" applied
-  // to an employee: what they do and how long they have done it. Both facts were already
-  // on this screen (the role on the old header's second line, the seniority in Details);
-  // neither is new, they are just introduced together now.
-  const headerMeta = [member.title, member.startDate ? seniority(member.startDate) : null]
-    .filter(Boolean)
-    .join(" · ");
+  void s;
+  const tint = tintFor(member.id);
+  const presGlyph = status.key === "with_client" ? "◐" : status.key === "available" || status.key === "on_shift" ? "●" : "○";
+  const presInk = status.key === "with_client" ? "text-[var(--warn)]" : status.key === "available" || status.key === "on_shift" ? "text-[var(--success)]" : "text-muted";
+  const [editingProfile, setEditingProfile] = useState(false);
+  /** «Cambiar la pausa de una fecha»: the next break of this professional, on its week. */
+  const [oneDate, setOneDate] = useState<OccurrenceRef | null>(null);
+  const nextBreak = (): OccurrenceRef | null => {
+    if (!Array.isArray(seriesState)) return null;
+    const toMin = (t: string) => Number(t.slice(0, 2)) * 60 + Number(t.slice(3, 5));
+    const own = seriesState.filter((x) => x.kind === "break" && x.staffId === member.id);
+    const rows = own.map((x) => ({ id: x.id, site_id: member.siteId, staff_id: x.staffId, kind: x.kind, weekdays: x.weekdays, start_min: toMin(x.start), end_min: toMin(x.end), starts_on: x.startsOn, ends_on: x.endsOn, reason: x.reason, public_reason: null }));
+    const ovs = own.flatMap((x) => x.overrides.map((o) => ({ series_id: x.id, occurrence_date: o.date, action: o.action, start_min: o.start ? toMin(o.start) : null, end_min: o.end ? toMin(o.end) : null })));
+    const from = dayKey(now, tz);
+    const to = dayKey(new Date(now.getTime() + 21 * 86_400_000), tz);
+    const o = expandSeries(rows, ovs, from, to, tz).find((x) => x.from.getTime() > now.getTime());
+    return o ? { seriesId: o.series_id, kind: "break", staffId: o.staff_id, date: o.date, startsAt: o.from.toISOString(), endsAt: o.until.toISOString(), moved: o.moved } : null;
+  };
 
   // ── Performance, all computed from the 30-day window this page loaded ──
   const settled = windowAppointments.filter((a) => a.status !== "cancelled");
   const completed = settled.filter((a) => a.status === "completed").length;
   const noShows = settled.filter((a) => a.status === "no_show").length;
   const minutes = settled.reduce((n, a) => n + a.durationMin, 0);
-  const completedPct = settled.length === 0 ? null : Math.round((completed / settled.length) * 100);
-
-  /** Appointments per day over the selected window — the sparkline's series. */
-  const series = useMemo(() => {
-    const days: number[] = [];
-    for (let i = range - 1; i >= 0; i--) {
-      const from = new Date(now.getTime() - i * 86_400_000);
-      const key = dayKey(from, tz);
-      days.push(settled.filter((a) => dayKey(new Date(a.startAt), tz) === key).length);
-    }
-    return days;
-  }, [settled, now, tz, range]);
-
-  /** CAPACITY: the hours this barber is rostered for across the window, straight from
-   *  their weekly grid — so "booked 46 of 76 h" is two real numbers, not a target. */
-  const weeklyMinutes = WEEKDAYS.reduce(
-    (n, d) => n + (member.workingHours[d] ?? []).reduce((m, r) => m + minutesBetween(r.start, r.end), 0),
-    0,
-  );
-  const capacityHours = Math.round((weeklyMinutes * (30 / 7)) / 60);
-
-  /** The five services this barber was booked for most in the window, biggest first. */
-  const topServices = useMemo(() => {
-    const counts = new Map<string, number>();
-    for (const a of settled) {
-      const name = a.serviceName?.trim();
-      if (!name) continue;
-      counts.set(name, (counts.get(name) ?? 0) + 1);
-    }
-    return [...counts.entries()]
-      .map(([name, count]) => ({ name, count }))
-      .sort((x, z) => z.count - x.count || x.name.localeCompare(z.name))
-      .slice(0, 5);
-  }, [settled]);
-
 
   return (
-    <section
-      aria-label={`Ficha de ${member.name}`}
-      // No drop shadow: in this system elevation is SURFACE CONTRAST, not a blur (see
-      // the house rules in components/ui/primitives.tsx). The panel already reads as
-      // "on top" from its own fill and hairline against the recessed roster behind it —
-      // the shadow the reference used only muddied the edge.
-      // No shadow, and the same hairline as the two cards it sits beside: the drawer
-      // is part of the screen's card family, not something lifted off it. Depth here
-      // is surface contrast against the canvas, as everywhere else in this system.
-      // The FRAME is PageShell's, class for class, so this panel is the same card as the
-      // header and the roster beside it — 12px radius, --line hairline, --shadow-card.
-      // It used to draw its own 16px radius on a --line-strong hairline with no shadow,
-      // which is why it read as a different KIND of object next to the two cards it
-      // shares a row with. Its WIDTH comes from the wrapper (see --staff-panel-w), which
-      // is what lets one element be a column here and a full-bleed overlay below `lg`.
-      className="flex min-h-0 w-full flex-1 flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-[var(--shadow-card)]"
-    >
-      {/* HEADER (redesign E2): breadcrumb, the person, presence in words, where their
-          schedule comes from, and the two actions. The ficha is its own screen. */}
-      <div className="flex shrink-0 flex-col gap-4 border-b border-line px-6 pb-4 pt-4">
-        <nav aria-label="Ruta" className="flex items-center gap-1.5 text-[13px] text-muted">
-          <Link href={closeHref} scroll={false} className="u-focus inline-flex items-center gap-1 rounded hover:text-foreground">
+    <section aria-label={`Ficha de ${member.name}`} className="flex min-h-0 w-full flex-1 flex-col overflow-hidden bg-[var(--surface)]">
+      {/* HEADER (reference E2): breadcrumb, the person (88px pastel tile), role · site,
+          presence in words (finding F) with where the schedule comes from and how many
+          services, and the two actions. The ficha is its own screen. */}
+      <div className="flex shrink-0 flex-col gap-5 px-6 pb-4 pt-5">
+        <nav aria-label="Ruta" className="flex items-center gap-1.5 text-[13px] text-[var(--ag-ink2)]">
+          <Link href={closeHref} scroll={false} className="u-focus inline-flex items-center gap-1.5 rounded hover:text-foreground">
             <svg aria-hidden viewBox="0 0 16 16" className="size-3.5" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M10 3.5L5.5 8l4.5 4.5" /></svg>
             Equipo
           </Link>
-          <span aria-hidden>/</span>
+          <span aria-hidden className="text-muted">/</span>
           <span aria-current="page" className="truncate text-foreground">{member.name}</span>
         </nav>
-        <div className="flex flex-wrap items-center gap-4">
-          {member.publicPhotoUrl ? (
-            // eslint-disable-next-line @next/next/no-img-element -- the business's own uploaded photo (R2)
-            <img src={member.publicPhotoUrl} alt="" aria-hidden className="size-[64px] rounded-[14px] object-cover" />
-          ) : (
-            <span aria-hidden className={`u-mono flex size-[64px] items-center justify-center rounded-[14px] text-[22px] font-semibold ${avatarColor(member.name)}`}>
-              {initials(member.name)}
-            </span>
-          )}
+        <div className="flex flex-wrap items-center gap-5">
+          <AgAvatar name={member.name} id={member.id} size={88} radius={18} tint={tint} photoUrl={member.publicPhotoUrl ?? null} />
           <div className="flex min-w-0 flex-1 flex-col gap-1">
-            <h2 className="truncate text-[22px] font-semibold leading-7 tracking-tight">{member.name}</h2>
-            <p className="truncate text-[13px] text-muted">{[member.title, member.siteName, headerMeta && member.startDate ? seniority(member.startDate) : null].filter(Boolean).join(" · ")}</p>
-            <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
-              <span className={`inline-flex items-center gap-1.5 ${s.text}`}>
-                <span aria-hidden className={`size-2 rounded-full ${s.dot}`} />
-                {presenceChip(status.key, status.appts, now)}
+            <h2 className="truncate text-[22px] font-semibold tracking-[-0.01em]">{member.name}</h2>
+            <p className="truncate text-[14px] text-[var(--ag-ink2)]">{[member.title, member.siteName].filter(Boolean).join(" · ")}</p>
+            <p className="flex flex-wrap items-center gap-x-3.5 gap-y-1 text-[13px]">
+              <span className={`inline-flex items-center gap-1.5 ${presInk}`}>
+                <span aria-hidden>{presGlyph}</span>
+                {presenceChip(status.key, status.appts, now, tz)}
               </span>
               <span className="text-muted">{Object.keys(member.workingHours).length === 0 ? "Usa el horario de la sede" : "Horario propio"}</span>
               <span className="text-muted">{member.serviceIds.length} {member.serviceIds.length === 1 ? "servicio" : "servicios"}</span>
-              {!member.active ? <span className="rounded-full bg-chip px-2 py-0.5 text-[11.5px] text-muted">Inactivo</span> : null}
+              {!member.active ? <span className="rounded-[6px] bg-[var(--chip)] px-2 py-0.5 text-[11.5px] text-muted">Inactivo</span> : null}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
-            <button type="button" onClick={() => setTab("details")} className="u-focus inline-flex h-[40px] items-center rounded-sch-control border border-line px-4 text-[13px] font-medium hover:bg-subtle">
+            <button type="button" onClick={() => setEditingProfile(true)} className="u-focus inline-flex h-[40px] items-center rounded-[12px] border border-[var(--line-strong)] bg-[var(--surface)] px-4 text-[14px] font-medium hover:bg-[var(--subtle)]">
               Editar perfil
             </button>
-            <Link href={`/clients/${clientId}/scheduling/agenda?staff=${member.id}`} className={ACT_PRIMARY}>
+            <Link href={`/clients/${clientId}/scheduling/agenda?staff=${member.id}`} className="u-focus inline-flex h-[40px] items-center rounded-[12px] bg-[var(--ink)] px-4 text-[14px] font-medium text-[var(--ink-fg)] hover:bg-[var(--ink-hover)]">
               Ver su agenda
             </Link>
           </div>
         </div>
       </div>
 
-      {/* THREE ZONES, as on the contact panel: a fixed header, a FIXED tab strip, and one
-          scrolling body. The strip used to live inside the scroll container, so scrolling
-          the Hours grid carried the tabs off the top of the panel and the reader lost the
-          control that got them there. */}
-      <div className="flex shrink-0 items-center gap-3.5 overflow-x-auto border-b border-line px-6" role="tablist">
-        <div className="flex min-w-max items-center gap-3.5">
-          {DETAIL_TABS.map((t) => (
-            <button
-              key={t}
-              type="button"
-              role="tab"
-              aria-selected={tab === t}
-              onClick={() => setTab(t)}
-              className={`-mb-px flex items-center gap-1.5 whitespace-nowrap border-b-2 pb-2.5 pt-3 text-[12.5px] font-medium capitalize transition-colors ${
-                tab === t ? "border-ink font-semibold text-foreground" : "border-transparent text-muted hover:text-foreground"
-              }`}
-            >
-              {DETAIL_TAB_LABEL[t]}
-              {t === "time off" && timeOff.length > 0 ? (
-                <span className="u-mono rounded bg-danger-tint/40 px-1.5 text-[9.5px] font-medium text-brand">
-                  {timeOff.length}
-                </span>
-              ) : null}
-              {t === "services" && member.serviceIds.length > 0 ? (
-                <span className="u-mono rounded bg-chip px-1.5 text-[9.5px] font-medium text-muted">
-                  {member.serviceIds.length}
-                </span>
-              ) : null}
-            </button>
-          ))}
-        </div>
+      <div className="flex shrink-0 gap-5 overflow-x-auto px-6 shadow-[inset_0_-1px_0_var(--line)]" role="tablist">
+        {DETAIL_TABS.map((t) => (
+          <button
+            key={t}
+            type="button"
+            role="tab"
+            aria-selected={tab === t}
+            onClick={() => requestTab(t)}
+            className={`u-focus flex h-[40px] items-center gap-1.5 whitespace-nowrap border-b-2 text-[14px] transition-colors ${
+              tab === t ? "border-[var(--foreground)] text-foreground" : "border-transparent text-[var(--ag-ink2)] hover:text-foreground"
+            }`}
+          >
+            {DETAIL_TAB_LABEL[t]}
+            {t === "time off" ? <span className="text-[12px] tabular-nums text-muted">{timeOff.filter((x) => Date.parse(x.endsAt) > now.getTime()).length}</span> : null}
+            {t === "services" ? <span className="text-[12px] tabular-nums text-muted">{member.serviceIds.length}</span> : null}
+          </button>
+        ))}
       </div>
 
       {/* THE only scrolling zone. Its `key` sends it back to the top on a tab change:
@@ -800,130 +732,218 @@ function StaffDetail({
           middle of a grid whose first rows they never saw. */}
       <div key={tab} className="min-h-0 flex-1 overflow-y-auto overflow-x-hidden">
         {tab === "performance" ? (
-          // NO wrapper padding. Each section brings its own and closes with a full-width
-          // rule, so the column reads as one continuous document — the contact panel's
-          // arrangement. This used to be a padded stack of individually bordered cards,
-          // which put a second border inside a panel that already has one and broke the
-          // tab into floating slabs. That is the single biggest reason the two panels
-          // felt like different products with the same tabs.
-          <div className="mx-auto grid w-full max-w-5xl content-start lg:grid-cols-2">
-            {completedPct !== null && completedPct >= 90 ? (
-              <div className="border-b border-line px-4 py-3">
-                <div className="flex items-center gap-2.5 rounded-lg border border-brand/35 bg-brand-soft px-3 py-2.5">
-                  <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-brand" />
-                  <p className="text-xs text-foreground">
-                    Completó el {completedPct} % de sus citas reservadas en los últimos 30 días.
-                  </p>
-                </div>
-              </div>
-            ) : null}
-
-            {/* The window toggle drives the sparkline; the KPIs below stay on 30 days,
-                which is the window the page actually loaded. It is the heading's
-                TRAILING slot now, not a row of standalone buttons above the chart —
-                a control that only changes this section belongs to this section. */}
-            <PanelSection
-              title="Citas por día"
-              icon={<IconCalendar />}
-              trailing={
-                // TODO(staff): the design puts "CHAIR 3" at the right of this row. There
-                // is no chair column and we decided not to add one, so the slot holds the
-                // window toggle rather than a number nobody stored.
-                <span className="inline-flex items-center gap-0.5 rounded-md bg-chip p-0.5">
-                  {([14, 30] as const).map((r) => (
-                    <button
-                      key={r}
-                      type="button"
-                      onClick={() => setRange(r)}
-                      aria-pressed={range === r}
-                      className={`inline-flex h-6 items-center whitespace-nowrap rounded px-2 text-[11px] font-medium transition-colors ${
-                        range === r ? "bg-surface text-foreground shadow-[var(--shadow-card)]" : "text-muted hover:text-foreground"
-                      }`}
-                    >
-                      Últimos {r} días
-                    </button>
-                  ))}
+          // RESUMEN (reference E2): today's appointments, the last 30 days (agenda data —
+          // not billing) with the next absences, and the weekly schedule.
+          <div className="grid w-full content-start gap-8 px-6 py-5 lg:grid-cols-[minmax(0,1.25fr)_minmax(0,1fr)_minmax(0,1fr)]">
+            <section aria-labelledby="fr-today" className="flex min-w-0 flex-col">
+              <div className="flex items-baseline gap-2 pb-3">
+                <h3 id="fr-today" className="min-w-0 flex-1 text-[15px] font-medium">Hoy · {fmtDayLong(now.toISOString(), tz)}</h3>
+                <span className="text-[13px] tabular-nums text-muted">
+                  {citas(status.appts.length)}
+                  {status.appts.length ? ` · ${String(Math.round((status.appts.reduce((n, x) => n + (Date.parse(x.endAt) - Date.parse(x.startAt)), 0) / 3_600_000) * 10) / 10).replace(".", ",")} h` : ""}
                 </span>
-              }
-            >
-              <Sparkline series={series} />
-            </PanelSection>
-
-            <PanelSection title="Últimos 30 días" icon={<IconTask />}>
-              {/* ONE divided box, not four floating cards — the same MetricBox the
-                  contact panel's CITAS / ÚLTIMA / CANAL strip is built from. 2×2 because
-                  "Appointments · 30d" and "Hours booked" cannot share one row at 440px. */}
-              <MetricBox cols={2}>
-                <MetricCell label="Citas · 30 d" value={settled.length} />
-                <MetricCell label="Completadas" value={completed} note={completedPct === null ? undefined : `${completedPct}%`} />
-                <MetricCell label="Inasistencias" value={noShows} tone={noShows > 0 ? "brand" : undefined} />
-                <MetricCell
-                  label="Horas reservadas"
-                  value={Math.round(minutes / 60)}
-                  note={weeklyMinutes > 0 ? `de ${capacityHours} h` : "sin horario"}
-                />
-              </MetricBox>
-            </PanelSection>
-
-            <PanelSection
-              title={`Hoy · ${fmtDay(now.toISOString(), tz)}`}
-              icon={<IconCalendar />}
-              trailing={status.appts.length > 0 ? citas(status.appts.length) : undefined}
-            >
-              <div className="flex flex-col gap-2">
-                {status.appts.length === 0 ? (
-                  <p className="text-xs text-faint">No hay citas hoy.</p>
-                ) : (
-                  <div className="flex flex-col rounded-lg border border-line">
-                    {status.appts.map((a) => (
-                      <div key={a.id} className="flex items-center gap-2.5 border-b border-line/70 px-3 py-2 last:border-0">
-                        <span aria-hidden className="h-6 w-[3px] shrink-0 rounded-sm bg-service-purple" />
-                        <span className="flex min-w-0 flex-1 flex-col">
-                          <span className="truncate text-xs font-semibold text-foreground">{a.contactName ?? "Sin nombre"}</span>
-                          <span className="truncate text-[11px] text-faint">{a.serviceName}</span>
-                        </span>
-                        <StatusChip status={a.status} size="sm" />
-                        <span className="u-mono shrink-0 text-[11px] text-muted">{fmtTime(a.startAt, tz)}</span>
-                      </div>
-                    ))}
-                  </div>
-                )}
-                <Link
-                  href={`/clients/${clientId}/scheduling/agenda?staff=${member.id}`}
-                  className="self-start text-xs text-accent hover:underline"
-                >
-                  Abrir este día en la agenda &#8599;
-                </Link>
               </div>
-            </PanelSection>
-
-            {/* TOP SERVICES — what this barber actually gets booked for. Counted from
-                the SAME 30-day window the KPIs above use, off the appointment's own
-                service-name snapshot, so a renamed or deleted service still counts
-                under the name it was sold as. Cancelled rows are already excluded. */}
-            {topServices.length > 0 ? (
-              <PanelSection title="Servicios más reservados · 30 d" icon={<IconTask />}>
-                <div className="flex flex-col gap-1.5">
-                  {topServices.map((t) => (
-                    <div key={t.name} className="flex items-center gap-2.5">
-                      <span className="w-[116px] shrink-0 truncate text-xs text-foreground" title={t.name}>
-                        {t.name}
+              {status.appts.length === 0 ? (
+                <p className="rounded-[10px] bg-[var(--chip)] px-3 py-2.5 text-[13px] text-[var(--ag-ink2)]">No hay citas hoy.</p>
+              ) : (
+                <ul className="flex flex-col">
+                  {status.appts.map((x) => (
+                    <li key={x.id} className="grid grid-cols-[56px_minmax(0,1fr)_auto] items-center gap-3 py-2.5 shadow-[inset_0_-1px_0_var(--line-soft)]">
+                      <span className="text-[14px] tabular-nums">{fmtTime(x.startAt, tz)}</span>
+                      <span className="flex min-w-0 flex-col">
+                        <span className="truncate text-[14px]">{x.contactName ?? "Sin contacto"}</span>
+                        <span className="truncate text-[12.5px] text-muted">{x.serviceName}</span>
                       </span>
-                      <span className="h-2 min-w-0 flex-1 overflow-hidden rounded-full bg-chip">
-                        <span
-                          aria-hidden
-                          className="block h-full rounded-full bg-service-purple"
-                          style={{ width: `${Math.round((t.count / topServices[0].count) * 100)}%` }}
-                        />
-                      </span>
-                      <span className="u-mono w-6 shrink-0 text-right text-[11px] text-muted">{t.count}</span>
-                    </div>
+                      <StateChip status={x.status} size="sm" />
+                    </li>
                   ))}
-                </div>
-              </PanelSection>
-            ) : null}
+                </ul>
+              )}
+            </section>
+            <section aria-labelledby="fr-30" className="flex min-w-0 flex-col gap-3">
+              <h3 id="fr-30" className="text-[15px] font-medium">Últimos 30 días</h3>
+              <dl className="grid grid-cols-2 overflow-hidden rounded-[12px] shadow-[inset_0_0_0_1px_var(--line)]">
+                {([
+                  ["Citas", settled.length],
+                  ["Completadas", completed],
+                  ["Inasistencias", noShows],
+                  ["Horas reservadas", `${Math.round(minutes / 60)} h`],
+                ] as const).map(([k, v], i) => (
+                  <div key={k} className={`flex flex-col gap-0.5 px-3.5 py-3 ${i % 2 ? "shadow-[inset_1px_0_0_var(--line)]" : ""} ${i > 1 ? "border-t border-[var(--line)]" : ""}`}>
+                    <dt className="text-[13px] text-muted">{k}</dt>
+                    <dd className="text-[22px] font-medium tabular-nums">{v}</dd>
+                  </div>
+                ))}
+              </dl>
+              <p className="text-[12.5px] leading-[1.45] text-muted">Datos de la agenda. No representan facturación ni dinero cobrado.</p>
+              <div className="flex items-baseline gap-2 pt-3">
+                <h3 className="min-w-0 flex-1 text-[15px] font-medium">Próximas ausencias</h3>
+                <button type="button" onClick={() => requestTab("time off")} className="u-focus rounded text-[13px] text-[var(--ag-ink2)] hover:underline">
+                  Ver todas
+                </button>
+              </div>
+              {(() => {
+                const next = timeOff.filter((x) => Date.parse(x.endsAt) > now.getTime()).sort((x, y) => x.startsAt.localeCompare(y.startsAt)).slice(0, 2);
+                return next.length === 0 ? (
+                  <p className="rounded-[10px] bg-[var(--chip)] px-3 py-2.5 text-[13px] text-[var(--ag-ink2)]">No hay ausencias en este periodo.</p>
+                ) : (
+                  <ul className="flex flex-col">
+                    {next.map((x) => (
+                      <li key={x.id} className="flex flex-col py-2 shadow-[inset_0_-1px_0_var(--line-soft)]">
+                        <span className="text-[13.5px]">{fmtDay(x.startsAt, tz)} → {fmtDay(new Date(Date.parse(x.endsAt) - 1).toISOString(), tz)}</span>
+                        {x.reason ? <span className="text-[12.5px] text-muted">{x.reason}</span> : null}
+                      </li>
+                    ))}
+                  </ul>
+                );
+              })()}
+            </section>
+            <section aria-labelledby="fr-week" className="flex min-w-0 flex-col gap-3">
+              <div className="flex items-baseline gap-2">
+                <h3 id="fr-week" className="min-w-0 flex-1 text-[15px] font-medium">Horario semanal</h3>
+                <button type="button" onClick={() => requestTab("hours")} className="u-focus rounded text-[13px] text-[var(--ag-ink2)] hover:underline">
+                  Editar
+                </button>
+              </div>
+              <span className="self-start rounded-[6px] bg-[var(--chip)] px-2 py-0.5 text-[12px] text-[var(--ag-ink2)]">
+                {Object.keys(member.workingHours).length === 0 ? "Usa el horario de la sede" : "Horario propio"}
+              </span>
+              <ul className="flex flex-col">
+                {(["mon", "tue", "wed", "thu", "fri", "sat", "sun"] as const).map((d) => {
+                  const inherits = Object.keys(member.workingHours).length === 0;
+                  const ranges = (inherits ? member.siteOpeningHours : member.workingHours)[d] ?? [];
+                  return (
+                    <li key={d} className="grid grid-cols-[92px_minmax(0,1fr)] gap-2 py-2 text-[13px] shadow-[inset_0_-1px_0_var(--line-soft)]">
+                      <span>{DAY_LONG[d]}</span>
+                      <span className={`tabular-nums ${ranges.length ? (inherits ? "text-[var(--ag-ink2)]" : "") : "text-muted"}`}>
+                        {ranges.length ? ranges.map((r) => `${r.start} – ${r.end}`).join(" · ") : inherits ? "Sede cerrada" : "No trabaja"}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
           </div>
         ) : tab === "details" ? (
+          <ProfileView member={member} onEdit={() => setEditingProfile(true)} />
+        ) : tab === "services" ? (
+          <div className="w-full px-6 py-5">
+            <StaffServicesEditor
+              clientId={clientId}
+              staffId={member.id}
+              staffName={member.name}
+              services={services}
+              assigned={member.serviceIds}
+              canEdit
+              onDirtyChange={reportServicesDirty}
+              onSaved={(m) => {
+                setNotice(m);
+                onSaved();
+              }}
+            />
+          </div>
+        ) : tab === "hours" ? (
+          <div className="w-full px-6 py-5">
+            {seriesState === "error" ? (
+              <p className="text-[13px] text-muted">No pudimos cargar las pausas. <button type="button" className="underline" onClick={() => void loadSeries()}>Reintentar</button></p>
+            ) : seriesState === null ? (
+              <div aria-busy="true" className="h-64 rounded-[14px] bg-subtle" />
+            ) : (
+              <WeeklyScheduleEditor
+                clientId={clientId}
+                siteId={member.siteId}
+                staffId={member.id}
+                ownerLabel={member.name}
+                siteName={member.siteName}
+                timezone={tz}
+                today={dayKey(now, tz)}
+                hours={member.workingHours}
+                siteHours={member.siteOpeningHours}
+                series={seriesState.filter((x) => x.kind === "break" && x.staffId === member.id)}
+                siteSeries={seriesState.filter((x) => x.kind === "break" && x.staffId === null)}
+                canEdit
+                recheck={hoursRecheck}
+                onDirtyChange={reportHoursDirty}
+                onChangeOneDate={() => setOneDate(nextBreak())}
+                onReschedule={(item) => setHoursResched(item)}
+                onSaved={(m) => {
+                  setNotice(m);
+                  void loadSeries();
+                  onSaved();
+                }}
+              />
+            )}
+          </div>
+        ) : (
+          <div className="w-full px-6 py-5">
+            <StaffAbsences
+              clientId={clientId}
+              siteId={member.siteId}
+              siteName={member.siteName}
+              timezone={tz}
+              staffId={member.id}
+              staffName={member.name}
+              timeOff={timeOff}
+              canEdit
+              onChanged={(m) => {
+                setNotice(m);
+                onSaved();
+              }}
+            />
+          </div>
+        )}
+      </div>
+      {oneDate ? (
+        <BreakWeekPanel
+          clientId={clientId}
+          siteId={member.siteId}
+          timezone={tz}
+          occ={oneDate}
+          ownerName={member.name}
+          ownerNote={`${member.name} · ${Object.keys(member.workingHours).length ? "horario propio" : "horario de la sede"}`}
+          canEdit
+          recheck={hoursRecheck}
+          onReschedule={(item) => setHoursResched(item)}
+          onClose={() => setOneDate(null)}
+          onChanged={() => {
+            void loadSeries();
+            onSaved();
+          }}
+        />
+      ) : null}
+      {editingProfile ? (
+        <SidePanel
+          name="staff-profile"
+          title="Editar perfil"
+          subtitle={`${member.name} · ${member.siteName}`}
+          dirty={dirtyFields.length > 0}
+          onClose={() => {
+            setProfile(profileFromMember(member));
+            setSaveError(null);
+            setDeactivateConfirm(null);
+            setEditingProfile(false);
+          }}
+          footer={
+            <div className="flex items-center gap-2">
+              <span className={`min-w-0 flex-1 truncate text-[12.5px] ${invalid || saveError ? "text-danger" : "text-muted"}`}>
+                {invalid ?? saveError ?? (dirtyFields.length ? `${dirtyFields.length} ${dirtyFields.length === 1 ? "cambio sin guardar" : "cambios sin guardar"}` : "Sin cambios")}
+              </span>
+              <Button
+                onClick={() => {
+                  setProfile(profileFromMember(member));
+                  setSaveError(null);
+                  setEditingProfile(false);
+                }}
+                disabled={saving}
+              >
+                Cancelar
+              </Button>
+              <Button variant="primary" disabled={saving || dirtyFields.length === 0 || invalid !== null} loading={saving} loadingLabel="Guardando…" onClick={requestSave}>
+                {saveError ? "Reintentar" : "Guardar cambios"}
+              </Button>
+            </div>
+          }
+        >
           <div className="mx-auto flex w-full max-w-3xl flex-col">
             {/* IDENTITY — the name, and the site it belongs to. This section is why there
                 is no longer an "Edit" button above: the name was the last field that lived
@@ -1180,73 +1200,28 @@ function StaffDetail({
               </div>
             </DetailSection>
           </div>
-        ) : tab === "services" ? (
-          <div className="mx-auto w-full max-w-3xl px-6 py-5">
-            <StaffServicesEditor
-              clientId={clientId}
-              staffId={member.id}
-              staffName={member.name}
-              services={services}
-              assigned={member.serviceIds}
-              canEdit
-              onSaved={(m) => {
-                setNotice(m);
-                onSaved();
-              }}
-            />
-          </div>
-        ) : tab === "hours" ? (
-          <div className="mx-auto w-full max-w-4xl px-6 py-5">
-            {seriesState === "error" ? (
-              <p className="text-[13px] text-muted">No pudimos cargar las pausas. <button type="button" className="underline" onClick={() => void loadSeries()}>Reintentar</button></p>
-            ) : seriesState === null ? (
-              <div aria-busy="true" className="h-64 rounded-[14px] bg-subtle" />
-            ) : (
-              <WeeklyScheduleEditor
-                clientId={clientId}
-                siteId={member.siteId}
-                staffId={member.id}
-                ownerLabel={member.name}
-                siteName={member.siteName}
-                timezone={tz}
-                today={dayKey(now, tz)}
-                hours={member.workingHours}
-                siteHours={member.siteOpeningHours}
-                series={seriesState.filter((x) => x.kind === "break" && x.staffId === member.id)}
-                siteSeries={seriesState.filter((x) => x.kind === "break" && x.staffId === null)}
-                canEdit
-                recheck={hoursRecheck}
-                onReschedule={(item) => setHoursResched(item)}
-                onSaved={(m) => {
-                  setNotice(m);
-                  void loadSeries();
-                  onSaved();
-                }}
-              />
-            )}
-            <p className="mt-4 text-[12.5px] text-muted">
-              Para cambiar la pausa de una sola fecha ábrela en el calendario: se guarda como excepción de ese día y la rutina no cambia.
-            </p>
-          </div>
-        ) : (
-          <div className="mx-auto w-full max-w-3xl px-6 py-5">
-            <StaffAbsences
-              clientId={clientId}
-              siteId={member.siteId}
-              siteName={member.siteName}
-              timezone={tz}
-              staffId={member.id}
-              staffName={member.name}
-              timeOff={timeOff}
-              canEdit
-              onChanged={(m) => {
-                setNotice(m);
-                onSaved();
-              }}
-            />
-          </div>
-        )}
-      </div>
+          {deactivateConfirm ? (
+            <div role="alert" className="mt-4 flex flex-col gap-2 rounded-[10px] bg-[var(--warn-soft)] px-3 py-2.5 text-[13px] text-[var(--warn)]">
+              <p className="font-medium">
+                {member.name} tiene {citas(deactivateConfirm.length)} {deactivateConfirm.length === 1 ? "próxima" : "próximas"}
+              </p>
+              <p>Al desactivar se detienen las reservas nuevas. Estas citas se conservan: no se cancela ninguna.</p>
+              <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto tabular-nums">
+                {deactivateConfirm.map((x) => (
+                  <li key={x.id} className="truncate">
+                    {fmtDay(x.start_at, x.site_timezone)} · {x.service_name}
+                    {x.contact_name ? ` · ${x.contact_name}` : ""}
+                  </li>
+                ))}
+              </ul>
+              <div className="flex flex-wrap justify-end gap-2">
+                <Button size="sm" onClick={() => setDeactivateConfirm(null)}>Volver</Button>
+                <Button size="sm" variant="destructive" disabled={saving} onClick={commitSave}>Desactivar de todos modos</Button>
+              </div>
+            </div>
+          ) : null}
+        </SidePanel>
+      ) : null}
       {notice ? (
         <div role="status" aria-live="polite" className="fixed bottom-6 left-1/2 z-[90] flex min-h-[44px] -translate-x-1/2 items-center gap-2 rounded-sch-control bg-foreground px-4 text-sm text-background shadow-[var(--shadow-float)]">
           <span aria-hidden>✓</span>
@@ -1254,68 +1229,6 @@ function StaffDetail({
         </div>
       ) : null}
 
-      {/* UNSAVED CHANGES — only when there are any. It reports DAYS, which is the unit
-          the editor above works in, and saves through the same updateStaffAction the
-          settings form always used. */}
-      {changes > 0 || saveError ? (
-        <div className="flex shrink-0 items-center gap-2 border-t border-line bg-surface px-4 py-3">
-          {/* The SENTENCE is the flexible one: it shrinks and truncates. The two
-              buttons never wrap — "Save changes" breaking onto two lines made the bar
-              grow a row every time the message got long. */}
-          <span className="min-w-0 flex-1 truncate text-xs text-muted">
-            {invalid ?? saveError ?? `${changes} ${changes === 1 ? "cambio sin guardar" : "cambios sin guardar"}`}
-          </span>
-          <button
-            type="button"
-            onClick={() => {
-              setSaveError(null);
-              setDraft(draftFromWeekly(member.workingHours));
-              setProfile(profileFromMember(member));
-            }}
-            className="inline-flex h-[32px] shrink-0 items-center whitespace-nowrap rounded-md border border-line-strong bg-surface px-3 text-xs transition-colors hover:bg-hover"
-          >
-            Descartar
-          </button>
-          <button
-            type="button"
-            disabled={saving || changes === 0 || invalid !== null}
-            onClick={requestSave}
-            className="inline-flex h-[32px] shrink-0 items-center whitespace-nowrap rounded-md bg-ink px-3 text-xs font-medium text-ink-fg transition-colors hover:bg-ink-hover disabled:opacity-50"
-          >
-            {saving ? "Guardando…" : "Guardar cambios"}
-          </button>
-        </div>
-      ) : null}
-
-      {/* DEACTIVATION GUARD (3d): the future appointments this deactivation would affect.
-          Nothing is cancelled — they are kept and simply stop being added to. */}
-      {deactivateConfirm ? (
-        <div className="flex shrink-0 flex-col gap-2 border-t border-line bg-surface px-4 py-3">
-          <p className="text-xs font-semibold text-foreground">
-            {member.name} tiene {citas(deactivateConfirm.length)} {deactivateConfirm.length === 1 ? "próxima" : "próximas"}
-          </p>
-          <p className="text-[11px] text-muted">
-            Al desactivar se detienen las reservas nuevas. Estas citas se conservan: no se cancela
-            ninguna. Gestiónalas con cada cliente si hace falta.
-          </p>
-          <ul className="flex max-h-40 flex-col gap-1 overflow-y-auto">
-            {deactivateConfirm.map((a) => (
-              <li key={a.id} className="u-mono truncate text-[11px] text-muted">
-                {fmtDay(a.start_at, a.site_timezone)} · {a.service_name}
-                {a.contact_name ? ` · ${a.contact_name}` : ""}
-              </li>
-            ))}
-          </ul>
-          <div className="flex flex-wrap justify-end gap-2">
-            <button type="button" onClick={() => setDeactivateConfirm(null)} className="inline-flex h-[32px] items-center rounded-md border border-line-strong bg-surface px-3 text-xs hover:bg-hover">
-              Cancelar
-            </button>
-            <button type="button" disabled={saving} onClick={commitSave} className="inline-flex h-[32px] items-center rounded-md border border-danger/40 px-3 text-xs text-danger hover:bg-danger/10 disabled:opacity-50">
-              Desactivar de todos modos
-            </button>
-          </div>
-        </div>
-      ) : null}
       {hoursResched ? (
         <AffectedReschedulePanel
           clientId={clientId}
@@ -1330,6 +1243,17 @@ function StaffDetail({
           onBack={() => {
             setHoursResched(null);
             setHoursRecheck((n) => n + 1);
+          }}
+        />
+      ) : null}
+      {tabAsk ? (
+        <DiscardChanges
+          onKeep={() => setTabAsk(null)}
+          onDiscard={() => {
+            const next = tabAsk;
+            setTabAsk(null);
+            setTabDirtyState({ tab: next, dirty: false });
+            setTab(next);
           }}
         />
       ) : null}
@@ -1734,64 +1658,8 @@ function CertificationForm({
   );
 }
 
-/** A dependency-free sparkline. One series, no axes — the numbers live in the KPIs. */
-function Sparkline({ series }: { series: number[] }) {
-  const w = 300;
-  const h = 64;
-  const max = Math.max(1, ...series);
-  const step = series.length > 1 ? w / (series.length - 1) : w;
-  const points = series.map((v, i) => `${(i * step).toFixed(1)},${(h - (v / max) * (h - 8) - 4).toFixed(1)}`);
-  const last = points[points.length - 1]?.split(",") ?? ["0", "0"];
-  return (
-    <svg viewBox={`0 0 ${w} ${h}`} width="100%" height={h} preserveAspectRatio="none" aria-hidden>
-      {[0.25, 0.6, 1].map((f) => (
-        <line key={f} x1="0" y1={h * f} x2={w} y2={h * f} stroke="var(--line)" strokeWidth="1" />
-      ))}
-      <polyline
-        points={points.join(" ")}
-        fill="none"
-        stroke="var(--service-purple)"
-        strokeWidth="2"
-        strokeLinejoin="round"
-        strokeLinecap="round"
-      />
-      <circle cx={last[0]} cy={last[1]} r="3" fill="var(--service-purple)" />
-    </svg>
-  );
-}
 
 
-function Facet({
-  label,
-  value,
-  options,
-  onChange,
-}: {
-  label: string;
-  value: string;
-  options: { value: string; label: string }[];
-  onChange: (v: string) => void;
-}) {
-  const current = options.find((o) => o.value === value);
-  return (
-    <div className={`relative ${CONTROL_CLS}`}>
-      <span className="pointer-events-none whitespace-nowrap">{current?.label ?? label}</span>
-      <span aria-hidden className="pointer-events-none text-faint">&#9662;</span>
-      <select
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        aria-label={label}
-        className="absolute inset-0 cursor-pointer opacity-0"
-      >
-        {options.map((o) => (
-          <option key={o.value || "any"} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </div>
-  );
-}
 
 function SearchIcon() {
   return (
@@ -1815,4 +1683,149 @@ function fmtDay(iso: string, tz: string): string {
 }
 function dayKey(d: Date, tz: string): string {
   return new Intl.DateTimeFormat("en-CA", { timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit" }).format(d);
+}
+
+/** «Opciones» (reference E1): the presence filter, and — real facets the roster already
+ *  had — service and site. One popover; Escape closes it and returns focus. */
+function TeamOptions(props: {
+  presence: Array<{ key: string; label: string; n: number }>;
+  statusFilter: string;
+  onStatus: (k: string) => void;
+  services: Array<{ id: string; name: string }>;
+  serviceFilter: string;
+  onService: (id: string) => void;
+  sites: Array<{ id: string; name: string }>;
+  siteId: string;
+  onSite: (id: string) => void;
+}) {
+  const { open, toggle, close, triggerRef, panelRef } = usePopover();
+  const current = props.presence.find((p) => p.key === props.statusFilter) ?? props.presence[0];
+  const label = props.statusFilter || props.serviceFilter ? `${current.label}${props.serviceFilter ? " · 1 servicio" : ""}` : "Opciones";
+  return (
+    <div className="relative">
+      <button
+        ref={triggerRef}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        onClick={toggle}
+        className="u-focus inline-flex h-[40px] shrink-0 items-center gap-2 whitespace-nowrap rounded-[10px] border border-[var(--line-strong)] bg-[var(--surface)] px-3.5 text-[14px] hover:bg-[var(--chip)]"
+      >
+        {label}
+        <svg aria-hidden viewBox="0 0 16 16" className="size-[11px]" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M4 6l4 4 4-4" /></svg>
+      </button>
+      {open ? (
+        <div ref={panelRef} role="menu" aria-label="Filtrar el equipo" className="absolute right-0 top-[46px] z-20 flex min-w-[220px] flex-col rounded-[12px] border border-[var(--line)] bg-[var(--surface)] p-1.5 shadow-[0_8px_24px_rgba(0,0,0,0.10)]">
+          <span className="px-2.5 pb-1 pt-1.5 text-[12px] text-muted">Presencia</span>
+          {props.presence.map((p) => (
+            <button
+              key={p.key || "all"}
+              type="button"
+              role="menuitemradio"
+              aria-checked={p.key === props.statusFilter}
+              onClick={() => {
+                props.onStatus(p.key);
+                close(true);
+              }}
+              className={`u-focus flex h-[34px] items-center gap-2 rounded-[8px] px-2.5 text-left text-[14px] hover:bg-[var(--chip)] ${p.key === props.statusFilter ? "bg-[var(--chip)]" : ""}`}
+            >
+              <span className="flex-1">{p.label}</span>
+              <span className="text-[12px] tabular-nums text-muted">{p.n}</span>
+            </button>
+          ))}
+          {props.services.length > 0 ? (
+            <label className="mt-1 flex flex-col gap-1 border-t border-[var(--line)] px-2.5 pb-1.5 pt-2">
+              <span className="text-[12px] text-muted">Servicio</span>
+              <select value={props.serviceFilter} onChange={(e) => props.onService(e.target.value)} className="u-focus h-[34px] rounded-[10px] border border-[var(--line-strong)] bg-[var(--surface)] px-2 text-[13.5px]">
+                <option value="">Todos los servicios</option>
+                {props.services.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          {props.sites.length > 1 ? (
+            <label className="flex flex-col gap-1 px-2.5 pb-1.5 pt-1">
+              <span className="text-[12px] text-muted">Sede</span>
+              <select value={props.siteId} onChange={(e) => props.onSite(e.target.value)} className="u-focus h-[34px] rounded-[10px] border border-[var(--line-strong)] bg-[var(--surface)] px-2 text-[13.5px]">
+                {props.sites.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+const DAY_LONG: Record<string, string> = { mon: "Lunes", tue: "Martes", wed: "Miércoles", thu: "Jueves", fri: "Viernes", sat: "Sábado", sun: "Domingo" };
+/** "miércoles 21 oct" — the reference's day heading. */
+function fmtDayLong(iso: string, tz: string): string {
+  return new Intl.DateTimeFormat("es-CO", { timeZone: tz, weekday: "long", day: "numeric", month: "short" })
+    .format(new Date(iso))
+    .replace(/\./g, "")
+    .replace(",", "");
+}
+
+/**
+ * PERFIL (reference f13): what is stored about the person, read-only, in four blocks.
+ * Editing happens in the «Editar perfil» panel (same fields). Contact and emergency data
+ * are internal: never on the booking page. A professional is NOT a user account.
+ */
+function ProfileView({ member, onEdit }: { member: StaffMember; onEdit: () => void }) {
+  const NONE = "Sin registrar";
+  const employment = EMPLOYMENT_TYPES.find((t) => t.value === member.employmentType)?.label ?? NONE;
+  const block = (title: string, rows: Array<[string, React.ReactNode]>) => (
+    <section className="flex min-w-0 flex-col">
+      <h3 className="pb-1 text-[15px] font-medium">{title}</h3>
+      <dl className="flex flex-col">
+        {rows.map(([k, v]) => (
+          <div key={k} className="grid grid-cols-[170px_minmax(0,1fr)] gap-3 py-[11px] text-[13.5px] shadow-[inset_0_-1px_0_var(--line-soft)]">
+            <dt className="text-muted">{k}</dt>
+            <dd className="min-w-0 [overflow-wrap:anywhere]">{v}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
+  );
+  return (
+    <div className="flex w-full flex-col gap-8 px-6 py-5">
+      <div className="grid gap-x-10 gap-y-8 lg:grid-cols-2">
+        {block("Identidad", [
+          ["Nombre", member.name],
+          ["Sede", member.siteName],
+          ["Rol en la agenda", member.takesBookings ? "Profesional · recibe citas" : "Sin agenda propia"],
+        ])}
+        {block("Perfil público", [
+          ["Título público", member.publicTitle || NONE],
+          ["Presentación", member.publicBio || "Sin presentación"],
+        ])}
+        {block("Contacto (interno)", [
+          ["Teléfono", member.phone ? <span className="tabular-nums">{member.phone}</span> : NONE],
+          ["Email", member.email || NONE],
+          ["Contacto de emergencia", member.emergencyContactName ? `${member.emergencyContactName}${member.emergencyContactPhone ? ` · ${member.emergencyContactPhone}` : ""}` : NONE],
+        ])}
+        {block("Vinculación", [
+          ["Cargo", member.title || NONE],
+          ["Tipo de contrato", employment],
+          ["Horas semanales", member.weeklyHours ? `${member.weeklyHours} h` : NONE],
+          ["Fecha de inicio", member.startDate ? `${new Intl.DateTimeFormat("es-CO", { day: "numeric", month: "short", year: "numeric", timeZone: "UTC" }).format(new Date(`${member.startDate}T00:00:00Z`)).replace(/\./g, "")}${seniority(member.startDate) ? ` · ${seniority(member.startDate)}` : ""}` : NONE],
+          ["Recibe citas", member.takesBookings ? "Sí" : "No"],
+          ["Sigue trabajando", member.active ? "Sí" : "No"],
+          ["Habilidades", member.skills.length ? member.skills.join(", ") : NONE],
+          ["Certificaciones", member.certifications.length ? member.certifications.map((c) => c.name).join(", ") : NONE],
+        ])}
+      </div>
+      <div className="flex flex-wrap items-center gap-3">
+        <p className="min-w-0 flex-1 text-[12.5px] leading-[1.45] text-muted">
+          Teléfono, email y emergencia son internos: no se muestran en la reserva pública. Un profesional no es una cuenta de usuario; los accesos se gestionan en Usuarios y accesos.
+        </p>
+        <button type="button" onClick={onEdit} className="u-focus inline-flex h-[40px] shrink-0 items-center rounded-[12px] border border-[var(--line-strong)] bg-[var(--surface)] px-4 text-[14px] font-medium hover:bg-[var(--subtle)]">
+          Editar perfil
+        </button>
+      </div>
+    </div>
+  );
 }

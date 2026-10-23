@@ -30,6 +30,9 @@ import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
 import { effectivePublicReason, PublicReasonField } from "./timeoff/PublicReasonField";
 import { PUBLIC_REASON_LABEL, type PublicAbsenceReason } from "@/lib/publicAbsenceReason";
 import { ABSENCES_ANCHOR, schedulingHref, type SchedulingPage } from "@/lib/schedulingNav";
+import { diagnoseDay, fmtSpans, nextDateOf, type BreakInput, type DayKey, type WeeklyRanges } from "@/lib/availabilityDiagnosis";
+import { listScheduleSeriesAction } from "@/lib/scheduleSeriesActions";
+import { todayAtSite } from "@/lib/siteCalendar";
 
 type WeeklyHours = Record<string, Array<{ start: string; end: string }>>;
 
@@ -556,22 +559,32 @@ export function WhyNothingAvailable({ clientId, sites, staff }: { clientId: stri
   const active = sites.filter((s) => s.active);
   const [siteId, setSiteId] = useState(active[0]?.id ?? "");
   const [dow, setDow] = useState<string>("mon");
+  // The site's usual breaks (break series), tagged with the site they belong to.
+  const [breakState, setBreaks] = useState<{ siteId: string; list: BreakInput[] }>({ siteId: "", list: [] });
+  useEffect(() => {
+    if (!siteId) return;
+    let alive = true;
+    listScheduleSeriesAction(clientId, siteId)
+      .then((r) => alive && setBreaks({ siteId, list: r.ok ? r.series.filter((x) => x.kind === "break") : [] }))
+      .catch(() => alive && setBreaks({ siteId, list: [] }));
+    return () => {
+      alive = false;
+    };
+  }, [clientId, siteId]);
   const site = sites.find((s) => s.id === siteId);
   if (!site) return null;
 
-  const siteSlot = site.opening_hours?.[dow]?.[0];
-  const siteOpen = Boolean(siteSlot);
-  // Effective staff hours for the day: own working_hours if set, else the site's.
-  const worksThisDay = (st: Staff): boolean => {
-    if (!st.active || st.site_id !== siteId) return false;
-    const own = st.working_hours && Object.keys(st.working_hours).length > 0 ? st.working_hours : null;
-    return own ? Boolean(own[dow]?.[0]) : siteOpen; // inheriting staff work iff the site is open
-  };
-  const working = staff.filter(worksThisDay);
-  // 3e — distinguish "everyone is deactivated" from "no one works this weekday". If the
-  // site has staff but every one is inactive, say so exactly (that was a blind guess before).
-  const staffAtSite = staff.filter((st) => st.site_id === siteId);
-  const allStaffInactive = staffAtSite.length > 0 && staffAtSite.every((st) => !st.active);
+  // Every range of the day and every break — the same inputs the engine reads (finding E).
+  const day = diagnoseDay({
+    dow: dow as DayKey,
+    date: nextDateOf(dow as DayKey, todayAtSite(site.timezone)),
+    siteHours: (site.opening_hours ?? {}) as WeeklyRanges,
+    staff: staff.filter((st) => st.site_id === siteId).map((st) => ({ id: st.id, name: st.name, active: st.active, working_hours: (st.working_hours ?? null) as WeeklyRanges | null })),
+    breaks: breakState.siteId === siteId ? breakState.list : [],
+  });
+  const siteOpen = day.siteSpans.length > 0;
+  const working = day.working;
+  const allStaffInactive = day.allStaffInactive;
 
   const notice = site.scheduling_config.min_notice_min;
   const noticeHours = Math.floor(notice / 60);
@@ -590,10 +603,17 @@ export function WhyNothingAvailable({ clientId, sites, staff }: { clientId: stri
    */
   const findings: Array<{ ok: boolean; title: string; detail: string }> = [
     siteOpen
-      ? { ok: true, title: `Abierta de ${siteSlot!.start} a ${siteSlot!.end}`, detail: `${site.name} · ${DAY_LABELS[dow]}` }
+      ? { ok: true, title: `Abierta ${fmtSpans(day.siteSpans)}`, detail: `${site.name} · ${DAY_LABELS[dow]}` }
       : { ok: false, title: "La sede no abre este día", detail: `${site.name} · ${DAY_LABELS[dow]} sin horario` },
+    ...(siteOpen && day.siteBreaks.length > 0
+      ? [{ ok: true, title: `Pausa de la sede ${fmtSpans(day.siteBreaks)}`, detail: "Nadie recibe citas en ese tramo" }]
+      : []),
     working.length > 0
-      ? { ok: true, title: `${working.length} profesional${working.length === 1 ? "" : "es"} trabaja${working.length === 1 ? "" : "n"} este día`, detail: working.map((st) => st.name).join(", ") }
+      ? {
+          ok: true,
+          title: `${working.length} profesional${working.length === 1 ? "" : "es"} trabaja${working.length === 1 ? "" : "n"} este día`,
+          detail: working.map((st) => `${st.name} ${fmtSpans(st.spans)}${st.breaks.length ? ` (pausa ${fmtSpans(st.breaks)})` : ""}`).join(" · "),
+        }
       : allStaffInactive
         ? { ok: false, title: "Todo el equipo de esta sede está inactivo", detail: "Reactiva a alguien para volver a recibir reservas" }
         : { ok: false, title: "Nadie trabaja este día", detail: "Ningún profesional tiene horario para esta jornada" },
@@ -622,7 +642,7 @@ export function WhyNothingAvailable({ clientId, sites, staff }: { clientId: stri
             <span aria-hidden className={`mt-1.5 size-[7px] shrink-0 rounded-full ${finding.ok ? "bg-success" : "bg-warn-rule"}`} />
             <div className="min-w-0 flex-1">
               <p className="text-[0.8125rem] text-foreground">{finding.title}</p>
-              <p className="truncate text-[0.6875rem] text-muted">{finding.detail}</p>
+              <p className="text-[0.6875rem] text-muted">{finding.detail}</p>
             </div>
           </div>
         ))}

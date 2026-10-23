@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState, useTransition } from "react";
+import { useEffect, useMemo, useRef, useState, useTransition } from "react";
 import { setStaffServiceAction } from "@/lib/schedulingAdminActions";
 import { useNavigationGuard } from "@/components/ui/module/useEditorGuard";
 import { DiscardChanges } from "@/components/ui/module/ConfirmLayer";
@@ -23,6 +23,8 @@ export function StaffServicesEditor(props: {
   assigned: string[];
   canEdit: boolean;
   onSaved: (message: string) => void;
+  /** Reports unsaved changes to the host (the ficha guards its tabs with it). */
+  onDirtyChange?: (dirty: boolean) => void;
 }) {
   const active = props.services.filter((s) => s.active || props.assigned.includes(s.id));
   const [selected, setSelected] = useState<Set<string>>(() => new Set(props.assigned));
@@ -36,6 +38,8 @@ export function StaffServicesEditor(props: {
   const toRemove = [...initial].filter((id) => !selected.has(id));
   const dirty = toAdd.length + toRemove.length > 0;
   const nav = useNavigationGuard({ dirty, onAsk: () => setAsking(true) });
+  const onDirtyChange = props.onDirtyChange;
+  useEffect(() => onDirtyChange?.(dirty), [dirty, onDirtyChange]);
 
   const q = query.trim().toLocaleLowerCase("es");
   const groups = useMemo(() => {

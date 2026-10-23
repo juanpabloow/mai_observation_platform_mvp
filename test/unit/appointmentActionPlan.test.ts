@@ -11,10 +11,13 @@ import { appointmentActionPlan } from '../../web/lib/appointmentActionPlan.js';
  */
 const read = (rel: string) => readFileSync(fileURLToPath(new URL(`../../${rel}`, import.meta.url)), 'utf8');
 
-// canOperate: every client role and the agency may operate an agenda.
-const OWN = { canOperate: true, canModify: true }; // a professional on its OWN appointment
-const OTHER = { canOperate: true, canModify: false }; // a professional on SOMEONE ELSE's
-const RECEPTION = { canOperate: true, canModify: true }; // setter / client owner / agency: any staff
+// canOperate: every client role and the agency may operate an agenda. The appointment
+// has already started (the start rule has its own test below).
+const START = '2026-10-21T15:00:00.000Z';
+const STARTED = { startAt: START, now: Date.parse(START) + 30 * 60_000 };
+const OWN = { canOperate: true, canModify: true, ...STARTED }; // a professional on its OWN appointment
+const OTHER = { canOperate: true, canModify: false, ...STARTED }; // a professional on SOMEONE ELSE's
+const RECEPTION = { canOperate: true, canModify: true, ...STARTED }; // setter / client owner / agency: any staff
 
 test('own appointment (Sin confirmar): every authorised action is offered', () => {
   const p = appointmentActionPlan({ ...OWN, status: 'scheduled' });
@@ -62,7 +65,7 @@ test('a closed appointment offers no transition, but the history stays readable 
 });
 
 test('a login that cannot operate the agenda gets nothing, whatever the per-appointment flag says', () => {
-  const p = appointmentActionPlan({ canOperate: false, canModify: true, status: 'scheduled' });
+  const p = appointmentActionPlan({ canOperate: false, canModify: true, status: 'scheduled', ...STARTED });
   assert.equal(p.allowed, false);
   assert.deepEqual(p.transitions, []);
 });
@@ -91,7 +94,7 @@ test('both detail surfaces decide from the shared plan — no separate visual ru
   const panel = read('web/components/scheduling/agenda/AppointmentPanel.tsx');
   const sheet = read('web/components/scheduling/mobile/MobileAppointmentSheet.tsx');
   for (const [name, src] of [['desktop panel', panel], ['phone sheet', sheet]] as const) {
-    assert.ok(src.includes('appointmentActionPlan({ canOperate: props.canOperate, canModify: props.canModify, status: appt.status })'), `${name} uses the plan`);
+    assert.ok(src.includes('appointmentActionPlan({ canOperate: props.canOperate, canModify: props.canModify, status: appt.status, startAt: appt.start_at, now })'), `${name} uses the plan`);
     assert.ok(!/props\.canOperate && live/.test(src), `${name} no longer decides from canOperate alone`);
   }
   assert.ok(panel.includes('canModify={props.canModify}'), 'the desktop panel passes it to the phone sheet');
@@ -105,7 +108,7 @@ test('the review link is offered ONLY for a completed appointment this login may
   assert.equal(appointmentActionPlan({ ...OWN, status: 'completed' }).reviewLink, true);
   assert.equal(appointmentActionPlan({ ...RECEPTION, status: 'completed' }).reviewLink, true);
   assert.equal(appointmentActionPlan({ ...OTHER, status: 'completed' }).reviewLink, false, 'not someone else’s appointment');
-  assert.equal(appointmentActionPlan({ canOperate: false, canModify: true, status: 'completed' }).reviewLink, false);
+  assert.equal(appointmentActionPlan({ canOperate: false, canModify: true, status: 'completed', ...STARTED }).reviewLink, false);
   for (const status of ['scheduled', 'confirmed', 'cancelled', 'no_show']) {
     assert.equal(appointmentActionPlan({ ...OWN, status }).reviewLink, false, `${status}: no review link`);
   }
@@ -114,4 +117,30 @@ test('the review link is offered ONLY for a completed appointment this login may
   assert.ok(/\{plan\.reviewLink \? \(?\s*(<div[^>]*>\s*)?<ReviewLinkCard/.test(panel), 'desktop shows it from the plan');
   assert.ok(sheet.includes('...(plan.reviewLink ? [{ k: "Reseña"'), 'phone shows it from the plan');
   assert.ok(read('web/components/scheduling/AgendaView.tsx').includes('getReviewLinkAction(props.clientId, appt.id)'));
+});
+
+test('Completar waits for the start — the same answer on desktop and phone (finding A)', () => {
+  const at = (deltaMin: number) => ({ canOperate: true, canModify: true, startAt: START, now: Date.parse(START) + deltaMin * 60_000 });
+  // A FUTURE appointment: confirm / cancel / no-show yes, completed no, no "Completar" primary.
+  const future = appointmentActionPlan({ ...at(-90), status: 'confirmed' });
+  assert.deepEqual(future.transitions, ['no_show', 'cancelled']);
+  assert.equal(future.complete, false);
+  assert.equal(future.primary, null, 'the phone offers no "Completar" before the start');
+  assert.equal(future.completeWaitsForStart, true);
+  assert.equal(appointmentActionPlan({ ...at(-1 / 60_000), status: 'scheduled' }).transitions.includes('completed'), false, '1 ms before the start');
+  // The EXACT start enables it; so does any time after.
+  for (const d of [0, 1, 240]) {
+    const p = appointmentActionPlan({ ...at(d), status: 'confirmed' });
+    assert.ok(p.transitions.includes('completed'), `+${d} min`);
+    assert.equal(p.primary, 'completed');
+    assert.equal(p.completeWaitsForStart, false);
+  }
+  // Sin confirmar, future: Confirmar is still the primary.
+  assert.equal(appointmentActionPlan({ ...at(-90), status: 'scheduled' }).primary, 'confirmed');
+  // The server holds the same rule for every agenda caller.
+  const action = read('web/lib/schedulingActions.ts');
+  assert.match(action, /requireStartedToComplete: true/);
+  const engine = read('src/scheduling/booking.ts');
+  assert.match(engine, /target === 'completed' && input\.requireStartedToComplete && current\.start_at\.getTime\(\) > /);
+  assert.ok(read('web/components/scheduling/mobile/MobileAppointmentSheet.tsx').includes('plan.completeWaitsForStart'), 'the phone says why');
 });

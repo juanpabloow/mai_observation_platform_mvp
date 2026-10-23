@@ -87,7 +87,8 @@ export function MobileAppointmentSheet(props: {
   const [otherReason, setOtherReason] = useState("");
   const [activity, setActivity] = useState<{ state: "loading" } | { state: "error" } | { state: "ready"; items: AppointmentActivityItem[] }>({ state: "loading" });
 
-  const plan = appointmentActionPlan({ canOperate: props.canOperate, canModify: props.canModify, status: appt.status });
+  const [now] = useState(() => Date.now());
+  const plan = appointmentActionPlan({ canOperate: props.canOperate, canModify: props.canModify, status: appt.status, startAt: appt.start_at, now });
   // The activity line is part of the detail (who created it, when) — loaded once, and only
   // when the server would serve it (same appointment gate as the writes).
   useEffect(() => {
@@ -307,7 +308,7 @@ export function MobileAppointmentSheet(props: {
                 </span>
                 <span className="flex flex-1 flex-col">
                   <span className="text-[16px]">{STATE_LABEL[s]}</span>
-                  <span className="text-[13px] text-m-tx3">{STATE_DESC[s]}</span>
+                  <span className="text-[13px] text-m-tx3">{s === "completed" && plan.completeWaitsForStart ? "Se habilita al empezar la cita" : STATE_DESC[s]}</span>
                 </span>
                 {cur ? <span className="text-[13px] font-semibold text-m-ok">Actual</span> : null}
               </button>

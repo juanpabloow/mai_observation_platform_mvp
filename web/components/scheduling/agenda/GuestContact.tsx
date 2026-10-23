@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from "react";
 import { findContactMatchesAction, saveAppointmentContactAction } from "@/lib/appointmentContactActions";
 import type { ContactMatch, GuestField } from "@/lib/walkInContact";
-import { Button, INPUT } from "../ui/system";
+import { INPUT } from "../ui/system";
 
 /**
  * The CLIENT of an appointment with NO linked contact (a walk-in registered as a guest).
@@ -84,68 +84,67 @@ export function GuestContact(props: {
 
   if (!props.canModify) {
     return (
-      <div className="flex flex-col gap-1 text-[13px]">
+      <div className="flex flex-col gap-1 text-[13.5px]">
         <p className="font-medium">{props.initial.name ?? "Sin nombre"}</p>
-        {props.initial.phone ? <p className="u-mono text-muted">{props.initial.phone}</p> : null}
+        {props.initial.phone ? <p className="tabular-nums text-muted">{props.initial.phone}</p> : null}
         {props.initial.email ? <p className="text-muted">{props.initial.email}</p> : null}
         <p className="text-muted">Sin contacto vinculado.</p>
       </div>
     );
   }
 
+  const SMALL = "u-focus inline-flex h-[32px] items-center gap-1.5 self-start whitespace-nowrap rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] px-3 text-[13px] text-foreground transition-colors hover:bg-[var(--subtle)] disabled:cursor-not-allowed disabled:opacity-50";
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-2.5">
+      <span className="text-[13px] text-[var(--ag-ink2)]">Sin contacto vinculado · añade un teléfono o un correo para crear su ficha</span>
       <label className="flex flex-col gap-1.5">
-        <span className="text-[13px] font-medium">Nombre</span>
+        <span className="text-[13px] font-medium">
+          Nombre <span className="font-normal text-muted">(opcional)</span>
+        </span>
         <input className={INPUT} value={name} onChange={(e) => setName(e.target.value)} maxLength={120} autoComplete="off" aria-invalid={Boolean(errors.name)} aria-describedby={errors.name ? "gc-name-err" : undefined} />
-        {errors.name ? <span id="gc-name-err" className="text-[12.5px] text-danger">{errors.name}</span> : null}
+        {errors.name ? <span id="gc-name-err" role="alert" className="text-[12.5px] font-medium text-danger">{errors.name}</span> : null}
       </label>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="flex flex-col gap-1.5">
+      <div className="grid grid-cols-2 gap-2.5">
+        <label className="flex min-w-0 flex-col gap-1.5">
           <span className="text-[13px] font-medium">Teléfono</span>
-          <input className={INPUT} value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" autoComplete="off" placeholder="+57 300 000 0000" aria-invalid={Boolean(errors.phone)} aria-describedby={errors.phone ? "gc-phone-err" : undefined} />
-          {errors.phone ? <span id="gc-phone-err" className="text-[12.5px] text-danger">{errors.phone}</span> : null}
+          <input className={INPUT} type="tel" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" autoComplete="off" placeholder="+57 300 000 0000" aria-invalid={Boolean(errors.phone)} aria-describedby={errors.phone ? "gc-phone-err" : undefined} />
+          {errors.phone ? <span id="gc-phone-err" role="alert" className="text-[12.5px] font-medium text-danger">{errors.phone}</span> : null}
         </label>
-        <label className="flex flex-col gap-1.5">
+        <label className="flex min-w-0 flex-col gap-1.5">
           <span className="text-[13px] font-medium">Correo</span>
-          <input className={INPUT} value={email} onChange={(e) => setEmail(e.target.value)} inputMode="email" autoComplete="off" placeholder="nombre@correo.com" aria-invalid={Boolean(errors.email)} aria-describedby={errors.email ? "gc-email-err" : undefined} />
-          {errors.email ? <span id="gc-email-err" className="text-[12.5px] text-danger">{errors.email}</span> : null}
+          <input className={INPUT} type="email" value={email} onChange={(e) => setEmail(e.target.value)} inputMode="email" autoComplete="off" placeholder="nombre@correo.com" aria-invalid={Boolean(errors.email)} aria-describedby={errors.email ? "gc-email-err" : undefined} />
+          {errors.email ? <span id="gc-email-err" role="alert" className="text-[12.5px] font-medium text-danger">{errors.email}</span> : null}
         </label>
       </div>
       {emailOnly ? <p className="text-[12.5px] text-muted">Con solo un correo no se le puede escribir por WhatsApp.</p> : null}
 
       {matches.length > 0 ? (
-        <div role="status" className="flex flex-col gap-2 rounded-[12px] border border-line px-3.5 py-3">
-          <p className="text-[13px] font-medium">
-            {matches.length === 1 ? "Ya existe un contacto con estos datos" : `Ya existen ${matches.length} contactos con estos datos`}
-          </p>
-          {matches.map((m) => (
-            <div key={m.contactId} className="flex items-center gap-3">
-              <div className="min-w-0 flex-1">
-                <p className="truncate text-[13px] font-semibold">{m.name ?? "Sin nombre"}</p>
-                <p className="u-mono truncate text-[12px] text-muted">
-                  {m.matchedBy === "phone" ? "Teléfono" : "Correo"} · {m.matchedValue}
-                </p>
-              </div>
-              <Button size="sm" onClick={() => send("link", m.contactId)} disabled={pending}>
-                Vincular
-              </Button>
-            </div>
-          ))}
-          <p className="text-[12.5px] text-muted">Vincula en lugar de crear otro contacto con el mismo dato.</p>
+        <div role="alert" className="flex flex-col gap-2 rounded-[10px] bg-[var(--warn-soft)] px-3 py-2.5 text-[13px] leading-[1.45] text-[var(--warn)]">
+          <span>
+            {matches.length === 1
+              ? `Ya existe un contacto con ${matches[0].matchedBy === "phone" ? "este teléfono" : "este correo"}: ${matches[0].name ?? "Sin nombre"} (${matches[0].matchedValue}).`
+              : `Ya existen ${matches.length} contactos con estos datos.`}{" "}
+            Vincula en lugar de crear otro.
+          </span>
+          <div className="flex flex-wrap gap-2">
+            {matches.map((m) => (
+              <button key={m.contactId} type="button" className={SMALL} onClick={() => send("link", m.contactId)} disabled={pending}>
+                Vincular a {m.name ?? m.matchedValue}
+              </button>
+            ))}
+          </div>
         </div>
       ) : null}
 
-      {error ? <p role="alert" className="text-[13px] text-danger">{error}</p> : null}
+      {error ? <p role="alert" className="text-[12.5px] font-medium text-danger">{error}</p> : null}
       <div className="flex flex-wrap gap-2">
-        <Button size="sm" onClick={() => send("guest")} disabled={pending || !dirty}>
-          Guardar datos
-        </Button>
-        <Button size="sm" variant="primary" onClick={() => send("create")} disabled={pending || matches.length > 0} loading={pending} loadingLabel="Guardando…">
-          Guardar contacto
-        </Button>
+        <button type="button" className={SMALL} onClick={() => send("create")} disabled={pending || matches.length > 0}>
+          {pending ? "Guardando…" : "Guardar contacto"}
+        </button>
+        <button type="button" className={SMALL} onClick={() => send("guest")} disabled={pending || !dirty}>
+          Guardar sin crear contacto
+        </button>
       </div>
-      <p className="text-[12.5px] leading-5 text-muted">«Guardar datos» los deja en esta cita sin crear un contacto. Para un contacto basta un teléfono o un correo.</p>
     </div>
   );
 }

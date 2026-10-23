@@ -391,6 +391,7 @@ export function SeriesPanel(props: {
                   ) : (
                     <AffectedList
                       items={affected}
+                      preexisting={preview.result && preview.result.ok ? preview.result.preexisting : null}
                       loading={preview.loading}
                       error={preview.error ? "x" : null}
                       timezone={tz}

@@ -5,9 +5,10 @@ import { createManualAppointmentAction } from "@/lib/schedulingActions";
 import { findContactMatchesAction } from "@/lib/appointmentContactActions";
 import type { ContactMatch, GuestField } from "@/lib/walkInContact";
 import { priceLabelCOP } from "@/lib/money";
-import { fmtTime, longDate, siteDayKey, siteMidnight, todayAtSite } from "@/lib/siteCalendar";
+import { fmtTime, siteDayKey, siteMidnight, todayAtSite } from "@/lib/siteCalendar";
 import { apptCategoryClass, serviceCategory } from "@/lib/agendaCategory";
-import { Avatar, Button, INPUT } from "../ui/system";
+import { Button, INPUT } from "../ui/system";
+import { AgAvatar } from "./AgendaChrome";
 import { SidePanel, PanelSection, type SidePanelHandle } from "./SidePanel";
 
 /**
@@ -35,7 +36,7 @@ export function WalkInPanel(props: {
   siteId: string;
   siteName: string;
   timezone: string;
-  staff: Array<{ id: string; name: string; photoUrl?: string | null }>;
+  staff: Array<{ id: string; name: string; photoUrl?: string | null; tint?: "1" | "2" | "3" | "4" }>;
   services: Svc[];
   lockStaffId: string | null;
   onClose: () => void;
@@ -194,11 +195,11 @@ export function WalkInPanel(props: {
       name="walkin"
       title="Atención sin cita"
       subtitle={
-        <span className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
+        <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
           <span>
-            {props.siteName} · {longDate(new Date().toISOString(), tz)}
+            {props.siteName} · {shortToday(tz)} ·
           </span>
-          <button type="button" onClick={props.onSwitchToBooking} className="u-focus rounded font-medium text-foreground underline underline-offset-2">
+          <button type="button" onClick={props.onSwitchToBooking} className="u-focus rounded text-foreground hover:underline">
             Cambiar a cita con reserva
           </button>
         </span>
@@ -208,9 +209,10 @@ export function WalkInPanel(props: {
       handleRef={handle}
       footer={
         <div className="flex flex-wrap items-center gap-2">
-          <p aria-live="polite" className="u-tnum w-full min-w-0 truncate text-[12.5px] text-muted sm:w-auto sm:flex-1">
-            {summary}
-          </p>
+          <div aria-live="polite" className="flex w-full min-w-0 flex-col sm:w-auto sm:flex-1">
+            <span className="text-[12.5px] text-muted">Hoy, sin reserva previa</span>
+            <span className="truncate text-[14px] font-medium tabular-nums">{slot && service ? summary : "Elige servicio y profesional"}</span>
+          </div>
           <span className="flex-1 sm:hidden" />
           <Button onClick={() => handle.current?.requestClose()} disabled={pending}>
             Cancelar
@@ -222,35 +224,7 @@ export function WalkInPanel(props: {
       }
     >
       <div className="flex flex-col">
-        <PanelSection title="Servicio" id="wi-service">
-          <input className={INPUT} placeholder="Buscar servicio" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Buscar servicio" />
-          <div role="radiogroup" aria-labelledby="wi-service" className="grid gap-2 sm:grid-cols-2">
-            {visibleServices.length === 0 ? <p className="text-[13px] text-muted">Ningún servicio coincide con «{query}».</p> : null}
-            {visibleServices.map((s) => {
-              const on = s.id === serviceId;
-              return (
-                <button
-                  key={s.id}
-                  type="button"
-                  role="radio"
-                  aria-checked={on}
-                  onClick={() => setServiceId(s.id)}
-                  className={`u-focus flex min-h-[52px] items-start gap-2.5 rounded-[12px] border px-3 py-2.5 text-left transition-colors ${on ? "border-foreground shadow-[inset_0_0_0_1px_var(--foreground)]" : "border-line hover:bg-subtle"}`}
-                >
-                  <span aria-hidden className={`u-appt-service ${apptCategoryClass(serviceCategory(s.name, s.category))} mt-1.5 size-2 shrink-0 rounded-full bg-[var(--appt-rule)]`} />
-                  <span className="min-w-0">
-                    <span className="block truncate text-[13px] font-medium">{s.name}</span>
-                    <span className="block text-[12px] text-muted">
-                      {s.duration_min} min{priceLabelCOP(s.price) ? ` · ${priceLabelCOP(s.price)}` : ""}
-                    </span>
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </PanelSection>
-
-        <PanelSection title="¿Quién lo atiende?" id="wi-staff" hint={serviceId ? "Primero quien puede atender ahora, para la duración completa del servicio." : "Elige el servicio para ver quién puede atender ahora."}>
+        <PanelSection title="¿Quién lo atiende?" id="wi-staff" size="lg" hint={serviceId ? "Ordenado por quién queda libre antes, para la duración completa del servicio." : "Elige el servicio y verás quién queda libre antes."}>
           {slots.state === "error" ? (
             <p className="text-[13px] text-danger">No pudimos cargar la disponibilidad de hoy.</p>
           ) : null}
@@ -266,15 +240,15 @@ export function WalkInPanel(props: {
                   type="button"
                   role="radio"
                   aria-checked={on}
-                  disabled={disabled || !serviceId}
+                  disabled={disabled}
                   onClick={() => setStaffId(s.id)}
-                  className={`u-focus flex min-h-[52px] items-center gap-3 rounded-[12px] border px-3 py-2 text-left transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${on ? "border-foreground shadow-[inset_0_0_0_1px_var(--foreground)]" : "border-line hover:bg-subtle"}`}
+                  className={`u-focus flex min-h-[56px] items-center gap-3 rounded-[12px] px-3 py-2 text-left transition-shadow disabled:cursor-not-allowed disabled:opacity-50 ${on ? "shadow-[inset_0_0_0_1.5px_var(--foreground)]" : "shadow-[inset_0_0_0_1px_var(--line)] hover:bg-[var(--subtle)]"}`}
                 >
-                  <Avatar name={s.name} photoUrl={s.photoUrl ?? undefined} />
+                  <AgAvatar name={s.name} id={s.id} size={40} tint={s.tint} photoUrl={s.photoUrl ?? null} />
                   <span className="min-w-0">
-                    <span className="block truncate text-[13px] font-medium">{s.name}</span>
-                    <span className="block text-[12px] text-muted">
-                      {!serviceId ? "—" : slots.state === "loading" ? "Calculando…" : free ? `Puede atender ahora · ${fmtTime(free.start_at, tz)}` : next ? `Ahora no · siguiente a las ${fmtTime(next.start_at, tz)}` : "Sin hueco hoy para este servicio"}
+                    <span className="block truncate text-[14px]">{s.name}</span>
+                    <span className="block text-[12.5px] tabular-nums text-muted">
+                      {!serviceId ? "Elige un servicio" : slots.state === "loading" ? "Calculando…" : free ? `Puede atender ahora · ${fmtTime(free.start_at, tz)}` : next ? `Ahora no · siguiente a las ${fmtTime(next.start_at, tz)}` : "Sin hueco hoy para este servicio"}
                     </span>
                   </span>
                 </button>
@@ -282,7 +256,7 @@ export function WalkInPanel(props: {
             })}
           </div>
           {serviceId && slots.state === "ready" && staffId && !nowSlot && laterSlot ? (
-            <div role="status" className="flex flex-col gap-2 rounded-[12px] border border-line px-3.5 py-3">
+            <div role="status" className="flex flex-col gap-2 rounded-[10px] bg-[var(--chip)] px-3 py-2.5">
               <p className="text-[13px] font-medium">No hay espacio ahora con {props.staff.find((s) => s.id === staffId)?.name.split(" ")[0] ?? "este profesional"}</p>
               <p className="u-tnum text-[12.5px] text-muted">
                 El siguiente horario disponible hoy es a las {fmtTime(laterSlot.start_at, tz)} – {fmtTime(laterSlot.service_end_at, tz)}. No se reserva hasta que lo confirmes.
@@ -299,14 +273,45 @@ export function WalkInPanel(props: {
             </div>
           ) : null}
           {serviceId && slots.state === "ready" && ordered.length > 0 && !ordered.some((s) => canTake(s.id)) ? (
-            <div role="status" className="flex flex-col gap-1.5 rounded-[12px] border border-line px-3.5 py-3">
+            <div role="status" className="flex flex-col gap-1.5 rounded-[10px] bg-[var(--chip)] px-3 py-2.5">
               <p className="text-[13px] font-medium">No hay espacio hoy para este servicio</p>
               <p className="text-[12.5px] text-muted">Puedes reservarle una cita otro día.</p>
             </div>
           ) : null}
         </PanelSection>
 
-        <PanelSection title={<>Cliente <span className="font-normal text-muted">· opcional</span></>} id="wi-client">
+        <PanelSection title="Servicio" id="wi-service" size="lg">
+          <label className="flex h-[38px] items-center gap-2 rounded-[10px] bg-[var(--chip)] px-3 text-muted">
+            <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="7" cy="7" r="4.6" /><path d="M10.4 10.4L14 14" /></svg>
+            <input type="search" placeholder="Buscar servicio" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Buscar servicio" className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted" />
+          </label>
+          <div role="radiogroup" aria-labelledby="wi-service" className="grid grid-cols-2 gap-2">
+            {visibleServices.length === 0 ? <p className="text-[13px] text-muted">Ningún servicio coincide con «{query}».</p> : null}
+            {visibleServices.map((s) => {
+              const on = s.id === serviceId;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  role="radio"
+                  aria-checked={on}
+                  onClick={() => setServiceId(s.id)}
+                  className={`u-focus flex min-h-[56px] items-start gap-2.5 rounded-[10px] px-3 py-2.5 text-left transition-shadow ${on ? "shadow-[inset_0_0_0_1.5px_var(--foreground)]" : "shadow-[inset_0_0_0_1px_var(--line-strong)] hover:bg-[var(--subtle)]"}`}
+                >
+                  <span aria-hidden className={`u-appt-service ${apptCategoryClass(serviceCategory(s.name, s.category))} mt-1.5 size-2 shrink-0 rounded-full bg-[var(--appt-rule)]`} />
+                  <span className="min-w-0">
+                    <span className="block truncate text-[14px]">{s.name}</span>
+                    <span className="block text-[12.5px] tabular-nums text-muted">
+                      {s.duration_min} min{priceLabelCOP(s.price) ? ` · ${priceLabelCOP(s.price)}` : ""}
+                    </span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </PanelSection>
+
+        <PanelSection title={<>Cliente <span className="font-normal text-muted">· opcional</span></>} id="wi-client" size="lg">
           {linkTo ? (
             <div className="flex items-center gap-3 rounded-[12px] border border-foreground px-3.5 py-3">
               <div className="min-w-0 flex-1">
@@ -376,4 +381,12 @@ function firstPerStaff(list: Slot[]): Map<string, Slot> {
   const m = new Map<string, Slot>();
   for (const s of list) for (const id of s.available_staff_ids) if (!m.has(id) || m.get(id)!.start_at > s.start_at) m.set(id, s);
   return m;
+}
+
+const WD = ["dom", "lun", "mar", "mié", "jue", "vie", "sáb"];
+const MO = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+/** "jue 22 oct" — today at the site, as the reference's subtitle reads. */
+function shortToday(tz: string): string {
+  const [y, m, d] = todayAtSite(tz).split("-").map(Number);
+  return `${WD[new Date(Date.UTC(y, m - 1, d)).getUTCDay()]} ${d} ${MO[m - 1]}`;
 }

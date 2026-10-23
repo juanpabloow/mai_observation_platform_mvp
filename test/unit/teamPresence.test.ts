@@ -15,7 +15,7 @@ import {
 
 /**
  * BEHAVIOUR of the phone Equipo presence (web/components/scheduling/mobile/team/presence.ts):
- * "En turno / Con cliente / Fuera de turno / Inactivo" and the line beside the chip are all
+ * "En turno / Ocupado según agenda / Fuera de turno / Inactivo" and the line beside the chip are all
  * DERIVED from working hours (site tz), appointments and exceptions. Bogotá is UTC-5 all
  * year, so 10:00 local = 15:00Z. 2026-10-09 is a Friday.
  */
@@ -57,11 +57,12 @@ test('on shift, nothing left today → "Libre hasta las <end of shift>"', () => 
   assert.equal(p.sub, 'Libre hasta las 19:00');
 });
 
-test('an appointment in progress → "Con cliente hasta …", counted as on shift', () => {
+test('an appointment whose time is now → "Ocupado según agenda", never a claim the client is in the chair (finding F)', () => {
   const p = presenceFor({ ...base, now: now('10:40'), appts: [appt('a', '10:30', '11:15')] });
   assert.equal(p.kind, 'busy');
-  assert.equal(p.chip, '◐ Con cliente');
-  assert.equal(p.sub, 'Con cliente hasta 11:15');
+  assert.equal(p.chip, '◐ Ocupado según agenda');
+  assert.equal(p.sub, 'Cita hasta las 11:15');
+  assert.ok(!/cliente|silla|atendiendo/i.test(p.chip + p.sub), 'no presence claim without an event behind it');
   assert.equal(p.onShift, true);
   // A cancelled or no-show one is not a client in the chair.
   for (const status of ['cancelled', 'no_show']) {

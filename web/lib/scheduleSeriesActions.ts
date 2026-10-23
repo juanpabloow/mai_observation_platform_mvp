@@ -97,7 +97,16 @@ export interface SummaryView extends PlanSummary {
 }
 
 export type ScheduleWriteResult =
-  | { ok: true; written: boolean; summary: SummaryView | null; affected: AffectedAppointment[] }
+  | {
+      ok: true;
+      written: boolean;
+      summary: SummaryView | null;
+      /** Conflicts THIS change creates — saving with any needs `confirm`. */
+      affected: AffectedAppointment[];
+      /** Already in conflict before the change (inside its window) — shown apart, never
+       *  counted as affected by it. */
+      preexisting: AffectedAppointment[];
+    }
   | { ok: false; error: string; field?: string };
 
 const UNAVAILABLE = "La agenda no está disponible para este cliente.";
@@ -175,57 +184,71 @@ function summaryView(s: PlanSummary, kindLabel: string): SummaryView {
 
 const HORIZON_DAYS = 400;
 
-/** Active future appointments of the owner (one professional, or every professional of the
- *  site) that, in the AFTER state, fall inside `blocked` occurrences or — when weekly hours
- *  are given — outside the hours / inside the breaks. Read-only. */
-async function affectedAfter(params: {
+/** What removes time for the owner in one state (before or after the change). */
+interface ConflictState {
+  series: ScheduleSeries[];
+  overrides: SeriesOverride[];
+  /** Weekly-hours save: the owner's hours in that state (site or professional). */
+  hours?: { site: WeeklyHours; staff: Map<string, WeeklyHours> } | null;
+}
+
+/**
+ * Active appointments of the owner (one professional, or every professional of the site)
+ * inside the change's WINDOW that, in the AFTER state, fall inside its occurrences or —
+ * when weekly hours are given — outside the hours / inside the breaks. Read-only.
+ *
+ * Split in two (finding D): `caused` are the conflicts THIS change creates (absent, or
+ * for another reason, in the before state) — only these need the explicit confirmation.
+ * `preexisting` already conflicted before and still do; they are shown apart and never
+ * counted as affected by the edit. The window is the scope's real reach: "Solo esta
+ * fecha" is that one date; a series' end and its exceptions come from the expansion.
+ */
+async function conflictsOfChange(params: {
   tenantId: string;
   clientId: string;
   site: { id: string; timezone: string; opening_hours: WeeklyHours };
   staffId: string | null;
-  from: Date;
-  /** Occurrences (after state) that remove time: the series being written. */
-  series: ScheduleSeries[];
-  overrides: SeriesOverride[];
+  window: { from: Date; to: Date | null };
+  before: ConflictState | null;
+  after: ConflictState;
   reason: ReviewReason;
-  /** Weekly-hours save: the after-state hours of the owner (site or professional). */
-  hours?: { site: WeeklyHours; staff: Map<string, WeeklyHours> } | null;
-}): Promise<AffectedAppointment[]> {
-  const to = new Date(params.from.getTime() + HORIZON_DAYS * 86_400_000);
+}): Promise<{ caused: AffectedAppointment[]; preexisting: AffectedAppointment[] }> {
+  const to = params.window.to ?? new Date(params.window.from.getTime() + HORIZON_DAYS * 86_400_000);
   const appts = await listActiveAppointmentsOverlapping(params.tenantId, {
     clientId: params.clientId,
     siteId: params.site.id,
     staffId: params.staffId,
-    from: params.from,
+    from: params.window.from,
     to,
   });
-  const future = appts.filter((a) => a.start_at.getTime() >= params.from.getTime());
-  if (future.length === 0) return [];
+  const inWindow = appts.filter((a) => a.start_at.getTime() >= params.window.from.getTime() && a.start_at.getTime() < to.getTime());
+  const caused: AffectedAppointment[] = [];
+  const preexisting: AffectedAppointment[] = [];
   const tz = params.site.timezone;
-  const out: AffectedAppointment[] = [];
-  for (const a of future) {
+  const reasonsIn = (state: ConflictState, a: (typeof inWindow)[number]): Set<ReviewReason> => {
     const day = localToday(a.start_at, tz);
-    const occ = expandSeries(params.series, params.overrides, day, day, tz).filter(
-      (o) => o.staff_id === null || o.staff_id === a.staff_id,
-    );
+    const occ = expandSeries(state.series, state.overrides, day, day, tz).filter((o) => o.staff_id === null || o.staff_id === a.staff_id);
     const reasons = new Set<ReviewReason>();
     const span = { from: a.start_at, until: a.service_end_at };
-    if (occ.some((o) => o.until.getTime() > span.from.getTime() && o.from.getTime() < span.until.getTime())) {
-      reasons.add(params.reason);
-    }
-    if (params.hours) {
+    if (occ.some((o) => o.until.getTime() > span.from.getTime() && o.from.getTime() < span.until.getTime())) reasons.add(params.reason);
+    if (state.hours) {
       const r = reviewReasons(span, {
         timeZone: tz,
-        siteHours: params.hours.site,
-        staffHours: params.hours.staff.get(a.staff_id) ?? {},
+        siteHours: state.hours.site,
+        staffHours: state.hours.staff.get(a.staff_id) ?? {},
         breaks: occ.filter((o) => o.kind === "break").map((o) => ({ from: o.from, until: o.until })),
         staffBlocks: [],
         siteBlocks: [],
       });
       for (const x of r) if (x === "outside_hours" || x === "break") reasons.add(x);
     }
-    if (reasons.size === 0) continue;
-    out.push({
+    return reasons;
+  };
+  for (const a of inWindow) {
+    const after = reasonsIn(params.after, a);
+    if (after.size === 0) continue;
+    const before = params.before ? reasonsIn(params.before, a) : new Set<ReviewReason>();
+    const view: AffectedAppointment = {
       id: a.id,
       staffId: a.staff_id,
       staffName: a.staff_name,
@@ -236,10 +259,17 @@ async function affectedAfter(params: {
       customerName: a.contact_name ?? a.guest_name ?? null,
       startAt: a.start_at.toISOString(),
       endAt: a.service_end_at.toISOString(),
-      reasons: [...reasons],
-    });
+      reasons: [...after],
+    };
+    if ([...after].some((r) => !before.has(r))) caused.push(view);
+    else preexisting.push(view);
   }
-  return out;
+  return { caused, preexisting };
+}
+
+/** Start of the local day AFTER `date` — the end of a "Solo esta fecha" window. */
+function endOfLocalDate(date: string, tz: string): Date {
+  return localMinuteToUtc(addDays(date, 1), 0, tz);
 }
 
 // ── shared input parsing ────────────────────────────────────────────────────────
@@ -371,25 +401,25 @@ export async function createBlockSeriesAction(input: CreateBlockSeriesInput): Pr
   };
   const ops: SeriesOp[] = [{ op: "create", ref: "new", fields, split_from_id: null }];
   const after = applyOpsInMemory([], [], ops);
-  const affected = await affectedAfter({
+  const { caused: affected, preexisting } = await conflictsOfChange({
     tenantId: g.tenantId,
     clientId: input.clientId,
     site: g.site,
     staffId,
-    from: now,
-    series: after.series,
-    overrides: after.overrides,
+    window: { from: now, to: endsOn ? endOfLocalDate(endsOn, tz) : null },
+    before: null,
+    after: { series: after.series, overrides: after.overrides },
     reason: staffId ? "absence" : "site_closure",
   });
   const summary = summaryView({ scope: "following", from: input.startsOn, only: null, keepsBefore: false }, "bloqueo");
   summary.lines = [describeSeries(fields)];
-  if (input.dryRun || (affected.length > 0 && !input.confirm)) return { ok: true, written: false, summary, affected };
+  if (input.dryRun || (affected.length > 0 && !input.confirm)) return { ok: true, written: false, summary, affected, preexisting };
   try {
     await finishWrite(g, input.clientId, ops, { staffId, kind: "block" });
   } catch {
     return { ok: false, error: RETRY };
   }
-  return { ok: true, written: true, summary, affected };
+  return { ok: true, written: true, summary, affected, preexisting };
 }
 
 function describeSeries(f: { weekdays: number[]; start_min: number; end_min: number; starts_on: string | null; ends_on: string | null }): string {
@@ -489,26 +519,26 @@ export async function editSeriesAction(input: EditSeriesInput): Promise<Schedule
   const all = await listSeries(g.tenantId, g.site.id, { kind: series.kind, staffIds: series.staff_id ? [series.staff_id] : null, siteWide: series.staff_id ? false : true });
   const allOverrides = await listOverrides(g.tenantId, all.map((s) => s.id));
   const after = applyOpsInMemory(all, allOverrides, ops);
-  const touched = after.series.filter((s) => after.touched.has(s.id));
   const cutStart = localMinuteToUtc(summary.from, 0, tz);
-  const affected = await affectedAfter({
+  // The scope's real reach: one date for "Solo esta fecha", else from the cut onward.
+  const { caused: affected, preexisting } = await conflictsOfChange({
     tenantId: g.tenantId,
     clientId: input.clientId,
     site: g.site,
     staffId: series.staff_id,
-    from: new Date(Math.max(now.getTime(), cutStart.getTime())),
-    series: touched,
-    overrides: after.overrides,
+    window: { from: new Date(Math.max(now.getTime(), cutStart.getTime())), to: scope === "date" ? endOfLocalDate(input.date, tz) : null },
+    before: { series: all, overrides: allOverrides },
+    after: { series: after.series, overrides: after.overrides },
     reason: series.kind === "break" ? "break" : series.staff_id ? "absence" : "site_closure",
   });
   const view = summaryView(summary, series.kind === "break" ? "horario de la pausa" : "horario del bloqueo");
-  if (input.dryRun || (affected.length > 0 && !input.confirm)) return { ok: true, written: false, summary: view, affected };
+  if (input.dryRun || (affected.length > 0 && !input.confirm)) return { ok: true, written: false, summary: view, affected, preexisting };
   try {
     await finishWrite(g, input.clientId, ops, { staffId: series.staff_id, kind: series.kind });
   } catch {
     return { ok: false, error: RETRY };
   }
-  return { ok: true, written: true, summary: view, affected };
+  return { ok: true, written: true, summary: view, affected, preexisting };
 }
 
 function sameSet(a: number[], b: number[]): boolean {
@@ -551,13 +581,13 @@ export async function deleteSeriesAction(input: {
     summary.scope === "date"
       ? [`Se excluye el ${dateLabel(summary.from)}. La serie sigue en las demás fechas.`]
       : [`Termina el ${dateLabel(addDays(summary.from, -1))}: desde el ${dateLabel(summary.from)} deja de aplicarse.`, ...(summary.keepsBefore ? ["Las fechas anteriores se conservan en el historial."] : [])];
-  if (input.dryRun) return { ok: true, written: false, summary: view, affected: [] };
+  if (input.dryRun) return { ok: true, written: false, summary: view, affected: [], preexisting: [] };
   try {
     await finishWrite(g, input.clientId, ops, { staffId: series.staff_id, kind: series.kind });
   } catch {
     return { ok: false, error: RETRY };
   }
-  return { ok: true, written: true, summary: view, affected: [] };
+  return { ok: true, written: true, summary: view, affected: [], preexisting: [] };
 }
 
 // ── a break that still lives as a gap in the weekly hours ─────────────────────────
@@ -709,16 +739,25 @@ export async function saveWeeklyScheduleAction(input: WeeklyScheduleInput): Prom
   if (staffId) staffHours.set(staffId, inherit ? {} : (hours as WeeklyHours));
   const siteBreaks = staffId ? await listSeries(g.tenantId, g.site.id, { kind: "break", siteWide: true }) : [];
   const siteBreakOverrides = await listOverrides(g.tenantId, siteBreaks.map((s) => s.id));
-  const affected = await affectedAfter({
+  const staffHoursBefore = new Map(staffHours);
+  if (staffId) staffHoursBefore.set(staffId, pre.current as WeeklyHours);
+  const { caused: affected, preexisting } = await conflictsOfChange({
     tenantId: g.tenantId,
     clientId: input.clientId,
     site: g.site,
     staffId,
-    from: now,
-    series: [...after.series, ...siteBreaks],
-    overrides: [...after.overrides, ...siteBreakOverrides],
+    window: { from: now, to: null },
+    before: {
+      series: [...pre.existing, ...siteBreaks],
+      overrides: [...pre.overrides, ...siteBreakOverrides],
+      hours: { site: g.site.opening_hours as WeeklyHours, staff: staffHoursBefore },
+    },
+    after: {
+      series: [...after.series, ...siteBreaks],
+      overrides: [...after.overrides, ...siteBreakOverrides],
+      hours: { site: siteHoursAfter, staff: staffHours },
+    },
     reason: "break",
-    hours: { site: siteHoursAfter, staff: staffHours },
   });
   const firstCut = Object.values(pre.plan.cuts).sort()[0] ?? localToday(now, tz);
   const summary: SummaryView = {
@@ -734,7 +773,7 @@ export async function saveWeeklyScheduleAction(input: WeeklyScheduleInput): Prom
       "Las fechas pasadas y sus excepciones se conservan.",
     ],
   };
-  if (input.dryRun || (affected.length > 0 && !input.confirm)) return { ok: true, written: false, summary, affected };
+  if (input.dryRun || (affected.length > 0 && !input.confirm)) return { ok: true, written: false, summary, affected, preexisting };
 
   try {
     const ok = await withTransaction(async (tx) => {
@@ -751,7 +790,7 @@ export async function saveWeeklyScheduleAction(input: WeeklyScheduleInput): Prom
   }
   await recordSchedulingEvent({ tenantId: g.tenantId, clientId: input.clientId, siteId: g.site.id, eventType: "schedule.changed", payload: { kind: "hours", staff_id: staffId } });
   revalidate(input.clientId);
-  return { ok: true, written: true, summary, affected };
+  return { ok: true, written: true, summary, affected, preexisting };
 }
 
 function normalizeHours(h: Record<string, Array<{ start: string; end: string }>>): Record<string, string> {

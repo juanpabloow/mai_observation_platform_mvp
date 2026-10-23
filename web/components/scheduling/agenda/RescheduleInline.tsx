@@ -1,5 +1,7 @@
 "use client";
 
+import { AgAvatar } from "./AgendaChrome";
+
 import { useEffect, useMemo, useReducer, useRef, useState, useTransition, type ReactNode } from "react";
 import { rescheduleAppointmentAction } from "@/lib/schedulingActions";
 import {
@@ -39,7 +41,7 @@ export function RescheduleInline(props: {
   siteId: string;
   timezone: string;
   appt: RescheduleAppt;
-  staff: Array<{ id: string; name: string; photoUrl?: string | null }>;
+  staff: Array<{ id: string; name: string; photoUrl?: string | null; tint?: "1" | "2" | "3" | "4" }>;
   lockStaffId: string | null;
   openWeekdays: Set<string>;
   holds?: string[];
@@ -186,7 +188,7 @@ export function RescheduleInline(props: {
                     sel ? "border-foreground font-semibold shadow-[inset_0_0_0_1px_var(--foreground)]" : "border-line hover:bg-subtle"
                   }`}
                 >
-                  <Avatar name={s.name} size="sm" photoUrl={s.photoUrl ?? undefined} />
+                  <AgAvatar name={s.name} id={s.id} size={24} tint={s.tint} photoUrl={s.photoUrl ?? null} />
                   {staffFirstName(s.name)}
                 </button>
               );

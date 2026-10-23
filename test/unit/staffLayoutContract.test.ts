@@ -57,7 +57,7 @@ test('the roster is ONE table (redesign E1) and never reserves a side lane', () 
   }
   // Presence in WORDS (with a dot), the day's load as secondary data, and «Agenda» opens
   // the calendar filtered to that person.
-  assert.ok(src.includes('presenceChip(d.key, d.appts, now)'), 'presence is text');
+  assert.ok(src.includes('presenceChip(d.key, d.appts, now, tz)'), 'presence is text');
   assert.ok(src.includes('scheduling/agenda?staff=${member.id}'), '«Agenda» opens the filtered calendar');
   assert.equal(src.includes('function StaffCard('), false, 'the card grid is gone, not left dead');
 });
@@ -149,6 +149,12 @@ test('the primary action sits in the control band, and the roster keeps its dash
   assert.ok(!src.includes('openCreate'), 'no counter prop, and so no setState in an effect');
 });
 
+test('presence words describe the agenda, not the room (finding F)', () => {
+  const src = read(TAB);
+  for (const claim of ['min en silla', '"Con cliente"']) assert.ok(!src.includes(claim), `no "${claim}" without an event that supports it`);
+  assert.ok(src.includes('label: "Ocupado según agenda"'));
+});
+
 test('the roster still shows everything it showed before', () => {
   const src = read(TAB);
   // SPANISH labels — the roster joined the rest of the CRM surfaces. The FACTS are what
@@ -158,7 +164,7 @@ test('the roster still shows everything it showed before', () => {
     'Hoy',
     'Ver perfil',
     'Buscar por nombre, servicio o sede',
-    'Con cliente',
+    'Con cita ahora',
     'En turno',
     'Fuera',
   ]) {
@@ -263,7 +269,7 @@ test("the ficha header introduces the person, then two actions", () => {
   assert.ok(src.includes('avatarColor(member.name)'), 'the same avatar seed as everywhere');
   // Presence in words, where the schedule comes from, and how many services — the facts
   // a receptionist reads before opening a tab.
-  assert.ok(src.includes('presenceChip(status.key, status.appts, now)'), 'presence in words');
+  assert.ok(src.includes('presenceChip(status.key, status.appts, now, tz)'), 'presence in words');
   assert.ok(src.includes('"Usa el horario de la sede" : "Horario propio"'), 'inherited vs own is stated');
   // «Editar perfil» opens the Perfil TAB — still the one write path — and «Ver su agenda»
   // is the primary.

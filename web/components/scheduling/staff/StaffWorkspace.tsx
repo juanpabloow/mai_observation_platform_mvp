@@ -53,13 +53,14 @@ export function StaffWorkspace({
     {/* PHONE (< md): the Equipo screens, built from the mobile kit. Desktop and tablet
         never render it; the tree below is hidden on phones instead. */}
     {staff && mobile ? <TeamMobile clientId={clientId} staff={staff} extras={mobile} /> : null}
-    <main className={`${staff ? "hidden md:flex" : "flex"} min-h-0 w-full flex-1 flex-col`}>
+    <main className={`u-ag ${staff ? "hidden md:flex" : "flex"} min-h-0 w-full flex-1 flex-col`}>
       {/* `surface="canvas"`: this screen is NOT one card. PageShell contributes the region
           (flex, min-h-0, flex-1) and lets the layout's canvas show through; the cards below
           are the page's own, so there is no card inside a card and no doubled border.
           `relative` makes this the drawer's positioning context, which is what lets the
           drawer run the FULL height of the region. */}
-      <PageShell surface="canvas" className="relative">
+      {/* ONE surface flush to the shell frame (reference E1–E2), like the calendar. */}
+      <div className="relative -m-[var(--content-pad)] flex min-h-0 flex-1 flex-col bg-[var(--surface)]">
         {desk ? (
           <StaffTab clientId={clientId} header={slots} {...desk} />
         ) : (
@@ -81,7 +82,7 @@ export function StaffWorkspace({
             </PageShell>
           </div>
         )}
-      </PageShell>
+      </div>
     </main>
     </>
   );

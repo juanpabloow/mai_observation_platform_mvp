@@ -36,8 +36,27 @@ export function AffectedList(props: {
   lead?: (n: number) => string;
   onReschedule?: (item: AffectedItem) => void;
   onRetry?: () => void;
+  /** Appointments that ALREADY conflicted before this change (inside its scope): shown
+   *  apart, never counted as affected by it and never asking for confirmation. */
+  preexisting?: AffectedItem[] | null;
 }) {
   const { items, timezone: tz } = props;
+  const before = props.preexisting && props.preexisting.length > 0 ? (
+    <details className="group rounded-[12px] border border-line">
+      <summary className="u-focus flex min-h-[44px] cursor-pointer list-none items-center gap-2 rounded-[12px] px-3.5 py-2.5 text-[13px] text-muted">
+        <svg aria-hidden viewBox="0 0 16 16" className="size-3.5 shrink-0 transition-transform group-open:rotate-90" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"><path d="M6 4l4 4-4 4" /></svg>
+        <span className="min-w-0 flex-1">
+          {props.preexisting.length === 1 ? "1 cita ya estaba en conflicto" : `${props.preexisting.length} citas ya estaban en conflicto`} antes de este cambio
+        </span>
+      </summary>
+      <p className="px-3.5 pb-2 text-[12.5px] text-muted">Este cambio no las provoca ni las resuelve; siguen marcadas «Requiere revisión».</p>
+      <ul className="flex flex-col divide-y divide-line-soft border-t border-line-soft">
+        {props.preexisting.map((a) => (
+          <AffectedRow key={a.id} a={a} tz={tz} onReschedule={props.onReschedule} />
+        ))}
+      </ul>
+    </details>
+  ) : null;
   if (props.error) {
     return (
       <div className="flex items-center gap-3 rounded-[12px] bg-subtle px-3.5 py-3 text-[13px] text-muted">
@@ -52,10 +71,13 @@ export function AffectedList(props: {
   if (!items) return null;
   if (items.length === 0) {
     return (
-      <p role="status" className="flex items-center gap-2 rounded-[12px] bg-[var(--success-soft,rgba(34,87,58,0.08))] px-3.5 py-3 text-[13px] text-[var(--success,#22573a)]">
-        <svg aria-hidden viewBox="0 0 16 16" className="size-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M3.5 8.5l3 3 6-7" /></svg>
-        Ninguna cita queda dentro {within(props.what)}.
-      </p>
+      <div className="flex flex-col gap-2">
+        <p role="status" className="flex items-center gap-2 rounded-[12px] bg-[var(--success-soft,rgba(34,87,58,0.08))] px-3.5 py-3 text-[13px] text-[var(--success,#22573a)]">
+          <svg aria-hidden viewBox="0 0 16 16" className="size-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M3.5 8.5l3 3 6-7" /></svg>
+          {before ? "Este cambio no deja ninguna cita nueva dentro" : "Ninguna cita queda dentro"} {within(props.what)}.
+        </p>
+        {before}
+      </div>
     );
   }
   return (
@@ -68,23 +90,31 @@ export function AffectedList(props: {
       </p>
       <ul className="flex flex-col divide-y divide-line-soft rounded-[12px] border border-line">
         {items.map((a) => (
-          <li key={a.id} className="flex items-center gap-3 px-3.5 py-2.5">
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-[13px] font-semibold">{a.customerName ?? "Sin contacto"}</p>
-              <p className="u-tnum line-clamp-2 text-[12px] text-muted">
-                {longDate(a.startAt, tz)} · {fmtTime(a.startAt, tz)}–{fmtTime(a.endAt, tz)} · {a.serviceName}
-                {a.staffName ? ` · ${a.staffName}` : ""}
-              </p>
-            </div>
-            {props.onReschedule ? (
-              <Button size="sm" onClick={() => props.onReschedule?.(a)}>
-                Reagendar
-              </Button>
-            ) : null}
-          </li>
+          <AffectedRow key={a.id} a={a} tz={tz} onReschedule={props.onReschedule} />
         ))}
       </ul>
+      {before}
     </div>
+  );
+}
+
+function AffectedRow(props: { a: AffectedItem; tz: string; onReschedule?: (item: AffectedItem) => void }) {
+  const { a, tz } = props;
+  return (
+    <li className="flex items-center gap-3 px-3.5 py-2.5">
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-[13px] font-semibold">{a.customerName ?? "Sin contacto"}</p>
+        <p className="u-tnum line-clamp-2 text-[12px] text-muted">
+          {longDate(a.startAt, tz)} · {fmtTime(a.startAt, tz)}–{fmtTime(a.endAt, tz)} · {a.serviceName}
+          {a.staffName ? ` · ${a.staffName}` : ""}
+        </p>
+      </div>
+      {props.onReschedule ? (
+        <Button size="sm" onClick={() => props.onReschedule?.(a)}>
+          Reagendar
+        </Button>
+      ) : null}
+    </li>
   );
 }
 

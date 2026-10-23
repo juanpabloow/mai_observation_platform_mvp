@@ -55,6 +55,8 @@ function messageFor(error: BookingError, fallback: string): string {
       return "Ese teléfono o correo ya pertenece a otro contacto.";
     case "invalid_phone":
       return "No pudimos leer el teléfono. Escríbelo con el indicativo del país.";
+    case "not_started":
+      return "Se puede completar cuando la cita empiece.";
     case "not_immediate":
       return "Ese horario ya no es «ahora». Elige el siguiente horario disponible.";
     default:
@@ -102,6 +104,9 @@ export interface ContactSearchHit {
   name: string | null;
   /** Phone-or-email. NULL for a staff-scoped login, which must not see identities. */
   identity: string | null;
+  /** Both, for the reference's two-line recents (same masking as `identity`). */
+  phone: string | null;
+  email: string | null;
   /** ≥1 completed appointment — the "Ya es cliente" chip. */
   isCustomer: boolean;
   appointmentCount: number;
@@ -123,20 +128,38 @@ export async function searchSchedulingContactsAction(
   clientId: string,
   search: string,
 ): Promise<{ ok: true; hits: ContactSearchHit[] } | { ok: false; error: string }> {
+  const term = search.trim();
+  // Below two characters every contact matches, which is a table scan rendered as a
+  // useless list. The caller shows its "keep typing" hint instead.
+  if (term.length < 2) {
+    const g = await gate(clientId, "agenda.book");
+    return g.ok ? { ok: true, hits: [] } : { ok: false, error: g.error };
+  }
+  return contactHits(clientId, { search: term, limit: 8 });
+}
+
+/** «Recientes» (Nueva cita, reference E4): the client's contacts with the latest activity
+ *  — the SAME gate, CRM check and identity masking as the search. */
+export async function recentSchedulingContactsAction(
+  clientId: string,
+): Promise<{ ok: true; hits: ContactSearchHit[] } | { ok: false; error: string }> {
+  return contactHits(clientId, { limit: 3 });
+}
+
+async function contactHits(
+  clientId: string,
+  q: { search?: string; limit: number },
+): Promise<{ ok: true; hits: ContactSearchHit[] } | { ok: false; error: string }> {
   const g = await gate(clientId, "agenda.book");
   if (!g.ok) return { ok: false, error: g.error };
   const ctx = g.context;
   // The customers searched here are CRM contacts: without the CRM module there is
   // nothing to search (a professional login used to reach them regardless).
   if (!(await isClientModuleEnabled(ctx.scope.tenantId, ctx.client.id, "crm"))) return { ok: true, hits: [] };
-  const term = search.trim();
-  // Below two characters every contact matches, which is a table scan rendered as a
-  // useless list. The caller shows its "keep typing" hint instead.
-  if (term.length < 2) return { ok: true, hits: [] };
   const { items } = await listContacts(ctx.scope.tenantId, {
-    search: term,
+    ...(q.search ? { search: q.search } : {}),
     clientId: ctx.client.id,
-    limit: 8,
+    limit: q.limit,
   });
   // Names suffice to book; phone/email only for a login that may see contacts (never a
   // professional login, which stays narrower than its permissions on the agenda).
@@ -147,6 +170,8 @@ export async function searchSchedulingContactsAction(
       id: c.id,
       name: c.name,
       identity: hideIdentity ? null : c.phone_e164 ?? c.email ?? null,
+      phone: hideIdentity ? null : c.phone_e164 ?? null,
+      email: hideIdentity ? null : c.email ?? null,
       isCustomer: c.is_customer,
       appointmentCount: c.appointment_count,
       lastVisitAt: c.last_visit_at ? c.last_visit_at.toISOString() : null,
@@ -340,6 +365,8 @@ async function transition(
     actorUserId: ctx.scope.userId,
     reason: reason ?? null,
     scopeClientId: ctx.client.id, // always — cross-client appointment = not-found
+    // Completar only once the appointment has started — the SAME rule on every screen.
+    requireStartedToComplete: true,
   });
   if (!r.ok) return { ok: false, error: messageFor(r.error, fallback) };
   revalidatePath(agendaPath(ctx.client.id));
