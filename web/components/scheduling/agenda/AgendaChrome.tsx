@@ -82,7 +82,8 @@ export function AgAvatar(props: { name: string | null; id?: string | null; size:
 
 // ── State ─────────────────────────────────────────────────────────────────────
 
-export const STATE_GLYPH: Record<string, string> = { scheduled: "○", confirmed: "✓", completed: "✓✓", cancelled: "✕", no_show: "!" };
+// «⊘» for a no-show (as on the phone): «!» is reserved for «Requiere revisión».
+export const STATE_GLYPH: Record<string, string> = { scheduled: "○", confirmed: "✓", completed: "✓✓", cancelled: "✕", no_show: "⊘" };
 export const STATE_WORD: Record<string, string> = {
   scheduled: "Sin confirmar",
   confirmed: "Confirmada",

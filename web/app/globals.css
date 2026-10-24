@@ -2052,6 +2052,16 @@ body {
 .u-m-color { --m-fill: var(--m-lila); --m-dot: var(--m-lila-s); }
 .u-m-feature { --m-fill: var(--m-salvia); --m-dot: var(--m-salvia-s); }
 .u-m-neutral { --m-fill: var(--m-neutro); --m-dot: var(--m-neutro-s); }
+/* The phone AGENDA wears the desktop's service colours (2026-10-24, «unifica los colores de
+   servicio entre escritorio y móvil»): the same four families as .u-ag (--appt-*-rule) for the
+   dot, and the same 16 % / 22 % pastel once completed. Scoped to the agenda so other phone
+   screens keep their own swatches. */
+[data-m-agenda] { --m-svc-cut: #2f5fd0; --m-svc-grooming: #b4561f; --m-svc-color: #8a3db0; --m-svc-feature: #18785d; --m-svc-mix: 16%; }
+.dark [data-m-agenda] { --m-svc-cut: #7fa2f0; --m-svc-grooming: #e59466; --m-svc-color: #c58be3; --m-svc-feature: #5cc4a2; --m-svc-mix: 22%; }
+[data-m-agenda] .u-m-cut { --m-dot: var(--m-svc-cut); --m-fill: color-mix(in srgb, var(--m-svc-cut) var(--m-svc-mix), var(--m-sf)); }
+[data-m-agenda] .u-m-grooming { --m-dot: var(--m-svc-grooming); --m-fill: color-mix(in srgb, var(--m-svc-grooming) var(--m-svc-mix), var(--m-sf)); }
+[data-m-agenda] .u-m-color { --m-dot: var(--m-svc-color); --m-fill: color-mix(in srgb, var(--m-svc-color) var(--m-svc-mix), var(--m-sf)); }
+[data-m-agenda] .u-m-feature { --m-dot: var(--m-svc-feature); --m-fill: color-mix(in srgb, var(--m-svc-feature) var(--m-svc-mix), var(--m-sf)); }
 .u-m-st-scheduled { background-color: var(--m-st-scheduled-bg); color: var(--m-st-scheduled-fg); }
 .u-m-st-confirmed { background-color: var(--m-st-confirmed-bg); color: var(--m-st-confirmed-fg); }
 .u-m-st-completed { background-color: var(--m-st-completed-bg); color: var(--m-st-completed-fg); }
@@ -2297,26 +2307,63 @@ body {
 .u-ag .u-sch-break { background: repeating-linear-gradient(135deg, var(--ag-hatch-soft) 0 1px, transparent 1px 8px), var(--ag-break); color: var(--muted); }
 .u-ag .u-sch-block { background: repeating-linear-gradient(135deg, var(--ag-hatch) 0 1px, transparent 1px 7px), var(--ag-off); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
 .u-ag .u-sch-closed { background: repeating-linear-gradient(135deg, var(--ag-hatch) 0 1px, transparent 1px 7px), repeating-linear-gradient(45deg, var(--ag-hatch) 0 1px, transparent 1px 7px), var(--ag-off); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-strong); }
-/* ONE colour model (2026-10-23, «los colores según el tipo de servicio»): the colour is
-   ALWAYS the service family; the state is how the card wears it —
-     Confirmada    contour only (1.5px service edge on white)
-     Sin confirmar the same contour, dashed
-     Completada    filled with the service colour (16 %, 22 % on hover; Grafito 22 / 28 %)
-     Cancelada     1px dashed field line, transparent, struck through (unchanged)
-   The ○ / ✓ / ✓✓ icon and the word stay on every card: colour is never the only signal.
+/* ONE colour model (2026-10-23, «los colores según el tipo de servicio»), drawn as the approved
+   «M_AI Agenda» capture (2026-10-24, the visual reference that wins over any reading of «5a»):
+   a light card with a hairline NEUTRAL ring and a soft shadow; the service lives in the colour
+   dot beside the service name, and in the pastel fill once completed. No side bar.
+     Confirmada    light surface, neutral ring, soft shadow
+     Sin confirmar the same card, the ring dashed
+     Completada    pastel fill of the service (16 %; Grafito 22 %), no visible ring
+     Inasistencia  soft red pastel fill and ring (as in the capture); the dot keeps the service
+     Cancelada     1px dashed field line, struck through
+   The ✓ / ✓✓ / ○ / ⊘ / ✕ glyph sits quietly at the top right: colour is never the only signal.
    Day cards and week chips share it. There is no «Servicio | Estado» switch any more. */
-.u-ag .u-appt2 { border-radius: 10px; background: var(--surface); border: 1.5px solid var(--appt-rule, var(--line-strong)); }
-.u-ag .u-appt2[data-status="scheduled"] { border-style: dashed; }
-.u-ag .u-appt2[data-status="cancelled"] { border: 1px dashed var(--line-strong); background: var(--surface); color: var(--muted); }
+.u-ag .u-appt2 { border-radius: 10px; background: var(--surface); border: 1px solid rgba(17, 19, 22, 0.08); box-shadow: 0 1px 3px rgba(17, 19, 22, 0.08); container-type: inline-size; }
+.u-ag .u-appt2[data-status="scheduled"] { border-style: dashed; border-color: var(--line-strong); }
+.u-ag .u-appt2[data-status="cancelled"] { border: 1px dashed var(--line-strong); background: var(--surface); color: var(--muted); box-shadow: none; }
+.u-ag .u-appt2[data-status="no_show"] { background: #fbeded; border-color: #f1c6c8; }
 /* Every card is OPAQUE (audit 23 Oct): a pause or block under it must never read through
    its text. Grafito's lift is mixed into the surface instead of a translucent white. */
-.dark .u-ag .u-appt2 { background: color-mix(in srgb, #ffffff 3%, var(--surface)); }
-.dark .u-ag .u-appt2[data-status="cancelled"] { background: var(--surface); }
+.dark .u-ag .u-appt2 { background: color-mix(in srgb, #ffffff 3%, var(--surface)); border-color: rgba(255, 255, 255, 0.08); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45); }
+.dark .u-ag .u-appt2[data-status="scheduled"] { border-color: var(--line-strong); }
+.dark .u-ag .u-appt2[data-status="cancelled"] { background: var(--surface); box-shadow: none; }
+.dark .u-ag .u-appt2[data-status="no_show"] { background: color-mix(in srgb, #e5484d 14%, var(--surface)); border-color: rgba(229, 72, 77, 0.38); }
 .u-ag .u-appt2:where(:not([data-status="cancelled"])):hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 6%, var(--surface)); }
-.u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 16%, var(--surface)); }
+.u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 16%, var(--surface)); border-color: transparent; }
 .u-ag .u-appt2[data-status="completed"]:hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 22%, var(--surface)); }
-.dark .u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 22%, var(--surface)); }
+.dark .u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 22%, var(--surface)); border-color: transparent; }
 .dark .u-ag .u-appt2[data-status="completed"]:hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 28%, var(--surface)); }
+/* The necessary notices stay SMALL and quiet: «!» Requiere revisión (amber), «$» Cobro pendiente
+   (neutral). They sit after the name / time and never shrink them. */
+.u-ag .u-ag-mk { display: inline-flex; flex: none; align-items: center; justify-content: center; height: 15px; min-width: 15px; padding: 0 4px; border-radius: 8px; font-size: 10px; font-weight: 600; line-height: 1; white-space: nowrap; }
+.u-ag .u-ag-mk[data-kind="rev"] { background: var(--warn-soft); color: var(--warn); }
+.u-ag .u-ag-mk[data-kind="pay"] { background: color-mix(in srgb, var(--foreground) 7%, transparent); color: var(--ag-ink2); }
+.u-ag .u-ag-noshow { color: var(--danger); }
+/* Card type: the capture's own — 14/500 name, 12.5 secondary — at its 88 px/h grid. Own classes
+   on purpose: Agenda's compact desktop density (text-[14px] → 13px) must not shrink them. */
+.u-ag .u-ag-c-name { font-size: 14px; line-height: 17px; font-weight: 500; }
+.u-ag .u-ag-c-name-sm { font-size: 12.5px; line-height: 15px; }
+.u-ag .u-ag-c-sub { font-size: 12.5px; line-height: 15px; color: var(--ag-ink2); }
+.u-ag .u-ag-c-glyph { flex: none; font-size: 12.5px; line-height: 1; color: var(--ag-ink2); }
+/* A narrow week chip that carries a mark gives the state icon's room to the name: the state
+   still reads from the ring / dash / fill (and the label); a no-show keeps its red ⊘. */
+@container (max-width: 159px) {
+  .u-ag .u-appt2[data-marked] [data-glyph]:not(.u-ag-noshow) { display: none; }
+}
+/* A narrow lane (overlaps): the time range falls first and only the highest-priority mark
+   stays (! › $ › state), so the name keeps its room. */
+/* A one-line card in a shared lane (content box < 140px): its range gives way before the name. */
+@container (max-width: 139px) {
+  .u-ag .u-appt2 [data-drop-sm] { display: none; }
+}
+/* …and sooner when the card also carries a notice (! / $), so the name never shrinks to «Cli…». */
+@container (max-width: 189px) {
+  .u-ag .u-appt2[data-marked] [data-drop-sm] { display: none; }
+}
+@container (max-width: 109px) {
+  .u-ag .u-appt2 [data-drop] { display: none; }
+  .u-ag .u-appt2 .u-ag-marks > :not(:first-child) { display: none; }
+}
 .u-ag .u-appt2-dot { border-radius: 2px; }
 /* A completed appointment's state chip fills with its service colour (as the card does),
    never the generic green; with no service in context (legend, filters) it is neutral grey.
@@ -2414,3 +2461,141 @@ body {
 @media (max-width: 767.98px) {
   body:has([data-integrated-nav]) .u-topbar { display: none; }
 }
+
+/*
+ * ── CARD LANGUAGE 5a («Agenda Lenguaje Tarjeta», S5: thin lines, all white) ──────────
+ * The appointment detail and the charge panel (desktop side panel and phone sheet) share it:
+ * a white header with the service-colour bar, small-caps section labels, 40–44px rows, 1px
+ * separators, aligned amounts and a fixed footer with the primary action in ink (Claro) or
+ * light (Grafito). Scoped to `.u-c5` — only these cards wear it; the calendar under them keeps
+ * its tokens, as in the approved sheet. Sizes live in `.c5-*` classes on purpose: Agenda's
+ * compact desktop density (text-[14px] → 13px above) must not shrink the card's spec.
+ * Grafito = palette 3a (#16171A / #2A2C31 / #1F2125).
+ */
+.u-c5 {
+  --c5-bg: #ffffff; --c5-panel-bd: #e3e3e6; --c5-head-bd: #ededef; --c5-head-tx: #3a3a3c; --c5-head-sub: #6e6e73;
+  --c5-tx: #111111; --c5-tx2: #3a3a3c; --c5-sec: #6e6e73; --c5-bd: #ededef; --c5-ctrl-bd: #e3e3e6; --c5-field: #fafafb;
+  --c5-foot: #fafafb; --c5-pri: #111111; --c5-pri-fg: #ffffff; --c5-hover: #f5f5f7;
+  --c5-ok-bg: #eef7f1; --c5-ok-bd: #cfe6d7; --c5-ok-fg: #1e5b33;
+  --c5-amber-bg: #fdf4e3; --c5-amber-bd: #f0ddb4; --c5-amber-fg: #6b4200; --c5-amber-dot: #d99a1e;
+  --c5-red-bg: #fdf5f4; --c5-red-bd: #f1c9c4; --c5-red-fg: #b42318;
+  --c5-dot: #b6c6e8; --c5-sel-bg: #111111; --c5-sel-fg: #ffffff; --c5-seg-track: #ededf0; --c5-seg-sel: #ffffff;
+  --c5-shadow: 0 10px 40px rgba(0, 0, 0, 0.18);
+  /* Inner parts (guest contact, reschedule, alerts, buttons) read the same palette. */
+  --surface: var(--c5-bg); --background: var(--c5-bg); --popover: var(--c5-bg); --foreground: var(--c5-tx);
+  --ag-ink2: var(--c5-tx2); --muted: var(--c5-sec); --faint: var(--c5-sec); --line: var(--c5-bd); --line-strong: var(--c5-ctrl-bd);
+  --line-soft: var(--c5-bd); --subtle: var(--c5-hover); --chip: var(--c5-field); --ink: var(--c5-pri); --ink-fg: var(--c5-pri-fg);
+  --danger: var(--c5-red-fg); --warn: var(--c5-amber-fg); --warn-soft: var(--c5-amber-bg); --success: var(--c5-ok-fg); --success-soft: var(--c5-ok-bg);
+  --ag-seg: var(--c5-seg-track); --ag-seg-on: var(--c5-seg-sel);
+  color: var(--c5-tx);
+}
+.dark .u-c5 {
+  --c5-bg: #16171a; --c5-panel-bd: #2a2c31; --c5-head-bd: #2a2c31; --c5-head-tx: #c9c9cf; --c5-head-sub: #a6a6ae;
+  --c5-tx: #ececee; --c5-tx2: #c9c9cf; --c5-sec: #a6a6ae; --c5-bd: #2a2c31; --c5-ctrl-bd: #3a3d43; --c5-field: #1f2125;
+  --c5-foot: #131417; --c5-pri: #ececee; --c5-pri-fg: #111214; --c5-hover: #1f2125;
+  --c5-ok-bg: #18291f; --c5-ok-bd: #2c4a37; --c5-ok-fg: #9fddb4;
+  --c5-amber-bg: #2e2412; --c5-amber-bd: #57431c; --c5-amber-fg: #f2cd7e; --c5-amber-dot: #e0a93a;
+  --c5-red-bg: #2e1715; --c5-red-bd: #5c2a26; --c5-red-fg: #ff9a8c;
+  --c5-dot: #4a5a78; --c5-sel-bg: #ececee; --c5-sel-fg: #111214; --c5-seg-track: #1f2125; --c5-seg-sel: #34363c;
+  --c5-shadow: 0 10px 40px rgba(0, 0, 0, 0.5);
+  color-scheme: dark;
+}
+/* Component classes in the components layer: Tailwind utilities on a card element win. */
+@layer components {
+.c5-panel { background: var(--c5-bg); border: 1px solid var(--c5-panel-bd); border-radius: 16px; box-shadow: var(--c5-shadow); }
+.c5-head { display: flex; flex-direction: column; gap: 12px; padding: 16px 24px; background: var(--c5-bg); border-bottom: 1px solid var(--c5-head-bd); }
+.c5-bar { width: 4px; flex: none; align-self: stretch; border-radius: 2px; background: var(--c5-sec); }
+.c5-av { display: flex; flex: none; align-items: center; justify-content: center; width: 46px; height: 46px; border-radius: 50%; background: var(--c5-bg); border: 1px solid var(--c5-head-bd); color: var(--c5-head-tx); font-size: 15px; font-weight: 590; }
+.c5-title { font-size: 22px; line-height: 28px; font-weight: 600; letter-spacing: -0.01em; color: var(--c5-tx); }
+.c5-title-sub { font-size: 13px; line-height: 18px; color: var(--c5-head-sub); }
+.c5-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; font-size: 14px; color: var(--c5-head-tx); font-variant-numeric: tabular-nums; }
+.c5-x { display: grid; flex: none; place-items: center; width: 36px; height: 36px; border-radius: 10px; align-self: flex-start; color: var(--c5-head-tx); }
+.c5-x:hover { background: var(--c5-hover); }
+.c5-body { display: flex; flex-direction: column; padding: 8px 24px; background: var(--c5-bg); scrollbar-width: thin; }
+.c5-sec { display: flex; flex-direction: column; gap: 6px; padding: 16px 0; border-bottom: 1px solid var(--c5-bd); }
+.c5-cap { font-size: 11px; line-height: 16px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--c5-sec); }
+.c5-row { display: flex; align-items: center; gap: 8px; min-height: 40px; font-size: 14px; }
+.c5-row[data-tall] { min-height: 44px; }
+.c5-k { width: 112px; flex: none; color: var(--c5-sec); }
+.c5-text { font-size: 14px; color: var(--c5-tx); }
+.c5-note { font-size: 12px; line-height: 1.45; color: var(--c5-sec); }
+.c5-small { font-size: 13px; line-height: 1.45; color: var(--c5-tx2); }
+.c5-num { font-variant-numeric: tabular-nums; }
+.c5-chip { display: inline-flex; flex: none; align-items: center; gap: 5px; height: 24px; padding: 0 9px; border-radius: 12px; white-space: nowrap; font-size: 12px; font-weight: 590; border: 1px solid var(--c5-ctrl-bd); background: var(--c5-field); color: var(--c5-sec); }
+.c5-box { display: flex; flex-direction: column; gap: 4px; padding: 12px 14px; border-radius: 12px; border: 1px solid var(--c5-ctrl-bd); background: var(--c5-field); font-size: 13px; line-height: 1.45; color: var(--c5-tx2); }
+.c5-ok { background: var(--c5-ok-bg); border-color: var(--c5-ok-bd); color: var(--c5-ok-fg); }
+.c5-amber { background: var(--c5-amber-bg); border-color: var(--c5-amber-bd); color: var(--c5-amber-fg); }
+.c5-red { background: var(--c5-red-bg); border-color: var(--c5-red-bd); color: var(--c5-red-fg); }
+.c5-btn { display: inline-flex; min-width: 0; flex: 1 1 0; align-items: center; justify-content: center; gap: 6px; height: 44px; padding: 0 14px; border-radius: 12px; white-space: nowrap; font-size: 14px; border: 1px solid var(--c5-ctrl-bd); background: var(--c5-bg); color: var(--c5-tx); transition: opacity 160ms, background 160ms; }
+.c5-btn:hover:not(:disabled) { background: var(--c5-hover); }
+.c5-btn[data-kind="primary"] { border-color: var(--c5-pri); background: var(--c5-pri); color: var(--c5-pri-fg); font-weight: 590; }
+.c5-btn[data-kind="primary"]:hover:not(:disabled) { background: var(--c5-pri); opacity: 0.9; }
+.c5-btn[data-kind="ok"] { border-color: var(--c5-ok-bd); background: var(--c5-ok-bg); color: var(--c5-ok-fg); font-weight: 590; }
+.c5-btn[data-kind="danger"] { border-color: var(--c5-red-fg); background: var(--c5-red-fg); color: var(--c5-bg); font-weight: 590; }
+.c5-btn[data-kind="danger"]:hover:not(:disabled) { background: var(--c5-red-fg); opacity: 0.9; }
+.c5-btn[data-size="sm"] { flex: none; height: 36px; padding: 0 12px; border-radius: 10px; font-size: 13px; }
+.c5-btn:disabled, .c5-btn[aria-disabled="true"] { opacity: 0.55; cursor: not-allowed; }
+.c5-btn[aria-busy="true"] { opacity: 0.55; cursor: progress; }
+.c5-icon-btn { display: grid; flex: none; place-items: center; width: 36px; height: 36px; border-radius: 10px; border: 1px solid var(--c5-ctrl-bd); color: var(--c5-tx2); }
+.c5-icon-btn:hover { background: var(--c5-hover); }
+.c5-icon-btn[data-kind="ok"] { border-color: var(--c5-ok-bd); background: var(--c5-ok-bg); color: var(--c5-ok-fg); }
+.c5-link { display: inline-flex; align-items: center; min-height: 32px; font-size: 13px; color: var(--c5-tx2); border-radius: 6px; }
+.c5-link:hover { text-decoration: underline; text-underline-offset: 3px; }
+.c5-link[data-tone="red"] { color: var(--c5-red-fg); }
+.c5-seg { display: flex; gap: 2px; padding: 4px; border-radius: 14px; background: var(--c5-seg-track); }
+.c5-seg-opt { display: flex; min-width: 0; flex: 1 1 0; align-items: center; justify-content: center; gap: 6px; height: 40px; border-radius: 10px; white-space: nowrap; font-size: 14px; color: var(--c5-sec); transition: background 180ms, color 180ms; }
+.c5-seg-opt:hover:not(:disabled):not([aria-pressed="true"]) { color: var(--c5-tx); }
+.c5-seg-opt[aria-pressed="true"] { background: var(--c5-seg-sel); color: var(--c5-tx); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
+.c5-seg-opt:disabled:not([aria-pressed="true"]) { cursor: not-allowed; opacity: 0.55; }
+.c5-choice { display: inline-flex; align-items: center; height: 40px; padding: 0 14px; border-radius: 10px; border: 1px solid var(--c5-ctrl-bd); background: transparent; font-size: 13px; color: var(--c5-tx); transition: background 160ms; }
+.c5-choice:hover:not([aria-checked="true"]) { background: var(--c5-hover); }
+.c5-choice[aria-checked="true"] { border-color: var(--c5-sel-bg); background: var(--c5-sel-bg); color: var(--c5-sel-fg); }
+.c5-choice[data-size="sm"] { height: 32px; padding: 0 11px; }
+/* Inside a tinted box (reasons) the idle choices sit on white so they read as options. */
+.c5-box .c5-choice:not([aria-checked="true"]) { background: var(--c5-bg); }
+.c5-field { height: 44px; border-radius: 12px; border: 1px solid var(--c5-ctrl-bd); background: var(--c5-field); padding: 0 12px; font-size: 16px; color: var(--c5-tx); outline: none; font-variant-numeric: tabular-nums; }
+.c5-field[aria-invalid="true"], .c5-affix[aria-invalid="true"] { border-color: var(--c5-red-fg); }
+textarea.c5-field { height: auto; padding: 10px 12px; line-height: 1.4; font-variant-numeric: normal; }
+.c5-affix { display: flex; align-items: center; gap: 8px; height: 44px; border-radius: 12px; border: 1px solid var(--c5-ctrl-bd); background: var(--c5-field); padding: 0 12px; }
+.c5-affix input { min-width: 0; flex: 1; border: 0; background: transparent; font-size: 16px; color: var(--c5-tx); outline: none; font-variant-numeric: tabular-nums; }
+.c5-stepper { display: flex; flex: none; align-items: center; height: 36px; border-radius: 10px; border: 1px solid var(--c5-ctrl-bd); }
+.c5-stepper button { display: grid; place-items: center; width: 36px; height: 34px; color: var(--c5-tx2); }
+.c5-stepper button:disabled { opacity: 0.4; }
+.c5-dot { width: 7px; height: 7px; flex: none; border-radius: 50%; background: var(--c5-dot); }
+.c5-foot { display: flex; flex-direction: column; gap: 10px; padding: 12px 24px 14px; background: var(--c5-foot); border-top: 1px solid var(--c5-bd); }
+.c5-total { font-size: 22px; line-height: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+@media (max-width: 767.98px) {
+  .c5-head { padding: 12px 16px 14px; gap: 10px; }
+  .c5-title { font-size: 21px; line-height: 26px; }
+  .c5-av { width: 44px; height: 44px; }
+  .c5-x { width: 44px; height: 44px; }
+  .c5-body { padding: 4px 16px; }
+  .c5-row { min-height: 48px; font-size: 15px; }
+  .c5-row[data-tall] { min-height: 52px; }
+  .c5-k { width: 104px; }
+  .c5-text { font-size: 15px; }
+  .c5-small { font-size: 14px; }
+  .c5-note { font-size: 13px; }
+  .c5-btn { height: 48px; font-size: 15px; }
+  .c5-btn[data-size="sm"] { height: 44px; font-size: 14px; }
+  .c5-icon-btn { width: 44px; height: 44px; }
+  .c5-link { min-height: 44px; font-size: 14px; }
+  .c5-seg-opt { height: 44px; font-size: 14px; }
+  .c5-choice, .c5-choice[data-size="sm"] { height: 44px; font-size: 15px; }
+  .c5-field, .c5-affix { height: 48px; }
+  .c5-stepper { height: 44px; }
+  .c5-stepper button { width: 44px; height: 42px; }
+  .c5-foot { padding: 12px 16px max(12px, env(safe-area-inset-bottom)); }
+}
+/* The narrowest phones (360px): the three states keep their words on one line. */
+@media (max-width: 400px) {
+  .c5-seg { padding: 3px; }
+  .c5-seg-opt { gap: 4px; font-size: 13px; letter-spacing: -0.01em; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .c5-btn, .c5-seg-opt, .c5-choice { transition: none; }
+}
+}
+/* The header's state chip is information, not a control (unlayered: it must beat `.u-ag .u-status-cancelled`): filled, no outline, no pointer. */
+.c5-state .u-status-cancelled { box-shadow: none; background: var(--c5-seg-track); }
+.c5-state > span:last-child { cursor: default; user-select: none; }

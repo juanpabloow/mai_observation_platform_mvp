@@ -25,6 +25,8 @@ const SYSTEM = (): string => {
 const VIEW = 'web/components/scheduling/AgendaView.tsx';
 /** The appointment detail moved out of AgendaView into a side panel of its own. */
 const PANEL = 'web/components/scheduling/agenda/AppointmentPanel.tsx';
+/** The detail's body (card language 5a), framed by the panel on desktop and the sheet on a phone. */
+const CARD = 'web/components/scheduling/agenda/AppointmentCard.tsx';
 const PREVIEW = 'web/components/scheduling/agenda/AppointmentPreview.tsx';
 const PAGE = 'web/app/clients/[clientId]/scheduling/agenda/page.tsx';
 const REPO = 'src/db/repositories/scheduling/appointments.ts';
@@ -81,7 +83,7 @@ test('identity is canonical — primary_identity replaced the raw phone column',
 });
 
 test('the appointment detail shows canonical identity — never the internal UUID', () => {
-  for (const rel of [PANEL, PREVIEW]) {
+  for (const rel of [CARD, PREVIEW]) {
     const src = read(rel);
     // The title is the contact's name; a walk-in without a contact shows what was typed,
     // and only then the generic label — never a reference.
@@ -209,16 +211,17 @@ test('selecting an appointment opens a side panel built from the shared Scheduli
   assert.ok(frame.includes('useNavigationGuard'), 'links elsewhere are guarded too');
   assert.ok(frame.includes('e.defaultPrevented') && frame.includes('[data-own-escape]'), 'Escape closes only the top layer');
   assert.ok(frame.includes('back.isConnected') , 'focus returns to the opener');
-  assert.ok(panel.includes('<SidePanel') && panel.includes('from "../ui/system"'), 'the detail composes the shared frame and system');
+  const card = read(CARD);
+  assert.ok(panel.includes('<SidePanel') && panel.includes('variant="card"') && panel.includes('<AppointmentCard'), 'the detail composes the shared frame and the card');
   // The state in one touch, from the shared plan (behaviour-tested in appointmentActionPlan.test.ts).
-  assert.ok(panel.includes('appointmentActionPlan({') && panel.includes('plan.transitions.includes'), 'transitions come from the shared plan');
-  assert.ok(panel.includes('DESTRUCTIVE.has(target)') && panel.includes('<ConfirmLayer'), 'cancel / no-show confirm first');
+  assert.ok(panel.includes('appointmentActionPlan({') && card.includes('plan.transitions.includes'), 'transitions come from the shared plan');
+  assert.ok(card.includes('if (target === "cancelled" || target === "no_show") {') && card.includes('role="alertdialog"'), 'cancel / no-show confirm first');
   // Reagendar happens INSIDE the same panel and moves the same appointment.
   assert.ok(panel.includes('<RescheduleInline') && read('web/components/scheduling/agenda/RescheduleInline.tsx').includes('rescheduleAppointmentAction('), 'reschedule inside the panel, the real move action');
   assert.ok(panel.includes('if (phone) {') && panel.includes('<MobileAppointmentSheet'), 'the phone gets its own bottom sheet');
   assert.ok(read('web/components/scheduling/agenda/status.ts').includes('NEXT_STATUSES'), 'transitions mirror the engine');
-  for (const fake of ['Añadir formulario', 'política de pagos', 'cita de grupo', 'Ver venta', 'Finalizar compra']) {
-    assert.ok(!panel.toLowerCase().includes(fake.toLowerCase()), `no "${fake}" control`);
+  for (const fake of ['Añadir formulario', 'política de pagos', 'cita de grupo', 'Ver venta', 'Finalizar compra', 'Nota interna', 'inasistencias ·']) {
+    assert.ok(!panel.toLowerCase().includes(fake.toLowerCase()) && !card.toLowerCase().includes(fake.toLowerCase()), `no "${fake}" control`);
   }
   assert.ok(read(VIEW).includes('<AppointmentPanel'), 'the panel renders beside the grid, not instead of it');
 });
@@ -319,15 +322,17 @@ test('control heights are absolute px, because this app scales the rem ramp', ()
   assert.ok(SYSTEM().includes('export const INPUT = `${FIELD} h-[44px] lg:h-[40px]`;'), 'fields are a real 44px on touch');
 });
 
-test('a confirmation inside the detail panel is modal: Tab cannot reach the panel behind it', () => {
-  const panel = read(PANEL);
+test('a confirmation inside the detail is IN PLACE (card 5a): nothing else in the card can be reached', () => {
+  const card = read(CARD);
   const sys = SYSTEM();
-  // The confirmation is a ConfirmLayer (focus trapped, Escape cancels) and the panel body
-  // is inert behind it; the panel's own Escape/outside-click stand down while it is open.
-  assert.ok(panel.includes('<ConfirmLayer'), 'the confirmation is the shared modal layer');
-  assert.ok(panel.includes('<div inert={confirm !== null} className="flex flex-col">'), 'the panel body is inert behind it');
-  assert.ok(panel.includes('covered={confirm !== null || props.covered}'), 'the panel does not close underneath it');
-  assert.ok(sys.includes('querySelector<HTMLElement>("[data-autofocus]")') && sys.includes('data-autofocus>'), 'focus lands on the safe choice');
+  // Cancel / no-show confirm in a box under the state (the approved sheet), not a modal: the
+  // rest of the card is inert and the footer's actions are disabled while it is open; focus
+  // lands on the safe choice; the box goes once the server applied the change.
+  assert.equal(card.match(/inert=\{Boolean\(asking\) \|\| undefined\}/g)?.length, 2, 'the state and the sections are inert behind it');
+  assert.ok(card.includes('disabled={props.pending || Boolean(asking)}') && card.includes('disabled={Boolean(asking)}'), 'the footer waits for the answer');
+  assert.ok(card.includes('<button type="button" autoFocus data-size="sm" className="u-focus c5-btn" onClick={() => setConfirm(null)}'), 'focus lands on «Volver»');
+  assert.ok(card.includes('const asking = confirm && live && plan.transitions.includes(confirm.target) ? confirm : null;'), 'it lives only while the change is still possible');
+  assert.ok(sys.includes('querySelector<HTMLElement>("[data-autofocus]")') && sys.includes('data-autofocus>'), 'the shared confirm layer keeps its safe default');
   const overlay = read('web/components/ui/Overlay.tsx');
   assert.ok(overlay.includes('!el.closest("[inert]")'), 'the focus trap ignores inert content');
 });
@@ -376,9 +381,12 @@ test('calendar: the grid sits in its own frame; a click marks 15 min; the slot m
 test('ONE colour model: the service colours the card; contour = confirmada, dashed = sin confirmar, filled = completada', () => {
   const r = (rel: string) => readFileSync(fileURLToPath(new URL(`../../${rel}`, import.meta.url)), 'utf8');
   const css = r('web/app/globals.css');
-  assert.ok(css.includes('.u-ag .u-appt2 { border-radius: 10px; background: var(--surface); border: 1.5px solid var(--appt-rule, var(--line-strong)); }'), 'confirmed: the service contour on white');
-  assert.ok(css.includes('.u-ag .u-appt2[data-status="scheduled"] { border-style: dashed; }'), 'unconfirmed: the same contour, dashed');
-  assert.ok(css.includes('.u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 16%, var(--surface)); }'), 'completed: filled with the service colour');
+  // Drawn as the approved capture (2026-10-24): light card, hairline NEUTRAL ring, soft shadow, no
+  // side bar; the service lives in the dot and, once completed, in the pastel fill.
+  assert.ok(css.includes('.u-ag .u-appt2 { border-radius: 10px; background: var(--surface); border: 1px solid rgba(17, 19, 22, 0.08); box-shadow: 0 1px 3px rgba(17, 19, 22, 0.08);'), 'confirmed: light card, neutral ring, soft shadow');
+  assert.ok(css.includes('.u-ag .u-appt2[data-status="scheduled"] { border-style: dashed; border-color: var(--line-strong); }'), 'unconfirmed: the same card, dashed');
+  assert.ok(css.includes('.u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 16%, var(--surface)); border-color: transparent; }'), 'completed: filled with the service colour');
+  assert.ok(!css.includes('.u-appt2-bar'), 'no side bar');
   assert.ok(css.includes('.u-ag .u-appt2[data-selected][data-selected] { box-shadow: 0 0 0 2px var(--foreground); }'), 'selection beats hover');
   assert.ok(!css.includes('data-mode='), 'no «Estado» colouring left');
   const view = r('web/components/scheduling/AgendaView.tsx');
@@ -389,7 +397,7 @@ test('ONE colour model: the service colours the card; contour = confirmada, dash
   assert.ok(chrome.includes('Contorno: confirmada · punteado: sin confirmar · relleno: completada'), 'the legend says how a state looks');
   const phone = r('web/components/scheduling/mobile/MobileAgenda.tsx');
   assert.ok(!/colorBy|onColorBy|MSegmented\s+label="Color de las citas"/.test(phone), 'the phone has no switch either');
-  assert.ok(phone.includes('a.status === "completed" ? "bg-[var(--m-fill)]" : "bg-m-sf"') && phone.includes('a.status === "scheduled" ? "border-dashed" : ""'), 'the phone cards follow the same model');
+  assert.ok(phone.includes('? "border-transparent bg-[var(--m-fill)] shadow-[0_1px_3px_rgba(17,19,22,0.08)]"') && phone.includes('${a.status === "scheduled" ? "border-dashed !border-m-tx3/50" : ""}'), 'the phone cards follow the same model');
 });
 
 test('Claro rail: graphite tokens on the default rail; Light keeps Light; dark mode untouched', () => {
@@ -403,9 +411,10 @@ test('Claro rail: graphite tokens on the default rail; Light keeps Light; dark m
 
 test('completion FILLS with the service colour — no generic green on a completed appointment', () => {
   const r = (rel: string) => readFileSync(fileURLToPath(new URL(`../../${rel}`, import.meta.url)), 'utf8');
-  const panel = r('web/components/scheduling/agenda/AppointmentPanel.tsx');
-  assert.ok(!panel.includes('"var(--ag-done-bar)"'), 'the panel stripe keeps the service colour when completed');
-  assert.equal(panel.match(/<StateChip status=\{appt\.status\} toneClass=\{props\.toneClass\} \/>/g)?.length, 2, 'the panel chip gets the service family');
+  const panel = r('web/components/scheduling/agenda/AppointmentPanel.tsx') + r('web/components/scheduling/agenda/AppointmentCard.tsx');
+  assert.ok(!panel.includes('"var(--ag-done-bar)"'), 'the card bar keeps the service colour when completed');
+  assert.ok(panel.includes('status === "no_show" ? "var(--c5-red-fg)" : status === "cancelled" ? "var(--c5-ctrl-bd)" : "var(--appt-rule, var(--c5-sec))"'), 'only no-show / cancelled change the bar');
+  assert.equal(panel.match(/<StateChip status=\{appt\.status\} toneClass=\{props\.toneClass\} \/>/g)?.length, 1, 'the card chip gets the service family');
   assert.ok(r('web/components/scheduling/agenda/AgendaChrome.tsx').includes('const done = status === "completed" ? `${toneClass ?? ""} u-ag-done-chip` : "";'), 'one chip rule: never green');
   assert.ok(r('web/app/globals.css').includes('.u-ag .u-ag-done-chip { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 18%, var(--surface)); color: var(--foreground);'), 'filled with the service colour');
   assert.ok(r('web/components/scheduling/agenda/AppointmentPreview.tsx').includes('<StateChip status={appt.status} size="sm" toneClass='), 'hover preview');
@@ -421,9 +430,11 @@ test('audit 23 Oct: tile labels avoid cards, cards are opaque, the brush gates p
   const hatch = r('web/app/globals.css');
   for (const cls of ['.u-ag .u-sch-break { background: repeating-linear-gradient(135deg', '.u-ag .u-sch-block { background: repeating-linear-gradient(135deg', '.u-ag .u-sch-closed { background: repeating-linear-gradient(135deg']) assert.ok(hatch.includes(cls), cls);
   assert.ok(view.includes('${siteWide ? "u-sch-closed" : "u-sch-block"}'), 'a site closure is told apart from one person\'s absence');
-  assert.ok(view.includes('{one ? "!" : "Revisar"}'), 'a one-line card keeps room for the name');
+  // The review mark is the compact «!» on short cards (the words «! Revisar» only from 90 min),
+  // and it is first in priority, so even a 15-min card keeps it without losing the name.
+  assert.ok(view.includes('...(rev') && view.includes('title="Requiere revisión" data-kind="rev" className="u-ag-mk"'), 'a one-line card keeps the review mark, small, and room for the name');
   const css = r('web/app/globals.css');
-  assert.ok(css.includes('.dark .u-ag .u-appt2 { background: color-mix(in srgb, #ffffff 3%, var(--surface)); }') && !css.includes('.dark .u-ag .u-appt2 { background: rgba(255, 255, 255, 0.03); }'), 'Grafito cards are opaque');
+  assert.ok(css.includes('.dark .u-ag .u-appt2 { background: color-mix(in srgb, #ffffff 3%, var(--surface));') && !css.includes('.dark .u-ag .u-appt2 { background: rgba(255, 255, 255, 0.03); }'), 'Grafito cards are opaque');
   assert.ok(css.includes('.u-ag .u-appt2[data-status="cancelled"] { border: 1px dashed var(--line-strong); background: var(--surface);'), 'a cancelled card is opaque too');
   assert.ok(view.includes('if (e.button !== 0 || !painting || !canSlotMenu(col.key)'), 'only the brush starts a painted range');
   assert.ok(view.includes('aria-pressed={paint}') && view.includes('window.addEventListener("keydown", onKey, true);'), 'a toggle; Esc closes the menu first, then the brush');
@@ -438,5 +449,5 @@ test('feedback: highlight only after the server confirms; recalculating is said 
   assert.ok(css.includes('.u-ag .u-ag-flash { animation: none; box-shadow: 0 0 0 2px var(--foreground); }'), 'reduced motion: a still ring');
   assert.ok(r('web/components/scheduling/agenda/ScheduleFormParts.tsx').includes('if (props.loading && items.length === 0) return <Recalc />;'), 'no stale «all clear» while recalculating');
   assert.ok(r('web/components/scheduling/agenda/AgendaChrome.tsx').includes('const POP = "u-pop-in '), 'menus open in 150 ms');
-  assert.ok(r('web/components/scheduling/agenda/AppointmentPanel.tsx').includes('Guardando: ${segment.find((x) => x.status === shownSaving)?.label'), 'the state being saved is announced');
+  assert.ok(r('web/components/scheduling/agenda/AppointmentCard.tsx').includes('Guardando: ${segment.find((x) => x.status === shownSaving)?.label'), 'the state being saved is announced');
 });

@@ -62,6 +62,11 @@ export function SidePanel(props: {
   bodyClassName?: string;
   /** A row under the title inside the header (Nueva cita's steps). */
   headerBelow?: ReactNode;
+  /** "card" = the card language 5a (appointment detail, charge): white header with the
+   *  service bar, 24px gutters, the grey fixed footer — `.c5-*` in globals.css. */
+  variant?: "default" | "card";
+  /** card: the line(s) under the title row inside the header (date · time · duration). */
+  meta?: ReactNode;
 }) {
   const autoId = useId();
   const titleId = props.labelledById ?? `${autoId}-title`;
@@ -128,6 +133,78 @@ export function SidePanel(props: {
     return () => document.removeEventListener("pointerdown", onDown, true);
   }, [phone, props.closeOnOutside, asking, requestClose]);
 
+  const discard = asking ? (
+    <ConfirmLayer
+      id="panel-discard"
+      title="¿Descartar los cambios?"
+      body="Hay cambios sin guardar. Si cierras ahora, se pierden."
+      cancelLabel="Seguir editando"
+      confirmLabel="Descartar cambios"
+      onCancel={() => {
+        setAsking(false);
+        nav.forget();
+      }}
+      onConfirm={() => {
+        setAsking(false);
+        if (nav.hasPending()) {
+          latest.current.onClose();
+          nav.follow();
+        } else {
+          latest.current.onClose();
+        }
+      }}
+    />
+  ) : null;
+
+  if (props.variant === "card") {
+    return (
+      <>
+        <aside
+          ref={panelRef as RefObject<HTMLElement>}
+          role="dialog"
+          aria-labelledby={titleId}
+          tabIndex={-1}
+          data-side-panel={props.name ?? ""}
+          data-card=""
+          className={
+            phone
+              ? "u-c5 u-side-panel-in fixed inset-0 z-50 flex flex-col bg-[var(--c5-bg)] outline-none"
+              : "u-c5 c5-panel u-side-panel-in fixed bottom-3 right-3 top-3 z-50 flex w-[min(520px,calc(100vw-24px))] flex-col overflow-hidden outline-none"
+          }
+        >
+          <header className={`c5-head shrink-0 ${phone ? "pt-[max(0.75rem,env(safe-area-inset-top))]" : ""}`}>
+            <div className="flex items-center gap-3">
+              {phone && props.onBack ? (
+                <button type="button" aria-label={props.backLabel ?? "Volver"} title={props.backLabel ?? "Volver"} onClick={props.onBack} className="u-focus c5-x -ml-2">
+                  <svg aria-hidden viewBox="0 0 16 16" className="size-[16px]" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M10 3.5L5.5 8l4.5 4.5" />
+                  </svg>
+                </button>
+              ) : null}
+              {props.leading}
+              <div className="flex min-w-0 flex-1 flex-col gap-1">
+                <h2 id={titleId} className="c5-title truncate">
+                  {props.title}
+                </h2>
+                {props.subtitle ? <div className="c5-title-sub">{props.subtitle}</div> : null}
+              </div>
+              {props.aside}
+              <button type="button" aria-label="Cerrar" title="Cerrar" onClick={requestClose} className="u-focus c5-x">
+                <svg aria-hidden viewBox="0 0 16 16" className="size-[14px]" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M4 4l8 8M12 4l-8 8" />
+                </svg>
+              </button>
+            </div>
+            {props.meta}
+          </header>
+          <div className={`c5-body min-h-0 flex-1 overflow-y-auto overscroll-contain ${props.bodyClassName ?? ""}`}>{props.children}</div>
+          {props.footer ? <footer className="c5-foot shrink-0">{props.footer}</footer> : null}
+        </aside>
+        {discard}
+      </>
+    );
+  }
+
   return (
     <>
       <aside
@@ -170,28 +247,7 @@ export function SidePanel(props: {
           </footer>
         ) : null}
       </aside>
-      {asking ? (
-        <ConfirmLayer
-          id="panel-discard"
-          title="¿Descartar los cambios?"
-          body="Hay cambios sin guardar. Si cierras ahora, se pierden."
-          cancelLabel="Seguir editando"
-          confirmLabel="Descartar cambios"
-          onCancel={() => {
-            setAsking(false);
-            nav.forget();
-          }}
-          onConfirm={() => {
-            setAsking(false);
-            if (nav.hasPending()) {
-              latest.current.onClose();
-              nav.follow();
-            } else {
-              latest.current.onClose();
-            }
-          }}
-        />
-      ) : null}
+      {discard}
     </>
   );
 }

@@ -27,9 +27,11 @@ test('payment data reaches the page only with payments.view, and only for appoin
 test('the charge step: unknown price is empty (not $0), the server computes the total, voiding says it gives no money back', () => {
   const panel = r('web/components/scheduling/agenda/ChargePanel.tsx');
   assert.ok(panel.includes('amount: amountInput(appt.price)') && r('web/lib/chargeDraft.ts').includes('if (price == null) return "";'), 'unknown → empty field');
-  assert.ok(panel.includes('No procesa tarjetas ni mueve dinero.'));
-  assert.ok(panel.includes('El servidor confirma el total al guardar.'));
-  assert.ok(panel.includes('if (sending.current || pending || !valid) return;'), 'no double submit');
+  assert.ok(panel.includes('no procesa tarjetas ni mueve dinero.'));
+  assert.ok(panel.includes('el total lo confirma el servidor.'));
+  assert.ok(panel.includes('if (sending.current || pending || !valid || already) return;'), 'no double submit, no second payment');
+  assert.ok(panel.includes('if (r.error === ALREADY) setAlready(true);') && panel.includes('No se guardará un segundo cobro'), 'a payment recorded meanwhile blocks a second one');
+  assert.ok(panel.includes('aria-labelledby="ch-sum"'), 'the summary is shown before saving');
   assert.ok(panel.includes('createPortal('), 'mounted outside the desktop-only column (visible on a phone)');
   const section = r('web/components/scheduling/agenda/PaymentSection.tsx');
   assert.ok(section.includes('Anular el registro no devuelve dinero al cliente.'));

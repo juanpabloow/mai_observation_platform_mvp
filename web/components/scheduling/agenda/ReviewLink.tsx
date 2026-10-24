@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import type { ReviewLinkResult } from "@/lib/schedulingActions";
-import { Button, CARD } from "../ui/system";
 
 /**
  * "Enlace de reseña" — the review link of a COMPLETED appointment, shared by the desktop
@@ -52,55 +51,68 @@ export function whatsappHref(phone: string | null, text: string): string | null 
   return digits.length >= 7 ? `https://wa.me/${digits}?text=${encodeURIComponent(text)}` : null;
 }
 
-/** Desktop card (AppointmentPanel). */
-export function ReviewLinkCard({ load, siteName, phone }: { load: ReviewLinkLoader; siteName: string; phone: string | null }) {
+/**
+ * «Reseña» section of the appointment card (card language 5a), desktop and phone. Two steps on
+ * purpose (see above): «Crear enlace de reseña», then «Copiar enlace» / «Abrir en WhatsApp»
+ * (green). The chip appears only when the client already answered — whether the link was sent
+ * is not recorded anywhere, so the card does not claim it.
+ */
+export function ReviewSection({ load, siteName, phone, clientName }: { load: ReviewLinkLoader; siteName: string; phone: string | null; clientName: string }) {
   const { s, create, copy } = useReviewLink(load);
   const wa = s.state === "ready" ? whatsappHref(phone, reviewShareText(siteName, s.url)) : null;
+  const first = clientName.replace(/^\s*[[(][^\])]*[\])]\s*/, "").split(/\s+/)[0] || "el cliente";
   return (
-    <section aria-labelledby="appt-panel-review" className={`${CARD} p-4`}>
-      <div className="flex items-center justify-between gap-2">
-        <h3 id="appt-panel-review" className="text-[13px] font-semibold">
+    <section aria-labelledby="appt-sec-review" className="c5-sec gap-2.5">
+      <div className="flex items-center gap-2">
+        <h3 id="appt-sec-review" className="c5-cap flex-1">
           Reseña
         </h3>
-        {s.state === "idle" || s.state === "error" ? (
-          <Button variant="tertiary" size="sm" onClick={create}>
-            {s.state === "error" ? "Reintentar" : "Crear enlace"}
-          </Button>
-        ) : null}
+        {s.state === "ready" && s.answered ? <span className="c5-chip c5-ok">Respondida</span> : null}
       </div>
-      {s.state === "idle" ? (
-        <p className="mt-1 text-[13px] text-muted">Pídele al cliente su opinión. Se publica solo después de que la apruebes.</p>
-      ) : s.state === "loading" ? (
-        <div className="mt-3 h-10 animate-pulse rounded-sch-control bg-subtle" aria-busy="true" aria-label="Creando enlace" />
-      ) : s.state === "error" ? (
-        <p role="alert" className="mt-2 text-[13px] text-danger">
+      {s.state === "error" ? (
+        <p role="alert" className="c5-small text-[var(--c5-red-fg)]">
           {s.error}
         </p>
       ) : (
-        <div className="mt-2 flex flex-col gap-2">
-          {s.answered ? <p className="text-[13px] text-muted">El cliente ya respondió esta reseña.</p> : null}
-          <input
-            readOnly
-            value={s.url}
-            aria-label="Enlace de reseña"
-            onFocus={(e) => e.currentTarget.select()}
-            className="u-mono h-[36px] w-full truncate rounded-sch-control border border-line bg-subtle px-2.5 text-xs"
-          />
-          <div className="flex flex-wrap gap-2">
-            <Button size="sm" onClick={copy}>
-              {s.copied ? "Copiado" : "Copiar enlace"}
-            </Button>
+        <p className="c5-small">
+          {s.state === "ready" && s.answered
+            ? "El cliente ya respondió esta reseña. Se publica solo después de que la apruebes."
+            : `Envíale a ${first} el enlace para que deje su opinión. Se publica solo después de que la apruebes.`}
+        </p>
+      )}
+      {s.state === "ready" ? (
+        <>
+          <input readOnly value={s.url} aria-label="Enlace de reseña" onFocus={(e) => e.currentTarget.select()} className="u-focus c5-field h-[36px] truncate text-[12px]" />
+          <div className="flex gap-2">
+            <button type="button" className="u-focus c5-btn" data-size="sm" style={{ flex: "1 1 0" }} onClick={copy}>
+              {s.copied ? "Enlace copiado ✓" : "Copiar enlace"}
+            </button>
             {wa ? (
-              <a href={wa} target="_blank" rel="noopener noreferrer" className="inline-flex h-[32px] items-center rounded-sch-control px-2.5 text-xs text-accent hover:underline">
-                Abrir WhatsApp
+              <a href={wa} target="_blank" rel="noopener noreferrer" data-kind="ok" data-size="sm" style={{ flex: "1 1 0" }} className="u-focus c5-btn">
+                <ChatGlyph />
+                Abrir en WhatsApp
               </a>
             ) : null}
           </div>
           <span aria-live="polite" className="sr-only">
             {s.copied ? "Enlace copiado" : ""}
           </span>
+        </>
+      ) : (
+        <div>
+          <button type="button" className="u-focus c5-btn" data-size="sm" aria-busy={s.state === "loading" || undefined} onClick={() => s.state !== "loading" && create()}>
+            {s.state === "loading" ? "Creando enlace…" : s.state === "error" ? "Reintentar" : "Crear enlace de reseña"}
+          </button>
         </div>
       )}
     </section>
+  );
+}
+
+function ChatGlyph() {
+  return (
+    <svg aria-hidden width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <path d="M4 20l1.3-3.9A8 8 0 1112 20a8 8 0 01-4-1z" />
+    </svg>
   );
 }
