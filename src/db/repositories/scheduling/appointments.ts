@@ -575,6 +575,27 @@ export interface AppointmentEventRow {
   created_at: Date;
 }
 
+/** NON-CANCELLED appointments of one professional whose blocked window overlaps [from, until)
+ *  — completed and no-show included. A past walk-in («ya se realizó») is refused, and the
+ *  agenda shows these, when the list is not empty; nothing here writes. */
+export async function listStaffAppointmentsOverlapping(
+  tenantId: string,
+  siteId: string,
+  staffId: string,
+  from: Date,
+  until: Date,
+): Promise<Array<{ id: string; start_at: Date; service_end_at: Date; status: string; service_name: string }>> {
+  const r = await query<{ id: string; start_at: Date; service_end_at: Date; status: string; service_name: string }>(
+    `SELECT id, start_at, service_end_at, status, service_name_snapshot AS service_name
+       FROM appointments
+      WHERE tenant_id = $1 AND site_id = $2 AND staff_id = $3 AND status <> 'cancelled'
+        AND blocked_until > $4 AND blocked_from < $5
+      ORDER BY start_at`,
+    [tenantId, siteId, staffId, from, until],
+  );
+  return r.rows;
+}
+
 export async function listAppointmentEvents(tenantId: string, appointmentId: string): Promise<AppointmentEventRow[]> {
   const r = await query<AppointmentEventRow>(
     `SELECT id, event_type, actor_type, actor_user_id, detail, created_at

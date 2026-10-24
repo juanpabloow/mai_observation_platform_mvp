@@ -9,8 +9,9 @@ import { can, canAccessSchedulingSite, canAccessSchedulingStaff, isSchedulingSta
 import { listContacts } from "@worker/db/repositories/contacts.js";
 import { findContactMatchesByIdentity } from "@worker/db/repositories/contactIdentities.js";
 import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
+import { getServiceById } from "@worker/db/repositories/scheduling/services.js";
 import { validateGuest, maskIdentity, type ContactMatch, type ContactMode, type GuestValue } from "./walkInContact";
-import { getAppointmentById, listAppointmentEvents } from "@worker/db/repositories/scheduling/appointments.js";
+import { getAppointmentById, listAppointmentEvents, listStaffAppointmentsOverlapping } from "@worker/db/repositories/scheduling/appointments.js";
 import { ensureReviewRequest } from "@worker/db/repositories/scheduling/reviews.js";
 import { reviewLinkSecret, reviewPath, signReviewToken } from "./reviewLink";
 import {
@@ -59,6 +60,10 @@ function messageFor(error: BookingError, fallback: string): string {
       return "Se puede completar cuando la cita empiece.";
     case "not_immediate":
       return "Ese horario ya no es «ahora». Elige el siguiente horario disponible.";
+    case "not_past":
+      return "Solo se registran como realizadas las atenciones de hoy que ya terminaron. Revisa la hora de inicio.";
+    case "past_overlap":
+      return "Ese horario se cruza con otra cita de ese profesional. No se cambió ninguna cita.";
     default:
       return fallback;
   }
@@ -216,6 +221,15 @@ export interface ManualAppointmentInput {
    * the immediate window, and every other availability rule is still checked by the engine.
    */
   immediate?: boolean;
+  /**
+   * «Esta atención ya se realizó» (walkIn only, never with `immediate`): reception registering
+   * at the end of the day a service that ALREADY happened today. The engine checks the slot as
+   * of its own start and refuses it unless it ended before now on the site's day, or if it
+   * overlaps another appointment of the professional (src/scheduling/booking.ts · pastWalkIn).
+   * Then the SAME «Completar» transition runs: it is saved as completed, with the real creation
+   * date and who registered it; the payment stays pending; nothing is sent to anyone.
+   */
+  alreadyDone?: boolean;
 }
 
 /** Contacts that already carry this phone or email (read-only — never creates). */
@@ -256,7 +270,9 @@ export async function createManualAppointmentAction(
     (input.staffId && !isUuid(input.staffId)) ||
     (input.contactId && !isUuid(input.contactId)) ||
     (input.idempotencyKey && !isUuid(input.idempotencyKey)) ||
-    (input.initialStatus && input.initialStatus !== "scheduled" && input.initialStatus !== "confirmed")
+    (input.initialStatus && input.initialStatus !== "scheduled" && input.initialStatus !== "confirmed") ||
+    // «Ya se realizó» is a walk-in only, and never «ahora» nor a chosen initial state.
+    (input.alreadyDone && (!input.walkIn || input.immediate || input.initialStatus))
   ) {
     return { ok: false, error: GENERIC_GATE };
   }
@@ -276,6 +292,8 @@ export async function createManualAppointmentAction(
   }
   const start = new Date(input.startAt);
   if (Number.isNaN(start.getTime())) return { ok: false, error: "La hora de inicio no es válida." };
+  // A service that already happened was done by SOMEONE: «cualquiera» is not a record.
+  if (input.alreadyDone && !staffId) return { ok: false, error: "Elige quién realizó la atención." };
 
   // C-4.1: booking for an existing contact attaches to it directly (no typed identity).
   const bookingForContact = Boolean(input.contactId);
@@ -327,22 +345,39 @@ export async function createManualAppointmentAction(
     guest,
     origin: input.walkIn ? "walk_in" : "internal",
     immediateWalkIn: Boolean(input.walkIn && input.immediate),
+    pastWalkIn: Boolean(input.walkIn && input.alreadyDone),
     createdByType: "agent",
     createdByUserId: ctx.scope.userId,
     idempotencyKey: input.idempotencyKey ? `agenda-manual:${input.idempotencyKey}` : null,
     // The VALIDATED contextual client — a site of another client is not-found.
     scopeClientId: ctx.client.id,
   });
-  if (!result.ok) return { ok: false, error: messageFor(result.error, "No se pudo crear la cita.") };
+  if (!result.ok) {
+    if (input.alreadyDone && result.error === "unavailable") {
+      return { ok: false, error: "Ese horario no estaba disponible para ese profesional: fuera de su horario, en una pausa, un bloqueo o una ausencia. No se cambió ninguna cita." };
+    }
+    return { ok: false, error: messageFor(result.error, "No se pudo crear la cita.") };
+  }
   return { ok: true, id: result.value.id, status: result.value.status };
   };
 
+  const done = Boolean(input.walkIn && input.alreadyDone);
   const outcome = await createThenMaybeConfirm(
     create,
-    // The SAME gated transition the detail's "Confirmar" runs (own-column rule included).
-    (id) => transition("confirmed", clientId, id, "No se pudo confirmar la cita."),
-    input.initialStatus ?? "scheduled",
+    // The SAME gated transition the detail runs — "Confirmar", or "Completar" for a walk-in
+    // that already happened (own-column rule and «already started» included).
+    (id) => (done ? transition("completed", clientId, id, "No se pudo completar la cita.") : transition("confirmed", clientId, id, "No se pudo confirmar la cita.")),
+    done ? "completed" : input.initialStatus ?? "scheduled",
   );
+  if (!outcome.ok && done && outcome.error === messageFor("past_overlap", "")) {
+    // Show what it overlaps (the professional's own appointments, already visible in this
+    // login's agenda); nothing was changed.
+    const service = await getServiceById(ctx.scope.tenantId, ctx.client.id, input.serviceId);
+    if (service && staffId) {
+      const list = await listStaffAppointmentsOverlapping(ctx.scope.tenantId, input.siteId, staffId, start, new Date(start.getTime() + service.duration_min * 60_000));
+      return { ...outcome, conflicts: list.map((a) => ({ startAt: a.start_at.toISOString(), endAt: a.service_end_at.toISOString(), service: a.service_name, status: a.status })) };
+    }
+  }
   if (outcome.ok) revalidatePath(agendaPath(ctx.client.id));
   return outcome;
 }
