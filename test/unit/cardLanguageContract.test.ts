@@ -39,3 +39,13 @@ test('what the sheet marks «Propuesto» is not built, and decisions already tak
   const review = r('web/components/scheduling/agenda/ReviewLink.tsx');
   assert.ok(review.includes('Abrir en WhatsApp') && !review.includes('Enviar por WhatsApp'));
 });
+
+test('the CURRENT state is a read-only chip beside the close button, for every state', () => {
+  const card = r('web/components/scheduling/agenda/AppointmentCard.tsx');
+  assert.ok(!card.includes('<span className="c5-k">Estado</span>'), 'no separate «Estado» row in the body');
+  assert.ok(card.includes('<span className="sr-only">Estado: </span>') && card.includes('frame({ leading, title: client, status, meta, body, footer })'), 'one chip for all states');
+  assert.ok(r('web/components/scheduling/agenda/AppointmentPanel.tsx').includes('aside={parts.status}'), 'desktop: before the X');
+  const sheet = r('web/components/scheduling/mobile/MobileAppointmentSheet.tsx');
+  assert.ok(sheet.indexOf('{parts.status}') < sheet.indexOf('aria-label="Cerrar detalle"') && sheet.indexOf('aria-label="Cerrar detalle"') < sheet.indexOf('<h2'), 'phone: chip + 44px close on the top row, the name below at full width');
+  assert.ok(r('web/app/globals.css').includes('.c5-state .u-status-cancelled { box-shadow: none;'), 'informational, not a button');
+});

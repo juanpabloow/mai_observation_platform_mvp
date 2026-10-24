@@ -61,6 +61,9 @@ export function phoneOf(identity: string | null): string | null {
 export interface CardParts {
   leading: ReactNode;
   title: string;
+  /** The CURRENT state, informational — beside the close button (it is not an action: the
+   *  state changes from the segment in the body). */
+  status: ReactNode;
   meta: ReactNode;
   body: ReactNode;
   footer: ReactNode;
@@ -199,14 +202,15 @@ export function AppointmentCard(props: {
           {plan.completeWaitsForStart ? <span className="c5-note ml-auto">Completar se habilita al empezar la cita</span> : null}
         </div>
       </div>
-    ) : (
-      <div className="c5-sec">
-        <div className="c5-row">
-          <span className="c5-k">Estado</span>
-          <StateChip status={appt.status} toneClass={props.toneClass} />
-        </div>
-      </div>
-    );
+    ) : null;
+  // Every state, the same pattern: a read-only chip in the header; the payment's own state
+  // stays in «Cobro».
+  const status = (
+    <span className="c5-state flex shrink-0 items-center">
+      <span className="sr-only">Estado: </span>
+      <StateChip status={appt.status} toneClass={props.toneClass} />
+    </span>
+  );
 
   const finalReason = asking?.reason === "Otro" ? asking.other.trim() || "Otro" : asking?.reason ?? undefined;
   const confirmBox = asking ? (
@@ -447,7 +451,7 @@ export function AppointmentCard(props: {
     </>
   );
 
-  return <>{props.frame({ leading, title: client, meta, body, footer })}</>;
+  return <>{props.frame({ leading, title: client, status, meta, body, footer })}</>;
 }
 
 /** Actividad: loaded when the card opens (the server reads it through the appointment gate);

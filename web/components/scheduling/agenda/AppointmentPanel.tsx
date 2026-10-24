@@ -227,6 +227,7 @@ export function AppointmentPanel(props: {
         variant="card"
         title={parts.title}
         leading={parts.leading}
+        aside={parts.status}
         meta={parts.meta}
         dirty={contactDirty}
         covered={props.covered}

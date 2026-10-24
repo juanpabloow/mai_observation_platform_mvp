@@ -2549,3 +2549,6 @@ textarea.c5-field { height: auto; padding: 10px 12px; line-height: 1.4; font-var
   .c5-btn, .c5-seg-opt, .c5-choice { transition: none; }
 }
 }
+/* The header's state chip is information, not a control (unlayered: it must beat `.u-ag .u-status-cancelled`): filled, no outline, no pointer. */
+.c5-state .u-status-cancelled { box-shadow: none; background: var(--c5-seg-track); }
+.c5-state > span:last-child { cursor: default; user-select: none; }

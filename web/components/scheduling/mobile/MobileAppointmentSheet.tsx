@@ -23,13 +23,18 @@ export function MobileAppointmentSheet({ parts, onClose }: { parts: CardParts; o
       expandable
       tone="card"
       header={
-        <div className="c5-head flex-none pt-0">
-          <div className="flex items-center gap-3">
-            {parts.leading}
-            <h2 className="c5-title min-w-0 flex-1 break-words">{parts.title}</h2>
+        <div className="c5-head flex-none gap-2 pt-0">
+          {/* The state chip and the 44×44 close share the top row, so neither squeezes the
+              client's name, which gets the full width below. */}
+          <div className="-mr-2 flex items-center justify-end gap-2">
+            {parts.status}
             <button type="button" aria-label="Cerrar detalle" title="Cerrar" onClick={onClose} className="u-focus c5-x">
               <Icon d={ICON.close} size={16} width={1.6} />
             </button>
+          </div>
+          <div className="flex items-center gap-3">
+            {parts.leading}
+            <h2 className="c5-title min-w-0 flex-1 break-words">{parts.title}</h2>
           </div>
           {parts.meta}
         </div>
