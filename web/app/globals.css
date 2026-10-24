@@ -2297,50 +2297,63 @@ body {
 .u-ag .u-sch-break { background: repeating-linear-gradient(135deg, var(--ag-hatch-soft) 0 1px, transparent 1px 8px), var(--ag-break); color: var(--muted); }
 .u-ag .u-sch-block { background: repeating-linear-gradient(135deg, var(--ag-hatch) 0 1px, transparent 1px 7px), var(--ag-off); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line); }
 .u-ag .u-sch-closed { background: repeating-linear-gradient(135deg, var(--ag-hatch) 0 1px, transparent 1px 7px), repeating-linear-gradient(45deg, var(--ag-hatch) 0 1px, transparent 1px 7px), var(--ag-off); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-strong); }
-/* ONE colour model (2026-10-23, «los colores según el tipo de servicio»): the colour is
-   ALWAYS the service family; the state is how the card wears it —
-     Confirmada    full service contour (1px) on white
-     Sin confirmar the same contour, dashed (and the bar dashed)
-     Completada    filled with the service colour (16 %, 22 % on hover; Grafito 22 / 28 %)
-     Inasistencia  the service contour softened; a discreet red ⊘ (the bar keeps the service)
-     Cancelada     1px dashed field line, struck through, grey bar
-   Card language 5a, compact (2026-10-24): a 3px service bar at the left edge, 8px corners and
-   compact marks — «!» Requiere revisión (amber) and «$» Cobro pendiente (neutral). The
-   ○ / ✓ / ✓✓ / ⊘ / ✕ icon stays on every card: colour is never the only signal.
+/* ONE colour model (2026-10-23, «los colores según el tipo de servicio»), drawn as the approved
+   «M_AI Agenda» capture (2026-10-24, the visual reference that wins over any reading of «5a»):
+   a light card with a hairline NEUTRAL ring and a soft shadow; the service lives in the colour
+   dot beside the service name, and in the pastel fill once completed. No side bar.
+     Confirmada    light surface, neutral ring, soft shadow
+     Sin confirmar the same card, the ring dashed
+     Completada    pastel fill of the service (16 %; Grafito 22 %), no visible ring
+     Inasistencia  soft red pastel fill and ring (as in the capture); the dot keeps the service
+     Cancelada     1px dashed field line, struck through
+   The ✓ / ✓✓ / ○ / ⊘ / ✕ glyph sits quietly at the top right: colour is never the only signal.
    Day cards and week chips share it. There is no «Servicio | Estado» switch any more. */
-.u-ag .u-appt2 { border-radius: 8px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--appt-rule, var(--line-strong)) 55%, var(--surface)); container-type: inline-size; }
-.u-ag .u-appt2[data-status="confirmed"] { border-color: var(--appt-rule, var(--line-strong)); }
-.u-ag .u-appt2[data-status="scheduled"] { border-style: dashed; border-color: var(--appt-rule, var(--line-strong)); }
-.u-ag .u-appt2[data-status="cancelled"] { border: 1px dashed var(--line-strong); background: var(--surface); color: var(--muted); }
+.u-ag .u-appt2 { border-radius: 10px; background: var(--surface); border: 1px solid rgba(17, 19, 22, 0.08); box-shadow: 0 1px 3px rgba(17, 19, 22, 0.08); container-type: inline-size; }
+.u-ag .u-appt2[data-status="scheduled"] { border-style: dashed; border-color: var(--line-strong); }
+.u-ag .u-appt2[data-status="cancelled"] { border: 1px dashed var(--line-strong); background: var(--surface); color: var(--muted); box-shadow: none; }
+.u-ag .u-appt2[data-status="no_show"] { background: #fbeded; border-color: #f1c6c8; }
 /* Every card is OPAQUE (audit 23 Oct): a pause or block under it must never read through
    its text. Grafito's lift is mixed into the surface instead of a translucent white. */
-.dark .u-ag .u-appt2 { background: color-mix(in srgb, #ffffff 3%, var(--surface)); }
-.dark .u-ag .u-appt2[data-status="cancelled"] { background: var(--surface); }
+.dark .u-ag .u-appt2 { background: color-mix(in srgb, #ffffff 3%, var(--surface)); border-color: rgba(255, 255, 255, 0.08); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.45); }
+.dark .u-ag .u-appt2[data-status="scheduled"] { border-color: var(--line-strong); }
+.dark .u-ag .u-appt2[data-status="cancelled"] { background: var(--surface); box-shadow: none; }
+.dark .u-ag .u-appt2[data-status="no_show"] { background: color-mix(in srgb, #e5484d 14%, var(--surface)); border-color: rgba(229, 72, 77, 0.38); }
 .u-ag .u-appt2:where(:not([data-status="cancelled"])):hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 6%, var(--surface)); }
 .u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 16%, var(--surface)); border-color: transparent; }
 .u-ag .u-appt2[data-status="completed"]:hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 22%, var(--surface)); }
-.dark .u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 22%, var(--surface)); }
+.dark .u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 22%, var(--surface)); border-color: transparent; }
 .dark .u-ag .u-appt2[data-status="completed"]:hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 28%, var(--surface)); }
-.u-ag .u-appt2-bar { width: 3px; flex: none; align-self: stretch; background: var(--appt-rule, var(--line-strong)); }
-.u-ag .u-appt2[data-status="scheduled"] .u-appt2-bar { background: repeating-linear-gradient(180deg, var(--appt-rule, var(--line-strong)) 0 4px, transparent 4px 7px); }
-.u-ag .u-appt2[data-status="cancelled"] .u-appt2-bar { background: var(--line-strong); }
-/* Compact marks: never cover the name or the time — they sit after them and never shrink. */
-.u-ag .u-ag-mk { display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 3px; height: 16px; min-width: 16px; padding: 0 5px; border-radius: 8px; font-size: 10.5px; font-weight: 590; line-height: 1; white-space: nowrap; }
-.u-ag .u-ag-mk[data-kind="rev"] { background: var(--warn-soft); color: var(--warn); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 30%, transparent); }
-.u-ag .u-ag-mk[data-kind="pay"] { background: var(--chip); color: var(--ag-ink2); box-shadow: inset 0 0 0 1px var(--line); }
+/* The necessary notices stay SMALL and quiet: «!» Requiere revisión (amber), «$» Cobro pendiente
+   (neutral). They sit after the name / time and never shrink them. */
+.u-ag .u-ag-mk { display: inline-flex; flex: none; align-items: center; justify-content: center; height: 15px; min-width: 15px; padding: 0 4px; border-radius: 8px; font-size: 10px; font-weight: 600; line-height: 1; white-space: nowrap; }
+.u-ag .u-ag-mk[data-kind="rev"] { background: var(--warn-soft); color: var(--warn); }
+.u-ag .u-ag-mk[data-kind="pay"] { background: color-mix(in srgb, var(--foreground) 7%, transparent); color: var(--ag-ink2); }
 .u-ag .u-ag-noshow { color: var(--danger); }
-/* A narrow lane (overlaps) or column: the time and the secondary words fall first; only the
-   highest-priority mark stays (! › $ › state), so the name keeps its room. */
-.u-ag .u-ag-mk-narrow { display: none; }
+/* Card type (the capture's 14/500 · 12.5 at its 88 px/h, brought to Agenda's 72 px/h with tighter
+   leading so its line breaks per duration hold). Own classes on purpose: Agenda's
+   compact desktop density (text-[14px] → 13px) must not shrink the reference's cards. */
+.u-ag .u-ag-c-name { font-size: 13px; line-height: 15px; font-weight: 500; }
+.u-ag .u-ag-c-name-sm { font-size: 12px; line-height: 14px; }
+.u-ag .u-ag-c-sub { font-size: 12px; line-height: 14px; color: var(--ag-ink2); }
+.u-ag .u-ag-c-glyph { flex: none; font-size: 12px; line-height: 1; color: var(--ag-ink2); }
 /* A narrow week chip that carries a mark gives the state icon's room to the name: the state
-   still reads from the contour / dash / fill (and the label); a no-show keeps its red ⊘. */
+   still reads from the ring / dash / fill (and the label); a no-show keeps its red ⊘. */
 @container (max-width: 159px) {
   .u-ag .u-appt2[data-marked] [data-glyph]:not(.u-ag-noshow) { display: none; }
+}
+/* A narrow lane (overlaps): the time range falls first and only the highest-priority mark
+   stays (! › $ › state), so the name keeps its room. */
+/* A one-line card in a shared lane (content box < 140px): its range gives way before the name. */
+@container (max-width: 139px) {
+  .u-ag .u-appt2 [data-drop-sm] { display: none; }
+}
+/* …and sooner when the card also carries a notice (! / $), so the name never shrinks to «Cli…». */
+@container (max-width: 189px) {
+  .u-ag .u-appt2[data-marked] [data-drop-sm] { display: none; }
 }
 @container (max-width: 109px) {
   .u-ag .u-appt2 [data-drop] { display: none; }
   .u-ag .u-appt2 .u-ag-marks > :not(:first-child) { display: none; }
-  .u-ag .u-appt2 .u-ag-mk-narrow { display: inline-flex; }
 }
 .u-ag .u-appt2-dot { border-radius: 2px; }
 /* A completed appointment's state chip fills with its service colour (as the card does),

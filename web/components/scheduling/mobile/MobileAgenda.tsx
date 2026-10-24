@@ -639,56 +639,53 @@ function DayList({
               <span className="u-tnum text-[15px] font-semibold">{fmt(a.start_at, tz)}</span>
               <span className="text-[12px] text-m-tx3">{a.duration_min} min</span>
             </div>
-            {/* The colour is the service; the state is how the card wears it (as on the desktop):
-                contour = confirmada, dashed = sin confirmar, filled = completada; a cancelled
-                one is a grey dashed outline. «Siguiente» keeps its ink edge. Card language 5a:
-                the service bar on the left, «Requiere revisión» amber, «Cobro pendiente»
-                neutral, and the state as quiet text (a red ⊘ for a no-show) — not a button. */}
+            {/* Drawn like the desktop card (the approved capture): a light card with a hairline
+                neutral ring and a soft shadow, dashed when unconfirmed, the service's pastel when
+                completed, a soft red when a no-show; the service in the dot beside its name; the
+                state glyph quietly at the top right. «Siguiente» keeps its ink edge. The notices
+                («!» review, «$» pending charge) stay small. */}
             <div
               data-status={a.status}
-              className={`${mFamilyClass(a)} flex min-w-0 flex-1 overflow-hidden rounded-[14px] border ${
+              className={`${mFamilyClass(a)} flex min-w-0 flex-1 flex-col gap-0.5 rounded-[16px] border px-[14px] py-3 ${
                 cancelled
                   ? "border-dashed border-m-bd bg-transparent"
                   : a.status === "completed"
-                    ? "border-transparent bg-[var(--m-fill)]"
-                    : a.status === "confirmed" || a.status === "scheduled"
-                      ? "border-[var(--m-dot)] bg-m-sf"
-                      : "border-[color-mix(in_srgb,var(--m-dot)_55%,var(--m-sf))] bg-m-sf"
-              } ${it.isNext ? "!border-m-tx" : ""} ${a.status === "scheduled" ? "border-dashed" : ""}`}
+                    ? "border-transparent bg-[var(--m-fill)] shadow-[0_1px_3px_rgba(17,19,22,0.08)]"
+                    : a.status === "no_show"
+                      ? "border-[color-mix(in_srgb,var(--m-dn)_28%,var(--m-sf))] bg-[color-mix(in_srgb,var(--m-dn)_9%,var(--m-sf))] shadow-[0_1px_3px_rgba(17,19,22,0.08)]"
+                      : `border-m-bd bg-m-sf shadow-[0_1px_3px_rgba(17,19,22,0.08)] ${a.status === "scheduled" ? "border-dashed !border-m-tx3/50" : ""}`
+              } ${it.isNext ? "!border-m-tx" : ""}`}
             >
-              <span
-                aria-hidden
-                className={`w-1 flex-none ${cancelled ? "bg-m-bd" : "bg-[var(--m-dot)]"}`}
-                style={a.status === "scheduled" ? { background: "repeating-linear-gradient(180deg, var(--m-dot) 0 5px, transparent 5px 9px)" } : undefined}
-              />
-              <div className="flex min-w-0 flex-1 flex-col gap-0.5 px-[14px] py-3">
-                {it.isNext ? (
-                  <span className="text-[12px] font-semibold uppercase tracking-[0.02em]">→ Siguiente · {untilLabel(now.getTime(), new Date(a.start_at).getTime())}</span>
+              {it.isNext ? (
+                <span className="text-[12px] font-semibold uppercase tracking-[0.02em]">→ Siguiente · {untilLabel(now.getTime(), new Date(a.start_at).getTime())}</span>
+              ) : null}
+              <span className="flex min-w-0 items-start gap-2">
+                <span className={`min-w-0 flex-1 break-words text-[16px] font-semibold leading-[1.3] ${cancelled ? "line-through" : ""}`}>{apptClientLabel(a)}</span>
+                {!cancelled && a.review.length > 0 ? (
+                  <span aria-hidden title="Requiere revisión" className="mt-0.5 flex h-[18px] min-w-[18px] flex-none items-center justify-center rounded-full bg-[var(--warn-soft)] px-1 text-[11px] font-bold text-[var(--warn)]">
+                    !
+                  </span>
                 ) : null}
-                <span className={`break-words text-[16px] font-semibold leading-[1.3] ${cancelled ? "line-through" : ""}`}>{apptClientLabel(a)}</span>
-                <span className="text-[14px] leading-[1.35] text-m-tx2">
-                  {a.service_name} <span className="text-m-tx3">· hasta {end}</span>
+                {!cancelled && a.payment_state === "pending" ? (
+                  <span aria-hidden title="Cobro pendiente" className="mt-0.5 flex h-[18px] min-w-[18px] flex-none items-center justify-center rounded-full bg-m-sf2 px-1 text-[11px] font-bold text-m-tx2">
+                    $
+                  </span>
+                ) : null}
+                <span aria-hidden title={STATE_LABEL[a.status]} className={`mt-0.5 flex-none text-[14px] ${a.status === "no_show" ? "text-m-dn" : "text-m-tx3"}`}>
+                  {STATE_ICON[a.status] ?? ""}
                 </span>
-                {!cancelled && (a.review.length > 0 || a.payment_state === "pending") ? (
-                  <span className="mt-1 flex flex-wrap gap-1.5">
-                    {a.review.length > 0 ? (
-                      <span className="rounded-full bg-[var(--warn-soft)] px-2 py-0.5 text-[12px] font-semibold text-[var(--warn)] shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--warn)_30%,transparent)]">! Requiere revisión</span>
-                    ) : null}
-                    {a.payment_state === "pending" ? (
-                      <span className="rounded-full bg-m-sf2 px-2 py-0.5 text-[12px] font-semibold text-m-tx2 shadow-[inset_0_0_0_1px_var(--m-bd)]">$ Cobro pendiente</span>
-                    ) : null}
-                  </span>
-                ) : null}
-                <div className="mt-1.5 flex items-center gap-1.5">
-                  <MStaffAvatar id={a.staff_id} name={a.staff_name} size={24} color={colors.get(a.staff_id)} />
-                  <span className="min-w-0 truncate text-[13px] text-m-tx2">{firstName(a.staff_name)}</span>
-                  <span className="ml-auto shrink-0 self-center text-[13px] text-m-tx3">
-                    <span aria-hidden className={a.status === "no_show" ? "text-m-dn" : ""}>
-                      {STATE_ICON[a.status] ?? ""}
-                    </span>{" "}
-                    {STATE_LABEL[a.status] ?? a.status}
-                  </span>
-                </div>
+              </span>
+              <span className="flex min-w-0 items-center gap-1.5 text-[14px] leading-[1.35] text-m-tx2">
+                <span aria-hidden className="size-[7px] flex-none rounded-[2px] bg-[var(--m-dot)]" />
+                <span className="truncate">{a.service_name}</span>
+              </span>
+              <span className="u-tnum text-[14px] leading-[1.35] text-m-tx2">
+                {fmt(a.start_at, tz)}–{end}
+              </span>
+              <div className="mt-1.5 flex items-center gap-1.5">
+                <MStaffAvatar id={a.staff_id} name={a.staff_name} size={24} color={colors.get(a.staff_id)} />
+                <span className="min-w-0 truncate text-[13px] text-m-tx2">{firstName(a.staff_name)}</span>
+                <span className="ml-auto shrink-0 text-[13px] text-m-tx3">{STATE_LABEL[a.status] ?? a.status}</span>
               </div>
             </div>
           </button>
