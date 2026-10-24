@@ -226,8 +226,9 @@ export interface ManualAppointmentInput {
    * at the end of the day a service that ALREADY happened today. The engine checks the slot as
    * of its own start and refuses it unless it ended before now on the site's day, or if it
    * overlaps another appointment of the professional (src/scheduling/booking.ts · pastWalkIn).
-   * Then the SAME «Completar» transition runs: it is saved as completed, with the real creation
-   * date and who registered it; the payment stays pending; nothing is sent to anyone.
+   * It is created AND completed in one engine transaction (the same status write and audit
+   * event as «Completar»): saved as completed, with the real creation date and who registered
+   * it; the payment stays pending; nothing is sent to anyone.
    */
   alreadyDone?: boolean;
 }
@@ -362,13 +363,19 @@ export async function createManualAppointmentAction(
   };
 
   const done = Boolean(input.walkIn && input.alreadyDone);
+  // A walk-in that already happened is created AND completed by the engine in ONE
+  // transaction (pastWalkIn) — there is no second step that could leave it half-registered.
   const outcome = await createThenMaybeConfirm(
     create,
-    // The SAME gated transition the detail runs — "Confirmar", or "Completar" for a walk-in
-    // that already happened (own-column rule and «already started» included).
-    (id) => (done ? transition("completed", clientId, id, "No se pudo completar la cita.") : transition("confirmed", clientId, id, "No se pudo confirmar la cita.")),
-    done ? "completed" : input.initialStatus ?? "scheduled",
+    // The SAME gated transition the detail's "Confirmar" runs (own-column rule included).
+    (id) => transition("confirmed", clientId, id, "No se pudo confirmar la cita."),
+    done ? "scheduled" : input.initialStatus ?? "scheduled",
   );
+  if (outcome.ok && done) {
+    // Defence in depth: the engine committed it completed; anything else is reported, not hidden.
+    const row = await getAppointmentById(ctx.scope.tenantId, outcome.id);
+    if (row?.status !== "completed") return { ok: false, error: "No se pudo registrar la atención como completada." };
+  }
   if (!outcome.ok && done && outcome.error === messageFor("past_overlap", "")) {
     // Show what it overlaps (the professional's own appointments, already visible in this
     // login's agenda); nothing was changed.

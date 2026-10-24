@@ -8,7 +8,7 @@ import { loadExplainExceptions, prepareAvailability } from "@worker/db/repositor
 import { computeAvailability } from "@worker/scheduling/availability.js";
 import { explainAvailability } from "@worker/scheduling/availabilityExplain.js";
 import { immediateWindowMin } from "@worker/scheduling/immediate.js";
-import { getAppointmentById } from "@worker/db/repositories/scheduling/appointments.js";
+import { getAppointmentById, listStaffAppointmentsOverlapping } from "@worker/db/repositories/scheduling/appointments.js";
 
 /**
  * GET /api/scheduling/internal/availability — SESSION-authed availability for
@@ -138,6 +138,25 @@ export async function GET(req: Request): Promise<Response> {
         ? computed.filter((s) => s.service_end_at.getTime() <= now.getTime())
         : computed,
   };
+  // «Ya se realizó»: the engine's busy set holds only ACTIVE appointments, so a start that
+  // overlaps what a professional already COMPLETED (or a no-show) today is dropped here too —
+  // the booking action refuses it anyway; this keeps it from being offered.
+  if (past) {
+    const staffIds = [...new Set(result.slots.flatMap((s) => s.candidates.map((c) => c.staff_id)))];
+    const taken = new Map<string, Array<[number, number]>>();
+    for (const id of staffIds) {
+      const rows = await listStaffAppointmentsOverlapping(scope.tenantId, siteId, id, from, now);
+      taken.set(id, rows.map((r) => [r.start_at.getTime(), r.service_end_at.getTime()]));
+    }
+    const bb = result.buffers.before_min * 60_000;
+    const ba = result.buffers.after_min * 60_000;
+    result.slots = result.slots.flatMap((s) => {
+      const ok = s.candidates.filter((c) => !(taken.get(c.staff_id) ?? []).some(([a, b]) => a < c.service_end_at.getTime() + ba && b > s.start_at.getTime() - bb));
+      if (ok.length === 0) return [];
+      const chosen = ok.find((c) => c.staff_id === s.staff_id) ?? ok[0];
+      return [{ ...s, staff_id: chosen.staff_id, service_end_at: chosen.service_end_at, available_staff_ids: ok.map((c) => c.staff_id), candidates: ok }];
+    });
+  }
   const holds = parseHolds(p.getAll("hold"));
   if (holds === null) return Response.json({ error: "invalid hold" }, { status: 400 });
   const bufBefore = result.buffers.before_min * 60_000;

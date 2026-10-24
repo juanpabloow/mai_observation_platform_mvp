@@ -270,11 +270,6 @@ export async function createAppointment(
     if (serviceEnd.getTime() > now.getTime()) {
       return { ok: false, error: 'not_past', message: 'The service has not ended yet.' };
     }
-    // The engine's busy set (and the DB exclusion) only hold ACTIVE appointments; a past
-    // registration must not overlap what that professional already completed either.
-    if ((await listStaffAppointmentsOverlapping(input.tenantId, input.siteId, chosenStaffId, blockedFrom, blockedUntil)).length > 0) {
-      return { ok: false, error: 'past_overlap', message: 'It overlaps another appointment of this professional.' };
-    }
   }
 
   // 2b. §2: a customer_phone typed in chat may be LOCAL (no country code). Normalize it
@@ -305,6 +300,16 @@ export async function createAppointment(
       // just turned off concurrently), write NOTHING.
       if (!(await isSchedulingEnabledForUpdate(client, input.tenantId, clientId))) {
         return { kind: 'module_disabled' as const };
+      }
+      // PAST WALK-IN — before ANY write: the engine's busy set and the DB exclusion only hold
+      // ACTIVE appointments, so an overlap with what this professional already completed (or a
+      // no-show) is checked here, serialized per professional (a concurrent past registration
+      // for the same person waits, then sees the committed one).
+      if (input.pastWalkIn) {
+        await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`past-walk-in:${chosenStaffId}`]);
+        if ((await listStaffAppointmentsOverlapping(input.tenantId, input.siteId, chosenStaffId, blockedFrom, blockedUntil, client)).length > 0) {
+          return { kind: 'past_overlap' as const };
+        }
       }
       // Public cap — checked BEFORE any contact is resolved/created, so a refusal writes
       // nothing at all (not even a new contact).
@@ -487,6 +492,23 @@ export async function createAppointment(
         },
         client,
       );
+      // PAST WALK-IN: completed in the SAME transaction — created and completed, or neither.
+      // The same status write and audit event as the «Completar» transition; no payment.
+      if (input.pastWalkIn) {
+        const done = await setStatus(client, input.tenantId, appt.id, 'completed');
+        await recordAppointmentEvent(
+          {
+            tenantId: input.tenantId,
+            appointmentId: appt.id,
+            eventType: EVENT_FOR.completed,
+            actorType: input.createdByType,
+            actorUserId: input.createdByUserId ?? null,
+            detail: { from: 'scheduled', to: 'completed', reason: null, already_done: true },
+          },
+          client,
+        );
+        return { kind: 'ok' as const, appt: done };
+      }
       return { kind: 'ok' as const, appt };
     });
 
@@ -508,6 +530,9 @@ export async function createAppointment(
     if (created.kind === 'contact_conflict') {
       return { ok: false, error: 'contact_conflict', message: 'The provided identity belongs to a different contact.' };
     }
+    if (created.kind === 'past_overlap') {
+      return { ok: false, error: 'past_overlap', message: 'It overlaps another appointment of this professional.' };
+    }
     const appt = created.appt;
 
     // 4. Realtime AFTER commit.
@@ -520,6 +545,17 @@ export async function createAppointment(
     });
     // PL-1 §2: link the booking to its sale (fail-safe — never fails the booking, which has committed).
     await pipelineOnBookingCreated(appt, input.createdByType, input.createdByUserId ?? null);
+    if (input.pastWalkIn && appt.status === 'completed') {
+      // The same post-commit work as a «Completar» transition (realtime refresh, the sale).
+      await recordSchedulingEvent({
+        tenantId: appt.tenant_id,
+        clientId: appt.client_id,
+        siteId: appt.site_id,
+        eventType: 'appointment.status_changed',
+        payload: { appointment_id: appt.id, status: 'completed', staff_id: appt.staff_id, start_at: appt.start_at },
+      });
+      await pipelineOnAppointmentStatusChanged(appt, 'completed', input.createdByType, input.createdByUserId ?? null);
+    }
     return { ok: true, value: appt };
   } catch (err) {
     if (isExclusionViolation(err)) {

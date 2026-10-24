@@ -584,8 +584,10 @@ export async function listStaffAppointmentsOverlapping(
   staffId: string,
   from: Date,
   until: Date,
+  client?: PoolClient,
 ): Promise<Array<{ id: string; start_at: Date; service_end_at: Date; status: string; service_name: string }>> {
-  const r = await query<{ id: string; start_at: Date; service_end_at: Date; status: string; service_name: string }>(
+  const run = <R extends QueryResultRow>(text: string, params: unknown[]) => (client ? client.query<R>(text, params) : query<R>(text, params));
+  const r = await run<{ id: string; start_at: Date; service_end_at: Date; status: string; service_name: string }>(
     `SELECT id, start_at, service_end_at, status, service_name_snapshot AS service_name
        FROM appointments
       WHERE tenant_id = $1 AND site_id = $2 AND staff_id = $3 AND status <> 'cancelled'

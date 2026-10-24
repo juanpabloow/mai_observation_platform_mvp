@@ -16,16 +16,19 @@ test('the walk-in form offers it, shows only ended starts of today, and asks bef
   assert.ok(panel.includes('No se cambió ninguna cita.'), 'conflicts are shown, nothing else is changed');
 });
 
-test('the server gates it: agenda walk-ins only, today, ended, no overlap, then the real «Completar»', () => {
+test('the server gates it: agenda walk-ins only, today, ended, no overlap, created and completed atomically', () => {
   const actions = r('web/lib/schedulingActions.ts');
   assert.ok(actions.includes('(input.alreadyDone && (!input.walkIn || input.immediate || input.initialStatus))'), 'walk-in only, never «ahora»');
   assert.ok(actions.includes('pastWalkIn: Boolean(input.walkIn && input.alreadyDone)'));
-  assert.ok(actions.includes('transition("completed", clientId, id, "No se pudo completar la cita.")'), 'the same gated complete transition');
+  assert.ok(!actions.includes('transition("completed", clientId, id'), 'no second, separate «complete» step that could fail half-way');
+  assert.ok(actions.includes('if (row?.status !== "completed") return { ok: false'), 'anything but completed is reported');
   const engine = r('src/scheduling/booking.ts');
   assert.ok(engine.includes("if (input.pastWalkIn && (input.origin !== 'walk_in' || input.immediateWalkIn || input.startAt.getTime() >= now.getTime()))"));
   assert.ok(engine.includes('if (day(input.startAt) !== day(now))'), 'today at the site only');
   assert.ok(engine.includes('if (serviceEnd.getTime() > now.getTime())'), 'the whole service ended');
   assert.ok(engine.includes("error: 'past_overlap'"), 'an overlap with any appointment of the professional is refused');
+  assert.ok(engine.includes("pg_advisory_xact_lock(hashtext($1))`, [`past-walk-in:${chosenStaffId}`]") , 'serialized per professional, before any write');
+  assert.ok(engine.includes("const done = await setStatus(client, input.tenantId, appt.id, 'completed');"), 'completed in the SAME transaction as the insert');
   // Nothing outside the agenda can set it: the bot route and the public page never pass it.
   for (const f of ['web/app/api/scheduling/v1/appointments/route.ts', 'web/app/api/booking/[slug]/route.ts']) {
     assert.ok(!r(f).includes('pastWalkIn') && !r(f).includes('alreadyDone'), f);

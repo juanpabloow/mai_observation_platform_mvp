@@ -162,6 +162,45 @@ test('conflicts are shown and nothing else changes: another appointment (even co
   assert.deepEqual((await at(s, start)).length, 1);
 });
 
+test('created and completed in ONE transaction: if completing fails, nothing is left registered', async () => {
+  const s = await scenario();
+  asUser(s.reception);
+  const start = new Date(floorTick().getTime() - 3 * 3_600_000);
+  // Force the «completed» write to fail INSIDE the transaction (a test-only trigger on the
+  // audit event this path writes), with a contact to be created too: all must roll back.
+  const fn = `t_fail_past_${randomUUID().replace(/-/g, '').slice(0, 10)}`;
+  await query(`CREATE FUNCTION ${fn}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF NEW.event_type = 'appointment_completed' AND (NEW.detail->>'already_done') = 'true' THEN RAISE EXCEPTION 'forced failure'; END IF;
+      RETURN NEW; END $$`);
+  await query(`CREATE TRIGGER ${fn} BEFORE INSERT ON appointment_events FOR EACH ROW EXECUTE FUNCTION ${fn}()`);
+  try {
+    const phone = `+57300${String(Date.now()).slice(-7)}`;
+    const r = await pastWalkIn(s, s.staffA, start, { customerPhone: phone, contactMode: 'create' }).catch((e: unknown) => ({ ok: false as const, error: String(e) }));
+    assert.equal(r.ok, false, 'the failure is reported');
+    assert.deepEqual(await at(s, start), [], 'no appointment half-registered (not even «Sin confirmar»)');
+    const contacts = await query(`SELECT 1 FROM contacts WHERE tenant_id = $1 AND phone_e164 = $2`, [s.tenantId, phone]);
+    assert.equal(contacts.rowCount, 0, 'and no contact created by it');
+  } finally {
+    await query(`DROP TRIGGER IF EXISTS ${fn} ON appointment_events`);
+    await query(`DROP FUNCTION IF EXISTS ${fn}()`);
+  }
+  // Without the forced failure the same registration goes through, completed.
+  const ok = await pastWalkIn(s, s.staffA, start);
+  assert.ok(ok.ok, JSON.stringify(ok));
+  assert.deepEqual((await at(s, start)).map((x) => x.status), ['completed']);
+});
+
+test('two registrations at once for the same professional and time: exactly one, the other is told why', async () => {
+  const s = await scenario();
+  asUser(s.reception);
+  const start = new Date(floorTick().getTime() - 4 * 3_600_000);
+  const [a, b] = await Promise.all([pastWalkIn(s, s.staffB, start), pastWalkIn(s, s.staffB, start)]);
+  assert.equal([a, b].filter((x) => x.ok).length, 1, `one wins: ${JSON.stringify([a, b])}`);
+  const lost = [a, b].find((x) => !x.ok);
+  assert.match(lost && !lost.ok ? lost.error : '', /se cruza/);
+  assert.deepEqual((await at(s, start)).map((x) => x.status), ['completed']);
+});
+
 test('without agenda.book, or for another professional\'s column, it is refused on the server', async () => {
   const s = await scenario();
   const start = new Date(floorTick().getTime() - 3 * 3_600_000);

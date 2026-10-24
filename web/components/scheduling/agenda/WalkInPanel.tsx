@@ -75,6 +75,10 @@ export function WalkInPanel(props: {
   const [done, setDone] = useState(false);
   const [pastStart, setPastStart] = useState("");
   const [confirming, setConfirming] = useState(false);
+  // The confirmation opens with the focus on its safe choice («Volver»).
+  useEffect(() => {
+    if (confirming) document.querySelector<HTMLButtonElement>("[data-wi-confirm-back]")?.focus();
+  }, [confirming]);
   const [conflicts, setConflicts] = useState<Array<{ startAt: string; endAt: string; service: string; status: string }>>([]);
   const [pastState, setPast] = useState<{ forKey: string; state: "ready" | "error"; list: Slot[] }>({ forKey: "", state: "ready", list: [] });
   const sending = useRef(false);
@@ -321,7 +325,7 @@ export function WalkInPanel(props: {
               <span className="flex-1 sm:hidden" />
               {confirming ? (
                 <>
-                  <Button autoFocus onClick={() => setConfirming(false)} disabled={pending}>
+                  <Button data-wi-confirm-back="" onClick={() => setConfirming(false)} disabled={pending}>
                     Volver
                   </Button>
                   <Button variant="primary" onClick={submitDone} loading={pending} loadingLabel="Registrando…">
