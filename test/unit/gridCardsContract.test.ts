@@ -18,9 +18,10 @@ test('the capture’s card: no side bar, neutral ring, soft shadow, pastel when 
 });
 
 test('day card: the line breaks follow the capture’s, in minutes — nothing is grown to fit', () => {
-  assert.ok(view.includes('const HOUR_PX = 72;'));
+  assert.ok(view.includes('const HOUR_PX = 88;'), 'the whole grid at the capture’s scale (not per card)');
   assert.ok(view.includes('const h = height - 3;') && view.includes('height: h,'), 'the card is exactly its duration');
-  assert.ok(view.includes('const one = h < 45;') && view.includes('const three = h >= 56;'), '< 40 min one line · 40–48 two · ≥ 49 three');
+  assert.ok(view.includes('const one = h < 56;') && view.includes('const three = h >= 68;'), '< 40 min one line · 40–48 two · ≥ 49 three (the capture’s own)');
+  assert.ok(css.includes('.u-ag .u-ag-c-name { font-size: 14px; line-height: 17px; font-weight: 500; }') && css.includes('.u-ag .u-ag-c-sub { font-size: 12.5px;'), 'the capture’s type, not reduced');
   assert.ok(!/formatDurationMin|· \{formatDuration/.test(view), 'no redundant duration: the range says it');
   // A shared lane drops the range first and keeps only the first (most important) mark.
   assert.ok(css.includes('@container (max-width: 109px) {\n  .u-ag .u-appt2 [data-drop] { display: none; }\n  .u-ag .u-appt2 .u-ag-marks > :not(:first-child) { display: none; }'));
@@ -45,6 +46,9 @@ test('week keeps its board and the same look; the preview spells out the notices
 
 test('phone list: the same card (no bar), the dot, the range, the glyph at the top right', () => {
   const m = r('web/components/scheduling/mobile/MobileAgenda.tsx');
+  // The desktop's service colours on the phone agenda (dot + completed pastel), scoped to it.
+  assert.ok(m.includes('data-m-agenda=""') && css.includes('[data-m-agenda] { --m-svc-cut: #2f5fd0; --m-svc-grooming: #b4561f; --m-svc-color: #8a3db0; --m-svc-feature: #18785d; --m-svc-mix: 16%; }'));
+  assert.ok(css.includes('.u-ag {') && css.includes('--appt-cut-rule: #2f5fd0;') && css.includes('--appt-grooming-rule: #b4561f;'), 'the same values as the desktop families');
   assert.ok(!m.includes('w-1 flex-none'), 'no side bar');
   assert.ok(m.includes('<span aria-hidden className="size-[7px] flex-none rounded-[2px] bg-[var(--m-dot)]" />'));
   assert.ok(m.includes('{fmt(a.start_at, tz)}–{end}'));

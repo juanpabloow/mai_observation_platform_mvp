@@ -189,10 +189,11 @@ type ModalState =
   /** One occurrence of a usual break / recurring block (schedule_series). */
   | { mode: "series"; occ: SeriesOcc };
 
-/** The calendar body's vertical scale. One hour = this many px. 60 is the floor
- *  at which a 45-minute card still fits its three lines (time / customer /
- *  service) without cropping the last one. */
-const HOUR_PX = 72;
+/** The calendar body's vertical scale, for the WHOLE day grid (cards, blocks, pauses, the
+ *  now line, drag and click hit-testing all derive from it). 88 = the approved «M_AI Agenda»
+ *  capture (2026-10-24), so its cards keep the reference's type and line breaks at their real
+ *  duration — no card is ever stretched on its own. */
+const HOUR_PX = 88;
 /**
  * WEEK's vertical scale. The reference week is a BLOCK grid, not a proportional one:
  * seven narrow columns can't carry proportional heights and stay readable, so one hour
@@ -2426,11 +2427,11 @@ function ApptCard({
   const cancelled = appt.status === "cancelled";
   const review = conflict || appt.review.length > 0;
   // Drawn as the approved «M_AI Agenda» capture. Its height IS its duration (HOUR_PX), so the
-  // content adapts to the real space — nothing is grown to fit. The line breaks follow the
-  // capture's, in minutes:
-  //   < 40 min   one line: name · range + the glyph (12px name under 26px)
-  //   40–48 min  name / ● service
-  //   ≥ 49 min   name / ● service / range   (no duration: the range says it)
+  // content adapts to the real space — nothing is grown to fit. At 88 px/h the breaks are the
+  // capture's own:
+  //   < 56px (< 40 min)   one line: name · range + the glyph (12.5px name under 30px)
+  //   < 68px (40–48 min)  name / ● service
+  //   ≥ 68px (≥ 49 min)   name / ● service / range   (no duration: the range says it)
   // The notices «!» (review) and «$» (pending charge) stay small, after the name. A narrow lane
   // drops the range first and keeps only the highest-priority mark, so nothing covers the name.
   // Everything else is in the preview (hover / keyboard focus) and the accessible label.
@@ -2441,11 +2442,11 @@ function ApptCard({
   const n = lane?.laneCount ?? 1;
   const rev = review && !cancelled;
   const pay = appt.payment_state === "pending" && !cancelled;
-  const one = h < 45;
-  const three = h >= 56;
-  // Vertical breathing room from the real height, never more than the capture's ~9px.
-  const textH = three ? 47 : 31;
-  const padY = one ? 0 : Math.max(3, Math.min(9, Math.floor((h - textH) / 2)));
+  const one = h < 56;
+  const three = h >= 68;
+  // The capture's 10px of breathing room, less only when the real height is tighter.
+  const textH = three ? 53 : 35;
+  const padY = one ? 0 : Math.max(4, Math.min(10, Math.floor((h - textH) / 2)));
   const glyph = (
     <span key="st" aria-hidden title={stateWord} className={`u-ag-c-glyph ${appt.status === "no_show" ? "u-ag-noshow" : ""}`}>
       {STATE_GLYPH[appt.status] ?? ""}
@@ -2477,7 +2478,7 @@ function ApptCard({
       {...previewProps}
       aria-label={`${client}, ${fmtTime(appt.start_at, tz)} a ${fmtTime(appt.service_end_at, tz)}, ${appt.service_name}, ${stateWord}${appt.payment_state === "pending" ? ", cobro pendiente" : ""}${review ? ", requiere revisión" : ""}${overlapping ? ", solapamiento" : ""}`}
       className={`u-appt2 ${toneClass} absolute flex flex-col items-stretch overflow-hidden text-left text-foreground transition-[opacity,background,box-shadow] duration-150 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-edge)] ${
-        one ? "justify-center pl-3 pr-2.5" : "justify-start gap-[2px] pl-3 pr-2.5"
+        one ? "justify-center pl-3 pr-2.5" : "justify-start gap-[3px] pl-3 pr-2.5"
       } ${selected || flash ? "shadow-[0_0_0_2px_var(--foreground)]" : ""} ${flash ? "u-ag-flash" : ""}`}
       data-status={appt.status}
       data-marked={rev || pay ? "" : undefined}
@@ -2493,7 +2494,7 @@ function ApptCard({
       }}
     >
       <span className="flex w-full min-w-0 items-center gap-2">
-        <span className={`u-ag-c-name min-w-0 flex-1 truncate ${one && h < 26 ? "u-ag-c-name-sm" : ""} ${cancelled ? "line-through" : ""}`}>{client}</span>
+        <span className={`u-ag-c-name min-w-0 flex-1 truncate ${one && h < 30 ? "u-ag-c-name-sm" : ""} ${cancelled ? "line-through" : ""}`}>{client}</span>
         {one ? (
           <span data-drop-sm="" className="u-ag-c-sub shrink-0 tabular-nums">
             {range}

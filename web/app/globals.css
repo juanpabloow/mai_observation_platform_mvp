@@ -2052,6 +2052,16 @@ body {
 .u-m-color { --m-fill: var(--m-lila); --m-dot: var(--m-lila-s); }
 .u-m-feature { --m-fill: var(--m-salvia); --m-dot: var(--m-salvia-s); }
 .u-m-neutral { --m-fill: var(--m-neutro); --m-dot: var(--m-neutro-s); }
+/* The phone AGENDA wears the desktop's service colours (2026-10-24, «unifica los colores de
+   servicio entre escritorio y móvil»): the same four families as .u-ag (--appt-*-rule) for the
+   dot, and the same 16 % / 22 % pastel once completed. Scoped to the agenda so other phone
+   screens keep their own swatches. */
+[data-m-agenda] { --m-svc-cut: #2f5fd0; --m-svc-grooming: #b4561f; --m-svc-color: #8a3db0; --m-svc-feature: #18785d; --m-svc-mix: 16%; }
+.dark [data-m-agenda] { --m-svc-cut: #7fa2f0; --m-svc-grooming: #e59466; --m-svc-color: #c58be3; --m-svc-feature: #5cc4a2; --m-svc-mix: 22%; }
+[data-m-agenda] .u-m-cut { --m-dot: var(--m-svc-cut); --m-fill: color-mix(in srgb, var(--m-svc-cut) var(--m-svc-mix), var(--m-sf)); }
+[data-m-agenda] .u-m-grooming { --m-dot: var(--m-svc-grooming); --m-fill: color-mix(in srgb, var(--m-svc-grooming) var(--m-svc-mix), var(--m-sf)); }
+[data-m-agenda] .u-m-color { --m-dot: var(--m-svc-color); --m-fill: color-mix(in srgb, var(--m-svc-color) var(--m-svc-mix), var(--m-sf)); }
+[data-m-agenda] .u-m-feature { --m-dot: var(--m-svc-feature); --m-fill: color-mix(in srgb, var(--m-svc-feature) var(--m-svc-mix), var(--m-sf)); }
 .u-m-st-scheduled { background-color: var(--m-st-scheduled-bg); color: var(--m-st-scheduled-fg); }
 .u-m-st-confirmed { background-color: var(--m-st-confirmed-bg); color: var(--m-st-confirmed-fg); }
 .u-m-st-completed { background-color: var(--m-st-completed-bg); color: var(--m-st-completed-fg); }
@@ -2329,13 +2339,12 @@ body {
 .u-ag .u-ag-mk[data-kind="rev"] { background: var(--warn-soft); color: var(--warn); }
 .u-ag .u-ag-mk[data-kind="pay"] { background: color-mix(in srgb, var(--foreground) 7%, transparent); color: var(--ag-ink2); }
 .u-ag .u-ag-noshow { color: var(--danger); }
-/* Card type (the capture's 14/500 · 12.5 at its 88 px/h, brought to Agenda's 72 px/h with tighter
-   leading so its line breaks per duration hold). Own classes on purpose: Agenda's
-   compact desktop density (text-[14px] → 13px) must not shrink the reference's cards. */
-.u-ag .u-ag-c-name { font-size: 13px; line-height: 15px; font-weight: 500; }
-.u-ag .u-ag-c-name-sm { font-size: 12px; line-height: 14px; }
-.u-ag .u-ag-c-sub { font-size: 12px; line-height: 14px; color: var(--ag-ink2); }
-.u-ag .u-ag-c-glyph { flex: none; font-size: 12px; line-height: 1; color: var(--ag-ink2); }
+/* Card type: the capture's own — 14/500 name, 12.5 secondary — at its 88 px/h grid. Own classes
+   on purpose: Agenda's compact desktop density (text-[14px] → 13px) must not shrink them. */
+.u-ag .u-ag-c-name { font-size: 14px; line-height: 17px; font-weight: 500; }
+.u-ag .u-ag-c-name-sm { font-size: 12.5px; line-height: 15px; }
+.u-ag .u-ag-c-sub { font-size: 12.5px; line-height: 15px; color: var(--ag-ink2); }
+.u-ag .u-ag-c-glyph { flex: none; font-size: 12.5px; line-height: 1; color: var(--ag-ink2); }
 /* A narrow week chip that carries a mark gives the state icon's room to the name: the state
    still reads from the ring / dash / fill (and the label); a no-show keeps its red ⊘. */
 @container (max-width: 159px) {

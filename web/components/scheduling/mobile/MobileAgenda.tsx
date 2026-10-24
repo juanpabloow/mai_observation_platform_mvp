@@ -166,7 +166,7 @@ export function MobileAgenda(props: {
   const resultCount = isDay ? day!.items.filter((i) => i.kind === "appt").length : visible.length;
 
   return (
-    <div className="u-sch-m flex min-h-[calc(100dvh-var(--topbar-height))] flex-col bg-m-bg">
+    <div data-m-agenda="" className="u-sch-m flex min-h-[calc(100dvh-var(--topbar-height))] flex-col bg-m-bg">
       {/* ── HEADER ── */}
       {/* Sticky inside the shell's scroller, whose padding (--content-pad) this layout
           cancels — so the sticky edge is offset by the same amount. */}
