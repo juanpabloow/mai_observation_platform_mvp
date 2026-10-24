@@ -1743,6 +1743,9 @@ export function AgendaView(props: {
             id="appt-preview"
             appt={preview.appt}
             timezone={tz}
+            // What a short card cannot spell out: the review reasons (the server's labels, plus
+            // the block it sits in when the calendar sees one).
+            reviewReasons={[...new Set([...preview.appt.review, ...(conflictIds.has(preview.appt.id) ? ["Dentro de una ausencia o bloqueo"] : [])])]}
             anchor={preview.rect}
             onPointerEnter={keepPreview}
             onPointerLeave={hidePreviewSoon}
@@ -2055,20 +2058,29 @@ function WeekTeamBoard({
                           {...previewFor(c.a)}
                           data-appt-card=""
                           aria-label={`${fmtTime(c.a.start_at, timezone)} ${apptClientLabel(c.a)} ${STATE_WORD[c.a.status] ?? c.a.status}${c.a.payment_state === "pending" ? ", cobro pendiente" : ""}${c.a.review.length > 0 || conflictIds.has(c.a.id) ? ", requiere revisión" : ""}`}
-                          className={`u-appt2 ${appointmentToneClass(c.a)} u-focus flex h-[32px] min-w-0 shrink-0 items-center gap-[5px] px-[7px] text-left text-[13px] transition-[background,opacity] hover:bg-[var(--subtle)] ${c.a.status === "cancelled" ? "line-through" : ""} ${selectedId === c.a.id || flashId === c.a.id ? "shadow-[0_0_0_2px_var(--foreground)]" : ""} ${flashId === c.a.id ? "u-ag-flash" : ""}`}
+                          className={`u-appt2 ${appointmentToneClass(c.a)} u-focus flex h-[32px] min-w-0 shrink-0 items-center gap-1 overflow-hidden pr-[6px] text-left text-[12.5px] transition-[background,opacity] ${selectedId === c.a.id || flashId === c.a.id ? "shadow-[0_0_0_2px_var(--foreground)]" : ""} ${flashId === c.a.id ? "u-ag-flash" : ""}`}
                           data-status={c.a.status}
+                          data-marked={c.a.status !== "cancelled" && (c.a.payment_state === "pending" || c.a.review.length > 0 || conflictIds.has(c.a.id)) ? "" : undefined}
                           data-selected={selectedId === c.a.id || flashId === c.a.id ? "" : undefined}
-                          style={{ opacity: dimmed(c.a) ? 0.28 : 1, borderRadius: 9 }}
+                          style={{ opacity: dimmed(c.a) ? 0.28 : 1 }}
                         >
-                          <span className="shrink-0 text-[12px] tabular-nums opacity-[0.62]">{fmtTime(c.a.start_at, timezone)}</span>
-                          <span className="min-w-0 flex-1 truncate font-medium">{shortName(c.a.contact_name ?? c.a.guest_name)}</span>
-                          {c.a.payment_state === "pending" ? (
-                            <span title="Cobro pendiente" aria-hidden className="shrink-0 rounded-[4px] bg-[var(--chip)] px-1 text-[11px] font-semibold text-[var(--ag-ink2)]">$</span>
+                          {/* Week chip, card language 5a compact: the service bar, the time, the
+                              short name, then the marks in priority (! amber · $ neutral) and the
+                              state (a red ⊘ for a no-show). Marks never shrink the time. */}
+                          <span aria-hidden className="u-appt2-bar" />
+                          <span className="shrink-0 pl-[3px] text-[11.5px] tabular-nums text-[var(--muted)]">{fmtTime(c.a.start_at, timezone)}</span>
+                          <span className={`min-w-0 flex-1 truncate font-[590] ${c.a.status === "cancelled" ? "line-through" : ""}`}>{shortName(c.a.contact_name ?? c.a.guest_name)}</span>
+                          {c.a.status !== "cancelled" && (c.a.review.length > 0 || conflictIds.has(c.a.id)) ? (
+                            <span title="Requiere revisión" aria-hidden data-kind="rev" className="u-ag-mk">
+                              !
+                            </span>
                           ) : null}
-                          {c.a.review.length > 0 || conflictIds.has(c.a.id) ? (
-                            <span title="Requiere revisión" aria-hidden className="shrink-0 rounded-[4px] bg-[var(--warn-soft)] px-1 text-[11px] font-semibold text-[var(--warn)]">!</span>
+                          {c.a.status !== "cancelled" && c.a.payment_state === "pending" ? (
+                            <span title="Cobro pendiente" aria-hidden data-kind="pay" className="u-ag-mk">
+                              $
+                            </span>
                           ) : null}
-                          <span aria-hidden className="shrink-0 text-[11px] opacity-70">{STATE_GLYPH[c.a.status] ?? ""}</span>
+                          <span aria-hidden data-glyph="" className={`shrink-0 text-[11px] ${c.a.status === "no_show" ? "u-ag-noshow" : "text-[var(--ag-ink2)]"}`}>{STATE_GLYPH[c.a.status] ?? ""}</span>
                         </button>
                       ),
                     )}
@@ -2414,15 +2426,50 @@ function ApptCard({
 }) {
   const cancelled = appt.status === "cancelled";
   const review = conflict || appt.review.length > 0;
-  // The reference's card (apptItem): its height IS its duration, so the content adapts —
-  // under 50px one line (client + time), else client / service, and the time from 66px
-  // (at 72px an hour: 45 min shows two lines, an hour shows three).
+  // Card language 5a, compact. Its height IS its duration (HOUR_PX), so the content adapts to
+  // the real space — nothing is grown to fit:
+  //   < 20px (15 min)   the name and ONE mark (! › $ › state)
+  //   < 50px (30 min)   one row: name · start time + the marks
+  //   < 66px (45 min)   + service · range
+  //   < 100px (60 min)  name / service / range · duration
+  //   ≥ 100px (90 min)  + the words «! Revisar» / «$ Pendiente»
+  // A narrow lane (container < 110px) drops the time and the secondary words first and keeps
+  // only the highest-priority mark, so no signal ever covers the name. The rest is in the
+  // preview (hover / keyboard focus) and in the card's accessible label.
   const h = height - 3;
-  const one = h < 50;
   const client = apptClientLabel(appt);
   const stateWord = STATE_WORD[appt.status] ?? appt.status;
-  const range = `${fmtTime(appt.start_at, tz)}–${fmtTime(appt.service_end_at, tz)}`;
+  const start = fmtTime(appt.start_at, tz);
+  const range = `${start}–${fmtTime(appt.service_end_at, tz)}`;
   const n = lane?.laneCount ?? 1;
+  const rev = review && !cancelled;
+  const pay = appt.payment_state === "pending" && !cancelled;
+  const mode = h < 20 ? "xs" : h < 50 ? "one" : h < 66 ? "two" : h < 100 ? "three" : "four";
+  const glyph =
+    appt.status === "no_show" ? (
+      <span key="st" aria-hidden title={stateWord} className="u-ag-noshow shrink-0 text-[12px] leading-none">
+        ⊘
+      </span>
+    ) : (
+      <span key="st" aria-hidden title={stateWord} className="shrink-0 text-[12px] leading-none text-[var(--ag-ink2)]">
+        {STATE_GLYPH[appt.status] ?? ""}
+      </span>
+    );
+  const revMark = (
+    <span key="rev" aria-hidden title="Requiere revisión" data-kind="rev" className="u-ag-mk">
+      !
+    </span>
+  );
+  const payMark = (
+    <span key="pay" aria-hidden title="Cobro pendiente" data-kind="pay" className="u-ag-mk">
+      $
+    </span>
+  );
+  // Priority order: the first one is the one a narrow lane keeps.
+  const marks = mode === "xs" ? [rev ? revMark : pay ? payMark : glyph] : mode === "four" ? [glyph] : [...(rev ? [revMark] : []), ...(pay ? [payMark] : []), glyph];
+  const name = (
+    <span className={`min-w-0 flex-1 truncate font-[590] ${mode === "xs" ? "text-[11.5px] leading-[13px]" : "text-[13px] leading-[16px]"} ${cancelled ? "line-through" : ""}`}>{client}</span>
+  );
   return (
     <button
       type="button"
@@ -2430,9 +2477,9 @@ function ApptCard({
       data-appt-card=""
       {...previewProps}
       aria-label={`${client}, ${fmtTime(appt.start_at, tz)} a ${fmtTime(appt.service_end_at, tz)}, ${appt.service_name}, ${stateWord}${appt.payment_state === "pending" ? ", cobro pendiente" : ""}${review ? ", requiere revisión" : ""}${overlapping ? ", solapamiento" : ""}`}
-      className={`u-appt2 ${toneClass} absolute flex flex-col items-stretch gap-[3px] overflow-hidden text-left text-foreground transition-[opacity,background,box-shadow] duration-150 hover:bg-[var(--subtle)] focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-edge)] ${
-        one ? "justify-center pl-2.5 pr-2" : "justify-start py-[7px] pl-2.5 pr-2"
-      } ${selected || flash ? "shadow-[0_0_0_2px_var(--foreground)]" : ""} ${flash ? "u-ag-flash" : ""}`}
+      className={`u-appt2 ${toneClass} absolute flex overflow-hidden text-left text-foreground transition-[opacity,background,box-shadow] duration-150 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--focus-edge)] ${
+        selected || flash ? "shadow-[0_0_0_2px_var(--foreground)]" : ""
+      } ${flash ? "u-ag-flash" : ""}`}
       data-status={appt.status}
       data-selected={selected || flash ? "" : undefined}
       style={{
@@ -2443,34 +2490,64 @@ function ApptCard({
         opacity: dim ? 0.28 : 1,
       }}
     >
-      <span className={`flex w-full min-w-0 items-baseline gap-2 font-medium ${one && h < 26 ? "text-[12px]" : "text-[13px]"}`}>
-        <span className={`min-w-0 flex-1 truncate ${cancelled ? "text-muted line-through" : ""}`}>{client}</span>
-        {one ? <span className="shrink-0 text-[12px] font-normal tabular-nums text-[var(--ag-ink2)]">{range}</span> : null}
-        {appt.payment_state === "pending" ? (
-          <span title="Cobro pendiente" className="shrink-0 self-center rounded-[6px] bg-[var(--chip)] px-1.5 text-[11px] font-medium leading-[18px] text-[var(--ag-ink2)]">
-            {one ? "$" : "Cobro pendiente"}
-          </span>
-        ) : null}
-        {/* On a one-line card the review mark is the compact «!» (as on the week chips), so
-            the client's name keeps its room; the word stays in the tooltip and the label. */}
-        {review ? (
-          <span title="Requiere revisión" className="shrink-0 self-center rounded-[6px] bg-[var(--warn-soft)] px-1.5 text-[11px] font-medium leading-[18px] text-[var(--warn)]">
-            {one ? "!" : "Revisar"}
-          </span>
-        ) : null}
-        <span title={stateWord} className="shrink-0 text-[12px] font-normal text-[var(--ag-ink2)]">
-          <span aria-hidden>{STATE_GLYPH[appt.status] ?? ""}</span>
+      <span aria-hidden className="u-appt2-bar" />
+      {mode === "xs" || mode === "one" ? (
+        <span className={`flex min-w-0 flex-1 items-center gap-1.5 ${mode === "xs" ? "px-[5px]" : "px-[7px]"}`}>
+          {name}
+          {mode === "one" ? (
+            <span data-drop="" className="shrink-0 text-[12px] tabular-nums text-[var(--muted)]">
+              {start}
+            </span>
+          ) : null}
+          <span className="u-ag-marks flex shrink-0 items-center gap-1">{marks}</span>
         </span>
-      </span>
-      {!one ? (
-        <span className="flex min-w-0 items-center gap-1.5 text-[12px] text-[var(--ag-ink2)]">
-          <span aria-hidden className={`${toneClass} u-appt2-dot size-[6px] shrink-0`} />
-          <span className="truncate">{appt.service_name}</span>
+      ) : (
+        <span className="flex min-w-0 flex-1 flex-col gap-px px-[7px] py-[5px]">
+          <span className="flex min-w-0 items-center gap-1.5">
+            {name}
+            {mode === "four" ? (
+              <>
+                {rev ? <span className="u-ag-mk u-ag-mk-narrow" data-kind="rev" aria-hidden>!</span> : null}
+                {pay ? <span className="u-ag-mk u-ag-mk-narrow" data-kind="pay" aria-hidden>$</span> : null}
+              </>
+            ) : null}
+            <span className="u-ag-marks flex shrink-0 items-center gap-1">{marks}</span>
+          </span>
+          {mode === "two" ? (
+            <span className="truncate text-[12px] leading-[15px] text-[var(--ag-ink2)]">
+              {appt.service_name}
+              <span data-drop="" className="tabular-nums text-[var(--muted)]">
+                {" "}
+                · {range}
+              </span>
+            </span>
+          ) : (
+            <>
+              <span className="truncate text-[12px] leading-[15px] text-[var(--ag-ink2)]">{appt.service_name}</span>
+              <span className="truncate text-[12px] leading-[15px] tabular-nums text-[var(--muted)]">
+                {range}
+                <span data-drop=""> · {formatDurationMin(appt.duration_min)}</span>
+              </span>
+            </>
+          )}
+          {mode === "four" && (rev || pay) ? (
+            <span data-drop="" className="mt-[3px] flex flex-wrap gap-1">
+              {rev ? <span data-kind="rev" className="u-ag-mk">! Revisar</span> : null}
+              {pay ? <span data-kind="pay" className="u-ag-mk">$ Pendiente</span> : null}
+            </span>
+          ) : null}
         </span>
-      ) : null}
-      {!one && h >= 66 ? <span className="truncate text-[12px] tabular-nums text-[var(--ag-ink2)]">{range}</span> : null}
+      )}
     </button>
   );
+}
+
+/** "45 min" · "1 h" · "1 h 30 min" — the card's duration words. */
+function formatDurationMin(min: number): string {
+  if (min < 60) return `${min} min`;
+  const hh = Math.floor(min / 60);
+  const mm = min % 60;
+  return mm ? `${hh} h ${mm} min` : `${hh} h`;
 }
 
 /** sessionStorage key: the appointment to highlight after "Cambiar fecha y hora". */

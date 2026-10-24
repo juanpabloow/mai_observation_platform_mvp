@@ -2299,24 +2299,49 @@ body {
 .u-ag .u-sch-closed { background: repeating-linear-gradient(135deg, var(--ag-hatch) 0 1px, transparent 1px 7px), repeating-linear-gradient(45deg, var(--ag-hatch) 0 1px, transparent 1px 7px), var(--ag-off); color: var(--muted); box-shadow: inset 0 0 0 1px var(--line-strong); }
 /* ONE colour model (2026-10-23, «los colores según el tipo de servicio»): the colour is
    ALWAYS the service family; the state is how the card wears it —
-     Confirmada    contour only (1.5px service edge on white)
-     Sin confirmar the same contour, dashed
+     Confirmada    full service contour (1px) on white
+     Sin confirmar the same contour, dashed (and the bar dashed)
      Completada    filled with the service colour (16 %, 22 % on hover; Grafito 22 / 28 %)
-     Cancelada     1px dashed field line, transparent, struck through (unchanged)
-   The ○ / ✓ / ✓✓ icon and the word stay on every card: colour is never the only signal.
+     Inasistencia  the service contour softened; a discreet red ⊘ (the bar keeps the service)
+     Cancelada     1px dashed field line, struck through, grey bar
+   Card language 5a, compact (2026-10-24): a 3px service bar at the left edge, 8px corners and
+   compact marks — «!» Requiere revisión (amber) and «$» Cobro pendiente (neutral). The
+   ○ / ✓ / ✓✓ / ⊘ / ✕ icon stays on every card: colour is never the only signal.
    Day cards and week chips share it. There is no «Servicio | Estado» switch any more. */
-.u-ag .u-appt2 { border-radius: 10px; background: var(--surface); border: 1.5px solid var(--appt-rule, var(--line-strong)); }
-.u-ag .u-appt2[data-status="scheduled"] { border-style: dashed; }
+.u-ag .u-appt2 { border-radius: 8px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--appt-rule, var(--line-strong)) 55%, var(--surface)); container-type: inline-size; }
+.u-ag .u-appt2[data-status="confirmed"] { border-color: var(--appt-rule, var(--line-strong)); }
+.u-ag .u-appt2[data-status="scheduled"] { border-style: dashed; border-color: var(--appt-rule, var(--line-strong)); }
 .u-ag .u-appt2[data-status="cancelled"] { border: 1px dashed var(--line-strong); background: var(--surface); color: var(--muted); }
 /* Every card is OPAQUE (audit 23 Oct): a pause or block under it must never read through
    its text. Grafito's lift is mixed into the surface instead of a translucent white. */
 .dark .u-ag .u-appt2 { background: color-mix(in srgb, #ffffff 3%, var(--surface)); }
 .dark .u-ag .u-appt2[data-status="cancelled"] { background: var(--surface); }
 .u-ag .u-appt2:where(:not([data-status="cancelled"])):hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 6%, var(--surface)); }
-.u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 16%, var(--surface)); }
+.u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 16%, var(--surface)); border-color: transparent; }
 .u-ag .u-appt2[data-status="completed"]:hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 22%, var(--surface)); }
 .dark .u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 22%, var(--surface)); }
 .dark .u-ag .u-appt2[data-status="completed"]:hover { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 28%, var(--surface)); }
+.u-ag .u-appt2-bar { width: 3px; flex: none; align-self: stretch; background: var(--appt-rule, var(--line-strong)); }
+.u-ag .u-appt2[data-status="scheduled"] .u-appt2-bar { background: repeating-linear-gradient(180deg, var(--appt-rule, var(--line-strong)) 0 4px, transparent 4px 7px); }
+.u-ag .u-appt2[data-status="cancelled"] .u-appt2-bar { background: var(--line-strong); }
+/* Compact marks: never cover the name or the time — they sit after them and never shrink. */
+.u-ag .u-ag-mk { display: inline-flex; flex: none; align-items: center; justify-content: center; gap: 3px; height: 16px; min-width: 16px; padding: 0 5px; border-radius: 8px; font-size: 10.5px; font-weight: 590; line-height: 1; white-space: nowrap; }
+.u-ag .u-ag-mk[data-kind="rev"] { background: var(--warn-soft); color: var(--warn); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--warn) 30%, transparent); }
+.u-ag .u-ag-mk[data-kind="pay"] { background: var(--chip); color: var(--ag-ink2); box-shadow: inset 0 0 0 1px var(--line); }
+.u-ag .u-ag-noshow { color: var(--danger); }
+/* A narrow lane (overlaps) or column: the time and the secondary words fall first; only the
+   highest-priority mark stays (! › $ › state), so the name keeps its room. */
+.u-ag .u-ag-mk-narrow { display: none; }
+/* A narrow week chip that carries a mark gives the state icon's room to the name: the state
+   still reads from the contour / dash / fill (and the label); a no-show keeps its red ⊘. */
+@container (max-width: 159px) {
+  .u-ag .u-appt2[data-marked] [data-glyph]:not(.u-ag-noshow) { display: none; }
+}
+@container (max-width: 109px) {
+  .u-ag .u-appt2 [data-drop] { display: none; }
+  .u-ag .u-appt2 .u-ag-marks > :not(:first-child) { display: none; }
+  .u-ag .u-appt2 .u-ag-mk-narrow { display: inline-flex; }
+}
 .u-ag .u-appt2-dot { border-radius: 2px; }
 /* A completed appointment's state chip fills with its service colour (as the card does),
    never the generic green; with no service in context (legend, filters) it is neutral grey.

@@ -381,9 +381,12 @@ test('calendar: the grid sits in its own frame; a click marks 15 min; the slot m
 test('ONE colour model: the service colours the card; contour = confirmada, dashed = sin confirmar, filled = completada', () => {
   const r = (rel: string) => readFileSync(fileURLToPath(new URL(`../../${rel}`, import.meta.url)), 'utf8');
   const css = r('web/app/globals.css');
-  assert.ok(css.includes('.u-ag .u-appt2 { border-radius: 10px; background: var(--surface); border: 1.5px solid var(--appt-rule, var(--line-strong)); }'), 'confirmed: the service contour on white');
-  assert.ok(css.includes('.u-ag .u-appt2[data-status="scheduled"] { border-style: dashed; }'), 'unconfirmed: the same contour, dashed');
-  assert.ok(css.includes('.u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 16%, var(--surface)); }'), 'completed: filled with the service colour');
+  // Card language 5a, compact (2026-10-24): 8px corners, a 1px edge and the 3px service bar.
+  assert.ok(css.includes('.u-ag .u-appt2 { border-radius: 8px; background: var(--surface); border: 1px solid color-mix(in srgb, var(--appt-rule, var(--line-strong)) 55%, var(--surface));'), 'the service edge on white');
+  assert.ok(css.includes('.u-ag .u-appt2[data-status="confirmed"] { border-color: var(--appt-rule, var(--line-strong)); }'), 'confirmed: the full service contour');
+  assert.ok(css.includes('.u-ag .u-appt2[data-status="scheduled"] { border-style: dashed; border-color: var(--appt-rule, var(--line-strong)); }'), 'unconfirmed: the same contour, dashed');
+  assert.ok(css.includes('.u-ag .u-appt2[data-status="completed"] { background: color-mix(in srgb, var(--appt-rule, #8a8f98) 16%, var(--surface)); border-color: transparent; }'), 'completed: filled with the service colour');
+  assert.ok(css.includes('.u-ag .u-appt2-bar { width: 3px; flex: none; align-self: stretch; background: var(--appt-rule, var(--line-strong)); }'), 'the service bar (never red: a no-show is a red ⊘ icon)');
   assert.ok(css.includes('.u-ag .u-appt2[data-selected][data-selected] { box-shadow: 0 0 0 2px var(--foreground); }'), 'selection beats hover');
   assert.ok(!css.includes('data-mode='), 'no «Estado» colouring left');
   const view = r('web/components/scheduling/AgendaView.tsx');
@@ -394,7 +397,7 @@ test('ONE colour model: the service colours the card; contour = confirmada, dash
   assert.ok(chrome.includes('Contorno: confirmada · punteado: sin confirmar · relleno: completada'), 'the legend says how a state looks');
   const phone = r('web/components/scheduling/mobile/MobileAgenda.tsx');
   assert.ok(!/colorBy|onColorBy|MSegmented\s+label="Color de las citas"/.test(phone), 'the phone has no switch either');
-  assert.ok(phone.includes('a.status === "completed" ? "bg-[var(--m-fill)]" : "bg-m-sf"') && phone.includes('a.status === "scheduled" ? "border-dashed" : ""'), 'the phone cards follow the same model');
+  assert.ok(phone.includes('? "border-transparent bg-[var(--m-fill)]"') && phone.includes('a.status === "scheduled" ? "border-dashed" : ""'), 'the phone cards follow the same model');
 });
 
 test('Claro rail: graphite tokens on the default rail; Light keeps Light; dark mode untouched', () => {
@@ -427,7 +430,9 @@ test('audit 23 Oct: tile labels avoid cards, cards are opaque, the brush gates p
   const hatch = r('web/app/globals.css');
   for (const cls of ['.u-ag .u-sch-break { background: repeating-linear-gradient(135deg', '.u-ag .u-sch-block { background: repeating-linear-gradient(135deg', '.u-ag .u-sch-closed { background: repeating-linear-gradient(135deg']) assert.ok(hatch.includes(cls), cls);
   assert.ok(view.includes('${siteWide ? "u-sch-closed" : "u-sch-block"}'), 'a site closure is told apart from one person\'s absence');
-  assert.ok(view.includes('{one ? "!" : "Revisar"}'), 'a one-line card keeps room for the name');
+  // The review mark is the compact «!» on short cards (the words «! Revisar» only from 90 min),
+  // and it is first in priority, so even a 15-min card keeps it without losing the name.
+  assert.ok(view.includes('const marks = mode === "xs" ? [rev ? revMark : pay ? payMark : glyph]') && view.includes('{rev ? <span data-kind="rev" className="u-ag-mk">! Revisar</span> : null}'), 'a one-line card keeps room for the name');
   const css = r('web/app/globals.css');
   assert.ok(css.includes('.dark .u-ag .u-appt2 { background: color-mix(in srgb, #ffffff 3%, var(--surface)); }') && !css.includes('.dark .u-ag .u-appt2 { background: rgba(255, 255, 255, 0.03); }'), 'Grafito cards are opaque');
   assert.ok(css.includes('.u-ag .u-appt2[data-status="cancelled"] { border: 1px dashed var(--line-strong); background: var(--surface);'), 'a cancelled card is opaque too');

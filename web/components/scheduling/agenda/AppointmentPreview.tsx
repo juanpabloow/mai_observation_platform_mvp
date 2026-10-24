@@ -35,11 +35,14 @@ export function AppointmentPreview({
   anchor,
   onPointerEnter,
   onPointerLeave,
+  reviewReasons = [],
 }: {
   id: string;
   appt: Appt;
   timezone: string;
   anchor: DOMRect;
+  /** «Requiere revisión» and why — empty when nothing needs review. */
+  reviewReasons?: string[];
   onPointerEnter: () => void;
   onPointerLeave: () => void;
 }) {
@@ -100,6 +103,21 @@ export function AppointmentPreview({
           <span className="u-mono shrink-0">{appt.duration_min} min</span>
         </p>
       </div>
+      {/* What a compact card only marks («!», «$»), spelled out. payment_state reaches the
+          browser only with payments.view, so the charge line follows the same permission. */}
+      {(reviewReasons.length > 0 && appt.status !== "cancelled") || (appt.payment_state === "pending" && appt.status !== "cancelled") ? (
+        <div className="flex flex-col items-start gap-1.5 border-t border-line px-4 py-3 text-[13px]">
+          {reviewReasons.length > 0 && appt.status !== "cancelled" ? (
+            <>
+              <span className="inline-flex h-[22px] items-center rounded-[11px] bg-[var(--warn-soft)] px-2 text-[12px] font-[590] text-[var(--warn)]">! Requiere revisión</span>
+              <span className="text-muted">{reviewReasons.join(" · ")}</span>
+            </>
+          ) : null}
+          {appt.payment_state === "pending" && appt.status !== "cancelled" ? (
+            <span className="inline-flex h-[22px] items-center rounded-[11px] bg-[var(--chip)] px-2 text-[12px] font-[590] text-[var(--ag-ink2)] shadow-[inset_0_0_0_1px_var(--line)]">$ Cobro pendiente</span>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }
