@@ -279,7 +279,9 @@ export async function listPendingPaymentsAction(clientId: string): Promise<{ ok:
 
 /** Every payment of an appointment: the recorded one and the VOIDED history (who, when, why).
  *  payments.view + reach; commission only with commissions.view. */
-export async function getAppointmentPaymentHistoryAction(clientId: string, appointmentId: string): Promise<{ ok: true; value: Array<PaymentDTO & { methodLabel: string }> } | { ok: false; error: string }> {
+/** Each record carries `recordedByMe` («registrado por ti» / «por el equipo»): a boolean —
+ *  no member name is resolved or sent. */
+export async function getAppointmentPaymentHistoryAction(clientId: string, appointmentId: string): Promise<{ ok: true; value: Array<PaymentDTO & { methodLabel: string; recordedByMe: boolean }> } | { ok: false; error: string }> {
   if (!isUuid(appointmentId)) return { ok: false, error: GENERIC };
   const g = await gateClientModule(clientId, "scheduling", "payments.view", GENERIC);
   if (!g.ok) return { ok: false, error: g.error };
@@ -290,7 +292,11 @@ export async function getAppointmentPaymentHistoryAction(clientId: string, appoi
   ]);
   const label = new Map(methods.map((m) => [m.key, m.label]));
   const withCommission = can(g.context.scope, "commissions.view", g.context.client.id);
-  return { ok: true, value: views.map((v) => ({ ...toDTO(v, withCommission), methodLabel: label.get(v.payment.method_key) ?? v.payment.method_key })) };
+  const me = g.context.scope.userId;
+  return {
+    ok: true,
+    value: views.map((v) => ({ ...toDTO(v, withCommission), methodLabel: label.get(v.payment.method_key) ?? v.payment.method_key, recordedByMe: v.payment.recorded_by === me })),
+  };
 }
 
 export interface CheckoutOptions {

@@ -92,13 +92,16 @@ test('both detail surfaces decide from the shared plan — no separate visual ru
   const view = read('web/components/scheduling/AgendaView.tsx');
   assert.ok(view.includes('canModify={appt.can_modify}'), 'the agenda hands the server flag to the detail');
   const panel = read('web/components/scheduling/agenda/AppointmentPanel.tsx');
+  const card = read('web/components/scheduling/agenda/AppointmentCard.tsx');
   const sheet = read('web/components/scheduling/mobile/MobileAppointmentSheet.tsx');
-  for (const [name, src] of [['desktop panel', panel], ['phone sheet', sheet]] as const) {
-    assert.ok(src.includes('appointmentActionPlan({ canOperate: props.canOperate, canModify: props.canModify, status: appt.status, startAt: appt.start_at, now })'), `${name} uses the plan`);
+  // ONE plan, computed once, and ONE card body framed by the desktop panel and the phone sheet.
+  assert.ok(panel.includes('appointmentActionPlan({ canOperate: props.canOperate, canModify: props.canModify, status: appt.status, startAt: appt.start_at, now })'), 'the panel computes the plan');
+  assert.ok(panel.includes('plan={plan}') && panel.includes('<MobileAppointmentSheet parts={parts}'), 'both frames get the same card from that plan');
+  for (const [name, src] of [['card', card], ['phone sheet', sheet]] as const) {
+    assert.ok(!src.includes('appointmentActionPlan('), `${name} does not decide on its own`);
     assert.ok(!/props\.canOperate && live/.test(src), `${name} no longer decides from canOperate alone`);
   }
-  assert.ok(panel.includes('canModify={props.canModify}'), 'the desktop panel passes it to the phone sheet');
-  assert.ok(sheet.includes('if (!plan.readActivity) return;'), 'the phone does not request an activity read the server would refuse');
+  assert.ok(card.includes('{plan.readActivity ? <ActivitySection'), 'no activity read the server would refuse');
   // Visibility is unchanged: the page still loads the whole site for a staff login.
   const page = read('web/app/clients/[clientId]/scheduling/agenda/page.tsx');
   assert.ok(page.includes('listAppointments(tenantId, { siteId: site.id, from: rangeStart, to: rangeEnd, clientId: client.id })'), 'the same site-wide read');
@@ -112,10 +115,8 @@ test('the review link is offered ONLY for a completed appointment this login may
   for (const status of ['scheduled', 'confirmed', 'cancelled', 'no_show']) {
     assert.equal(appointmentActionPlan({ ...OWN, status }).reviewLink, false, `${status}: no review link`);
   }
-  const panel = read('web/components/scheduling/agenda/AppointmentPanel.tsx');
-  const sheet = read('web/components/scheduling/mobile/MobileAppointmentSheet.tsx');
-  assert.ok(/\{plan\.reviewLink \? \(?\s*(<div[^>]*>\s*)?<ReviewLinkCard/.test(panel), 'desktop shows it from the plan');
-  assert.ok(sheet.includes('...(plan.reviewLink ? [{ k: "Reseña"'), 'phone shows it from the plan');
+  const card = read('web/components/scheduling/agenda/AppointmentCard.tsx');
+  assert.ok(card.includes('{plan.reviewLink ? <ReviewSection'), 'desktop and phone show it from the plan (one card)');
   assert.ok(read('web/components/scheduling/AgendaView.tsx').includes('getReviewLinkAction(props.clientId, appt.id)'));
 });
 
@@ -142,5 +143,5 @@ test('Completar waits for the start — the same answer on desktop and phone (fi
   assert.match(action, /requireStartedToComplete: true/);
   const engine = read('src/scheduling/booking.ts');
   assert.match(engine, /target === 'completed' && input\.requireStartedToComplete && current\.start_at\.getTime\(\) > /);
-  assert.ok(read('web/components/scheduling/mobile/MobileAppointmentSheet.tsx').includes('plan.completeWaitsForStart'), 'the phone says why');
+  assert.ok(read('web/components/scheduling/agenda/AppointmentCard.tsx').includes('{plan.completeWaitsForStart ? <span className="c5-note ml-auto">Completar se habilita al empezar la cita</span>'), 'desktop and phone say why');
 });

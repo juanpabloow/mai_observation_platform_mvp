@@ -16,7 +16,7 @@ test('the client label keeps name, CRM link and origin apart', () => {
 
 test('every agenda surface names the client through the one rule', () => {
   const read = (rel: string) => readFileSync(fileURLToPath(new URL(`../../web/${rel}`, import.meta.url)), 'utf8');
-  for (const f of ['components/scheduling/mobile/MobileAppointmentSheet.tsx', 'components/scheduling/mobile/MobileAgenda.tsx', 'components/scheduling/agenda/AppointmentPanel.tsx', 'components/scheduling/agenda/AppointmentPreview.tsx', 'components/scheduling/agenda/RescheduleFlow.tsx', 'components/scheduling/AgendaView.tsx']) {
+  for (const f of ['components/scheduling/agenda/AppointmentCard.tsx', 'components/scheduling/mobile/MobileAgenda.tsx', 'components/scheduling/agenda/AppointmentPanel.tsx', 'components/scheduling/agenda/AppointmentPreview.tsx', 'components/scheduling/agenda/RescheduleFlow.tsx', 'components/scheduling/AgendaView.tsx']) {
     const src = read(f);
     assert.ok(src.includes('apptClientLabel('), f);
     assert.ok(!/contact_name \?\? "Atención sin cita"/.test(src), `${f}: no «sin cita» just because there is no contact`);

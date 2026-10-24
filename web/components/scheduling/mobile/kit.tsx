@@ -180,6 +180,7 @@ export function Sheet({
   footer,
   children,
   bodyClassName = "",
+  tone,
 }: {
   open: boolean;
   onClose: () => void;
@@ -191,6 +192,8 @@ export function Sheet({
   footer?: ReactNode;
   children: ReactNode;
   bodyClassName?: string;
+  /** "card" = the appointment card's language 5a (`.u-c5`): its surface and its footer. */
+  tone?: "card";
 }) {
   const [node, setNode] = useState<HTMLDivElement | null>(null);
   const [full, setFull] = useState(false);
@@ -242,14 +245,20 @@ export function Sheet({
             bottom: vv?.bottomInset ?? 0,
             ...(expandable ? { top: full ? vv?.top ?? 0 : peekTop } : vv ? { maxHeight: vv.h * 0.92 } : {}),
           }}
-          className={`fixed inset-x-0 bottom-0 z-[81] flex flex-col bg-m-sf text-m-tx shadow-[0_-8px_30px_rgba(0,0,0,0.15)] transition-[top,border-radius] focus-visible:outline-none duration-200 md:left-1/2 md:right-auto md:w-[min(34rem,100vw)] md:-translate-x-1/2 ${
+          className={`fixed inset-x-0 bottom-0 z-[81] flex flex-col ${tone === "card" ? "u-ag u-c5 bg-[var(--c5-bg)] text-[var(--c5-tx)]" : "bg-m-sf text-m-tx"} shadow-[0_-8px_30px_rgba(0,0,0,0.15)] transition-[top,border-radius] focus-visible:outline-none duration-200 md:left-1/2 md:right-auto md:w-[min(34rem,100vw)] md:-translate-x-1/2 ${
             expandable ? (full ? "rounded-none pt-[env(safe-area-inset-top)]" : "rounded-t-[24px]") : "max-h-[92dvh] rounded-t-[24px]"
           }`}
         >
           {handle}
           {header}
           <div className={`u-noscroll min-h-0 flex-1 overflow-y-auto overscroll-contain ${bodyClassName}`}>{children}</div>
-          {footer ? <div className="flex-none border-t border-m-dv bg-m-sf px-4 pb-[max(20px,env(safe-area-inset-bottom))] pt-3">{footer}</div> : null}
+          {footer ? (
+            tone === "card" ? (
+              <div className="c5-foot flex-none">{footer}</div>
+            ) : (
+              <div className="flex-none border-t border-m-dv bg-m-sf px-4 pb-[max(20px,env(safe-area-inset-bottom))] pt-3">{footer}</div>
+            )
+          ) : null}
         </div>
       </div>
     </Portal>

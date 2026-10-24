@@ -1631,6 +1631,7 @@ export function AgendaView(props: {
                 appt={appt}
                 timezone={tz}
                 mode={charge.mode}
+                toneClass={appointmentToneClass(appt)}
                 onClose={() => setCharge(null)}
                 onDone={(m) => {
                   setCharge(null);

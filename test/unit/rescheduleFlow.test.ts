@@ -148,14 +148,14 @@ test('the flow asks FOR THIS appointment and the professional on screen, and sen
 
 test('the detail offers «Reagendar» directly, with one name, apart from the state', () => {
   const panel = read('web/components/scheduling/agenda/AppointmentPanel.tsx');
-  const sheet = read('web/components/scheduling/mobile/MobileAppointmentSheet.tsx');
-  for (const [name, src] of [['panel', panel], ['sheet', sheet]] as const) {
+  const card = read('web/components/scheduling/agenda/AppointmentCard.tsx');
+  for (const [name, src] of [['panel', panel], ['card', card]] as const) {
     assert.match(src, /Reagendar/, name);
     assert.doesNotMatch(src, />\s*Reprogramar\s*</, `${name}: no "Reprogramar" entry`);
     assert.doesNotMatch(src, /Cambiar hora o profesional/, name);
-    assert.match(src, /rescheduleBlockedReason\(/, `${name}: says why when it is not offered`);
   }
-  // Phone: visible in the sheet itself, not behind "Más acciones".
-  const statusSheet = sheet.slice(sheet.indexOf('label="Acciones de la cita"'));
-  assert.doesNotMatch(statusSheet, /onReschedule/, 'not repeated inside "Más acciones"');
+  assert.match(panel, /rescheduleBlockedReason\(/, 'says why when it is not offered');
+  // The card's footer, beside the next step — apart from the state; the same on the phone.
+  assert.ok(card.includes('plan.reschedule && props.onReschedule ? (') && card.includes('footNote'), 'Reagendar is the footer secondary, with the reason when blocked');
+  assert.doesNotMatch(read('web/components/scheduling/mobile/MobileAppointmentSheet.tsx'), /Más acciones/, 'no "Más acciones" detour on the phone');
 });
