@@ -1,4 +1,6 @@
 @import "tailwindcss";
+/* Inbox · Grafito (palette 3a): dark-only tokens scoped to `.u-ib`. */
+@import "./inbox-grafito.css";
 
 /*
  * Dark mode is CLASS-BASED: the `.dark` class on <html> (set by next-themes /

@@ -28,7 +28,7 @@ export function ThreadActions({
   return (
     <div className="flex shrink-0 items-center gap-2">
       {plan.secondary ? (
-        <button type="button" onClick={() => onRequest("dismiss")} disabled={busy} className={`${BTN_SECONDARY} ${compact ? "max-sm:hidden" : ""}`}>
+        <button type="button" onClick={() => onRequest("dismiss")} disabled={busy} data-ib-pill="" data-ib-outline="" className={`${BTN_SECONDARY} ${compact ? "max-sm:hidden" : ""}`}>
           {plan.secondary.label}
         </button>
       ) : null}
@@ -38,6 +38,8 @@ export function ThreadActions({
         disabled={busy || Boolean(p.disabledReason)}
         title={p.disabledReason ?? undefined}
         aria-describedby={p.disabledReason ? "thread-action-reason" : undefined}
+        data-ib-pill=""
+        data-ib-outline={isTake ? undefined : ""}
         className={isTake ? BTN_PRIMARY : BTN_SECONDARY}
       >
         {p.label}

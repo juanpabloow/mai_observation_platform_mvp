@@ -68,14 +68,14 @@ export function Composer({
 
   if (blockedReason) {
     return (
-      <div className="flex flex-col items-start gap-2.5 rounded-2xl border border-line bg-surface px-3.5 py-2.5 sm:flex-row sm:items-center sm:gap-3">
+      <div data-ib-field="" className="flex flex-col items-start gap-2.5 rounded-2xl border border-line bg-surface px-3.5 py-2.5 sm:flex-row sm:items-center sm:gap-3">
         <span className="flex min-w-0 flex-1 items-start gap-2 text-sm leading-snug text-muted">
           <span className="mt-0.5 text-faint">
             <IconLock />
           </span>
           {blockedReason}
         </span>
-        <button type="button" disabled title="Las plantillas de WhatsApp aún no están conectadas" className={BTN_SECONDARY}>
+        <button type="button" disabled title="Las plantillas de WhatsApp aún no están conectadas" data-ib-template="" className={BTN_SECONDARY}>
           Plantilla no disponible
         </button>
       </div>
@@ -84,12 +84,12 @@ export function Composer({
 
   if (mode !== "human") {
     return (
-      <div className="flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-surface px-3.5 py-2.5">
+      <div data-ib-field="" className="flex flex-wrap items-center gap-3 rounded-2xl border border-line bg-surface px-3.5 py-2.5">
         <span className="min-w-0 flex-1 text-sm leading-snug text-muted">
           {mode === "bot" ? "El bot está respondiendo. Toma la conversación para escribir." : "Nadie está respondiendo todavía. Tómala para escribir."}
         </span>
         {onTake ? (
-          <button type="button" onClick={onTake} disabled={Boolean(takeDisabledReason)} title={takeDisabledReason ?? undefined} className={BTN_PRIMARY}>
+          <button type="button" onClick={onTake} disabled={Boolean(takeDisabledReason)} title={takeDisabledReason ?? undefined} data-ib-pill="" className={BTN_PRIMARY}>
             Tomar conversación
           </button>
         ) : null}
@@ -122,7 +122,7 @@ export function Composer({
   };
 
   return (
-    <div className="u-focus flex items-end gap-2 rounded-2xl border border-line bg-surface py-1.5 pl-3.5 pr-1.5">
+    <div data-ib-field="" className="u-focus flex items-end gap-2 rounded-2xl border border-line bg-surface py-1.5 pl-3.5 pr-1.5">
       <label htmlFor={`${hintId}-field`} className="sr-only">
         Mensaje
       </label>
