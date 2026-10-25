@@ -808,7 +808,15 @@ export interface MergeResult {
  * the duplicate (never overwrite); delete the duplicate (a JSON snapshot is written to
  * contact_merges so a human could reverse it); resolve/cascade the candidate row. Derived
  * values (visits, "customer") recompute at read time from the moved appointments.
- * (C-3 note: when notes/tasks/tags land, add their move here.)
+ *
+ * EVERY table with an FK to `contacts` must be handled here (re-point, or an intentional delete),
+ * or the drop-row DELETE at the end CASCADE-deletes / orphans its data. The set is pinned by
+ * test/integration/mergeContactFkCoverage.test.ts, which reads the live FK catalog and fails the
+ * build if a referencing table is not explicitly covered — so a future table can't reintroduce the
+ * opportunities data-loss bug (FIX-1 §1). Handled: contact_identities, appointments, conversations,
+ * contact_notes, crm_tasks, contact_tag_links, attribution_touches, contacts.origin_ref_contact_id,
+ * duplicate_contact_candidates, opportunities (+stage events), payments, crm_activity_events,
+ * meeting_speakers.
  */
 export async function mergeContacts(
   tenantId: string,
@@ -859,6 +867,39 @@ export async function mergeContacts(
       [tenantId, clientId, dropId, keepId],
     );
     await run(`DELETE FROM contact_tag_links WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3`, [tenantId, clientId, dropId]);
+
+    // FIX-1 §1: re-point the tables added AFTER this merge was written, so a merge never silently
+    // CASCADE-deletes (opportunities, crm_activity_events) or detaches (payments, meeting_speakers)
+    // the dropped contact's data. The one-open-per-contact rule for OPPORTUNITIES: if BOTH contacts
+    // have an OPEN sale, the survivor keeps its open one and the dropped contact's open sale is closed
+    // as lost ('otro', note "fusionado con <survivor>", one stage event) so re-pointing can't violate
+    // the opportunities_one_open_per_contact unique index. Coverage is enforced for EVERY table with
+    // an FK to contacts by test/integration/mergeContactFkCoverage.test.ts.
+    const closedOpps = await run<{ id: string; stage: string }>(
+      `UPDATE opportunities d
+          SET status='lost', lost_reason='otro', lost_note=$5, closed_at=now(), updated_at=now()
+        WHERE d.tenant_id=$1 AND d.client_id=$2 AND d.contact_id=$3 AND d.status='open'
+          AND EXISTS (SELECT 1 FROM opportunities k
+                       WHERE k.tenant_id=$1 AND k.client_id=$2 AND k.contact_id=$4 AND k.status='open')
+        RETURNING id, stage`,
+      [tenantId, clientId, dropId, keepId, `fusionado con ${keep.name ?? keepId}`],
+    );
+    for (const o of closedOpps.rows) {
+      await run(
+        `INSERT INTO opportunity_stage_events
+           (tenant_id, client_id, opportunity_id, from_stage, to_stage, from_status, to_status, actor, reason)
+         VALUES ($1,$2,$3,$4,$4,'open','lost',$5,'merged')`,
+        [tenantId, clientId, o.id, o.stage, mergedByUserId ?? 'system'],
+      );
+    }
+    // None of the dropped contact's sales are open now → re-point them all. Their stage events and
+    // appointment links ride along (keyed on opportunity_id, not contact_id).
+    await run(`UPDATE opportunities SET contact_id=$4, updated_at=now() WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3`, [tenantId, clientId, dropId, keepId]);
+    // Financial history: the recorded payments move to the survivor (payment_lines follow by
+    // payment_id). The CRM activity timeline and meeting-speaker labels move too.
+    await run(`UPDATE payments SET contact_id=$4, updated_at=now() WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3`, [tenantId, clientId, dropId, keepId]);
+    await run(`UPDATE crm_activity_events SET contact_id=$4 WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3`, [tenantId, clientId, dropId, keepId]);
+    await run(`UPDATE meeting_speakers SET contact_id=$4 WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3`, [tenantId, clientId, dropId, keepId]);
 
     // ID-H §3: consent = the MOST RESTRICTIVE of the two (never widen permission on a merge):
     // opted_out beats unknown beats opted_in; do_not_contact true wins.
