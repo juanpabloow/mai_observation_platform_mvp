@@ -112,6 +112,9 @@ async function clean(): Promise<Record<string, number>> {
     const del = async (sql: string): Promise<number> => (await query(sql, [c.id, c.tenant_id])).rowCount ?? 0;
     // appointment_events cascade from appointments; site_services / staff_services
     // and contact_identities cascade from their parents.
+    // FIX-1 §2: payments.appointment_id is NO ACTION now (money is never cascade-deleted), so clear
+    // payments (payment_lines cascade with them) BEFORE the appointments they reference.
+    await del(`DELETE FROM payments WHERE client_id = $1 AND tenant_id = $2`);
     counts.appointments += await del(`DELETE FROM appointments WHERE client_id = $1 AND tenant_id = $2`);
     counts.schedule_exceptions += await del(
       `DELETE FROM schedule_exceptions WHERE tenant_id = $2

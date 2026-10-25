@@ -5,7 +5,7 @@ import { resolveClientModuleContext } from "./clientModuleAccess";
 import { isUuid } from "./clientModuleValidation";
 import { NO_PERMISSION, can } from "./access";
 import { parseContactPatch, parseContactCreate } from "./contactActionValidation";
-import { updateContact, deleteContact, type UpdateContactInput } from "@worker/db/repositories/contacts.js";
+import { updateContact, deleteContact, contactHasFinancialHistory, type UpdateContactInput } from "@worker/db/repositories/contacts.js";
 import { getMemberInTenant } from "@worker/db/repositories/tenantMembers.js";
 import { listFieldDefinitions, validateCustomFieldValues } from "@worker/db/repositories/clientFieldDefinitions.js";
 import {
@@ -294,6 +294,12 @@ export async function deleteContactAction(clientId: string, contactId: string): 
   const resolved = await resolveClientModuleContext(clientId, "crm", "contacts.delete");
   if (!resolved.ok) return { ok: false, error: resolved.forbidden ? NO_PERMISSION : GENERIC };
   const { scope, client } = resolved.context;
+
+  // FIX-1 §2: never hard-delete a contact that carries money or pipeline history — the payment would be
+  // orphaned (SET NULL) and the sale + its stage events would CASCADE away. Refuse with a clear path.
+  if (await contactHasFinancialHistory(scope.tenantId, client.id, contactId)) {
+    return { ok: false, error: "Este contacto tiene cobros u oportunidades registrados. Archívalo o fusiónalo con otro contacto para conservar su historial; no se puede eliminar." };
+  }
 
   const gone = await deleteContact(scope.tenantId, client.id, contactId);
   if (!gone) return { ok: false, error: GENERIC };

@@ -773,6 +773,24 @@ export async function deleteContact(tenantId: string, clientId: string, contactI
   return (r.rowCount ?? 0) > 0;
 }
 
+/**
+ * FIX-1 §2: does this contact carry money or pipeline history a HARD delete would destroy?
+ * `opportunities.contact_id` is ON DELETE CASCADE (the sale + its stage events would be deleted) and
+ * `payments.contact_id` is SET NULL (the payment would be orphaned from the person). The delete action
+ * refuses when true — archive (stage='archived') or merge instead, both of which keep the history.
+ */
+export async function contactHasFinancialHistory(tenantId: string, clientId: string, contactId: string): Promise<boolean> {
+  const r = await query<{ has: boolean }>(
+    `SELECT EXISTS (
+       SELECT 1 FROM payments WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3
+       UNION ALL
+       SELECT 1 FROM opportunities WHERE tenant_id=$1 AND client_id=$2 AND contact_id=$3
+     ) AS has`,
+    [tenantId, clientId, contactId],
+  );
+  return r.rows[0]?.has ?? false;
+}
+
 /** Record messaging consent (STORE-ONLY — never gates anything). Client-aware so the
  * machine booking flow can set it inside its transaction. */
 export async function setContactConsent(
