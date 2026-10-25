@@ -52,8 +52,12 @@ export default async function ClientStaffPage({
   const { scope, client } = await requireClientModulePage(clientId, "scheduling", "team.manage");
   // The roster is for the agency OR this client's OWNER — editors/staff are 404'd.
 
-  const roster = await loadRoster(scope.tenantId, client.id, sp);
-  // PY-1: per-artist commission is shown + editable only with payments.settings (agency / owner).
+  // FIX-1 §3: per-artist commission is READ only with commissions.view and EDITED only with
+  // payments.settings. team.manage alone (a role that manages the roster but not money) must never
+  // RECEIVE the rates — so the READ gate is applied where the values are serialized, in loadRoster,
+  // not merely in the UI.
+  const canViewCommissions = can(scope, "commissions.view", client.id);
+  const roster = await loadRoster(scope.tenantId, client.id, sp, canViewCommissions);
   if (roster) roster.staff.canManagePayments = can(scope, "payments.settings", client.id);
   return (
     <StaffWorkspace
@@ -83,6 +87,7 @@ async function loadRoster(
   tenantId: string,
   clientId: string,
   sp: { s?: string | string[]; site?: string; dtab?: string; p?: string | string[] },
+  canViewCommissions: boolean,
 ): Promise<{ staff: StaffTabProps } | null> {
   const sites = await listSites(tenantId, { clientId, includeInactive: false });
   if (sites.length === 0) return null; // a barber belongs to a site — no site, no roster
@@ -137,6 +142,8 @@ async function loadRoster(
     .map((o) => ({ id: `${o.series_id}:${o.date}`, staffId: o.staff_id as string, startsAt: o.from.toISOString(), endsAt: o.until.toISOString(), reason: o.reason, publicReason: o.public_reason ?? null }));
 
   const staffProps: StaffTabProps = {
+    // READ gate for the commission block (edit gate canManagePayments is set by the caller).
+    canViewCommissions,
     // A public photo can be uploaded only where object storage is configured.
     photoUploadEnabled: isR2Configured,
     sites: sites.map((s) => ({ id: s.id, name: s.name, timezone: s.timezone })),
@@ -175,8 +182,9 @@ async function loadRoster(
       email: s.email,
       emergencyContactName: s.emergency_contact_name,
       emergencyContactPhone: s.emergency_contact_phone,
-      commissionPctServices: s.commission_pct_services,
-      commissionPctProducts: s.commission_pct_products,
+      // READ gate: only ship the rates to a viewer who holds commissions.view (FIX-1 §3).
+      commissionPctServices: canViewCommissions ? s.commission_pct_services : "",
+      commissionPctProducts: canViewCommissions ? s.commission_pct_products : "",
       certifications: (certifications.get(s.id) ?? []).map((c) => ({
         id: c.id,
         name: c.name,

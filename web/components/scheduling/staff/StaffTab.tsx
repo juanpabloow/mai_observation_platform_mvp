@@ -238,8 +238,11 @@ export interface StaffTabProps {
   detailTab?: string;
   /** Object storage is configured, so a public photo can be uploaded. */
   photoUploadEnabled?: boolean;
-  /** PY-1: the viewer may see + edit per-artist commission (payments.settings). */
+  /** PY-1 / FIX-1 §3: the viewer may EDIT per-artist commission (payments.settings). */
   canManagePayments?: boolean;
+  /** FIX-1 §3: the viewer may READ per-artist commission (commissions.view). When false the
+   *  rates are not even serialized to the client, so the block is not shown. */
+  canViewCommissions?: boolean;
 }
 
 export function StaffTab(
@@ -363,6 +366,7 @@ export function StaffTab(
           initialTab={props.detailTab}
           photoUploadEnabled={props.photoUploadEnabled ?? false}
           canManagePayments={props.canManagePayments ?? false}
+          canViewCommissions={props.canViewCommissions ?? false}
           tintFor={tintOf}
         />
       </div>
@@ -531,6 +535,7 @@ function StaffDetail({
   initialTab,
   photoUploadEnabled,
   canManagePayments,
+  canViewCommissions,
   tintFor,
 }: {
   member: StaffMember;
@@ -546,6 +551,7 @@ function StaffDetail({
   initialTab?: string;
   photoUploadEnabled: boolean;
   canManagePayments: boolean;
+  canViewCommissions: boolean;
   tintFor: (id: string) => "1" | "2" | "3" | "4";
 }) {
   // FIVE tabs, and every one reads something real: the schedule answers performance,
@@ -842,7 +848,7 @@ function StaffDetail({
         ) : tab === "details" ? (
           <>
             <ProfileView member={member} onEdit={() => setEditingProfile(true)} />
-            {canManagePayments ? <CommissionBlock clientId={clientId} member={member} onSaved={onSaved} /> : null}
+            {canViewCommissions ? <CommissionBlock clientId={clientId} member={member} canEdit={canManagePayments} onSaved={onSaved} /> : null}
           </>
         ) : tab === "services" ? (
           <div className="w-full px-6 py-5">
@@ -1805,7 +1811,7 @@ function fmtDayLong(iso: string, tz: string): string {
  * configuration with its own permission. A change applies to FUTURE charges only — every
  * recorded payment line keeps the commission it was charged with.
  */
-function CommissionBlock({ clientId, member, onSaved }: { clientId: string; member: StaffMember; onSaved: () => void }) {
+function CommissionBlock({ clientId, member, canEdit, onSaved }: { clientId: string; member: StaffMember; canEdit: boolean; onSaved: () => void }) {
   const [svc, setSvc] = useState(member.commissionPctServices);
   const [prod, setProd] = useState(member.commissionPctProducts);
   const [saving, startSave] = useTransition();
@@ -1813,7 +1819,7 @@ function CommissionBlock({ clientId, member, onSaved }: { clientId: string; memb
   const [saved, setSaved] = useState(false);
   const dirty = Number(svc) !== Number(member.commissionPctServices) || Number(prod) !== Number(member.commissionPctProducts);
   const save = () => {
-    if (saving) return;
+    if (saving || !canEdit) return; // the action re-checks payments.settings; this just avoids a doomed call
     setError(null);
     setSaved(false);
     const s = Number(svc);
@@ -1838,24 +1844,26 @@ function CommissionBlock({ clientId, member, onSaved }: { clientId: string; memb
   const field = (label: string, value: string, set: (v: string) => void) => (
     <label className="grid grid-cols-[170px_minmax(0,140px)_auto] items-center gap-3 py-[9px] text-[13.5px] shadow-[inset_0_-1px_0_var(--line-soft)]">
       <span className="text-muted">{label}</span>
-      <input type="number" inputMode="decimal" min={0} max={100} step={0.01} value={value} onChange={(e) => { set(e.target.value); setSaved(false); }} aria-label={`Comisión de ${label.toLowerCase()} (%)`} className="u-focus h-[34px] rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] px-2.5 text-right tabular-nums" />
+      <input type="number" inputMode="decimal" min={0} max={100} step={0.01} value={value} disabled={!canEdit} onChange={(e) => { set(e.target.value); setSaved(false); }} aria-label={`Comisión de ${label.toLowerCase()} (%)`} className="u-focus h-[34px] rounded-[9px] border border-[var(--line-strong)] bg-[var(--surface)] px-2.5 text-right tabular-nums disabled:opacity-60" />
       <span className="text-muted">%</span>
     </label>
   );
   return (
     <section aria-labelledby="commission-title" className="flex w-full flex-col px-6 pb-6">
       <h3 id="commission-title" className="pb-1 text-[15px] font-medium">Comisiones</h3>
-      <p className="pb-1 text-[12.5px] text-muted">Porcentaje sobre lo cobrado. Solo lo ven quienes gestionan pagos. Un cambio aplica a los cobros nuevos: los ya registrados conservan su comisión.</p>
+      <p className="pb-1 text-[12.5px] text-muted">Porcentaje sobre lo cobrado. Un cambio aplica a los cobros nuevos: los ya registrados conservan su comisión.{canEdit ? "" : " Solo lectura."}</p>
       {field("Servicios", svc, setSvc)}
       {field("Productos", prod, setProd)}
-      <div className="flex items-center gap-3 pt-3">
-        <span role="status" aria-live="polite" className={`min-w-0 flex-1 text-[13px] ${error ? "text-danger" : "text-muted"}`}>
-          {error ?? (saving ? "Guardando…" : saved ? "Comisiones guardadas" : dirty ? "Cambios sin guardar" : "")}
-        </span>
-        <Button variant="primary" onClick={save} disabled={!dirty || saving} loading={saving} loadingLabel="Guardando…">
-          Guardar comisiones
-        </Button>
-      </div>
+      {canEdit ? (
+        <div className="flex items-center gap-3 pt-3">
+          <span role="status" aria-live="polite" className={`min-w-0 flex-1 text-[13px] ${error ? "text-danger" : "text-muted"}`}>
+            {error ?? (saving ? "Guardando…" : saved ? "Comisiones guardadas" : dirty ? "Cambios sin guardar" : "")}
+          </span>
+          <Button variant="primary" onClick={save} disabled={!dirty || saving} loading={saving} loadingLabel="Guardando…">
+            Guardar comisiones
+          </Button>
+        </div>
+      ) : null}
     </section>
   );
 }
