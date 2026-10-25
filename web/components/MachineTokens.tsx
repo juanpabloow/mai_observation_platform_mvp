@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { issueTokenAction, revokeTokenAction, updateTokenCapabilitiesAction } from "@/lib/handoffTokenActions";
+import { CAPABILITY_CHOICES } from "@/lib/capabilityLabels";
 
 export interface MachineTokenView {
   id: string;
@@ -19,21 +20,16 @@ export interface ConnectionTokens {
   tokens: MachineTokenView[];
 }
 
-/** The capability vocabulary in plain language (C-5). The server action re-validates
- *  against the canonical vocabulary; this list is presentation only (hardcoded so the
- *  client bundle never imports the server-only token repo). */
-const CAPABILITIES: { key: string; label: string; hint: string }[] = [
-  { key: "handoff", label: "Handoff", hint: "Conversation messages, mode & human escalation" },
-  { key: "handoff.context.read", label: "Read conversation context", hint: "Recent customer, bot and sent human messages for bot recovery; opt-in" },
-  { key: "scheduling.read", label: "Read the schedule", hint: "Services, staff, availability, appointment reads" },
-  { key: "scheduling.write", label: "Book and change appointments", hint: "Create, cancel, reschedule, confirm, complete" },
-  { key: "crm.read", label: "Read contacts", hint: "Look up and read contact records" },
-  { key: "crm.write", label: "Create and update contacts", hint: "Upsert, notes, tags, fields, consent" },
-  { key: "pipeline.write", label: "Calificar oportunidades", hint: "Let the bot qualify a conversation's sale (lead → qualified) with evidence" },
-  { key: "catalog.read", label: "Read the product catalog", hint: "List products, prices and availability" },
-];
+/** The capability checklist is DERIVED from ALL_CAPABILITIES (CAPABILITY_CHOICES, see
+ *  web/lib/capabilityLabels.ts) — never a hand-kept copy — so a capability can never again exist
+ *  without a checkbox. The server action re-validates against the canonical vocabulary; these are
+ *  presentation only. The labels module imports only the dependency-free vocabulary, so this client
+ *  component still never pulls in the server-only token repo. */
+const CAPABILITIES = CAPABILITY_CHOICES;
 const DEFAULT_CAPS = ["handoff", "scheduling.read", "scheduling.write"];
-const LABEL = new Map(CAPABILITIES.map((c) => [c.key, c.label]));
+// Keyed by plain string: a token row may carry a capability string the vocabulary no longer lists,
+// and the chips fall back to showing the raw key (title lookup below).
+const LABEL = new Map<string, string>(CAPABILITIES.map((c) => [c.key, c.label]));
 
 function fmtDate(iso: string): string {
   return iso.slice(0, 10);

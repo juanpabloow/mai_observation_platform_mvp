@@ -1,5 +1,12 @@
 import { randomBytes, createHash } from 'node:crypto';
 import { query, firstRowOrThrow } from '../client.js';
+import {
+  ALL_CAPABILITIES,
+  LEGACY_CAPABILITIES,
+  isCapability,
+  tokenHasCapability,
+  type Capability,
+} from '../../capabilities.js';
 
 /**
  * H-1a repository for handoff tokens — per-connection MACHINE credentials that
@@ -7,38 +14,13 @@ import { query, firstRowOrThrow } from '../client.js';
  * is NEVER stored: only its SHA-256 hash (for lookup) and an 8-char display
  * prefix are persisted. issueToken returns the raw token exactly once. Every
  * function is tenant-scoped.
+ *
+ * The capability vocabulary (ALL_CAPABILITIES / Capability / LEGACY_CAPABILITIES / isCapability /
+ * tokenHasCapability) now lives in ../../capabilities.ts — a dependency-free module the client can
+ * also import — and is re-exported here so every existing `from handoffTokens.js` importer is unchanged.
  */
-
-/**
- * The machine-token capability vocabulary (C-5), dot-separated,
- * stored as text[]. Deny-by-default: a token grants ONLY the capabilities it lists; an
- * unknown/removed string is simply absent (never a wildcard). LEGACY_CAPABILITIES is the
- * authority every pre-C-5 token effectively had — the migration + backfill grant exactly
- * these to existing tokens so no running workflow changes behavior. CRM is deliberately
- * NOT in the legacy set.
- */
-export const ALL_CAPABILITIES = [
-  'handoff',
-  'scheduling.read',
-  'scheduling.write',
-  'crm.read',
-  'crm.write',
-  'pipeline.write',
-  'catalog.read',
-  'handoff.context.read',
-] as const;
-export type Capability = (typeof ALL_CAPABILITIES)[number];
-
-export const LEGACY_CAPABILITIES: Capability[] = ['handoff', 'scheduling.read', 'scheduling.write'];
-
-export function isCapability(value: string): value is Capability {
-  return (ALL_CAPABILITIES as readonly string[]).includes(value);
-}
-
-/** Deny-by-default membership check. An unknown string in `have` is ignored. */
-export function tokenHasCapability(have: readonly string[] | null | undefined, required: Capability): boolean {
-  return Array.isArray(have) && have.includes(required);
-}
+export { ALL_CAPABILITIES, LEGACY_CAPABILITIES, isCapability, tokenHasCapability };
+export type { Capability };
 
 export interface HandoffTokenRow {
   id: string;
