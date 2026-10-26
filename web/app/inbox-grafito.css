@@ -1,0 +1,112 @@
+/*
+ * ── INBOX · Grafito, palette 3a (approved reference «Inbox oscuro aprobado») ─────────
+ * Dark only, scoped to the Inbox (`.u-ib` on its root PageShell — the list, the thread, the
+ * ficha drawer and the confirmations are all inside it). Claro and every other module keep
+ * their tokens: the reference only defines Grafito. Functions are untouched — this is
+ * palette, surfaces, bubbles, selection, headers, buttons and the Bot/Humano chips.
+ *
+ *   surfaces   #0E0F11 (thread) · #16171A (list, headers, composer) · #1F2125 (fields)
+ *   borders    #2A2C31 (#3A3D43 controls) · text #ECECEE / #A6A6AE / #80808A
+ *   bubbles    client #24262B + #2F3136 border · bot AND team #E9E9EC with #16171A text
+ *              (who wrote stays in words: «Bot», «Tú (Laura)», «Equipo» above them)
+ *   selection  #24262B with a #34363C border · Humano / Bot as icon chips
+ *
+ * Unlayered on purpose: these rules must win over the components' Tailwind utilities.
+ * Kept out of globals.css so the theme-token contract there (light map vs `.dark {}`)
+ * keeps reading only the platform tokens.
+ */
+.dark .u-ib {
+  --surface: #16171a;
+  --background: #0e0f11;
+  --thread-bg: #0e0f11;
+  --popover: #16171a;
+  --popover-foreground: #ececee;
+  --chip: #1f2125;
+  --subtle: #1f2125;
+  --line: #2a2c31;
+  --line-strong: #3a3d43;
+  --line-row: transparent;
+  --foreground: #ececee;
+  --muted: #a6a6ae;
+  --faint: #80808a;
+  --ink: #ececee;
+  --ink-hover: #ffffff;
+  --ink-fg: #111214;
+  --queue-row-active: #24262b;
+  --bubble-in: #24262b;
+  --bubble-in-border: #2f3136;
+  --bubble-in-fg: #ececee;
+  --bubble-bot: #e9e9ec;
+  --bubble-bot-border: #e9e9ec;
+  --bubble-bot-fg: #16171a;
+  --bubble-bot-inset: #dcdce1;
+  --bubble-bot-rule: rgba(22, 23, 26, 0.14);
+  --bubble-bot-label: #5a5a62;
+  --bubble-agent: #e9e9ec;
+  --bubble-agent-border: #e9e9ec;
+  --bubble-agent-fg: #16171a;
+  --radius-bubble: 14px;
+  --radius-bubble-tail: 14px;
+  --chip-bot-bg: #1f2125;
+  --chip-bot-fg: #c9c9cf;
+  font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* List column: no rule under its header; the search field is a bordered 10px field. */
+.dark .u-ib [data-ib-list-head] { border-bottom-color: transparent; }
+.dark .u-ib [data-ib-search] { border-color: #2a2c31; border-radius: 10px; background: #1f2125; }
+.dark .u-ib [data-ib-search] input::placeholder { color: #a6a6ae; }
+@media (min-width: 768px) { .dark .u-ib [data-ib-search] { height: 40px; } }
+.dark .u-ib [data-ib-workflow] { border-radius: 9999px; border-color: #2a2c31; color: #c9c9cf; }
+.dark .u-ib [data-ib-workflow][data-on] { border-color: #ececee; color: #ececee; }
+
+/* Filter chips: outlined pills; the active one a raised graphite pill (not inverted). */
+.dark .u-ib [data-ib-tab] { border-radius: 9999px; border-color: #2a2c31; background: transparent; color: #a6a6ae; font-weight: 400; }
+.dark .u-ib [data-ib-tab] [data-ib-count] { color: #ececee; }
+.dark .u-ib [data-ib-tab]:hover { background: #1f2125; }
+.dark .u-ib [data-ib-tab][aria-pressed="true"] { border-color: #3a3d43; background: #2e3036; color: #ececee; font-weight: 590; }
+
+/* Rows: 10px radius, no separators; the selected one #24262B with its #34363C border. */
+.dark .u-ib [data-ib-row] { border-radius: 10px; }
+.dark .u-ib [data-ib-row]:hover { background: rgba(36, 38, 43, 0.6); }
+.dark .u-ib [data-ib-row][aria-current="page"] { border-color: #34363c; background: #24262b; }
+.dark .u-ib [data-ib-row-name] { font-weight: 590; }
+
+/* Avatars: one neutral disc (#2A2C31, #C9C9CF initials), in the list and the header. */
+.dark .u-ib [data-ib-avatar] { background: #2a2c31; color: #c9c9cf; }
+
+/* Thread header and composer band: the #16171A surface over the #0E0F11 thread. */
+.dark .u-ib [data-ib-thread-head] { background: #16171a; }
+.dark .u-ib [data-ib-thread-head] [data-ib-title] { font-weight: 590; }
+.dark .u-ib [data-ib-composer-band] { background: #16171a; }
+
+/* Who answers: from md, a round icon chip beside the action (the text chip steps aside). On a
+   phone the header has no room for both it and the round «Ficha» button, so the text chip stays. */
+.u-ib [data-ib-who-icon] { display: none; }
+@media (min-width: 768px) {
+  .dark .u-ib [data-ib-who-icon] { display: inline-flex; width: 34px; height: 34px; flex: none; align-items: center; justify-content: center; border-radius: 9999px; border: 1px solid #2a2c31; background: #1f2125; color: #ececee; }
+  .dark .u-ib [data-ib-who-icon][data-kind="pending"] { color: var(--chip-pending-fg); }
+  .dark .u-ib [data-ib-who-text] { display: none; }
+}
+
+/* Header buttons: pills — «Tomar conversación» light, «Ficha» / «Devolver al bot» outlined. */
+@media (min-width: 768px) {
+  .dark .u-ib [data-ib-pill] { height: 34px; border-radius: 17px; padding-left: 14px; padding-right: 14px; font-size: 13px; }
+}
+.dark .u-ib [data-ib-pill] { border-radius: 9999px; }
+.dark .u-ib [data-ib-pill][data-ib-outline] { border-color: #3a3d43; }
+.dark .u-ib [data-ib-pill][data-ib-outline][aria-pressed="true"] { border-color: #ececee; }
+@media (min-width: 768px) {
+  .dark .u-ib [data-ib-pill] svg { display: none; }
+}
+
+/* Bubbles: the time on the light (bot / team) bubbles, and the chosen offered slot. */
+.dark .u-ib [data-sender="bot"] [data-ib-time],
+.dark .u-ib [data-sender="human_agent"]:not([data-failed]) [data-ib-time] { color: #5a5a62; }
+.dark .u-ib [data-sender="bot"] [data-chosen] { box-shadow: inset 2px 0 0 #16171a; }
+
+/* Composer: the field on #1F2125, the template pill dashed (templates are not connected). */
+.dark .u-ib [data-ib-field] { border-color: #2a2c31; border-radius: 14px; background: #1f2125; }
+.dark .u-ib [data-ib-template] { height: 32px; border-radius: 16px; border: 1px dashed #3a3d43; background: transparent; color: #8e8e96; opacity: 1; }
+.dark .u-ib [data-ib-history] { border-radius: 9999px; border-color: #2a2c31; background: #16171a; }

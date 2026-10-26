@@ -53,11 +53,14 @@ const NEUTRAL: readonly [string, string] = ["#eceef1", "#474c54"];
 
 export function InboxAvatar({ text, toneKey, large = false }: { text: string; toneKey: string; large?: boolean }) {
   const [bg, fg] = text === "#" || text === "?" ? NEUTRAL : PASTELS[(avatarToneIndex(toneKey) - 1) % PASTELS.length];
+  // The tone travels as variables (not an inline colour) so Grafito can use its one neutral
+  // disc (inbox-grafito.css · [data-ib-avatar]).
   return (
     <span
       aria-hidden
-      style={{ backgroundColor: bg, color: fg }}
-      className={`flex shrink-0 items-center justify-center rounded-full font-semibold ${
+      data-ib-avatar=""
+      style={{ "--av-bg": bg, "--av-fg": fg } as React.CSSProperties}
+      className={`flex shrink-0 items-center justify-center rounded-full bg-[var(--av-bg)] font-semibold text-[var(--av-fg)] ${
         large ? "size-10 text-[0.8125rem] md:size-9 md:text-xs" : "size-9 text-xs md:size-8 md:text-[0.6875rem]"
       }`}
     >

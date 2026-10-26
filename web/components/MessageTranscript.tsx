@@ -327,13 +327,15 @@ function Bubble({
   return (
     <div className={`flex min-w-0 max-w-full flex-col gap-1 ${isUser ? "items-start" : "items-end"}`}>
       <div
+        data-sender={msg.sender}
+        data-failed={failed ? "" : undefined}
         className={`max-w-[min(62ch,86%)] rounded-bubble px-3.5 pb-1.5 pt-2.5 md:max-w-[min(62ch,100%)] md:px-3 md:pt-2 text-[0.9375rem] leading-[1.45] md:text-[0.875rem] ${bubbleClass} ${
           sending ? "opacity-70" : ""
         } ${highlighted ? "ring-2 ring-[var(--warn-rule)]" : ""}`}
       >
         <span className="block whitespace-pre-wrap break-words [text-wrap:pretty]">{body}</span>
         {msg.payload ? <PayloadBlock payload={msg.payload} onDark={!isUser && !isAgent} /> : null}
-        <span className={`mt-0.5 block text-right text-[0.6875rem] tabular-nums ${timeColor}`}>{time}</span>
+        <span data-ib-time="" className={`mt-0.5 block text-right text-[0.6875rem] tabular-nums ${timeColor}`}>{time}</span>
       </div>
       {sending ? <span className="px-0.5 text-xs text-faint">Enviando…</span> : null}
       {failed ? (
@@ -381,6 +383,7 @@ function PayloadBlock({ payload, onDark }: { payload: MessagePayload; onDark: bo
         return (
           <span
             key={`${s.at}-${i}`}
+            data-chosen={s.chosen ? "" : undefined}
             className={`flex items-center gap-2 rounded-md px-2.5 py-1.5 ${onDark ? "bg-bubble-bot-inset" : "bg-chip"} ${
               s.chosen ? (onDark ? "shadow-[inset_2px_0_0_#fff]" : "shadow-[inset_2px_0_0_var(--ink)]") : ""
             }`}

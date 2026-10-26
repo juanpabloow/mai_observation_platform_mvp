@@ -5,7 +5,7 @@ import Link from "next/link";
 import { ThreadActions } from "./ThreadActions";
 import { Composer } from "./Composer";
 import { MessageTranscript } from "./MessageTranscript";
-import { InboxAvatar, InboxConfirm, StateChip, IconArrowDown, IconBack, IconPerson } from "./inbox/InboxUi";
+import { InboxAvatar, InboxConfirm, StateChip, IconAlert, IconArrowDown, IconBack, IconBot, IconPerson } from "./inbox/InboxUi";
 import {
   formatConversationRef,
   type ThreadEventView,
@@ -242,9 +242,11 @@ export function InboxThread({
     viewerIsFullAccess,
   });
   const title = conversationTitle(header.contactName, header.conversationRef);
+  const whatsapp = /whats\s*app/i.test(header.channel ?? "");
   const sub = [
-    isPhoneRef(header.conversationRef) ? formatConversationRef(header.conversationRef) : "Sin número visible · WhatsApp",
+    isPhoneRef(header.conversationRef) ? formatConversationRef(header.conversationRef) : `Sin número visible${whatsapp ? "" : " · WhatsApp"}`,
     header.workflowName,
+    whatsapp ? "WhatsApp" : null,
   ]
     .filter(Boolean)
     .join(" · ");
@@ -303,7 +305,9 @@ export function InboxThread({
   const pipeline = initial.pipeline;
   const chips = (
     <div className="flex min-w-0 flex-wrap items-center gap-1.5">
-      <StateChip kind={who.kind}>{who.label}</StateChip>
+      <span data-ib-who-text="" className="contents">
+        <StateChip kind={who.kind}>{who.label}</StateChip>
+      </span>
       {chip ? <StateChip kind={chip.open ? "open" : "closed"}>{chip.label}</StateChip> : null}
       {pipeline?.origin ? (
         <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[0.6875rem] font-medium ${pipeline.origin.tone}`} title="De dónde vino este contacto">
@@ -331,7 +335,7 @@ export function InboxThread({
         {announce}
       </p>
 
-      <header className="flex min-h-[var(--topbar-height)] shrink-0 flex-col gap-2 border-b border-line px-3 py-2.5 md:gap-1.5 md:px-4 md:py-2">
+      <header data-ib-thread-head="" className="flex min-h-[var(--topbar-height)] shrink-0 flex-col gap-2 border-b border-line px-3 py-2.5 md:gap-1.5 md:px-4 md:py-2">
         <div className="flex min-w-0 items-center gap-2.5">
           {onBack ? (
             <button
@@ -345,11 +349,15 @@ export function InboxThread({
           ) : null}
           <InboxAvatar text={avatarText(header.contactName, header.conversationRef)} toneKey={header.conversationRef} />
           <div className="flex min-w-0 flex-1 flex-col">
-            <h2 className={`truncate text-[1.0625rem] font-semibold leading-tight tracking-[-0.01em] text-foreground md:text-[0.9375rem] ${title.kind === "phone" ? "tabular-nums" : ""}`}>
+            <h2 data-ib-title="" className={`truncate text-[1.0625rem] font-semibold leading-tight tracking-[-0.01em] text-foreground md:text-[0.9375rem] ${title.kind === "phone" ? "tabular-nums" : ""}`}>
               {title.text}
             </h2>
             <span className="truncate text-xs text-muted">{sub}</span>
           </div>
+          {/* Grafito: who answers as a round icon chip (the text chip steps aside there). */}
+          <span data-ib-who-icon="" data-kind={who.kind} role="img" aria-label={who.label} title={who.label}>
+            {who.kind === "bot" ? <IconBot /> : who.kind === "pending" ? <IconAlert /> : <IconPerson />}
+          </span>
           <div className="hidden lg:flex">
             <ThreadActions plan={plan} busy={busy} onRequest={setConfirm} />
           </div>
@@ -359,6 +367,8 @@ export function InboxThread({
               onClick={onOpenDetails}
               aria-pressed={detailsOpen}
               aria-label="Ficha del cliente"
+              data-ib-pill=""
+              data-ib-outline=""
               className={`inline-flex size-11 shrink-0 items-center justify-center gap-1.5 rounded-xl border text-sm font-medium transition-colors md:h-8 md:w-auto md:px-2.5 md:text-[0.8125rem] ${
                 detailsOpen ? "border-ink text-foreground" : "border-line-strong text-foreground hover:bg-subtle"
               }`}
@@ -392,6 +402,7 @@ export function InboxThread({
             <button
               type="button"
               onClick={() => setShowEarlier(true)}
+              data-ib-history=""
               className="mb-3 flex min-h-[44px] w-full items-center justify-center rounded-xl border border-line bg-surface px-3 text-sm text-muted transition-colors hover:text-foreground md:min-h-8 md:text-[0.8125rem]"
             >
               Historial antes del escalado · {earlier.length} {earlier.length === 1 ? "mensaje" : "mensajes"}
@@ -419,7 +430,7 @@ export function InboxThread({
         ) : null}
       </div>
 
-      <div className="shrink-0 border-t border-line bg-[var(--thread-bg)] px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2.5 md:px-4">
+      <div data-ib-composer-band="" className="shrink-0 border-t border-line bg-[var(--thread-bg)] px-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] pt-2.5 md:px-4">
         <Composer
           key={header.id}
           clientId={clientId}
