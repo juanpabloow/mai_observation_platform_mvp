@@ -16,6 +16,7 @@ import {
   getAppointmentForUpdate,
   findByIdempotencyKey,
   insertAppointment,
+  listStaffAppointmentsOverlapping,
   moveInterval,
   recordAppointmentEvent,
   setStatus,
@@ -26,6 +27,7 @@ import {
 } from '../db/repositories/scheduling/appointments.js';
 import { recordSchedulingEvent } from '../db/repositories/scheduling/events.js';
 import { isImmediateStart } from './immediate.js';
+import { utcToZonedParts } from './timezone.js';
 import { isSchedulingBookable, isSchedulingEnabledForUpdate } from '../db/repositories/clientModules.js';
 import { pipelineOnAppointmentStatusChanged, pipelineOnBookingCreated } from '../pipeline/hooks.js';
 
@@ -53,6 +55,8 @@ export type BookingError =
   | 'price_changed' // the price the customer was shown is no longer the price (zero writes)
   | 'stale' // reschedule: the appointment moved since the operator read it (agenda UI only)
   | 'not_immediate' // immediate walk-in asked for a start outside "now" (agenda UI only)
+  | 'not_past' // a walk-in registered as ALREADY DONE whose service has not ended today (agenda UI only)
+  | 'past_overlap' // that past walk-in overlaps another appointment of the professional (agenda UI only)
   | 'not_started'; // "completed" asked before the appointment starts (agenda UI only)
 
 export type BookingResult<T> =
@@ -86,6 +90,15 @@ export interface CreateAppointmentInput {
    *  only for a start inside the immediate window. Set by the agenda's walk-in action for
    *  an authorised login — never by the bot API or the public page. */
   immediateWalkIn?: boolean;
+  /** PAST WALK-IN («Esta atención ya se realizó»): reception registering, at the end of the
+   *  day, a service that ALREADY happened today. The slot is checked against the same rules as
+   *  of its own start (hours, breaks, blocks, absences, the professional's services, active
+   *  appointments) instead of «now», the minimum notice does not apply, and it is refused
+   *  unless the whole service ENDED before now on the site's current day; it also refuses an
+   *  overlap with ANY non-cancelled appointment of that professional (completed ones too),
+   *  and never moves or changes another appointment. Walk-in origin only; set by the agenda's
+   *  walk-in action for an authorised login — never by the bot API or the public page. */
+  pastWalkIn?: boolean;
   /** I-1: additional identities the booking declares for the appointment's contact (the
    *  attendee) — attached through the same identity chokepoint as everything else. Applies to
    *  the resolve paths (customer_phone / channel_user_id); the EXPLICIT-contact path (contactId)
@@ -184,6 +197,9 @@ export async function createAppointment(
     return { ok: false, error: 'not_found', message: 'Service is not offered at this site.' };
   }
   const now = input.now ?? new Date();
+  if (input.pastWalkIn && (input.origin !== 'walk_in' || input.immediateWalkIn || input.startAt.getTime() >= now.getTime())) {
+    return { ok: false, error: 'not_past', message: 'A past walk-in must be a walk-in that already happened.' };
+  }
 
   // 1. Idempotency short-circuit (before any writes) — with the cross-client +
   //    module-disabled guards.
@@ -207,12 +223,22 @@ export async function createAppointment(
     // interval + min-notice + horizon remain the real gates. We only .find() the exact
     // start, so the extra candidates are harmless.
     to: new Date(input.startAt.getTime() + 24 * 60 * MS_PER_MIN),
-    now,
-    ignoreMinNotice: input.immediateWalkIn === true,
+    // A past walk-in is evaluated AS OF its own start: every rule but «already started».
+    now: input.pastWalkIn ? input.startAt : now,
+    ignoreMinNotice: input.immediateWalkIn === true || input.pastWalkIn === true,
   });
   if (!avail) return { ok: false, error: 'not_found', message: 'Service is not offered at this site.' };
   if (input.immediateWalkIn && !isImmediateStart(input.startAt, now, avail.slotIntervalMin)) {
     return { ok: false, error: 'not_immediate', message: 'An immediate walk-in must start now.' };
+  }
+  if (input.pastWalkIn) {
+    const day = (d: Date) => {
+      const p = utcToZonedParts(d, avail.site.timezone);
+      return `${p.year}-${p.month}-${p.day}`;
+    };
+    if (day(input.startAt) !== day(now)) {
+      return { ok: false, error: 'not_past', message: 'A past walk-in must be from today at the site.' };
+    }
   }
 
   const slot = avail.slots.find((s) => s.start_at.getTime() === input.startAt.getTime());
@@ -240,6 +266,11 @@ export async function createAppointment(
   const durationMinSnapshot = Math.round((serviceEnd.getTime() - input.startAt.getTime()) / MS_PER_MIN);
   const blockedFrom = new Date(input.startAt.getTime() - avail.buffers.before_min * MS_PER_MIN);
   const blockedUntil = new Date(serviceEnd.getTime() + avail.buffers.after_min * MS_PER_MIN);
+  if (input.pastWalkIn) {
+    if (serviceEnd.getTime() > now.getTime()) {
+      return { ok: false, error: 'not_past', message: 'The service has not ended yet.' };
+    }
+  }
 
   // 2b. §2: a customer_phone typed in chat may be LOCAL (no country code). Normalize it
   //     against the SITE's dialing region (derived from its timezone) BEFORE any write, so
@@ -269,6 +300,16 @@ export async function createAppointment(
       // just turned off concurrently), write NOTHING.
       if (!(await isSchedulingEnabledForUpdate(client, input.tenantId, clientId))) {
         return { kind: 'module_disabled' as const };
+      }
+      // PAST WALK-IN — before ANY write: the engine's busy set and the DB exclusion only hold
+      // ACTIVE appointments, so an overlap with what this professional already completed (or a
+      // no-show) is checked here, serialized per professional (a concurrent past registration
+      // for the same person waits, then sees the committed one).
+      if (input.pastWalkIn) {
+        await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`past-walk-in:${chosenStaffId}`]);
+        if ((await listStaffAppointmentsOverlapping(input.tenantId, input.siteId, chosenStaffId, blockedFrom, blockedUntil, client)).length > 0) {
+          return { kind: 'past_overlap' as const };
+        }
       }
       // Public cap — checked BEFORE any contact is resolved/created, so a refusal writes
       // nothing at all (not even a new contact).
@@ -451,6 +492,23 @@ export async function createAppointment(
         },
         client,
       );
+      // PAST WALK-IN: completed in the SAME transaction — created and completed, or neither.
+      // The same status write and audit event as the «Completar» transition; no payment.
+      if (input.pastWalkIn) {
+        const done = await setStatus(client, input.tenantId, appt.id, 'completed');
+        await recordAppointmentEvent(
+          {
+            tenantId: input.tenantId,
+            appointmentId: appt.id,
+            eventType: EVENT_FOR.completed,
+            actorType: input.createdByType,
+            actorUserId: input.createdByUserId ?? null,
+            detail: { from: 'scheduled', to: 'completed', reason: null, already_done: true },
+          },
+          client,
+        );
+        return { kind: 'ok' as const, appt: done };
+      }
       return { kind: 'ok' as const, appt };
     });
 
@@ -472,6 +530,9 @@ export async function createAppointment(
     if (created.kind === 'contact_conflict') {
       return { ok: false, error: 'contact_conflict', message: 'The provided identity belongs to a different contact.' };
     }
+    if (created.kind === 'past_overlap') {
+      return { ok: false, error: 'past_overlap', message: 'It overlaps another appointment of this professional.' };
+    }
     const appt = created.appt;
 
     // 4. Realtime AFTER commit.
@@ -484,6 +545,17 @@ export async function createAppointment(
     });
     // PL-1 §2: link the booking to its sale (fail-safe — never fails the booking, which has committed).
     await pipelineOnBookingCreated(appt, input.createdByType, input.createdByUserId ?? null);
+    if (input.pastWalkIn && appt.status === 'completed') {
+      // The same post-commit work as a «Completar» transition (realtime refresh, the sale).
+      await recordSchedulingEvent({
+        tenantId: appt.tenant_id,
+        clientId: appt.client_id,
+        siteId: appt.site_id,
+        eventType: 'appointment.status_changed',
+        payload: { appointment_id: appt.id, status: 'completed', staff_id: appt.staff_id, start_at: appt.start_at },
+      });
+      await pipelineOnAppointmentStatusChanged(appt, 'completed', input.createdByType, input.createdByUserId ?? null);
+    }
     return { ok: true, value: appt };
   } catch (err) {
     if (isExclusionViolation(err)) {

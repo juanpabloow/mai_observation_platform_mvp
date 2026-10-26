@@ -2,12 +2,13 @@ import { canAccessSchedulingSite, canAccessSchedulingStaff, getSessionScope } fr
 import { resolveClientModuleForScope } from "@/lib/clientModuleAccess";
 import { isUuid } from "@/lib/clientModuleValidation";
 import { parseIsoDate } from "@/lib/schedulingApi";
+import { siteDayKey, todayAtSite } from "@/lib/siteCalendar";
 import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
 import { loadExplainExceptions, prepareAvailability } from "@worker/db/repositories/scheduling/availabilityData.js";
 import { computeAvailability } from "@worker/scheduling/availability.js";
 import { explainAvailability } from "@worker/scheduling/availabilityExplain.js";
 import { immediateWindowMin } from "@worker/scheduling/immediate.js";
-import { getAppointmentById } from "@worker/db/repositories/scheduling/appointments.js";
+import { getAppointmentById, listStaffAppointmentsOverlapping } from "@worker/db/repositories/scheduling/appointments.js";
 
 /**
  * GET /api/scheduling/internal/availability — SESSION-authed availability for
@@ -39,6 +40,12 @@ import { getAppointmentById } from "@worker/db/repositories/scheduling/appointme
  * window, without the site's minimum notice — the one exception of src/scheduling/immediate.ts,
  * for a login that may book (agenda.book, gated above). Every other rule still applies; the
  * booking action re-checks the start on the server. Never offered for a reschedule.
+ *
+ * `past=1` («Atención sin cita · Esta atención ya se realizó»): the starts of TODAY at the site
+ * (from `from`, today's local midnight) whose service has already ENDED, evaluated as of the
+ * start of the day — every rule but «already started» (no minimum notice). Only today; never
+ * with `immediate` or a reschedule. Read-only: the booking action re-checks the chosen start
+ * (and refuses an overlap with the professional's completed appointments too).
  */
 export const dynamic = "force-dynamic";
 
@@ -93,18 +100,24 @@ export async function GET(req: Request): Promise<Response> {
   }
 
   const immediate = p.get("immediate") === "1" && !moving;
+  const past = p.get("past") === "1" && !moving && !immediate;
   const now = new Date();
+  // «Ya se realizó»: today only — `from` must be inside today's site day and before now.
+  if (past && (siteDayKey(from, site.timezone) !== todayAtSite(site.timezone, now) || from.getTime() >= now.getTime())) {
+    return Response.json({ site: { id: site.id, timezone: site.timezone }, slots: [] });
+  }
   const prepared = await prepareAvailability({
     tenantId: scope.tenantId,
     siteId,
     serviceId: moving?.serviceId ?? serviceId,
     staffId: staffId ?? null,
     from,
-    to,
-    now,
+    to: past ? now : to,
+    // As of the start of the day: every start today is judged by the rules, not by the clock.
+    now: past ? from : now,
     excludeAppointmentId: moving?.id ?? null,
     timingOverride: moving?.timing ?? null,
-    ignoreMinNotice: immediate,
+    ignoreMinNotice: immediate || past,
   });
   // The gate has passed (this login may book at this site of this client). A service the
   // site does not offer — removed or deactivated after the appointment was booked, or simply
@@ -119,8 +132,31 @@ export async function GET(req: Request): Promise<Response> {
   const result = {
     site: prepared.site,
     buffers: prepared.buffers,
-    slots: immediate ? computed.filter((s) => s.start_at.getTime() >= now.getTime() - 60_000 && s.start_at.getTime() <= windowEnd) : computed,
+    slots: immediate
+      ? computed.filter((s) => s.start_at.getTime() >= now.getTime() - 60_000 && s.start_at.getTime() <= windowEnd)
+      : past
+        ? computed.filter((s) => s.service_end_at.getTime() <= now.getTime())
+        : computed,
   };
+  // «Ya se realizó»: the engine's busy set holds only ACTIVE appointments, so a start that
+  // overlaps what a professional already COMPLETED (or a no-show) today is dropped here too —
+  // the booking action refuses it anyway; this keeps it from being offered.
+  if (past) {
+    const staffIds = [...new Set(result.slots.flatMap((s) => s.candidates.map((c) => c.staff_id)))];
+    const taken = new Map<string, Array<[number, number]>>();
+    for (const id of staffIds) {
+      const rows = await listStaffAppointmentsOverlapping(scope.tenantId, siteId, id, from, now);
+      taken.set(id, rows.map((r) => [r.start_at.getTime(), r.service_end_at.getTime()]));
+    }
+    const bb = result.buffers.before_min * 60_000;
+    const ba = result.buffers.after_min * 60_000;
+    result.slots = result.slots.flatMap((s) => {
+      const ok = s.candidates.filter((c) => !(taken.get(c.staff_id) ?? []).some(([a, b]) => a < c.service_end_at.getTime() + ba && b > s.start_at.getTime() - bb));
+      if (ok.length === 0) return [];
+      const chosen = ok.find((c) => c.staff_id === s.staff_id) ?? ok[0];
+      return [{ ...s, staff_id: chosen.staff_id, service_end_at: chosen.service_end_at, available_staff_ids: ok.map((c) => c.staff_id), candidates: ok }];
+    });
+  }
   const holds = parseHolds(p.getAll("hold"));
   if (holds === null) return Response.json({ error: "invalid hold" }, { status: 400 });
   const bufBefore = result.buffers.before_min * 60_000;

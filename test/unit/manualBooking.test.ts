@@ -43,3 +43,17 @@ test('create fails: the error passes through and nothing is confirmed', async ()
   assert.deepEqual(r, { ok: false, error: 'Ese horario ya no está disponible.' });
   assert.equal(confirms, 0);
 });
+
+test('«Esta atención ya se realizó»: creates, then runs the real COMPLETE transition once; a failure is a warning', async () => {
+  const seen: string[] = [];
+  const r = await createThenMaybeConfirm(created(), async (id) => (seen.push(id), { ok: true }), 'completed');
+  assert.deepEqual(r, { ok: true, id: 'a1' });
+  assert.deepEqual(seen, ['a1']);
+  const failed = await createThenMaybeConfirm(created(), async () => ({ ok: false, error: 'boom' }), 'completed');
+  assert.equal(failed.ok, true, 'the registration exists: never an error that invites a second one');
+  assert.match(failed.ok ? failed.warning ?? '' : '', /no se pudo marcar como completada/);
+  let again = 0;
+  const replay = await createThenMaybeConfirm(created('completed'), async () => (again++, { ok: true }), 'completed');
+  assert.deepEqual(replay, { ok: true, id: 'a1' });
+  assert.equal(again, 0, 'a deduped replay already completed is not completed twice');
+});
