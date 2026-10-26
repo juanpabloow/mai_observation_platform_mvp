@@ -162,6 +162,11 @@ export interface ThreadEventView {
   toMode: InboxMode;
   /** The agent who acted, when a person did. */
   agentName: string | null;
+  /** JP-2: the transition's reason_code (e.g. 'auto_return' for the platform auto-return). */
+  reasonCode: string | null;
+  /** JP-2: the auto-return threshold in minutes (parsed from the transition detail), for the
+   *  "Volvió al bot automáticamente tras 1 h sin atención" line; null unless it was an auto-return. */
+  autoReturnMinutes: number | null;
   at: string; // ISO
 }
 

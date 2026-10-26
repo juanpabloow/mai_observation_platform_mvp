@@ -49,6 +49,7 @@ export async function readConversationContext(scope: ContextReadScope) {
      )
      SELECT s.id AS conversation_id, s.mode, s.anchor_id AS through_message_id,
             t.latest_transition,
+            ar.auto_returned_at,
             COALESCE(h.messages, '[]'::jsonb) AS messages
        FROM scoped s
        LEFT JOIN LATERAL (
@@ -58,6 +59,15 @@ export async function readConversationContext(scope: ContextReadScope) {
           WHERE tr.tenant_id = s.tenant_id AND tr.conversation_id = s.id
           ORDER BY tr.created_at DESC, tr.id DESC LIMIT 1
        ) t ON true
+       -- JP-2: when the platform last auto-returned this conversation to the bot (ping-pong guard).
+       LEFT JOIN LATERAL (
+         -- to_jsonb → an ISO string (or JSON null), so it matches the string|null projection type
+         -- exactly like the jsonb latest_transition above (a bare timestamptz column parses to a Date).
+         SELECT to_jsonb(max(tr.created_at)) AS auto_returned_at
+           FROM conversation_mode_transitions tr
+          WHERE tr.tenant_id = s.tenant_id AND tr.conversation_id = s.id
+            AND tr.to_mode = 'bot' AND tr.source = 'platform_rule' AND tr.reason_code = 'auto_return'
+       ) ar ON true
        LEFT JOIN LATERAL (
          SELECT jsonb_agg(jsonb_build_object('id', m.id, 'sender', m.sender,
                   'text', m.text, 'occurred_at', m.occurred_at, 'recorded_at', m.created_at,

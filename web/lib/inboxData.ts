@@ -310,6 +310,10 @@ export async function loadInboxThread(
       fromMode: t.from_mode,
       toMode: t.to_mode,
       agentName: t.agent_name,
+      reasonCode: t.reason_code,
+      // JP-2: the auto-return sweep stores the threshold minutes in `detail`.
+      autoReturnMinutes:
+        t.reason_code === "auto_return" && t.detail && /^\d+$/.test(t.detail) ? Number(t.detail) : null,
       at: t.created_at.toISOString(),
     })),
     schedulingEvents: scheduling.map((e) => ({

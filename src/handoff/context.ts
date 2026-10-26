@@ -24,6 +24,13 @@ export interface ContextSnapshot {
     to_mode: ConversationMode;
     at: string;
   } | null;
+  /**
+   * JP-2 — when the PLATFORM last handed this conversation back to the bot automatically (the
+   * auto-return sweep), ISO-8601, else null. Lets the n8n prompt avoid immediately re-escalating the
+   * same issue the moment it gets the conversation back (ping-pong). Null for a conversation that was
+   * never auto-returned.
+   */
+  auto_returned_at: string | null;
   /** Newest first, bounded by the SQL LIMIT before any text leaves the database. */
   messages: ContextMessage[];
 }
@@ -56,6 +63,7 @@ export function projectConversationContext(snapshot: ContextSnapshot) {
     mode: snapshot.mode,
     through_message_id: snapshot.through_message_id,
     latest_transition: snapshot.latest_transition,
+    auto_returned_at: snapshot.auto_returned_at,
     messages: selected.reverse(),
     truncated,
     history_is_authorization: false as const,

@@ -5,6 +5,7 @@ import { startWorker, stopWorker } from './ingestion/worker.js';
 import { startAttributionReconciliation, stopAttributionReconciliation } from './attribution/reconcile.js';
 import { startCoverReconcile, stopCoverReconcile } from './attribution/coverReconcile.js';
 import { startAutoLost, stopAutoLost } from './pipeline/autoLost.js';
+import { startAutoReturn, stopAutoReturn } from './handoff/autoReturn.js';
 
 /**
  * Mask the password embedded in a PostgreSQL connection string while keeping
@@ -47,6 +48,11 @@ startCoverReconcile();
 // sales the business answered last and that went unanswered past auto_lost_after_hours. Fail-safe +
 // re-checks each candidate under its row lock. Default 15-min interval (PIPELINE_AUTOLOST_INTERVAL_SECONDS).
 startAutoLost();
+// JP-2: the handoff auto-return sweep shares THIS worker too — it hands a conversation back to the
+// bot once it has been pending (unattended) or human (no agent message) past the per-client
+// inbox_settings.auto_return_minutes. Fail-safe + re-checks each candidate under its row lock.
+// Default 2-min interval (HANDOFF_AUTORETURN_INTERVAL_SECONDS).
+startAutoReturn();
 // El barrido de eliminaciones de Reuniones NO va aquí: tiene su propio
 // entrypoint (`src/maintenanceMain.ts`) y su propio servicio. Este proceso es
 // el de la ingesta de n8n, y mezclarlos haría que reiniciar uno reiniciara el
@@ -65,6 +71,7 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     await stopAttributionReconciliation();
     await stopCoverReconcile();
     stopAutoLost();
+    stopAutoReturn();
     await closePool();
   } catch (err) {
     logger.error({ err }, 'error during shutdown');
