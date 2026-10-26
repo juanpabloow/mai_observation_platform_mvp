@@ -221,8 +221,20 @@ export function buildEmailVerification(send: SendEmailFn) {
  * so an attacker who pre-registered the email loses both footholds at once.
  * Better Auth generates, stores (verification table), and single-use-consumes
  * the token itself.
+ *
+ * AUTH-1 item 2 — `onVerifyOnReset` (optional): completing a reset PROVES the person
+ * controls the inbox (the single-use token was delivered only there), exactly the proof a
+ * verification link gives. When provided, we hand Better Auth an `onPasswordReset` callback
+ * (invoked by its POST /reset-password handler AFTER the new password is stored, BEFORE
+ * sessions are revoked — verified against better-auth/dist/api/routes/password.mjs) that marks
+ * the email verified via the injected writer, lifting an invited email/password user out of the
+ * unverified-sign-in limbo. This module stays pure: the DB write is injected by the caller.
+ * Safe against pre-hijacking — a reset replaces the credential AND revokes every session, and
+ * a verified email still grants nothing toward Google linking (implicit linking is OFF).
+ * `onPasswordReset` is honored at runtime by 1.6.19 but is absent from its exported types, so it
+ * rides in via the object spread (which suppresses the excess-property check at the call site).
  */
-export function buildPasswordReset(send: SendEmailFn) {
+export function buildPasswordReset(send: SendEmailFn, onVerifyOnReset?: (userId: string) => Promise<void>) {
   return {
     sendResetPassword: async ({ user, url }: { user: { email: string }; url: string }) => {
       await deliver(send, "reset-password", {
@@ -233,6 +245,13 @@ export function buildPasswordReset(send: SendEmailFn) {
     },
     resetPasswordTokenExpiresIn: 60 * 60,
     revokeSessionsOnPasswordReset: true,
+    ...(onVerifyOnReset
+      ? {
+          onPasswordReset: async ({ user }: { user: { id: string } }) => {
+            await onVerifyOnReset(user.id);
+          },
+        }
+      : {}),
   };
 }
 

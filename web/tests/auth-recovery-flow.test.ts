@@ -26,7 +26,7 @@ import {
 type SentEmail = { to: string; subject: string; html: string };
 type GoogleUser = { id: string; name: string; email: string; emailVerified: boolean };
 
-function makeTestAuth(opts: { googleUser?: GoogleUser } = {}) {
+function makeTestAuth(opts: { googleUser?: GoogleUser; requireEmailVerification?: boolean; verifyOnReset?: boolean } = {}) {
   const db: Record<string, unknown[]> = { user: [], session: [], account: [], verification: [] };
   const sent: SentEmail[] = [];
   // Stand-in for the production tenant-provisioning hook: counts how many
@@ -36,12 +36,26 @@ function makeTestAuth(opts: { googleUser?: GoogleUser } = {}) {
     sent.push(msg);
     return { ok: true as const, id: "test" };
   };
+  // AUTH-1 item 2: mirror production's "a reset proves the email" write
+  // (setAuthUserEmailVerified) through the SAME adapter Better Auth uses, so the reset
+  // handler's onPasswordReset actually flips emailVerified and a post-reset sign-in can
+  // succeed under requireEmailVerification. Captured via a ref so it can reference `auth`
+  // without a use-before-define.
+  const ref: { auth?: ReturnType<typeof betterAuth> } = {};
+  const verifyWriter = async (userId: string) => {
+    const ctx = await ref.auth!.$context;
+    await ctx.internalAdapter.updateUser(userId, { emailVerified: true });
+  };
 
   const auth = betterAuth({
     database: memoryAdapter(db),
     baseURL: "https://app.test",
     secret: "test-secret-test-secret-test-secret",
-    emailAndPassword: { enabled: true, ...buildPasswordReset(send) },
+    emailAndPassword: {
+      enabled: true,
+      ...buildPasswordReset(send, opts.verifyOnReset ? verifyWriter : undefined),
+      ...(opts.requireEmailVerification ? { requireEmailVerification: true } : {}),
+    },
     emailVerification: buildEmailVerification(send),
     account: { accountLinking: { ...ACCOUNT_LINKING_POLICY } },
     // Dummy creds: enough to register the provider and build authorization
@@ -68,6 +82,7 @@ function makeTestAuth(opts: { googleUser?: GoogleUser } = {}) {
     },
   });
 
+  ref.auth = auth;
   return { auth, db, sent, tenantProvisions };
 }
 
@@ -238,6 +253,47 @@ test("regression: signup → verify email → Google sign-in does NOT link impli
   assert.equal(googleAccounts.length, 0, "implicit linking must not attach Google");
   assert.equal(db.session.length, sessionsBefore, "no session is created by the refused sign-in");
   assert.equal(db.user.length, 1, "no second user is created");
+});
+
+test("AUTH-1 item 2: completing a password reset marks the email verified, unblocking an unverified account", async () => {
+  const { auth, db, sent } = makeTestAuth({ requireEmailVerification: true, verifyOnReset: true });
+  const EMAIL = "invited-staff@example.com";
+  const OLD_PASSWORD = "signup-pass-1";
+  const NEW_PASSWORD = "reset-pass-1";
+
+  // 1. Email/password signup → the account exists but is UNVERIFIED (sendOnSignUp mailed a
+  //    verification link the person can't reach; the invite deadlock in production).
+  await auth.api.signUpEmail({ body: { email: EMAIL, password: OLD_PASSWORD, name: "Fede" } });
+  assert.equal((db.user[0] as { emailVerified: boolean }).emailVerified, false);
+
+  // 2. The dead-end: password sign-in is refused BECAUSE the email isn't verified.
+  await assert.rejects(
+    auth.api.signInEmail({ body: { email: EMAIL, password: OLD_PASSWORD } }),
+    (err: { body?: { code?: string } }) => err.body?.code === "EMAIL_NOT_VERIFIED",
+    "an unverified account cannot sign in (requireEmailVerification)",
+  );
+
+  // 3. The person uses "forgot password" and completes the reset from their inbox.
+  await auth.api.requestPasswordReset({ body: { email: EMAIL, redirectTo: "/reset-password" } });
+  const token = resetTokenFrom(sent.at(-1)!);
+  const resetRes = await auth.api.resetPassword({ body: { newPassword: NEW_PASSWORD, token } });
+  assert.equal(resetRes.status, true);
+
+  // 4. The reset PROVED inbox control → the email is now verified (read through the adapter).
+  const found = await (await auth.$context).internalAdapter.findUserByEmail(EMAIL);
+  assert.equal(found?.user.emailVerified, true, "a completed reset marks the email verified");
+
+  // 5. Sign-in now SUCCEEDS with the new password — the dead-end is gone.
+  const signin = await auth.api.signInEmail({ body: { email: EMAIL, password: NEW_PASSWORD }, returnHeaders: true });
+  const headers = cookieFrom(signin.headers);
+  assert.ok(await auth.api.getSession({ headers }), "the recovered user is signed in");
+
+  // 6. Pre-hijack stays shut: the old (signup/attacker-era) password is dead.
+  await assert.rejects(
+    auth.api.signInEmail({ body: { email: EMAIL, password: OLD_PASSWORD } }),
+    (err: { body?: { code?: string } }) => err.body?.code === "INVALID_EMAIL_OR_PASSWORD",
+    "the pre-reset password no longer works",
+  );
 });
 
 test("anti-enumeration: unknown email gets the same public response and no email", async () => {

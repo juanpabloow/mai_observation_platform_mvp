@@ -6,6 +6,7 @@ import {
   createTenantWithOwner,
   deleteAuthUserById,
   getTenantIdForUser,
+  setAuthUserEmailVerified,
 } from "@worker/db/repositories/tenantMembers.js";
 import { hasValidPendingInvitationForEmail } from "@worker/db/repositories/invitations.js";
 import { sendEmail, isEmailConfigured } from "./email";
@@ -107,8 +108,16 @@ export const auth = betterAuth({
     // sendResetPassword / resetPasswordTokenExpiresIn /
     // revokeSessionsOnPasswordReset — names verified against the installed
     // 1.6.19 types. Better Auth owns the token lifecycle (single-use,
-    // stored in `verification`).
-    ...buildPasswordReset(sendEmail),
+    // stored in `verification`). AUTH-1 item 2: the injected callback marks the
+    // email verified when a reset completes — a reset proves inbox access the
+    // same way a verification link does, so a recovered email/password account
+    // is no longer stuck behind requireEmailVerification. Safe: the reset also
+    // replaced the credential and (revokeSessionsOnPasswordReset) revoked every
+    // session, and a verified email grants nothing toward Google linking.
+    ...buildPasswordReset(sendEmail, async (userId) => {
+      await setAuthUserEmailVerified(userId);
+      console.info("[auth] password-reset: email marked verified (reset proves inbox access)");
+    }),
     // MF-1 item 8: an email/password account must PROVE it owns the email before it can sign
     // in. This closes the invitation-hijack — an attacker could previously register an
     // unverified account with an invited address and accept the invite (acceptInvitation only
