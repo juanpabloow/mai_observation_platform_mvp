@@ -75,16 +75,19 @@ test('sidebar shows Productos only when the module is on, to general-access role
 });
 
 test('capability vocabulary: catalog.read is a known capability but NOT auto-granted to legacy tokens', () => {
-  const h = read('src/db/repositories/handoffTokens.ts');
+  // The capability vocabulary lives in src/capabilities.ts (re-exported by handoffTokens.ts).
+  const h = read('src/capabilities.ts');
   // In the canonical vocabulary (so isCapability/issueToken accept it)…
   assert.match(h, /ALL_CAPABILITIES = \[[\s\S]{0,160}'catalog\.read',[\s\S]{0,40}\] as const/);
   // …but never backfilled onto existing tokens.
   assert.match(h, /LEGACY_CAPABILITIES: Capability\[\] = \['handoff', 'scheduling\.read', 'scheduling\.write'\]/);
   assert.doesNotMatch(h, /LEGACY_CAPABILITIES[^\n]*catalog/);
 
-  // The token UI exposes the checkbox but does NOT pre-check it for new tokens.
+  // The token UI's vocabulary (capabilityLabels.ts) carries the catalog capability + its label,
+  // and the editor does NOT pre-check it for new tokens (DEFAULT_CAPS in MachineTokens.tsx).
+  const labels = read('web/lib/capabilityLabels.ts');
+  assert.match(labels, /"catalog\.read": \{ label: "Leer el catálogo de productos"/);
   const ui = read('web/components/MachineTokens.tsx');
-  assert.match(ui, /key: "catalog\.read", label: "Read the product catalog"/);
   assert.match(ui, /DEFAULT_CAPS = \["handoff", "scheduling\.read", "scheduling\.write"\]/);
   assert.doesNotMatch(ui, /DEFAULT_CAPS[^\n]*catalog/);
 });

@@ -47,7 +47,10 @@ test('context route is opt-in, dynamic, no-store and workflow/client scoped', ()
   assert.ok(route.includes('clientId: wf.clientId'));
   assert.ok(route.includes('"inbox"') && route.includes('"private, no-store"'));
   assert.ok(route.includes('force-dynamic'));
+  // The editor's capability vocabulary (with labels) lives in web/lib/capabilityLabels.ts; the
+  // editor (MachineTokens.tsx) renders the list DERIVED from it and keeps the default-granted set.
+  const labels = readFileSync(new URL('../../web/lib/capabilityLabels.ts', import.meta.url), 'utf8');
+  assert.ok(labels.includes('"handoff.context.read":'), 'the capability has an editor label');
   const picker = readFileSync(new URL('../../web/components/MachineTokens.tsx', import.meta.url), 'utf8');
-  assert.ok(picker.includes('key: "handoff.context.read"'));
   assert.ok(!picker.match(/const DEFAULT_CAPS = [^;]+;/)?.[0].includes('handoff.context.read'));
 });
