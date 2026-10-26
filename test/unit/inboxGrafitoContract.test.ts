@@ -29,9 +29,11 @@ test('who wrote stays in words when bot and team share the light bubble', () => 
   assert.ok(t.includes('data-sender={msg.sender}') && t.includes('data-ib-time=""'), 'the light bubbles get a readable time');
 });
 
-test('every Inbox function is kept (history, search, filters, ficha, take/return, WhatsApp window)', () => {
+test('every Inbox function is kept (history shown in full, search, filters, ficha, take/return, WhatsApp window)', () => {
   const thread = r('web/components/InboxThread.tsx');
-  assert.ok(thread.includes('Historial antes del escalado ·') && thread.includes('<HistoryDisclosure turns={history} />'), 'history: fold + reconstructed history');
+  // History (on request, 2026-10-23): the whole conversation is shown, the reconstructed
+  // pre-handoff history inline at the top — nothing folded behind a button.
+  assert.ok(thread.includes('<HistoryInline turns={history} />') && !thread.includes('Historial antes del escalado ·'), 'history: shown in full, reconstructed history inline');
   assert.ok(thread.includes('<ThreadActions plan={plan} busy={busy} onRequest={setConfirm} />') && thread.includes('<InboxConfirm'), 'take / return with confirmation');
   assert.ok(thread.includes('blockedReason={windowClosedLine(win, now)}') && thread.includes('{chip ? <StateChip kind={chip.open ? "open" : "closed"}>{chip.label}</StateChip> : null}'), 'the 24 h window');
   assert.ok(thread.includes('aria-label="Ficha del cliente"'), 'the ficha');

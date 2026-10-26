@@ -114,7 +114,7 @@ export function PipelinePanel({
         <div className="flex min-h-11 flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
           <div className="min-w-0">
             <div className="flex items-baseline gap-2.5">
-              <h1 className="truncate text-xl font-semibold tracking-[-0.025em] text-foreground">Pipeline</h1>
+              <h1 className="u-page-title truncate text-[19px] font-semibold tracking-[-0.025em] text-foreground">Pipeline</h1>
               <span className="truncate text-xs text-muted">{clientName}</span>
             </div>
             <p className="mt-0.5 hidden text-xs text-muted sm:block">
