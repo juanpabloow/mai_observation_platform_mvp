@@ -3266,14 +3266,20 @@ function AppointmentModal(props: {
                 </div>
               ) : null}
               <PanelSection title="Cliente" id="nv-client" size="lg">
-                {customer.label ? (
+                {/* JP-1: in "new" mode the person types freely in the inline form below — a half-typed
+                    name is NOT a committed selection, so it must not flip to the locked chip (which
+                    unmounts the input and steals focus on the first keystroke). The chip is only for a
+                    real selection: a deep-link contact, a picked existing contact, or reschedule. */}
+                {customerMode !== "new" && customer.label ? (
                   <div className="flex flex-col gap-2">
                     <div className="flex items-center gap-3 rounded-[12px] px-3 py-2.5 shadow-[inset_0_0_0_1.5px_var(--foreground)]">
                       <span aria-hidden className="inline-flex size-[36px] shrink-0 items-center justify-center rounded-full bg-[var(--chip)] text-[12px] font-medium text-[var(--ag-ink2)]">{initialsOf(customer.label)}</span>
                       <span className="flex min-w-0 flex-1 flex-col">
                         <span className="truncate text-[14px] font-medium">{customer.label}</span>
                         <span className="truncate text-[12.5px] tabular-nums text-muted">
-                          {customer.identity ?? (customerMode === "new" && !pickedContact ? "Contacto nuevo · se crea al confirmar la cita" : "")}
+                          {/* The chip is only a COMMITTED selection now (never "new" mode — that renders the
+                              inline form), so this is just the picked/linked contact's identity. */}
+                          {customer.identity ?? ""}
                         </span>
                       </span>
                       {!bookingContact ? (
