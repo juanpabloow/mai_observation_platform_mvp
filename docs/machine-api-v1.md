@@ -366,6 +366,80 @@ GET /api/scheduling/v1/availability?site_id=…&service=Corte&staff=Coneja&from=
 }
 ```
 
+### 1.12a Start windows + exact-time check (AV-1, additive)
+
+`free_blocks` (§1.12) collapses free TIME, but its `to_label` is the END of the free block (the last
+slot's service end). To offer a range aloud — "Falla tiene libre de 9:00 a 12:00 y de 2:00 a 5:00
+p. m." — the bot needs the LAST time the service can still START, a computation it must not do itself
+(durations, buffers and the last valid start are exactly what the prompt forbids it to calculate). So
+the platform computes it.
+
+- **`start_windows`** — contiguous runs of VALID START times, straight from the same engine that
+  produces `slots`. Each window: `day`, `date_label`, `from`/`until` (HH:MM 24h — `until` is the LAST
+  valid start, **never** the end of the free time), `from_label`/`until_label` (read-aloud, business
+  locale), `step_minutes`, `first_start_at`/`until_start_at` (ISO, bookable verbatim), and
+  `staff_name` for a single-staff query (`null` for the "any staff" union). With a `staff`/`staff_id`
+  filter → that artist's windows; without → the UNION of every bookable artist's valid starts (a time
+  is in a window if at least one artist can start then). COMPLETE for the requested range — slots are
+  never capped — and `start_windows_truncated` is a clear flag if a defensive internal cap is ever hit
+  (not reachable on a normal ≤45-day request).
+- **`?at=HH:MM`** — the exact-time check: "can this service start exactly then, and with whom?" in ONE
+  call, resolved against the local day of `from`. Adds `exact_time { at, at_label, at_start_at,
+  can_start, staff[] }`. `can_start` uses the SAME engine membership test that booking uses to accept a
+  start, so the check and booking always agree — an off-grid or blocked time is `false`, and booking
+  refuses that same start. Prefer it over a narrow `from`/`to` range, which cannot work: the engine
+  requires the whole service to fit inside `[from,to]`, so a one-minute range rejects every start and
+  the caller would need the duration/buffers the bot must not compute.
+
+Executed — `Falla`, 30-min grid, 60-min service, free from 09:00 with a mid-day booking that splits
+the day into two windows (`until` is the last START before the gap, not the block end):
+
+```
+GET /api/scheduling/v1/availability?site_id=…&service_id=…&staff=Falla&from=…&to=…&compact=true
+→ 200 {
+  "site": { "id":"…", "timezone":"America/Bogota", "timezone_used":"America/Bogota" },
+  "start_windows": [
+    { "day":"2026-11-16", "date_label":"lunes, 16 de noviembre", "staff_name":"Falla",
+      "from":"09:00", "until":"12:00", "from_label":"9:00 a. m.", "until_label":"12:00 p. m.",
+      "step_minutes":30, "first_start_at":"2026-11-16T14:00:00.000Z", "until_start_at":"2026-11-16T17:00:00.000Z" },
+    { "day":"2026-11-16", "date_label":"lunes, 16 de noviembre", "staff_name":"Falla",
+      "from":"14:00", "until":"17:00", "from_label":"2:00 p. m.", "until_label":"5:00 p. m.",
+      "step_minutes":30, "first_start_at":"2026-11-16T19:00:00.000Z", "until_start_at":"2026-11-16T22:00:00.000Z" }
+  ],
+  "start_windows_truncated": false
+}
+```
+
+"Any staff" — the UNION over every bookable artist (Federico covers Falla's gap, so it is one
+window), `staff_name:null`:
+
+```
+GET /api/scheduling/v1/availability?site_id=…&service_id=…&from=…&to=…&compact=true
+→ 200 { "start_windows": [
+  { "day":"2026-11-16", "date_label":"lunes, 16 de noviembre", "staff_name":null,
+    "from":"09:00", "until":"17:00", "from_label":"9:00 a. m.", "until_label":"5:00 p. m.",
+    "step_minutes":30, "first_start_at":"2026-11-16T14:00:00.000Z", "until_start_at":"2026-11-16T22:00:00.000Z" } ] }
+```
+
+A fully booked / closed day — no windows (an empty list, never a silent cut):
+
+```
+GET /api/scheduling/v1/availability?site_id=…&service_id=…&staff=Falla&from=…&to=…&compact=true
+→ 200 { "has_availability": { "2026-11-17": false }, "start_windows": [], "start_windows_truncated": false }
+```
+
+Exact-time check — "¿puede a las 2:00 p. m. con Falla?":
+
+```
+GET /api/scheduling/v1/availability?site_id=…&service_id=…&staff=Falla&at=14:00&from=…&to=…
+→ 200 { "exact_time": {
+  "at":"14:00", "at_label":"2:00 p. m.", "at_start_at":"2026-11-16T19:00:00.000Z",
+  "can_start":true, "staff":[ { "id":"…", "name":"Falla" } ] } }
+```
+
+An off-grid or taken time returns `"can_start":false, "staff":[]`, and booking refuses that same
+start. A bad `at` (not `HH:MM`, e.g. `25:00` or `9am`) → `400 invalid_request`.
+
 ### 1.13 Compact responses + labels for conversational callers (E-4, additive)
 
 The SAFE trims from the output catalog (`docs/machine-api-output-catalog.md`). All additive —
@@ -407,9 +481,11 @@ GET /api/scheduling/v1/services?site_id=…
 ```
 
 **Guidance for a conversational (LLM) caller:** **send `compact=true`** on availability,
-appointments and contact reads; on availability **read `free_blocks` first** (it is the
-PRIMARY availability surface — the ranges to offer aloud), falling back to the compact slots
-only to pin an exact booking time; and **resolve by name and day+time, never by UUID**
+appointments and contact reads; on availability **read `start_windows` first** (the PRIMARY
+surface — the ranges to offer aloud: "de `from_label` a `until_label`", where `until` is the last
+time the service can START), use `?at=HH:MM` to validate the exact time the customer picks, and fall
+back to the compact slots only to pin a specific booking instant (`first_start_at` is bookable
+verbatim); and **resolve by name and day+time, never by UUID**
 (service/staff by name, appointments by `phone`+`current_day`+`current_time` via the
 `by-time` path). UUIDs remain for programmatic callers.
 

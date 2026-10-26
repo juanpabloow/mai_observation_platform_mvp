@@ -108,7 +108,7 @@ test('without explain the response is the previous contract, and the slots are i
   const q = { staff_id: s.falla, service_id: s.serviceHaircut, from: day(WED).toISOString(), to: day(THU).toISOString() };
   const plain = await avail(s, q);
   const explained = await avail(s, { ...q, explain: 'true' });
-  assert.deepEqual(Object.keys(plain.json).sort(), ['free_blocks', 'has_availability', 'site', 'slots']);
+  assert.deepEqual(Object.keys(plain.json).sort(), ['free_blocks', 'has_availability', 'site', 'slots', 'start_windows', 'start_windows_truncated']);
   assert.deepEqual(explained.json.slots, plain.json.slots, 'explain never changes the slots');
   assert.deepEqual(explained.json.free_blocks, plain.json.free_blocks);
   // A one-hour block does not make the day an absence.
