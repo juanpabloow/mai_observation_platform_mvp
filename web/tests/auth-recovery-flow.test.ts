@@ -40,8 +40,11 @@ function makeTestAuth(opts: { googleUser?: GoogleUser; requireEmailVerification?
   // (setAuthUserEmailVerified) through the SAME adapter Better Auth uses, so the reset
   // handler's onPasswordReset actually flips emailVerified and a post-reset sign-in can
   // succeed under requireEmailVerification. Captured via a ref so it can reference `auth`
-  // without a use-before-define.
-  const ref: { auth?: ReturnType<typeof betterAuth> } = {};
+  // without a use-before-define. Typed structurally to just the adapter write it needs — the
+  // concrete betterAuth(...) instance isn't assignable to the generic Auth<BetterAuthOptions>.
+  const ref: {
+    auth?: { $context: Promise<{ internalAdapter: { updateUser(userId: string, data: { emailVerified: boolean }): Promise<unknown> } }> };
+  } = {};
   const verifyWriter = async (userId: string) => {
     const ctx = await ref.auth!.$context;
     await ctx.internalAdapter.updateUser(userId, { emailVerified: true });
