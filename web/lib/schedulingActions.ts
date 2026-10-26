@@ -9,17 +9,20 @@ import { can, canAccessSchedulingSite, canAccessSchedulingStaff, isSchedulingSta
 import { listContacts } from "@worker/db/repositories/contacts.js";
 import { findContactMatchesByIdentity } from "@worker/db/repositories/contactIdentities.js";
 import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
-import { getServiceById } from "@worker/db/repositories/scheduling/services.js";
 import { validateGuest, maskIdentity, type ContactMatch, type ContactMode, type GuestValue } from "./walkInContact";
-import { getAppointmentById, listAppointmentEvents, listStaffAppointmentsOverlapping } from "@worker/db/repositories/scheduling/appointments.js";
+import { getAppointmentById, listAppointmentEvents, listAppointments } from "@worker/db/repositories/scheduling/appointments.js";
 import { ensureReviewRequest } from "@worker/db/repositories/scheduling/reviews.js";
 import { reviewLinkSecret, reviewPath, signReviewToken } from "./reviewLink";
 import {
+  blocksPastAttendance,
   createAppointment,
+  planPastAttendance,
   rescheduleAppointment,
   transitionStatus,
   type BookingError,
 } from "@worker/scheduling/booking.js";
+import { siteDayKey } from "./siteCalendar";
+import type { PastConflict, PastProblemView } from "./pastAttendance";
 
 /**
  * Server actions for the client-scoped Agenda (Phase 3A). Every action takes the
@@ -61,7 +64,7 @@ function messageFor(error: BookingError, fallback: string): string {
     case "not_immediate":
       return "Ese horario ya no es «ahora». Elige el siguiente horario disponible.";
     case "not_past":
-      return "Solo se registran como realizadas las atenciones de hoy que ya terminaron. Revisa la hora de inicio.";
+      return "Solo se registran como realizadas las atenciones que ya terminaron. Revisa la fecha y la hora de inicio.";
     case "past_overlap":
       return "Ese horario se cruza con otra cita de ese profesional. No se cambió ninguna cita.";
     default:
@@ -222,13 +225,14 @@ export interface ManualAppointmentInput {
    */
   immediate?: boolean;
   /**
-   * «Esta atención ya se realizó» (walkIn only, never with `immediate`): reception registering
-   * at the end of the day a service that ALREADY happened today. The engine checks the slot as
-   * of its own start and refuses it unless it ended before now on the site's day, or if it
-   * overlaps another appointment of the professional (src/scheduling/booking.ts · pastWalkIn).
-   * It is created AND completed in one engine transaction (the same status write and audit
-   * event as «Completar»): saved as completed, with the real creation date and who registered
-   * it; the payment stays pending; nothing is sent to anyone.
+   * «Registrar atención realizada» (walkIn only, never with `immediate`): reception recording a
+   * service that ALREADY happened — today or an earlier day, at its real start (any minute).
+   * The engine checks that exact interval (src/scheduling/booking.ts · planPastAttendance) and
+   * refuses it, with the reason, unless it ended before now and fits the professional's hours,
+   * breaks and blocks that day without overlapping an active or completed appointment of theirs
+   * (a no-show does not block). It is created AND completed in one engine transaction (the same
+   * status write and audit event as «Completar»): saved as completed, with the real creation
+   * date and who registered it; the payment stays pending; nothing is sent to anyone.
    */
   alreadyDone?: boolean;
 }
@@ -354,9 +358,15 @@ export async function createManualAppointmentAction(
     scopeClientId: ctx.client.id,
   });
   if (!result.ok) {
-    if (input.alreadyDone && result.error === "unavailable") {
-      return { ok: false, error: "Ese horario no estaba disponible para ese profesional: fuera de su horario, en una pausa, un bloqueo o una ausencia. No se cambió ninguna cita." };
+    if (input.alreadyDone && result.problems?.length) {
+      // The form names each rule (pausa 13:00–14:00, bloqueo…); nothing was written.
+      return {
+        ok: false,
+        error: result.error === "not_past" ? messageFor("not_past", "") : "Ese profesional no estaba disponible a esa hora. No se cambió ninguna cita.",
+        problems: result.problems.map((p) => ({ code: p.code, from: p.from.toISOString(), until: p.until.toISOString() })),
+      };
     }
+    if (input.alreadyDone && result.error === "no_staff") return { ok: false, error: "Ese profesional no tiene este servicio asignado en esta sede." };
     return { ok: false, error: messageFor(result.error, "No se pudo crear la cita.") };
   }
   return { ok: true, id: result.value.id, status: result.value.status };
@@ -378,15 +388,94 @@ export async function createManualAppointmentAction(
   }
   if (!outcome.ok && done && outcome.error === messageFor("past_overlap", "")) {
     // Show what it overlaps (the professional's own appointments, already visible in this
-    // login's agenda); nothing was changed.
-    const service = await getServiceById(ctx.scope.tenantId, ctx.client.id, input.serviceId);
-    if (service && staffId) {
-      const list = await listStaffAppointmentsOverlapping(ctx.scope.tenantId, input.siteId, staffId, start, new Date(start.getTime() + service.duration_min * 60_000));
-      return { ...outcome, conflicts: list.map((a) => ({ startAt: a.start_at.toISOString(), endAt: a.service_end_at.toISOString(), service: a.service_name, status: a.status })) };
-    }
+    // login's agenda) — the SAME interval the engine checked; nothing was changed.
+    const past = await planPastAttendance({ tenantId: ctx.scope.tenantId, siteId: input.siteId, serviceId: input.serviceId, staffId, startAt: start, now: new Date() });
+    if (past.ok) return { ...outcome, conflicts: past.plan.overlapping.filter((a) => blocksPastAttendance(a.status)).map((a) => pastConflict(a, past.plan.timezone)) };
   }
   if (outcome.ok) revalidatePath(agendaPath(ctx.client.id));
   return outcome;
+}
+
+function pastConflict(a: { id: string; start_at: Date; service_end_at: Date; status: string; service_name: string; customer_name: string | null }, timeZone: string): PastConflict {
+  return {
+    id: a.id,
+    startAt: a.start_at.toISOString(),
+    endAt: a.service_end_at.toISOString(),
+    service: a.service_name,
+    status: a.status,
+    customer: a.customer_name,
+    dayKey: siteDayKey(a.start_at, timeZone),
+  };
+}
+
+export type PastAttendanceCheck =
+  | {
+      ok: true;
+      /** The professional's own duration for this service, and the end it gives. */
+      durationMin: number;
+      serviceEndAt: string;
+      /** Schedule rules the exact interval runs into (empty = it fits). */
+      problems: PastProblemView[];
+      /** Active or completed appointments of the professional it overlaps — they block. */
+      conflicts: PastConflict[];
+      /** No-shows it overlaps — they do NOT block (someone else was attended instead). */
+      noShows: PastConflict[];
+      /** The linked contact's still-open appointments that day with ANOTHER professional:
+       *  maybe the visit already has its appointment («revísala en vez de duplicarla»). */
+      sameClient: Array<PastConflict & { staffName: string | null }>;
+    }
+  | { ok: false; error: string };
+
+/**
+ * «Registrar atención realizada» — the read-only check the form runs BEFORE it offers to
+ * confirm: the same plan the engine writes with (planPastAttendance), so what the form shows
+ * and what the server accepts never disagree. The same gate as registering (agenda.book, the
+ * site, a staff login only its own column); it writes nothing.
+ */
+export async function checkPastAttendanceAction(
+  clientId: string,
+  input: { siteId: string; serviceId: string; staffId: string; startAt: string; contactId?: string | null },
+): Promise<PastAttendanceCheck> {
+  if (!isUuid(input.siteId) || !isUuid(input.serviceId) || !isUuid(input.staffId) || (input.contactId && !isUuid(input.contactId))) {
+    return { ok: false, error: GENERIC_GATE };
+  }
+  const g = await gate(clientId, "agenda.book");
+  if (!g.ok) return { ok: false, error: g.error };
+  const ctx = g.context;
+  if (!canAccessSchedulingSite(ctx.scope, input.siteId)) return { ok: false, error: GENERIC_GATE };
+  if (isSchedulingStaff(ctx.scope) && !canAccessSchedulingStaff(ctx.scope, input.staffId)) return { ok: false, error: GENERIC_GATE };
+  const start = new Date(input.startAt);
+  if (Number.isNaN(start.getTime())) return { ok: false, error: "La hora de inicio no es válida." };
+  const site = await getSiteById(ctx.scope.tenantId, input.siteId);
+  if (!site || site.client_id !== ctx.client.id) return { ok: false, error: GENERIC_GATE };
+  const past = await planPastAttendance({ tenantId: ctx.scope.tenantId, siteId: input.siteId, serviceId: input.serviceId, staffId: input.staffId, startAt: start, now: new Date() });
+  if (!past.ok) return { ok: false, error: past.error === "no_staff" ? "Ese profesional no tiene este servicio asignado en esta sede." : GENERIC_GATE };
+  const { plan } = past;
+  let sameClient: Array<PastConflict & { staffName: string | null }> = [];
+  // Another professional's column is not this login's to read when it is a staff login.
+  if (input.contactId && !isSchedulingStaff(ctx.scope)) {
+    const day = siteDayKey(start, plan.timezone);
+    const rows = await listAppointments(ctx.scope.tenantId, {
+      clientId: ctx.client.id,
+      siteId: input.siteId,
+      contactId: input.contactId,
+      status: ["scheduled", "confirmed"],
+      from: new Date(start.getTime() - 24 * 3_600_000),
+      to: new Date(start.getTime() + 24 * 3_600_000),
+    });
+    sameClient = rows
+      .filter((a) => a.staff_id !== plan.staffId && siteDayKey(a.start_at, plan.timezone) === day)
+      .map((a) => ({ ...pastConflict({ ...a, service_name: a.service_name_snapshot, customer_name: a.contact_name }, plan.timezone), staffName: a.staff_name }));
+  }
+  return {
+    ok: true,
+    durationMin: plan.durationMin,
+    serviceEndAt: plan.serviceEnd.toISOString(),
+    problems: plan.problems.map((p) => ({ code: p.code, from: p.from.toISOString(), until: p.until.toISOString() })),
+    conflicts: plan.overlapping.filter((a) => blocksPastAttendance(a.status)).map((a) => pastConflict(a, plan.timezone)),
+    noShows: plan.overlapping.filter((a) => !blocksPastAttendance(a.status)).map((a) => pastConflict(a, plan.timezone)),
+    sameClient,
+  };
 }
 
 async function transition(

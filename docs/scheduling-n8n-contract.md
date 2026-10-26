@@ -100,6 +100,8 @@ curl "${H[@]}" -X POST "$BASE/appointments/$ID/reschedule" -H "Content-Type: app
 # link; renewed for 30 days if it expired unanswered. Sends nothing — n8n delivers it.
 # → { "review_link": { "url", "path", "status": "requested" | "answered", "expires_at" } }
 #   404 unknown / other client · 409 not_completed · 503 no link secret configured
+#   409 registered_after_service: a visit reception recorded in the agenda after it ended
+#       («Registrar atención realizada») — no review request is created for it.
 curl "${H[@]}" -X POST "$BASE/appointments/$ID/review-link"
 ```
 

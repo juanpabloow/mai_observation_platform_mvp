@@ -4,6 +4,7 @@ import { validateBetterAuthUrl } from "@/lib/auth-verification";
 import { reviewLinkSecret, reviewPath, signReviewToken } from "@/lib/reviewLink";
 import { getAppointmentById } from "@worker/db/repositories/scheduling/appointments.js";
 import { ensureReviewRequest } from "@worker/db/repositories/scheduling/reviews.js";
+import { isRegisteredAfterService } from "@worker/scheduling/pastAttendance.js";
 
 /**
  * POST /api/scheduling/v1/appointments/{id}/review-link — MACHINE endpoint (n8n).
@@ -15,6 +16,9 @@ import { ensureReviewRequest } from "@worker/db/repositories/scheduling/reviews.
  *
  *   200 { review_link: { url, path, status: "requested" | "answered", expires_at } }
  *   404 unknown / other client's appointment · 409 not completed · 503 no link secret
+ *   409 registered_after_service — a visit recorded in the agenda only after it ended
+ *       («Registrar atención realizada»): writing it down must never make an automation ask
+ *       the customer for a review. A person can still copy its link from the agenda.
  */
 export const dynamic = "force-dynamic";
 
@@ -36,6 +40,9 @@ export async function POST(req: Request, { params }: { params: Promise<{ id: str
   const appt = await getAppointmentById(tenantId, id);
   if (!appt || appt.client_id !== clientId) return schedulingError(404, "not_found", "Appointment not found.");
   if (appt.status !== "completed") return schedulingError(409, "not_completed", "Only a completed appointment can be reviewed.");
+  if (isRegisteredAfterService(appt)) {
+    return schedulingError(409, "registered_after_service", "This visit was recorded after it happened; no review request is created for it.");
+  }
 
   const secret = reviewLinkSecret();
   if (!secret) return schedulingError(503, "unavailable", "Review links are not configured.");

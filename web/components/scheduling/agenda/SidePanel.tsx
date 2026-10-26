@@ -25,6 +25,9 @@ import { useIsOverlayWidth } from "@/components/ui/Overlay";
 export interface SidePanelHandle {
   /** Ask to close (runs the unsaved-changes guard). */
   requestClose: () => void;
+  /** The same, then `then` once it HAS closed (kept or discarded on purpose) — e.g. to open
+   *  an existing appointment from a form. Nothing runs if the operator keeps editing. */
+  requestCloseThen: (then: () => void) => void;
 }
 
 export function SidePanel(props: {
@@ -81,12 +84,24 @@ export function SidePanel(props: {
 
   const nav = useNavigationGuard({ dirty: Boolean(props.dirty), onAsk: () => setAsking(true) });
 
+  /** What to do once the panel has closed through the guard (requestCloseThen). */
+  const afterClose = useRef<(() => void) | null>(null);
   const requestClose = useCallback(() => {
+    afterClose.current = null;
     if (latest.current.dirty) setAsking(true);
     else latest.current.onClose();
   }, []);
+  const requestCloseThen = useCallback((then: () => void) => {
+    if (latest.current.dirty) {
+      afterClose.current = then;
+      setAsking(true);
+    } else {
+      latest.current.onClose();
+      then();
+    }
+  }, []);
 
-  useImperativeHandle(props.handleRef, () => ({ requestClose }), [requestClose]);
+  useImperativeHandle(props.handleRef, () => ({ requestClose, requestCloseThen }), [requestClose, requestCloseThen]);
 
   // Focus in on open, back to the opener on close.
   useEffect(() => {
@@ -142,15 +157,19 @@ export function SidePanel(props: {
       confirmLabel="Descartar cambios"
       onCancel={() => {
         setAsking(false);
+        afterClose.current = null;
         nav.forget();
       }}
       onConfirm={() => {
         setAsking(false);
+        const then = afterClose.current;
+        afterClose.current = null;
         if (nav.hasPending()) {
           latest.current.onClose();
           nav.follow();
         } else {
           latest.current.onClose();
+          then?.();
         }
       }}
     />

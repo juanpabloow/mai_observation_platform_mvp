@@ -280,8 +280,8 @@ test('manual booking is a three-step operator flow with one rich final confirmat
   assert.ok(src.includes('serviceCategory(selectedService.name, selectedService.category)'), 'the colour preview reads the stored category');
   assert.ok(src.includes('"Crear cita"'), 'the final action names its outcome');
   assert.ok(src.includes('visibleSlots'), 'any-professional availability collapses duplicate clock times');
-  // «Sin cita · ahora» hands over to the one-step walk-in panel.
-  assert.ok(src.includes('Sin cita · ahora') && src.includes('onWalkIn={() => setModal({ mode: "walkin" })}'), 'walk-in from Nueva cita');
+  // «Sin cita · ahora» hands over to the one-step walk-in panel — with what was already chosen.
+  assert.ok(src.includes('Sin cita · ahora') && src.includes('onWalkIn={(context) => setModal({ mode: "walkin", ...context })}'), 'walk-in from Nueva cita');
 });
 
 test('manual booking has a real selectable month with concise availability labels', () => {
@@ -290,7 +290,8 @@ test('manual booking has a real selectable month with concise availability label
   assert.ok(src.includes('function calendarDays(') && src.includes('Mes anterior') && src.includes('Mes siguiente'), 'the full month calendar is navigable');
   assert.ok(src.includes('changeDate(day.key)'), 'choosing a day refreshes the booking date');
   assert.ok(src.includes('from: siteMidnightIso(monthStart, props.timezone)') && src.includes('to: siteMidnightIso(monthEnd, props.timezone)'), 'one real monthly availability query feeds day and professional counts');
-  assert.ok(src.includes('const [serviceId, setServiceId] = useState(props.modal.mode === "reschedule" ? props.modal.appt.service_id : "")'), 'new appointments do not preselect a service');
+  // A new appointment preselects no service — only one handed over from «Atención sin cita».
+  assert.ok(src.includes(': props.modal.serviceId && props.services.some((sv) => sv.id === (props.modal as { serviceId?: string }).serviceId)') && src.includes('        : "",\n  );'), 'new appointments do not preselect a service');
   assert.ok(!src.includes('horarios libres hoy'), 'calendar and professional cards avoid noisy slot counts');
 });
 
@@ -372,7 +373,7 @@ test('calendar: the grid sits in its own frame; a click marks 15 min; the slot m
   const src = readFileSync(fileURLToPath(new URL('../../web/components/scheduling/AgendaView.tsx', import.meta.url)), 'utf8');
   assert.ok(src.includes('relative mx-2 mb-2 flex min-h-0 flex-1 rounded-[12px] border border-[var(--line)] bg-[var(--surface)] ${isWeek ? "" : "overflow-hidden"}'), 'framed grid; Semana does not clip');
   assert.ok(!src.includes('relative flex min-h-0 flex-1 border-t border-[var(--line)]'), 'no rule under the bar');
-  assert.ok(src.includes('setSlotPop((cur) => (cur ? { ...cur, dragging: false, dragged: d.moved } : cur));') && !src.includes('to: from + 60'), 'a click keeps the 15 minutes pressed');
+  assert.ok(src.includes('setSlotPop((cur) => (cur ? { ...cur, dragging: false, dragged: d.moved, at } : cur));') && !src.includes('to: from + 60'), 'a click keeps the 15 minutes pressed');
   assert.ok(src.includes('if (!props.dragging) menu.current?.focus({ preventScroll: true });') && src.includes('tabIndex={-1}\n          data-slot-menu=""'), 'no focus ring after a pointer click; ↓/↑ reach the items');
   const chrome = readFileSync(fileURLToPath(new URL('../../web/components/scheduling/agenda/AgendaChrome.tsx', import.meta.url)), 'utf8');
   assert.ok(chrome.includes('export const AG_HEAD = "flex shrink-0 flex-wrap items-start gap-2 px-5 py-2.5";'), 'the bar: 10px above and below, 20px at the sides');

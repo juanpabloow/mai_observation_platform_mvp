@@ -14,7 +14,9 @@
  * runs; the payment stays pending, nothing is charged).
  */
 
-export type CreateOutcome = { ok: true; id: string; status: string } | { ok: false; error: string };
+export type CreateOutcome =
+  | { ok: true; id: string; status: string }
+  | { ok: false; error: string; problems?: import("./pastAttendance").PastProblemView[] };
 export type ManualBookingResult =
   | { ok: true; id: string; warning?: string }
   | {
@@ -26,7 +28,9 @@ export type ManualBookingResult =
       fieldErrors?: Partial<Record<import("./walkInContact").GuestField, string>>;
       /** A past walk-in that overlaps the professional's other appointments: those, to SHOW
        *  (nothing was changed). Times are ISO; the service is the stored snapshot. */
-      conflicts?: Array<{ startAt: string; endAt: string; service: string; status: string }>;
+      conflicts?: import("./pastAttendance").PastConflict[];
+      /** A past walk-in the professional's schedule did not allow then: each rule, to SHOW. */
+      problems?: import("./pastAttendance").PastProblemView[];
     };
 
 export async function createThenMaybeConfirm(
