@@ -26,7 +26,7 @@ import {
   staffColors,
 } from "./mobile/kit";
 import { OVERLAY_SCRIM, useIsOverlayWidth, useTrappedPanel } from "@/components/ui/Overlay";
-import { blockSpanLabel, dayHeadline, monthTitle } from "@/lib/siteCalendar";
+import { blockSpanLabel, dayHeadline, dayShort, monthTitle } from "@/lib/siteCalendar";
 import { apptCategoryClass, serviceCategory, type ApptCategory } from "@/lib/agendaCategory";
 import { apptClientLabel } from "@/lib/apptClientLabel";
 import { priceLabelCOP } from "@/lib/money";
@@ -49,7 +49,7 @@ import { AppointmentPanel } from "./agenda/AppointmentPanel";
 import { useNavigationGuard } from "@/components/ui/module/useEditorGuard";
 import type { ContactMatch } from "@/lib/walkInContact";
 import { RescheduleFlow } from "./agenda/RescheduleFlow";
-import { WalkInPanel } from "./agenda/WalkInPanel";
+import { WalkInPanel, type WalkInContext } from "./agenda/WalkInPanel";
 import { BlockPanel } from "./agenda/BlockPanel";
 import { SeriesPanel } from "./agenda/SeriesPanel";
 import { BreakWeekPanel } from "./agenda/BreakWeekPanel";
@@ -179,7 +179,7 @@ interface Block {
   public_reason?: "vacation" | "unavailable" | "site_closed" | null;
 }
 type BookingModalState =
-  | { mode: "new" | "walkin"; contact?: ContactPrefill; staffId?: string; startAt?: string; spanMin?: number }
+  | { mode: "new" | "walkin"; contact?: ContactPrefill; staffId?: string; startAt?: string; spanMin?: number; serviceId?: string; done?: boolean }
   | { mode: "reschedule"; appt: Appt };
 /** The agenda's modal states — the booking ones plus Time Off (create / edit a block). */
 type ModalState =
@@ -570,7 +570,7 @@ export function AgendaView(props: {
    *               and the grid then shows the real size of the draft as it is chosen.
    * Nothing is created until the panel is saved.
    */
-  const [slotPop, setSlotPop] = useState<{ staffId: string; from: number; to: number; last: boolean; dragging: boolean; dragged: boolean } | null>(null);
+  const [slotPop, setSlotPop] = useState<{ staffId: string; from: number; to: number; last: boolean; dragging: boolean; dragged: boolean; /** The clock when the range was released. */ at?: number } | null>(null);
   const dragRef = useRef<{ staffId: string; anchor: number; x: number; y: number; timer: number | null; live: boolean; moved: boolean; el: HTMLElement; touch: boolean; last: boolean; pointerId: number } | null>(null);
   useEffect(() => {
     if (!slotPop || slotPop.dragging) return;
@@ -595,7 +595,7 @@ export function AgendaView(props: {
     return () => document.removeEventListener("touchmove", f);
   }, []);
   /** The draft the booking panel is building — drawn on the grid at its real size. */
-  const [bookingGhost, setBookingGhost] = useState<{ staffId: string; startAt: string; durationMin: number; label: string } | null>(null);
+  const [bookingGhost, setBookingGhost] = useState<{ staffId: string; startAt: string; durationMin: number; label: string; past?: boolean } | null>(null);
   // Bring the draft into view beside the panel (the panel overlays the right of the grid).
   const ghostKey = bookingGhost ? `${bookingGhost.staffId}|${bookingGhost.startAt}` : "";
   useEffect(() => {
@@ -769,6 +769,14 @@ export function AgendaView(props: {
     setPreview(null);
     setSelectedId(id);
   };
+  /** An appointment a form found in its way (to review or complete it): here if it is on the
+   *  day shown, else on its own day (the page opens `?appt=` once it is in range). */
+  const openExisting = (id: string, dayKey: string) => {
+    if (dayKey === props.date && props.appointments.some((a) => a.id === id)) return openAppointment(id);
+    const params = new URLSearchParams({ site: props.currentSiteId, date: dayKey, appt: id });
+    if (props.from) params.set("from", props.from);
+    router.push(`${props.basePath}?${params.toString()}`);
+  };
   const locateAppointment = (id: string) => {
     // Each layout (desktop grid, tablet board, phone timeline) renders its own copy
     // of the card and only one is displayed — scroll to the one actually on screen.
@@ -941,6 +949,10 @@ export function AgendaView(props: {
     return Math.min(Math.max(raw, fromHour * 60), toHour * 60 - (nearest ? 0 : 15));
   };
   const hmOf = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+  /** The painted range's start, and whether all of it is already in the past (then it is a
+   *  service to RECORD, not a booking — the engine cannot book the past). */
+  const slotStartIso = (sp: { from: number }) => new Date(Date.parse(siteMidnightIso(shownDayKeys[0], tz)) + sp.from * 60_000).toISOString();
+  const slotEnded = (sp: { to: number; at?: number }) => sp.at !== undefined && Date.parse(siteMidnightIso(shownDayKeys[0], tz)) + sp.to * 60_000 <= sp.at;
   // The grid menu offers only what this login may do; a staff login, its own lane only.
   const canSlotMenu = (staffKey: string) =>
     (props.canOperate || props.canBlockStaff) && (!props.lockStaffId || props.lockStaffId === staffKey);
@@ -1501,7 +1513,8 @@ export function AgendaView(props: {
                             if (d.timer) window.clearTimeout(d.timer);
                             if (!d.live) return;
                             // A click marks the quarter hour pressed (15 min); a drag marks what it covers.
-                            setSlotPop((cur) => (cur ? { ...cur, dragging: false, dragged: d.moved } : cur));
+                            const at = Date.now();
+                            setSlotPop((cur) => (cur ? { ...cur, dragging: false, dragged: d.moved, at } : cur));
                           }}
                           onPointerCancel={() => {
                             const d = dragRef.current;
@@ -1513,7 +1526,7 @@ export function AgendaView(props: {
                           {bookingGhost && bookingGhost.staffId === col.key && siteDayKey(bookingGhost.startAt, tz) === shownDayKeys[0] ? (() => {
                             const p = zonedParts(bookingGhost.startAt, tz);
                             const m0 = p.h * 60 + p.m;
-                            const clash = columnAppointments.some((a) => a.status !== "cancelled" && Date.parse(a.start_at) < Date.parse(bookingGhost.startAt) + bookingGhost.durationMin * 60_000 && Date.parse(a.service_end_at) > Date.parse(bookingGhost.startAt));
+                            const clash = columnAppointments.some((a) => a.status !== "cancelled" && !(bookingGhost.past && a.status === "no_show") && Date.parse(a.start_at) < Date.parse(bookingGhost.startAt) + bookingGhost.durationMin * 60_000 && Date.parse(a.service_end_at) > Date.parse(bookingGhost.startAt));
                             return (
                               <div aria-hidden data-booking-ghost="" className={`u-ag-ghost pointer-events-none absolute inset-x-[3px] z-[7] flex flex-col gap-0.5 overflow-hidden rounded-[10px] border-[1.5px] border-dashed px-3 py-2 text-[12.5px] ${clash ? "border-[var(--danger)] bg-[var(--ag-danger-soft)] text-[var(--ag-danger-ink)]" : "border-[var(--foreground)] bg-[var(--ag-break)] text-foreground"}`} style={{ top: offsetTop(m0) + 1.5, height: Math.max(22, (bookingGhost.durationMin / 60) * HOUR_PX - 3) }}>
                                 <span className="truncate font-medium">{bookingGhost.label}</span>
@@ -1531,12 +1544,19 @@ export function AgendaView(props: {
                               from={hmOf(slotPop.from)}
                               to={hmOf(slotPop.to)}
                               onNew={
-                                props.canOperate
+                                props.canOperate && !slotEnded(slotPop)
                                   ? () => {
-                                      const at = new Date(Date.parse(siteMidnightIso(shownDayKeys[0], tz)) + slotPop.from * 60_000).toISOString();
                                       const span = slotPop.dragged ? slotPop.to - slotPop.from : undefined;
                                       setSlotPop(null);
-                                      setModal({ mode: "new", staffId: col.key, startAt: at, spanMin: span });
+                                      setModal({ mode: "new", staffId: col.key, startAt: slotStartIso(slotPop), spanMin: span });
+                                    }
+                                  : null
+                              }
+                              onDone={
+                                props.canOperate && slotEnded(slotPop)
+                                  ? () => {
+                                      setSlotPop(null);
+                                      setModal({ mode: "walkin", done: true, staffId: col.key, startAt: slotStartIso(slotPop), spanMin: slotPop.to - slotPop.from });
                                     }
                                   : null
                               }
@@ -1784,7 +1804,7 @@ export function AgendaView(props: {
           onError={setError}
           error={error}
           onNotice={setNotice}
-          onWalkIn={() => setModal({ mode: "walkin" })}
+          onWalkIn={(context) => setModal({ mode: "walkin", ...context })}
           onDraft={setBookingGhost}
           onDone={(dayKey, createdId) => {
             setModal(null);
@@ -1813,8 +1833,12 @@ export function AgendaView(props: {
           staff={props.staff.filter((s) => s.active).map((s) => ({ id: s.id, name: s.name, photoUrl: s.photoUrl, tint: tintOf(s.id) }))}
           services={props.services}
           lockStaffId={props.lockStaffId}
+          viewDate={props.date}
+          initial={{ staffId: modal.staffId, startAt: modal.startAt, spanMin: modal.spanMin, serviceId: modal.serviceId, done: modal.done }}
           onClose={() => setModal(null)}
-          onSwitchToBooking={() => setModal({ mode: "new" })}
+          onSwitchToBooking={(context) => setModal({ mode: "new", ...context, done: undefined })}
+          onOpenAppointment={openExisting}
+          onDraft={setBookingGhost}
           onDone={({ id, dayKey, message, warning }) => {
             setModal(null);
             setNotice(warning ?? message);
@@ -2235,7 +2259,7 @@ function Initial({ name, muted, on, photoUrl }: { name: string | null; muted?: b
  * marker. Rendered under the cards so a kept conflicting appointment stays legible on top.
  */
 /** The reference's slot popover: the dashed selection with its live time, then a menu. */
-function SlotMenu(props: { top: number; height: number; dragging: boolean; alignRight: boolean; label: string; from: string; to: string; onNew: (() => void) | null; onBlock: (() => void) | null; onClose: () => void }) {
+function SlotMenu(props: { top: number; height: number; dragging: boolean; alignRight: boolean; label: string; from: string; to: string; onNew: (() => void) | null; onDone?: (() => void) | null; onBlock: (() => void) | null; onClose: () => void }) {
   // The MENU takes focus when it opens (not its first item): a pointer user sees no focus
   // ring, a keyboard user goes on with ↓/↑ (or Tab) to the items, Escape closes.
   const menu = useRef<HTMLDivElement | null>(null);
@@ -2279,6 +2303,15 @@ function SlotMenu(props: { top: number; height: number; dragging: boolean; align
                 <span className="text-[12px] text-muted">Desde las {props.from} · dura lo que dure el servicio</span>
               </span>
               <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 3v10M3 8h10" /></svg>
+            </button>
+          ) : null}
+          {props.onDone ? (
+            <button type="button" role="menuitem" onClick={props.onDone} className={item}>
+              <span className="flex flex-col">
+                <span className="text-[14px] text-foreground">Registrar atención realizada</span>
+                <span className="text-[12px] tabular-nums text-muted">Ya terminó · desde las {props.from}, con este profesional</span>
+              </span>
+              <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M3.5 8.5l3 3 6-7" /></svg>
             </button>
           ) : null}
           {props.onBlock ? (
@@ -2545,19 +2578,32 @@ function AppointmentModal(props: {
   error?: string | null;
   /** A short confirmation for the phone's toast ("Cita creada"). */
   onNotice?: (message: string) => void;
-  /** «Sin cita · ahora»: switch to the one-step walk-in panel. */
-  onWalkIn?: () => void;
+  /** «Sin cita · ahora» / «Registrar atención realizada»: switch to the one-step walk-in
+   *  panel, carrying what is already chosen here (never asked again). */
+  onWalkIn?: (context: WalkInContext) => void;
   /** The draft (professional, start, real duration) — the calendar draws it at its size. */
   onDraft?: (d: { staffId: string; startAt: string; durationMin: number; label: string } | null) => void;
 }) {
   const isReschedule = props.modal.mode === "reschedule";
   // Booking for an existing contact (deep-link): lock identity, submit its id.
   const bookingContact = props.modal.mode !== "reschedule" ? props.modal.contact ?? null : null;
-  const [serviceId, setServiceId] = useState(props.modal.mode === "reschedule" ? props.modal.appt.service_id : "");
+  const [serviceId, setServiceId] = useState(
+    props.modal.mode === "reschedule"
+      ? props.modal.appt.service_id
+      : props.modal.serviceId && props.services.some((sv) => sv.id === (props.modal as { serviceId?: string }).serviceId)
+        ? props.modal.serviceId
+        : "",
+  );
   // A staff login starts (and stays) on its own column; the server refuses any other.
   const presetStaff = props.modal.mode !== "reschedule" ? props.modal.staffId : undefined;
-  const presetStart = useRef(props.modal.mode !== "reschedule" ? props.modal.startAt ?? null : null);
   const presetStartAt = props.modal.mode !== "reschedule" ? props.modal.startAt ?? null : null;
+  /** The start painted on the grid still drives the flow: it is offered as THE time (step 2
+   *  skipped) until the operator picks another time, day or professional. */
+  const [presetActive, setPresetActive] = useState(Boolean(presetStartAt));
+  /** It was tried and is not free for this service/professional — step 2 says so. */
+  const [presetMiss, setPresetMiss] = useState(false);
+  /** A painted start already in the past cannot be booked — it may be a service to RECORD. */
+  const [presetPast] = useState(() => Boolean(presetStartAt && Date.parse(presetStartAt) <= Date.now()));
   /** The range dragged on the grid: a HINT for the service (an appointment lasts what its
    *  service lasts), never a duration. */
   const spanMin = props.modal.mode !== "reschedule" ? props.modal.spanMin ?? null : null;
@@ -2688,10 +2734,10 @@ function AppointmentModal(props: {
     setSearched(false);
   };
 
-  const loadSlots = async (nextDate = selectedDate) => {
+  const loadSlots = async (nextDate = selectedDate): Promise<Slot[] | null> => {
     // Reschedule keeps the appointment's own service; "new"/"walk-in" uses the picked one.
     const effectiveServiceId = props.modal.mode === "reschedule" ? props.modal.appt.service_id : serviceId;
-    if (!effectiveServiceId) return;
+    if (!effectiveServiceId) return null;
     props.onError(null);
     setLoadingSlots(true);
     setSlots([]);
@@ -2711,17 +2757,14 @@ function AppointmentModal(props: {
       const res = await fetch(`/api/scheduling/internal/availability?${params.toString()}`);
       if (!res.ok) {
         props.onError("No se pudo cargar la disponibilidad.");
-        return;
+        return null;
       }
       const data = (await res.json()) as { slots: Slot[] };
       setSlots(data.slots);
-      // A click on the calendar grid preset this time: take it if it is still free.
-      const want = presetStart.current;
-      presetStart.current = null;
-      if (want && data.slots.some((sl) => sl.start_at === want && (!staffId || sl.available_staff_ids.includes(staffId)))) setSlotStart(want);
       // A completed search — now an empty result can say "nothing available" rather
       // than staying silent and looking broken.
       setSearched(true);
+      return data.slots;
     } finally {
       setLoadingSlots(false);
     }
@@ -2807,6 +2850,33 @@ function AppointmentModal(props: {
   const selectedStaff = props.staff.find((staff) => staff.id === effectiveStaffId);
   const selectedSite = props.sites.find((site) => site.id === props.currentSiteId);
   const activeStaff = props.staff.filter((staff) => staff.active);
+  /** What the grid marked (day · start – end · professional), said from step 1 on. */
+  const presetStaffFirst = presetStaff ? props.staff.find((st) => st.id === presetStaff)?.name.split(" ")[0] ?? null : null;
+  const paintedLabel =
+    presetStartAt && !isReschedule
+      ? [
+          dayShort(siteDayKey(presetStartAt, props.timezone)),
+          `${fmtTime(presetStartAt, props.timezone)}${spanMin ? ` – ${fmtTime(new Date(Date.parse(presetStartAt) + spanMin * 60_000).toISOString(), props.timezone)}` : ""}`,
+          presetStaffFirst,
+        ]
+          .filter(Boolean)
+          .join(" · ")
+      : null;
+  /** What «Atención sin cita» receives from here — the same professional, start and service. */
+  const walkContext = (done?: boolean): WalkInContext => ({
+    staffId: staffId || presetStaff || undefined,
+    startAt: slotStart || presetStartAt || undefined,
+    spanMin: spanMin ?? undefined,
+    serviceId: serviceId || undefined,
+    ...(done ? { done: true } : {}),
+  });
+  /** The chosen time's REAL length with that professional (their own duration for it). */
+  const slotMinutes = selectedSlot ? Math.round((Date.parse(selectedSlot.service_end_at) - Date.parse(selectedSlot.start_at)) / 60_000) : null;
+  /** The painted range and the service's length differ: say which end the cita keeps. */
+  const spanNote =
+    spanMin && presetStartAt && slotStart === presetStartAt && selectedSlot && slotMinutes !== null && slotMinutes !== spanMin
+      ? `Marcaste hasta las ${fmtTime(new Date(Date.parse(presetStartAt) + spanMin * 60_000).toISOString(), props.timezone)} (${spanMin} min); ${selectedService?.name ?? "el servicio"}${selectedStaff ? ` con ${selectedStaff.name.split(" ")[0]}` : ""} dura ${slotMinutes} min, así que la cita termina a las ${fmtTime(selectedSlot.service_end_at, props.timezone)}.`
+      : null;
   /**
    * The colour this booking will wear on the board — decided by the chosen SERVICE,
    * so the preview in step 3 matches the card that gets drawn. Before a service is
@@ -2929,9 +2999,13 @@ function AppointmentModal(props: {
   const changeStaff = (nextStaffId: string) => {
     setStaffId(nextStaffId);
     setSlotStart("");
+    setPresetActive(false);
+    setPresetMiss(false);
   };
 
   const changeDate = (nextDate: string) => {
+    setPresetActive(false);
+    setPresetMiss(false);
     setSelectedDate(nextDate);
     const nextMonth = nextDate.slice(0, 7);
     const monthChanged = nextMonth !== calendarMonth;
@@ -2954,7 +3028,18 @@ function AppointmentModal(props: {
         return;
       }
       setStep(2);
-      void loadSlots();
+      setPresetMiss(false);
+      void loadSlots().then((list) => {
+        // The painted start, if it is still free with that professional for THIS service,
+        // is the time: straight to «Confirmar» — it is not asked again. Otherwise step 2 says
+        // so and offers the others.
+        if (!list || !presetActive || !presetStartAt || presetPast) return;
+        const hit = list.find((sl) => sl.start_at === presetStartAt && (!staffId || sl.available_staff_ids.includes(staffId)));
+        if (!hit) return setPresetMiss(true);
+        setSlotStart(presetStartAt);
+        if (!staffId) setStaffId(hit.staff_id);
+        setStep(3);
+      });
       return;
     }
     if (step === 2) {
@@ -3061,7 +3146,7 @@ function AppointmentModal(props: {
       ["Contacto", customer.identity ?? "—"],
       ["Servicio", selectedService?.name ?? "—"],
       ["Precio", priceLabelCOP(selectedService?.price ?? null) ?? "A consultar"],
-      ["Duración", selectedService ? `${selectedService.duration_min} min` : "—"],
+      ["Duración", selectedService ? `${slotMinutes ?? selectedService.duration_min} min` : "—"],
       ["Profesional", selectedStaff?.name ?? "Cualquiera"],
       ["Sede", selectedSite?.name ?? "—"],
     ];
@@ -3165,6 +3250,21 @@ function AppointmentModal(props: {
           ) : null}
           {step === 1 ? (
             <>
+              {paintedLabel ? (
+                <div className="mb-1 flex flex-col gap-2 rounded-[10px] bg-[var(--chip)] px-3 py-2 text-[12.5px] leading-[1.45] text-[var(--ag-ink2)]">
+                  <span>
+                    <span className="font-medium text-foreground">Marcaste {paintedLabel}.</span>{" "}
+                    {presetPast
+                      ? "Esa hora ya pasó: no se puede reservar. Si la atención ya se hizo, regístrala como realizada."
+                      : `${spanMin !== null ? "La cita dura lo que dure el servicio con ese profesional; primero van los que caben. " : ""}Al continuar se usa esa hora si sigue libre.`}
+                  </span>
+                  {presetPast && props.onWalkIn ? (
+                    <button type="button" className={`${SMALL} self-start`} onClick={() => props.onWalkIn?.(walkContext(true))}>
+                      Registrar atención realizada
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               <PanelSection title="Cliente" id="nv-client" size="lg">
                 {customer.label ? (
                   <div className="flex flex-col gap-2">
@@ -3251,7 +3351,7 @@ function AppointmentModal(props: {
                         {contactQuery.trim().length >= 2 ? `Nuevo cliente «${contactQuery.trim()}»` : "Nuevo cliente"}
                       </button>
                       {props.onWalkIn ? (
-                        <button type="button" className="u-focus text-[var(--ag-ink2)] underline underline-offset-2" onClick={props.onWalkIn}>
+                        <button type="button" className="u-focus text-[var(--ag-ink2)] underline underline-offset-2" onClick={() => props.onWalkIn?.(walkContext())}>
                           ¿Llegó sin cita? Registrar ahora
                         </button>
                       ) : null}
@@ -3280,11 +3380,6 @@ function AppointmentModal(props: {
                 ) : null}
               </PanelSection>
               <PanelSection title="Servicio" id="nv-service" size="lg">
-                {spanMin !== null && presetStartAt ? (
-                  <p className="-mt-1 rounded-[10px] bg-[var(--chip)] px-3 py-2 text-[12.5px] leading-[1.45] text-[var(--ag-ink2)]">
-                    Marcaste {fmtTime(presetStartAt, props.timezone)} – {fmtTime(new Date(Date.parse(presetStartAt) + spanMin * 60_000).toISOString(), props.timezone)} ({spanMin} min). La cita dura lo que dure el servicio: primero van los que caben.
-                  </p>
-                ) : null}
                 <label className={SEARCH}>
                   <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="7" cy="7" r="4.6" /><path d="M10.4 10.4L14 14" /></svg>
                   <input type="search" aria-label="Buscar servicio" placeholder="Buscar servicio" value={serviceQuery} onChange={(e) => setServiceQuery(e.target.value)} className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted" />
@@ -3380,6 +3475,11 @@ function AppointmentModal(props: {
                 </div>
               </PanelSection>
               <PanelSection title={<>Hora libre <span className="font-normal text-muted">· {selectedService ? `${selectedService.duration_min} min` : ""}</span></>} id="nv-time">
+                {presetMiss && presetStartAt && !loadingSlots ? (
+                  <p role="status" className="rounded-[10px] bg-[var(--warn-soft)] px-3 py-2 text-[12.5px] leading-[1.45] text-[var(--warn)]">
+                    Las {fmtTime(presetStartAt, props.timezone)} que marcaste{presetStaffFirst ? ` con ${presetStaffFirst}` : ""} no están libres para {selectedService?.name ?? "este servicio"}: se cruza con otra cita, una pausa o un bloqueo, o no cabe en su horario. Elige otra hora.
+                  </p>
+                ) : null}
                 {loadingSlots ? (
                   <div role="status" aria-live="polite" className="flex flex-col gap-2">
                     <p className="flex items-center gap-2 text-[13px] text-muted">
@@ -3413,6 +3513,7 @@ function AppointmentModal(props: {
                           aria-checked={sel}
                           onClick={() => {
                             setSlotStart(slot.start_at);
+                            setPresetActive(false);
                             if (!staffId) setStaffId(slot.staff_id);
                           }}
                           className={`u-focus h-[36px] rounded-[10px] text-[14px] tabular-nums ${sel ? "bg-[var(--ink)] font-medium text-[var(--ink-fg)]" : "shadow-[inset_0_0_0_1px_var(--line-strong)] hover:bg-[var(--subtle)]"}`}
@@ -3435,6 +3536,7 @@ function AppointmentModal(props: {
                   <span className="min-w-0 tabular-nums [overflow-wrap:anywhere]">{v}</span>
                 </div>
               ))}
+              {spanNote ? <p className="mt-3 rounded-[10px] bg-[var(--chip)] px-3 py-2.5 text-[13px] leading-[1.45] text-[var(--ag-ink2)]">{spanNote}</p> : null}
               <p className="mt-3 rounded-[10px] bg-[var(--chip)] px-3 py-2.5 text-[13px] text-[var(--ag-ink2)]">Nada se guarda hasta que confirmes. No se avisa al cliente automáticamente.</p>
             </div>
           ) : null}
@@ -3496,6 +3598,19 @@ function AppointmentModal(props: {
         <div className="flex flex-col gap-[22px]">
           {step === 1 ? (
             <>
+              {paintedLabel ? (
+                <div className="flex flex-col gap-2 rounded-[12px] bg-m-sf2 px-3 py-[10px] text-[14px] leading-[1.4] text-m-tx2">
+                  <span>
+                    <span className="font-semibold text-m-tx">Marcaste {paintedLabel}.</span>{" "}
+                    {presetPast ? "Esa hora ya pasó: no se puede reservar. Si la atención ya se hizo, regístrala como realizada." : "Al continuar se usa esa hora si sigue libre."}
+                  </span>
+                  {presetPast && props.onWalkIn ? (
+                    <button type="button" onClick={() => props.onWalkIn?.(walkContext(true))} className={`${M_SMALL} self-start`}>
+                      Registrar atención realizada
+                    </button>
+                  ) : null}
+                </div>
+              ) : null}
               <section className="flex flex-col gap-[10px]">
                 <h2 className="m-0 text-[15px] font-semibold">Cliente</h2>
                 {customer.label ? (
@@ -3589,7 +3704,7 @@ function AppointmentModal(props: {
                       </button>
                       <button
                         type="button"
-                        onClick={() => (props.onWalkIn ? props.onWalkIn() : setCustomerMode("anonymous"))}
+                        onClick={() => (props.onWalkIn ? props.onWalkIn(walkContext()) : setCustomerMode("anonymous"))}
                         className="flex min-h-[56px] w-full items-center gap-3 border-0 border-t border-m-dv bg-transparent px-[14px] text-left text-[15px] text-m-tx"
                       >
                         <span aria-hidden className="flex size-[40px] flex-none items-center justify-center rounded-full bg-m-sf2 text-[15px]">
@@ -3717,6 +3832,11 @@ function AppointmentModal(props: {
                   <h2 className="m-0 text-[15px] font-semibold">{dayHeadline(selectedDate)}</h2>
                   <span className="text-[13px] text-m-tx3">{tzLabel}</span>
                 </div>
+                {presetMiss && presetStartAt && !loadingSlots ? (
+                  <p role="status" className="rounded-[12px] bg-m-warnbg px-3 py-[10px] text-[14px] leading-[1.4] text-m-warn">
+                    Las {fmtTime(presetStartAt, props.timezone)} que marcaste{presetStaffFirst ? ` con ${presetStaffFirst}` : ""} no están libres para {selectedService?.name ?? "este servicio"}. Elige otra hora.
+                  </p>
+                ) : null}
                 {loadingSlots ? (
                   <div role="status" aria-label="Cargando disponibilidad" className="flex flex-col gap-2">
                     <span className="text-[13px] text-m-tx3">Buscando horarios disponibles…</span>
@@ -3770,6 +3890,7 @@ function AppointmentModal(props: {
                               aria-checked={sel}
                               onClick={() => {
                                 setSlotStart(slot.start_at);
+                                setPresetActive(false);
                                 if (!staffId) setStaffId(slot.staff_id);
                               }}
                               className={`u-tnum flex min-h-[48px] items-center justify-center rounded-[12px] border p-0 text-[15px] ${sel ? "border-m-pri bg-m-pri font-semibold text-m-onpri" : "border-m-bd bg-m-sf text-m-tx"}`}
@@ -3792,10 +3913,11 @@ function AppointmentModal(props: {
                 <span className="text-[15px] text-m-tx2">{dayHeadline(selectedDate)}</span>
                 <span className="u-tnum text-[30px] font-semibold leading-[1.15] tracking-[-0.02em]">{timeRangeLabel ?? "—"}</span>
                 <div className="mt-1 flex flex-wrap items-center gap-2">
-                  <span className="text-[14px] text-m-tx2">{[selectedService ? `${selectedService.duration_min} min` : null, selectedService?.name].filter(Boolean).join(" · ")}</span>
+                  <span className="text-[14px] text-m-tx2">{[selectedService ? `${slotMinutes ?? selectedService.duration_min} min` : null, selectedService?.name].filter(Boolean).join(" · ")}</span>
                   {!isReschedule ? <MStateChip status={initialStatus} /> : null}
                 </div>
               </div>
+              {spanNote ? <p className="rounded-[12px] bg-m-sf2 px-3 py-[10px] text-[14px] leading-[1.4] text-m-tx2">{spanNote}</p> : null}
               {contactMatches.length > 0 ? (
                 <div role="status" className="flex flex-col gap-2 rounded-[16px] border border-m-bd bg-m-sf px-[14px] py-3">
                   <span className="text-[15px] font-semibold">Ya existe un contacto con ese teléfono o correo</span>

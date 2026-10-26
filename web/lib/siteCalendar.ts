@@ -77,6 +77,19 @@ export function siteMidnight(day: DayKey, timeZone: string): Date {
   return new Date(naive - offsetAt(first));
 }
 
+/** A site wall-clock time ("2026-10-19", "10:07") as a UTC instant. The minutes are added to
+ *  the site's midnight and then corrected by what the wall clock actually reads there, so a
+ *  DST change earlier that day does not shift it. Null for a malformed time. */
+export function siteLocalToUtc(day: DayKey, hhmm: string, timeZone: string): Date | null {
+  const m = /^(\d{2}):(\d{2})$/.exec(hhmm);
+  if (!m || Number(m[1]) > 23 || Number(m[2]) > 59) return null;
+  const want = Number(m[1]) * 60 + Number(m[2]);
+  const guess = siteMidnight(day, timeZone).getTime() + want * 60_000;
+  const [h, min] = fmtTime(new Date(guess).toISOString(), timeZone).split(":").map(Number);
+  const got = h * 60 + min;
+  return new Date(guess + (want - got) * 60_000);
+}
+
 /** Monday-first month grid, padded to whole weeks. */
 export function calendarDays(month: MonthKey): Array<{ key: DayKey; day: number; inMonth: boolean }> {
   const first = `${month}-01`;

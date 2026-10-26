@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, useTransition } from "react";
-import { createManualAppointmentAction } from "@/lib/schedulingActions";
+import { checkPastAttendanceAction, createManualAppointmentAction, searchSchedulingContactsAction, type ContactSearchHit, type PastAttendanceCheck } from "@/lib/schedulingActions";
 import { findContactMatchesAction } from "@/lib/appointmentContactActions";
 import type { ContactMatch, GuestField } from "@/lib/walkInContact";
 import { priceLabelCOP } from "@/lib/money";
-import { fmtTime, siteDayKey, siteMidnight, todayAtSite } from "@/lib/siteCalendar";
+import { dayShort, fmtTime, siteDayKey, siteLocalToUtc, siteMidnight, todayAtSite } from "@/lib/siteCalendar";
+import { PAST_STATUS_WORD, pastProblemText, type PastConflict } from "@/lib/pastAttendance";
 import { apptCategoryClass, serviceCategory } from "@/lib/agendaCategory";
-import { Button, INPUT } from "../ui/system";
+import { Button, Field, INPUT } from "../ui/system";
 import { AgAvatar } from "./AgendaChrome";
 import { SidePanel, PanelSection, type SidePanelHandle } from "./SidePanel";
 
@@ -15,11 +16,11 @@ import { SidePanel, PanelSection, type SidePanelHandle } from "./SidePanel";
  * ATENCIÓN SIN CITA — one step. Who attends (ordered by who is free first, from the real
  * engine for the chosen service), the service, and the client's details — all optional.
  *
- * The client: Nombre, then Teléfono and Correo below it. Registering WITHOUT a contact is
- * allowed (what was typed stays on the appointment and is shown when it is reopened). To
- * save a contact a valid phone or email is needed; if a contact already has it, it is
- * offered to LINK — never duplicated. A name alone never creates or finds a contact. An
- * email does not mean WhatsApp.
+ * The client: an existing contact found by name, phone or email (the booking's own search),
+ * or Nombre, Teléfono and Correo for a new one — or nothing at all (registered unidentified:
+ * what was typed stays on the appointment). To save a contact a valid phone or email is
+ * needed; if a contact already has it, it is offered to LINK — never duplicated. A name alone
+ * never creates or finds a contact. An email does not mean WhatsApp.
  *
  * The time. «Ahora» is the first start inside the immediate window (src/scheduling/immediate.ts):
  * the ONE rule relaxed is the site's minimum notice, for someone who is already here — hours,
@@ -28,15 +29,30 @@ import { SidePanel, PanelSection, type SidePanelHandle } from "./SidePanel";
  * today (normal availability, minimum notice included); it is booked only once the operator
  * accepts that time explicitly — never on its own.
  *
- * «Esta atención ya se realizó»: reception registering at the end of the day a service that
- * already happened TODAY. Then the professional (who did it) and a start of today whose
- * service has already ended (the engine's own starts, `past=1`) are chosen, and after an
- * explicit confirmation it is saved as COMPLETED — the charge stays pending, nothing is sent
- * to anyone. The server re-checks everything (src/scheduling/booking.ts · pastWalkIn) and an
- * overlap with another appointment of that professional is SHOWN, never resolved by changing it.
+ * «Esta atención ya se realizó» («Registrar atención realizada»): a service that already
+ * happened — today or an earlier day — recorded with WHO did it, the service, the date and its
+ * REAL start (any minute, not the booking grid), in the site's timezone. The end is the
+ * professional's own duration for the service, shown before saving (a range painted on the
+ * grid never changes it silently). The server checks that exact interval as the form types it
+ * (checkPastAttendanceAction): what stands in the way is SHOWN with its reason — hours, a
+ * break, a block, another appointment (which can be opened to review or complete instead of
+ * duplicating it); a no-show does not block. Only then «Revisar registro» → «Confirmar
+ * registro»; changing the date, time, professional, service or client voids that review. It is
+ * saved as COMPLETED — the charge stays pending, nothing is sent to anyone.
  */
 interface Svc { id: string; name: string; duration_min: number; category: string | null; price: string | null }
 interface Slot { start_at: string; service_end_at: string; staff_id: string; available_staff_ids: string[] }
+
+/** What the agenda already knows when the panel opens (a range painted on the grid, or the
+ *  booking form it was switched from) — kept, never asked again. */
+export interface WalkInContext {
+  staffId?: string;
+  startAt?: string;
+  spanMin?: number;
+  serviceId?: string;
+  /** Open on «Esta atención ya se realizó» (the range has already ended). */
+  done?: boolean;
+}
 
 export function WalkInPanel(props: {
   clientId: string;
@@ -46,16 +62,25 @@ export function WalkInPanel(props: {
   staff: Array<{ id: string; name: string; photoUrl?: string | null; tint?: "1" | "2" | "3" | "4" }>;
   services: Svc[];
   lockStaffId: string | null;
+  /** The day the agenda is showing — the default date of a past attendance (never after today). */
+  viewDate: string;
+  initial?: WalkInContext;
   onClose: () => void;
-  onSwitchToBooking: () => void;
+  /** To «Nueva cita», carrying what is chosen here (professional, start, service). */
+  onSwitchToBooking: (context: WalkInContext) => void;
+  /** Open an existing appointment (to review or complete it instead of duplicating it). */
+  onOpenAppointment?: (id: string, dayKey: string) => void;
+  /** The past attendance being prepared — the calendar draws it at its real size. */
+  onDraft?: (d: { staffId: string; startAt: string; durationMin: number; label: string; past: true } | null) => void;
   onDone: (result: { id: string; dayKey: string; message: string; warning?: string }) => void;
 }) {
   const tz = props.timezone;
   const today = todayAtSite(tz);
-  const [serviceId, setServiceId] = useState("");
+  const initial = props.initial ?? {};
+  const [serviceId, setServiceId] = useState(initial.serviceId && props.services.some((s) => s.id === initial.serviceId) ? initial.serviceId : "");
   const [query, setQuery] = useState("");
   /** The professional the operator PICKED (null = the one free first). */
-  const [pickedStaff, setStaffId] = useState<string>(props.lockStaffId ?? "");
+  const [pickedStaff, setStaffId] = useState<string>(props.lockStaffId ?? (initial.staffId && props.staff.some((s) => s.id === initial.staffId) ? initial.staffId : ""));
   const [slotState, setSlots] = useState<{ forKey: string; state: "ready" | "error"; now: Slot[]; later: Slot[] }>({ forKey: "", state: "ready", now: [], later: [] });
   /** Bumped to re-ask the engine (a start that stopped being «ahora», a slot just taken). */
   const [refresh, setRefresh] = useState(0);
@@ -72,28 +97,33 @@ export function WalkInPanel(props: {
   const [pending, startTransition] = useTransition();
   const [idemKey] = useState(() => crypto.randomUUID());
   // «Esta atención ya se realizó».
-  const [done, setDone] = useState(false);
-  const [pastStart, setPastStart] = useState("");
-  const [confirming, setConfirming] = useState(false);
-  // The confirmation opens with the focus on its safe choice («Volver»).
-  useEffect(() => {
-    if (confirming) document.querySelector<HTMLButtonElement>("[data-wi-confirm-back]")?.focus();
-  }, [confirming]);
-  const [conflicts, setConflicts] = useState<Array<{ startAt: string; endAt: string; service: string; status: string }>>([]);
-  const [pastState, setPast] = useState<{ forKey: string; state: "ready" | "error"; list: Slot[] }>({ forKey: "", state: "ready", list: [] });
+  const [done, setDone] = useState(Boolean(initial.done));
+  const [pastDay, setPastDay] = useState(() => {
+    const d = initial.startAt ? siteDayKey(initial.startAt, tz) : props.viewDate;
+    return d <= today ? d : today;
+  });
+  const [pastTime, setPastTime] = useState(() => (initial.startAt && siteDayKey(initial.startAt, tz) <= today ? fmtTime(initial.startAt, tz) : ""));
+  const [openedWhen] = useState({ day: pastDay, time: pastTime });
+  /** The data the operator REVIEWED (the key below). Any change to it closes the review. */
+  const [reviewed, setReviewed] = useState<string | null>(null);
+  /** «Revisar registro» was pressed with something missing: say what, next to each field. */
+  const [showMissing, setShowMissing] = useState(false);
+  /** A refused registration, tied to the data it was for (it goes once that data changes). */
+  const [doneError, setDoneError] = useState<{ key: string; message: string } | null>(null);
+  const [checkState, setCheck] = useState<{ forKey: string; state: "ready" | "error"; data: PastAttendanceCheck | null }>({ forKey: "", state: "ready", data: null });
   const sending = useRef(false);
   const handle = useRef<SidePanelHandle | null>(null);
   // Two answers from the real engine, tagged with service + refresh so "loading" is derived:
   //   now   — immediate=1: starts within the immediate window, minimum notice waived;
   //   later — the normal starts left today (minimum notice included), offered when «now» is full.
   const slotKey = `${serviceId}|${refresh}`;
-  const slots: { state: "idle" | "loading" | "ready" | "error"; now: Slot[]; later: Slot[] } = !serviceId
+  const slots: { state: "idle" | "loading" | "ready" | "error"; now: Slot[]; later: Slot[] } = !serviceId || done
     ? { state: "idle", now: [], later: [] }
     : slotState.forKey === slotKey
       ? slotState
       : { state: "loading", now: [], later: [] };
   useEffect(() => {
-    if (!serviceId) return;
+    if (!serviceId || done) return;
     const ctrl = new AbortController();
     const ask = (immediate: boolean) => {
       const params = new URLSearchParams({
@@ -115,38 +145,7 @@ export function WalkInPanel(props: {
       .then(([now, later]) => setSlots({ forKey: key, state: "ready", now, later }))
       .catch(() => !ctrl.signal.aborted && setSlots({ forKey: key, state: "error", now: [], later: [] }));
     return () => ctrl.abort();
-  }, [serviceId, refresh, props.clientId, props.siteId, props.lockStaffId, today, tz]);
-
-  // «Ya se realizó»: the starts of today whose service already ended (the engine's own grid).
-  const pastKey = `${serviceId}|${refresh}`;
-  const past: { state: "idle" | "loading" | "ready" | "error"; list: Slot[] } = !done || !serviceId
-    ? { state: "idle", list: [] }
-    : pastState.forKey === pastKey
-      ? pastState
-      : { state: "loading", list: [] };
-  useEffect(() => {
-    if (!done || !serviceId) return;
-    const ctrl = new AbortController();
-    const params = new URLSearchParams({
-      client_id: props.clientId,
-      site_id: props.siteId,
-      service_id: serviceId,
-      from: siteMidnight(today, tz).toISOString(),
-      to: new Date().toISOString(),
-      past: "1",
-    });
-    if (props.lockStaffId) params.set("staff_id", props.lockStaffId);
-    const key = `${serviceId}|${refresh}`;
-    fetch(`/api/scheduling/internal/availability?${params.toString()}`, { signal: ctrl.signal, cache: "no-store" })
-      .then(async (r) => {
-        if (!r.ok) throw new Error(String(r.status));
-        const list = ((await r.json()) as { slots: Slot[] }).slots;
-        setPast({ forKey: key, state: "ready", list });
-      })
-      .catch(() => !ctrl.signal.aborted && setPast({ forKey: key, state: "error", list: [] }));
-    return () => ctrl.abort();
-  }, [done, serviceId, refresh, props.clientId, props.siteId, props.lockStaffId, today, tz]);
-  const pastFor = (id: string) => past.list.filter((s) => s.available_staff_ids.includes(id)).sort((a, b) => b.start_at.localeCompare(a.start_at));
+  }, [serviceId, done, refresh, props.clientId, props.siteId, props.lockStaffId, today, tz]);
 
   // First start per professional, «now» and «later»; ordered: free now, then soonest later.
   const nowFree = useMemo(() => firstPerStaff(slots.now), [slots.now]);
@@ -166,9 +165,14 @@ export function WalkInPanel(props: {
   const staffId = done
     ? props.lockStaffId ?? pickedStaff
     : props.lockStaffId ?? (pickedStaff && canTake(pickedStaff) ? pickedStaff : ordered.find((s) => canTake(s.id))?.id ?? "");
-  const dirty = Boolean(done || serviceId || name.trim() || phone.trim() || email.trim() || (pickedStaff && !props.lockStaffId));
-  const pastList = done && staffId ? pastFor(staffId) : [];
-  const pastSlot = pastList.find((s) => s.start_at === pastStart) ?? null;
+  // Unsaved = anything beyond what the panel opened with (a painted range is not a change).
+  const dirty = Boolean(
+    done !== Boolean(initial.done) ||
+      (serviceId && serviceId !== initial.serviceId) ||
+      name.trim() || phone.trim() || email.trim() || linkTo ||
+      (pickedStaff && !props.lockStaffId && pickedStaff !== initial.staffId) ||
+      (done && (pastDay !== openedWhen.day || pastTime !== openedWhen.time)),
+  );
 
   // «Ahora» when there is room now; otherwise the next start today, only once accepted.
   const nowSlot = staffId ? nowFree.get(staffId) ?? null : null;
@@ -177,11 +181,74 @@ export function WalkInPanel(props: {
   const slot = nowSlot ?? (laterAccepted ? laterSlot : null);
   const service = props.services.find((s) => s.id === serviceId) ?? null;
   const visibleServices = props.services.filter((s) => s.name.toLocaleLowerCase("es").includes(query.trim().toLocaleLowerCase("es")));
+  const staffFirst = props.staff.find((s) => s.id === staffId)?.name.split(" ")[0] ?? "";
 
   // Duplicate check while typing (read-only), tagged with what was typed.
   const typedKey = `${phone.trim()}|${email.trim()}`;
   const searchable = phone.trim().replace(/\D/g, "").length >= 7 || /@.+\./.test(email.trim());
   const matches = searchable && matchState.forKey === typedKey ? matchState.list : [];
+
+  // ── «Ya se realizó»: the exact interval and what the server says about it ─────────────────
+  const pastStart = done && pastDay && pastDay <= today ? siteLocalToUtc(pastDay, pastTime, tz)?.toISOString() ?? null : null;
+  const doneKey = `${serviceId}|${staffId}|${pastStart ?? ""}|${linkTo?.contactId ?? ""}`;
+  const checkKey = `${doneKey}|${refresh}`;
+  const checkReady = Boolean(done && serviceId && staffId && pastStart);
+  const check: { state: "idle" | "loading" | "ready" | "error"; data: PastAttendanceCheck | null } = !checkReady
+    ? { state: "idle", data: null }
+    : checkState.forKey === checkKey
+      ? checkState
+      : { state: "loading", data: null };
+  useEffect(() => {
+    if (!checkReady || !pastStart) return;
+    let cancelled = false;
+    const key = `${serviceId}|${staffId}|${pastStart}|${linkTo?.contactId ?? ""}|${refresh}`;
+    // A short pause while a time is being typed: ask once it settles.
+    const t = setTimeout(async () => {
+      try {
+        const r = await checkPastAttendanceAction(props.clientId, { siteId: props.siteId, serviceId, staffId, startAt: pastStart, contactId: linkTo?.contactId ?? null });
+        if (!cancelled) setCheck({ forKey: key, state: "ready", data: r });
+      } catch {
+        if (!cancelled) setCheck({ forKey: key, state: "error", data: null });
+      }
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [checkReady, serviceId, staffId, pastStart, linkTo, refresh, props.clientId, props.siteId]);
+  const result = check.state === "ready" && check.data?.ok ? check.data : null;
+  const pastEnd = result?.serviceEndAt ?? null;
+  const fits = Boolean(result && result.problems.length === 0 && result.conflicts.length === 0);
+  const contactBlocked = saveContact && !linkTo && matches.length > 0;
+  const canReview = fits && !contactBlocked;
+  /** The review is open only for the data it was made of — derived, so it cannot go stale. */
+  const confirmOpen = done && reviewed === doneKey && canReview;
+  const pastFailure = doneError && doneError.key === doneKey ? doneError.message : null;
+  // The confirmation opens with the focus on its safe choice («Volver»).
+  useEffect(() => {
+    if (confirmOpen) document.querySelector<HTMLButtonElement>("[data-wi-confirm-back]")?.focus();
+  }, [confirmOpen]);
+
+  // The draft on the calendar, at the professional's real duration.
+  const onDraft = props.onDraft;
+  const draftDur = result?.durationMin ?? null;
+  const draftLabel = service ? `Atención realizada · ${service.name}` : "";
+  useEffect(() => {
+    if (!onDraft) return;
+    onDraft(done && staffId && pastStart && draftDur ? { staffId, startAt: pastStart, durationMin: draftDur, label: draftLabel, past: true } : null);
+  }, [onDraft, done, staffId, pastStart, draftDur, draftLabel]);
+  useEffect(() => () => onDraft?.(null), [onDraft]);
+
+  /** What is still missing, in the order of the form — each with the control to focus. */
+  const missing: Array<{ label: string; focus: string }> = done
+    ? [
+        ...(!staffId ? [{ label: "quién la realizó", focus: "#wi-staff-list [role=radio]" }] : []),
+        ...(!serviceId ? [{ label: "el servicio", focus: "#wi-service-list [role=radio]" }] : []),
+        ...(!pastDay || pastDay > today ? [{ label: "la fecha", focus: "#wi-date" }] : []),
+        ...(!siteLocalToUtc(pastDay || today, pastTime, tz) ? [{ label: "la hora de inicio", focus: "#wi-time" }] : []),
+      ]
+    : [];
+
   useEffect(() => {
     if (!searchable) return;
     const p = phone.trim();
@@ -199,19 +266,62 @@ export function WalkInPanel(props: {
     };
   }, [phone, email, searchable, props.clientId, props.siteId]);
 
+  // An existing contact by name, phone or email — the booking form's own search.
+  const [contactQuery, setContactQuery] = useState("");
+  const [hitState, setHits] = useState<{ forKey: string; hits: ContactSearchHit[] }>({ forKey: "", hits: [] });
+  const term = contactQuery.trim();
+  const hits = term.length >= 2 && hitState.forKey === term ? hitState.hits : [];
+  const searching = term.length >= 2 && hitState.forKey !== term;
+  useEffect(() => {
+    if (term.length < 2) return;
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      const r = await searchSchedulingContactsAction(props.clientId, term);
+      if (!cancelled) setHits({ forKey: term, hits: r.ok ? r.hits : [] });
+    }, 220);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [term, props.clientId]);
+  const pickHit = (h: ContactSearchHit) => {
+    setLinkTo({ contactId: h.id, name: h.name, matchedBy: h.email && !h.phone ? "email" : "phone", matchedValue: h.phone ?? h.email ?? h.identity });
+    setContactQuery("");
+  };
+
+  const review = () => {
+    if (missing.length > 0) {
+      setShowMissing(true);
+      document.querySelector<HTMLElement>(missing[0].focus)?.focus();
+      return;
+    }
+    if (check.state === "error" || (check.state === "ready" && !check.data?.ok)) {
+      setRefresh((n) => n + 1);
+      return;
+    }
+    if (!canReview) {
+      setShowMissing(true);
+      document.querySelector<HTMLElement>(contactBlocked ? "#wi-client-matches button" : "#wi-done-issues")?.focus();
+      return;
+    }
+    setDoneError(null);
+    setReviewed(doneKey);
+  };
+
   const submitDone = () => {
-    if (!pastSlot || !serviceId || !staffId || sending.current) return;
+    if (!confirmOpen || !pastStart || !serviceId || !staffId || sending.current) return;
     sending.current = true;
     setError(null);
     setFieldErrors({});
-    setConflicts([]);
+    const key = doneKey;
+    const day = pastDay;
     startTransition(async () => {
       try {
         const r = await createManualAppointmentAction(props.clientId, {
           siteId: props.siteId,
           serviceId,
           staffId,
-          startAt: pastSlot.start_at,
+          startAt: pastStart,
           walkIn: true,
           alreadyDone: true,
           idempotencyKey: idemKey,
@@ -220,18 +330,18 @@ export function WalkInPanel(props: {
             : { customerName: name, customerPhone: phone, customerEmail: email, contactMode: saveContact ? ("create" as const) : ("guest" as const) }),
         });
         if (!r.ok) {
-          setConfirming(false);
+          // Everything typed stays; the review closes and the check runs again with the data as it is now.
+          setReviewed(null);
           if (r.fieldErrors) setFieldErrors(r.fieldErrors);
           if (r.matches) setMatches({ forKey: typedKey, list: r.matches });
-          setConflicts(r.conflicts ?? []);
-          setError(r.fieldErrors ? null : r.error);
+          if (!r.fieldErrors) setDoneError({ key, message: r.error });
           if (!r.fieldErrors && !r.matches) setRefresh((n) => n + 1);
           return;
         }
-        props.onDone({ id: r.id, dayKey: siteDayKey(pastSlot.start_at, tz), message: "Atención registrada como completada · cobro pendiente", warning: r.warning });
+        props.onDone({ id: r.id, dayKey: day, message: "Atención registrada como completada · cobro pendiente", warning: r.warning });
       } catch {
-        setConfirming(false);
-        setError("No se pudo registrar. Tus datos siguen aquí; vuelve a intentarlo.");
+        setReviewed(null);
+        setDoneError({ key, message: "No se pudo registrar. Tus datos siguen aquí; vuelve a intentarlo." });
       } finally {
         sending.current = false;
       }
@@ -280,25 +390,71 @@ export function WalkInPanel(props: {
     });
   };
 
-  const staffFirst = props.staff.find((s) => s.id === staffId)?.name.split(" ")[0] ?? "";
+  const pastDayLabel = pastDay === today ? "Hoy" : dayShort(pastDay);
+  const pastRange = pastStart ? `${fmtTime(pastStart, tz)}${pastEnd ? ` – ${fmtTime(pastEnd, tz)}` : ""}` : null;
   const summary = done
-    ? pastSlot && service
-      ? `Hoy · ${fmtTime(pastSlot.start_at, tz)} – ${fmtTime(pastSlot.service_end_at, tz)} · ${service.name} · ${staffFirst} · ya realizada`
-      : "Elige quién la realizó, el servicio y la hora"
+    ? pastRange && service && staffId
+      ? `${pastDayLabel} · ${pastRange} · ${service.name} · ${staffFirst}`
+      : "Elige quién la realizó, el servicio, la fecha y la hora"
     : slot && service
       ? `${slot === nowSlot ? "Ahora" : "Hoy"} · ${fmtTime(slot.start_at, tz)} – ${fmtTime(slot.service_end_at, tz)} · ${service.name} · ${staffFirst}`
       : "Hoy, sin reserva previa";
 
+  // What the grid marked, said once at the top — the panel starts from it.
+  const painted = initial.startAt && initial.staffId
+    ? `${dayShort(siteDayKey(initial.startAt, tz))} · ${fmtTime(initial.startAt, tz)}${initial.spanMin ? ` – ${fmtTime(new Date(Date.parse(initial.startAt) + initial.spanMin * 60_000).toISOString(), tz)}` : ""} · ${props.staff.find((s) => s.id === initial.staffId)?.name.split(" ")[0] ?? ""}`
+    : null;
+  const switchContext = (): WalkInContext => ({
+    staffId: staffId || initial.staffId,
+    startAt: done ? pastStart ?? initial.startAt : initial.startAt,
+    spanMin: initial.spanMin,
+    serviceId: serviceId || undefined,
+  });
+  const toggleDone = (on: boolean) => {
+    setDone(on);
+    setReviewed(null);
+    setShowMissing(false);
+    setError(null);
+  };
+
+  // A painted range differs from the service's real length: say which end is kept.
+  const paintedDiff = (() => {
+    if (!done || !result || !initial.spanMin || !initial.startAt || !pastStart || pastStart !== initial.startAt) return null;
+    if (result.durationMin === initial.spanMin) return null;
+    const markedEnd = fmtTime(new Date(Date.parse(initial.startAt) + initial.spanMin * 60_000).toISOString(), tz);
+    return `Marcaste hasta las ${markedEnd} (${initial.spanMin} min), pero ${service?.name ?? "el servicio"} con ${staffFirst || "este profesional"} dura ${result.durationMin} min: se registra de ${fmtTime(pastStart, tz)} a ${fmtTime(result.serviceEndAt, tz)}.`;
+  })();
+
+  const conflictRow = (c: PastConflict, extra?: string) => (
+    <span key={c.id} className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span className="u-tnum">
+        {c.dayKey !== pastDay ? `${dayShort(c.dayKey)} · ` : ""}
+        {fmtTime(c.startAt, tz)} – {fmtTime(c.endAt, tz)} · {c.service}
+        {c.customer ? ` · ${c.customer}` : ""} · {PAST_STATUS_WORD[c.status] ?? c.status}
+        {extra ? ` · ${extra}` : ""}
+      </span>
+      {props.onOpenAppointment ? (
+        <button
+          type="button"
+          onClick={() => handle.current?.requestCloseThen(() => props.onOpenAppointment?.(c.id, c.dayKey))}
+          className="u-focus rounded text-[12.5px] font-medium text-foreground underline underline-offset-2"
+        >
+          {c.status === "completed" ? "Ver cita" : "Abrir para completarla"}
+        </button>
+      ) : null}
+    </span>
+  );
+
   return (
     <SidePanel
       name="walkin"
-      title="Atención sin cita"
+      title={done ? "Registrar atención realizada" : "Atención sin cita"}
       subtitle={
         <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
           <span>
-            {props.siteName} · {shortToday(tz)} ·
+            {props.siteName} · {done ? (pastDay ? dayShort(pastDay) : shortToday(tz)) : shortToday(tz)} ·
           </span>
-          <button type="button" onClick={props.onSwitchToBooking} className="u-focus rounded text-foreground hover:underline">
+          <button type="button" onClick={() => props.onSwitchToBooking(switchContext())} className="u-focus rounded text-foreground hover:underline">
             Cambiar a cita con reserva
           </button>
         </span>
@@ -309,23 +465,23 @@ export function WalkInPanel(props: {
       footer={
         done ? (
           <div className="flex flex-col gap-2">
-            {confirming && pastSlot ? (
+            {confirmOpen && pastStart && service ? (
               <div role="alertdialog" aria-labelledby="wi-done-confirm" className="flex flex-col gap-1 rounded-[10px] bg-[var(--chip)] px-3 py-2.5">
                 <p id="wi-done-confirm" className="text-[13px] font-medium">¿Registrar esta atención como completada?</p>
                 <p className="u-tnum text-[12.5px] text-muted">
-                  {summary.replace(" · ya realizada", "")}. Queda como completada con la fecha de hoy y tu nombre como quien la registró; el cobro queda pendiente y no se envía ningún mensaje al cliente.
+                  {summary}. Queda completada en esa fecha y hora; el registro queda con tu nombre y la fecha de hoy. El cobro queda pendiente y no se envía ningún mensaje al cliente.
                 </p>
               </div>
             ) : null}
             <div className="flex flex-wrap items-center gap-2">
               <div aria-live="polite" className="flex w-full min-w-0 flex-col sm:w-auto sm:flex-1">
-                <span className="text-[12.5px] text-muted">Atención ya realizada hoy</span>
+                <span className="text-[12.5px] text-muted">Atención ya realizada</span>
                 <span className="truncate text-[14px] font-medium tabular-nums">{summary}</span>
               </div>
               <span className="flex-1 sm:hidden" />
-              {confirming ? (
+              {confirmOpen ? (
                 <>
-                  <Button data-wi-confirm-back="" onClick={() => setConfirming(false)} disabled={pending}>
+                  <Button data-wi-confirm-back="" onClick={() => setReviewed(null)} disabled={pending}>
                     Volver
                   </Button>
                   <Button variant="primary" onClick={submitDone} loading={pending} loadingLabel="Registrando…">
@@ -337,8 +493,8 @@ export function WalkInPanel(props: {
                   <Button onClick={() => handle.current?.requestClose()} disabled={pending}>
                     Cancelar
                   </Button>
-                  <Button variant="primary" onClick={() => setConfirming(true)} disabled={!pastSlot || pending || (saveContact && !linkTo && matches.length > 0)}>
-                    {error ? "Revisar de nuevo" : "Revisar registro"}
+                  <Button variant="primary" onClick={review} loading={check.state === "loading" && missing.length === 0} loadingLabel="Comprobando…" disabled={pending}>
+                    {pastFailure ? "Revisar de nuevo" : "Revisar registro"}
                   </Button>
                 </>
               )}
@@ -362,22 +518,19 @@ export function WalkInPanel(props: {
       }
     >
       <div className="flex flex-col">
+        {painted ? (
+          <p className="mb-2 rounded-[10px] bg-[var(--chip)] px-3 py-2 text-[12.5px] leading-[1.45] text-[var(--ag-ink2)]">
+            <span className="font-medium text-foreground">Marcaste {painted}.</span>{" "}
+            {done
+              ? "La fecha, la hora y el profesional ya están puestos; elige el servicio."
+              : "La atención sin cita empieza ahora. Para esa hora, usa «Cambiar a cita con reserva»: se conserva lo que marcaste."}
+          </p>
+        ) : null}
         <label className="mb-1 flex min-h-[44px] items-start gap-2.5 rounded-[10px] px-3 py-2.5 text-[13px] shadow-[inset_0_0_0_1px_var(--line)] md:min-h-0">
-          <input
-            type="checkbox"
-            checked={done}
-            onChange={(e) => {
-              setDone(e.target.checked);
-              setConfirming(false);
-              setConflicts([]);
-              setError(null);
-              setPastStart("");
-            }}
-            className="mt-0.5 size-4 accent-[var(--foreground)]"
-          />
+          <input type="checkbox" checked={done} onChange={(e) => toggleDone(e.target.checked)} className="mt-0.5 size-4 accent-[var(--foreground)]" />
           <span>
             <span className="font-medium">Esta atención ya se realizó</span>
-            <span className="block text-[12.5px] text-muted">Para registrar al final del día un servicio de hoy que ya terminó. Se guarda como completada; el cobro queda pendiente y no se envía ningún mensaje.</span>
+            <span className="block text-[12.5px] text-muted">Para registrar un servicio que ya terminó, de hoy o de un día anterior. Se guarda como completada; el cobro queda pendiente y no se envía ningún mensaje.</span>
           </span>
         </label>
         <PanelSection
@@ -389,13 +542,12 @@ export function WalkInPanel(props: {
           {slots.state === "error" ? (
             <p className="text-[13px] text-danger">No pudimos cargar la disponibilidad de hoy.</p>
           ) : null}
-          <div role="radiogroup" aria-labelledby="wi-staff" className="flex flex-col gap-1.5">
+          <div id="wi-staff-list" role="radiogroup" aria-labelledby="wi-staff" className="flex flex-col gap-1.5">
             {ordered.map((s) => {
               const free = nowFree.get(s.id);
               const next = laterFree.get(s.id);
               const on = s.id === staffId;
               const disabled = !done && Boolean(serviceId) && slots.state === "ready" && !free && !next;
-              const doneCount = done ? pastFor(s.id).length : 0;
               return (
                 <button
                   key={s.id}
@@ -409,22 +561,17 @@ export function WalkInPanel(props: {
                   <AgAvatar name={s.name} id={s.id} size={40} tint={s.tint} photoUrl={s.photoUrl ?? null} />
                   <span className="min-w-0">
                     <span className="block truncate text-[14px]">{s.name}</span>
-                    <span className="block text-[12.5px] tabular-nums text-muted">
-                      {done
-                        ? !serviceId
-                          ? "Elige un servicio"
-                          : past.state === "loading"
-                            ? "Calculando…"
-                            : doneCount > 0
-                              ? `${doneCount} ${doneCount === 1 ? "horario terminado" : "horarios terminados"} hoy`
-                              : "Sin horarios terminados hoy para este servicio"
-                        : !serviceId ? "Elige un servicio" : slots.state === "loading" ? "Calculando…" : free ? `Puede atender ahora · ${fmtTime(free.start_at, tz)}` : next ? `Ahora no · siguiente a las ${fmtTime(next.start_at, tz)}` : "Sin hueco hoy para este servicio"}
-                    </span>
+                    {done ? null : (
+                      <span className="block text-[12.5px] tabular-nums text-muted">
+                        {!serviceId ? "Elige un servicio" : slots.state === "loading" ? "Calculando…" : free ? `Puede atender ahora · ${fmtTime(free.start_at, tz)}` : next ? `Ahora no · siguiente a las ${fmtTime(next.start_at, tz)}` : "Sin hueco hoy para este servicio"}
+                      </span>
+                    )}
                   </span>
                 </button>
               );
             })}
           </div>
+          {done && showMissing && !staffId ? <p className="text-[12.5px] text-danger">Falta elegir quién la realizó.</p> : null}
           {!done && serviceId && slots.state === "ready" && staffId && !nowSlot && laterSlot ? (
             <div role="status" className="flex flex-col gap-2 rounded-[10px] bg-[var(--chip)] px-3 py-2.5">
               <p className="text-[13px] font-medium">No hay espacio ahora con {props.staff.find((s) => s.id === staffId)?.name.split(" ")[0] ?? "este profesional"}</p>
@@ -455,7 +602,7 @@ export function WalkInPanel(props: {
             <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="7" cy="7" r="4.6" /><path d="M10.4 10.4L14 14" /></svg>
             <input type="search" placeholder="Buscar servicio" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="Buscar servicio" className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted" />
           </label>
-          <div role="radiogroup" aria-labelledby="wi-service" className="grid grid-cols-2 gap-2">
+          <div id="wi-service-list" role="radiogroup" aria-labelledby="wi-service" className="grid grid-cols-2 gap-2">
             {visibleServices.length === 0 ? <p className="text-[13px] text-muted">Ningún servicio coincide con «{query}».</p> : null}
             {visibleServices.map((s) => {
               const on = s.id === serviceId;
@@ -479,51 +626,100 @@ export function WalkInPanel(props: {
               );
             })}
           </div>
+          {done && showMissing && !serviceId ? <p className="text-[12.5px] text-danger">Falta elegir el servicio.</p> : null}
         </PanelSection>
 
         {done ? (
-          <PanelSection title="Hora de inicio · hoy" id="wi-time" size="lg" hint="Solo horarios de hoy cuyo servicio ya terminó, según la hora de la sede.">
-            {!serviceId || !staffId ? (
-              <p className="text-[13px] text-muted">Elige el servicio y quién lo realizó.</p>
-            ) : past.state === "loading" ? (
-              <p className="text-[13px] text-muted">Calculando…</p>
-            ) : past.state === "error" ? (
-              <p className="text-[13px] text-danger">No pudimos cargar los horarios de hoy.</p>
-            ) : pastList.length === 0 ? (
-              <p className="text-[13px] text-muted">No hay horarios de hoy ya terminados en los que {staffFirst || "este profesional"} estuviera disponible para este servicio (fuera de su horario, pausas, bloqueos u otras citas).</p>
-            ) : (
-              <label className="flex flex-col gap-1.5">
-                <span className="sr-only">Hora de inicio</span>
-                <select
-                  value={pastSlot ? pastStart : ""}
-                  onChange={(e) => {
-                    setPastStart(e.target.value);
-                    setConfirming(false);
-                    setConflicts([]);
-                  }}
-                  data-own-escape=""
+          <PanelSection title="Fecha y hora de inicio" id="wi-when" size="lg" hint="La hora real en que empezó, en la hora de la sede. Puede ser de hoy o de un día anterior.">
+            <div className="grid grid-cols-2 gap-3">
+              <Field label="Fecha" error={showMissing && (!pastDay || pastDay > today) ? (pastDay > today ? "No puede ser posterior a hoy." : "Falta la fecha.") : undefined}>
+                <input
+                  id="wi-date"
+                  type="date"
                   className={INPUT}
-                >
-                  <option value="">Elige la hora</option>
-                  {pastList.map((s) => (
-                    <option key={s.start_at} value={s.start_at}>
-                      {fmtTime(s.start_at, tz)} – {fmtTime(s.service_end_at, tz)}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-            {conflicts.length > 0 ? (
-              <div role="status" className="flex flex-col gap-1 rounded-[10px] bg-[var(--warn-soft)] px-3 py-2.5 text-[12.5px] text-[var(--warn)]">
-                <span className="font-medium">Se cruza con {conflicts.length === 1 ? "esta cita" : "estas citas"} de {staffFirst || "este profesional"}:</span>
-                {conflicts.map((c) => (
-                  <span key={c.startAt} className="u-tnum">
-                    {fmtTime(c.startAt, tz)} – {fmtTime(c.endAt, tz)} · {c.service} · {STATUS_WORD[c.status] ?? c.status}
-                  </span>
-                ))}
-                <span>No se cambió ninguna cita. Elige otra hora o revisa la cita existente.</span>
-              </div>
-            ) : null}
+                  value={pastDay}
+                  max={today}
+                  onChange={(e) => setPastDay(e.target.value)}
+                  aria-invalid={showMissing && (!pastDay || pastDay > today)}
+                  data-own-escape=""
+                />
+              </Field>
+              <Field label="Hora de inicio" error={showMissing && !siteLocalToUtc(pastDay || today, pastTime, tz) ? "Falta la hora de inicio." : undefined}>
+                <input
+                  id="wi-time"
+                  type="time"
+                  step={60}
+                  className={INPUT}
+                  value={pastTime}
+                  onChange={(e) => setPastTime(e.target.value)}
+                  aria-invalid={showMissing && !siteLocalToUtc(pastDay || today, pastTime, tz)}
+                  data-own-escape=""
+                />
+              </Field>
+            </div>
+            <div id="wi-done-issues" tabIndex={-1} aria-live="polite" className="flex flex-col gap-2 outline-none">
+              {!checkReady ? (
+                <p className="text-[13px] text-muted">
+                  {missing.length > 0 ? `Falta ${joinEs(missing.map((m) => m.label))}.` : "Elige el servicio y quién la realizó."}
+                </p>
+              ) : check.state === "loading" ? (
+                <p className="text-[13px] text-muted">Comprobando la agenda de {staffFirst || "este profesional"}…</p>
+              ) : check.state === "error" ? (
+                <p role="alert" className="text-[13px] text-danger">No pudimos comprobar ese horario. Tus datos siguen aquí; pulsa «Revisar registro» para intentarlo de nuevo.</p>
+              ) : check.data && !check.data.ok ? (
+                <p role="alert" className="text-[13px] text-danger">{check.data.error}</p>
+              ) : result ? (
+                <>
+                  <p className="u-tnum text-[13px]">
+                    <span className="font-medium">
+                      {fmtTime(pastStart!, tz)} – {fmtTime(result.serviceEndAt, tz)}
+                    </span>
+                    <span className="text-muted"> · {service?.name} dura {result.durationMin} min con {staffFirst}</span>
+                  </p>
+                  {paintedDiff ? <p className="text-[12.5px] leading-[1.45] text-[var(--ag-ink2)]">{paintedDiff}</p> : null}
+                  {result.problems.length > 0 ? (
+                    <div role="status" className="flex flex-col gap-1 rounded-[10px] bg-[var(--warn-soft)] px-3 py-2.5 text-[12.5px] text-[var(--warn)]">
+                      <span className="font-medium">No se puede registrar a esa hora:</span>
+                      {result.problems.map((p) => (
+                        <span key={p.code} className="u-tnum">{pastProblemText(p, tz, staffFirst)}</span>
+                      ))}
+                      {result.problems.some((p) => p.code !== "not_ended") ? (
+                        <span>Si de verdad se atendió entonces, primero ajusta el horario, la pausa o el bloqueo de ese día; aquí no se hace ninguna excepción.</span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {result.conflicts.length > 0 ? (
+                    <div role="status" className="flex flex-col gap-1 rounded-[10px] bg-[var(--warn-soft)] px-3 py-2.5 text-[12.5px] text-[var(--warn)]">
+                      <span className="font-medium">Se cruza con {result.conflicts.length === 1 ? "esta cita" : "estas citas"} de {staffFirst || "este profesional"}:</span>
+                      {result.conflicts.map((c) => conflictRow(c))}
+                      <span>
+                        {result.conflicts.some((c) => c.status !== "completed")
+                          ? "Si es la misma atención, ábrela y complétala en lugar de registrar otra. No se cambió ninguna cita."
+                          : "Ya hay una atención registrada en ese tiempo. No se cambió ninguna cita."}
+                      </span>
+                    </div>
+                  ) : null}
+                  {result.noShows.length > 0 && result.conflicts.length === 0 ? (
+                    <p className="flex flex-col gap-0.5 rounded-[10px] bg-[var(--chip)] px-3 py-2 text-[12.5px] text-[var(--ag-ink2)]">
+                      <span>
+                        En ese tiempo {result.noShows.length === 1 ? "hay una inasistencia" : "hay inasistencias"}: {result.noShows.map((c) => `${fmtTime(c.startAt, tz)} ${c.customer ?? c.service}`).join(", ")}. No impide registrar a quien se atendió; la inasistencia no cambia.
+                      </span>
+                    </p>
+                  ) : null}
+                  {result.sameClient.length > 0 ? (
+                    <div role="status" className="flex flex-col gap-1 rounded-[10px] bg-[var(--chip)] px-3 py-2.5 text-[12.5px] text-[var(--ag-ink2)]">
+                      <span className="font-medium text-foreground">{linkTo?.name ?? "Este cliente"} tenía cita ese día:</span>
+                      {result.sameClient.map((c) => conflictRow(c, c.staffName ?? undefined))}
+                      <span>Si es esa misma visita, ábrela y complétala para no duplicarla.</span>
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+              {pastFailure ? <p role="alert" className="text-[13px] text-danger">{pastFailure}</p> : null}
+              {showMissing && missing.length === 0 && check.state === "ready" && !canReview ? (
+                <p className="text-[12.5px] text-danger">{contactBlocked ? "Vincula el contacto que ya existe o desmarca «Guardar como contacto»." : "Cambia la hora, el profesional o el servicio, o revisa la cita existente."}</p>
+              ) : null}
+            </div>
           </PanelSection>
         ) : null}
 
@@ -532,12 +728,31 @@ export function WalkInPanel(props: {
             <div className="flex items-center gap-3 rounded-[12px] border border-foreground px-3.5 py-3">
               <div className="min-w-0 flex-1">
                 <p className="truncate text-[13px] font-semibold">{linkTo.name ?? "Sin nombre"}</p>
-                <p className="u-mono truncate text-[12px] text-muted">Se vinculará a este contacto · {linkTo.matchedValue}</p>
+                <p className="u-mono truncate text-[12px] text-muted">Se vinculará a este contacto{linkTo.matchedValue ? ` · ${linkTo.matchedValue}` : ""}</p>
               </div>
               <Button size="sm" onClick={() => setLinkTo(null)}>Cambiar</Button>
             </div>
           ) : (
             <>
+              <div className="flex flex-col gap-1.5">
+                <label className="flex h-[38px] items-center gap-2 rounded-[10px] bg-[var(--chip)] px-3 text-muted">
+                  <svg aria-hidden viewBox="0 0 16 16" className="size-[14px] shrink-0" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="7" cy="7" r="4.6" /><path d="M10.4 10.4L14 14" /></svg>
+                  <input type="search" placeholder="Buscar cliente: nombre, teléfono o correo" value={contactQuery} onChange={(e) => setContactQuery(e.target.value)} aria-label="Buscar cliente existente" className="min-w-0 flex-1 bg-transparent text-[14px] text-foreground outline-none placeholder:text-muted" />
+                </label>
+                {term.length >= 2 ? (
+                  <div className="flex flex-col">
+                    <span className="text-[12.5px] text-muted">{searching ? "Buscando…" : `${hits.length} resultado${hits.length === 1 ? "" : "s"}`}</span>
+                    {hits.map((h) => (
+                      <button key={h.id} type="button" onClick={() => pickHit(h)} className="u-focus flex min-h-[48px] w-full flex-col justify-center rounded-[10px] px-2 py-1.5 text-left hover:bg-[var(--subtle)]">
+                        <span className="truncate text-[14px]">{h.name ?? "Contacto sin nombre"}</span>
+                        {h.phone || h.email || h.identity ? <span className="truncate text-[12.5px] tabular-nums text-muted">{[h.phone, h.email].filter(Boolean).join(" · ") || h.identity}</span> : null}
+                      </button>
+                    ))}
+                    {!searching && hits.length === 0 ? <p className="px-2 py-1.5 text-[13px] text-muted">Sin resultados para «{term}». Escribe sus datos abajo como cliente nuevo.</p> : null}
+                  </div>
+                ) : null}
+              </div>
+              <p className="text-[12.5px] text-muted">O cliente nuevo. Si lo dejas vacío, se registra sin identificar.</p>
               <label className="flex flex-col gap-1.5">
                 <span className="text-[13px] font-medium">Nombre</span>
                 <input className={INPUT} value={name} onChange={(e) => setName(e.target.value)} maxLength={120} autoComplete="off" aria-invalid={Boolean(fieldErrors.name)} />
@@ -557,7 +772,7 @@ export function WalkInPanel(props: {
               </div>
               {!phone.trim() && email.trim() ? <p className="text-[12.5px] text-muted">Con solo un correo no se le puede escribir por WhatsApp.</p> : null}
               {matches.length > 0 ? (
-                <div role="status" className="flex flex-col gap-2 rounded-[12px] border border-line px-3.5 py-3">
+                <div id="wi-client-matches" role="status" className="flex flex-col gap-2 rounded-[12px] border border-line px-3.5 py-3">
                   <p className="text-[13px] font-medium">Ya existe un contacto con estos datos</p>
                   {matches.map((m) => (
                     <div key={m.contactId} className="flex items-center gap-3">
@@ -587,7 +802,10 @@ export function WalkInPanel(props: {
   );
 }
 
-const STATUS_WORD: Record<string, string> = { scheduled: "Sin confirmar", confirmed: "Confirmada", completed: "Completada", no_show: "Inasistencia" };
+/** «quién la realizó, el servicio y la hora» */
+function joinEs(parts: string[]): string {
+  return parts.length <= 1 ? parts.join("") : `${parts.slice(0, -1).join(", ")} y ${parts[parts.length - 1]}`;
+}
 
 function nextDay(d: string): string {
   const [y, m, day] = d.split("-").map(Number);

@@ -585,14 +585,16 @@ export async function listStaffAppointmentsOverlapping(
   from: Date,
   until: Date,
   client?: PoolClient,
-): Promise<Array<{ id: string; start_at: Date; service_end_at: Date; status: string; service_name: string }>> {
+): Promise<Array<{ id: string; start_at: Date; service_end_at: Date; status: string; service_name: string; customer_name: string | null }>> {
   const run = <R extends QueryResultRow>(text: string, params: unknown[]) => (client ? client.query<R>(text, params) : query<R>(text, params));
-  const r = await run<{ id: string; start_at: Date; service_end_at: Date; status: string; service_name: string }>(
-    `SELECT id, start_at, service_end_at, status, service_name_snapshot AS service_name
-       FROM appointments
-      WHERE tenant_id = $1 AND site_id = $2 AND staff_id = $3 AND status <> 'cancelled'
-        AND blocked_until > $4 AND blocked_from < $5
-      ORDER BY start_at`,
+  const r = await run<{ id: string; start_at: Date; service_end_at: Date; status: string; service_name: string; customer_name: string | null }>(
+    `SELECT a.id, a.start_at, a.service_end_at, a.status, a.service_name_snapshot AS service_name,
+            COALESCE(c.name, a.guest_name) AS customer_name
+       FROM appointments a
+       LEFT JOIN contacts c ON c.id = a.contact_id AND c.tenant_id = a.tenant_id
+      WHERE a.tenant_id = $1 AND a.site_id = $2 AND a.staff_id = $3 AND a.status <> 'cancelled'
+        AND a.blocked_until > $4 AND a.blocked_from < $5
+      ORDER BY a.start_at`,
     [tenantId, siteId, staffId, from, until],
   );
   return r.rows;

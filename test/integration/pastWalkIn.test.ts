@@ -10,14 +10,18 @@ import { createException } from '../../src/db/repositories/scheduling/exceptions
 import { cleanupTenant, closeDb, seedMember, seedScenario, seedWorkflow } from './fixtures.js';
 
 /**
- * PAST WALK-IN («Atención sin cita · Esta atención ya se realizó») — reception registering at
- * the end of the day a service that ALREADY happened today. Through the REAL server action, the
- * REAL bot route and the REAL public route, on the local test database, with the real clock:
+ * PAST WALK-IN («Registrar atención realizada») — reception recording a service that ALREADY
+ * happened, today or an earlier day, at its real start. Through the REAL server actions, the
+ * REAL bot routes and the REAL public route, on the local test database, with the real clock:
  *   - an authorised login (reception) registers it as COMPLETED, keeping the real creation date
  *     and who registered it; no payment is recorded (the charge stays pending);
- *   - a start in the future, a service that has not ended yet, or another day is refused;
- *   - an overlap with ANY appointment of that professional (a completed one too), a block, or a
- *     login without agenda.book / another professional's column is refused — nothing changes;
+ *   - a week ago and off the slot grid (the real minute) is fine; the professional's own
+ *     duration sets the end; the check before confirming says the same as the write;
+ *   - a start in the future or a service that has not ended yet is refused;
+ *   - an overlap with an ACTIVE or COMPLETED appointment of that professional (returned, so it
+ *     can be opened and completed instead), a block, or a login without agenda.book / another
+ *     professional's column is refused — nothing changes; a NO-SHOW does not block;
+ *   - the sale it belongs to is won; no review is requested by the bot API for it;
  *   - the bot API and the public page cannot ask for it.
  *
  * The site uses the fixed-offset zone whose local time is ~12:00 now, open 08:00–20:00 daily,
@@ -46,7 +50,7 @@ const asUser = (userId: string | null) => {
   CURRENT = userId ? { id: userId, email: `${userId.slice(0, 8)}@test.local` } : null;
 };
 
-const { createManualAppointmentAction } = await import('../../web/lib/schedulingActions.js');
+const { createManualAppointmentAction, checkPastAttendanceAction } = await import('../../web/lib/schedulingActions.js');
 
 const savedSecret = process.env.PUBLIC_BOOKING_HASH_SECRET;
 process.env.PUBLIC_BOOKING_HASH_SECRET ??= 'test-public-booking-hash-secret-0123456789';
@@ -120,7 +124,7 @@ test('reception registers a service that already happened today: completed, real
   assert.ok(events.rows.some((e) => /complet/.test(e.event_type) && e.actor_user_id === s.reception), 'completed by the same login');
 });
 
-test('a future start, a service still in progress or another day is refused — nothing is written', async () => {
+test('a future start or a service still in progress is refused — nothing is written', async () => {
   const s = await scenario();
   asUser(s.reception);
   const future = new Date(floorTick().getTime() + 2 * 3_600_000);
@@ -131,10 +135,10 @@ test('a future start, a service still in progress or another day is refused — 
   const running = floorTick();
   const g = await pastWalkIn(s, s.staffA, running);
   assert.equal(g.ok, false, 'a service that has not ended is not «ya se realizó»');
-  const yesterday = new Date(floorTick().getTime() - 27 * 3_600_000);
-  const y = await pastWalkIn(s, s.staffA, yesterday);
-  assert.equal(y.ok, false, 'only today, at the site');
-  for (const d of [future, running, yesterday]) assert.deepEqual(await at(s, d), []);
+  assert.deepEqual(!g.ok && g.problems?.map((p) => p.code), ['not_ended'], 'and it says when it ends');
+  const ck = await checkPastAttendanceAction(s.clientId, { siteId: s.siteId, serviceId: s.serviceBeard, staffId: s.staffA, startAt: running.toISOString() });
+  assert.ok(ck.ok && ck.problems.some((p) => p.code === 'not_ended'), 'the check before confirming says the same');
+  for (const d of [future, running]) assert.deepEqual(await at(s, d), []);
   // Without the walk-in flag (or together with «ahora») the option does not exist.
   const start = new Date(floorTick().getTime() - 3 * 3_600_000);
   assert.equal((await pastWalkIn(s, s.staffA, start, { walkIn: false })).ok, false);
@@ -159,6 +163,7 @@ test('conflicts are shown and nothing else changes: another appointment (even co
   const blocked = await pastWalkIn(s, s.staffB, start);
   assert.equal(blocked.ok, false);
   assert.match(blocked.ok ? '' : blocked.error, /no estaba disponible/);
+  assert.deepEqual(!blocked.ok && blocked.problems?.map((p) => p.code), ['absence'], 'with the rule that was in the way');
   assert.deepEqual((await at(s, start)).length, 1);
 });
 
@@ -259,3 +264,124 @@ test('the bot API and the public page cannot register a past service, whatever t
   assert.ok(pub.status >= 400 && pub.status < 500, `public page refused (got ${pub.status})`);
   assert.deepEqual(await at(s, start), [], 'neither booked anything in the past');
 });
+
+test('an earlier day at its real minute (off the grid): completed, start stored as typed, end from the professional\'s own duration', async () => {
+  const s = await scenario();
+  asUser(s.reception);
+  // Beto does the beard in 45 min (his own duration), not the service's 30.
+  await query(`UPDATE staff_services SET duration_override_min = 45 WHERE staff_id = $1 AND service_id = $2`, [s.staffB, s.serviceBeard]);
+  const start = new Date(floorTick().getTime() - 7 * 24 * 3_600_000 - 3 * 3_600_000 + 7 * 60_000); // a week ago, «:07»
+  const ck = await checkPastAttendanceAction(s.clientId, { siteId: s.siteId, serviceId: s.serviceBeard, staffId: s.staffB, startAt: start.toISOString() });
+  assert.ok(ck.ok, JSON.stringify(ck));
+  assert.equal(ck.ok && ck.durationMin, 45);
+  assert.equal(ck.ok && ck.serviceEndAt, new Date(start.getTime() + 45 * 60_000).toISOString());
+  assert.deepEqual(ck.ok && [ck.problems, ck.conflicts, ck.noShows], [[], [], []]);
+  assert.deepEqual(await at(s, start), [], 'the check writes nothing');
+  const r = await pastWalkIn(s, s.staffB, start);
+  assert.ok(r.ok, JSON.stringify(r));
+  const row = (await query<{ status: string; start_at: Date; service_end_at: Date; duration_min_snapshot: number; created_at: Date }>(
+    `SELECT status, start_at, service_end_at, duration_min_snapshot, created_at FROM appointments WHERE id = $1`, [r.ok ? r.id : ''])).rows[0];
+  assert.equal(row.status, 'completed');
+  assert.equal(row.start_at.toISOString(), start.toISOString(), 'the real start, not snapped to the grid');
+  assert.equal(row.duration_min_snapshot, 45);
+  assert.equal(row.service_end_at.toISOString(), new Date(start.getTime() + 45 * 60_000).toISOString());
+  assert.ok(Date.now() - row.created_at.getTime() < 60_000, 'created_at is when it was registered, a week later');
+});
+
+test('a no-show in that time does not block (someone else was attended); it stays a no-show', async () => {
+  const s = await scenario();
+  asUser(s.reception);
+  const start = new Date(floorTick().getTime() - 2 * 24 * 3_600_000 - 3 * 3_600_000);
+  const noShow = await insertPast(s, s.staffA, start, 'no_show', 'Pedro no vino');
+  const ck = await checkPastAttendanceAction(s.clientId, { siteId: s.siteId, serviceId: s.serviceBeard, staffId: s.staffA, startAt: start.toISOString() });
+  assert.ok(ck.ok && ck.conflicts.length === 0 && ck.noShows.length === 1 && ck.noShows[0].id === noShow, JSON.stringify(ck));
+  const r = await pastWalkIn(s, s.staffA, start);
+  assert.ok(r.ok, JSON.stringify(r));
+  const rows = await query<{ id: string; status: string }>(`SELECT id, status FROM appointments WHERE tenant_id = $1 AND start_at = $2 ORDER BY status`, [s.tenantId, start]);
+  assert.deepEqual(rows.rows.map((x) => x.status).sort(), ['completed', 'no_show'], 'the no-show is untouched');
+});
+
+test('an existing appointment that was never marked blocks a duplicate and is returned to open and complete it', async () => {
+  const s = await scenario();
+  asUser(s.reception);
+  const start = new Date(floorTick().getTime() - 24 * 3_600_000 - 3 * 3_600_000);
+  const existing = await insertPast(s, s.staffB, start, 'confirmed', 'Lucía ya tenía cita');
+  const r = await pastWalkIn(s, s.staffB, new Date(start.getTime() + 10 * 60_000));
+  assert.equal(r.ok, false);
+  assert.ok(!r.ok && r.conflicts?.length === 1, JSON.stringify(r));
+  const c = !r.ok ? r.conflicts![0] : null;
+  assert.equal(c?.id, existing, 'which appointment, to open it');
+  assert.equal(c?.customer, 'Lucía ya tenía cita');
+  assert.equal(c?.status, 'confirmed');
+  assert.ok(c && /^\d{4}-\d{2}-\d{2}$/.test(c.dayKey));
+  const still = (await query<{ status: string }>(`SELECT status FROM appointments WHERE id = $1`, [existing])).rows[0];
+  assert.equal(still.status, 'confirmed', 'nothing was changed');
+});
+
+test('the sale of a recorded visit is won, nothing is sent, and the bot API asks no review for it', async () => {
+  const s = await scenario();
+  asUser(s.reception);
+  const start = new Date(floorTick().getTime() - 3 * 24 * 3_600_000 - 3 * 3_600_000);
+  const phone = `+57301${String(Date.now()).slice(-7)}`;
+  const r = await pastWalkIn(s, s.staffA, start, { customerName: 'Cliente con venta', customerPhone: phone, contactMode: 'create' });
+  assert.ok(r.ok, JSON.stringify(r));
+  const id = r.ok ? r.id : '';
+  const opp = (await query<{ status: string; stage: string }>(
+    `SELECT o.status, o.stage FROM opportunities o JOIN appointments a ON a.opportunity_id = o.id WHERE a.id = $1`, [id])).rows[0];
+  assert.deepEqual(opp, { status: 'won', stage: 'attended' }, 'the same as «Completar»: attended and won');
+  const ev = (await query<{ payload: Record<string, unknown> }>(
+    `SELECT payload FROM scheduling_events WHERE tenant_id = $1 AND event_type = 'appointment.status_changed' AND payload->>'appointment_id' = $2`, [s.tenantId, id])).rows;
+  assert.equal(ev.length, 1);
+  assert.equal(ev[0].payload.already_done, true, 'the realtime hint says it was recorded afterwards');
+  const wfRef = `wf-${s.tenantId.slice(0, 8)}`;
+  const { connectionId } = await seedWorkflow(s.tenantId, s.clientId, wfRef);
+  const { rawToken } = await issueToken(s.tenantId, connectionId, ['scheduling.read', 'scheduling.write']);
+  const { POST: ReviewPost } = (await import('../../web/app/api/scheduling/v1/appointments/[id]/review-link/route.js')) as { POST: (req: Request, ctx: { params: Promise<{ id: string }> }) => Promise<Response> };
+  const res = await ReviewPost(
+    new Request(`http://t/api/scheduling/v1/appointments/${id}/review-link`, { method: 'POST', headers: { Authorization: `Bearer ${rawToken}`, 'x-workflow-ref': wfRef } }),
+    { params: Promise.resolve({ id }) },
+  );
+  assert.equal(res.status, 409);
+  assert.equal(((await res.json()) as { error: { code: string } }).error.code, 'registered_after_service');
+  assert.equal((await query(`SELECT 1 FROM appointment_reviews WHERE appointment_id = $1`, [id])).rowCount, 0, 'no review request exists');
+});
+
+test('a staff login checks and records only in its own column', async () => {
+  const s = await scenario();
+  const start = new Date(floorTick().getTime() - 24 * 3_600_000 - 2 * 3_600_000);
+  const staffUser = randomUUID();
+  await query(`INSERT INTO "user" (id, name, email, "emailVerified") VALUES ($1,'S',$2,true)`, [staffUser, `p-${staffUser.slice(0, 6)}@t.local`]);
+  await query(
+    `INSERT INTO tenant_members (tenant_id, user_id, role, member_client_id, client_role, scheduling_site_id, scheduling_staff_id) VALUES ($1,$2,'member',$3,'staff',$4,$5)`,
+    [s.tenantId, staffUser, s.clientId, s.siteId, s.staffA],
+  );
+  asUser(staffUser);
+  const other = await checkPastAttendanceAction(s.clientId, { siteId: s.siteId, serviceId: s.serviceBeard, staffId: s.staffB, startAt: start.toISOString() });
+  assert.equal(other.ok, false, "never another professional's column, not even to read it");
+  const own = await pastWalkIn(s, s.staffA, start);
+  assert.ok(own.ok, JSON.stringify(own));
+  await query(`DELETE FROM tenant_members WHERE user_id = $1`, [staffUser]);
+  await query(`DELETE FROM "user" WHERE id = $1`, [staffUser]);
+});
+
+test('the same form sent twice at once (double click, retry): one appointment, both answers point to it', async () => {
+  const s = await scenario();
+  asUser(s.reception);
+  const start = new Date(floorTick().getTime() - 5 * 24 * 3_600_000 - 3 * 3_600_000);
+  const key = randomUUID();
+  const [a, b] = await Promise.all([pastWalkIn(s, s.staffA, start, { idempotencyKey: key }), pastWalkIn(s, s.staffA, start, { idempotencyKey: key })]);
+  assert.ok(a.ok && b.ok, JSON.stringify([a, b]));
+  assert.equal(a.ok && b.ok && a.id, b.ok ? b.id : '', 'the same appointment');
+  assert.deepEqual((await at(s, start)).map((x) => x.status), ['completed']);
+});
+
+async function insertPast(s: S, staffId: string, start: Date, status: string, guest: string): Promise<string> {
+  const end = new Date(start.getTime() + 30 * 60_000);
+  const r = await query<{ id: string }>(
+    `INSERT INTO appointments (tenant_id, client_id, site_id, staff_id, service_id, start_at, service_end_at, blocked_from, blocked_until,
+       service_name_snapshot, duration_min_snapshot, status, origin, created_by_type, guest_name)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$6,$7,'Beard trim',30,$8,'public','public',$9) RETURNING id`,
+    [s.tenantId, s.clientId, s.siteId, staffId, s.serviceBeard, start, end, status, guest],
+  );
+  return r.rows[0].id;
+}

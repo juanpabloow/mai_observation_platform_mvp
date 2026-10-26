@@ -9,10 +9,13 @@ import { normalizeE164, dialingRegionForTimezone } from './phone.js';
 import {
   isSlotAvailable,
   loadAvailability,
+  loadExplainExceptions,
+  prepareAvailability,
   resolveEffectivePrice,
 } from '../db/repositories/scheduling/availabilityData.js';
 import {
   countActiveFutureForPhoneAtSite,
+  getAppointmentById,
   getAppointmentForUpdate,
   findByIdempotencyKey,
   insertAppointment,
@@ -27,7 +30,7 @@ import {
 } from '../db/repositories/scheduling/appointments.js';
 import { recordSchedulingEvent } from '../db/repositories/scheduling/events.js';
 import { isImmediateStart } from './immediate.js';
-import { utcToZonedParts } from './timezone.js';
+import { checkPastInterval, type PastProblem } from './pastAttendance.js';
 import { isSchedulingBookable, isSchedulingEnabledForUpdate } from '../db/repositories/clientModules.js';
 import { pipelineOnAppointmentStatusChanged, pipelineOnBookingCreated } from '../pipeline/hooks.js';
 
@@ -55,13 +58,21 @@ export type BookingError =
   | 'price_changed' // the price the customer was shown is no longer the price (zero writes)
   | 'stale' // reschedule: the appointment moved since the operator read it (agenda UI only)
   | 'not_immediate' // immediate walk-in asked for a start outside "now" (agenda UI only)
-  | 'not_past' // a walk-in registered as ALREADY DONE whose service has not ended today (agenda UI only)
+  | 'not_past' // a walk-in registered as ALREADY DONE whose service has not ended yet (agenda UI only)
   | 'past_overlap' // that past walk-in overlaps another appointment of the professional (agenda UI only)
   | 'not_started'; // "completed" asked before the appointment starts (agenda UI only)
 
 export type BookingResult<T> =
   | { ok: true; value: T; deduped?: boolean }
-  | { ok: false; error: BookingError; message: string; /** price_changed only: the current price. */ price?: string | null };
+  | {
+      ok: false;
+      error: BookingError;
+      message: string;
+      /** price_changed only: the current price. */
+      price?: string | null;
+      /** PAST WALK-IN only: each schedule rule the interval ran into (hours, break, block…). */
+      problems?: PastProblem[];
+    };
 
 export interface CreateAppointmentInput {
   tenantId: string;
@@ -90,14 +101,15 @@ export interface CreateAppointmentInput {
    *  only for a start inside the immediate window. Set by the agenda's walk-in action for
    *  an authorised login — never by the bot API or the public page. */
   immediateWalkIn?: boolean;
-  /** PAST WALK-IN («Esta atención ya se realizó»): reception registering, at the end of the
-   *  day, a service that ALREADY happened today. The slot is checked against the same rules as
-   *  of its own start (hours, breaks, blocks, absences, the professional's services, active
-   *  appointments) instead of «now», the minimum notice does not apply, and it is refused
-   *  unless the whole service ENDED before now on the site's current day; it also refuses an
-   *  overlap with ANY non-cancelled appointment of that professional (completed ones too),
-   *  and never moves or changes another appointment. Walk-in origin only; set by the agenda's
-   *  walk-in action for an authorised login — never by the bot API or the public page. */
+  /** PAST WALK-IN («Registrar atención realizada»): reception recording a service that ALREADY
+   *  happened — today or any earlier day; no retroactive limit. The EXACT start is checked
+   *  (planPastAttendance: not the slot grid, no minimum notice) against the professional's
+   *  services, the site's and their hours that day, breaks, blocks and absences, and it is
+   *  refused unless the whole service ENDED before now. It also refuses an overlap with an
+   *  ACTIVE or COMPLETED appointment of that professional — a no-show does not block, since
+   *  someone else may have been attended in that time — and never moves or changes another
+   *  appointment. Requires a professional. Walk-in origin only; set by the agenda's walk-in
+   *  action for an authorised login — never by the bot API or the public page. */
   pastWalkIn?: boolean;
   /** I-1: additional identities the booking declares for the appointment's contact (the
    *  attendee) — attached through the same identity chokepoint as everything else. Applies to
@@ -208,48 +220,63 @@ export async function createAppointment(
     if (existing) return replayOrConflict(existing, input);
   }
 
-  // 2. Resolve timing + choose a concrete staff via the availability engine.
-  const avail = await loadAvailability({
-    tenantId: input.tenantId,
-    siteId: input.siteId,
-    serviceId: input.serviceId,
-    staffId: input.staffId ?? null,
-    from: new Date(input.startAt.getTime() - 60 * MS_PER_MIN),
-    // The upper bound must exceed startAt + serviceDuration, else availability.ts
-    // (`s + durMs > rangeEnd` → skip) filters out the requested start for any service
-    // LONGER than this window and the booking 409s `unavailable` even though the wide-
-    // window availability endpoint offered it (C-1: a 60-min window silently blocked
-    // every 75-min "Corte + barba"). Any single-day service fits within 24h; the free
-    // interval + min-notice + horizon remain the real gates. We only .find() the exact
-    // start, so the extra candidates are harmless.
-    to: new Date(input.startAt.getTime() + 24 * 60 * MS_PER_MIN),
-    // A past walk-in is evaluated AS OF its own start: every rule but «already started».
-    now: input.pastWalkIn ? input.startAt : now,
-    ignoreMinNotice: input.immediateWalkIn === true || input.pastWalkIn === true,
-  });
-  if (!avail) return { ok: false, error: 'not_found', message: 'Service is not offered at this site.' };
-  if (input.immediateWalkIn && !isImmediateStart(input.startAt, now, avail.slotIntervalMin)) {
-    return { ok: false, error: 'not_immediate', message: 'An immediate walk-in must start now.' };
-  }
+  // 2. Resolve timing + choose a concrete staff: the availability engine's own starts, or —
+  //    for a service that already happened — the exact interval (planPastAttendance).
+  let plan: { clientId: string; timezone: string; buffers: { before_min: number; after_min: number }; staffId: string; serviceEnd: Date };
   if (input.pastWalkIn) {
-    const day = (d: Date) => {
-      const p = utcToZonedParts(d, avail.site.timezone);
-      return `${p.year}-${p.month}-${p.day}`;
-    };
-    if (day(input.startAt) !== day(now)) {
-      return { ok: false, error: 'not_past', message: 'A past walk-in must be from today at the site.' };
+    const past = await planPastAttendance({
+      tenantId: input.tenantId,
+      siteId: input.siteId,
+      serviceId: input.serviceId,
+      staffId: input.staffId ?? null,
+      startAt: input.startAt,
+      now,
+    });
+    if (!past.ok) {
+      return past.error === 'no_staff'
+        ? { ok: false, error: 'no_staff', message: 'That professional does not offer this service.' }
+        : { ok: false, error: 'not_found', message: 'Service is not offered at this site.' };
     }
+    if (past.plan.problems.length > 0) {
+      const notEnded = past.plan.problems.some((p) => p.code === 'not_ended');
+      return notEnded
+        ? { ok: false, error: 'not_past', message: 'The service has not ended yet.', problems: past.plan.problems }
+        : { ok: false, error: 'unavailable', message: 'The professional was not available at that time.', problems: past.plan.problems };
+    }
+    plan = { clientId: past.plan.clientId, timezone: past.plan.timezone, buffers: past.plan.buffers, staffId: past.plan.staffId, serviceEnd: past.plan.serviceEnd };
+  } else {
+    const avail = await loadAvailability({
+      tenantId: input.tenantId,
+      siteId: input.siteId,
+      serviceId: input.serviceId,
+      staffId: input.staffId ?? null,
+      from: new Date(input.startAt.getTime() - 60 * MS_PER_MIN),
+      // The upper bound must exceed startAt + serviceDuration, else availability.ts
+      // (`s + durMs > rangeEnd` → skip) filters out the requested start for any service
+      // LONGER than this window and the booking 409s `unavailable` even though the wide-
+      // window availability endpoint offered it (C-1: a 60-min window silently blocked
+      // every 75-min "Corte + barba"). Any single-day service fits within 24h; the free
+      // interval + min-notice + horizon remain the real gates. We only .find() the exact
+      // start, so the extra candidates are harmless.
+      to: new Date(input.startAt.getTime() + 24 * 60 * MS_PER_MIN),
+      now,
+      ignoreMinNotice: input.immediateWalkIn === true,
+    });
+    if (!avail) return { ok: false, error: 'not_found', message: 'Service is not offered at this site.' };
+    if (input.immediateWalkIn && !isImmediateStart(input.startAt, now, avail.slotIntervalMin)) {
+      return { ok: false, error: 'not_immediate', message: 'An immediate walk-in must start now.' };
+    }
+    const slot = avail.slots.find((s) => s.start_at.getTime() === input.startAt.getTime());
+    if (!slot) return { ok: false, error: 'unavailable', message: 'That time is no longer available.' };
+    const candidate = slot.candidates.find((c) => c.staff_id === (input.staffId ?? slot.staff_id));
+    if (!candidate) {
+      return { ok: false, error: 'no_staff', message: 'The requested staff is not available for that time.' };
+    }
+    plan = { clientId: avail.site.client_id, timezone: avail.site.timezone, buffers: avail.buffers, staffId: candidate.staff_id, serviceEnd: candidate.service_end_at };
   }
+  const chosenStaffId = plan.staffId;
 
-  const slot = avail.slots.find((s) => s.start_at.getTime() === input.startAt.getTime());
-  if (!slot) return { ok: false, error: 'unavailable', message: 'That time is no longer available.' };
-  const chosenStaffId = input.staffId ?? slot.staff_id;
-  const candidate = slot.candidates.find((c) => c.staff_id === chosenStaffId);
-  if (!candidate) {
-    return { ok: false, error: 'no_staff', message: 'The requested staff is not available for that time.' };
-  }
-
-  const clientId = avail.site.client_id;
+  const clientId = plan.clientId;
   // Unconditional: the resolved site's client MUST match the required scope.
   if (clientId !== input.scopeClientId) {
     return { ok: false, error: 'not_found', message: 'Service is not offered at this site.' };
@@ -262,15 +289,10 @@ export async function createAppointment(
   if (serviceName == null) return { ok: false, error: 'not_found', message: 'Service not found.' };
 
   // Per-staff service window (the chosen staff's own duration), plus service-level buffers.
-  const serviceEnd = candidate.service_end_at;
+  const serviceEnd = plan.serviceEnd;
   const durationMinSnapshot = Math.round((serviceEnd.getTime() - input.startAt.getTime()) / MS_PER_MIN);
-  const blockedFrom = new Date(input.startAt.getTime() - avail.buffers.before_min * MS_PER_MIN);
-  const blockedUntil = new Date(serviceEnd.getTime() + avail.buffers.after_min * MS_PER_MIN);
-  if (input.pastWalkIn) {
-    if (serviceEnd.getTime() > now.getTime()) {
-      return { ok: false, error: 'not_past', message: 'The service has not ended yet.' };
-    }
-  }
+  const blockedFrom = new Date(input.startAt.getTime() - plan.buffers.before_min * MS_PER_MIN);
+  const blockedUntil = new Date(serviceEnd.getTime() + plan.buffers.after_min * MS_PER_MIN);
 
   // 2b. §2: a customer_phone typed in chat may be LOCAL (no country code). Normalize it
   //     against the SITE's dialing region (derived from its timezone) BEFORE any write, so
@@ -280,7 +302,7 @@ export async function createAppointment(
   let normalizedCustomerPhone: string | null = null;
   if (typeof input.customerPhone === 'string' && input.customerPhone.trim() !== '') {
     normalizedCustomerPhone = normalizeE164(input.customerPhone, {
-      defaultRegion: dialingRegionForTimezone(avail.site.timezone),
+      defaultRegion: dialingRegionForTimezone(plan.timezone),
     });
     if (!normalizedCustomerPhone) {
       return {
@@ -301,13 +323,20 @@ export async function createAppointment(
       if (!(await isSchedulingEnabledForUpdate(client, input.tenantId, clientId))) {
         return { kind: 'module_disabled' as const };
       }
-      // PAST WALK-IN — before ANY write: the engine's busy set and the DB exclusion only hold
-      // ACTIVE appointments, so an overlap with what this professional already completed (or a
-      // no-show) is checked here, serialized per professional (a concurrent past registration
-      // for the same person waits, then sees the committed one).
+      // PAST WALK-IN — before ANY write: the DB exclusion only holds ACTIVE appointments, so an
+      // overlap with one this professional already COMPLETED is checked here too, serialized per
+      // professional (a concurrent past registration for the same person waits, then sees the
+      // committed one). A NO-SHOW never blocks: someone else may have been attended in its place.
       if (input.pastWalkIn) {
         await client.query(`SELECT pg_advisory_xact_lock(hashtext($1))`, [`past-walk-in:${chosenStaffId}`]);
-        if ((await listStaffAppointmentsOverlapping(input.tenantId, input.siteId, chosenStaffId, blockedFrom, blockedUntil, client)).length > 0) {
+        // The same form sent twice at once (a double click, a network retry): the one that
+        // waited sees the other's committed row and replays it instead of calling it an overlap.
+        if (input.idempotencyKey) {
+          const existing = await findByIdempotencyKey(input.tenantId, input.idempotencyKey, client);
+          if (existing) return { kind: 'replay' as const, existing };
+        }
+        const overlapping = await listStaffAppointmentsOverlapping(input.tenantId, input.siteId, chosenStaffId, blockedFrom, blockedUntil, client);
+        if (overlapping.some((a) => blocksPastAttendance(a.status))) {
           return { kind: 'past_overlap' as const };
         }
       }
@@ -466,8 +495,8 @@ export async function createAppointment(
         serviceNameSnapshot: serviceName,
         durationMinSnapshot,
         priceSnapshot,
-        bufferBeforeMinSnapshot: avail.buffers.before_min,
-        bufferAfterMinSnapshot: avail.buffers.after_min,
+        bufferBeforeMinSnapshot: plan.buffers.before_min,
+        bufferAfterMinSnapshot: plan.buffers.after_min,
         origin: input.origin,
         createdByType: input.createdByType,
         createdByUserId: input.createdByUserId ?? null,
@@ -533,6 +562,7 @@ export async function createAppointment(
     if (created.kind === 'past_overlap') {
       return { ok: false, error: 'past_overlap', message: 'It overlaps another appointment of this professional.' };
     }
+    if (created.kind === 'replay') return replayOrConflict(created.existing, input);
     const appt = created.appt;
 
     // 4. Realtime AFTER commit.
@@ -552,9 +582,12 @@ export async function createAppointment(
         clientId: appt.client_id,
         siteId: appt.site_id,
         eventType: 'appointment.status_changed',
-        payload: { appointment_id: appt.id, status: 'completed', staff_id: appt.staff_id, start_at: appt.start_at },
+        payload: { appointment_id: appt.id, status: 'completed', staff_id: appt.staff_id, start_at: appt.start_at, already_done: true },
       });
-      await pipelineOnAppointmentStatusChanged(appt, 'completed', input.createdByType, input.createdByUserId ?? null);
+      // The sale was linked just above (post-commit), so the row read inside the transaction
+      // has no opportunity_id yet: read it again, or the sale would stay «booked» forever.
+      const linked = (await getAppointmentById(appt.tenant_id, appt.id)) ?? appt;
+      await pipelineOnAppointmentStatusChanged(linked, 'completed', input.createdByType, input.createdByUserId ?? null);
     }
     return { ok: true, value: appt };
   } catch (err) {
@@ -575,6 +608,93 @@ export async function createAppointment(
     }
     throw err;
   }
+}
+
+/** Which appointments of the professional a past attendance may NOT overlap: the active ones
+ *  and the completed ones. A no-show does not block — the time was free after all. */
+export function blocksPastAttendance(status: string): boolean {
+  return status === 'scheduled' || status === 'confirmed' || status === 'completed';
+}
+
+export interface PastAttendancePlan {
+  clientId: string;
+  timezone: string;
+  staffId: string;
+  buffers: { before_min: number; after_min: number };
+  /** The professional's own duration for the service (staff → site → service). */
+  durationMin: number;
+  serviceEnd: Date;
+  blockedFrom: Date;
+  blockedUntil: Date;
+  /** Every schedule rule the exact interval runs into (empty = it fits). */
+  problems: PastProblem[];
+  /** The professional's non-cancelled appointments it overlaps (no-shows included, flagged by
+   *  status: the caller decides with blocksPastAttendance). */
+  overlapping: Array<{ id: string; start_at: Date; service_end_at: Date; status: string; service_name: string; customer_name: string | null }>;
+}
+
+/**
+ * The EXACT interval a past attendance would occupy and what stands in its way — read-only,
+ * shared by createAppointment (pastWalkIn) and the agenda's check before confirming, so the
+ * form and the write always agree. Same inputs as the availability engine (prepareAvailability:
+ * the professional must offer the service at this site and take bookings), but no slot grid,
+ * no minimum notice and no horizon: a service that happened at 10:07 is recorded at 10:07.
+ */
+export async function planPastAttendance(params: {
+  tenantId: string;
+  siteId: string;
+  serviceId: string;
+  staffId: string | null;
+  startAt: Date;
+  now: Date;
+}): Promise<{ ok: true; plan: PastAttendancePlan } | { ok: false; error: 'not_found' | 'no_staff' }> {
+  if (!params.staffId) return { ok: false, error: 'no_staff' };
+  const prepared = await prepareAvailability({
+    tenantId: params.tenantId,
+    siteId: params.siteId,
+    serviceId: params.serviceId,
+    staffId: params.staffId,
+    from: new Date(params.startAt.getTime() - 24 * 60 * MS_PER_MIN),
+    to: new Date(params.startAt.getTime() + 24 * 60 * MS_PER_MIN),
+    now: params.startAt,
+  });
+  if (!prepared) return { ok: false, error: 'not_found' };
+  const staff = prepared.request?.staff.find((s) => s.id === params.staffId);
+  if (!prepared.request || !staff) return { ok: false, error: 'no_staff' };
+  const durationMin = staff.timing.duration_min;
+  const serviceEnd = new Date(params.startAt.getTime() + durationMin * MS_PER_MIN);
+  const blockedFrom = new Date(params.startAt.getTime() - staff.timing.buffer_before_min * MS_PER_MIN);
+  const blockedUntil = new Date(serviceEnd.getTime() + staff.timing.buffer_after_min * MS_PER_MIN);
+  const blocks = await loadExplainExceptions({ tenantId: params.tenantId, siteId: params.siteId, from: blockedFrom, to: blockedUntil, staffIds: [staff.id] });
+  const problems = checkPastInterval({
+    timezone: prepared.site.timezone,
+    siteHours: prepared.request.site.opening_hours,
+    staffHours: staff.working_hours,
+    siteBreaks: blocks.siteBreaks,
+    staffBreaks: blocks.staffBreaks.get(staff.id) ?? [],
+    siteBlocks: blocks.site,
+    staffBlocks: blocks.staff.get(staff.id) ?? [],
+    from: blockedFrom,
+    until: blockedUntil,
+    serviceEnd,
+    now: params.now,
+  });
+  const overlapping = await listStaffAppointmentsOverlapping(params.tenantId, params.siteId, staff.id, blockedFrom, blockedUntil);
+  return {
+    ok: true,
+    plan: {
+      clientId: prepared.site.client_id,
+      timezone: prepared.site.timezone,
+      staffId: staff.id,
+      buffers: { before_min: staff.timing.buffer_before_min, after_min: staff.timing.buffer_after_min },
+      durationMin,
+      serviceEnd,
+      blockedFrom,
+      blockedUntil,
+      problems,
+      overlapping,
+    },
+  };
 }
 
 async function serviceNameFor(tenantId: string, clientId: string, serviceId: string): Promise<string | null> {
