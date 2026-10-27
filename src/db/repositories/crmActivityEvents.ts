@@ -31,7 +31,9 @@ export type CrmEventType =
   | 'consent_changed'
   // AT-1: lead origin assigned, and an inbound ad/post touch recorded.
   | 'origin_set'
-  | 'attribution_touch';
+  | 'attribution_touch'
+  // JP-3: the customer's visible WhatsApp username changed (display/contact-point only, never a key).
+  | 'whatsapp_username_changed';
 
 export type ActorKind = 'user' | 'automation';
 

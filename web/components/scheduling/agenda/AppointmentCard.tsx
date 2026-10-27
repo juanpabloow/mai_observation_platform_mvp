@@ -37,6 +37,8 @@ export const CANCEL_REASONS = ["Cliente canceló", "Reprogramará", "Profesional
 const ACTIVITY_LABEL: Record<AppointmentActivityItem["type"], string> = {
   created: "Creada",
   rescheduled: "Reagendada",
+  service_changed: "Servicio cambiado",
+  time_corrected: "Hora corregida",
   cancelled: "Cancelada",
   confirmed: "Confirmada",
   completed: "Completada",
@@ -89,6 +91,10 @@ export function AppointmentCard(props: {
   onStatus: (target: Target, reason?: string) => void;
   /** Desktop: reschedule inside the panel. Phone: the full-screen flow. Null = not offered. */
   onReschedule: (() => void) | null;
+  /** JP-4 «Cambiar servicio» — opens the service-change flow. Null = not offered. */
+  onChangeService: (() => void) | null;
+  /** JP-4 «Corregir hora o profesional» — opens the time-correction flow. Null = not offered. */
+  onCorrectTime: (() => void) | null;
   loadActivity: () => Promise<{ ok: true; items: AppointmentActivityItem[] } | { ok: false; error: string }>;
   loadReviewLink: ReviewLinkLoader;
   payment?: PaymentHooks | null;
@@ -438,6 +444,20 @@ export function AppointmentCard(props: {
               <dd className="min-w-0 flex-1">{props.originLabel}</dd>
             </div>
           </dl>
+          {props.onChangeService || props.onCorrectTime ? (
+            <div className="flex flex-wrap gap-x-4 gap-y-1 pt-2">
+              {props.onChangeService ? (
+                <button type="button" className="u-focus c5-link" onClick={props.onChangeService} disabled={props.pending}>
+                  Cambiar servicio
+                </button>
+              ) : null}
+              {props.onCorrectTime ? (
+                <button type="button" className="u-focus c5-link" onClick={props.onCorrectTime} disabled={props.pending}>
+                  Corregir hora o profesional
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {props.contactSlot ? <div className="flex flex-col gap-2.5 pt-2">{props.contactSlot}</div> : null}
           {links.length > 0 ? <div className="flex flex-wrap gap-x-4 pt-1">{links}</div> : null}
         </section>
@@ -517,6 +537,11 @@ function ActivitySection({ load, timezone: tz }: { load: () => Promise<{ ok: tru
                 {item.fromStart && item.toStart ? (
                   <span className="c5-num text-[12px] text-[var(--c5-sec)]">
                     {longDate(item.fromStart, tz)} {fmtTime(item.fromStart, tz)} → {longDate(item.toStart, tz)} {fmtTime(item.toStart, tz)}
+                  </span>
+                ) : null}
+                {item.fromService && item.toService && item.fromService !== item.toService ? (
+                  <span className="text-[12px] text-[var(--c5-sec)]">
+                    {item.fromService} → {item.toService}
                   </span>
                 ) : null}
                 {item.reason ? <span className="text-[12px] text-[var(--c5-sec)]">Motivo: {item.reason}</span> : null}

@@ -32,6 +32,14 @@ export interface ActionPlan {
   /** Phone footer primary: the next valid step (Sin confirmar → Confirmar, Confirmada → Completar). */
   primary: Target | null;
   reschedule: boolean;
+  /** JP-4 «Cambiar servicio» — change the booked service (scheduled/confirmed/completed).
+   *  Offered for completed too (D3); a completed appointment with a recorded payment is
+   *  routed to void → re-charge inside the flow, and the server refuses it anyway. */
+  changeService: boolean;
+  /** JP-4 «Corregir hora o profesional» — a CORRECTION (past/completed allowed), distinct
+   *  from Reagendar. Any status except cancelled; the server refuses an artist change on a
+   *  paid appointment (void → re-charge). */
+  correctTime: boolean;
   /** "Ver actividad" — the server reads it through the same appointment gate. */
   readActivity: boolean;
   /** "Enlace de reseña" — only for a COMPLETED appointment this login may act on. */
@@ -59,6 +67,8 @@ export function appointmentActionPlan(input: {
     complete: transitions.includes("completed"),
     primary: !allowed || !live ? null : input.status === "scheduled" ? "confirmed" : started ? "completed" : null,
     reschedule: allowed && live,
+    changeService: allowed && (input.status === "scheduled" || input.status === "confirmed" || input.status === "completed"),
+    correctTime: allowed && input.status !== "cancelled",
     readActivity: allowed,
     reviewLink: allowed && input.status === "completed",
   };

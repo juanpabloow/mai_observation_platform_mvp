@@ -103,6 +103,8 @@ export interface ContactEditInitial {
   isCustomer: boolean;
   assignedTo: string | null;
   preferredChannel: PreferredChannel | null;
+  /** JP-3: the visible WhatsApp username (without "@"), or null. Display only. */
+  whatsappUsername: string | null;
   doNotContact: boolean;
   consent: string;
   consentUpdatedAt: string | null; // ISO

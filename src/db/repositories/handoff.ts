@@ -97,8 +97,10 @@ export class IllegalModeTransitionError extends Error {
  *   bot → pending  (workflow | platform_rule)   -- an escalation is raised
  *   bot → human    (agent)                       -- an agent takes over directly
  *   pending → human(agent)                       -- an agent claims an escalation
- *   pending → bot  (agent)                       -- an agent dismisses it
- *   human → bot    (agent)                       -- an agent hands back to the bot
+ *   pending → bot  (agent | platform_rule)       -- an agent dismisses it, OR the auto-return
+ *       sweep hands an unattended escalation back to the bot (JP-2)
+ *   human → bot    (agent | platform_rule)       -- an agent hands back, OR the auto-return sweep
+ *       returns a human conversation with no recent agent message (JP-2)
  *   human → pending(platform_rule)               -- ORPHAN RELEASE: the assigned
  *       agent was removed, so the platform re-queues the conversation. This edge is
  *       platform_rule ONLY — an agent can never move a live conversation straight
@@ -113,8 +115,11 @@ const LEGAL_TRANSITIONS: ReadonlyArray<{
   { from: 'bot', to: 'pending', sources: ['workflow', 'platform_rule'] },
   { from: 'bot', to: 'human', sources: ['agent'] },
   { from: 'pending', to: 'human', sources: ['agent'] },
-  { from: 'pending', to: 'bot', sources: ['agent'] },
-  { from: 'human', to: 'bot', sources: ['agent'] },
+  // 'platform_rule' (JP-2): the AUTO-RETURN sweep hands an unattended pending conversation back to
+  // the bot after the per-client threshold (reason_code 'auto_return'); an agent still dismisses too.
+  { from: 'pending', to: 'bot', sources: ['agent', 'platform_rule'] },
+  // 'platform_rule' (JP-2): same sweep returns a human conversation with no recent agent message.
+  { from: 'human', to: 'bot', sources: ['agent', 'platform_rule'] },
   { from: 'human', to: 'pending', sources: ['platform_rule'] },
 ];
 
@@ -642,6 +647,8 @@ export interface InboxConversationRow {
    *  name across clients. NULL for an unattributed conversation. */
   contact_name: string | null;
   contact_channel: string | null;
+  /** JP-3: the contact's visible WhatsApp username (without "@"), or null. */
+  contact_whatsapp_username: string | null;
   /**
    * How many times this person has actually been in — completed appointments.
    *
@@ -664,6 +671,7 @@ export interface InboxConversationRow {
 const contactLateral = (client: string): string => `
   SELECT ct.name AS contact_name,
          ct.channel AS contact_channel,
+         ct.whatsapp_username AS contact_whatsapp_username,
          -- COMPLETED appointments — the number the queue prints in the avatar disc.
          --
          -- A correlated count rather than a grouped rollup, deliberately: this lateral
@@ -702,6 +710,8 @@ export interface InboxConversationDetail extends ConversationRow {
   /** Same client-scoped contact resolution as the list — see contactLateral. */
   contact_name: string | null;
   contact_channel: string | null;
+  /** JP-3: the contact's visible WhatsApp username (without "@"), or null. */
+  contact_whatsapp_username: string | null;
   contact_visit_count: number;
   /** The linked contact (conversations.contact_id) — nullable; returned by the SELECT c.*
    *  detail reads. Scoped by the canonical-workflow client, but the pointed-at contact is
@@ -721,7 +731,7 @@ export async function getConversationForClient(
 ): Promise<InboxConversationDetail | null> {
   const r = await query<InboxConversationDetail>(
     `SELECT c.*, cw.workflow_name, u.name AS assigned_agent_name,
-            ct.contact_name, ct.contact_channel, ct.contact_visit_count
+            ct.contact_name, ct.contact_channel, ct.contact_whatsapp_username, ct.contact_visit_count
        FROM conversations c
        JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON cw.client_id = $2
        LEFT JOIN LATERAL (${contactLateral('$2')}) ct ON true
@@ -986,6 +996,9 @@ export interface ModeTransitionRow {
   source: TransitionSource;
   agent_name: string | null;
   reason_code: string | null;
+  /** JP-2: the auto-return sweep stores the threshold (minutes) here, so the thread can say
+   *  "tras 1 h sin atención". Null for most transitions. */
+  detail: string | null;
   created_at: Date;
 }
 export async function listModeTransitions(
@@ -993,7 +1006,7 @@ export async function listModeTransitions(
   conversationId: string,
 ): Promise<ModeTransitionRow[]> {
   const r = await query<ModeTransitionRow>(
-    `SELECT t.id, t.from_mode, t.to_mode, t.source, t.reason_code, t.created_at,
+    `SELECT t.id, t.from_mode, t.to_mode, t.source, t.reason_code, t.detail, t.created_at,
             u.name AS agent_name
        FROM conversation_mode_transitions t
        LEFT JOIN "user" u ON u.id = t.agent_user_id

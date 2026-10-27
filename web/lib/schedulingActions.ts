@@ -16,6 +16,8 @@ import { reviewLinkSecret, reviewPath, signReviewToken } from "./reviewLink";
 import {
   blocksPastAttendance,
   createAppointment,
+  changeAppointmentService,
+  correctAppointmentTime,
   planPastAttendance,
   rescheduleAppointment,
   transitionStatus,
@@ -576,6 +578,88 @@ const RESCHEDULE_TERMINAL: Partial<Record<string, string>> = {
   no_show: "Esta cita quedó como inasistencia: no se puede cambiar su fecha.",
 };
 
+// ── JP-4: edit an existing appointment (service change + time/staff correction) ──────────────
+/** JP-4 refusals, in the operator's words. */
+const EDIT_ERROR: Partial<Record<string, string>> = {
+  unavailable: "El cambio se cruza con otra cita de este profesional. Ajusta o mueve la otra cita.",
+  conflict_slot: "Alguien acaba de ocupar ese horario. Elige otro.",
+  invalid_transition: "Esta cita ya no se puede editar así.",
+  service_not_performed: "El profesional asignado no realiza ese servicio.",
+  payment_recorded: "Esta cita tiene un cobro registrado. Anula el cobro, haz el cambio y vuelve a cobrar.",
+  module_disabled: "La agenda está desactivada para este negocio.",
+  not_found: GENERIC_GATE,
+};
+
+/**
+ * JP-4 A1 — change an appointment's service. agenda.book (agency / Client Owner / Setter; a Staff
+ * login on its own column). A Staff login may NOT change the service of a COMPLETED appointment (D3);
+ * a completed appointment with a recorded payment is refused by the engine (void → re-charge, D1).
+ */
+export async function changeAppointmentServiceAction(
+  clientId: string,
+  appointmentId: string,
+  newServiceId: string,
+): Promise<ActionResult> {
+  if (!isUuid(appointmentId) || !isUuid(newServiceId)) return { ok: false, error: GENERIC_GATE };
+  const gated = await gateAppointment(clientId, appointmentId, "agenda.book");
+  if (!gated.ok) return { ok: false, error: gated.error };
+  const { ctx, appointment } = gated;
+  if (appointment.status === "completed" && isSchedulingStaff(ctx.scope)) {
+    return { ok: false, error: "Una cuenta de profesional no puede cambiar el servicio de una cita completada." };
+  }
+  const r = await changeAppointmentService({
+    tenantId: ctx.scope.tenantId,
+    appointmentId,
+    newServiceId,
+    scopeClientId: ctx.client.id,
+    actorType: "agent",
+    actorUserId: ctx.scope.userId,
+  });
+  if (!r.ok) return { ok: false, error: EDIT_ERROR[r.error] ?? messageFor(r.error, "No se pudo cambiar el servicio."), code: r.error };
+  revalidatePath(agendaPath(ctx.client.id));
+  return { ok: true };
+}
+
+/**
+ * JP-4 B — correct the time (and optionally the artist) of an existing appointment, even a past or
+ * completed one (a CORRECTION, not a reschedule). agenda.book — allowed for the Setter on completed
+ * appointments too (D2); a Staff login can't move it to another professional's column. Changing the
+ * artist on an appointment with a recorded payment is refused by the engine (void → re-charge, D5).
+ */
+export async function correctAppointmentTimeAction(
+  clientId: string,
+  appointmentId: string,
+  startAt: string,
+  staffId?: string | null,
+  reason?: string | null,
+): Promise<ActionResult> {
+  if (!isUuid(appointmentId) || (staffId && !isUuid(staffId))) return { ok: false, error: GENERIC_GATE };
+  const gated = await gateAppointment(clientId, appointmentId, "agenda.book");
+  if (!gated.ok) return { ok: false, error: gated.error };
+  const { ctx, appointment } = gated;
+  if (isSchedulingStaff(ctx.scope) && staffId && !canAccessSchedulingStaff(ctx.scope, staffId)) {
+    return { ok: false, error: GENERIC_GATE };
+  }
+  const start = new Date(startAt);
+  if (Number.isNaN(start.getTime())) return { ok: false, error: "La hora no es válida." };
+  if (start.getTime() === new Date(appointment.start_at).getTime() && (staffId ?? appointment.staff_id) === appointment.staff_id) {
+    return { ok: false, error: "Elige una hora o un profesional distintos a los actuales." };
+  }
+  const r = await correctAppointmentTime({
+    tenantId: ctx.scope.tenantId,
+    appointmentId,
+    startAt: start,
+    staffId: staffId ?? null,
+    scopeClientId: ctx.client.id,
+    actorType: "agent",
+    actorUserId: ctx.scope.userId,
+    reason: reason?.trim().slice(0, 500) || null,
+  });
+  if (!r.ok) return { ok: false, error: EDIT_ERROR[r.error] ?? messageFor(r.error, "No se pudo corregir la hora."), code: r.error };
+  revalidatePath(agendaPath(ctx.client.id));
+  return { ok: true };
+}
+
 /**
  * One row of an appointment's ACTIVITY ("Ver actividad" in the agenda detail) — a
  * read-only projection of `appointment_events`. Deliberately narrow: what happened,
@@ -585,17 +669,22 @@ const RESCHEDULE_TERMINAL: Partial<Record<string, string>> = {
  */
 export interface AppointmentActivityItem {
   id: string;
-  type: "created" | "rescheduled" | "cancelled" | "confirmed" | "completed" | "no_show" | "note" | "other";
+  type: "created" | "rescheduled" | "service_changed" | "time_corrected" | "cancelled" | "confirmed" | "completed" | "no_show" | "note" | "other";
   actor: "team" | "public" | "agent" | "system";
   at: string;
   reason: string | null;
   fromStart: string | null;
   toStart: string | null;
+  /** JP-4 service change: the service name before → after (names only; ids stay on the server). */
+  fromService?: string | null;
+  toService?: string | null;
 }
 
 const ACTIVITY_TYPE: Record<string, AppointmentActivityItem["type"]> = {
   appointment_created: "created",
   appointment_rescheduled: "rescheduled",
+  appointment_service_changed: "service_changed",
+  appointment_time_corrected: "time_corrected",
   appointment_cancelled: "cancelled",
   appointment_confirmed: "confirmed",
   appointment_completed: "completed",
@@ -635,7 +724,10 @@ export async function listAppointmentActivityAction(
       const from = (detail.from && typeof detail.from === "object" ? detail.from : {}) as Record<string, unknown>;
       const to = (detail.to && typeof detail.to === "object" ? detail.to : {}) as Record<string, unknown>;
       const reason = typeof detail.reason === "string" && detail.reason.trim() ? detail.reason.trim().slice(0, 500) : null;
-      const moved = e.event_type === "appointment_rescheduled";
+      // A reschedule AND a time correction both carry from/to start times.
+      const moved = e.event_type === "appointment_rescheduled" || e.event_type === "appointment_time_corrected";
+      const serviceChanged = e.event_type === "appointment_service_changed";
+      const nameOrNull = (v: unknown) => (typeof v === "string" && v.trim() ? v.trim().slice(0, 120) : null);
       return {
         id: e.id,
         type: ACTIVITY_TYPE[e.event_type] ?? "other",
@@ -644,6 +736,8 @@ export async function listAppointmentActivityAction(
         reason,
         fromStart: moved ? isoOrNull(from.start_at) : null,
         toStart: moved ? isoOrNull(to.start_at) : null,
+        fromService: serviceChanged ? nameOrNull(from.name) : null,
+        toService: serviceChanged ? nameOrNull(to.name) : null,
       };
     }),
   };

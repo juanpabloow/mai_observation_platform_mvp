@@ -8,6 +8,7 @@ import {
 import { getOrCreateConversation, insertMessage } from "@worker/db/repositories/handoff.js";
 import { isClientModuleEnabled } from "@worker/db/repositories/clientModules.js";
 import { ensureContactForInboundMessage } from "@worker/db/repositories/contactIdentities.js";
+import { setContactWhatsappUsername } from "@worker/db/repositories/contacts.js";
 import { parseReferral, ingestLiveReferral, ensureInboundOrigin, recordAttributionFailure } from "@worker/attribution/ingest.js";
 import { pipelineOnInboundMessage } from "@worker/pipeline/hooks.js";
 import { identitiesSchema } from "@/lib/identities";
@@ -49,6 +50,10 @@ const Body = z
     // person — [{kind, value, label}]. conversation_ref is UNCHANGED (still identifies the
     // CONVERSATION); these ADD to the resolved contact. Absent → exactly today's behavior.
     identities: identitiesSchema,
+    // JP-3: the customer's visible WhatsApp username (contacts[0].profile.username). Stored on the
+    // resolved contact as a DISPLAY/contact-point attribute — NEVER a match key. The RECOMMENDED
+    // place to send it (it rides every inbound message, so a change is caught and timelined).
+    whatsapp_username: z.string().min(1).max(100).optional(),
   })
   .refine(
     (d) => {
@@ -158,6 +163,11 @@ export async function POST(req: Request): Promise<Response> {
           // path created the row (a CRM /contacts/upsert "sync profile" node commonly creates the
           // contact just before its first message, so it is already "existing" here). Self-healing
           // + idempotent: a settled origin is left untouched.
+          // JP-3: record/refresh the visible WhatsApp username on the resolved contact (never a match
+          // key — the contact is already resolved by phone/BSUID above). Inside the same fail-safe.
+          if (b.whatsapp_username !== undefined) {
+            await setContactWhatsappUsername(auth.auth.tenantId, wf.clientId, contactId, b.whatsapp_username);
+          }
           await ensureInboundOrigin({ tenantId: auth.auth.tenantId, clientId: wf.clientId, contactId });
           // PL-1 §2: open/reopen the contact's sale from this inbound message. Runs AFTER attribution
           // so an ad touch on this message already exists to read. Self-contained fail-safe (never

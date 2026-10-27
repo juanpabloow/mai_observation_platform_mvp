@@ -212,8 +212,23 @@ function SchedulingStrip({
   );
 }
 
+/** "90" → "1 h 30 min", "60" → "1 h", "45" → "45 min" — the auto-return threshold, read aloud. */
+function humanizeMinutes(min: number): string {
+  const h = Math.floor(min / 60);
+  const m = min % 60;
+  if (h === 0) return `${m} min`;
+  if (m === 0) return `${h} h`;
+  return `${h} h ${m} min`;
+}
+
 /** The words for a MODE turning point. Built here, never stored. */
 function modeEventLabel(e: ThreadEventView): string {
+  // JP-2: the platform auto-returned the conversation to the bot after the inactivity threshold.
+  if (e.reasonCode === "auto_return") {
+    return e.autoReturnMinutes
+      ? `Volvió al bot automáticamente tras ${humanizeMinutes(e.autoReturnMinutes)} sin atención`
+      : "Volvió al bot automáticamente por inactividad";
+  }
   if (e.toMode === "human") {
     const who = firstName(e.agentName);
     return who ? `${who} tomó la conversación` : "Una persona tomó la conversación";

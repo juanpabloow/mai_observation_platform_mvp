@@ -120,6 +120,39 @@ test('the review link is offered ONLY for a completed appointment this login may
   assert.ok(read('web/components/scheduling/AgendaView.tsx').includes('getReviewLinkAction(props.clientId, appt.id)'));
 });
 
+test('JP-4 «Cambiar servicio» is offered for scheduled/confirmed/completed, never cancelled/no_show', () => {
+  for (const status of ['scheduled', 'confirmed', 'completed']) {
+    assert.equal(appointmentActionPlan({ ...OWN, status }).changeService, true, `${status}: offered`);
+  }
+  for (const status of ['cancelled', 'no_show']) {
+    assert.equal(appointmentActionPlan({ ...OWN, status }).changeService, false, `${status}: not offered`);
+  }
+  // Never for someone else's appointment, nor a login that can't operate the agenda.
+  for (const status of ['scheduled', 'confirmed', 'completed']) {
+    assert.equal(appointmentActionPlan({ ...OTHER, status }).changeService, false, `${status}: not for another column`);
+  }
+  assert.equal(appointmentActionPlan({ canOperate: false, canModify: true, status: 'scheduled', ...STARTED }).changeService, false);
+});
+
+test('JP-4 «Corregir hora o profesional» is offered for any status except cancelled (incl. past/completed)', () => {
+  for (const status of ['scheduled', 'confirmed', 'completed', 'no_show']) {
+    assert.equal(appointmentActionPlan({ ...OWN, status }).correctTime, true, `${status}: offered`);
+  }
+  assert.equal(appointmentActionPlan({ ...OWN, status: 'cancelled' }).correctTime, false, 'a cancelled appointment never happened');
+  for (const status of ['scheduled', 'confirmed', 'completed']) {
+    assert.equal(appointmentActionPlan({ ...OTHER, status }).correctTime, false, `${status}: not for another column`);
+  }
+  assert.equal(appointmentActionPlan({ canOperate: false, canModify: true, status: 'confirmed', ...STARTED }).correctTime, false);
+});
+
+test('both edit entry points come from the shared plan and the panel offers them from there', () => {
+  const panel = read('web/components/scheduling/agenda/AppointmentPanel.tsx');
+  const card = read('web/components/scheduling/agenda/AppointmentCard.tsx');
+  assert.ok(panel.includes('plan.changeService') && panel.includes('plan.correctTime'), 'the panel reads both flags from the plan');
+  assert.ok(card.includes('props.onChangeService') && card.includes('props.onCorrectTime'), 'the card renders both entry points');
+  assert.ok(!card.includes('appointmentActionPlan('), 'the card does not invent its own rule');
+});
+
 test('Completar waits for the start — the same answer on desktop and phone (finding A)', () => {
   const at = (deltaMin: number) => ({ canOperate: true, canModify: true, startAt: START, now: Date.parse(START) + deltaMin * 60_000 });
   // A FUTURE appointment: confirm / cancel / no-show yes, completed no, no "Completar" primary.

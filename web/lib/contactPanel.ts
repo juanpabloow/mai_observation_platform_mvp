@@ -190,6 +190,7 @@ export async function loadContactEditPayload(
       isCustomer: appts.some((a) => a.status === 'completed'),
       assignedTo: contact.assigned_to,
       preferredChannel: contact.preferred_channel,
+      whatsappUsername: contact.whatsapp_username,
       doNotContact: contact.do_not_contact,
       consent: contact.messaging_consent,
       consentUpdatedAt: contact.consent_updated_at?.toISOString() ?? null,

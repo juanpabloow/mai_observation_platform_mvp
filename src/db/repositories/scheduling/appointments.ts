@@ -22,7 +22,10 @@ export type AppointmentEventType =
   | 'appointment_no_show'
   | 'manual_note'
   | 'mode_changed'
-  | 'escalation';
+  | 'escalation'
+  // JP-4: editing an existing appointment.
+  | 'appointment_service_changed'
+  | 'appointment_time_corrected';
 
 export interface AppointmentRow {
   id: string;
@@ -296,6 +299,41 @@ export async function moveInterval(
     [id, tenantId, next.staffId, next.startAt, next.serviceEndAt, next.blockedFrom, next.blockedUntil],
   );
   return firstRowOrThrow(r, 'moveInterval');
+}
+
+/**
+ * JP-4 — swap an appointment's SERVICE (and the frozen snapshots it implies). The start stays put;
+ * only the service identity, its snapshots, the price and the derived end/blocked_until move. Same
+ * per-staff advisory lock as moveInterval so a concurrent write serializes into a clean 23P01.
+ */
+export async function changeServiceColumns(
+  client: PoolClient,
+  tenantId: string,
+  id: string,
+  next: {
+    serviceId: string;
+    serviceNameSnapshot: string;
+    durationMinSnapshot: number;
+    bufferBeforeMinSnapshot: number;
+    bufferAfterMinSnapshot: number;
+    priceSnapshot: string | null;
+    serviceEndAt: Date;
+    blockedFrom: Date;
+    blockedUntil: Date;
+  },
+): Promise<AppointmentRow> {
+  const r = await client.query<AppointmentRow>(
+    `UPDATE appointments
+        SET service_id = $3, service_name_snapshot = $4, duration_min_snapshot = $5,
+            buffer_before_min_snapshot = $6, buffer_after_min_snapshot = $7, price_snapshot = $8,
+            service_end_at = $9, blocked_from = $10, blocked_until = $11,
+            version = version + 1, updated_at = now()
+      WHERE id = $1 AND tenant_id = $2 RETURNING *`,
+    [id, tenantId, next.serviceId, next.serviceNameSnapshot, next.durationMinSnapshot,
+      next.bufferBeforeMinSnapshot, next.bufferAfterMinSnapshot, next.priceSnapshot,
+      next.serviceEndAt, next.blockedFrom, next.blockedUntil],
+  );
+  return firstRowOrThrow(r, 'changeServiceColumns');
 }
 
 export interface ListAppointmentsFilters {
