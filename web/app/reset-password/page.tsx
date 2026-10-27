@@ -1,18 +1,14 @@
 import { Suspense } from "react";
+import { AccessHeading, AccessShell } from "@/components/access/AccessShell";
 import { ResetPasswordForm } from "@/components/ResetPasswordForm";
 
 export default function ResetPasswordPage() {
   return (
-    <main className="mx-auto flex w-full max-w-sm flex-1 flex-col justify-center gap-6 px-6 py-16">
-      <div className="space-y-1">
-        <h1 className="text-2xl font-semibold tracking-tight">Set a new password</h1>
-        <p className="text-sm text-neutral-500">
-          Choosing a new password signs out every existing session on this account.
-        </p>
-      </div>
+    <AccessShell width={360}>
+      <AccessHeading title="Crea una contraseña nueva" lead="Al guardarla se cierran todas las sesiones abiertas de esta cuenta." />
       <Suspense fallback={null}>
         <ResetPasswordForm />
       </Suspense>
-    </main>
+    </AccessShell>
   );
 }

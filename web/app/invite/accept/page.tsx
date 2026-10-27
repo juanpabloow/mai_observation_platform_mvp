@@ -1,153 +1,234 @@
 import { connection } from "next/server";
+import { headers } from "next/headers";
+import { redirect } from "next/navigation";
 import Link from "next/link";
+import { isGoogleConfigured } from "@/lib/auth";
 import { getServerSession } from "@/lib/session";
+import { countryOptions, isKnownCountry } from "@/lib/phone";
+import { inviteAccessLabel, inviteBusinessName, inviterLabel } from "@/lib/inviteCopy";
 import {
   getInvitationByTokenHash,
   hashInviteToken,
   normalizeEmail,
 } from "@worker/db/repositories/invitations.js";
+import { findUserIdByEmail, getMembershipForUser } from "@worker/db/repositories/tenantMembers.js";
+import { getUserAvatarMeta, getUserProfile } from "@worker/db/repositories/userProfiles.js";
+import { ACC, AccessHeading, AccessShell } from "@/components/access/AccessShell";
+import { LoginForm } from "@/components/access/LoginForm";
+import { InviteProfileFlow } from "@/components/access/InviteProfileFlow";
 import { AcceptInviteButton } from "@/components/AcceptInviteButton";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v);
 
-/** Centered card shell matching the auth screens. */
-function Shell({ title, children }: { title: string; children: React.ReactNode }) {
+/** 2c/2g — the link can't be used. Generic for an unknown token (no existence signal). */
+function InvalidInvite({ badge, title, body }: { badge: string; title: string; body: string }) {
   return (
-    <main className="mx-auto flex w-full max-w-md flex-1 flex-col justify-center gap-6 px-6 py-16">
-      <div className="space-y-1">
-        <p className="text-xs font-medium uppercase tracking-widest text-faint">Invitation</p>
-        <h1 className="text-2xl font-semibold tracking-tight">{title}</h1>
+    <AccessShell>
+      <div className="flex flex-1 flex-col justify-center gap-3.5 lg:flex-none">
+        <span className="self-start rounded-md bg-[#FFF4E0] px-2 py-[3px] text-xs text-[#8A5300]">{badge}</span>
+        <AccessHeading title={title} lead={body} />
       </div>
-      <div className="space-y-4 text-sm text-muted">{children}</div>
-    </main>
+      <Link href="/login" className={`${ACC.secondary} lg:hidden`}>
+        Ya tengo perfil · Iniciar sesión
+      </Link>
+      <Link href="/login" className={`${ACC.link} hidden text-[15px] lg:inline`}>
+        ¿Ya tienes perfil? Inicia sesión
+      </Link>
+    </AccessShell>
   );
 }
 
+/** The phone country to preselect: the region of a SPANISH browser locale (es-MX → MX), else
+ *  Colombia, where the platform's businesses are. Only a default — the person changes it. */
+function defaultCountryFrom(acceptLanguage: string | null): string {
+  const m = /\bes-([A-Z]{2})\b/.exec(acceptLanguage ?? "");
+  return m && isKnownCountry(m[1]) ? m[1] : "CO";
+}
+
 /**
- * Invite accept page. GET-only / side-effect-free: it VALIDATES the token and
- * shows the right state; the actual join is the AcceptInviteButton → action.
+ * /invite/accept?token=… — GET is side-effect free: it reads the invitation and shows the
+ * right state; joining is always a server action that re-validates everything (recipient,
+ * expiry, business and role come from the server row only).
  *
- * Token handling fails closed + doesn't leak: an unknown token gets the same
- * generic "invalid or expired" as a malformed one (no signal about whether a
- * tenant/email exists). A token that DOES resolve gets a specific reason
- * (used / revoked / expired) since its holder was the intended recipient.
+ *   not signed in, no account for the invited email  → 5a/5b «Crea tu perfil»
+ *   not signed in, the account exists                → sign in (email fixed) and come back
+ *   signed in as ANOTHER email                       → «Esta invitación es para…»
+ *   signed in as the invited email, existing person  → «Aceptar invitación» (no new account,
+ *                                                       no new password)
+ *   back from Google in the create flow (&step=join) → accept + 5a step 2
+ *   already accepted by this person, not onboarded   → 5a step 2 («Completa tu perfil»)
  */
-export default async function AcceptInvitePage({
-  searchParams,
-}: {
-  searchParams: Promise<SearchParams>;
-}) {
+export default async function AcceptInvitePage({ searchParams }: { searchParams: Promise<SearchParams> }) {
   await connection();
-  const token = first((await searchParams).token) ?? "";
+  const sp = await searchParams;
+  const token = first(sp.token) ?? "";
   const invite = token ? await getInvitationByTokenHash(hashInviteToken(token)) : null;
 
   if (!invite) {
     return (
-      <Shell title="Invalid or expired invitation">
-        <p>This invitation link is invalid or has expired. Ask whoever invited you to send a new one.</p>
-        <Link href="/login" className="text-accent hover:opacity-80">Go to sign in</Link>
-      </Shell>
+      <InvalidInvite
+        badge="Enlace no válido"
+        title="Esta invitación ya no es válida"
+        body="El enlace no es correcto o ya no existe. Pide a quien te invitó que te envíe uno nuevo."
+      />
     );
   }
+
+  const business = inviteBusinessName(invite);
+  const access = inviteAccessLabel(invite);
+  const inviter = inviterLabel(invite);
+  const askNew = inviter ? `Pide a ${inviter} que te envíe una nueva.` : "Pide a quien te invitó que te envíe una nueva.";
+  const session = await getServerSession();
+  const currentEmail = session?.user?.email ? normalizeEmail(session.user.email) : null;
+  const isInvitee = currentEmail === invite.email;
+
+  // A person in the middle of the flow (the invite was just consumed by THEM) finishes step 2.
+  if (invite.status === "accepted" && isInvitee && session) {
+    const [profile, membership] = await Promise.all([getUserProfile(session.user.id), getMembershipForUser(session.user.id)]);
+    if (!membership || membership.tenant_id !== invite.tenant_id || profile?.onboarded_at) redirect("/");
+    const avatar = await getUserAvatarMeta(session.user.id);
+    return (
+      <InviteProfileFlow
+        invite={{ token, email: invite.email, business, access, inviter }}
+        googleEnabled={isGoogleConfigured}
+        initialStep="complete"
+        user={{
+          id: session.user.id,
+          name: session.user.name ?? "",
+          providerImage: session.user.image ?? null,
+          uploaded: avatar?.sha256 ?? null,
+          via: session.session.authMethod === "google" ? "google" : "password",
+        }}
+        countries={countryOptions()}
+        defaultCountry={defaultCountryFrom((await headers()).get("accept-language"))}
+      />
+    );
+  }
+
   if (invite.status === "accepted") {
     return (
-      <Shell title="Already used">
-        <p>This invitation has already been accepted. If that was you, just sign in.</p>
-        <Link href="/login" className="text-accent hover:opacity-80">Sign in</Link>
-      </Shell>
+      <InvalidInvite
+        badge="Invitación usada"
+        title="Esta invitación ya se aceptó"
+        body={`Si fuiste tú, inicia sesión con ${invite.email}. Si no, ${askNew.charAt(0).toLowerCase()}${askNew.slice(1)}`}
+      />
     );
   }
   if (invite.status === "revoked") {
-    return (
-      <Shell title="No longer valid">
-        <p>This invitation has been revoked and can no longer be used.</p>
-      </Shell>
-    );
+    return <InvalidInvite badge="Invitación anulada" title="Esta invitación ya no es válida" body={`Quien te invitó la anuló. ${askNew}`} />;
   }
-  // This is a dynamic Server Component (`connection()` above), so the current
-  // wall clock is intentionally evaluated once per request to reject expired links.
-  // eslint-disable-next-line react-hooks/purity
+  // eslint-disable-next-line react-hooks/purity -- dynamic per-request page (connection())
   if (invite.status !== "pending" || invite.expires_at.getTime() <= Date.now()) {
+    return <InvalidInvite badge="Enlace vencido" title="Esta invitación ya no es válida" body={`Pasaron más de 7 días o ya se usó. ${askNew}`} />;
+  }
+
+  const acceptPath = `/invite/accept?token=${encodeURIComponent(token)}`;
+
+  if (!session) {
+    const exists = Boolean(await findUserIdByEmail(invite.email));
+    if (!exists) {
+      return (
+        <InviteProfileFlow
+          invite={{ token, email: invite.email, business, access, inviter }}
+          googleEnabled={isGoogleConfigured}
+          initialStep="create"
+          user={null}
+          countries={countryOptions()}
+          defaultCountry={defaultCountryFrom((await headers()).get("accept-language"))}
+        />
+      );
+    }
+    // An existing person accepts with the account they already have — never a second one.
     return (
-      <Shell title="Invitation expired">
-        <p>This invitation has expired. Ask whoever invited you to send a new one.</p>
-      </Shell>
+      <AccessShell
+        aside={
+          <h2 className="m-0 text-[34px] font-semibold leading-[1.15] tracking-[-.02em] text-[#ECECEE] [text-wrap:pretty]">
+            Te invitaron a {business}.
+          </h2>
+        }
+        mobileTop={
+          <span className="text-sm text-[#A6A6AE]">
+            {business} · {access}
+          </span>
+        }
+        width={360}
+      >
+        <AccessHeading
+          title="Entra para aceptar"
+          lead={
+            <>
+              Ya tienes una cuenta con <span className="text-[#111]">{invite.email}</span>. Entra con ella y aceptarás el acceso
+              como {access}.
+            </>
+          }
+        />
+        <LoginForm googleEnabled={isGoogleConfigured} destination={acceptPath} initialEmail={invite.email} emailLocked showSignup={false} />
+      </AccessShell>
     );
   }
 
-  // Valid pending invite.
-  const roleText =
-    invite.client_role === "owner"
-      ? `the owner of ${invite.client_name ?? "a client"}`
-      : invite.client_role === "staff"
-        ? `staff (${invite.scheduling_staff_name ?? "assigned schedule"}) at ${invite.client_name ?? "a client"}`
-        : invite.client_role === "setter"
-          ? `a setter at ${invite.client_name ?? "a client"}`
-          : invite.client_role === "custom" && invite.access_role_name
-            ? `«${invite.access_role_name}» at ${invite.client_name ?? "a client"}`
-            : invite.role === "member"
-            ? `a member of ${invite.client_name ?? "a client"}`
-            : "an admin";
-  const session = await getServerSession();
-  const currentEmail = session?.user?.email ? normalizeEmail(session.user.email) : null;
-
-  // Not signed in → prompt sign in/up AS the invited email, carrying the token so
-  // they return here afterward (/invite is public, so the link survives).
-  if (!currentEmail) {
-    const acceptPath = `/invite/accept?token=${encodeURIComponent(token)}`;
-    const q = `redirect=${encodeURIComponent(acceptPath)}&email=${encodeURIComponent(invite.email)}`;
+  if (!isInvitee) {
+    const back = `/logout?next=${encodeURIComponent(acceptPath)}`;
     return (
-      <Shell title={`Join ${invite.tenant_name}`}>
-        <p>
-          You&rsquo;ve been invited to join <strong className="text-foreground">{invite.tenant_name}</strong> as{" "}
-          {roleText}. Sign in or create an account with <strong className="text-foreground">{invite.email}</strong> to
-          accept.
-        </p>
-        <p className="text-sm text-muted">
-          Easiest: <strong className="text-foreground">Continue with Google</strong> using this email. Or create a
-          password — you&rsquo;ll confirm your email with a verification link before you can log in. Either way, accepting
-          this invitation confirms the address, so you won&rsquo;t be asked again.
-        </p>
-        <div className="flex gap-3 pt-1">
-          <Link
-            href={`/signup?${q}`}
-            className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500"
-          >
-            Create account
-          </Link>
-          <Link
-            href={`/login?${q}`}
-            className="rounded-lg border border-line-strong px-4 py-2 text-sm transition-colors hover:bg-subtle"
-          >
-            Log in
-          </Link>
-        </div>
-      </Shell>
+      <AccessShell>
+        <AccessHeading
+          title="Esta invitación es para otra cuenta"
+          lead={
+            <>
+              Es para <span className="text-[#111]">{invite.email}</span>, pero entraste como{" "}
+              <span className="text-[#111]">{currentEmail}</span>. Cierra esta sesión y entra con el correo invitado.
+            </>
+          }
+        />
+        <Link href={back} className={`${ACC.primary} lg:w-auto lg:self-start lg:px-5`}>
+          Cerrar sesión y continuar
+        </Link>
+      </AccessShell>
     );
   }
 
-  // Signed in as a DIFFERENT email → refuse (the invite binds to its email).
-  if (currentEmail !== invite.email) {
+  // Signed in as the invited email.
+  const membership = await getMembershipForUser(session.user.id);
+  const fromCreateFlow = first(sp.step) === "join" && !membership;
+  if (fromCreateFlow) {
+    const avatar = await getUserAvatarMeta(session.user.id);
     return (
-      <Shell title="Wrong account">
-        <p>
-          This invitation is for <strong className="text-foreground">{invite.email}</strong>, but you&rsquo;re signed in
-          as <strong className="text-foreground">{currentEmail}</strong>. Sign out and sign in as the invited address,
-          then open this link again.
-        </p>
-        <Link href="/logout" className="text-accent hover:opacity-80">Log out</Link>
-      </Shell>
+      <InviteProfileFlow
+        invite={{ token, email: invite.email, business, access, inviter }}
+        googleEnabled={isGoogleConfigured}
+        initialStep="join"
+        user={{
+          id: session.user.id,
+          name: session.user.name ?? "",
+          providerImage: session.user.image ?? null,
+          uploaded: avatar?.sha256 ?? null,
+          via: "google",
+        }}
+        countries={countryOptions()}
+        defaultCountry={defaultCountryFrom((await headers()).get("accept-language"))}
+      />
     );
   }
 
-  // Signed in as the invited email → confirm + accept.
   return (
-    <Shell title={`Join ${invite.tenant_name}`}>
-      <p>
-        Accept this invitation to join <strong className="text-foreground">{invite.tenant_name}</strong> as {roleText}?
-      </p>
+    <AccessShell
+      aside={
+        <h2 className="m-0 text-[34px] font-semibold leading-[1.15] tracking-[-.02em] text-[#ECECEE] [text-wrap:pretty]">
+          Te invitaron a {business}.
+        </h2>
+      }
+    >
+      <AccessHeading
+        title={`Únete a ${business}`}
+        lead={
+          <>
+            {inviter ? `${inviter} te invitó` : "Te invitaron"} con acceso como <span className="text-[#111]">{access}</span>. Usarás tu
+            cuenta actual: no necesitas otra contraseña.
+          </>
+        }
+      />
       <AcceptInviteButton token={token} />
-    </Shell>
+    </AccessShell>
   );
 }

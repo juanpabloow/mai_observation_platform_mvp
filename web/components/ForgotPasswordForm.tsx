@@ -5,6 +5,8 @@ import Link from "next/link";
 import { authClient } from "@/lib/auth-client";
 import { GENERIC_RESET_NOTICE, RATE_LIMITED_NOTICE } from "@/lib/auth-errors";
 import { RESET_PASSWORD_PATH } from "@/lib/auth-verification";
+import { ACC, Notice } from "@/components/access/AccessShell";
+import { TextField } from "@/components/access/fields";
 
 /**
  * Public "recover access" form. Better Auth's /request-password-reset answers
@@ -19,12 +21,12 @@ export function ForgotPasswordForm() {
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    if (busy) return;
+    if (busy || !email.trim()) return;
     setBusy(true);
     setNotice(null);
     try {
       const result = await authClient.requestPasswordReset({
-        email,
+        email: email.trim(),
         redirectTo: RESET_PASSWORD_PATH,
       });
       setNotice(result.error?.status === 429 ? RATE_LIMITED_NOTICE : GENERIC_RESET_NOTICE);
@@ -36,38 +38,18 @@ export function ForgotPasswordForm() {
   }
 
   return (
-    <div className="flex flex-col gap-5">
-      <form onSubmit={onSubmit} className="flex flex-col gap-3">
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="text-muted">Email</span>
-          <input
-            type="email"
-            required
-            autoComplete="email"
-            value={email}
-            onChange={(e) => setEmail(e.target.value)}
-            className="rounded-lg border border-line bg-transparent px-3 py-2 outline-none transition-colors focus:border-line-strong"
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={busy}
-          className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
-        >
-          {busy ? "Sending…" : "Send reset link"}
-        </button>
-        {notice ? (
-          <p className="rounded-lg border border-line bg-subtle px-3 py-2 text-sm text-muted">
-            {notice}
-          </p>
-        ) : null}
-      </form>
-      <p className="text-center text-sm text-neutral-500">
-        Remembered it?{" "}
-        <Link href="/login" className="text-accent hover:opacity-80">
-          Back to log in
+    <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
+      <TextField label="Correo" type="email" name="email" value={email} onChange={setEmail} autoComplete="username" inputMode="email" />
+      <button type="submit" aria-busy={busy || undefined} className={ACC.primary}>
+        {busy ? "Enviando…" : "Enviar enlace"}
+      </button>
+      {notice ? <Notice tone="info">{notice}</Notice> : null}
+      <p className="m-0 text-center text-[13px] text-[#6E6E73]">
+        ¿La recordaste?{" "}
+        <Link href="/login" className={ACC.link}>
+          Volver a iniciar sesión
         </Link>
       </p>
-    </div>
+    </form>
   );
 }

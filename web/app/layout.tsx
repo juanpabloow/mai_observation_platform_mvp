@@ -14,6 +14,8 @@ import { isChromelessPath } from "@/lib/shellChrome";
 import { parseTextScale, TEXT_SCALE_COOKIE } from "@/lib/textScale";
 import { parseTopbarPref, resolveTopbarPref, TOPBAR_COOKIE } from "@/lib/topbarPref";
 import { getSessionScope } from "@/lib/access";
+import { getServerSession } from "@/lib/session";
+import { SessionGuard } from "@/components/session/SessionGuard";
 import "./globals.css";
 
 // Self-hosted (next/font/local) so `next build` never calls Google Fonts — that build-time
@@ -70,6 +72,18 @@ export default async function RootLayout({
   // when it matters (no choice yet, a page with chrome), so public pages pay no lookup.
   const storedTopbar = parseTopbarPref(jar.get(TOPBAR_COOKIE)?.value);
   const topbar = resolveTopbarPref(storedTopbar, storedTopbar || chromeless ? null : ((await getSessionScope())?.role ?? null));
+  // Session policy (ACCESO-1): a signed-in screen gets the inactivity warning / cross-tab
+  // guard, seeded with the SERVER's deadline. Access screens and public pages never do.
+  const current = chromeless ? null : await getServerSession();
+  const guard = current?.session
+    ? {
+        persistent: current.session.persistent === true,
+        expiresAt: current.session.expiresAt.getTime(),
+        absoluteExpiresAt: (current.session.absoluteExpiresAt ?? current.session.expiresAt).getTime(),
+        // eslint-disable-next-line react-hooks/purity -- per-request layout; the guard measures clock skew from it
+        serverNow: Date.now(),
+      }
+    : null;
 
   return (
     <html
@@ -139,6 +153,7 @@ export default async function RootLayout({
               </div>
             </div>
           </ScopeProviderServer>
+          {guard ? <SessionGuard initial={guard} /> : null}
         </Providers>
       </body>
     </html>

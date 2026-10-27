@@ -2601,3 +2601,11 @@ textarea.c5-field { height: auto; padding: 10px 12px; line-height: 1.4; font-var
 /* The header's state chip is information, not a control (unlayered: it must beat `.u-ag .u-status-cancelled`): filled, no outline, no pointer. */
 .c5-state .u-status-cancelled { box-shadow: none; background: var(--c5-seg-track); }
 .c5-state > span:last-child { cursor: default; user-select: none; }
+
+/* ACCESO-1 — access screens (components/access/AccessShell.tsx). Theme-independent by design:
+   the approved light card on the graphite ground. Focus is the app's ONE treatment (u-focus);
+   the few transitions switch off for people who ask the system for less motion. */
+.u-access { color-scheme: light; }
+@media (prefers-reduced-motion: reduce) {
+  .u-access *, .u-session-layer * { transition: none !important; animation: none !important; }
+}

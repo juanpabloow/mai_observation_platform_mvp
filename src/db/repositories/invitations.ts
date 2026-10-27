@@ -42,6 +42,9 @@ export interface InvitationWithNames {
   expires_at: Date;
   tenant_name: string;
   client_name: string | null;
+  /** Who invited (display only — the accept page and the "ask for a new one" copy). */
+  invited_by_name: string | null;
+  invited_by_email: string | null;
 }
 
 /** Invitation row for the RBAC-3 team list (joins client + inviter; no token). */
@@ -173,9 +176,11 @@ export async function getInvitationByTokenHash(
             i.client_role, i.scheduling_site_id, s.name AS scheduling_site_name,
             i.scheduling_staff_id, st.name AS scheduling_staff_name,
             i.access_role_id, ar.name AS access_role_name, i.status,
-            i.expires_at, t.name AS tenant_name, c.name AS client_name
+            i.expires_at, t.name AS tenant_name, c.name AS client_name,
+            iu.name AS invited_by_name, iu.email AS invited_by_email
        FROM invitations i
        JOIN tenants t ON t.id = i.tenant_id
+       LEFT JOIN "user" iu ON iu.id = i.invited_by
        LEFT JOIN clients c ON c.id = i.member_client_id
        LEFT JOIN sites s ON s.id = i.scheduling_site_id AND s.tenant_id = i.tenant_id
        LEFT JOIN staff st ON st.id = i.scheduling_staff_id AND st.tenant_id = i.tenant_id

@@ -5,6 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { authClient } from "@/lib/auth-client";
 import { mapAuthErrorParam, mapClientAuthError } from "@/lib/auth-errors";
+import { ACC, Notice } from "@/components/access/AccessShell";
+import { PasswordField } from "@/components/access/fields";
 
 /**
  * Consumes the password-reset token minted by Better Auth. The user arrives
@@ -13,7 +15,8 @@ import { mapAuthErrorParam, mapClientAuthError } from "@/lib/auth-errors";
  * calls the official resetPassword endpoint: the token is single-use, the old
  * password is replaced, and every existing session is revoked
  * (revokeSessionsOnPasswordReset) — then we send the user to /login to sign
- * in with the new password.
+ * in with the new password. One field with «Mostrar» (no "repeat password"), like the
+ * profile screens.
  */
 export function ResetPasswordForm() {
   const router = useRouter();
@@ -21,18 +24,15 @@ export function ResetPasswordForm() {
   const token = searchParams.get("token");
   const urlErrorMessage = mapAuthErrorParam(searchParams.get("error"));
   const [password, setPassword] = useState("");
-  const [confirm, setConfirm] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
   if (token === null || urlErrorMessage) {
     return (
       <div className="flex flex-col gap-4">
-        <p className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm">
-          {urlErrorMessage ?? "This reset link is invalid or incomplete."}
-        </p>
-        <Link href="/forgot-password" className="text-center text-sm text-accent hover:opacity-80">
-          Request a new reset link
+        <Notice tone="warn">{urlErrorMessage ?? "Este enlace no es válido o está incompleto."}</Notice>
+        <Link href="/forgot-password" className={`${ACC.secondary} lg:w-auto lg:self-start`}>
+          Pedir un enlace nuevo
         </Link>
       </div>
     );
@@ -44,65 +44,39 @@ export function ResetPasswordForm() {
     e.preventDefault();
     if (busy) return;
     setError(null);
-    if (password !== confirm) {
-      setError("Passwords don't match.");
+    if (password.length < 8) {
+      setError("Usa al menos 8 caracteres.");
       return;
     }
     setBusy(true);
     try {
       const result = await authClient.resetPassword({ newPassword: password, token: resetToken });
       if (result.error) {
-        setError(mapClientAuthError(result.error.code, "Could not reset the password. Please try again."));
+        setError(mapClientAuthError(result.error.code, "No pudimos cambiar la contraseña. Inténtalo otra vez."));
         return;
       }
       router.push("/login?reset=1");
     } catch {
-      setError("Could not reset the password. Please try again.");
+      setError("No pudimos cambiar la contraseña. Inténtalo otra vez.");
     } finally {
       setBusy(false);
     }
   }
 
   return (
-    <form onSubmit={onSubmit} className="flex flex-col gap-3">
-      <label className="flex flex-col gap-1 text-sm">
-        <span className="text-muted">New password</span>
-        <input
-          type="password"
-          required
-          minLength={8}
-          autoComplete="new-password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          className="rounded-lg border border-line bg-transparent px-3 py-2 outline-none transition-colors focus:border-line-strong"
-        />
-        <span className="text-xs text-faint">At least 8 characters.</span>
-      </label>
-      <label className="flex flex-col gap-1 text-sm">
-        <span className="text-muted">Confirm new password</span>
-        <input
-          type="password"
-          required
-          minLength={8}
-          autoComplete="new-password"
-          value={confirm}
-          onChange={(e) => setConfirm(e.target.value)}
-          className="rounded-lg border border-line bg-transparent px-3 py-2 outline-none transition-colors focus:border-line-strong"
-        />
-      </label>
-
-      {error ? (
-        <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-danger">
-          {error}
-        </p>
-      ) : null}
-
-      <button
-        type="submit"
-        disabled={busy}
-        className="rounded-lg bg-emerald-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
-      >
-        {busy ? "Please wait…" : "Set new password"}
+    <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
+      <PasswordField
+        label="Contraseña nueva"
+        value={password}
+        onChange={setPassword}
+        autoComplete="new-password"
+        invalid={Boolean(error)}
+        hint={password.length >= 8 ? "✓ Contraseña válida" : "Mínimo 8 caracteres."}
+        hintTone={password.length >= 8 ? "success" : "muted"}
+      />
+      {error ? <Notice tone="error">{error}</Notice> : null}
+      <button type="submit" aria-busy={busy || undefined} className={ACC.primary}>
+        {busy ? "Guardando…" : "Guardar contraseña"}
       </button>
     </form>
   );

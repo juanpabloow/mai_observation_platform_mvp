@@ -42,25 +42,25 @@ export function ConnectGoogle({
         errorCallbackURL: "/settings/security",
       });
       if (result.error) {
-        setError(mapClientAuthError(result.error.code, "Could not start Google linking. Please try again."));
+        setError(mapClientAuthError(result.error.code, "No pudimos empezar a conectar Google. Inténtalo otra vez."));
         setBusy(false);
         return;
       }
       // Success = redirecting to Google; keep busy=true against double clicks.
     } catch {
-      setError("Could not start Google linking. Please try again.");
+      setError("No pudimos empezar a conectar Google. Inténtalo otra vez.");
       setBusy(false);
     }
   }
 
   return (
-    <section className="flex flex-col gap-3 rounded-xl border border-line p-4">
+    <section className="flex flex-col gap-3 rounded-sch-card border border-line bg-surface p-5">
       <div className="space-y-1">
-        <h2 className="text-sm font-medium">Google sign-in</h2>
+        <h2 className="text-[15px] font-semibold">Entrar con Google</h2>
         <p className="text-sm text-muted">
           {googleLinked
-            ? "Google is connected. You can sign in with Google or your password."
-            : `Connect the Google account for ${email} to also sign in with Google. Only a Google account with this exact email can be connected.`}
+            ? "Google está conectado. Puedes entrar con Google o con tu contraseña."
+            : `Conecta la cuenta de Google de ${email} para entrar también con Google. Solo se puede conectar una cuenta de Google con este mismo correo.`}
         </p>
       </div>
 
@@ -71,7 +71,7 @@ export function ConnectGoogle({
       ) : null}
       {justLinked ? (
         <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm">
-          Google connected. You can now use it to sign in.
+          Google conectado. Ya puedes usarlo para entrar.
         </p>
       ) : null}
       {error ? (
@@ -85,10 +85,10 @@ export function ConnectGoogle({
           type="button"
           onClick={onConnect}
           disabled={!googleEnabled || busy}
-          title={googleEnabled ? undefined : "Google sign-in is not configured"}
+          title={googleEnabled ? undefined : "El acceso con Google no está configurado"}
           className="self-start rounded-lg border border-line-strong px-4 py-2 text-sm transition-colors enabled:hover:bg-subtle disabled:cursor-not-allowed disabled:opacity-50"
         >
-          {busy ? "Please wait…" : "Connect Google"}
+          {busy ? "Abriendo Google…" : "Conectar Google"}
         </button>
       ) : null}
     </section>

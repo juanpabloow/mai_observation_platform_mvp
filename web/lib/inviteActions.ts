@@ -1,13 +1,18 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
+import { auth } from "./auth";
 import { getServerSession } from "./session";
+import { normalizePersonName } from "./personName";
+import { INVITE_TTL_DAYS, inviteAccessLabel, inviteBusinessName, inviteEmailHtml } from "./inviteCopy";
 import { getAccessScope, hasFullAccess, requireFullAccessForAction } from "./access";
 import { canGrantRole, roleRefOf, type RoleRef } from "./permissions/delegation";
 import { SYSTEM_ROLE_LABEL, isSystemRoleKey } from "./permissions/catalog";
 import { getAccessRole, getSystemRoleOverride } from "@worker/db/repositories/accessRoles.js";
 import { getClientById } from "@worker/db/repositories/clients.js";
 import {
+  deleteAuthUserById,
+  findUserIdByEmail,
   getMembershipForUser,
   setAuthUserEmailVerified,
   type ClientRole,
@@ -28,66 +33,12 @@ import {
 } from "@worker/db/repositories/invitations.js";
 import { sendEmail } from "./email";
 
-const INVITE_TTL_DAYS = 7;
 // Pragmatic email shape check (full RFC validation is overkill; the real proof of
 // control is the accept flow requiring the matching signed-in email + the token).
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 function appBaseUrl(): string {
   return process.env.BETTER_AUTH_URL ?? "http://localhost:3000";
-}
-
-function roleLabel(
-  role: InvitationRole,
-  clientName: string | null,
-  clientRole: ClientRole | null = null,
-  customRoleName: string | null = null,
-): string {
-  if (clientRole === "owner") return `the owner of ${clientName ?? "a client"}`;
-  if (clientRole === "staff") return `staff at ${clientName ?? "a client"}`;
-  if (clientRole === "setter") return `a setter at ${clientName ?? "a client"}`;
-  if (clientRole === "custom" && customRoleName) return `«${customRoleName}» at ${clientName ?? "a client"}`;
-  return role === "member" ? `a member of ${clientName ?? "a client"}` : "an admin";
-}
-
-function inviteEmailHtml(params: {
-  inviterEmail: string;
-  tenantName: string;
-  role: InvitationRole;
-  clientName: string | null;
-  clientRole?: ClientRole | null;
-  customRoleName?: string | null;
-  acceptUrl: string;
-}): string {
-  const what = roleLabel(params.role, params.clientName, params.clientRole ?? null, params.customRoleName ?? null);
-  // Inline styles only (email clients strip <style>); plain, legible, no tracking.
-  return `<!doctype html><html><body style="margin:0;background:#f5f5f4;padding:24px;font-family:-apple-system,Segoe UI,Roboto,Helvetica,Arial,sans-serif;color:#1c1917">
-  <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr><td align="center">
-    <table role="presentation" width="480" cellpadding="0" cellspacing="0" style="background:#fff;border:1px solid #e7e5e4;border-radius:14px;padding:32px">
-      <tr><td>
-        <p style="margin:0 0 16px;font-size:13px;letter-spacing:.08em;text-transform:uppercase;color:#78716c">Workspace invitation</p>
-        <h1 style="margin:0 0 12px;font-size:20px;line-height:1.3;font-weight:600">You've been invited to ${escapeHtml(params.tenantName)}</h1>
-        <p style="margin:0 0 24px;font-size:15px;line-height:1.55;color:#44403c">
-          <strong>${escapeHtml(params.inviterEmail)}</strong> invited you to join
-          <strong>${escapeHtml(params.tenantName)}</strong> as ${escapeHtml(what)}.
-        </p>
-        <a href="${params.acceptUrl}" style="display:inline-block;background:#059669;color:#fff;text-decoration:none;font-size:15px;font-weight:600;padding:11px 22px;border-radius:9px">Accept invitation</a>
-        <p style="margin:20px 0 0;font-size:14px;line-height:1.55;color:#44403c">
-          Sign in with <strong>this email address</strong> — continue with Google, or create a password for it — then accept. (If you create a password, confirm your email with the verification link first.)
-        </p>
-        <p style="margin:16px 0 0;font-size:13px;line-height:1.5;color:#78716c">
-          This invitation expires in ${INVITE_TTL_DAYS} days. If you weren't expecting it, you can safely ignore this email.
-        </p>
-      </td></tr>
-    </table>
-  </td></tr></table>
-</body></html>`;
-}
-
-function escapeHtml(s: string): string {
-  return s.replace(/[&<>"']/g, (c) =>
-    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string,
-  );
 }
 
 /**
@@ -126,7 +77,6 @@ export async function createInvitationAction(input: {
   }
 
   let memberClientId: string | null = null;
-  let clientName: string | null = null;
   let clientRole: ClientRole | null = null;
   let accessRoleId: string | null = null;
   let customRoleName: string | null = null;
@@ -163,7 +113,6 @@ export async function createInvitationAction(input: {
     if (!client) return { ok: false, error: "That client doesn't belong to your workspace." };
     if (client.is_default) return { ok: false, error: "The Unassigned client can't have client roles." };
     memberClientId = clientId;
-    clientName = client.name;
     clientRole = requestedRole;
 
     // Only STAFF carries a site + staff binding; owner/editor see the whole client.
@@ -229,20 +178,19 @@ export async function createInvitationAction(input: {
 
   const acceptUrl = `${appBaseUrl()}/invite/accept?token=${rawToken}`;
 
-  // Inviter email + tenant name for the body (the just-created row joins them).
+  // Business + access + inviter for the body (2a): all from the just-created SERVER row.
   const session = await getServerSession();
   const created = await getInvitationByTokenHash(tokenHash);
-  const tenantName = created?.tenant_name ?? "your workspace";
+  const business = created ? inviteBusinessName(created) : "tu negocio";
+  const inviter = session?.user?.name?.trim() || session?.user?.email || "Tu equipo";
   const send = await sendEmail({
     to: email,
-    subject: `You've been invited to ${tenantName}`,
+    subject: `${inviter} te invitó a ${business}`,
     html: inviteEmailHtml({
-      inviterEmail: session?.user?.email ?? "A teammate",
-      tenantName,
-      role: input.role,
-      clientName,
-      clientRole,
-      customRoleName,
+      inviter,
+      business,
+      access: created ? inviteAccessLabel(created) : "miembro",
+      email,
       acceptUrl,
     }),
   });
@@ -270,26 +218,26 @@ export async function createInvitationAction(input: {
 export async function acceptInvitationAction(
   rawToken: string,
 ): Promise<{ ok: boolean; error?: string; redirectTo?: string }> {
-  if (!rawToken) return { ok: false, error: "This invitation link is invalid or has expired." };
+  if (!rawToken) return { ok: false, error: "Este enlace de invitación no es válido o ya venció." };
 
   const invite = await getInvitationByTokenHash(hashInviteToken(rawToken));
-  if (!invite) return { ok: false, error: "This invitation link is invalid or has expired." };
-  if (invite.status === "accepted") return { ok: false, error: "This invitation has already been used." };
-  if (invite.status === "revoked") return { ok: false, error: "This invitation is no longer valid." };
+  if (!invite) return { ok: false, error: "Este enlace de invitación no es válido o ya venció." };
+  if (invite.status === "accepted") return { ok: false, error: "Esta invitación ya se usó." };
+  if (invite.status === "revoked") return { ok: false, error: "Esta invitación ya no es válida." };
   if (invite.status !== "pending" || invite.expires_at.getTime() <= Date.now()) {
-    return { ok: false, error: "This invitation has expired." };
+    return { ok: false, error: "Esta invitación venció." };
   }
 
   const session = await getServerSession();
   if (!session?.user?.id) {
-    return { ok: false, error: "Please sign in with the invited email to accept this invitation." };
+    return { ok: false, error: "Entra con el correo invitado para aceptar la invitación." };
   }
   // Bind to the invited email: the token alone (without controlling that account)
   // is not enough to consume the invite.
   if (normalizeEmail(session.user.email) !== invite.email) {
     return {
       ok: false,
-      error: "This invitation was issued for a different email address. Sign in with the invited email to accept it.",
+      error: "Esta invitación es para otro correo. Entra con el correo invitado para aceptarla.",
     };
   }
 
@@ -300,7 +248,7 @@ export async function acceptInvitationAction(
   if (existing && existing.tenant_id !== invite.tenant_id) {
     return {
       ok: false,
-      error: "This account already belongs to a workspace. Invitations can only be accepted by an account that isn't already in one.",
+      error: "Esta cuenta ya pertenece a otro espacio de trabajo y por ahora una cuenta solo puede estar en uno. Pide que te inviten con otro correo.",
     };
   }
 
@@ -312,10 +260,10 @@ export async function acceptInvitationAction(
       userId: session.user.id,
     });
   } catch {
-    return { ok: false, error: "Could not accept the invitation. Please try again." };
+    return { ok: false, error: "No pudimos aceptar la invitación. Inténtalo otra vez." };
   }
   if (result === "already_used") {
-    return { ok: false, error: "This invitation has already been used." };
+    return { ok: false, error: "Esta invitación ya se usó." };
   }
 
   // FIX-1: accepting a valid invitation PROVES the user owns this email — the single-use
@@ -337,6 +285,69 @@ export async function acceptInvitationAction(
   // computed from the membership just created — one rule for every role, custom included.
   const redirectTo = "/";
   return { ok: true, redirectTo };
+}
+
+/**
+ * 5a «Crear perfil» with a PASSWORD, for someone who has no account yet. One server step:
+ *  1. re-validate the token (pending, unexpired) — the invitation fixes the email, business
+ *     and role; the browser only sends a name, a password and the «Mantener sesión» choice;
+ *  2. refuse when an account already exists for that email (that person signs in and
+ *     accepts — never a second account, never a second password);
+ *  3. create the user THROUGH Better Auth's internal adapter (its password hasher, its
+ *     user-create hook — which sees the pending invite and provisions no personal tenant),
+ *     with the email VERIFIED: the single-use token was delivered only to that inbox, the
+ *     same proof FIX-1 already relies on when accepting;
+ *  4. consume the invite + create the membership (one transaction, single-use); if the
+ *     invite was consumed meanwhile, the just-created user is removed again;
+ *  5. the BROWSER then signs in through Better Auth's normal email endpoint (exactly the
+ *     /login path: same session policy hooks, same cookies). Signing in from inside this
+ *     action would set the cookie mid-render and re-render the page with the old request
+ *     headers, i.e. without the new session.
+ * The password is never logged, stored by us or echoed back.
+ */
+export async function createProfileFromInvitationAction(input: {
+  token: string;
+  name: string;
+  password: string;
+}): Promise<{ ok: true; email: string } | { ok: false; error: string; field?: "name" | "password"; code?: "exists" | "invalid" }> {
+  const invite = input.token ? await getInvitationByTokenHash(hashInviteToken(input.token)) : null;
+  if (!invite || invite.status !== "pending" || invite.expires_at.getTime() <= Date.now()) {
+    return { ok: false, code: "invalid", error: "Esta invitación ya no es válida. Pide una nueva a quien te invitó." };
+  }
+  const name = normalizePersonName(input.name);
+  if (!name.ok) return { ok: false, field: "name", error: name.error };
+  const password = typeof input.password === "string" ? input.password : "";
+  if (password.length < 8) return { ok: false, field: "password", error: "Usa al menos 8 caracteres." };
+  if (password.length > 128) return { ok: false, field: "password", error: "Usa como máximo 128 caracteres." };
+
+  if (await findUserIdByEmail(invite.email)) {
+    return { ok: false, code: "exists", error: "Ya tienes una cuenta con este correo. Inicia sesión para aceptar la invitación." };
+  }
+
+  const ctx = await auth.$context;
+  let userId: string;
+  try {
+    const hash = await ctx.password.hash(password);
+    const user = await ctx.internalAdapter.createUser({ email: invite.email, name: name.name, emailVerified: true });
+    userId = user.id;
+    await ctx.internalAdapter.linkAccount({ userId, providerId: "credential", accountId: userId, password: hash });
+  } catch {
+    // Most likely a concurrent creation of the same email (unique violation).
+    return { ok: false, code: "exists", error: "Ya tienes una cuenta con este correo. Inicia sesión para aceptar la invitación." };
+  }
+
+  let accepted: "accepted" | "already_member" | "already_used";
+  try {
+    accepted = await acceptInvitation({ invitationId: invite.id, tenantId: invite.tenant_id, userId });
+  } catch {
+    accepted = "already_used";
+  }
+  if (accepted === "already_used") {
+    await deleteAuthUserById(userId).catch(() => {});
+    return { ok: false, code: "invalid", error: "Esta invitación ya se usó. Pide una nueva a quien te invitó." };
+  }
+
+  return { ok: true, email: invite.email };
 }
 
 /** RBAC-3 wiring: list a tenant's invitations (owner/admin only). No token exposed. */

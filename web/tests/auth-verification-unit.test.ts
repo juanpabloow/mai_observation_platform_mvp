@@ -132,27 +132,28 @@ test("validateBetterAuthUrl enforces https + non-localhost only in deployed prod
 
 test("account_not_linked points to password recovery, not public verification", () => {
   const msg = mapAuthErrorParam("account_not_linked");
-  assert.ok(msg && msg.includes("Forgot password"));
-  assert.ok(msg.includes("Connect Google") || msg.includes("connect Google"));
+  // ACCESO-1: the access screens are Spanish — same guidance, same allowlist.
+  assert.ok(msg && msg.includes("¿La olvidaste?"));
+  assert.ok(msg.includes("conectar Google"));
 });
 
 test("redirect error codes map through the allowlist with a generic fallback", () => {
-  assert.ok(mapAuthErrorParam("TOKEN_EXPIRED")?.includes("expired"));
+  assert.ok(mapAuthErrorParam("TOKEN_EXPIRED")?.includes("venció"));
   assert.ok(mapAuthErrorParam("INVALID_TOKEN"));
-  assert.ok(mapAuthErrorParam("email_doesn't_match")?.includes("same email"));
-  assert.equal(mapAuthErrorParam("SOME_NEW_CODE"), "Sign-in failed. Please try again.");
+  assert.ok(mapAuthErrorParam("email_doesn't_match")?.includes("mismo correo"));
+  assert.equal(mapAuthErrorParam("SOME_NEW_CODE"), "No pudimos iniciar la sesión. Inténtalo otra vez.");
   assert.equal(mapAuthErrorParam(null), null);
 });
 
 test("client error codes map through the allowlist; raw messages are never used", () => {
-  assert.equal(mapClientAuthError("PASSWORD_TOO_SHORT"), "Password must be at least 8 characters.");
-  assert.ok(mapClientAuthError("LINKING_DIFFERENT_EMAILS_NOT_ALLOWED").includes("same email"));
+  assert.equal(mapClientAuthError("PASSWORD_TOO_SHORT"), "La contraseña debe tener al menos 8 caracteres.");
+  assert.ok(mapClientAuthError("LINKING_DIFFERENT_EMAILS_NOT_ALLOWED").includes("mismo correo"));
   assert.equal(mapClientAuthError("UNMAPPED_CODE", "fallback text"), "fallback text");
   assert.equal(mapClientAuthError(undefined, "fallback text"), "fallback text");
 });
 
 test("public notices and callback targets don't leak anything", () => {
-  assert.ok(GENERIC_RESET_NOTICE.startsWith("If an account exists"));
+  assert.ok(GENERIC_RESET_NOTICE.startsWith("Si existe una cuenta"));
   assert.equal(VERIFIED_LOGIN_CALLBACK, "/login?verified=1");
   assert.equal(RESET_PASSWORD_PATH, "/reset-password");
 });

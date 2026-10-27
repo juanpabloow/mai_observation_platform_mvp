@@ -1,8 +1,8 @@
 "use client";
 
 import { useState } from "react";
-import { useRouter } from "next/navigation";
 import { acceptInvitationAction } from "@/lib/inviteActions";
+import { ACC, Notice } from "@/components/access/AccessShell";
 
 /**
  * Confirms acceptance of an invite. The READ (token validation + display) happens
@@ -11,7 +11,6 @@ import { acceptInvitationAction } from "@/lib/inviteActions";
  * read (GET) from write (action) keeps the accept URL itself side-effect-free.
  */
 export function AcceptInviteButton({ token }: { token: string }) {
-  const router = useRouter();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -21,33 +20,23 @@ export function AcceptInviteButton({ token }: { token: string }) {
     try {
       const res = await acceptInvitationAction(token);
       if (res.ok && res.redirectTo) {
-        router.push(res.redirectTo);
-        router.refresh(); // pick up the brand-new membership in the scope resolvers
+        // Hard navigation: the new membership changes the whole shell (rail, scope).
+        window.location.assign(res.redirectTo);
         return;
       }
-      setError(res.error ?? "Could not accept the invitation.");
+      setError(res.error ?? "No pudimos aceptar la invitación.");
     } catch {
-      setError("Something went wrong. Please try again.");
-    } finally {
-      setBusy(false);
+      setError("Algo salió mal. Inténtalo otra vez.");
     }
+    setBusy(false);
   }
 
   return (
     <div className="flex flex-col gap-3">
-      <button
-        type="button"
-        onClick={onAccept}
-        disabled={busy}
-        className="rounded-lg bg-emerald-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-emerald-500 disabled:opacity-50"
-      >
-        {busy ? "Joining…" : "Accept invitation"}
+      {error ? <Notice tone="error">{error}</Notice> : null}
+      <button type="button" onClick={onAccept} aria-busy={busy || undefined} className={ACC.primary}>
+        {busy ? "Uniéndote…" : "Aceptar invitación"}
       </button>
-      {error ? (
-        <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-danger">
-          {error}
-        </p>
-      ) : null}
     </div>
   );
 }

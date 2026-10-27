@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createLeaveGuard, type LeaveGuard } from "@/lib/leaveGuard";
+import { setUnsaved } from "@/lib/unsavedChanges";
 
 /**
  * React wrapper for lib/leaveGuard: one guard per open form, armed on mount.
@@ -24,6 +25,15 @@ export function useLeaveGuard({ dirty, onLeave }: { dirty: boolean; onLeave: () 
     dirtyRef.current = dirty;
     onLeaveRef.current = onLeave;
   });
+
+  // Let the session warning know this form holds unsaved changes (lib/unsavedChanges.ts).
+  const unsavedKey = useRef<symbol | null>(null);
+  useEffect(() => {
+    unsavedKey.current ??= Symbol("form");
+    const key = unsavedKey.current;
+    setUnsaved(key, dirty);
+    return () => setUnsaved(key, false);
+  }, [dirty]);
 
   const guardRef = useRef<LeaveGuard | null>(null);
   const pendingDispose = useRef<number | null>(null);
