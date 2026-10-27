@@ -13,7 +13,8 @@ import { buildSections, locate, type NavSection as ModelSection, type PageId, ty
 import { memberLandingPath } from "@/lib/landing";
 import { hasSidebarCollapsedCookie, LEGACY_SIDEBAR_COLLAPSED_KEY } from "@/lib/sidebarCollapsed";
 
-const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password"];
+// ACCESO-1: /invite and /negocios are access screens too (their own full-screen frame).
+const AUTH_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password", "/invite", "/negocios"];
 
 /** The client id when inside a client (/clients/<id>/…); null at the tenant level. */
 function parseClientId(pathname: string): string | null {

@@ -3,7 +3,7 @@
  * Pure so the layout and the tests share one list. Mirrors AppHeader's AUTH_PREFIXES
  * and the public booking and review pages; the real gates stay at the data layer.
  */
-export const CHROMELESS_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password", "/book", "/resena"] as const;
+export const CHROMELESS_PREFIXES = ["/login", "/signup", "/logout", "/forgot-password", "/reset-password", "/invite", "/negocios", "/book", "/resena"] as const;
 
 export function isChromelessPath(pathname: string): boolean {
   return CHROMELESS_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));

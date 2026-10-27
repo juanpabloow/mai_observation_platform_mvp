@@ -10,6 +10,7 @@ import {
 } from "@worker/db/repositories/tenantMembers.js";
 import { hasValidPendingInvitationForEmail } from "@worker/db/repositories/invitations.js";
 import { sendEmail, isEmailConfigured } from "./email";
+import { DISABLED_SESSION_PATHS, buildSessionPolicy } from "./auth-session-policy";
 import {
   ACCOUNT_LINKING_POLICY,
   applyGoogleAccountTakeover,
@@ -43,6 +44,15 @@ import {
 export const isGoogleConfigured = Boolean(
   process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET,
 );
+
+/**
+ * Can Google PROVE a recent authentication for Seguridad → Sesiones? Only when the Google app
+ * has "Session age claims" enabled (Google Auth Platform → Settings → Advanced; the app must be
+ * In production and Verified). Without it Google never sends `auth_time`, a Google round-trip
+ * proves nothing about freshness, and the confirmation is not offered at all. Declared by the
+ * operator once the console setting is on: GOOGLE_SESSION_AGE_CLAIMS=enabled.
+ */
+export const isGoogleReauthAvailable = isGoogleConfigured && process.env.GOOGLE_SESSION_AGE_CLAIMS === "enabled";
 
 // Single Pool reused across HMR re-evaluations (see DATABASE note above).
 const globalForAuthPool = globalThis as unknown as { __obsAuthPool?: Pool };
@@ -87,6 +97,24 @@ const takeoverCtx: { resolve: () => Promise<TakeoverContext> } = {
   resolve: () => Promise.reject(new Error("auth context not initialised")),
 };
 
+/**
+ * May this person keep a PERSISTENT session («Mantener mi sesión en este equipo», 30 days)?
+ *
+ * DEPENDENCY: there is no per-business session policy yet (no table, no admin screen), so
+ * every account may. This is the ONE server-side point a business policy plugs into when it
+ * exists — and because a user belongs to ONE tenant and the answer is computed per USER at
+ * authentication, switching business inside the app can never bypass it. The login page
+ * cannot know the person before they sign in, so it always offers the checkbox; when a policy
+ * says no, the session is simply created non-persistent here (12 h / 2 h idle).
+ */
+// eslint-disable-next-line @typescript-eslint/no-unused-vars -- the per-user hook point (see above)
+export async function persistentSessionsAllowed(_userId: string): Promise<boolean> {
+  return true;
+}
+
+// Session policy (web/lib/sessionPolicy.ts): Better Auth hooks + options, shared with the tests.
+const sessionPolicy = buildSessionPolicy({ allowPersistent: persistentSessionsAllowed });
+
 export const auth = betterAuth({
   database: authPool,
   baseURL,
@@ -103,6 +131,12 @@ export const auth = betterAuth({
   // tenant-provisioning create-hook below never fires), so
   // userId/tenant/memberships/roles are preserved.
   secret: process.env.BETTER_AUTH_SECRET,
+  // SESSION POLICY (ACCESO-1): no sliding refresh; deadlines set by the hooks below; the
+  // policy columns are server-written only. See web/lib/auth-session-policy.ts.
+  session: sessionPolicy.session,
+  // Better Auth's own list/revoke endpoints would close other sessions WITHOUT a recent
+  // re-authentication — replaced by web/lib/sessionActions.ts (server-only calls still work).
+  disabledPaths: DISABLED_SESSION_PATHS,
   emailAndPassword: {
     enabled: true,
     // sendResetPassword / resetPasswordTokenExpiresIn /
@@ -161,8 +195,18 @@ export const auth = betterAuth({
           // account_not_linked. See applyGoogleAccountTakeover for the full rationale. The context
           // is reached via a getter assigned AFTER `auth` (referencing auth.$context inline here
           // would make auth's own type un-inferrable).
-          mapProfileToUser: async (profile: TakeoverProfile): Promise<Record<string, never>> =>
-            applyGoogleAccountTakeover(await takeoverCtx.resolve(), profile),
+          //
+          // ACCESO-1: a Google RE-AUTHENTICATION (Seguridad → Sesiones) first checks the
+          // Google account is the one the challenge was issued for — otherwise it aborts here,
+          // before any user could be created for a different address.
+          mapProfileToUser: async (profile: TakeoverProfile & { auth_time?: unknown }): Promise<Record<string, never>> => {
+            const ctx = await takeoverCtx.resolve();
+            await sessionPolicy.checkGoogleProfile(
+              ctx.internalAdapter as unknown as Parameters<typeof sessionPolicy.checkGoogleProfile>[0],
+              profile,
+            );
+            return applyGoogleAccountTakeover(ctx, profile);
+          },
         },
       }
     : {},
@@ -171,6 +215,12 @@ export const auth = betterAuth({
   // `user` is created once, never on subsequent logins), so it is inherently
   // idempotent: returning users never get a second tenant.
   databaseHooks: {
+    session: {
+      create: {
+        before: (session, ctx) =>
+          sessionPolicy.sessionCreateBefore(session, ctx as Parameters<typeof sessionPolicy.sessionCreateBefore>[1]),
+      },
+    },
     user: {
       create: {
         after: async (user) => {
@@ -202,11 +252,13 @@ export const auth = betterAuth({
   // user a SPECIFIC message (no longer the generic one) is also logged for ops — code only, no PII,
   // never throws. Runs after the handler; a hook that returns nothing leaves the response untouched.
   hooks: {
+    before: createAuthMiddleware(sessionPolicy.beforeHandler),
     after: createAuthMiddleware(async (ctx) => {
       const returned = ctx.context.returned as { body?: { code?: string } } | undefined;
       if (returned?.body?.code === "EMAIL_NOT_VERIFIED" && ctx.path === "/sign-in/email") {
         console.info("[auth] sign-in refused: EMAIL_NOT_VERIFIED (unverified email/password account)");
       }
+      return sessionPolicy.afterHandler(ctx);
     }),
   },
   // Honors Set-Cookie from server-side auth calls in the Next App Router

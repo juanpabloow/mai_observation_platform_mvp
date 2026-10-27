@@ -277,6 +277,62 @@ Authorized redirect URI:
 <BETTER_AUTH_URL>/api/auth/callback/google
 ```
 
+**Confirming identity with Google (Seguridad → Sesiones).** Google does not support
+re-authentication requests; the only freshness proof is the ID token's `auth_time`, which Google
+sends only when the app has **Session age claims** enabled (Google Auth Platform → Settings →
+Advanced settings; the app must be *In production* and *Verified*). Only after enabling it, set
+`GOOGLE_SESSION_AGE_CLAIMS=enabled` on the **web** service. Without it, Google sign-in works as
+before, but a Google-only account cannot close its OTHER sessions (closing the current one always
+works) — the app never treats a Google round-trip without a recent `auth_time` as proof.
+
+## Acceso y sesiones (migración `1822000000000`) · despliegue y vuelta atrás
+
+**Qué cambia en la base.** La migración solo AÑADE columnas a `session` (todas con valor por
+defecto o nulas) y crea `user_profiles` / `user_avatars`. Las sesiones abiertas conservan su
+vencimiento actual (marcadas `legacy`). No hay ninguna restricción que el código ANTERIOR pueda
+violar: está comprobado que, con el esquema nuevo, el código anterior sigue iniciando sesión,
+refrescando, listando, revocando y cerrando sesiones (`npm run test:migrations:acceso`, que
+alterna el código real de `origin/main` y el de la rama sobre un PostgreSQL desechable propio de
+cada ejecución, publicado solo en 127.0.0.1; `npm run test:migrations:acceso:selftest` prueba
+que el arnés falla con código ≠ 0 —y sin «OK»— ante una migración o comprobación fallida, o un
+PostgreSQL que no arranca, y que no toca contenedores ajenos).
+
+**Secuencia (la de siempre, sin pasos manuales):**
+1. Justo antes del merge: `ls migrations/ | sort | tail -5` contra `main` — `1822…` debe ser la
+   última (renumerar con `git mv` si otra rama tomó el número). Hacer el `pg_dump` de siempre.
+2. Merge a `main` → el pre-deploy aplica `1822`. Durante esa ventana el código anterior sigue
+   sirviendo sin errores; las sesiones que crea o refresca quedan sin política.
+3. El código nuevo arranca: `web/instrumentation-node.ts` concilia esas sesiones y
+   `web/lib/session.ts` (→ `lib/sessionValidation.ts`) repite la conciliación por fila en cada
+   lectura, para lo que el código anterior escriba mientras ambos conviven. Conciliar RECORTA,
+   nunca alarga ni cuenta como actividad: una sesión sin «Mantener sesión» queda en
+   min(su vencimiento, su límite de 12 h, ÚLTIMA ACTIVIDAD REGISTRADA + 2 h) — si eso ya pasó, la
+   sesión termina. Tras conciliar, la sesión se RELEE y se juzga sobre su estado actual (otra
+   petición pudo conciliarla, revocarla o vencerla): nunca se acepta una sesión vencida o
+   revocada por haber usado la lectura anterior.
+4. Comprobar: `SELECT name FROM pgmigrations ORDER BY run_on DESC LIMIT 3;`, iniciar sesión con y
+   sin «Mantener sesión», y que el log del web muestre (si hubo) `session policy: reconciled N`.
+
+**Vuelta atrás = SOLO código.** Redesplegar el commit anterior (Railway → web → deployments →
+Redeploy del anterior, o revert en `main`). El esquema se queda: el código anterior funciona con
+él (verificado). Mientras dure la vuelta atrás vuelve el comportamiento anterior (sesiones de 7
+días que se deslizan, endpoints de Better Auth de listar/revocar abiertos); al volver a desplegar
+el código nuevo, esas sesiones se recortan solas. Teléfonos y fotos quedan guardados, sin uso.
+
+**Lo que NO se puede reconstruir (y por eso no se inventa):**
+- El código anterior no registra la interacción de las personas: solo «refresca» al leer. Las
+  sesiones que creó (incluidas las abiertas antes de este despliegue) quedan como `legacy`:
+  persistentes, con su vencimiento actual como límite (máximo 30 días desde su creación) y SIN
+  actividad registrada — en Seguridad → Sesiones aparecen como «Actividad no registrada».
+- Si hay una vuelta atrás, lo que la persona trabajó mientras servía el código anterior tampoco
+  queda registrado: al redesplegar, una sesión sin «Mantener sesión» se juzga por la última
+  actividad que vio el código nuevo, y puede terminar en ese momento (la persona vuelve a entrar).
+
+**No ejecutar `down` para volver atrás.** `down` BORRA los teléfonos (`user_profiles`) y las fotos
+(`user_avatars`) de todas las personas, además de las columnas de política de sesión. Se niega a
+correr mientras haya datos salvo con `ACCESO_DOWN_ALLOW_DATA_LOSS=1`; si de verdad hace falta,
+exportar antes esas dos tablas.
+
 ## Suggested first-deploy order
 
 1. Create the project and add **Postgres** (managed plugin).

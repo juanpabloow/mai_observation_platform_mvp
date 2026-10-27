@@ -43,7 +43,12 @@ import { getSessionCookie } from "better-auth/cookies";
 // cookie, exactly as they do today. Their real gate is resolveAppScope at the
 // data layer; the middleware bounce is the UX half, and dropping it would be a
 // silent widening nobody asked for.
+//
+// /api/account/session is the browser's view of its OWN session deadline (SessionGuard). It
+// answers 401 JSON itself when the session is gone — a 307 to /login would hand the guard an
+// HTML page instead of telling it the session ended.
 const PUBLIC_PREFIXES = [
+  "/api/account/session",
   "/login",
   "/signup",
   "/logout",
@@ -77,7 +82,8 @@ export function middleware(request: NextRequest): NextResponse {
   const isPublic = PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`));
   if (!isPublic && !getSessionCookie(request)) {
     const url = new URL("/login", request.url);
-    url.searchParams.set("redirect", pathname);
+    // Path AND query, so e.g. Agenda reopens on the same week after signing in.
+    url.searchParams.set("redirect", `${pathname}${request.nextUrl.search}`);
     return NextResponse.redirect(url);
   }
 
