@@ -145,12 +145,13 @@ test('JP-4 «Corregir hora o profesional» is offered for any status except canc
   assert.equal(appointmentActionPlan({ canOperate: false, canModify: true, status: 'confirmed', ...STARTED }).correctTime, false);
 });
 
-test('both edit entry points come from the shared plan and the panel offers them from there', () => {
-  const panel = read('web/components/scheduling/agenda/AppointmentPanel.tsx');
+test('JP-5 the in-card edit affordances come from the shared plan, not a separate rule', () => {
   const card = read('web/components/scheduling/agenda/AppointmentCard.tsx');
-  assert.ok(panel.includes('plan.changeService') && panel.includes('plan.correctTime'), 'the panel reads both flags from the plan');
-  assert.ok(card.includes('props.onChangeService') && card.includes('props.onCorrectTime'), 'the card renders both entry points');
-  assert.ok(!card.includes('appointmentActionPlan('), 'the card does not invent its own rule');
+  // The card decides each field's mode (edit / guided / ask / none) from the plan flags + role.
+  assert.ok(card.includes('plan.changeService') && card.includes('plan.correctTime'), 'the card reads both flags from the plan');
+  assert.ok(!card.includes('appointmentActionPlan('), 'the card does not compute the plan itself');
+  // Edit happens in place, on the row — one vocabulary from control to editor title.
+  assert.ok(card.includes('Cambiar fecha y hora') && card.includes('Cambiar') , 'the time control uses the plain verb');
 });
 
 test('Completar waits for the start — the same answer on desktop and phone (finding A)', () => {

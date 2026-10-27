@@ -1115,10 +1115,10 @@ export function AgendaView(props: {
   /** md+: «Reagendar» lives inside the appointment's panel; the phone keeps its flow. */
   const deskReschedule = modal?.mode === "reschedule" && !isPhoneWidth ? modal.appt : null;
   const openWeekdays = new Set(Object.entries(props.openingHours).filter(([, r]) => (r?.length ?? 0) > 0).map(([k]) => k));
-  const afterReschedule = (dayKey: string, appointmentId: string) => {
+  const afterReschedule = (dayKey: string, appointmentId: string, notice = "Cita reagendada") => {
     setModal(null);
     setSelectedId(null);
-    setNotice("Cita reagendada");
+    setNotice(notice);
     // Highlight it once it is drawn on its new day (this page or the next one).
     try {
       window.sessionStorage.setItem(FLASH_KEY, appointmentId);
@@ -1680,6 +1680,7 @@ export function AgendaView(props: {
           <AppointmentPanel
             key={`${appt.id}:${deskReschedule ? "r" : "d"}`}
             appt={appt}
+            clientId={props.clientId}
             timezone={tz}
             toneClass={appointmentToneClass(appt)}
             siteName={currentSite?.name ?? "Sede actual"}
@@ -1693,8 +1694,12 @@ export function AgendaView(props: {
             startInReschedule={Boolean(deskReschedule)}
             reschedule={rescheduleConfig()}
             services={props.services}
-            onEdited={(m) => {
-              setNotice(m);
+            staff={rescheduleConfig().staff}
+            others={props.appointments}
+            isStaffLogin={props.lockStaffId != null}
+            onTimeRescheduled={({ dayKey, appointmentId }) => afterReschedule(dayKey, appointmentId, "Fecha y hora cambiadas")}
+            onEdited={(verb) => {
+              setNotice(verb);
               // Highlight the card once the server-confirmed change is drawn.
               try {
                 window.sessionStorage.setItem(FLASH_KEY, appt.id);
@@ -1731,7 +1736,6 @@ export function AgendaView(props: {
               });
             }}
             onLocate={() => locateAppointment(appt.id)}
-            onReschedule={() => setModal({ mode: "reschedule", appt })}
             payment={
               props.canViewPayments
                 ? {
