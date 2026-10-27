@@ -585,7 +585,7 @@ Authorization: Bearer hk_…      X-Workflow-Ref: demo-crm-wf
 ```
 
 #### `POST /api/crm/v1/contacts/upsert` — `crm.write`
-Body: `{ phone?, email?, external_id?, name?, custom_fields?, consent?, source_label?, identities? }`
+Body: `{ phone?, email?, external_id?, name?, whatsapp_username?, custom_fields?, consent?, source_label?, identities? }`
 (at least one identity required). The **only** write path that may create a contact — through
 the identity chokepoint (the same person can't fork into two contacts; duplicate candidates
 are recorded, never silently merged). Field semantics an integrator can rely on:
@@ -598,6 +598,13 @@ are recorded, never silently merged). Field semantics an integrator can rely on:
   byte-identical to before.
 - **`name`, `email` — fill-empty.** Written only when the stored value is empty; a non-empty
   stored value is **never** overwritten (correcting a name is a human's job, not a bot's guess).
+- **`whatsapp_username` — display/contact-point only (JP-3).** The customer's visible WhatsApp
+  handle (`contacts[0].profile.username`), stored without the "@", length-capped, sentinel-ignored,
+  with a last-seen time; a changed handle is timelined. **IDENTITY RULE: it is NEVER a match key** —
+  it never finds, matches or merges a contact (a username can change hands). The phone is the primary
+  identifier when present, the BSUID the stable fallback; the username is neither. **Prefer sending it
+  on the inbound message push** (`POST /api/handoff/v1/messages`) so a change is caught per message;
+  this upsert field is the alternative for a profile-sync node.
 - **`consent` — overwrites.** An explicit `opted_out` sticks, always. Consent is STORE-ONLY:
   recorded and displayed, and **never** gates a service reply — a handoff/inbox send is never
   blocked by it.

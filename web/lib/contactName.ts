@@ -34,14 +34,23 @@ export function maskPhone(raw: string | null | undefined): string | null {
 
 export interface ContactNameSource {
   name: string | null | undefined;
+  /** JP-3: the visible WhatsApp username (stored without "@") — shown as "@handle" when there is no
+   *  real name, BEFORE the masked phone (a handle the customer chose is friendlier than a number). */
+  whatsappUsername?: string | null;
   /** The E.164 phone (preferred source for the masked fallback). */
   phoneE164?: string | null;
   /** The channel id — for WhatsApp this is usually the phone, so it is the last-resort source. */
   channelUserId?: string | null;
 }
 
-/** The contact's display name: a real stored name → the masked phone → "Sin nombre". */
+/**
+ * The contact's display name, in fallback order (DISPLAY ONLY — never rewrites the stored name):
+ *   real stored name (the WhatsApp profile name or a typed name) → "@username" → masked phone →
+ *   "Sin nombre". A username can change hands, so it is only ever a LABEL here, never a key.
+ */
 export function displayContactName(src: ContactNameSource): string {
   if (isMeaningfulName(src.name)) return src.name!.trim();
+  const handle = src.whatsappUsername?.trim();
+  if (handle) return `@${handle}`;
   return maskPhone(src.phoneE164) ?? maskPhone(src.channelUserId) ?? "Sin nombre";
 }

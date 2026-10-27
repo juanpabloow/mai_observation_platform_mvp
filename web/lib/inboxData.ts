@@ -147,6 +147,7 @@ export function toHeaderView(
     assignedAgentName: c.assigned_agent_name,
     contactName: c.contact_name,
     channel: c.contact_channel,
+    whatsappUsername: c.contact_whatsapp_username,
   };
 }
 

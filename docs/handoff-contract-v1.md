@@ -87,8 +87,22 @@ Request:
   "occurred_at": "optional ISO-8601 UTC — defaults to receipt time",
   "metadata": "optional object — stored verbatim, never interpreted",
   "identity_label": "optional string (≤64) — free-text SOURCE hint ('whatsapp', 'instagram', 'webchat')",
-  "identities": "optional array (≤20) of { kind: 'phone'|'email'|'external', value, label? } — every identity known for THIS person"
+  "identities": "optional array (≤20) of { kind: 'phone'|'email'|'external', value, label? } — every identity known for THIS person",
+  "whatsapp_username": "optional string — the customer's visible WhatsApp username (contacts[0].profile.username); DISPLAY only, NEVER a match key"
 }
+```
+
+> **`whatsapp_username` (JP-3 — added, non-breaking).** WhatsApp now lets people use a username (e.g. `nanditho.66`) and hide their phone; the webhook carries it in `contacts[0].profile.username`. Send it here and the platform stores it on the resolved contact (the "@" is stripped; length-capped; a sentinel like `"undefined"` is ignored) with a last-seen timestamp, and — when a later message brings a **different** username — updates it and writes a timeline event ("Cambió su usuario de WhatsApp de @a a @b"). **This is the RECOMMENDED place to send it** (over the CRM `/contacts/upsert` `whatsapp_username` field): it rides every inbound message, so a change is caught and timelined. **IDENTITY RULE:** the username is a **display / contact-point attribute ONLY** — it is NEVER used to find, match or merge contacts (a username can change hands, so matching on it could attach a stranger). The phone stays the primary identifier when present; the BSUID is the stable fallback; the username is neither. Applied inside the same fail-safe as D-2/I-1, so it never fails the push.
+
+Executed (a later message that changes the handle):
+```
+POST /api/handoff/v1/messages
+{ "workflow_ref":"wf_x", "conversation_ref":"CO.2405…", "sender":"user", "text":"hola",
+  "whatsapp_username":"@nanditho.66" }
+→ 201 { "message_id":"…", "conversation": { "mode":"bot", … } }     # stored as "nanditho.66"
+# …a week later the same person renamed themselves:
+{ …, "whatsapp_username":"nando.nuevo" }
+→ 201 …     # contact updated + timeline: "Cambió su usuario de WhatsApp de @nanditho.66 a @nando.nuevo"
 ```
 
 > **`identity_label` (added, non-breaking).** Additive to contract v1 — omitting it changes nothing. When CRM is enabled for the workflow's client, the first inbound `sender: "user"` message on an unlinked conversation auto-creates a CRM contact (see D-2 rule below); `identity_label` becomes that contact's **source** and its identity **label**. It is a display hint only — stored and shown, **never parsed or branched on**. Absent → a neutral `"conversation"`. The platform stays channel-blind: the `conversation_ref` itself is classified by value (phone / email / external), so this label does not need to match any channel taxonomy.

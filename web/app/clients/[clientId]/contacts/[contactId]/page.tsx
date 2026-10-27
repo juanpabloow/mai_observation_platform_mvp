@@ -215,6 +215,7 @@ export default async function ClientContactDetailPage({
           ownerLabel: ownerName,
           stage: contact.stage,
           preferredChannel: contact.preferred_channel,
+          whatsappUsername: contact.whatsapp_username,
           doNotContact: contact.do_not_contact,
           consent: contact.messaging_consent,
           consentUpdatedAt: contact.consent_updated_at?.toISOString() ?? null,

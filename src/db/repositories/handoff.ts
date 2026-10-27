@@ -647,6 +647,8 @@ export interface InboxConversationRow {
    *  name across clients. NULL for an unattributed conversation. */
   contact_name: string | null;
   contact_channel: string | null;
+  /** JP-3: the contact's visible WhatsApp username (without "@"), or null. */
+  contact_whatsapp_username: string | null;
   /**
    * How many times this person has actually been in — completed appointments.
    *
@@ -669,6 +671,7 @@ export interface InboxConversationRow {
 const contactLateral = (client: string): string => `
   SELECT ct.name AS contact_name,
          ct.channel AS contact_channel,
+         ct.whatsapp_username AS contact_whatsapp_username,
          -- COMPLETED appointments — the number the queue prints in the avatar disc.
          --
          -- A correlated count rather than a grouped rollup, deliberately: this lateral
@@ -707,6 +710,8 @@ export interface InboxConversationDetail extends ConversationRow {
   /** Same client-scoped contact resolution as the list — see contactLateral. */
   contact_name: string | null;
   contact_channel: string | null;
+  /** JP-3: the contact's visible WhatsApp username (without "@"), or null. */
+  contact_whatsapp_username: string | null;
   contact_visit_count: number;
   /** The linked contact (conversations.contact_id) — nullable; returned by the SELECT c.*
    *  detail reads. Scoped by the canonical-workflow client, but the pointed-at contact is
@@ -726,7 +731,7 @@ export async function getConversationForClient(
 ): Promise<InboxConversationDetail | null> {
   const r = await query<InboxConversationDetail>(
     `SELECT c.*, cw.workflow_name, u.name AS assigned_agent_name,
-            ct.contact_name, ct.contact_channel, ct.contact_visit_count
+            ct.contact_name, ct.contact_channel, ct.contact_whatsapp_username, ct.contact_visit_count
        FROM conversations c
        JOIN LATERAL (${CANONICAL_WORKFLOW_LATERAL}) cw ON cw.client_id = $2
        LEFT JOIN LATERAL (${contactLateral('$2')}) ct ON true

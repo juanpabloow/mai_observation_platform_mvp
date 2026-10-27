@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { authenticateCrm, crmError, loadEnrichmentContact, applyConsentAsAutomation } from "@/lib/crmApi";
 import { resolveContactByIdentity } from "@worker/db/repositories/contactIdentities.js";
-import { updateContact } from "@worker/db/repositories/contacts.js";
+import { updateContact, setContactWhatsappUsername } from "@worker/db/repositories/contacts.js";
 import { listFieldDefinitions, validateCustomFieldValues } from "@worker/db/repositories/clientFieldDefinitions.js";
 import { identitiesSchema } from "@/lib/identities";
 import { isSentinelIdentifier } from "@worker/identity/sentinel.js";
@@ -25,6 +25,9 @@ const Body = z
     email: z.string().trim().min(1).max(256).optional(),
     external_id: z.string().trim().min(1).max(256).optional(),
     name: z.string().trim().max(256).optional(),
+    // JP-3: the customer's visible WhatsApp username (contacts[0].profile.username), e.g.
+    // "nanditho.66". DISPLAY/contact-point only — stored without "@", NEVER a match key.
+    whatsapp_username: z.string().trim().max(100).optional(),
     custom_fields: z.record(z.string(), z.unknown()).optional(),
     consent: z.enum(["unknown", "opted_in", "opted_out"]).optional(),
     source_label: z.string().trim().max(64).optional(),
@@ -93,6 +96,10 @@ export async function POST(req: Request): Promise<Response> {
   }
   if (body.consent !== undefined && body.consent !== contact.messaging_consent) {
     await applyConsentAsAutomation(tenantId, clientId, contact.id, body.consent, body.source_label ?? "api");
+  }
+  // JP-3: record the visible WhatsApp username on the already-resolved contact (never used to match).
+  if (body.whatsapp_username !== undefined) {
+    await setContactWhatsappUsername(tenantId, clientId, contact.id, body.whatsapp_username);
   }
 
   // Enrichment response — NO appointment-shaped field (see loadEnrichmentContact). A contact

@@ -138,6 +138,8 @@ export interface InboxHeaderView {
   workflowName: string | null;
   contactName: string | null;
   channel: string | null;
+  /** JP-3: the customer's visible WhatsApp username (without "@"), or null. */
+  whatsappUsername: string | null;
   mode: InboxMode;
   /** ACTIVE iff the customer wrote within the activity window (for the drawer's tag). */
   active: boolean;

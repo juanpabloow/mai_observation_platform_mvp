@@ -218,8 +218,8 @@ export function ContactsTable({
         const selected = c.id === selectedId;
         const overdue = c.overdue_task_count > 0;
         const named = isMeaningfulName(c.name);
-        // The shared display name (real name → masked phone → "Sin nombre"), same as the board.
-        const display = displayContactName({ name: c.name, phoneE164: c.phone_e164, channelUserId: c.channel_user_id });
+        // The shared display name (real name → @username → masked phone → "Sin nombre"), same as the board.
+        const display = displayContactName({ name: c.name, whatsappUsername: c.whatsapp_username, phoneE164: c.phone_e164, channelUserId: c.channel_user_id });
         return (
           <div
             role="row"
@@ -288,12 +288,15 @@ export function ContactsTable({
               </span>
             </span>
 
-            {/* ── Teléfono ── */}
-            <span role="cell" className="min-w-0">
+            {/* ── Teléfono (+ JP-3 WhatsApp username as a secondary line) ── */}
+            <span role="cell" className="flex min-w-0 flex-col gap-px">
               {c.phone_e164 ? (
                 <span className="u-mono block truncate text-[0.8125rem] text-muted">
                   {c.phone_e164}
                 </span>
+              ) : c.whatsapp_username ? (
+                // No phone, but a visible WhatsApp handle — show it and say the number is hidden.
+                <span className="text-[0.75rem] text-faint">Sin número visible</span>
               ) : !canEdit ? (
                 <span className="text-[0.75rem] text-faint">—</span>
               ) : (
@@ -305,6 +308,11 @@ export function ContactsTable({
                   + Agregar número
                 </Link>
               )}
+              {c.whatsapp_username ? (
+                <span className="truncate text-[0.75rem] text-faint" title={`Usuario de WhatsApp · @${c.whatsapp_username}`}>
+                  @{c.whatsapp_username}
+                </span>
+              ) : null}
             </span>
 
             {/* ── Origen: the AT-1 attribution origin (a chip + a quiet detail line), gated like

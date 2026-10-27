@@ -59,6 +59,8 @@ export interface ContactReadValues {
   ownerLabel: string | null;
   stage: string;
   preferredChannel: PreferredChannel | null;
+  /** JP-3: the visible WhatsApp username (without "@"), or null. */
+  whatsappUsername: string | null;
   doNotContact: boolean;
   consent: string;
   consentUpdatedAt: string | null;
@@ -213,6 +215,12 @@ export function ContactSections(props: Props) {
             <ReadField label="Email">
               <IdentityList values={props.read.emails} />
             </ReadField>
+            {/* JP-3: the customer's visible WhatsApp handle (display only, never a key). */}
+            {props.read.whatsappUsername ? (
+              <ReadField label="Usuario de WhatsApp">
+                <span className="u-mono">@{props.read.whatsappUsername}</span>
+              </ReadField>
+            ) : null}
           </ReadGrid>
         ) : (
           <>

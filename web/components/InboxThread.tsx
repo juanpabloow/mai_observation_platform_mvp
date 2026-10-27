@@ -239,6 +239,8 @@ export function InboxThread({
   const whatsapp = /whats\s*app/i.test(header.channel ?? "");
   const sub = [
     isPhoneRef(header.conversationRef) ? formatConversationRef(header.conversationRef) : `Sin número visible${whatsapp ? "" : " · WhatsApp"}`,
+    // JP-3: the customer's visible WhatsApp handle, beside the number (or "Sin número visible").
+    header.whatsappUsername ? `@${header.whatsappUsername}` : null,
     header.workflowName,
     whatsapp ? "WhatsApp" : null,
   ]

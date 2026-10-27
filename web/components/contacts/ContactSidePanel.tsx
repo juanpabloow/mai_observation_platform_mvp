@@ -330,6 +330,7 @@ export function ContactSidePanel({
                       edit.owners.find((o) => o.userId === edit.initial.assignedTo)?.label ?? null,
                     stage: edit.initial.stage,
                     preferredChannel: edit.initial.preferredChannel,
+                    whatsappUsername: edit.initial.whatsappUsername,
                     doNotContact: edit.initial.doNotContact,
                     consent: edit.initial.consent,
                     consentUpdatedAt: edit.initial.consentUpdatedAt,

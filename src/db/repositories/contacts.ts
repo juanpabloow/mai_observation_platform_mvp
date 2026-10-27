@@ -2,6 +2,7 @@ import type { PoolClient } from 'pg';
 import { query, withTransaction } from '../client.js';
 import { normalizeE164 } from '../../scheduling/phone.js';
 import { recordCrmActivity, type ActorKind } from './crmActivityEvents.js';
+import { isSentinelIdentifier } from '../../identity/sentinel.js';
 
 /** Who drove a contact write — the attribution recorded on stage_changed / owner_changed. */
 export interface ContactWriteActor {
@@ -46,6 +47,10 @@ export interface ContactRow {
   consent_source: string | null;
   /** NULL = no preference on record, which is not the same as "WhatsApp". */
   preferred_channel: PreferredChannel | null;
+  /** JP-3: the customer's visible WhatsApp username (stored without "@"), or null. DISPLAY/contact-
+   *  point ONLY — never a match key. `whatsapp_username_seen_at` is when it was last seen. */
+  whatsapp_username: string | null;
+  whatsapp_username_seen_at: Date | null;
   /** The SHOP suppressing its own sends — a different statement from the customer's
    *  consent, which is why it is a separate column. Stored this phase; the send paths
    *  adopt it when they exist (same staging as consent). */
@@ -178,7 +183,7 @@ export interface ListContactsResult {
  * so a phone typed with +/spaces/dashes still matches the stored E.164.
  */
 const CONTACT_SEARCH_DOC =
-  `lower(coalesce(c.name,'') || ' ' || coalesce(c.email,'') || ' ' || coalesce(c.channel_user_id,'') || ' ' || coalesce(c.phone_e164,'') || ' ' || regexp_replace(coalesce(c.phone_e164,''), '[^0-9]', '', 'g'))`;
+  `lower(coalesce(c.name,'') || ' ' || coalesce(c.email,'') || ' ' || coalesce(c.channel_user_id,'') || ' ' || coalesce(c.phone_e164,'') || ' ' || regexp_replace(coalesce(c.phone_e164,''), '[^0-9]', '', 'g') || ' ' || coalesce(c.whatsapp_username,''))`;
 
 /** Keyset cursor codec: opaque base64url of `<micro-precise ISO ts>|<id>`. The
  * timestamp MUST carry Postgres's microsecond precision — a JS Date only has
@@ -789,6 +794,72 @@ export async function contactHasFinancialHistory(tenantId: string, clientId: str
     [tenantId, clientId, contactId],
   );
   return r.rows[0]?.has ?? false;
+}
+
+/**
+ * JP-3 — normalize an inbound WhatsApp username: strip a leading "@", trim, collapse the result to
+ * nothing if it's empty / a sentinel ("undefined", an unrendered expression) / longer than 64 after
+ * trimming. Returns null when there is nothing real to store (the caller then no-ops). DISPLAY ONLY —
+ * never a match key.
+ */
+export function normalizeWhatsappUsername(raw: string | null | undefined): string | null {
+  if (!raw) return null;
+  const stripped = raw.trim().replace(/^@+/, '').trim();
+  if (!stripped || stripped.length > 64 || isSentinelIdentifier(stripped)) return null;
+  return stripped;
+}
+
+/**
+ * JP-3 — record the contact's current WhatsApp username (stored WITHOUT "@"). The username is a
+ * DISPLAY/contact-point attribute, NEVER an identity: this only ever runs on an ALREADY-RESOLVED
+ * contact (resolved by phone/BSUID), so it can never find, match or merge anyone.
+ *
+ *  - garbage/sentinel/too-long → no-op (nothing stored).
+ *  - same as the stored one → just bump whatsapp_username_seen_at.
+ *  - different from a PREVIOUS non-null one → update + bump seen_at + write a 'whatsapp_username_changed'
+ *    timeline event ("Cambió su usuario de WhatsApp de @a a @b"), atomically.
+ *  - first time (was null) → set it + seen_at, no event (it is not a "change").
+ *
+ * Returns what happened, for the caller's logging/tests. Tenant + client scoped (a foreign contact
+ * id matches nothing → { changed:false }).
+ */
+export async function setContactWhatsappUsername(
+  tenantId: string,
+  clientId: string,
+  contactId: string,
+  rawUsername: string | null | undefined,
+  actor: { kind: ActorKind; userId: string | null } = { kind: 'automation', userId: null },
+): Promise<{ changed: boolean; from: string | null; to: string | null }> {
+  const next = normalizeWhatsappUsername(rawUsername);
+  if (next === null) return { changed: false, from: null, to: null };
+  return withTransaction(async (client) => {
+    const cur = await client.query<{ whatsapp_username: string | null }>(
+      `SELECT whatsapp_username FROM contacts WHERE id = $1 AND tenant_id = $2 AND client_id = $3 FOR UPDATE`,
+      [contactId, tenantId, clientId],
+    );
+    if (cur.rows.length === 0) return { changed: false, from: null, to: null };
+    const from = cur.rows[0].whatsapp_username;
+    if (from === next) {
+      // Same handle — just note we saw it again (no timeline noise).
+      await client.query(`UPDATE contacts SET whatsapp_username_seen_at = now() WHERE id = $1 AND tenant_id = $2`, [contactId, tenantId]);
+      return { changed: false, from, to: next };
+    }
+    await client.query(
+      `UPDATE contacts SET whatsapp_username = $3, whatsapp_username_seen_at = now() WHERE id = $1 AND tenant_id = $2`,
+      [contactId, tenantId, next],
+    );
+    // Only a CHANGE (a previous different handle) is a timeline fact; the first-ever set is silent.
+    if (from !== null) {
+      await recordCrmActivity(client, {
+        tenantId, clientId, contactId,
+        eventType: 'whatsapp_username_changed',
+        actorUserId: actor.userId,
+        actorKind: actor.kind,
+        detail: { from, to: next },
+      });
+    }
+    return { changed: true, from, to: next };
+  });
 }
 
 /** Record messaging consent (STORE-ONLY — never gates anything). Client-aware so the
