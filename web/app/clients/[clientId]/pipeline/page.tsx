@@ -10,6 +10,7 @@ import {
 import { listAdsWithStats, listCampaignsWithStats } from "@worker/db/repositories/attribution.js";
 import { isOriginGroupKey, kindsForGroup } from "@/lib/originDisplay";
 import { displayContactName } from "@/lib/contactName";
+import { can } from "@/lib/access";
 import { toBoardCard } from "@/lib/pipelineBoard";
 import { PipelinePanel } from "@/components/pipeline/PipelinePanel";
 
@@ -32,6 +33,9 @@ export default async function PipelinePage({
   const { clientId } = await params;
   const { scope, client } = await requireClientModulePage(clientId, "crm", "pipeline.view");
   const sp = await searchParams;
+  // JP-6: only a viewer with payments.view sees the amount + method on a paid card (the board's
+  // audience — agency/owner/setter — normally has it; a custom role without it sees the card alone).
+  const canViewPayments = can(scope, "payments.view", client.id);
 
   const [campaigns, ads] = await Promise.all([
     listCampaignsWithStats(scope.tenantId, client.id),
@@ -68,8 +72,8 @@ export default async function PipelinePage({
     <PipelinePanel
       clientId={client.id}
       clientName={client.name}
-      cards={boardRows.map(toBoardCard)}
-      lostCards={lostRows.map(toBoardCard)}
+      cards={boardRows.map((r) => toBoardCard(r, canViewPayments))}
+      lostCards={lostRows.map((r) => toBoardCard(r, canViewPayments))}
       queue={queue}
       campaigns={campaigns.map((c) => ({ id: c.id, name: c.name }))}
       ads={ads.map((a) => ({ id: a.id, label: a.name || a.headline || a.external_id }))}

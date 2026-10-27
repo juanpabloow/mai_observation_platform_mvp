@@ -9,13 +9,13 @@ import { displayContactName } from "./contactName";
  * column and the inbox chip use).
  */
 
-/** The board columns, in funnel order. `paid` is shown DISABLED until the payments phase exists. */
+/** The board columns, in funnel order. (JP-6: `paid` is a real column now that payments ship.) */
 export const BOARD_STAGES: Array<{ key: OpportunityStage; label: string; disabled?: boolean }> = [
   { key: "lead", label: "Lead" },
   { key: "qualified", label: "Calificado" },
   { key: "booked", label: "Reservó" },
   { key: "attended", label: "Asistió" },
-  { key: "paid", label: "Pagó", disabled: true },
+  { key: "paid", label: "Pagó" },
 ];
 
 export const STAGE_LABEL: Record<OpportunityStage, string> = {
@@ -56,6 +56,10 @@ export interface BoardCard {
   spokeLast: "business" | "customer" | null;
   lostReason: LostReason | null;
   lostNote: string | null;
+  /** JP-6 (paid cards only, and only for a viewer with payments.view): the recorded amount and the
+   *  method label. `paidMethod` is null when more than one payment backs the sale. Never commission. */
+  paidAmount: string | null;
+  paidMethod: string | null;
 }
 
 export function whoSpokeLast(sender: string | null): "business" | "customer" | null {
@@ -64,7 +68,8 @@ export function whoSpokeLast(sender: string | null): "business" | "customer" | n
   return null;
 }
 
-export function toBoardCard(row: BoardOpportunityRow): BoardCard {
+/** `showPaidAmount` is the viewer's payments.view — when false, a paid card shows no money. */
+export function toBoardCard(row: BoardOpportunityRow, showPaidAmount = true): BoardCard {
   const originSource = {
     originKind: row.origin_kind,
     adName: row.ad_name,
@@ -88,6 +93,8 @@ export function toBoardCard(row: BoardOpportunityRow): BoardCard {
     spokeLast: whoSpokeLast(row.last_sender),
     lostReason: row.lost_reason,
     lostNote: row.lost_note,
+    paidAmount: showPaidAmount ? row.paid_total : null,
+    paidMethod: showPaidAmount ? row.paid_method : null,
   };
 }
 

@@ -178,6 +178,10 @@ export interface BoardOpportunityRow {
   campaign_name: string | null;
   last_sender: string | null;
   last_message_at: Date | null;
+  /** JP-6: the recorded payment of this sale (via its appointments). Amount + method only — NEVER
+   *  commission. `paid_method` is null when the sale has more than one recorded payment. */
+  paid_total: string | null;
+  paid_method: string | null;
 }
 
 export interface BoardFilters {
@@ -237,7 +241,8 @@ export async function listBoardOpportunities(tenantId: string, clientId: string,
                          WHEN 'attended' THEN o.attended_at WHEN 'paid' THEN o.paid_at END AS stage_since,
             ct.name AS contact_name, ct.channel_user_id AS contact_channel_user_id, ct.phone_e164 AS contact_phone_e164, ct.origin_kind,
             ad.name AS ad_name, ad.headline AS ad_headline, ad.is_test AS ad_is_test, camp.name AS campaign_name,
-            lm.sender AS last_sender, lm.created_at AS last_message_at
+            lm.sender AS last_sender, lm.created_at AS last_message_at,
+            pay.paid_total, pay.paid_method
        FROM opportunities o
        JOIN contacts ct ON ct.id = o.contact_id AND ct.tenant_id = o.tenant_id
        LEFT JOIN attribution_touches ft ON ft.id = ct.first_touch_id AND ft.tenant_id = o.tenant_id
@@ -248,6 +253,16 @@ export async function listBoardOpportunities(tenantId: string, clientId: string,
           WHERE hm.tenant_id = o.tenant_id AND hm.conversation_id = o.conversation_id
           ORDER BY hm.created_at DESC, hm.id DESC LIMIT 1
        ) lm ON true
+       LEFT JOIN LATERAL (
+         -- The recorded payment(s) of this sale, via its appointments. Amount + method only (never
+         -- commission); method is null when more than one payment backs the sale.
+         SELECT SUM(p.total)::text AS paid_total,
+                CASE WHEN count(*) = 1 THEN max(pm.label) END AS paid_method
+           FROM appointments ap
+           JOIN payments p ON p.appointment_id = ap.id AND p.tenant_id = ap.tenant_id AND p.status = 'recorded'
+           LEFT JOIN payment_methods pm ON pm.tenant_id = p.tenant_id AND pm.client_id = p.client_id AND pm.key = p.method_key
+          WHERE ap.tenant_id = o.tenant_id AND ap.opportunity_id = o.id
+       ) pay ON true
       WHERE ${where.join(' AND ')}
       ORDER BY o.created_at DESC, o.id DESC
       LIMIT $${limitIdx}`,
