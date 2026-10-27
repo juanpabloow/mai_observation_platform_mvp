@@ -21,6 +21,7 @@ import {
   insertAppointment,
   listStaffAppointmentsOverlapping,
   moveInterval,
+  changeServiceColumns,
   recordAppointmentEvent,
   setStatus,
   type AppointmentRow,
@@ -60,7 +61,10 @@ export type BookingError =
   | 'not_immediate' // immediate walk-in asked for a start outside "now" (agenda UI only)
   | 'not_past' // a walk-in registered as ALREADY DONE whose service has not ended yet (agenda UI only)
   | 'past_overlap' // that past walk-in overlaps another appointment of the professional (agenda UI only)
-  | 'not_started'; // "completed" asked before the appointment starts (agenda UI only)
+  | 'not_started' // "completed" asked before the appointment starts (agenda UI only)
+  // JP-4 — editing an existing appointment:
+  | 'service_not_performed' // the appointment's staff doesn't perform the requested new service
+  | 'payment_recorded'; // a recorded payment blocks this edit — void it first (service/artist change)
 
 export type BookingResult<T> =
   | { ok: true; value: T; deduped?: boolean }
@@ -944,6 +948,203 @@ export async function rescheduleAppointment(input: RescheduleInput): Promise<Boo
     }
     if (isDeadlock(err)) {
       logger.warn({ err, appointmentId: input.appointmentId, startAt: input.startAt }, 'rescheduleAppointment: deadlock mapped to conflict_slot');
+      return { ok: false, error: 'conflict_slot', message: 'That time was just booked. Please pick another.' };
+    }
+    throw err;
+  }
+}
+
+// ── JP-4: edit an existing appointment (service change + time/staff correction) ──────────────
+
+/** Does this appointment carry a RECORDED (non-voided) payment? Gates the edits that would desync
+ *  the payment's own snapshots (service, artist, commission) — those must go via void → re-charge. */
+async function hasRecordedPayment(client: PoolClient, tenantId: string, appointmentId: string): Promise<boolean> {
+  const r = await client.query<{ has: boolean }>(
+    `SELECT EXISTS (SELECT 1 FROM payments WHERE tenant_id = $1 AND appointment_id = $2 AND status = 'recorded') AS has`,
+    [tenantId, appointmentId],
+  );
+  return r.rows[0]?.has ?? false;
+}
+
+/** A named appointment this edit would collide with (same staff, overlapping interval). */
+export interface EditConflict { id: string; start_at: Date; service_end_at: Date; service_name: string; customer_name: string | null }
+
+export interface ChangeServiceInput {
+  tenantId: string;
+  appointmentId: string;
+  newServiceId: string;
+  scopeClientId: string;
+  actorType: ActorType;
+  actorUserId?: string | null;
+}
+
+/**
+ * JP-4 — change the SERVICE of an existing appointment (e.g. "Corte + barba" → "Corte"), keeping the
+ * same staff and start. Allowed for scheduled/confirmed/in-progress AND completed-WITHOUT-a-recorded-
+ * payment (D3); a completed appointment WITH a recorded payment is refused ('payment_recorded') —
+ * the service must change via void → re-charge so payment_lines/commissions stay consistent (D1).
+ *
+ * Re-validates the new service's effective timing for the same staff (the engine's own resolution via
+ * prepareAvailability; the staff must perform it → else 'service_not_performed'), recomputes the end +
+ * blocked window from the SAME start, and refuses only if the new (longer) interval OVERLAPS another
+ * active appointment of that staff — named in the result. Updates the service + snapshots + price and
+ * writes an `appointment_service_changed` audit event. The value dashboard reflects the new
+ * price_snapshot automatically.
+ */
+export async function changeAppointmentService(
+  input: ChangeServiceInput,
+): Promise<BookingResult<AppointmentRow> & { conflict?: EditConflict }> {
+  if (!hasScope(input.scopeClientId)) return { ok: false, error: 'not_found', message: 'Appointment not found.' };
+  try {
+    const outcome = await withTransaction(async (client) => {
+      const current = await getAppointmentForUpdate(client, input.tenantId, input.appointmentId);
+      if (!current || current.client_id !== input.scopeClientId) return { kind: 'not_found' as const };
+      if (!(await isSchedulingEnabledForUpdate(client, input.tenantId, current.client_id))) return { kind: 'module_disabled' as const };
+      if (current.status === 'cancelled' || current.status === 'no_show') return { kind: 'invalid' as const, from: current.status };
+      if (current.status === 'completed' && (await hasRecordedPayment(client, input.tenantId, input.appointmentId))) {
+        return { kind: 'payment' as const };
+      }
+      if (current.service_id === input.newServiceId) return { kind: 'ok' as const, updated: current };
+
+      // The new service's effective timing for THIS staff — the engine's own resolution.
+      const prepared = await prepareAvailability({
+        tenantId: input.tenantId, siteId: current.site_id, serviceId: input.newServiceId,
+        staffId: current.staff_id,
+        from: new Date(current.start_at.getTime() - 24 * 60 * MS_PER_MIN),
+        to: new Date(current.start_at.getTime() + 24 * 60 * MS_PER_MIN),
+        now: new Date(),
+      });
+      const staff = prepared?.request?.staff.find((s) => s.id === current.staff_id);
+      if (!prepared || !staff) return { kind: 'service_mismatch' as const };
+
+      const start = new Date(current.start_at);
+      const serviceEnd = new Date(start.getTime() + staff.timing.duration_min * MS_PER_MIN);
+      const blockedFrom = new Date(start.getTime() - staff.timing.buffer_before_min * MS_PER_MIN);
+      const blockedUntil = new Date(serviceEnd.getTime() + staff.timing.buffer_after_min * MS_PER_MIN);
+
+      const overlaps = (await listStaffAppointmentsOverlapping(input.tenantId, current.site_id, current.staff_id, blockedFrom, blockedUntil, client))
+        .filter((a) => a.id !== input.appointmentId);
+      if (overlaps.length > 0) return { kind: 'overlap' as const, conflict: overlaps[0] };
+
+      const price = await resolveEffectivePrice(input.tenantId, current.site_id, input.newServiceId, current.staff_id);
+      const name = (await serviceNameFor(input.tenantId, current.client_id, input.newServiceId)) ?? 'Servicio';
+      const updated = await changeServiceColumns(client, input.tenantId, input.appointmentId, {
+        serviceId: input.newServiceId, serviceNameSnapshot: name,
+        durationMinSnapshot: staff.timing.duration_min,
+        bufferBeforeMinSnapshot: staff.timing.buffer_before_min,
+        bufferAfterMinSnapshot: staff.timing.buffer_after_min,
+        priceSnapshot: price, serviceEndAt: serviceEnd, blockedFrom, blockedUntil,
+      });
+      await recordAppointmentEvent({
+        tenantId: input.tenantId, appointmentId: input.appointmentId,
+        eventType: 'appointment_service_changed', actorType: input.actorType, actorUserId: input.actorUserId ?? null,
+        detail: {
+          from: { service_id: current.service_id, name: current.service_name_snapshot, price: current.price_snapshot },
+          to: { service_id: input.newServiceId, name, price },
+        },
+      }, client);
+      return { kind: 'ok' as const, updated };
+    });
+
+    if (outcome.kind === 'not_found') return { ok: false, error: 'not_found', message: 'Appointment not found.' };
+    if (outcome.kind === 'module_disabled') return { ok: false, error: 'module_disabled', message: 'Scheduling is disabled for this client.' };
+    if (outcome.kind === 'invalid') return { ok: false, error: 'invalid_transition', message: `Cannot change the service of a ${outcome.from} appointment.` };
+    if (outcome.kind === 'payment') return { ok: false, error: 'payment_recorded', message: 'This appointment has a recorded payment. Void the charge first, then change the service and re-charge.' };
+    if (outcome.kind === 'service_mismatch') return { ok: false, error: 'service_not_performed', message: 'The assigned professional does not perform that service.' };
+    if (outcome.kind === 'overlap') return { ok: false, error: 'unavailable', message: `The new duration overlaps «${outcome.conflict.service_name}»${outcome.conflict.customer_name ? ` (${outcome.conflict.customer_name})` : ''}. Shorten the service, pick another, or move the other booking.`, conflict: outcome.conflict };
+    await recordSchedulingEvent({
+      tenantId: outcome.updated.tenant_id, clientId: outcome.updated.client_id, siteId: outcome.updated.site_id,
+      eventType: 'appointment.rescheduled',
+      payload: { appointment_id: outcome.updated.id, staff_id: outcome.updated.staff_id, start_at: outcome.updated.start_at },
+    });
+    return { ok: true, value: outcome.updated };
+  } catch (err) {
+    if (isExclusionViolation(err) || isDeadlock(err)) {
+      return { ok: false, error: 'conflict_slot', message: 'That time was just booked. Please pick another.' };
+    }
+    throw err;
+  }
+}
+
+export interface CorrectTimeInput {
+  tenantId: string;
+  appointmentId: string;
+  /** The time it REALLY started (may be in the past). */
+  startAt: Date;
+  /** Optional artist correction ("it was actually Paola"). Omit to keep the same staff. */
+  staffId?: string | null;
+  scopeClientId: string;
+  actorType: ActorType;
+  actorUserId?: string | null;
+  reason?: string | null;
+}
+
+/**
+ * JP-4 — CORRECT the time (and optionally the artist) of an existing appointment. This is NOT a
+ * reschedule: it is allowed on PAST and COMPLETED appointments, applies NO booking-window / lead-time
+ * / availability-hours rule, and sends no customer notification. The ONE hard rule is that the
+ * corrected interval must not OVERLAP another active appointment of the target staff (named on
+ * refusal). The interval is recomputed from the appointment's own SNAPSHOT duration/buffers (a
+ * correction preserves what was booked). A no_show/scheduled/confirmed/completed appointment can be
+ * corrected; a cancelled one cannot (it never happened). Changing the ARTIST on an appointment with a
+ * recorded payment is refused ('payment_recorded') — the payment snapshots the artist + commission, so
+ * that goes via void → re-charge (D5). Writes an `appointment_time_corrected` audit event; the
+ * pipeline is untouched (no status change) and the value dashboard re-buckets by the corrected start.
+ */
+export async function correctAppointmentTime(
+  input: CorrectTimeInput,
+): Promise<BookingResult<AppointmentRow> & { conflict?: EditConflict }> {
+  if (!hasScope(input.scopeClientId)) return { ok: false, error: 'not_found', message: 'Appointment not found.' };
+  try {
+    const outcome = await withTransaction(async (client) => {
+      const current = await getAppointmentForUpdate(client, input.tenantId, input.appointmentId);
+      if (!current || current.client_id !== input.scopeClientId) return { kind: 'not_found' as const };
+      if (!(await isSchedulingEnabledForUpdate(client, input.tenantId, current.client_id))) return { kind: 'module_disabled' as const };
+      if (current.status === 'cancelled') return { kind: 'invalid' as const, from: current.status };
+
+      const targetStaff = input.staffId ?? current.staff_id;
+      const changingStaff = targetStaff !== current.staff_id;
+      if (changingStaff && (await hasRecordedPayment(client, input.tenantId, input.appointmentId))) {
+        return { kind: 'payment' as const };
+      }
+
+      // Preserve the booked duration/buffers (a correction never reshapes the service).
+      const serviceEnd = new Date(input.startAt.getTime() + current.duration_min_snapshot * MS_PER_MIN);
+      const blockedFrom = new Date(input.startAt.getTime() - current.buffer_before_min_snapshot * MS_PER_MIN);
+      const blockedUntil = new Date(serviceEnd.getTime() + current.buffer_after_min_snapshot * MS_PER_MIN);
+
+      const overlaps = (await listStaffAppointmentsOverlapping(input.tenantId, current.site_id, targetStaff, blockedFrom, blockedUntil, client))
+        .filter((a) => a.id !== input.appointmentId);
+      if (overlaps.length > 0) return { kind: 'overlap' as const, conflict: overlaps[0] };
+
+      const moved = await moveInterval(client, input.tenantId, input.appointmentId, {
+        staffId: targetStaff, startAt: input.startAt, serviceEndAt: serviceEnd, blockedFrom, blockedUntil,
+      });
+      await recordAppointmentEvent({
+        tenantId: input.tenantId, appointmentId: input.appointmentId,
+        eventType: 'appointment_time_corrected', actorType: input.actorType, actorUserId: input.actorUserId ?? null,
+        detail: {
+          from: { staff_id: current.staff_id, start_at: current.start_at, service_end_at: current.service_end_at },
+          to: { staff_id: moved.staff_id, start_at: moved.start_at, service_end_at: moved.service_end_at },
+          reason: input.reason ?? null,
+        },
+      }, client);
+      return { kind: 'ok' as const, moved };
+    });
+
+    if (outcome.kind === 'not_found') return { ok: false, error: 'not_found', message: 'Appointment not found.' };
+    if (outcome.kind === 'module_disabled') return { ok: false, error: 'module_disabled', message: 'Scheduling is disabled for this client.' };
+    if (outcome.kind === 'invalid') return { ok: false, error: 'invalid_transition', message: 'A cancelled appointment cannot be time-corrected.' };
+    if (outcome.kind === 'payment') return { ok: false, error: 'payment_recorded', message: 'This appointment has a recorded payment that records the artist and commission. Void the charge first, then change the artist and re-charge.' };
+    if (outcome.kind === 'overlap') return { ok: false, error: 'unavailable', message: `That time overlaps «${outcome.conflict.service_name}»${outcome.conflict.customer_name ? ` (${outcome.conflict.customer_name})` : ''} for this professional.`, conflict: outcome.conflict };
+    await recordSchedulingEvent({
+      tenantId: outcome.moved.tenant_id, clientId: outcome.moved.client_id, siteId: outcome.moved.site_id,
+      eventType: 'appointment.rescheduled',
+      payload: { appointment_id: outcome.moved.id, staff_id: outcome.moved.staff_id, start_at: outcome.moved.start_at },
+    });
+    return { ok: true, value: outcome.moved };
+  } catch (err) {
+    if (isExclusionViolation(err) || isDeadlock(err)) {
       return { ok: false, error: 'conflict_slot', message: 'That time was just booked. Please pick another.' };
     }
     throw err;

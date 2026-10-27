@@ -1692,6 +1692,17 @@ export function AgendaView(props: {
             review={appt.review}
             startInReschedule={Boolean(deskReschedule)}
             reschedule={rescheduleConfig()}
+            services={props.services}
+            onEdited={(m) => {
+              setNotice(m);
+              // Highlight the card once the server-confirmed change is drawn.
+              try {
+                window.sessionStorage.setItem(FLASH_KEY, appt.id);
+              } catch {
+                /* nicety */
+              }
+              router.refresh();
+            }}
             onContactSaved={(m) => {
               setNotice(m);
               router.refresh();

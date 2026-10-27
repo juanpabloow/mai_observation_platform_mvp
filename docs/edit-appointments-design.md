@@ -1,6 +1,36 @@
 # Edit an existing appointment — audit & design (JP-4)
 
-**Status: AUDIT + DESIGN ONLY. Nothing is built. Waiting for the operator's "go".**
+**Status: BUILT (operator's "go" with decisions D1–D6). This is the design of record; the
+"Decisions needed" at the end were all answered — see "What was built" below.**
+
+## What was built (JP-4)
+- **Migration** `migrations/1824000000000_appointment-edit-events.ts` — reversibly extends the
+  `appointment_events.event_type` CHECK with `appointment_service_changed` + `appointment_time_corrected`.
+- **Engine** (`src/scheduling/booking.ts`): `changeAppointmentService` (A1) and `correctAppointmentTime`
+  (B), plus the `hasRecordedPayment` guard, `EditConflict`, and two new `BookingError`s
+  (`service_not_performed`, `payment_recorded`). Repo: `changeServiceColumns`
+  (`src/db/repositories/scheduling/appointments.ts`).
+- **Actions** (`web/lib/schedulingActions.ts`): `changeAppointmentServiceAction` (D3: a Staff login
+  cannot change a completed appointment's service) and `correctAppointmentTimeAction` (a Staff login
+  stays on its own column), both gated by `agenda.book`, with the `EDIT_ERROR` copy map.
+- **UI**: the shared action plan (`appointmentActionPlan.changeService` / `.correctTime`) → two entry
+  points in the `AppointmentCard` «Cita» section → the `ServiceChangeInline` / `TimeCorrectInline`
+  panels (desktop `SidePanel`, phone `Sheet`), wired through `AppointmentPanel` + `AgendaView`. The
+  activity timeline labels both new events (`web/lib/schedulingActions.ts` → `AppointmentCard`).
+- **Tests**: `test/integration/editAppointment.test.ts` (14 cases: fits / overlap / not-performed /
+  completed-without-payment / completed+paid-blocked / D3 staff-vs-setter; past & completed time
+  correction / overlap / artist-on-unpaid / artist-on-paid-blocked / time-only-on-paid / D2 setter /
+  cancelled / permission tiers) and new `appointmentActionPlan` unit assertions.
+
+Decisions as built: **D1** void→change→re-charge for completed+paid; **D2** the Setter may
+time-correct completed/paid (time-only; artist still Owner/agency via void→re-charge); **D3** service
+change includes completed-without-payment, a Staff login excluded from completed; **D4** extras stay in
+checkout; **D5** artist change on a paid appointment goes via void→re-charge; **D6** combos suffice,
+line-items deferred.
+
+---
+
+**Original audit + design (for reference):**
 
 Two operator requirements:
 - **A. Change the service** of an appointment ("Corte + barba" → "Corte") and **add extras** (e.g. a catalog product) before or while it happens.
