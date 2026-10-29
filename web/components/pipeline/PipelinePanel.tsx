@@ -7,6 +7,7 @@ import { PageShell } from "@/components/ui/PageShell";
 import { OVERLAY_SCRIM, useTrappedPanel } from "@/components/ui/Overlay";
 import { Menu, MenuButton, MenuLink, MenuSeparator } from "@/components/scheduling/ui/Menu";
 import { formatStampFull, relativeAgeShort } from "@/lib/format";
+import { priceLabelCOP } from "@/lib/money";
 import { ORIGIN_GROUPS } from "@/lib/originDisplay";
 import {
   BOARD_STAGES,
@@ -170,20 +171,6 @@ export function PipelinePanel({
           <PageShell ariaLabel="Tablero de pipeline" className="overflow-hidden">
             <div className="flex min-h-0 flex-1 snap-x snap-mandatory gap-3 overflow-x-auto p-3 sm:p-4">
               {BOARD_STAGES.map((col) => {
-                if (col.disabled) {
-                  // Pagó: a slim, always-empty column so the four live columns get the width. The
-                  // note lives in the tooltip (there are no cards to label).
-                  return (
-                    <section
-                      key={col.key}
-                      aria-label={`${col.label} — llega con la fase de pagos`}
-                      title="Llega con la fase de pagos"
-                      className="flex w-12 shrink-0 snap-start flex-col items-center justify-start gap-2 rounded-xl border border-dashed border-line bg-subtle/30 py-3 text-faint"
-                    >
-                      <span className="rotate-180 text-xs font-semibold tracking-wide [writing-mode:vertical-rl]">{col.label}</span>
-                    </section>
-                  );
-                }
                 const colCards = grouped[col.key];
                 return (
                   <section key={col.key} aria-label={col.label} className="flex min-h-0 w-[17rem] shrink-0 snap-start flex-col rounded-xl border border-line bg-subtle/40">
@@ -324,6 +311,16 @@ function OppCard({ clientId, card, now, pending, onQualify, onUnqualify, onLose 
       <p className="truncate text-[0.6875rem] text-muted" title={originTitleOf(card)}>
         {originLineOf(card)}
       </p>
+
+      {/* JP-6 — the money state: a paid card shows the recorded amount + method (never commission);
+          an attended card is waiting to be charged. */}
+      {card.stage === "paid" ? (
+        <p className="truncate text-[0.6875rem] font-medium text-[var(--success)]" title={card.paidMethod ?? undefined}>
+          {card.paidAmount ? `Pagó ${priceLabelCOP(card.paidAmount)}${card.paidMethod ? ` · ${card.paidMethod}` : ""}` : "Pagado"}
+        </p>
+      ) : card.stage === "attended" ? (
+        <p className="text-[0.6875rem] font-medium text-warn">Cobro pendiente</p>
+      ) : null}
 
       {/* Line 3 — who spoke last + when. Customer last → calm emphasis (warn), this one needs a reply. */}
       {card.lastMessageAt ? (

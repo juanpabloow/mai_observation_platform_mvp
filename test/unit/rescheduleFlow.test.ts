@@ -146,16 +146,18 @@ test('the flow asks FOR THIS appointment and the professional on screen, and sen
   assert.match(flow, /Paso \{step\} de 2/, 'two steps, not the three of creation');
 });
 
-test('the detail offers «Reagendar» directly, with one name, apart from the state', () => {
+test('JP-5 the detail edits the date/time ON its row, with ONE name, and never says "can\'t reschedule"', () => {
   const panel = read('web/components/scheduling/agenda/AppointmentPanel.tsx');
   const card = read('web/components/scheduling/agenda/AppointmentCard.tsx');
-  for (const [name, src] of [['panel', panel], ['card', card]] as const) {
-    assert.match(src, /Reagendar/, name);
-    assert.doesNotMatch(src, />\s*Reprogramar\s*</, `${name}: no "Reprogramar" entry`);
-    assert.doesNotMatch(src, /Cambiar hora o profesional/, name);
-  }
-  assert.match(panel, /rescheduleBlockedReason\(/, 'says why when it is not offered');
-  // The card's footer, beside the next step — apart from the state; the same on the phone.
-  assert.ok(card.includes('plan.reschedule && props.onReschedule ? (') && card.includes('footNote'), 'Reagendar is the footer secondary, with the reason when blocked');
+  // ONE action for time — the person never chooses reschedule vs correction; the helper does.
+  assert.ok(card.includes('Cambiar fecha y hora'), 'the time control has one plain name');
+  assert.doesNotMatch(card, />\s*Reprogramar\s*</, 'no "Reprogramar"');
+  assert.doesNotMatch(card, /Corregir hora o profesional/, 'the old split wording is gone');
+  assert.doesNotMatch(card, /ya no se puede reagendar/, 'the contradiction is removed everywhere');
+  assert.ok(card.includes('isReschedule('), 'future reschedules, past/completed corrects — decided for you');
+  // The future case still reuses the real availability move; the deep-linked panel keeps it too.
+  assert.ok(card.includes('<RescheduleInline') && panel.includes('<RescheduleInline'), 'the availability picker backs a future change');
+  assert.ok(read('web/components/scheduling/agenda/RescheduleInline.tsx').includes('rescheduleAppointmentAction('), 'the real move action');
+  assert.match(panel, /rescheduleBlockedReason\(/, 'says why when editing is not offered');
   assert.doesNotMatch(read('web/components/scheduling/mobile/MobileAppointmentSheet.tsx'), /Más acciones/, 'no "Más acciones" detour on the phone');
 });

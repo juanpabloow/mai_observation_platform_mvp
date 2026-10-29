@@ -6,12 +6,33 @@ import { apptClientLabel } from "@/lib/apptClientLabel";
 import type { ActionPlan } from "@/lib/appointmentActionPlan";
 import { priceLabelCOP } from "@/lib/money";
 import { fmtTime, longDate } from "@/lib/siteCalendar";
+import { isReschedule } from "@/lib/appointmentEdit";
 import type { AppointmentActivityItem } from "@/lib/schedulingActions";
 import type { Appt } from "../AgendaView";
 import { AgAvatar, STATE_GLYPH, StateChip } from "./AgendaChrome";
 import { CobroSection, type PaymentHooks } from "./PaymentSection";
+import { RescheduleInline } from "./RescheduleInline";
+import { GuidedVoid, ServiceEditor, StaffEditor, TimeCorrectionEditor, type ServiceOption, type StaffOption } from "./editPanels";
 import { ReviewSection, type ReviewLinkLoader } from "./ReviewLink";
 import { STATUS_NAME, type AppointmentStatus } from "./status";
+
+/** JP-5 — which field's editor is open in the card, and the guided void→change→charge wizard. */
+type Editing =
+  | null
+  | { kind: "time" }
+  | { kind: "service" }
+  | { kind: "staff" }
+  | { kind: "void"; next: "service" | "staff" }
+  | { kind: "guided"; field: "service" | "staff" }
+  | { kind: "recharge"; field: "service" | "staff" };
+
+/** The config the in-card time editor needs for a FUTURE reschedule (availability rules). */
+export interface InlineRescheduleConfig {
+  siteId: string;
+  openWeekdays: Set<string>;
+  lockStaffId: string | null;
+  holds?: string[];
+}
 
 /**
  * THE APPOINTMENT CARD — card language 5a («Agenda Lenguaje Tarjeta»), one body for the
@@ -19,10 +40,12 @@ import { STATUS_NAME, type AppointmentStatus } from "./status";
  *
  * Reading order: header (service bar · client · date, time, duration) → state in one touch,
  * with «Cancelar cita» / «Marcar inasistencia» confirmed IN PLACE → «Requiere revisión» →
- * Cita (service + list price, professional, phone with Llamar / WhatsApp, origin, the guest
- * details without a contact) → Cobro (payments.view only) → Reseña → Actividad. Footer: a note
- * on what the state allows, then the secondary action (Reagendar / Ver ficha) and the ONE next
- * step (Confirmar · Marcar completada · Registrar cobro · Reservar de nuevo).
+ * Cita — Fecha y hora, Servicio and Profesional are each EDITED IN PLACE on their row (JP-5:
+ * «Cambiar» opens the editor under the row, with a plain-words preview and a live conflict
+ * check; a recorded payment locks service/professional with the guided void→change→charge) →
+ * read-only details (phone, origin, guest) → Cobro (payments.view only) → Reseña → Actividad.
+ * Footer: a note on what the state allows, then «Ver ficha» and the ONE next step
+ * (Confirmar · Marcar completada · Registrar cobro · Reservar de nuevo).
  *
  * Functions, states and permissions are the engine's (appointmentActionPlan): the card never
  * offers a change the server would refuse, and the server checks every request anyway. What
@@ -89,12 +112,25 @@ export function AppointmentCard(props: {
   staffTint?: "1" | "2" | "3" | "4";
   review?: string[];
   onStatus: (target: Target, reason?: string) => void;
-  /** Desktop: reschedule inside the panel. Phone: the full-screen flow. Null = not offered. */
-  onReschedule: (() => void) | null;
-  /** JP-4 «Cambiar servicio» — opens the service-change flow. Null = not offered. */
-  onChangeService: (() => void) | null;
-  /** JP-4 «Corregir hora o profesional» — opens the time-correction flow. Null = not offered. */
-  onCorrectTime: (() => void) | null;
+  // ── JP-5 edit-in-place ──────────────────────────────────────────────────────────────
+  /** The contextual client id (the editors call the same JP-4 actions with it). */
+  clientId: string;
+  /** The site's service catalogue for «Cambiar servicio». */
+  services: ServiceOption[];
+  /** The site's active professionals for «Cambiar profesional» / the reschedule picker. */
+  staff: StaffOption[];
+  /** The day's appointments, for the live conflict preview (the server re-checks on save). */
+  others: Appt[];
+  /** FUTURE time edits reschedule with availability rules; null hides time editing. */
+  reschedule: InlineRescheduleConfig | null;
+  /** A staff login (locked to its own column) — no service/professional edit controls. */
+  isStaffLogin: boolean;
+  /** A future reschedule landed (may move to another day → navigate + flash on the grid). */
+  onTimeRescheduled: (r: { dayKey: string; appointmentId: string; startAt: string }) => void;
+  /** An in-place edit saved: refresh + toast with the button's verb. */
+  onEdited: (verb: string) => void;
+  /** Open directly editing the time (deep-linked «Reagendar»). */
+  initialEdit?: "time" | null;
   loadActivity: () => Promise<{ ok: true; items: AppointmentActivityItem[] } | { ok: false; error: string }>;
   loadReviewLink: ReviewLinkLoader;
   payment?: PaymentHooks | null;
@@ -129,6 +165,57 @@ export function AppointmentCard(props: {
     setSavingTo(target);
     props.onStatus(target);
   };
+
+  // ── JP-5 edit-in-place: which editor is open, the guided wizard, and the after-save flash ──
+  const [editing, setEditing] = useState<Editing>(props.initialEdit === "time" ? { kind: "time" } : null);
+  const [flash, setFlash] = useState<"time" | "service" | "staff" | null>(null);
+  useEffect(() => {
+    if (!flash) return;
+    const t = setTimeout(() => setFlash(null), 1500);
+    return () => clearTimeout(t);
+  }, [flash]);
+  const finishInPlace = (verb: string, field: "time" | "service" | "staff") => {
+    setFlash(field);
+    setEditing(null);
+    props.onEdited(verb);
+  };
+  const finishGuided = (verb: string, field: "service" | "staff") => {
+    setFlash(field);
+    props.onEdited(verb);
+    setEditing({ kind: "recharge", field });
+  };
+
+  // Role tier (the server re-checks everything): Owner/agency may void; a staff login edits no
+  // money-related field; everyone else is the Setter.
+  const paid = appt.payment_state === "recorded";
+  const owner = Boolean(props.payment?.canVoid);
+  const futureTime = isReschedule(appt.status, Date.parse(appt.start_at), now);
+
+  // What each editable field offers for THIS login. "edit" = open the editor; "guided" = void →
+  // change → re-charge (Owner on a paid appointment); "ask" = locked, ask the owner (Setter);
+  // "none" = no control (read-only).
+  type FieldMode = "edit" | "guided" | "ask" | "none";
+  const canEditTime: boolean = plan.correctTime && (futureTime ? Boolean(props.reschedule) : true);
+  const serviceMode: FieldMode = !(plan.changeService && props.services.some((s) => s.id !== appt.service_id))
+    ? "none"
+    : props.isStaffLogin
+      ? appt.status === "completed"
+        ? "none"
+        : "edit"
+      : paid
+        ? owner
+          ? "guided"
+          : "ask"
+        : "edit";
+  const staffMode: FieldMode = !(plan.correctTime && props.staff.length > 1)
+    ? "none"
+    : props.isStaffLogin
+      ? "none"
+      : paid
+        ? owner
+          ? "guided"
+          : "ask"
+        : "edit";
 
   // ── Header ──
   const leading = (
@@ -280,26 +367,23 @@ export function AppointmentCard(props: {
 
   // ── Footer ──
   const paymentPending = props.payment?.canRecord && appt.status === "completed" && appt.payment_state !== "recorded";
+  // JP-5: the footer never talks about moving the date — editing the time lives on its own row,
+  // so the old completed-state contradiction about it is gone everywhere.
   const footNote = live
     ? !plan.allowed
       ? props.blocked
       : appt.status === "scheduled"
         ? "Aún no confirmada por el cliente"
         : plan.completeWaitsForStart
-          ? "Puedes reagendar hasta que se complete · completar se habilita al empezar la cita"
-          : "Puedes reagendar hasta que se complete"
+          ? "Completar se habilita al empezar la cita"
+          : null
     : appt.status === "completed"
-      ? "🔒 Completada · ya no se puede reagendar"
+      ? null
       : appt.status === "cancelled"
         ? "Cancelada · el horario quedó libre"
         : "Inasistencia registrada";
   const secondary =
-    plan.reschedule && props.onReschedule ? (
-      <button type="button" className="u-focus c5-btn" onClick={props.onReschedule} disabled={props.pending || Boolean(asking)}>
-        <CalIcon />
-        Reagendar
-      </button>
-    ) : props.contactHref && appt.contact_id ? (
+    props.contactHref && appt.contact_id ? (
       <Link href={props.contactHref} className="u-focus c5-btn">
         Ver ficha del cliente
       </Link>
@@ -353,7 +437,7 @@ export function AppointmentCard(props: {
 
   // ── Cita ──
   const links: ReactNode[] = [];
-  if (appt.contact_id && props.contactHref && !(secondary && !plan.reschedule)) {
+  if (appt.contact_id && props.contactHref && !secondary) {
     links.push(
       <Link key="contact" href={props.contactHref} className="u-focus c5-link">
         Ver ficha del cliente
@@ -374,6 +458,105 @@ export function AppointmentCard(props: {
       </Link>,
     );
   }
+
+  // ── JP-5 inline editors (one open at a time) ──
+  const timeOpen = editing?.kind === "time";
+  const serviceOpen =
+    (editing?.kind === "void" && editing.next === "service") ||
+    editing?.kind === "service" ||
+    (editing?.kind === "guided" && editing.field === "service") ||
+    (editing?.kind === "recharge" && editing.field === "service");
+  const staffOpen =
+    (editing?.kind === "void" && editing.next === "staff") ||
+    editing?.kind === "staff" ||
+    (editing?.kind === "guided" && editing.field === "staff") ||
+    (editing?.kind === "recharge" && editing.field === "staff");
+
+  const rechargePrompt = (field: "service" | "staff") => (
+    <div className="c5-edit mt-2 flex flex-col gap-3 rounded-[12px] border border-[var(--c5-ok-bd)] bg-[var(--c5-field)] p-3">
+      <p className="text-[13px] leading-[1.45]">
+        <span className="font-[590]">Cobro anulado y {field === "service" ? "servicio" : "profesional"} cambiado.</span> Registra el nuevo cobro para cerrar la cita.
+      </p>
+      <div className="flex items-center justify-end gap-2">
+        <button type="button" data-size="sm" className="u-focus c5-btn" onClick={() => setEditing(null)}>
+          Más tarde
+        </button>
+        <button
+          type="button"
+          data-size="sm"
+          data-kind="primary"
+          className="u-focus c5-btn"
+          onClick={() => {
+            setEditing(null);
+            props.payment?.onRecord();
+          }}
+        >
+          Registrar cobro
+        </button>
+      </div>
+    </div>
+  );
+
+  const timeEditorNode = !timeOpen ? null : futureTime && props.reschedule ? (
+    <RescheduleInline
+      clientId={props.clientId}
+      siteId={props.reschedule.siteId}
+      timezone={tz}
+      appt={appt}
+      staff={props.staff}
+      lockStaffId={appt.staff_id} // time-only: the professional has its own row
+      openWeekdays={props.reschedule.openWeekdays}
+      holds={props.reschedule.holds}
+      onDirty={() => {}}
+      onCancel={() => setEditing(null)}
+      onDone={(r) => {
+        setEditing(null);
+        props.onTimeRescheduled(r);
+      }}
+      frame={(b, f) => (
+        <div className="c5-edit mt-2 flex flex-col gap-3 rounded-[12px] border border-[var(--c5-ctrl-bd)] bg-[var(--c5-field)] p-3">
+          <h4 className="text-[13px] font-[590]">Cambiar fecha y hora</h4>
+          {b}
+          {f}
+        </div>
+      )}
+    />
+  ) : (
+    <TimeCorrectionEditor clientId={props.clientId} appt={appt} others={props.others} timezone={tz} onCancel={() => setEditing(null)} onDone={(verb) => finishInPlace(verb, "time")} />
+  );
+
+  const serviceEditorNode = !serviceOpen ? null : editing?.kind === "void" ? (
+    <GuidedVoid clientId={props.clientId} appt={appt} nextNoun="el servicio" onCancel={() => setEditing(null)} onVoided={() => setEditing({ kind: "guided", field: "service" })} />
+  ) : editing?.kind === "recharge" ? (
+    rechargePrompt("service")
+  ) : (
+    <ServiceEditor
+      clientId={props.clientId}
+      appt={appt}
+      services={props.services}
+      others={props.others}
+      timezone={tz}
+      onCancel={() => setEditing(null)}
+      onDone={(verb) => (editing?.kind === "guided" ? finishGuided(verb, "service") : finishInPlace(verb, "service"))}
+    />
+  );
+
+  const staffEditorNode = !staffOpen ? null : editing?.kind === "void" ? (
+    <GuidedVoid clientId={props.clientId} appt={appt} nextNoun="el profesional" onCancel={() => setEditing(null)} onVoided={() => setEditing({ kind: "guided", field: "staff" })} />
+  ) : editing?.kind === "recharge" ? (
+    rechargePrompt("staff")
+  ) : (
+    <StaffEditor
+      clientId={props.clientId}
+      appt={appt}
+      staff={props.staff}
+      others={props.others}
+      timezone={tz}
+      reschedule={futureTime}
+      onCancel={() => setEditing(null)}
+      onDone={(verb) => (editing?.kind === "guided" ? finishGuided(verb, "staff") : finishInPlace(verb, "staff"))}
+    />
+  );
 
   const body = (
     <>
@@ -400,22 +583,106 @@ export function AppointmentCard(props: {
           <h3 id="appt-sec-cita" className="c5-cap pb-1">
             Cita
           </h3>
+
+          {/* Fecha y hora — editable in place; future reschedules, past/completed corrects. */}
+          <div>
+            {canEditTime && !timeOpen ? (
+              <button type="button" onClick={() => setEditing({ kind: "time" })} className={`c5-row u-focus -mx-1 w-full rounded-[8px] px-1 text-left hover:bg-[var(--c5-hover)] ${flash === "time" ? "u-flash" : ""}`}>
+                <span className="c5-k">Fecha y hora</span>
+                <span className="c5-num min-w-0 flex-1">
+                  {dayLabel(appt.start_at, tz)} · {timeRange} · {formatDuration(appt.duration_min)}
+                </span>
+                <span aria-hidden className="c5-link shrink-0 gap-1">
+                  Cambiar <EditIcon />
+                </span>
+              </button>
+            ) : (
+              <div className={`c5-row -mx-1 px-1 ${flash === "time" ? "u-flash" : ""}`}>
+                <span className="c5-k">Fecha y hora</span>
+                <span className="c5-num min-w-0 flex-1">
+                  {dayLabel(appt.start_at, tz)} · {timeRange} · {formatDuration(appt.duration_min)}
+                </span>
+              </div>
+            )}
+            {timeEditorNode}
+          </div>
+
+          {/* Servicio — locked with a lock + one line when there is a recorded payment. */}
+          <div>
+            {serviceMode === "edit" && !serviceOpen ? (
+              <button type="button" onClick={() => setEditing({ kind: "service" })} className={`c5-row u-focus -mx-1 w-full rounded-[8px] px-1 text-left hover:bg-[var(--c5-hover)] ${flash === "service" ? "u-flash" : ""}`}>
+                <span className="c5-k">Servicio</span>
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span aria-hidden className={`${props.toneClass} size-[10px] shrink-0 rounded-[3px] bg-[var(--appt-rule)]`} />
+                  <span className="truncate">{appt.service_name}</span>
+                  <span className="c5-num shrink-0 text-[12px] text-[var(--c5-sec)]">{price ? `· Lista ${price}` : "· Sin precio"}</span>
+                </span>
+                <span aria-hidden className="c5-link shrink-0 gap-1">
+                  Cambiar <EditIcon />
+                </span>
+              </button>
+            ) : (
+              <div className={`c5-row -mx-1 px-1 ${flash === "service" ? "u-flash" : ""} ${appt.status === "cancelled" ? "line-through decoration-1 opacity-70" : ""}`}>
+                <span className="c5-k">Servicio</span>
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <span aria-hidden className={`${props.toneClass} size-[10px] shrink-0 rounded-[3px] bg-[var(--appt-rule)]`} />
+                  <span className="truncate">{appt.service_name}</span>
+                  {serviceMode === "guided" || serviceMode === "ask" ? <LockIcon /> : null}
+                </span>
+                <span className="c5-num shrink-0 text-[13px] text-[var(--c5-sec)]">{price ? `Lista ${price}` : "Sin precio"}</span>
+              </div>
+            )}
+            {!serviceOpen && serviceMode === "guided" ? (
+              <div className="flex flex-col items-start gap-1.5 pt-1">
+                <p className="c5-note">Tiene un cobro registrado. Para cambiar el servicio, primero anula el cobro.</p>
+                <button type="button" data-tone="red" className="u-focus c5-link" onClick={() => setEditing({ kind: "void", next: "service" })}>
+                  Anular cobro y cambiar
+                </button>
+              </div>
+            ) : !serviceOpen && serviceMode === "ask" ? (
+              <p className="c5-note pt-1">Tiene un cobro registrado. Para cambiar el servicio, primero anula el cobro. Pídele al dueño que lo anule.</p>
+            ) : null}
+            {serviceEditorNode}
+          </div>
+
+          {/* Profesional — same lock rule as the service when there is a recorded payment. */}
+          <div>
+            {staffMode === "edit" && !staffOpen ? (
+              <button type="button" onClick={() => setEditing({ kind: "staff" })} className={`c5-row u-focus -mx-1 w-full rounded-[8px] px-1 text-left hover:bg-[var(--c5-hover)] ${flash === "staff" ? "u-flash" : ""}`}>
+                <span className="c5-k">Profesional</span>
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <AgAvatar name={appt.staff_name} id={appt.staff_id} size={24} tint={props.staffTint} />
+                  <span className="truncate">{appt.staff_name ?? "Sin profesional"}</span>
+                </span>
+                <span aria-hidden className="c5-link shrink-0 gap-1">
+                  Cambiar <EditIcon />
+                </span>
+              </button>
+            ) : (
+              <div className={`c5-row -mx-1 px-1 ${flash === "staff" ? "u-flash" : ""}`}>
+                <span className="c5-k">Profesional</span>
+                <span className="flex min-w-0 flex-1 items-center gap-2">
+                  <AgAvatar name={appt.staff_name} id={appt.staff_id} size={24} tint={props.staffTint} />
+                  <span className="truncate">{appt.staff_name ?? "Sin profesional"}</span>
+                  {staffMode === "guided" || staffMode === "ask" ? <LockIcon /> : null}
+                </span>
+              </div>
+            )}
+            {!staffOpen && staffMode === "guided" ? (
+              <div className="flex flex-col items-start gap-1.5 pt-1">
+                <p className="c5-note">Tiene un cobro registrado. Para cambiar el profesional, primero anula el cobro.</p>
+                <button type="button" data-tone="red" className="u-focus c5-link" onClick={() => setEditing({ kind: "void", next: "staff" })}>
+                  Anular cobro y cambiar
+                </button>
+              </div>
+            ) : !staffOpen && staffMode === "ask" ? (
+              <p className="c5-note pt-1">Tiene un cobro registrado. Para cambiar el profesional, primero anula el cobro. Pídele al dueño que lo anule.</p>
+            ) : null}
+            {staffEditorNode}
+          </div>
+
+          {/* Read-only details. */}
           <dl className="contents">
-            <div className="c5-row">
-              <dt className="c5-k">Servicio</dt>
-              <dd className={`flex min-w-0 flex-1 items-center gap-2 ${appt.status === "cancelled" ? "line-through decoration-1 opacity-70" : ""}`}>
-                <span aria-hidden className={`${props.toneClass} size-[10px] shrink-0 rounded-[3px] bg-[var(--appt-rule)]`} />
-                <span className="truncate">{appt.service_name}</span>
-              </dd>
-              <dd className="c5-num shrink-0 text-[13px] text-[var(--c5-sec)]">{price ? `Lista ${price}` : "Sin precio"}</dd>
-            </div>
-            <div className="c5-row">
-              <dt className="c5-k">Profesional</dt>
-              <dd className="flex min-w-0 items-center gap-2">
-                <AgAvatar name={appt.staff_name} id={appt.staff_id} size={24} tint={props.staffTint} />
-                <span className="truncate">{appt.staff_name ?? "Sin profesional"}</span>
-              </dd>
-            </div>
             {appt.contact_id && appt.primary_identity ? (
               <div className="c5-row" data-tall="">
                 <dt className="c5-k">{appt.primary_identity.includes("@") ? "Correo" : "Teléfono"}</dt>
@@ -444,20 +711,6 @@ export function AppointmentCard(props: {
               <dd className="min-w-0 flex-1">{props.originLabel}</dd>
             </div>
           </dl>
-          {props.onChangeService || props.onCorrectTime ? (
-            <div className="flex flex-wrap gap-x-4 gap-y-1 pt-2">
-              {props.onChangeService ? (
-                <button type="button" className="u-focus c5-link" onClick={props.onChangeService} disabled={props.pending}>
-                  Cambiar servicio
-                </button>
-              ) : null}
-              {props.onCorrectTime ? (
-                <button type="button" className="u-focus c5-link" onClick={props.onCorrectTime} disabled={props.pending}>
-                  Corregir hora o profesional
-                </button>
-              ) : null}
-            </div>
-          ) : null}
           {props.contactSlot ? <div className="flex flex-col gap-2.5 pt-2">{props.contactSlot}</div> : null}
           {links.length > 0 ? <div className="flex flex-wrap gap-x-4 pt-1">{links}</div> : null}
         </section>
@@ -620,6 +873,24 @@ export function ChatIcon() {
   return (
     <svg aria-hidden width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
       <path d="M4 20l1.3-3.9A8 8 0 1112 20a8 8 0 01-4-1z" />
+    </svg>
+  );
+}
+/** A small pencil, so «Cambiar» reads as an action on the row. */
+function EditIcon() {
+  return (
+    <svg aria-hidden width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M12 20h9" />
+      <path d="M16.5 3.5a2.1 2.1 0 013 3L7 19l-4 1 1-4z" />
+    </svg>
+  );
+}
+/** A small padlock, shown on a service/professional that a recorded payment has locked. */
+function LockIcon() {
+  return (
+    <svg aria-hidden width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="shrink-0 text-[var(--c5-sec)]">
+      <rect x="4" y="11" width="16" height="10" rx="2" />
+      <path d="M8 11V7a4 4 0 118 0v4" />
     </svg>
   );
 }

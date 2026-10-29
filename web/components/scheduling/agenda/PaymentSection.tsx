@@ -160,9 +160,9 @@ function PaymentSection(props: { appt: Appt; timezone: string; hooks: PaymentHoo
           </span>
           {hooks.canVoid ? (
             voiding?.id === recorded.id ? (
-              <div role="group" aria-label="Anular registro" className="c5-box c5-red mt-1 gap-2.5">
+              <div role="group" aria-label="Anular cobro" className="c5-box c5-red mt-1 gap-2.5">
                 <span className="text-[13px] leading-[1.45]">
-                  <span className="font-[590]">Anular el registro no devuelve dinero al cliente.</span> Solo corrige lo anotado: la cita sigue completada, vuelve a «Cobro pendiente» y el registro anulado queda en el historial.
+                  <span className="font-[590]">El cobro de {priceLabelCOP(recorded.total)} quedará anulado y la cita volverá a cobro pendiente.</span> Anular no devuelve dinero al cliente; el registro anulado queda en el historial.
                 </span>
                 <textarea
                   autoFocus
@@ -179,14 +179,22 @@ function PaymentSection(props: { appt: Appt; timezone: string; hooks: PaymentHoo
                     Volver
                   </button>
                   <button type="button" data-size="sm" data-kind="danger" aria-busy={pending || undefined} className="u-focus c5-btn" onClick={doVoid} disabled={!voiding.reason.trim() && !pending}>
-                    {pending ? "Anulando…" : "Anular registro"}
+                    {pending ? "Anulando…" : "Anular cobro"}
                   </button>
                 </div>
               </div>
             ) : (
+              // JP-5: a destructive SECONDARY control (bordered, danger-coloured) — money actions
+              // never read as a plain text link, and never carry the filled primary style.
               <div>
-                <button type="button" className="u-focus c5-link" onClick={() => setVoiding({ id: recorded.id, reason: "" })}>
-                  Anular registro
+                <button
+                  type="button"
+                  data-size="sm"
+                  className="u-focus c5-btn flex-none border-[var(--c5-red-fg)] text-[var(--c5-red-fg)]"
+                  onClick={() => setVoiding({ id: recorded.id, reason: "" })}
+                >
+                  <VoidIcon />
+                  Anular cobro
                 </button>
               </div>
             )
@@ -203,7 +211,7 @@ function PaymentSection(props: { appt: Appt; timezone: string; hooks: PaymentHoo
         </div>
       )}
       {voided.length > 0 ? (
-        <details className="mt-1 rounded-[12px] border border-[var(--c5-bd)]">
+        <details data-void-history className="mt-1 rounded-[12px] border border-[var(--c5-bd)]">
           <summary className="u-focus flex min-h-[40px] cursor-pointer list-none items-center px-3 text-[13px] text-[var(--c5-sec)]">
             {voided.length === 1 ? "1 registro anulado" : `${voided.length} registros anulados`}
           </summary>
@@ -220,5 +228,15 @@ function PaymentSection(props: { appt: Appt; timezone: string; hooks: PaymentHoo
         </details>
       ) : null}
     </section>
+  );
+}
+
+/** A small "undo" mark, so «Anular cobro» reads as the reversal of a money record. */
+function VoidIcon() {
+  return (
+    <svg aria-hidden width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M3 7v6h6" />
+      <path d="M3.5 13a9 9 0 103-7.7L3 7" />
+    </svg>
   );
 }

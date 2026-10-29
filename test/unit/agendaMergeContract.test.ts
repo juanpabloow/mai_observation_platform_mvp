@@ -330,7 +330,7 @@ test('a confirmation inside the detail is IN PLACE (card 5a): nothing else in th
   // rest of the card is inert and the footer's actions are disabled while it is open; focus
   // lands on the safe choice; the box goes once the server applied the change.
   assert.equal(card.match(/inert=\{Boolean\(asking\) \|\| undefined\}/g)?.length, 2, 'the state and the sections are inert behind it');
-  assert.ok(card.includes('disabled={props.pending || Boolean(asking)}') && card.includes('disabled={Boolean(asking)}'), 'the footer waits for the answer');
+  assert.ok(card.includes('disabled={Boolean(asking)}'), 'the footer primary waits for the answer');
   assert.ok(card.includes('<button type="button" autoFocus data-size="sm" className="u-focus c5-btn" onClick={() => setConfirm(null)}'), 'focus lands on «Volver»');
   assert.ok(card.includes('const asking = confirm && live && plan.transitions.includes(confirm.target) ? confirm : null;'), 'it lives only while the change is still possible');
   assert.ok(sys.includes('querySelector<HTMLElement>("[data-autofocus]")') && sys.includes('data-autofocus>'), 'the shared confirm layer keeps its safe default');

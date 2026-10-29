@@ -1,6 +1,6 @@
 import type { ActorType, AppointmentRow, AppointmentStatus } from '../db/repositories/scheduling/appointments.js';
 import { recordPipelineFailure } from './failures.js';
-import { bookingActor, markOpportunityPaid, onAppointmentStatusChanged, onBookingCreated, openOnInbound, revertOpportunityPaid } from './engine.js';
+import { bookingActor, ensureOpportunityPaidForPayment, onAppointmentStatusChanged, onBookingCreated, openOnInbound, revertOpportunityPaid } from './engine.js';
 
 /**
  * FAIL-SAFE pipeline hooks. Each wraps an engine operation in try/catch so a pipeline error NEVER
@@ -36,12 +36,12 @@ export async function pipelineOnAppointmentStatusChanged(appt: AppointmentRow, t
   }
 }
 
-/** PY-1: a payment was recorded → advance its sale attended → paid (actor = the person).
- *  Post-commit, fail-safe (never rolls back the payment). No-op when the appointment has no sale. */
+/** PY-1 / JP-6: a payment was recorded → its sale must end at `paid`. Fast-forwards the linked sale,
+ *  or (when the appointment has none) advances the contact's open sale / creates one directly at paid
+ *  and links it. Post-commit, fail-safe (never rolls back the payment). No contact → nothing to do. */
 export async function pipelineOnPaymentRecorded(appt: AppointmentRow, actorUserId: string | null): Promise<void> {
-  if (!appt.opportunity_id) return;
   try {
-    await markOpportunityPaid(appt.tenant_id, appt.client_id, appt.opportunity_id, { kind: 'user', userId: actorUserId });
+    await ensureOpportunityPaidForPayment(appt, { kind: 'user', userId: actorUserId });
   } catch (err) {
     recordPipelineFailure({ hook: 'payment_recorded', clientId: appt.client_id, appointmentId: appt.id }, err);
   }

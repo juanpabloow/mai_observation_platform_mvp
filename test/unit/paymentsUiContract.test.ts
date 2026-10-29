@@ -34,7 +34,11 @@ test('the charge step: unknown price is empty (not $0), the server computes the 
   assert.ok(panel.includes('aria-labelledby="ch-sum"'), 'the summary is shown before saving');
   assert.ok(panel.includes('createPortal('), 'mounted outside the desktop-only column (visible on a phone)');
   const section = r('web/components/scheduling/agenda/PaymentSection.tsx');
-  assert.ok(section.includes('Anular el registro no devuelve dinero al cliente.'));
+  // JP-5: «Anular cobro» (plain money verb), a destructive SECONDARY control, with the amount +
+  // outcome in the confirmation and the "no money back" guarantee kept.
+  assert.ok(section.includes('>\n                  Anular cobro\n                </button>') || section.includes('Anular cobro'), 'the money verb');
+  assert.ok(section.includes('quedará anulado y la cita volverá a cobro pendiente'), 'the consequence states the amount + outcome');
+  assert.ok(section.includes('Anular no devuelve dinero al cliente'), 'voiding gives no money back');
   assert.ok(section.includes('registros anulados'), 'voided records stay visible');
 });
 

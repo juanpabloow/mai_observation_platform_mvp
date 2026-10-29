@@ -21,13 +21,13 @@ const mkCard = (over: Partial<BoardCard> = {}): BoardCard => ({
   id: 'o', contactId: 'c', conversationId: null, stage: 'lead', status: 'open', name: 'n',
   originChip: { label: 'Desconocido', tone: 'bg-chip text-muted' }, originDetail: null, adName: null,
   isTestAd: false, stageSince: null, lastMessageAt: null, spokeLast: null, lostReason: null, lostNote: null,
+  paidAmount: null, paidMethod: null,
   ...over,
 });
 
-test('BOARD_STAGES: five columns, only Pago disabled', () => {
+test('JP-6 BOARD_STAGES: five real columns, none disabled (Pagó is live now that payments ship)', () => {
   assert.deepEqual(BOARD_STAGES.map((s) => s.key), ['lead', 'qualified', 'booked', 'attended', 'paid']);
-  assert.equal(BOARD_STAGES.find((s) => s.key === 'paid')?.disabled, true);
-  assert.ok(BOARD_STAGES.slice(0, 4).every((s) => !s.disabled), 'the real funnel columns are enabled');
+  assert.ok(BOARD_STAGES.every((s) => !s.disabled), 'every funnel column, including Pagó, is a real column');
 });
 
 test('whoSpokeLast', () => {
@@ -43,7 +43,7 @@ test('toBoardCard maps origin (reuses the origin vocabulary), ad name, stage_sin
     created_at: new Date('2026-06-01'), stage_since: new Date('2026-06-01'), lost_reason: null, lost_note: null, closed_at: null,
     contact_name: 'Ana', contact_channel_user_id: 'wa:x', contact_phone_e164: null, origin_kind: 'meta_ad',
     ad_name: 'Factos', ad_headline: 'H', ad_is_test: false, campaign_name: 'Camp',
-    last_sender: 'user', last_message_at: new Date('2026-06-02'),
+    last_sender: 'user', last_message_at: new Date('2026-06-02'), paid_total: null, paid_method: null,
   };
   const c = toBoardCard(row);
   assert.equal(c.name, 'Ana');
@@ -60,14 +60,14 @@ test('toBoardCard falls back to a masked phone when the stored name is junk', ()
     id: 'o', contact_id: 'c', conversation_id: null, status: 'open', stage: 'lead',
     created_at: new Date(), stage_since: null, lost_reason: null, lost_note: null, closed_at: null,
     origin_kind: null, ad_name: null, ad_headline: null, ad_is_test: null, campaign_name: null,
-    last_sender: null, last_message_at: null,
+    last_sender: null, last_message_at: null, paid_total: null, paid_method: null,
   };
   const junk = toBoardCard({ ...base, contact_name: '.', contact_channel_user_id: 'wa:x', contact_phone_e164: '+573120000220' } as BoardOpportunityRow);
   assert.equal(junk.name, '+57 312 ••• 0220', 'junk name "." → masked phone');
 });
 
 test('toBoardCard flags a test-ad origin', () => {
-  const row = { contact_name: 'T', contact_channel_user_id: null, contact_phone_e164: null, origin_kind: 'meta_ad', ad_name: null, ad_headline: 'x', ad_is_test: true, campaign_name: null, id: 'o', contact_id: 'c', conversation_id: null, status: 'open', stage: 'lead', created_at: new Date(), stage_since: null, lost_reason: null, lost_note: null, closed_at: null, last_sender: null, last_message_at: null } as BoardOpportunityRow;
+  const row = { contact_name: 'T', contact_channel_user_id: null, contact_phone_e164: null, origin_kind: 'meta_ad', ad_name: null, ad_headline: 'x', ad_is_test: true, campaign_name: null, id: 'o', contact_id: 'c', conversation_id: null, status: 'open', stage: 'lead', created_at: new Date(), stage_since: null, lost_reason: null, lost_note: null, closed_at: null, last_sender: null, last_message_at: null, paid_total: null, paid_method: null } as BoardOpportunityRow;
   const c = toBoardCard(row);
   assert.equal(c.isTestAd, true);
   assert.equal(c.originDetail, 'Anuncio de prueba');
@@ -126,10 +126,32 @@ test('PipelinePanel card: every action reachable from an accessible menu; no "Ga
   assert.ok(PANEL.includes('after:absolute after:inset-0'), 'the whole card body is a stretched link');
 });
 
-test('PipelinePanel board: independent per-column scroll + a slim Pagó column', () => {
+test('JP-6 PipelinePanel board: Pagó is a real column; paid cards show amount+method, attended shows "Cobro pendiente"', () => {
   assert.ok(PANEL.includes('overflow-y-auto'), 'columns scroll on their own');
   assert.ok(PANEL.includes('snap-x'), 'the board scroll-snaps per column when it overflows');
-  assert.ok(PANEL.includes('[writing-mode:vertical-rl]') && PANEL.includes('Llega con la fase de pagos'), 'Pagó is a slim column with the note in its tooltip');
+  // The placeholder is gone and Pagó renders like any other column.
+  assert.ok(!PANEL.includes('Llega con la fase de pagos') && !PANEL.includes('[writing-mode:vertical-rl]'), 'the disabled placeholder is removed');
+  assert.ok(!PANEL.includes('col.disabled'), 'no special-cased disabled column');
+  // Money state on the card: paid shows the recorded amount + method; attended awaits a charge.
+  assert.ok(PANEL.includes('card.stage === "paid"') && PANEL.includes('priceLabelCOP(card.paidAmount)') && PANEL.includes('card.paidMethod'), 'paid card shows amount + method');
+  assert.ok(PANEL.includes('Cobro pendiente'), 'attended card is marked pending payment');
+  assert.ok(!/commission_amount|commissionAmount|\.commission|comisión/.test(PANEL), 'the board card never references commission');
+});
+
+test('JP-6 toBoardCard carries the paid amount + method, and payments.view gates it', () => {
+  const base = {
+    id: 'p', contact_id: 'c', conversation_id: null, status: 'won', stage: 'paid',
+    created_at: new Date(), stage_since: new Date(), lost_reason: null, lost_note: null, closed_at: new Date(),
+    contact_name: 'Sofía', contact_channel_user_id: null, contact_phone_e164: null, origin_kind: null,
+    ad_name: null, ad_headline: null, ad_is_test: null, campaign_name: null, last_sender: null, last_message_at: null,
+    paid_total: '85000', paid_method: 'Efectivo',
+  } as BoardOpportunityRow;
+  const shown = toBoardCard(base);
+  assert.equal(shown.paidAmount, '85000');
+  assert.equal(shown.paidMethod, 'Efectivo');
+  const hidden = toBoardCard(base, false); // a viewer without payments.view
+  assert.equal(hidden.paidAmount, null, 'no amount without payments.view');
+  assert.equal(hidden.paidMethod, null);
 });
 
 test('card "⋯" menu is floating (portaled) so it is never clipped by the column scroll', () => {

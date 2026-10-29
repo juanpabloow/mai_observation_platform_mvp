@@ -602,4 +602,84 @@ export async function revertOpportunityPaid(tenantId: string, clientId: string, 
   });
 }
 
+/** A recorded payment is definitive: the sale is WON and PAID. Fast-forward an OPEN or WON
+ *  opportunity straight to paid, filling the funnel timestamps it skipped (idempotent if paid). */
+async function payInPlace(client: PoolClient, opp: OpportunityRow, actor: PipelineActor): Promise<void> {
+  if (opp.stage === 'paid') return;
+  await client.query(
+    `UPDATE opportunities
+        SET status = 'won', stage = 'paid',
+            qualified_implicitly = CASE WHEN qualified_at IS NULL THEN true ELSE qualified_implicitly END,
+            qualified_at = COALESCE(qualified_at, now()),
+            booked_at = COALESCE(booked_at, now()),
+            attended_at = COALESCE(attended_at, now()),
+            paid_at = now(),
+            closed_at = COALESCE(closed_at, now()),
+            updated_at = now()
+      WHERE id = $1`,
+    [opp.id],
+  );
+  await writeEvent(client, {
+    tenantId: opp.tenant_id, clientId: opp.client_id, opportunityId: opp.id,
+    fromStage: opp.stage, toStage: 'paid', fromStatus: opp.status, toStatus: 'won', actor, reason: 'payment_recorded',
+  });
+}
+
+/** Insert a NEW opportunity directly at won+paid (origin = the contact's latest ad touch in the
+ *  brief window). A won row never collides with the one-OPEN-per-contact index, so this only runs
+ *  when the contact has no open sale (the caller advances an existing open one instead). */
+async function tryOpenPaid(client: PoolClient, input: { tenantId: string; clientId: string; contactId: string; conversationId: string | null; originTouchId: string | null; actor: PipelineActor }): Promise<OpportunityRow> {
+  const r = await client.query<OpportunityRow>(
+    `INSERT INTO opportunities
+       (tenant_id, client_id, contact_id, conversation_id, status, stage,
+        lead_at, qualified_at, booked_at, attended_at, paid_at, closed_at,
+        origin_touch_id, qualified_by, qualified_implicitly)
+     VALUES ($1,$2,$3,$4,'won','paid', now(),now(),now(),now(),now(),now(), $5, $6, true)
+     RETURNING ${SELECT_LOCK.replace(/^SELECT /, '')}`,
+    [input.tenantId, input.clientId, input.contactId, input.conversationId, input.originTouchId, actorText(input.actor)],
+  );
+  const created = r.rows[0]!;
+  await writeEvent(client, {
+    tenantId: input.tenantId, clientId: input.clientId, opportunityId: created.id,
+    fromStage: null, toStage: 'paid', fromStatus: null, toStatus: 'won', actor: input.actor, reason: 'payment_new',
+  });
+  return created;
+}
+
+/**
+ * JP-6: a recorded payment must leave its sale at `paid`. The fail-safe heal the payment hook and
+ * the backfill both call:
+ *   A) the appointment already links a sale → fast-forward it to paid (reopen first if it was lost);
+ *   B) no sale but the appointment has a CONTACT → advance the contact's open sale, else create one
+ *      directly at paid (origin = the latest ad touch in the brief window), and link the appointment;
+ *   a guest walk-in with no contact → nothing to attach a sale to (no-op).
+ * Idempotent (already paid → no change). Returns the paid opportunity, or null when none applies.
+ */
+export async function ensureOpportunityPaidForPayment(appt: AppointmentRow, actor: PipelineActor): Promise<OpportunityRow | null> {
+  return withTransaction(async (client) => {
+    if (appt.opportunity_id) {
+      const r = await client.query<OpportunityRow>(`${SELECT_LOCK} FROM opportunities WHERE id = $1 AND tenant_id = $2 AND client_id = $3 FOR UPDATE`, [appt.opportunity_id, appt.tenant_id, appt.client_id]);
+      const opp = r.rows[0];
+      if (opp) {
+        if (opp.stage === 'paid') return opp; // idempotent
+        const live = opp.status === 'lost' ? await reopen(client, opp, appt.source_conversation_id, actor, 'payment_recorded') : opp;
+        await payInPlace(client, live, actor);
+        return await getOpportunityById(appt.tenant_id, appt.client_id, opp.id, client);
+      }
+      // a dangling opportunity_id (the sale was deleted) → fall through and attach a fresh one.
+    }
+    const contactId = appt.contact_id;
+    if (!contactId) return null; // a guest walk-in has no contact to own a sale
+    let opp = await lockOpenForContact(client, appt.tenant_id, appt.client_id, contactId);
+    if (opp) {
+      await payInPlace(client, opp, actor);
+    } else {
+      const origin = await latestAdTouchInWindow(client, appt.tenant_id, appt.client_id, contactId);
+      opp = await tryOpenPaid(client, { tenantId: appt.tenant_id, clientId: appt.client_id, contactId, conversationId: appt.source_conversation_id, originTouchId: origin, actor });
+    }
+    await linkAppointment(client, appt.tenant_id, appt.id, opp.id);
+    return await getOpportunityById(appt.tenant_id, appt.client_id, opp.id, client);
+  });
+}
+
 export { getOpportunityById };
