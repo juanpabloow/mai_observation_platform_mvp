@@ -27,6 +27,8 @@ import { SYSTEM_ROLE_PERMISSIONS } from '../../web/lib/permissions/catalog.js';
 const PANEL = readFileSync(new URL('../../web/components/pipeline/PipelinePanel.tsx', import.meta.url), 'utf8');
 const MENU = readFileSync(new URL('../../web/components/scheduling/ui/Menu.tsx', import.meta.url), 'utf8');
 const PAGE = readFileSync(new URL('../../web/app/clients/[clientId]/pipeline/page.tsx', import.meta.url), 'utf8');
+const DRAWER = readFileSync(new URL('../../web/components/pipeline/OpportunityDrawer.tsx', import.meta.url), 'utf8');
+const ACTIONS = readFileSync(new URL('../../web/lib/pipelineActions.ts', import.meta.url), 'utf8');
 
 const mkCard = (over: Partial<BoardCard> = {}): BoardCard => ({
   id: 'o', contactId: 'c', conversationId: null, stage: 'lead', status: 'open', name: 'n',
@@ -316,4 +318,44 @@ test('JP-7 part 2: the panel offers search, owner filter, "waiting" toggle, and 
     assert.ok(PANEL.includes(`label="${col}"`) || PANEL.includes(`>${col}<`), `list column: ${col}`);
   }
   assert.ok(PANEL.includes('aria-sort='), 'columns are sortable (aria-sort)');
+});
+
+test('JP-7 part 3: clicking a card (board / list / Perdidos) opens the opportunity drawer — not a page change', () => {
+  // The board card name is a BUTTON that opens the drawer; "Ver ficha" (the contact page) stays in the menu.
+  assert.ok(PANEL.includes('onClick={onOpen}'), 'the card name opens the drawer');
+  assert.ok(PANEL.includes('onOpen={() => setSelected(c)}'), 'the board wires the drawer open');
+  assert.ok(PANEL.includes('onClick={() => onOpen(c)}'), 'a list row opens the drawer');
+  assert.ok(PANEL.includes('<MenuLink href={contactHref}>Ver ficha</MenuLink>'), '"Ver ficha" still links to the contact record');
+  // The drawer is rendered beside the board, keyed on the selected card so each selection mounts fresh.
+  assert.ok(PANEL.includes('<OpportunityDrawer') && PANEL.includes('key={selected.id}'), 'the drawer mounts fresh per selection');
+  // Its trap pauses while a Calificar/Perder modal is layered over it.
+  assert.ok(PANEL.includes('trapActive={modal === null}'), 'the drawer trap yields to a layered modal');
+});
+
+test('JP-7 part 3: the drawer shows the sale in full and reuses the engine actions', () => {
+  // Every section the brief asks for.
+  for (const section of ['Progreso', 'Calificación', 'Pago', 'Últimos mensajes', 'Historial']) {
+    assert.ok(DRAWER.includes(`title="${section}"`), `drawer section: ${section}`);
+  }
+  assert.ok(/title=\{data\.appointments\.length > 1 \? "Citas" : "Cita"\}/.test(DRAWER), 'the linked appointment(s)');
+  assert.ok(DRAWER.includes('Abrir conversación') && DRAWER.includes('/inbox?c='), 'a link into the Inbox');
+  assert.ok(DRAWER.includes('Ver ficha') && DRAWER.includes('/contacts/'), '"Ver ficha" → the contact record');
+  // The actions are the SAME ones as the card — delegated to the parent (which calls the engine).
+  for (const action of ['onQualify', 'onUnqualify', 'onLose', 'onReopen']) {
+    assert.ok(DRAWER.includes(action), `drawer action: ${action}`);
+  }
+  // The reads load via the server action in an async effect (state only set in `.then` — lint-safe).
+  assert.ok(DRAWER.includes('loadOpportunityDrawerAction(clientId, card.id).then('), 'the drawer loads via the action, async');
+  // Motion answers the user's action and honours reduced motion (existing u-drawer-in utility, no new keyframes).
+  assert.ok(DRAWER.includes('u-drawer-in'), 'the drawer uses the reduced-motion-safe slide-in');
+});
+
+test('JP-7 part 3: the drawer loader gates on pipeline.view, gates money on payments.view, and never reads commission', () => {
+  assert.ok(ACTIONS.includes('export async function loadOpportunityDrawerAction'), 'the loader exists');
+  assert.ok(/resolveClientModuleContext\(clientId, "crm", "pipeline\.view"\)/.test(ACTIONS), 'gated by pipeline.view under CRM');
+  assert.ok(ACTIONS.includes('can(scope, "payments.view", clientId)'), 'the payment summary is gated by payments.view');
+  // Actor tokens resolve to a human label (bot / system / a member name).
+  assert.ok(ACTIONS.includes('"Sistema"') && ACTIONS.includes('"Bot"'), 'actor tokens resolve to plain words');
+  // Money shown is amount + method only — the drawer read must never touch commission.
+  assert.ok(!/commission/i.test(ACTIONS) && !/comisi[oó]n/i.test(ACTIONS), 'the drawer never reads commission');
 });

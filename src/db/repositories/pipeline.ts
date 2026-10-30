@@ -400,6 +400,20 @@ export interface OpportunityAppointmentRow {
   status: string;
   service_name_snapshot: string;
 }
+/** JP-7 drawer: the recorded payment(s) of a sale, via its appointments. Amount + method only —
+ *  never commission. `method` is null when more than one payment backs it. null when none recorded. */
+export async function getOpportunityPaymentSummary(tenantId: string, opportunityId: string): Promise<{ total: string; method: string | null } | null> {
+  const r = await query<{ total: string | null; method: string | null }>(
+    `SELECT SUM(p.total)::text AS total, CASE WHEN count(*) = 1 THEN max(pm.label) END AS method
+       FROM appointments a
+       JOIN payments p ON p.appointment_id = a.id AND p.tenant_id = a.tenant_id AND p.status = 'recorded'
+       LEFT JOIN payment_methods pm ON pm.tenant_id = p.tenant_id AND pm.client_id = p.client_id AND pm.key = p.method_key
+      WHERE a.tenant_id = $1 AND a.opportunity_id = $2`,
+    [tenantId, opportunityId],
+  );
+  return r.rows[0]?.total ? { total: r.rows[0].total, method: r.rows[0].method } : null;
+}
+
 export async function listOpportunityAppointments(tenantId: string, opportunityId: string): Promise<OpportunityAppointmentRow[]> {
   const r = await query<OpportunityAppointmentRow>(
     `SELECT id, start_at, status, service_name_snapshot FROM appointments

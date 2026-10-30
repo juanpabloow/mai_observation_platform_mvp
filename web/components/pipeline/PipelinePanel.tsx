@@ -32,6 +32,7 @@ import {
   reopenOpportunityAction,
   unqualifyOpportunityAction,
 } from "@/lib/pipelineActions";
+import { OpportunityDrawer } from "@/components/pipeline/OpportunityDrawer";
 
 interface QueueItem {
   id: string;
@@ -126,6 +127,8 @@ export function PipelinePanel({
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [modal, setModal] = useState<null | { kind: "qualify" | "lost"; card: BoardCard }>(null);
+  // JP-7 §4: the card whose drawer is open (board / list / Perdidos). Null = no drawer.
+  const [selected, setSelected] = useState<BoardCard | null>(null);
   const [lossFilter, setLossFilter] = useState<BoardCard["lostReason"]>(null);
   const [searchDraft, setSearchDraft] = useState(filters.q);
   const [onlyWaiting, setOnlyWaiting] = useState(false);
@@ -139,6 +142,8 @@ export function PipelinePanel({
       if (!r.ok) setError(r.error ?? "No se pudo completar la acción.");
       else {
         setModal(null);
+        // Close the drawer too: the sale just changed stage/status, so its open view is now stale.
+        setSelected(null);
         router.refresh();
       }
     });
@@ -278,7 +283,7 @@ export function PipelinePanel({
 
           {/* JP-7: the same filtered set, as a kanban (Tablero) or a sortable table (Lista). */}
           {view === "list" ? (
-            <BoardListView cards={shownCards} clientId={clientId} now={now} sort={sort} onSort={setSort} />
+            <BoardListView cards={shownCards} now={now} sort={sort} onSort={setSort} onOpen={setSelected} />
           ) : (
           /* The board FILLS the height below the filters and never grows the page: the row is
              flex-1 min-h-0 and scrolls horizontally; each column stretches to full height and scrolls
@@ -304,6 +309,7 @@ export function PipelinePanel({
                       ) : (
                         colCards.map((c) => (
                           <OppCard key={c.id} clientId={clientId} card={c} now={now} pending={pending}
+                            onOpen={() => setSelected(c)}
                             onQualify={() => setModal({ kind: "qualify", card: c })}
                             onUnqualify={() => run(() => unqualifyOpportunityAction(clientId, c.id))}
                             onLose={() => setModal({ kind: "lost", card: c })}
@@ -341,7 +347,7 @@ export function PipelinePanel({
                 <article key={c.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-line bg-surface px-4 py-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <Link href={`/clients/${clientId}/contacts/${c.contactId}`} className="truncate text-sm font-medium text-foreground hover:underline">{c.name}</Link>
+                      <button type="button" onClick={() => setSelected(c)} className="u-focus truncate text-left text-sm font-medium text-foreground hover:underline">{c.name}</button>
                       <OriginChip card={c} />
                       {c.lostReason ? <span className="rounded-full bg-warn-soft px-2 py-0.5 text-[0.625rem] font-medium text-warn">{LOST_REASON_LABEL[c.lostReason]}</span> : null}
                     </div>
@@ -385,6 +391,24 @@ export function PipelinePanel({
         </PageShell>
       )}
 
+      {/* JP-7 §4: the opportunity drawer. Keyed on the card id so each selection mounts fresh (its
+          detail is loaded on mount). Actions reuse the same handlers as the card. */}
+      {selected ? (
+        <OpportunityDrawer
+          key={selected.id}
+          clientId={clientId}
+          card={selected}
+          now={now}
+          pending={pending}
+          trapActive={modal === null}
+          onClose={() => setSelected(null)}
+          onQualify={() => setModal({ kind: "qualify", card: selected })}
+          onUnqualify={() => run(() => unqualifyOpportunityAction(clientId, selected.id))}
+          onLose={() => setModal({ kind: "lost", card: selected })}
+          onReopen={() => run(() => reopenOpportunityAction(clientId, selected.id))}
+        />
+      ) : null}
+
       {modal?.kind === "qualify" ? (
         <QualifyModal card={modal.card} pending={pending} onClose={() => setModal(null)} onSubmit={(service, timeframe) => run(() => qualifyOpportunityAction(clientId, modal.card.id, { service, timeframe }))} />
       ) : null}
@@ -411,11 +435,12 @@ function OriginChip({ card }: { card: BoardCard }) {
  * and touch, no hover-only). The whole card body is a stretched link to the contact record; the
  * action controls sit above it. No "Ganada" chip — each column already implies the status.
  */
-function OppCard({ clientId, card, now, pending, onQualify, onUnqualify, onLose }: {
+function OppCard({ clientId, card, now, pending, onOpen, onQualify, onUnqualify, onLose }: {
   clientId: string;
   card: BoardCard;
   now: Date;
   pending: boolean;
+  onOpen: () => void;
   onQualify: () => void;
   onUnqualify: () => void;
   onLose: () => void;
@@ -430,14 +455,15 @@ function OppCard({ clientId, card, now, pending, onQualify, onUnqualify, onLose 
       className={`relative flex flex-col gap-1 rounded-lg border bg-surface p-2.5 transition-colors hover:border-line-strong focus-within:border-line-strong ${card.stale ? "border-line border-l-[3px] border-l-[var(--warn-rule)]" : "border-line"}`}
       title={card.stale ? card.stale.reason : undefined}
     >
-      {/* Line 1 — name (stretched link → the contact record) · owner avatar · time in stage (warn when stale). */}
+      {/* Line 1 — name (stretched button → opens the drawer) · owner avatar · time in stage (warn when stale). */}
       <div className="flex items-start gap-2">
-        <Link
-          href={contactHref}
-          className="u-focus min-w-0 flex-1 truncate text-[0.8125rem] font-medium text-foreground no-underline after:absolute after:inset-0 after:rounded-lg after:content-[''] hover:underline"
+        <button
+          type="button"
+          onClick={onOpen}
+          className="u-focus min-w-0 flex-1 truncate text-left text-[0.8125rem] font-medium text-foreground after:absolute after:inset-0 after:rounded-lg after:content-[''] hover:underline"
         >
           {card.name}
-        </Link>
+        </button>
         {card.owner ? (
           <span
             aria-hidden
@@ -524,12 +550,12 @@ function SortTh({ sort, onSort, k, label, className = "" }: { sort: Sort; onSort
  * message · owner. Horizontal scroll keeps it usable at ~390px; the whole row is a link to the
  * contact record. The sort choice lives in the parent (so it survives a board/list toggle).
  */
-function BoardListView({ cards, clientId, now, sort, onSort }: {
+function BoardListView({ cards, now, sort, onSort, onOpen }: {
   cards: BoardCard[];
-  clientId: string;
   now: Date;
   sort: Sort;
   onSort: (s: Sort) => void;
+  onOpen: (card: BoardCard) => void;
 }) {
   const STAGE_ORDER: Record<BoardCard["stage"], number> = { lead: 0, qualified: 1, booked: 2, attended: 3, paid: 4 };
   const key = (c: BoardCard): string | number => {
@@ -569,7 +595,7 @@ function BoardListView({ cards, clientId, now, sort, onSort }: {
             {sorted.map((c) => (
               <tr key={c.id} className="relative border-t border-line-soft hover:bg-subtle/60">
                 <td className="max-w-[12rem] truncate px-2.5 py-2 pl-4">
-                  <Link href={`/clients/${clientId}/contacts/${c.contactId}`} className="u-focus font-medium text-foreground after:absolute after:inset-0 hover:underline">{c.name}</Link>
+                  <button type="button" onClick={() => onOpen(c)} className="u-focus truncate text-left font-medium text-foreground after:absolute after:inset-0 hover:underline">{c.name}</button>
                 </td>
                 <td className="whitespace-nowrap px-2.5 py-2 text-muted">{STAGE_LABEL[c.stage]}</td>
                 <td className="max-w-[12rem] truncate px-2.5 py-2 text-muted" title={originTitleOf(c)}>{originLineOf(c)}</td>

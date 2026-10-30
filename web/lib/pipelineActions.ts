@@ -1,7 +1,7 @@
 "use server";
 
 import { revalidatePath } from "next/cache";
-import { NO_PERMISSION, requireFullAccessForAction } from "./access";
+import { can, NO_PERMISSION, requireFullAccessForAction } from "./access";
 import { resolveClientModuleContext } from "./clientModuleAccess";
 import { getClientForTenant } from "./clientWorkflow";
 import { isUuid } from "./clientModuleValidation";
@@ -12,7 +12,19 @@ import {
   unqualifyOpportunity,
   type PipelineActor,
 } from "@worker/pipeline/engine.js";
-import { getOpportunityById, getPipelineSettings, setPipelineSettings, type LostReason } from "@worker/db/repositories/pipeline.js";
+import {
+  getOpportunityById,
+  getOpportunityPaymentSummary,
+  getPipelineSettings,
+  listOpportunityAppointments,
+  listOpportunityStageEvents,
+  setPipelineSettings,
+  type LostReason,
+  type OpportunityStage,
+  type OpportunityStatus,
+} from "@worker/db/repositories/pipeline.js";
+import { listMessages, type MessageSender } from "@worker/db/repositories/handoff.js";
+import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
 
 /**
  * SALES PIPELINE actions (PL-2). Every mutation goes through PL-1's engine functions (which lock
@@ -148,4 +160,117 @@ export async function setPipelineSettingsAction(
   await setPipelineSettings(tenantId, clientId, patch);
   revalidatePath(`/clients/${clientId}/campaigns/settings`);
   return { ok: true };
+}
+
+// ── JP-7 §4 — the opportunity DRAWER read ───────────────────────────────────────────
+
+/** One stage transition, with the actor resolved to a human label (who did it, in plain words). */
+export type DrawerEvent = {
+  id: string;
+  fromStage: OpportunityStage | null;
+  toStage: OpportunityStage | null;
+  fromStatus: OpportunityStatus | null;
+  toStatus: OpportunityStatus | null;
+  reason: string | null;
+  actorLabel: string;
+  at: string;
+};
+
+export type DrawerData = {
+  id: string;
+  stage: OpportunityStage;
+  status: OpportunityStatus;
+  conversationId: string | null;
+  contactId: string;
+  /** ISO timestamps for each stage this sale has reached (null = not reached). */
+  stages: { lead: string | null; qualified: string | null; booked: string | null; attended: string | null; paid: string | null };
+  qualification: { service: string | null; timeframe: string | null; byLabel: string | null; implicit: boolean } | null;
+  lost: { reason: LostReason; note: string | null; atLabel: string | null } | null;
+  reopenWindowDays: number;
+  appointments: Array<{ id: string; startAt: string; status: string; service: string }>;
+  /** Null when the viewer lacks payments.view, OR when no payment is recorded. */
+  payment: { total: string; method: string | null } | null;
+  /** The last few messages, oldest → newest (ready to render top-to-bottom). */
+  messages: Array<{ id: string; sender: MessageSender; text: string | null; at: string }>;
+  history: DrawerEvent[];
+};
+
+export type DrawerResult = { ok: true; data: DrawerData } | { ok: false; error: string };
+
+/**
+ * Load everything the drawer shows for one opportunity, in a handful of batched reads (no N+1): the
+ * opportunity, its stage history, its appointments, its recorded payment (gated by payments.view),
+ * and the conversation's last few messages. Gate = `pipeline.view` under the client's CRM module —
+ * the same audience as the board. The actor on every transition is resolved to a member name.
+ */
+export async function loadOpportunityDrawerAction(clientId: string, opportunityId: string): Promise<DrawerResult> {
+  const res = await resolveClientModuleContext(clientId, "crm", "pipeline.view");
+  if (!res.ok) return { ok: false, error: res.forbidden ? NO_PERMISSION : UNAVAILABLE };
+  const { scope } = res.context;
+  if (!isUuid(opportunityId)) return { ok: false, error: NOT_FOUND };
+
+  const opp = await getOpportunityById(scope.tenantId, clientId, opportunityId);
+  if (!opp) return { ok: false, error: NOT_FOUND };
+
+  const canSeeMoney = can(scope, "payments.view", clientId);
+  const [events, appts, members, payment, messages, settings] = await Promise.all([
+    listOpportunityStageEvents(scope.tenantId, opportunityId),
+    listOpportunityAppointments(scope.tenantId, opportunityId),
+    listMembersForTenant(scope.tenantId),
+    canSeeMoney ? getOpportunityPaymentSummary(scope.tenantId, opportunityId) : Promise.resolve(null),
+    opp.conversation_id ? listMessages(scope.tenantId, opp.conversation_id, { limit: 6 }) : Promise.resolve([]),
+    getPipelineSettings(scope.tenantId, clientId),
+  ]);
+
+  // Resolve an actor token ('system' | 'bot' | a user id) to a human label.
+  const nameById = new Map(members.map((m) => [m.user_id, m.name ?? m.email]));
+  const actorLabel = (token: string | null): string => {
+    if (!token) return "—";
+    if (token === "system") return "Sistema";
+    if (token === "bot") return "Bot";
+    return nameById.get(token) ?? "Usuario";
+  };
+
+  return {
+    ok: true,
+    data: {
+      id: opp.id,
+      stage: opp.stage,
+      status: opp.status,
+      conversationId: opp.conversation_id,
+      contactId: opp.contact_id,
+      stages: {
+        lead: opp.lead_at?.toISOString() ?? null,
+        qualified: opp.qualified_at?.toISOString() ?? null,
+        booked: opp.booked_at?.toISOString() ?? null,
+        attended: opp.attended_at?.toISOString() ?? null,
+        paid: opp.paid_at?.toISOString() ?? null,
+      },
+      qualification:
+        opp.qualification_service || opp.qualification_timeframe
+          ? {
+              service: opp.qualification_service,
+              timeframe: opp.qualification_timeframe,
+              byLabel: opp.qualified_by ? actorLabel(opp.qualified_by) : null,
+              implicit: opp.qualified_implicitly,
+            }
+          : null,
+      lost: opp.status === "lost" && opp.lost_reason ? { reason: opp.lost_reason, note: opp.lost_note, atLabel: opp.closed_at?.toISOString() ?? null } : null,
+      reopenWindowDays: settings.reopen_window_days,
+      appointments: appts.map((a) => ({ id: a.id, startAt: a.start_at.toISOString(), status: a.status, service: a.service_name_snapshot })),
+      payment,
+      // Oldest → newest for top-to-bottom reading; listMessages returns newest first.
+      messages: [...messages].reverse().map((m) => ({ id: m.id, sender: m.sender, text: m.text, at: m.occurred_at.toISOString() })),
+      history: events.map((e) => ({
+        id: e.id,
+        fromStage: e.from_stage,
+        toStage: e.to_stage,
+        fromStatus: e.from_status,
+        toStatus: e.to_status,
+        reason: e.reason,
+        actorLabel: actorLabel(e.actor),
+        at: e.occurred_at.toISOString(),
+      })),
+    },
+  };
 }
