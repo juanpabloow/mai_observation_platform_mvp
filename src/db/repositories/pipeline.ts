@@ -182,6 +182,24 @@ export interface BoardOpportunityRow {
    *  commission. `paid_method` is null when the sale has more than one recorded payment. */
   paid_total: string | null;
   paid_method: string | null;
+  // ── JP-7: the next thing to know, per stage (one batched query — no N+1) ──
+  /** Lead: a preview of the conversation's last message. */
+  last_message_text: string | null;
+  /** Calificado: the qualification evidence + who qualified it (raw actor + resolved user name). */
+  qualification_service: string | null;
+  qualification_timeframe: string | null;
+  qualified_by: string | null;
+  qualified_by_name: string | null;
+  /** Reservó / Asistió: the sale's most recent non-cancelled appointment (time, status, list price). */
+  appt_start_at: Date | null;
+  appt_status: string | null;
+  /** The appointment's site timezone (so the card formats its time correctly). */
+  appt_tz: string | null;
+  /** The appointment's list price (price_snapshot) — only for a viewer with payments.view. */
+  appt_list_price: string | null;
+  /** The contact's assigned owner (avatar/initials), when one is set. */
+  owner_user_id: string | null;
+  owner_name: string | null;
 }
 
 export interface BoardFilters {
@@ -241,18 +259,32 @@ export async function listBoardOpportunities(tenantId: string, clientId: string,
                          WHEN 'attended' THEN o.attended_at WHEN 'paid' THEN o.paid_at END AS stage_since,
             ct.name AS contact_name, ct.channel_user_id AS contact_channel_user_id, ct.phone_e164 AS contact_phone_e164, ct.origin_kind,
             ad.name AS ad_name, ad.headline AS ad_headline, ad.is_test AS ad_is_test, camp.name AS campaign_name,
-            lm.sender AS last_sender, lm.created_at AS last_message_at,
-            pay.paid_total, pay.paid_method
+            lm.sender AS last_sender, lm.created_at AS last_message_at, lm.text AS last_message_text,
+            pay.paid_total, pay.paid_method,
+            o.qualification_service, o.qualification_timeframe, o.qualified_by, qu.name AS qualified_by_name,
+            appt.start_at AS appt_start_at, appt.status AS appt_status, appt.price_snapshot AS appt_list_price, appt.tz AS appt_tz,
+            ct.assigned_to AS owner_user_id, ou.name AS owner_name
        FROM opportunities o
        JOIN contacts ct ON ct.id = o.contact_id AND ct.tenant_id = o.tenant_id
        LEFT JOIN attribution_touches ft ON ft.id = ct.first_touch_id AND ft.tenant_id = o.tenant_id
        LEFT JOIN ads ad ON ad.id = ft.ad_id AND ad.tenant_id = o.tenant_id
        LEFT JOIN campaigns camp ON camp.id = ad.campaign_id AND camp.tenant_id = o.tenant_id
+       LEFT JOIN "user" qu ON qu.id = o.qualified_by
+       LEFT JOIN "user" ou ON ou.id = ct.assigned_to
        LEFT JOIN LATERAL (
-         SELECT hm.sender, hm.created_at FROM handoff_messages hm
+         SELECT hm.sender, hm.created_at, hm.text FROM handoff_messages hm
           WHERE hm.tenant_id = o.tenant_id AND hm.conversation_id = o.conversation_id
           ORDER BY hm.created_at DESC, hm.id DESC LIMIT 1
        ) lm ON true
+       LEFT JOIN LATERAL (
+         -- The sale's most recent non-cancelled appointment: the upcoming one for a booked sale,
+         -- the completed one for an attended/paid sale. Drives the Reservó / Asistió card lines.
+         SELECT ap.start_at, ap.status, ap.price_snapshot::text AS price_snapshot, si.timezone AS tz
+           FROM appointments ap
+           JOIN sites si ON si.id = ap.site_id AND si.tenant_id = ap.tenant_id
+          WHERE ap.tenant_id = o.tenant_id AND ap.opportunity_id = o.id AND ap.status <> 'cancelled'
+          ORDER BY ap.start_at DESC, ap.id DESC LIMIT 1
+       ) appt ON true
        LEFT JOIN LATERAL (
          -- The recorded payment(s) of this sale, via its appointments. Amount + method only (never
          -- commission); method is null when more than one payment backs the sale.

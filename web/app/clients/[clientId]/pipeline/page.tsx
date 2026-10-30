@@ -11,7 +11,7 @@ import { listAdsWithStats, listCampaignsWithStats } from "@worker/db/repositorie
 import { isOriginGroupKey, kindsForGroup } from "@/lib/originDisplay";
 import { displayContactName } from "@/lib/contactName";
 import { can } from "@/lib/access";
-import { toBoardCard } from "@/lib/pipelineBoard";
+import { stageTotals, toBoardCard } from "@/lib/pipelineBoard";
 import { PipelinePanel } from "@/components/pipeline/PipelinePanel";
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -33,9 +33,12 @@ export default async function PipelinePage({
   const { clientId } = await params;
   const { scope, client } = await requireClientModulePage(clientId, "crm", "pipeline.view");
   const sp = await searchParams;
-  // JP-6: only a viewer with payments.view sees the amount + method on a paid card (the board's
-  // audience — agency/owner/setter — normally has it; a custom role without it sees the card alone).
+  // JP-6: only a viewer with payments.view sees per-card amounts (the paid amount + the list price).
   const canViewPayments = can(scope, "payments.view", client.id);
+  // JP-7: the column/funnel MONEY TOTALS are a revenue view — Client Owner + agency, NEVER a Setter
+  // (analytics.view; the Setter is explicitly "No ve resultados"). Enforced server-side: a Setter's
+  // payload carries no totals at all (see `moneyTotals` below).
+  const canViewRevenue = can(scope, "analytics.view", client.id);
 
   const [campaigns, ads] = await Promise.all([
     listCampaignsWithStats(scope.tenantId, client.id),
@@ -68,12 +71,19 @@ export default async function PipelinePage({
     lastMessageAt: q.last_message_at.toISOString(),
   }));
 
+  // `toBoardCard` reads its own clock for the stale thresholds (a lib call, not render state).
+  const cards = boardRows.map((r) => toBoardCard(r, canViewPayments));
+  const lostCardsVm = lostRows.map((r) => toBoardCard(r, canViewPayments));
+  // Server-gated money totals: computed only for a revenue viewer, so a Setter's payload has none.
+  const moneyTotals = canViewRevenue ? stageTotals(cards) : null;
+
   return (
     <PipelinePanel
       clientId={client.id}
       clientName={client.name}
-      cards={boardRows.map((r) => toBoardCard(r, canViewPayments))}
-      lostCards={lostRows.map((r) => toBoardCard(r, canViewPayments))}
+      cards={cards}
+      lostCards={lostCardsVm}
+      moneyTotals={moneyTotals}
       queue={queue}
       campaigns={campaigns.map((c) => ({ id: c.id, name: c.name }))}
       ads={ads.map((a) => ({ id: a.id, label: a.name || a.headline || a.external_id }))}

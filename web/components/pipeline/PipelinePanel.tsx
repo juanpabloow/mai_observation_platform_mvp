@@ -14,12 +14,17 @@ import {
   LOST_REASON_LABEL,
   LOST_REASONS,
   STAGE_LABEL,
+  apptLineOf,
+  funnelSteps,
   groupByStage,
+  lossReasonCounts,
   originLineOf,
   originTitleOf,
+  ownerInitials,
+  qualificationLineOf,
   sortByActivityDesc,
-  spokeLastDisplay,
   type BoardCard,
+  type StageTotals,
 } from "@/lib/pipelineBoard";
 import {
   markOpportunityLostAction,
@@ -61,6 +66,7 @@ export function PipelinePanel({
   clientName,
   cards,
   lostCards,
+  moneyTotals,
   queue,
   campaigns,
   ads,
@@ -70,6 +76,8 @@ export function PipelinePanel({
   clientName: string;
   cards: BoardCard[];
   lostCards: BoardCard[];
+  /** JP-7: per-stage money, present ONLY for a revenue viewer (null for a Setter — enforced server-side). */
+  moneyTotals: StageTotals | null;
   queue: QueueItem[];
   campaigns: Array<{ id: string; name: string }>;
   ads: Array<{ id: string; label: string }>;
@@ -82,6 +90,7 @@ export function PipelinePanel({
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [modal, setModal] = useState<null | { kind: "qualify" | "lost"; card: BoardCard }>(null);
+  const [lossFilter, setLossFilter] = useState<BoardCard["lostReason"]>(null);
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
     setError(null);
@@ -108,6 +117,13 @@ export function PipelinePanel({
   const grouped = groupByStage(sortByActivityDesc(cards));
   const now = new Date();
   const filtered = Boolean(filters.origin || filters.campaign || filters.ad || filters.from || filters.to || filters.status);
+  // JP-7: the funnel (counts + conversion, from the filtered cards) and the per-column money that a
+  // revenue viewer sees in the headers + funnel (null for a Setter — the payload carried no totals).
+  const funnel = funnelSteps(cards);
+  const columnMoney: Partial<Record<BoardCard["stage"], number>> = moneyTotals
+    ? { booked: moneyTotals.bookedExpected, attended: moneyTotals.attendedPending, paid: moneyTotals.paidCollected }
+    : {};
+  const losses = lossReasonCounts(lostCards);
 
   return (
     <main className="flex min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]">
@@ -164,6 +180,33 @@ export function PipelinePanel({
             </div>
           </PageShell>
 
+          {/* JP-7 FUNNEL STRIP — a snapshot of the FILTERED set: each step's count + the conversion
+              from the previous step, plus the lost count. Money per step only for a revenue viewer. */}
+          <PageShell grow={false} clip={false}>
+            <div className="flex flex-nowrap items-stretch gap-1.5 overflow-x-auto px-3 py-2.5 sm:px-4" aria-label="Embudo de conversión">
+              {funnel.map((step, i) => (
+                <div key={step.stage} className="flex shrink-0 items-center gap-1.5">
+                  {i > 0 ? (
+                    <span className="u-tnum shrink-0 text-[0.625rem] text-faint" title="Conversión desde el paso anterior">
+                      {step.convPct !== null ? `${step.convPct}%` : "—"}&nbsp;›
+                    </span>
+                  ) : null}
+                  <div className="flex min-w-[84px] flex-col rounded-lg border border-line bg-subtle/40 px-2.5 py-1.5">
+                    <span className="text-[0.625rem] uppercase tracking-wide text-faint">{step.label}</span>
+                    <span className="u-tnum text-sm font-semibold text-foreground">{step.count}</span>
+                    {columnMoney[step.stage] !== undefined ? <span className="u-tnum text-[0.625rem] text-muted">{priceLabelCOP(columnMoney[step.stage]!)}</span> : null}
+                  </div>
+                </div>
+              ))}
+              <div className="flex shrink-0 items-center gap-1.5 pl-1">
+                <button type="button" onClick={() => setTab("perdidos")} className="u-focus flex min-w-[76px] flex-col rounded-lg border border-dashed border-line bg-subtle/30 px-2.5 py-1.5 text-left transition hover:bg-subtle">
+                  <span className="text-[0.625rem] uppercase tracking-wide text-faint">Perdidas</span>
+                  <span className="u-tnum text-sm font-semibold text-muted">{lostCards.length}</span>
+                </button>
+              </div>
+            </div>
+          </PageShell>
+
           {/* The board FILLS the height below the filters and never grows the page: the row is
               flex-1 min-h-0 and scrolls horizontally; each column stretches to full height and
               scrolls its OWN cards (overflow-y), with its header pinned at the top. Columns keep a
@@ -175,7 +218,11 @@ export function PipelinePanel({
                 return (
                   <section key={col.key} aria-label={col.label} className="flex min-h-0 w-[17rem] shrink-0 snap-start flex-col rounded-xl border border-line bg-subtle/40">
                     <header className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-2.5 py-2">
-                      <h2 className="text-xs font-semibold text-foreground">{col.label}</h2>
+                      <div className="flex min-w-0 items-baseline gap-2">
+                        <h2 className="text-xs font-semibold text-foreground">{col.label}</h2>
+                        {/* Revenue viewers only: expected (Reservó) / pending (Asistió) / collected (Pagó). */}
+                        {columnMoney[col.key] !== undefined ? <span className="u-tnum truncate text-[0.625rem] text-muted">{priceLabelCOP(columnMoney[col.key]!)}</span> : null}
+                      </div>
                       <span className="u-mono rounded bg-chip px-1.5 py-0.5 text-[0.625rem] text-faint">{colCards.length}</span>
                     </header>
                     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
@@ -200,10 +247,23 @@ export function PipelinePanel({
       ) : tab === "perdidos" ? (
         <PageShell className="overflow-y-auto" ariaLabel="Oportunidades perdidas">
           <div className="flex min-h-full flex-col gap-2 p-3 sm:p-4">
+            {/* JP-7: counts per loss reason, each a toggle that filters the list below. */}
+            {losses.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-1.5 pb-1" role="group" aria-label="Motivos de pérdida">
+                <button type="button" onClick={() => setLossFilter(null)} aria-pressed={lossFilter === null} className={`u-focus rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium transition ${lossFilter === null ? "border-foreground bg-foreground text-background" : "border-line text-muted hover:bg-subtle"}`}>
+                  Todas <span className="u-tnum">{lostCards.length}</span>
+                </button>
+                {losses.map(({ reason, count }) => (
+                  <button key={reason} type="button" onClick={() => setLossFilter(lossFilter === reason ? null : reason)} aria-pressed={lossFilter === reason} className={`u-focus rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium transition ${lossFilter === reason ? "border-warn bg-warn-soft text-warn" : "border-line text-muted hover:bg-subtle"}`}>
+                    {LOST_REASON_LABEL[reason]} <span className="u-tnum">{count}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
             {lostCards.length === 0 ? (
               <p className="py-10 text-center text-xs text-muted">Ninguna oportunidad perdida con estos filtros.</p>
             ) : (
-              lostCards.map((c) => (
+              lostCards.filter((c) => !lossFilter || c.lostReason === lossFilter).map((c) => (
                 <article key={c.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-line bg-surface px-4 py-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
@@ -287,12 +347,16 @@ function OppCard({ clientId, card, now, pending, onQualify, onUnqualify, onLose 
   onLose: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const spoke = spokeLastDisplay(card.spokeLast);
   const isOpen = card.status === "open";
   const contactHref = `/clients/${clientId}/contacts/${card.contactId}`;
+  // JP-7 — the one "next thing to know" line for this stage.
+  const stageLine = card.stage === "lead" ? originLineOf(card) : card.stage === "qualified" ? qualificationLineOf(card) : card.stage === "booked" ? apptLineOf(card) : null;
   return (
-    <article className="relative flex flex-col gap-1 rounded-lg border border-line bg-surface p-2.5 transition-colors hover:border-line-strong focus-within:border-line-strong">
-      {/* Line 1 — name (stretched link → the contact record) + time in stage, right-aligned. */}
+    <article
+      className={`relative flex flex-col gap-1 rounded-lg border bg-surface p-2.5 transition-colors hover:border-line-strong focus-within:border-line-strong ${card.stale ? "border-line border-l-[3px] border-l-[var(--warn-rule)]" : "border-line"}`}
+      title={card.stale ? card.stale.reason : undefined}
+    >
+      {/* Line 1 — name (stretched link → the contact record) · owner avatar · time in stage (warn when stale). */}
       <div className="flex items-start gap-2">
         <Link
           href={contactHref}
@@ -300,33 +364,44 @@ function OppCard({ clientId, card, now, pending, onQualify, onUnqualify, onLose 
         >
           {card.name}
         </Link>
+        {card.owner ? (
+          <span
+            aria-hidden
+            title={`Dueño: ${card.owner.name ?? "asignado"}`}
+            className="grid size-[18px] shrink-0 place-items-center rounded-full bg-chip text-[0.5625rem] font-semibold text-muted"
+          >
+            {ownerInitials(card.owner.name)}
+          </span>
+        ) : null}
         {card.stageSince ? (
-          <span className="shrink-0 text-[0.625rem] text-faint" title={`En esta etapa desde ${formatStampFull(new Date(card.stageSince))}`}>
+          <span className={`shrink-0 text-[0.625rem] ${card.stale ? "font-medium text-warn" : "text-faint"}`} title={card.stale ? card.stale.reason : `En esta etapa desde ${formatStampFull(new Date(card.stageSince))}`}>
             {relativeAgeShort(card.stageSince, now)}
           </span>
         ) : null}
       </div>
 
-      {/* Line 2 — origin on one line, truncated (the campaign is in the tooltip + the detail). */}
-      <p className="truncate text-[0.6875rem] text-muted" title={originTitleOf(card)}>
-        {originLineOf(card)}
-      </p>
-
-      {/* JP-6 — the money state: a paid card shows the recorded amount + method (never commission);
-          an attended card is waiting to be charged. */}
-      {card.stage === "paid" ? (
-        <p className="truncate text-[0.6875rem] font-medium text-[var(--success)]" title={card.paidMethod ?? undefined}>
-          {card.paidAmount ? `Pagó ${priceLabelCOP(card.paidAmount)}${card.paidMethod ? ` · ${card.paidMethod}` : ""}` : "Pagado"}
+      {/* The stage's "next thing to know": origin (Lead) / qualification (Calificado) / appointment (Reservó). */}
+      {stageLine ? (
+        <p className="truncate text-[0.6875rem] text-muted" title={card.stage === "lead" ? originTitleOf(card) : stageLine}>
+          {stageLine}
         </p>
-      ) : card.stage === "attended" ? (
-        <p className="text-[0.6875rem] font-medium text-warn">Cobro pendiente</p>
       ) : null}
 
-      {/* Line 3 — who spoke last + when. Customer last → calm emphasis (warn), this one needs a reply. */}
-      {card.lastMessageAt ? (
-        <p className={`truncate text-[0.625rem] ${spoke?.emphasize ? "font-medium text-warn" : "text-faint"}`}>
-          {spoke?.label ?? "Mensaje"} ·{" "}
-          <span title={formatStampFull(new Date(card.lastMessageAt))}>{relativeAgeShort(card.lastMessageAt, now)}</span>
+      {/* Lead: a preview of the customer's last message. */}
+      {card.stage === "lead" && card.lastMessageText ? (
+        <p className="truncate text-[0.625rem] text-faint" title={card.lastMessageText}>
+          «{card.lastMessageText}»
+        </p>
+      ) : null}
+
+      {/* Money state: Asistió waits to be charged (list value); Pagó shows the amount + method. */}
+      {card.stage === "attended" ? (
+        <p className="truncate text-[0.6875rem] font-medium text-warn">
+          Cobro pendiente{card.apptListAmount ? ` · ${priceLabelCOP(card.apptListAmount)} (lista)` : ""}
+        </p>
+      ) : card.stage === "paid" ? (
+        <p className="truncate text-[0.6875rem] font-medium text-[var(--success)]" title={card.paidMethod ?? undefined}>
+          {card.paidAmount ? `Pagó ${priceLabelCOP(card.paidAmount)}${card.paidMethod ? ` · ${card.paidMethod}` : ""}` : "Pagado"}
         </p>
       ) : null}
 

@@ -190,7 +190,9 @@ export default async function ClientContactsPage({
   const firstShown = total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1;
   const lastShown = (page - 1) * PAGE_SIZE + contacts.length;
 
-  const visibleColumns = parseColumns(cols);
+  // JP-7: the "Pipeline" column is visible BY DEFAULT. Absent ?cols ⇒ show pipeline; the toolbar
+  // writes the "none" sentinel when the user clears every optional column, so it stays hidden.
+  const visibleColumns = cols == null ? parseColumns("pipeline") : parseColumns(cols);
   const base = `/clients/${client.id}/contacts`;
   const fromQS = from ? `?from=${encodeURIComponent(from)}` : "";
   const filtered = Boolean(search || stageFilter || ownerFilter || taskFilter || originGroup || campaignFilter);

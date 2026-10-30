@@ -431,7 +431,9 @@ export function ContactsOverflowMenu({
 
   const toggleColumn = (key: ContactColumnKey) => {
     const next = visibleColumns.includes(key) ? visibleColumns.filter((k) => k !== key) : [...visibleColumns, key];
-    apply({ cols: next.join(",") }, { keepPaging: true });
+    // JP-7: "none" (not an empty param) when the user clears every column, so it is distinguishable
+    // from "never chosen" — which defaults to the Pipeline column (see the contacts page).
+    apply({ cols: next.length ? next.join(",") : "none" }, { keepPaging: true });
   };
 
   // The export URL describes the FILTERED SET, not the current page.

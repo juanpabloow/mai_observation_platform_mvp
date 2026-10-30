@@ -568,14 +568,17 @@ test('contacts: Columns is presentational — it writes ?cols= and touches nothi
   // only Buscar, Filtrar and the primary stayed visible. The URL contract is
   // unchanged — that is the part that matters.
   assert.ok(toolbar.includes('export function ContactsOverflowMenu'), 'the overflow menu is the control that hosts Columns');
-  assert.ok(toolbar.includes('apply({ cols: next.join(",") }, { keepPaging: true })'), 'Columns only writes ?cols=');
+  // JP-7: still writes ONLY ?cols= — now with a "none" sentinel when the user clears every optional
+  // column, so "cleared" stays distinct from "never chosen" (which defaults to the Pipeline column).
+  assert.ok(toolbar.includes('apply({ cols: next.length ? next.join(",") : "none" }, { keepPaging: true })'), 'Columns only writes ?cols= (with a none sentinel)');
   assert.ok(
     read(CONTACTS_PAGE).includes('visibleColumns={visibleColumns}'),
     'and the page still hands it the parsed columns',
   );
   const page = read(CONTACTS_PAGE);
   // `cols` must never be forwarded into a query — it is parsed for rendering only.
-  assert.ok(page.includes('const visibleColumns = parseColumns(cols)'), 'cols is parsed for rendering');
+  // JP-7: absent ?cols defaults to the Pipeline column (still parsed, never a filter).
+  assert.ok(page.includes('parseColumns(cols)') && page.includes('parseColumns("pipeline")'), 'cols is parsed for rendering, with Pipeline as the default');
   assert.ok(!/filters\s*=\s*{[^}]*cols/s.test(page), 'cols never enters the filter set');
 });
 
