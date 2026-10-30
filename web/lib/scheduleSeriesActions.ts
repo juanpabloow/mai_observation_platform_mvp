@@ -11,6 +11,7 @@ import { getSiteById } from "@worker/db/repositories/scheduling/sites.js";
 import { getStaffById, listStaff } from "@worker/db/repositories/scheduling/staff.js";
 import { listActiveAppointmentsOverlapping } from "@worker/db/repositories/scheduling/appointments.js";
 import { recordSchedulingEvent } from "@worker/db/repositories/scheduling/events.js";
+import { occupancyOnSiteScheduleChanged } from "@worker/occupancy/hooks.js";
 import {
   applySeriesOps,
   getOwnerHoursForUpdate,
@@ -326,6 +327,8 @@ async function finishWrite(
     eventType: "schedule.changed",
     payload: { kind: lock.kind, staff_id: lock.staffId },
   });
+  // JP-8: breaks/blocks/hours of this site changed → recompute the window for its team (fail-safe).
+  await occupancyOnSiteScheduleChanged(g.tenantId, g.site.id);
   revalidate(clientId);
 }
 
@@ -633,6 +636,7 @@ export async function adoptLegacyBreakAction(input: {
       return created[`g${split.gaps.indexOf(gap)}`];
     });
     if (!id) return { ok: false, error: "Ese horario cambió mientras lo editabas. Vuelve a abrirlo." };
+    await occupancyOnSiteScheduleChanged(g.tenantId, g.site.id); // JP-8 (fail-safe)
     revalidate(input.clientId);
     return { ok: true, seriesId: id };
   } catch {
@@ -789,6 +793,8 @@ export async function saveWeeklyScheduleAction(input: WeeklyScheduleInput): Prom
     return { ok: false, error: RETRY };
   }
   await recordSchedulingEvent({ tenantId: g.tenantId, clientId: input.clientId, siteId: g.site.id, eventType: "schedule.changed", payload: { kind: "hours", staff_id: staffId } });
+  // JP-8: weekly hours + usual breaks changed → recompute the window for this site's team (fail-safe).
+  await occupancyOnSiteScheduleChanged(g.tenantId, g.site.id);
   revalidate(input.clientId);
   return { ok: true, written: true, summary, affected, preexisting };
 }

@@ -6,6 +6,7 @@ import { startAttributionReconciliation, stopAttributionReconciliation } from '.
 import { startCoverReconcile, stopCoverReconcile } from './attribution/coverReconcile.js';
 import { startAutoLost, stopAutoLost } from './pipeline/autoLost.js';
 import { startAutoReturn, stopAutoReturn } from './handoff/autoReturn.js';
+import { startOccupancyNightly, startOccupancyRollup, stopOccupancyNightly, stopOccupancyRollup } from './occupancy/rollup.js';
 
 /**
  * Mask the password embedded in a PostgreSQL connection string while keeping
@@ -53,6 +54,13 @@ startAutoLost();
 // inbox_settings.auto_return_minutes. Fail-safe + re-checks each candidate under its row lock.
 // Default 2-min interval (HANDOFF_AUTORETURN_INTERVAL_SECONDS).
 startAutoReturn();
+// JP-8 §1: the staff-occupancy rollup shares THIS worker too. The DRAIN job recomputes the (staff,
+// day) rows that appointment/payment/schedule writes enqueued (default 2-min, OCCUPANCY_ROLLUP_
+// INTERVAL_SECONDS); the NIGHTLY job re-enqueues the rolling window [−35, +30] (default 24-h,
+// OCCUPANCY_NIGHTLY_INTERVAL_SECONDS, plus once at boot). Both fail-safe (an error is counted, never
+// thrown) and only ever rebuild a DERIVED cache, so they never affect a booking or a payment.
+startOccupancyRollup();
+startOccupancyNightly();
 // El barrido de eliminaciones de Reuniones NO va aquí: tiene su propio
 // entrypoint (`src/maintenanceMain.ts`) y su propio servicio. Este proceso es
 // el de la ingesta de n8n, y mezclarlos haría que reiniciar uno reiniciara el
@@ -72,6 +80,8 @@ async function shutdown(signal: NodeJS.Signals): Promise<void> {
     await stopCoverReconcile();
     stopAutoLost();
     stopAutoReturn();
+    stopOccupancyRollup();
+    stopOccupancyNightly();
     await closePool();
   } catch (err) {
     logger.error({ err }, 'error during shutdown');
