@@ -216,6 +216,10 @@ export interface BoardFilters {
   status?: OpportunityStatus;
   /** Include opportunities whose origin ad is a TEST ad (excluded by default, like everywhere). */
   includeTest?: boolean;
+  /** JP-7: free-text search over the contact's name / phone / @username / channel id. */
+  search?: string;
+  /** JP-7: the contact's assigned owner — a user id, or 'unassigned' for no owner. */
+  owner?: string;
   limit?: number;
 }
 
@@ -241,6 +245,17 @@ export async function listBoardOpportunities(tenantId: string, clientId: string,
   if (filters.adId) {
     params.push(filters.adId);
     where.push(`ft.ad_id = $${params.length}`);
+  }
+  if (filters.search && filters.search.trim()) {
+    params.push(`%${filters.search.trim()}%`);
+    const i = params.length;
+    where.push(`(ct.name ILIKE $${i} OR ct.phone_e164 ILIKE $${i} OR ct.whatsapp_username ILIKE $${i} OR ct.channel_user_id ILIKE $${i})`);
+  }
+  if (filters.owner === "unassigned") {
+    where.push(`ct.assigned_to IS NULL`);
+  } else if (filters.owner) {
+    params.push(filters.owner);
+    where.push(`ct.assigned_to = $${params.length}`);
   }
   if (filters.openedFrom) {
     params.push(filters.openedFrom);

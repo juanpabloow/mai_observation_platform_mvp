@@ -2,7 +2,7 @@ import { strict as assert } from 'node:assert';
 import { randomUUID } from 'node:crypto';
 import { after, test } from 'node:test';
 import { query } from '../../src/db/client.js';
-import { cleanupTenant, closeDb, seedContact, seedScenario, seedWorkflow } from './fixtures.js';
+import { cleanupTenant, closeDb, seedContact, seedMember, seedScenario, seedWorkflow } from './fixtures.js';
 import { getOrCreateConversation } from '../../src/db/repositories/handoff.js';
 import {
   getInboxContactPipeline,
@@ -16,7 +16,12 @@ import {
  * awaiting-reply queue lists exactly the opportunities whose customer spoke last; isolation holds.
  */
 const tenants: string[] = [];
-after(async () => { for (const t of tenants) await cleanupTenant(t); await closeDb(); });
+const users: string[] = [];
+after(async () => {
+  for (const t of tenants) await cleanupTenant(t);
+  if (users.length) await query(`DELETE FROM "user" WHERE id = ANY($1::text[])`, [users]);
+  await closeDb();
+});
 const one = async <T>(sql: string, p: unknown[]): Promise<T> => (await query<T>(sql, p)).rows[0];
 
 async function fixture() {
@@ -128,4 +133,28 @@ test('getInboxContactPipeline: ad origin + opportunity stage; listContactOpportu
   assert.equal(opps.length, 2);
   assert.equal(opps[0].status, 'open', 'newest first = the current open sale');
   assert.equal(opps[1].status, 'lost');
+});
+
+test('JP-7 board filters: search (name / phone / @username) and owner (incl. unassigned)', async () => {
+  const s = await fixture();
+  const owner = await seedMember(s.tenantId);
+  users.push(owner);
+  const c1 = await seedContact(s.tenantId, s.clientId, { name: 'Wilson Cuellar' });
+  await query(`UPDATE contacts SET phone_e164='+573001234567', whatsapp_username='wilson99', assigned_to=$2 WHERE id=$1`, [c1, owner]);
+  const c2 = await seedContact(s.tenantId, s.clientId, { name: 'Marcela Ruiz' });
+  await seedOpp(s, { contactId: c1, stage: 'booked' });
+  await seedOpp(s, { contactId: c2, stage: 'lead' });
+
+  const ids = async (f: Parameters<typeof listBoardOpportunities>[2]) => (await listBoardOpportunities(s.tenantId, s.clientId, f)).map((x) => x.contact_id).sort();
+  assert.deepEqual(await ids({ search: 'wilson' }), [c1], 'by name');
+  assert.deepEqual(await ids({ search: '1234567' }), [c1], 'by phone fragment');
+  assert.deepEqual(await ids({ search: 'wilson99' }), [c1], 'by @username');
+  assert.deepEqual(await ids({ search: 'zzz-no-match' }), [], 'no match');
+  assert.deepEqual(await ids({ owner }), [c1], 'owner filter');
+  assert.deepEqual(await ids({ owner: 'unassigned' }), [c2], 'unassigned bucket');
+
+  // The JP-7 per-card fields are projected in one query (no N+1): owner + the new columns exist.
+  const wilson = (await listBoardOpportunities(s.tenantId, s.clientId, { search: 'wilson' }))[0];
+  assert.equal(wilson.owner_user_id, owner);
+  assert.ok('appt_tz' in wilson && 'last_message_text' in wilson && 'qualification_service' in wilson);
 });

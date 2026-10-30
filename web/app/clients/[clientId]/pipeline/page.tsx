@@ -8,6 +8,7 @@ import {
   type OpportunityStatus,
 } from "@worker/db/repositories/pipeline.js";
 import { listAdsWithStats, listCampaignsWithStats } from "@worker/db/repositories/attribution.js";
+import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
 import { isOriginGroupKey, kindsForGroup } from "@/lib/originDisplay";
 import { displayContactName } from "@/lib/contactName";
 import { can } from "@/lib/access";
@@ -40,10 +41,14 @@ export default async function PipelinePage({
   // payload carries no totals at all (see `moneyTotals` below).
   const canViewRevenue = can(scope, "analytics.view", client.id);
 
-  const [campaigns, ads] = await Promise.all([
+  const [campaigns, ads, members] = await Promise.all([
     listCampaignsWithStats(scope.tenantId, client.id),
     listAdsWithStats(scope.tenantId, client.id), // non-test by default
+    listMembersForTenant(scope.tenantId),
   ]);
+  // Owner options for the filter: real members of the tenant (name, else email). ONE query, mapped.
+  const ownerName = new Map(members.map((m) => [m.user_id, m.name ?? m.email]));
+  const ownerOptions = members.map((m) => ({ id: m.user_id, label: m.name ?? m.email }));
 
   // Validate every facet (unknown → no filter), mirroring the contacts list.
   const originGroup = isOriginGroupKey(sp.origin) ? sp.origin : undefined;
@@ -53,8 +58,11 @@ export default async function PipelinePage({
   const openedFrom = sp.from && DAY.test(sp.from) ? `${sp.from}T00:00:00.000Z` : undefined;
   const openedTo = sp.to && DAY.test(sp.to) ? `${sp.to}T23:59:59.999Z` : undefined;
   const statusFilter = sp.status && STATUSES.has(sp.status as OpportunityStatus) ? (sp.status as OpportunityStatus) : undefined;
+  const search = sp.q?.trim() || undefined;
+  // Only a real member (or the "unassigned" sentinel) is a valid owner filter.
+  const ownerFilter = sp.owner === "unassigned" ? "unassigned" : sp.owner && ownerName.has(sp.owner) ? sp.owner : undefined;
 
-  const filters: BoardFilters = { originKinds, campaignId, adId, openedFrom, openedTo };
+  const filters: BoardFilters = { originKinds, campaignId, adId, openedFrom, openedTo, search, owner: ownerFilter };
   const [boardRows, lostRows, queueRows] = await Promise.all([
     // The board columns = everything NOT lost (the status filter narrows further if set).
     listBoardOpportunities(scope.tenantId, client.id, { ...filters, status: statusFilter }),
@@ -87,6 +95,7 @@ export default async function PipelinePage({
       queue={queue}
       campaigns={campaigns.map((c) => ({ id: c.id, name: c.name }))}
       ads={ads.map((a) => ({ id: a.id, label: a.name || a.headline || a.external_id }))}
+      owners={ownerOptions}
       filters={{
         origin: originGroup ?? "",
         campaign: campaignId ?? "",
@@ -94,6 +103,8 @@ export default async function PipelinePage({
         from: sp.from && DAY.test(sp.from) ? sp.from : "",
         to: sp.to && DAY.test(sp.to) ? sp.to : "",
         status: statusFilter ?? "",
+        q: search ?? "",
+        owner: ownerFilter ?? "",
       }}
     />
   );

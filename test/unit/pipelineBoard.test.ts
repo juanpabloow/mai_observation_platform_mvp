@@ -302,3 +302,18 @@ test('JP-7 the panel renders the funnel, gated column money, stage card lines, s
   assert.ok(PANEL.includes('ownerInitials') && PANEL.includes('Dueño:'), 'the owner avatar + title');
   assert.ok(PANEL.includes('Motivos de pérdida') && PANEL.includes('LOST_REASON_LABEL[reason]'), 'the Perdidos loss-reason header');
 });
+
+test('JP-7 part 2: the panel offers search, owner filter, "waiting" toggle, and a Tablero/Lista view', () => {
+  // Search is a form that writes ?q=; owner is a select (incl. "Sin dueño"); waiting is a client lens.
+  assert.ok(PANEL.includes("apply({ q: searchDraft.trim() })"), 'search submits ?q=');
+  assert.ok(PANEL.includes('label="Dueño"') && PANEL.includes('"unassigned"'), 'owner filter incl. unassigned');
+  assert.ok(PANEL.includes('Solo los que esperan respuesta') && PANEL.includes('c.spokeLast === "customer"'), 'waiting lens filters to customer-last');
+  // View toggle persisted per user (localStorage via an external store — no setState-in-effect).
+  assert.ok(PANEL.includes('useSyncExternalStore(subscribeView') && PANEL.includes('localStorage.setItem(VIEW_KEY'), 'the Tablero/Lista choice is remembered per user, SSR-safe');
+  // List view: a sortable table with the required columns.
+  assert.ok(PANEL.includes('function BoardListView'), 'the list view exists');
+  for (const col of ['Contacto', 'Etapa', 'Origen / anuncio', 'Servicio', 'Cita', 'En etapa', 'Último mensaje', 'Dueño']) {
+    assert.ok(PANEL.includes(`label="${col}"`) || PANEL.includes(`>${col}<`), `list column: ${col}`);
+  }
+  assert.ok(PANEL.includes('aria-sort='), 'columns are sortable (aria-sort)');
+});

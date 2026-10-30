@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PageShell } from "@/components/ui/PageShell";
@@ -48,6 +48,8 @@ interface Filters {
   from: string;
   to: string;
   status: string;
+  q: string;
+  owner: string;
 }
 
 const BTN =
@@ -60,6 +62,37 @@ const INPUT =
   "h-[36px] rounded-lg border border-line-strong bg-surface px-2.5 text-xs text-foreground outline-none transition focus:border-foreground";
 
 type Tab = "board" | "perdidos" | "cola";
+type View = "board" | "list";
+
+/** JP-7: the Tablero/Lista choice, remembered PER USER (localStorage) — SSR-safe via an external
+ *  store, so there is no hydration mismatch and no setState-in-effect. */
+const VIEW_KEY = "mai.pipelineView";
+const viewListeners = new Set<() => void>();
+function subscribeView(cb: () => void) {
+  viewListeners.add(cb);
+  return () => void viewListeners.delete(cb);
+}
+function readView(): View {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "list" ? "list" : "board";
+  } catch {
+    return "board";
+  }
+}
+function writeView(v: View) {
+  try {
+    localStorage.setItem(VIEW_KEY, v);
+  } catch {
+    /* private mode: the choice just won't persist */
+  }
+  viewListeners.forEach((cb) => cb());
+}
+
+type SortKey = "name" | "stage" | "time" | "appt" | "lastMsg" | "owner";
+interface Sort {
+  key: SortKey;
+  dir: "asc" | "desc";
+}
 
 export function PipelinePanel({
   clientId,
@@ -70,6 +103,7 @@ export function PipelinePanel({
   queue,
   campaigns,
   ads,
+  owners,
   filters,
 }: {
   clientId: string;
@@ -81,6 +115,8 @@ export function PipelinePanel({
   queue: QueueItem[];
   campaigns: Array<{ id: string; name: string }>;
   ads: Array<{ id: string; label: string }>;
+  /** JP-7: the tenant's members, for the owner filter. */
+  owners: Array<{ id: string; label: string }>;
   filters: Filters;
 }) {
   const router = useRouter();
@@ -91,6 +127,10 @@ export function PipelinePanel({
   const [pending, startTransition] = useTransition();
   const [modal, setModal] = useState<null | { kind: "qualify" | "lost"; card: BoardCard }>(null);
   const [lossFilter, setLossFilter] = useState<BoardCard["lostReason"]>(null);
+  const [searchDraft, setSearchDraft] = useState(filters.q);
+  const [onlyWaiting, setOnlyWaiting] = useState(false);
+  const view = useSyncExternalStore(subscribeView, readView, () => "board");
+  const [sort, setSort] = useState<Sort>({ key: "time", dir: "desc" });
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
     setError(null);
@@ -114,12 +154,14 @@ export function PipelinePanel({
     router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
 
-  const grouped = groupByStage(sortByActivityDesc(cards));
+  // JP-7: the "waiting" lens filters the board view to sales where the CUSTOMER spoke last.
+  const shownCards = onlyWaiting ? cards.filter((c) => c.spokeLast === "customer") : cards;
+  const grouped = groupByStage(sortByActivityDesc(shownCards));
   const now = new Date();
-  const filtered = Boolean(filters.origin || filters.campaign || filters.ad || filters.from || filters.to || filters.status);
-  // JP-7: the funnel (counts + conversion, from the filtered cards) and the per-column money that a
+  const filtered = Boolean(filters.origin || filters.campaign || filters.ad || filters.from || filters.to || filters.status || filters.q || filters.owner);
+  // JP-7: the funnel (counts + conversion, from the shown cards) and the per-column money that a
   // revenue viewer sees in the headers + funnel (null for a Setter — the payload carried no totals).
-  const funnel = funnelSteps(cards);
+  const funnel = funnelSteps(shownCards);
   const columnMoney: Partial<Record<BoardCard["stage"], number>> = moneyTotals
     ? { booked: moneyTotals.bookedExpected, attended: moneyTotals.attendedPending, paid: moneyTotals.paidCollected }
     : {};
@@ -156,6 +198,17 @@ export function PipelinePanel({
         <>
           <PageShell grow={false} clip={false}>
             <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 sm:px-4">
+              {/* JP-7: search (name · phone · @usuario). A form → Enter applies ?q=. */}
+              <form onSubmit={(e) => { e.preventDefault(); apply({ q: searchDraft.trim() }); }} className="flex items-center">
+                <input
+                  type="search"
+                  value={searchDraft}
+                  onChange={(e) => setSearchDraft(e.target.value)}
+                  placeholder="Buscar nombre, teléfono, @usuario"
+                  aria-label="Buscar en el pipeline"
+                  className={`${INPUT} w-[13rem]`}
+                />
+              </form>
               <Select label="Origen" value={filters.origin} onChange={(v) => apply({ origin: v })} options={[{ value: "", label: "Cualquier origen" }, ...ORIGIN_GROUPS.map((g) => ({ value: g.key, label: g.label }))]} />
               {campaigns.length ? (
                 <Select label="Campaña" value={filters.campaign} onChange={(v) => apply({ campaign: v })} options={[{ value: "", label: "Cualquier campaña" }, ...campaigns.map((c) => ({ value: c.id, label: c.name }))]} />
@@ -164,6 +217,17 @@ export function PipelinePanel({
                 <Select label="Anuncio" value={filters.ad} onChange={(v) => apply({ ad: v })} options={[{ value: "", label: "Cualquier anuncio" }, ...ads.map((a) => ({ value: a.id, label: a.label }))]} />
               ) : null}
               <Select label="Estado" value={filters.status} onChange={(v) => apply({ status: v })} options={[{ value: "", label: "Abiertas y ganadas" }, { value: "open", label: "Abiertas" }, { value: "won", label: "Ganadas" }]} />
+              {owners.length ? (
+                <Select label="Dueño" value={filters.owner} onChange={(v) => apply({ owner: v })} options={[{ value: "", label: "Cualquier dueño" }, { value: "unassigned", label: "Sin dueño" }, ...owners.map((o) => ({ value: o.id, label: o.label }))]} />
+              ) : null}
+              <button
+                type="button"
+                aria-pressed={onlyWaiting}
+                onClick={() => setOnlyWaiting((v) => !v)}
+                className={`inline-flex h-[36px] items-center rounded-lg border px-2.5 text-xs transition ${onlyWaiting ? "border-warn bg-warn-soft text-warn" : "border-line-strong text-muted hover:bg-subtle"}`}
+              >
+                Solo los que esperan respuesta
+              </button>
               <label className="flex items-center gap-1.5 text-xs text-muted">
                 Abierta desde
                 <input type="date" value={filters.from} onChange={(e) => apply({ from: e.target.value })} aria-label="Abierta desde" className={INPUT} />
@@ -172,11 +236,16 @@ export function PipelinePanel({
                 hasta
                 <input type="date" value={filters.to} onChange={(e) => apply({ to: e.target.value })} aria-label="Abierta hasta" className={INPUT} />
               </label>
-              {filtered ? (
-                <button type="button" className={GHOST} onClick={() => apply({ origin: "", campaign: "", ad: "", from: "", to: "", status: "" })}>
+              {filtered || onlyWaiting ? (
+                <button type="button" className={GHOST} onClick={() => { setSearchDraft(""); setOnlyWaiting(false); apply({ origin: "", campaign: "", ad: "", from: "", to: "", status: "", q: "", owner: "" }); }}>
                   Quitar filtros
                 </button>
               ) : null}
+              {/* JP-7: Tablero / Lista — remembered per user. */}
+              <div className="ml-auto flex items-center gap-0.5 rounded-lg bg-chip p-0.5" role="group" aria-label="Vista">
+                <button type="button" aria-pressed={view === "board"} onClick={() => writeView("board")} className={`u-focus rounded-md px-2.5 py-1 text-xs transition ${view === "board" ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted hover:text-foreground"}`}>Tablero</button>
+                <button type="button" aria-pressed={view === "list"} onClick={() => writeView("list")} className={`u-focus rounded-md px-2.5 py-1 text-xs transition ${view === "list" ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted hover:text-foreground"}`}>Lista</button>
+              </div>
             </div>
           </PageShell>
 
@@ -207,10 +276,14 @@ export function PipelinePanel({
             </div>
           </PageShell>
 
-          {/* The board FILLS the height below the filters and never grows the page: the row is
-              flex-1 min-h-0 and scrolls horizontally; each column stretches to full height and
-              scrolls its OWN cards (overflow-y), with its header pinned at the top. Columns keep a
-              comfortable fixed width and scroll-snap when they don't fit (narrow / phone). */}
+          {/* JP-7: the same filtered set, as a kanban (Tablero) or a sortable table (Lista). */}
+          {view === "list" ? (
+            <BoardListView cards={shownCards} clientId={clientId} now={now} sort={sort} onSort={setSort} />
+          ) : (
+          /* The board FILLS the height below the filters and never grows the page: the row is
+             flex-1 min-h-0 and scrolls horizontally; each column stretches to full height and scrolls
+             its OWN cards (overflow-y), header pinned. Columns scroll-snap when they don't fit. Capped
+             at the existing 500-row board limit (listBoardOpportunities) — long columns scroll. */
           <PageShell ariaLabel="Tablero de pipeline" className="overflow-hidden">
             <div className="flex min-h-0 flex-1 snap-x snap-mandatory gap-3 overflow-x-auto p-3 sm:p-4">
               {BOARD_STAGES.map((col) => {
@@ -243,6 +316,7 @@ export function PipelinePanel({
               })}
             </div>
           </PageShell>
+          )}
         </>
       ) : tab === "perdidos" ? (
         <PageShell className="overflow-y-auto" ariaLabel="Oportunidades perdidas">
@@ -426,6 +500,90 @@ function OppCard({ clientId, card, now, pending, onQualify, onUnqualify, onLose 
         </Menu>
       </div>
     </article>
+  );
+}
+
+/** A sortable list-view header cell. Toggles direction on the active column; a fresh column opens
+ *  ascending for text (name/owner/stage) and descending for recency (time/appt/last message). */
+function SortTh({ sort, onSort, k, label, className = "" }: { sort: Sort; onSort: (s: Sort) => void; k: SortKey; label: string; className?: string }) {
+  const active = sort.key === k;
+  const toggle = () => onSort(active ? { key: k, dir: sort.dir === "asc" ? "desc" : "asc" } : { key: k, dir: k === "name" || k === "owner" || k === "stage" ? "asc" : "desc" });
+  return (
+    <th scope="col" aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"} className={`whitespace-nowrap px-2.5 py-1.5 text-left font-medium ${className}`}>
+      <button type="button" onClick={toggle} className="u-focus inline-flex items-center gap-1 hover:text-foreground">
+        {label}
+        <span aria-hidden className="text-[0.625rem] text-faint">{active ? (sort.dir === "asc" ? "▲" : "▼") : ""}</span>
+      </button>
+    </th>
+  );
+}
+
+/**
+ * JP-7 LIST VIEW — the same filtered opportunities as a sortable table, sharing the board's filters.
+ * Columns: contact · stage · origin/ad · service interested · appointment · time in stage · last
+ * message · owner. Horizontal scroll keeps it usable at ~390px; the whole row is a link to the
+ * contact record. The sort choice lives in the parent (so it survives a board/list toggle).
+ */
+function BoardListView({ cards, clientId, now, sort, onSort }: {
+  cards: BoardCard[];
+  clientId: string;
+  now: Date;
+  sort: Sort;
+  onSort: (s: Sort) => void;
+}) {
+  const STAGE_ORDER: Record<BoardCard["stage"], number> = { lead: 0, qualified: 1, booked: 2, attended: 3, paid: 4 };
+  const key = (c: BoardCard): string | number => {
+    switch (sort.key) {
+      case "name": return c.name.toLocaleLowerCase("es");
+      case "stage": return STAGE_ORDER[c.stage];
+      case "appt": return c.apptStartAt ?? "";
+      case "lastMsg": return c.lastMessageAt ?? "";
+      case "owner": return (c.owner?.name ?? "").toLocaleLowerCase("es");
+      default: return c.stageSince ?? ""; // "time"
+    }
+  };
+  const sorted = [...cards].sort((a, b) => {
+    const av = key(a), bv = key(b);
+    const cmp = av < bv ? -1 : av > bv ? 1 : a.id < b.id ? -1 : 1;
+    return sort.dir === "asc" ? cmp : -cmp;
+  });
+  return (
+    <PageShell ariaLabel="Lista de oportunidades" className="overflow-auto">
+      {cards.length === 0 ? (
+        <p className="px-4 py-10 text-center text-xs text-muted">Sin oportunidades con estos filtros.</p>
+      ) : (
+        <table className="w-full min-w-[56rem] border-collapse text-xs">
+          <thead className="sticky top-0 z-10 bg-surface text-muted shadow-[0_1px_0_var(--line)]">
+            <tr>
+              <SortTh sort={sort} onSort={onSort} k="name" label="Contacto" className="pl-4" />
+              <SortTh sort={sort} onSort={onSort} k="stage" label="Etapa" />
+              <th scope="col" className="whitespace-nowrap px-2.5 py-1.5 text-left font-medium">Origen / anuncio</th>
+              <th scope="col" className="whitespace-nowrap px-2.5 py-1.5 text-left font-medium">Servicio</th>
+              <SortTh sort={sort} onSort={onSort} k="appt" label="Cita" />
+              <SortTh sort={sort} onSort={onSort} k="time" label="En etapa" />
+              <SortTh sort={sort} onSort={onSort} k="lastMsg" label="Último mensaje" />
+              <SortTh sort={sort} onSort={onSort} k="owner" label="Dueño" className="pr-4" />
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((c) => (
+              <tr key={c.id} className="relative border-t border-line-soft hover:bg-subtle/60">
+                <td className="max-w-[12rem] truncate px-2.5 py-2 pl-4">
+                  <Link href={`/clients/${clientId}/contacts/${c.contactId}`} className="u-focus font-medium text-foreground after:absolute after:inset-0 hover:underline">{c.name}</Link>
+                </td>
+                <td className="whitespace-nowrap px-2.5 py-2 text-muted">{STAGE_LABEL[c.stage]}</td>
+                <td className="max-w-[12rem] truncate px-2.5 py-2 text-muted" title={originTitleOf(c)}>{originLineOf(c)}</td>
+                <td className="max-w-[10rem] truncate px-2.5 py-2 text-muted">{c.qualService ?? "—"}</td>
+                <td className="whitespace-nowrap px-2.5 py-2 text-muted">{apptLineOf(c) ?? "—"}</td>
+                <td className="whitespace-nowrap px-2.5 py-2 text-muted">{c.stageSince ? relativeAgeShort(c.stageSince, now) : "—"}</td>
+                <td className="max-w-[12rem] truncate px-2.5 py-2 text-muted" title={c.lastMessageText ?? undefined}>{c.lastMessageText ?? (c.lastMessageAt ? relativeAgeShort(c.lastMessageAt, now) : "—")}</td>
+                <td className="whitespace-nowrap px-2.5 py-2 pr-4 text-muted">{c.owner?.name ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </PageShell>
   );
 }
 
