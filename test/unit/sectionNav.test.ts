@@ -40,7 +40,7 @@ test('agency on a client with every module: the three blocks of the proposal + M
   assert.deepEqual(shape(agency(ALL)), {
     inbox: ['inbox'],
     contacts: ['contacts', 'pipeline'],
-    agenda: ['calendar', 'team', 'hours'],
+    agenda: ['calendar', 'occupancy', 'team', 'hours'],
     catalog: ['services', 'products', 'promotions'],
     presence: ['booking-page', 'reviews', 'campaigns'],
     results: ['value'],
@@ -49,7 +49,7 @@ test('agency on a client with every module: the three blocks of the proposal + M
     agency: ['modules'],
   });
   const labels = Object.fromEntries(buildSections(agency(ALL)).map((x) => [x.id, x.pages.map((p) => p.label)]));
-  assert.deepEqual(labels.agenda, ['Calendario', 'Equipo', 'Horarios y ausencias']);
+  assert.deepEqual(labels.agenda, ['Calendario', 'Ocupación', 'Equipo', 'Horarios y ausencias']);
   assert.deepEqual(labels.automations, ['Workflows', 'Analíticas técnicas', 'Reuniones']);
   assert.deepEqual(rail(agency(ALL)), [
     'Inbox', 'Contactos', 'Agenda', 'Catálogo', 'Presencia y marketing', 'Dashboard de valor', 'Configuración', 'Automatizaciones', 'Módulos',
@@ -68,10 +68,10 @@ test('groups vs direct links: Agenda is a group whose row opens the calendar; th
     assert.equal(by[id].homeHref, null, `${id} has no page of its own — its row only unfolds`);
   }
   for (const id of ['inbox', 'results', 'agency']) assert.equal(by[id].kind, 'link', id);
-  // Reception: Agenda shrinks to a direct link (one page), never a group with one child.
+  // Reception: Agenda is a group (Calendario + Ocupación); its row opens the calendar.
   const setter = Object.fromEntries(buildSections(member('setter', ALL)).map((x) => [x.id, x]));
-  assert.equal(setter.agenda.kind, 'link');
-  assert.equal(setter.agenda.homeHref, null);
+  assert.equal(setter.agenda.kind, 'group');
+  assert.equal(setter.agenda.homeHref, `/clients/${A}/scheduling/agenda`);
   assert.equal(setter.catalog.kind, 'link');
 });
 
@@ -120,10 +120,11 @@ test('campaigns alone: «Campañas» is a direct link (lone non-home page)', () 
   assert.equal(sec?.href, `/clients/${A}/campaigns`);
 });
 
-test('the lone HOME page keeps the section name (Agenda for a reception login)', () => {
+test('Agenda keeps the section name and its row opens the calendar (reception login)', () => {
   const sec = buildSections(member('setter', ['scheduling'])).find((x) => x.id === 'agenda');
-  assert.deepEqual(sec?.pages.map((p) => p.id), ['calendar']);
+  assert.deepEqual(sec?.pages.map((p) => p.id), ['calendar', 'occupancy']);
   assert.equal(sec?.label, 'Agenda');
+  assert.equal(sec?.homeHref, `/clients/${A}/scheduling/agenda`, 'the row opens Calendario');
 });
 
 test('setter (reception): operations only — no settings, roster, results or automations', () => {
@@ -131,16 +132,16 @@ test('setter (reception): operations only — no settings, roster, results or au
   assert.deepEqual(s, {
     inbox: ['inbox'],
     contacts: ['contacts', 'pipeline'],
-    agenda: ['calendar'],
+    agenda: ['calendar', 'occupancy'],
     catalog: ['products'],
     presence: ['campaigns'],
   });
   assert.deepEqual(rail(member('setter', ALL)), ['Inbox', 'Contactos', 'Agenda', 'Productos', 'Campañas']);
 });
 
-test('staff: their own agenda and nothing else; never on another client', () => {
-  assert.deepEqual(shape(member('staff', ALL)), { agenda: ['calendar'] });
-  assert.deepEqual(rail(member('staff', ALL)), ['Mi agenda']);
+test('staff: their own agenda + their own occupancy, and nothing else; never on another client', () => {
+  assert.deepEqual(shape(member('staff', ALL)), { agenda: ['calendar', 'occupancy'] });
+  assert.deepEqual(rail(member('staff', ALL)), ['Agenda']);
   assert.deepEqual(buildSections(member('staff', ['crm'])), [], 'no scheduling → nothing');
   assert.deepEqual(buildSections(member('staff', ALL, { clientId: OTHER })), [], 'another client → nothing');
 });
@@ -249,9 +250,9 @@ test('a CUSTOM role sees exactly the pages its permissions open — the name pla
     results: ['value'],
     automations: ['tech-analytics'],
   });
-  // «Encargado de sede»: agenda + team + hours, no inbox/contacts/settings.
+  // «Encargado de sede»: agenda (calendar + occupancy) + team + hours, no inbox/contacts/settings.
   assert.deepEqual(shape(custom(['agenda.view', 'agenda.book', 'team.manage', 'hours.manage'])), {
-    agenda: ['calendar', 'team', 'hours'],
+    agenda: ['calendar', 'occupancy', 'team', 'hours'],
   });
   // A permission whose module is NOT contracted shows nothing.
   assert.deepEqual(shape(custom(['inbox.view', 'products.view'], ['crm'])), {});

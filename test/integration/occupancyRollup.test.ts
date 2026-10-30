@@ -170,6 +170,41 @@ test('dirty → drain → recompute converges and is idempotent; an empty day st
   assert.equal(await rowOf(s, s.staffA, sunday), null, 'a fully-closed day (0 capacity, no appts) stores no row');
 });
 
+test('a SITE closure (site-wide exception) removes capacity for every professional that day', async () => {
+  const s = await seedScenario({ enableScheduling: true });
+  tenants.push(s.tenantId);
+  const day = anOpenDay();
+  // A whole-day site closure 00:00–24:00 (staff_id NULL).
+  await query(
+    `INSERT INTO schedule_exceptions (tenant_id, site_id, staff_id, starts_at, ends_at, type) VALUES ($1,$2,NULL,$3,$4,'blocked')`,
+    [s.tenantId, s.siteId, localAt(day, 0), localAt(shiftDay(day, 1), 0)],
+  );
+  await recomputeStaffDays(s.tenantId, s.clientId, s.siteId, s.staffA, [day]);
+  assert.equal(await rowOf(s, s.staffA, day), null, 'site closed all day → 0 capacity → no row');
+});
+
+test('a JP-4 move recomputes BOTH the old and the new (staff, day): minutes follow the appointment', async () => {
+  const s = await seedScenario({ enableScheduling: true });
+  tenants.push(s.tenantId);
+  const isSun = (day: string) => utcToZonedParts(localAt(day, 12), TZ).weekday === 'sun';
+  let d1 = anOpenDay();
+  for (let i = 0; i < 7 && (isSun(d1) || isSun(shiftDay(d1, 1))); i++) d1 = shiftDay(d1, 1); // both days open
+  const d2 = shiftDay(d1, 1);
+  const id = await seedAppt(s, { staffId: s.staffA, startAt: localAt(d1, 10), durationMin: 60, status: 'scheduled' });
+  await recomputeStaffDays(s.tenantId, s.clientId, s.siteId, s.staffA, [d1]);
+  assert.equal((await rowOf(s, s.staffA, d1))!.booked_min, 60, 'booked on day 1 for staffA');
+
+  // Simulate correctAppointmentTime moving it to staffB on day 2 (the engine's moveInterval), then
+  // mark BOTH old and new (staff, day) dirty — exactly what occupancyOnAppointmentMoved does.
+  await query(`UPDATE appointments SET staff_id=$2, start_at=$3, service_end_at=$4, blocked_from=$3, blocked_until=$4 WHERE id=$1`, [id, s.staffB, localAt(d2, 10), localAt(d2, 11)]);
+  await markDirtyForAppointment(s.tenantId, s.clientId, s.siteId, s.staffA, localAt(d1, 10));
+  await markDirtyForAppointment(s.tenantId, s.clientId, s.siteId, s.staffB, localAt(d2, 10));
+  await runOccupancyRollupOnce();
+
+  assert.equal((await rowOf(s, s.staffA, d1))!.booked_min, 0, 'the old day/staff lost the minutes');
+  assert.equal((await rowOf(s, s.staffB, d2))!.booked_min, 60, 'the new day/staff gained them');
+});
+
 test('markDirtyExceptionRange enqueues each local day a time off spans (site-wide hits every bookable pro)', async () => {
   const s = await seedScenario({ enableScheduling: true });
   tenants.push(s.tenantId);

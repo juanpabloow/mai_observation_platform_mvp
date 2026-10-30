@@ -103,3 +103,27 @@ test('totals, free hours, trend series, and the weekday×hour heatmap', async ()
   assert.equal(hm.grid[weekdayMon0(wed)][9].bookedMin, 60);
   assert.equal(hm.grid[weekdayMon0(wed)][10].bookedMin, 60);
 });
+
+test('month aggregation: two days in the same calendar month sum into one month bucket', async () => {
+  const s = await seedScenario({ enableScheduling: true });
+  tenants.push(s.tenantId);
+  // Two open days in the same month but different ISO weeks (≥8 days apart).
+  let d1 = '2026-09-01';
+  for (let i = 0; i < 7; i++) { if (weekdayMon0(d1) !== 6) break; d1 = shiftDay(d1, 1); } // skip Sunday
+  const d2 = shiftDay(d1, 9); // same month (Sep), a later week
+  await seedAppt(s, s.staffA, localAt(d1, 10), 60, 'completed');
+  await seedAppt(s, s.staffA, localAt(d2, 10), 60, 'completed');
+  await recomputeStaffDays(s.tenantId, s.clientId, s.siteId, s.staffA, [d1, d2]);
+
+  const [y, m] = d1.split('-').map(Number);
+  const first = `${y}-${pad(m)}-01`;
+  const last = dayStr(y, m, new Date(Date.UTC(y, m, 0)).getUTCDate());
+  const totals = await occupancyTotalsByStaff(s.tenantId, s.clientId, first, last);
+  assert.equal(totals.find((x) => x.staff_id === s.staffA)!.booked_min, 120, 'the whole month sums both days');
+
+  const series = await occupancySeriesByStaff(s.tenantId, s.clientId, first, last, 'month');
+  const sa = series.filter((x) => x.staff_id === s.staffA);
+  assert.equal(sa.length, 1, 'one month bucket');
+  assert.equal(sa[0].bucket, first, 'the bucket is the first of the month');
+  assert.equal(sa[0].booked_min, 120);
+});
