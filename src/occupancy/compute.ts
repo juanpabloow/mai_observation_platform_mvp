@@ -105,28 +105,27 @@ export function enumerateLocalDays(startDay: string, endDay: string, tz: string)
     .filter((s) => s >= startDay && s <= endDay);
 }
 
-/**
- * Recompute the rollup for one professional on a specific set of local days. Reuses the availability
- * engine (`loadExplainExceptions` + `explainStaffStatus`) for capacity, so the numbers can never
- * diverge from what the bot/booking page offer. Writes a row per non-empty day; deletes an empty one.
- */
-export async function recomputeStaffDays(
+/** The engine inputs for a professional over a set of local days: the site timezone, the available
+ *  shift per day (reused by both the rollup and the heatmap), and the day's appointments bucketed by
+ *  local day. `null` when the source is gone (site/staff deleted or the staff moved sites). */
+export interface StaffDaysLoad {
+  tz: string;
+  shiftByDay: Map<string, Span[]>;
+  apptsByDay: Map<string, OccupancyApptInput[]>;
+}
+
+export async function loadStaffDays(
   tenantId: string,
   clientId: string,
   siteId: string,
   staffId: string,
   days: string[],
-): Promise<void> {
-  if (days.length === 0) return;
+): Promise<StaffDaysLoad | null> {
+  if (days.length === 0) return { tz: 'UTC', shiftByDay: new Map(), apptsByDay: new Map() };
   const uniqueDays = [...new Set(days)].sort();
-
   const site = await getSiteById(tenantId, siteId);
   const staff = await getStaffById(tenantId, staffId);
-  // Source gone (site/staff deleted, or staff moved sites): the day has no capacity here — clear it.
-  if (!site || !staff || staff.site_id !== siteId) {
-    for (const day of uniqueDays) await deleteStaffDayOccupancy({ tenantId, clientId, siteId, staffId, day });
-    return;
-  }
+  if (!site || !staff || staff.site_id !== siteId) return null;
   const tz = site.timezone;
   const from = localMidnight(uniqueDays[0], tz);
   const to = localMidnightAfter(uniqueDays[uniqueDays.length - 1], tz);
@@ -152,6 +151,33 @@ export async function recomputeStaffDays(
     list.push({ startMs: a.start_at.getTime(), endMs: a.service_end_at.getTime(), status: a.status });
     apptsByDay.set(key, list);
   }
+  return { tz, shiftByDay, apptsByDay };
+}
+
+/**
+ * Recompute the rollup for one professional on a specific set of local days. Reuses the availability
+ * engine (`loadExplainExceptions` + `explainStaffStatus`) for capacity, so the numbers can never
+ * diverge from what the bot/booking page offer. Writes a row per non-empty day; deletes an empty one.
+ */
+export async function recomputeStaffDays(
+  tenantId: string,
+  clientId: string,
+  siteId: string,
+  staffId: string,
+  days: string[],
+): Promise<void> {
+  if (days.length === 0) return;
+  const uniqueDays = [...new Set(days)].sort();
+
+  const load = await loadStaffDays(tenantId, clientId, siteId, staffId, uniqueDays);
+  // Source gone (site/staff deleted, or staff moved sites): the day has no capacity here — clear it.
+  if (!load) {
+    for (const day of uniqueDays) await deleteStaffDayOccupancy({ tenantId, clientId, siteId, staffId, day });
+    return;
+  }
+  const { tz, shiftByDay, apptsByDay } = load;
+  const from = localMidnight(uniqueDays[0], tz);
+  const to = localMidnightAfter(uniqueDays[uniqueDays.length - 1], tz);
   const collected = await collectedServiceByDay(tenantId, clientId, staffId, from, to, tz);
 
   for (const day of uniqueDays) {
