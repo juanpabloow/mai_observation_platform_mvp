@@ -32,6 +32,7 @@ export type PageId =
   | "contacts"
   | "pipeline"
   | "calendar"
+  | "occupancy"
   | "team"
   | "hours"
   | "services"
@@ -131,7 +132,19 @@ export function buildSections(ctx: NavContext): NavSection[] {
   // A PROFESSIONAL login: their own agenda and nothing else (unchanged).
   if (staffBound) {
     return forOwnClient && has("scheduling") && p("agenda.view")
-      ? [{ id: "agenda", label: "Mi agenda", block: 1, href: c("/scheduling/agenda"), kind: "link", homeHref: null, pages: [{ id: "calendar", label: "Mi agenda", href: c("/scheduling/agenda") }] }]
+      ? [{
+          id: "agenda",
+          label: "Agenda",
+          block: 1,
+          href: c("/scheduling/agenda"),
+          kind: "group",
+          homeHref: c("/scheduling/agenda"),
+          pages: [
+            { id: "calendar", label: "Mi agenda", href: c("/scheduling/agenda") },
+            // JP-8: a professional reaches their OWN occupancy (the loader shows only their row).
+            { id: "occupancy", label: "Mi ocupación", href: c("/scheduling/ocupacion") },
+          ],
+        }]
       : [];
   }
 
@@ -149,6 +162,7 @@ export function buildSections(ctx: NavContext): NavSection[] {
     ],
     agenda: [
       p("agenda.view") && has("scheduling") && { id: "calendar", label: "Calendario", href: c("/scheduling/agenda") },
+      p("agenda.view") && has("scheduling") && !isDefault && { id: "occupancy", label: "Ocupación", href: c("/scheduling/ocupacion") },
       sched("team.manage") && { id: "team", label: "Equipo", href: c("/scheduling/staff") },
       sched("hours.manage") && { id: "hours", label: "Horarios y ausencias", href: c("/scheduling/hours") },
     ],
@@ -209,6 +223,7 @@ const ROUTES: Array<{ re: RegExp; section: SectionId; page: PageId }> = [
   { re: /^\/contacts\/fields(?:\/|$)/, section: "settings", page: "fields" },
   { re: /^\/pipeline(?:\/|$)/, section: "contacts", page: "pipeline" },
   { re: /^\/contacts(?:\/|$)/, section: "contacts", page: "contacts" },
+  { re: /^\/scheduling\/ocupacion(?:\/|$)/, section: "agenda", page: "occupancy" },
   { re: /^\/scheduling\/agenda(?:\/|$)/, section: "agenda", page: "calendar" },
   { re: /^\/scheduling\/staff(?:\/|$)/, section: "agenda", page: "team" },
   { re: /^\/scheduling\/(?:hours|exceptions|availability)(?:\/|$)/, section: "agenda", page: "hours" },
