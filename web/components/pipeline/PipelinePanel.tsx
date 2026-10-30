@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState, useTransition } from "react";
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore, useTransition } from "react";
 import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PageShell } from "@/components/ui/PageShell";
@@ -14,12 +14,17 @@ import {
   LOST_REASON_LABEL,
   LOST_REASONS,
   STAGE_LABEL,
+  apptLineOf,
+  funnelSteps,
   groupByStage,
+  lossReasonCounts,
   originLineOf,
   originTitleOf,
+  ownerInitials,
+  qualificationLineOf,
   sortByActivityDesc,
-  spokeLastDisplay,
   type BoardCard,
+  type StageTotals,
 } from "@/lib/pipelineBoard";
 import {
   markOpportunityLostAction,
@@ -27,6 +32,7 @@ import {
   reopenOpportunityAction,
   unqualifyOpportunityAction,
 } from "@/lib/pipelineActions";
+import { OpportunityDrawer } from "@/components/pipeline/OpportunityDrawer";
 
 interface QueueItem {
   id: string;
@@ -43,6 +49,8 @@ interface Filters {
   from: string;
   to: string;
   status: string;
+  q: string;
+  owner: string;
 }
 
 const BTN =
@@ -55,24 +63,61 @@ const INPUT =
   "h-[36px] rounded-lg border border-line-strong bg-surface px-2.5 text-xs text-foreground outline-none transition focus:border-foreground";
 
 type Tab = "board" | "perdidos" | "cola";
+type View = "board" | "list";
+
+/** JP-7: the Tablero/Lista choice, remembered PER USER (localStorage) — SSR-safe via an external
+ *  store, so there is no hydration mismatch and no setState-in-effect. */
+const VIEW_KEY = "mai.pipelineView";
+const viewListeners = new Set<() => void>();
+function subscribeView(cb: () => void) {
+  viewListeners.add(cb);
+  return () => void viewListeners.delete(cb);
+}
+function readView(): View {
+  try {
+    return localStorage.getItem(VIEW_KEY) === "list" ? "list" : "board";
+  } catch {
+    return "board";
+  }
+}
+function writeView(v: View) {
+  try {
+    localStorage.setItem(VIEW_KEY, v);
+  } catch {
+    /* private mode: the choice just won't persist */
+  }
+  viewListeners.forEach((cb) => cb());
+}
+
+type SortKey = "name" | "stage" | "time" | "appt" | "lastMsg" | "owner";
+interface Sort {
+  key: SortKey;
+  dir: "asc" | "desc";
+}
 
 export function PipelinePanel({
   clientId,
   clientName,
   cards,
   lostCards,
+  moneyTotals,
   queue,
   campaigns,
   ads,
+  owners,
   filters,
 }: {
   clientId: string;
   clientName: string;
   cards: BoardCard[];
   lostCards: BoardCard[];
+  /** JP-7: per-stage money, present ONLY for a revenue viewer (null for a Setter — enforced server-side). */
+  moneyTotals: StageTotals | null;
   queue: QueueItem[];
   campaigns: Array<{ id: string; name: string }>;
   ads: Array<{ id: string; label: string }>;
+  /** JP-7: the tenant's members, for the owner filter. */
+  owners: Array<{ id: string; label: string }>;
   filters: Filters;
 }) {
   const router = useRouter();
@@ -82,6 +127,13 @@ export function PipelinePanel({
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [modal, setModal] = useState<null | { kind: "qualify" | "lost"; card: BoardCard }>(null);
+  // JP-7 §4: the card whose drawer is open (board / list / Perdidos). Null = no drawer.
+  const [selected, setSelected] = useState<BoardCard | null>(null);
+  const [lossFilter, setLossFilter] = useState<BoardCard["lostReason"]>(null);
+  const [searchDraft, setSearchDraft] = useState(filters.q);
+  const [onlyWaiting, setOnlyWaiting] = useState(false);
+  const view = useSyncExternalStore(subscribeView, readView, () => "board");
+  const [sort, setSort] = useState<Sort>({ key: "time", dir: "desc" });
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
     setError(null);
@@ -90,6 +142,8 @@ export function PipelinePanel({
       if (!r.ok) setError(r.error ?? "No se pudo completar la acción.");
       else {
         setModal(null);
+        // Close the drawer too: the sale just changed stage/status, so its open view is now stale.
+        setSelected(null);
         router.refresh();
       }
     });
@@ -105,9 +159,18 @@ export function PipelinePanel({
     router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
 
-  const grouped = groupByStage(sortByActivityDesc(cards));
+  // JP-7: the "waiting" lens filters the board view to sales where the CUSTOMER spoke last.
+  const shownCards = onlyWaiting ? cards.filter((c) => c.spokeLast === "customer") : cards;
+  const grouped = groupByStage(sortByActivityDesc(shownCards));
   const now = new Date();
-  const filtered = Boolean(filters.origin || filters.campaign || filters.ad || filters.from || filters.to || filters.status);
+  const filtered = Boolean(filters.origin || filters.campaign || filters.ad || filters.from || filters.to || filters.status || filters.q || filters.owner);
+  // JP-7: the funnel (counts + conversion, from the shown cards) and the per-column money that a
+  // revenue viewer sees in the headers + funnel (null for a Setter — the payload carried no totals).
+  const funnel = funnelSteps(shownCards);
+  const columnMoney: Partial<Record<BoardCard["stage"], number>> = moneyTotals
+    ? { booked: moneyTotals.bookedExpected, attended: moneyTotals.attendedPending, paid: moneyTotals.paidCollected }
+    : {};
+  const losses = lossReasonCounts(lostCards);
 
   return (
     <main className="flex min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]">
@@ -140,6 +203,17 @@ export function PipelinePanel({
         <>
           <PageShell grow={false} clip={false}>
             <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 sm:px-4">
+              {/* JP-7: search (name · phone · @usuario). A form → Enter applies ?q=. */}
+              <form onSubmit={(e) => { e.preventDefault(); apply({ q: searchDraft.trim() }); }} className="flex items-center">
+                <input
+                  type="search"
+                  value={searchDraft}
+                  onChange={(e) => setSearchDraft(e.target.value)}
+                  placeholder="Buscar nombre, teléfono, @usuario"
+                  aria-label="Buscar en el pipeline"
+                  className={`${INPUT} w-[13rem]`}
+                />
+              </form>
               <Select label="Origen" value={filters.origin} onChange={(v) => apply({ origin: v })} options={[{ value: "", label: "Cualquier origen" }, ...ORIGIN_GROUPS.map((g) => ({ value: g.key, label: g.label }))]} />
               {campaigns.length ? (
                 <Select label="Campaña" value={filters.campaign} onChange={(v) => apply({ campaign: v })} options={[{ value: "", label: "Cualquier campaña" }, ...campaigns.map((c) => ({ value: c.id, label: c.name }))]} />
@@ -148,6 +222,17 @@ export function PipelinePanel({
                 <Select label="Anuncio" value={filters.ad} onChange={(v) => apply({ ad: v })} options={[{ value: "", label: "Cualquier anuncio" }, ...ads.map((a) => ({ value: a.id, label: a.label }))]} />
               ) : null}
               <Select label="Estado" value={filters.status} onChange={(v) => apply({ status: v })} options={[{ value: "", label: "Abiertas y ganadas" }, { value: "open", label: "Abiertas" }, { value: "won", label: "Ganadas" }]} />
+              {owners.length ? (
+                <Select label="Dueño" value={filters.owner} onChange={(v) => apply({ owner: v })} options={[{ value: "", label: "Cualquier dueño" }, { value: "unassigned", label: "Sin dueño" }, ...owners.map((o) => ({ value: o.id, label: o.label }))]} />
+              ) : null}
+              <button
+                type="button"
+                aria-pressed={onlyWaiting}
+                onClick={() => setOnlyWaiting((v) => !v)}
+                className={`inline-flex h-[36px] items-center rounded-lg border px-2.5 text-xs transition ${onlyWaiting ? "border-warn bg-warn-soft text-warn" : "border-line-strong text-muted hover:bg-subtle"}`}
+              >
+                Solo los que esperan respuesta
+              </button>
               <label className="flex items-center gap-1.5 text-xs text-muted">
                 Abierta desde
                 <input type="date" value={filters.from} onChange={(e) => apply({ from: e.target.value })} aria-label="Abierta desde" className={INPUT} />
@@ -156,18 +241,54 @@ export function PipelinePanel({
                 hasta
                 <input type="date" value={filters.to} onChange={(e) => apply({ to: e.target.value })} aria-label="Abierta hasta" className={INPUT} />
               </label>
-              {filtered ? (
-                <button type="button" className={GHOST} onClick={() => apply({ origin: "", campaign: "", ad: "", from: "", to: "", status: "" })}>
+              {filtered || onlyWaiting ? (
+                <button type="button" className={GHOST} onClick={() => { setSearchDraft(""); setOnlyWaiting(false); apply({ origin: "", campaign: "", ad: "", from: "", to: "", status: "", q: "", owner: "" }); }}>
                   Quitar filtros
                 </button>
               ) : null}
+              {/* JP-7: Tablero / Lista — remembered per user. */}
+              <div className="ml-auto flex items-center gap-0.5 rounded-lg bg-chip p-0.5" role="group" aria-label="Vista">
+                <button type="button" aria-pressed={view === "board"} onClick={() => writeView("board")} className={`u-focus rounded-md px-2.5 py-1 text-xs transition ${view === "board" ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted hover:text-foreground"}`}>Tablero</button>
+                <button type="button" aria-pressed={view === "list"} onClick={() => writeView("list")} className={`u-focus rounded-md px-2.5 py-1 text-xs transition ${view === "list" ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted hover:text-foreground"}`}>Lista</button>
+              </div>
             </div>
           </PageShell>
 
-          {/* The board FILLS the height below the filters and never grows the page: the row is
-              flex-1 min-h-0 and scrolls horizontally; each column stretches to full height and
-              scrolls its OWN cards (overflow-y), with its header pinned at the top. Columns keep a
-              comfortable fixed width and scroll-snap when they don't fit (narrow / phone). */}
+          {/* JP-7 FUNNEL STRIP — a snapshot of the FILTERED set: each step's count + the conversion
+              from the previous step, plus the lost count. Money per step only for a revenue viewer. */}
+          <PageShell grow={false} clip={false}>
+            <div className="flex flex-nowrap items-stretch gap-1.5 overflow-x-auto px-3 py-2.5 sm:px-4" aria-label="Embudo de conversión">
+              {funnel.map((step, i) => (
+                <div key={step.stage} className="flex shrink-0 items-center gap-1.5">
+                  {i > 0 ? (
+                    <span className="u-tnum shrink-0 text-[0.625rem] text-faint" title="Conversión desde el paso anterior">
+                      {step.convPct !== null ? `${step.convPct}%` : "—"}&nbsp;›
+                    </span>
+                  ) : null}
+                  <div className="flex min-w-[84px] flex-col rounded-lg border border-line bg-subtle/40 px-2.5 py-1.5">
+                    <span className="text-[0.625rem] uppercase tracking-wide text-faint">{step.label}</span>
+                    <span className="u-tnum text-sm font-semibold text-foreground">{step.count}</span>
+                    {columnMoney[step.stage] !== undefined ? <span className="u-tnum text-[0.625rem] text-muted">{priceLabelCOP(columnMoney[step.stage]!)}</span> : null}
+                  </div>
+                </div>
+              ))}
+              <div className="flex shrink-0 items-center gap-1.5 pl-1">
+                <button type="button" onClick={() => setTab("perdidos")} className="u-focus flex min-w-[76px] flex-col rounded-lg border border-dashed border-line bg-subtle/30 px-2.5 py-1.5 text-left transition hover:bg-subtle">
+                  <span className="text-[0.625rem] uppercase tracking-wide text-faint">Perdidas</span>
+                  <span className="u-tnum text-sm font-semibold text-muted">{lostCards.length}</span>
+                </button>
+              </div>
+            </div>
+          </PageShell>
+
+          {/* JP-7: the same filtered set, as a kanban (Tablero) or a sortable table (Lista). */}
+          {view === "list" ? (
+            <BoardListView cards={shownCards} now={now} sort={sort} onSort={setSort} onOpen={setSelected} />
+          ) : (
+          /* The board FILLS the height below the filters and never grows the page: the row is
+             flex-1 min-h-0 and scrolls horizontally; each column stretches to full height and scrolls
+             its OWN cards (overflow-y), header pinned. Columns scroll-snap when they don't fit. Capped
+             at the existing 500-row board limit (listBoardOpportunities) — long columns scroll. */
           <PageShell ariaLabel="Tablero de pipeline" className="overflow-hidden">
             <div className="flex min-h-0 flex-1 snap-x snap-mandatory gap-3 overflow-x-auto p-3 sm:p-4">
               {BOARD_STAGES.map((col) => {
@@ -175,7 +296,11 @@ export function PipelinePanel({
                 return (
                   <section key={col.key} aria-label={col.label} className="flex min-h-0 w-[17rem] shrink-0 snap-start flex-col rounded-xl border border-line bg-subtle/40">
                     <header className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-2.5 py-2">
-                      <h2 className="text-xs font-semibold text-foreground">{col.label}</h2>
+                      <div className="flex min-w-0 items-baseline gap-2">
+                        <h2 className="text-xs font-semibold text-foreground">{col.label}</h2>
+                        {/* Revenue viewers only: expected (Reservó) / pending (Asistió) / collected (Pagó). */}
+                        {columnMoney[col.key] !== undefined ? <span className="u-tnum truncate text-[0.625rem] text-muted">{priceLabelCOP(columnMoney[col.key]!)}</span> : null}
+                      </div>
                       <span className="u-mono rounded bg-chip px-1.5 py-0.5 text-[0.625rem] text-faint">{colCards.length}</span>
                     </header>
                     <div className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-2">
@@ -184,6 +309,7 @@ export function PipelinePanel({
                       ) : (
                         colCards.map((c) => (
                           <OppCard key={c.id} clientId={clientId} card={c} now={now} pending={pending}
+                            onOpen={() => setSelected(c)}
                             onQualify={() => setModal({ kind: "qualify", card: c })}
                             onUnqualify={() => run(() => unqualifyOpportunityAction(clientId, c.id))}
                             onLose={() => setModal({ kind: "lost", card: c })}
@@ -196,18 +322,32 @@ export function PipelinePanel({
               })}
             </div>
           </PageShell>
+          )}
         </>
       ) : tab === "perdidos" ? (
         <PageShell className="overflow-y-auto" ariaLabel="Oportunidades perdidas">
           <div className="flex min-h-full flex-col gap-2 p-3 sm:p-4">
+            {/* JP-7: counts per loss reason, each a toggle that filters the list below. */}
+            {losses.length > 0 ? (
+              <div className="flex flex-wrap items-center gap-1.5 pb-1" role="group" aria-label="Motivos de pérdida">
+                <button type="button" onClick={() => setLossFilter(null)} aria-pressed={lossFilter === null} className={`u-focus rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium transition ${lossFilter === null ? "border-foreground bg-foreground text-background" : "border-line text-muted hover:bg-subtle"}`}>
+                  Todas <span className="u-tnum">{lostCards.length}</span>
+                </button>
+                {losses.map(({ reason, count }) => (
+                  <button key={reason} type="button" onClick={() => setLossFilter(lossFilter === reason ? null : reason)} aria-pressed={lossFilter === reason} className={`u-focus rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium transition ${lossFilter === reason ? "border-warn bg-warn-soft text-warn" : "border-line text-muted hover:bg-subtle"}`}>
+                    {LOST_REASON_LABEL[reason]} <span className="u-tnum">{count}</span>
+                  </button>
+                ))}
+              </div>
+            ) : null}
             {lostCards.length === 0 ? (
               <p className="py-10 text-center text-xs text-muted">Ninguna oportunidad perdida con estos filtros.</p>
             ) : (
-              lostCards.map((c) => (
+              lostCards.filter((c) => !lossFilter || c.lostReason === lossFilter).map((c) => (
                 <article key={c.id} className="flex flex-wrap items-center gap-3 rounded-xl border border-line bg-surface px-4 py-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-2">
-                      <Link href={`/clients/${clientId}/contacts/${c.contactId}`} className="truncate text-sm font-medium text-foreground hover:underline">{c.name}</Link>
+                      <button type="button" onClick={() => setSelected(c)} className="u-focus truncate text-left text-sm font-medium text-foreground hover:underline">{c.name}</button>
                       <OriginChip card={c} />
                       {c.lostReason ? <span className="rounded-full bg-warn-soft px-2 py-0.5 text-[0.625rem] font-medium text-warn">{LOST_REASON_LABEL[c.lostReason]}</span> : null}
                     </div>
@@ -251,6 +391,24 @@ export function PipelinePanel({
         </PageShell>
       )}
 
+      {/* JP-7 §4: the opportunity drawer. Keyed on the card id so each selection mounts fresh (its
+          detail is loaded on mount). Actions reuse the same handlers as the card. */}
+      {selected ? (
+        <OpportunityDrawer
+          key={selected.id}
+          clientId={clientId}
+          card={selected}
+          now={now}
+          pending={pending}
+          trapActive={modal === null}
+          onClose={() => setSelected(null)}
+          onQualify={() => setModal({ kind: "qualify", card: selected })}
+          onUnqualify={() => run(() => unqualifyOpportunityAction(clientId, selected.id))}
+          onLose={() => setModal({ kind: "lost", card: selected })}
+          onReopen={() => run(() => reopenOpportunityAction(clientId, selected.id))}
+        />
+      ) : null}
+
       {modal?.kind === "qualify" ? (
         <QualifyModal card={modal.card} pending={pending} onClose={() => setModal(null)} onSubmit={(service, timeframe) => run(() => qualifyOpportunityAction(clientId, modal.card.id, { service, timeframe }))} />
       ) : null}
@@ -277,56 +435,73 @@ function OriginChip({ card }: { card: BoardCard }) {
  * and touch, no hover-only). The whole card body is a stretched link to the contact record; the
  * action controls sit above it. No "Ganada" chip — each column already implies the status.
  */
-function OppCard({ clientId, card, now, pending, onQualify, onUnqualify, onLose }: {
+function OppCard({ clientId, card, now, pending, onOpen, onQualify, onUnqualify, onLose }: {
   clientId: string;
   card: BoardCard;
   now: Date;
   pending: boolean;
+  onOpen: () => void;
   onQualify: () => void;
   onUnqualify: () => void;
   onLose: () => void;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
-  const spoke = spokeLastDisplay(card.spokeLast);
   const isOpen = card.status === "open";
   const contactHref = `/clients/${clientId}/contacts/${card.contactId}`;
+  // JP-7 — the one "next thing to know" line for this stage.
+  const stageLine = card.stage === "lead" ? originLineOf(card) : card.stage === "qualified" ? qualificationLineOf(card) : card.stage === "booked" ? apptLineOf(card) : null;
   return (
-    <article className="relative flex flex-col gap-1 rounded-lg border border-line bg-surface p-2.5 transition-colors hover:border-line-strong focus-within:border-line-strong">
-      {/* Line 1 — name (stretched link → the contact record) + time in stage, right-aligned. */}
+    <article
+      className={`relative flex flex-col gap-1 rounded-lg border bg-surface p-2.5 transition-colors hover:border-line-strong focus-within:border-line-strong ${card.stale ? "border-line border-l-[3px] border-l-[var(--warn-rule)]" : "border-line"}`}
+      title={card.stale ? card.stale.reason : undefined}
+    >
+      {/* Line 1 — name (stretched button → opens the drawer) · owner avatar · time in stage (warn when stale). */}
       <div className="flex items-start gap-2">
-        <Link
-          href={contactHref}
-          className="u-focus min-w-0 flex-1 truncate text-[0.8125rem] font-medium text-foreground no-underline after:absolute after:inset-0 after:rounded-lg after:content-[''] hover:underline"
+        <button
+          type="button"
+          onClick={onOpen}
+          className="u-focus min-w-0 flex-1 truncate text-left text-[0.8125rem] font-medium text-foreground after:absolute after:inset-0 after:rounded-lg after:content-[''] hover:underline"
         >
           {card.name}
-        </Link>
+        </button>
+        {card.owner ? (
+          <span
+            aria-hidden
+            title={`Dueño: ${card.owner.name ?? "asignado"}`}
+            className="grid size-[18px] shrink-0 place-items-center rounded-full bg-chip text-[0.5625rem] font-semibold text-muted"
+          >
+            {ownerInitials(card.owner.name)}
+          </span>
+        ) : null}
         {card.stageSince ? (
-          <span className="shrink-0 text-[0.625rem] text-faint" title={`En esta etapa desde ${formatStampFull(new Date(card.stageSince))}`}>
+          <span className={`shrink-0 text-[0.625rem] ${card.stale ? "font-medium text-warn" : "text-faint"}`} title={card.stale ? card.stale.reason : `En esta etapa desde ${formatStampFull(new Date(card.stageSince))}`}>
             {relativeAgeShort(card.stageSince, now)}
           </span>
         ) : null}
       </div>
 
-      {/* Line 2 — origin on one line, truncated (the campaign is in the tooltip + the detail). */}
-      <p className="truncate text-[0.6875rem] text-muted" title={originTitleOf(card)}>
-        {originLineOf(card)}
-      </p>
-
-      {/* JP-6 — the money state: a paid card shows the recorded amount + method (never commission);
-          an attended card is waiting to be charged. */}
-      {card.stage === "paid" ? (
-        <p className="truncate text-[0.6875rem] font-medium text-[var(--success)]" title={card.paidMethod ?? undefined}>
-          {card.paidAmount ? `Pagó ${priceLabelCOP(card.paidAmount)}${card.paidMethod ? ` · ${card.paidMethod}` : ""}` : "Pagado"}
+      {/* The stage's "next thing to know": origin (Lead) / qualification (Calificado) / appointment (Reservó). */}
+      {stageLine ? (
+        <p className="truncate text-[0.6875rem] text-muted" title={card.stage === "lead" ? originTitleOf(card) : stageLine}>
+          {stageLine}
         </p>
-      ) : card.stage === "attended" ? (
-        <p className="text-[0.6875rem] font-medium text-warn">Cobro pendiente</p>
       ) : null}
 
-      {/* Line 3 — who spoke last + when. Customer last → calm emphasis (warn), this one needs a reply. */}
-      {card.lastMessageAt ? (
-        <p className={`truncate text-[0.625rem] ${spoke?.emphasize ? "font-medium text-warn" : "text-faint"}`}>
-          {spoke?.label ?? "Mensaje"} ·{" "}
-          <span title={formatStampFull(new Date(card.lastMessageAt))}>{relativeAgeShort(card.lastMessageAt, now)}</span>
+      {/* Lead: a preview of the customer's last message. */}
+      {card.stage === "lead" && card.lastMessageText ? (
+        <p className="truncate text-[0.625rem] text-faint" title={card.lastMessageText}>
+          «{card.lastMessageText}»
+        </p>
+      ) : null}
+
+      {/* Money state: Asistió waits to be charged (list value); Pagó shows the amount + method. */}
+      {card.stage === "attended" ? (
+        <p className="truncate text-[0.6875rem] font-medium text-warn">
+          Cobro pendiente{card.apptListAmount ? ` · ${priceLabelCOP(card.apptListAmount)} (lista)` : ""}
+        </p>
+      ) : card.stage === "paid" ? (
+        <p className="truncate text-[0.6875rem] font-medium text-[var(--success)]" title={card.paidMethod ?? undefined}>
+          {card.paidAmount ? `Pagó ${priceLabelCOP(card.paidAmount)}${card.paidMethod ? ` · ${card.paidMethod}` : ""}` : "Pagado"}
         </p>
       ) : null}
 
@@ -351,6 +526,90 @@ function OppCard({ clientId, card, now, pending, onQualify, onUnqualify, onLose 
         </Menu>
       </div>
     </article>
+  );
+}
+
+/** A sortable list-view header cell. Toggles direction on the active column; a fresh column opens
+ *  ascending for text (name/owner/stage) and descending for recency (time/appt/last message). */
+function SortTh({ sort, onSort, k, label, className = "" }: { sort: Sort; onSort: (s: Sort) => void; k: SortKey; label: string; className?: string }) {
+  const active = sort.key === k;
+  const toggle = () => onSort(active ? { key: k, dir: sort.dir === "asc" ? "desc" : "asc" } : { key: k, dir: k === "name" || k === "owner" || k === "stage" ? "asc" : "desc" });
+  return (
+    <th scope="col" aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"} className={`whitespace-nowrap px-2.5 py-1.5 text-left font-medium ${className}`}>
+      <button type="button" onClick={toggle} className="u-focus inline-flex items-center gap-1 hover:text-foreground">
+        {label}
+        <span aria-hidden className="text-[0.625rem] text-faint">{active ? (sort.dir === "asc" ? "▲" : "▼") : ""}</span>
+      </button>
+    </th>
+  );
+}
+
+/**
+ * JP-7 LIST VIEW — the same filtered opportunities as a sortable table, sharing the board's filters.
+ * Columns: contact · stage · origin/ad · service interested · appointment · time in stage · last
+ * message · owner. Horizontal scroll keeps it usable at ~390px; the whole row is a link to the
+ * contact record. The sort choice lives in the parent (so it survives a board/list toggle).
+ */
+function BoardListView({ cards, now, sort, onSort, onOpen }: {
+  cards: BoardCard[];
+  now: Date;
+  sort: Sort;
+  onSort: (s: Sort) => void;
+  onOpen: (card: BoardCard) => void;
+}) {
+  const STAGE_ORDER: Record<BoardCard["stage"], number> = { lead: 0, qualified: 1, booked: 2, attended: 3, paid: 4 };
+  const key = (c: BoardCard): string | number => {
+    switch (sort.key) {
+      case "name": return c.name.toLocaleLowerCase("es");
+      case "stage": return STAGE_ORDER[c.stage];
+      case "appt": return c.apptStartAt ?? "";
+      case "lastMsg": return c.lastMessageAt ?? "";
+      case "owner": return (c.owner?.name ?? "").toLocaleLowerCase("es");
+      default: return c.stageSince ?? ""; // "time"
+    }
+  };
+  const sorted = [...cards].sort((a, b) => {
+    const av = key(a), bv = key(b);
+    const cmp = av < bv ? -1 : av > bv ? 1 : a.id < b.id ? -1 : 1;
+    return sort.dir === "asc" ? cmp : -cmp;
+  });
+  return (
+    <PageShell ariaLabel="Lista de oportunidades" className="overflow-auto">
+      {cards.length === 0 ? (
+        <p className="px-4 py-10 text-center text-xs text-muted">Sin oportunidades con estos filtros.</p>
+      ) : (
+        <table className="w-full min-w-[56rem] border-collapse text-xs">
+          <thead className="sticky top-0 z-10 bg-surface text-muted shadow-[0_1px_0_var(--line)]">
+            <tr>
+              <SortTh sort={sort} onSort={onSort} k="name" label="Contacto" className="pl-4" />
+              <SortTh sort={sort} onSort={onSort} k="stage" label="Etapa" />
+              <th scope="col" className="whitespace-nowrap px-2.5 py-1.5 text-left font-medium">Origen / anuncio</th>
+              <th scope="col" className="whitespace-nowrap px-2.5 py-1.5 text-left font-medium">Servicio</th>
+              <SortTh sort={sort} onSort={onSort} k="appt" label="Cita" />
+              <SortTh sort={sort} onSort={onSort} k="time" label="En etapa" />
+              <SortTh sort={sort} onSort={onSort} k="lastMsg" label="Último mensaje" />
+              <SortTh sort={sort} onSort={onSort} k="owner" label="Dueño" className="pr-4" />
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((c) => (
+              <tr key={c.id} className="relative border-t border-line-soft hover:bg-subtle/60">
+                <td className="max-w-[12rem] truncate px-2.5 py-2 pl-4">
+                  <button type="button" onClick={() => onOpen(c)} className="u-focus truncate text-left font-medium text-foreground after:absolute after:inset-0 hover:underline">{c.name}</button>
+                </td>
+                <td className="whitespace-nowrap px-2.5 py-2 text-muted">{STAGE_LABEL[c.stage]}</td>
+                <td className="max-w-[12rem] truncate px-2.5 py-2 text-muted" title={originTitleOf(c)}>{originLineOf(c)}</td>
+                <td className="max-w-[10rem] truncate px-2.5 py-2 text-muted">{c.qualService ?? "—"}</td>
+                <td className="whitespace-nowrap px-2.5 py-2 text-muted">{apptLineOf(c) ?? "—"}</td>
+                <td className="whitespace-nowrap px-2.5 py-2 text-muted">{c.stageSince ? relativeAgeShort(c.stageSince, now) : "—"}</td>
+                <td className="max-w-[12rem] truncate px-2.5 py-2 text-muted" title={c.lastMessageText ?? undefined}>{c.lastMessageText ?? (c.lastMessageAt ? relativeAgeShort(c.lastMessageAt, now) : "—")}</td>
+                <td className="whitespace-nowrap px-2.5 py-2 pr-4 text-muted">{c.owner?.name ?? "—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+    </PageShell>
   );
 }
 

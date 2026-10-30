@@ -3,25 +3,51 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
   BOARD_STAGES,
+  STALE_LEAD_MINUTES,
+  STALE_QUALIFIED_HOURS,
+  apptLineOf,
+  funnelSteps,
   groupByStage,
+  lossReasonCounts,
   originLineOf,
   originTitleOf,
+  ownerInitials,
+  qualificationLineOf,
   sortByActivityDesc,
   spokeLastDisplay,
+  stageTotals,
   toBoardCard,
   whoSpokeLast,
   type BoardCard,
 } from '../../web/lib/pipelineBoard.js';
+import { siteLocalToUtc, todayAtSite } from '../../web/lib/siteCalendar.js';
 import type { BoardOpportunityRow } from '../../src/db/repositories/pipeline.js';
+import { SYSTEM_ROLE_PERMISSIONS } from '../../web/lib/permissions/catalog.js';
 
 const PANEL = readFileSync(new URL('../../web/components/pipeline/PipelinePanel.tsx', import.meta.url), 'utf8');
 const MENU = readFileSync(new URL('../../web/components/scheduling/ui/Menu.tsx', import.meta.url), 'utf8');
+const PAGE = readFileSync(new URL('../../web/app/clients/[clientId]/pipeline/page.tsx', import.meta.url), 'utf8');
+const DRAWER = readFileSync(new URL('../../web/components/pipeline/OpportunityDrawer.tsx', import.meta.url), 'utf8');
+const ACTIONS = readFileSync(new URL('../../web/lib/pipelineActions.ts', import.meta.url), 'utf8');
 
 const mkCard = (over: Partial<BoardCard> = {}): BoardCard => ({
   id: 'o', contactId: 'c', conversationId: null, stage: 'lead', status: 'open', name: 'n',
   originChip: { label: 'Desconocido', tone: 'bg-chip text-muted' }, originDetail: null, adName: null,
   isTestAd: false, stageSince: null, lastMessageAt: null, spokeLast: null, lostReason: null, lostNote: null,
   paidAmount: null, paidMethod: null,
+  lastMessageText: null, qualService: null, qualTimeframe: null, qualifiedBy: null,
+  apptStartAt: null, apptStatus: null, apptTz: null, apptListAmount: null, owner: null, stale: null,
+  ...over,
+});
+
+/** A full BoardOpportunityRow with null defaults (JP-7 added many optional fields). */
+const mkRow = (over: Partial<BoardOpportunityRow> & { id: string; contact_id: string; status: BoardOpportunityRow["status"]; stage: BoardOpportunityRow["stage"] }): BoardOpportunityRow => ({
+  conversation_id: null, created_at: new Date(), stage_since: new Date(), lost_reason: null, lost_note: null, closed_at: null,
+  contact_name: null, contact_channel_user_id: null, contact_phone_e164: null, origin_kind: null,
+  ad_name: null, ad_headline: null, ad_is_test: null, campaign_name: null, last_sender: null, last_message_at: null,
+  paid_total: null, paid_method: null, last_message_text: null, qualification_service: null, qualification_timeframe: null,
+  qualified_by: null, qualified_by_name: null, appt_start_at: null, appt_status: null, appt_tz: null, appt_list_price: null,
+  owner_user_id: null, owner_name: null,
   ...over,
 });
 
@@ -44,6 +70,9 @@ test('toBoardCard maps origin (reuses the origin vocabulary), ad name, stage_sin
     contact_name: 'Ana', contact_channel_user_id: 'wa:x', contact_phone_e164: null, origin_kind: 'meta_ad',
     ad_name: 'Factos', ad_headline: 'H', ad_is_test: false, campaign_name: 'Camp',
     last_sender: 'user', last_message_at: new Date('2026-06-02'), paid_total: null, paid_method: null,
+    last_message_text: 'Quiero una cita', qualification_service: null, qualification_timeframe: null,
+    qualified_by: null, qualified_by_name: null, appt_start_at: null, appt_status: null, appt_tz: null,
+    appt_list_price: null, owner_user_id: null, owner_name: null,
   };
   const c = toBoardCard(row);
   assert.equal(c.name, 'Ana');
@@ -61,6 +90,9 @@ test('toBoardCard falls back to a masked phone when the stored name is junk', ()
     created_at: new Date(), stage_since: null, lost_reason: null, lost_note: null, closed_at: null,
     origin_kind: null, ad_name: null, ad_headline: null, ad_is_test: null, campaign_name: null,
     last_sender: null, last_message_at: null, paid_total: null, paid_method: null,
+    last_message_text: null, qualification_service: null, qualification_timeframe: null, qualified_by: null,
+    qualified_by_name: null, appt_start_at: null, appt_status: null, appt_tz: null, appt_list_price: null,
+    owner_user_id: null, owner_name: null,
   };
   const junk = toBoardCard({ ...base, contact_name: '.', contact_channel_user_id: 'wa:x', contact_phone_e164: '+573120000220' } as BoardOpportunityRow);
   assert.equal(junk.name, '+57 312 ••• 0220', 'junk name "." → masked phone');
@@ -165,4 +197,165 @@ test('Menu floating mode: portals to <body> and flips above the trigger when the
   assert.ok(/const up =/.test(MENU) && MENU.includes('spaceBelow') && MENU.includes('spaceAbove'), 'flips up when there is more room above than below');
   assert.ok(MENU.includes("querySelector<HTMLElement>('[role=\"menuitem\"]')"), 'focus moves into the portaled list on open (keyboard stays reachable)');
   assert.ok(/if \(floating\) triggerRef\.current\?\.focus\(\)/.test(MENU), 'Escape returns focus to the trigger in floating mode');
+});
+
+// ────────────────────────── JP-7: the richer board ──────────────────────────
+
+const TZ = 'America/Bogota';
+const atToday = (hhmm: string) => siteLocalToUtc(todayAtSite(TZ), hhmm, TZ)!.toISOString();
+
+test('JP-7 computeStale: Lead (customer waited > 15 min), Calificado (> 24 h), Reservó (appt passed)', () => {
+  const now = Date.now();
+  // Lead: customer spoke last, long ago → stale.
+  const leadStale = toBoardCard(mkRow({ id: 'a', contact_id: 'c', status: 'open', stage: 'lead', last_sender: 'user', last_message_at: new Date(now - 20 * 60_000) }), true, now);
+  assert.ok(leadStale.stale && /15 min/.test(leadStale.stale.reason));
+  // Lead but the BUSINESS spoke last → not stale (ball is in the customer's court).
+  assert.equal(toBoardCard(mkRow({ id: 'a', contact_id: 'c', status: 'open', stage: 'lead', last_sender: 'bot', last_message_at: new Date(now - 60 * 60_000) }), true, now).stale, null);
+  // Lead, recent → not stale.
+  assert.equal(toBoardCard(mkRow({ id: 'a', contact_id: 'c', status: 'open', stage: 'lead', last_sender: 'user', last_message_at: new Date(now - 5 * 60_000) }), true, now).stale, null);
+  // Calificado > 24 h → stale.
+  const qStale = toBoardCard(mkRow({ id: 'b', contact_id: 'c', status: 'open', stage: 'qualified', stage_since: new Date(now - 30 * 3_600_000) }), true, now);
+  assert.ok(qStale.stale && /24 h/.test(qStale.stale.reason));
+  assert.equal(toBoardCard(mkRow({ id: 'b', contact_id: 'c', status: 'open', stage: 'qualified', stage_since: new Date(now - 2 * 3_600_000) }), true, now).stale, null);
+  // Reservó whose appointment already passed, still not completed → stale; a future one → not.
+  const bStale = toBoardCard(mkRow({ id: 'd', contact_id: 'c', status: 'open', stage: 'booked', appt_start_at: new Date(now - 3_600_000), appt_status: 'confirmed' }), true, now);
+  assert.ok(bStale.stale && /ya pasó/.test(bStale.stale.reason));
+  assert.equal(toBoardCard(mkRow({ id: 'd', contact_id: 'c', status: 'open', stage: 'booked', appt_start_at: new Date(now + 3_600_000), appt_status: 'confirmed' }), true, now).stale, null);
+  // The thresholds are exported constants.
+  assert.equal(STALE_LEAD_MINUTES, 15);
+  assert.equal(STALE_QUALIFIED_HOURS, 24);
+});
+
+test('JP-7 qualificationLineOf: evidence + who qualified (Bot / first name)', () => {
+  const bot = toBoardCard(mkRow({ id: 'a', contact_id: 'c', status: 'open', stage: 'qualified', qualification_service: 'Corte con barba', qualification_timeframe: 'el sábado', qualified_by: 'bot' }));
+  assert.equal(qualificationLineOf(bot), 'Corte con barba · el sábado · Bot');
+  const person = toBoardCard(mkRow({ id: 'a', contact_id: 'c', status: 'open', stage: 'qualified', qualification_service: 'Corte', qualification_timeframe: 'mañana', qualified_by: 'u1', qualified_by_name: 'Ana Ruiz' }));
+  assert.equal(qualificationLineOf(person), 'Corte · mañana · Ana');
+  assert.equal(qualificationLineOf(mkCard({ stage: 'qualified' })), null, 'no evidence → no line');
+});
+
+test('JP-7 apptLineOf: Hoy/Mañana + 12h time + confirmed state', () => {
+  const now = Date.now();
+  const today = toBoardCard(mkRow({ id: 'a', contact_id: 'c', status: 'open', stage: 'booked', appt_start_at: new Date(atToday('14:30')), appt_status: 'confirmed', appt_tz: TZ }), true, now);
+  const line = apptLineOf(today)!;
+  assert.ok(line.startsWith('Hoy · '), `expected "Hoy · …", got "${line}"`);
+  assert.ok(line.includes('Confirmada'));
+  const scheduled = toBoardCard(mkRow({ id: 'a', contact_id: 'c', status: 'open', stage: 'booked', appt_start_at: new Date(atToday('09:00')), appt_status: 'scheduled', appt_tz: TZ }), true, now);
+  assert.ok(apptLineOf(scheduled)!.includes('Sin confirmar'));
+  assert.equal(apptLineOf(mkCard({ stage: 'booked' })), null, 'no appointment → no line');
+});
+
+test('JP-7 stageTotals sums per stage and is 0 without payments.view', () => {
+  const rows = [
+    mkRow({ id: '1', contact_id: 'a', status: 'open', stage: 'booked', appt_list_price: '90000' }),
+    mkRow({ id: '2', contact_id: 'b', status: 'won', stage: 'attended', appt_list_price: '45000' }),
+    mkRow({ id: '3', contact_id: 'c', status: 'won', stage: 'paid', paid_total: '60000' }),
+  ];
+  const t = stageTotals(rows.map((r) => toBoardCard(r, true)));
+  assert.deepEqual(t, { bookedExpected: 90000, attendedPending: 45000, paidCollected: 60000 });
+  // Without payments.view the per-card amounts are null → totals collapse to 0 (and the page never
+  // even builds totals for a Setter — see the revenue-gate test below).
+  const hidden = stageTotals(rows.map((r) => toBoardCard(r, false)));
+  assert.deepEqual(hidden, { bookedExpected: 0, attendedPending: 0, paidCollected: 0 });
+});
+
+test('JP-7 funnelSteps: counts + conversion % from the previous step', () => {
+  const cards = [
+    ...Array.from({ length: 10 }, (_, i) => mkCard({ id: `l${i}`, stage: 'lead' })),
+    ...Array.from({ length: 5 }, (_, i) => mkCard({ id: `q${i}`, stage: 'qualified' })),
+    ...Array.from({ length: 4 }, (_, i) => mkCard({ id: `b${i}`, stage: 'booked' })),
+    ...Array.from({ length: 2 }, (_, i) => mkCard({ id: `a${i}`, stage: 'attended' })),
+    mkCard({ id: 'p0', stage: 'paid' }),
+  ];
+  const f = funnelSteps(cards);
+  assert.deepEqual(f.map((s) => s.count), [10, 5, 4, 2, 1]);
+  assert.deepEqual(f.map((s) => s.convPct), [null, 50, 80, 50, 50]);
+});
+
+test('JP-7 lossReasonCounts + ownerInitials', () => {
+  const lost = [mkCard({ id: '1', lostReason: 'precio' }), mkCard({ id: '2', lostReason: 'precio' }), mkCard({ id: '3', lostReason: 'no_asistio' })];
+  assert.deepEqual(lossReasonCounts(lost), [{ reason: 'precio', count: 2 }, { reason: 'no_asistio', count: 1 }]);
+  assert.equal(ownerInitials('Ana Ruiz'), 'AR');
+  assert.equal(ownerInitials('Beto'), 'B');
+  assert.equal(ownerInitials(null), '?');
+});
+
+test('JP-7 toBoardCard gates the appointment list price behind payments.view', () => {
+  const row = mkRow({ id: 'a', contact_id: 'c', status: 'won', stage: 'attended', appt_list_price: '90000', owner_user_id: 'u1', owner_name: 'Ana' });
+  assert.equal(toBoardCard(row, true).apptListAmount, '90000');
+  assert.equal(toBoardCard(row, false).apptListAmount, null);
+  assert.deepEqual(toBoardCard(row, true).owner, { userId: 'u1', name: 'Ana' });
+});
+
+test('JP-7 revenue totals are a Client-Owner/agency view — the Setter never gets them', () => {
+  // The Setter's SYSTEM role lacks analytics.view (the revenue gate), so the page never builds totals.
+  assert.ok(!SYSTEM_ROLE_PERMISSIONS.setter.has('analytics.view'), 'Setter has no analytics.view');
+  assert.ok(SYSTEM_ROLE_PERMISSIONS.owner.has('analytics.view'), 'Owner has analytics.view');
+  assert.ok(PAGE.includes('const canViewRevenue = can(scope, "analytics.view"'), 'the page gates on analytics.view');
+  assert.ok(PAGE.includes('const moneyTotals = canViewRevenue ? stageTotals(cards) : null'), 'totals are null for a non-revenue viewer (payload carries none)');
+});
+
+test('JP-7 the panel renders the funnel, gated column money, stage card lines, stale edge, and the Perdidos header', () => {
+  assert.ok(PANEL.includes('Embudo de conversión') && PANEL.includes('step.convPct'), 'the funnel strip with conversion %');
+  assert.ok(PANEL.includes('columnMoney[col.key]') && PANEL.includes('moneyTotals'), 'column money shown only when totals are present (revenue only)');
+  assert.ok(PANEL.includes('qualificationLineOf') && PANEL.includes('apptLineOf') && PANEL.includes('card.lastMessageText'), 'per-stage card lines');
+  assert.ok(PANEL.includes('(lista)') && PANEL.includes('Cobro pendiente'), 'Asistió shows the pending list amount');
+  assert.ok(PANEL.includes('card.stale') && PANEL.includes('--warn-rule'), 'a stale card gets a calm warn edge (never error red)');
+  assert.ok(PANEL.includes('ownerInitials') && PANEL.includes('Dueño:'), 'the owner avatar + title');
+  assert.ok(PANEL.includes('Motivos de pérdida') && PANEL.includes('LOST_REASON_LABEL[reason]'), 'the Perdidos loss-reason header');
+});
+
+test('JP-7 part 2: the panel offers search, owner filter, "waiting" toggle, and a Tablero/Lista view', () => {
+  // Search is a form that writes ?q=; owner is a select (incl. "Sin dueño"); waiting is a client lens.
+  assert.ok(PANEL.includes("apply({ q: searchDraft.trim() })"), 'search submits ?q=');
+  assert.ok(PANEL.includes('label="Dueño"') && PANEL.includes('"unassigned"'), 'owner filter incl. unassigned');
+  assert.ok(PANEL.includes('Solo los que esperan respuesta') && PANEL.includes('c.spokeLast === "customer"'), 'waiting lens filters to customer-last');
+  // View toggle persisted per user (localStorage via an external store — no setState-in-effect).
+  assert.ok(PANEL.includes('useSyncExternalStore(subscribeView') && PANEL.includes('localStorage.setItem(VIEW_KEY'), 'the Tablero/Lista choice is remembered per user, SSR-safe');
+  // List view: a sortable table with the required columns.
+  assert.ok(PANEL.includes('function BoardListView'), 'the list view exists');
+  for (const col of ['Contacto', 'Etapa', 'Origen / anuncio', 'Servicio', 'Cita', 'En etapa', 'Último mensaje', 'Dueño']) {
+    assert.ok(PANEL.includes(`label="${col}"`) || PANEL.includes(`>${col}<`), `list column: ${col}`);
+  }
+  assert.ok(PANEL.includes('aria-sort='), 'columns are sortable (aria-sort)');
+});
+
+test('JP-7 part 3: clicking a card (board / list / Perdidos) opens the opportunity drawer — not a page change', () => {
+  // The board card name is a BUTTON that opens the drawer; "Ver ficha" (the contact page) stays in the menu.
+  assert.ok(PANEL.includes('onClick={onOpen}'), 'the card name opens the drawer');
+  assert.ok(PANEL.includes('onOpen={() => setSelected(c)}'), 'the board wires the drawer open');
+  assert.ok(PANEL.includes('onClick={() => onOpen(c)}'), 'a list row opens the drawer');
+  assert.ok(PANEL.includes('<MenuLink href={contactHref}>Ver ficha</MenuLink>'), '"Ver ficha" still links to the contact record');
+  // The drawer is rendered beside the board, keyed on the selected card so each selection mounts fresh.
+  assert.ok(PANEL.includes('<OpportunityDrawer') && PANEL.includes('key={selected.id}'), 'the drawer mounts fresh per selection');
+  // Its trap pauses while a Calificar/Perder modal is layered over it.
+  assert.ok(PANEL.includes('trapActive={modal === null}'), 'the drawer trap yields to a layered modal');
+});
+
+test('JP-7 part 3: the drawer shows the sale in full and reuses the engine actions', () => {
+  // Every section the brief asks for.
+  for (const section of ['Progreso', 'Calificación', 'Pago', 'Últimos mensajes', 'Historial']) {
+    assert.ok(DRAWER.includes(`title="${section}"`), `drawer section: ${section}`);
+  }
+  assert.ok(/title=\{data\.appointments\.length > 1 \? "Citas" : "Cita"\}/.test(DRAWER), 'the linked appointment(s)');
+  assert.ok(DRAWER.includes('Abrir conversación') && DRAWER.includes('/inbox?c='), 'a link into the Inbox');
+  assert.ok(DRAWER.includes('Ver ficha') && DRAWER.includes('/contacts/'), '"Ver ficha" → the contact record');
+  // The actions are the SAME ones as the card — delegated to the parent (which calls the engine).
+  for (const action of ['onQualify', 'onUnqualify', 'onLose', 'onReopen']) {
+    assert.ok(DRAWER.includes(action), `drawer action: ${action}`);
+  }
+  // The reads load via the server action in an async effect (state only set in `.then` — lint-safe).
+  assert.ok(DRAWER.includes('loadOpportunityDrawerAction(clientId, card.id).then('), 'the drawer loads via the action, async');
+  // Motion answers the user's action and honours reduced motion (existing u-drawer-in utility, no new keyframes).
+  assert.ok(DRAWER.includes('u-drawer-in'), 'the drawer uses the reduced-motion-safe slide-in');
+});
+
+test('JP-7 part 3: the drawer loader gates on pipeline.view, gates money on payments.view, and never reads commission', () => {
+  assert.ok(ACTIONS.includes('export async function loadOpportunityDrawerAction'), 'the loader exists');
+  assert.ok(/resolveClientModuleContext\(clientId, "crm", "pipeline\.view"\)/.test(ACTIONS), 'gated by pipeline.view under CRM');
+  assert.ok(ACTIONS.includes('can(scope, "payments.view", clientId)'), 'the payment summary is gated by payments.view');
+  // Actor tokens resolve to a human label (bot / system / a member name).
+  assert.ok(ACTIONS.includes('"Sistema"') && ACTIONS.includes('"Bot"'), 'actor tokens resolve to plain words');
+  // Money shown is amount + method only — the drawer read must never touch commission.
+  assert.ok(!/commission/i.test(ACTIONS) && !/comisi[oó]n/i.test(ACTIONS), 'the drawer never reads commission');
 });

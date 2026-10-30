@@ -24,7 +24,7 @@ mock.module(urlOf('next/headers'), { namedExports: { headers: async () => new He
 mock.module(urlOf('next/cache'), { namedExports: { revalidatePath: () => {}, revalidateTag: () => {} } });
 const asUser = (id: string) => { CURRENT = { id, email: `${id.slice(0, 8)}@test.local` }; };
 
-const { qualifyOpportunityAction, unqualifyOpportunityAction, markOpportunityLostAction, reopenOpportunityAction, setPipelineSettingsAction } = await import('../../web/lib/pipelineActions.js');
+const { qualifyOpportunityAction, unqualifyOpportunityAction, markOpportunityLostAction, reopenOpportunityAction, setPipelineSettingsAction, loadOpportunityDrawerAction } = await import('../../web/lib/pipelineActions.js');
 after(closeDb);
 
 const one = async <T>(sql: string, params: unknown[]): Promise<T> => (await query<T>(sql, params)).rows[0];
@@ -145,5 +145,69 @@ test('PL-2: isolation — a setter cannot act on another client\'s opportunity',
     asUser(setter);
     assert.equal((await qualifyOpportunityAction(s.otherClientId, other, { service: 'X', timeframe: 'y' })).ok, false, 'cross-client refused');
     assert.equal((await stageOf(s, other)).stage, 'lead');
+  } finally { await cleanupTenant(s.tenantId); }
+});
+
+test('JP-7 §4: the drawer loader returns the full sale and gates on pipeline.view', async () => {
+  const s = await seedScenario({ enableCrm: true });
+  try {
+    const owner = await seedMember(s.tenantId, { role: 'member', clientId: s.clientId, clientRole: 'owner' });
+    const ownerLabel = `U ${owner.slice(0, 6)}`;
+    const staff = await seedStaffMember(s);
+
+    // A qualified sale, qualified BY the owner, with an appointment and a recorded payment.
+    const c = await contact(s);
+    const opp = await seedOpp(s, { contactId: c, stage: 'qualified' });
+    await query(
+      `UPDATE opportunities SET qualified_at = now(), qualification_service = 'Corte + barba', qualification_timeframe = 'esta semana', qualified_by = $2 WHERE id = $1`,
+      [opp, owner],
+    );
+    await query(
+      `INSERT INTO opportunity_stage_events (tenant_id, client_id, opportunity_id, from_stage, to_stage, from_status, to_status, actor, reason)
+         VALUES ($1, $2, $3, 'lead', 'qualified', 'open', 'open', $4, 'qualified')`,
+      [s.tenantId, s.clientId, opp, owner],
+    );
+    const appt = await one<{ id: string }>(
+      `INSERT INTO appointments (tenant_id, client_id, site_id, staff_id, service_id,
+          start_at, service_end_at, blocked_from, blocked_until,
+          service_name_snapshot, duration_min_snapshot, price_snapshot, buffer_before_min_snapshot, buffer_after_min_snapshot,
+          status, origin, created_by_type, contact_id, opportunity_id)
+       VALUES ($1,$2,$3,$4,$5,
+          now() + interval '24 hours', now() + interval '25 hours', now() + interval '24 hours', now() + interval '25 hours',
+          'Corte + barba', 60, '90000', 0, 0, 'confirmed', 'n8n', 'n8n', $6, $7)
+       RETURNING id`,
+      [s.tenantId, s.clientId, s.siteId, s.staffA, s.serviceHaircut, c, opp],
+    );
+    await query(`INSERT INTO payment_methods (tenant_id, client_id, key, label, sort_order) VALUES ($1,$2,'efectivo','Efectivo',0) ON CONFLICT DO NOTHING`, [s.tenantId, s.clientId]);
+    await query(`INSERT INTO payments (tenant_id, client_id, appointment_id, method_key, total, recorded_by) VALUES ($1,$2,$3,'efectivo','90000','seed')`, [s.tenantId, s.clientId, appt.id]);
+
+    // Staff is refused (same gate as the board).
+    asUser(staff);
+    assert.equal((await loadOpportunityDrawerAction(s.clientId, opp)).ok, false, 'staff refused');
+
+    // The owner gets the full picture.
+    asUser(owner);
+    const r = await loadOpportunityDrawerAction(s.clientId, opp);
+    assert.equal(r.ok, true);
+    if (!r.ok) return;
+    const d = r.data;
+    assert.equal(d.stage, 'qualified');
+    assert.ok(d.stages.lead && d.stages.qualified, 'the stage timeline carries lead + qualified timestamps');
+    assert.equal(d.stages.booked, null, 'a stage not reached stays null');
+    assert.equal(d.qualification?.service, 'Corte + barba');
+    assert.equal(d.qualification?.timeframe, 'esta semana');
+    assert.equal(d.qualification?.byLabel, ownerLabel, 'the qualifier resolves to a member label');
+    assert.equal(d.appointments.length, 1);
+    assert.equal(d.appointments[0].service, 'Corte + barba');
+    assert.equal(d.appointments[0].status, 'confirmed');
+    assert.equal(Number(d.payment?.total), 90000, 'owner has payments.view → sees the recorded payment');
+    assert.equal(d.payment?.method, 'Efectivo', 'the method label is joined');
+    assert.equal(d.messages.length, 0, 'no conversation → no messages');
+    const qualifiedEvent = d.history.find((e) => e.reason === 'qualified');
+    assert.ok(qualifiedEvent, 'the qualified transition is in the history');
+    assert.equal(qualifiedEvent!.actorLabel, ownerLabel, 'the transition actor resolves to a member label');
+
+    // An unknown id under a real gate is NOT_FOUND, not a crash.
+    assert.equal((await loadOpportunityDrawerAction(s.clientId, randomUUID())).ok, false, 'unknown opp → not found');
   } finally { await cleanupTenant(s.tenantId); }
 });
