@@ -11,11 +11,11 @@ import { priceLabelCOP } from "@/lib/money";
 import { ORIGIN_GROUPS } from "@/lib/originDisplay";
 import {
   BOARD_STAGES,
+  COHORT_PRESET_LABEL,
   LOST_REASON_LABEL,
   LOST_REASONS,
   STAGE_LABEL,
   apptLineOf,
-  funnelSteps,
   groupByStage,
   lossReasonCounts,
   originLineOf,
@@ -24,6 +24,10 @@ import {
   qualificationLineOf,
   sortByActivityDesc,
   type BoardCard,
+  type CohortPeriod,
+  type CohortPreset,
+  type CohortStep,
+  type LostReason,
   type StageTotals,
 } from "@/lib/pipelineBoard";
 import {
@@ -52,42 +56,57 @@ interface Filters {
   q: string;
   owner: string;
 }
+interface CohortView {
+  period: CohortPeriod;
+  steps: CohortStep[];
+  size: number;
+  lost: number;
+  topLoss: { reason: LostReason; count: number } | null;
+}
 
 const BTN =
   "inline-flex h-[36px] items-center justify-center rounded-lg bg-foreground px-3 text-xs font-medium text-background transition hover:opacity-90 disabled:opacity-50";
 const GHOST =
-  "inline-flex h-[32px] items-center justify-center rounded-lg border border-line px-2.5 text-xs text-muted transition hover:bg-subtle hover:text-foreground disabled:opacity-50";
-const PRIMARY_SM =
-  "u-focus inline-flex h-[32px] items-center justify-center rounded-lg bg-foreground px-3 text-xs font-medium text-background transition hover:opacity-90 disabled:opacity-50";
+  "u-focus inline-flex h-[32px] items-center justify-center rounded-lg border border-line px-2.5 text-xs text-muted transition hover:bg-subtle hover:text-foreground disabled:opacity-50";
+/** JP-7b §4: the per-card primary action is a COMPACT GHOST button, not a solid black block. */
+const QUALIFY_BTN =
+  "u-focus inline-flex h-[28px] items-center justify-center rounded-md border border-line-strong px-2.5 text-[0.6875rem] font-medium text-foreground transition hover:bg-subtle disabled:opacity-50";
 const INPUT =
-  "h-[36px] rounded-lg border border-line-strong bg-surface px-2.5 text-xs text-foreground outline-none transition focus:border-foreground";
+  "h-[34px] rounded-lg border border-line-strong bg-surface px-2.5 text-xs text-foreground outline-none transition focus:border-foreground";
+const CHIP = "u-focus inline-flex h-[34px] items-center gap-1.5 rounded-lg border px-2.5 text-xs transition";
 
 type Tab = "board" | "perdidos" | "cola";
 type View = "board" | "list";
 
-/** JP-7: the Tablero/Lista choice, remembered PER USER (localStorage) — SSR-safe via an external
- *  store, so there is no hydration mismatch and no setState-in-effect. */
-const VIEW_KEY = "mai.pipelineView";
-const viewListeners = new Set<() => void>();
-function subscribeView(cb: () => void) {
-  viewListeners.add(cb);
-  return () => void viewListeners.delete(cb);
+/** A per-user preference persisted in localStorage, SSR-safe via an external store (no hydration
+ *  mismatch, no setState-in-effect). Used for the Tablero/Lista view and the funnel strip state. */
+function makePref(key: string, fallback: string) {
+  const listeners = new Set<() => void>();
+  return {
+    subscribe(cb: () => void) {
+      listeners.add(cb);
+      return () => void listeners.delete(cb);
+    },
+    read(): string {
+      try {
+        return localStorage.getItem(key) ?? fallback;
+      } catch {
+        return fallback;
+      }
+    },
+    server: () => fallback,
+    write(v: string) {
+      try {
+        localStorage.setItem(key, v);
+      } catch {
+        /* private mode: the choice just won't persist */
+      }
+      listeners.forEach((cb) => cb());
+    },
+  };
 }
-function readView(): View {
-  try {
-    return localStorage.getItem(VIEW_KEY) === "list" ? "list" : "board";
-  } catch {
-    return "board";
-  }
-}
-function writeView(v: View) {
-  try {
-    localStorage.setItem(VIEW_KEY, v);
-  } catch {
-    /* private mode: the choice just won't persist */
-  }
-  viewListeners.forEach((cb) => cb());
-}
+const viewPref = makePref("mai.pipelineView", "board");
+const stripPref = makePref("mai.pipelineFunnel", "open");
 
 type SortKey = "name" | "stage" | "time" | "appt" | "lastMsg" | "owner";
 interface Sort {
@@ -101,6 +120,7 @@ export function PipelinePanel({
   cards,
   lostCards,
   moneyTotals,
+  cohort,
   queue,
   campaigns,
   ads,
@@ -113,6 +133,8 @@ export function PipelinePanel({
   lostCards: BoardCard[];
   /** JP-7: per-stage money, present ONLY for a revenue viewer (null for a Setter — enforced server-side). */
   moneyTotals: StageTotals | null;
+  /** JP-7b §1: the cohort funnel for its own (independent) period. */
+  cohort: CohortView;
   queue: QueueItem[];
   campaigns: Array<{ id: string; name: string }>;
   ads: Array<{ id: string; label: string }>;
@@ -127,12 +149,13 @@ export function PipelinePanel({
   const [error, setError] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
   const [modal, setModal] = useState<null | { kind: "qualify" | "lost"; card: BoardCard }>(null);
-  // JP-7 §4: the card whose drawer is open (board / list / Perdidos). Null = no drawer.
   const [selected, setSelected] = useState<BoardCard | null>(null);
   const [lossFilter, setLossFilter] = useState<BoardCard["lostReason"]>(null);
   const [searchDraft, setSearchDraft] = useState(filters.q);
   const [onlyWaiting, setOnlyWaiting] = useState(false);
-  const view = useSyncExternalStore(subscribeView, readView, () => "board");
+  const [advancedOpen, setAdvancedOpen] = useState(false);
+  const view = useSyncExternalStore(viewPref.subscribe, viewPref.read, viewPref.server) as View;
+  const stripOpen = useSyncExternalStore(stripPref.subscribe, stripPref.read, stripPref.server) !== "collapsed";
   const [sort, setSort] = useState<Sort>({ key: "time", dir: "desc" });
 
   const run = (fn: () => Promise<{ ok: boolean; error?: string }>) => {
@@ -142,14 +165,13 @@ export function PipelinePanel({
       if (!r.ok) setError(r.error ?? "No se pudo completar la acción.");
       else {
         setModal(null);
-        // Close the drawer too: the sale just changed stage/status, so its open view is now stale.
         setSelected(null);
         router.refresh();
       }
     });
   };
 
-  const apply = (patch: Partial<Filters>) => {
+  const go = (patch: Record<string, string | null>) => {
     const p = new URLSearchParams(searchParams.toString());
     for (const [k, v] of Object.entries(patch)) {
       if (v) p.set(k, v);
@@ -158,15 +180,17 @@ export function PipelinePanel({
     const qs = p.toString();
     router.push(qs ? `${pathname}?${qs}` : pathname, { scroll: false });
   };
+  const apply = (patch: Partial<Filters>) => go(patch);
 
-  // JP-7: the "waiting" lens filters the board view to sales where the CUSTOMER spoke last.
+  // JP-7: the "waiting" lens filters the board to sales where the CUSTOMER spoke last.
+  const waitingCount = cards.filter((c) => c.spokeLast === "customer").length;
   const shownCards = onlyWaiting ? cards.filter((c) => c.spokeLast === "customer") : cards;
   const grouped = groupByStage(sortByActivityDesc(shownCards));
   const now = new Date();
-  const filtered = Boolean(filters.origin || filters.campaign || filters.ad || filters.from || filters.to || filters.status || filters.q || filters.owner);
-  // JP-7: the funnel (counts + conversion, from the shown cards) and the per-column money that a
-  // revenue viewer sees in the headers + funnel (null for a Setter — the payload carried no totals).
-  const funnel = funnelSteps(shownCards);
+  const boardFiltered = Boolean(filters.origin || filters.campaign || filters.ad || filters.from || filters.to || filters.status || filters.q || filters.owner);
+  // JP-7b §3: advanced filters live behind "Filtros" — the badge counts the active ones (dates = 1).
+  const advancedCount = [filters.ad, filters.status, filters.owner, filters.from || filters.to].filter(Boolean).length;
+  // JP-7 / §2: per-column money for the HEADERS (revenue viewers only); the strip carries no money.
   const columnMoney: Partial<Record<BoardCard["stage"], number>> = moneyTotals
     ? { booked: moneyTotals.bookedExpected, attended: moneyTotals.attendedPending, paid: moneyTotals.paidCollected }
     : {};
@@ -176,14 +200,18 @@ export function PipelinePanel({
     <main className="flex min-h-0 w-full flex-1 flex-col gap-[var(--content-pad)]">
       <PageShell grow={false} clip={false}>
         <div className="flex min-h-11 flex-wrap items-center justify-between gap-3 px-4 py-3 sm:px-5">
-          <div className="min-w-0">
-            <div className="flex items-baseline gap-2.5">
-              <h1 className="u-page-title truncate text-[19px] font-semibold tracking-[-0.025em] text-foreground">Pipeline</h1>
-              <span className="truncate text-xs text-muted">{clientName}</span>
-            </div>
-            <p className="mt-0.5 hidden text-xs text-muted sm:block">
-              Cada oportunidad es una venta. Reservó y Asistió vienen de las citas; aquí calificas, pierdes o reabres.
-            </p>
+          <div className="flex min-w-0 items-center gap-2">
+            <h1 className="u-page-title truncate text-[19px] font-semibold tracking-[-0.025em] text-foreground">Pipeline</h1>
+            <span className="truncate text-xs text-muted">{clientName}</span>
+            {/* JP-7b §3: the explanation is an info hint, not a line of chrome. */}
+            <button
+              type="button"
+              aria-label="Qué es el pipeline"
+              title="Cada oportunidad es una venta. Reservó y Asistió vienen de las citas; aquí calificas, pierdes o reabres."
+              className="u-focus grid size-[18px] shrink-0 place-items-center rounded-full border border-line text-[0.625rem] font-semibold text-muted transition hover:bg-subtle hover:text-foreground"
+            >
+              i
+            </button>
           </div>
         </div>
         <nav aria-label="Vistas" className="flex items-center gap-1 overflow-x-auto border-t border-line px-2 sm:px-3">
@@ -201,9 +229,9 @@ export function PipelinePanel({
 
       {tab === "board" ? (
         <>
+          {/* JP-7b §3: ONE filter row — search · Origen · Campaña · Filtros(⋯) · waiting chip · view. */}
           <PageShell grow={false} clip={false}>
             <div className="flex flex-wrap items-center gap-2 px-3 py-2.5 sm:px-4">
-              {/* JP-7: search (name · phone · @usuario). A form → Enter applies ?q=. */}
               <form onSubmit={(e) => { e.preventDefault(); apply({ q: searchDraft.trim() }); }} className="flex items-center">
                 <input
                   type="search"
@@ -218,87 +246,58 @@ export function PipelinePanel({
               {campaigns.length ? (
                 <Select label="Campaña" value={filters.campaign} onChange={(v) => apply({ campaign: v })} options={[{ value: "", label: "Cualquier campaña" }, ...campaigns.map((c) => ({ value: c.id, label: c.name }))]} />
               ) : null}
-              {ads.length ? (
-                <Select label="Anuncio" value={filters.ad} onChange={(v) => apply({ ad: v })} options={[{ value: "", label: "Cualquier anuncio" }, ...ads.map((a) => ({ value: a.id, label: a.label }))]} />
-              ) : null}
-              <Select label="Estado" value={filters.status} onChange={(v) => apply({ status: v })} options={[{ value: "", label: "Abiertas y ganadas" }, { value: "open", label: "Abiertas" }, { value: "won", label: "Ganadas" }]} />
-              {owners.length ? (
-                <Select label="Dueño" value={filters.owner} onChange={(v) => apply({ owner: v })} options={[{ value: "", label: "Cualquier dueño" }, { value: "unassigned", label: "Sin dueño" }, ...owners.map((o) => ({ value: o.id, label: o.label }))]} />
-              ) : null}
-              <button
-                type="button"
-                aria-pressed={onlyWaiting}
-                onClick={() => setOnlyWaiting((v) => !v)}
-                className={`inline-flex h-[36px] items-center rounded-lg border px-2.5 text-xs transition ${onlyWaiting ? "border-warn bg-warn-soft text-warn" : "border-line-strong text-muted hover:bg-subtle"}`}
-              >
-                Solo los que esperan respuesta
+              <button type="button" aria-expanded={advancedOpen} onClick={() => setAdvancedOpen((v) => !v)} className={`${CHIP} ${advancedCount > 0 ? "border-foreground text-foreground" : "border-line-strong text-muted hover:bg-subtle"}`}>
+                Filtros
+                {advancedCount > 0 ? <span className="u-tnum rounded-full bg-foreground px-1.5 text-[0.625rem] font-semibold text-background">{advancedCount}</span> : <span aria-hidden className="text-faint">▾</span>}
               </button>
-              <label className="flex items-center gap-1.5 text-xs text-muted">
-                Abierta desde
-                <input type="date" value={filters.from} onChange={(e) => apply({ from: e.target.value })} aria-label="Abierta desde" className={INPUT} />
-              </label>
-              <label className="flex items-center gap-1.5 text-xs text-muted">
-                hasta
-                <input type="date" value={filters.to} onChange={(e) => apply({ to: e.target.value })} aria-label="Abierta hasta" className={INPUT} />
-              </label>
-              {filtered || onlyWaiting ? (
+              {/* The "waiting" lens — a real toggle chip with its count. */}
+              <button type="button" aria-pressed={onlyWaiting} onClick={() => setOnlyWaiting((v) => !v)} className={`${CHIP} ${onlyWaiting ? "border-warn bg-warn-soft text-warn" : "border-line-strong text-muted hover:bg-subtle"}`}>
+                Esperan respuesta
+                <span className="u-tnum rounded-full bg-chip px-1.5 text-[0.625rem] font-semibold">{waitingCount}</span>
+              </button>
+              {boardFiltered || onlyWaiting ? (
                 <button type="button" className={GHOST} onClick={() => { setSearchDraft(""); setOnlyWaiting(false); apply({ origin: "", campaign: "", ad: "", from: "", to: "", status: "", q: "", owner: "" }); }}>
                   Quitar filtros
                 </button>
               ) : null}
-              {/* JP-7: Tablero / Lista — remembered per user. */}
               <div className="ml-auto flex items-center gap-0.5 rounded-lg bg-chip p-0.5" role="group" aria-label="Vista">
-                <button type="button" aria-pressed={view === "board"} onClick={() => writeView("board")} className={`u-focus rounded-md px-2.5 py-1 text-xs transition ${view === "board" ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted hover:text-foreground"}`}>Tablero</button>
-                <button type="button" aria-pressed={view === "list"} onClick={() => writeView("list")} className={`u-focus rounded-md px-2.5 py-1 text-xs transition ${view === "list" ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted hover:text-foreground"}`}>Lista</button>
+                <button type="button" aria-pressed={view === "board"} onClick={() => viewPref.write("board")} className={`u-focus rounded-md px-2.5 py-1 text-xs transition ${view === "board" ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted hover:text-foreground"}`}>Tablero</button>
+                <button type="button" aria-pressed={view === "list"} onClick={() => viewPref.write("list")} className={`u-focus rounded-md px-2.5 py-1 text-xs transition ${view === "list" ? "bg-surface font-medium text-foreground shadow-sm" : "text-muted hover:text-foreground"}`}>Lista</button>
               </div>
             </div>
-          </PageShell>
-
-          {/* JP-7 FUNNEL STRIP — a snapshot of the FILTERED set: each step's count + the conversion
-              from the previous step, plus the lost count. Money per step only for a revenue viewer. */}
-          <PageShell grow={false} clip={false}>
-            <div className="flex flex-nowrap items-stretch gap-1.5 overflow-x-auto px-3 py-2.5 sm:px-4" aria-label="Embudo de conversión">
-              {funnel.map((step, i) => (
-                <div key={step.stage} className="flex shrink-0 items-center gap-1.5">
-                  {i > 0 ? (
-                    <span className="u-tnum shrink-0 text-[0.625rem] text-faint" title="Conversión desde el paso anterior">
-                      {step.convPct !== null ? `${step.convPct}%` : "—"}&nbsp;›
-                    </span>
-                  ) : null}
-                  <div className="flex min-w-[84px] flex-col rounded-lg border border-line bg-subtle/40 px-2.5 py-1.5">
-                    <span className="text-[0.625rem] uppercase tracking-wide text-faint">{step.label}</span>
-                    <span className="u-tnum text-sm font-semibold text-foreground">{step.count}</span>
-                    {columnMoney[step.stage] !== undefined ? <span className="u-tnum text-[0.625rem] text-muted">{priceLabelCOP(columnMoney[step.stage]!)}</span> : null}
-                  </div>
-                </div>
-              ))}
-              <div className="flex shrink-0 items-center gap-1.5 pl-1">
-                <button type="button" onClick={() => setTab("perdidos")} className="u-focus flex min-w-[76px] flex-col rounded-lg border border-dashed border-line bg-subtle/30 px-2.5 py-1.5 text-left transition hover:bg-subtle">
-                  <span className="text-[0.625rem] uppercase tracking-wide text-faint">Perdidas</span>
-                  <span className="u-tnum text-sm font-semibold text-muted">{lostCards.length}</span>
-                </button>
+            {/* The rest of the filters, revealed by "Filtros". */}
+            {advancedOpen ? (
+              <div className="flex flex-wrap items-center gap-2 border-t border-line px-3 py-2.5 sm:px-4">
+                {ads.length ? (
+                  <Select label="Anuncio" value={filters.ad} onChange={(v) => apply({ ad: v })} options={[{ value: "", label: "Cualquier anuncio" }, ...ads.map((a) => ({ value: a.id, label: a.label }))]} />
+                ) : null}
+                <Select label="Estado" value={filters.status} onChange={(v) => apply({ status: v })} options={[{ value: "", label: "Abiertas y ganadas" }, { value: "open", label: "Abiertas" }, { value: "won", label: "Ganadas" }]} />
+                {owners.length ? (
+                  <Select label="Dueño" value={filters.owner} onChange={(v) => apply({ owner: v })} options={[{ value: "", label: "Cualquier dueño" }, { value: "unassigned", label: "Sin dueño" }, ...owners.map((o) => ({ value: o.id, label: o.label }))]} />
+                ) : null}
+                <OpenedDateControl from={filters.from} to={filters.to} onChange={(from, to) => apply({ from, to })} />
               </div>
-            </div>
+            ) : null}
           </PageShell>
 
-          {/* JP-7: the same filtered set, as a kanban (Tablero) or a sortable table (Lista). */}
+          {/* JP-7b §1/§2: the COHORT funnel — one group of leads followed over time. Compact + collapsible. */}
+          <CohortStrip cohort={cohort} open={stripOpen} onToggle={() => stripPref.write(stripOpen ? "collapsed" : "open")} onPeriod={(preset, from, to) => go({ fp: preset, ff: from, ft: to })} onLost={() => setTab("perdidos")} />
+
           {view === "list" ? (
             <BoardListView cards={shownCards} now={now} sort={sort} onSort={setSort} onOpen={setSelected} />
           ) : (
-          /* The board FILLS the height below the filters and never grows the page: the row is
-             flex-1 min-h-0 and scrolls horizontally; each column stretches to full height and scrolls
-             its OWN cards (overflow-y), header pinned. Columns scroll-snap when they don't fit. Capped
-             at the existing 500-row board limit (listBoardOpportunities) — long columns scroll. */
+          /* JP-7b §6: the five columns FIT at ≥1280px (fluid 1fr with a 12rem min); below that the
+             row scrolls with snap. The grid fills the height; each column scrolls its own cards. */
           <PageShell ariaLabel="Tablero de pipeline" className="overflow-hidden">
-            <div className="flex min-h-0 flex-1 snap-x snap-mandatory gap-3 overflow-x-auto p-3 sm:p-4">
+            <div className="grid min-h-0 flex-1 snap-x grid-cols-[repeat(5,minmax(11rem,1fr))] gap-3 overflow-auto p-3 sm:p-4">
               {BOARD_STAGES.map((col) => {
                 const colCards = grouped[col.key];
                 return (
-                  <section key={col.key} aria-label={col.label} className="flex min-h-0 w-[17rem] shrink-0 snap-start flex-col rounded-xl border border-line bg-subtle/40">
+                  <section key={col.key} aria-label={col.label} className="flex min-h-0 min-w-0 snap-start flex-col rounded-xl border border-line bg-subtle/40">
                     <header className="flex shrink-0 items-center justify-between gap-2 border-b border-line px-2.5 py-2">
                       <div className="flex min-w-0 items-baseline gap-2">
                         <h2 className="text-xs font-semibold text-foreground">{col.label}</h2>
-                        {/* Revenue viewers only: expected (Reservó) / pending (Asistió) / collected (Pagó). */}
+                        {/* §2: column headers show what is there NOW — the count (below) + money here, revenue roles only. */}
                         {columnMoney[col.key] !== undefined ? <span className="u-tnum truncate text-[0.625rem] text-muted">{priceLabelCOP(columnMoney[col.key]!)}</span> : null}
                       </div>
                       <span className="u-mono rounded bg-chip px-1.5 py-0.5 text-[0.625rem] text-faint">{colCards.length}</span>
@@ -327,7 +326,6 @@ export function PipelinePanel({
       ) : tab === "perdidos" ? (
         <PageShell className="overflow-y-auto" ariaLabel="Oportunidades perdidas">
           <div className="flex min-h-full flex-col gap-2 p-3 sm:p-4">
-            {/* JP-7: counts per loss reason, each a toggle that filters the list below. */}
             {losses.length > 0 ? (
               <div className="flex flex-wrap items-center gap-1.5 pb-1" role="group" aria-label="Motivos de pérdida">
                 <button type="button" onClick={() => setLossFilter(null)} aria-pressed={lossFilter === null} className={`u-focus rounded-full border px-2.5 py-1 text-[0.6875rem] font-medium transition ${lossFilter === null ? "border-foreground bg-foreground text-background" : "border-line text-muted hover:bg-subtle"}`}>
@@ -391,8 +389,6 @@ export function PipelinePanel({
         </PageShell>
       )}
 
-      {/* JP-7 §4: the opportunity drawer. Keyed on the card id so each selection mounts fresh (its
-          detail is loaded on mount). Actions reuse the same handlers as the card. */}
       {selected ? (
         <OpportunityDrawer
           key={selected.id}
@@ -419,6 +415,124 @@ export function PipelinePanel({
   );
 }
 
+/**
+ * JP-7b §1 — the COHORT funnel strip. It follows ONE group of opportunities (those OPENED in the
+ * selected period) and shows how many of THAT group reached each stage over time, so conversion is
+ * never above 100%. Its period is independent of the board. Compact + collapsible; no money, no
+ * current-column counts (those live in the column headers — §2).
+ */
+function CohortStrip({ cohort, open, onToggle, onPeriod, onLost }: {
+  cohort: CohortView;
+  open: boolean;
+  onToggle: () => void;
+  onPeriod: (preset: CohortPreset, from: string | null, to: string | null) => void;
+  onLost: () => void;
+}) {
+  const { period, steps, size, lost, topLoss } = cohort;
+  const title = `De los ${size} ${size === 1 ? "lead" : "leads"} que entraron ${period.entrada}…`;
+  return (
+    <PageShell grow={false} clip={false}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3 py-2 sm:px-4">
+        <button type="button" aria-expanded={open} onClick={onToggle} className="u-focus flex min-w-0 items-center gap-1.5 text-left">
+          <span aria-hidden className="text-faint">{open ? "▾" : "▸"}</span>
+          <span className="truncate text-xs font-medium text-foreground">{title}</span>
+        </button>
+        {period.inProgress ? (
+          <span title="Los leads recientes todavía pueden avanzar; estos porcentajes van a subir." className="rounded-full bg-chip px-2 py-0.5 text-[0.625rem] font-medium text-muted">
+            En curso
+          </span>
+        ) : null}
+        <div className="ml-auto flex items-center gap-2">
+          <CohortPeriodControl period={period} onPeriod={onPeriod} />
+        </div>
+      </div>
+      {open ? (
+        <div className="flex flex-nowrap items-stretch gap-1.5 overflow-x-auto border-t border-line px-3 py-2.5 sm:px-4" aria-label="Embudo del cohorte">
+          {steps.map((step, i) => (
+            <div key={step.stage} className="flex shrink-0 items-center gap-1.5">
+              {i > 0 ? (
+                <span className="u-tnum shrink-0 text-[0.625rem] text-faint" title={`${step.convPct ?? 0}% del paso anterior llegó a ${step.label}`}>
+                  {step.convPct !== null ? `${step.convPct}%` : "—"}&nbsp;›
+                </span>
+              ) : null}
+              <div className="flex min-w-[76px] flex-col rounded-lg border border-line bg-subtle/40 px-2.5 py-1.5">
+                <span className="text-[0.625rem] uppercase tracking-wide text-faint">{step.label}</span>
+                <span className="u-tnum text-sm font-semibold text-foreground">{step.reached}</span>
+              </div>
+            </div>
+          ))}
+          <div className="flex shrink-0 items-center pl-1">
+            <button type="button" onClick={onLost} className="u-focus flex min-w-[76px] flex-col rounded-lg border border-dashed border-line bg-subtle/30 px-2.5 py-1.5 text-left transition hover:bg-subtle">
+              <span className="text-[0.625rem] uppercase tracking-wide text-faint">Perdidas</span>
+              <span className="u-tnum text-sm font-semibold text-muted">{lost}</span>
+              {topLoss ? <span className="truncate text-[0.5625rem] text-faint">sobre todo {LOST_REASON_LABEL[topLoss.reason].toLocaleLowerCase("es")}</span> : null}
+            </button>
+          </div>
+        </div>
+      ) : null}
+    </PageShell>
+  );
+}
+
+const COHORT_PRESETS: CohortPreset[] = ["mes_pasado", "hace_30_60", "ultimos_30", "ultimos_90", "custom"];
+function CohortPeriodControl({ period, onPeriod }: { period: CohortPeriod; onPeriod: (preset: CohortPreset, from: string | null, to: string | null) => void }) {
+  const isCustom = period.preset === "custom";
+  return (
+    <div className="flex items-center gap-1.5">
+      <label className="flex items-center gap-1 text-xs text-muted">
+        <span className="sr-only">Periodo del cohorte</span>
+        <select
+          value={period.preset}
+          onChange={(e) => (e.target.value === "custom" ? onPeriod("custom", period.customFrom || null, period.customTo || null) : onPeriod(e.target.value as CohortPreset, null, null))}
+          aria-label="Periodo del cohorte"
+          className={`${INPUT} max-w-[11rem]`}
+        >
+          {COHORT_PRESETS.map((p) => (
+            <option key={p} value={p}>{COHORT_PRESET_LABEL[p]}</option>
+          ))}
+        </select>
+      </label>
+      {isCustom ? (
+        <>
+          <input type="date" aria-label="Cohorte desde" value={period.customFrom} onChange={(e) => onPeriod("custom", e.target.value, period.customTo || null)} className={INPUT} />
+          <input type="date" aria-label="Cohorte hasta" value={period.customTo} onChange={(e) => onPeriod("custom", period.customFrom || null, e.target.value)} className={INPUT} />
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+/** JP-7b §3: the "opened" date filter as ONE control — presets + an optional custom range. The
+ *  presets compute their range in the click handler (never during render), so the clock stays out
+ *  of the component body. */
+const DATE_PRESETS: Array<{ label: string; days: number }> = [
+  { label: "Últimos 7 días", days: 7 },
+  { label: "Últimos 30 días", days: 30 },
+  { label: "Últimos 90 días", days: 90 },
+];
+function OpenedDateControl({ from, to, onChange }: { from: string; to: string; onChange: (from: string, to: string) => void }) {
+  const dayStr = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;
+  const preset = (days: number) => {
+    const now = new Date();
+    onChange(dayStr(new Date(now.getTime() - days * 86_400_000)), dayStr(now));
+  };
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <span className="text-xs text-muted">Abierta</span>
+      {DATE_PRESETS.map((p) => (
+        <button key={p.days} type="button" onClick={() => preset(p.days)} className="u-focus rounded-md border border-line px-2 py-1 text-[0.6875rem] text-muted transition hover:bg-subtle hover:text-foreground">
+          {p.label}
+        </button>
+      ))}
+      <input type="date" value={from} onChange={(e) => onChange(e.target.value, to)} aria-label="Abierta desde" className={INPUT} />
+      <input type="date" value={to} onChange={(e) => onChange(from, e.target.value)} aria-label="Abierta hasta" className={INPUT} />
+      {from || to ? (
+        <button type="button" onClick={() => onChange("", "")} className="u-focus text-[0.6875rem] text-muted underline-offset-2 hover:underline">limpiar</button>
+      ) : null}
+    </div>
+  );
+}
+
 function OriginChip({ card }: { card: BoardCard }) {
   return (
     <span className={`inline-flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-[0.625rem] font-medium ${card.originChip.tone}`}>
@@ -429,11 +543,11 @@ function OriginChip({ card }: { card: BoardCard }) {
 }
 
 /**
- * A COMPACT board card: three short, non-wrapping lines — name + time in stage, a one-line origin
- * (campaign in the tooltip), and who spoke last + when (the customer's turn is emphasised: it needs
- * a reply). One primary action per stage (Lead → Calificar); the rest live in a "⋯" menu (keyboard
- * and touch, no hover-only). The whole card body is a stretched link to the contact record; the
- * action controls sit above it. No "Ganada" chip — each column already implies the status.
+ * JP-7b §4/§5 — a DENSE, content-sized card: the "⋯" menu sits top-right next to the time (no empty
+ * footer). The one stage line, then the lead preview (the CUSTOMER's last message only; "Esperando
+ * al cliente" when the business spoke last), then the money state. The primary action (Calificar) is
+ * a COMPACT GHOST button, never a solid black block. Colour means ONE thing: stale is the left edge
+ * only (calm warn, reason in the tooltip); "Cobro pendiente" is neutral with an icon; money green.
  */
 function OppCard({ clientId, card, now, pending, onOpen, onQualify, onUnqualify, onLose }: {
   clientId: string;
@@ -448,15 +562,22 @@ function OppCard({ clientId, card, now, pending, onOpen, onQualify, onUnqualify,
   const [menuOpen, setMenuOpen] = useState(false);
   const isOpen = card.status === "open";
   const contactHref = `/clients/${clientId}/contacts/${card.contactId}`;
-  // JP-7 — the one "next thing to know" line for this stage.
   const stageLine = card.stage === "lead" ? originLineOf(card) : card.stage === "qualified" ? qualificationLineOf(card) : card.stage === "booked" ? apptLineOf(card) : null;
+  const leadPreview =
+    card.stage === "lead"
+      ? card.spokeLast === "customer" && card.lastMessageText
+        ? `«${card.lastMessageText}»`
+        : card.spokeLast === "business"
+          ? "Esperando al cliente"
+          : null
+      : null;
   return (
     <article
-      className={`relative flex flex-col gap-1 rounded-lg border bg-surface p-2.5 transition-colors hover:border-line-strong focus-within:border-line-strong ${card.stale ? "border-line border-l-[3px] border-l-[var(--warn-rule)]" : "border-line"}`}
+      className={`relative flex flex-col gap-1 rounded-lg border border-line bg-surface p-2.5 transition-colors hover:border-line-strong focus-within:border-line-strong ${card.stale ? "border-l-[3px] border-l-[var(--warn-rule)]" : ""}`}
       title={card.stale ? card.stale.reason : undefined}
     >
-      {/* Line 1 — name (stretched button → opens the drawer) · owner avatar · time in stage (warn when stale). */}
-      <div className="flex items-start gap-2">
+      {/* Top row — name (stretched → drawer) · owner · time (neutral even when stale) · ⋯ menu. */}
+      <div className="flex items-start gap-1.5">
         <button
           type="button"
           onClick={onOpen}
@@ -465,38 +586,44 @@ function OppCard({ clientId, card, now, pending, onOpen, onQualify, onUnqualify,
           {card.name}
         </button>
         {card.owner ? (
-          <span
-            aria-hidden
-            title={`Dueño: ${card.owner.name ?? "asignado"}`}
-            className="grid size-[18px] shrink-0 place-items-center rounded-full bg-chip text-[0.5625rem] font-semibold text-muted"
-          >
+          <span aria-hidden title={`Dueño: ${card.owner.name ?? "asignado"}`} className="grid size-[18px] shrink-0 place-items-center rounded-full bg-chip text-[0.5625rem] font-semibold text-muted">
             {ownerInitials(card.owner.name)}
           </span>
         ) : null}
         {card.stageSince ? (
-          <span className={`shrink-0 text-[0.625rem] ${card.stale ? "font-medium text-warn" : "text-faint"}`} title={card.stale ? card.stale.reason : `En esta etapa desde ${formatStampFull(new Date(card.stageSince))}`}>
+          <span className="shrink-0 text-[0.625rem] text-faint" title={`En esta etapa desde ${formatStampFull(new Date(card.stageSince))}`}>
             {relativeAgeShort(card.stageSince, now)}
           </span>
         ) : null}
+        <div className="relative z-10 -mr-1 -mt-0.5 shrink-0">
+          <Menu label="Más acciones" floating open={menuOpen} onToggle={() => setMenuOpen((v) => !v)} onClose={() => setMenuOpen(false)}>
+            {card.stage === "qualified" ? (
+              <MenuButton onClick={() => { setMenuOpen(false); onUnqualify(); }} disabled={pending}>Quitar calificación</MenuButton>
+            ) : null}
+            {isOpen ? (
+              <MenuButton danger onClick={() => { setMenuOpen(false); onLose(); }} disabled={pending}>Marcar perdida</MenuButton>
+            ) : null}
+            {card.stage === "qualified" || isOpen ? <MenuSeparator /> : null}
+            {card.conversationId ? <MenuLink href={`/clients/${clientId}/inbox?c=${card.conversationId}`}>Abrir conversación</MenuLink> : null}
+            <MenuLink href={contactHref}>Ver ficha</MenuLink>
+          </Menu>
+        </div>
       </div>
 
-      {/* The stage's "next thing to know": origin (Lead) / qualification (Calificado) / appointment (Reservó). */}
       {stageLine ? (
         <p className="truncate text-[0.6875rem] text-muted" title={card.stage === "lead" ? originTitleOf(card) : stageLine}>
           {stageLine}
         </p>
       ) : null}
 
-      {/* Lead: a preview of the customer's last message. */}
-      {card.stage === "lead" && card.lastMessageText ? (
-        <p className="truncate text-[0.625rem] text-faint" title={card.lastMessageText}>
-          «{card.lastMessageText}»
-        </p>
+      {leadPreview ? (
+        <p className="truncate text-[0.625rem] text-faint" title={leadPreview}>{leadPreview}</p>
       ) : null}
 
-      {/* Money state: Asistió waits to be charged (list value); Pagó shows the amount + method. */}
+      {/* §5 money state: Asistió is NEUTRAL "cobro pendiente" with an icon; Pagó is success green. */}
       {card.stage === "attended" ? (
-        <p className="truncate text-[0.6875rem] font-medium text-warn">
+        <p className="flex items-center gap-1 truncate text-[0.6875rem] text-muted">
+          <ClockIcon />
           Cobro pendiente{card.apptListAmount ? ` · ${priceLabelCOP(card.apptListAmount)} (lista)` : ""}
         </p>
       ) : card.stage === "paid" ? (
@@ -505,32 +632,25 @@ function OppCard({ clientId, card, now, pending, onOpen, onQualify, onUnqualify,
         </p>
       ) : null}
 
-      {/* Actions — one primary per stage + a menu for the rest. `relative z-10` keeps them above the
-          stretched link so they stay independently clickable. */}
-      <div className="relative z-10 mt-0.5 flex items-center justify-between gap-2">
-        {card.stage === "lead" ? (
-          <button type="button" className={PRIMARY_SM} disabled={pending} onClick={onQualify}>Calificar</button>
-        ) : (
-          <span aria-hidden />
-        )}
-        <Menu label="Más acciones" floating open={menuOpen} onToggle={() => setMenuOpen((v) => !v)} onClose={() => setMenuOpen(false)}>
-          {card.stage === "qualified" ? (
-            <MenuButton onClick={() => { setMenuOpen(false); onUnqualify(); }} disabled={pending}>Quitar calificación</MenuButton>
-          ) : null}
-          {isOpen ? (
-            <MenuButton danger onClick={() => { setMenuOpen(false); onLose(); }} disabled={pending}>Marcar perdida</MenuButton>
-          ) : null}
-          {card.stage === "qualified" || isOpen ? <MenuSeparator /> : null}
-          {card.conversationId ? <MenuLink href={`/clients/${clientId}/inbox?c=${card.conversationId}`}>Abrir conversación</MenuLink> : null}
-          <MenuLink href={contactHref}>Ver ficha</MenuLink>
-        </Menu>
-      </div>
+      {/* §4: the one primary action, as a compact ghost button (lead only) — no empty footer. */}
+      {card.stage === "lead" ? (
+        <div className="relative z-10 mt-0.5">
+          <button type="button" className={QUALIFY_BTN} disabled={pending} onClick={onQualify}>Calificar</button>
+        </div>
+      ) : null}
     </article>
   );
 }
 
-/** A sortable list-view header cell. Toggles direction on the active column; a fresh column opens
- *  ascending for text (name/owner/stage) and descending for recency (time/appt/last message). */
+function ClockIcon() {
+  return (
+    <svg aria-hidden width="11" height="11" viewBox="0 0 12 12" fill="none" className="shrink-0 text-faint">
+      <circle cx="6" cy="6" r="4.5" stroke="currentColor" strokeWidth="1.1" />
+      <path d="M6 3.6V6l1.6 1" stroke="currentColor" strokeWidth="1.1" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  );
+}
+
 function SortTh({ sort, onSort, k, label, className = "" }: { sort: Sort; onSort: (s: Sort) => void; k: SortKey; label: string; className?: string }) {
   const active = sort.key === k;
   const toggle = () => onSort(active ? { key: k, dir: sort.dir === "asc" ? "desc" : "asc" } : { key: k, dir: k === "name" || k === "owner" || k === "stage" ? "asc" : "desc" });
@@ -544,12 +664,6 @@ function SortTh({ sort, onSort, k, label, className = "" }: { sort: Sort; onSort
   );
 }
 
-/**
- * JP-7 LIST VIEW — the same filtered opportunities as a sortable table, sharing the board's filters.
- * Columns: contact · stage · origin/ad · service interested · appointment · time in stage · last
- * message · owner. Horizontal scroll keeps it usable at ~390px; the whole row is a link to the
- * contact record. The sort choice lives in the parent (so it survives a board/list toggle).
- */
 function BoardListView({ cards, now, sort, onSort, onOpen }: {
   cards: BoardCard[];
   now: Date;

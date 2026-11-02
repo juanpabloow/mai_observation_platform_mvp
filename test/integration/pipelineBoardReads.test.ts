@@ -5,6 +5,7 @@ import { query } from '../../src/db/client.js';
 import { cleanupTenant, closeDb, seedContact, seedMember, seedScenario, seedWorkflow } from './fixtures.js';
 import { getOrCreateConversation } from '../../src/db/repositories/handoff.js';
 import {
+  getCohortFunnel,
   getInboxContactPipeline,
   listAwaitingBusinessReply,
   listBoardOpportunities,
@@ -157,4 +158,83 @@ test('JP-7 board filters: search (name / phone / @username) and owner (incl. una
   const wilson = (await listBoardOpportunities(s.tenantId, s.clientId, { search: 'wilson' }))[0];
   assert.equal(wilson.owner_user_id, owner);
   assert.ok('appt_tz' in wilson && 'last_message_text' in wilson && 'qualification_service' in wilson);
+});
+
+/** Seed one opportunity OPENED `openedDaysAgo` days ago, having reached the given stage timestamps. */
+async function seedCohortOpp(
+  s: F,
+  o: { contactId: string; openedDaysAgo: number; reach: { qualified?: boolean; booked?: boolean; attended?: boolean; paid?: boolean }; status?: string; lostReason?: string | null },
+): Promise<string> {
+  const stage = o.reach.paid ? 'paid' : o.reach.attended ? 'attended' : o.reach.booked ? 'booked' : o.reach.qualified ? 'qualified' : 'lead';
+  const r = await one<{ id: string }>(
+    `INSERT INTO opportunities (tenant_id, client_id, contact_id, status, stage, created_at, lead_at, qualified_at, booked_at, attended_at, paid_at, closed_at, lost_reason)
+       VALUES ($1,$2,$3,$4,$5,
+         now() - make_interval(days => $6::int), now() - make_interval(days => $6::int),
+         CASE WHEN $7 THEN now() - make_interval(days => $6::int) END,
+         CASE WHEN $8 THEN now() - make_interval(days => $6::int) END,
+         CASE WHEN $9 THEN now() - make_interval(days => $6::int) END,
+         CASE WHEN $10 THEN now() - make_interval(days => $6::int) END,
+         CASE WHEN $4 = 'lost' THEN now() - make_interval(days => $6::int) END, $11)
+     RETURNING id`,
+    [s.tenantId, s.clientId, o.contactId, o.status ?? 'open', stage, o.openedDaysAgo,
+      !!o.reach.qualified, !!o.reach.booked, !!o.reach.attended, !!o.reach.paid, o.lostReason ?? null],
+  );
+  return r.id;
+}
+
+test('JP-7b §1 getCohortFunnel: monotonic reached-counts for one group, lost by reason, window + origin filters', async () => {
+  const s = await fixture();
+  const win = (days: number) => new Date(Date.now() - days * 86_400_000).toISOString();
+  const from = win(40);
+  const to = win(10); // a settled window: [40d ago, 10d ago]
+
+  // Five opportunities OPENED ~30 days ago (inside the window), reaching different stages.
+  const A = await mkContact(s); await seedCohortOpp(s, { contactId: A, openedDaysAgo: 30, reach: { qualified: true, booked: true, attended: true, paid: true } });
+  const B = await mkContact(s); await seedCohortOpp(s, { contactId: B, openedDaysAgo: 30, reach: { qualified: true, booked: true } });
+  const C = await mkContact(s); await seedCohortOpp(s, { contactId: C, openedDaysAgo: 30, reach: { qualified: true } });
+  const D = await mkContact(s); await seedCohortOpp(s, { contactId: D, openedDaysAgo: 30, reach: {}, status: 'lost', lostReason: 'no_respondio' });
+  const E = await mkContact(s); await seedCohortOpp(s, { contactId: E, openedDaysAgo: 30, reach: { qualified: true, booked: true, attended: true }, status: 'lost', lostReason: 'no_asistio' });
+  // One opened AFTER the window (5 days ago) → excluded.
+  const F2 = await mkContact(s); await seedCohortOpp(s, { contactId: F2, openedDaysAgo: 5, reach: { qualified: true } });
+
+  const c = await getCohortFunnel(s.tenantId, s.clientId, {}, from, to);
+  assert.equal(c.cohort, 5, 'only the five opened inside the window (the 5-day-old one excluded)');
+  assert.deepEqual(
+    [c.cohort, c.reached_qualified, c.reached_booked, c.reached_attended, c.reached_paid],
+    [5, 4, 3, 2, 1],
+    'reached is monotonic: Lead 5 ≥ Calificado 4 ≥ Reservó 3 ≥ Asistió 2 ≥ Pagó 1',
+  );
+  assert.equal(c.lost, 2);
+  assert.equal(c.lost_no_respondio, 1);
+  assert.equal(c.lost_no_asistio, 1);
+
+  // Origin filter narrows the SAME cohort: give A a real ad origin, filter to meta_ad.
+  const realAd = await mkAd(s, { name: 'Camp A' });
+  await setAdOrigin(s, A, await mkConv(s, A), realAd);
+  const byOrigin = await getCohortFunnel(s.tenantId, s.clientId, { originKinds: ['meta_ad'] }, from, to);
+  assert.equal(byOrigin.cohort, 1, 'the origin filter narrows the cohort to the ad contact');
+  assert.equal(byOrigin.reached_paid, 1);
+});
+
+test('JP-7b §7: a contact literally named "TEST" is hidden by default (board + cohort), shown with includeTest', async () => {
+  const s = await fixture();
+  const real = await seedContact(s.tenantId, s.clientId, { name: 'Wendy Real' });
+  const testC = await seedContact(s.tenantId, s.clientId, { name: 'TEST' });
+  await seedOpp(s, { contactId: real, stage: 'lead' });
+  await seedCohortOpp(s, { contactId: testC, openedDaysAgo: 5, reach: { qualified: true } });
+
+  const names = (rows: Array<{ contact_id: string }>) => rows.map((r) => r.contact_id).sort();
+  const def = await listBoardOpportunities(s.tenantId, s.clientId);
+  assert.ok(def.some((r) => r.contact_id === real), 'the real contact shows');
+  assert.ok(!def.some((r) => r.contact_id === testC), 'the "TEST" contact is hidden by default');
+  const withTest = await listBoardOpportunities(s.tenantId, s.clientId, { includeTest: true });
+  assert.ok(withTest.some((r) => r.contact_id === testC), 'includeTest brings it back');
+  void names;
+
+  // The cohort funnel excludes it too (both opps are in the last-30-days window: the real lead +
+  // the TEST one). Default counts only the real one; includeTest counts both.
+  const from = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const to = new Date(Date.now() + 86_400_000).toISOString();
+  assert.equal((await getCohortFunnel(s.tenantId, s.clientId, {}, from, to)).cohort, 1, 'the TEST opp is excluded; only the real lead counts');
+  assert.equal((await getCohortFunnel(s.tenantId, s.clientId, { includeTest: true }, from, to)).cohort, 2, 'includeTest counts the TEST opp too');
 });

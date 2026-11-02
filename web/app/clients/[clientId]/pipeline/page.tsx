@@ -2,6 +2,7 @@ import { connection } from "next/server";
 import { notFound } from "next/navigation";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import {
+  getCohortFunnel,
   listAwaitingBusinessReply,
   listBoardOpportunities,
   type BoardFilters,
@@ -12,7 +13,7 @@ import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
 import { isOriginGroupKey, kindsForGroup } from "@/lib/originDisplay";
 import { displayContactName } from "@/lib/contactName";
 import { can } from "@/lib/access";
-import { stageTotals, toBoardCard } from "@/lib/pipelineBoard";
+import { cohortFunnelSteps, cohortTopLoss, resolveCohortPeriod, stageTotals, toBoardCard } from "@/lib/pipelineBoard";
 import { PipelinePanel } from "@/components/pipeline/PipelinePanel";
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -63,12 +64,17 @@ export default async function PipelinePage({
   const ownerFilter = sp.owner === "unassigned" ? "unassigned" : sp.owner && ownerName.has(sp.owner) ? sp.owner : undefined;
 
   const filters: BoardFilters = { originKinds, campaignId, adId, openedFrom, openedTo, search, owner: ownerFilter };
-  const [boardRows, lostRows, queueRows] = await Promise.all([
+  // JP-7b §1: the cohort funnel has its OWN period (independent of the board's current-state view);
+  // it respects the origin/campaign/ad/owner facets but not search/status (the cohort is a time group).
+  const cohortPeriod = resolveCohortPeriod(sp.fp, sp.ff, sp.ft);
+  const [boardRows, lostRows, queueRows, cohortRaw] = await Promise.all([
     // The board columns = everything NOT lost (the status filter narrows further if set).
     listBoardOpportunities(scope.tenantId, client.id, { ...filters, status: statusFilter }),
     listBoardOpportunities(scope.tenantId, client.id, { ...filters, status: "lost" }),
     listAwaitingBusinessReply(scope.tenantId, client.id),
+    getCohortFunnel(scope.tenantId, client.id, { originKinds, campaignId, adId, owner: ownerFilter }, cohortPeriod.fromIso, cohortPeriod.toIso),
   ]);
+  const cohort = { period: cohortPeriod, steps: cohortFunnelSteps(cohortRaw), size: cohortRaw.cohort, lost: cohortRaw.lost, topLoss: cohortTopLoss(cohortRaw) };
 
   const queue = queueRows.map((q) => ({
     id: q.id,
@@ -92,6 +98,7 @@ export default async function PipelinePage({
       cards={cards}
       lostCards={lostCardsVm}
       moneyTotals={moneyTotals}
+      cohort={cohort}
       queue={queue}
       campaigns={campaigns.map((c) => ({ id: c.id, name: c.name }))}
       ads={ads.map((a) => ({ id: a.id, label: a.name || a.headline || a.external_id }))}
