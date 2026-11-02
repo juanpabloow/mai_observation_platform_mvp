@@ -12,9 +12,16 @@
 /** A character that makes a name "real": any letter or number, OR an emoji / pictograph / flag
  *  (so "😀" stays a name, but ".", "!!", "—" and "   " do not). */
 const MEANINGFUL = /[\p{L}\p{N}]|\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
+const EMOJI = /\p{Extended_Pictographic}|\p{Regional_Indicator}/u;
 
 export function isMeaningfulName(name: string | null | undefined): boolean {
-  return !!name && MEANINGFUL.test(name);
+  if (!name) return false;
+  const t = name.trim();
+  if (!MEANINGFUL.test(t)) return false; // empty / whitespace / punctuation-only (e.g. ".")
+  // JP-7b §7: a lone alphanumeric character ("a", "x", "1") is a placeholder, not a name. A single
+  // EMOJI stays a real name (one pictograph), so only plain letters/digits of length 1 are junk.
+  if ([...t].length === 1 && !EMOJI.test(t)) return false;
+  return true;
 }
 
 /**

@@ -265,7 +265,13 @@ export async function listBoardOpportunities(tenantId: string, clientId: string,
     params.push(filters.openedTo);
     where.push(`o.created_at < $${params.length}::timestamptz`);
   }
-  if (!filters.includeTest) where.push(`(ad.is_test IS NOT TRUE)`);
+  if (!filters.includeTest) {
+    // JP-7b §7: hide test data by default — test-ad origins (a "TEST-" ad external_id → ads.is_test)
+    // AND the placeholder contact literally named "TEST" (a tester's WhatsApp profile name; there is
+    // no is_test flag on contacts, so the exact name is the only signal). IS DISTINCT FROM keeps nulls.
+    where.push(`(ad.is_test IS NOT TRUE)`);
+    where.push(`(upper(btrim(ct.name)) IS DISTINCT FROM 'TEST')`);
+  }
   params.push(Math.min(Math.max(filters.limit ?? 500, 1), 1000));
   const limitIdx = params.length;
   const r = await query<BoardOpportunityRow>(
@@ -316,6 +322,99 @@ export async function listBoardOpportunities(tenantId: string, clientId: string,
     params,
   );
   return r.rows;
+}
+
+/** JP-7b §1 — the cohort-funnel filters: the SAME origin/campaign/ad/owner facets as the board (NO
+ *  search/status — the cohort is a time group), plus the opened-in window and the test exclusion. */
+export interface CohortFilters {
+  originKinds?: OriginKind[];
+  campaignId?: string;
+  adId?: string;
+  owner?: string; // a user id, or 'unassigned'
+  includeTest?: boolean;
+}
+
+/** One cohort's reached-counts (monotonic) + how many were lost, by reason. */
+export interface CohortFunnelRow {
+  cohort: number;
+  reached_qualified: number;
+  reached_booked: number;
+  reached_attended: number;
+  reached_paid: number;
+  lost: number;
+  lost_precio: number;
+  lost_horario: number;
+  lost_no_respondio: number;
+  lost_no_asistio: number;
+  lost_otro: number;
+}
+
+/**
+ * JP-7b §1 — the COHORT funnel: take the opportunities OPENED in [fromIso, toIso) (opened =
+ * COALESCE(lead_at, created_at)), then count how many of THAT SAME group reached each stage AT ANY
+ * TIME up to now, from the stage timestamps. Reached is defined as "this stage's timestamp OR any
+ * later one is set", so the counts are monotonic (Lead ≥ Calificado ≥ … ≥ Pagó) and every
+ * conversion is ≤ 100% — unlike the old snapshot, which divided who is in each column NOW. Lost
+ * opportunities stay in the cohort and are counted up to the stage they reached. Honors the same
+ * origin/campaign/ad/owner filters + the test-data exclusion.
+ */
+export async function getCohortFunnel(
+  tenantId: string,
+  clientId: string,
+  filters: CohortFilters,
+  fromIso: string,
+  toIso: string,
+): Promise<CohortFunnelRow> {
+  const params: unknown[] = [tenantId, clientId, fromIso, toIso];
+  const where: string[] = [
+    'o.tenant_id = $1',
+    'o.client_id = $2',
+    'COALESCE(o.lead_at, o.created_at) >= $3::timestamptz',
+    'COALESCE(o.lead_at, o.created_at) < $4::timestamptz',
+  ];
+  if (filters.originKinds && filters.originKinds.length > 0) {
+    params.push(filters.originKinds);
+    where.push(`ct.origin_kind = ANY($${params.length}::text[])`);
+  }
+  if (filters.campaignId) {
+    params.push(filters.campaignId);
+    where.push(`ad.campaign_id = $${params.length}`);
+  }
+  if (filters.adId) {
+    params.push(filters.adId);
+    where.push(`ft.ad_id = $${params.length}`);
+  }
+  if (filters.owner === 'unassigned') {
+    where.push(`ct.assigned_to IS NULL`);
+  } else if (filters.owner) {
+    params.push(filters.owner);
+    where.push(`ct.assigned_to = $${params.length}`);
+  }
+  if (!filters.includeTest) {
+    where.push(`(ad.is_test IS NOT TRUE)`);
+    where.push(`(upper(btrim(ct.name)) IS DISTINCT FROM 'TEST')`);
+  }
+  const r = await query<CohortFunnelRow>(
+    `SELECT
+        count(*)::int AS cohort,
+        count(*) FILTER (WHERE o.qualified_at IS NOT NULL OR o.booked_at IS NOT NULL OR o.attended_at IS NOT NULL OR o.paid_at IS NOT NULL)::int AS reached_qualified,
+        count(*) FILTER (WHERE o.booked_at IS NOT NULL OR o.attended_at IS NOT NULL OR o.paid_at IS NOT NULL)::int AS reached_booked,
+        count(*) FILTER (WHERE o.attended_at IS NOT NULL OR o.paid_at IS NOT NULL)::int AS reached_attended,
+        count(*) FILTER (WHERE o.paid_at IS NOT NULL)::int AS reached_paid,
+        count(*) FILTER (WHERE o.status = 'lost')::int AS lost,
+        count(*) FILTER (WHERE o.status = 'lost' AND o.lost_reason = 'precio')::int AS lost_precio,
+        count(*) FILTER (WHERE o.status = 'lost' AND o.lost_reason = 'horario')::int AS lost_horario,
+        count(*) FILTER (WHERE o.status = 'lost' AND o.lost_reason = 'no_respondio')::int AS lost_no_respondio,
+        count(*) FILTER (WHERE o.status = 'lost' AND o.lost_reason = 'no_asistio')::int AS lost_no_asistio,
+        count(*) FILTER (WHERE o.status = 'lost' AND o.lost_reason = 'otro')::int AS lost_otro
+       FROM opportunities o
+       JOIN contacts ct ON ct.id = o.contact_id AND ct.tenant_id = o.tenant_id
+       LEFT JOIN attribution_touches ft ON ft.id = ct.first_touch_id AND ft.tenant_id = o.tenant_id
+       LEFT JOIN ads ad ON ad.id = ft.ad_id AND ad.tenant_id = o.tenant_id
+      WHERE ${where.join(' AND ')}`,
+    params,
+  );
+  return r.rows[0];
 }
 
 /** The "sin respuesta del negocio" queue: OPEN lead/qualified opportunities whose conversation's

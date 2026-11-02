@@ -15,6 +15,13 @@ test('isMeaningfulName: letters/numbers/emoji are names; punctuation/whitespace 
   assert.equal(isMeaningfulName(''), false);
   assert.equal(isMeaningfulName(null), false);
   assert.equal(isMeaningfulName(undefined), false);
+  // JP-7b §7: a lone alphanumeric character is a placeholder, not a name.
+  assert.equal(isMeaningfulName('a'), false);
+  assert.equal(isMeaningfulName('x'), false);
+  assert.equal(isMeaningfulName('1'), false);
+  assert.equal(isMeaningfulName(' a '), false, 'trimmed to a single char');
+  assert.equal(isMeaningfulName('Jo'), true, 'two letters is a (short) name');
+  assert.equal(isMeaningfulName('😀'), true, 'a lone emoji is still a real name');
 });
 
 test('maskPhone: masks the middle, keeps a hint and the last four', () => {

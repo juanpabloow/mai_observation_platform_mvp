@@ -3,10 +3,15 @@ import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import {
   BOARD_STAGES,
+  COHORT_SETTLING_DAYS,
   STALE_LEAD_MINUTES,
   STALE_QUALIFIED_HOURS,
   apptLineOf,
+  cohortFunnelSteps,
+  cohortPeriodRange,
+  cohortTopLoss,
   funnelSteps,
+  resolveCohortPeriod,
   groupByStage,
   lossReasonCounts,
   originLineOf,
@@ -295,8 +300,7 @@ test('JP-7 revenue totals are a Client-Owner/agency view — the Setter never ge
   assert.ok(PAGE.includes('const moneyTotals = canViewRevenue ? stageTotals(cards) : null'), 'totals are null for a non-revenue viewer (payload carries none)');
 });
 
-test('JP-7 the panel renders the funnel, gated column money, stage card lines, stale edge, and the Perdidos header', () => {
-  assert.ok(PANEL.includes('Embudo de conversión') && PANEL.includes('step.convPct'), 'the funnel strip with conversion %');
+test('JP-7 the panel renders gated column money, stage card lines, stale edge, and the Perdidos header', () => {
   assert.ok(PANEL.includes('columnMoney[col.key]') && PANEL.includes('moneyTotals'), 'column money shown only when totals are present (revenue only)');
   assert.ok(PANEL.includes('qualificationLineOf') && PANEL.includes('apptLineOf') && PANEL.includes('card.lastMessageText'), 'per-stage card lines');
   assert.ok(PANEL.includes('(lista)') && PANEL.includes('Cobro pendiente'), 'Asistió shows the pending list amount');
@@ -309,15 +313,85 @@ test('JP-7 part 2: the panel offers search, owner filter, "waiting" toggle, and 
   // Search is a form that writes ?q=; owner is a select (incl. "Sin dueño"); waiting is a client lens.
   assert.ok(PANEL.includes("apply({ q: searchDraft.trim() })"), 'search submits ?q=');
   assert.ok(PANEL.includes('label="Dueño"') && PANEL.includes('"unassigned"'), 'owner filter incl. unassigned');
-  assert.ok(PANEL.includes('Solo los que esperan respuesta') && PANEL.includes('c.spokeLast === "customer"'), 'waiting lens filters to customer-last');
+  assert.ok(PANEL.includes('Esperan respuesta') && PANEL.includes('c.spokeLast === "customer"'), 'waiting lens filters to customer-last');
   // View toggle persisted per user (localStorage via an external store — no setState-in-effect).
-  assert.ok(PANEL.includes('useSyncExternalStore(subscribeView') && PANEL.includes('localStorage.setItem(VIEW_KEY'), 'the Tablero/Lista choice is remembered per user, SSR-safe');
+  assert.ok(PANEL.includes('useSyncExternalStore(viewPref.subscribe') && PANEL.includes('localStorage.setItem(key'), 'the Tablero/Lista choice is remembered per user, SSR-safe');
   // List view: a sortable table with the required columns.
   assert.ok(PANEL.includes('function BoardListView'), 'the list view exists');
   for (const col of ['Contacto', 'Etapa', 'Origen / anuncio', 'Servicio', 'Cita', 'En etapa', 'Último mensaje', 'Dueño']) {
     assert.ok(PANEL.includes(`label="${col}"`) || PANEL.includes(`>${col}<`), `list column: ${col}`);
   }
   assert.ok(PANEL.includes('aria-sort='), 'columns are sortable (aria-sort)');
+});
+
+// ── JP-7b ────────────────────────────────────────────────────────────────────────────────
+
+test('JP-7b §1 cohortFunnelSteps: monotonic reached counts, conversion never above 100%', () => {
+  // A cohort where the OLD snapshot gave >100%: more are booked NOW than were ever qualified-column.
+  // Cohort of 100 leads; 60 reached qualified, 50 booked, 20 attended, 10 paid.
+  const steps = cohortFunnelSteps({ cohort: 100, reached_qualified: 60, reached_booked: 50, reached_attended: 20, reached_paid: 10, lost: 0, lost_precio: 0, lost_horario: 0, lost_no_respondio: 0, lost_no_asistio: 0, lost_otro: 0 });
+  assert.deepEqual(steps.map((s) => s.reached), [100, 60, 50, 20, 10], 'reached is monotonic (Lead ≥ … ≥ Pagó)');
+  assert.deepEqual(steps.map((s) => s.convPct), [null, 60, 83, 40, 50], 'conversion = reached(next) ÷ reached(prev)');
+  for (const s of steps) if (s.convPct !== null) assert.ok(s.convPct <= 100, `${s.label} ≤ 100%`);
+});
+
+test('JP-7b §1 cohortFunnelSteps caps a degenerate ratio at 100% (never the old 150%/353%)', () => {
+  // Even if the data were inconsistent (more booked than qualified), the % is clamped, not >100.
+  const steps = cohortFunnelSteps({ cohort: 10, reached_qualified: 4, reached_booked: 9, reached_attended: 0, reached_paid: 0, lost: 0, lost_precio: 0, lost_horario: 0, lost_no_respondio: 0, lost_no_asistio: 0, lost_otro: 0 });
+  const booked = steps.find((s) => s.stage === 'booked')!;
+  assert.equal(booked.convPct, 100, 'clamped to 100%, never 225%');
+});
+
+test('JP-7b §1 cohortTopLoss: the most common loss reason (or null)', () => {
+  assert.equal(cohortTopLoss({ cohort: 50, reached_qualified: 0, reached_booked: 0, reached_attended: 0, reached_paid: 0, lost: 0, lost_precio: 0, lost_horario: 0, lost_no_respondio: 0, lost_no_asistio: 0, lost_otro: 0 }), null, 'no losses → null');
+  assert.deepEqual(cohortTopLoss({ cohort: 50, reached_qualified: 0, reached_booked: 0, reached_attended: 0, reached_paid: 0, lost: 7, lost_precio: 2, lost_horario: 5, lost_no_respondio: 0, lost_no_asistio: 0, lost_otro: 0 }), { reason: 'horario', count: 5 });
+});
+
+test('JP-7b §1 period presets: closed default + the "En curso" rule at the settling window', () => {
+  const now = new Date('2026-11-02T12:00:00Z');
+  const lastMonth = cohortPeriodRange('mes_pasado', now);
+  assert.equal(lastMonth.fromIso, new Date(Date.UTC(2026, 9, 1)).toISOString(), 'Mes pasado starts 1 Oct');
+  assert.equal(lastMonth.toIso, new Date(Date.UTC(2026, 10, 1)).toISOString(), 'and ends 1 Nov (a CLOSED month)');
+  assert.equal(lastMonth.entrada, 'en octubre');
+  // Early in November, late-October leads are still within the 14-day settling window → En curso.
+  assert.equal(lastMonth.inProgress, true, 'the month just closed, so it is still settling');
+  // By late November that same month has fully settled.
+  assert.equal(cohortPeriodRange('mes_pasado', new Date('2026-11-20T12:00:00Z')).inProgress, false, 'by 20 Nov, October has settled');
+  // "Últimos 30 días" ends today → inside the settling window → En curso.
+  assert.equal(cohortPeriodRange('ultimos_30', now).inProgress, true);
+  // "Hace 30–60 días" ends 30 days ago → settled.
+  assert.equal(cohortPeriodRange('hace_30_60', now).inProgress, false);
+  // An invalid/absent preset falls back to the closed default.
+  assert.equal(resolveCohortPeriod('bogus').preset, 'mes_pasado');
+  assert.equal(COHORT_SETTLING_DAYS, 14, 'the settling window is a reported constant');
+});
+
+test('JP-7b §2 the cohort strip shows no money and no current-column counts (numbers appear once)', () => {
+  // The strip renders cohort reached-counts + conversion; it must NOT carry money or groupByStage counts.
+  const strip = PANEL.slice(PANEL.indexOf('function CohortStrip'), PANEL.indexOf('function CohortPeriodControl'));
+  assert.ok(strip.includes('step.reached') && strip.includes('step.convPct'), 'the strip shows reached + conversion');
+  assert.ok(!strip.includes('priceLabelCOP') && !strip.includes('columnMoney'), 'no money in the strip');
+  assert.ok(!strip.includes('groupByStage') && !strip.includes('colCards'), 'no current-column counts in the strip');
+  assert.ok(PANEL.includes('que entraron ${period.entrada}'), 'the strip is titled with the cohort + its period');
+});
+
+test('JP-7b §4 the Lead preview is the CUSTOMER\'s message only; else "Esperando al cliente"', () => {
+  assert.ok(PANEL.includes('card.spokeLast === "customer" && card.lastMessageText'), 'preview only when the customer spoke last');
+  assert.ok(PANEL.includes('"Esperando al cliente"'), 'business-last shows a waiting note, never the bot/team text');
+  assert.ok(PANEL.includes('QUALIFY_BTN') && PANEL.includes('border border-line-strong'), 'Calificar is a compact ghost button, not a solid black block');
+});
+
+test('JP-7b §5 one meaning per colour', () => {
+  // Stale = the left edge only; the time text is NOT warn-coloured.
+  assert.ok(PANEL.includes('border-l-[var(--warn-rule)]'), 'stale = the left edge (warn rule)');
+  assert.ok(!/stale \? "font-medium text-warn"/.test(PANEL), 'the time is never re-coloured for stale');
+  // "Cobro pendiente" is neutral text + an icon, not the warn colour.
+  const attended = PANEL.slice(PANEL.indexOf('card.stage === "attended" ?'), PANEL.indexOf('card.stage === "paid" ?'));
+  assert.ok(attended.includes('text-muted') && !attended.includes('text-warn'), '"Cobro pendiente" is neutral');
+  assert.ok(attended.includes('<ClockIcon'), 'and carries a small icon');
+  // Money collected stays success green; the Sin respuesta badge keeps the attention colour.
+  assert.ok(PANEL.includes('text-[var(--success)]'), 'collected money = success green');
+  assert.ok(PANEL.includes('countTone="warn"'), 'the Sin respuesta tab badge keeps the attention colour');
 });
 
 test('JP-7 part 3: clicking a card (board / list / Perdidos) opens the opportunity drawer — not a page change', () => {

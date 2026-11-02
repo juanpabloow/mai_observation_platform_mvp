@@ -1,4 +1,6 @@
 import type { BoardOpportunityRow, LostReason, OpportunityStage, OpportunityStatus } from "@worker/db/repositories/pipeline.js";
+
+export type { LostReason, OpportunityStage, OpportunityStatus };
 import { originColumnAdName, originColumnChip, originColumnDetail } from "./originDisplay";
 import { displayContactName } from "./contactName";
 import { dayShort, fmtTime, siteDayKey, todayAtSite } from "./siteCalendar";
@@ -231,6 +233,153 @@ export function funnelSteps(cards: BoardCard[]): FunnelStep[] {
     prev = count;
     return { stage, label: STAGE_LABEL[stage], count, convPct };
   });
+}
+
+// ── JP-7b §1: the COHORT funnel (one group of leads followed over time) ──────────────────────
+
+/**
+ * How recent a cohort can be before its conversions are still "settling" — leads opened within this
+ * many days can still advance, so the percentages will rise. Any period whose end reaches into this
+ * window is marked "En curso". One place to tune; reported in the JP-7b notes.
+ */
+export const COHORT_SETTLING_DAYS = 14;
+
+export type CohortPreset = "mes_pasado" | "hace_30_60" | "ultimos_30" | "ultimos_90" | "custom";
+const COHORT_PRESETS: CohortPreset[] = ["mes_pasado", "hace_30_60", "ultimos_30", "ultimos_90", "custom"];
+export const COHORT_PRESET_LABEL: Record<CohortPreset, string> = {
+  mes_pasado: "Mes pasado",
+  hace_30_60: "Hace 30–60 días",
+  ultimos_30: "Últimos 30 días",
+  ultimos_90: "Últimos 90 días",
+  custom: "Personalizado",
+};
+/** The DEFAULT cohort period — a CLOSED, settled month (clearest to read; see the report). */
+export const DEFAULT_COHORT_PRESET: CohortPreset = "mes_pasado";
+
+const MESES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
+const iso = (d: Date) => d.toISOString();
+const utcMidnight = (y: number, m0: number, d: number) => new Date(Date.UTC(y, m0, d));
+
+export interface CohortPeriod {
+  preset: CohortPreset;
+  fromIso: string;
+  toIso: string;
+  /** Period chip label, e.g. "Mes pasado". */
+  label: string;
+  /** The "…que entraron <entrada>" fragment for the strip title, e.g. "en octubre". */
+  entrada: string;
+  /** The period reaches into the last COHORT_SETTLING_DAYS → its %s can still rise. */
+  inProgress: boolean;
+  /** Echoed back for the custom date inputs (YYYY-MM-DD) or "". */
+  customFrom: string;
+  customTo: string;
+}
+
+/** PURE period math (testable): preset + the clock → the cohort window + labels. */
+export function cohortPeriodRange(preset: CohortPreset, now: Date, customFrom?: string, customTo?: string): CohortPeriod {
+  const nowMs = now.getTime();
+  const y = now.getUTCFullYear();
+  const m0 = now.getUTCMonth();
+  let from: Date;
+  let to: Date;
+  let entrada: string;
+  let cf = "";
+  let ct = "";
+  if (preset === "custom" && customFrom && customTo && DAY_RE.test(customFrom) && DAY_RE.test(customTo) && customFrom <= customTo) {
+    const [fy, fm, fd] = customFrom.split("-").map(Number);
+    const [ty, tm, td] = customTo.split("-").map(Number);
+    from = utcMidnight(fy, fm - 1, fd);
+    to = utcMidnight(ty, tm - 1, td + 1); // inclusive end day
+    entrada = `entre el ${fd} ${MESES[fm - 1]} y el ${td} ${MESES[tm - 1]}`;
+    cf = customFrom;
+    ct = customTo;
+  } else if (preset === "hace_30_60") {
+    from = new Date(nowMs - 60 * 86_400_000);
+    to = new Date(nowMs - 30 * 86_400_000);
+    entrada = "hace 30–60 días";
+  } else if (preset === "ultimos_30") {
+    from = new Date(nowMs - 30 * 86_400_000);
+    to = now;
+    entrada = "en los últimos 30 días";
+  } else if (preset === "ultimos_90") {
+    from = new Date(nowMs - 90 * 86_400_000);
+    to = now;
+    entrada = "en los últimos 90 días";
+  } else {
+    // mes_pasado (also the fallback for an invalid custom range)
+    preset = "mes_pasado";
+    from = utcMidnight(y, m0 - 1, 1);
+    to = utcMidnight(y, m0, 1);
+    const lm = (m0 + 11) % 12;
+    entrada = `en ${MESES[lm]}`;
+  }
+  const inProgress = to.getTime() > nowMs - COHORT_SETTLING_DAYS * 86_400_000;
+  return { preset, fromIso: iso(from), toIso: iso(to), label: COHORT_PRESET_LABEL[preset], entrada, inProgress, customFrom: cf, customTo: ct };
+}
+
+/** Resolve the cohort period from URL params (reads the clock here, so the page/component body does
+ *  not — keeps the react-compiler "no impure call in render" rule satisfied). */
+export function resolveCohortPeriod(presetParam: string | undefined, customFrom?: string, customTo?: string): CohortPeriod {
+  const preset = (COHORT_PRESETS as string[]).includes(presetParam ?? "") ? (presetParam as CohortPreset) : DEFAULT_COHORT_PRESET;
+  return cohortPeriodRange(preset, new Date(), customFrom, customTo);
+}
+
+export interface CohortRaw {
+  cohort: number;
+  reached_qualified: number;
+  reached_booked: number;
+  reached_attended: number;
+  reached_paid: number;
+  lost: number;
+  lost_precio: number;
+  lost_horario: number;
+  lost_no_respondio: number;
+  lost_no_asistio: number;
+  lost_otro: number;
+}
+
+export interface CohortStep {
+  stage: OpportunityStage;
+  label: string;
+  /** How many of the cohort reached this stage (monotonic, ≤ cohort). */
+  reached: number;
+  /** Conversion from the previous step (0–100, never above 100), null for the first. */
+  convPct: number | null;
+}
+
+/** The cohort funnel steps: monotonic reached-counts + conversion from the previous step. */
+export function cohortFunnelSteps(raw: CohortRaw): CohortStep[] {
+  const reached: Record<OpportunityStage, number> = {
+    lead: raw.cohort,
+    qualified: raw.reached_qualified,
+    booked: raw.reached_booked,
+    attended: raw.reached_attended,
+    paid: raw.reached_paid,
+  };
+  const order: OpportunityStage[] = ["lead", "qualified", "booked", "attended", "paid"];
+  let prev: number | null = null;
+  return order.map((stage) => {
+    const r = reached[stage];
+    const convPct = prev !== null && prev > 0 ? Math.min(100, Math.round((r / prev) * 100)) : null;
+    prev = r;
+    return { stage, label: STAGE_LABEL[stage], reached: r, convPct };
+  });
+}
+
+/** The cohort's most common loss reason (for "N perdidas · sobre todo <motivo>"), or null. */
+export function cohortTopLoss(raw: CohortRaw): { reason: LostReason; count: number } | null {
+  const all: Array<{ reason: LostReason; count: number }> = [
+    { reason: "precio", count: raw.lost_precio },
+    { reason: "horario", count: raw.lost_horario },
+    { reason: "no_respondio", count: raw.lost_no_respondio },
+    { reason: "no_asistio", count: raw.lost_no_asistio },
+    { reason: "otro", count: raw.lost_otro },
+  ];
+  const byReason = all.filter((x) => x.count > 0);
+  if (byReason.length === 0) return null;
+  byReason.sort((a, b) => b.count - a.count || LOST_REASONS.indexOf(a.reason) - LOST_REASONS.indexOf(b.reason));
+  return byReason[0];
 }
 
 /** Lost opportunities grouped by reason (for the Perdidos header filter). */
