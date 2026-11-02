@@ -67,6 +67,7 @@ import {
   parseServiceCategory,
 } from "@worker/db/repositories/scheduling/services.js";
 import { countUpcomingAppointmentsForResource, listAppointments } from "@worker/db/repositories/scheduling/appointments.js";
+import { occupancyOnSiteScheduleChanged, occupancyOnStaffHoursChanged } from "@worker/occupancy/hooks.js";
 
 /**
  * CLIENT-ADMIN CRUD for a SINGLE CLIENT's scheduling resource model (sites, staff, the
@@ -228,6 +229,8 @@ export async function updateSiteAction(
     ...contact.value,
   });
   if (!row) return { ok: false, error: "Site not found." };
+  // JP-8: an opening-hours or active change moves every professional's capacity here (fail-safe).
+  if (patch.openingHours !== undefined || patch.active !== undefined) await occupancyOnSiteScheduleChanged(auth.tenantId, id);
   revalidateAdmin(clientId);
   return { ok: true, id, contact: contact.value };
 }
@@ -238,6 +241,7 @@ export async function deactivateSiteAction(clientId: string, id: string): Promis
   if (!(await siteInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
   const ok = await deactivateSite(auth.tenantId, id);
   if (!ok) return { ok: false, error: "Site not found or already inactive." };
+  await occupancyOnSiteScheduleChanged(auth.tenantId, id); // JP-8 (fail-safe)
   revalidateAdmin(clientId);
   return { ok: true };
 }
@@ -249,6 +253,7 @@ export async function activateSiteAction(clientId: string, id: string): Promise<
   if (!(await siteInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
   const ok = await reactivateSite(auth.tenantId, id);
   if (!ok) return { ok: false, error: "Site not found or already active." };
+  await occupancyOnSiteScheduleChanged(auth.tenantId, id); // JP-8 (fail-safe)
   revalidateAdmin(clientId);
   return { ok: true };
 }
@@ -469,6 +474,9 @@ export async function updateStaffAction(
     ...(weeklyHours !== undefined ? { weeklyHours } : {}),
   });
   if (!row) return { ok: false, error: "No encontramos al profesional." };
+  // JP-8: a change to active / takes_bookings / hours moves what's shown — rebuild their window
+  // while they remain bookable (a deactivated professional freezes as history). Fail-safe.
+  if (row.active && row.takes_bookings) await occupancyOnStaffHoursChanged(auth.tenantId, id);
   revalidateAdmin(clientId);
   return { ok: true, id };
 }
@@ -539,6 +547,7 @@ export async function activateStaffAction(clientId: string, id: string): Promise
   if (!(await staffInClient(auth.tenantId, clientId, id))) return { ok: false, error: FOREIGN };
   const ok = await reactivateStaff(auth.tenantId, id);
   if (!ok) return { ok: false, error: "No encontramos al profesional o ya estaba activo." };
+  await occupancyOnStaffHoursChanged(auth.tenantId, id); // JP-8: rebuild their window (fail-safe)
   revalidateAdmin(clientId);
   return { ok: true };
 }

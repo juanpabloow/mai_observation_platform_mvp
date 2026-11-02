@@ -16,6 +16,7 @@ import {
 } from '../db/repositories/scheduling/payments.js';
 import { isPaymentMethodActive } from '../db/repositories/scheduling/paymentMethods.js';
 import { pipelineOnPaymentRecorded, pipelineOnPaymentVoided } from '../pipeline/hooks.js';
+import { occupancyOnPayment } from '../occupancy/hooks.js';
 
 /**
  * PY-1 PAYMENTS ENGINE — recording what was charged when an appointment is completed, as ONE
@@ -275,6 +276,7 @@ export async function completeWithPayment(input: {
   }
   if (!result.ok) return mapBookingFailure(result);
   await pipelineOnPaymentRecorded(result.value, actor.userId);
+  await occupancyOnPayment(result.value); // JP-8: this day's collected amount changed (fail-safe).
   return { ok: true, value: await viewOf(tenantId, payment!, resolved.resolved.outOfStock) };
 }
 
@@ -322,6 +324,7 @@ export async function recordPaymentForCompleted(input: { tenantId: string; clien
     throw err;
   }
   await pipelineOnPaymentRecorded(appt, actor.userId);
+  await occupancyOnPayment(appt); // JP-8: this day's collected amount changed (fail-safe).
   return { ok: true, value: await viewOf(tenantId, payment, resolved.resolved.outOfStock) };
 }
 
@@ -338,7 +341,10 @@ export async function voidPayment(input: { tenantId: string; clientId: string; p
   const voided = await withTransaction((client) => setPaymentVoided(client, tenantId, clientId, paymentId, actor.userId, reason));
   if (!voided) return fail('invalid_status', 'This payment is already voided.'); // concurrent void
   const appt = await getAppointmentById(tenantId, voided.appointment_id);
-  if (appt) await pipelineOnPaymentVoided(appt, actor.userId);
+  if (appt) {
+    await pipelineOnPaymentVoided(appt, actor.userId);
+    await occupancyOnPayment(appt); // JP-8: voiding removed collected amount from this day (fail-safe).
+  }
   return { ok: true, value: await viewOf(tenantId, voided, []) };
 }
 

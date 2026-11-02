@@ -15,6 +15,7 @@ import {
   updateException,
 } from "@worker/db/repositories/scheduling/exceptions.js";
 import { listActiveAppointmentsOverlapping } from "@worker/db/repositories/scheduling/appointments.js";
+import { occupancyOnException } from "@worker/occupancy/hooks.js";
 
 /**
  * TIME OFF — one-off blocks that remove availability WITHOUT editing the weekly schedule.
@@ -166,6 +167,8 @@ export async function writeTimeOff(input: WriteTimeOffInput): Promise<TimeOffRes
     reason: normalizeReason(input.reason),
     publicReason: publicReason.value,
   });
+  // JP-8: the days this block spans lose availability — recompute them (fail-safe).
+  await occupancyOnException(auth.tenantId, input.siteId, input.staffId ?? null, startsAt, endsAt);
   revalidate(input.clientId);
   return { ok: true, id: row.id };
 }
@@ -250,6 +253,9 @@ export async function updateTimeOffAction(
     ...(publicReason ? { publicReason: publicReason.value } : {}),
   });
   if (!row) return { ok: false, error: FOREIGN };
+  // JP-8: an edit can MOVE the block — recompute both the old and the new day ranges (fail-safe).
+  await occupancyOnException(tenantId, block.site_id, block.staff_id, block.starts_at, block.ends_at);
+  await occupancyOnException(tenantId, block.site_id, block.staff_id, startsAt, endsAt);
   revalidate(clientId);
   return { ok: true, id };
 }
@@ -270,6 +276,8 @@ export async function deleteTimeOffAction(clientId: string, id: string): Promise
 
   const ok = await deleteException(tenantId, id);
   if (!ok) return { ok: false, error: FOREIGN };
+  // JP-8: the block's days get their availability back — recompute them (fail-safe).
+  await occupancyOnException(tenantId, block.site_id, block.staff_id, block.starts_at, block.ends_at);
   revalidate(clientId);
   return { ok: true };
 }

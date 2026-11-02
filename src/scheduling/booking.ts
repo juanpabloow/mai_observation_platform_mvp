@@ -34,6 +34,13 @@ import { isImmediateStart } from './immediate.js';
 import { checkPastInterval, type PastProblem } from './pastAttendance.js';
 import { isSchedulingBookable, isSchedulingEnabledForUpdate } from '../db/repositories/clientModules.js';
 import { pipelineOnAppointmentStatusChanged, pipelineOnBookingCreated } from '../pipeline/hooks.js';
+import { occupancyOnAppointmentMoved, occupancyOnAppointmentWritten, type OccupancyApptRef } from '../occupancy/hooks.js';
+
+/** The pre-move (staff, day) of an appointment, for occupancy dirty-marking. A move keeps the same
+ *  site, so the old ref borrows tenant/client/site from the moved row and the old staff + start. */
+function beforeRef(moved: { tenant_id: string; client_id: string; site_id: string }, before: { staffId: string; startAt: Date }): OccupancyApptRef {
+  return { tenant_id: moved.tenant_id, client_id: moved.client_id, site_id: moved.site_id, staff_id: before.staffId, start_at: before.startAt };
+}
 
 /**
  * The booking domain service — the single engine BOTH n8n and the public page use.
@@ -593,6 +600,8 @@ export async function createAppointment(
       const linked = (await getAppointmentById(appt.tenant_id, appt.id)) ?? appt;
       await pipelineOnAppointmentStatusChanged(linked, 'completed', input.createdByType, input.createdByUserId ?? null);
     }
+    // JP-8: the day this appointment lands on changed capacity usage (fail-safe, post-commit).
+    await occupancyOnAppointmentWritten(appt);
     return { ok: true, value: appt };
   } catch (err) {
     if (isExclusionViolation(err)) {
@@ -813,6 +822,8 @@ export async function transitionStatus(
     });
     // PL-1 §2: drive the linked sale (completed→won, no_show→lost, cancel→qualified). Fail-safe.
     await pipelineOnAppointmentStatusChanged(result.updated, target, input.actorType, input.actorUserId ?? null);
+    // JP-8: the status change moves minutes between buckets on this day (fail-safe, post-commit).
+    await occupancyOnAppointmentWritten(result.updated);
     return { ok: true, value: result.updated };
   } catch (err) {
     throw err;
@@ -918,7 +929,7 @@ export async function rescheduleAppointment(input: RescheduleInput): Promise<Boo
         },
         client,
       );
-      return { kind: 'ok' as const, moved };
+      return { kind: 'ok' as const, moved, before: { staffId: current.staff_id, startAt: current.start_at } };
     });
 
     if (outcome.kind === 'not_found') return { ok: false, error: 'not_found', message: 'Appointment not found.' };
@@ -941,6 +952,8 @@ export async function rescheduleAppointment(input: RescheduleInput): Promise<Boo
       eventType: 'appointment.rescheduled',
       payload: { appointment_id: outcome.moved.id, staff_id: outcome.moved.staff_id, start_at: outcome.moved.start_at },
     });
+    // JP-8: a move changes BOTH the old and new (staff, day) — mark each (fail-safe, post-commit).
+    await occupancyOnAppointmentMoved(beforeRef(outcome.moved, outcome.before), outcome.moved);
     return { ok: true, value: outcome.moved };
   } catch (err) {
     if (isExclusionViolation(err)) {
@@ -1057,6 +1070,8 @@ export async function changeAppointmentService(
       eventType: 'appointment.rescheduled',
       payload: { appointment_id: outcome.updated.id, staff_id: outcome.updated.staff_id, start_at: outcome.updated.start_at },
     });
+    // JP-8: the duration changed (same staff + day) → recompute that day (fail-safe, post-commit).
+    await occupancyOnAppointmentWritten(outcome.updated);
     return { ok: true, value: outcome.updated };
   } catch (err) {
     if (isExclusionViolation(err) || isDeadlock(err)) {
@@ -1129,7 +1144,7 @@ export async function correctAppointmentTime(
           reason: input.reason ?? null,
         },
       }, client);
-      return { kind: 'ok' as const, moved };
+      return { kind: 'ok' as const, moved, before: { staffId: current.staff_id, startAt: current.start_at } };
     });
 
     if (outcome.kind === 'not_found') return { ok: false, error: 'not_found', message: 'Appointment not found.' };
@@ -1142,6 +1157,8 @@ export async function correctAppointmentTime(
       eventType: 'appointment.rescheduled',
       payload: { appointment_id: outcome.moved.id, staff_id: outcome.moved.staff_id, start_at: outcome.moved.start_at },
     });
+    // JP-8: a correction can change the time AND the artist → mark both old and new (staff, day).
+    await occupancyOnAppointmentMoved(beforeRef(outcome.moved, outcome.before), outcome.moved);
     return { ok: true, value: outcome.moved };
   } catch (err) {
     if (isExclusionViolation(err) || isDeadlock(err)) {
