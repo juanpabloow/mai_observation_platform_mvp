@@ -17,6 +17,10 @@ export interface AiCostReportInput {
   tz: string;
   generatedAt: string;
   usdCop: number | null;
+  /** Where the rate came from (today's TRM or the manual fallback). */
+  fx?: { source: 'trm' | 'env'; validFrom: string | null; validTo: string | null } | null;
+  /** Limited to one business (its owner's report); absent/null = every business. */
+  client?: { id: string; name: string } | null;
   current: AiCostDashboard;
   previous: AiCostDashboard;
   comparison: AiCostComparison;
@@ -81,8 +85,16 @@ const row = (cells: string[]) => `| ${cells.map((c) => c.replace(/\|/g, '\\|')).
 const table = (head: string[], rows: string[][]) =>
   [row(head), row(head.map(() => '---')), ...rows.map(row)].join('\n');
 
+export function fxText(fx: AiCostReportInput['fx']): string {
+  if (!fx) return 'tasa manual';
+  if (fx.source === 'env') return 'tasa manual';
+  const range = fx.validFrom && fx.validTo && fx.validFrom !== fx.validTo ? `${fx.validFrom} a ${fx.validTo}` : fx.validFrom ?? '';
+  return `TRM oficial${range ? ` vigente ${range}` : ''}, Superintendencia Financiera`;
+}
+
 export function reportFileStem(r: AiCostReportInput): string {
-  return `costos-ia_${r.period.fromDay}_${r.period.toDay}`;
+  const who = r.client ? `_${r.client.name.normalize('NFD').replace(/[^A-Za-z0-9]+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'negocio'}` : '';
+  return `costos-ia${who}_${r.period.fromDay}_${r.period.toDay}`;
 }
 
 export function renderAiCostMarkdown(r: AiCostReportInput): string {
@@ -91,13 +103,13 @@ export function renderAiCostMarkdown(r: AiCostReportInput): string {
   const estimatePct = cur.totals.calls > 0 ? Math.round((100 * cur.totals.estimateCalls) / cur.totals.calls) : null;
   const out: string[] = [];
 
-  out.push(`# Costos de IA — ${p.fromDay} a ${p.toDay}`);
+  out.push(`# Costos de IA${r.client ? ` — ${r.client.name}` : ''} — ${p.fromDay} a ${p.toDay}`);
   out.push('');
   out.push(`- Periodo: ${p.fromDay} a ${p.toDay} (${p.days} días, hora de ${r.tz}).`);
   out.push(`- Comparado con: ${b.fromDay} a ${b.toDay} (${BASELINE_LABEL[b.key](b.days)}).`);
   if (cmp.perDay) out.push('- Los periodos tienen distinta duración: costo, llamadas, ejecuciones y conversaciones se comparan como promedio por día.');
   out.push(`- Generado: ${r.generatedAt}.`);
-  out.push(`- Tasa de cambio: ${r.usdCop === null ? 'no configurada (solo dólares)' : `${num(r.usdCop)} COP por US$`}.`);
+  out.push(`- Tasa de cambio: ${r.usdCop === null ? 'no disponible (solo dólares)' : `${num(r.usdCop, 2)} COP por US$ (${fxText(r.fx)})`}.`);
   if (!cmp.status.available) out.push(`- **Sin comparación:** ${cmp.status.reason}.`);
   out.push('');
   out.push('## Cómo leer estas cifras');
@@ -185,6 +197,8 @@ export function renderAiCostMarkdown(r: AiCostReportInput): string {
     comparacion_disponible: cmp.status.available,
     motivo_sin_comparacion: cmp.status.reason,
     usd_cop: r.usdCop,
+    fuente_usd_cop: r.usdCop === null ? null : fxText(r.fx),
+    negocio: r.client?.name ?? null,
     metricas: Object.fromEntries(keys.map((k) => [k, { actual: cmp.current[k], anterior: cmp.previous[k], cambio: cmp.changes[k], menor_es_mejor: METRIC_DIRECTION[k] === 'lower' }])),
     por_negocio: cur.byClient.map((c) => ({ negocio: c.clientName, costo_usd: c.cost.usd, costo_parcial: c.cost.partial, llamadas: c.calls, tokens_entrada: c.inputTokens, tokens_salida: c.outputTokens, conversaciones: c.conversations, costo_por_conversacion_usd: c.perConversationUsd, citas_bot: c.botAppointments, cambio: cmp.clients[c.clientId ?? ''] })),
     por_workflow: cur.byWorkflow.map((w) => ({ workflow: w.workflowName, workflow_id: w.workflowId, negocio: w.clientName, modelos: w.models, costo_usd: w.cost.usd, costo_parcial: w.cost.partial, ejecuciones: w.executions, llamadas: w.calls, tokens_entrada: w.inputTokens, tokens_salida: w.outputTokens, sin_datos_n8n: w.coverage.withoutData, cambio: cmp.workflows[w.workflowId] })),

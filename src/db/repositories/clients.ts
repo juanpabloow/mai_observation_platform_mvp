@@ -12,6 +12,8 @@ export interface ClientRow {
   name: string;
   is_default: boolean;
   logo_url: string | null;
+  /** Chart palette slot ('s1'…'s8') chosen by the agency; null = automatic. */
+  chart_color: string | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -21,7 +23,7 @@ export interface ClientWithCount extends ClientRow {
   workflow_count: number;
 }
 
-const CLIENT_COLUMNS = 'id, tenant_id, name, is_default, logo_url, created_at, updated_at';
+const CLIENT_COLUMNS = 'id, tenant_id, name, is_default, logo_url, chart_color, created_at, updated_at';
 
 /** The tenant's default client (home for ungrouped workflows), or null. */
 export async function getDefaultClientForTenant(tenantId: string): Promise<ClientRow | null> {
@@ -51,7 +53,7 @@ export async function getClientById(params: {
 /** All clients for a tenant with their workflow counts (default first, then name). */
 export async function listClientsForTenant(tenantId: string): Promise<ClientWithCount[]> {
   const r = await query<ClientWithCount>(
-    `SELECT c.id, c.tenant_id, c.name, c.is_default, c.logo_url, c.created_at, c.updated_at,
+    `SELECT c.id, c.tenant_id, c.name, c.is_default, c.logo_url, c.chart_color, c.created_at, c.updated_at,
             count(w.id)::int AS workflow_count
        FROM clients c
        LEFT JOIN workflows w ON w.client_id = c.id
@@ -98,6 +100,23 @@ export async function updateClientLogo(params: {
   const r = await query(
     `UPDATE clients SET logo_url = $3, updated_at = now() WHERE id = $2 AND tenant_id = $1`,
     [params.tenantId, params.clientId, params.logoUrl],
+  );
+  return (r.rowCount ?? 0) > 0;
+}
+
+/**
+ * Set (or clear, with null = automatic) a client's chart color slot (tenant-scoped). The
+ * caller validates the slot; the column's CHECK refuses anything else. Returns true if a row
+ * was updated (false if the client isn't this tenant's).
+ */
+export async function updateClientChartColor(params: {
+  tenantId: string;
+  clientId: string;
+  chartColor: string | null;
+}): Promise<boolean> {
+  const r = await query(
+    `UPDATE clients SET chart_color = $3, updated_at = now() WHERE id = $2 AND tenant_id = $1`,
+    [params.tenantId, params.clientId, params.chartColor],
   );
   return (r.rowCount ?? 0) > 0;
 }

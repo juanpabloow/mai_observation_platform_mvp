@@ -4,6 +4,7 @@ import { after, test } from 'node:test';
 import { query } from '../../src/db/client.js';
 import { deriveLlmUsageForExecutionIds, backfillLlmUsage } from '../../src/analytics/deriveLlmUsage.js';
 import { listAiClientActivity, listAiCoverage, listAiUsageRows } from '../../src/db/repositories/llmUsage.js';
+import { updateClientChartColor } from '../../src/db/repositories/clients.js';
 import { cleanupTenant, closeDb, seedScenario, seedWorkflow } from './fixtures.js';
 
 /**
@@ -69,6 +70,20 @@ test('derive on ingest: per-client usage, idempotent, coverage tells unknown fro
   assert.deepEqual([a.executions, a.calls, a.input_tokens, a.output_tokens], [1, 2, 3000, 150]);
   assert.equal(rows.find((r) => r.n8n_workflow_id === 'wf-bot-b')?.client_id, s.otherClientId);
   assert.ok(!rows.some((r) => r.n8n_workflow_id === 'wf-foreign'), 'another tenant never shows');
+  assert.equal(a.chart_color, null, 'automatic color until one is chosen');
+
+  // The business owner's view: every read limited to ONE business.
+  await updateClientChartColor({ tenantId: s.tenantId, clientId: s.clientId, chartColor: 's4' });
+  const onlyA = await listAiUsageRows({ ...period, clientId: s.clientId });
+  assert.deepEqual([...new Set(onlyA.map((r) => r.client_id))], [s.clientId]);
+  assert.equal(onlyA[0].chart_color, 's4');
+  const covA = await listAiCoverage({ ...period, clientId: s.clientId });
+  assert.deepEqual(covA.map((c) => c.n8n_workflow_id), ['wf-bot-a']);
+  await assert.rejects(
+    query(`UPDATE clients SET chart_color = '#ff0000' WHERE id = $1`, [s.clientId]),
+    /clients_chart_color_check/,
+    'only palette slots can be stored',
+  );
 
   const unscanned = await insertExecution(s.tenantId, connectionId, 'wf-bot-a', at, { resultData: { runData: {} } });
   const coverage = await listAiCoverage(period);

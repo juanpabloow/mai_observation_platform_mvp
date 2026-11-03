@@ -82,7 +82,7 @@ test('pricing: closed list, unknown model is null (never free)', () => {
 });
 
 const usageRow = (o: Partial<Parameters<typeof buildAiCostDashboard>[0]['usage'][number]>) => ({
-  client_id: 'c1', client_name: 'Barbería', n8n_workflow_id: 'wf1', workflow_name: 'Bot', model: 'gpt-5.6-terra',
+  client_id: 'c1', client_name: 'Barbería', chart_color: null, n8n_workflow_id: 'wf1', workflow_name: 'Bot', model: 'gpt-5.6-terra',
   usage_source: 'estimate' as const, day: '2026-11-01', executions: 1, calls: 2, input_tokens: 1_000_000, output_tokens: 0, ...o,
 });
 

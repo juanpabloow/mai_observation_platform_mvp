@@ -8,8 +8,10 @@ import {
   deleteClient,
   getClientById,
   renameClient,
+  updateClientChartColor,
   updateClientLogo,
 } from "@worker/db/repositories/clients.js";
+import { isChartColorSlot } from "@worker/analytics/chartColors.js";
 import { getCurrentTenantId } from "./tenant";
 import { requireFullAccessForAction } from "./access";
 import { deleteLogo, isR2Configured, uploadLogo } from "./r2";
@@ -113,6 +115,23 @@ export async function renameClientAction(input: {
   const tenantId = await getCurrentTenantId();
   const ok = await renameClient({ tenantId, clientId: input.clientId, name: trimmed });
   revalidatePath("/clients");
+  return { ok, error: ok ? undefined : "Client not found." };
+}
+
+/**
+ * Set a client's chart color (a palette slot) or clear it (null = automatic). Only a slot of
+ * the validated palette is accepted — never a free-form color string.
+ */
+export async function setClientChartColorAction(input: {
+  clientId: string;
+  chartColor: string | null;
+}): Promise<{ ok: boolean; error?: string }> {
+  if (input.chartColor !== null && !isChartColorSlot(input.chartColor)) return { ok: false, error: "Unknown color." };
+  await requireFullAccessForAction(); // owner/admin only — client management is not a member capability
+  const tenantId = await getCurrentTenantId();
+  const ok = await updateClientChartColor({ tenantId, clientId: input.clientId, chartColor: input.chartColor });
+  revalidatePath("/clients");
+  revalidatePath("/costos-ia");
   return { ok, error: ok ? undefined : "Client not found." };
 }
 

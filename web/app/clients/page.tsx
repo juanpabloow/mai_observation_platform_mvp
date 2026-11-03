@@ -92,6 +92,7 @@ export default async function ClientsPage() {
       id: c.id,
       name: c.name,
       logoUrl: c.logo_url,
+      chartColor: c.chart_color,
       workflowCount: c.workflow_count,
       workflows: (byClient.get(c.id) ?? []).sort(byName),
     }));
