@@ -78,6 +78,9 @@ test('offline patch preserves original IDs and credentials, disables old memory 
 test('embedded expression executes the same tested validator; incompatible topology/double patch rejected', () => {
   const patch = buildContextRecoveryPatch(workflow());
   const agent = patch.nodes.find((n: { name: string }) => n.name === 'AI Agent')!;
+  // n8n parses expression delimiters before JavaScript, including inside comments.
+  assert.equal(agent.parameters.text.split('{{').length - 1, 1);
+  assert.equal(agent.parameters.text.split('}}').length - 1, 1);
   const evaluate = new Function('$json', '$', `return (${agent.parameters.text.slice(3, -2)});`);
   const dollar = (name: string) => ({ first: () => ({ json: name === 'WhatsApp Trigger'
     ? { messages: [{ text: { body: 'Actual' } }] } : { message_id: 'current', conversation: { id: 'conv' } } }) });
