@@ -1,0 +1,10 @@
+/* A palette swatch that follows light/dark: --l and --d come from CHART_COLORS
+   (src/analytics/chartColors.ts) as inline custom properties. */
+.sw {
+  display: inline-block;
+  flex: none;
+  background: var(--l);
+}
+:global(.dark) .sw {
+  background: var(--d);
+}

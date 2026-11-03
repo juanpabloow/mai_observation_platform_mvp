@@ -45,12 +45,12 @@ test('agency on a client with every module: the three blocks of the proposal + M
     presence: ['booking-page', 'reviews', 'campaigns'],
     results: ['value'],
     settings: ['sites', 'rules', 'payment-methods', 'fields', 'users'],
-    automations: ['workflows', 'tech-analytics', 'meetings'],
+    automations: ['workflows', 'tech-analytics', 'ai-costs', 'meetings'],
     agency: ['modules'],
   });
   const labels = Object.fromEntries(buildSections(agency(ALL)).map((x) => [x.id, x.pages.map((p) => p.label)]));
   assert.deepEqual(labels.agenda, ['Calendario', 'Ocupación', 'Equipo', 'Horarios y ausencias']);
-  assert.deepEqual(labels.automations, ['Workflows', 'Analíticas técnicas', 'Reuniones']);
+  assert.deepEqual(labels.automations, ['Workflows', 'Analíticas técnicas', 'Costos de IA', 'Reuniones']);
   assert.deepEqual(rail(agency(ALL)), [
     'Inbox', 'Contactos', 'Agenda', 'Catálogo', 'Presencia y marketing', 'Dashboard de valor', 'Configuración', 'Automatizaciones', 'Módulos',
   ]);
@@ -79,7 +79,7 @@ test('owner of their own client: everything but Módulos (agency-only)', () => {
   const s = shape(member('owner', ALL));
   assert.equal(s.agency, undefined, 'Módulos is never shown to a business');
   assert.deepEqual(s.settings, ['sites', 'rules', 'payment-methods', 'fields', 'users']);
-  assert.deepEqual(s.automations, ['workflows', 'tech-analytics', 'meetings']);
+  assert.deepEqual(s.automations, ['workflows', 'tech-analytics', 'ai-costs', 'meetings']);
   assert.deepEqual(s.results, ['value']);
 });
 
@@ -197,6 +197,7 @@ test('locate marks section + page on a direct link, including the legacy routes'
   assert.deepEqual(at('/workflows/w1/executions'), { section: 'automations', page: 'workflows' });
   assert.deepEqual(at('/workflows/w1/inbox'), { section: 'automations', page: 'workflows' });
   assert.deepEqual(at('/analytics'), { section: 'results', page: 'value' });
+  assert.deepEqual(at('/costos-ia'), { section: 'automations', page: 'ai-costs' });
   assert.equal(locate(A, `/clients/${OTHER}/inbox`), null, 'another client path is not this client');
 });
 
@@ -248,7 +249,7 @@ test('a CUSTOM role sees exactly the pages its permissions open — the name pla
   assert.deepEqual(shape(custom(['campaigns.view', 'campaigns.manage', 'analytics.view'])), {
     presence: ['campaigns'],
     results: ['value'],
-    automations: ['tech-analytics'],
+    automations: ['tech-analytics', 'ai-costs'],
   });
   // «Encargado de sede»: agenda (calendar + occupancy) + team + hours, no inbox/contacts/settings.
   assert.deepEqual(shape(custom(['agenda.view', 'agenda.book', 'team.manage', 'hours.manage'])), {

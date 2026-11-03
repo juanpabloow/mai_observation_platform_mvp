@@ -93,11 +93,15 @@ export interface AiCostPeriod {
   to: Date;
   /** IANA zone the per-day buckets are cut in. */
   timeZone: string;
+  /** Only this business (the business owner's view). Absent = every business of the tenant. */
+  clientId?: string | null;
 }
 
 export interface AiUsageRow {
   client_id: string | null;
   client_name: string | null;
+  /** The business's chosen chart palette slot, or null (automatic). */
+  chart_color: string | null;
   n8n_workflow_id: string;
   workflow_name: string | null;
   model: string | null;
@@ -112,7 +116,7 @@ export interface AiUsageRow {
 /** Usage in the period, grouped by client × workflow × model × source × local day. */
 export async function listAiUsageRows(p: AiCostPeriod): Promise<AiUsageRow[]> {
   const r = await query<AiUsageRow>(
-    `SELECT w.client_id, c.name AS client_name, u.n8n_workflow_id,
+    `SELECT w.client_id, c.name AS client_name, c.chart_color, u.n8n_workflow_id,
             coalesce(w.name, max(e.workflow_name)) AS workflow_name,
             u.model, u.usage_source,
             to_char((u.started_at AT TIME ZONE $4)::date, 'YYYY-MM-DD') AS day,
@@ -127,8 +131,9 @@ export async function listAiUsageRows(p: AiCostPeriod): Promise<AiUsageRow[]> {
         AND w.n8n_workflow_id = u.n8n_workflow_id
        LEFT JOIN clients c ON c.id = w.client_id AND c.tenant_id = u.tenant_id
       WHERE u.tenant_id = $1 AND u.started_at >= $2 AND u.started_at < $3
-      GROUP BY w.client_id, c.name, u.n8n_workflow_id, w.name, u.model, u.usage_source, 7`,
-    [p.tenantId, p.from, p.to, p.timeZone],
+        AND ($5::uuid IS NULL OR w.client_id = $5)
+      GROUP BY w.client_id, c.name, c.chart_color, u.n8n_workflow_id, w.name, u.model, u.usage_source, 8`,
+    [p.tenantId, p.from, p.to, p.timeZone, p.clientId ?? null],
   );
   return r.rows;
 }
@@ -155,8 +160,12 @@ export async function listAiCoverage(p: AiCostPeriod): Promise<AiCoverageRow[]> 
       WHERE e.tenant_id = $1 AND e.started_at >= $2 AND e.started_at < $3
         AND EXISTS (SELECT 1 FROM execution_llm_usage x
                      WHERE x.tenant_id = e.tenant_id AND x.n8n_workflow_id = e.n8n_workflow_id)
+        AND ($4::uuid IS NULL OR EXISTS (
+              SELECT 1 FROM workflows w
+               WHERE w.tenant_id = e.tenant_id AND w.n8n_connection_id = e.n8n_connection_id
+                 AND w.n8n_workflow_id = e.n8n_workflow_id AND w.client_id = $4))
       GROUP BY e.n8n_workflow_id`,
-    [p.tenantId, p.from, p.to],
+    [p.tenantId, p.from, p.to, p.clientId ?? null],
   );
   return r.rows;
 }
@@ -177,17 +186,19 @@ export async function listAiClientActivity(p: AiCostPeriod): Promise<AiClientAct
          JOIN workflows w ON w.tenant_id = cv.tenant_id AND w.n8n_workflow_id = cv.n8n_workflow_id
         WHERE m.tenant_id = $1 AND m.sender = 'user' AND m.created_at >= $2 AND m.created_at < $3
           AND w.client_id IS NOT NULL
+          AND ($4::uuid IS NULL OR w.client_id = $4)
         GROUP BY w.client_id
      ), appt AS (
        SELECT client_id, count(*)::int AS n
          FROM appointments
         WHERE tenant_id = $1 AND origin = 'n8n' AND created_at >= $2 AND created_at < $3
+          AND ($4::uuid IS NULL OR client_id = $4)
         GROUP BY client_id
      )
      SELECT coalesce(conv.client_id, appt.client_id) AS client_id,
             coalesce(conv.n, 0) AS conversations, coalesce(appt.n, 0) AS bot_appointments
        FROM conv FULL JOIN appt ON appt.client_id = conv.client_id`,
-    [p.tenantId, p.from, p.to],
+    [p.tenantId, p.from, p.to, p.clientId ?? null],
   );
   return r.rows;
 }
@@ -218,8 +229,9 @@ export async function listAiMeetingRows(p: AiCostPeriod): Promise<AiMeetingsRow[
        LEFT JOIN clients c ON c.id = a.client_id AND c.tenant_id = a.tenant_id
       WHERE a.tenant_id = $1 AND a.created_at >= $2 AND a.created_at < $3
         AND (a.input_tokens + a.output_tokens) > 0
+        AND ($4::uuid IS NULL OR a.client_id = $4)
       GROUP BY a.client_id, c.name, 3`,
-    [p.tenantId, p.from, p.to],
+    [p.tenantId, p.from, p.to, p.clientId ?? null],
   );
   return r.rows;
 }

@@ -30,6 +30,8 @@ export interface TokenTotals {
 export interface ClientCost extends TokenTotals {
   clientId: string | null;
   clientName: string;
+  /** Chart palette slot chosen in «Clientes y workflows», or null (automatic). */
+  chartColor: string | null;
   conversations: number;
   botAppointments: number;
   perConversationUsd: number | null;
@@ -123,11 +125,11 @@ export function buildAiCostDashboard(input: {
   );
   const coverageByWf = new Map(input.coverage.map((c) => [c.n8n_workflow_id, c]));
 
-  const clientOf = (id: string | null, name: string | null): ClientCost => {
+  const clientOf = (id: string | null, name: string | null, chartColor: string | null): ClientCost => {
     const key = id ?? '';
     let c = clients.get(key);
     if (!c) {
-      c = { ...blank(), clientId: id, clientName: name ?? UNASSIGNED, conversations: 0, botAppointments: 0, perConversationUsd: null, perAppointmentUsd: null };
+      c = { ...blank(), clientId: id, clientName: name ?? UNASSIGNED, chartColor, conversations: 0, botAppointments: 0, perConversationUsd: null, perAppointmentUsd: null };
       clients.set(key, c);
     }
     return c;
@@ -138,7 +140,7 @@ export function buildAiCostDashboard(input: {
     addUsage(totals, row, usd);
     if (row.usage_source === 'estimate') totals.estimateCalls += row.calls;
 
-    addUsage(clientOf(row.client_id, row.client_name), row, usd);
+    addUsage(clientOf(row.client_id, row.client_name, row.chart_color ?? null), row, usd);
 
     let wf = workflows.get(row.n8n_workflow_id);
     if (!wf) {

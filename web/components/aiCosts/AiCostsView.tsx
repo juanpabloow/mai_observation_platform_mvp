@@ -13,6 +13,7 @@ import { localToday, resolvePeriod, type PeriodKey } from "@worker/analytics/val
 import { resolveBaseline, type BaselineKey } from "@worker/analytics/aiCostPeriods.js";
 import { METRIC_DIRECTION, type Change, type DayCost, type MetricKey, type Money } from "@worker/analytics/aiCostModel.js";
 import { changeText, METRIC_LABEL, usdText } from "@worker/analytics/aiCostReport.js";
+import { assignChartColors } from "@worker/analytics/chartColors.js";
 
 /**
  * COSTOS DE IA — the agency's screen. A quiet header (title, one date control whose choices
@@ -30,7 +31,12 @@ const nf = new Intl.NumberFormat("es-CO");
 const compact = new Intl.NumberFormat("es-CO", { notation: "compact", maximumFractionDigits: 1 });
 const int = (v: number | null) => (v === null ? "—" : nf.format(Math.round(v)));
 const dec = (v: number | null) => (v === null ? "—" : v.toLocaleString("es-CO", { maximumFractionDigits: 2 }));
-const SERIES = 8;
+
+function fxLabel(fx: AiCostsReport["fx"]): string {
+  if (!fx || fx.source === "env") return "tasa manual";
+  const range = fx.validFrom && fx.validTo && fx.validFrom !== fx.validTo ? fmtRange(fx.validFrom, fx.validTo, false) : fx.validFrom ? fmtRange(fx.validFrom, fx.validFrom, false) : "";
+  return `TRM oficial${range ? ` vigente ${range}` : ""}`;
+}
 
 function copText(usd: number | null, rate: number | null): string | null {
   if (usd === null || rate === null) return null;
@@ -127,7 +133,16 @@ const HELP: Record<"costUsd" | "perConversationUsd" | "inputPerCall" | "calls", 
   },
 };
 
-export function AiCostsView({ initial, initialError }: { initial: AiCostsReport | null; initialError: string | null }) {
+export function AiCostsView({
+  initial,
+  initialError,
+  clientId = null,
+}: {
+  initial: AiCostsReport | null;
+  initialError: string | null;
+  /** Limit the screen to one business (its owner's view, /clients/{id}/costos-ia). */
+  clientId?: string | null;
+}) {
   const [data, setData] = useState<AiCostsReport | null>(initial);
   const [status, setStatus] = useState<"ready" | "loading" | "error">(initial ? "ready" : "error");
   const [errorMsg, setErrorMsg] = useState<string | null>(initialError);
@@ -182,7 +197,9 @@ export function AiCostsView({ initial, initialError }: { initial: AiCostsReport 
     setStatus("loading");
     const qs = query(nextP, nextB);
     try {
-      const res = await fetch(`/api/costos-ia?${qs}`, { signal: ac.signal, cache: "no-store" });
+      const api = new URLSearchParams(qs);
+      if (clientId) api.set("cliente", clientId);
+      const res = await fetch(`/api/costos-ia?${api}`, { signal: ac.signal, cache: "no-store" });
       const json = await res.json();
       if (id !== seq.current) return;
       if (!res.ok) {
@@ -239,6 +256,8 @@ export function AiCostsView({ initial, initialError }: { initial: AiCostsReport 
   const loading = status === "loading";
   const vk = `${p.fromDay}-${p.toDay}-${b.fromDay}-${data.generatedAt}`;
   const reportQs = query({ key: p.key, from: p.fromDay, to: p.toDay }, { key: b.key, from: b.fromDay, to: b.toDay });
+  if (clientId) reportQs.set("cliente", clientId);
+  const oneBusiness = data.client !== null;
   const baseLabel = BASE_SHORT[b.key] || `vs ${fmtRange(b.fromDay, b.toDay, false)}`;
   const estimatePct = t.calls > 0 ? Math.round((100 * t.estimateCalls) / t.calls) : null;
   const tokensKind = t.estimateCalls > 0 ? "estimate" : "measured";
@@ -250,7 +269,9 @@ export function AiCostsView({ initial, initialError }: { initial: AiCostsReport 
         (estimatePct !== null && estimatePct > 0
           ? "n8n no reporta los tokens de razonamiento ni los de caché: la factura real puede ser mayor."
           : "Puede diferir de la factura del proveedor.") +
-        (usdCop === null ? " Configura USD_COP_RATE para ver pesos." : ` Tasa: ${nf.format(usdCop)} COP por dólar.`),
+        (usdCop === null
+          ? " No hay tasa de cambio disponible: se muestran solo dólares."
+          : ` Tasa: ${usdCop.toLocaleString("es-CO", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} COP por dólar (${fxLabel(data.fx)}).`),
       warn: false,
     },
     ...(partialCoverage
@@ -274,11 +295,15 @@ export function AiCostsView({ initial, initialError }: { initial: AiCostsReport 
   const prevCost = data.previous.totals.cost.partial ? null : (data.previous.totals.cost.usd ?? (data.previous.totals.calls === 0 ? 0 : null));
   const baselineAvgUsd = cmp.status.available && prevCost !== null ? prevCost / b.days : null;
 
-  // Color follows the business: fixed order by name, independent of this period's ranking.
+  // Color follows the business: the one chosen in «Clientes y workflows», else the first free
+  // palette slot by name — never this period's ranking.
+  const slots = assignChartColors(cur.byClient.map((c) => ({ key: c.clientId ?? "", name: c.clientName, chartColor: c.chartColor })));
   const series: Series[] = [...cur.byClient]
     .sort((x, y) => x.clientName.localeCompare(y.clientName, "es"))
-    .slice(0, SERIES)
-    .map((c, i) => ({ key: c.clientId ?? "", name: c.clientName, color: `var(--ai-s${i + 1})` }));
+    .map((c) => {
+      const slot = slots.get(c.clientId ?? "") ?? null;
+      return { key: c.clientId ?? "", name: c.clientName, color: slot ? `var(--ai-${slot})` : "var(--vd-tertiary)" };
+    });
   const colorOf = (id: string | null) => series.find((sr) => sr.key === (id ?? ""))?.color ?? "var(--vd-tertiary)";
 
   // The chart's business filter: only the chosen businesses' spend, and the comparison line
@@ -353,7 +378,7 @@ export function AiCostsView({ initial, initialError }: { initial: AiCostsReport 
       <header className={a.head}>
         <div>
           <h1 className={a.title}>Costos de IA</h1>
-          <p className={a.subtitle}>Todos los negocios · {loading ? "actualizando…" : updatedLabel(data.generatedAt, data.tz).replace(/^Actualizado/, "actualizado")}</p>
+          <p className={a.subtitle}>{data.client ? data.client.name : "Todos los negocios"} · {loading ? "actualizando…" : updatedLabel(data.generatedAt, data.tz).replace(/^Actualizado/, "actualizado")}</p>
         </div>
         <div className={a.headActions} ref={actionsRef}>
           <button
@@ -531,7 +556,7 @@ export function AiCostsView({ initial, initialError }: { initial: AiCostsReport 
                 <h2 id="ai-days" className={s.h2}>
                   Gasto diario
                 </h2>
-                <p className={s.sub}>US$ estimados por día, de los modelos con precio, por negocio.</p>
+                <p className={s.sub}>US$ estimados por día, de los modelos con precio{oneBusiness ? "" : ", por negocio"}.</p>
               </div>
               <ValueSeg label="Vista del gasto diario" value={view} onChange={setView} options={[["chart", "Gráfico"], ["table", "Tabla"]]} />
             </div>
@@ -669,6 +694,7 @@ export function AiCostsView({ initial, initialError }: { initial: AiCostsReport 
           </section>
 
           {/* ------------------------------------------------ by business -- */}
+          {oneBusiness ? null : (
           <section aria-labelledby="ai-clients" className={cx(s.card, s.enter)}>
             <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
               <h2 id="ai-clients" className={s.h2}>
@@ -727,6 +753,8 @@ export function AiCostsView({ initial, initialError }: { initial: AiCostsReport 
               </div>
             )}
           </section>
+
+          )}
 
           {/* -------------------------------------------------- workflows -- */}
           <section aria-labelledby="ai-wf" className={cx(s.card, s.enter)}>

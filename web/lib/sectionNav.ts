@@ -49,6 +49,7 @@ export type PageId =
   | "users"
   | "workflows"
   | "tech-analytics"
+  | "ai-costs"
   | "meetings"
   | "modules";
 
@@ -189,6 +190,8 @@ export function buildSections(ctx: NavContext): NavSection[] {
       // pages); there is no separate all-workflows execution screen to duplicate it with.
       p("automations.view") && { id: "workflows", label: "Workflows", href: wf.executions },
       p("analytics.view") && { id: "tech-analytics", label: "Analíticas técnicas", href: wf.analytics },
+      // What this business's bots spend in AI (same gate as the value dashboard).
+      p("analytics.view") && !isDefault && { id: "ai-costs", label: "Costos de IA", href: c("/costos-ia") },
       p("meetings.view") && has("meetings") && { id: "meetings", label: "Reuniones", href: c("/reuniones") },
     ],
     agency: [isAgency && !isDefault && { id: "modules", label: "Módulos", href: c("/modules") }],
@@ -241,6 +244,7 @@ const ROUTES: Array<{ re: RegExp; section: SectionId; page: PageId }> = [
   { re: /^\/workflows\/[^/]+\/analytics(?:\/|$)/, section: "automations", page: "tech-analytics" },
   { re: /^\/workflows(?:\/|$)/, section: "automations", page: "workflows" },
   { re: /^\/reuniones(?:\/|$)/, section: "automations", page: "meetings" },
+  { re: /^\/costos-ia(?:\/|$)/, section: "automations", page: "ai-costs" },
   { re: /^\/modules(?:\/|$)/, section: "agency", page: "modules" },
 ];
 

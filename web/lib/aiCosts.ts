@@ -1,5 +1,9 @@
 import "server-only";
 import { getSessionScope, hasFullAccess, type AccessScope } from "./access";
+import { resolveValueAccess } from "./valueDashboard";
+import { getUsdCop } from "./usdCop";
+import { isUuid } from "./clientModuleValidation";
+import { getClientById } from "@worker/db/repositories/clients.js";
 import {
   buildAiCostDashboard,
   compareAiCosts,
@@ -8,6 +12,7 @@ import {
 } from "@worker/analytics/aiCostModel.js";
 import { periodDays, resolvePeriod, type Period, type PeriodInput } from "@worker/analytics/valueDashboardModel.js";
 import { resolveBaseline, type Baseline, type BaselineInput } from "@worker/analytics/aiCostPeriods.js";
+import type { UsdCop } from "@worker/analytics/usdCop.js";
 import {
   listAiClientActivity,
   listAiCoverage,
@@ -17,9 +22,14 @@ import {
 } from "@worker/db/repositories/llmUsage.js";
 
 /**
- * COSTOS DE IA — access + assembly, SERVER ONLY. Used by the page, the period API and the report
- * download, so all three apply the same rule: the agency (tenant owner/admin, `hasFullAccess`).
- * Everyone else gets 404; no session, 401. Every read is scoped to the session's tenant.
+ * COSTOS DE IA — access + assembly, SERVER ONLY. Used by the pages, the period API and the
+ * report download, so all of them apply the same rule:
+ *   - all businesses (`/costos-ia`): the agency only (tenant owner/admin, `hasFullAccess`);
+ *   - one business (`/clients/{id}/costos-ia`, `?cliente=`): the value dashboard's rule —
+ *     the agency or whoever holds `analytics.view` on THAT business (its owner), and the
+ *     business must belong to the session's tenant.
+ * Everyone else gets 404; no session, 401. Every read is tenant-scoped, and a business view
+ * filters every query by that business.
  *
  * Periods follow the value dashboard exactly (7 días / 30 días / personalizado ≤ 92 días, local
  * days in Bogotá). The comparison period is the window right before (default), the same dates one
@@ -32,8 +42,12 @@ export interface AiCostsReport {
   baseline: Baseline;
   tz: string;
   generatedAt: string;
-  /** COP per USD from USD_COP_RATE; null when unset or invalid (COP is then not shown). */
+  /** The business this view is limited to; null = every business (agency view). */
+  client: { id: string; name: string } | null;
+  /** COP per USD (today's TRM, or the manual fallback); null when neither is available. */
   usdCop: number | null;
+  /** Where `usdCop` came from, for the screen's note. */
+  fx: UsdCop | null;
   current: AiCostDashboard;
   previous: AiCostDashboard;
   comparison: AiCostComparison;
@@ -43,16 +57,21 @@ export type AiCostsResult =
   | { ok: true; data: AiCostsReport }
   | { ok: false; status: 400 | 401 | 404; error: string };
 
-export function usdCopRate(raw: string | undefined = process.env.USD_COP_RATE): number | null {
-  const n = Number(raw);
-  return raw && Number.isFinite(n) && n > 0 ? n : null;
-}
+type Access = { ok: true; scope: AccessScope; client: { id: string; name: string } | null } | { ok: false; status: 401 | 404 };
 
-export async function resolveAiCostsAccess(): Promise<{ ok: true; scope: AccessScope } | { ok: false; status: 401 | 404 }> {
+export async function resolveAiCostsAccess(clientId?: string | null): Promise<Access> {
+  if (clientId) {
+    if (!isUuid(clientId)) return { ok: false, status: 404 };
+    const v = await resolveValueAccess(clientId); // agency, or analytics.view on this business, same tenant
+    if (!v.ok) return { ok: false, status: v.status };
+    const c = await getClientById({ tenantId: v.scope.tenantId, clientId });
+    if (!c || c.is_default) return { ok: false, status: 404 };
+    return { ok: true, scope: v.scope, client: { id: c.id, name: c.name } };
+  }
   const scope = await getSessionScope();
   if (!scope) return { ok: false, status: 401 };
   if (!hasFullAccess(scope)) return { ok: false, status: 404 };
-  return { ok: true, scope };
+  return { ok: true, scope, client: null };
 }
 
 async function loadDashboard(p: AiCostPeriod, days: string[]): Promise<AiCostDashboard> {
@@ -65,8 +84,13 @@ async function loadDashboard(p: AiCostPeriod, days: string[]): Promise<AiCostDas
   return buildAiCostDashboard({ days, usage, coverage, activity, meetings });
 }
 
-export async function buildAiCosts(input: PeriodInput, baselineInput: BaselineInput = { key: "anterior" }, now = new Date()): Promise<AiCostsResult> {
-  const access = await resolveAiCostsAccess();
+export async function buildAiCosts(
+  input: PeriodInput,
+  baselineInput: BaselineInput = { key: "anterior" },
+  options: { clientId?: string | null; now?: Date } = {},
+): Promise<AiCostsResult> {
+  const now = options.now ?? new Date();
+  const access = await resolveAiCostsAccess(options.clientId);
   if (!access.ok) return { ok: false, status: access.status, error: access.status === 401 ? "unauthorized" : "not_found" };
   const r = resolvePeriod(input, now, AI_COSTS_TZ);
   if (!r.ok) return { ok: false, status: 400, error: r.error };
@@ -75,15 +99,17 @@ export async function buildAiCosts(input: PeriodInput, baselineInput: BaselineIn
   if (!b.ok) return { ok: false, status: 400, error: b.error };
   const baseline = b.baseline;
   const tenantId = access.scope.tenantId;
-  const [current, previous] = await Promise.all([
+  const clientId = access.client?.id ?? null;
+  const [current, previous, fx] = await Promise.all([
     loadDashboard(
-      { tenantId, from: new Date(period.startUtc), to: new Date(period.endUtc), timeZone: AI_COSTS_TZ },
+      { tenantId, clientId, from: new Date(period.startUtc), to: new Date(period.endUtc), timeZone: AI_COSTS_TZ },
       periodDays(period),
     ),
     loadDashboard(
-      { tenantId, from: new Date(baseline.startUtc), to: new Date(baseline.endUtc), timeZone: AI_COSTS_TZ },
+      { tenantId, clientId, from: new Date(baseline.startUtc), to: new Date(baseline.endUtc), timeZone: AI_COSTS_TZ },
       periodDays({ fromDay: baseline.fromDay, days: baseline.days }),
     ),
+    getUsdCop(),
   ]);
   return {
     ok: true,
@@ -92,7 +118,9 @@ export async function buildAiCosts(input: PeriodInput, baselineInput: BaselineIn
       baseline,
       tz: AI_COSTS_TZ,
       generatedAt: now.toISOString(),
-      usdCop: usdCopRate(),
+      client: access.client,
+      usdCop: fx?.rate ?? null,
+      fx,
       current,
       previous,
       comparison: compareAiCosts(current, previous, { current: period.days, previous: baseline.days }),

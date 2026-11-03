@@ -9,8 +9,11 @@ import {
   createClientAction,
   deleteClientAction,
   renameClientAction,
+  setClientChartColorAction,
   uploadClientLogoAction,
 } from "@/lib/clientActions";
+import { CHART_COLORS } from "@worker/analytics/chartColors.js";
+import cc from "./chartColor.module.css";
 
 export interface WorkflowItem {
   /** workflows.id (row uuid) — what assignment operates on. */
@@ -26,6 +29,8 @@ export interface ClientFolderView {
   id: string;
   name: string;
   logoUrl: string | null;
+  /** Chart palette slot chosen for this business, or null (automatic). */
+  chartColor: string | null;
   workflowCount: number;
   workflows: WorkflowItem[];
 }
@@ -254,6 +259,7 @@ export function ClientsWorkflowsView({
   const [deleteTarget, setDeleteTarget] = useState<ClientFolderView | null>(null);
   const [deleteError, setDeleteError] = useState<React.ReactNode | null>(null);
   const [logoTarget, setLogoTarget] = useState<ClientFolderView | null>(null);
+  const [colorTarget, setColorTarget] = useState<ClientFolderView | null>(null);
 
   // Close any open ⋯ menu on an outside click or Escape. The menu body is
   // portaled to <body> (to escape overflow clipping), so a click inside it lands
@@ -447,7 +453,10 @@ export function ClientsWorkflowsView({
                     <ClientLogo name={folder.name} logoUrl={folder.logoUrl} />
                     <FolderIcon open={isOpen} />
                     <span className="min-w-0">
-                      <span className="block truncate text-sm font-semibold">{folder.name}</span>
+                      <span className="flex items-center gap-2">
+                        <span className="truncate text-sm font-semibold">{folder.name}</span>
+                        <ChartColorDot slot={folder.chartColor} />
+                      </span>
                       <span className="flex items-center gap-1.5">
                         <span className="text-xs text-neutral-500">
                           {folder.workflowCount} workflow{folder.workflowCount === 1 ? "" : "s"}
@@ -503,6 +512,16 @@ export function ClientsWorkflowsView({
                         className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
                       >
                         Rename
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setOpenMenu(null);
+                          setColorTarget(folder);
+                        }}
+                        className="flex w-full items-center px-3 py-1.5 text-left text-sm transition-colors hover:bg-black/[0.04] dark:hover:bg-subtle"
+                      >
+                        Chart color
                       </button>
                       {r2Enabled ? (
                         <button
@@ -607,6 +626,27 @@ export function ClientsWorkflowsView({
         />
       ) : null}
 
+      {colorTarget ? (
+        <ColorModal
+          client={colorTarget}
+          busy={busy}
+          onCancel={() => setColorTarget(null)}
+          onPick={async (slot) => {
+            setBusy(true);
+            try {
+              const res = await setClientChartColorAction({ clientId: colorTarget.id, chartColor: slot });
+              if (res.ok) {
+                setColorTarget(null);
+                router.refresh();
+              }
+              return res;
+            } finally {
+              setBusy(false);
+            }
+          }}
+        />
+      ) : null}
+
       {renameTarget ? (
         <NameModal
           title="Rename client"
@@ -682,6 +722,86 @@ export function ClientsWorkflowsView({
         />
       ) : null}
     </main>
+  );
+}
+
+/** The business's chart color, when one was chosen (automatic shows nothing). */
+function ChartColorDot({ slot }: { slot: string | null }) {
+  const c = CHART_COLORS.find((x) => x.slot === slot);
+  if (!c) return null;
+  return (
+    <span
+      title={`Chart color: ${c.label}`}
+      aria-label={`Chart color: ${c.label}`}
+      className={`${cc.sw} h-2.5 w-2.5 rounded-full`}
+      style={{ ["--l" as string]: c.light, ["--d" as string]: c.dark }}
+    />
+  );
+}
+
+/**
+ * Pick the business's color in charts (Costos de IA): one of the validated palette slots, or
+ * automatic. Saved on click; the palette is fixed so no business becomes unreadable.
+ */
+function ColorModal({
+  client,
+  busy,
+  onCancel,
+  onPick,
+}: {
+  client: ClientFolderView;
+  busy: boolean;
+  onCancel: () => void;
+  onPick: (slot: string | null) => Promise<{ ok: boolean; error?: string }>;
+}) {
+  const [error, setError] = useState<string | null>(null);
+  const pick = async (slot: string | null) => {
+    if (busy) return;
+    setError(null);
+    const res = await onPick(slot);
+    if (!res.ok) setError(res.error ?? "Something went wrong.");
+  };
+  return (
+    <Backdrop onClose={onCancel}>
+      <h3 className="mb-1 text-sm font-medium">Chart color</h3>
+      <p className="mb-4 text-xs text-muted">How «{client.name}» is drawn in Costos de IA. Colors are checked for color blindness and dark mode.</p>
+      <div role="radiogroup" aria-label="Chart color" className="grid grid-cols-4 gap-2">
+        {CHART_COLORS.map((c) => {
+          const on = client.chartColor === c.slot;
+          return (
+            <button
+              key={c.slot}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              disabled={busy}
+              onClick={() => pick(c.slot)}
+              className={`flex flex-col items-center gap-1.5 rounded-xl border px-2 py-2.5 text-xs transition-colors ${
+                on ? "border-foreground/60 bg-black/[0.04] dark:bg-subtle" : "border-black/10 hover:bg-black/[0.03] dark:border-line-strong dark:hover:bg-subtle"
+              }`}
+            >
+              <span className={`${cc.sw} h-6 w-6 rounded-md`} style={{ ["--l" as string]: c.light, ["--d" as string]: c.dark }} aria-hidden />
+              {c.label}
+            </button>
+          );
+        })}
+      </div>
+      {error ? <p className="mt-2 text-xs text-danger">{error}</p> : null}
+      <div className="mt-4 flex items-center justify-between gap-2">
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => pick(null)}
+          aria-pressed={client.chartColor === null}
+          className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-foreground"
+        >
+          {client.chartColor === null ? "Automatic (current)" : "Use automatic"}
+        </button>
+        <button type="button" onClick={onCancel} className="rounded-lg px-3 py-1.5 text-sm text-neutral-500 hover:text-foreground">
+          Close
+        </button>
+      </div>
+    </Backdrop>
   );
 }
 
