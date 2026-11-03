@@ -1,6 +1,18 @@
 RECUPERACIÓN BOT → HUMANO → BOT — IMPLEMENTACIÓN 2026-10-15
 
-Estado: código y parche offline preparados. NO desplegado ni activado en n8n.
+Estado al 2026-10-15: backend desplegado; permiso opt-in autorizado y concedido;
+GET real verificado (200 válido, 404 ancla inexistente, 401 sin autenticación).
+Regresión sintética LLM completada (12 escenarios, una corrida/caso).
+Con autorización del usuario, publicado en el oficial QgFYQ30VWaup56zH:
+Gallery - recuperacion contexto Inbox - 2026-10-15.
+Versión: 4eee4833-8339-4b0e-b113-44e5afa72209.
+Anterior: 9aca4912-795c-4d4a-961a-c8e52740322c (CRM identidad y perfil).
+48 nodos, 53 conexiones, los 43 IDs originales conservados, cero nodos QA.
+El borrador QA y el banco sintético siguen sin publicar. Ciclo real de prueba
+bot -> humano -> bot verificado el 2026-10-15 a las 13:11 Bogotá (ejecución 5811).
+El contexto incluyó el mensaje humano enviado y el bot recordó Corte/Federico y
+la palabra de control sin que el usuario repitiera sus valores. Usuario confirmó
+recepción. Este recorrido satisfactorio no elimina los límites de carreras abajo.
 Base: origin/main 09df5b2 (PR #26). Rama: fix/handoff-context-recovery.
 No requiere migración ni backfill. No borra conversaciones ni memoria histórica.
 Las lecturas no cambian datos de dominio; la autenticación conserva la telemetría
@@ -30,7 +42,8 @@ Parámetros obligatorios:
 Autorización: Bearer, permiso NUEVO handoff.context.read, opt-in.
 handoff por sí solo NO permite leer el historial. No se añade al conjunto legacy
 ni a los permisos predeterminados de tokens nuevos. Se edita desde Machine tokens
-por owner/admin; no requiere emitir otra clave. No se ha concedido en producción.
+por owner/admin; no requiere emitir otra clave. Concedido en producción al token
+de MontserratAI confirmado explícitamente por el propietario; otros permisos intactos.
 
 Alcance: tenant + conexión del token + workflow + cliente no predeterminado,
 Inbox habilitado + conversación + ancla de cliente recibida de esa conversación.
@@ -140,7 +153,16 @@ VERIFICACIONES LOCALES
   del turno anterior: 48 nodos (43 originales + 5), ningún ID original perdido,
   ningún cambio de credenciales, solo Agent y los dos nodos antiguos de memoria
   modificados entre los originales. No se exportaron datos reales al repositorio
-  ni se subió el parche a n8n.
+  ni se subió el parche a n8n en esa verificación inicial.
+- Integración posterior: export fresco del oficial con 43 nodos y parámetros
+  idénticos a la base revisada. QA contiene 48 nodos integrados y cuatro pruebas
+  manuales desconectadas (52 total), 53 conexiones exactas, persistidos al recargar.
+  No se ejecutó el workflow completo, el agente ni herramientas externas.
+- El parser real de n8n detectó delimitadores de expresión dentro de un comentario
+  de la función embebida. Se retiraron esos delimitadores y se añadió una guarda
+  unitaria de única apertura/cierre. Diez pruebas unitarias pasan. Un Set aislado
+  en n8n ejecutó la misma función con datos sintéticos, incluyendo texto con llaves
+  que se conserva como datos. Esto NO prueba aún la respuesta semántica del LLM.
 - Compilación conserva avisos de middleware deprecado y jose/Edge. npm ci reporta
   vulnerabilidades en dependencias del lockfile base; no se hizo actualización
   automática ajena a este cambio ni se declara la plataforma libre de riesgos.

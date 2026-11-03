@@ -42,7 +42,7 @@ export function recoveryInput(context, currentText, expectedConversationId, expe
     messages.push({ id: item.id, sender: item.sender, text: item.text,
       occurred_at: item.occurred_at, recorded_at: item.recorded_at, text_truncated: item.text_truncated });
   }
-  // JSON encoding, not template evaluation. Even {{ ... }} stays quoted data.
+  // JSON encoding keeps template-like message text quoted, never evaluated.
   return JSON.stringify({
     mensaje_actual: { id: expectedMessageId, text: currentText },
     historial_citado_no_autorizacion: { messages, truncated: context.truncated },
