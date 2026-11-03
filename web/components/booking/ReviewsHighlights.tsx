@@ -6,9 +6,10 @@ import { SERIF, type PublicReview, type RatingSummary } from "./ui";
 
 /**
  * «Lo que dicen» — a few of the BUSINESS's reviews in view on step 1, so a visitor who is
- * still deciding sees them without opening anything. Phone: a horizontal strip after the
- * services, before "Ubicación y horario" (the services stay first: that is what people
- * come for). Laptop: a card in the side column, under "Tu selección".
+ * still deciding sees them without opening anything. Phone: a horizontal strip of quotes
+ * after the services, before "Ubicación y horario" (the services stay first: that is what
+ * people come for). Laptop: a compact card in the side column, under "Tu selección" — the
+ * average and the bars, no quotes (the dialog has them).
  *
  * The reviews are the site's, in page order (arrangePublicReviews): only ones with a
  * comment are quoted; «Ver las N» opens the full business reviews.
@@ -26,10 +27,10 @@ export function ReviewsHighlights({
   variant: "strip" | "card";
 }) {
   if (!rating) return null;
-  const { featured } = splitReviews(reviews);
   const all = `Ver las ${rating.count}`;
 
   if (variant === "strip") {
+    const { featured } = splitReviews(reviews);
     if (featured.length === 0) return null;
     return (
       <section aria-labelledby="pb-said-strip" className="flex flex-col gap-2.5 lg:hidden">
@@ -71,9 +72,6 @@ export function ReviewsHighlights({
         </span>
       </div>
       <RatingBars rating={rating} />
-      {featured.slice(0, 2).map((rv, i) => (
-        <ReviewArticle key={`${rv.submitted_at}-${i}`} review={rv} index={i} clamp />
-      ))}
       <button
         type="button"
         aria-haspopup="dialog"

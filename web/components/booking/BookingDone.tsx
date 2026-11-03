@@ -85,6 +85,7 @@ export function BookingDone({ confirmation: c, firstName, site }: { confirmation
         directionsUrl={site.directions_url ?? null}
         whatsapp={wa ? site.whatsapp ?? null : null}
         whatsappText={waText}
+        mapQuery={site.map_query}
       />
     </div>
   );

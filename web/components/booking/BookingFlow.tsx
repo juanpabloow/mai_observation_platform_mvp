@@ -846,7 +846,9 @@ export function BookingFlow({
     <div className={root} ref={topRef}>
       <div className="flex-1">
         <div className="mx-auto w-full max-w-[640px] px-4 pb-5 pt-3 lg:flex lg:max-w-[1120px] lg:items-start lg:gap-7 lg:px-6 lg:pb-10 lg:pt-9">
-          <main lang="es" className="flex min-w-0 flex-1 flex-col gap-5 lg:gap-[22px]">
+          {/* After booking there is nothing left to select: the confirmation is one centred
+              column, without the side «Tu selección», and «Hacer otra reserva» closes it. */}
+          <main lang="es" className={`flex min-w-0 flex-1 flex-col gap-5 lg:gap-[22px] ${confirmation ? "lg:mx-auto lg:max-w-[760px]" : ""}`}>
             {!confirmation ? (
               <div className="flex flex-col gap-3.5">
                 {/* ONE brand row at every width, inside the column: back (from step 2),
@@ -967,6 +969,7 @@ export function BookingFlow({
                   directionsUrl={site.directions_url ?? null}
                   whatsapp={site.whatsapp ?? null}
                   whatsappText={`Hola ${site.name}, quiero reservar.`}
+                  mapQuery={site.map_query}
                 />
               </div>
             ) : step === 2 && service ? (
@@ -1045,12 +1048,19 @@ export function BookingFlow({
             ) : null}
             </div>
 
+            {confirmation ? (
+              <div className="hidden lg:flex">
+                <CtaButton label={ctaLabel} state={ctaState} disabled={ctaDisabled} onClick={onCta} arrow={false} />
+              </div>
+            ) : null}
+
             <p className="m-0 mt-1.5 text-center text-[12.5px] text-pb-muted lg:mt-4 lg:text-left">Impulsado por M_AI</p>
           </main>
 
           {/* Desktop: the compact selection and the CTA, always in view; on step 1 the
               business's reviews («Lo que dicen») under it — the column scrolls on its own when
               it is taller than the window, so «Continuar» is never out of reach. */}
+          {!confirmation ? (
           <div className="sticky top-7 hidden max-h-[calc(100dvh-3.5rem)] w-[340px] flex-none flex-col gap-3.5 overflow-y-auto rounded-[16px] [scrollbar-width:thin] lg:flex">
           <aside aria-label="Tu selección" className="flex flex-col gap-3.5 rounded-[16px] border border-pb-line bg-white p-5">
             <h2 className={`${SERIF} m-0 text-[23px]`}>Tu selección</h2>
@@ -1078,10 +1088,11 @@ export function BookingFlow({
                 {hint}
               </span>
             ) : null}
-            {!confirmation && step === 4 ? <span className="text-center text-[13px] text-pb-muted">Nada se reserva hasta que confirmes.</span> : null}
+            {step === 4 ? <span className="text-center text-[13px] text-pb-muted">Nada se reserva hasta que confirmes.</span> : null}
           </aside>
-          {!confirmation && step === 1 ? <ReviewsHighlights variant="card" rating={siteRating} reviews={siteReviews} onOpen={openSiteReviews} /> : null}
+          {step === 1 ? <ReviewsHighlights variant="card" rating={siteRating} reviews={siteReviews} onOpen={openSiteReviews} /> : null}
           </div>
+          ) : null}
         </div>
       </div>
 

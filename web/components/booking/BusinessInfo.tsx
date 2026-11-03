@@ -10,8 +10,10 @@ import { BTN_SECONDARY, BTN_WHATSAPP, IconHours, IconPin, IconWhatsApp, SERIF } 
  * line that has no data is simply omitted, and the block disappears when there is
  * nothing to say. The same block closes step 1 and the confirmation.
  *
- * The map is Google Maps' public embed for the address (mapEmbedUrl); it is out of the
- * tab order because "Cómo llegar" is the accessible way to the same place.
+ * The map is Google Maps' public embed (mapEmbedUrl) of `mapQuery` — the exact place of
+ * the business's own Maps link when there is one (web/lib/mapsPlace.ts), so its pin is
+ * where "Cómo llegar" goes; else the address. It is out of the tab order because "Cómo
+ * llegar" is the accessible way to the same place.
  *
  * Laptop: the title, then the map on the left and the details and actions on the right.
  * Phone: stacked — map, details, then the actions full width one under the other.
@@ -26,6 +28,7 @@ export function BusinessInfo({
   directionsUrl,
   whatsapp,
   whatsappText,
+  mapQuery,
   title = "Ubicación y horario",
 }: {
   siteName: string;
@@ -34,10 +37,11 @@ export function BusinessInfo({
   directionsUrl: string | null;
   whatsapp: string | null;
   whatsappText: string;
+  mapQuery?: string | null;
   title?: string;
 }) {
   const wa = whatsappLink(whatsapp, whatsappText);
-  const map = mapEmbedUrl(address);
+  const map = mapEmbedUrl(mapQuery ?? address);
   if (!address && hours.length === 0 && !directionsUrl && !wa) return null;
   return (
     <section aria-label={title} className="flex flex-col gap-3 rounded-[16px] border border-pb-line bg-white p-4 lg:px-5">

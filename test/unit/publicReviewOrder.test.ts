@@ -95,3 +95,52 @@ test('confirmation: the full location block, WhatsApp once, green', () => {
   assert.match(root('web/components/booking/ui.tsx'), /bg-pb-wa px-4 text-\[15px\] font-\[590\] text-white/);
   assert.match(root('web/app/globals.css'), /--color-pb-wa: #1a7f4b;/);
 });
+
+// ── The map's pin: the same place as «Cómo llegar» ──────────────────────────────────
+
+test('the map query comes from the business link: exact coordinates first', async () => {
+  const { mapQueryFromMapsUrl } = await import('../../web/lib/bookingPage.js');
+  const place = 'https://www.google.com/maps/place/Gallery+93/@4.6636,-74.0571,17z/data=!3m1!4b1!4m6!3m5!1s0x8e3f9a:0x1!8m2!3d4.6637123!4d-74.0572456!16s%2Fg%2F11';
+  assert.equal(mapQueryFromMapsUrl(place), '4.6637123,-74.0572456', 'the place pin (!3d!4d), not the camera (@)');
+  assert.equal(mapQueryFromMapsUrl('https://www.google.com/maps/@4.66,-74.05,15z'), '4.66,-74.05');
+  assert.equal(mapQueryFromMapsUrl('https://maps.google.com/?q=4.6,-74.0'), '4.6,-74.0');
+  assert.equal(mapQueryFromMapsUrl('https://www.google.com/maps/search/?api=1&query=Gallery%2093%20Bogot%C3%A1'), 'Gallery 93 Bogotá');
+  assert.equal(mapQueryFromMapsUrl('https://www.google.com/maps/place/Gallery+93,+Calle+77/'), 'Gallery 93, Calle 77');
+  assert.equal(mapQueryFromMapsUrl('https://maps.app.goo.gl/AbC123'), null, 'a short link says nothing until resolved');
+  assert.equal(mapQueryFromMapsUrl('https://evil.example/maps/@4.6,-74.0,15z'), null, 'Google Maps links only');
+  assert.equal(mapQueryFromMapsUrl('https://www.google.com/maps/@95.1,-74.0,15z'), null, 'no impossible coordinates');
+});
+
+test('a short link is resolved once, only through Google Maps hosts; anything else falls back to name + address', async () => {
+  const { publicMapQuery, clearMapsCache } = await import('../../web/lib/mapsPlace.js');
+  clearMapsCache();
+  const site = { name: 'Gallery-93', address: 'Calle 77A #13-19, Bogotá' };
+  const calls: string[] = [];
+  const redirectTo = (location: string) => async (url: string) => {
+    calls.push(url);
+    return new Response(null, { status: 302, headers: { location } });
+  };
+  const exact = 'https://www.google.com/maps/place/Gallery+93/data=!4m6!3m5!8m2!3d4.6637123!4d-74.0572456';
+  assert.equal(await publicMapQuery({ ...site, public_maps_url: 'https://maps.app.goo.gl/AbC123' }, redirectTo(exact)), '4.6637123,-74.0572456');
+  assert.equal(await publicMapQuery({ ...site, public_maps_url: 'https://maps.app.goo.gl/AbC123' }, redirectTo(exact)), '4.6637123,-74.0572456');
+  assert.equal(calls.length, 1, 'cached per link');
+  // A redirect away from Google, a network error or no link at all: the business name and address.
+  assert.equal(await publicMapQuery({ ...site, public_maps_url: 'https://maps.app.goo.gl/Evil' }, redirectTo('https://evil.example/@1,2')), 'Gallery-93, Calle 77A #13-19, Bogotá');
+  assert.equal(await publicMapQuery({ ...site, public_maps_url: 'https://maps.app.goo.gl/Down' }, async () => { throw new Error('offline'); }), 'Gallery-93, Calle 77A #13-19, Bogotá');
+  assert.equal(await publicMapQuery({ ...site, public_maps_url: 'https://www.google.com/maps/@4.66,-74.05,15z' }, async () => { throw new Error('never called'); }), '4.66,-74.05', 'a long link needs no request');
+  assert.equal(await publicMapQuery({ name: 'X', address: null }), null, 'no address, no link: no map');
+  const page = root('web/app/book/[siteSlug]/page.tsx');
+  assert.match(page, /publicMapQuery\(site\)/);
+  assert.match(page, /map_query: mapQuery/);
+  assert.match(root('web/components/booking/BusinessInfo.tsx'), /mapEmbedUrl\(mapQuery \?\? address\)/);
+});
+
+test('desktop «Lo que dicen» is the average and the bars; the confirmation is one centred column', () => {
+  const hl = root('web/components/booking/ReviewsHighlights.tsx');
+  const card = hl.slice(hl.indexOf('aria-labelledby="pb-said-card"'));
+  assert.doesNotMatch(card, /ReviewArticle/, 'no quotes in the side card');
+  assert.match(card, /<RatingBars rating=\{rating\} \/>/);
+  const flow = root('web/components/booking/BookingFlow.tsx');
+  assert.match(flow, /\{!confirmation \? \(\s*<div className="sticky top-7/, 'no «Tu selección» after booking');
+  assert.match(flow, /confirmation \? "lg:mx-auto lg:max-w-\[760px\]" : ""/);
+});

@@ -17,6 +17,8 @@ export interface PublicSiteView {
   whatsapp?: string | null;
   directions_url?: string | null;
   hours?: Array<{ days: string; hours: string }>;
+  /** What the map searches (web/lib/mapsPlace.ts): the exact place, else name + address. */
+  map_query?: string | null;
 }
 
 export interface CategoryView {
