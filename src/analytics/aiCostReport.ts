@@ -21,6 +21,8 @@ export interface AiCostReportInput {
   fx?: { source: 'trm' | 'env'; validFrom: string | null; validTo: string | null } | null;
   /** Limited to one business (its owner's report); absent/null = every business. */
   client?: { id: string; name: string } | null;
+  /** What OpenAI billed the organization (agency report only). */
+  billing?: { connected: boolean; totalUsd: number | null; previousTotalUsd: number | null; lastSyncedAt: string | null } | null;
   current: AiCostDashboard;
   previous: AiCostDashboard;
   comparison: AiCostComparison;
@@ -111,6 +113,9 @@ export function renderAiCostMarkdown(r: AiCostReportInput): string {
   out.push(`- Generado: ${r.generatedAt}.`);
   out.push(`- Tasa de cambio: ${r.usdCop === null ? 'no disponible (solo dólares)' : `${num(r.usdCop, 2)} COP por US$ (${fxText(r.fx)})`}.`);
   if (!cmp.status.available) out.push(`- **Sin comparación:** ${cmp.status.reason}.`);
+  if (r.billing?.connected) {
+    out.push(`- **Facturado por OpenAI** (toda la organización, días UTC): ${usdText(r.billing.totalUsd)} en el periodo; ${usdText(r.billing.previousTotalUsd)} en la comparación. Estimado por n8n: ${moneyText(cur.totals.cost)}. La diferencia es razonamiento, caché y usos fuera de n8n.`);
+  }
   out.push('');
   out.push('## Cómo leer estas cifras');
   out.push('');
@@ -199,6 +204,7 @@ export function renderAiCostMarkdown(r: AiCostReportInput): string {
     usd_cop: r.usdCop,
     fuente_usd_cop: r.usdCop === null ? null : fxText(r.fx),
     negocio: r.client?.name ?? null,
+    facturado_openai_usd: r.billing?.connected ? { periodo: r.billing.totalUsd, comparacion: r.billing.previousTotalUsd, sincronizado: r.billing.lastSyncedAt } : null,
     metricas: Object.fromEntries(keys.map((k) => [k, { actual: cmp.current[k], anterior: cmp.previous[k], cambio: cmp.changes[k], menor_es_mejor: METRIC_DIRECTION[k] === 'lower' }])),
     por_negocio: cur.byClient.map((c) => ({ negocio: c.clientName, costo_usd: c.cost.usd, costo_parcial: c.cost.partial, llamadas: c.calls, tokens_entrada: c.inputTokens, tokens_salida: c.outputTokens, conversaciones: c.conversations, costo_por_conversacion_usd: c.perConversationUsd, citas_bot: c.botAppointments, cambio: cmp.clients[c.clientId ?? ''] })),
     por_workflow: cur.byWorkflow.map((w) => ({ workflow: w.workflowName, workflow_id: w.workflowId, negocio: w.clientName, modelos: w.models, costo_usd: w.cost.usd, costo_parcial: w.cost.partial, ejecuciones: w.executions, llamadas: w.calls, tokens_entrada: w.inputTokens, tokens_salida: w.outputTokens, sin_datos_n8n: w.coverage.withoutData, cambio: cmp.workflows[w.workflowId] })),
