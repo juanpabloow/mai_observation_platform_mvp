@@ -42,7 +42,10 @@ test('sidebar: the client rail is the proposal\'s three blocks, built from ONE s
   assert.ok(ctx.includes('const here = locate(clientId, pathname);'), 'the current page comes from locate (direct links too)');
   assert.ok(ctx.includes('const BLOCK_LABEL = { 1: "Operación", 2: "Negocio", 3: "Herramientas" } as const;'), 'the three blocks');
   assert.ok(ctx.includes('divider: true'), 'split by a hairline, not titled');
-  assert.ok(ctx.includes('agency = { key: "modules", label: "Módulos"') && ctx.includes('tag: "AGENCIA"'), 'Módulos is apart, tagged AGENCIA');
+  assert.ok(ctx.includes('agency.push({ key: "modules", label: "Módulos"') && ctx.includes('tag: "AGENCIA"'), 'Módulos is apart, tagged AGENCIA');
+  // Costos de IA sits beside it, for the agency only (the page re-checks hasFullAccess).
+  assert.ok(ctx.includes('if (!isMember) agency.push(aiCostsItem);'), 'Costos de IA is apart, agency only');
+  assert.ok(src.includes('label: "Costos de IA", href: "/costos-ia"'), 'Costos de IA links to /costos-ia');
   for (const gone of ['label: "Workspace"', 'label: "CRM"', 'label: "Scheduling"', 'label: "Administration"']) {
     assert.ok(!ctx.includes(gone), `${gone} heading is gone`);
   }
