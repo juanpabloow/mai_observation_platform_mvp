@@ -48,6 +48,64 @@ export function directionsUrl(site: { name: string; address: string | null; publ
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${site.name}, ${site.address.trim()}`)}`;
 }
 
+/**
+ * The map shown in "Ubicación y horario": Google Maps' public embed (no API key) of a
+ * search — ideally the exact coordinates of the business (mapQueryFromMapsUrl), else its
+ * name and address. Null without a query: no map is better than a map of the wrong place.
+ *
+ * It is the /maps/embed form directly: the shorter `/maps?q=…&output=embed` answers with a
+ * redirect that carries X-Frame-Options: SAMEORIGIN, and browsers then leave the frame
+ * blank. In the `pb` value `!` separates fields, so it is escaped too.
+ */
+export function mapEmbedUrl(query: string | null | undefined): string | null {
+  const q = query?.trim();
+  if (!q) return null;
+  return `https://www.google.com/maps/embed?origin=mfe&pb=!1m3!2m1!1s${encodeURIComponent(q).replace(/!/g, "%21")}!6i16`;
+}
+
+const COORD = String.raw`(-?\d{1,2}(?:\.\d+)?)`;
+const LNG = String.raw`(-?\d{1,3}(?:\.\d+)?)`;
+const decodeSafe = (t: string) => {
+  try {
+    return decodeURIComponent(t);
+  } catch {
+    return t;
+  }
+};
+const validCoords = (lat: string, lng: string) => {
+  const a = Number(lat);
+  const b = Number(lng);
+  return Number.isFinite(a) && Number.isFinite(b) && Math.abs(a) <= 90 && Math.abs(b) <= 180 ? `${lat},${lng}` : null;
+};
+
+/**
+ * What to search on the map so its pin lands exactly where the business's own "Cómo llegar"
+ * link points: the place's coordinates (`!3d…!4d…`, then `@lat,lng`, then `?q=lat,lng`),
+ * else the searched text or the place name. Null for a short link (maps.app.goo.gl), which
+ * says nothing until it is resolved (web/lib/mapsPlace.ts), and for anything that is not a
+ * Google Maps link (safeMapsUrl).
+ */
+export function mapQueryFromMapsUrl(url: string | null | undefined): string | null {
+  const safe = safeMapsUrl(url);
+  if (!safe) return null;
+  const u = new URL(safe);
+  const full = decodeSafe(u.pathname) + u.search + u.hash;
+  const place = new RegExp(`!3d${COORD}!4d${LNG}`).exec(full);
+  if (place) return validCoords(place[1], place[2]);
+  const at = new RegExp(`@${COORD},${LNG}`).exec(full);
+  if (at) return validCoords(at[1], at[2]);
+  for (const key of ["q", "query", "ll"]) {
+    const v = u.searchParams.get(key)?.trim();
+    if (!v) continue;
+    const c = new RegExp(`^${COORD},\\s*${LNG}$`).exec(v);
+    if (c) return validCoords(c[1], c[2]);
+    if (key !== "ll") return v.slice(0, 200);
+  }
+  const named = /\/maps\/(?:place|search)\/([^/@]+)/.exec(u.pathname);
+  if (named) return decodeSafe(named[1].replace(/\+/g, " ")).trim().slice(0, 200) || null;
+  return null;
+}
+
 // ── Opening hours ───────────────────────────────────────────────────────────────────
 
 type Ranges = Array<{ start: string; end: string }>;

@@ -5,7 +5,7 @@ import { whatsappLink } from "@/lib/bookingPage";
 import { priceLabelCOP } from "@/lib/money";
 import { fmtTime, longDate, timezoneLabel } from "@/lib/siteCalendar";
 import { BusinessInfo } from "./BusinessInfo";
-import { SERIF, type PublicConfirmation, type PublicSiteView } from "./ui";
+import { BTN_SECONDARY, SERIF, type PublicConfirmation, type PublicSiteView } from "./ui";
 
 /**
  * "Tu cita está reservada" — built ONLY from the server's confirmation (the engine's
@@ -13,10 +13,13 @@ import { SERIF, type PublicConfirmation, type PublicSiteView } from "./ui";
  * that was recorded and the public reference (a random UUID, never a row id). It
  * promises nothing the platform does not do (no "we sent you a WhatsApp"). It is only
  * ever rendered AFTER the server answered 200/201 — the check draws itself then.
- * The location block repeats the site's address, hours and "Cómo llegar".
+ * The location block is the same as on step 1 — map, address, hours, "Cómo llegar" and
+ * the WhatsApp button (its first message carries the reference) — so the WhatsApp action
+ * appears once on this screen, not as a second link next to "Añadir a mi calendario".
  */
 export function BookingDone({ confirmation: c, firstName, site }: { confirmation: PublicConfirmation; firstName: string | null; site: PublicSiteView }) {
-  const wa = whatsappLink(site.whatsapp ?? null, `Hola ${c.site}, tengo una cita reservada (referencia ${c.reference.slice(0, 8)}).`);
+  const waText = `Hola ${c.site}, tengo una cita reservada (referencia ${c.reference.slice(0, 8)}).`;
+  const wa = whatsappLink(site.whatsapp ?? null, waText);
   const ics = bookingIcsDataUrl({
     reference: c.reference,
     service: c.service,
@@ -68,29 +71,21 @@ export function BookingDone({ confirmation: c, firstName, site }: { confirmation
         </div>
       </section>
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-        <a href={ics} download="cita.ics" className="inline-flex min-h-11 items-center rounded-[12px] border border-pb-line3 bg-white px-4 text-[15px] text-pb-ink">
+        <a href={ics} download="cita.ics" className={BTN_SECONDARY}>
           Añadir a mi calendario
         </a>
         <p className="m-0 text-[14px] leading-[1.5] text-pb-muted">
-          ¿Necesitas cambiarla?{" "}
-          {wa ? (
-            <a href={wa} rel="noopener noreferrer" className="text-pb-ink underline underline-offset-[3px]">
-              Escríbele a {c.site} por WhatsApp
-            </a>
-          ) : (
-            `Escríbele a ${c.site}.`
-          )}
+          ¿Necesitas cambiarla? {wa ? "Escríbenos por WhatsApp." : `Escríbele a ${c.site}.`}
         </p>
       </div>
       <BusinessInfo
-        title="Ubicación"
         siteName={c.site}
         address={c.address}
         hours={site.hours ?? []}
         directionsUrl={site.directions_url ?? null}
-        whatsapp={null}
-        whatsappText=""
-        compact
+        whatsapp={wa ? site.whatsapp ?? null : null}
+        whatsappText={waText}
+        mapQuery={site.map_query}
       />
     </div>
   );

@@ -1581,6 +1581,9 @@ body {
   --color-pb-sage: #e2eadf;
   --color-pb-sage-fg: #2f5a38;
   --color-pb-ok: #4e7a5a;
+  /* WhatsApp actions: a deeper WhatsApp green that keeps white text legible (5:1). */
+  --color-pb-wa: #1a7f4b;
+  --color-pb-wa-press: #156b3f;
   --color-pb-warn-bg: #f6ecd9;
   --color-pb-warn-bd: #e6d2ac;
   --color-pb-warn-fg: #5a4114;

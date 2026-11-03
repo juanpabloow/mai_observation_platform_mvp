@@ -3,6 +3,7 @@ import type { PublicCategoryRow, PublicServiceRow, PublicStaffRow } from "@worke
 import type { PublicReviewRow, PublicSiteReviewRow, RatingSummary } from "@worker/db/repositories/scheduling/reviews.js";
 import { serviceCategory, type ApptCategory } from "@/lib/agendaCategory";
 import { directionsUrl, E164_RE, hoursLines, type CategoryLayout } from "@/lib/bookingPage";
+import { arrangePublicReviews, PUBLIC_REVIEWS_SENT } from "@/lib/publicReviews";
 import type { PromotionRow } from "@worker/db/repositories/scheduling/promotions.js";
 import { appointmentRuleText, BENEFIT_LABEL } from "@worker/scheduling/promotions.js";
 
@@ -184,7 +185,7 @@ export interface PublicService {
   family: ApptCategory;
   /** APPROVED reviews only (migration 1801); null = no reviews yet. */
   rating: RatingSummary | null;
-  /** Latest approved reviews of THIS service (≤ 3), newest first. */
+  /** Approved reviews of THIS service in page order (arrangePublicReviews), ≤ PUBLIC_REVIEWS_SENT. */
   reviews: PublicReview[];
   /** Booking-page presentation (migration 1804). */
   category_id: string | null;
@@ -208,7 +209,7 @@ export function projectPublicService(
     price: s.price,
     family: serviceCategory(s.name, s.category),
     rating: ratings?.get(s.id) ?? null,
-    reviews: (reviews ?? []).filter((r) => r.service_id === s.id).map(projectPublicReview),
+    reviews: publicReviewList((reviews ?? []).filter((r) => r.service_id === s.id)),
     category_id: s.public_category_id ?? null,
     recommended: Boolean(s.public_recommended),
     image_url: httpsOrNull(s.public_image_url ?? null),
@@ -258,6 +259,11 @@ export function safeFreshaUrl(url: string | null | undefined): string | null {
   }
 }
 
+/** A list of approved review rows as the page shows them: in page order, capped, projected. */
+export function publicReviewList(rows: readonly Parameters<typeof projectPublicReview>[0][]): PublicReview[] {
+  return arrangePublicReviews(rows).slice(0, PUBLIC_REVIEWS_SENT).map(projectPublicReview);
+}
+
 export function projectPublicReview(
   r: Pick<PublicReviewRow, "author_display" | "service_name" | "rating" | "comment" | "submitted_at"> & Partial<Pick<PublicReviewRow, "source" | "public_source_url">>,
 ): PublicReview {
@@ -286,7 +292,7 @@ export interface PublicStaff {
   service_ids: string[];
   /** APPROVED reviews only; null = none yet. */
   rating: RatingSummary | null;
-  /** The latest approved reviews (≤ 10), newest first. */
+  /** Approved reviews in page order (arrangePublicReviews), ≤ PUBLIC_REVIEWS_SENT. */
   reviews: PublicReview[];
 }
 
@@ -314,7 +320,7 @@ export function projectPublicStaff(
     photo_url: httpsOrNull(s.public_photo_url),
     service_ids: s.service_ids ?? [],
     rating: extra.ratings?.get(s.id) ?? null,
-    reviews: (extra.reviews ?? []).filter((r) => r.staff_id === s.id).map(projectPublicReview),
+    reviews: publicReviewList((extra.reviews ?? []).filter((r) => r.staff_id === s.id)),
   };
 }
 

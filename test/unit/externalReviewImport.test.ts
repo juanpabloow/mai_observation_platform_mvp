@@ -188,15 +188,16 @@ test('idempotent: stable keys; a re-plan skips what was imported and repeats in 
 
 // ── Public wording ──────────────────────────────────────────────────────────────
 
-test('public wording: says where reviews come from, explains mixed averages, never "verified"', async () => {
-  const { reviewOrigin, originalDate } = await import('../../web/lib/publicReviews.js');
-  assert.match(reviewOrigin({ count: 4, imported: 0 }), /cita completada aquí/);
-  assert.match(reviewOrigin({ count: 4 }), /cita completada aquí/, 'absent = all collected here');
-  assert.match(reviewOrigin({ count: 2, imported: 2 }), /^Reseñas importadas de Fresha: se revisó su procedencia/);
-  assert.match(reviewOrigin({ count: 4, imported: 1 }), /^Incluye 1 reseña importada de Fresha .*Las demás son de clientes con una cita completada aquí\.$/);
-  assert.match(reviewOrigin({ count: 4, imported: 3 }), /3 reseñas importadas/);
-  for (const t of [reviewOrigin({ count: 2, imported: 2 }), reviewOrigin({ count: 4, imported: 1 })]) assert.doesNotMatch(t, /verificad/i);
-  assert.equal(originalDate('2026-03-14T17:00:00.000Z'), '14 de marzo de 2026');
+test('public page: where a review came from is never shown to the visitor (product, 3 Nov 2026)', async () => {
+  const { readFileSync, readdirSync } = await import('node:fs');
+  const dir = new URL('../../web/components/booking/', import.meta.url);
+  for (const f of readdirSync(dir).filter((x) => x.endsWith('.tsx'))) {
+    const src = readFileSync(new URL(f, dir), 'utf8');
+    assert.doesNotMatch(src, /Fresha|importad[ao]s?\b/i, `${f}: no provenance label, link or wording on the public page`);
+    assert.doesNotMatch(src, /source_url|rv\.source\b/, `${f}: the source fields are not rendered`);
+  }
+  const lib = readFileSync(new URL('../../web/lib/publicReviews.ts', import.meta.url), 'utf8');
+  assert.doesNotMatch(lib, /export function (reviewOrigin|originalDate)\b/, 'the provenance wording helpers are gone');
 });
 
 test('the booking components never call a review "Verificada" or an imported one an M_AI appointment', async () => {
@@ -207,6 +208,4 @@ test('the booking components never call a review "Verificada" or an imported one
     assert.doesNotMatch(src, /["'>][^"'<]*\bVerificad[ao]s?\b/, `${f}: no generic "Verificada" badge`);
     assert.doesNotMatch(src, /cita verificada/i, f);
   }
-  const ui = readFileSync(new URL('ui.tsx', dir), 'utf8');
-  assert.match(ui, /importada" : "importadas"\} de Fresha/, 'the rating button names imported reviews in its accessible name');
 });

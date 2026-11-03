@@ -4,8 +4,9 @@ import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/s
 import { getPublicBrandLogo, listPublicCategories, listPublicServicesForSite } from "@worker/db/repositories/scheduling/publicCatalog.js";
 import { publicServiceRatings, publicServiceReviews, publicSiteRating, publicSiteReviews } from "@worker/db/repositories/scheduling/reviews.js";
 import { listPublicPromotions } from "@worker/db/repositories/scheduling/promotions.js";
-import { projectPublicCategory, projectPublicPromotion, projectPublicReview, projectPublicService, projectPublicSite } from "@/lib/publicBookingApi";
+import { projectPublicCategory, projectPublicPromotion, projectPublicService, projectPublicSite, publicReviewList } from "@/lib/publicBookingApi";
 import { publicClientConfig, readPublicBookingPolicy } from "@/lib/publicBookingPolicy";
+import { publicMapQuery } from "@/lib/mapsPlace";
 import { BookingFlow } from "@/components/booking/BookingFlow";
 
 /**
@@ -66,7 +67,7 @@ export default async function PublicBookingPage({ params }: { params: Promise<{ 
   const site = await resolve(siteSlug);
   if (!site) notFound();
 
-  const [serviceRows, logoUrl, ratings, serviceReviews, categoryRows, siteRating, siteReviews, promotionRows] = await Promise.all([
+  const [serviceRows, logoUrl, ratings, serviceReviews, categoryRows, siteRating, siteReviews, promotionRows, mapQuery] = await Promise.all([
     listPublicServicesForSite(site.tenant_id, site.id),
     getPublicBrandLogo(site.tenant_id, site.client_id),
     publicServiceRatings(site.tenant_id, site.id),
@@ -75,9 +76,11 @@ export default async function PublicBookingPage({ params }: { params: Promise<{ 
     publicSiteRating(site.tenant_id, site.id),
     publicSiteReviews(site.tenant_id, site.id),
     listPublicPromotions(site.tenant_id, site.id, new Date()),
+    publicMapQuery(site),
   ]);
   const services = serviceRows.map((s) => projectPublicService(s, ratings, serviceReviews));
-  const publicSite = projectPublicSite(site);
+  // The map's search (exact place of the business's Maps link) is only for this page.
+  const publicSite = { ...projectPublicSite(site), map_query: mapQuery };
   const config = publicClientConfig(readPublicBookingPolicy());
 
   return (
@@ -89,7 +92,7 @@ export default async function PublicBookingPage({ params }: { params: Promise<{ 
         initialServices={services}
         initialCategories={categoryRows.map(projectPublicCategory)}
         siteRating={siteRating}
-        siteReviews={siteReviews.map(projectPublicReview)}
+        siteReviews={publicReviewList(siteReviews)}
         promotions={promotionRows.map(projectPublicPromotion)}
         turnstileSiteKey={config.turnstileSiteKey}
         turnstileMisconfigured={config.turnstileMisconfigured}

@@ -185,7 +185,9 @@ export function ServiceStep({
             const href = whatsappLink(whatsapp, `Hola ${siteName}, quiero información sobre ${c.name}.`);
             return href ? (
               <a key={c.id} href={href} rel="noopener noreferrer" className={`${LINK_BTN} -ml-2 gap-2 self-start`}>
-                <IconWhatsApp size={16} />
+                <span aria-hidden className="flex size-[26px] flex-none items-center justify-center rounded-full bg-pb-wa text-white">
+                  <IconWhatsApp size={15} />
+                </span>
                 {c.tagline}
                 <span className="sr-only"> Abre WhatsApp</span>
               </a>

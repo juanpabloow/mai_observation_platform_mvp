@@ -34,6 +34,7 @@ import { ArtistStep } from "./ArtistStep";
 import { BookingDone } from "./BookingDone";
 import { BusinessInfo } from "./BusinessInfo";
 import { ReviewsDialog, type ReviewsTarget } from "./ReviewsDialog";
+import { ReviewsHighlights } from "./ReviewsHighlights";
 import type { PublicPromotionView } from "./ServiceStep";
 import { DateTimeStep, type EmptyAction, type EmptyState } from "./DateTimeStep";
 import { DetailsStep, type SummaryRow } from "./DetailsStep";
@@ -490,6 +491,8 @@ export function BookingFlow({
   };
 
   const openReviews = (target: ReviewsTarget, trigger: HTMLElement) => setReviews({ target, trigger });
+  const openSiteReviews = (trigger: HTMLElement) =>
+    siteRating ? openReviews({ title: `de ${site.name}`, scope: "Todas las reseñas de la sede.", rating: siteRating, reviews: siteReviews }, trigger) : undefined;
 
   const pickArtist = (choice: Exclude<ArtistChoice, null>) => {
     const r = onArtistChange(selRef.current, choice);
@@ -843,12 +846,15 @@ export function BookingFlow({
     <div className={root} ref={topRef}>
       <div className="flex-1">
         <div className="mx-auto w-full max-w-[640px] px-4 pb-5 pt-3 lg:flex lg:max-w-[1120px] lg:items-start lg:gap-7 lg:px-6 lg:pb-10 lg:pt-9">
-          <main lang="es" className="flex min-w-0 flex-1 flex-col gap-5 lg:gap-[22px]">
+          {/* After booking there is nothing left to select: the confirmation is one centred
+              column, without the side «Tu selección», and «Hacer otra reserva» closes it. */}
+          <main lang="es" className={`flex min-w-0 flex-1 flex-col gap-5 lg:gap-[22px] ${confirmation ? "lg:mx-auto lg:max-w-[760px]" : ""}`}>
             {!confirmation ? (
               <div className="flex flex-col gap-3.5">
                 {/* ONE brand row at every width, inside the column: back (from step 2),
-                    the business mark and name, and the step count. On the phone the back
-                    button takes the mark's place to keep the row on one line. */}
+                    the business mark and name, and WhatsApp (the progress bar below says
+                    the step). On the phone the back button takes the mark's place to keep
+                    the row on one line. */}
                 <div className="flex min-h-11 items-center gap-2.5">
                   {step > 1 ? (
                     <button
@@ -865,13 +871,7 @@ export function BookingFlow({
                     <span className={`${SERIF} truncate text-[19px] leading-[1.1] lg:text-[21px]`}>{site.name}</span>
                     {siteRating && step === 1 ? (
                       <span className="flex min-w-0 items-center">
-                        <RatingButton
-                          rating={siteRating}
-                          label={site.name}
-                          onOpen={(t) =>
-                            openReviews({ title: `de ${site.name}`, scope: "Todas las reseñas de la sede.", rating: siteRating, reviews: siteReviews }, t)
-                          }
-                        />
+                        <RatingButton rating={siteRating} label={site.name} onOpen={openSiteReviews} />
                       </span>
                     ) : site.address ? (
                       <span className="truncate text-[12.5px] text-pb-muted lg:text-[13px]">{site.address}</span>
@@ -883,12 +883,11 @@ export function BookingFlow({
                         href={waHello}
                         rel="noopener noreferrer"
                         aria-label={`Escribir a ${site.name} por WhatsApp`}
-                        className="pb-press flex size-11 items-center justify-center rounded-full border border-pb-line2 bg-white text-pb-ink"
+                        className="pb-press flex size-11 items-center justify-center rounded-full bg-pb-wa text-white shadow-[0_1px_2px_rgba(11,46,23,0.25)] hover:bg-pb-wa-press"
                       >
-                        <IconWhatsApp />
+                        <IconWhatsApp size={20} />
                       </a>
                     ) : null}
-                    <span className="text-[13px] text-pb-muted [font-variant-numeric:tabular-nums]">Paso {step} de 4</span>
                   </span>
                 </div>
                 <h1 ref={titleRef} tabIndex={-1} className={`${SERIF} m-0 mt-0.5 text-[32px] leading-[1.08] tracking-[-0.01em]`}>
@@ -955,13 +954,14 @@ export function BookingFlow({
                   onSelect={pickService}
                   onReserve={reserveService}
                   onOpenReviews={(s, t) =>
-                    s.rating ? openReviews({ title: `de ${s.name}`, scope: "Solo reseñas de este servicio.", rating: s.rating, reviews: (s.reviews ?? []).slice(0, 3) }, t) : undefined
+                    s.rating ? openReviews({ title: `de ${s.name}`, scope: "Solo reseñas de este servicio.", rating: s.rating, reviews: s.reviews ?? [] }, t) : undefined
                   }
                   siteName={site.name}
                   whatsapp={site.whatsapp ?? null}
                   willRecheck={Boolean(sel.artist || sel.slotStart)}
                   promotions={promotions}
                 />
+                <ReviewsHighlights variant="strip" rating={siteRating} reviews={siteReviews} onOpen={openSiteReviews} />
                 <BusinessInfo
                   siteName={site.name}
                   address={site.address}
@@ -969,6 +969,7 @@ export function BookingFlow({
                   directionsUrl={site.directions_url ?? null}
                   whatsapp={site.whatsapp ?? null}
                   whatsappText={`Hola ${site.name}, quiero reservar.`}
+                  mapQuery={site.map_query}
                 />
               </div>
             ) : step === 2 && service ? (
@@ -982,7 +983,7 @@ export function BookingFlow({
                 onView={(id, trigger) => setProfile({ id, trigger })}
                 onRetry={() => void loadStaff(service.id, sel.artist, artist?.name ?? null, service.name)}
                 onOpenReviews={(a, t) =>
-                  a.rating ? openReviews({ title: `de ${a.name}`, scope: "Solo reseñas de este artista.", rating: a.rating, reviews: (a.reviews ?? []).slice(0, 3) }, t) : undefined
+                  a.rating ? openReviews({ title: `de ${a.name}`, scope: "Solo reseñas de este artista.", rating: a.rating, reviews: a.reviews ?? [] }, t) : undefined
                 }
               />
             ) : step === 3 && service ? (
@@ -1047,14 +1048,21 @@ export function BookingFlow({
             ) : null}
             </div>
 
+            {confirmation ? (
+              <div className="hidden lg:flex">
+                <CtaButton label={ctaLabel} state={ctaState} disabled={ctaDisabled} onClick={onCta} arrow={false} />
+              </div>
+            ) : null}
+
             <p className="m-0 mt-1.5 text-center text-[12.5px] text-pb-muted lg:mt-4 lg:text-left">Impulsado por M_AI</p>
           </main>
 
-          {/* Desktop: the compact selection and the CTA, always in view. */}
-          <aside
-            aria-label="Tu selección"
-            className="sticky top-7 hidden w-[340px] flex-none flex-col gap-3.5 rounded-[16px] border border-pb-line bg-white p-5 lg:flex"
-          >
+          {/* Desktop: the compact selection and the CTA, always in view; on step 1 the
+              business's reviews («Lo que dicen») under it — the column scrolls on its own when
+              it is taller than the window, so «Continuar» is never out of reach. */}
+          {!confirmation ? (
+          <div className="sticky top-7 hidden max-h-[calc(100dvh-3.5rem)] w-[340px] flex-none flex-col gap-3.5 overflow-y-auto rounded-[16px] [scrollbar-width:thin] lg:flex">
+          <aside aria-label="Tu selección" className="flex flex-col gap-3.5 rounded-[16px] border border-pb-line bg-white p-5">
             <h2 className={`${SERIF} m-0 text-[23px]`}>Tu selección</h2>
             {service ? (
               <div className="flex flex-col">
@@ -1080,8 +1088,11 @@ export function BookingFlow({
                 {hint}
               </span>
             ) : null}
-            {!confirmation && step === 4 ? <span className="text-center text-[13px] text-pb-muted">Nada se reserva hasta que confirmes.</span> : null}
+            {step === 4 ? <span className="text-center text-[13px] text-pb-muted">Nada se reserva hasta que confirmes.</span> : null}
           </aside>
+          {step === 1 ? <ReviewsHighlights variant="card" rating={siteRating} reviews={siteReviews} onOpen={openSiteReviews} /> : null}
+          </div>
+          ) : null}
         </div>
       </div>
 

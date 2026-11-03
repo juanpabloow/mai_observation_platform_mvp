@@ -17,6 +17,8 @@ export interface PublicSiteView {
   whatsapp?: string | null;
   directions_url?: string | null;
   hours?: Array<{ days: string; hours: string }>;
+  /** What the map searches (web/lib/mapsPlace.ts): the exact place, else name + address. */
+  map_query?: string | null;
 }
 
 export interface CategoryView {
@@ -31,6 +33,8 @@ export interface RatingSummary {
   count: number;
   /** How many were imported from another platform (0/absent = all collected here). */
   imported?: number;
+  /** How many have 5, 4, 3, 2 and 1 stars, in that order (absent on old payloads). */
+  dist?: number[];
 }
 
 export interface PublicReview {
@@ -39,8 +43,6 @@ export interface PublicReview {
   rating: number;
   comment: string | null;
   submitted_at: string;
-  source?: "mai" | "fresha";
-  source_url?: string | null;
 }
 
 export interface ServiceOption {
@@ -113,6 +115,9 @@ export const ctaTone = (state: "on" | "muted" | "sending" | "outline") =>
         ? "border border-pb-line3 bg-white text-pb-ink"
         : "bg-pb-line text-pb-muted cursor-not-allowed";
 
+/** The WhatsApp action: the same box as BTN_SECONDARY, in WhatsApp green with white text. */
+export const BTN_WHATSAPP =
+  "pb-press inline-flex min-h-[44px] items-center justify-center gap-2 whitespace-nowrap rounded-[12px] border border-pb-wa bg-pb-wa px-4 text-[15px] font-[590] text-white shadow-[0_1px_2px_rgba(11,46,23,0.25)] hover:border-pb-wa-press hover:bg-pb-wa-press";
 /** Secondary pill-ish button ("Elegir artista", "Reservar sin preferencia"). */
 export const BTN_SECONDARY =
   "pb-sel pb-press inline-flex min-h-[44px] items-center justify-center whitespace-nowrap rounded-[12px] border border-pb-line3 bg-white px-4 text-[15px] text-pb-ink";
@@ -208,10 +213,10 @@ export function IconShuffle() {
 }
 
 /** The design's amber star (decorative — the number beside it carries the meaning). */
-export function IconStar({ size = 13 }: { size?: number }) {
+export function IconStar({ size = 13, off = false }: { size?: number; off?: boolean }) {
   return (
     <svg width={size} height={size} viewBox="0 0 16 16" aria-hidden className="flex-none">
-      <path d="M8 1.6l1.9 4 4.4.5-3.3 3 .9 4.3L8 11.3l-3.9 2.1.9-4.3-3.3-3 4.4-.5z" fill="#E8A317" />
+      <path d="M8 1.6l1.9 4 4.4.5-3.3 3 .9 4.3L8 11.3l-3.9 2.1.9-4.3-3.3-3 4.4-.5z" fill={off ? "#CDD1D6" : "#E8A317"} />
     </svg>
   );
 }
@@ -251,7 +256,7 @@ export function Portrait({
   );
 }
 
-/** WhatsApp's mark, monochrome (the page stays black and white). */
+/** WhatsApp's mark, in the current text colour (white on the green WhatsApp actions). */
 export function IconWhatsApp({ size = 18 }: { size?: number }) {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden className="flex-none">
@@ -309,7 +314,7 @@ export function RatingButton({
     <button
       type="button"
       aria-haspopup="dialog"
-      aria-label={`${avg} de 5, ${count} de ${label}${rating.imported ? ` (${rating.imported} ${rating.imported === 1 ? "importada" : "importadas"} de Fresha)` : ""}. Ver reseñas`}
+      aria-label={`${avg} de 5, ${count} de ${label}. Ver reseñas`}
       onClick={(e) => {
         e.stopPropagation();
         onOpen(e.currentTarget);

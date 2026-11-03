@@ -73,18 +73,34 @@ export function relativeWhen(iso: string, now: Date = new Date()): string {
   return y === 1 ? "hace 1 año" : `hace ${y} años`;
 }
 
-/** Where the reviews of a summary come from — said plainly, never "verified". */
-export function reviewOrigin(r: { count: number; imported?: number }): string {
-  const imported = r.imported ?? 0;
-  if (imported === 0) return "De clientes con una cita completada aquí; publicadas por el negocio.";
-  // The honest scope of the control: someone checked WHERE it came from — it is not an
-  // appointment booked here and nobody can promise more than that.
-  if (imported >= r.count) return "Reseñas importadas de Fresha: se revisó su procedencia antes de publicarlas, pero no son de citas reservadas aquí.";
-  return `Incluye ${imported} ${imported === 1 ? "reseña importada" : "reseñas importadas"} de Fresha (se revisó su procedencia; no son de citas reservadas aquí). Las demás son de clientes con una cita completada aquí.`;
-}
+/** How many reviews WITH a comment lead every public list, and where the 3–4★ ones go. */
+export const FEATURED_REVIEWS = 6;
+const MIXED_SLOTS = [1, 3];
+/** What a page sends per list (service, artist, business): the featured ones and a few more. */
+export const PUBLIC_REVIEWS_SENT = 20;
 
-/** "14 de marzo de 2026" — an imported review shows the date it was written on Fresha. */
-export function originalDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("es-CO", { day: "numeric", month: "long", year: "numeric", timeZone: "UTC" });
+/**
+ * The ORDER of a public review list (product, 3 Nov 2026) — so a page where every review is
+ * 5★ does not read as staged, without hiding anything that changes the numbers:
+ *  1. Reviews with a comment first; star-only ones after them.
+ *  2. Among the first FEATURED_REVIEWS with a comment, up to two 3–4★ ones (the most recent
+ *     of that range), in the 2nd and 4th place; the other places are the newest 5★ ones.
+ *  3. 1–2★ ones are never featured but stay in the list (after the featured, by date) and
+ *     always count in the average and the bars (RatingSummary). Nothing is invented: a
+ *     service with only 5★ reviews shows only 5★ reviews.
+ * Within each group, newest first. Pure; the input order does not matter.
+ */
+export function arrangePublicReviews<T extends { rating: number; comment: string | null; submitted_at: string | Date }>(reviews: readonly T[]): T[] {
+  const time = (r: T) => new Date(r.submitted_at).getTime();
+  const recent = [...reviews].sort((a, b) => time(b) - time(a));
+  const commented = recent.filter((r) => r.comment?.trim());
+  const top = commented.filter((r) => r.rating >= 5);
+  const mid = commented.filter((r) => r.rating === 3 || r.rating === 4);
+  const featured: T[] = [];
+  for (let i = 0; i < FEATURED_REVIEWS && (top.length || mid.length); i++) {
+    const next = MIXED_SLOTS.includes(i) && mid.length ? mid.shift() : top.length ? top.shift() : mid.shift();
+    featured.push(next!);
+  }
+  const rest = commented.filter((r) => !featured.includes(r));
+  return [...featured, ...rest, ...recent.filter((r) => !r.comment?.trim())];
 }
-
