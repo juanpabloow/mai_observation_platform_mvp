@@ -48,6 +48,22 @@ export function directionsUrl(site: { name: string; address: string | null; publ
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${site.name}, ${site.address.trim()}`)}`;
 }
 
+/**
+ * The map shown in "Ubicación y horario": Google Maps' public embed (no API key) for the
+ * site's ADDRESS. A short business link (maps.app.goo.gl) cannot be embedded, so the map
+ * always follows the address while "Cómo llegar" keeps the business's own link. Null
+ * without an address: no map is better than a map of the wrong place.
+ *
+ * It is the /maps/embed form directly: the shorter `/maps?q=…&output=embed` answers with a
+ * redirect that carries X-Frame-Options: SAMEORIGIN, and browsers then leave the frame
+ * blank. In the `pb` value `!` separates fields, so it is escaped too.
+ */
+export function mapEmbedUrl(address: string | null | undefined): string | null {
+  const a = address?.trim();
+  if (!a) return null;
+  return `https://www.google.com/maps/embed?origin=mfe&pb=!1m3!2m1!1s${encodeURIComponent(a).replace(/!/g, "%21")}!6i16`;
+}
+
 // ── Opening hours ───────────────────────────────────────────────────────────────────
 
 type Ranges = Array<{ start: string; end: string }>;

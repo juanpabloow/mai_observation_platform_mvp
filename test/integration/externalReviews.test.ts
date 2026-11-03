@@ -312,12 +312,12 @@ test('published: labelled as Fresha, mixed averages, unattributed out of artist/
   }
 
   // Artist: 3★ native + 5★ + 4★ imported (Mateo's 3★ is unattributed → not here).
-  assert.deepEqual((await publicStaffRatings(s.tenantId, s.siteId)).get(s.staffA), { average: 4, count: 3, imported: 2 });
+  assert.deepEqual((await publicStaffRatings(s.tenantId, s.siteId)).get(s.staffA), { average: 4, count: 3, imported: 2, dist: [1, 1, 1, 0, 0] });
   assert.equal((await publicStaffRatings(s.tenantId, s.siteId)).get(s.staffB), undefined, 'no other artist gets anything');
   // Service: native 3★ + Andrés 5★ (the only one with a confirmed service).
-  assert.deepEqual((await publicServiceRatings(s.tenantId, s.siteId)).get(s.serviceHaircut), { average: 4, count: 2, imported: 1 });
+  assert.deepEqual((await publicServiceRatings(s.tenantId, s.siteId)).get(s.serviceHaircut), { average: 4, count: 2, imported: 1, dist: [1, 0, 1, 0, 0] });
   // The business: everything approved, including the unattributed one.
-  assert.deepEqual(await publicSiteRating(s.tenantId, s.siteId), { average: 3.8, count: 4, imported: 3 });
+  assert.deepEqual(await publicSiteRating(s.tenantId, s.siteId), { average: 3.8, count: 4, imported: 3, dist: [1, 1, 2, 0, 0] });
 
   const raw = await publicGet('staff', s);
   const body = JSON.parse(raw) as { staff: Array<{ id: string; reviews: Array<Record<string, unknown>> }> };

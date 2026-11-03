@@ -171,20 +171,34 @@ export interface RatingSummary {
   count: number;
   /** How many of `count` were imported from another platform (0 = all collected here). */
   imported: number;
+  /** How many of `count` have 5, 4, 3, 2 and 1 stars (in that order) — the page's bars. */
+  dist: [number, number, number, number, number];
 }
 
 const RATING_COLS = `round(avg(rating)::numeric, 1)::text AS average, count(*)::int AS count,
-            count(*) FILTER (WHERE source <> 'mai')::int AS imported`;
-const toSummary = (x: { average: string; count: number; imported: number }): RatingSummary => ({
+            count(*) FILTER (WHERE source <> 'mai')::int AS imported,
+            count(*) FILTER (WHERE rating = 5)::int AS s5, count(*) FILTER (WHERE rating = 4)::int AS s4,
+            count(*) FILTER (WHERE rating = 3)::int AS s3, count(*) FILTER (WHERE rating = 2)::int AS s2,
+            count(*) FILTER (WHERE rating = 1)::int AS s1`;
+type RatingRow = { average: string; count: number; imported: number; s5: number; s4: number; s3: number; s2: number; s1: number };
+const toSummary = (x: RatingRow): RatingSummary => ({
   average: Number(x.average),
   count: x.count,
   imported: x.imported,
+  dist: [x.s5, x.s4, x.s3, x.s2, x.s1],
 });
+
+/**
+ * How many recent approved reviews each public list reads before the page picks what to
+ * show (arrangePublicReviews, web/lib/publicReviews.ts): enough to find the ones WITH a
+ * comment and a few 3–4★ among many star-only 5★ ones. The page sends fewer.
+ */
+export const PUBLIC_REVIEW_POOL = 30;
 
 /** Approved-review average and count per professional of the site. */
 export async function publicStaffRatings(tenantId: string, siteId: string): Promise<Map<string, RatingSummary>> {
   // staff_id IS NOT NULL: an imported review whose artist was not confirmed counts for no one.
-  const r = await query<{ staff_id: string; average: string; count: number; imported: number }>(
+  const r = await query<RatingRow & { staff_id: string }>(
     `SELECT staff_id, ${RATING_COLS}
        FROM appointment_reviews
       WHERE tenant_id = $1 AND site_id = $2 AND status = 'approved' AND staff_id IS NOT NULL
@@ -197,7 +211,7 @@ export async function publicStaffRatings(tenantId: string, siteId: string): Prom
 /** Approved-review average and count per service of the site (any professional). */
 export async function publicServiceRatings(tenantId: string, siteId: string): Promise<Map<string, RatingSummary>> {
   // service_id IS NOT NULL: only a CONFIRMED equivalence counts, never a service name.
-  const r = await query<{ service_id: string; average: string; count: number; imported: number }>(
+  const r = await query<RatingRow & { service_id: string }>(
     `SELECT service_id, ${RATING_COLS}
        FROM appointment_reviews
       WHERE tenant_id = $1 AND site_id = $2 AND status = 'approved' AND service_id IS NOT NULL
@@ -227,7 +241,7 @@ const PUBLIC_COLS = (rv: string) =>
    coalesce(${rv}.original_reviewed_at, ${rv}.submitted_at) AS submitted_at, ${rv}.source, ${rv}.public_source_url`;
 
 /** The latest approved reviews (≤ `limit` each) of the given professionals at the site. */
-export async function publicStaffReviews(tenantId: string, siteId: string, staffIds: string[], limit = 10): Promise<PublicReviewRow[]> {
+export async function publicStaffReviews(tenantId: string, siteId: string, staffIds: string[], limit = PUBLIC_REVIEW_POOL): Promise<PublicReviewRow[]> {
   if (staffIds.length === 0) return [];
   const r = await query<PublicReviewRow>(
     `SELECT staff_id, author_display, service_name, rating, comment, submitted_at, source, public_source_url
@@ -250,7 +264,7 @@ export async function publicStaffReviews(tenantId: string, siteId: string, staff
  * and never repeats it next to an artist or a service. Null when there is none.
  */
 export async function publicSiteRating(tenantId: string, siteId: string): Promise<RatingSummary | null> {
-  const r = await query<{ average: string | null; count: number; imported: number }>(
+  const r = await query<Omit<RatingRow, 'average'> & { average: string | null }>(
     `SELECT ${RATING_COLS}
        FROM appointment_reviews
       WHERE tenant_id = $1 AND site_id = $2 AND status = 'approved'`,
@@ -266,7 +280,7 @@ export interface PublicSiteReviewRow extends Omit<PublicReviewRow, 'staff_id'> {
 }
 
 /** The latest approved reviews of the whole site, newest first. */
-export async function publicSiteReviews(tenantId: string, siteId: string, limit = 3): Promise<PublicSiteReviewRow[]> {
+export async function publicSiteReviews(tenantId: string, siteId: string, limit = PUBLIC_REVIEW_POOL): Promise<PublicSiteReviewRow[]> {
   const r = await query<PublicSiteReviewRow>(
     `SELECT rv.staff_id, rv.service_id, ${PUBLIC_COLS('rv')}
        FROM appointment_reviews rv
@@ -279,7 +293,7 @@ export async function publicSiteReviews(tenantId: string, siteId: string, limit 
 }
 
 /** The latest approved reviews (≤ `limit` each) of every service of the site. */
-export async function publicServiceReviews(tenantId: string, siteId: string, limit = 3): Promise<PublicSiteReviewRow[]> {
+export async function publicServiceReviews(tenantId: string, siteId: string, limit = PUBLIC_REVIEW_POOL): Promise<PublicSiteReviewRow[]> {
   const r = await query<PublicSiteReviewRow>(
     `SELECT staff_id, service_id, author_display, service_name, rating, comment, submitted_at, source, public_source_url
        FROM (

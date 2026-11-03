@@ -4,7 +4,7 @@ import { getPublicBookingSiteBySlug } from "@worker/db/repositories/scheduling/s
 import { getPublicBrandLogo, listPublicCategories, listPublicServicesForSite } from "@worker/db/repositories/scheduling/publicCatalog.js";
 import { publicServiceRatings, publicServiceReviews, publicSiteRating, publicSiteReviews } from "@worker/db/repositories/scheduling/reviews.js";
 import { listPublicPromotions } from "@worker/db/repositories/scheduling/promotions.js";
-import { projectPublicCategory, projectPublicPromotion, projectPublicReview, projectPublicService, projectPublicSite } from "@/lib/publicBookingApi";
+import { projectPublicCategory, projectPublicPromotion, projectPublicService, projectPublicSite, publicReviewList } from "@/lib/publicBookingApi";
 import { publicClientConfig, readPublicBookingPolicy } from "@/lib/publicBookingPolicy";
 import { BookingFlow } from "@/components/booking/BookingFlow";
 
@@ -89,7 +89,7 @@ export default async function PublicBookingPage({ params }: { params: Promise<{ 
         initialServices={services}
         initialCategories={categoryRows.map(projectPublicCategory)}
         siteRating={siteRating}
-        siteReviews={siteReviews.map(projectPublicReview)}
+        siteReviews={publicReviewList(siteReviews)}
         promotions={promotionRows.map(projectPublicPromotion)}
         turnstileSiteKey={config.turnstileSiteKey}
         turnstileMisconfigured={config.turnstileMisconfigured}

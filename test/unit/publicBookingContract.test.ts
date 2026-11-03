@@ -25,7 +25,8 @@ test('the v3 flow has exactly four steps with the specified titles, labels and f
   for (const t of ['Elige tu experiencia', 'Elige a tu artista', 'Elige fecha y hora', 'Tus datos']) assert.ok(logic.includes(`"${t}"`), t);
   for (const l of ['Experiencia', 'Artista', 'Fecha y hora', 'Datos']) assert.ok(logic.includes(`"${l}"`), l);
   assert.ok(flow.includes('([1, 2, 3, 4] as const)'), 'four progress steps');
-  assert.ok(flow.includes('Paso {step} de 4'));
+  // The progress bar already says where the visitor is (product, 3 Nov 2026): no «Paso N de 4».
+  assert.ok(!flow.includes('Paso {step} de 4'), 'no step counter next to the brand');
   assert.ok(flow.includes('"Confirmar cita"'));
   const done = root(`${BOOKING_DIR}/BookingDone.tsx`);
   for (const s of ['Tu cita está reservada', 'Añadir a mi calendario']) assert.ok(done.includes(s), s);

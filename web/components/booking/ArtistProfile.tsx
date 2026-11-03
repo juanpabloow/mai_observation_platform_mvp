@@ -1,10 +1,10 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import { originalDate, ratingText, relativeWhen, reviewCountText, reviewOrigin } from "@/lib/publicReviews";
+import { ratingText, reviewCountText } from "@/lib/publicReviews";
 import { artistInitials, artistTone } from "@/lib/publicBookingFlow";
 import { bioLead } from "@/lib/staffPublicProfile";
-import { ImportedBadge } from "./ReviewsDialog";
+import { RatingBars, ReviewArticle } from "./ReviewsDialog";
 import { CTA_BASE, ctaTone, IconBack, IconStar, Portrait, SERIF, type ServiceOption, type StaffOption } from "./ui";
 
 /**
@@ -169,29 +169,10 @@ export function ArtistProfile({
               <section aria-label="Reseñas" className="flex flex-col gap-2.5">
                 <div className="flex flex-wrap items-baseline gap-2">
                   <h3 className="m-0 text-[14px] font-[590]">Reseñas</h3>
-                  {artist.rating ? <span className="text-[12.5px] text-pb-muted">{reviewOrigin(artist.rating)}</span> : null}
                 </div>
+                {artist.rating ? <RatingBars rating={artist.rating} /> : null}
                 {shown.map((rv, i) => (
-                  <article key={`${rv.submitted_at}-${i}`} className="flex flex-col gap-1.5 rounded-[16px] border border-pb-line bg-white p-3.5">
-                    <div className="flex items-center gap-2.5">
-                      <span aria-hidden className="flex size-8 flex-none items-center justify-center rounded-full bg-pb-sf2 text-[12px] font-semibold">
-                        {rv.author.split(/\s+/).map((w) => w.charAt(0)).join("").slice(0, 2)}
-                      </span>
-                      <span className="flex min-w-0 flex-1 flex-col">
-                        <span className="text-[14px] font-[590]">{rv.author}</span>
-                        <span className="text-[12.5px] leading-[1.35] text-pb-muted [overflow-wrap:anywhere]">
-                          {[rv.service, rv.source === "fresha" ? originalDate(rv.submitted_at) : relativeWhen(rv.submitted_at)].filter(Boolean).join(" · ")}
-                        </span>
-                      </span>
-                      <span aria-label={`${rv.rating} de 5 estrellas`} className="flex flex-none gap-px">
-                        {Array.from({ length: rv.rating }, (_, k) => (
-                          <IconStar key={k} />
-                        ))}
-                      </span>
-                    </div>
-                    {rv.comment ? <p className="m-0 whitespace-pre-line text-[14.5px] leading-[1.5] text-pb-body">{rv.comment}</p> : null}
-                    {rv.source === "fresha" ? <ImportedBadge url={rv.source_url ?? null} /> : null}
-                  </article>
+                  <ReviewArticle key={`${rv.submitted_at}-${i}`} review={rv} index={i} />
                 ))}
                 {reviews.length > 3 ? (
                   <button
