@@ -62,6 +62,8 @@ export interface DayCost {
   usd: number | null;
   /** Priced US$ of the day per business, keyed by client id ('' = unassigned). */
   byClient: Record<string, number>;
+  /** Tokens (input + output) of the day per business — priced or not. Drives the invoice split. */
+  tokensByClient: Record<string, number>;
 }
 
 export interface MeetingsCost {
@@ -121,7 +123,7 @@ export function buildAiCostDashboard(input: {
   const workflows = new Map<string, WorkflowCost>();
   const models = new Map<string, ModelCost>();
   const daily = new Map<string, DayCost>(
-    input.days.map((day) => [day, { day, calls: 0, inputTokens: 0, outputTokens: 0, usd: null, byClient: {} }]),
+    input.days.map((day) => [day, { day, calls: 0, inputTokens: 0, outputTokens: 0, usd: null, byClient: {}, tokensByClient: {} }]),
   );
   const coverageByWf = new Map(input.coverage.map((c) => [c.n8n_workflow_id, c]));
 
@@ -171,6 +173,8 @@ export function buildAiCostDashboard(input: {
       d.calls += row.calls;
       d.inputTokens += row.input_tokens;
       d.outputTokens += row.output_tokens;
+      const tk = row.client_id ?? '';
+      d.tokensByClient[tk] = (d.tokensByClient[tk] ?? 0) + row.input_tokens + row.output_tokens;
       if (usd !== null) {
         d.usd = (d.usd ?? 0) + usd;
         const ck = row.client_id ?? '';

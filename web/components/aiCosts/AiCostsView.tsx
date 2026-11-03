@@ -9,6 +9,8 @@ import { buttonClass, FIELD } from "@/components/ui/controls";
 import { fmtRange, updatedLabel } from "@/lib/valueDashboardView";
 import type { AiCostsReport } from "@/lib/aiCosts";
 import { DailyCostChart, dayLong, type Series } from "./DailyCostChart";
+import { OpenAiBillingCard } from "./OpenAiBillingCard";
+import { ClientBillingCard } from "./ClientBillingCard";
 import { localToday, resolvePeriod, type PeriodKey } from "@worker/analytics/valueDashboardModel.js";
 import { resolveBaseline, type BaselineKey } from "@worker/analytics/aiCostPeriods.js";
 import { METRIC_DIRECTION, type Change, type DayCost, type MetricKey, type Money } from "@worker/analytics/aiCostModel.js";
@@ -548,6 +550,21 @@ export function AiCostsView({
               );
             })}
           </section>
+
+          {/* --------------------------------------------- OpenAI billing -- */}
+          {data.clientBilling ? <ClientBillingCard billing={data.clientBilling} usdCop={usdCop} estimatedUsd={cur.totals.cost.partial ? null : cur.totals.cost.usd} /> : null}
+          {data.billing ? (
+            <OpenAiBillingCard
+              billing={data.billing}
+              estimatedUsd={cur.totals.cost.usd}
+              estimatedPartial={cur.totals.cost.partial}
+              estimates={Object.fromEntries(cur.byClient.map((c) => [c.clientId ?? "", c.cost.partial ? null : c.cost.usd]))}
+              colors={Object.fromEntries(series.map((sr) => [sr.key, sr.color]))}
+              usdCop={usdCop}
+              tz={data.tz}
+              onChanged={() => void load(sel, base)}
+            />
+          ) : null}
 
           {/* ------------------------------------------------------ daily -- */}
           <section aria-labelledby="ai-days" className={cx(s.card, s.enter)}>

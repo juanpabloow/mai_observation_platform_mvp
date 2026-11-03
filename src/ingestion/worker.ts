@@ -5,6 +5,7 @@ import { ingestExecutionsForConnection, type IngestResult } from './ingestExecut
 import { syncWorkflowsForConnection, type SyncResult } from './syncWorkflows.js';
 import { deriveTurnsForExecutionIds, type DeriveCounts } from '../conversations/deriveTurns.js';
 import { deriveLlmUsageForExecutionIds, type LlmUsageCounts } from '../analytics/deriveLlmUsage.js';
+import { syncDueOpenAiConnections } from '../analytics/syncOpenAi.js';
 import type { N8nConnectionRow } from '../db/types.js';
 
 /**
@@ -148,6 +149,10 @@ async function runCycle(): Promise<void> {
       },
       'ingestion cycle complete',
     );
+
+    // COSTOS DE IA: what OpenAI billed, for agencies that connected an Admin key. At most every
+    // 6 h per tenant (attempts included); best-effort, never fails the cycle.
+    await syncDueOpenAiConnections();
   } catch (err) {
     // e.g. listActiveConnections failed — never let a cycle crash the worker.
     logger.error({ cycle, err, durationMs: Date.now() - startedAt }, 'ingestion cycle failed');
