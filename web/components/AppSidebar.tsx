@@ -614,7 +614,7 @@ const fold = (v: string) => v.normalize("NFD").replace(/[\u0300-\u036f]/g, "").t
  * what the rail already shows this person (the same permission-filtered model), nothing
  * more. Enter opens the first result; Escape clears.
  */
-function filterSections(sections: NavSection[], agency: NavItem | null, q: string) {
+function filterSections(sections: NavSection[], agency: NavItem[], q: string) {
   const nq = fold(q.trim());
   if (!nq) return { sections, agency, first: null as string | null, count: -1 };
   let first: string | null = null;
@@ -637,9 +637,9 @@ function filterSections(sections: NavSection[], agency: NavItem | null, q: strin
       }),
     }))
     .filter((sec) => sec.entries.length > 0);
-  const ag = agency && fold(agency.label).includes(nq) ? agency : null;
-  if (ag) {
-    first ??= ag.href;
+  const ag = agency.filter((a) => fold(a.label).includes(nq));
+  for (const a of ag) {
+    first ??= a.href;
     count += 1;
   }
   return { sections: out, agency: ag, first, count };
@@ -658,8 +658,8 @@ function RailBody({
   searchable = false,
 }: {
   sections: NavSection[];
-  /** Módulos — the agency's own tool, kept apart at the bottom of the rail. */
-  agency: NavItem | null;
+  /** Módulos and Costos de IA — the agency's own tools, kept apart at the bottom of the rail. */
+  agency: NavItem[];
   pathname: string;
   collapsed: boolean;
   account: Account;
@@ -815,10 +815,12 @@ function RailBody({
             {section.entries.map(renderEntry)}
           </div>
         ))}
-        {shown.agency ? (
-          // Apart, at the foot of the nav: the agency's tool, never the business's.
-          <div role="group" aria-label="Agencia" className="mt-auto flex flex-col pt-3">
-            <NavLink item={shown.agency} collapsed={collapsed} onNavigate={onNavigate} />
+        {shown.agency.length > 0 ? (
+          // Apart, at the foot of the nav: the agency's tools, never the business's.
+          <div role="group" aria-label="Agencia" className="mt-auto flex flex-col gap-px pt-3">
+            {shown.agency.map((item) => (
+              <NavLink key={item.key} item={item} collapsed={collapsed} onNavigate={onNavigate} />
+            ))}
           </div>
         ) : null}
       </nav>
@@ -987,7 +989,9 @@ export function AppSidebar({
 
   // Build the section model for the current context.
   let sections: NavSection[];
-  let agency: NavItem | null = null;
+  const agency: NavItem[] = [];
+  // COSTOS DE IA — cross-business, agency only (the page re-checks on the server).
+  const aiCostsItem: NavItem = { key: "ai-costs", label: "Costos de IA", href: "/costos-ia", icon: Icon.overview, active: pathname.startsWith("/costos-ia"), tag: "AGENCIA" };
   const links = (items: NavItem[]): NavEntry[] => items.map((it) => ({ kind: "link" as const, ...it }));
   if (clientId) {
     // The proposal's three blocks — Operación · Negocio · Herramientas — split by a
@@ -1044,8 +1048,9 @@ export function AppSidebar({
       .filter((g) => g.entries.length > 0);
     const modules = model.find((x) => x.id === "agency");
     if (modules) {
-      agency = { key: "modules", label: "Módulos", href: modules.href, icon: Icon.modules, active: here?.section === "agency", tag: "AGENCIA" };
+      agency.push({ key: "modules", label: "Módulos", href: modules.href, icon: Icon.modules, active: here?.section === "agency", tag: "AGENCIA" });
     }
+    if (!isMember) agency.push(aiCostsItem);
   } else if (isMember) {
     // A member landed OFF their client path (e.g. root) — a small stand-in until they
     // navigate in: the pages its permissions open (a professional login: its agenda only).
@@ -1096,6 +1101,7 @@ export function AppSidebar({
             icon: Icon.clients,
             active: pathname === "/clients" || pathname.startsWith("/clients/"),
           },
+          { ...aiCostsItem, tag: undefined }, // already under «Agencia» here
         ]),
       },
     ];

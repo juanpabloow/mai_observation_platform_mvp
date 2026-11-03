@@ -22,6 +22,7 @@
     "migrate": "node-pg-migrate --envPath .env --tsx",
     "migrate:prod": "node-pg-migrate --tsx",
     "derive:backfill": "tsx src/scripts/deriveBackfill.ts",
+    "llm-usage:backfill": "tsx src/scripts/llmUsageBackfill.ts",
     "identity:contain": "tsx src/scripts/identityContainmentPlan.ts",
     "attribution:backfill": "tsx src/scripts/attributionBackfillPlan.ts",
     "pipeline:backfill": "tsx src/scripts/pipelineBackfillPlan.ts",

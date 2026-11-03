@@ -4,6 +4,7 @@ import { listActiveConnections } from '../db/repositories/n8nConnections.js';
 import { ingestExecutionsForConnection, type IngestResult } from './ingestExecutions.js';
 import { syncWorkflowsForConnection, type SyncResult } from './syncWorkflows.js';
 import { deriveTurnsForExecutionIds, type DeriveCounts } from '../conversations/deriveTurns.js';
+import { deriveLlmUsageForExecutionIds, type LlmUsageCounts } from '../analytics/deriveLlmUsage.js';
 import type { N8nConnectionRow } from '../db/types.js';
 
 /**
@@ -22,7 +23,10 @@ interface ConnectionOutcome {
   sync: SyncResult;
   ingest: IngestResult;
   derive: DeriveCounts;
+  llm: LlmUsageCounts;
 }
+
+const EMPTY_LLM: LlmUsageCounts = { processed: 0, withCalls: 0, withoutData: 0, errors: 0 };
 
 const EMPTY_DERIVE: DeriveCounts = {
   processed: 0,
@@ -55,7 +59,21 @@ async function processConnection(connection: N8nConnectionRow): Promise<Connecti
     );
   }
 
-  return { sync, ingest, derive };
+  // COSTOS DE IA: token usage of the same new executions. Best-effort, like turns.
+  let llm = EMPTY_LLM;
+  try {
+    llm = await deriveLlmUsageForExecutionIds({
+      tenantId: connection.tenant_id,
+      executionIds: ingest.newExecutionIds,
+    });
+  } catch (err) {
+    logger.error(
+      { err, connection: connection.name, connectionId: connection.id },
+      'llm usage derivation step failed for connection; continuing',
+    );
+  }
+
+  return { sync, ingest, derive, llm };
 }
 
 /** One cycle across all active connections. Never throws (logs instead). */
@@ -82,7 +100,7 @@ async function runCycle(): Promise<void> {
         const connection = chunk[idx];
         processed += 1;
         if (outcome.status === 'fulfilled') {
-          const { sync, ingest, derive } = outcome.value;
+          const { sync, ingest, derive, llm } = outcome.value;
           totalSynced += sync.synced;
           totalNew += ingest.new;
           totalErrors += ingest.errors + derive.errors;
@@ -102,6 +120,8 @@ async function runCycle(): Promise<void> {
               turnsUpserted: derive.upserted,
               turnsDeleted: derive.deleted,
               deriveErrors: derive.errors,
+              llmExecutions: llm.withCalls,
+              llmErrors: llm.errors,
             },
             'connection processed',
           );
