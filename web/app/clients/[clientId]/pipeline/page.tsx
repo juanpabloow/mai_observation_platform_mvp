@@ -3,8 +3,10 @@ import { notFound } from "next/navigation";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import {
   getCohortFunnel,
+  getEarliestCohortMonth,
   listAwaitingBusinessReply,
   listBoardOpportunities,
+  listNeedsFollowup,
   type BoardFilters,
   type OpportunityStatus,
 } from "@worker/db/repositories/pipeline.js";
@@ -13,7 +15,7 @@ import { listMembersForTenant } from "@worker/db/repositories/tenantMembers.js";
 import { isOriginGroupKey, kindsForGroup } from "@/lib/originDisplay";
 import { displayContactName } from "@/lib/contactName";
 import { can } from "@/lib/access";
-import { cohortFunnelSteps, cohortTopLoss, resolveCohortPeriod, stageTotals, toBoardCard } from "@/lib/pipelineBoard";
+import { cohortFunnelSteps, cohortMonths, cohortTopLoss, resolveCohortPeriod, stageTotals, toBoardCard } from "@/lib/pipelineBoard";
 import { PipelinePanel } from "@/components/pipeline/PipelinePanel";
 
 const DAY = /^\d{4}-\d{2}-\d{2}$/;
@@ -67,23 +69,34 @@ export default async function PipelinePage({
   // JP-7b §1: the cohort funnel has its OWN period (independent of the board's current-state view);
   // it respects the origin/campaign/ad/owner facets but not search/status (the cohort is a time group).
   const cohortPeriod = resolveCohortPeriod(sp.fp, sp.ff, sp.ft);
-  const [boardRows, lostRows, queueRows, cohortRaw] = await Promise.all([
+  const [boardRows, lostRows, queueRows, followupRows, cohortRaw, earliestMonth] = await Promise.all([
     // The board columns = everything NOT lost (the status filter narrows further if set).
     listBoardOpportunities(scope.tenantId, client.id, { ...filters, status: statusFilter }),
     listBoardOpportunities(scope.tenantId, client.id, { ...filters, status: "lost" }),
-    listAwaitingBusinessReply(scope.tenantId, client.id),
+    listAwaitingBusinessReply(scope.tenantId, client.id), // "Te esperan" (customer spoke last)
+    listNeedsFollowup(scope.tenantId, client.id), // "Sin respuesta" (business last, ≥ 24 h)
     getCohortFunnel(scope.tenantId, client.id, { originKinds, campaignId, adId, owner: ownerFilter }, cohortPeriod.fromIso, cohortPeriod.toIso),
+    getEarliestCohortMonth(scope.tenantId, client.id),
   ]);
-  const cohort = { period: cohortPeriod, steps: cohortFunnelSteps(cohortRaw), size: cohortRaw.cohort, lost: cohortRaw.lost, topLoss: cohortTopLoss(cohortRaw) };
+  const cohort = {
+    period: cohortPeriod,
+    steps: cohortFunnelSteps(cohortRaw),
+    size: cohortRaw.cohort,
+    lost: cohortRaw.lost,
+    topLoss: cohortTopLoss(cohortRaw),
+    months: cohortMonths(earliestMonth, new Date()),
+  };
 
-  const queue = queueRows.map((q) => ({
+  const toQueueItem = (q: (typeof queueRows)[number]) => ({
     id: q.id,
     contactId: q.contact_id,
     conversationId: q.conversation_id,
     name: displayContactName({ name: q.contact_name, phoneE164: q.contact_phone_e164, channelUserId: q.contact_channel_user_id }),
     stage: q.stage,
     lastMessageAt: q.last_message_at.toISOString(),
-  }));
+  });
+  const queue = queueRows.map(toQueueItem); // Te esperan
+  const followup = followupRows.map(toQueueItem); // Sin respuesta
 
   // `toBoardCard` reads its own clock for the stale thresholds (a lib call, not render state).
   const cards = boardRows.map((r) => toBoardCard(r, canViewPayments));
@@ -94,12 +107,12 @@ export default async function PipelinePage({
   return (
     <PipelinePanel
       clientId={client.id}
-      clientName={client.name}
       cards={cards}
       lostCards={lostCardsVm}
       moneyTotals={moneyTotals}
       cohort={cohort}
       queue={queue}
+      followup={followup}
       campaigns={campaigns.map((c) => ({ id: c.id, name: c.name }))}
       ads={ads.map((a) => ({ id: a.id, label: a.name || a.headline || a.external_id }))}
       owners={ownerOptions}

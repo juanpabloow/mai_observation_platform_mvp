@@ -7,9 +7,13 @@ import {
   STALE_LEAD_MINUTES,
   STALE_QUALIFIED_HOURS,
   apptLineOf,
+  apptWhenLine,
+  cardUrgency,
   cohortFunnelSteps,
+  cohortMonths,
   cohortPeriodRange,
   cohortTopLoss,
+  contactAvatar,
   funnelSteps,
   resolveCohortPeriod,
   groupByStage,
@@ -18,6 +22,8 @@ import {
   originTitleOf,
   ownerInitials,
   qualificationLineOf,
+  reminderText,
+  sortBoardColumn,
   sortByActivityDesc,
   spokeLastDisplay,
   stageTotals,
@@ -42,6 +48,7 @@ const mkCard = (over: Partial<BoardCard> = {}): BoardCard => ({
   paidAmount: null, paidMethod: null,
   lastMessageText: null, qualService: null, qualTimeframe: null, qualifiedBy: null,
   apptStartAt: null, apptStatus: null, apptTz: null, apptListAmount: null, owner: null, stale: null,
+  avatar: "·", nameMuted: false, apptId: null, apptService: null, apptStaffName: null, hasPayment: false,
   ...over,
 });
 
@@ -52,6 +59,7 @@ const mkRow = (over: Partial<BoardOpportunityRow> & { id: string; contact_id: st
   ad_name: null, ad_headline: null, ad_is_test: null, campaign_name: null, last_sender: null, last_message_at: null,
   paid_total: null, paid_method: null, last_message_text: null, qualification_service: null, qualification_timeframe: null,
   qualified_by: null, qualified_by_name: null, appt_start_at: null, appt_status: null, appt_tz: null, appt_list_price: null,
+  appt_id: null, appt_service: null, appt_staff_name: null,
   owner_user_id: null, owner_name: null,
   ...over,
 });
@@ -151,26 +159,19 @@ test('groupByStage buckets by stage with every column key present', () => {
   assert.equal(g.paid.length, 0);
 });
 
-test('PipelinePanel card: every action reachable from an accessible menu; no "Ganada" chip; stretched link', () => {
-  // Reuses the house Menu (keyboard + touch: closes on Escape/outside click, real menuitem controls).
-  assert.ok(/from "@\/components\/scheduling\/ui\/Menu"/.test(PANEL), 'reuses the accessible Menu');
-  assert.ok(/MenuButton[\s\S]*Quitar calificación/.test(PANEL), 'menu: Quitar calificación');
-  assert.ok(/MenuButton[\s\S]*Marcar perdida/.test(PANEL), 'menu: Marcar perdida');
-  assert.ok(PANEL.includes('Abrir conversación'), 'menu: Abrir conversación');
-  assert.ok(PANEL.includes('>Ver ficha<'), 'menu: Ver ficha');
-  assert.ok(PANEL.includes('Calificar</button>'), 'Lead has a primary Calificar action');
-  assert.ok(!/>\s*Ganada\s*<\/span>/.test(PANEL), 'no redundant "Ganada" chip on board cards');
-  assert.ok(PANEL.includes('after:absolute after:inset-0'), 'the whole card body is a stretched link');
+test('JP-9 card: opens the drawer; no "⋯" menu on the card; no "Ganada" chip; nameless → muted italic', () => {
+  // Secondary actions (Perder / Quitar calificación / Reabrir / Ver ficha) live in the drawer now.
+  assert.ok(!/<Menu\b/.test(PANEL), 'the card has no "⋯" menu — actions moved to the drawer');
+  assert.ok(PANEL.includes('onClick={onOpen}') && PANEL.includes('after:absolute after:inset-0'), 'the whole card body opens the drawer');
+  assert.ok(PANEL.includes('onOpen={() => setSelected(c)}'), 'board cards open the drawer');
+  assert.ok(!/>\s*Ganada\s*<\/span>/.test(PANEL), 'no redundant "Ganada" chip');
+  assert.ok(PANEL.includes('card.nameMuted') && PANEL.includes('italic text-muted'), 'a nameless contact shows muted italic "Sin nombre"');
 });
 
-test('JP-6 PipelinePanel board: Pagó is a real column; paid cards show amount+method, attended shows "Cobro pendiente"', () => {
+test('JP-9 board: five fluid columns, per-column scroll + snap, paid shows method + neutral amount, no commission', () => {
   assert.ok(PANEL.includes('overflow-y-auto'), 'columns scroll on their own');
-  assert.ok(PANEL.includes('snap-x'), 'the board scroll-snaps per column when it overflows');
-  // The placeholder is gone and Pagó renders like any other column.
-  assert.ok(!PANEL.includes('Llega con la fase de pagos') && !PANEL.includes('[writing-mode:vertical-rl]'), 'the disabled placeholder is removed');
-  assert.ok(!PANEL.includes('col.disabled'), 'no special-cased disabled column');
-  // Money state on the card: paid shows the recorded amount + method; attended awaits a charge.
-  assert.ok(PANEL.includes('card.stage === "paid"') && PANEL.includes('priceLabelCOP(card.paidAmount)') && PANEL.includes('card.paidMethod'), 'paid card shows amount + method');
+  assert.ok(PANEL.includes('snap-x') && PANEL.includes('grid-cols-[repeat(5,minmax(11rem,1fr))]'), 'five fluid columns, scroll-snap below 1280');
+  assert.ok(PANEL.includes('card.paidMethod') && PANEL.includes('priceLabelCOP(card.paidAmount)'), 'paid card shows the method + amount');
   assert.ok(PANEL.includes('Cobro pendiente'), 'attended card is marked pending payment');
   assert.ok(!/commission_amount|commissionAmount|\.commission|comisión/.test(PANEL), 'the board card never references commission');
 });
@@ -189,10 +190,6 @@ test('JP-6 toBoardCard carries the paid amount + method, and payments.view gates
   const hidden = toBoardCard(base, false); // a viewer without payments.view
   assert.equal(hidden.paidAmount, null, 'no amount without payments.view');
   assert.equal(hidden.paidMethod, null);
-});
-
-test('card "⋯" menu is floating (portaled) so it is never clipped by the column scroll', () => {
-  assert.ok(/<Menu\b[^>]*\bfloating\b/.test(PANEL), 'the card menu opts into the floating/portaled Menu');
 });
 
 test('Menu floating mode: portals to <body> and flips above the trigger when there is no room below', () => {
@@ -300,28 +297,20 @@ test('JP-7 revenue totals are a Client-Owner/agency view — the Setter never ge
   assert.ok(PAGE.includes('const moneyTotals = canViewRevenue ? stageTotals(cards) : null'), 'totals are null for a non-revenue viewer (payload carries none)');
 });
 
-test('JP-7 the panel renders gated column money, stage card lines, stale edge, and the Perdidos header', () => {
+test('JP-9 the board renders gated column money + the per-stage card lines + the Perdidos header', () => {
   assert.ok(PANEL.includes('columnMoney[col.key]') && PANEL.includes('moneyTotals'), 'column money shown only when totals are present (revenue only)');
-  assert.ok(PANEL.includes('qualificationLineOf') && PANEL.includes('apptLineOf') && PANEL.includes('card.lastMessageText'), 'per-stage card lines');
-  assert.ok(PANEL.includes('(lista)') && PANEL.includes('Cobro pendiente'), 'Asistió shows the pending list amount');
-  assert.ok(PANEL.includes('card.stale') && PANEL.includes('--warn-rule'), 'a stale card gets a calm warn edge (never error red)');
-  assert.ok(PANEL.includes('ownerInitials') && PANEL.includes('Dueño:'), 'the owner avatar + title');
+  assert.ok(PANEL.includes('apptWhenLine') && PANEL.includes('qualificationLineOf') && PANEL.includes('Quiere '), 'per-stage lines: appointment / qualification evidence');
+  assert.ok(PANEL.includes('Cobro pendiente') && PANEL.includes('Sin cobrar'), 'Asistió shows the pending / overdue state');
   assert.ok(PANEL.includes('Motivos de pérdida') && PANEL.includes('LOST_REASON_LABEL[reason]'), 'the Perdidos loss-reason header');
 });
 
-test('JP-7 part 2: the panel offers search, owner filter, "waiting" toggle, and a Tablero/Lista view', () => {
-  // Search is a form that writes ?q=; owner is a select (incl. "Sin dueño"); waiting is a client lens.
-  assert.ok(PANEL.includes("apply({ q: searchDraft.trim() })"), 'search submits ?q=');
-  assert.ok(PANEL.includes('label="Dueño"') && PANEL.includes('"unassigned"'), 'owner filter incl. unassigned');
-  assert.ok(PANEL.includes('Esperan respuesta') && PANEL.includes('c.spokeLast === "customer"'), 'waiting lens filters to customer-last');
-  // View toggle persisted per user (localStorage via an external store — no setState-in-effect).
-  assert.ok(PANEL.includes('useSyncExternalStore(viewPref.subscribe') && PANEL.includes('localStorage.setItem(key'), 'the Tablero/Lista choice is remembered per user, SSR-safe');
-  // List view: a sortable table with the required columns.
-  assert.ok(PANEL.includes('function BoardListView'), 'the list view exists');
-  for (const col of ['Contacto', 'Etapa', 'Origen / anuncio', 'Servicio', 'Cita', 'En etapa', 'Último mensaje', 'Dueño']) {
-    assert.ok(PANEL.includes(`label="${col}"`) || PANEL.includes(`>${col}<`), `list column: ${col}`);
-  }
-  assert.ok(PANEL.includes('aria-sort='), 'columns are sortable (aria-sort)');
+test('JP-9 header: Activos/Te esperan/Sin respuesta/Perdidos tabs, search, Más filtros, Tablero/Lista', () => {
+  for (const t of ['Activos', 'Te esperan', 'Sin respuesta', 'Perdidos']) assert.ok(PANEL.includes(`label="${t}"`), `tab: ${t}`);
+  assert.ok(PANEL.includes('attention') && PANEL.includes('bg-warn'), '"Te esperan" shows the attention dot');
+  assert.ok(PANEL.includes("apply({ q: searchDraft.trim() })") && PANEL.includes('Nombre, teléfono o @usuario'), 'search submits ?q=');
+  assert.ok(PANEL.includes('Más filtros') && PANEL.includes('label="Anuncio"') && PANEL.includes('label="Dueño"'), 'Anuncio + Dueño live in the Más filtros popover');
+  assert.ok(PANEL.includes('useSyncExternalStore(viewPref.subscribe'), 'the Tablero/Lista choice is remembered per user, SSR-safe');
+  assert.ok(PANEL.includes('function BoardListView') && PANEL.includes('aria-sort='), 'the sortable list view exists');
 });
 
 // ── JP-7b ────────────────────────────────────────────────────────────────────────────────
@@ -347,63 +336,111 @@ test('JP-7b §1 cohortTopLoss: the most common loss reason (or null)', () => {
   assert.deepEqual(cohortTopLoss({ cohort: 50, reached_qualified: 0, reached_booked: 0, reached_attended: 0, reached_paid: 0, lost: 7, lost_precio: 2, lost_horario: 5, lost_no_respondio: 0, lost_no_asistio: 0, lost_otro: 0 }), { reason: 'horario', count: 5 });
 });
 
-test('JP-7b §1 period presets: closed default + the "En curso" rule at the settling window', () => {
-  const now = new Date('2026-11-02T12:00:00Z');
-  const lastMonth = cohortPeriodRange('mes_pasado', now);
-  assert.equal(lastMonth.fromIso, new Date(Date.UTC(2026, 9, 1)).toISOString(), 'Mes pasado starts 1 Oct');
-  assert.equal(lastMonth.toIso, new Date(Date.UTC(2026, 10, 1)).toISOString(), 'and ends 1 Nov (a CLOSED month)');
-  assert.equal(lastMonth.entrada, 'en octubre');
-  // Early in November, late-October leads are still within the 14-day settling window → En curso.
-  assert.equal(lastMonth.inProgress, true, 'the month just closed, so it is still settling');
-  // By late November that same month has fully settled.
-  assert.equal(cohortPeriodRange('mes_pasado', new Date('2026-11-20T12:00:00Z')).inProgress, false, 'by 20 Nov, October has settled');
-  // "Últimos 30 días" ends today → inside the settling window → En curso.
-  assert.equal(cohortPeriodRange('ultimos_30', now).inProgress, true);
-  // "Hace 30–60 días" ends 30 days ago → settled.
-  assert.equal(cohortPeriodRange('hace_30_60', now).inProgress, false);
-  // An invalid/absent preset falls back to the closed default.
-  assert.equal(resolveCohortPeriod('bogus').preset, 'mes_pasado');
+test('JP-9 cohort period: last-closed-month default, month range, custom cross-month, "en curso" rule', () => {
+  const now = new Date('2026-11-04T12:00:00Z');
+  assert.equal(resolveCohortPeriod(undefined).key.length, 7, 'default resolves to a YYYY-MM month (the last closed one)');
+  const oct = cohortPeriodRange('2026-10', now);
+  assert.equal(oct.fromIso, new Date(Date.UTC(2026, 9, 1)).toISOString(), 'October starts 1 Oct');
+  assert.equal(oct.toIso, new Date(Date.UTC(2026, 10, 1)).toISOString(), 'and ends 1 Nov');
+  assert.equal(oct.label, 'Leads de octubre');
+  // October just closed → late-Oct leads still within the 14-day window on the 4th → "en curso".
+  assert.equal(oct.inProgress, true);
+  assert.equal(cohortPeriodRange('2026-10', new Date('2026-11-20T12:00:00Z')).inProgress, false, 'settled by late Nov');
+  const custom = cohortPeriodRange('custom', now, '2026-10-15', '2026-11-10');
+  assert.equal(custom.label, 'Leads del 15 oct al 10 nov', 'a custom cross-month range');
+  assert.equal(custom.fromIso, new Date(Date.UTC(2026, 9, 15)).toISOString());
+  assert.equal(custom.toIso, new Date(Date.UTC(2026, 10, 11)).toISOString(), 'inclusive end day');
   assert.equal(COHORT_SETTLING_DAYS, 14, 'the settling window is a reported constant');
 });
 
-test('JP-7b §2 the cohort strip shows no money and no current-column counts (numbers appear once)', () => {
-  // The strip renders cohort reached-counts + conversion; it must NOT carry money or groupByStage counts.
-  const strip = PANEL.slice(PANEL.indexOf('function CohortStrip'), PANEL.indexOf('function CohortPeriodControl'));
-  assert.ok(strip.includes('step.reached') && strip.includes('step.convPct'), 'the strip shows reached + conversion');
+test('JP-9 cohort month menu: current month "en curso", back to the earliest data month, most recent first', () => {
+  const now = new Date('2026-11-04T12:00:00Z');
+  const months = cohortMonths(new Date(Date.UTC(2026, 7, 1)), now); // earliest = August
+  assert.equal(months[0].key, '2026-11');
+  assert.ok(months[0].label.includes('(en curso)') && months[0].inProgress);
+  assert.equal(months[months.length - 1].key, '2026-08', 'runs back to the earliest data month');
+  // No data → still offers the current + last (closed, default) month.
+  const bare = cohortMonths(null, now);
+  assert.deepEqual(bare.map((m) => m.key), ['2026-11', '2026-10']);
+});
+
+test('JP-9 cohort strip: month selector + reached funnel + Conversión; no money, no current counts', () => {
+  const strip = PANEL.slice(PANEL.indexOf('function CohortStrip'), PANEL.indexOf('function topLossPhrase'));
+  assert.ok(strip.includes('step.reached') && strip.includes('step.convPct'), 'reached-count + conversion funnel');
+  assert.ok(strip.includes('Conversión') && strip.includes('paid / size'), 'Conversión = reached Pagó ÷ cohort Lead');
   assert.ok(!strip.includes('priceLabelCOP') && !strip.includes('columnMoney'), 'no money in the strip');
-  assert.ok(!strip.includes('groupByStage') && !strip.includes('colCards'), 'no current-column counts in the strip');
-  assert.ok(PANEL.includes('que entraron ${period.entrada}'), 'the strip is titled with the cohort + its period');
+  assert.ok(!strip.includes('groupBoard') && !strip.includes('colCards'), 'no current-column counts in the strip');
+  assert.ok(PANEL.includes('<CohortSelector'), 'a month selector drives the cohort period');
 });
 
-test('JP-7b §4 the Lead preview is the CUSTOMER\'s message only; else "Esperando al cliente"', () => {
-  assert.ok(PANEL.includes('card.spokeLast === "customer" && card.lastMessageText'), 'preview only when the customer spoke last');
+test('JP-9 Lead preview is the CUSTOMER message only; business-last → "Esperando al cliente"', () => {
+  assert.ok(PANEL.includes('card.spokeLast === "customer"') && PANEL.includes('card.lastMessageAt'), 'preview only when the customer spoke last');
   assert.ok(PANEL.includes('"Esperando al cliente"'), 'business-last shows a waiting note, never the bot/team text');
-  assert.ok(PANEL.includes('QUALIFY_BTN') && PANEL.includes('border border-line-strong'), 'Calificar is a compact ghost button, not a solid black block');
+  assert.ok(PANEL.includes('Te escribió'), 'customer-waiting shows the attention line');
 });
 
-test('JP-7b §5 one meaning per colour', () => {
-  // Stale = the left edge only; the time text is NOT warn-coloured.
-  assert.ok(PANEL.includes('border-l-[var(--warn-rule)]'), 'stale = the left edge (warn rule)');
-  assert.ok(!/stale \? "font-medium text-warn"/.test(PANEL), 'the time is never re-coloured for stale');
-  // "Cobro pendiente" is neutral text + an icon, not the warn colour.
-  const attended = PANEL.slice(PANEL.indexOf('card.stage === "attended" ?'), PANEL.indexOf('card.stage === "paid" ?'));
-  assert.ok(attended.includes('text-muted') && !attended.includes('text-warn'), '"Cobro pendiente" is neutral');
-  assert.ok(attended.includes('<ClockIcon'), 'and carries a small icon');
-  // Money collected stays success green; the Sin respuesta badge keeps the attention colour.
-  assert.ok(PANEL.includes('text-[var(--success)]'), 'collected money = success green');
-  assert.ok(PANEL.includes('countTone="warn"'), 'the Sin respuesta tab badge keeps the attention colour');
+test('JP-9 one meaning per colour: urgent border, neutral "Cobro pendiente", neutral paid amount, attention tab', () => {
+  assert.ok(PANEL.includes('border-[var(--warn-rule)]'), 'only urgent cards get the attention border');
+  const attended = PANEL.slice(PANEL.indexOf('card.stage === "attended"'), PANEL.indexOf('// paid'));
+  assert.ok(attended.includes('Cobro pendiente') && attended.includes('icon="clock"'), '"Cobro pendiente" is a muted clock line');
+  assert.ok(!PANEL.includes('text-[var(--success)]'), 'paid amounts are neutral, not green (per the mockup)');
+  assert.ok(PANEL.includes('tone === "attention" ? "text-warn"'), 'only the attention state uses the warn colour');
 });
 
-test('JP-7 part 3: clicking a card (board / list / Perdidos) opens the opportunity drawer — not a page change', () => {
-  // The board card name is a BUTTON that opens the drawer; "Ver ficha" (the contact page) stays in the menu.
-  assert.ok(PANEL.includes('onClick={onOpen}'), 'the card name opens the drawer');
+test('JP-9 clicking a card opens the drawer (board / list / Perdidos), keyed fresh', () => {
+  assert.ok(PANEL.includes('onClick={onOpen}'), 'the card body opens the drawer');
   assert.ok(PANEL.includes('onOpen={() => setSelected(c)}'), 'the board wires the drawer open');
   assert.ok(PANEL.includes('onClick={() => onOpen(c)}'), 'a list row opens the drawer');
-  assert.ok(PANEL.includes('<MenuLink href={contactHref}>Ver ficha</MenuLink>'), '"Ver ficha" still links to the contact record');
-  // The drawer is rendered beside the board, keyed on the selected card so each selection mounts fresh.
+  assert.ok(PANEL.includes('onClick={() => setSelected(c)}'), 'a Perdidos row opens the drawer');
   assert.ok(PANEL.includes('<OpportunityDrawer') && PANEL.includes('key={selected.id}'), 'the drawer mounts fresh per selection');
-  // Its trap pauses while a Calificar/Perder modal is layered over it.
   assert.ok(PANEL.includes('trapActive={modal === null}'), 'the drawer trap yields to a layered modal');
+});
+
+test('JP-9 cardUrgency + sortBoardColumn: customer-waiting / today-unconfirmed / overdue-unpaid; urgent first', () => {
+  const now = new Date('2026-11-04T15:00:00Z');
+  const leadWaiting = mkCard({ id: 'l', stage: 'lead', spokeLast: 'customer' });
+  const leadCalm = mkCard({ id: 'lc', stage: 'lead', spokeLast: 'business' });
+  assert.equal(cardUrgency(leadWaiting, now), 'lead_waiting');
+  assert.equal(cardUrgency(leadCalm, now), null);
+  const bookedToday = mkCard({ id: 'b', stage: 'booked', apptStartAt: now.toISOString(), apptTz: 'America/Bogota', apptStatus: 'scheduled' });
+  assert.equal(cardUrgency(bookedToday, now), 'reservo_today_unconfirmed');
+  assert.equal(cardUrgency({ ...bookedToday, apptStatus: 'confirmed' }, now), null, 'confirmed is not urgent');
+  const overdue = mkCard({ id: 'a', stage: 'attended', hasPayment: false, stageSince: new Date(now.getTime() - 3 * 86_400_000).toISOString() });
+  assert.equal(cardUrgency(overdue, now), 'asistio_overdue');
+  assert.equal(cardUrgency({ ...overdue, stageSince: new Date(now.getTime() - 3_600_000).toISOString() }, now), null, '≤ 1 day is not overdue');
+  assert.equal(cardUrgency({ ...overdue, hasPayment: true }, now), null, 'paid is never overdue');
+  assert.equal(sortBoardColumn([leadCalm, leadWaiting], now)[0].id, 'l', 'urgent cards sort first');
+});
+
+test('JP-9 contactAvatar: initials for a real name, "#" for masked phone, "?" (muted) for nameless', () => {
+  assert.deepEqual(contactAvatar('Daniel Felipe', null, null), { avatar: 'DF', nameMuted: false });
+  assert.deepEqual(contactAvatar('☆DaX☆', null, null), { avatar: 'D', nameMuted: false }, 'leading symbols skipped');
+  assert.deepEqual(contactAvatar('sergio pabon', null, null), { avatar: 'SP', nameMuted: false });
+  assert.deepEqual(contactAvatar(null, '+573229990000', null), { avatar: '#', nameMuted: false });
+  assert.deepEqual(contactAvatar('.', null, null), { avatar: '?', nameMuted: true });
+});
+
+test('JP-9 reminderText (Recordar): a ready reminder, never auto-sent', () => {
+  const card = mkCard({ stage: 'booked', name: 'Kevin Steven', apptService: 'Corte', apptStaffName: 'Paola', apptStartAt: '2026-11-05T15:30:00.000Z', apptTz: 'America/Bogota' });
+  const text = reminderText(card, new Date('2026-11-04T12:00:00Z'));
+  assert.ok(text.startsWith('Hola Kevin Steven, te recordamos tu cita de corte'), 'personalised reminder');
+  assert.ok(text.includes('con Paola'), 'names the barber');
+  // The panel writes it to the composer draft key, then opens the conversation (no send).
+  assert.ok(PANEL.includes('sessionStorage.setItem(`inbox-draft:') && PANEL.includes('reminderText('), 'Recordar pre-types the draft');
+  assert.ok(!/send|enviar/i.test(PANEL.slice(PANEL.indexOf('const recordar'), PANEL.indexOf('const grouped'))), 'Recordar never sends');
+});
+
+test('JP-9 per-stage action buttons map to the right surfaces', () => {
+  // The CardAction block wires each stage's button to the existing action/route.
+  const action = PANEL.slice(PANEL.indexOf('function CardAction'), PANEL.indexOf('function urgencyReason'));
+  assert.ok(action.includes('"Responder"') && action.includes('onResponder'), 'Lead urgent → Responder');
+  assert.ok(action.includes('"Calificar"') && action.includes('onCalificar'), 'Lead calm → Calificar');
+  assert.ok(action.includes('"Agendar"') && action.includes('"Escribir"'), 'Calificado → Agendar / Escribir');
+  assert.ok(action.includes('"Confirmar"') && action.includes('"Recordar"'), 'Reservó → Confirmar / Recordar');
+  assert.ok(action.includes('"Cobrar"'), 'Asistió → Cobrar');
+  assert.ok(action.includes('aria: `Cobrar a ${name}`') || action.includes('`Cobrar a ${name}`'), 'the Cobrar button names the contact');
+  // The handlers call the existing engine actions / routes.
+  assert.ok(PANEL.includes('confirmAppointmentAction(clientId, c.apptId') && PANEL.includes('scheduling/agenda?appt=') && PANEL.includes('scheduling/agenda?book=') && PANEL.includes('inbox?c='), 'wired to confirm action, charge/agenda, new-cita, and the inbox');
 });
 
 test('JP-7 part 3: the drawer shows the sale in full and reuses the engine actions', () => {
