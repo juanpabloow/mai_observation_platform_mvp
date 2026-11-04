@@ -1,5 +1,5 @@
-import Link from "next/link";
-import { ModuleHeader } from "@/components/ui/ModuleHeader";
+import { ModuleSurface, SurfaceHeader } from "@/components/ui/module/ModuleSurface";
+import { NoSitesState } from "@/components/scheduling/NoSitesState";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { can, canAccessSchedulingSite, canAccessSchedulingStaff, isSchedulingStaff } from "@/lib/access";
@@ -56,23 +56,12 @@ export default async function ClientAgendaPage({
   const sites = allSites.filter((candidate) => canAccessSchedulingSite(scope, candidate.id));
   if (sites.length === 0) {
     return (
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 py-20">
-        <ModuleHeader title="Agenda" />
-        <div className="flex flex-col items-start gap-3 rounded-xl border border-dashed border-line-strong px-5 py-8">
-          {can(scope, "settings.sites", client.id) ? (
-            <>
-              <p className="text-sm text-muted">Aún no hay sedes para {client.name} — crea una para empezar a agendar.</p>
-              <Link href={`/clients/${client.id}/scheduling/sites`} className="text-sm text-accent hover:underline">
-                Crear una sede en Configuración → Sedes →
-              </Link>
-            </>
-          ) : (
-            <p className="text-sm text-muted">
-              Aún no hay sedes configuradas. Pide a tu administrador que configure la agenda para {client.name}.
-            </p>
-          )}
-        </div>
-      </main>
+      // The shared «Aún no hay sedes» (NoSitesState) on the module surface, under the
+      // screen's own title — not a dashed box in a narrow column (auditoría 2026-11-03, F04).
+      <ModuleSurface label="Agenda">
+        <SurfaceHeader title="Agenda" />
+        <NoSitesState clientId={client.id} canManageSites={can(scope, "settings.sites", client.id)} reason="Las citas se agendan en una sede." />
+      </ModuleSurface>
     );
   }
 

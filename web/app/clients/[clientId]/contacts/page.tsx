@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { connection } from "next/server";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
 import { can } from "@/lib/access";
@@ -17,7 +16,8 @@ import { DuplicateCandidates } from "@/components/contacts/DuplicateCandidates";
 import { ContactsFilterMenu, ContactsOverflowMenu, ContactsSearch } from "@/components/contacts/ContactsToolbar";
 import { ContactsTable } from "@/components/contacts/ContactsTable";
 import { parseColumns } from "@/lib/contactColumns";
-import { EmptyState, Pagination } from "@/components/ui/primitives";
+import { Pagination } from "@/components/ui/primitives";
+import { ContactsEmptyState } from "@/components/contacts/ContactsEmptyState";
 import { PAGE_SIZE } from "@/lib/contactColumns";
 import { PageShell } from "@/components/ui/PageShell";
 import { ModuleHeader } from "@/components/ui/ModuleHeader";
@@ -316,23 +316,10 @@ export default async function ClientContactsPage({
           no longer has any — the row menu is a Link, not a dropdown. */}
       <PageShell>
         {contacts.length === 0 ? (
-          <div className="p-4">
-            <EmptyState
-              title={filtered ? "Ningún contacto coincide con estos filtros." : "Todavía no hay contactos."}
-              hint={
-                filtered ? (
-                  <Link
-                    href={hrefWith({ q: undefined, stage: undefined, owner: undefined, tasks: undefined, origin: undefined, campaign: undefined, page: undefined })}
-                    className="text-accent hover:underline"
-                  >
-                    Quitar los filtros
-                  </Link>
-                ) : (
-                  "Las personas aparecen aquí en cuanto un flujo, una reserva o un agente las crea."
-                )
-              }
-            />
-          </div>
+          <ContactsEmptyState
+            filtered={filtered}
+            clearHref={hrefWith({ q: undefined, stage: undefined, owner: undefined, tasks: undefined, origin: undefined, campaign: undefined, page: undefined })}
+          />
         ) : (
           <>
             {/* flex-1 so the white surface continues below the last row instead of

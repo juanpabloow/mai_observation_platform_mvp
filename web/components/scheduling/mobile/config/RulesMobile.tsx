@@ -14,7 +14,7 @@ import { CARD_M, Chevron, ErrorNote, Field, ROW_M, SELECT_M, Screen, SubHeader, 
  * saved with updateSiteAction (which sanitises them). The other keys of the config (the
  * default buffers) are merged through untouched.
  */
-export function RulesScreen({ nav, clientId, sites, toast }: { nav: ConfigNav; clientId: string; sites: Site[]; toast: (m: string) => void }) {
+export function RulesScreen({ nav, clientId, sites, toast, canSites = false }: { nav: ConfigNav; clientId: string; sites: Site[]; toast: (m: string) => void; canSites?: boolean }) {
   const router = useRouter();
   const active = sites.filter((s) => s.active);
   const choices = active.length > 0 ? active : sites;
@@ -26,7 +26,23 @@ export function RulesScreen({ nav, clientId, sites, toast }: { nav: ConfigNav; c
   if (!site) {
     return (
       <Screen label="Reglas de reserva" header={<SubHeader backLabel={nav.rootLabel ?? "Configuración"} onBack={() => nav.back(null)} title="Reglas de reserva" />}>
-        <div className={`${CARD_M} px-[18px] py-[24px] text-[14px] text-m-tx3`}>Crea o activa una sede para configurar sus reglas de reserva.</div>
+        {/* The phone form of «Aún no hay sedes» (SitesMobile's card): the action only for a
+            login that may create sites, as on desktop (components/scheduling/NoSitesState). */}
+        <div className={`${CARD_M} flex flex-col gap-[14px] px-[18px] py-[24px]`}>
+          <div className="flex flex-col gap-[4px]">
+            <span className="text-[16px] font-semibold">Aún no hay sedes</span>
+            <span className="text-[14px] leading-[1.45] text-m-tx3">
+              {canSites
+                ? "Las reglas de reserva se configuran por sede. Crea la primera en Sedes, con su horario."
+                : "Las reglas de reserva se configuran por sede. Pide a quien administra el negocio que cree la primera."}
+            </span>
+          </div>
+          {canSites ? (
+            <MButton kind="primary" onClick={() => nav.go("sedes")}>
+              Ir a Sedes
+            </MButton>
+          ) : null}
+        </div>
       </Screen>
     );
   }

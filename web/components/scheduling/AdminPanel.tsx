@@ -155,6 +155,8 @@ export interface SchedulingSettingsProps {
   promotions?: PromotionAdminRow[];
   /** «Horarios y ausencias»: may open a professional's ficha (team.manage). */
   canTeam?: boolean;
+  /** May create sites (settings.sites): the no-site state offers «Ir a Sedes» only then. */
+  canSites?: boolean;
 }
 
 /**
@@ -217,6 +219,7 @@ export function SchedulingSettings(props: SchedulingSettingsProps) {
           schedulingEnabled={schedulingEnabled}
           entry={entry}
           exitHref={`/clients/${clientId}/scheduling/agenda`}
+          canSites={props.canSites ?? false}
         />
       ) : null}
       {/* Redesigned module pages draw their OWN continuous surface (components/ui/module):
@@ -226,7 +229,7 @@ export function SchedulingSettings(props: SchedulingSettingsProps) {
           {page === "sites" ? (
             <SitesScreen clientId={clientId} sites={sites} services={services} staff={staff} exceptions={exceptions} siteServiceMap={siteServiceMap} />
           ) : (
-            <RulesScreen clientId={clientId} sites={sites} />
+            <RulesScreen clientId={clientId} sites={sites} canSites={props.canSites ?? false} />
           )}
         </div>
       ) : page === "booking-page" ? (
@@ -240,6 +243,7 @@ export function SchedulingSettings(props: SchedulingSettingsProps) {
             schedulingEnabled={schedulingEnabled}
             bookingCategories={bookingCategories}
             promotions={promotions}
+            canSites={props.canSites ?? false}
           />
         </div>
       ) : page === "promotions" ? (
@@ -261,6 +265,7 @@ export function SchedulingSettings(props: SchedulingSettingsProps) {
             exceptions={exceptions as never}
             pastExceptions={(pastExceptions ?? []) as never}
             canTeam={props.canTeam ?? false}
+            canSites={props.canSites ?? false}
             footer={<WhyNothingAvailable clientId={clientId} sites={sites} staff={staff} />}
           />
         </div>

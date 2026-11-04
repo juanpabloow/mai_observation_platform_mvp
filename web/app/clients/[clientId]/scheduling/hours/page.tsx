@@ -21,5 +21,5 @@ export default async function SchedulingHoursPage({
   const { clientId } = await params;
   const { scope, client } = await requireClientModulePage(clientId, "scheduling", "hours.manage");
   const data = await loadSchedulingSettings(scope.tenantId, client);
-  return <SchedulingSettings page="hours" {...data} canTeam={can(scope, "team.manage", client.id)} />;
+  return <SchedulingSettings page="hours" {...data} canTeam={can(scope, "team.manage", client.id)} canSites={can(scope, "settings.sites", client.id)} />;
 }

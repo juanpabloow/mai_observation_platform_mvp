@@ -36,6 +36,8 @@ export interface ConfigMobileProps {
    *  With it there is no «Inicio»: the entry screen's back leaves to `exitHref`. */
   entry?: ConfigScreenId | string | null;
   exitHref?: string;
+  /** May create sites (settings.sites): a no-site screen offers «Ir a Sedes» only then. */
+  canSites?: boolean;
 }
 
 export function ConfigMobile({ entry, exitHref, ...props }: ConfigMobileProps) {
@@ -116,7 +118,7 @@ function ConfigScreen({ nav, toast, ...p }: ConfigMobileProps & { nav: ConfigNav
       // Old links keep working: the list, with the SAME new editor already open.
       return <BlocksList key={nav.param("plantilla") ?? "blank"} nav={nav} clientId={p.clientId} sites={p.sites} staff={p.staff} exceptions={p.exceptions} past={p.pastExceptions} toast={toast} startNew template={nav.param("plantilla")} />;
     case "reglas":
-      return <RulesScreen nav={nav} clientId={p.clientId} sites={p.sites} toast={toast} />;
+      return <RulesScreen nav={nav} clientId={p.clientId} sites={p.sites} toast={toast} canSites={p.canSites ?? false} />;
     case "horarios":
       return <HoursHub nav={nav} {...p} />;
     default:

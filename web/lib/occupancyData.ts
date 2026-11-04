@@ -52,7 +52,9 @@ export interface OccupancyView {
   heatmapStaffId: string | null;
 }
 
-export type OccupancyResult = { ok: true; clientName: string; view: OccupancyView } | { ok: false };
+export type OccupancyResult =
+  | { ok: true; clientId: string; clientName: string; canSites: boolean; view: OccupancyView }
+  | { ok: false };
 
 export interface OccupancyParams {
   g?: string; // dia | semana | mes
@@ -79,7 +81,9 @@ export async function loadOccupancyView(clientId: string, params: OccupancyParam
     const today = "1970-01-01";
     return {
       ok: true,
+      clientId: client.id,
       clientName: client.name,
+      canSites: can(scope, "settings.sites", client.id),
       view: {
         granularity,
         period: periodRange(granularity, today),
@@ -145,7 +149,9 @@ export async function loadOccupancyView(clientId: string, params: OccupancyParam
 
   return {
     ok: true,
+    clientId: client.id,
     clientName: client.name,
+    canSites: can(scope, "settings.sites", client.id),
     view: {
       granularity,
       period,

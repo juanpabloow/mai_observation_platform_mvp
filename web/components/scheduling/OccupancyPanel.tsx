@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import { PageShell } from "@/components/ui/PageShell";
+import { NoSitesState } from "./NoSitesState";
 import { priceLabelCOP } from "@/lib/money";
 import { hoursLabel, type OccupancyGranularity, type OccupancyRow } from "@/lib/occupancyView";
 import type { OccupancyView } from "@/lib/occupancyData";
@@ -35,7 +36,21 @@ const tint = (pct: number | null): string =>
 
 type SortKey = "name" | "available" | "reservada" | "atendida" | "noshow" | "free" | "collected" | "sales";
 
-export function OccupancyPanel({ clientName, view }: { clientName: string; view: OccupancyView }) {
+export function OccupancyPanel({
+  clientId,
+  clientName,
+  canSites = false,
+  view,
+}: {
+  clientId: string;
+  clientName: string;
+  /** May create sites (settings.sites) — the no-site state's «Ir a Sedes». */
+  canSites?: boolean;
+  view: OccupancyView;
+}) {
+  // No site: nothing to measure, so the period controls (Día/Semana/Mes, ‹ ›, Hoy) would
+  // only move an empty frame. They go, and the shared «Aún no hay sedes» says what to do.
+  const noSites = view.sites.length === 0;
   const router = useRouter();
   const pathname = usePathname();
   const searchParams = useSearchParams();
@@ -84,6 +99,7 @@ export function OccupancyPanel({ clientName, view }: { clientName: string; view:
               Cuánto del tiempo disponible de cada profesional se vende. Reservada cuenta lo agendado; atendida, lo que de verdad asistió.
             </p>
           </div>
+          {noSites ? null : (
           <div className="flex flex-wrap items-center gap-2">
             {!view.isStaff && view.sites.length > 1 ? (
               <select aria-label="Sede" value={view.selectedSiteId ?? ""} onChange={(e) => nav({ site: e.target.value, staff: null })} className={`${INPUT} max-w-[12rem]`}>
@@ -105,11 +121,14 @@ export function OccupancyPanel({ clientName, view }: { clientName: string; view:
               <button type="button" onClick={() => nav({ d: null })} className="u-focus ml-1 h-[34px] rounded-lg border border-line-strong px-2.5 text-xs text-muted transition hover:bg-subtle hover:text-foreground">Hoy</button>
             </div>
           </div>
+          )}
         </div>
       </PageShell>
 
       {view.sites.length === 0 ? (
-        <PageShell><p className="p-8 text-center text-sm text-muted">No hay sedes configuradas. Crea una sede y sus horarios para medir la ocupación.</p></PageShell>
+        <PageShell>
+          <NoSitesState clientId={clientId} canManageSites={canSites} reason="La ocupación se mide con los horarios de cada sede." />
+        </PageShell>
       ) : view.rows.length === 0 ? (
         <PageShell><p className="p-8 text-center text-sm text-muted">No hay profesionales que tomen reservas en esta sede todavía.</p></PageShell>
       ) : (

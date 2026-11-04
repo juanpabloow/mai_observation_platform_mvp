@@ -9,6 +9,7 @@ import { PUBLIC_REASON_LABEL, type PublicAbsenceReason } from "@/lib/publicAbsen
 import { fmtTime, longDate, todayAtSite, timezoneLabel } from "@/lib/siteCalendar";
 import { Button } from "../ui/system";
 import { WeeklyScheduleEditor } from "./WeeklyScheduleEditor";
+import { NoSitesState } from "../NoSitesState";
 import { AgAvatar, AgPageHeader, agTintAt, TB_BTN, TB_PRIMARY } from "../agenda/AgendaChrome";
 import { BlockPanel, type DatedBlock } from "../agenda/BlockPanel";
 import { SeriesPanel, type OccurrenceRef } from "../agenda/SeriesPanel";
@@ -46,6 +47,8 @@ export function HoursScreen(props: {
   pastExceptions: Exc[];
   /** May open a professional's ficha (team.manage). */
   canTeam: boolean;
+  /** May create the first site (settings.sites) — the no-site state's «Ir a Sedes». */
+  canSites?: boolean;
   /** «¿Por qué no hay disponibilidad?» — the existing diagnostic, kept under the lists. */
   footer?: ReactNode;
 }) {
@@ -104,11 +107,14 @@ export function HoursScreen(props: {
 
   const siteWeek = useMemo(() => KEYS.map((k) => span(site?.opening_hours ?? {}, k)), [site]);
 
+  // Without a site the page keeps its header (it had none: one grey sentence was the whole
+  // screen) and shows the shared «Aún no hay sedes» (auditoría 2026-11-03, F04).
   if (!site) {
     return (
-      <div className="flex flex-1 items-center justify-center p-10 text-center text-[13px] text-muted">
-        Aún no hay sedes. Crea una en Configuración → Sedes para definir horarios.
-      </div>
+      <section aria-labelledby="hours-title" className="u-ag -m-[var(--content-pad)] flex min-h-0 flex-1 flex-col self-stretch overflow-hidden bg-[var(--surface)]">
+        <AgPageHeader id="hours-title" title="Horarios y ausencias" subtitle="Cuándo se atiende y cuándo no" />
+        <NoSitesState clientId={props.clientId} canManageSites={props.canSites ?? false} reason="Los horarios y las ausencias se definen por sede." />
+      </section>
     );
   }
 
