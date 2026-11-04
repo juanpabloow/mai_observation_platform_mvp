@@ -805,6 +805,26 @@ html[data-text-scale='large'] {
     display: inline-flex;
   }
 }
+/* What the bar said, for a page that has no other place to say it (Ejecuciones: the workflow
+   name). Read by screen readers always; drawn only while the bar is hidden. */
+.u-topbar-fallback {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+@media (min-width: 1280px) {
+  html[data-topbar='hidden'] .u-topbar-fallback {
+    position: static;
+    display: flex;
+    width: auto;
+    height: auto;
+    overflow: visible;
+    clip-path: none;
+  }
+}
 
 /*
  * Inbox list rows, WhatsApp-style: a hairline BETWEEN conversations, starting at the text

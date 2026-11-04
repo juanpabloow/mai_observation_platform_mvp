@@ -527,7 +527,63 @@ function RailToggle({ onClick, push = false }: { onClick: () => void; push?: boo
   );
 }
 
-function Brand({ homeHref, collapsed, onNavigate }: { homeHref: string; collapsed: boolean; onNavigate?: () => void }) {
+/** The business the page belongs to, for the rail chip below. */
+interface RailBusiness {
+  name: string;
+  /** Owner/admin manage several businesses: the chip links to Inicio to change it. */
+  canSwitch: boolean;
+}
+
+/**
+ * The ACTIVE BUSINESS, in the rail, while the top bar is hidden (auditoría 2026-11-03, F02).
+ * The header's client chip is the only place that names it; hiding the bar (xl+) left
+ * every client page without saying whose data it is. `.u-rail-toggle` keeps this row out
+ * of the layout whenever the bar is visible, so the name is never shown twice. It is not
+ * a second picker: owner/admin go to Inicio, where businesses are chosen.
+ */
+function RailBusinessChip({ business, collapsed, onNavigate }: { business: RailBusiness; collapsed: boolean; onNavigate?: () => void }) {
+  const initials = business.name.replace(/[^\p{L}\p{N} ]/gu, " ").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase() || "·";
+  if (collapsed) {
+    const tile = (
+      <span aria-hidden className="flex size-8 items-center justify-center rounded-lg bg-sidebar-hover text-[0.6875rem] font-semibold text-sidebar-fg">
+        {initials}
+      </span>
+    );
+    return (
+      <div className="u-rail-toggle w-full shrink-0 justify-center pb-1.5">
+        {business.canSwitch ? (
+          <Link href="/" onClick={onNavigate} aria-label={`Negocio: ${business.name}. Cambiar de negocio`} title={`${business.name} · Cambiar de negocio`} className="u-focus rounded-lg">
+            {tile}
+          </Link>
+        ) : (
+          <span role="img" aria-label={`Negocio: ${business.name}`} title={business.name}>{tile}</span>
+        )}
+      </div>
+    );
+  }
+  // Only the name on screen (Santiago, 2026-11-03: sin «Negocio» ni «Cambiar»). What the
+  // link does stays in its accessible name and the hover title.
+  const body = <span className="min-w-0 flex-1 truncate text-[0.8125rem] font-medium leading-5 text-sidebar-fg">{business.name}</span>;
+  return (
+    <div className="u-rail-toggle w-full shrink-0 px-2 pb-1.5">
+      {business.canSwitch ? (
+        <Link
+          href="/"
+          onClick={onNavigate}
+          aria-label={`Negocio: ${business.name}. Cambiar de negocio`}
+          title="Cambiar de negocio"
+          className="u-focus flex w-full min-w-0 items-center gap-2 rounded-[9px] bg-sidebar-field px-2.5 py-1.5 transition-colors hover:bg-sidebar-hover"
+        >
+          {body}
+        </Link>
+      ) : (
+        <div className="flex w-full min-w-0 items-center gap-2 rounded-[9px] bg-sidebar-field px-2.5 py-1.5">{body}</div>
+      )}
+    </div>
+  );
+}
+
+function Brand({ homeHref, collapsed, onNavigate, business = null }: { homeHref: string; collapsed: boolean; onNavigate?: () => void; business?: RailBusiness | null }) {
   const { toggle } = useSidebar();
   return (
     <>
@@ -562,6 +618,7 @@ function Brand({ homeHref, collapsed, onNavigate }: { homeHref: string; collapse
         <RailToggle onClick={toggle} />
       </div>
     ) : null}
+    {business ? <RailBusinessChip business={business} collapsed={collapsed} onNavigate={onNavigate} /> : null}
     </>
   );
 }
@@ -655,6 +712,7 @@ function RailBody({
   homeHref,
   onNavigate,
   searchable = false,
+  business = null,
 }: {
   sections: NavSection[];
   /** Módulos and Costos de IA — the agency's own tools, kept apart at the bottom of the rail. */
@@ -666,6 +724,8 @@ function RailBody({
   onNavigate?: () => void;
   /** Show the section search (inside a client, where the rail has groups). */
   searchable?: boolean;
+  /** The business of the current page (inside a client), for the hidden-top-bar chip. */
+  business?: RailBusiness | null;
 }) {
   const [acctOpen, setAcctOpen] = useState(false);
   const router = useRouter();
@@ -746,7 +806,7 @@ function RailBody({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <Brand homeHref={homeHref} collapsed={collapsed} onNavigate={onNavigate} />
+      <Brand homeHref={homeHref} collapsed={collapsed} onNavigate={onNavigate} business={business} />
       {searchable && !collapsed ? (
         <div className="shrink-0 px-2 pb-1.5">
           <label className="u-focus flex h-8 items-center gap-2 rounded-[9px] bg-sidebar-field px-2.5 text-sidebar-section max-xl:h-11">
@@ -923,6 +983,7 @@ export function AppSidebar({
   roleLabel,
   permissions,
   staffBound,
+  clientNames = {},
 }: {
   /** Display name for the account footer; falls back to the email when absent. */
   name: string | null;
@@ -944,6 +1005,8 @@ export function AppSidebar({
   permissions: string[];
   /** A professional login (bound to one staff resource). */
   staffBound: boolean;
+  /** clientId → name of the businesses this login can see (the rail's business chip). */
+  clientNames?: Record<string, string>;
 }) {
   const pathname = usePathname();
   const { collapsed, mobileOpen, setMobileOpen, setCollapsed } = useSidebar();
@@ -974,6 +1037,8 @@ export function AppSidebar({
 
   const clientId = parseClientId(pathname);
   const isMember = memberClientId !== null;
+  const businessName = clientId ? clientNames[decodeURIComponent(clientId)] : undefined;
+  const business: RailBusiness | null = businessName ? { name: businessName, canSwitch: !isMember } : null;
   // Brand target: the Hub for owner/admin; a member has no Hub access, so their brand
   // links to their own landing — the same rule as the server bounce (lib/landing.ts).
   const homeHref = memberClientId ? memberLandingPath(memberClientId, { permissions, staffBound }) : "/";
@@ -1117,7 +1182,7 @@ export function AppSidebar({
           collapsed ? "w-16" : ""
         }`}
       >
-        <RailBody sections={sections} agency={agency} pathname={pathname} collapsed={collapsed} account={account} homeHref={homeHref} searchable={Boolean(clientId)} />
+        <RailBody sections={sections} agency={agency} pathname={pathname} collapsed={collapsed} account={account} homeHref={homeHref} searchable={Boolean(clientId)} business={business} />
       </aside>
 
       {/* MOBILE drawer — off-canvas, over a backdrop. Always expanded content. */}

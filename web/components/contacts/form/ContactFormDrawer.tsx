@@ -113,6 +113,25 @@ export function ContactFormDrawer({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, [modal, onEscape]);
 
+  // Without the trap nothing moved focus either: opening «Nuevo contacto» at xl+ left it on
+  // the button, and the next Tab went to the search box behind (auditoría 2026-11-03, F03).
+  // Not modal still means a useful start: the first field. Closing hands focus back to
+  // what opened it — unless the person has already moved on to something in the list.
+  useEffect(() => {
+    if (modal) return;
+    const node = panelRef.current;
+    if (!node) return;
+    const restoreTo = document.activeElement as HTMLElement | null;
+    const field = node.querySelector<HTMLElement>(
+      'input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled])',
+    );
+    field?.focus({ preventScroll: true });
+    return () => {
+      const now = document.activeElement;
+      if (!now || now === document.body || node.contains(now)) restoreTo?.focus?.({ preventScroll: true });
+    };
+  }, [modal, panelRef]);
+
   const discardDialog = guard?.asking ? (
     <ConfirmDialog
       layerRef={discardLayer.layerRef}

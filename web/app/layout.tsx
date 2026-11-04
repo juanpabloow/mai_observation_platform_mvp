@@ -39,7 +39,8 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: "Observability Platform",
+  // Internal screens refine it to «Pantalla · Negocio · M_AI» (HeaderBar, lib/documentTitle.ts).
+  title: "M_AI",
   description: "Multi-tenant observability for n8n automations",
 };
 
@@ -87,7 +88,7 @@ export default async function RootLayout({
 
   return (
     <html
-      lang="en"
+      lang="es"
       data-sidebar-theme={sidebarTheme}
       data-text-scale={textScale}
       data-topbar={topbar}
