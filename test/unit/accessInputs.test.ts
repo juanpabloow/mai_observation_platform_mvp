@@ -73,8 +73,8 @@ test('return path after login: only same-site paths, never auth screens or APIs;
     null,
     `/${'a'.repeat(3000)}`,
   ];
-  for (const p of bad) assert.equal(safeInternalPath(p as string), '/negocios', String(p));
-  assert.equal(safeInternalPath('/\u0000x'), '/negocios', 'control characters');
+  for (const p of bad) assert.equal(safeInternalPath(p as string), '/', String(p));
+  assert.equal(safeInternalPath('/\u0000x'), '/', 'control characters');
   assert.equal(destinationLabel('/clients/x/scheduling/agenda?date=1'), 'Agenda');
   assert.equal(destinationLabel('/clients/x/inbox'), 'Inbox');
   assert.equal(destinationLabel('/'), null);
