@@ -22,6 +22,7 @@ import { usePageFormGuard } from "@/components/ui/module/useEditorGuard";
 import { useUrlState } from "@/components/ui/module/useUrlState";
 import { returnFocus } from "@/components/ui/module/ListTable";
 import { SitePicker } from "./SitePicker";
+import { NoSitesState } from "../NoSitesState";
 import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
@@ -57,6 +58,7 @@ export function BookingPageScreen({
   schedulingEnabled,
   bookingCategories,
   promotions,
+  canSites = false,
 }: {
   clientId: string;
   sites: Site[];
@@ -66,6 +68,8 @@ export function BookingPageScreen({
   schedulingEnabled: boolean;
   bookingCategories: BookingCategory[];
   promotions: PromotionAdminRow[];
+  /** May create sites (settings.sites) — the no-site state's «Ir a Sedes». */
+  canSites?: boolean;
 }) {
   const router = useRouter();
   const [siteParam, setSiteParam] = useUrlState("sede", "");
@@ -123,6 +127,8 @@ export function BookingPageScreen({
         summary="Lo que ve tu cliente al reservar: presentación, categorías públicas y catálogo visible."
         actions={
           <>
+            {/* No site, no preview: a toggle for a panel that cannot exist only confuses. */}
+            {preview ? (
             <button
               type="button"
               onClick={() => setPreviewOpen(!previewOpen)}
@@ -132,6 +138,7 @@ export function BookingPageScreen({
             >
               {previewOpen ? "Ocultar vista previa" : "Mostrar vista previa"}
             </button>
+            ) : null}
             {site ? (
               <a href={bookingPath(site.slug)} target="_blank" rel="noopener noreferrer" className={buttonClass()}>
                 Abrir página
@@ -148,15 +155,7 @@ export function BookingPageScreen({
       ) : null}
 
       {!site ? (
-        <div className="p-6">
-          <Notice>
-            Aún no hay sedes. Crea la primera en{" "}
-            <Link href={schedulingHref(clientId, "sites")} className="underline underline-offset-2">
-              Sedes
-            </Link>{" "}
-            para tener una página de reservas.
-          </Notice>
-        </div>
+        <NoSitesState clientId={clientId} canManageSites={canSites} reason="La página de reservas publica los servicios y horarios de una sede." />
       ) : (
         <EditorFrame
           sections={[

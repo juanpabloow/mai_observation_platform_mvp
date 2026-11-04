@@ -21,5 +21,5 @@ export default async function OcupacionPage({
   const sp = await searchParams;
   const res = await loadOccupancyView(clientId, { g: sp.g, d: sp.d, site: sp.site, staff: sp.staff });
   if (!res.ok) notFound();
-  return <OccupancyPanel clientName={res.clientName} view={res.view} />;
+  return <OccupancyPanel clientId={res.clientId} clientName={res.clientName} canSites={res.canSites} view={res.view} />;
 }

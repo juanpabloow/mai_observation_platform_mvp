@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 import { notFound } from "next/navigation";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
+import { can } from "@/lib/access";
 import { loadSchedulingSettings } from "@/lib/schedulingSettingsData";
 import { SchedulingSettings } from "@/components/scheduling/AdminPanel";
 
@@ -21,5 +22,5 @@ export default async function SchedulingRulesPage({
   const { clientId } = await params;
   const { scope, client } = await requireClientModulePage(clientId, "scheduling", "settings.rules");
   const data = await loadSchedulingSettings(scope.tenantId, client);
-  return <SchedulingSettings page="rules" {...data} />;
+  return <SchedulingSettings page="rules" {...data} canSites={can(scope, "settings.sites", client.id)} />;
 }

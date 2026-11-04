@@ -638,10 +638,15 @@ test('contacts: a late task is a CHIP on the name — it never paints the row', 
 });
 
 test('contacts: loading / empty / error states exist and the empty state can clear filters', () => {
+  // The approved module states (ui/module/States), not the old dashed hairline — auditoría
+  // UI 2026-11-03, F04. Filtered-empty and genuinely-empty stay two different objects.
   const src = read(CONTACTS_PAGE);
-  assert.ok(src.includes('Ningún contacto coincide con estos filtros.'), 'filtered-empty is distinct…');
-  assert.ok(src.includes('Todavía no hay contactos.'), '…from genuinely-empty');
-  assert.ok(src.includes('Quitar los filtros'), 'the filtered-empty state offers a way out');
+  assert.ok(src.includes('<ContactsEmptyState') && src.includes('filtered={filtered}'), 'the page hands the state the filter flag');
+  const empty = read('components/contacts/ContactsEmptyState.tsx');
+  assert.ok(empty.includes('<NoResults body="Ningún contacto coincide con la búsqueda o los filtros.">'), 'filtered-empty is «Sin resultados»…');
+  assert.ok(empty.includes('title="Todavía no hay contactos"'), '…distinct from genuinely-empty');
+  assert.ok(empty.includes('Limpiar búsqueda y filtros'), 'the filtered-empty state offers a way out');
+  assert.ok(!src.includes('border-dashed') && !empty.includes('border-dashed'), 'no dashed frame');
 });
 
 // ─────────────────────────── Contact record ─────────────────────────────────

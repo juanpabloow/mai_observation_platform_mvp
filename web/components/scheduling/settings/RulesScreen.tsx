@@ -8,11 +8,12 @@ import type { Site } from "../AdminPanel";
 import { Alert, Button } from "../ui/system";
 import { ModuleSurface, SurfaceHeader, SurfaceToolbar } from "@/components/ui/module/ModuleSurface";
 import { EditorFrame, EditorSection, ErrorSummary, SaveBar, SaveNote, changesLabel, countChanges, type SummaryError } from "@/components/ui/module/Editor";
-import { AffixInput, Notice } from "@/components/ui/module/FormKit";
+import { AffixInput } from "@/components/ui/module/FormKit";
 import { DiscardChanges } from "@/components/ui/module/ConfirmLayer";
 import { usePageFormGuard } from "@/components/ui/module/useEditorGuard";
 import { useUrlState } from "@/components/ui/module/useUrlState";
 import { SitePicker } from "./SitePicker";
+import { NoSitesState } from "../NoSitesState";
 import { safeAction } from "@/components/ui/module/safeAction";
 
 /**
@@ -47,7 +48,7 @@ function checkRule(k: RuleKey, v: string): string | null {
   return null;
 }
 
-export function RulesScreen({ clientId, sites }: { clientId: string; sites: Site[] }) {
+export function RulesScreen({ clientId, sites, canSites = false }: { clientId: string; sites: Site[]; canSites?: boolean }) {
   const [siteParam, setSiteParam] = useUrlState("sede", "");
   const [switchTo, setSwitchTo] = useState<string | null>(null);
   const [dirty, setDirty] = useState(false);
@@ -68,9 +69,7 @@ export function RulesScreen({ clientId, sites }: { clientId: string; sites: Site
       {site ? (
         <RulesForm key={site.id} clientId={clientId} site={site} onDirtyChange={setDirty} />
       ) : (
-        <div className="p-6">
-          <Notice>Aún no hay sedes: las reglas se configuran por sede.</Notice>
-        </div>
+        <NoSitesState clientId={clientId} canManageSites={canSites} reason="Las reglas de reserva se configuran por sede." />
       )}
       {switchTo ? (
         <DiscardChanges

@@ -62,6 +62,7 @@ export default async function ClientStaffPage({
   return (
     <StaffWorkspace
       clientId={client.id}
+      canManageSites={can(scope, "settings.sites", client.id)}
       staff={roster?.staff ?? null}
       mobile={
         roster

@@ -2,6 +2,7 @@ import { PageShell } from "@/components/ui/PageShell";
 import { StaffHeaderCard, type StaffHeaderSlots } from "./StaffHeaderCard";
 import { StaffTab, type StaffTabProps } from "./StaffTab";
 import { TeamMobile, type TeamMobileExtras } from "@/components/scheduling/mobile/team/TeamMobile";
+import { NoSitesState } from "@/components/scheduling/NoSitesState";
 
 /**
  * STAFF — the operational roster, under SCHEDULING.
@@ -27,8 +28,11 @@ export function StaffWorkspace({
   clientId,
   staff,
   mobile,
+  canManageSites = false,
 }: {
   clientId: string;
+  /** May create the first site (settings.sites) — the empty state's «Ir a Sedes». */
+  canManageSites?: boolean;
   /**
    * null when the client has no site — a barber belongs to one. `members` includes the
    * INACTIVE ones, and BOTH widths list them (last, labelled "Inactivo") and count them
@@ -70,15 +74,7 @@ export function StaffWorkspace({
           <div className="flex min-h-0 flex-1 flex-col gap-3">
             <StaffHeaderCard slots={slots} />
             <PageShell>
-              <div className="flex min-h-0 flex-1 items-center justify-center p-10">
-                <div className="flex max-w-sm flex-col items-center gap-1 text-center">
-                  <p className="text-sm font-medium text-muted">Todavía no hay equipo</p>
-                  <p className="text-sm text-faint">
-                    Este cliente no tiene sede, y un miembro del equipo pertenece a una.
-                    Crea una sede en Configuración de agenda primero.
-                  </p>
-                </div>
-              </div>
+              <NoSitesState clientId={clientId} canManageSites={canManageSites} reason="Cada profesional del equipo trabaja en una sede." />
             </PageShell>
           </div>
         )}

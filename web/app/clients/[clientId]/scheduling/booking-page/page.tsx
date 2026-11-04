@@ -1,6 +1,7 @@
 import { connection } from "next/server";
 import { notFound, redirect } from "next/navigation";
 import { requireClientModulePage } from "@/lib/clientModuleAccess";
+import { can } from "@/lib/access";
 import { loadSchedulingSettings } from "@/lib/schedulingSettingsData";
 import { bookingPageAnchor, schedulingHref } from "@/lib/schedulingNav";
 import { SchedulingSettings } from "@/components/scheduling/AdminPanel";
@@ -28,5 +29,5 @@ export default async function SchedulingBookingPage({
   const anchor = bookingPageAnchor((await searchParams).tab);
   if (anchor) redirect(`${schedulingHref(client.id, "booking-page")}#${anchor}`);
   const data = await loadSchedulingSettings(scope.tenantId, client);
-  return <SchedulingSettings page="booking-page" {...data} />;
+  return <SchedulingSettings page="booking-page" {...data} canSites={can(scope, "settings.sites", client.id)} />;
 }
