@@ -13,8 +13,11 @@ import { usdText } from "@worker/analytics/aiCostReport.js";
  * a count chart (the executions screen) with the same marks.
  */
 
-/** The fields the chart reads. `usd` is the day's total in the chart's unit. */
-export type ChartDay = Pick<DayCost, "day" | "usd" | "calls" | "byClient">;
+/**
+ * The fields the chart reads. `usd` is the day's total in the chart's unit; `partial` = some of
+ * the day's calls have no price, so `usd` is only part of it (money charts only).
+ */
+export type ChartDay = Pick<DayCost, "day" | "usd" | "calls" | "byClient"> & { partial?: boolean };
 
 export interface ChartUnits {
   value: (v: number) => string;
@@ -77,8 +80,19 @@ export function DailyCostChart({
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const peak = Math.max(0, ...days.map((d) => d.usd ?? 0));
-  if (!(peak > 0)) return <p className={a.muted} style={{ margin: 0, fontSize: 13 }}>{units?.empty ?? "Sin gasto con precio en este periodo."}</p>;
+  if (!(peak > 0)) {
+    const calls = days.reduce((n, d) => n + d.calls, 0);
+    // No calls and calls without a price are different facts: neither is US$0 of spend.
+    const empty =
+      units?.empty ??
+      (calls > 0
+        ? `Hay ${nf.format(calls)} llamadas al modelo en este periodo, pero ninguna de un modelo con tarifa: su costo queda «sin precio», no es US$0.`
+        : "Sin llamadas al modelo en este periodo.");
+    return <p className={a.muted} style={{ margin: 0, fontSize: 13 }}>{empty}</p>;
+  }
   const valueText = units?.value ?? ((v: number) => usdText(v));
+  const dayText = (d: ChartDay, none: string) =>
+    d.usd === null ? (d.calls > 0 ? "sin precio" : none) : d.partial ? `${valueText(d.usd)} + sin precio` : valueText(d.usd);
   const axisText = units?.axis ?? axisUsd;
 
   const ticks = niceTicks(Math.max(peak, baselineAvgUsd ?? 0));
@@ -111,7 +125,7 @@ export function DailyCostChart({
                 type="button"
                 role="listitem"
                 className={cx(a.col, hover === i && a.on, "u-focus")}
-                aria-label={`${dayLong(d.day)}: ${d.usd === null ? (d.calls > 0 ? "sin precio" : "sin llamadas") : valueText(d.usd)}`}
+                aria-label={`${dayLong(d.day)}: ${dayText(d, "sin llamadas")}`}
                 onMouseEnter={() => setHover(i)}
                 onFocus={() => setHover(i)}
                 onBlur={() => setHover(null)}
@@ -124,6 +138,8 @@ export function DailyCostChart({
                     style={{ height: pct(d.byClient[sr.key]), background: sr.color }}
                   />
                 ))}
+                {/* column-reverse: last child sits on top — the unpriced share of a partial day. */}
+                {segs.length > 0 && d.partial ? <span className={a.unknown} style={{ height: "3%" }} title="Parte del día sin precio" /> : null}
               </button>
             );
           })}
@@ -151,7 +167,7 @@ export function DailyCostChart({
               ))}
             <span className={cx(a.tipRow, a.tipTotal)}>
               <span>Total</span>
-              <span>{h.usd === null ? (h.calls > 0 ? "sin precio" : "—") : valueText(h.usd)}</span>
+              <span>{dayText(h, "—")}</span>
             </span>
             <span className={a.small}>
               {units ? units.foot?.(h) ?? null : [cop(h.usd), showCalls ? `${nf.format(h.calls)} llamadas` : null].filter(Boolean).join(" · ")}

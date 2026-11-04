@@ -14,7 +14,7 @@ import { ClientBillingCard } from "./ClientBillingCard";
 import { localToday } from "@worker/analytics/valueDashboardModel.js";
 import { baseLabelOf, baseSelOf, periodQuery as query, RangeControl, ScreenToggle, selOf, type BaseSel, type Sel } from "./periodControls";
 import { METRIC_DIRECTION, type Change, type DayCost, type MetricKey, type Money } from "@worker/analytics/aiCostModel.js";
-import { changeText, METRIC_LABEL, usdText } from "@worker/analytics/aiCostReport.js";
+import { changeText, dayMoneyText, METRIC_LABEL, usdText } from "@worker/analytics/aiCostReport.js";
 
 /**
  * COSTOS DE IA — the agency's screen. A quiet header (title, one date control whose choices
@@ -251,17 +251,34 @@ export function AiCostsView({
     ? cur.daily.map((d) => {
         const byClient = Object.fromEntries(shown.filter((sr) => d.byClient[sr.key] !== undefined).map((sr) => [sr.key, d.byClient[sr.key]]));
         const vals = Object.values(byClient);
-        return { ...d, byClient, usd: vals.length ? vals.reduce((n, v) => n + v, 0) : null, calls: vals.length ? d.calls : 0 };
+        // Calls are only counted tenant-wide; a shown business with tokens that day is activity.
+        const active = shown.some((sr) => (d.tokensByClient[sr.key] ?? 0) > 0);
+        const partial = shown.some((sr) => (d.unpricedTokensByClient[sr.key] ?? 0) > 0);
+        return { ...d, byClient, partial, usd: vals.length ? vals.reduce((n, v) => n + v, 0) : null, calls: active ? d.calls : 0 };
       })
     : cur.daily;
   const prevShown = data.previous.daily.reduce((n, d) => n + shown.reduce((m, sr) => m + (d.byClient[sr.key] ?? 0), 0), 0);
   const chartBaseline = filtered ? (cmp.status.available ? prevShown / b.days : null) : baselineAvgUsd;
   const pricedDays = chartDays.filter((d) => d.usd !== null);
+  // Some shown day has calls with no price: the period total is partial (or unknown), not complete.
+  const chartUnpriced = chartDays.some((d) => d.partial || (d.usd === null && d.calls > 0));
   const chartTotal = pricedDays.reduce((n, d) => n + (d.usd ?? 0), 0);
   const chartAvg = chartDays.length > 0 && pricedDays.length > 0 ? chartTotal / chartDays.length : null;
   const peak = pricedDays.reduce<DayCost | null>((best, d) => (best === null || (d.usd ?? 0) > (best.usd ?? 0) ? d : best), null);
   const avgChange = chartAvg !== null && chartBaseline !== null && chartBaseline > 0 ? Math.round(((chartAvg - chartBaseline) / chartBaseline) * 1000) / 10 : null;
   const toggle = (key: string) => setHidden((h) => (h.includes(key) ? h.filter((k) => k !== key) : [...h, key]));
+
+  const unpricedNames = cur.unpricedModels.map((m) => m.model ?? "modelo desconocido").join(", ");
+  const unpricedCalls = cur.unpricedModels.reduce((n, m) => n + m.calls, 0);
+  // The four states the period's money can be in (the OpenAI sync error lives in its own card).
+  const stateNote =
+    cur.state === "no_activity"
+      ? "Sin actividad: no hubo llamadas al modelo en este periodo."
+      : cur.state === "unpriced"
+        ? `Actividad sin tarifa: ${nf.format(unpricedCalls)} llamadas de ${unpricedNames}, sin precio en el catálogo. Sus tokens se cuentan; el costo queda «sin precio», no US$0.`
+        : cur.state === "partial"
+          ? `Importe parcial: el total solo incluye los modelos con precio. ${nf.format(unpricedCalls)} llamadas de ${unpricedNames} quedan «sin precio».`
+          : null;
 
   const kpis: Array<{ id: keyof typeof HELP; label: string; value: string; kind: "measured" | "estimate"; note: string }> = [
     {
@@ -295,7 +312,11 @@ export function AiCostsView({
   ];
 
   const stats: Array<{ label: string; value: string; sub: string | null; cls?: string }> = [
-    { label: "Total del periodo", value: pricedDays.length ? usdText(chartTotal) : "—", sub: copText(pricedDays.length ? chartTotal : null, usdCop) },
+    {
+      label: "Total del periodo",
+      value: pricedDays.length ? usdText(chartTotal) : chartUnpriced ? "sin precio" : "—",
+      sub: [copText(pricedDays.length ? chartTotal : null, usdCop), pricedDays.length && chartUnpriced ? "más tokens sin precio" : null].filter(Boolean).join(" · ") || null,
+    },
     { label: "Promedio diario", value: usdText(chartAvg), sub: copText(chartAvg, usdCop) },
     { label: "Día más alto", value: peak ? usdText(peak.usd) : "—", sub: peak ? dayLong(peak.day) : null },
     {
@@ -476,6 +497,11 @@ export function AiCostsView({
                   Gasto diario
                 </h2>
                 <p className={s.sub}>US$ estimados por día, de los modelos con precio{oneBusiness ? "" : ", por negocio"}.</p>
+                {stateNote ? (
+                  <p role="status" className={cx(s.sub, a.stateNote)} data-state={cur.state}>
+                    {stateNote}
+                  </p>
+                ) : null}
               </div>
               <ValueSeg label="Vista del gasto diario" value={view} onChange={setView} options={[["chart", "Gráfico"], ["table", "Tabla"]]} />
             </div>
@@ -517,7 +543,7 @@ export function AiCostsView({
               ))}
             </dl>
 
-            {shown.length === 0 ? (
+            {shown.length === 0 && series.length > 0 ? (
               <p className={s.sub}>Elige al menos un negocio para ver su gasto.</p>
             ) : view === "chart" ? (
               <>
@@ -552,7 +578,7 @@ export function AiCostsView({
                           <td key={sr.key}>{d.byClient[sr.key] === undefined ? "—" : usdText(d.byClient[sr.key])}</td>
                         ))}
                         {filtered ? null : <td>{nf.format(d.calls)}</td>}
-                        <td>{d.usd === null ? (d.calls > 0 ? "sin precio" : "—") : usdText(d.usd)}</td>
+                        <td>{dayMoneyText(d)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -837,6 +863,15 @@ export function AiCostsView({
                   </tr>
                 </thead>
                 <tbody>
+                  {cur.unpricedModels.map((m) => (
+                    <tr key={`sin-precio-${m.model ?? ""}`}>
+                      <td className={a.name}>{m.model ?? "modelo desconocido"}</td>
+                      <td>—</td>
+                      <td>—</td>
+                      <td>—</td>
+                      <td className={a.muted}>Sin tarifa en el catálogo · {nf.format(m.calls)} llamadas en el periodo</td>
+                    </tr>
+                  ))}
                   {cur.prices.map((x) => (
                     <tr key={x.model}>
                       <td className={a.name}>{x.model}</td>

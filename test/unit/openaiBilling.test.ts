@@ -1,7 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
 import { looksLikeAdminKey, mergeCostRows, parseCostsPage, parseUsagePage } from '../../src/analytics/openaiBilling.js';
-import { fetchCompletionsUsage, fetchCosts, OpenAiAdminError } from '../../src/openai/adminClient.js';
+import { fetchCompletionsUsage, fetchCosts, OpenAiAdminError, parseRetryAfter, retryDelayMs, type RetryPolicy } from '../../src/openai/adminClient.js';
 
 const DAY1 = Date.UTC(2026, 9, 20) / 1000; // 2026-10-20 00:00 UTC
 const DAY2 = DAY1 + 86_400;
@@ -81,4 +81,124 @@ test('client: fixed host, bearer header only, repeated group_by, follows pages, 
   await assert.rejects(fetchCompletionsUsage('sk-admin-test', DAY1, DAY2, denied), (e: unknown) => e instanceof OpenAiAdminError && e.kind === 'auth');
   const broken = (async () => new Response('not json', { status: 200 })) as typeof fetch;
   await assert.rejects(fetchCosts('sk-admin-test', DAY1, DAY2, broken), (e: unknown) => e instanceof OpenAiAdminError && e.kind === 'format');
+});
+
+/* -------------------------------------------------- 429 y reintentos (2026-11-04) -- */
+
+/** A fake OpenAI that answers from a script, one response per request, and records the sleeps. */
+function scripted(responses: Array<() => Response>) {
+  let i = 0;
+  const fetcher = (async () => {
+    const next = responses[Math.min(i, responses.length - 1)];
+    i += 1;
+    return next();
+  }) as typeof fetch;
+  const sleeps: number[] = [];
+  const policy: RetryPolicy = { retries: 3, baseDelayMs: 1_000, maxDelayMs: 20_000, sleep: async (ms) => void sleeps.push(ms), random: () => 0.5 };
+  return { fetcher, policy, sleeps, calls: () => i };
+}
+const ok = () => new Response(JSON.stringify(costsPage([{ amount: { value: 1, currency: 'usd' }, line_item: 'a' }])), { status: 200 });
+const tooMany = (headers: Record<string, string> = {}, error: Record<string, unknown> = { type: 'rate_limit_error', code: null, message: 'Rate limit reached for org-sintética' }) => () =>
+  new Response(JSON.stringify({ error }), { status: 429, headers });
+
+test('429 rate limit: honors Retry-After, then succeeds', async () => {
+  const s = scripted([tooMany({ 'retry-after': '2' }), ok]);
+  const r = await fetchCosts('sk-admin-test', DAY1, DAY2, s.fetcher, s.policy);
+  assert.equal(r.rows.length, 1);
+  assert.equal(s.calls(), 2);
+  assert.deepEqual(s.sleeps, [2_000]);
+});
+
+test('429 rate limit without Retry-After: bounded exponential backoff with jitter, then gives up', async () => {
+  const s = scripted([tooMany()]);
+  await assert.rejects(fetchCosts('sk-admin-test', DAY1, DAY2, s.fetcher, s.policy), (e: unknown) => {
+    assert.ok(e instanceof OpenAiAdminError);
+    assert.equal(e.kind, 'rate_limit');
+    assert.equal(e.detail.status, 429);
+    assert.equal(e.detail.attempts, 4);
+    assert.match(e.message, /429/);
+    assert.ok(!e.message.includes('org-sintética'), 'the body message is never echoed');
+    return true;
+  });
+  assert.equal(s.calls(), 4, '1 attempt + 3 retries, not forever');
+  assert.deepEqual(s.sleeps, [750, 1_500, 3_000], 'half fixed + half random of 1s, 2s, 4s (random = 0.5)');
+});
+
+test('429 for quota, credit or spend limit: not retried, and said so', async () => {
+  for (const error of [
+    { type: 'insufficient_quota', code: 'insufficient_quota' },
+    { type: 'insufficient_quota', code: 'credit_balance_exhausted' },
+    { type: 'requests', code: 'organization_spend_limit_exceeded' },
+    { type: 'insufficient_quota', code: 'algo_nuevo' },
+  ]) {
+    const s = scripted([tooMany({ 'retry-after': '1' }, error)]);
+    await assert.rejects(fetchCosts('sk-admin-test', DAY1, DAY2, s.fetcher, s.policy), (e: unknown) => {
+      assert.ok(e instanceof OpenAiAdminError);
+      assert.equal(e.kind, 'quota', JSON.stringify(error));
+      assert.match(e.message, /saldo, cuota o límite de gasto/);
+      return true;
+    });
+    assert.equal(s.calls(), 1, `${error.code}: retrying a billing error does not restore access`);
+    assert.deepEqual(s.sleeps, []);
+  }
+});
+
+test('a Retry-After longer than the cap is not waited out: fail now, the worker retries later', async () => {
+  const s = scripted([tooMany({ 'retry-after': '120' }), ok]);
+  await assert.rejects(fetchCosts('sk-admin-test', DAY1, DAY2, s.fetcher, s.policy), (e: unknown) => e instanceof OpenAiAdminError && e.kind === 'rate_limit' && e.detail.retryAfterMs === 120_000);
+  assert.equal(s.calls(), 1);
+  assert.deepEqual(s.sleeps, []);
+});
+
+test('5xx and network errors are retried; 4xx, auth and format are not', async () => {
+  const s5 = scripted([() => new Response('{}', { status: 503 }), ok]);
+  assert.equal((await fetchCosts('sk-admin-test', DAY1, DAY2, s5.fetcher, s5.policy)).rows.length, 1);
+  assert.equal(s5.calls(), 2);
+
+  let n = 0;
+  const flaky = (async () => {
+    n += 1;
+    if (n === 1) throw new TypeError('fetch failed');
+    return ok();
+  }) as typeof fetch;
+  const sn = scripted([ok]);
+  assert.equal((await fetchCosts('sk-admin-test', DAY1, DAY2, flaky, sn.policy)).rows.length, 1);
+  assert.equal(n, 2);
+
+  for (const [res, kind] of [[() => new Response('{}', { status: 400 }), 'http'], [() => new Response('{}', { status: 401 }), 'auth'], [() => new Response('nope', { status: 200 }), 'format']] as const) {
+    const s = scripted([res, ok]);
+    await assert.rejects(fetchCosts('sk-admin-test', DAY1, DAY2, s.fetcher, s.policy), (e: unknown) => e instanceof OpenAiAdminError && e.kind === kind);
+    assert.equal(s.calls(), 1, `${kind} is not retried`);
+  }
+});
+
+test('a 429 on page 2 retries that page only, keeping page 1', async () => {
+  const pages: string[] = [];
+  let failed = false;
+  const fetcher = (async (input: URL | RequestInfo) => {
+    const url = String(input);
+    pages.push(url.includes('page=cur_2') ? '2' : '1');
+    if (url.includes('page=cur_2') && !failed) {
+      failed = true;
+      return tooMany({ 'retry-after': '1' })();
+    }
+    return new Response(JSON.stringify(url.includes('page=cur_2')
+      ? costsPage([{ amount: { value: 2, currency: 'usd' }, line_item: 'b' }])
+      : costsPage([{ amount: { value: 1, currency: 'usd' }, line_item: 'a' }], { has_more: true, next_page: 'cur_2' })), { status: 200 });
+  }) as typeof fetch;
+  const r = await fetchCosts('sk-admin-test', DAY1, DAY2, fetcher, scripted([ok]).policy);
+  assert.equal(r.rows.length, 2);
+  assert.deepEqual(pages, ['1', '2', '2']);
+});
+
+test('Retry-After parsing and backoff delays', () => {
+  const now = Date.parse('2026-11-04T12:00:00Z');
+  assert.equal(parseRetryAfter('3', now), 3_000);
+  assert.equal(parseRetryAfter('0.5', now), 500);
+  assert.equal(parseRetryAfter('Wed, 04 Nov 2026 12:00:10 GMT', now), 10_000);
+  assert.equal(parseRetryAfter('Wed, 04 Nov 2026 11:00:00 GMT', now), 0);
+  for (const bad of [null, '', 'pronto', '-1']) assert.equal(parseRetryAfter(bad, now), null);
+  const policy: RetryPolicy = { retries: 5, baseDelayMs: 1_000, maxDelayMs: 8_000, sleep: async () => {}, random: () => 0.999 };
+  const e = new OpenAiAdminError('x', 'rate_limit', { status: 429 });
+  assert.deepEqual([1, 2, 3, 4, 5].map((k) => retryDelayMs(e, k, policy)), [1_000, 1_999, 3_998, 7_996, 7_996], 'capped at maxDelayMs');
 });

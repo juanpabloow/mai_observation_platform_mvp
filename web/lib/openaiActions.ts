@@ -4,9 +4,10 @@ import { revalidatePath } from "next/cache";
 import { encrypt } from "@worker/crypto.js";
 import { looksLikeAdminKey } from "@worker/analytics/openaiBilling.js";
 import { fetchCosts, OpenAiAdminError } from "@worker/openai/adminClient.js";
-import { syncOpenAiForTenant } from "@worker/analytics/syncOpenAi.js";
+import { manualSyncWaitMs, syncOpenAiForTenant } from "@worker/analytics/syncOpenAi.js";
 import {
   deleteOpenAiConnection,
+  getOpenAiConnectionStatus,
   listOpenAiProjects,
   setClientOpenAiProject,
   upsertOpenAiConnection,
@@ -46,6 +47,8 @@ export async function connectOpenAiAction(rawKey: string): Promise<Result> {
 
 export async function syncOpenAiNowAction(): Promise<Result> {
   const scope = await requireFullAccessForAction();
+  const wait = manualSyncWaitMs((await getOpenAiConnectionStatus(scope.tenantId))?.last_attempt_at ?? null);
+  if (wait > 0) return { ok: false, error: `Se intentó sincronizar hace un momento. Espera ${Math.ceil(wait / 1000)} s antes de volver a intentarlo.` };
   const sync = await syncOpenAiForTenant(scope.tenantId);
   revalidatePath("/costos-ia");
   return sync.ok ? { ok: true } : { ok: false, error: sync.error };

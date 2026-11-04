@@ -1,6 +1,6 @@
 import type { Period } from './valueDashboardModel.js';
 import type { Baseline } from './aiCostPeriods.js';
-import { METRIC_DIRECTION, type AiCostComparison, type AiCostDashboard, type Change, type MetricKey, type Money } from './aiCostModel.js';
+import { METRIC_DIRECTION, type AiCostComparison, type AiCostDashboard, type Change, type DayCost, type MetricKey, type Money } from './aiCostModel.js';
 
 /**
  * COSTOS DE IA — the downloadable report. Pure: same input, same bytes.
@@ -61,6 +61,12 @@ export function usdText(v: number | null): string {
 function moneyText(m: Money): string {
   if (m.usd === null) return m.partial ? 'sin precio' : '—';
   return m.partial ? `${usdText(m.usd)} + sin precio` : usdText(m.usd);
+}
+
+/** A day's money: «sin precio» when it had calls but nothing priced, «+ sin precio» when partial. */
+export function dayMoneyText(d: Pick<DayCost, 'usd' | 'calls'> & { partial?: boolean }): string {
+  if (d.usd === null) return d.calls > 0 ? 'sin precio' : '—';
+  return d.partial ? `${usdText(d.usd)} + sin precio` : usdText(d.usd);
 }
 
 export function changeText(c: Change): string {
@@ -177,7 +183,7 @@ export function renderAiCostMarkdown(r: AiCostReportInput): string {
   out.push('## Por día');
   out.push('');
   out.push(table(['Día', 'Llamadas', 'Tokens entrada', 'Tokens salida', 'Costo con precio'],
-    cur.daily.map((d) => [d.day, num(d.calls), num(d.inputTokens), num(d.outputTokens), usdText(d.usd)])));
+    cur.daily.map((d) => [d.day, num(d.calls), num(d.inputTokens), num(d.outputTokens), dayMoneyText(d)])));
   out.push('');
   out.push('## Reuniones (análisis con IA, conteo real del proveedor)');
   out.push('');
@@ -208,7 +214,7 @@ export function renderAiCostMarkdown(r: AiCostReportInput): string {
     metricas: Object.fromEntries(keys.map((k) => [k, { actual: cmp.current[k], anterior: cmp.previous[k], cambio: cmp.changes[k], menor_es_mejor: METRIC_DIRECTION[k] === 'lower' }])),
     por_negocio: cur.byClient.map((c) => ({ negocio: c.clientName, costo_usd: c.cost.usd, costo_parcial: c.cost.partial, llamadas: c.calls, tokens_entrada: c.inputTokens, tokens_salida: c.outputTokens, conversaciones: c.conversations, costo_por_conversacion_usd: c.perConversationUsd, citas_bot: c.botAppointments, cambio: cmp.clients[c.clientId ?? ''] })),
     por_workflow: cur.byWorkflow.map((w) => ({ workflow: w.workflowName, workflow_id: w.workflowId, negocio: w.clientName, modelos: w.models, costo_usd: w.cost.usd, costo_parcial: w.cost.partial, ejecuciones: w.executions, llamadas: w.calls, tokens_entrada: w.inputTokens, tokens_salida: w.outputTokens, sin_datos_n8n: w.coverage.withoutData, cambio: cmp.workflows[w.workflowId] })),
-    por_dia: cur.daily.map(({ byClient, ...d }) => ({
+    por_dia: cur.daily.map(({ byClient, unpricedTokensByClient: _unpriced, ...d }) => ({
       ...d,
       // Business names, not internal ids: the report is read by people and by an AI.
       por_negocio_usd: Object.fromEntries(Object.entries(byClient).map(([id, usd]) => [

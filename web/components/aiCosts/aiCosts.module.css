@@ -922,3 +922,13 @@
   height: 100%;
   border-radius: 999px;
 }
+
+/* The period's money state under «Gasto diario»: sin actividad / sin tarifa / parcial. */
+.stateNote {
+  margin: 2px 0 0;
+}
+.stateNote[data-state="unpriced"],
+.stateNote[data-state="partial"] {
+  border-left: 3px solid var(--vd-warn-dot);
+  padding-left: 8px;
+}

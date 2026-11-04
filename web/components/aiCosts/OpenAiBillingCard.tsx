@@ -79,7 +79,7 @@ export function OpenAiBillingCard({
           <p className={s.sub}>
             {billing.connected
               ? `Lo que OpenAI cobró a la organización: incluye razonamiento, caché y cualquier uso fuera de n8n. Clave ····${billing.keyHint ?? ""} · ${
-                  billing.lastSyncedAt ? updatedLabel(billing.lastSyncedAt, tz).replace(/^Actualizado/, "sincronizado") : "sin sincronizar aún"
+                  billing.lastSyncedAt ? `última sincronización correcta ${updatedLabel(billing.lastSyncedAt, tz).replace(/^Actualizado /, "")}` : "sin sincronizar aún"
                 }.`
               : "Conecta la organización de OpenAI para ver lo que realmente se facturó, no solo la estimación de n8n."}
           </p>
@@ -114,7 +114,14 @@ export function OpenAiBillingCard({
       ) : null}
       {billing.connected && billing.lastSyncError && !error ? (
         <p role="status" className={a.popError} style={{ margin: 0 }}>
-          Última sincronización con error: {billing.lastSyncError}
+          Error de sincronización{billing.lastAttemptAt ? ` (${updatedLabel(billing.lastAttemptAt, tz).replace(/^Actualizado/, "intento")})` : ""}: {billing.lastSyncError}{" "}
+          {billing.lastSyncedAt
+            ? `Se muestran los datos del último éxito (${updatedLabel(billing.lastSyncedAt, tz).replace(/^Actualizado /, "")}); pueden estar desactualizados.`
+            : "Aún no hay ninguna sincronización correcta: no hay datos de OpenAI que mostrar."}
+        </p>
+      ) : billing.connected && billing.stale && billing.lastSyncedAt && !error ? (
+        <p role="status" className={a.muted} style={{ margin: 0, fontSize: 13 }}>
+          Datos desactualizados: la última sincronización correcta fue {updatedLabel(billing.lastSyncedAt, tz).replace(/^Actualizado /, "")}.
         </p>
       ) : null}
 

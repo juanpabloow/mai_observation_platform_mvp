@@ -1,6 +1,6 @@
 import { decrypt } from '../crypto.js';
 import { logger } from '../logger.js';
-import { fetchCompletionsUsage, fetchCosts, fetchProjects, OpenAiAdminError } from '../openai/adminClient.js';
+import { DEFAULT_RETRY, fetchCompletionsUsage, fetchCosts, fetchProjects, OpenAiAdminError, type RetryPolicy } from '../openai/adminClient.js';
 import {
   getOpenAiKeyForSync,
   listOpenAiConnectionsDue,
@@ -13,14 +13,43 @@ import {
  * WINDOW_DAYS UTC days and replace that window. Recent days keep changing on OpenAI's side, so
  * the whole window is re-read each time; older days stay as stored.
  * Run by the worker every few hours and on demand from the screen. Never logs the key.
+ *
+ * The three reads go one after another, not in parallel: OpenAI counts every request (failed ones
+ * too) against the per-minute limit, and a burst is what earns a 429. Each request retries a
+ * transient failure a bounded number of times (adminClient's RetryPolicy). A failure writes
+ * nothing to the stored window: the last good figures and `last_synced_at` stay as they were.
  */
 
 export const WINDOW_DAYS = 95;
 const DAY_MS = 86_400_000;
 
+/** The worker syncs every 6 h; two missed rounds without a success means the figures are behind. */
+export const STALE_AFTER_MS = 12 * 60 * 60 * 1000;
+/** «Sincronizar ahora» waits this long after any attempt, so repeated clicks cannot stack 429s. */
+export const MANUAL_COOLDOWN_MS = 60 * 1000;
+
+/** True when the last attempt failed, or there has been no success within STALE_AFTER_MS. */
+export function isOpenAiSyncStale(
+  s: { last_synced_at: Date | null; last_sync_error: string | null },
+  now = new Date(),
+): boolean {
+  if (s.last_sync_error) return true;
+  return s.last_synced_at === null || now.getTime() - s.last_synced_at.getTime() > STALE_AFTER_MS;
+}
+
+export function manualSyncWaitMs(lastAttemptAt: Date | null, now = new Date()): number {
+  if (!lastAttemptAt) return 0;
+  return Math.max(0, MANUAL_COOLDOWN_MS - (now.getTime() - lastAttemptAt.getTime()));
+}
+
 export type OpenAiSyncResult = { ok: true; costs: number; usage: number; skipped: number } | { ok: false; error: string };
 
-export async function syncOpenAiForTenant(tenantId: string, now = new Date(), fetcher: typeof fetch = fetch): Promise<OpenAiSyncResult> {
+export async function syncOpenAiForTenant(
+  tenantId: string,
+  now = new Date(),
+  fetcher: typeof fetch = fetch,
+  policy: RetryPolicy = DEFAULT_RETRY,
+): Promise<OpenAiSyncResult> {
   const encrypted = await getOpenAiKeyForSync(tenantId);
   if (!encrypted) return { ok: false, error: 'No hay una conexión con OpenAI.' };
   const todayUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
@@ -28,12 +57,10 @@ export async function syncOpenAiForTenant(tenantId: string, now = new Date(), fe
   const end = todayUtc + DAY_MS; // tomorrow 00:00 UTC, exclusive: includes today's partial day
   try {
     const key = decrypt(encrypted);
-    const [costs, usage, projects] = await Promise.all([
-      fetchCosts(key, start / 1000, end / 1000, fetcher),
-      fetchCompletionsUsage(key, start / 1000, end / 1000, fetcher),
-      // Names for the project → business picker. A failure here must not lose the figures.
-      fetchProjects(key, fetcher).catch(() => undefined),
-    ]);
+    const costs = await fetchCosts(key, start / 1000, end / 1000, fetcher, policy);
+    const usage = await fetchCompletionsUsage(key, start / 1000, end / 1000, fetcher, policy);
+    // Names for the project → business picker. A failure here must not lose the figures.
+    const projects = await fetchProjects(key, fetcher, policy).catch(() => undefined);
     await replaceOpenAiWindow({
       tenantId,
       fromDay: new Date(start).toISOString().slice(0, 10),
@@ -46,7 +73,14 @@ export async function syncOpenAiForTenant(tenantId: string, now = new Date(), fe
     return { ok: true, costs: costs.rows.length, usage: usage.rows.length, skipped: costs.skipped + usage.skipped };
   } catch (err) {
     const message = err instanceof OpenAiAdminError ? err.message : 'No se pudo sincronizar con OpenAI.';
-    logger.warn({ tenantId, kind: err instanceof OpenAiAdminError ? err.kind : 'unknown' }, 'openai billing sync failed');
+    // Kind, status, OpenAI's error code and the retry count: enough to tell a rate limit from a
+    // quota problem later. Never the key, never the response body.
+    logger.warn(
+      err instanceof OpenAiAdminError
+        ? { tenantId, kind: err.kind, status: err.detail.status, code: err.detail.code, attempts: err.detail.attempts, retryAfterMs: err.detail.retryAfterMs }
+        : { tenantId, kind: 'unknown' },
+      'openai billing sync failed',
+    );
     await recordOpenAiSync(tenantId, message);
     return { ok: false, error: message };
   }
