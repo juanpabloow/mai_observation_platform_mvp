@@ -6,7 +6,8 @@ import Link from "next/link";
 import { authClient } from "@/lib/auth-client";
 import { mapAuthErrorParam, mapClientAuthError } from "@/lib/auth-errors";
 import { ACC, Notice } from "@/components/access/AccessShell";
-import { PasswordField } from "@/components/access/fields";
+import { NewPasswordField } from "@/components/access/fields";
+import { checkNewPassword } from "@/lib/passwordPolicy";
 
 /**
  * Consumes the password-reset token minted by Better Auth. The user arrives
@@ -26,6 +27,7 @@ export function ResetPasswordForm() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [tried, setTried] = useState(false);
 
   if (token === null || urlErrorMessage) {
     return (
@@ -44,10 +46,9 @@ export function ResetPasswordForm() {
     e.preventDefault();
     if (busy) return;
     setError(null);
-    if (password.length < 8) {
-      setError("Usa al menos 8 caracteres.");
-      return;
-    }
+    setTried(true);
+    // The email/name rule needs the account behind the token — the server checks that one.
+    if (!checkNewPassword(password).ok) return;
     setBusy(true);
     try {
       const result = await authClient.resetPassword({ newPassword: password, token: resetToken });
@@ -65,15 +66,7 @@ export function ResetPasswordForm() {
 
   return (
     <form onSubmit={onSubmit} noValidate className="flex flex-col gap-4">
-      <PasswordField
-        label="Contraseña nueva"
-        value={password}
-        onChange={setPassword}
-        autoComplete="new-password"
-        invalid={Boolean(error)}
-        hint={password.length >= 8 ? "✓ Contraseña válida" : "Mínimo 8 caracteres."}
-        hintTone={password.length >= 8 ? "success" : "muted"}
-      />
+      <NewPasswordField label="Contraseña nueva" value={password} onChange={setPassword} showErrors={tried} />
       {error ? <Notice tone="error">{error}</Notice> : null}
       <button type="submit" aria-busy={busy || undefined} className={ACC.primary}>
         {busy ? "Guardando…" : "Guardar contraseña"}

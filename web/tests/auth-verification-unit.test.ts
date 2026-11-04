@@ -146,7 +146,7 @@ test("redirect error codes map through the allowlist with a generic fallback", (
 });
 
 test("client error codes map through the allowlist; raw messages are never used", () => {
-  assert.equal(mapClientAuthError("PASSWORD_TOO_SHORT"), "La contraseña debe tener al menos 8 caracteres.");
+  assert.equal(mapClientAuthError("PASSWORD_TOO_SHORT"), "Usa al menos 12 caracteres.");
   assert.ok(mapClientAuthError("LINKING_DIFFERENT_EMAILS_NOT_ALLOWED").includes("mismo correo"));
   assert.equal(mapClientAuthError("UNMAPPED_CODE", "fallback text"), "fallback text");
   assert.equal(mapClientAuthError(undefined, "fallback text"), "fallback text");

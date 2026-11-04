@@ -6,8 +6,9 @@ import { authClient } from "@/lib/auth-client";
 import { RATE_LIMITED_NOTICE, mapClientAuthError } from "@/lib/auth-errors";
 import { VERIFIED_LOGIN_CALLBACK } from "@/lib/auth-verification";
 import { normalizePersonName } from "@/lib/personName";
+import { checkNewPassword } from "@/lib/passwordPolicy";
 import { ACC, AccessHeading, Divider, Notice } from "./AccessShell";
-import { GoogleButton, PasswordField, TextField } from "./fields";
+import { GoogleButton, NewPasswordField, TextField } from "./fields";
 
 /**
  * «Crear cuenta de negocio» — the open door for NEW businesses (the platform is not
@@ -28,14 +29,14 @@ export function SignupForm({ googleEnabled }: { googleEnabled: boolean }) {
   const nameCheck = normalizePersonName(name);
   const nameError = tried && !nameCheck.ok ? nameCheck.error : null;
   const emailError = tried && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim()) ? "Escribe un correo válido." : null;
-  const passError = tried && password.length < 8 ? "Usa al menos 8 caracteres." : null;
+  const passOk = checkNewPassword(password, { email, name }).ok;
 
   async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (busy) return;
     setTried(true);
     setError(null);
-    if (!nameCheck.ok || emailError || password.length < 8 || !email.trim()) return;
+    if (!nameCheck.ok || emailError || !passOk || !email.trim()) return;
     setBusy("mail");
     try {
       const result = await authClient.signUp.email({
@@ -101,15 +102,7 @@ export function SignupForm({ googleEnabled }: { googleEnabled: boolean }) {
         <Divider>o con tu correo</Divider>
         <TextField label="Tu nombre" value={name} onChange={setName} autoComplete="name" placeholder="Nombre y apellido" error={nameError} />
         <TextField label="Correo" type="email" value={email} onChange={setEmail} autoComplete="username" inputMode="email" error={emailError} />
-        <PasswordField
-          label="Contraseña"
-          value={password}
-          onChange={setPassword}
-          autoComplete="new-password"
-          invalid={Boolean(passError)}
-          hint={passError ?? (password.length >= 8 ? "✓ Contraseña válida" : "Mínimo 8 caracteres.")}
-          hintTone={passError ? "error" : password.length >= 8 ? "success" : "muted"}
-        />
+        <NewPasswordField value={password} onChange={setPassword} context={{ email, name }} showErrors={tried} />
         {error ? <Notice tone="error">{error}</Notice> : null}
         <button type="submit" className={ACC.primary} aria-busy={busy === "mail" || undefined} disabled={busy === "google"}>
           {busy === "mail" ? "Creando cuenta…" : "Crear cuenta"}
