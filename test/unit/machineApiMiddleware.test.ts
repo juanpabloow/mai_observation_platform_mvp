@@ -29,6 +29,7 @@ test('every machine API reaches its route without a session cookie', () => {
     '/api/meetings/v1/maintenance/sweep',
     '/api/booking/v1/sites',
     '/api/health',
+    '/api/whatsapp/webhook',
   ]) {
     const res = run(path, BEARER);
     assert.equal(isBounce(res), false, `${path} must not bounce a Bearer caller to /login`);
@@ -41,6 +42,8 @@ test('session-only surfaces still bounce to /login without a cookie', () => {
     '/api/meetings/v1/meetings/abc',
     '/api/catalogue-not-a-prefix',
     '/api/catalog-v2/products',
+    '/api/whatsapp/other',
+    '/api/whatsapp/webhooks',
   ]) {
     const res = run(path, BEARER);
     assert.equal(isBounce(res), true, `${path} keeps the login bounce`);

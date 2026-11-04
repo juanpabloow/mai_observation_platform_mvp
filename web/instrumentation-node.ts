@@ -8,6 +8,10 @@
  */
 import { reconcileLegacySessions } from "@worker/db/repositories/authSessions.js";
 import { IDLE_TIMEOUT_MS } from "./lib/sessionPolicy";
+import { describeConfig, readWebhookConfig } from "./lib/whatsappWebhook";
+
+// WhatsApp webhook receiver: say at boot whether it is enabled (variable NAMES only, never values).
+console.info(describeConfig(readWebhookConfig(process.env)));
 
 try {
   const rows = await Promise.race([

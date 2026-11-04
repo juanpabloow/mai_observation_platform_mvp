@@ -47,7 +47,11 @@ import { getSessionCookie } from "better-auth/cookies";
 // /api/account/session is the browser's view of its OWN session deadline (SessionGuard). It
 // answers 401 JSON itself when the session is gone — a 307 to /login would hand the guard an
 // HTML page instead of telling it the session ended.
+//
+// /api/whatsapp/webhook is Meta's WhatsApp webhook receiver: cookieless, protected by Meta's
+// X-Hub-Signature-256. Only that path, not /api/whatsapp/**.
 const PUBLIC_PREFIXES = [
+  "/api/whatsapp/webhook",
   "/api/account/session",
   "/login",
   "/signup",
