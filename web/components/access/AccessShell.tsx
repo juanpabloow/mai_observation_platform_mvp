@@ -24,6 +24,8 @@ export function AccessShell({
   mobileTop,
   children,
   width = 380,
+  asideAtBottom = false,
+  intro = false,
 }: {
   /** Left panel middle (desktop). Defaults to the platform line. */
   aside?: ReactNode;
@@ -32,12 +34,16 @@ export function AccessShell({
   children: ReactNode;
   /** Content column width on desktop. */
   width?: 360 | 380 | 420;
+  /** Sit the left panel's line low, just above the footer (the login), instead of centred. */
+  asideAtBottom?: boolean;
+  /** The card's content rises in once on arrival (the login; off for reduced motion). */
+  intro?: boolean;
 }) {
   return (
     <div className="u-access fixed inset-0 z-0 flex flex-col overflow-y-auto bg-[#1C1D20] text-[#111] lg:flex-row lg:gap-3 lg:overflow-hidden lg:p-3">
       <aside className="hidden w-[460px] flex-none flex-col justify-between px-6 py-7 lg:flex">
         <Brand />
-        <div className="flex flex-col gap-[22px]">
+        <div className={`flex flex-col gap-[22px] ${asideAtBottom ? "flex-1 justify-end pb-10" : ""}`}>
           {aside ?? (
             <h2 className="m-0 text-[34px] font-semibold leading-[1.15] tracking-[-.02em] text-[#ECECEE] [text-wrap:pretty]">
               Conversaciones, clientes y agenda en un solo lugar.
@@ -51,7 +57,7 @@ export function AccessShell({
         {mobileTop}
       </div>
       <main className="flex flex-1 justify-center rounded-t-[20px] bg-white px-5 pb-[calc(24px+env(safe-area-inset-bottom))] pt-7 lg:items-center lg:overflow-y-auto lg:rounded-xl lg:px-10 lg:py-10">
-        <div className="flex w-full flex-col gap-4" style={{ maxWidth: width }}>
+        <div className={`flex w-full flex-col gap-4 ${intro ? "u-access-rise" : ""}`} style={{ maxWidth: width }}>
           {children}
         </div>
       </main>

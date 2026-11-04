@@ -12,6 +12,8 @@
  *   with UPPER_SNAKE codes, e.g. TOKEN_EXPIRED, INVALID_TOKEN.
  */
 
+import { PASSWORD_RULE_ERRORS, PASSWORD_TOO_LONG_ERROR } from "./passwordPolicy";
+
 export const GENERIC_RESET_NOTICE =
   "Si existe una cuenta con ese correo, te enviamos un enlace para cambiar la contraseña. Revisa tu bandeja de entrada (y la de spam).";
 
@@ -64,8 +66,10 @@ export function mapAuthErrorParam(code: string | null): string | null {
 const CLIENT_MESSAGES: Record<string, string> = {
   PROVIDER_NOT_FOUND: "El inicio de sesión con Google no está disponible ahora.",
   INVALID_TOKEN: "Ese enlace no es válido o ya se usó. Pide uno nuevo.",
-  PASSWORD_TOO_SHORT: "La contraseña debe tener al menos 8 caracteres.",
-  PASSWORD_TOO_LONG: "Esa contraseña es demasiado larga.",
+  PASSWORD_TOO_SHORT: PASSWORD_RULE_ERRORS.length,
+  PASSWORD_TOO_LONG: PASSWORD_TOO_LONG_ERROR,
+  PASSWORD_TOO_COMMON: PASSWORD_RULE_ERRORS.common,
+  PASSWORD_HAS_PERSONAL_INFO: PASSWORD_RULE_ERRORS.personal,
   LINKING_NOT_ALLOWED: "No se permite conectar esta cuenta.",
   LINKING_DIFFERENT_EMAILS_NOT_ALLOWED: "Solo puedes conectar una cuenta de Google con el mismo correo.",
   SOCIAL_ACCOUNT_ALREADY_LINKED: "Esa cuenta de Google ya está conectada.",

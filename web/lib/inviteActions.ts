@@ -4,6 +4,7 @@ import { revalidatePath } from "next/cache";
 import { auth } from "./auth";
 import { getServerSession } from "./session";
 import { normalizePersonName } from "./personName";
+import { passwordProblem } from "./passwordPolicy";
 import { INVITE_TTL_DAYS, inviteAccessLabel, inviteBusinessName, inviteEmailHtml } from "./inviteCopy";
 import { getAccessScope, hasFullAccess, requireFullAccessForAction } from "./access";
 import { canGrantRole, roleRefOf, type RoleRef } from "./permissions/delegation";
@@ -317,8 +318,8 @@ export async function createProfileFromInvitationAction(input: {
   const name = normalizePersonName(input.name);
   if (!name.ok) return { ok: false, field: "name", error: name.error };
   const password = typeof input.password === "string" ? input.password : "";
-  if (password.length < 8) return { ok: false, field: "password", error: "Usa al menos 8 caracteres." };
-  if (password.length > 128) return { ok: false, field: "password", error: "Usa como máximo 128 caracteres." };
+  const weak = passwordProblem(password, { email: invite.email, name: name.name });
+  if (weak) return { ok: false, field: "password", error: weak.error };
 
   if (await findUserIdByEmail(invite.email)) {
     return { ok: false, code: "exists", error: "Ya tienes una cuenta con este correo. Inicia sesión para aceptar la invitación." };

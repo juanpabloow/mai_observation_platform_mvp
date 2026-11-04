@@ -2609,6 +2609,12 @@ textarea.c5-field { height: auto; padding: 10px 12px; line-height: 1.4; font-var
    the approved light card on the graphite ground. Focus is the app's ONE treatment (u-focus);
    the few transitions switch off for people who ask the system for less motion. */
 .u-access { color-scheme: light; }
+/* The login's two small signs of life: the card rises in once, the rotating word slides up. */
+@keyframes u-access-rise { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@keyframes u-access-word { from { opacity: 0; transform: translateY(.35em); } to { opacity: 1; transform: none; } }
+.u-access-rise { animation: u-access-rise .5s cubic-bezier(.2, .7, .2, 1) both; }
+.u-access-word { display: inline-block; animation: u-access-word .45s cubic-bezier(.2, .7, .2, 1) both; }
+.u-pw-bar { transition: width .2s ease, background-color .2s ease; }
 @media (prefers-reduced-motion: reduce) {
   .u-access *, .u-session-layer * { transition: none !important; animation: none !important; }
 }

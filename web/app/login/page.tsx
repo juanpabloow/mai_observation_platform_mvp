@@ -9,6 +9,7 @@ import { END_REASON_MESSAGE, parseEndReason } from "@/lib/accessCopy";
 import { DEFAULT_AFTER_LOGIN, destinationLabel, safeInternalPath } from "@/lib/safeRedirect";
 import { ACC, AccessHeading, AccessShell, Notice } from "@/components/access/AccessShell";
 import { LoginForm } from "@/components/access/LoginForm";
+import { LoginAside, TimeGreeting } from "@/components/access/LoginAside";
 
 type SearchParams = Record<string, string | string[] | undefined>;
 const first = (v: string | string[] | undefined) => (Array.isArray(v) ? v[0] : v) ?? null;
@@ -78,7 +79,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
   const ended = reason && reason !== "signed-out" ? reason : null;
 
   return (
-    <AccessShell width={ended ? 380 : 360}>
+    <AccessShell width={ended ? 380 : 360} aside={<LoginAside />} asideAtBottom intro>
       {ended ? (
         <Notice tone="info" title="Tu sesión se cerró">
           {END_REASON_MESSAGE[ended]}
@@ -86,6 +87,7 @@ export default async function LoginPage({ searchParams }: { searchParams: Promis
       ) : null}
       {reason === "signed-out" ? <Notice tone="info">{END_REASON_MESSAGE["signed-out"]}</Notice> : null}
       <AccessHeading
+        eyebrow={ended || reason === "signed-out" ? undefined : <TimeGreeting />}
         title={ended ? "Vuelve a entrar" : "Inicia sesión"}
         lead={
           ended ? (

@@ -4,11 +4,12 @@ import { useEffect, useRef, useState } from "react";
 import { authClient } from "@/lib/auth-client";
 import { mapClientAuthError } from "@/lib/auth-errors";
 import { normalizePersonName } from "@/lib/personName";
+import { checkNewPassword } from "@/lib/passwordPolicy";
 import type { CountryOption } from "@/lib/phone";
 import { acceptInvitationAction, createProfileFromInvitationAction } from "@/lib/inviteActions";
 import { completeProfileAction, updateMyNameAction } from "@/lib/accountActions";
 import { ACC, AccessHeading, AccessShell, Divider, Notice } from "./AccessShell";
-import { FixedEmail, GoogleButton, PasswordField, TextField } from "./fields";
+import { FixedEmail, GoogleButton, NewPasswordField, TextField } from "./fields";
 import { Avatar, PHONE_HINT, PHOTO_HINT, PhoneField, PhotoControl, type AvatarState } from "./ProfileFields";
 
 /**
@@ -96,8 +97,7 @@ export function InviteProfileFlow({
 
   const nameCheck = normalizePersonName(name);
   const nameError = tried && !nameCheck.ok ? nameCheck.error : null;
-  const passOk = password.length >= 8 && password.length <= 128;
-  const passError = tried && !passOk ? (password.length > 128 ? "Usa como máximo 128 caracteres." : "Usa al menos 8 caracteres.") : null;
+  const passOk = checkNewPassword(password, { email: invite.email, name }).ok;
   const acceptPath = `/invite/accept?token=${encodeURIComponent(invite.token)}`;
 
   async function onCreate(e: React.FormEvent) {
@@ -266,15 +266,7 @@ export function InviteProfileFlow({
                 placeholder="Nombre y apellido"
                 error={nameError}
               />
-              <PasswordField
-                label="Contraseña"
-                value={password}
-                onChange={setPassword}
-                autoComplete="new-password"
-                invalid={Boolean(passError)}
-                hint={passError ?? (passOk ? "✓ Contraseña válida" : "Mínimo 8 caracteres.")}
-                hintTone={passError ? "error" : passOk ? "success" : "muted"}
-              />
+              <NewPasswordField value={password} onChange={setPassword} context={{ email: invite.email, name }} showErrors={tried} />
               {error ? <Notice tone="error">{error}</Notice> : null}
               <button type="submit" className={ACC.primary} aria-busy={busy === "create" || undefined} disabled={busy === "google"}>
                 {busy === "create" ? "Creando perfil…" : "Crear perfil"}

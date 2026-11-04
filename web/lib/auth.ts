@@ -11,6 +11,8 @@ import {
 import { hasValidPendingInvitationForEmail } from "@worker/db/repositories/invitations.js";
 import { sendEmail, isEmailConfigured } from "./email";
 import { DISABLED_SESSION_PATHS, buildSessionPolicy } from "./auth-session-policy";
+import { enforcePasswordPolicy } from "./auth-password-policy";
+import { PASSWORD_MAX, PASSWORD_MIN } from "./passwordPolicy";
 import {
   ACCOUNT_LINKING_POLICY,
   applyGoogleAccountTakeover,
@@ -139,6 +141,10 @@ export const auth = betterAuth({
   disabledPaths: DISABLED_SESSION_PATHS,
   emailAndPassword: {
     enabled: true,
+    // New passwords follow lib/passwordPolicy.ts (12+ characters, not common, not the person's
+    // email/name), enforced by the before-hook below; these bounds are Better Auth's own check.
+    minPasswordLength: PASSWORD_MIN,
+    maxPasswordLength: PASSWORD_MAX,
     // sendResetPassword / resetPasswordTokenExpiresIn /
     // revokeSessionsOnPasswordReset — names verified against the installed
     // 1.6.19 types. Better Auth owns the token lifecycle (single-use,
@@ -252,7 +258,10 @@ export const auth = betterAuth({
   // user a SPECIFIC message (no longer the generic one) is also logged for ops — code only, no PII,
   // never throws. Runs after the handler; a hook that returns nothing leaves the response untouched.
   hooks: {
-    before: createAuthMiddleware(sessionPolicy.beforeHandler),
+    before: createAuthMiddleware(async (ctx) => {
+      await enforcePasswordPolicy(ctx);
+      return sessionPolicy.beforeHandler(ctx);
+    }),
     after: createAuthMiddleware(async (ctx) => {
       const returned = ctx.context.returned as { body?: { code?: string } } | undefined;
       if (returned?.body?.code === "EMAIL_NOT_VERIFIED" && ctx.path === "/sign-in/email") {
