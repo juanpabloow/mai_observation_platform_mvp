@@ -81,7 +81,7 @@ export async function setClientModuleAction(input: {
     view = { module_key: row.module_key, enabled: row.enabled };
   }
 
-  revalidatePath("/clients");
+  revalidatePath("/");
   revalidatePath(`/clients/${clientId}/modules`);
   // The module surfaces themselves — so a toggle immediately reflects on their
   // pages (and the sidebar re-render drops/adds the links).

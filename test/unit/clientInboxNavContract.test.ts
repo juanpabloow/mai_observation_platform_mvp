@@ -65,7 +65,7 @@ test('sidebar: the client rail is the proposal\'s three blocks, built from ONE s
   assert.ok(!src.includes('⌘K') && !/key(\.toLowerCase\(\))? === ["']k["']/.test(src), 'no ⌘K shortcut');
 });
 
-test('sidebar: Automatizaciones = Workflows + Analíticas técnicas + Reuniones; the Dashboard de valor is Negocio', () => {
+test('sidebar: Automatizaciones = Workflows + Costos de IA + Reuniones; the Dashboard de valor is Negocio', () => {
   const src = read('components/AppSidebar.tsx');
   assert.ok(!src.includes('key: "hub"'), 'Hub is no longer a rail item — the brand wordmark links home instead');
   const model = read('lib/sectionNav.ts');
@@ -73,7 +73,8 @@ test('sidebar: Automatizaciones = Workflows + Analíticas técnicas + Reuniones;
   // a Setter never sees them. Both workflow entries follow the remembered scope.
   assert.ok(model.includes('const p = (key: string) => forOwnClient && permissions.includes(key);'), 'pages read the login\'s permissions on its own client');
   assert.ok(model.includes('p("automations.view") && { id: "workflows", label: "Workflows", href: wf.executions }'), 'Workflows is automations.view, scope-aware');
-  assert.ok(model.includes('p("analytics.view") && { id: "tech-analytics", label: "Analíticas técnicas", href: wf.analytics }'), 'Analíticas técnicas is analytics.view, scope-aware');
+  assert.ok(!model.includes('"tech-analytics"'), 'Analíticas técnicas is gone (folded into Costos de IA → Ejecuciones)');
+  assert.ok(model.includes('p("analytics.view") && !isDefault && { id: "ai-costs", label: "Costos de IA", href: c("/costos-ia") }'), 'Costos de IA (and its Ejecuciones view) is analytics.view');
   assert.ok(model.includes('results: [p("analytics.view") && { id: "value", label: "Dashboard de valor", href: c("/analytics") }]'), 'the value dashboard is analytics.view');
   assert.ok(src.includes('workflowScope: scopeFor(clientId)'), 'the remembered workflow scope rides the rail link');
   // No duplicate destination: there is no all-workflows execution screen besides Workflows.

@@ -9,8 +9,21 @@ import { usdText } from "@worker/analytics/aiCostReport.js";
 /**
  * Gasto diario — columns stacked by business (fixed color per business, legend + table view in
  * the parent), a US$ axis with recessive gridlines, a dashed line for the comparison period's
- * daily average, and a per-day detail card on hover/focus.
+ * daily average, and a per-day detail card on hover/focus. Money by default; `units` turns it into
+ * a count chart (the executions screen) with the same marks.
  */
+
+/** The fields the chart reads. `usd` is the day's total in the chart's unit. */
+export type ChartDay = Pick<DayCost, "day" | "usd" | "calls" | "byClient">;
+
+export interface ChartUnits {
+  value: (v: number) => string;
+  axis: (v: number) => string;
+  label: string;
+  empty: string;
+  /** The small line under the total in the hover card. */
+  foot?: (d: ChartDay) => string | null;
+}
 
 export interface Series {
   key: string;
@@ -52,17 +65,21 @@ export function DailyCostChart({
   baselineAvgUsd,
   usdCop,
   showCalls = true,
+  units,
 }: {
-  days: DayCost[];
+  days: ChartDay[];
   series: Series[];
   baselineAvgUsd: number | null;
   usdCop: number | null;
   /** Calls are counted for all businesses together; hidden while the chart is filtered. */
   showCalls?: boolean;
+  units?: ChartUnits;
 }) {
   const [hover, setHover] = useState<number | null>(null);
   const peak = Math.max(0, ...days.map((d) => d.usd ?? 0));
-  if (!(peak > 0)) return <p className={a.muted} style={{ margin: 0, fontSize: 13 }}>Sin gasto con precio en este periodo.</p>;
+  if (!(peak > 0)) return <p className={a.muted} style={{ margin: 0, fontSize: 13 }}>{units?.empty ?? "Sin gasto con precio en este periodo."}</p>;
+  const valueText = units?.value ?? ((v: number) => usdText(v));
+  const axisText = units?.axis ?? axisUsd;
 
   const ticks = niceTicks(Math.max(peak, baselineAvgUsd ?? 0));
   const top = ticks[ticks.length - 1] || 1;
@@ -76,7 +93,7 @@ export function DailyCostChart({
       <div className={a.yAxis} aria-hidden>
         {ticks.map((t) => (
           <span key={t} style={{ bottom: pct(t) }}>
-            {axisUsd(t)}
+            {axisText(t)}
           </span>
         ))}
       </div>
@@ -85,7 +102,7 @@ export function DailyCostChart({
           <span key={t} className={a.grid} style={{ bottom: pct(t) }} aria-hidden />
         ))}
         {baselineAvgUsd !== null && baselineAvgUsd > 0 ? <span className={a.refLine} style={{ bottom: pct(baselineAvgUsd) }} aria-hidden /> : null}
-        <div className={cx(a.bars, hover !== null && a.dim)} role="list" aria-label="Gasto estimado por día">
+        <div className={cx(a.bars, hover !== null && a.dim)} role="list" aria-label={units?.label ?? "Gasto estimado por día"}>
           {days.map((d, i) => {
             const segs = series.filter((sr) => (d.byClient[sr.key] ?? 0) > 0);
             return (
@@ -94,7 +111,7 @@ export function DailyCostChart({
                 type="button"
                 role="listitem"
                 className={cx(a.col, hover === i && a.on, "u-focus")}
-                aria-label={`${dayLong(d.day)}: ${d.usd === null ? (d.calls > 0 ? "sin precio" : "sin llamadas") : usdText(d.usd)}`}
+                aria-label={`${dayLong(d.day)}: ${d.usd === null ? (d.calls > 0 ? "sin precio" : "sin llamadas") : valueText(d.usd)}`}
                 onMouseEnter={() => setHover(i)}
                 onFocus={() => setHover(i)}
                 onBlur={() => setHover(null)}
@@ -129,15 +146,15 @@ export function DailyCostChart({
                     <span className={a.sw} style={{ background: sr.color }} />
                     {sr.name}
                   </span>
-                  <span>{usdText(h.byClient[sr.key])}</span>
+                  <span>{valueText(h.byClient[sr.key])}</span>
                 </span>
               ))}
             <span className={cx(a.tipRow, a.tipTotal)}>
               <span>Total</span>
-              <span>{h.usd === null ? (h.calls > 0 ? "sin precio" : "—") : usdText(h.usd)}</span>
+              <span>{h.usd === null ? (h.calls > 0 ? "sin precio" : "—") : valueText(h.usd)}</span>
             </span>
             <span className={a.small}>
-              {[cop(h.usd), showCalls ? `${nf.format(h.calls)} llamadas` : null].filter(Boolean).join(" · ")}
+              {units ? units.foot?.(h) ?? null : [cop(h.usd), showCalls ? `${nf.format(h.calls)} llamadas` : null].filter(Boolean).join(" · ")}
             </span>
           </div>
         ) : null}

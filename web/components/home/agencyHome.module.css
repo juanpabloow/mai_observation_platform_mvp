@@ -1,0 +1,208 @@
+/*
+ * The agency's landing. App tokens only (--surface, --line, --foreground, --muted…), so light
+ * and dark follow globals.css. The business list itself is ClientsWorkflowsView; here are its
+ * doors (Inbox, Dashboard, Agenda), the review strip and the agency tools.
+ */
+
+.page {
+  width: 100%;
+  max-width: 1040px;
+  margin: 0 auto;
+  padding: 40px 24px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+.head {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.date {
+  margin: 0;
+  font-size: 13px;
+  color: var(--muted);
+}
+.title {
+  margin: 4px 0 0;
+  font-size: 28px;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+}
+.label {
+  margin: 0 0 10px;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--muted);
+}
+.card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 14px;
+}
+
+/* ------------------------------------------------------------ to review -- */
+
+.review {
+  padding: 14px 16px;
+}
+.review .label {
+  margin-bottom: 6px;
+}
+.review ul {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+}
+.review li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  font-size: 14px;
+}
+.review li + li {
+  border-top: 1px solid var(--line);
+}
+.reviewText {
+  flex: 1;
+  min-width: 0;
+}
+.reviewLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+  font-size: 13px;
+  color: var(--muted);
+  text-decoration: none;
+  border-radius: 6px;
+}
+.reviewLink:hover {
+  color: var(--foreground);
+}
+.iconInfo,
+.iconWarn {
+  display: inline-flex;
+  flex: none;
+}
+.iconInfo {
+  color: #3d7cc0;
+}
+.iconWarn {
+  color: #c98a12;
+}
+:global(.dark) .iconInfo {
+  color: #6fa6e0;
+}
+.bad {
+  color: #c2410c;
+}
+:global(.dark) .bad {
+  color: #fb923c;
+}
+
+/* ------------------------------------------------------------ businesses -- */
+.doors {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.door {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 11px;
+  border: 1px solid var(--line-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--foreground);
+  font-size: 13px;
+  text-decoration: none;
+  transition: background 150ms ease;
+}
+.door:hover {
+  background: var(--subtle);
+}
+.count {
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: #e6effa;
+  color: #23548a;
+  font-size: 11.5px;
+  font-weight: 600;
+  line-height: 18px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+:global(.dark) .count {
+  background: #1f3550;
+  color: #b9d4f3;
+}
+
+/* ---------------------------------------------------------------- agency -- */
+
+.tools {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  overflow: hidden;
+}
+.tool {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 16px;
+  color: inherit;
+  text-decoration: none;
+  transition: background 150ms ease;
+}
+.tool:hover {
+  background: var(--subtle);
+}
+.tool + .tool {
+  border-left: 1px solid var(--line);
+}
+@media (max-width: 720px) {
+  .tool + .tool {
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+}
+.toolIcon {
+  flex: none;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  background: var(--subtle);
+  color: var(--muted);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.toolName {
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+.toolLine {
+  display: block;
+  margin-top: 2px;
+  font-size: 12.5px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .door,
+  .tool {
+    transition: none;
+  }
+}

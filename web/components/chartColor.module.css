@@ -8,3 +8,10 @@
 :global(.dark) .sw {
   background: var(--d);
 }
+/* A business initial on its chart color (no logo). */
+.avatar {
+  background: var(--l);
+}
+:global(.dark) .avatar {
+  background: var(--d);
+}

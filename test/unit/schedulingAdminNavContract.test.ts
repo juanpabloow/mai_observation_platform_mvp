@@ -33,7 +33,7 @@ test('sidebar: the Hub (tenant level) has NO Scheduling admin', () => {
   const hub = slice(src, 'Owner/admin tenant level', 'return (');
   assert.ok(!hub.includes('/scheduling/admin'), 'no /scheduling/admin link at the Hub');
   assert.ok(!/scheduling/i.test(hub) || !hub.includes('label: "Scheduling'), 'no Scheduling section at the Hub');
-  assert.ok(hub.includes('label: "Agencia"') && hub.includes('label: "Clientes y workflows"'), 'the Hub keeps its agency section (Clientes y workflows)');
+  assert.ok(hub.includes('label: "Agencia"') && hub.includes('label: "Inicio"'), 'the tenant level keeps its agency section (Inicio, where businesses are managed)');
 });
 
 // «Configuración de agenda» became one PAGE per job (lib/schedulingNav.ts), spread over

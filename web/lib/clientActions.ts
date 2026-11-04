@@ -33,12 +33,12 @@ export async function createClientAction(
   name: string,
 ): Promise<{ ok: boolean; error?: string; clientId?: string }> {
   const trimmed = name.trim();
-  if (!trimmed) return { ok: false, error: "Client name is required." };
-  if (trimmed.length > 120) return { ok: false, error: "Name is too long (max 120)." };
+  if (!trimmed) return { ok: false, error: "Escribe el nombre del negocio." };
+  if (trimmed.length > 120) return { ok: false, error: "El nombre es muy largo (máximo 120)." };
   await requireFullAccessForAction(); // owner/admin only — client management is not a member capability
   const tenantId = await getCurrentTenantId();
   const client = await createClient(tenantId, trimmed);
-  revalidatePath("/clients");
+  revalidatePath("/");
   return { ok: true, clientId: client.id };
 }
 
@@ -56,18 +56,18 @@ export async function createClientAction(
 export async function uploadClientLogoAction(
   formData: FormData,
 ): Promise<{ ok: boolean; error?: string }> {
-  if (!isR2Configured) return { ok: false, error: "Logo upload is not configured." };
+  if (!isR2Configured) return { ok: false, error: "Subir logos no está configurado." };
 
   const clientId = String(formData.get("clientId") ?? "");
   const file = formData.get("logo");
-  if (!clientId) return { ok: false, error: "Missing client." };
-  if (!(file instanceof File)) return { ok: false, error: "No image selected." };
+  if (!clientId) return { ok: false, error: "Falta el negocio." };
+  if (!(file instanceof File)) return { ok: false, error: "No elegiste ninguna imagen." };
 
   await requireFullAccessForAction(); // owner/admin only — client management is not a member capability
   const tenantId = await getCurrentTenantId();
   // Ownership check (tenant isolation) — also yields the previous logo for cleanup.
   const client = await getClientById({ tenantId, clientId });
-  if (!client) return { ok: false, error: "Client not found." };
+  if (!client) return { ok: false, error: "No encontramos el negocio." };
 
   const result = await uploadLogo(tenantId, clientId, file);
   if (!result.ok) return { ok: false, error: result.error };
@@ -83,7 +83,7 @@ export async function uploadClientLogoAction(
     }
   }
 
-  revalidatePath("/clients");
+  revalidatePath("/");
   return { ok: true };
 }
 
@@ -99,7 +99,7 @@ export async function assignWorkflowAction(input: {
     workflowId: input.workflowId,
     clientId: input.clientId,
   });
-  revalidatePath("/clients");
+  revalidatePath("/");
   return { ok };
 }
 
@@ -109,13 +109,13 @@ export async function renameClientAction(input: {
   name: string;
 }): Promise<{ ok: boolean; error?: string }> {
   const trimmed = input.name.trim();
-  if (!trimmed) return { ok: false, error: "Client name is required." };
-  if (trimmed.length > 120) return { ok: false, error: "Name is too long (max 120)." };
+  if (!trimmed) return { ok: false, error: "Escribe el nombre del negocio." };
+  if (trimmed.length > 120) return { ok: false, error: "El nombre es muy largo (máximo 120)." };
   await requireFullAccessForAction(); // owner/admin only — client management is not a member capability
   const tenantId = await getCurrentTenantId();
   const ok = await renameClient({ tenantId, clientId: input.clientId, name: trimmed });
-  revalidatePath("/clients");
-  return { ok, error: ok ? undefined : "Client not found." };
+  revalidatePath("/");
+  return { ok, error: ok ? undefined : "No encontramos el negocio." };
 }
 
 /**
@@ -126,13 +126,13 @@ export async function setClientChartColorAction(input: {
   clientId: string;
   chartColor: string | null;
 }): Promise<{ ok: boolean; error?: string }> {
-  if (input.chartColor !== null && !isChartColorSlot(input.chartColor)) return { ok: false, error: "Unknown color." };
+  if (input.chartColor !== null && !isChartColorSlot(input.chartColor)) return { ok: false, error: "Color desconocido." };
   await requireFullAccessForAction(); // owner/admin only — client management is not a member capability
   const tenantId = await getCurrentTenantId();
   const ok = await updateClientChartColor({ tenantId, clientId: input.clientId, chartColor: input.chartColor });
-  revalidatePath("/clients");
+  revalidatePath("/");
   revalidatePath("/costos-ia");
-  return { ok, error: ok ? undefined : "Client not found." };
+  return { ok, error: ok ? undefined : "No encontramos el negocio." };
 }
 
 /**
@@ -156,6 +156,6 @@ export async function deleteClientAction(input: {
     const memberCount = await countMembersAssignedToClient({ tenantId, clientId: input.clientId });
     return { ok: false, result, memberCount };
   }
-  revalidatePath("/clients");
+  revalidatePath("/");
   return { ok: result === "deleted", result };
 }

@@ -45,12 +45,12 @@ test('agency on a client with every module: the three blocks of the proposal + M
     presence: ['booking-page', 'reviews', 'campaigns'],
     results: ['value'],
     settings: ['sites', 'rules', 'payment-methods', 'fields', 'users'],
-    automations: ['workflows', 'tech-analytics', 'ai-costs', 'meetings'],
+    automations: ['workflows', 'ai-costs', 'meetings'],
     agency: ['modules'],
   });
   const labels = Object.fromEntries(buildSections(agency(ALL)).map((x) => [x.id, x.pages.map((p) => p.label)]));
   assert.deepEqual(labels.agenda, ['Calendario', 'Ocupación', 'Equipo', 'Horarios y ausencias']);
-  assert.deepEqual(labels.automations, ['Workflows', 'Analíticas técnicas', 'Costos de IA', 'Reuniones']);
+  assert.deepEqual(labels.automations, ['Workflows', 'Costos de IA', 'Reuniones']);
   assert.deepEqual(rail(agency(ALL)), [
     'Inbox', 'Contactos', 'Agenda', 'Catálogo', 'Presencia y marketing', 'Dashboard de valor', 'Configuración', 'Automatizaciones', 'Módulos',
   ]);
@@ -79,7 +79,7 @@ test('owner of their own client: everything but Módulos (agency-only)', () => {
   const s = shape(member('owner', ALL));
   assert.equal(s.agency, undefined, 'Módulos is never shown to a business');
   assert.deepEqual(s.settings, ['sites', 'rules', 'payment-methods', 'fields', 'users']);
-  assert.deepEqual(s.automations, ['workflows', 'tech-analytics', 'ai-costs', 'meetings']);
+  assert.deepEqual(s.automations, ['workflows', 'ai-costs', 'meetings']);
   assert.deepEqual(s.results, ['value']);
 });
 
@@ -161,14 +161,11 @@ test('the default ("Unassigned") client: no scheduling settings and no Módulos,
   }
 });
 
-test('Automatizaciones keeps the workflow scope on Workflows and Analíticas técnicas', () => {
+test('Automatizaciones keeps the workflow scope on Workflows; execution metrics live in Costos de IA → Ejecuciones', () => {
   const all = buildSections(agency(ALL)).find((x) => x.id === 'automations')!;
-  assert.deepEqual(all.pages.slice(0, 2).map((p) => p.href), [`/clients/${A}/workflows`, `/clients/${A}/workflows/all/analytics`]);
+  assert.deepEqual(all.pages.slice(0, 2).map((p) => p.href), [`/clients/${A}/workflows`, `/clients/${A}/costos-ia`]);
   const one = buildSections(agency(ALL, { workflowScope: 'wf 1' })).find((x) => x.id === 'automations')!;
-  assert.deepEqual(one.pages.slice(0, 2).map((p) => p.href), [
-    `/clients/${A}/workflows/wf%201/executions`,
-    `/clients/${A}/workflows/wf%201/analytics`,
-  ]);
+  assert.equal(one.pages[0].href, `/clients/${A}/workflows/wf%201/executions`);
 });
 
 test('every visible label is Spanish (no leftover English rail names)', () => {
@@ -191,8 +188,6 @@ test('locate marks section + page on a direct link, including the legacy routes'
   assert.deepEqual(at('/contacts/fields'), { section: 'settings', page: 'fields' }, 'fields before contacts');
   assert.deepEqual(at('/contacts/123'), { section: 'contacts', page: 'contacts' });
   assert.deepEqual(at('/catalog'), { section: 'catalog', page: 'products' });
-  assert.deepEqual(at('/workflows/all/analytics'), { section: 'automations', page: 'tech-analytics' });
-  assert.deepEqual(at('/workflows/w1/analytics'), { section: 'automations', page: 'tech-analytics' });
   assert.deepEqual(at('/workflows'), { section: 'automations', page: 'workflows' });
   assert.deepEqual(at('/workflows/w1/executions'), { section: 'automations', page: 'workflows' });
   assert.deepEqual(at('/workflows/w1/inbox'), { section: 'automations', page: 'workflows' });
@@ -249,7 +244,7 @@ test('a CUSTOM role sees exactly the pages its permissions open — the name pla
   assert.deepEqual(shape(custom(['campaigns.view', 'campaigns.manage', 'analytics.view'])), {
     presence: ['campaigns'],
     results: ['value'],
-    automations: ['tech-analytics', 'ai-costs'],
+    automations: ['ai-costs'],
   });
   // «Encargado de sede»: agenda (calendar + occupancy) + team + hours, no inbox/contacts/settings.
   assert.deepEqual(shape(custom(['agenda.view', 'agenda.book', 'team.manage', 'hours.manage'])), {
