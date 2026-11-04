@@ -3,7 +3,7 @@ import { isChromelessPath } from "@/lib/shellChrome";
 import { getSessionScope, isSchedulingStaff } from "@/lib/access";
 import { getServerSession } from "@/lib/session";
 import { buildEnabledModulesMap } from "@/lib/enabledModulesMap";
-import { getClientById, getDefaultClientForTenant } from "@worker/db/repositories/clients.js";
+import { getClientById, getDefaultClientForTenant, listClientsForTenant } from "@worker/db/repositories/clients.js";
 import {
   listClientModules,
   listClientModulesForTenant,
@@ -51,6 +51,9 @@ export async function AppSidebarServer() {
   let enabledModules: Record<string, string[]> = {};
   let adCounts: Record<string, number> = {};
   let clientLabel: string | null = null;
+  // The rail names the page's business while the top bar is hidden (AppSidebar). Same
+  // scope as the header's client list: a member only ever receives their own.
+  let clientNames: Record<string, string> = {};
 
   if (scope.memberClientId) {
     // Member: their client's module rows only.
@@ -67,12 +70,15 @@ export async function AppSidebarServer() {
     }
     // Their client name — so the footer/menu shows where they're scoped.
     clientLabel = memberClient ? (memberClient.is_default ? "Unassigned" : memberClient.name) : null;
+    if (memberClient && !memberClient.is_default) clientNames = { [memberClient.id]: memberClient.name };
   } else {
-    const [defaultClient, moduleRows, counts] = await Promise.all([
+    const [defaultClient, moduleRows, counts, clients] = await Promise.all([
       getDefaultClientForTenant(scope.tenantId),
       listClientModulesForTenant(scope.tenantId), // one query, no N+1
       unconfiguredAdCountsByClient(scope.tenantId), // one grouped query, no N+1
+      listClientsForTenant(scope.tenantId),
     ]);
+    clientNames = Object.fromEntries(clients.filter((c) => !c.is_default).map((c) => [c.id, c.name]));
     defaultClientId = defaultClient?.id ?? null;
     // Default client's rows excluded — Unassigned never shows module links.
     enabledModules = buildEnabledModulesMap(moduleRows, defaultClientId);
@@ -92,6 +98,7 @@ export async function AppSidebarServer() {
       roleLabel={scope.roleLabel}
       permissions={[...scope.permissions]}
       staffBound={isSchedulingStaff(scope)}
+      clientNames={clientNames}
     />
   );
 }

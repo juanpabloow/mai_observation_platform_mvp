@@ -1,5 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { test } from 'node:test';
+import { readdirSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { parseClientSurface } from '../../web/lib/clientSurface.js';
 
 /** The pure client-surface parser behind the header breadcrumb. */
@@ -67,6 +69,32 @@ test('workflow routes and non-client paths are NOT client surfaces', () => {
   assert.equal(parseClientSurface('/'), null);
   // A surface name embedded elsewhere doesn't match.
   assert.equal(parseClientSurface(`/clients/${CID}/teamster`), null);
+});
+
+test('every client page under app/clients/[clientId] names its client (F02)', () => {
+  // «Elige un cliente» aparecía en Pipeline, Métodos de pago y Ocupación: páginas sin
+  // patrón. Se recorre el árbol real para que una página nueva no vuelva a quedar fuera.
+  // Quedan fuera las rutas de UN workflow (parseWorkflowRoute) y las que solo redirigen.
+  const root = join(process.cwd(), 'web/app/clients/[clientId]');
+  const REDIRECT_ONLY = new Set(['scheduling/availability', 'scheduling/exceptions']);
+  const pages: string[] = [];
+  const walk = (dir: string, rel: string) => {
+    for (const name of readdirSync(dir)) {
+      const full = join(dir, name);
+      if (statSync(full).isDirectory()) walk(full, rel ? `${rel}/${name}` : name);
+      else if (name === 'page.tsx' && rel) pages.push(rel);
+    }
+  };
+  walk(root, '');
+  const checked = pages
+    .filter((p) => !p.startsWith('workflows/') && !REDIRECT_ONLY.has(p))
+    .map((p) => p.replace(/\[[^\]]+\]/g, 'x'));
+  assert.ok(checked.length > 20, 'the walk found the client pages');
+  for (const p of checked) {
+    assert.ok(parseClientSurface(`/clients/${CID}/${p}`), `${p} resolves to a client surface`);
+  }
+  assert.deepEqual(parseClientSurface(`/clients/${CID}/pipeline`), { clientId: CID, label: 'Pipeline' });
+  assert.deepEqual(parseClientSurface(`/clients/${CID}/scheduling/payment-methods`), { clientId: CID, label: 'Métodos de pago' });
 });
 
 test('client id is URL-decoded', () => {

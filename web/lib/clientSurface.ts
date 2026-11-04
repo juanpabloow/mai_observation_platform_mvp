@@ -50,6 +50,12 @@ const CLIENT_SURFACE_LABELS: ReadonlyArray<{ pattern: RegExp; label: string }> =
   { pattern: /^\/clients\/([^/]+)\/scheduling\/reviews(?:\/|$)/, label: "Reseñas" },
   { pattern: /^\/clients\/([^/]+)\/campaigns(?:\/|$)/, label: "Campañas" },
   { pattern: /^\/clients\/([^/]+)\/catalog(?:\/|$)/, label: "Productos" },
+  // Faltaban (auditoría 2026-11-03, F02): sin patrón, la cabecera decía «Elige un cliente»
+  // en páginas que ya pertenecen a uno. Mismo nombre que el rail (lib/sectionNav.ts).
+  { pattern: /^\/clients\/([^/]+)\/pipeline(?:\/|$)/, label: "Pipeline" },
+  { pattern: /^\/clients\/([^/]+)\/scheduling\/ocupacion(?:\/|$)/, label: "Ocupación" },
+  { pattern: /^\/clients\/([^/]+)\/scheduling\/payment-methods(?:\/|$)/, label: "Métodos de pago" },
+  { pattern: /^\/clients\/([^/]+)\/costos-ia(?:\/|$)/, label: "Costos de IA" },
 ];
 
 export interface ClientSurface {

@@ -314,10 +314,24 @@ export default async function WorkflowExecutionsPage({
 
   return (
     // H-8.2: full-width, edge-to-edge in the (workspace) slot (no centered container).
-    <div className="flex min-h-0 flex-1 flex-col">
+    // <main>, like the other client pages (PageShell / ModuleSurface): this one had none.
+    <main className="flex min-h-0 flex-1 flex-col">
+      {/* The page's identity (auditoría 2026-11-03, F06). The top bar's workflow switcher
+          names it; with the bar hidden (xl+) nothing did, and the page had no heading at
+          all. `u-topbar-fallback` shows this line only then — otherwise it stays for
+          screen readers, so the name is never drawn twice. */}
+      <div className="u-topbar-fallback items-center gap-1.5 px-4 pt-4 text-sm">
+        <Link href={`/clients/${linkClientId}/workflows`} className="u-focus rounded text-muted hover:text-foreground">
+          Workflows
+        </Link>
+        <span aria-hidden className="text-faint">/</span>
+        <h1 className="truncate font-semibold text-foreground">
+          {workflow.name ?? workflowId} <span className="sr-only">· Ejecuciones</span>
+        </h1>
+      </div>
       {/* ONE toolbar line: count + Filter + Add column (left) · auto-refresh (right). */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 pb-2 pt-4">
-        <p className="text-sm text-neutral-500">{total.toLocaleString()} matching</p>
+        <p className="text-sm text-neutral-500">{total.toLocaleString("es-CO")} {total === 1 ? "ejecución" : "ejecuciones"}</p>
         <FilterMenu customFields={filterableFields} />
         {/* Column definitions are agency plumbing (columnActions are agency-only). */}
         {hasFullAccess(await getAccessScope()) ? <ColumnsMenu workflowId={workflowId} columns={definedColumns} /> : null}
@@ -388,6 +402,6 @@ export default async function WorkflowExecutionsPage({
           />
         </ExecutionPane>
       ) : null}
-    </div>
+    </main>
   );
 }

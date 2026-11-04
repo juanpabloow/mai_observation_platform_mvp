@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import { useSidebar } from "@/components/SidebarContext";
 import { useScope } from "@/components/ScopeProvider";
 import { parseClientSurface } from "@/lib/clientSurface";
+import { buildDocumentTitle, pageForTitle } from "@/lib/documentTitle";
 import { parseScopeSurface, scopeHref } from "@/lib/scopeSurface";
 import { WorkflowSwitcherPanel } from "@/components/WorkflowSwitcherPanel";
 
@@ -197,6 +198,24 @@ export function HeaderBar({
     setLastPath(pathname);
     if (openMenu !== null) setOpenMenu(null);
   }
+
+  // The tab title, «Pantalla · Negocio · M_AI», from the same route and client list the
+  // breadcrumb reads (lib/documentTitle.ts). Here because the header is mounted on every
+  // internal screen — also while the bar is hidden, which only hides it with CSS.
+  // Next re-applies the layout's static title («M_AI») AFTER this effect on a client-side
+  // navigation, so the head is watched and the title put back whenever it is replaced.
+  useEffect(() => {
+    const { label, clientId } = pageForTitle(pathname);
+    const business = clientId ? clients.find((c) => c.id === clientId) ?? null : null;
+    const wanted = buildDocumentTitle(label, business ? (business.isDefault ? "Hub" : business.name) : null);
+    const apply = () => {
+      if (document.title !== wanted) document.title = wanted;
+    };
+    apply();
+    const watcher = new MutationObserver(apply);
+    watcher.observe(document.head, { childList: true, subtree: true, characterData: true });
+    return () => watcher.disconnect();
+  }, [pathname, clients]);
 
   // Auth screens stay clean (also covers a client-side nav to /logout).
   if (AUTH_PREFIXES.some((p) => pathname === p || pathname.startsWith(`${p}/`))) {
